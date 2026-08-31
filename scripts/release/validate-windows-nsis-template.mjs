@@ -19,8 +19,9 @@ const PINNED_UPSTREAM = Object.freeze({
   upstreamUrl:
     "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi",
   upstreamSha256: "20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079",
-  patchContract: "ai-security-scanner.version-neutral-repair-and-bounded-uninstall/v3",
-  vendoredSha256: "ce5b0a2947cf067b571a6dd7f253e622a90bb05134390afc20485eb352b498fb",
+  patchContract:
+    "ai-security-scanner.windows-prerequisite-version-neutral-repair-and-bounded-uninstall/v5",
+  vendoredSha256: "8396df85b36ce8c4778ae50097ae50593f55548e665604cf1bd86de37a8f0f1d",
 });
 
 function assert(condition, message) {
@@ -115,10 +116,10 @@ function reconstructPinnedUpstream(vendored) {
         "; Upstream SHA-256: 20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079",
         "; Upstream license: Apache-2.0 OR MIT",
         "; Local patch: version-neutral stale-registration and same-version repair,",
-        "; data-preserving upgrade overlays, the bounded v0.1.7 runtime transition",
-        "; receipts, and a bilingual three-choice uninstall delegated to the fixed",
-        "; product CLI with bounded, visible coordinator records and exact registration",
-        "; postconditions.",
+        "; data-preserving upgrade overlays, fixed Windows-prerequisite preparation with",
+        "; durable restart/resume state, and a bilingual three-choice uninstall",
+        "; delegated to the fixed product CLI with bounded, visible coordinator records",
+        "; and exact registration postconditions.",
         "; The release validator reverses these reviewed hunks and verifies both",
         "; complete-file SHA-256 values.",
         "",
@@ -129,8 +130,6 @@ function reconstructPinnedUpstream(vendored) {
       label: "repair state variables",
       patched: block([
         "Var OldMainBinaryName",
-        "Var PreviousVersion",
-        "Var InstallTransition",
         "Var RegistrationOverlayMode",
       ]),
       upstream: block(["Var OldMainBinaryName"]),
@@ -153,11 +152,6 @@ function reconstructPinnedUpstream(vendored) {
       label: "repair directory lock",
       patched: "!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipDirectoryIfRepairOrPassive\n",
       upstream: "!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive\n",
-    },
-    {
-      label: "previous-version receipt source",
-      patched: block(["  StrCpy $PreviousVersion $R0"]),
-      upstream: "",
     },
     {
       label: "headless maintenance selection",
@@ -189,35 +183,6 @@ function reconstructPinnedUpstream(vendored) {
       ]),
     },
     {
-      label: "updater transition receipt",
-      patched: block([
-        '    ${If} $PreviousVersion == "0.1.7"',
-        '      StrCpy $InstallTransition "updated-0.1.7"',
-        "    ${EndIf}",
-      ]),
-      upstream: "",
-    },
-    {
-      label: "interactive overlay transition receipt",
-      patched: block([
-        '      ${If} $PreviousVersion == "0.1.7"',
-        '        StrCpy $InstallTransition "overlaid-0.1.7"',
-        "      ${EndIf}",
-      ]),
-      upstream: "",
-      count: 2,
-    },
-    {
-      label: "old-uninstaller transition receipt",
-      patched: block([
-        "    ${If} $WixMode <> 1",
-        '    ${AndIf} $PreviousVersion == "0.1.7"',
-        '      StrCpy $InstallTransition "uninstalled-0.1.7"',
-        "    ${EndIf}",
-      ]),
-      upstream: "",
-    },
-    {
       label: "unconditional product repair detection",
       patched: block([
         "  ; These calls are intentionally unconditional and precede every silent,",
@@ -225,19 +190,18 @@ function reconstructPinnedUpstream(vendored) {
         "  ; registration can therefore be repaired without making private data or a",
         "  ; managed runtime an installer prerequisite.",
         "  Call DetectVersionNeutralProductRepair",
-        "  Call PreserveBoundedV017TransitionForV018Reinstall",
         "",
       ]),
       upstream: "",
     },
     {
-      label: "transition receipt registry value",
+      label: "fixed Windows prerequisite preparation dispatch",
       patched: block([
-        '  ${If} $InstallTransition == ""',
-        '    DeleteRegValue SHCTX "${UNINSTKEY}" "InstallTransition"',
-        "  ${Else}",
-        '    WriteRegStr SHCTX "${UNINSTKEY}" "InstallTransition" "$InstallTransition"',
-        "  ${EndIf}",
+        "",
+        "  ; Prepare Windows support only after every application binary and its",
+        "  ; registration have been installed. Failure can therefore never roll back or",
+        "  ; hide the application shell, and no later manual setup page is required.",
+        "  Call RunWindowsInstallerPrerequisiteCoordinator",
       ]),
       upstream: "",
     },
@@ -283,7 +247,7 @@ function reconstructPinnedUpstream(vendored) {
   reconstructed = removeFunction(reconstructed, "DetectVersionNeutralProductRepair");
   reconstructed = removeFunction(
     reconstructed,
-    "PreserveBoundedV017TransitionForV018Reinstall",
+    "RunWindowsInstallerPrerequisiteCoordinator",
   );
   reconstructed = removeFunction(reconstructed, "un.RunProductUninstallCoordinator");
   reconstructed = removeFunction(reconstructed, "un.PersistCoordinatorReceipt");
@@ -291,7 +255,7 @@ function reconstructPinnedUpstream(vendored) {
   reconstructed = removeFunction(reconstructed, "SkipDirectoryIfRepairOrPassive");
   reconstructed = replaceBoundedSection(
     reconstructed,
-    "; BEGIN AI SECURITY SCANNER BILINGUAL UNINSTALL STRINGS\n",
+    "; BEGIN AI SECURITY SCANNER BILINGUAL PRODUCT STRINGS\n",
     "Function .onInit\n",
     "",
     "bilingual uninstall strings",
@@ -409,6 +373,17 @@ function modeledRegistrationOutcome({ updateMode, selected }) {
   return "remove-install-path-preserve-language";
 }
 
+function modeledWindowsPrerequisiteOutcome({ invocation, exitCode, resultClass }) {
+  if (invocation === "missing" || invocation === "error" || invocation === "timeout") {
+    return "retry";
+  }
+  if (exitCode === 0 && ["ready", "serviced"].includes(resultClass)) return "ready";
+  if (exitCode === 10 && resultClass === "restart_required") return "restart_required";
+  if (exitCode === 20 && resultClass === "cancelled") return "retry";
+  if (exitCode === 30 && resultClass === "failed") return "retry";
+  return "retry";
+}
+
 function validateModeledDecisionTable() {
   const fixtures = [
     [{ exactIdentity: false, mainBinaryPresent: false, uninstallerPresent: false, compare: 1 }, "normal"],
@@ -471,6 +446,202 @@ function validateModeledDecisionTable() {
       `uninstall registration outcome drifted for ${JSON.stringify(input)}`,
     );
   }
+
+  const prerequisiteFixtures = [
+    [{ invocation: "missing", exitCode: null, resultClass: null }, "retry"],
+    [{ invocation: "error", exitCode: null, resultClass: null }, "retry"],
+    [{ invocation: "timeout", exitCode: null, resultClass: null }, "retry"],
+    [{ invocation: "complete", exitCode: 0, resultClass: "ready" }, "ready"],
+    [{ invocation: "complete", exitCode: 0, resultClass: "serviced" }, "ready"],
+    [{ invocation: "complete", exitCode: 10, resultClass: "restart_required" }, "restart_required"],
+    [{ invocation: "complete", exitCode: 20, resultClass: "cancelled" }, "retry"],
+    [{ invocation: "complete", exitCode: 30, resultClass: "failed" }, "retry"],
+    [{ invocation: "complete", exitCode: 0, resultClass: "failed" }, "retry"],
+    [{ invocation: "complete", exitCode: 99, resultClass: "ready" }, "retry"],
+  ];
+  for (const [input, expected] of prerequisiteFixtures) {
+    assert(
+      modeledWindowsPrerequisiteOutcome(input) === expected,
+      `Windows prerequisite outcome drifted for ${JSON.stringify(input)}`,
+    );
+  }
+}
+
+function validateWindowsPrerequisitePatch(vendored) {
+  const coordinator = extractFunction(
+    vendored,
+    "RunWindowsInstallerPrerequisiteCoordinator",
+  ).source;
+  const fixedCommand =
+    'nsExec::ExecToStack /TIMEOUT=360000 \'"$INSTDIR\\ai-security-scanner-cli.exe" --json windows-installer-prerequisite\'';
+  const prerequisiteEnvelopes = [
+    '{"schema_version":"ai-security-scanner.windows-installer-prerequisite/v1","result_class":"ready","exit_code":0,"restart_required":false,"terminal":"complete"}',
+    '{"schema_version":"ai-security-scanner.windows-installer-prerequisite/v1","result_class":"serviced","exit_code":0,"restart_required":false,"terminal":"complete"}',
+    '{"schema_version":"ai-security-scanner.windows-installer-prerequisite/v1","result_class":"restart_required","exit_code":10,"restart_required":true,"terminal":"complete"}',
+    '{"schema_version":"ai-security-scanner.windows-installer-prerequisite/v1","result_class":"cancelled","exit_code":20,"restart_required":false,"terminal":"complete"}',
+    '{"schema_version":"ai-security-scanner.windows-installer-prerequisite/v1","result_class":"failed","exit_code":30,"restart_required":false,"terminal":"complete"}',
+  ];
+  assertOrdered(
+    coordinator,
+    [
+      'WriteRegStr HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteReceiptSchema" "ai-security-scanner.windows-prerequisite-receipt/v1"',
+      'WriteRegStr HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteReceiptInstallerVersion" "${VERSION}"',
+      'WriteRegStr HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteReceiptResult" "checking"',
+      'WriteRegDWORD HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteResumeHint" 1',
+      'DetailPrint "$(windowsPrerequisiteChecking)"',
+      '${IfNot} ${FileExists} "$INSTDIR\\ai-security-scanner-cli.exe"',
+      "Goto windows_prerequisite_retry",
+      fixedCommand,
+      "Pop $R0",
+      "Pop $R1",
+      '${If} $R0 == "error"',
+      '${If} $R0 == "timeout"',
+      '${If} $R0 = 0',
+      `'${prerequisiteEnvelopes[0]}'`,
+      `'${prerequisiteEnvelopes[1]}'`,
+      'WriteRegStr HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteReceiptResult" "ready"',
+      'WriteRegDWORD HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteResumeHint" 0',
+      '${ElseIf} $R0 = 10',
+      `'${prerequisiteEnvelopes[2]}'`,
+      'WriteRegStr HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteReceiptResult" "restart_required"',
+      "SetRebootFlag true",
+      "SetErrorLevel 3010",
+      '${ElseIf} $R0 = 20',
+      `'${prerequisiteEnvelopes[3]}'`,
+      '${ElseIf} $R0 = 30',
+      `'${prerequisiteEnvelopes[4]}'`,
+      "windows_prerequisite_retry:",
+      'WriteRegStr HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteReceiptResult" "retry"',
+      'WriteRegDWORD HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteResumeHint" 1',
+      'DetailPrint "$(windowsPrerequisiteRetry)"',
+    ],
+    "fixed Windows prerequisite coordinator",
+  );
+  assert(
+    coordinator.split(fixedCommand).length === 2,
+    "installer must invoke exactly one fixed Windows prerequisite coordinator command",
+  );
+  for (const envelope of prerequisiteEnvelopes) {
+    assert(
+      coordinator.split(`'${envelope}'`).length === 2,
+      `installer does not accept exactly one complete prerequisite envelope: ${envelope}`,
+    );
+  }
+  assert(
+    coordinator.split("ai-security-scanner.windows-installer-prerequisite/v1").length === 6,
+    "installer accepts an incomplete or extra Windows prerequisite envelope",
+  );
+  for (const forbidden of [
+    "$CMDLINE",
+    "${GetOptions}",
+    "${GetParameters}",
+    "wsl.exe",
+    "powershell",
+    "pwsh",
+    "cmd.exe",
+    "--install",
+    "--update",
+    "--path",
+    "--action",
+    "--executable",
+    "--arguments",
+    "--data-dir",
+    "--managed-runtime-bundle",
+    "ExecWait",
+    "ExecShell",
+    "ShellExec",
+    "Abort",
+    "Quit",
+    "MessageBox",
+  ]) {
+    assert(
+      !coordinator.toLowerCase().includes(forbidden.toLowerCase()),
+      `Windows prerequisite coordinator exposes or invokes an unreviewed surface: ${forbidden}`,
+    );
+  }
+  assert(
+    !coordinator.includes("DetailPrint $R1") &&
+      !coordinator.includes('DetailPrint "$R1"') &&
+      !coordinator.includes("FileWrite") &&
+      !coordinator.includes("CopyFiles"),
+    "Windows prerequisite coordinator persists or displays helper output",
+  );
+  assert(
+    coordinator.split('WriteRegStr HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteReceiptResult"').length === 5 &&
+      coordinator.split('WriteRegDWORD HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteResumeHint"').length === 5,
+    "Windows prerequisite durable state is missing or has an unreviewed extra transition",
+  );
+  assert(
+    coordinator.split("SetRebootFlag true").length === 2 &&
+      coordinator.split("SetErrorLevel 3010").length === 2 &&
+      coordinator.indexOf("SetRebootFlag true") >
+        coordinator.indexOf('"WindowsPrerequisiteReceiptResult" "restart_required"') &&
+      coordinator.indexOf("SetRebootFlag true") <
+        coordinator.indexOf("SetErrorLevel 3010") &&
+      coordinator.indexOf("SetErrorLevel 3010") <
+        coordinator.indexOf('DetailPrint "$(windowsPrerequisiteRestart)"'),
+    "Windows prerequisite restart is not propagated once through the NSIS reboot flag and standard success-with-restart exit",
+  );
+  assert(
+    !coordinator.replace("SetErrorLevel 3010", "").includes("SetErrorLevel"),
+    "Windows prerequisite coordinator contains an unreviewed process exit override",
+  );
+  assert(
+    coordinator.indexOf('"WindowsPrerequisiteReceiptResult" "checking"') <
+      coordinator.indexOf(fixedCommand),
+    "Windows prerequisite operation is not durable before the side effect",
+  );
+  assert(
+    coordinator.includes("one non-authoritative receipt") &&
+      coordinator.includes("never readiness proof") &&
+      coordinator.includes("every app") &&
+      coordinator.includes("re-probes authoritative Windows state"),
+    "Windows prerequisite receipt can be mistaken for authoritative readiness state",
+  );
+  for (const forbiddenControlName of [
+    "WindowsPrerequisiteStatus",
+    "WindowsPrerequisiteResumePending",
+  ]) {
+    assert(
+      !coordinator.includes(forbiddenControlName),
+      `Windows prerequisite receipt uses an authoritative-looking control name: ${forbiddenControlName}`,
+    );
+  }
+
+  for (const id of [
+    "windowsPrerequisiteChecking",
+    "windowsPrerequisiteReady",
+    "windowsPrerequisiteRestart",
+    "windowsPrerequisiteRetry",
+  ]) {
+    assert(
+      vendored.split(`LangString ${id} ${"${LANG_ENGLISH}"}`).length === 2 &&
+        vendored.split(`LangString ${id} ${"${LANG_TRADCHINESE}"}`).length === 2,
+      `Windows prerequisite message is not defined once in both product languages: ${id}`,
+    );
+  }
+
+  const installStart = vendored.indexOf("Section Install\n");
+  const installEnd = vendored.indexOf("SectionEnd\n", installStart);
+  assert(installStart !== -1 && installEnd > installStart, "Install section is missing");
+  const install = vendored.slice(installStart, installEnd);
+  assertOrdered(
+    install,
+    [
+      'File "${MAINBINARYSRCPATH}"',
+      "; Copy external binaries",
+      'WriteUninstaller "$INSTDIR\\uninstall.exe"',
+      'WriteRegStr SHCTX "${UNINSTKEY}" "DisplayVersion" "${VERSION}"',
+      "!insertmacro NSIS_HOOK_POSTINSTALL",
+      "Call RunWindowsInstallerPrerequisiteCoordinator",
+      "SetAutoClose true",
+    ],
+    "application-first Windows prerequisite dispatch",
+  );
+  assert(
+    install.split("Call RunWindowsInstallerPrerequisiteCoordinator").length === 2,
+    "Install section must run the fixed prerequisite coordinator exactly once",
+  );
 }
 
 function validateProductUninstallPatch(vendored) {
@@ -855,7 +1026,6 @@ function validateProductRepairPatch(vendored) {
       "${AndIf} $R5 == $R8",
       "${AndIf} $R6 == $R9",
       '${AndIf} $R7 == "${MAINBINARYNAME}.exe"',
-      'StrCpy $PreviousVersion $R4',
       '${If} ${FileExists} "$INSTDIR\\${MAINBINARYNAME}.exe"',
       '${AndIf} ${FileExists} "$INSTDIR\\uninstall.exe"',
       'nsis_tauri_utils::SemverCompare "${VERSION}" $R4',
@@ -870,44 +1040,18 @@ function validateProductRepairPatch(vendored) {
     ],
     "version-neutral product repair detector",
   );
-  for (const required of [
-    'StrCpy $InstallTransition "recovered-ghost-v0.1.7"',
-    'StrCpy $InstallTransition "overlaid-0.1.7"',
-    '${AndIf} $3 == ""',
-  ]) {
-    assert(detector.includes(required), `bounded runtime receipt bridge is missing: ${required}`);
-  }
   assert(
-    detector.indexOf("StrCpy $RegistrationOverlayMode 1") <
-      detector.lastIndexOf('${If} $R4 == "0.1.7"'),
-    "the old version incorrectly gates stale-registration repair",
+    detector.split("ReadRegStr").length === 7,
+    "product repair detector reads an unexpected registry field",
   );
   assert(
     !/^\s*(?:Delete|DeleteReg|RMDir|Exec|ExecWait|nsExec|WriteReg|EnumRegKey)\b/mu.test(detector),
     "product repair detection mutates state or executes an old command",
   );
   assert(!detector.includes("--unregister"), "product repair detection claims WSL state");
-
-  const preservation = extractFunction(
-    vendored,
-    "PreserveBoundedV017TransitionForV018Reinstall",
-  ).source;
-  for (const required of [
-    '!if "${VERSION}" == "0.1.8"',
-    'ReadRegStr $2 HKCU "${UNINSTKEY}" "InstallTransition"',
-    '${If} $2 == "recovered-ghost-v0.1.7"',
-    '${OrIf} $2 == "uninstalled-0.1.7"',
-    '${OrIf} $2 == "updated-0.1.7"',
-    '${OrIf} $2 == "overlaid-0.1.7"',
-    "StrCpy $InstallTransition $2",
-  ]) {
-    assert(preservation.includes(required), `bounded receipt preservation is missing: ${required}`);
-  }
   assert(
-    !/^\s*(?:Delete|DeleteReg|RMDir|Exec|ExecWait|nsExec|WriteReg|EnumRegKey)\b/mu.test(
-      preservation,
-    ),
-    "same-version receipt preservation mutates product or user state",
+    !/!if\s+"\$\{VERSION\}"\s+==\s+"\d|\$R4\s+==\s+"\d+\.\d+\.\d+"/u.test(detector),
+    "product repair detector contains a predecessor-specific branch",
   );
 
   const page = extractFunction(vendored, "PageReinstall").source;
@@ -931,7 +1075,6 @@ function validateProductRepairPatch(vendored) {
     [
       "Call RestorePreviousInstallLocation",
       "Call DetectVersionNeutralProductRepair",
-      "Call PreserveBoundedV017TransitionForV018Reinstall",
     ],
     "installer initialization",
   );
@@ -954,12 +1097,6 @@ function validateProductRepairPatch(vendored) {
     ],
     "repair install-directory lock",
   );
-  assert(
-    !vendored.includes("RunBoundedSilentV017Upgrade") &&
-      !vendored.includes("DetectBoundedV017GhostRegistration"),
-    "version-specific installer gate or old-uninstaller path remains",
-  );
-
   const installSectionStart = vendored.indexOf("Section Install\n");
   const installSectionEnd = vendored.indexOf("SectionEnd\n", installSectionStart);
   assert(installSectionStart !== -1 && installSectionEnd > installSectionStart, "Install section is missing");
@@ -999,6 +1136,72 @@ function expectRepairMutationRejected(vendored, functionName, before, after, lab
 }
 
 function validateMutationGuards(vendored) {
+  for (const [before, after, label] of [
+    [
+      'nsExec::ExecToStack /TIMEOUT=360000 \'"$INSTDIR\\ai-security-scanner-cli.exe" --json windows-installer-prerequisite\'',
+      'nsExec::ExecToStack \'"$INSTDIR\\ai-security-scanner-cli.exe" --json windows-installer-prerequisite\'',
+      "Windows prerequisite outer timeout removed",
+    ],
+    [
+      '"WindowsPrerequisiteReceiptResult" "checking"',
+      '"WindowsPrerequisiteReceiptResult" "ready"',
+      "Windows prerequisite in-progress state removed",
+    ],
+    [
+      '"result_class":"ready","exit_code":0,"restart_required":false,"terminal":"complete"',
+      '"result_class":"ready","exit_code":0,"restart_required":false,"terminal":"partial"',
+      "Windows prerequisite complete-envelope sentinel changed",
+    ],
+    [
+      '"result_class":"restart_required","exit_code":10,"restart_required":true',
+      '"result_class":"restart_required","exit_code":0,"restart_required":true',
+      "Windows prerequisite restart exit binding changed",
+    ],
+    [
+      "SetRebootFlag true",
+      "",
+      "Windows prerequisite restart flag removed",
+    ],
+    [
+      "SetErrorLevel 3010",
+      "",
+      "Windows prerequisite restart process exit removed",
+    ],
+    [
+      "SetErrorLevel 3010",
+      "SetErrorLevel 0",
+      "Windows prerequisite restart process exit changed",
+    ],
+    [
+      'WriteRegStr HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteReceiptResult" "retry"',
+      'Abort',
+      "Windows prerequisite graceful degradation replaced by install abort",
+    ],
+    [
+      "Call RunWindowsInstallerPrerequisiteCoordinator",
+      "",
+      "Windows prerequisite installer dispatch removed",
+    ],
+  ]) {
+    const first = vendored.indexOf(before);
+    assert(first !== -1, `Windows prerequisite mutation fixture is missing: ${label}`);
+    assert(
+      vendored.indexOf(before, first + before.length) === -1,
+      `Windows prerequisite mutation fixture is ambiguous: ${label}`,
+    );
+    const mutated = `${vendored.slice(0, first)}${after}${vendored.slice(first + before.length)}`;
+    let prerequisiteRejected = false;
+    try {
+      validateWindowsPrerequisitePatch(mutated);
+    } catch {
+      prerequisiteRejected = true;
+    }
+    assert(
+      prerequisiteRejected,
+      `NSIS Windows prerequisite validator accepted mutation: ${label}`,
+    );
+  }
+
   for (const [functionName, before, after, label] of [
     ["DetectVersionNeutralProductRepair", '    ${AndIf} $R3 == "${MANUFACTURER}"\n', "", "publisher binding removed"],
     ["DetectVersionNeutralProductRepair", "    ${AndIf} $R6 == $R9\n", "", "uninstall path binding removed"],
@@ -1175,6 +1378,10 @@ export async function validateWindowsNsisTemplate() {
     "NSIS must expose the configured English and Traditional Chinese language selector",
   );
   assert(
+    tauri.bundle?.externalBin?.includes("binaries/ai-security-scanner-cli") === true,
+    "the fixed NSIS prerequisite coordinator CLI is not packaged as an installed Windows sidecar",
+  );
+  assert(
     packageLock.packages?.["node_modules/@tauri-apps/cli"]?.version === "2.11.4",
     "reviewed NSIS template is not paired with the pinned Tauri CLI 2.11.4",
   );
@@ -1191,6 +1398,7 @@ export async function validateWindowsNsisTemplate() {
     );
   }
   validateModeledDecisionTable();
+  validateWindowsPrerequisitePatch(vendored);
   validateProductRepairPatch(vendored);
   validateProductUninstallPatch(vendored);
   validateMutationGuards(vendored);
@@ -1200,7 +1408,7 @@ export async function validateWindowsNsisTemplate() {
     "reversing the reviewed patch does not reconstruct the pinned upstream template",
   );
   process.stdout.write(
-    `Source-validated version-neutral NSIS repair, bilingual bounded uninstall, and exact postconditions against ${provenance.upstreamTag} (${provenance.upstreamCommit}); this is not Windows installer qualification\n`,
+    `Source-validated fixed Windows prerequisite preparation, version-neutral NSIS repair, bilingual bounded uninstall, and exact postconditions against ${provenance.upstreamTag} (${provenance.upstreamCommit}); this is not Windows installer qualification\n`,
   );
 }
 

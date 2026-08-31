@@ -587,7 +587,10 @@ try {
       "/S", "/D=$installDirectory"
     ) -Wait -PassThru
   }
-  if ($install.ExitCode -ne 0) {
+  $installSucceeded = $install.ExitCode -eq 0 -or (
+    $InstallerType -eq "nsis" -and $install.ExitCode -eq 3010
+  )
+  if (-not $installSucceeded) {
     throw "$InstallerType installation failed with status $($install.ExitCode)."
   }
   $installed = $true

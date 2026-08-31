@@ -5,10 +5,10 @@
 ; Upstream SHA-256: 20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079
 ; Upstream license: Apache-2.0 OR MIT
 ; Local patch: version-neutral stale-registration and same-version repair,
-; data-preserving upgrade overlays, the bounded v0.1.7 runtime transition
-; receipts, and a bilingual three-choice uninstall delegated to the fixed
-; product CLI with bounded, visible coordinator records and exact registration
-; postconditions.
+; data-preserving upgrade overlays, fixed Windows-prerequisite preparation with
+; durable restart/resume state, and a bilingual three-choice uninstall
+; delegated to the fixed product CLI with bounded, visible coordinator records
+; and exact registration postconditions.
 ; The release validator reverses these reviewed hunks and verifies both
 ; complete-file SHA-256 values.
 
@@ -89,8 +89,6 @@ Var UpdateMode
 Var NoShortcutMode
 Var WixMode
 Var OldMainBinaryName
-Var PreviousVersion
-Var InstallTransition
 Var RegistrationOverlayMode
 
 Name "${PRODUCTNAME}"
@@ -253,7 +251,6 @@ Function PageReinstall
   ${Else}
     ReadRegStr $R0 SHCTX "${UNINSTKEY}" "DisplayVersion"
   ${EndIf}
-  StrCpy $PreviousVersion $R0
   ${IfThen} $R0 == "" ${|} StrCpy $R4 "$(unknown)" ${|}
 
   nsis_tauri_utils::SemverCompare "${VERSION}" $R0
@@ -352,9 +349,6 @@ Function PageLeaveReinstall
 
   ; In update mode, always proceeds without uninstalling
   ${If} $UpdateMode = 1
-    ${If} $PreviousVersion == "0.1.7"
-      StrCpy $InstallTransition "updated-0.1.7"
-    ${EndIf}
     Goto reinst_done
   ${EndIf}
 
@@ -372,18 +366,12 @@ Function PageLeaveReinstall
     ${If} $R1 = 1              ; User chose to uninstall
       Goto reinst_uninstall
     ${Else}
-      ${If} $PreviousVersion == "0.1.7"
-        StrCpy $InstallTransition "overlaid-0.1.7"
-      ${EndIf}
       Goto reinst_done         ; User chose NOT to uninstall
     ${EndIf}
   ${ElseIf} $R0 = -1 ; Downgrading
     ${If} $R1 = 1              ; User chose to uninstall
       Goto reinst_uninstall
     ${Else}
-      ${If} $PreviousVersion == "0.1.7"
-        StrCpy $InstallTransition "overlaid-0.1.7"
-      ${EndIf}
       Goto reinst_done         ; User chose NOT to uninstall
     ${EndIf}
   ${EndIf}
@@ -428,10 +416,6 @@ Function PageLeaveReinstall
       ; Other erros? show generic error message and return to select un/reinstall page
       MessageBox MB_ICONEXCLAMATION "$(unableToUninstall)"
       Abort
-    ${EndIf}
-    ${If} $WixMode <> 1
-    ${AndIf} $PreviousVersion == "0.1.7"
-      StrCpy $InstallTransition "uninstalled-0.1.7"
     ${EndIf}
   reinst_done:
 FunctionEnd
@@ -595,11 +579,21 @@ FunctionEnd
   !include "{{this}}"
 {{/each}}
 
-; BEGIN AI SECURITY SCANNER BILINGUAL UNINSTALL STRINGS
-; Product-specific uninstall messages are deliberately available in every
-; configured installer language. Scanner/runtime terminology stays out of the
-; primary choice page; these strings appear only when an operation is partial
-; or cannot safely continue.
+; BEGIN AI SECURITY SCANNER BILINGUAL PRODUCT STRINGS
+; Product-specific messages are deliberately available in every configured
+; installer language. WSL/runtime terminology stays out of these first-layer
+; messages and remains available only in the install log/Technical details.
+LangString windowsPrerequisiteChecking ${LANG_ENGLISH} "Preparing the Windows support used by local scan tools..."
+LangString windowsPrerequisiteChecking ${LANG_TRADCHINESE} "正在準備本機掃描工具需要的 Windows 支援..."
+LangString windowsPrerequisiteReady ${LANG_ENGLISH} "Windows support for local scan tools is ready."
+LangString windowsPrerequisiteReady ${LANG_TRADCHINESE} "本機掃描工具需要的 Windows 支援已準備完成。"
+LangString windowsPrerequisiteRestart ${LANG_ENGLISH} "Windows needs a restart before local scan tools can finish preparing. The app will continue automatically the next time it opens."
+LangString windowsPrerequisiteRestart ${LANG_TRADCHINESE} "Windows 需要重新啟動，才能完成本機掃描工具的準備。下次開啟應用程式時會自動繼續。"
+LangString windowsPrerequisiteRetry ${LANG_ENGLISH} "Windows support could not finish preparing. The app is installed and can open; local scan tools will retry automatically."
+LangString windowsPrerequisiteRetry ${LANG_TRADCHINESE} "Windows 支援尚未準備完成。應用程式已安裝並可正常開啟；本機掃描工具會自動重試。"
+
+; Uninstall messages appear only when an operation is partial or cannot safely
+; continue. Scanner/runtime terminology stays out of the primary choice page.
 LangString unCoordinatorRecordLabel ${LANG_ENGLISH} "Privacy-safe removal details:"
 LangString unCoordinatorRecordLabel ${LANG_TRADCHINESE} "不含敏感資訊的移除細節："
 LangString unCoordinatorStartFailed ${LANG_ENGLISH} "The app could not prepare removal. Nothing was deleted. Close ai-security-scanner and try again."
@@ -622,7 +616,85 @@ LangString unCoordinatorContactRetained ${LANG_ENGLISH} "The scan could not be s
 LangString unCoordinatorContactRetained ${LANG_TRADCHINESE} "掃描無法停止，因此應用程式與資料都已保留。"
 LangString unPostconditionPartial ${LANG_ENGLISH} "Windows could not remove every app file or registration. Anything it could not confirm was left untouched. Restart Windows, then try uninstalling again."
 LangString unPostconditionPartial ${LANG_TRADCHINESE} "Windows 無法移除所有應用程式檔案或登錄資料。無法確認的內容都保持原狀。請重新啟動 Windows，然後再次解除安裝。"
-; END AI SECURITY SCANNER BILINGUAL UNINSTALL STRINGS
+; END AI SECURITY SCANNER BILINGUAL PRODUCT STRINGS
+
+Function RunWindowsInstallerPrerequisiteCoordinator
+  ; Application binaries and registration already exist when this runs. The
+  ; fixed CLI command accepts no action, executable, argument, path, target, or
+  ; webview input. It derives the read-only Windows check and, only when needed,
+  ; one product-defined Microsoft servicing action inside the trusted backend.
+  ; Persist one non-authoritative receipt before the side effect so an
+  ; interrupted install records that preparation may need to continue. These
+  ; values are never readiness proof and never drive a UI state: every app
+  ; launch re-probes authoritative Windows state before resuming automatically.
+  WriteRegStr HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteReceiptSchema" "ai-security-scanner.windows-prerequisite-receipt/v1"
+  WriteRegStr HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteReceiptInstallerVersion" "${VERSION}"
+  WriteRegStr HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteReceiptResult" "checking"
+  WriteRegDWORD HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteResumeHint" 1
+  DetailPrint "$(windowsPrerequisiteChecking)"
+
+  ${IfNot} ${FileExists} "$INSTDIR\ai-security-scanner-cli.exe"
+    Goto windows_prerequisite_retry
+  ${EndIf}
+
+  ; The backend owns a five-minute servicing deadline. This six-minute outer
+  ; bound also covers startup and result serialization without making NSIS wait
+  ; forever. No scanner output, target, credential, or user path is accepted.
+  nsExec::ExecToStack /TIMEOUT=360000 '"$INSTDIR\ai-security-scanner-cli.exe" --json windows-installer-prerequisite'
+  Pop $R0
+  Pop $R1
+  ${If} $R0 == "error"
+    Goto windows_prerequisite_retry
+  ${EndIf}
+  ${If} $R0 == "timeout"
+    Goto windows_prerequisite_retry
+  ${EndIf}
+
+  ; Accept only one of five complete, exact envelopes paired with its process
+  ; exit class. The envelope intentionally contains no diagnostic or machine
+  ; data and is never executed or copied into another command.
+  ${If} $R0 = 0
+    ${If} $R1 != '{"schema_version":"ai-security-scanner.windows-installer-prerequisite/v1","result_class":"ready","exit_code":0,"restart_required":false,"terminal":"complete"}'
+    ${AndIf} $R1 != '{"schema_version":"ai-security-scanner.windows-installer-prerequisite/v1","result_class":"serviced","exit_code":0,"restart_required":false,"terminal":"complete"}'
+      Goto windows_prerequisite_retry
+    ${EndIf}
+    WriteRegStr HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteReceiptResult" "ready"
+    WriteRegDWORD HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteResumeHint" 0
+    DetailPrint "$(windowsPrerequisiteReady)"
+    Return
+  ${ElseIf} $R0 = 10
+    ${If} $R1 != '{"schema_version":"ai-security-scanner.windows-installer-prerequisite/v1","result_class":"restart_required","exit_code":10,"restart_required":true,"terminal":"complete"}'
+      Goto windows_prerequisite_retry
+    ${EndIf}
+    WriteRegStr HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteReceiptResult" "restart_required"
+    WriteRegDWORD HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteResumeHint" 1
+    ; Tell interactive, passive, and silent NSIS hosts that Windows requested a
+    ; restart without treating the installed app as failed or rolling it back.
+    SetRebootFlag true
+    SetErrorLevel 3010
+    DetailPrint "$(windowsPrerequisiteRestart)"
+    Return
+  ${ElseIf} $R0 = 20
+    ${If} $R1 != '{"schema_version":"ai-security-scanner.windows-installer-prerequisite/v1","result_class":"cancelled","exit_code":20,"restart_required":false,"terminal":"complete"}'
+      Goto windows_prerequisite_retry
+    ${EndIf}
+  ${ElseIf} $R0 = 30
+    ${If} $R1 != '{"schema_version":"ai-security-scanner.windows-installer-prerequisite/v1","result_class":"failed","exit_code":30,"restart_required":false,"terminal":"complete"}'
+      Goto windows_prerequisite_retry
+    ${EndIf}
+  ${Else}
+    Goto windows_prerequisite_retry
+  ${EndIf}
+
+  windows_prerequisite_retry:
+  ; Cancellation, failure, timeout, a malformed helper result, and a missing
+  ; helper all degrade only runtime-dependent tasks. Keep the installed shell,
+  ; projects, reports, and unsigned exports available. The app rechecks the
+  ; authoritative Windows state and retries the same fixed path automatically.
+  WriteRegStr HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteReceiptResult" "retry"
+  WriteRegDWORD HKCU "${MANUPRODUCTKEY}" "WindowsPrerequisiteResumeHint" 1
+  DetailPrint "$(windowsPrerequisiteRetry)"
+FunctionEnd
 
 Function .onInit
   ${GetOptions} $CMDLINE "/P" $PassiveMode
@@ -672,7 +744,6 @@ Function .onInit
   ; registration can therefore be repaired without making private data or a
   ; managed runtime an installer prerequisite.
   Call DetectVersionNeutralProductRepair
-  Call PreserveBoundedV017TransitionForV018Reinstall
 
 
   !if "${INSTALLMODE}" == "both"
@@ -863,11 +934,6 @@ Section Install
   WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
   WriteRegDWORD SHCTX "${UNINSTKEY}" "NoModify" "1"
   WriteRegDWORD SHCTX "${UNINSTKEY}" "NoRepair" "1"
-  ${If} $InstallTransition == ""
-    DeleteRegValue SHCTX "${UNINSTKEY}" "InstallTransition"
-  ${Else}
-    WriteRegStr SHCTX "${UNINSTKEY}" "InstallTransition" "$InstallTransition"
-  ${EndIf}
 
   ${GetSize} "$INSTDIR" "/M=uninstall.exe /S=0K /G=0" $0 $1 $2
   IntOp $0 $0 + ${ESTIMATEDSIZE}
@@ -895,6 +961,11 @@ Section Install
   !ifmacrodef NSIS_HOOK_POSTINSTALL
     !insertmacro NSIS_HOOK_POSTINSTALL
   !endif
+
+  ; Prepare Windows support only after every application binary and its
+  ; registration have been installed. Failure can therefore never roll back or
+  ; hide the application shell, and no later manual setup page is required.
+  Call RunWindowsInstallerPrerequisiteCoordinator
 
   ; Auto close this page for passive mode
   ${If} $PassiveMode = 1
@@ -1424,7 +1495,6 @@ FunctionEnd
 
 Function DetectVersionNeutralProductRepair
   StrCpy $RegistrationOverlayMode 0
-  StrCpy $InstallTransition ""
   ; Bind automatic repair to the exact HKCU product identity and its internally
   ; consistent install path. DisplayVersion is deliberately not an ownership
   ; proof: a stale registration from any product version can be repaired. This
@@ -1437,7 +1507,6 @@ Function DetectVersionNeutralProductRepair
     ReadRegStr $R5 HKCU "${UNINSTKEY}" "InstallLocation"
     ReadRegStr $R6 HKCU "${UNINSTKEY}" "UninstallString"
     ReadRegStr $R7 HKCU "${UNINSTKEY}" "MainBinaryName"
-    ReadRegStr $3 HKCU "${UNINSTKEY}" "InstallTransition"
     StrCpy $R8 '$\"$INSTDIR$\"'
     StrCpy $R9 '$\"$INSTDIR\uninstall.exe$\"'
     ${If} $R2 == "${PRODUCTNAME}"
@@ -1445,7 +1514,6 @@ Function DetectVersionNeutralProductRepair
     ${AndIf} $R5 == $R8
     ${AndIf} $R6 == $R9
     ${AndIf} $R7 == "${MAINBINARYNAME}.exe"
-      StrCpy $PreviousVersion $R4
       ${If} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
       ${AndIf} ${FileExists} "$INSTDIR\uninstall.exe"
         nsis_tauri_utils::SemverCompare "${VERSION}" $R4
@@ -1459,12 +1527,6 @@ Function DetectVersionNeutralProductRepair
           DetailPrint "Repairing this ai-security-scanner version in place."
         ${ElseIf} $R1 = 1
           StrCpy $RegistrationOverlayMode 3
-          !if "${VERSION}" == "0.1.8"
-            ${If} $R4 == "0.1.7"
-            ${AndIf} $3 == ""
-              StrCpy $InstallTransition "overlaid-0.1.7"
-            ${EndIf}
-          !endif
           DetailPrint "Upgrading ai-security-scanner in place while preserving its data."
         ${EndIf}
       ${Else}
@@ -1473,50 +1535,9 @@ Function DetectVersionNeutralProductRepair
         ; this candidate's files and registry values.
         StrCpy $RegistrationOverlayMode 1
         StrCpy $R0 0
-        !if "${VERSION}" == "0.1.8"
-          ${If} $R4 == "0.1.7"
-          ${AndIf} $3 == ""
-            StrCpy $InstallTransition "recovered-ghost-v0.1.7"
-          ${EndIf}
-        !endif
         DetailPrint "Repairing an incomplete ai-security-scanner installation in place."
       ${EndIf}
     ${EndIf}
-  !endif
-FunctionEnd
-
-Function PreserveBoundedV017TransitionForV018Reinstall
-  ; A same-version v0.1.8 repair must not erase the one-shot proof before the
-  ; managed runtime has consumed it. Preserve only the four receipts accepted
-  ; by the bounded N-1 verifier, and only for one complete current-user v0.1.8
-  ; product registration whose executable and uninstaller are both present.
-  !if "${VERSION}" == "0.1.8"
-  !if "${INSTALLMODE}" == "currentUser"
-    ReadRegStr $R2 HKCU "${UNINSTKEY}" "DisplayName"
-    ReadRegStr $R3 HKCU "${UNINSTKEY}" "Publisher"
-    ReadRegStr $R4 HKCU "${UNINSTKEY}" "DisplayVersion"
-    ReadRegStr $R5 HKCU "${UNINSTKEY}" "InstallLocation"
-    ReadRegStr $R6 HKCU "${UNINSTKEY}" "UninstallString"
-    ReadRegStr $R7 HKCU "${UNINSTKEY}" "MainBinaryName"
-    ReadRegStr $2 HKCU "${UNINSTKEY}" "InstallTransition"
-    StrCpy $R8 '$\"$INSTDIR$\"'
-    StrCpy $R9 '$\"$INSTDIR\uninstall.exe$\"'
-    ${If} $R2 == "${PRODUCTNAME}"
-    ${AndIf} $R3 == "${MANUFACTURER}"
-    ${AndIf} $R4 == "0.1.8"
-    ${AndIf} $R5 == $R8
-    ${AndIf} $R6 == $R9
-    ${AndIf} $R7 == "${MAINBINARYNAME}.exe"
-    ${AndIf} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
-    ${AndIf} ${FileExists} "$INSTDIR\uninstall.exe"
-      ${If} $2 == "recovered-ghost-v0.1.7"
-      ${OrIf} $2 == "uninstalled-0.1.7"
-      ${OrIf} $2 == "updated-0.1.7"
-      ${OrIf} $2 == "overlaid-0.1.7"
-        StrCpy $InstallTransition $2
-      ${EndIf}
-    ${EndIf}
-  !endif
   !endif
 FunctionEnd
 

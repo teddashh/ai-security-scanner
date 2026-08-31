@@ -32,6 +32,7 @@ use ai_security_scanner_lib::managed_network::{
 };
 use ai_security_scanner_lib::managed_runtime::{
     ManagedRuntimeManager, ManagedStopMode, ManagedUninstallOptions,
+    WindowsInstallerPrerequisiteClass, prepare_windows_installer_prerequisite,
 };
 use ai_security_scanner_lib::orchestrator::{ExecutionCheckpoint, ExecutionStage};
 use ai_security_scanner_lib::process_lease::DataDirectoryExclusiveLease;
@@ -53,6 +54,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 const MANAGED_RUNTIME_QUALIFICATION_ENGINE_ID: &str = "gitleaks";
@@ -97,6 +99,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Run the installed package's fixed Windows prerequisite check/servicing
+    /// coordinator before opening any project or accepting any caller input.
+    #[command(hide = true)]
+    WindowsInstallerPrerequisite,
     /// Coordinate one exact installed-product uninstall choice before opening
     /// the case database or engine catalog. Intended for the package uninstaller.
     ProductUninstall(ProductUninstallArgs),
@@ -839,6 +845,15 @@ struct ProductUninstallCoordinatorEnvelope {
     terminal: &'static str,
 }
 
+#[derive(Debug, Serialize)]
+struct WindowsInstallerPrerequisiteCoordinatorEnvelope {
+    schema_version: &'static str,
+    result_class: WindowsInstallerPrerequisiteClass,
+    exit_code: u8,
+    restart_required: bool,
+    terminal: &'static str,
+}
+
 impl GlobalOptionSources {
     fn data_dir_was_explicit(self) -> bool {
         self.data_dir == Some(ValueSource::CommandLine)
@@ -850,6 +865,9 @@ impl GlobalOptionSources {
 }
 
 async fn execute(cli: Cli, option_sources: GlobalOptionSources) -> AppResult<u8> {
+    if matches!(cli.command, Command::WindowsInstallerPrerequisite) {
+        return execute_windows_installer_prerequisite_early(option_sources);
+    }
     if let Command::ProductUninstall(args) = &cli.command {
         return execute_product_uninstall_early(&cli, args, option_sources);
     }
@@ -875,6 +893,9 @@ async fn execute(cli: Cli, option_sources: GlobalOptionSources) -> AppResult<u8>
     );
 
     match cli.command {
+        Command::WindowsInstallerPrerequisite => {
+            unreachable!("Windows installer prerequisite is early-dispatched")
+        }
         Command::ProductUninstall(_) => unreachable!("product uninstall is early-dispatched"),
         Command::Case { command } => {
             execute_case(command, &storage, &service, cli.json)?;
@@ -982,6 +1003,64 @@ fn validate_product_uninstall_option_sources(option_sources: GlobalOptionSources
     Ok(())
 }
 
+fn validate_windows_installer_prerequisite_option_sources(
+    option_sources: GlobalOptionSources,
+) -> AppResult<()> {
+    if option_sources.data_dir_was_explicit() {
+        return Err(AppError::NotAuthorized(
+            "windows-installer-prerequisite refuses an explicit global --data-dir override".into(),
+        ));
+    }
+    if option_sources.managed_runtime_bundle_was_explicit() {
+        return Err(AppError::NotAuthorized(
+            "windows-installer-prerequisite refuses an explicit managed-runtime bundle override"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+fn windows_installer_prerequisite_exit(
+    result_class: &WindowsInstallerPrerequisiteClass,
+) -> (u8, bool) {
+    match result_class {
+        WindowsInstallerPrerequisiteClass::Ready | WindowsInstallerPrerequisiteClass::Serviced => {
+            (0, false)
+        }
+        WindowsInstallerPrerequisiteClass::RestartRequired => (10, true),
+        WindowsInstallerPrerequisiteClass::Cancelled => (20, false),
+        WindowsInstallerPrerequisiteClass::Failed => (30, false),
+    }
+}
+
+fn execute_windows_installer_prerequisite_early(
+    option_sources: GlobalOptionSources,
+) -> AppResult<u8> {
+    // Environment-backed development overrides are ignored. Explicit global
+    // overrides are rejected so the package cannot be redirected toward a
+    // caller-selected data directory, bundle, executable, action, or argument.
+    validate_windows_installer_prerequisite_option_sources(option_sources)?;
+    let result = prepare_windows_installer_prerequisite()?;
+    let (exit_code, restart_required) = windows_installer_prerequisite_exit(&result.class);
+    let envelope = WindowsInstallerPrerequisiteCoordinatorEnvelope {
+        schema_version: "ai-security-scanner.windows-installer-prerequisite/v1",
+        result_class: result.class,
+        exit_code,
+        restart_required,
+        terminal: "complete",
+    };
+    // Deliberately no detail and no trailing newline. NSIS accepts only this
+    // complete, compact, privacy-safe terminal envelope paired with its exact
+    // process exit class. The backend result detail remains in-process.
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    serde_json::to_writer(&mut stdout, &envelope)?;
+    // `main` uses `process::exit` for restart/cancel/failure classes, so the
+    // complete envelope must cross the pipe before the nonzero exit occurs.
+    stdout.flush()?;
+    Ok(exit_code)
+}
+
 fn execute_product_uninstall_early(
     cli: &Cli,
     args: &ProductUninstallArgs,
@@ -1084,6 +1163,9 @@ fn execute_product_uninstall_early(
 
 fn command_requires_exclusive_data_directory(command: &Command) -> bool {
     match command {
+        // Both package coordinators are early-dispatched before the data root,
+        // database, catalog, or any caller-selected runtime state is opened.
+        Command::WindowsInstallerPrerequisite => false,
         // ProductUninstall is early-dispatched and acquires the same lease
         // before database/catalog initialization.
         Command::ProductUninstall(_) => false,
@@ -2993,6 +3075,122 @@ mod tests {
     #[test]
     fn complete_command_tree_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn windows_installer_prerequisite_is_hidden_zero_input_and_early_dispatched() {
+        let parsed = Cli::try_parse_from([
+            "ai-security-scanner",
+            "--json",
+            "windows-installer-prerequisite",
+        ])
+        .expect("fixed installed-package prerequisite invocation");
+        assert!(matches!(
+            parsed.command,
+            Command::WindowsInstallerPrerequisite
+        ));
+        assert!(!command_requires_exclusive_data_directory(&parsed.command));
+
+        for unexpected in ["--action", "--path", "--executable", "--arguments"] {
+            assert!(
+                Cli::try_parse_from([
+                    "ai-security-scanner",
+                    "--json",
+                    "windows-installer-prerequisite",
+                    unexpected,
+                    "caller-selected",
+                ])
+                .is_err(),
+                "hidden package coordinator accepted {unexpected}",
+            );
+        }
+    }
+
+    #[test]
+    fn windows_installer_prerequisite_envelopes_are_exact_redacted_and_bounded() {
+        let fixtures = [
+            (WindowsInstallerPrerequisiteClass::Ready, 0, false, "ready"),
+            (
+                WindowsInstallerPrerequisiteClass::Serviced,
+                0,
+                false,
+                "serviced",
+            ),
+            (
+                WindowsInstallerPrerequisiteClass::RestartRequired,
+                10,
+                true,
+                "restart_required",
+            ),
+            (
+                WindowsInstallerPrerequisiteClass::Cancelled,
+                20,
+                false,
+                "cancelled",
+            ),
+            (
+                WindowsInstallerPrerequisiteClass::Failed,
+                30,
+                false,
+                "failed",
+            ),
+        ];
+        for (result_class, expected_exit, expected_restart, encoded_class) in fixtures {
+            let (exit_code, restart_required) = windows_installer_prerequisite_exit(&result_class);
+            assert_eq!(exit_code, expected_exit);
+            assert_eq!(restart_required, expected_restart);
+            let envelope = WindowsInstallerPrerequisiteCoordinatorEnvelope {
+                schema_version: "ai-security-scanner.windows-installer-prerequisite/v1",
+                result_class,
+                exit_code,
+                restart_required,
+                terminal: "complete",
+            };
+            let encoded = serde_json::to_string(&envelope).unwrap();
+            assert!(encoded.len() < 256);
+            assert!(encoded.starts_with(
+                "{\"schema_version\":\"ai-security-scanner.windows-installer-prerequisite/v1\""
+            ));
+            assert!(encoded.contains(&format!("\"result_class\":\"{encoded_class}\"")));
+            assert!(encoded.contains(&format!("\"exit_code\":{expected_exit}")));
+            assert!(encoded.contains(&format!("\"restart_required\":{expected_restart}")));
+            assert!(encoded.ends_with("\"terminal\":\"complete\"}"));
+            for forbidden in [
+                "detail",
+                "target",
+                "path",
+                "argument",
+                "executable",
+                "provider",
+                "runtime_name",
+            ] {
+                assert!(!encoded.contains(forbidden));
+            }
+        }
+    }
+
+    #[test]
+    fn windows_installer_prerequisite_ignores_environment_overrides_but_rejects_cli_overrides() {
+        validate_windows_installer_prerequisite_option_sources(GlobalOptionSources {
+            data_dir: Some(ValueSource::EnvVariable),
+            managed_runtime_bundle: Some(ValueSource::EnvVariable),
+        })
+        .expect("inherited development overrides cannot redirect package preparation");
+
+        for option_sources in [
+            GlobalOptionSources {
+                data_dir: Some(ValueSource::CommandLine),
+                managed_runtime_bundle: None,
+            },
+            GlobalOptionSources {
+                data_dir: None,
+                managed_runtime_bundle: Some(ValueSource::CommandLine),
+            },
+        ] {
+            assert!(
+                validate_windows_installer_prerequisite_option_sources(option_sources).is_err()
+            );
+        }
     }
 
     #[test]

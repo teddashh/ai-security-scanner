@@ -45,19 +45,26 @@ const MACHINE_START_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MACHINE_STOP_TIMEOUT: Duration = Duration::from_secs(90);
 #[cfg(any(windows, test))]
 const WINDOWS_WSL_PREREQUISITE_REPAIR_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+#[cfg(any(windows, test))]
+const WINDOWS_WSL_MISSING_BINARY_STAGE_TIMEOUT: Duration = Duration::from_secs(150);
+#[cfg(any(windows, test))]
+const WINDOWS_WSL_SERVICING_COOLDOWN: Duration = Duration::from_secs(15 * 60);
+#[cfg(windows)]
+const WINDOWS_PREREQUISITE_REGISTRY_PATH: &str =
+    "Software\\ai-security-scanner contributors\\ai-security-scanner";
+#[cfg(windows)]
+const WINDOWS_WSL_SERVICING_COOLDOWN_VALUE: &str = "WindowsPrerequisiteServicingCooldownUntilUnix";
 const MAX_AUTOMATIC_WINDOWS_WSL_PREREQUISITE_REPAIRS: usize = 3;
-const WINDOWS_WSL_RECOVERY_TIMEOUT: Duration = Duration::from_secs(60 * 60);
-const WINDOWS_WSL_VHD_RELEASE_TIMEOUT: Duration = MACHINE_STOP_TIMEOUT;
-const WINDOWS_WSL_VHD_RELEASE_POLL: Duration = Duration::from_millis(100);
+#[cfg(windows)]
 const WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(windows)]
 const WINDOWS_WSL_PROVIDER_DELETE_POLL: Duration = Duration::from_millis(100);
 const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
 const DOWNLOAD_CHUNK_BYTES: usize = 128 * 1024;
-// The longest single command in setup is the bounded one-hour WSL recovery
-// export/import. Allow that command to reach its own deadline before declaring
-// that the worker stopped reporting liveness.
-const MANAGED_RUNTIME_SETUP_STALE_AFTER: Duration = Duration::from_secs(65 * 60);
+// The longest setup command is a ten-minute machine init/start. Download work
+// emits byte heartbeats, so eleven minutes without a milestone is stale.
+const MANAGED_RUNTIME_SETUP_STALE_AFTER: Duration = Duration::from_secs(11 * 60);
 const MACHINE_PREFIX: &str = "assm1";
 const WINDOWS_MACHINE_PREFIX: &str = "assm2";
 const MAX_MACHINE_NAME_BYTES: usize = 30;
@@ -77,52 +84,6 @@ const WINDOWS_WSL_GENERATION_DIRECTORY: &str = "wsl-generations";
 const WINDOWS_WSL_ISOLATED_MACHINE_PREFIX: &str = "assm2-iso-";
 const WINDOWS_WSL_ISOLATED_MACHINE_DIGEST_HEX_CHARS: usize = 20;
 const MAX_WINDOWS_WSL_ISOLATED_GENERATION_ATTEMPTS: u32 = 32;
-const WINDOWS_WSL_RECOVERY_DIRECTORY: &str = "wsl-recovery";
-const WINDOWS_WSL_RECOVERY_WORKSPACE_DIRECTORY: &str = "wsl-recovery-workspaces";
-const WINDOWS_WSL_RECOVERY_INTENT_SCHEMA_V1: &str =
-    "ai-security-scanner.managed-wsl-recovery-intent/v1";
-const WINDOWS_WSL_RECOVERY_INTENT_SCHEMA: &str =
-    "ai-security-scanner.managed-wsl-recovery-intent/v2";
-const WINDOWS_WSL_RECOVERY_BACKUP_SCHEMA: &str =
-    "ai-security-scanner.managed-wsl-recovery-backup/v1";
-const WINDOWS_WSL_RECOVERY_IMPORT_SCHEMA: &str =
-    "ai-security-scanner.managed-wsl-recovery-import/v1";
-const WINDOWS_WSL_GHOST_MIGRATION_CONSUMED_SCHEMA: &str =
-    "ai-security-scanner.managed-wsl-ghost-migration-consumed/v1";
-#[cfg(windows)]
-const WINDOWS_WSL_LEGACY_RETAINED_SCHEMA: &str =
-    "ai-security-scanner.managed-wsl-legacy-workspace-retained/v1";
-#[cfg(windows)]
-const WINDOWS_WSL_LEGACY_RETAINED_DIRECTORY: &str = "wsl-legacy-retained";
-const WINDOWS_NSIS_PRODUCT_NAME: &str = "ai-security-scanner";
-const WINDOWS_NSIS_PUBLISHER: &str = "ai-security-scanner contributors";
-const WINDOWS_NSIS_MAIN_EXECUTABLE: &str = "ai-security-scanner.exe";
-const WINDOWS_NSIS_UNINSTALL_EXECUTABLE: &str = "uninstall.exe";
-// One release may recognize exactly one predecessor. These values are the
-// SHA-256 identities published with the public v0.1.7 Windows x86-64 managed
-// runtime manifest and its pinned machine image, plus the one reviewed v0.1.8
-// staged manifest allowed to perform the migration. The current-version and
-// exact-current-manifest checks make this receipt expire instead of turning it
-// into a growing legacy-name allowlist.
-const WINDOWS_GHOST_MIGRATION_CURRENT_VERSION: &str = "0.1.8";
-const WINDOWS_GHOST_MIGRATION_CURRENT_MANIFEST_SHA256: &str =
-    "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a";
-const WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256: &str =
-    "8b2257ace33ecb14bb0995044a4e6d2b4e71b314741601122801fbb59e7de13f";
-const WINDOWS_GHOST_MIGRATION_MACHINE_IMAGE_SHA256: &str =
-    "e2b6cbcadd8b41b708fecb58a246a20d737dee0ef26872a3f75b575f77eba968";
-const WINDOWS_GHOST_MIGRATION_MACHINE_NAME: &str = "assm1-win-x64-e2b6cbcadd8b";
-#[cfg(any(windows, test))]
-const WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME: &str = "assm2-win-x64-e2b6cbcadd8b";
-const WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT: &str = "recovered-ghost-v0.1.7";
-const WINDOWS_GHOST_MIGRATION_UNINSTALLED_RECEIPT: &str = "uninstalled-0.1.7";
-const WINDOWS_GHOST_MIGRATION_UPDATED_RECEIPT: &str = "updated-0.1.7";
-const WINDOWS_GHOST_MIGRATION_OVERLAID_RECEIPT: &str = "overlaid-0.1.7";
-#[cfg(windows)]
-const WINDOWS_WSL_RECOVERY_FREE_SPACE_MARGIN_BYTES: u64 = 1024 * 1024 * 1024;
-const WINDOWS_WSL_RECOVERY_ARCHIVE_MARGIN_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-const WINDOWS_WSL_RECOVERY_ARCHIVE_DISK_MULTIPLIER: u64 = 2;
-const WINDOWS_WSL_RECOVERY_ARCHIVE_ABSOLUTE_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
 #[cfg(any(windows, test))]
 const MAX_WINDOWS_REGISTRY_STRING_BYTES: u32 = 64 * 1024;
 #[cfg(unix)]
@@ -389,149 +350,11 @@ struct WindowsWslOwnershipProof {
     ownership_basis: WindowsWslOwnershipBasis,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct WindowsWslRecoveryIntent {
-    schema_version: String,
-    recovery_id: String,
-    manifest_sha256: String,
-    machine_image_sha256: String,
-    ownership_basis: WindowsWslRecoveryOwnershipBasis,
-    source_provider_manifest_sha256: String,
-    install_transition_receipt: Option<String>,
-    machine_name: String,
-    distribution_name: String,
-    quarantine_distribution_name: String,
-    registration_base_path: PathBuf,
-    provider_home: PathBuf,
-    attempt_directory: PathBuf,
-    quarantine_install_directory: PathBuf,
-    staging_archive: PathBuf,
-    recovery_archive: PathBuf,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct WindowsWslRecoveryBackupProof {
-    schema_version: String,
-    recovery_id: String,
-    distribution_name: String,
-    quarantine_distribution_name: String,
-    recovery_archive: PathBuf,
-    size_bytes: u64,
-    sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct WindowsWslRecoveryImportProof {
-    schema_version: String,
-    recovery_id: String,
-    quarantine_distribution_name: String,
-    quarantine_install_directory: PathBuf,
-    recovery_archive: PathBuf,
-    archive_size_bytes: u64,
-    archive_sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct WindowsWslGhostMigrationConsumedProof {
-    schema_version: String,
-    recovery_id: String,
-    install_transition_receipt: String,
-    source_provider_manifest_sha256: String,
-    manifest_sha256: String,
-    machine_image_sha256: String,
-    machine_name: String,
-    distribution_name: String,
-}
-
-#[cfg(windows)]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum WindowsWslLegacyTransitionEvidenceSource {
-    NsisInstallTransition,
-    LegacyPendingRecoveryIntent,
-}
-
-/// Observation-only evidence that a proven N-1 workspace was deliberately
-/// left in place while the current Windows compatibility generation became
-/// usable. This record is never an ownership or deletion capability.
-#[cfg(windows)]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct WindowsWslLegacyWorkspaceRetainedProof {
-    schema_version: String,
-    authorizes_cleanup: bool,
-    transition_evidence_source: WindowsWslLegacyTransitionEvidenceSource,
-    install_transition_receipt: String,
-    previous_manifest_sha256: String,
-    current_manifest_sha256: String,
-    machine_image_sha256: String,
-    legacy_machine_name: String,
-    legacy_distribution_name: String,
-    current_machine_name: String,
-    current_distribution_name: String,
-    legacy_registration_id: String,
-    legacy_registration_base_path: PathBuf,
-    legacy_provider_home: PathBuf,
-    legacy_provider_namespace: String,
-    legacy_vhd_path: PathBuf,
-    legacy_vhd_size_bytes: u64,
-    legacy_vhd_volume_serial_number: u32,
-    legacy_vhd_file_index: u64,
-    legacy_vhd_number_of_links: u32,
-    legacy_vhd_attributes: u32,
-    legacy_provider_config_sha256: String,
-    legacy_ssh_public_key_sha256: String,
-    current_registration_id: String,
-    current_registration_base_path: PathBuf,
-    current_provider_home: PathBuf,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    legacy_recovery_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    legacy_recovery_intent_sha256: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WindowsWslRegistration {
     registration_id: String,
     distribution_name: String,
     base_path: PathBuf,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum WindowsWslRecoveryOwnershipBasis {
-    VerifiedManifest,
-    BoundedNMinusOneGhostMigration,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct WindowsWslRegistrationOwnership {
-    base_path: PathBuf,
-    provider_home: PathBuf,
-    ownership_basis: WindowsWslRecoveryOwnershipBasis,
-    source_provider_manifest_sha256: String,
-    install_transition_receipt: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BoundedWindowsGhostMigrationProof {
-    previous_manifest_sha256: String,
-    install_transition_receipt: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct WindowsNsisInstallation {
-    display_name: String,
-    display_version: String,
-    publisher: String,
-    install_location: String,
-    uninstall_string: String,
-    main_binary_name: String,
-    install_transition: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -781,6 +604,26 @@ pub enum ManagedRuntimePrerequisiteRepairOutcome {
 pub struct ManagedRuntimePrerequisiteRepairResult {
     pub outcome: ManagedRuntimePrerequisiteRepairOutcome,
     pub restart_required: bool,
+    pub detail: String,
+}
+
+/// Stable, zero-input outcome for the signed Windows installer prerequisite
+/// coordinator. The caller cannot choose a program, argument, provider, path,
+/// or servicing action; this module derives the one fixed action from a fresh
+/// read-only WSL probe.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowsInstallerPrerequisiteClass {
+    Ready,
+    Serviced,
+    RestartRequired,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WindowsInstallerPrerequisiteResult {
+    pub class: WindowsInstallerPrerequisiteClass,
     pub detail: String,
 }
 
@@ -1197,27 +1040,6 @@ impl ManagedRuntimeSetupController {
         self.check_cancelled()
     }
 
-    fn report_recovery_progress(&self, action: &str, processed: u64, total: u64) -> AppResult<()> {
-        if processed > total || total == 0 {
-            return Err(AppError::Runtime(
-                "managed Windows recovery progress is inconsistent".into(),
-            ));
-        }
-        let mut status = self.status.lock().map_err(|_| {
-            AppError::Internal("managed runtime setup status lock was poisoned".into())
-        })?;
-        status.phase = ManagedRuntimeSetupPhase::Recovery;
-        status.can_cancel = false;
-        status.received_bytes = processed;
-        status.total_bytes = Some(total);
-        let percent = processed as f64 * 100.0 / total as f64;
-        status.progress_percent = Some(percent);
-        status.resumed_from_bytes = 0;
-        status.detail = format!("{action}: {percent:.0}%");
-        record_managed_runtime_setup_heartbeat(&mut status, Utc::now());
-        Ok(())
-    }
-
     fn check_cancelled(&self) -> AppResult<()> {
         self.record_heartbeat()?;
         if self.cancel_requested.load(Ordering::Acquire) {
@@ -1516,10 +1338,6 @@ enum ManagedCommandOperation {
     MachineStop,
     MachineRemoval,
     WslDistributionInventory,
-    WslDistributionTerminate,
-    WslDistributionExport,
-    WslDistributionImport,
-    WslDistributionRemoval,
     ActiveContainerInventory,
     VersionPreflight,
 }
@@ -1533,10 +1351,6 @@ impl ManagedCommandOperation {
             Self::MachineStop => "managed runtime machine stop",
             Self::MachineRemoval => "managed runtime machine removal",
             Self::WslDistributionInventory => "managed Windows WSL distribution inventory",
-            Self::WslDistributionTerminate => "managed Windows WSL distribution stop",
-            Self::WslDistributionExport => "managed Windows WSL recovery export",
-            Self::WslDistributionImport => "managed Windows WSL recovery import",
-            Self::WslDistributionRemoval => "managed Windows WSL distribution replacement",
             Self::ActiveContainerInventory => "managed runtime active-container inventory",
             Self::VersionPreflight => "managed runtime version preflight",
         }
@@ -1556,16 +1370,6 @@ trait WindowsWslRegistrationReader: Send + Sync {
     fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>>;
 }
 
-trait WindowsNsisInstallationReader: Send + Sync {
-    fn installation(&self) -> AppResult<Option<WindowsNsisInstallation>>;
-    fn local_app_data_directory(&self) -> AppResult<PathBuf>;
-    fn consume_install_transition(
-        &self,
-        expected_installation: &WindowsNsisInstallation,
-        expected_receipt: &str,
-    ) -> AppResult<()>;
-}
-
 trait WindowsWslPrerequisiteRepairer: Send + Sync {
     fn repair(
         &self,
@@ -1579,40 +1383,6 @@ struct DirectWindowsWslRegistrationReader;
 impl WindowsWslRegistrationReader for DirectWindowsWslRegistrationReader {
     fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>> {
         windows_wsl_registrations()
-    }
-}
-
-#[derive(Debug, Default)]
-struct DirectWindowsNsisInstallationReader;
-
-impl WindowsNsisInstallationReader for DirectWindowsNsisInstallationReader {
-    fn installation(&self) -> AppResult<Option<WindowsNsisInstallation>> {
-        windows_nsis_installation()
-    }
-
-    fn local_app_data_directory(&self) -> AppResult<PathBuf> {
-        #[cfg(windows)]
-        return Ok(windows_local_app_data_directory()?);
-        #[cfg(not(windows))]
-        Err(AppError::NotAvailable(
-            "Windows LocalAppData is unavailable on this host".into(),
-        ))
-    }
-
-    fn consume_install_transition(
-        &self,
-        expected_installation: &WindowsNsisInstallation,
-        expected_receipt: &str,
-    ) -> AppResult<()> {
-        #[cfg(windows)]
-        return consume_windows_nsis_install_transition(expected_installation, expected_receipt);
-        #[cfg(not(windows))]
-        {
-            let _ = (expected_installation, expected_receipt);
-            Err(AppError::NotAvailable(
-                "Windows NSIS installation registration is unavailable on this host".into(),
-            ))
-        }
     }
 }
 
@@ -2551,13 +2321,8 @@ pub struct ManagedRuntimeManager {
     loaded: LoadedManagedRuntimeManifest,
     commands: Arc<dyn ManagedCommandRunner>,
     wsl_registrations: Arc<dyn WindowsWslRegistrationReader>,
-    nsis_installation: Arc<dyn WindowsNsisInstallationReader>,
     prerequisite_repairer: Arc<dyn WindowsWslPrerequisiteRepairer>,
     downloader: Arc<dyn ManagedArtifactDownloader>,
-    #[cfg(test)]
-    bounded_ghost_fixture_manifest: bool,
-    #[cfg(all(test, windows))]
-    windows_wsl_vhd_release_timing: Option<(Duration, Duration)>,
 }
 
 /// Result of admitting the packaged runtime into the trusted execution path.
@@ -2651,13 +2416,8 @@ impl ManagedRuntimeManager {
             loaded,
             commands: Arc::new(DirectManagedCommandRunner),
             wsl_registrations: Arc::new(DirectWindowsWslRegistrationReader),
-            nsis_installation: Arc::new(DirectWindowsNsisInstallationReader),
             prerequisite_repairer: Arc::new(DirectWindowsWslPrerequisiteRepairer),
             downloader,
-            #[cfg(test)]
-            bounded_ghost_fixture_manifest: false,
-            #[cfg(all(test, windows))]
-            windows_wsl_vhd_release_timing: None,
         };
         manager.verify_resource_bundle()?;
         Ok(manager)
@@ -2794,13 +2554,8 @@ impl ManagedRuntimeManager {
             loaded,
             commands: Arc::new(DirectManagedCommandRunner),
             wsl_registrations: Arc::new(DirectWindowsWslRegistrationReader),
-            nsis_installation: Arc::new(DirectWindowsNsisInstallationReader),
             prerequisite_repairer: Arc::new(DirectWindowsWslPrerequisiteRepairer),
             downloader,
-            #[cfg(test)]
-            bounded_ghost_fixture_manifest: false,
-            #[cfg(all(test, windows))]
-            windows_wsl_vhd_release_timing: None,
         };
         manager.verify_installation()?;
         Ok(manager)
@@ -2829,12 +2584,8 @@ impl ManagedRuntimeManager {
             loaded,
             commands,
             wsl_registrations: Arc::new(DirectWindowsWslRegistrationReader),
-            nsis_installation: Arc::new(DirectWindowsNsisInstallationReader),
             prerequisite_repairer: Arc::new(DirectWindowsWslPrerequisiteRepairer),
             downloader,
-            bounded_ghost_fixture_manifest: false,
-            #[cfg(windows)]
-            windows_wsl_vhd_release_timing: None,
         };
         manager.verify_resource_bundle()?;
         Ok(manager)
@@ -3016,6 +2767,14 @@ impl ManagedRuntimeManager {
         &self,
         setup: Option<&ManagedRuntimeSetupController>,
     ) -> AppResult<ManagedRuntimeCommand> {
+        self.start_locked_with_readiness_timeout(setup, MACHINE_START_TIMEOUT)
+    }
+
+    fn start_locked_with_readiness_timeout(
+        &self,
+        setup: Option<&ManagedRuntimeSetupController>,
+        readiness_timeout: Duration,
+    ) -> AppResult<ManagedRuntimeCommand> {
         if let Some(setup) = setup {
             setup.set_phase(
                 ManagedRuntimeSetupPhase::Install,
@@ -3034,7 +2793,27 @@ impl ManagedRuntimeManager {
                 )?;
             }
             self.require_windows_wsl_prerequisite_locked(target, &read_only_command, setup)?;
-            self.resolve_windows_machine_generation_locked(target, &read_only_command, &[], false)?;
+            let selected = self.resolve_windows_machine_generation_locked(
+                target,
+                &read_only_command,
+                &[],
+                false,
+            )?;
+            if !self.has_exact_windows_wsl_ownership_proof_locked(
+                target,
+                &selected,
+                WindowsWslOwnershipBasis::ProvenMachine,
+            )? {
+                // The durable generation identity is chosen before its mutable
+                // provider home exists. This exact one-shot proof lets a
+                // relaunch reuse an empty/in-progress product-owned home while
+                // unknown homes without it remain preserved collisions.
+                self.ensure_windows_wsl_ownership_proof_locked(
+                    target,
+                    &selected,
+                    WindowsWslOwnershipBasis::InitIntent,
+                )?;
+            }
             command = self.runtime_command(target)?;
         } else {
             command = self.runtime_command(target)?;
@@ -3078,20 +2857,13 @@ impl ManagedRuntimeManager {
                     &machine_name,
                     WindowsWslOwnershipBasis::ProvenMachine,
                 )?;
+                self.remove_windows_wsl_ownership_basis_proof_locked(
+                    target,
+                    &machine_name,
+                    WindowsWslOwnershipBasis::InitIntent,
+                )?;
             }
         } else {
-            let recovered = self.prove_windows_wsl_distribution_absent_locked(
-                target,
-                &command,
-                &machine_name,
-                setup,
-            )?;
-            if recovered {
-                return Err(AppError::Internal(
-                    "current runtime generation unexpectedly entered deprecated WSL recovery"
-                        .into(),
-                ));
-            }
             self.remove_windows_wsl_ownership_proof_locked(target, &machine_name)?;
             self.prepare_machine_ssh_identity_locked()?;
             let initialized = self.initialize_machine_with_one_bounded_windows_retry(
@@ -3126,17 +2898,46 @@ impl ManagedRuntimeManager {
                 WindowsWslOwnershipBasis::ProvenMachine,
             )?;
         }
+        match self.start_machine_and_wait_locked(
+            &command,
+            &machine_name,
+            machine.running,
+            setup,
+            readiness_timeout,
+        ) {
+            Ok(()) => Ok(command),
+            Err(error) if target.operating_system == ManagedOperatingSystem::Windows => self
+                .rebuild_unhealthy_windows_machine_once_locked(
+                    &command,
+                    target,
+                    &machine_name,
+                    error,
+                    setup,
+                    readiness_timeout,
+                ),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn start_machine_and_wait_locked(
+        &self,
+        command: &ManagedRuntimeCommand,
+        machine_name: &str,
+        machine_running: bool,
+        setup: Option<&ManagedRuntimeSetupController>,
+        readiness_timeout: Duration,
+    ) -> AppResult<()> {
         if let Some(setup) = setup {
             setup.set_phase(
                 ManagedRuntimeSetupPhase::Start,
                 "starting the private rootless managed runtime machine",
             )?;
         }
-        if !machine.running {
+        if !machine_running {
             let output = self.run_command(
                 ManagedCommandOperation::MachineStart,
-                &command,
-                ["machine", "start", "--quiet", machine_name.as_str()],
+                command,
+                ["machine", "start", "--quiet", machine_name],
                 MACHINE_START_TIMEOUT,
             )?;
             require_success("managed runtime machine start", &output)?;
@@ -3147,15 +2948,94 @@ impl ManagedRuntimeManager {
                 "verifying the managed runtime server is ready",
             )?;
         }
-        self.wait_for_server(&command, MACHINE_START_TIMEOUT, setup)?;
-        self.complete_windows_wsl_recovery_locked(target, &command, &machine_name, setup)?;
-        // v0.1.8's Windows compatibility generation is deliberately
-        // side-by-side. Once the new assm2 server is usable, make a bounded,
-        // observation-only record of an exact N-1 assm1 workspace when that
-        // can be proven. Failure to classify legacy state never blocks or
-        // mutates the new runtime.
-        self.retain_bounded_windows_legacy_workspace_nonblocking(target, &machine_name);
-        Ok(command)
+        self.wait_for_server(command, readiness_timeout, setup)
+    }
+
+    /// A verified product-owned Windows machine can still become unusable at
+    /// start or server preflight. Preserve that complete generation exactly as
+    /// it stands, append one fresh isolated generation, and try the replacement
+    /// once. This path never unregisters, exports, imports, or deletes WSL
+    /// state, and it does not recurse if the replacement is also unhealthy.
+    fn rebuild_unhealthy_windows_machine_once_locked(
+        &self,
+        failed_command: &ManagedRuntimeCommand,
+        target: &ManagedTarget,
+        failed_machine_name: &str,
+        first_error: AppError,
+        setup: Option<&ManagedRuntimeSetupController>,
+        readiness_timeout: Duration,
+    ) -> AppResult<ManagedRuntimeCommand> {
+        if target.operating_system != ManagedOperatingSystem::Windows {
+            return Err(first_error);
+        }
+        if let Some(setup) = setup {
+            setup.check_cancelled()?;
+            setup.set_phase(
+                ManagedRuntimeSetupPhase::Recovery,
+                "preserving an unavailable scan workspace and preparing a fresh isolated one",
+            )?;
+        }
+        let first_detail = first_error.to_string();
+        let replacement = (|| -> AppResult<ManagedRuntimeCommand> {
+            let distributions = self.windows_wsl_distribution_inventory(failed_command)?;
+            let machines = self.list_machines(failed_command)?;
+            let fresh_machine_name = self
+                .select_fresh_windows_machine_generation_after_runtime_failure_locked(
+                    target,
+                    failed_machine_name,
+                    &machines,
+                    &distributions,
+                )?;
+            self.ensure_windows_wsl_ownership_proof_locked(
+                target,
+                &fresh_machine_name,
+                WindowsWslOwnershipBasis::InitIntent,
+            )?;
+            let fresh_command = self.runtime_command(target)?;
+            self.prepare_machine_ssh_identity_locked()?;
+            self.initialize_machine_with_one_shot_wsl_intent(
+                &fresh_command,
+                target,
+                &self.machine_image_path(target),
+                &fresh_machine_name,
+            )
+            .map_err(|error| {
+                AppError::Runtime(format!(
+                    "fresh isolated Windows scan workspace initialization failed: {error}"
+                ))
+            })?;
+
+            let fresh_machines = self.list_machines(&fresh_command)?;
+            let fresh_machine = fresh_machines
+                .iter()
+                .find(|machine| machine.name == fresh_machine_name)
+                .ok_or_else(|| {
+                    AppError::Runtime(
+                        "managed runtime did not report the fresh isolated Windows machine after initialization"
+                            .into(),
+                    )
+                })?;
+            self.prove_machine_named(fresh_machine, target, &fresh_machine_name)?;
+            self.verify_current_windows_wsl_machine_registration_binding(&fresh_machine_name)?;
+            self.ensure_windows_wsl_ownership_proof_locked(
+                target,
+                &fresh_machine_name,
+                WindowsWslOwnershipBasis::ProvenMachine,
+            )?;
+            self.start_machine_and_wait_locked(
+                &fresh_command,
+                &fresh_machine_name,
+                fresh_machine.running,
+                setup,
+                readiness_timeout,
+            )?;
+            Ok(fresh_command)
+        })();
+        replacement.map_err(|replacement_error| {
+            AppError::Runtime(format!(
+                "the verified Windows scan workspace became unavailable and was preserved ({first_detail}); its one automatic isolated replacement also did not finish: {replacement_error}"
+            ))
+        })
     }
 
     /// Proves the Windows-owned WSL boundary before downloading the release
@@ -3485,13 +3365,6 @@ impl ManagedRuntimeManager {
                     target,
                     &command,
                     &machine_name,
-                )?;
-            } else {
-                self.prove_windows_wsl_distribution_absent_locked(
-                    target,
-                    &command,
-                    &machine_name,
-                    None,
                 )?;
             }
             self.remove_temporary_command_state_after_machine_removal_locked(target)?;
@@ -3919,53 +3792,6 @@ impl ManagedRuntimeManager {
         })
     }
 
-    fn prove_windows_wsl_distribution_absent_locked(
-        &self,
-        target: &ManagedTarget,
-        managed_command: &ManagedRuntimeCommand,
-        machine_name: &str,
-        setup: Option<&ManagedRuntimeSetupController>,
-    ) -> AppResult<bool> {
-        if target.operating_system != ManagedOperatingSystem::Windows {
-            return Ok(false);
-        }
-        if target.provider != ManagedMachineProvider::Wsl {
-            return Err(AppError::NotAuthorized(
-                "managed Windows runtime target did not use the WSL provider".into(),
-            ));
-        }
-        // Every generation selected by the current Windows lifecycle is already
-        // collision-safe. Do not run the retired name-recovery inventory after
-        // selection: it adds a redundant WSL dependency and could turn an
-        // unrelated legacy read failure into a current setup/scan gate.
-        if windows_machine_uses_current_compatibility_generation(machine_name) {
-            return Ok(false);
-        }
-        let expected = format!("podman-{machine_name}");
-        let distributions = self.windows_wsl_distribution_inventory(managed_command)?;
-        let expected_present = distributions
-            .iter()
-            .any(|distribution| distribution.eq_ignore_ascii_case(&expected));
-        let pending = match self.read_windows_wsl_recovery_intent_locked(machine_name) {
-            Ok(pending) => pending,
-            Err(AppError::NotAuthorized(_)) => {
-                return reject_legacy_windows_wsl_recovery_without_mutation(&expected);
-            }
-            Err(error) => return Err(error),
-        };
-        if !expected_present && pending.is_none() {
-            return Ok(false);
-        }
-        self.recover_windows_wsl_distribution_locked(
-            managed_command,
-            machine_name,
-            distributions,
-            pending,
-            setup,
-        )?;
-        Ok(true)
-    }
-
     /// Destructive provider cleanup has a stricter contract than setup
     /// routing. The current generation is removable only after both Windows'
     /// WSL inventory and its registration inventory confirm that the exact
@@ -4254,6 +4080,11 @@ impl ManagedRuntimeManager {
                 selected,
                 WindowsWslOwnershipBasis::ProvenMachine,
             )?;
+        let exact_initialization_intent = self.has_exact_windows_wsl_ownership_proof_locked(
+            target,
+            selected,
+            WindowsWslOwnershipBasis::InitIntent,
+        )?;
         // A name match alone is never ownership. Reuse requires the exact
         // frozen machine contract, product SSH identity, and WSL registration
         // binding to this verified provider generation. Any failed proof turns
@@ -4275,9 +4106,9 @@ impl ManagedRuntimeManager {
             selected_generation_index,
             &distributions,
             machines,
-        )? || (existing.is_none()
-            && private_entry_exists(&selected_provider_home)?
-            && !exact_product_binding)
+        )? || (private_entry_exists(&selected_provider_home)?
+            && !exact_product_binding
+            && !exact_initialization_intent)
             || (existing.is_none()
                 && self.windows_generation_selection_exists(selected_generation_index)?);
         if !occupied || (exact_product_binding && !provider_inventory_complete) {
@@ -4346,6 +4177,78 @@ impl ManagedRuntimeManager {
         ))
     }
 
+    fn select_fresh_windows_machine_generation_after_runtime_failure_locked(
+        &self,
+        target: &ManagedTarget,
+        failed_machine_name: &str,
+        machines: &[MachineListEntry],
+        distributions: &[String],
+    ) -> AppResult<String> {
+        if target.operating_system != ManagedOperatingSystem::Windows
+            || target.provider != ManagedMachineProvider::Wsl
+        {
+            return Err(AppError::InvalidRequest(
+                "an isolated Windows replacement was requested for another managed target".into(),
+            ));
+        }
+        let existing = self
+            .read_windows_wsl_generation_selection_locked(target)?
+            .ok_or_else(|| {
+                AppError::NotAvailable(
+                    "the unavailable Windows scan workspace had no durable generation selection"
+                        .into(),
+                )
+            })?;
+        if !existing
+            .selected_machine_name
+            .eq_ignore_ascii_case(failed_machine_name)
+        {
+            return Err(AppError::NotAuthorized(
+                "the unavailable Windows scan workspace changed before isolated replacement".into(),
+            ));
+        }
+
+        let mut preserved_collision_names = existing.preserved_collision_names.clone();
+        if !preserved_collision_names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(failed_machine_name))
+        {
+            preserved_collision_names.push(failed_machine_name.to_owned());
+        }
+        let first_index = existing.generation_index.saturating_add(1).max(1);
+        for generation_index in first_index..=MAX_WINDOWS_WSL_ISOLATED_GENERATION_ATTEMPTS {
+            let candidate = self.isolated_windows_machine_name(target, generation_index);
+            if self.windows_machine_generation_is_occupied(
+                target,
+                &candidate,
+                generation_index,
+                distributions,
+                machines,
+            )? || private_entry_exists(
+                &self.windows_provider_home_for_generation(target, generation_index),
+            )? || self.windows_generation_selection_exists(generation_index)?
+            {
+                continue;
+            }
+            let selection = WindowsWslGenerationSelection {
+                schema_version: WINDOWS_WSL_GENERATION_SELECTION_SCHEMA.into(),
+                authorizes_cleanup: false,
+                manifest_sha256: self.loaded.sha256.clone(),
+                machine_image_sha256: target.machine_image.sha256.clone(),
+                default_machine_name: machine_name(target),
+                selected_machine_name: candidate.clone(),
+                generation_index,
+                preserved_collision_names,
+            };
+            self.write_windows_wsl_generation_selection_locked(target, &selection)?;
+            return Ok(candidate);
+        }
+        Err(AppError::NotAvailable(
+            "managed Windows runtime could not allocate one isolated replacement within its bounded generation budget"
+                .into(),
+        ))
+    }
+
     fn effective_machine_name_locked(&self, target: &ManagedTarget) -> AppResult<String> {
         Ok(self
             .read_windows_wsl_generation_selection_locked(target)?
@@ -4364,1437 +4267,6 @@ impl ManagedRuntimeManager {
         Ok(self
             .read_windows_wsl_generation_selection_locked(target)?
             .is_some())
-    }
-
-    fn windows_wsl_recovery_root(&self) -> PathBuf {
-        self.state_root.join(WINDOWS_WSL_RECOVERY_DIRECTORY)
-    }
-
-    fn windows_wsl_recovery_workspace_root(&self) -> PathBuf {
-        self.state_root
-            .join(WINDOWS_WSL_RECOVERY_WORKSPACE_DIRECTORY)
-    }
-
-    fn windows_wsl_recovery_pending_path(&self, machine_name: &str) -> PathBuf {
-        self.windows_wsl_recovery_root()
-            .join(format!("pending-{machine_name}.json"))
-    }
-
-    fn windows_wsl_ghost_migration_consumed_path(&self, machine_name: &str) -> PathBuf {
-        self.windows_wsl_recovery_root()
-            .join(format!("ghost-migration-consumed-{machine_name}.json"))
-    }
-
-    #[cfg(windows)]
-    fn windows_wsl_legacy_retained_path(&self, registration_id: &str) -> AppResult<PathBuf> {
-        let registration_id = Uuid::parse_str(registration_id).map_err(|_| {
-            AppError::NotAuthorized(
-                "retained Windows WSL registration identity is not one GUID".into(),
-            )
-        })?;
-        Ok(self
-            .state_root
-            .join(WINDOWS_WSL_LEGACY_RETAINED_DIRECTORY)
-            .join(format!("{}.json", registration_id.hyphenated())))
-    }
-
-    #[cfg(windows)]
-    fn exact_windows_wsl_registration(
-        &self,
-        registration_id: &str,
-        distribution_name: &str,
-        expected_base_path: &Path,
-    ) -> AppResult<WindowsWslRegistration> {
-        let matching = self
-            .wsl_registrations
-            .registrations()?
-            .into_iter()
-            .filter(|registration| {
-                registration
-                    .registration_id
-                    .eq_ignore_ascii_case(registration_id)
-                    && registration
-                        .distribution_name
-                        .eq_ignore_ascii_case(distribution_name)
-            })
-            .collect::<Vec<_>>();
-        if matching.len() != 1 {
-            return Err(AppError::NotAuthorized(
-                "Windows WSL registration identity changed during legacy observation".into(),
-            ));
-        }
-        let registration = matching.into_iter().next().expect("one registration");
-        if !windows_paths_refer_to_same_location(&registration.base_path, expected_base_path)? {
-            return Err(AppError::NotAuthorized(
-                "Windows WSL registration path changed during legacy observation".into(),
-            ));
-        }
-        Ok(registration)
-    }
-
-    #[cfg(windows)]
-    fn exact_bounded_windows_legacy_pending_evidence(
-        &self,
-    ) -> AppResult<Option<(WindowsWslRecoveryIntent, String)>> {
-        let path = self.windows_wsl_recovery_pending_path(WINDOWS_GHOST_MIGRATION_MACHINE_NAME);
-        if !private_entry_exists(&path)? {
-            return Ok(None);
-        }
-        let Some(intent) =
-            self.read_windows_wsl_recovery_intent_locked(WINDOWS_GHOST_MIGRATION_MACHINE_NAME)?
-        else {
-            return Ok(None);
-        };
-        if intent.ownership_basis
-            != WindowsWslRecoveryOwnershipBasis::BoundedNMinusOneGhostMigration
-            || !intent
-                .source_provider_manifest_sha256
-                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256)
-            || !intent
-                .manifest_sha256
-                .eq_ignore_ascii_case(&self.loaded.sha256)
-            || !intent
-                .machine_image_sha256
-                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_MACHINE_IMAGE_SHA256)
-            || !intent
-                .machine_name
-                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_MACHINE_NAME)
-            || !intent
-                .install_transition_receipt
-                .as_deref()
-                .is_some_and(bounded_windows_install_transition_receipt_is_allowed)
-        {
-            return Err(AppError::NotAuthorized(
-                "legacy Windows recovery pointer escaped the one-release retained-workspace contract"
-                    .into(),
-            ));
-        }
-        // The pointer and transaction-local intent are intentionally duplicate
-        // durable records. Bind their exact bytes, not merely equivalent JSON,
-        // before using an already-consumed installer transition as historical
-        // observation evidence.
-        let pointer =
-            read_bounded_regular_bytes(&path, 64 * 1024, "legacy Windows WSL recovery pointer")?;
-        let durable = read_bounded_regular_bytes(
-            &intent.attempt_directory.join("intent.json"),
-            64 * 1024,
-            "legacy Windows WSL durable recovery intent",
-        )?;
-        if pointer != durable {
-            return Err(AppError::NotAuthorized(
-                "legacy Windows WSL recovery intent copies are not byte-identical".into(),
-            ));
-        }
-        Ok(Some((intent, sha256_bytes(&pointer))))
-    }
-
-    fn loaded_manifest_is_bounded_ghost_candidate(&self) -> bool {
-        if self
-            .loaded
-            .sha256
-            .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_CURRENT_MANIFEST_SHA256)
-        {
-            return true;
-        }
-        #[cfg(test)]
-        {
-            self.bounded_ghost_fixture_manifest
-        }
-        #[cfg(not(test))]
-        false
-    }
-
-    fn expected_windows_wsl_ghost_migration_consumed_proof(
-        &self,
-        intent: &WindowsWslRecoveryIntent,
-    ) -> AppResult<WindowsWslGhostMigrationConsumedProof> {
-        let receipt = intent.install_transition_receipt.clone().ok_or_else(|| {
-            AppError::NotAuthorized(
-                "managed Windows ghost-migration consumed proof has no installer receipt".into(),
-            )
-        })?;
-        if intent.ownership_basis
-            != WindowsWslRecoveryOwnershipBasis::BoundedNMinusOneGhostMigration
-            || !bounded_windows_install_transition_receipt_is_allowed(&receipt)
-        {
-            return Err(AppError::NotAuthorized(
-                "managed Windows ghost-migration consumed proof escaped the bounded transaction"
-                    .into(),
-            ));
-        }
-        Ok(WindowsWslGhostMigrationConsumedProof {
-            schema_version: WINDOWS_WSL_GHOST_MIGRATION_CONSUMED_SCHEMA.into(),
-            recovery_id: intent.recovery_id.clone(),
-            install_transition_receipt: receipt,
-            source_provider_manifest_sha256: intent.source_provider_manifest_sha256.clone(),
-            manifest_sha256: intent.manifest_sha256.clone(),
-            machine_image_sha256: intent.machine_image_sha256.clone(),
-            machine_name: intent.machine_name.clone(),
-            distribution_name: intent.distribution_name.clone(),
-        })
-    }
-
-    fn read_windows_wsl_ghost_migration_consumed_proof(
-        &self,
-        intent: &WindowsWslRecoveryIntent,
-    ) -> AppResult<Option<WindowsWslGhostMigrationConsumedProof>> {
-        let path = self.windows_wsl_ghost_migration_consumed_path(&intent.machine_name);
-        if !private_entry_exists(&path)? {
-            return Ok(None);
-        }
-        let proof: WindowsWslGhostMigrationConsumedProof = read_bounded_private_json(
-            &path,
-            64 * 1024,
-            "managed Windows ghost-migration consumed proof",
-        )?;
-        if proof != self.expected_windows_wsl_ghost_migration_consumed_proof(intent)? {
-            return Err(AppError::NotAuthorized(
-                "managed Windows ghost-migration consumed proof does not match this transaction"
-                    .into(),
-            ));
-        }
-        Ok(Some(proof))
-    }
-
-    fn read_windows_wsl_recovery_intent_locked(
-        &self,
-        machine_name: &str,
-    ) -> AppResult<Option<WindowsWslRecoveryIntent>> {
-        let path = self.windows_wsl_recovery_pending_path(machine_name);
-        if !private_entry_exists(&path)? {
-            return Ok(None);
-        }
-        let intent: WindowsWslRecoveryIntent =
-            read_bounded_private_json(&path, 64 * 1024, "managed Windows WSL recovery intent")?;
-        let recovery_id = Uuid::parse_str(&intent.recovery_id).map_err(|_| {
-            AppError::NotAuthorized("managed Windows WSL recovery ID is invalid".into())
-        })?;
-        let expected_attempt = self
-            .windows_wsl_recovery_root()
-            .join(recovery_id.simple().to_string());
-        if intent.attempt_directory != expected_attempt {
-            return Err(AppError::NotAuthorized(
-                "managed Windows WSL durable recovery intent escaped its transaction directory"
-                    .into(),
-            ));
-        }
-        let durable_intent: WindowsWslRecoveryIntent = read_bounded_private_json(
-            &expected_attempt.join("intent.json"),
-            64 * 1024,
-            "managed Windows WSL durable recovery intent",
-        )?;
-        if durable_intent != intent {
-            return Err(AppError::NotAuthorized(
-                "managed Windows WSL recovery pointers do not identify one transaction".into(),
-            ));
-        }
-        self.validate_persisted_windows_wsl_recovery_intent(machine_name, &intent)?;
-        Ok(Some(intent))
-    }
-
-    fn validate_windows_wsl_recovery_intent(
-        &self,
-        machine_name: &str,
-        intent: &WindowsWslRecoveryIntent,
-    ) -> AppResult<()> {
-        self.validate_windows_wsl_recovery_intent_state(machine_name, intent, false)
-    }
-
-    fn validate_persisted_windows_wsl_recovery_intent(
-        &self,
-        machine_name: &str,
-        intent: &WindowsWslRecoveryIntent,
-    ) -> AppResult<()> {
-        self.validate_windows_wsl_recovery_intent_state(machine_name, intent, true)
-    }
-
-    fn validate_windows_wsl_recovery_intent_state(
-        &self,
-        machine_name: &str,
-        intent: &WindowsWslRecoveryIntent,
-        persisted_transaction: bool,
-    ) -> AppResult<()> {
-        let recovery_id = Uuid::parse_str(&intent.recovery_id).map_err(|_| {
-            AppError::NotAuthorized("managed Windows WSL recovery ID is invalid".into())
-        })?;
-        let expected_distribution = format!("podman-{machine_name}");
-        let expected_quarantine = windows_wsl_recovery_distribution_name(recovery_id);
-        validate_sha256(
-            &intent.manifest_sha256,
-            "managed Windows WSL recovery manifest",
-        )
-        .map_err(|_| {
-            AppError::NotAuthorized(
-                "managed Windows WSL recovery manifest identity is invalid".into(),
-            )
-        })?;
-        validate_sha256(
-            &intent.machine_image_sha256,
-            "managed Windows WSL recovery machine image",
-        )
-        .map_err(|_| {
-            AppError::NotAuthorized(
-                "managed Windows WSL recovery machine-image identity is invalid".into(),
-            )
-        })?;
-        validate_sha256(
-            &intent.source_provider_manifest_sha256,
-            "managed Windows WSL recovery source provider manifest",
-        )
-        .map_err(|_| {
-            AppError::NotAuthorized(
-                "managed Windows WSL recovery source-provider identity is invalid".into(),
-            )
-        })?;
-        if intent.schema_version == WINDOWS_WSL_RECOVERY_INTENT_SCHEMA_V1
-            || intent.schema_version != WINDOWS_WSL_RECOVERY_INTENT_SCHEMA
-            || intent.machine_name != machine_name
-            || !intent
-                .distribution_name
-                .eq_ignore_ascii_case(&expected_distribution)
-            || !intent
-                .quarantine_distribution_name
-                .eq_ignore_ascii_case(&expected_quarantine)
-            || !intent
-                .manifest_sha256
-                .eq_ignore_ascii_case(&self.loaded.sha256)
-            || !intent
-                .machine_image_sha256
-                .eq_ignore_ascii_case(&self.loaded.target()?.machine_image.sha256)
-        {
-            return Err(AppError::NotAuthorized(
-                "managed Windows WSL recovery intent does not match this scanner workspace".into(),
-            ));
-        }
-        let expected_attempt = self
-            .windows_wsl_recovery_root()
-            .join(recovery_id.simple().to_string());
-        let expected_quarantine_install_directory = self
-            .windows_wsl_recovery_workspace_root()
-            .join(recovery_id.simple().to_string());
-        if intent.attempt_directory != expected_attempt
-            || intent.quarantine_install_directory != expected_quarantine_install_directory
-            || intent.staging_archive != expected_attempt.join("workspace.exporting.tar")
-            || intent.recovery_archive != expected_attempt.join("workspace-recovery.tar")
-            || intent.provider_home.parent()
-                != Some(self.state_root.join("provider-home").as_path())
-        {
-            return Err(AppError::NotAuthorized(
-                "managed Windows WSL recovery paths escaped the private recovery area".into(),
-            ));
-        }
-        let derived_provider = windows_wsl_provider_home_from_registration_path(
-            &self.state_root,
-            &intent.registration_base_path,
-            machine_name,
-        )?;
-        if derived_provider != intent.provider_home {
-            return Err(AppError::NotAuthorized(
-                "managed Windows WSL recovery provider binding changed".into(),
-            ));
-        }
-        match intent.ownership_basis {
-            WindowsWslRecoveryOwnershipBasis::VerifiedManifest => {
-                if intent.install_transition_receipt.is_some() {
-                    return Err(AppError::NotAuthorized(
-                        "verified-manifest recovery intent carried an unrelated installer receipt"
-                            .into(),
-                    ));
-                }
-                let verified_source = self
-                    .provider_home_matches_verified_manifest(&intent.provider_home)?
-                    .ok_or_else(|| {
-                        AppError::NotAuthorized(
-                            "verified-manifest recovery source is no longer installed and verified"
-                                .into(),
-                        )
-                    })?;
-                if !verified_source.eq_ignore_ascii_case(&intent.source_provider_manifest_sha256) {
-                    return Err(AppError::NotAuthorized(
-                        "verified-manifest recovery source identity changed".into(),
-                    ));
-                }
-            }
-            WindowsWslRecoveryOwnershipBasis::BoundedNMinusOneGhostMigration => {
-                let Some(receipt) = intent.install_transition_receipt.as_deref() else {
-                    return Err(AppError::NotAuthorized(
-                        "bounded Windows ghost migration has no installer transition receipt"
-                            .into(),
-                    ));
-                };
-                if !intent
-                    .source_provider_manifest_sha256
-                    .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256)
-                    || !self.loaded_manifest_is_bounded_ghost_candidate()
-                    || !bounded_windows_install_transition_receipt_is_allowed(receipt)
-                {
-                    return Err(AppError::NotAuthorized(
-                        "bounded Windows ghost migration proof does not identify the supported predecessor"
-                            .into(),
-                    ));
-                }
-                let current_installation = self
-                    .windows_nsis_installation_matches_bounded_migration_identity()?
-                    .ok_or_else(|| {
-                        AppError::NotAuthorized(
-                            "bounded Windows ghost migration is no longer backed by the installed candidate"
-                                .into(),
-                        )
-                    })?;
-                let consumed = if persisted_transaction {
-                    self.read_windows_wsl_ghost_migration_consumed_proof(intent)?
-                } else if private_entry_exists(
-                    &self.windows_wsl_ghost_migration_consumed_path(machine_name),
-                )? {
-                    return Err(AppError::NotAuthorized(
-                        "the bounded Windows ghost-migration receipt was already consumed".into(),
-                    ));
-                } else {
-                    None
-                };
-                let transition_matches = match current_installation.install_transition.as_deref() {
-                    Some(current) => current == receipt && consumed.is_none(),
-                    None => persisted_transaction,
-                };
-                if !transition_matches {
-                    return Err(AppError::NotAuthorized(
-                        "bounded Windows ghost migration installer receipt changed".into(),
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn begin_windows_wsl_recovery_locked(
-        &self,
-        target: &ManagedTarget,
-        machine_name: &str,
-        distribution_name: &str,
-        distributions: &[String],
-    ) -> AppResult<WindowsWslRecoveryIntent> {
-        let registrations = self.wsl_registrations.registrations()?;
-        let matching = registrations
-            .into_iter()
-            .filter(|registration| {
-                registration
-                    .distribution_name
-                    .eq_ignore_ascii_case(distribution_name)
-            })
-            .collect::<Vec<_>>();
-        if matching.len() != 1 {
-            return Err(AppError::NotAuthorized(
-                "Windows did not expose one unambiguous registration for the old scan-tool workspace"
-                    .into(),
-            ));
-        }
-        let registration = matching.into_iter().next().expect("one registration");
-        let ownership =
-            self.verify_windows_wsl_registration_ownership(machine_name, &registration.base_path)?;
-        let recovery_id = (0..8)
-            .map(|_| Uuid::new_v4())
-            .find(|candidate| {
-                let name = windows_wsl_recovery_distribution_name(*candidate);
-                !distributions
-                    .iter()
-                    .any(|distribution| distribution.eq_ignore_ascii_case(&name))
-            })
-            .ok_or_else(|| {
-                AppError::Conflict(
-                    "could not reserve a unique Windows WSL recovery workspace name".into(),
-                )
-            })?;
-        let attempt_directory = self
-            .windows_wsl_recovery_root()
-            .join(recovery_id.simple().to_string());
-        let quarantine_install_directory = self
-            .windows_wsl_recovery_workspace_root()
-            .join(recovery_id.simple().to_string());
-        ensure_managed_private_directory(&self.windows_wsl_recovery_root())?;
-        ensure_managed_private_directory(&attempt_directory)?;
-        ensure_managed_wsl_distribution_storage_directory(
-            &self.windows_wsl_recovery_workspace_root(),
-        )?;
-        ensure_managed_wsl_distribution_storage_directory(&quarantine_install_directory)?;
-        let intent = WindowsWslRecoveryIntent {
-            schema_version: WINDOWS_WSL_RECOVERY_INTENT_SCHEMA.into(),
-            recovery_id: recovery_id.to_string(),
-            manifest_sha256: self.loaded.sha256.clone(),
-            machine_image_sha256: target.machine_image.sha256.clone(),
-            ownership_basis: ownership.ownership_basis,
-            source_provider_manifest_sha256: ownership.source_provider_manifest_sha256,
-            install_transition_receipt: ownership.install_transition_receipt,
-            machine_name: machine_name.into(),
-            distribution_name: distribution_name.into(),
-            quarantine_distribution_name: windows_wsl_recovery_distribution_name(recovery_id),
-            registration_base_path: ownership.base_path,
-            provider_home: ownership.provider_home,
-            attempt_directory: attempt_directory.clone(),
-            quarantine_install_directory,
-            staging_archive: attempt_directory.join("workspace.exporting.tar"),
-            recovery_archive: attempt_directory.join("workspace-recovery.tar"),
-        };
-        self.validate_windows_wsl_recovery_intent(machine_name, &intent)?;
-        let encoded = serde_json::to_vec(&intent).map_err(|error| {
-            AppError::Internal(format!(
-                "managed Windows WSL recovery intent could not be encoded: {error}"
-            ))
-        })?;
-        write_private_atomic(&attempt_directory.join("intent.json"), &encoded)?;
-        write_private_atomic(
-            &self.windows_wsl_recovery_pending_path(machine_name),
-            &encoded,
-        )?;
-        Ok(intent)
-    }
-
-    fn claim_bounded_windows_ghost_migration_receipt(
-        &self,
-        intent: &WindowsWslRecoveryIntent,
-    ) -> AppResult<()> {
-        if intent.ownership_basis
-            != WindowsWslRecoveryOwnershipBasis::BoundedNMinusOneGhostMigration
-        {
-            return Ok(());
-        }
-        let receipt = intent
-            .install_transition_receipt
-            .as_deref()
-            .ok_or_else(|| {
-                AppError::NotAuthorized(
-                    "bounded Windows ghost migration has no installer transition receipt".into(),
-                )
-            })?;
-        if self
-            .read_windows_wsl_ghost_migration_consumed_proof(intent)?
-            .is_some()
-        {
-            let installation = self
-                .windows_nsis_installation_matches_bounded_migration_identity()?
-                .ok_or_else(|| {
-                    AppError::NotAuthorized(
-                        "consumed Windows ghost migration is not backed by the installed candidate"
-                            .into(),
-                    )
-                })?;
-            if installation.install_transition.is_some() {
-                return Err(AppError::NotAuthorized(
-                    "a consumed Windows ghost-migration receipt unexpectedly reappeared".into(),
-                ));
-            }
-            return Ok(());
-        }
-
-        let installation = self
-            .windows_nsis_installation_matches_bounded_migration_identity()?
-            .ok_or_else(|| {
-                AppError::NotAuthorized(
-                    "bounded Windows ghost migration is no longer backed by the installed candidate"
-                        .into(),
-                )
-            })?;
-        match installation.install_transition.as_deref() {
-            Some(current) if current == receipt => self
-                .nsis_installation
-                .consume_install_transition(&installation, receipt)?,
-            None => {}
-            Some(_) => {
-                return Err(AppError::NotAuthorized(
-                    "bounded Windows ghost migration installer receipt changed before it could be consumed"
-                        .into(),
-                ));
-            }
-        }
-        let claimed = self
-            .windows_nsis_installation_matches_bounded_migration_identity()?
-            .ok_or_else(|| {
-                AppError::NotAuthorized(
-                    "bounded Windows ghost migration installation changed while claiming its receipt"
-                        .into(),
-                )
-            })?;
-        if claimed.install_transition.is_some() {
-            return Err(AppError::NotAuthorized(
-                "bounded Windows ghost migration installer receipt was not consumed".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    fn recover_windows_wsl_distribution_locked(
-        &self,
-        managed_command: &ManagedRuntimeCommand,
-        machine_name: &str,
-        mut distributions: Vec<String>,
-        pending: Option<WindowsWslRecoveryIntent>,
-        setup: Option<&ManagedRuntimeSetupController>,
-    ) -> AppResult<()> {
-        let target = self.loaded.target()?;
-        let distribution_name = format!("podman-{machine_name}");
-        if let Some(setup) = setup {
-            setup.set_phase(
-                ManagedRuntimeSetupPhase::Recovery,
-                "checking the previous scan-tool workspace before making a recovery copy",
-            )?;
-        }
-        let intent = match pending {
-            Some(intent) => intent,
-            None => match self.begin_windows_wsl_recovery_locked(
-                target,
-                machine_name,
-                &distribution_name,
-                &distributions,
-            ) {
-                Ok(intent) => intent,
-                Err(AppError::NotAuthorized(_)) => {
-                    return reject_legacy_windows_wsl_recovery_without_mutation(&distribution_name);
-                }
-                Err(error) => return Err(error),
-            },
-        };
-        // The exact installer receipt authorizes creation of one durable
-        // recovery transaction. Consume it before the first WSL or recovery
-        // workspace mutation. From this point onward, the two identical,
-        // private intent records are the retry capability.
-        self.claim_bounded_windows_ghost_migration_receipt(&intent)?;
-        let command = windows_wsl_inventory_command(managed_command)?;
-        let same_name_present = distributions
-            .iter()
-            .any(|distribution| distribution.eq_ignore_ascii_case(&intent.distribution_name));
-        let interrupted_replacement_present = if same_name_present {
-            match self.verify_pending_windows_wsl_registration_binding(&intent) {
-                Ok(_) => false,
-                Err(original_error) => {
-                    if self
-                        .verify_current_windows_wsl_machine_registration_binding(machine_name)
-                        .is_ok()
-                    {
-                        true
-                    } else {
-                        return Err(original_error);
-                    }
-                }
-            }
-        } else {
-            false
-        };
-        let original_present = same_name_present && !interrupted_replacement_present;
-        let mut quarantine_present = distributions.iter().any(|distribution| {
-            distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-        });
-        let proof_path = intent.attempt_directory.join("backup.json");
-        let mut backup_proof = if private_entry_exists(&proof_path)? {
-            Some(self.read_windows_wsl_recovery_backup_proof(&intent, &proof_path)?)
-        } else {
-            None
-        };
-        let mut archive_hash_verified = false;
-        let import_proof_path = intent.attempt_directory.join("import.json");
-
-        if original_present && backup_proof.is_none() {
-            if let Some(setup) = setup {
-                setup.set_phase(
-                    ManagedRuntimeSetupPhase::Recovery,
-                    "saving a recovery copy of the previous scan-tool workspace",
-                )?;
-            }
-            if private_entry_exists(&intent.staging_archive)? {
-                remove_regular_file(&intent.staging_archive)?;
-            }
-            // A final archive without backup.json is not committed evidence.
-            // It can be a crash remnant or a path substituted after the
-            // durable staging handle closed. Because the original WSL
-            // distribution is still present in this branch, discard only the
-            // exact uncommitted regular entry and export it again. Unsafe
-            // entries fail removal and can never fall through to hashing.
-            if private_entry_exists(&intent.recovery_archive)? {
-                remove_regular_file(&intent.recovery_archive)?;
-            }
-            let output = self.run_command_args(
-                ManagedCommandOperation::WslDistributionTerminate,
-                &command,
-                &[
-                    OsString::from("--terminate"),
-                    OsString::from(&intent.distribution_name),
-                ],
-                MACHINE_STOP_TIMEOUT,
-            )?;
-            require_success("managed Windows WSL distribution stop", &output)?;
-            let source_vhd = self.verify_pending_windows_wsl_registration(&intent)?;
-            require_windows_wsl_recovery_free_space(&intent.attempt_directory, source_vhd.size)?;
-            let output = self.run_command_args(
-                ManagedCommandOperation::WslDistributionExport,
-                &command,
-                &[
-                    OsString::from("--export"),
-                    OsString::from(&intent.distribution_name),
-                    intent.staging_archive.as_os_str().to_owned(),
-                ],
-                WINDOWS_WSL_RECOVERY_TIMEOUT,
-            )?;
-            if let Err(error) = require_success("managed Windows WSL recovery export", &output) {
-                let _ = remove_regular_file(&intent.staging_archive);
-                return Err(error);
-            }
-            verify_windows_wsl_recovery_file(
-                &intent.staging_archive,
-                "managed Windows WSL recovery archive",
-            )?;
-            let durable_archive = sync_windows_wsl_recovery_file(
-                &intent.staging_archive,
-                "managed Windows WSL recovery archive",
-            )?;
-            fs::rename(&intent.staging_archive, &intent.recovery_archive)?;
-            verify_renamed_windows_wsl_recovery_file(
-                &intent.recovery_archive,
-                "managed Windows WSL recovery archive",
-                &durable_archive,
-            )?;
-            sync_directory(&intent.attempt_directory)?;
-            let max_bytes = windows_wsl_recovery_archive_max_bytes(
-                self.loaded.manifest.resources.disk_size_gb,
-                source_vhd.size,
-            )?;
-            let mut report_progress = |processed, total| match setup {
-                Some(setup) => setup.report_recovery_progress(
-                    "Verifying the saved recovery copy",
-                    processed,
-                    total,
-                ),
-                None => Ok(()),
-            };
-            let (size_bytes, sha256) = hash_bounded_regular_file_with_progress(
-                &intent.recovery_archive,
-                max_bytes,
-                "managed Windows WSL recovery archive",
-                &mut report_progress,
-            )?;
-            let proof = WindowsWslRecoveryBackupProof {
-                schema_version: WINDOWS_WSL_RECOVERY_BACKUP_SCHEMA.into(),
-                recovery_id: intent.recovery_id.clone(),
-                distribution_name: intent.distribution_name.clone(),
-                quarantine_distribution_name: intent.quarantine_distribution_name.clone(),
-                recovery_archive: intent.recovery_archive.clone(),
-                size_bytes,
-                sha256,
-            };
-            let encoded = serde_json::to_vec(&proof).map_err(|error| {
-                AppError::Internal(format!(
-                    "managed Windows WSL recovery proof could not be encoded: {error}"
-                ))
-            })?;
-            write_private_atomic(&proof_path, &encoded)?;
-            backup_proof = Some(proof);
-            archive_hash_verified = true;
-        }
-
-        let proof = backup_proof.as_ref().ok_or_else(|| {
-            AppError::NotAuthorized(
-                "managed Windows WSL recovery has no verified backup record".into(),
-            )
-        })?;
-        if !archive_hash_verified {
-            self.verify_windows_wsl_recovery_archive(
-                &intent,
-                proof,
-                setup,
-                "Checking the recovery copy before continuing",
-            )?;
-        }
-
-        let mut import_proof = if private_entry_exists(&import_proof_path)? {
-            Some(self.read_windows_wsl_recovery_import_proof(&intent, proof, &import_proof_path)?)
-        } else {
-            None
-        };
-
-        if quarantine_present && import_proof.is_none() {
-            distributions =
-                self.remove_uncheckpointed_windows_wsl_quarantine_locked(managed_command, &intent)?;
-            quarantine_present = distributions.iter().any(|distribution| {
-                distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-            });
-            if quarantine_present {
-                return Err(AppError::Runtime(
-                    "Windows retained an incomplete recovery workspace after cleanup".into(),
-                ));
-            }
-        }
-
-        if !quarantine_present {
-            if private_entry_exists(&import_proof_path)? {
-                remove_regular_file(&import_proof_path)?;
-                sync_directory(&intent.attempt_directory)?;
-            }
-            require_windows_wsl_recovery_import_space(
-                &self.windows_wsl_recovery_workspace_root(),
-                proof.size_bytes,
-            )?;
-            if let Some(setup) = setup {
-                setup.set_phase(
-                    ManagedRuntimeSetupPhase::Recovery,
-                    "keeping the recovery copy available in Windows and replacing the old workspace",
-                )?;
-            }
-            self.prepare_windows_wsl_quarantine_import_directory(&intent)?;
-            let output = self.run_command_args(
-                ManagedCommandOperation::WslDistributionImport,
-                &command,
-                &[
-                    OsString::from("--import"),
-                    OsString::from(&intent.quarantine_distribution_name),
-                    intent.quarantine_install_directory.as_os_str().to_owned(),
-                    intent.recovery_archive.as_os_str().to_owned(),
-                    OsString::from("--version"),
-                    OsString::from("2"),
-                ],
-                WINDOWS_WSL_RECOVERY_TIMEOUT,
-            )?;
-            require_success("managed Windows WSL recovery import", &output)?;
-            distributions = self.windows_wsl_distribution_inventory(managed_command)?;
-            quarantine_present = distributions.iter().any(|distribution| {
-                distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-            });
-            if !quarantine_present {
-                return Err(AppError::Runtime(
-                    "Windows did not report the recovery workspace after importing it".into(),
-                ));
-            }
-            self.verify_windows_wsl_quarantine_registration(&intent)?;
-            let imported = WindowsWslRecoveryImportProof {
-                schema_version: WINDOWS_WSL_RECOVERY_IMPORT_SCHEMA.into(),
-                recovery_id: intent.recovery_id.clone(),
-                quarantine_distribution_name: intent.quarantine_distribution_name.clone(),
-                quarantine_install_directory: intent.quarantine_install_directory.clone(),
-                recovery_archive: intent.recovery_archive.clone(),
-                archive_size_bytes: proof.size_bytes,
-                archive_sha256: proof.sha256.clone(),
-            };
-            let encoded = serde_json::to_vec(&imported).map_err(|error| {
-                AppError::Internal(format!(
-                    "managed Windows WSL recovery import proof could not be encoded: {error}"
-                ))
-            })?;
-            write_private_atomic(&import_proof_path, &encoded)?;
-            import_proof = Some(imported);
-        }
-
-        let _import_proof = import_proof.as_ref().ok_or_else(|| {
-            AppError::NotAuthorized(
-                "managed Windows WSL recovery workspace has no completed import record".into(),
-            )
-        })?;
-        self.verify_windows_wsl_quarantine_registration(&intent)?;
-
-        if interrupted_replacement_present {
-            self.verify_windows_wsl_recovery_archive(
-                &intent,
-                proof,
-                setup,
-                "Checking the recovery copy before restarting the interrupted replacement",
-            )?;
-            self.verify_windows_wsl_quarantine_registration(&intent)?;
-            let output = self.run_command_args(
-                ManagedCommandOperation::WslDistributionTerminate,
-                &command,
-                &[
-                    OsString::from("--terminate"),
-                    OsString::from(&intent.distribution_name),
-                ],
-                MACHINE_STOP_TIMEOUT,
-            )?;
-            require_success("interrupted managed Windows WSL replacement stop", &output)?;
-            self.verify_current_windows_wsl_machine_registration(machine_name)?;
-            distributions = self.windows_wsl_distribution_inventory(managed_command)?;
-            let replacement_still_present = distributions
-                .iter()
-                .any(|distribution| distribution.eq_ignore_ascii_case(&intent.distribution_name));
-            let quarantine_still_present = distributions.iter().any(|distribution| {
-                distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-            });
-            if !replacement_still_present || !quarantine_still_present {
-                return Err(AppError::Runtime(
-                    "Windows changed the interrupted replacement before recovery could restart it"
-                        .into(),
-                ));
-            }
-            let output = self.run_command_args(
-                ManagedCommandOperation::WslDistributionRemoval,
-                &command,
-                &[
-                    OsString::from("--unregister"),
-                    OsString::from(&intent.distribution_name),
-                ],
-                MACHINE_STOP_TIMEOUT,
-            )?;
-            distributions = self.windows_wsl_distribution_inventory(managed_command)?;
-            if distributions
-                .iter()
-                .any(|distribution| distribution.eq_ignore_ascii_case(&intent.distribution_name))
-            {
-                require_success(
-                    "interrupted managed Windows WSL replacement cleanup",
-                    &output,
-                )?;
-                return Err(AppError::Runtime(
-                    "Windows still reports the interrupted replacement workspace after cleanup"
-                        .into(),
-                ));
-            }
-            let registrations = self
-                .wsl_registrations
-                .registrations()?
-                .into_iter()
-                .filter(|registration| {
-                    registration
-                        .distribution_name
-                        .eq_ignore_ascii_case(&intent.distribution_name)
-                })
-                .count();
-            if registrations != 0 {
-                return Err(AppError::NotAuthorized(
-                    "Windows retained the interrupted replacement registration after cleanup"
-                        .into(),
-                ));
-            }
-            let current_provider_home = self.provider_home();
-            if private_entry_exists(&current_provider_home)? {
-                remove_provider_home_after_machine_removal(
-                    &current_provider_home,
-                    &self.state_root.join("provider-home"),
-                    WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT,
-                    WINDOWS_WSL_PROVIDER_DELETE_POLL,
-                )?;
-            }
-        }
-
-        if original_present {
-            // The archive and both registrations are checked again at the
-            // destructive edge. A completed or half-completed import alone
-            // can never authorize deletion of the original workspace.
-            self.verify_windows_wsl_recovery_archive(
-                &intent,
-                proof,
-                setup,
-                "Checking the recovery copy before replacing the old workspace",
-            )?;
-            self.verify_windows_wsl_quarantine_registration(&intent)?;
-            let output = self.run_command_args(
-                ManagedCommandOperation::WslDistributionTerminate,
-                &command,
-                &[
-                    OsString::from("--terminate"),
-                    OsString::from(&intent.distribution_name),
-                ],
-                MACHINE_STOP_TIMEOUT,
-            )?;
-            require_success("managed Windows WSL distribution stop", &output)?;
-            self.verify_pending_windows_wsl_registration(&intent)?;
-            distributions = self.windows_wsl_distribution_inventory(managed_command)?;
-            let original_still_present = distributions
-                .iter()
-                .any(|distribution| distribution.eq_ignore_ascii_case(&intent.distribution_name));
-            let quarantine_still_present = distributions.iter().any(|distribution| {
-                distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-            });
-            if !original_still_present || !quarantine_still_present {
-                return Err(AppError::Runtime(
-                    "Windows changed the recovery workspaces before the safe handoff completed"
-                        .into(),
-                ));
-            }
-            let output = self.run_command_args(
-                ManagedCommandOperation::WslDistributionRemoval,
-                &command,
-                &[
-                    OsString::from("--unregister"),
-                    OsString::from(&intent.distribution_name),
-                ],
-                MACHINE_STOP_TIMEOUT,
-            )?;
-            distributions = self.windows_wsl_distribution_inventory(managed_command)?;
-            if distributions
-                .iter()
-                .any(|distribution| distribution.eq_ignore_ascii_case(&intent.distribution_name))
-            {
-                require_success("managed Windows WSL distribution replacement", &output)?;
-                return Err(AppError::Runtime(
-                    "Windows still reports the previous scan-tool workspace after replacement"
-                        .into(),
-                ));
-            }
-        }
-
-        let original_present = distributions
-            .iter()
-            .any(|distribution| distribution.eq_ignore_ascii_case(&intent.distribution_name));
-        quarantine_present = distributions.iter().any(|distribution| {
-            distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-        });
-        if original_present || !quarantine_present || backup_proof.is_none() {
-            return Err(AppError::Runtime(
-                "Windows did not confirm the safe handoff from the old workspace to its recovery copy"
-                .into(),
-            ));
-        }
-        let original_registrations = self
-            .wsl_registrations
-            .registrations()?
-            .into_iter()
-            .filter(|registration| {
-                registration
-                    .distribution_name
-                    .eq_ignore_ascii_case(&intent.distribution_name)
-            })
-            .count();
-        if original_registrations != 0 {
-            return Err(AppError::NotAuthorized(
-                "Windows retained a registration for the previous scan-tool workspace".into(),
-            ));
-        }
-        self.verify_windows_wsl_quarantine_registration(&intent)?;
-        if private_entry_exists(&intent.provider_home)? {
-            remove_provider_home_after_machine_removal(
-                &intent.provider_home,
-                &self.state_root.join("provider-home"),
-                WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT,
-                WINDOWS_WSL_PROVIDER_DELETE_POLL,
-            )?;
-        }
-        let current_provider_home = self.provider_home();
-        if private_entry_exists(&current_provider_home)? {
-            remove_provider_home_after_machine_removal(
-                &current_provider_home,
-                &self.state_root.join("provider-home"),
-                WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT,
-                WINDOWS_WSL_PROVIDER_DELETE_POLL,
-            )?;
-        }
-        Ok(())
-    }
-
-    fn prepare_windows_wsl_quarantine_import_directory(
-        &self,
-        intent: &WindowsWslRecoveryIntent,
-    ) -> AppResult<()> {
-        let matching = self
-            .wsl_registrations
-            .registrations()?
-            .into_iter()
-            .filter(|registration| {
-                registration
-                    .distribution_name
-                    .eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-            })
-            .count();
-        if matching != 0 {
-            return Err(AppError::NotAuthorized(
-                "Windows has a recovery registration that was not present in its WSL inventory"
-                    .into(),
-            ));
-        }
-        let workspace_root = self.windows_wsl_recovery_workspace_root();
-        if private_entry_exists(&intent.quarantine_install_directory)? {
-            remove_provider_home_after_machine_removal(
-                &intent.quarantine_install_directory,
-                &workspace_root,
-                WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT,
-                WINDOWS_WSL_PROVIDER_DELETE_POLL,
-            )?;
-        }
-        ensure_managed_wsl_distribution_storage_directory(&intent.quarantine_install_directory)?;
-        Ok(())
-    }
-
-    fn remove_uncheckpointed_windows_wsl_quarantine_locked(
-        &self,
-        managed_command: &ManagedRuntimeCommand,
-        intent: &WindowsWslRecoveryIntent,
-    ) -> AppResult<Vec<String>> {
-        self.verify_windows_wsl_quarantine_registration_path(intent)?;
-        let command = windows_wsl_inventory_command(managed_command)?;
-        let _stop_output = self.run_command_args(
-            ManagedCommandOperation::WslDistributionTerminate,
-            &command,
-            &[
-                OsString::from("--terminate"),
-                OsString::from(&intent.quarantine_distribution_name),
-            ],
-            MACHINE_STOP_TIMEOUT,
-        )?;
-        // An interrupted import may have registered the exact private
-        // workspace before creating a complete ext4.vhdx. Re-prove its exact
-        // name/BasePath directory binding after terminate, but do not require
-        // an uncheckpointed VHD to be valid before cleaning that registration.
-        self.verify_windows_wsl_quarantine_registration_path(intent)?;
-        let output = self.run_command_args(
-            ManagedCommandOperation::WslDistributionRemoval,
-            &command,
-            &[
-                OsString::from("--unregister"),
-                OsString::from(&intent.quarantine_distribution_name),
-            ],
-            MACHINE_STOP_TIMEOUT,
-        )?;
-        let distributions = self.windows_wsl_distribution_inventory(managed_command)?;
-        if distributions.iter().any(|distribution| {
-            distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-        }) {
-            require_success(
-                "incomplete managed Windows WSL recovery workspace cleanup",
-                &output,
-            )?;
-            return Err(AppError::Runtime(
-                "Windows still reports the incomplete recovery workspace after cleanup".into(),
-            ));
-        }
-        let registrations = self
-            .wsl_registrations
-            .registrations()?
-            .into_iter()
-            .filter(|registration| {
-                registration
-                    .distribution_name
-                    .eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-            })
-            .count();
-        if registrations != 0 {
-            return Err(AppError::NotAuthorized(
-                "Windows retained a registration for the incomplete recovery workspace".into(),
-            ));
-        }
-        if private_entry_exists(&intent.quarantine_install_directory)? {
-            remove_provider_home_after_machine_removal(
-                &intent.quarantine_install_directory,
-                &self.windows_wsl_recovery_workspace_root(),
-                WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT,
-                WINDOWS_WSL_PROVIDER_DELETE_POLL,
-            )?;
-        }
-        Ok(distributions)
-    }
-
-    fn verify_windows_wsl_quarantine_registration(
-        &self,
-        intent: &WindowsWslRecoveryIntent,
-    ) -> AppResult<()> {
-        let (timeout, poll) = self.windows_wsl_vhd_release_timing();
-        verify_windows_wsl_quarantine_storage(
-            || self.verify_windows_wsl_quarantine_registration_path(intent),
-            timeout,
-            poll,
-        )
-    }
-
-    fn verify_windows_wsl_quarantine_registration_path(
-        &self,
-        intent: &WindowsWslRecoveryIntent,
-    ) -> AppResult<PathBuf> {
-        let matching = self
-            .wsl_registrations
-            .registrations()?
-            .into_iter()
-            .filter(|registration| {
-                registration
-                    .distribution_name
-                    .eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-            })
-            .collect::<Vec<_>>();
-        if matching.len() != 1 {
-            return Err(AppError::NotAuthorized(
-                "Windows did not expose one exact registration for the recovery workspace".into(),
-            ));
-        }
-        let actual = canonical_real_directory(
-            &matching[0].base_path,
-            "managed Windows WSL recovery registration",
-        )?;
-        let expected = canonical_real_directory(
-            &intent.quarantine_install_directory,
-            "managed Windows WSL recovery workspace",
-        )?;
-        if !windows_paths_refer_to_same_location(&actual, &expected)? {
-            return Err(AppError::NotAuthorized(
-                "Windows WSL recovery registration no longer points to its isolated workspace"
-                    .into(),
-            ));
-        }
-        verify_windows_wsl_quarantine_directory(&expected)?;
-        Ok(expected)
-    }
-
-    fn read_windows_wsl_recovery_backup_proof(
-        &self,
-        intent: &WindowsWslRecoveryIntent,
-        path: &Path,
-    ) -> AppResult<WindowsWslRecoveryBackupProof> {
-        let proof: WindowsWslRecoveryBackupProof = read_bounded_private_json(
-            path,
-            64 * 1024,
-            "managed Windows WSL recovery backup proof",
-        )?;
-        validate_sha256(&proof.sha256, "managed Windows WSL recovery backup proof")?;
-        if proof.schema_version != WINDOWS_WSL_RECOVERY_BACKUP_SCHEMA
-            || proof.recovery_id != intent.recovery_id
-            || !proof
-                .distribution_name
-                .eq_ignore_ascii_case(&intent.distribution_name)
-            || !proof
-                .quarantine_distribution_name
-                .eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-            || proof.recovery_archive != intent.recovery_archive
-            || proof.size_bytes == 0
-        {
-            return Err(AppError::NotAuthorized(
-                "managed Windows WSL recovery backup proof is inconsistent".into(),
-            ));
-        }
-        Ok(proof)
-    }
-
-    fn read_windows_wsl_recovery_import_proof(
-        &self,
-        intent: &WindowsWslRecoveryIntent,
-        backup: &WindowsWslRecoveryBackupProof,
-        path: &Path,
-    ) -> AppResult<WindowsWslRecoveryImportProof> {
-        let proof: WindowsWslRecoveryImportProof = read_bounded_private_json(
-            path,
-            64 * 1024,
-            "managed Windows WSL recovery import proof",
-        )?;
-        validate_sha256(
-            &proof.archive_sha256,
-            "managed Windows WSL recovery import proof",
-        )?;
-        if proof.schema_version != WINDOWS_WSL_RECOVERY_IMPORT_SCHEMA
-            || proof.recovery_id != intent.recovery_id
-            || !proof
-                .quarantine_distribution_name
-                .eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-            || proof.quarantine_install_directory != intent.quarantine_install_directory
-            || proof.recovery_archive != intent.recovery_archive
-            || proof.archive_size_bytes != backup.size_bytes
-            || !proof.archive_sha256.eq_ignore_ascii_case(&backup.sha256)
-        {
-            return Err(AppError::NotAuthorized(
-                "managed Windows WSL recovery import proof is inconsistent".into(),
-            ));
-        }
-        Ok(proof)
-    }
-
-    fn verify_windows_wsl_recovery_archive(
-        &self,
-        intent: &WindowsWslRecoveryIntent,
-        proof: &WindowsWslRecoveryBackupProof,
-        setup: Option<&ManagedRuntimeSetupController>,
-        action: &str,
-    ) -> AppResult<()> {
-        verify_windows_wsl_recovery_file(
-            &intent.recovery_archive,
-            "managed Windows WSL recovery archive",
-        )?;
-        let mut report_progress = |processed, total| match setup {
-            Some(setup) => setup.report_recovery_progress(action, processed, total),
-            None => Ok(()),
-        };
-        verify_file_hash_size_with_progress(
-            &intent.recovery_archive,
-            proof.size_bytes,
-            &proof.sha256,
-            "managed Windows WSL recovery archive",
-            &mut report_progress,
-        )
-    }
-
-    fn verify_pending_windows_wsl_registration(
-        &self,
-        intent: &WindowsWslRecoveryIntent,
-    ) -> AppResult<WindowsWslRecoveryFileSnapshot> {
-        let (timeout, poll) = self.windows_wsl_vhd_release_timing();
-        verify_windows_wsl_recovery_vhd_with_timing(
-            || {
-                self.verify_pending_windows_wsl_registration_binding(intent)
-                    .map(|(base_path, _)| base_path)
-            },
-            timeout,
-            poll,
-        )
-    }
-
-    fn verify_pending_windows_wsl_registration_binding(
-        &self,
-        intent: &WindowsWslRecoveryIntent,
-    ) -> AppResult<(PathBuf, PathBuf)> {
-        let registrations = self.wsl_registrations.registrations()?;
-        let matching = registrations
-            .into_iter()
-            .filter(|registration| {
-                registration
-                    .distribution_name
-                    .eq_ignore_ascii_case(&intent.distribution_name)
-            })
-            .collect::<Vec<_>>();
-        if matching.len() != 1 {
-            return Err(AppError::NotAuthorized(
-                "Windows WSL registration changed while recovery was pending".into(),
-            ));
-        }
-        let ownership = match intent.ownership_basis {
-            WindowsWslRecoveryOwnershipBasis::VerifiedManifest => self
-                .verify_windows_wsl_registration_ownership(
-                    &intent.machine_name,
-                    &matching[0].base_path,
-                )?,
-            WindowsWslRecoveryOwnershipBasis::BoundedNMinusOneGhostMigration => self
-                .verify_claimed_bounded_windows_ghost_registration(
-                    intent,
-                    &matching[0].base_path,
-                )?,
-        };
-        if ownership.ownership_basis != intent.ownership_basis
-            || ownership.source_provider_manifest_sha256 != intent.source_provider_manifest_sha256
-            || ownership.install_transition_receipt != intent.install_transition_receipt
-            || !windows_paths_refer_to_same_location(
-                &ownership.base_path,
-                &intent.registration_base_path,
-            )?
-            || !windows_paths_refer_to_same_location(
-                &ownership.provider_home,
-                &intent.provider_home,
-            )?
-        {
-            return Err(AppError::NotAuthorized(
-                "Windows WSL registration no longer matches the verified scan-tool workspace"
-                    .into(),
-            ));
-        }
-        Ok((ownership.base_path, ownership.provider_home))
-    }
-
-    fn verify_claimed_bounded_windows_ghost_registration(
-        &self,
-        intent: &WindowsWslRecoveryIntent,
-        base_path: &Path,
-    ) -> AppResult<WindowsWslRegistrationOwnership> {
-        if private_entry_exists(
-            &self.windows_wsl_ghost_migration_consumed_path(&intent.machine_name),
-        )? {
-            return Err(AppError::NotAuthorized(
-                "a completed Windows ghost migration cannot authorize another old workspace".into(),
-            ));
-        }
-        if env!("CARGO_PKG_VERSION") != WINDOWS_GHOST_MIGRATION_CURRENT_VERSION
-            || !self.loaded_manifest_is_bounded_ghost_candidate()
-            || !intent
-                .source_provider_manifest_sha256
-                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256)
-            || !intent
-                .machine_image_sha256
-                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_MACHINE_IMAGE_SHA256)
-            || !intent
-                .machine_name
-                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_MACHINE_NAME)
-            || !intent
-                .install_transition_receipt
-                .as_deref()
-                .is_some_and(bounded_windows_install_transition_receipt_is_allowed)
-        {
-            return Err(AppError::NotAuthorized(
-                "claimed Windows ghost migration escaped its one-release contract".into(),
-            ));
-        }
-        let canonical_base =
-            canonical_real_directory(base_path, "claimed managed Windows WSL registration")?;
-        let provider_home = windows_wsl_provider_home_from_registration_path(
-            &self.state_root,
-            &canonical_base,
-            &intent.machine_name,
-        )?;
-        let expected_namespace = &WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256[..16];
-        let expected_provider_home = canonical_real_directory(
-            &self
-                .state_root
-                .join("provider-home")
-                .join(expected_namespace),
-            "claimed previous managed runtime provider home",
-        )?;
-        if !windows_paths_refer_to_same_location(&provider_home, &expected_provider_home)?
-            || !windows_paths_refer_to_same_location(
-                &canonical_base,
-                &intent.registration_base_path,
-            )?
-            || !windows_paths_refer_to_same_location(&provider_home, &intent.provider_home)?
-        {
-            return Err(AppError::NotAuthorized(
-                "claimed Windows ghost migration changed its provider or WSL registration".into(),
-            ));
-        }
-        let previous_install = self
-            .versions_root()
-            .join(format!("podman-machine-5.8.2-{expected_namespace}"));
-        if private_entry_exists(&previous_install)?
-            || !self.previous_windows_provider_config_matches(&provider_home, &previous_install)?
-        {
-            return Err(AppError::NotAuthorized(
-                "claimed Windows ghost migration changed its predecessor payload state".into(),
-            ));
-        }
-        let identity = provider_home
-            .join("data")
-            .join("containers")
-            .join("podman")
-            .join("machine")
-            .join(PODMAN_MACHINE_IDENTITY_NAME);
-        if inspect_managed_ssh_identity(&identity)? != ManagedSshIdentityState::Valid {
-            return Err(AppError::NotAuthorized(
-                "claimed Windows ghost migration lost its cryptographic provider identity".into(),
-            ));
-        }
-        let installation = self
-            .windows_nsis_installation_matches_bounded_migration_identity()?
-            .ok_or_else(|| {
-                AppError::NotAuthorized(
-                    "claimed Windows ghost migration lost its candidate installation".into(),
-                )
-            })?;
-        if installation.install_transition.is_some() {
-            return Err(AppError::NotAuthorized(
-                "claimed Windows ghost migration did not consume its installer receipt".into(),
-            ));
-        }
-        verify_windows_wsl_product_storage_directory(&provider_home, &canonical_base)?;
-        Ok(WindowsWslRegistrationOwnership {
-            base_path: canonical_base,
-            provider_home,
-            ownership_basis: WindowsWslRecoveryOwnershipBasis::BoundedNMinusOneGhostMigration,
-            source_provider_manifest_sha256: intent.source_provider_manifest_sha256.clone(),
-            install_transition_receipt: intent.install_transition_receipt.clone(),
-        })
-    }
-
-    fn verify_current_windows_wsl_machine_registration(
-        &self,
-        machine_name: &str,
-    ) -> AppResult<WindowsWslRecoveryFileSnapshot> {
-        let (timeout, poll) = self.windows_wsl_vhd_release_timing();
-        verify_windows_wsl_recovery_vhd_with_timing(
-            || self.verify_current_windows_wsl_machine_registration_binding(machine_name),
-            timeout,
-            poll,
-        )
-    }
-
-    fn windows_wsl_vhd_release_timing(&self) -> (Duration, Duration) {
-        #[cfg(all(test, windows))]
-        if let Some(timing) = self.windows_wsl_vhd_release_timing {
-            return timing;
-        }
-        (
-            WINDOWS_WSL_VHD_RELEASE_TIMEOUT,
-            WINDOWS_WSL_VHD_RELEASE_POLL,
-        )
     }
 
     fn verify_current_windows_wsl_machine_registration_binding(
@@ -5924,15 +4396,6 @@ impl ManagedRuntimeManager {
         machine_name: &str,
         base_path: &Path,
     ) -> AppResult<(PathBuf, PathBuf)> {
-        let ownership = self.verify_windows_wsl_registration_ownership(machine_name, base_path)?;
-        Ok((ownership.base_path, ownership.provider_home))
-    }
-
-    fn verify_windows_wsl_registration_ownership(
-        &self,
-        machine_name: &str,
-        base_path: &Path,
-    ) -> AppResult<WindowsWslRegistrationOwnership> {
         let canonical_base =
             canonical_real_directory(base_path, "managed Windows WSL registration")?;
         let provider_home = windows_wsl_provider_home_from_registration_path(
@@ -5940,40 +4403,17 @@ impl ManagedRuntimeManager {
             &canonical_base,
             machine_name,
         )?;
-        let (ownership_basis, source_provider_manifest_sha256, install_transition_receipt) =
-            if let Some(manifest_sha256) =
-                self.provider_home_matches_verified_manifest(&provider_home)?
-            {
-                (
-                    WindowsWslRecoveryOwnershipBasis::VerifiedManifest,
-                    manifest_sha256,
-                    None,
-                )
-            } else if let Some(proof) = self
-                .provider_home_matches_bounded_n_minus_one_ghost_install(
-                    &provider_home,
-                    machine_name,
-                )?
-            {
-                (
-                    WindowsWslRecoveryOwnershipBasis::BoundedNMinusOneGhostMigration,
-                    proof.previous_manifest_sha256,
-                    proof.install_transition_receipt,
-                )
-            } else {
-                return Err(AppError::NotAuthorized(
-                    "Windows WSL workspace is not bound to a verified ai-security-scanner release"
-                        .into(),
-                ));
-            };
+        if self
+            .provider_home_matches_verified_manifest(&provider_home)?
+            .is_none()
+        {
+            return Err(AppError::NotAuthorized(
+                "Windows WSL workspace is not bound to a verified ai-security-scanner release; it was preserved"
+                    .into(),
+            ));
+        }
         verify_windows_wsl_product_storage_directory(&provider_home, &canonical_base)?;
-        Ok(WindowsWslRegistrationOwnership {
-            base_path: canonical_base,
-            provider_home,
-            ownership_basis,
-            source_provider_manifest_sha256,
-            install_transition_receipt,
-        })
+        Ok((canonical_base, provider_home))
     }
 
     fn provider_home_matches_verified_manifest(
@@ -6035,884 +4475,6 @@ impl ManagedRuntimeManager {
             }
         }
         Ok(None)
-    }
-
-    fn provider_home_matches_bounded_n_minus_one_ghost_install(
-        &self,
-        provider_home: &Path,
-        machine_name: &str,
-    ) -> AppResult<Option<BoundedWindowsGhostMigrationProof>> {
-        if env!("CARGO_PKG_VERSION") != WINDOWS_GHOST_MIGRATION_CURRENT_VERSION {
-            return Ok(None);
-        }
-        let target = self.loaded.target()?;
-        if self.loaded.manifest.bundle_id != "podman-machine"
-            || self.loaded.manifest.runtime_version != "5.8.2"
-            || !self.loaded_manifest_is_bounded_ghost_candidate()
-            || target.operating_system != ManagedOperatingSystem::Windows
-            || target.architecture != ManagedArchitecture::X86_64
-            || target.provider != ManagedMachineProvider::Wsl
-            || !target
-                .machine_image
-                .sha256
-                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_MACHINE_IMAGE_SHA256)
-            || !machine_name.eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_MACHINE_NAME)
-        {
-            return Ok(None);
-        }
-        if private_entry_exists(&self.windows_wsl_ghost_migration_consumed_path(machine_name))? {
-            return Err(AppError::NotAuthorized(
-                "the bounded Windows ghost-migration receipt was already consumed".into(),
-            ));
-        }
-
-        let expected_namespace = &WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256[..16];
-        let expected_provider_home = self
-            .state_root
-            .join("provider-home")
-            .join(expected_namespace);
-        let actual_provider_home =
-            canonical_real_directory(provider_home, "previous managed runtime provider home")?;
-        let expected_provider_home = canonical_real_directory(
-            &expected_provider_home,
-            "previous managed runtime provider home",
-        )?;
-        if !windows_paths_refer_to_same_location(&actual_provider_home, &expected_provider_home)? {
-            return Ok(None);
-        }
-
-        let previous_install = self
-            .versions_root()
-            .join(format!("podman-machine-5.8.2-{expected_namespace}"));
-        if private_entry_exists(&previous_install)? {
-            return Ok(None);
-        }
-        if !self
-            .previous_windows_provider_config_matches(&actual_provider_home, &previous_install)?
-        {
-            return Ok(None);
-        }
-        let identity = actual_provider_home
-            .join("data")
-            .join("containers")
-            .join("podman")
-            .join("machine")
-            .join(PODMAN_MACHINE_IDENTITY_NAME);
-        if inspect_managed_ssh_identity(&identity)? != ManagedSshIdentityState::Valid {
-            return Ok(None);
-        }
-        let Some(installation) =
-            self.windows_nsis_installation_matches_bounded_migration_identity()?
-        else {
-            return Ok(None);
-        };
-        if !installation
-            .install_transition
-            .as_deref()
-            .is_some_and(bounded_windows_install_transition_receipt_is_allowed)
-        {
-            return Ok(None);
-        }
-        Ok(Some(BoundedWindowsGhostMigrationProof {
-            previous_manifest_sha256: WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256.into(),
-            install_transition_receipt: installation.install_transition,
-        }))
-    }
-
-    fn previous_windows_provider_config_matches(
-        &self,
-        provider_home: &Path,
-        previous_install: &Path,
-    ) -> AppResult<bool> {
-        let expected = format!(
-            "[engine]\nhelper_binaries_dir = [{}]\n\n[machine]\ncpus = 2\ndisk_size = 40\nmemory = 4096\nprovider = \"wsl\"\n",
-            toml_string(&previous_install.join("bin"))?,
-        );
-        let path = provider_home
-            .join("config")
-            .join("containers")
-            .join("containers.conf");
-        match read_bounded_regular_bytes(
-            &path,
-            16 * 1024,
-            "previous managed runtime provider configuration",
-        ) {
-            Ok(actual) => Ok(actual == expected.as_bytes()),
-            Err(AppError::NotAvailable(_)) => Ok(false),
-            Err(error) => Err(error),
-        }
-    }
-
-    fn windows_nsis_installation_matches_bounded_migration_identity(
-        &self,
-    ) -> AppResult<Option<WindowsNsisInstallation>> {
-        if env!("CARGO_PKG_VERSION") != WINDOWS_GHOST_MIGRATION_CURRENT_VERSION
-            || !self.loaded_manifest_is_bounded_ghost_candidate()
-        {
-            return Ok(None);
-        }
-        let Some(installation) = self.nsis_installation.installation()? else {
-            return Ok(None);
-        };
-        if installation.display_name != WINDOWS_NSIS_PRODUCT_NAME
-            || installation.publisher != WINDOWS_NSIS_PUBLISHER
-            || installation.main_binary_name != WINDOWS_NSIS_MAIN_EXECUTABLE
-        {
-            return Ok(None);
-        }
-        let registered_install_location = parse_windows_nsis_quoted_path(
-            &installation.install_location,
-            "Windows NSIS install location",
-        )?;
-        let uninstall_path = parse_windows_nsis_quoted_path(
-            &installation.uninstall_string,
-            "Windows NSIS uninstall command",
-        )?;
-        let local_app_data = canonical_real_directory(
-            &self.nsis_installation.local_app_data_directory()?,
-            "Windows LocalAppData",
-        )?;
-        let expected_install_location = local_app_data.join(WINDOWS_NSIS_PRODUCT_NAME);
-        let registered_parent = registered_install_location.parent().ok_or_else(|| {
-            AppError::NotAuthorized("Windows NSIS install location has no parent".into())
-        })?;
-        let registered_parent =
-            canonical_real_directory(registered_parent, "Windows NSIS install-location parent")?;
-        if !windows_paths_refer_to_same_location(&registered_parent, &local_app_data)?
-            || !registered_install_location
-                .file_name()
-                .and_then(OsStr::to_str)
-                .is_some_and(|name| name.eq_ignore_ascii_case(WINDOWS_NSIS_PRODUCT_NAME))
-        {
-            return Ok(None);
-        }
-        let expected_uninstall =
-            registered_install_location.join(WINDOWS_NSIS_UNINSTALL_EXECUTABLE);
-        if !windows_paths_equal_lexically(&uninstall_path, &expected_uninstall) {
-            return Ok(None);
-        }
-        let main_executable = registered_install_location.join(WINDOWS_NSIS_MAIN_EXECUTABLE);
-
-        if installation.display_version != WINDOWS_GHOST_MIGRATION_CURRENT_VERSION {
-            return Ok(None);
-        }
-        let install_location = canonical_real_directory(
-            &registered_install_location,
-            "current Windows NSIS install location",
-        )?;
-        let expected_install_location = canonical_real_directory(
-            &expected_install_location,
-            "current Windows NSIS install location",
-        )?;
-        if !windows_paths_refer_to_same_location(&install_location, &expected_install_location)? {
-            return Ok(None);
-        }
-        verify_windows_nsis_regular_file(
-            &main_executable,
-            "current Windows NSIS application executable",
-        )?;
-        verify_windows_nsis_regular_file(&expected_uninstall, "current Windows NSIS uninstaller")?;
-        let bundled_runtime = install_location.join("managed-runtime");
-        if !private_entry_exists(&bundled_runtime)? {
-            return Ok(None);
-        }
-        let bundled_runtime = canonical_real_directory(
-            &bundled_runtime,
-            "current Windows NSIS managed runtime resource",
-        )?;
-        if !windows_paths_refer_to_same_location(&bundled_runtime, &self.resource_root)? {
-            return Ok(None);
-        }
-        Ok(Some(installation))
-    }
-
-    /// Legacy observation is deliberately best effort. The assm2 runtime is
-    /// already live when this runs, and neither malformed nor unowned assm1
-    /// state is allowed to send the user back to manual WSL setup. The inner
-    /// routine has no WSL command edge and the resulting proof explicitly
-    /// grants no cleanup authority.
-    fn retain_bounded_windows_legacy_workspace_nonblocking(
-        &self,
-        target: &ManagedTarget,
-        current_machine_name: &str,
-    ) {
-        #[cfg(windows)]
-        if target.operating_system == ManagedOperatingSystem::Windows {
-            let _ =
-                self.record_bounded_windows_legacy_workspace_retained(target, current_machine_name);
-        }
-        #[cfg(not(windows))]
-        let _ = (target, current_machine_name);
-    }
-
-    #[cfg(windows)]
-    fn validate_windows_wsl_legacy_workspace_retained_proof(
-        &self,
-        target: &ManagedTarget,
-        current_machine_name: &str,
-        proof: &WindowsWslLegacyWorkspaceRetainedProof,
-    ) -> AppResult<()> {
-        use windows_sys::Win32::Storage::FileSystem::{
-            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
-        };
-
-        let legacy_namespace = &WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256[..16];
-        let legacy_distribution_name = format!("podman-{WINDOWS_GHOST_MIGRATION_MACHINE_NAME}");
-        let current_distribution_name = format!("podman-{current_machine_name}");
-        let expected_legacy_provider = self.state_root.join("provider-home").join(legacy_namespace);
-        if proof.schema_version != WINDOWS_WSL_LEGACY_RETAINED_SCHEMA
-            || proof.authorizes_cleanup
-            || !self.loaded_manifest_is_bounded_ghost_candidate()
-            || target.operating_system != ManagedOperatingSystem::Windows
-            || target.architecture != ManagedArchitecture::X86_64
-            || target.provider != ManagedMachineProvider::Wsl
-            || current_machine_name != WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME
-            || !proof
-                .previous_manifest_sha256
-                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256)
-            || !proof
-                .current_manifest_sha256
-                .eq_ignore_ascii_case(&self.loaded.sha256)
-            || !proof
-                .machine_image_sha256
-                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_MACHINE_IMAGE_SHA256)
-            || !proof
-                .legacy_machine_name
-                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_MACHINE_NAME)
-            || !proof
-                .legacy_distribution_name
-                .eq_ignore_ascii_case(&legacy_distribution_name)
-            || !proof
-                .current_machine_name
-                .eq_ignore_ascii_case(current_machine_name)
-            || !proof
-                .current_distribution_name
-                .eq_ignore_ascii_case(&current_distribution_name)
-            || !proof
-                .legacy_provider_namespace
-                .eq_ignore_ascii_case(legacy_namespace)
-            || !bounded_windows_install_transition_receipt_is_allowed(
-                &proof.install_transition_receipt,
-            )
-            || proof.legacy_vhd_size_bytes == 0
-            || proof.legacy_vhd_number_of_links != 1
-            || proof.legacy_vhd_attributes
-                & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)
-                != 0
-        {
-            return Err(AppError::NotAuthorized(
-                "retained Windows WSL legacy proof escaped its observation-only release contract"
-                    .into(),
-            ));
-        }
-        validate_sha256(
-            &proof.legacy_provider_config_sha256,
-            "retained legacy provider configuration",
-        )?;
-        validate_sha256(
-            &proof.legacy_ssh_public_key_sha256,
-            "retained legacy SSH public key",
-        )?;
-        let legacy_registration_id = Uuid::parse_str(&proof.legacy_registration_id)
-            .map_err(|_| {
-                AppError::NotAuthorized(
-                    "retained Windows WSL legacy registration identity is invalid".into(),
-                )
-            })?
-            .hyphenated()
-            .to_string();
-        let current_registration_id = Uuid::parse_str(&proof.current_registration_id)
-            .map_err(|_| {
-                AppError::NotAuthorized(
-                    "retained Windows WSL current registration identity is invalid".into(),
-                )
-            })?
-            .hyphenated()
-            .to_string();
-        if legacy_registration_id != proof.legacy_registration_id
-            || current_registration_id != proof.current_registration_id
-            || proof.legacy_vhd_path != proof.legacy_registration_base_path.join("ext4.vhdx")
-            || !windows_paths_refer_to_same_location(
-                &proof.legacy_provider_home,
-                &expected_legacy_provider,
-            )?
-            || !windows_paths_refer_to_same_location(
-                &proof.current_provider_home,
-                &self.provider_home(),
-            )?
-        {
-            return Err(AppError::NotAuthorized(
-                "retained Windows WSL legacy proof changed its GUID or provider binding".into(),
-            ));
-        }
-        match proof.transition_evidence_source {
-            WindowsWslLegacyTransitionEvidenceSource::NsisInstallTransition => {
-                if proof.legacy_recovery_id.is_some()
-                    || proof.legacy_recovery_intent_sha256.is_some()
-                {
-                    return Err(AppError::NotAuthorized(
-                        "retained Windows WSL installer proof carried unrelated recovery evidence"
-                            .into(),
-                    ));
-                }
-            }
-            WindowsWslLegacyTransitionEvidenceSource::LegacyPendingRecoveryIntent => {
-                let recovery_id = proof.legacy_recovery_id.as_deref().ok_or_else(|| {
-                    AppError::NotAuthorized(
-                        "retained Windows WSL pending proof has no recovery ID".into(),
-                    )
-                })?;
-                Uuid::parse_str(recovery_id).map_err(|_| {
-                    AppError::NotAuthorized(
-                        "retained Windows WSL pending recovery ID is invalid".into(),
-                    )
-                })?;
-                validate_sha256(
-                    proof
-                        .legacy_recovery_intent_sha256
-                        .as_deref()
-                        .ok_or_else(|| {
-                            AppError::NotAuthorized(
-                                "retained Windows WSL pending proof has no intent digest".into(),
-                            )
-                        })?,
-                    "retained Windows WSL recovery intent",
-                )?;
-            }
-        }
-        Ok(())
-    }
-
-    #[cfg(windows)]
-    fn record_bounded_windows_legacy_workspace_retained(
-        &self,
-        target: &ManagedTarget,
-        current_machine_name: &str,
-    ) -> AppResult<()> {
-        if env!("CARGO_PKG_VERSION") != WINDOWS_GHOST_MIGRATION_CURRENT_VERSION
-            || !self.loaded_manifest_is_bounded_ghost_candidate()
-            || target.operating_system != ManagedOperatingSystem::Windows
-            || target.architecture != ManagedArchitecture::X86_64
-            || target.provider != ManagedMachineProvider::Wsl
-            || !target
-                .machine_image
-                .sha256
-                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_MACHINE_IMAGE_SHA256)
-            || current_machine_name != WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME
-        {
-            return Ok(());
-        }
-
-        let legacy_distribution_name = format!("podman-{WINDOWS_GHOST_MIGRATION_MACHINE_NAME}");
-        let current_distribution_name = format!("podman-{current_machine_name}");
-        let legacy_registrations = self
-            .wsl_registrations
-            .registrations()?
-            .into_iter()
-            .filter(|registration| {
-                registration
-                    .distribution_name
-                    .eq_ignore_ascii_case(&legacy_distribution_name)
-            })
-            .collect::<Vec<_>>();
-        if legacy_registrations.len() != 1 {
-            return Ok(());
-        }
-        let legacy_registration = legacy_registrations
-            .into_iter()
-            .next()
-            .expect("one registration");
-        let retained_path =
-            self.windows_wsl_legacy_retained_path(&legacy_registration.registration_id)?;
-
-        let current_registrations = self
-            .wsl_registrations
-            .registrations()?
-            .into_iter()
-            .filter(|registration| {
-                registration
-                    .distribution_name
-                    .eq_ignore_ascii_case(&current_distribution_name)
-            })
-            .collect::<Vec<_>>();
-        if current_registrations.len() != 1 {
-            return Err(AppError::NotAuthorized(
-                "Windows did not expose one exact assm2 registration after server preflight".into(),
-            ));
-        }
-        let current_registration = current_registrations
-            .into_iter()
-            .next()
-            .expect("one registration");
-        let current_base =
-            self.verify_current_windows_wsl_machine_registration_binding(current_machine_name)?;
-        self.exact_windows_wsl_registration(
-            &current_registration.registration_id,
-            &current_distribution_name,
-            &current_base,
-        )?;
-
-        if private_entry_exists(&retained_path)? {
-            let proof: WindowsWslLegacyWorkspaceRetainedProof = read_bounded_private_json(
-                &retained_path,
-                64 * 1024,
-                "retained Windows WSL legacy workspace proof",
-            )?;
-            self.validate_windows_wsl_legacy_workspace_retained_proof(
-                target,
-                current_machine_name,
-                &proof,
-            )?;
-            self.exact_windows_wsl_registration(
-                &proof.legacy_registration_id,
-                &proof.legacy_distribution_name,
-                &proof.legacy_registration_base_path,
-            )?;
-            self.exact_windows_wsl_registration(
-                &proof.current_registration_id,
-                &proof.current_distribution_name,
-                &proof.current_registration_base_path,
-            )?;
-            if let Some(installation) =
-                self.windows_nsis_installation_matches_bounded_migration_identity()?
-            {
-                if installation.install_transition.as_deref()
-                    == Some(proof.install_transition_receipt.as_str())
-                {
-                    self.nsis_installation.consume_install_transition(
-                        &installation,
-                        &proof.install_transition_receipt,
-                    )?;
-                }
-            }
-            return Ok(());
-        }
-
-        let installation = self
-            .windows_nsis_installation_matches_bounded_migration_identity()?
-            .ok_or_else(|| {
-                AppError::NotAuthorized(
-                    "retained Windows WSL observation is not backed by the installed candidate"
-                        .into(),
-                )
-            })?;
-        let (
-            transition_evidence_source,
-            install_transition_receipt,
-            pending_intent,
-            pending_intent_sha256,
-        ) = match installation.install_transition.as_deref() {
-            Some(receipt) if bounded_windows_install_transition_receipt_is_allowed(receipt) => (
-                WindowsWslLegacyTransitionEvidenceSource::NsisInstallTransition,
-                receipt.to_owned(),
-                None,
-                None,
-            ),
-            None => {
-                let (intent, digest) = self
-                    .exact_bounded_windows_legacy_pending_evidence()?
-                    .ok_or_else(|| {
-                        AppError::NotAuthorized(
-                            "retained Windows WSL observation has no exact transition evidence"
-                                .into(),
-                        )
-                    })?;
-                let receipt = intent
-                    .install_transition_receipt
-                    .clone()
-                    .expect("validated pending intent receipt");
-                (
-                    WindowsWslLegacyTransitionEvidenceSource::LegacyPendingRecoveryIntent,
-                    receipt,
-                    Some(intent),
-                    Some(digest),
-                )
-            }
-            Some(_) => {
-                return Err(AppError::NotAuthorized(
-                    "retained Windows WSL observation has an unsupported installer transition"
-                        .into(),
-                ));
-            }
-        };
-
-        let legacy_ownership = match pending_intent.as_ref() {
-            Some(intent) => self.verify_claimed_bounded_windows_ghost_registration(
-                intent,
-                &legacy_registration.base_path,
-            )?,
-            None => self.verify_windows_wsl_registration_ownership(
-                WINDOWS_GHOST_MIGRATION_MACHINE_NAME,
-                &legacy_registration.base_path,
-            )?,
-        };
-        if !legacy_ownership
-            .source_provider_manifest_sha256
-            .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256)
-        {
-            return Err(AppError::NotAuthorized(
-                "retained Windows WSL observation did not prove the exact predecessor provider"
-                    .into(),
-            ));
-        }
-
-        // Pin the exact old directory and VHD with the minimum read category
-        // needed for Windows share-mode arbitration, without reading its bytes
-        // or denying WSL its existing read/write access. Omitting delete sharing
-        // prevents replacement while the GUID/BasePath, provider configuration,
-        // SSH identity, and retained proof are bound.
-        let legacy_base_guard = open_windows_real_directory_security_handle(
-            &legacy_ownership.base_path,
-        )
-        .map_err(|error| {
-            AppError::NotAuthorized(format!(
-                "legacy Windows WSL workspace could not be pinned for observation: {error}"
-            ))
-        })?;
-        let legacy_vhd_path = legacy_ownership.base_path.join("ext4.vhdx");
-        let legacy_vhd_guard =
-            open_windows_wsl_vhd_observation_guard(&legacy_vhd_path).map_err(|error| {
-                AppError::NotAuthorized(format!(
-                    "legacy Windows WSL VHD could not be observed without interrupting it: {error}"
-                ))
-            })?;
-        let legacy_vhd_information = windows_file_information(&legacy_vhd_guard)?;
-        validate_windows_wsl_recovery_file_information(
-            &legacy_vhd_information,
-            "legacy Windows WSL VHD",
-        )?;
-        self.exact_windows_wsl_registration(
-            &legacy_registration.registration_id,
-            &legacy_distribution_name,
-            &legacy_ownership.base_path,
-        )?;
-
-        let legacy_config = legacy_ownership
-            .provider_home
-            .join("config")
-            .join("containers")
-            .join("containers.conf");
-        let (_, legacy_provider_config_sha256) = hash_bounded_regular_file(
-            &legacy_config,
-            16 * 1024,
-            "legacy managed runtime provider configuration",
-        )?;
-        let legacy_identity = legacy_ownership
-            .provider_home
-            .join("data")
-            .join("containers")
-            .join("podman")
-            .join("machine")
-            .join(PODMAN_MACHINE_IDENTITY_NAME);
-        let (_, legacy_ssh_public_key_sha256) = hash_bounded_regular_file(
-            &managed_ssh_public_key_path(&legacy_identity),
-            MAX_SSH_PUBLIC_KEY_BYTES,
-            "legacy managed runtime SSH public key",
-        )?;
-
-        let rebound_ownership = match pending_intent.as_ref() {
-            Some(intent) => self.verify_claimed_bounded_windows_ghost_registration(
-                intent,
-                &legacy_registration.base_path,
-            )?,
-            None => self.verify_windows_wsl_registration_ownership(
-                WINDOWS_GHOST_MIGRATION_MACHINE_NAME,
-                &legacy_registration.base_path,
-            )?,
-        };
-        if rebound_ownership != legacy_ownership {
-            return Err(AppError::NotAuthorized(
-                "legacy Windows WSL provider identity changed during retained observation".into(),
-            ));
-        }
-        self.exact_windows_wsl_registration(
-            &legacy_registration.registration_id,
-            &legacy_distribution_name,
-            &legacy_ownership.base_path,
-        )?;
-        self.exact_windows_wsl_registration(
-            &current_registration.registration_id,
-            &current_distribution_name,
-            &current_base,
-        )?;
-
-        let legacy_provider_home = canonical_real_directory(
-            &legacy_ownership.provider_home,
-            "retained legacy managed runtime provider home",
-        )?;
-        let current_provider_home = canonical_real_directory(
-            &self.provider_home(),
-            "retained current managed runtime provider home",
-        )?;
-        let legacy_namespace = WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256[..16].to_owned();
-        let proof = WindowsWslLegacyWorkspaceRetainedProof {
-            schema_version: WINDOWS_WSL_LEGACY_RETAINED_SCHEMA.into(),
-            authorizes_cleanup: false,
-            transition_evidence_source,
-            install_transition_receipt: install_transition_receipt.clone(),
-            previous_manifest_sha256: WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256.into(),
-            current_manifest_sha256: self.loaded.sha256.clone(),
-            machine_image_sha256: target.machine_image.sha256.clone(),
-            legacy_machine_name: WINDOWS_GHOST_MIGRATION_MACHINE_NAME.into(),
-            legacy_distribution_name,
-            current_machine_name: current_machine_name.into(),
-            current_distribution_name,
-            legacy_registration_id: legacy_registration.registration_id.clone(),
-            legacy_registration_base_path: legacy_ownership.base_path.clone(),
-            legacy_provider_home,
-            legacy_provider_namespace: legacy_namespace,
-            legacy_vhd_path,
-            legacy_vhd_size_bytes: legacy_vhd_information.size,
-            legacy_vhd_volume_serial_number: legacy_vhd_information.identity.volume_serial_number,
-            legacy_vhd_file_index: legacy_vhd_information.identity.file_index,
-            legacy_vhd_number_of_links: legacy_vhd_information.number_of_links,
-            legacy_vhd_attributes: legacy_vhd_information.attributes,
-            legacy_provider_config_sha256,
-            legacy_ssh_public_key_sha256,
-            current_registration_id: current_registration.registration_id.clone(),
-            current_registration_base_path: current_base,
-            current_provider_home,
-            legacy_recovery_id: pending_intent
-                .as_ref()
-                .map(|intent| intent.recovery_id.clone()),
-            legacy_recovery_intent_sha256: pending_intent_sha256,
-        };
-        self.validate_windows_wsl_legacy_workspace_retained_proof(
-            target,
-            current_machine_name,
-            &proof,
-        )?;
-        let encoded = serde_json::to_vec(&proof).map_err(|error| {
-            AppError::Internal(format!(
-                "retained Windows WSL legacy proof could not be encoded: {error}"
-            ))
-        })?;
-        write_private_atomic(&retained_path, &encoded)?;
-        let persisted: WindowsWslLegacyWorkspaceRetainedProof = read_bounded_private_json(
-            &retained_path,
-            64 * 1024,
-            "retained Windows WSL legacy workspace proof",
-        )?;
-        if persisted != proof {
-            return Err(AppError::NotAuthorized(
-                "retained Windows WSL legacy proof changed during its durable commit".into(),
-            ));
-        }
-
-        // Only the durable, re-read observation record permits deleting the
-        // transient NSIS marker. It never permits any WSL or provider cleanup.
-        if transition_evidence_source
-            == WindowsWslLegacyTransitionEvidenceSource::NsisInstallTransition
-        {
-            self.nsis_installation
-                .consume_install_transition(&installation, &install_transition_receipt)?;
-            let claimed = self
-                .windows_nsis_installation_matches_bounded_migration_identity()?
-                .ok_or_else(|| {
-                    AppError::NotAuthorized(
-                        "installed candidate changed while retaining its legacy workspace".into(),
-                    )
-                })?;
-            if claimed.install_transition.is_some() {
-                return Err(AppError::NotAuthorized(
-                    "Windows NSIS transition remained after retained proof became durable".into(),
-                ));
-            }
-        }
-        drop(legacy_vhd_guard);
-        drop(legacy_base_guard);
-        Ok(())
-    }
-
-    fn record_bounded_windows_ghost_migration_consumed(
-        &self,
-        intent: &WindowsWslRecoveryIntent,
-    ) -> AppResult<()> {
-        if intent.ownership_basis
-            != WindowsWslRecoveryOwnershipBasis::BoundedNMinusOneGhostMigration
-        {
-            return Ok(());
-        }
-        if self
-            .read_windows_wsl_ghost_migration_consumed_proof(intent)?
-            .is_some()
-        {
-            return Ok(());
-        }
-        let installation = self
-            .windows_nsis_installation_matches_bounded_migration_identity()?
-            .ok_or_else(|| {
-                AppError::NotAuthorized(
-                    "completed Windows ghost migration is not backed by the installed candidate"
-                        .into(),
-                )
-            })?;
-        if installation.install_transition.is_some() {
-            return Err(AppError::NotAuthorized(
-                "completed Windows ghost migration still has an unconsumed installer receipt"
-                    .into(),
-            ));
-        }
-        let proof = self.expected_windows_wsl_ghost_migration_consumed_proof(intent)?;
-        let encoded = serde_json::to_vec(&proof).map_err(|error| {
-            AppError::Internal(format!(
-                "managed Windows ghost-migration consumed proof could not be encoded: {error}"
-            ))
-        })?;
-        write_private_atomic(
-            &self.windows_wsl_ghost_migration_consumed_path(&intent.machine_name),
-            &encoded,
-        )?;
-        self.read_windows_wsl_ghost_migration_consumed_proof(intent)?
-            .ok_or_else(|| {
-                AppError::Internal(
-                    "managed Windows ghost-migration consumed proof disappeared".into(),
-                )
-            })?;
-        Ok(())
-    }
-
-    fn complete_windows_wsl_recovery_locked(
-        &self,
-        target: &ManagedTarget,
-        managed_command: &ManagedRuntimeCommand,
-        machine_name: &str,
-        setup: Option<&ManagedRuntimeSetupController>,
-    ) -> AppResult<()> {
-        if target.operating_system != ManagedOperatingSystem::Windows {
-            return Ok(());
-        }
-        let pending = self.windows_wsl_recovery_pending_path(machine_name);
-        // The current assm2 generation is never recovered through WSL's
-        // mutable name-based management interface. A stale or ambiguous
-        // checkpoint is preserved as observation-only state while the usable
-        // generation continues (or a fresh isolated name is selected during
-        // initialization). It never becomes a manual setup prerequisite.
-        if windows_machine_uses_current_compatibility_generation(machine_name) {
-            return Ok(());
-        }
-        if private_entry_exists(&pending)? {
-            let intent = self
-                .read_windows_wsl_recovery_intent_locked(machine_name)?
-                .ok_or_else(|| {
-                    AppError::Internal(
-                        "managed Windows WSL recovery pointer disappeared during cleanup".into(),
-                    )
-                })?;
-            let proof_path = intent.attempt_directory.join("backup.json");
-            let proof = self.read_windows_wsl_recovery_backup_proof(&intent, &proof_path)?;
-            let _import_proof = self.read_windows_wsl_recovery_import_proof(
-                &intent,
-                &proof,
-                &intent.attempt_directory.join("import.json"),
-            )?;
-            let distributions = self.windows_wsl_distribution_inventory(managed_command)?;
-            if !distributions
-                .iter()
-                .any(|distribution| distribution.eq_ignore_ascii_case(&intent.distribution_name))
-            {
-                return Err(AppError::NotAuthorized(
-                    "Windows did not report the verified replacement scan workspace".into(),
-                ));
-            }
-            self.verify_current_windows_wsl_machine_registration_binding(machine_name)?;
-            // A live, verified replacement is the commit point. Persist the
-            // one-shot receipt tombstone before deleting the pending pointer;
-            // a crash on either side remains resumable, while a later ghost
-            // workspace cannot replay this installer transition.
-            self.record_bounded_windows_ghost_migration_consumed(&intent)?;
-            let quarantine_present = distributions.iter().any(|distribution| {
-                distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-            });
-            if quarantine_present {
-                self.verify_windows_wsl_quarantine_registration_path(&intent)?;
-                let command = windows_wsl_inventory_command(managed_command)?;
-                let _stop_output = self.run_command_args(
-                    ManagedCommandOperation::WslDistributionTerminate,
-                    &command,
-                    &[
-                        OsString::from("--terminate"),
-                        OsString::from(&intent.quarantine_distribution_name),
-                    ],
-                    MACHINE_STOP_TIMEOUT,
-                )?;
-                self.verify_windows_wsl_recovery_archive(
-                    &intent,
-                    &proof,
-                    setup,
-                    "Checking the recovery copy before removing its temporary workspace",
-                )?;
-                self.verify_windows_wsl_quarantine_registration(&intent)?;
-                let output = self.run_command_args(
-                    ManagedCommandOperation::WslDistributionRemoval,
-                    &command,
-                    &[
-                        OsString::from("--unregister"),
-                        OsString::from(&intent.quarantine_distribution_name),
-                    ],
-                    MACHINE_STOP_TIMEOUT,
-                )?;
-                let distributions = self.windows_wsl_distribution_inventory(managed_command)?;
-                if distributions.iter().any(|distribution| {
-                    distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-                }) {
-                    require_success("managed Windows WSL recovery workspace cleanup", &output)?;
-                    return Err(AppError::Runtime(
-                        "Windows still reports the temporary recovery workspace after cleanup"
-                            .into(),
-                    ));
-                }
-            } else {
-                let registrations = self
-                    .wsl_registrations
-                    .registrations()?
-                    .into_iter()
-                    .filter(|registration| {
-                        registration
-                            .distribution_name
-                            .eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-                    })
-                    .count();
-                if registrations != 0 {
-                    return Err(AppError::NotAuthorized(
-                        "Windows WSL inventory and registration disagree about the recovery workspace"
-                            .into(),
-                    ));
-                }
-                self.verify_windows_wsl_recovery_archive(
-                    &intent,
-                    &proof,
-                    setup,
-                    "Checking the saved recovery copy",
-                )?;
-            }
-            let quarantine_registrations = self
-                .wsl_registrations
-                .registrations()?
-                .into_iter()
-                .filter(|registration| {
-                    registration
-                        .distribution_name
-                        .eq_ignore_ascii_case(&intent.quarantine_distribution_name)
-                })
-                .count();
-            if quarantine_registrations != 0 {
-                return Err(AppError::NotAuthorized(
-                    "Windows retained a registration for the temporary recovery workspace".into(),
-                ));
-            }
-            if private_entry_exists(&intent.quarantine_install_directory)? {
-                remove_provider_home_after_machine_removal(
-                    &intent.quarantine_install_directory,
-                    &self.windows_wsl_recovery_workspace_root(),
-                    WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT,
-                    WINDOWS_WSL_PROVIDER_DELETE_POLL,
-                )?;
-            }
-            remove_regular_file(&pending)?;
-            sync_directory(&self.windows_wsl_recovery_root())?;
-        }
-        Ok(())
     }
 
     fn windows_wsl_ownership_proof_path(
@@ -8554,176 +6116,6 @@ fn read_bounded_regular_bytes(path: &Path, max_bytes: u64, label: &str) -> AppRe
     }
 }
 
-#[cfg(any(windows, test))]
-fn hash_bounded_regular_file(path: &Path, max_bytes: u64, label: &str) -> AppResult<(u64, String)> {
-    hash_bounded_regular_file_with_progress(path, max_bytes, label, &mut |_, _| Ok(()))
-}
-
-fn hash_bounded_regular_file_with_progress(
-    path: &Path,
-    max_bytes: u64,
-    label: &str,
-    progress: &mut dyn FnMut(u64, u64) -> AppResult<()>,
-) -> AppResult<(u64, String)> {
-    verify_windows_wsl_recovery_file(path, label)?;
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.len() == 0 || metadata.len() > max_bytes {
-        return Err(AppError::NotAuthorized(format!(
-            "{label} is empty or exceeds the managed workspace size"
-        )));
-    }
-    let expected_size = metadata.len();
-    let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut size = 0_u64;
-    let mut next_progress = 0_u64;
-    let mut buffer = [0_u8; 128 * 1024];
-    progress(0, expected_size)?;
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        size = size
-            .checked_add(read as u64)
-            .ok_or_else(|| AppError::Runtime(format!("{label} size overflowed while hashing")))?;
-        if size > max_bytes {
-            return Err(AppError::NotAuthorized(format!(
-                "{label} exceeded the managed workspace size while hashing"
-            )));
-        }
-        hasher.update(&buffer[..read]);
-        if size >= next_progress || size == expected_size {
-            progress(size, expected_size)?;
-            next_progress = size.saturating_add(16 * 1024 * 1024);
-        }
-    }
-    if size != expected_size {
-        return Err(AppError::NotAuthorized(format!(
-            "{label} changed while it was hashed"
-        )));
-    }
-    Ok((size, hex::encode(hasher.finalize())))
-}
-
-fn windows_wsl_recovery_archive_max_bytes(
-    disk_size_gb: u16,
-    source_vhd_size: u64,
-) -> AppResult<u64> {
-    let manifest_bound = u64::from(disk_size_gb)
-        .checked_mul(1024 * 1024 * 1024)
-        .and_then(|bytes| bytes.checked_mul(WINDOWS_WSL_RECOVERY_ARCHIVE_DISK_MULTIPLIER))
-        .and_then(|bytes| bytes.checked_add(WINDOWS_WSL_RECOVERY_ARCHIVE_MARGIN_BYTES))
-        .ok_or_else(|| {
-            AppError::Runtime("managed Windows WSL recovery size limit overflowed".into())
-        })?;
-    let existing_workspace_bound = source_vhd_size
-        .checked_mul(WINDOWS_WSL_RECOVERY_ARCHIVE_DISK_MULTIPLIER)
-        .and_then(|bytes| bytes.checked_add(WINDOWS_WSL_RECOVERY_ARCHIVE_MARGIN_BYTES))
-        .ok_or_else(|| {
-            AppError::Runtime("managed Windows WSL recovery workspace size overflowed".into())
-        })?;
-    Ok(manifest_bound
-        .max(existing_workspace_bound)
-        .min(WINDOWS_WSL_RECOVERY_ARCHIVE_ABSOLUTE_MAX_BYTES))
-}
-
-#[cfg(windows)]
-fn require_windows_wsl_recovery_free_space(
-    destination_directory: &Path,
-    source_vhd_size: u64,
-) -> AppResult<()> {
-    // The caller first terminates the exact ownership-proven distribution and
-    // obtains this size from the bounded no-follow VHD handle proof. Do not
-    // reopen the VHD here: WSL may still be finishing its handle release.
-    if source_vhd_size == 0 {
-        return Err(AppError::NotAuthorized(
-            "managed Windows WSL recovery VHD must be one non-empty regular file".into(),
-        ));
-    }
-    let required = source_vhd_size
-        .checked_add(WINDOWS_WSL_RECOVERY_FREE_SPACE_MARGIN_BYTES)
-        .ok_or_else(|| {
-            AppError::Runtime("managed Windows WSL recovery space estimate overflowed".into())
-        })?;
-    let available = windows_available_disk_space(destination_directory)?;
-    if available < required {
-        return Err(AppError::NotAvailable(
-            "Windows needs more free disk space to preserve the previous scan-tool workspace before replacing it"
-                .into(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn require_windows_wsl_recovery_import_space(
-    destination_directory: &Path,
-    archive_size: u64,
-) -> AppResult<()> {
-    let required = archive_size
-        .checked_add(WINDOWS_WSL_RECOVERY_FREE_SPACE_MARGIN_BYTES)
-        .ok_or_else(|| {
-            AppError::Runtime("managed Windows WSL recovery import estimate overflowed".into())
-        })?;
-    if windows_available_disk_space(destination_directory)? < required {
-        return Err(AppError::NotAvailable(
-            "Windows needs more free disk space to restore the protected recovery copy before replacing the old workspace"
-                .into(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn windows_available_disk_space(destination_directory: &Path) -> AppResult<u64> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-
-    let canonical = canonical_real_directory(
-        destination_directory,
-        "managed Windows WSL recovery destination",
-    )?;
-    let mut encoded = canonical.as_os_str().encode_wide().collect::<Vec<_>>();
-    if encoded.contains(&0) {
-        return Err(AppError::NotAuthorized(
-            "managed Windows WSL recovery destination contains a NUL code unit".into(),
-        ));
-    }
-    encoded.push(0);
-    let mut available = 0_u64;
-    // SAFETY: encoded is NUL-terminated and live for the call; available is a
-    // valid writable u64 while the optional totals are intentionally omitted.
-    if unsafe {
-        GetDiskFreeSpaceExW(
-            encoded.as_ptr(),
-            &raw mut available,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    } == 0
-    {
-        return Err(io::Error::last_os_error().into());
-    }
-    Ok(available)
-}
-
-#[cfg(not(windows))]
-fn require_windows_wsl_recovery_free_space(
-    _destination_directory: &Path,
-    _source_vhd_size: u64,
-) -> AppResult<()> {
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn require_windows_wsl_recovery_import_space(
-    _destination_directory: &Path,
-    _archive_size: u64,
-) -> AppResult<()> {
-    Ok(())
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ManagedSshIdentityState {
     Absent,
@@ -8764,17 +6156,6 @@ struct WindowsFileInformation {
     identity: WindowsFileIdentity,
     size: u64,
     number_of_links: u32,
-    attributes: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct WindowsWslRecoveryFileSnapshot {
-    size: u64,
-    #[cfg(windows)]
-    identity: WindowsFileIdentity,
-    #[cfg(windows)]
-    number_of_links: u32,
-    #[cfg(windows)]
     attributes: u32,
 }
 
@@ -9496,87 +6877,6 @@ fn open_windows_managed_ssh_identity_file(path: &Path) -> io::Result<File> {
         .share_mode(FILE_SHARE_READ)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     options.open(path)
-}
-
-#[cfg(windows)]
-fn open_windows_wsl_vhd_quiescence_guard(path: &Path) -> io::Result<File> {
-    use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::io::FromRawHandle;
-    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_DATA, FILE_SHARE_READ, OPEN_EXISTING,
-    };
-
-    let mut encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
-    if encoded.contains(&0) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Windows WSL VHD path contains a NUL code unit",
-        ));
-    }
-    encoded.push(0);
-    // Nonzero read access is required for Windows' bidirectional share-mode
-    // arbitration. Sharing read (and only read) admits compatible readers,
-    // conflicts with every existing writer/deleter, and prevents a new
-    // writer, rename, or delete until the exact registration and file identity
-    // have been rebound below. The code never reads the VHD's bytes.
-    let raw = unsafe {
-        CreateFileW(
-            encoded.as_ptr(),
-            FILE_READ_DATA,
-            FILE_SHARE_READ,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            FILE_FLAG_OPEN_REPARSE_POINT,
-            std::ptr::null_mut(),
-        )
-    };
-    if raw == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: CreateFileW returned a uniquely owned handle.
-    Ok(unsafe { File::from_raw_handle(raw) })
-}
-
-#[cfg(windows)]
-fn open_windows_wsl_vhd_observation_guard(path: &Path) -> io::Result<File> {
-    use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::io::FromRawHandle;
-    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_DATA, FILE_SHARE_READ,
-        FILE_SHARE_WRITE, OPEN_EXISTING,
-    };
-
-    let mut encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
-    if encoded.contains(&0) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Windows WSL VHD path contains a NUL code unit",
-        ));
-    }
-    encoded.push(0);
-    // This is an observation pin, never a quiescence or cleanup proof. The
-    // minimum read category participates in Windows share-mode arbitration but
-    // the code never reads the VHD's bytes. Read/write sharing lets a running
-    // WSL distribution continue, and omitted delete sharing keeps this exact
-    // file object from being replaced while its retained record is committed.
-    let raw = unsafe {
-        CreateFileW(
-            encoded.as_ptr(),
-            FILE_READ_DATA,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            FILE_FLAG_OPEN_REPARSE_POINT,
-            std::ptr::null_mut(),
-        )
-    };
-    if raw == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: CreateFileW returned a uniquely owned handle.
-    Ok(unsafe { File::from_raw_handle(raw) })
 }
 
 #[cfg(windows)]
@@ -10341,6 +7641,80 @@ fn machine_name(target: &ManagedTarget) -> String {
     name
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(windows, test))]
+enum WindowsWslServicingCommand {
+    WslInstall,
+    WslUpdate,
+    EnableWindowsSubsystemForLinux,
+    EnableVirtualMachinePlatform,
+}
+
+#[cfg(any(windows, test))]
+impl WindowsWslServicingCommand {
+    fn executable_name(self) -> &'static str {
+        match self {
+            Self::WslInstall | Self::WslUpdate => "wsl.exe",
+            Self::EnableWindowsSubsystemForLinux | Self::EnableVirtualMachinePlatform => "dism.exe",
+        }
+    }
+
+    fn parameters(self) -> &'static str {
+        match self {
+            Self::WslInstall => "--install --no-distribution",
+            Self::WslUpdate => "--update",
+            Self::EnableWindowsSubsystemForLinux => {
+                "/Online /Enable-Feature /FeatureName:Microsoft-Windows-Subsystem-Linux /All /NoRestart"
+            }
+            Self::EnableVirtualMachinePlatform => {
+                "/Online /Enable-Feature /FeatureName:VirtualMachinePlatform /All /NoRestart"
+            }
+        }
+    }
+
+    fn timeout(self) -> Duration {
+        match self {
+            Self::WslInstall | Self::WslUpdate => WINDOWS_WSL_PREREQUISITE_REPAIR_TIMEOUT,
+            Self::EnableWindowsSubsystemForLinux | Self::EnableVirtualMachinePlatform => {
+                WINDOWS_WSL_MISSING_BINARY_STAGE_TIMEOUT
+            }
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+fn windows_wsl_servicing_commands(
+    action: ManagedRuntimeSetupNextAction,
+    wsl_binary_exists: bool,
+) -> AppResult<Vec<WindowsWslServicingCommand>> {
+    if !wsl_binary_exists {
+        return match action {
+            ManagedRuntimeSetupNextAction::InstallWsl
+            | ManagedRuntimeSetupNextAction::EnableWslOptionalFeatures => Ok(vec![
+                WindowsWslServicingCommand::EnableWindowsSubsystemForLinux,
+                WindowsWslServicingCommand::EnableVirtualMachinePlatform,
+            ]),
+            ManagedRuntimeSetupNextAction::UpdateWsl
+            | ManagedRuntimeSetupNextAction::RestartWindows
+            | ManagedRuntimeSetupNextAction::RetryWslCheck => Err(AppError::InvalidRequest(
+                "the selected Windows prerequisite action does not match the current WSL state"
+                    .into(),
+            )),
+        };
+    }
+    match action {
+        ManagedRuntimeSetupNextAction::InstallWsl
+        | ManagedRuntimeSetupNextAction::EnableWslOptionalFeatures => {
+            Ok(vec![WindowsWslServicingCommand::WslInstall])
+        }
+        ManagedRuntimeSetupNextAction::UpdateWsl => Ok(vec![WindowsWslServicingCommand::WslUpdate]),
+        ManagedRuntimeSetupNextAction::RestartWindows
+        | ManagedRuntimeSetupNextAction::RetryWslCheck => Err(AppError::InvalidRequest(
+            "this managed runtime prerequisite cannot be changed automatically".into(),
+        )),
+    }
+}
+
 fn windows_wsl_repair_parameters(action: ManagedRuntimeSetupNextAction) -> AppResult<&'static str> {
     match action {
         ManagedRuntimeSetupNextAction::InstallWsl
@@ -10353,6 +7727,24 @@ fn windows_wsl_repair_parameters(action: ManagedRuntimeSetupNextAction) -> AppRe
             "this managed runtime prerequisite cannot be changed automatically".into(),
         )),
     }
+}
+
+#[cfg(any(windows, test))]
+fn bounded_windows_wsl_servicing_cooldown_remaining(
+    now_unix_seconds: u64,
+    deadline_unix_seconds: u64,
+) -> Option<Duration> {
+    let remaining = deadline_unix_seconds.checked_sub(now_unix_seconds)?;
+    (remaining > 0 && remaining <= WINDOWS_WSL_SERVICING_COOLDOWN.as_secs())
+        .then(|| Duration::from_secs(remaining))
+}
+
+#[cfg(any(windows, test))]
+fn windows_wsl_servicing_completion_requires_restart(
+    wsl_binary_existed_before_servicing: bool,
+    reported_restart_required: bool,
+) -> bool {
+    reported_restart_required || !wsl_binary_existed_before_servicing
 }
 
 #[cfg(any(windows, test))]
@@ -10387,24 +7779,322 @@ fn windows_wsl_repair_timeout_result() -> ManagedRuntimePrerequisiteRepairResult
     ManagedRuntimePrerequisiteRepairResult {
         outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
         restart_required: false,
-        detail: "Windows is still completing the WSL change after five minutes. ai-security-scanner stopped waiting, but the Windows action may continue in the background. Retry after it finishes."
+        detail: "Windows may still be completing the requested change after the bounded wait. ai-security-scanner will keep checking the current state before it asks for administrator approval again."
             .into(),
     }
 }
 
-/// Runs exactly one product-defined WSL prerequisite action through Windows'
-/// standard UAC prompt. No executable, parameter, working-directory, secret,
-/// or environment input crosses the webview boundary.
+#[cfg(windows)]
+fn windows_wsl_servicing_cooldown_deadline() -> AppResult<Option<u64>> {
+    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
+    use windows_sys::Win32::System::Registry::{
+        HKEY_CURRENT_USER, REG_QWORD, RRF_RT_REG_QWORD, RRF_ZEROONFAILURE, RegGetValueW,
+    };
+
+    let subkey = windows_registry_wide(WINDOWS_PREREQUISITE_REGISTRY_PATH)?;
+    let value_name = windows_registry_wide(WINDOWS_WSL_SERVICING_COOLDOWN_VALUE)?;
+    let mut value_type = 0_u32;
+    let mut deadline = 0_u64;
+    let mut size = u32::try_from(std::mem::size_of::<u64>()).expect("u64 size fits u32");
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            value_name.as_ptr(),
+            RRF_RT_REG_QWORD | RRF_ZEROONFAILURE,
+            &raw mut value_type,
+            (&raw mut deadline).cast(),
+            &raw mut size,
+        )
+    };
+    if status == ERROR_FILE_NOT_FOUND {
+        return Ok(None);
+    }
+    if status != ERROR_SUCCESS {
+        return Err(io::Error::from_raw_os_error(status as i32).into());
+    }
+    if value_type != REG_QWORD || size as usize != std::mem::size_of::<u64>() {
+        return Err(AppError::NotAuthorized(
+            "Windows prerequisite cooldown receipt had an invalid type or size".into(),
+        ));
+    }
+    Ok(Some(deadline))
+}
+
+#[cfg(windows)]
+fn record_windows_wsl_servicing_cooldown() -> AppResult<()> {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{
+        HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_QWORD, RegCreateKeyExW,
+        RegSetValueExW,
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| AppError::NotAvailable("Windows system clock is unavailable".into()))?
+        .as_secs();
+    let deadline = now
+        .checked_add(WINDOWS_WSL_SERVICING_COOLDOWN.as_secs())
+        .ok_or_else(|| AppError::Internal("Windows prerequisite cooldown overflowed".into()))?;
+    let subkey = windows_registry_wide(WINDOWS_PREREQUISITE_REGISTRY_PATH)?;
+    let value_name = windows_registry_wide(WINDOWS_WSL_SERVICING_COOLDOWN_VALUE)?;
+    let mut raw_key = std::ptr::null_mut();
+    let mut disposition = 0_u32;
+    let status = unsafe {
+        RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            0,
+            std::ptr::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            std::ptr::null(),
+            &raw mut raw_key,
+            &raw mut disposition,
+        )
+    };
+    if status != ERROR_SUCCESS || raw_key.is_null() {
+        return Err(io::Error::from_raw_os_error(status as i32).into());
+    }
+    let key = WindowsRegistryKey(raw_key);
+    let status = unsafe {
+        RegSetValueExW(
+            key.0,
+            value_name.as_ptr(),
+            0,
+            REG_QWORD,
+            (&raw const deadline).cast(),
+            u32::try_from(std::mem::size_of::<u64>()).expect("u64 size fits u32"),
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(io::Error::from_raw_os_error(status as i32).into());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn clear_windows_wsl_servicing_cooldown() -> AppResult<()> {
+    use windows_sys::Win32::Foundation::{
+        ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS,
+    };
+    use windows_sys::Win32::System::Registry::{
+        HKEY_CURRENT_USER, KEY_SET_VALUE, RegDeleteValueW, RegOpenKeyExW,
+    };
+
+    let subkey = windows_registry_wide(WINDOWS_PREREQUISITE_REGISTRY_PATH)?;
+    let value_name = windows_registry_wide(WINDOWS_WSL_SERVICING_COOLDOWN_VALUE)?;
+    let mut raw_key = std::ptr::null_mut();
+    let status = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            0,
+            KEY_SET_VALUE,
+            &raw mut raw_key,
+        )
+    };
+    if status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND {
+        return Ok(());
+    }
+    if status != ERROR_SUCCESS || raw_key.is_null() {
+        return Err(io::Error::from_raw_os_error(status as i32).into());
+    }
+    let key = WindowsRegistryKey(raw_key);
+    let status = unsafe { RegDeleteValueW(key.0, value_name.as_ptr()) };
+    if status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND {
+        return Ok(());
+    }
+    Err(io::Error::from_raw_os_error(status as i32).into())
+}
+
+#[cfg(windows)]
+fn active_windows_wsl_servicing_cooldown() -> AppResult<Option<Duration>> {
+    let Some(deadline) = (match windows_wsl_servicing_cooldown_deadline() {
+        Ok(deadline) => deadline,
+        // This receipt is intentionally non-authoritative. An unreadable or
+        // malformed value cannot become a permanent setup gate.
+        Err(_) => None,
+    }) else {
+        return Ok(None);
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| AppError::NotAvailable("Windows system clock is unavailable".into()))?
+        .as_secs();
+    // The receipt suppresses duplicate elevation only inside this one fixed
+    // window. A corrupt value or clock rollback can never create a permanent
+    // setup gate, and the fresh WSL probe remains the readiness authority.
+    Ok(bounded_windows_wsl_servicing_cooldown_remaining(
+        now, deadline,
+    ))
+}
+
+#[cfg(not(windows))]
+fn active_windows_wsl_servicing_cooldown() -> AppResult<Option<Duration>> {
+    Ok(None)
+}
+
+fn repair_windows_wsl_prerequisite_with_cooldown<C, R>(
+    action: ManagedRuntimeSetupNextAction,
+    mut cooldown: C,
+    mut repair: R,
+) -> AppResult<ManagedRuntimePrerequisiteRepairResult>
+where
+    C: FnMut() -> AppResult<Option<Duration>>,
+    R: FnMut(ManagedRuntimeSetupNextAction) -> AppResult<ManagedRuntimePrerequisiteRepairResult>,
+{
+    windows_wsl_repair_parameters(action)?;
+    if cooldown()?.is_some() {
+        return Ok(ManagedRuntimePrerequisiteRepairResult {
+            outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
+            restart_required: false,
+            detail: "Windows may still be finishing the previous setup action. ai-security-scanner checked the current state and will wait before asking for administrator approval again."
+                .into(),
+        });
+    }
+    repair(action)
+}
+
+/// Runs one product-defined WSL prerequisite sequence through Windows' standard
+/// UAC prompt. A host without the inbox `wsl.exe` uses exactly the two fixed
+/// Microsoft feature-enablement stages; no executable, parameter,
+/// working-directory, secret, or environment input crosses the webview boundary.
 pub(crate) fn repair_windows_wsl_prerequisite(
     action: ManagedRuntimeSetupNextAction,
 ) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {
-    let parameters = windows_wsl_repair_parameters(action)?;
-    repair_windows_wsl_prerequisite_platform(parameters)
+    repair_windows_wsl_prerequisite_with_cooldown(
+        action,
+        active_windows_wsl_servicing_cooldown,
+        repair_windows_wsl_prerequisite_platform,
+    )
+}
+
+/// Detects and, when Windows can do so without a separate user-authored
+/// command, services the fixed WSL prerequisite needed by the packaged scan
+/// tools. This is deliberately a zero-input installer boundary: all paths,
+/// probes, UAC behavior, arguments, timeouts, and the servicing action are
+/// selected here from trusted product code.
+pub fn prepare_windows_installer_prerequisite() -> AppResult<WindowsInstallerPrerequisiteResult> {
+    coordinate_windows_installer_prerequisite(
+        probe_windows_installer_wsl_prerequisite,
+        repair_windows_wsl_prerequisite,
+    )
+}
+
+fn coordinate_windows_installer_prerequisite<P, R>(
+    mut probe: P,
+    mut repair: R,
+) -> AppResult<WindowsInstallerPrerequisiteResult>
+where
+    P: FnMut() -> Result<(), WindowsWslPrerequisiteFailure>,
+    R: FnMut(ManagedRuntimeSetupNextAction) -> AppResult<ManagedRuntimePrerequisiteRepairResult>,
+{
+    let initial_failure = match probe() {
+        Ok(()) => {
+            return Ok(WindowsInstallerPrerequisiteResult {
+                class: WindowsInstallerPrerequisiteClass::Ready,
+                detail: "Windows is ready for the local scan tools".into(),
+            });
+        }
+        Err(failure) => failure,
+    };
+
+    if initial_failure.action == ManagedRuntimeSetupNextAction::RestartWindows {
+        return Ok(WindowsInstallerPrerequisiteResult {
+            class: WindowsInstallerPrerequisiteClass::RestartRequired,
+            detail: initial_failure.detail(),
+        });
+    }
+    if initial_failure.action == ManagedRuntimeSetupNextAction::RetryWslCheck {
+        return Ok(WindowsInstallerPrerequisiteResult {
+            class: WindowsInstallerPrerequisiteClass::Failed,
+            detail: initial_failure.detail(),
+        });
+    }
+
+    let repaired = repair(initial_failure.action)?;
+    match repaired.outcome {
+        ManagedRuntimePrerequisiteRepairOutcome::Cancelled => {
+            Ok(WindowsInstallerPrerequisiteResult {
+                class: WindowsInstallerPrerequisiteClass::Cancelled,
+                detail: repaired.detail,
+            })
+        }
+        ManagedRuntimePrerequisiteRepairOutcome::Failed => Ok(WindowsInstallerPrerequisiteResult {
+            class: WindowsInstallerPrerequisiteClass::Failed,
+            detail: repaired.detail,
+        }),
+        ManagedRuntimePrerequisiteRepairOutcome::Completed if repaired.restart_required => {
+            Ok(WindowsInstallerPrerequisiteResult {
+                class: WindowsInstallerPrerequisiteClass::RestartRequired,
+                detail: repaired.detail,
+            })
+        }
+        ManagedRuntimePrerequisiteRepairOutcome::Completed => match probe() {
+            Ok(()) => Ok(WindowsInstallerPrerequisiteResult {
+                class: WindowsInstallerPrerequisiteClass::Serviced,
+                detail: "Windows finished preparing the local scan tools".into(),
+            }),
+            Err(failure) if failure.action == ManagedRuntimeSetupNextAction::RestartWindows => {
+                Ok(WindowsInstallerPrerequisiteResult {
+                    class: WindowsInstallerPrerequisiteClass::RestartRequired,
+                    detail: failure.detail(),
+                })
+            }
+            Err(failure) => Ok(WindowsInstallerPrerequisiteResult {
+                class: WindowsInstallerPrerequisiteClass::Failed,
+                detail: failure.detail(),
+            }),
+        },
+    }
+}
+
+#[cfg(windows)]
+fn probe_windows_installer_wsl_prerequisite() -> Result<(), WindowsWslPrerequisiteFailure> {
+    let directories = windows_system_directories()
+        .map_err(|_| WindowsWslPrerequisiteFailure::command_failed(None))?;
+    let wsl_binary = directories.system32.join("wsl.exe");
+    match fs::symlink_metadata(&wsl_binary) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(WindowsWslPrerequisiteFailure::not_installed(None));
+        }
+        Err(_) => return Err(WindowsWslPrerequisiteFailure::command_failed(None)),
+        Ok(_) => {}
+    }
+    let seed = ManagedRuntimeCommand {
+        binary: wsl_binary,
+        environment: BTreeMap::new(),
+        working_directory: directories.system32.clone(),
+        runtime_version: "installer-prerequisite".into(),
+        manifest_sha256: "installer-prerequisite".into(),
+        machine_image_sha256: "installer-prerequisite".into(),
+    };
+    let command = windows_wsl_inventory_command_with_directories(&seed, &directories)
+        .map_err(|_| WindowsWslPrerequisiteFailure::command_failed(None))?;
+    let runner = DirectManagedCommandRunner;
+    for arguments in [
+        &[OsString::from("--status")][..],
+        &[OsString::from("-l"), OsString::from("--quiet")][..],
+    ] {
+        let output = runner
+            .output(&command, arguments, COMMAND_TIMEOUT)
+            .map_err(|_| WindowsWslPrerequisiteFailure::command_failed(None))?;
+        if !output.status.success() {
+            return Err(classify_windows_wsl_prerequisite_failure(&output));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn probe_windows_installer_wsl_prerequisite() -> Result<(), WindowsWslPrerequisiteFailure> {
+    Err(WindowsWslPrerequisiteFailure::command_failed(None))
 }
 
 #[cfg(windows)]
 fn repair_windows_wsl_prerequisite_platform(
-    parameters: &'static str,
+    action: ManagedRuntimeSetupNextAction,
 ) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{
@@ -10488,6 +8178,113 @@ fn repair_windows_wsl_prerequisite_platform(
         Ok(shell_path.into_iter().chain(std::iter::once(0)).collect())
     }
 
+    fn execute_fixed_servicing_command(
+        directories: &WindowsSystemDirectories,
+        command: WindowsWslServicingCommand,
+    ) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {
+        let executable = directories.system32.join(command.executable_name());
+        verify_regular_file(
+            &executable,
+            "Windows System32 prerequisite servicing executable",
+        )?;
+        use std::os::windows::fs::MetadataExt;
+        let executable_metadata = fs::symlink_metadata(&executable).map_err(|error| {
+            AppError::NotAvailable(format!(
+                "Windows prerequisite servicing executable is unavailable: {error}"
+            ))
+        })?;
+        if executable_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(AppError::NotAuthorized(
+                "Windows prerequisite servicing executable must not be a reparse point".into(),
+            ));
+        }
+
+        let verb = wide_nul(OsStr::new("runas"))?;
+        let executable = shell_execute_path_wide_nul(executable.as_os_str())?;
+        let parameters = wide_nul(OsStr::new(command.parameters()))?;
+        let working_directory = shell_execute_path_wide_nul(directories.system32.as_os_str())?;
+
+        // Persist only a bounded timestamp before the side effect. It is not
+        // readiness proof: every caller has already run the authoritative WSL
+        // probe. It exists solely so a killed installer or a timed-out child
+        // cannot immediately launch a duplicate elevated servicing action.
+        record_windows_wsl_servicing_cooldown()?;
+        let mut execution = SHELLEXECUTEINFOW {
+            cbSize: u32::try_from(std::mem::size_of::<SHELLEXECUTEINFOW>())
+                .expect("SHELLEXECUTEINFOW size fits u32"),
+            fMask: SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC | SEE_MASK_NOCLOSEPROCESS,
+            lpVerb: verb.as_ptr(),
+            lpFile: executable.as_ptr(),
+            lpParameters: parameters.as_ptr(),
+            lpDirectory: working_directory.as_ptr(),
+            nShow: SW_SHOWNORMAL,
+            ..SHELLEXECUTEINFOW::default()
+        };
+        if unsafe { ShellExecuteExW(&mut execution) } == 0 {
+            let error = io::Error::last_os_error();
+            // No child started, so this attempt cannot overlap a later retry.
+            let _ = clear_windows_wsl_servicing_cooldown();
+            if error.raw_os_error() == Some(ERROR_CANCELLED as i32) {
+                return Ok(ManagedRuntimePrerequisiteRepairResult {
+                    outcome: ManagedRuntimePrerequisiteRepairOutcome::Cancelled,
+                    restart_required: false,
+                    detail: "Windows administrator confirmation was cancelled; no change was made"
+                        .into(),
+                });
+            }
+            return Ok(ManagedRuntimePrerequisiteRepairResult {
+                outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
+                restart_required: false,
+                detail: "Windows could not start the requested setup change".into(),
+            });
+        }
+        if execution.hProcess.is_null() {
+            return Ok(ManagedRuntimePrerequisiteRepairResult {
+                outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
+                restart_required: false,
+                detail: "Windows started the setup change but did not provide completion status"
+                    .into(),
+            });
+        }
+        let process = OwnedProcessHandle(execution.hProcess);
+        let timeout_milliseconds = u32::try_from(command.timeout().as_millis())
+            .expect("the fixed Windows prerequisite timeout fits a Win32 wait");
+        match unsafe { WaitForSingleObject(process.0, timeout_milliseconds) } {
+            WAIT_OBJECT_0 => {}
+            WAIT_TIMEOUT => return Ok(windows_wsl_repair_timeout_result()),
+            WAIT_FAILED => {
+                return Ok(ManagedRuntimePrerequisiteRepairResult {
+                    outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
+                    restart_required: false,
+                    detail: "Windows could not report whether the setup change finished".into(),
+                });
+            }
+            _ => {
+                return Ok(ManagedRuntimePrerequisiteRepairResult {
+                    outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
+                    restart_required: false,
+                    detail: "Windows returned an unexpected setup state".into(),
+                });
+            }
+        }
+        let mut exit_code = 0_u32;
+        if unsafe { GetExitCodeProcess(process.0, &mut exit_code) } == 0 {
+            // WAIT_OBJECT_0 proved the child terminal even though Windows did
+            // not return its code. A later retry cannot overlap this process.
+            let _ = clear_windows_wsl_servicing_cooldown();
+            return Ok(ManagedRuntimePrerequisiteRepairResult {
+                outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
+                restart_required: false,
+                detail: "Windows could not report the setup result".into(),
+            });
+        }
+        let result = windows_wsl_repair_result_from_exit_code(exit_code);
+        // A terminal child no longer needs duplicate-elevation suppression.
+        // Readiness is still decided only by the caller's next WSL probe.
+        let _ = clear_windows_wsl_servicing_cooldown();
+        Ok(result)
+    }
+
     let com_result = unsafe {
         CoInitializeEx(
             std::ptr::null(),
@@ -10507,91 +8304,51 @@ fn repair_windows_wsl_prerequisite_platform(
     };
 
     let directories = windows_system_directories()?;
-    let executable = directories.system32.join("wsl.exe");
-    verify_regular_file(&executable, "Windows System32 wsl.exe")?;
-    use std::os::windows::fs::MetadataExt;
-    let executable_metadata = fs::symlink_metadata(&executable).map_err(|error| {
-        AppError::NotAvailable(format!("Windows System32 wsl.exe is unavailable: {error}"))
-    })?;
-    if executable_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        return Err(AppError::NotAuthorized(
-            "Windows System32 wsl.exe must not be a reparse point".into(),
-        ));
-    }
-
-    let verb = wide_nul(OsStr::new("runas"))?;
-    let executable = shell_execute_path_wide_nul(executable.as_os_str())?;
-    let parameters = wide_nul(OsStr::new(parameters))?;
-    let working_directory = shell_execute_path_wide_nul(directories.system32.as_os_str())?;
-    let mut execution = SHELLEXECUTEINFOW {
-        cbSize: u32::try_from(std::mem::size_of::<SHELLEXECUTEINFOW>())
-            .expect("SHELLEXECUTEINFOW size fits u32"),
-        fMask: SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC | SEE_MASK_NOCLOSEPROCESS,
-        lpVerb: verb.as_ptr(),
-        lpFile: executable.as_ptr(),
-        lpParameters: parameters.as_ptr(),
-        lpDirectory: working_directory.as_ptr(),
-        nShow: SW_SHOWNORMAL,
-        ..SHELLEXECUTEINFOW::default()
+    let wsl_binary = directories.system32.join("wsl.exe");
+    let wsl_binary_exists = match fs::symlink_metadata(&wsl_binary) {
+        Ok(_) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
     };
-    if unsafe { ShellExecuteExW(&mut execution) } == 0 {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(ERROR_CANCELLED as i32) {
-            return Ok(ManagedRuntimePrerequisiteRepairResult {
-                outcome: ManagedRuntimePrerequisiteRepairOutcome::Cancelled,
-                restart_required: false,
-                detail: "Windows administrator confirmation was cancelled; no change was made"
-                    .into(),
-            });
+    let commands = windows_wsl_servicing_commands(action, wsl_binary_exists)?;
+    let missing_binary_bootstrap = !wsl_binary_exists;
+    let mut restart_required = false;
+    for command in commands {
+        let result = execute_fixed_servicing_command(&directories, command)?;
+        if result.outcome != ManagedRuntimePrerequisiteRepairOutcome::Completed {
+            if restart_required {
+                return Ok(ManagedRuntimePrerequisiteRepairResult {
+                    outcome: ManagedRuntimePrerequisiteRepairOutcome::Completed,
+                    restart_required: true,
+                    detail: "Windows completed one required setup change and needs a restart before automatic preparation can continue"
+                        .into(),
+                });
+            }
+            return Ok(result);
         }
-        return Ok(ManagedRuntimePrerequisiteRepairResult {
-            outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
-            restart_required: false,
-            detail: "Windows could not start the requested WSL change".into(),
-        });
+        restart_required |= result.restart_required;
     }
-    if execution.hProcess.is_null() {
-        return Ok(ManagedRuntimePrerequisiteRepairResult {
-            outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
-            restart_required: false,
-            detail: "Windows started the WSL change but did not provide completion status".into(),
-        });
-    }
-    let process = OwnedProcessHandle(execution.hProcess);
-    let timeout_milliseconds = u32::try_from(WINDOWS_WSL_PREREQUISITE_REPAIR_TIMEOUT.as_millis())
-        .expect("the fixed Windows WSL prerequisite timeout fits a Win32 wait");
-    match unsafe { WaitForSingleObject(process.0, timeout_milliseconds) } {
-        WAIT_OBJECT_0 => {}
-        WAIT_TIMEOUT => return Ok(windows_wsl_repair_timeout_result()),
-        WAIT_FAILED => {
-            return Ok(ManagedRuntimePrerequisiteRepairResult {
-                outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
-                restart_required: false,
-                detail: "Windows could not report whether the WSL change finished".into(),
-            });
-        }
-        _ => {
-            return Ok(ManagedRuntimePrerequisiteRepairResult {
-                outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
-                restart_required: false,
-                detail: "Windows returned an unexpected WSL setup state".into(),
-            });
-        }
-    }
-    let mut exit_code = 0_u32;
-    if unsafe { GetExitCodeProcess(process.0, &mut exit_code) } == 0 {
-        return Ok(ManagedRuntimePrerequisiteRepairResult {
-            outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
-            restart_required: false,
-            detail: "Windows could not report the WSL setup result".into(),
-        });
-    }
-    Ok(windows_wsl_repair_result_from_exit_code(exit_code))
+    // Enabling inbox Windows features from a genuinely missing `wsl.exe`
+    // requires a Windows restart before the fixed binary/probe contract can be
+    // authoritative, even when DISM reports a terminal zero exit code.
+    restart_required = windows_wsl_servicing_completion_requires_restart(
+        !missing_binary_bootstrap,
+        restart_required,
+    );
+    Ok(ManagedRuntimePrerequisiteRepairResult {
+        outcome: ManagedRuntimePrerequisiteRepairOutcome::Completed,
+        restart_required,
+        detail: if restart_required {
+            "Windows completed the required setup changes and needs a restart".into()
+        } else {
+            "Windows completed the required setup changes".into()
+        },
+    })
 }
 
 #[cfg(not(windows))]
 fn repair_windows_wsl_prerequisite_platform(
-    _parameters: &'static str,
+    _action: ManagedRuntimeSetupNextAction,
 ) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {
     Err(AppError::NotAvailable(
         "Windows prerequisite repair is unavailable on this host".into(),
@@ -10715,12 +8472,6 @@ fn fail_windows_wsl_prerequisite(
         setup.record_failure(failure.reason, failure.action, detail.clone())?;
     }
     Err(AppError::NotAvailable(detail))
-}
-
-fn reject_legacy_windows_wsl_recovery_without_mutation<T>(distribution_name: &str) -> AppResult<T> {
-    Err(AppError::NotAuthorized(format!(
-        "managed Windows runtime preserved legacy distribution {distribution_name}; legacy in-place recovery is retired and grants no ownership or cleanup authority"
-    )))
 }
 
 fn classify_windows_wsl_prerequisite_failure(
@@ -10912,10 +8663,6 @@ fn windows_wsl_inventory_command_with_directories(
     })
 }
 
-fn windows_wsl_recovery_distribution_name(recovery_id: Uuid) -> String {
-    format!("ai-security-scanner-recovery-{}", recovery_id.simple())
-}
-
 fn windows_wsl_provider_home_from_registration_path(
     state_root: &Path,
     registration_base_path: &Path,
@@ -11059,402 +8806,6 @@ fn windows_paths_refer_to_same_location(first: &Path, second: &Path) -> AppResul
 #[cfg(not(windows))]
 fn windows_paths_refer_to_same_location(first: &Path, second: &Path) -> AppResult<bool> {
     Ok(first == second)
-}
-
-#[cfg(windows)]
-fn verify_windows_wsl_quarantine_directory(install_directory: &Path) -> AppResult<()> {
-    use windows_sys::Win32::Security::{CONTAINER_INHERIT_ACE, OBJECT_INHERIT_ACE};
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
-    };
-
-    let directory =
-        open_windows_real_directory_security_handle(install_directory).map_err(|error| {
-            AppError::NotAuthorized(format!(
-                "Windows WSL recovery workspace could not be verified safely: {error}"
-            ))
-        })?;
-    let information = windows_file_information(&directory)?;
-    if information.attributes & FILE_ATTRIBUTE_DIRECTORY == 0
-        || information.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    {
-        return Err(AppError::NotAuthorized(
-            "Windows WSL recovery workspace is not a real directory".into(),
-        ));
-    }
-    let inheritance = u8::try_from(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)
-        .expect("Windows inheritance flags fit in an ACE header");
-    verify_windows_wsl_distribution_storage_dacl_with_ace_flags(&directory, inheritance).map_err(
-        |error| {
-            AppError::NotAuthorized(format!(
-                "Windows WSL recovery workspace permissions changed: {error}"
-            ))
-        },
-    )
-}
-
-#[cfg(not(windows))]
-fn verify_windows_wsl_quarantine_directory(_install_directory: &Path) -> AppResult<()> {
-    Err(AppError::NotAvailable(
-        "Windows WSL recovery storage verification is unavailable on this host".into(),
-    ))
-}
-
-fn verify_windows_wsl_quarantine_storage<F>(
-    verify_registration_base_path: F,
-    timeout: Duration,
-    poll: Duration,
-) -> AppResult<()>
-where
-    F: FnMut() -> AppResult<PathBuf>,
-{
-    verify_windows_wsl_recovery_vhd_with_timing(verify_registration_base_path, timeout, poll)
-        .map(|_| ())
-}
-
-#[cfg(windows)]
-fn verify_windows_wsl_recovery_vhd_with_timing<F>(
-    mut verify_registration_base_path: F,
-    timeout: Duration,
-    poll: Duration,
-) -> AppResult<WindowsWslRecoveryFileSnapshot>
-where
-    F: FnMut() -> AppResult<PathBuf>,
-{
-    if poll.is_zero() {
-        return Err(AppError::Internal(
-            "managed Windows WSL VHD quiescence poll interval was zero".into(),
-        ));
-    }
-    let deadline = Instant::now().checked_add(timeout).ok_or_else(|| {
-        AppError::Internal("managed Windows WSL VHD quiescence deadline overflowed".into())
-    })?;
-    let mut last_sharing_error = None::<String>;
-    loop {
-        if let Some(error) = last_sharing_error.as_deref() {
-            if Instant::now() >= deadline {
-                return Err(AppError::Runtime(format!(
-                    "managed Windows WSL recovery VHD remained writable or replaceable after its bounded quiescence wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
-                )));
-            }
-        }
-        // Re-prove the exact name, ownership/receipt, and BasePath on every
-        // retry. A delayed conflicting-handle release must never turn a stale path proof
-        // into authority for a later by-name WSL command.
-        let base_path = verify_registration_base_path()?;
-        if let Some(error) = last_sharing_error.as_deref() {
-            if Instant::now() >= deadline {
-                return Err(AppError::Runtime(format!(
-                    "managed Windows WSL recovery VHD remained writable or replaceable after its bounded quiescence wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
-                )));
-            }
-        }
-        let path = base_path.join("ext4.vhdx");
-        let file = match open_windows_wsl_vhd_quiescence_guard(&path) {
-            Ok(file) => file,
-            Err(error) if windows_error_is_sharing_violation(&error) => {
-                let now = Instant::now();
-                if now >= deadline {
-                    return Err(AppError::Runtime(format!(
-                        "managed Windows WSL recovery VHD remained writable or replaceable after its bounded quiescence wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
-                    )));
-                }
-                last_sharing_error = Some(error.to_string());
-                thread::sleep(poll.min(deadline.saturating_duration_since(now)));
-                continue;
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Err(AppError::NotAvailable(format!(
-                    "managed Windows WSL recovery VHD is unavailable: {error}"
-                )));
-            }
-            Err(error) => {
-                return Err(AppError::NotAuthorized(format!(
-                    "managed Windows WSL recovery VHD could not be opened safely: {error}"
-                )));
-            }
-        };
-        let information = windows_file_information(&file)?;
-        validate_windows_wsl_recovery_file_information(
-            &information,
-            "managed Windows WSL recovery VHD",
-        )?;
-        // Keep the first no-follow VHD handle open while the registration is
-        // read and bound again. Reopen the path under that second binding and
-        // require the exact same Windows file object before returning to the
-        // caller's by-name export/unregister edge.
-        let rebound_base_path = verify_registration_base_path()?;
-        if !windows_paths_refer_to_same_location(&base_path, &rebound_base_path)? {
-            return Err(AppError::NotAuthorized(
-                "Windows WSL registration changed during the bounded VHD quiescence proof".into(),
-            ));
-        }
-        if let Some(error) = last_sharing_error.as_deref() {
-            if Instant::now() >= deadline {
-                return Err(AppError::Runtime(format!(
-                    "managed Windows WSL recovery VHD remained writable or replaceable after its bounded quiescence wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
-                )));
-            }
-        }
-        let rebound_path = rebound_base_path.join("ext4.vhdx");
-        let rebound_file =
-            open_windows_wsl_vhd_quiescence_guard(&rebound_path).map_err(|error| {
-                AppError::NotAuthorized(format!(
-                    "managed Windows WSL recovery VHD could not be rebound safely after its registration was rechecked: {error}"
-                ))
-            })?;
-        let rebound_information = windows_file_information(&rebound_file)?;
-        validate_windows_wsl_recovery_file_information(
-            &rebound_information,
-            "managed Windows WSL recovery VHD",
-        )?;
-        if rebound_information != information {
-            return Err(AppError::NotAuthorized(
-                "managed Windows WSL recovery VHD identity changed while its registration was rechecked"
-                    .into(),
-            ));
-        }
-        let snapshot = WindowsWslRecoveryFileSnapshot {
-            size: information.size,
-            identity: information.identity,
-            number_of_links: information.number_of_links,
-            attributes: information.attributes,
-        };
-        drop(rebound_file);
-        drop(file);
-        return Ok(snapshot);
-    }
-}
-
-#[cfg(not(windows))]
-fn verify_windows_wsl_recovery_vhd_with_timing<F>(
-    mut verify_registration_base_path: F,
-    _timeout: Duration,
-    _poll: Duration,
-) -> AppResult<WindowsWslRecoveryFileSnapshot>
-where
-    F: FnMut() -> AppResult<PathBuf>,
-{
-    let path = verify_registration_base_path()?.join("ext4.vhdx");
-    verify_windows_wsl_recovery_file(&path, "managed Windows WSL recovery VHD")?;
-    Ok(WindowsWslRecoveryFileSnapshot {
-        size: fs::symlink_metadata(&path)?.len(),
-    })
-}
-
-fn verify_windows_wsl_recovery_file(path: &Path, label: &str) -> AppResult<()> {
-    verify_regular_file(path, label)?;
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.len() == 0 {
-        return Err(AppError::NotAuthorized(format!("{label} is empty")));
-    }
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::Storage::FileSystem::{
-            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
-        };
-        let file = open_windows_managed_ssh_identity_file(path)?;
-        let information = windows_file_information(&file)?;
-        if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
-            || information.number_of_links != 1
-            || information.size == 0
-        {
-            return Err(AppError::NotAuthorized(format!(
-                "{label} must be one real, non-empty file"
-            )));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn validate_windows_wsl_recovery_file_information(
-    information: &WindowsFileInformation,
-    label: &str,
-) -> AppResult<()> {
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
-    };
-
-    if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
-        || information.number_of_links != 1
-        || information.size == 0
-    {
-        return Err(AppError::NotAuthorized(format!(
-            "{label} must be one real, non-empty file"
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn sync_windows_wsl_recovery_file(
-    path: &Path,
-    label: &str,
-) -> AppResult<WindowsWslRecoveryFileSnapshot> {
-    use std::os::windows::fs::OpenOptionsExt;
-    use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
-
-    // FlushFileBuffers requires a writable Windows handle. Deny write/delete
-    // sharing and open the directory entry itself so the durable object can be
-    // bound to an exact identity before the path is renamed.
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .share_mode(FILE_SHARE_READ)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
-        .map_err(|error| {
-            AppError::NotAuthorized(format!(
-                "{label} could not be opened for durable verification without following links: {error}"
-            ))
-        })?;
-    let before = windows_file_information(&file)?;
-    validate_windows_wsl_recovery_file_information(&before, label)?;
-    file.sync_all()?;
-    let after = windows_file_information(&file)?;
-    if after != before {
-        return Err(AppError::NotAuthorized(format!(
-            "{label} changed while it was being made durable"
-        )));
-    }
-    Ok(WindowsWslRecoveryFileSnapshot {
-        size: after.size,
-        identity: after.identity,
-        number_of_links: after.number_of_links,
-        attributes: after.attributes,
-    })
-}
-
-#[cfg(not(windows))]
-fn sync_windows_wsl_recovery_file(
-    path: &Path,
-    label: &str,
-) -> AppResult<WindowsWslRecoveryFileSnapshot> {
-    verify_windows_wsl_recovery_file(path, label)?;
-    let file = File::open(path)?;
-    file.sync_all()?;
-    Ok(WindowsWslRecoveryFileSnapshot {
-        size: file.metadata()?.len(),
-    })
-}
-
-#[cfg(windows)]
-fn verify_renamed_windows_wsl_recovery_file(
-    path: &Path,
-    label: &str,
-    expected: &WindowsWslRecoveryFileSnapshot,
-) -> AppResult<()> {
-    use std::os::windows::fs::OpenOptionsExt;
-    use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
-
-    let file = OpenOptions::new()
-        .read(true)
-        .share_mode(FILE_SHARE_READ)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
-        .map_err(|error| {
-            AppError::NotAuthorized(format!(
-                "{label} could not be reopened after its durable rename without following links: {error}"
-            ))
-        })?;
-    let actual = windows_file_information(&file)?;
-    validate_windows_wsl_recovery_file_information(&actual, label)?;
-    let actual = WindowsWslRecoveryFileSnapshot {
-        size: actual.size,
-        identity: actual.identity,
-        number_of_links: actual.number_of_links,
-        attributes: actual.attributes,
-    };
-    if &actual != expected {
-        return Err(AppError::NotAuthorized(format!(
-            "{label} identity changed during its durable rename"
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn verify_renamed_windows_wsl_recovery_file(
-    path: &Path,
-    label: &str,
-    expected: &WindowsWslRecoveryFileSnapshot,
-) -> AppResult<()> {
-    verify_windows_wsl_recovery_file(path, label)?;
-    if fs::symlink_metadata(path)?.len() != expected.size {
-        return Err(AppError::NotAuthorized(format!(
-            "{label} changed during its durable rename"
-        )));
-    }
-    Ok(())
-}
-
-fn parse_windows_nsis_quoted_path(value: &str, label: &str) -> AppResult<PathBuf> {
-    let path = value
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .filter(|value| !value.is_empty() && !value.contains(['"', '\0', '\r', '\n']))
-        .ok_or_else(|| AppError::NotAuthorized(format!("{label} was not one exact quoted path")))?;
-    let path = PathBuf::from(path);
-    if !path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
-    {
-        return Err(AppError::NotAuthorized(format!(
-            "{label} was not an absolute normalized path"
-        )));
-    }
-    Ok(path)
-}
-
-fn windows_paths_equal_lexically(first: &Path, second: &Path) -> bool {
-    first
-        .as_os_str()
-        .to_string_lossy()
-        .replace('/', "\\")
-        .eq_ignore_ascii_case(&second.as_os_str().to_string_lossy().replace('/', "\\"))
-}
-
-fn bounded_windows_install_transition_receipt_is_allowed(receipt: &str) -> bool {
-    matches!(
-        receipt,
-        WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT
-            | WINDOWS_GHOST_MIGRATION_UNINSTALLED_RECEIPT
-            | WINDOWS_GHOST_MIGRATION_UPDATED_RECEIPT
-            | WINDOWS_GHOST_MIGRATION_OVERLAID_RECEIPT
-    )
-}
-
-#[cfg(windows)]
-fn verify_windows_nsis_regular_file(path: &Path, label: &str) -> AppResult<()> {
-    use std::os::windows::fs::OpenOptionsExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    };
-
-    let file = OpenOptions::new()
-        .read(true)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
-        .map_err(|error| AppError::NotAvailable(format!("{label} is unavailable: {error}")))?;
-    let information = windows_file_information(&file)?;
-    if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
-        || information.number_of_links != 1
-        || information.size == 0
-    {
-        return Err(AppError::NotAuthorized(format!(
-            "{label} must be one real, non-empty file"
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn verify_windows_nsis_regular_file(path: &Path, label: &str) -> AppResult<()> {
-    verify_regular_file(path, label)
 }
 
 #[cfg(windows)]
@@ -11619,147 +8970,6 @@ fn windows_registry_string(key: &WindowsRegistryKey, value_name: &str) -> AppRes
         &second,
         second_returned_bytes,
     )
-}
-
-#[cfg(windows)]
-fn windows_registry_optional_string(
-    key: &WindowsRegistryKey,
-    value_name: &str,
-) -> AppResult<Option<String>> {
-    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
-    use windows_sys::Win32::System::Registry::{
-        RRF_NOEXPAND, RRF_RT_REG_SZ, RRF_ZEROONFAILURE, RegGetValueW,
-    };
-
-    let value_name_wide = windows_registry_wide(value_name)?;
-    let mut value_type = 0;
-    let mut size_bytes = 0_u32;
-    let status = unsafe {
-        RegGetValueW(
-            key.0,
-            std::ptr::null(),
-            value_name_wide.as_ptr(),
-            RRF_RT_REG_SZ | RRF_NOEXPAND | RRF_ZEROONFAILURE,
-            &raw mut value_type,
-            std::ptr::null_mut(),
-            &raw mut size_bytes,
-        )
-    };
-    if status == ERROR_FILE_NOT_FOUND {
-        return Ok(None);
-    }
-    if status != ERROR_SUCCESS {
-        return Err(io::Error::from_raw_os_error(status as i32).into());
-    }
-    windows_registry_string(key, value_name).map(Some)
-}
-
-#[cfg(windows)]
-fn windows_nsis_installation_from_key(
-    key: &WindowsRegistryKey,
-) -> AppResult<WindowsNsisInstallation> {
-    Ok(WindowsNsisInstallation {
-        display_name: windows_registry_string(key, "DisplayName")?,
-        display_version: windows_registry_string(key, "DisplayVersion")?,
-        publisher: windows_registry_string(key, "Publisher")?,
-        install_location: windows_registry_string(key, "InstallLocation")?,
-        uninstall_string: windows_registry_string(key, "UninstallString")?,
-        main_binary_name: windows_registry_string(key, "MainBinaryName")?,
-        install_transition: windows_registry_optional_string(key, "InstallTransition")?,
-    })
-}
-
-#[cfg(windows)]
-fn open_windows_nsis_uninstall_key(access: u32) -> AppResult<Option<WindowsRegistryKey>> {
-    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
-    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RegOpenKeyExW};
-
-    let uninstall_path = windows_registry_wide(
-        "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ai-security-scanner",
-    )?;
-    let mut raw_key = std::ptr::null_mut();
-    let status = unsafe {
-        RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            uninstall_path.as_ptr(),
-            0,
-            access,
-            &raw mut raw_key,
-        )
-    };
-    if status == ERROR_FILE_NOT_FOUND {
-        return Ok(None);
-    }
-    if status != ERROR_SUCCESS || raw_key.is_null() {
-        return Err(io::Error::from_raw_os_error(status as i32).into());
-    }
-    Ok(Some(WindowsRegistryKey(raw_key)))
-}
-
-#[cfg(windows)]
-fn windows_nsis_installation() -> AppResult<Option<WindowsNsisInstallation>> {
-    use windows_sys::Win32::System::Registry::KEY_READ;
-
-    let Some(key) = open_windows_nsis_uninstall_key(KEY_READ)? else {
-        return Ok(None);
-    };
-    windows_nsis_installation_from_key(&key).map(Some)
-}
-
-#[cfg(windows)]
-fn consume_windows_nsis_install_transition(
-    expected_installation: &WindowsNsisInstallation,
-    expected_receipt: &str,
-) -> AppResult<()> {
-    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
-    use windows_sys::Win32::System::Registry::{
-        KEY_QUERY_VALUE, KEY_SET_VALUE, RegDeleteValueW, RegFlushKey,
-    };
-
-    if !bounded_windows_install_transition_receipt_is_allowed(expected_receipt)
-        || expected_installation.install_transition.as_deref() != Some(expected_receipt)
-    {
-        return Err(AppError::NotAuthorized(
-            "Windows NSIS transition consumption was not bound to an allowed exact receipt".into(),
-        ));
-    }
-    let key =
-        open_windows_nsis_uninstall_key(KEY_QUERY_VALUE | KEY_SET_VALUE)?.ok_or_else(|| {
-            AppError::NotAuthorized(
-                "Windows NSIS installation disappeared before its transition could be consumed"
-                    .into(),
-            )
-        })?;
-    let actual = windows_nsis_installation_from_key(&key)?;
-    if &actual != expected_installation
-        || actual.install_transition.as_deref() != Some(expected_receipt)
-    {
-        return Err(AppError::NotAuthorized(
-            "Windows NSIS installation or transition changed before consumption".into(),
-        ));
-    }
-    let value_name = windows_registry_wide("InstallTransition")?;
-    let status = unsafe { RegDeleteValueW(key.0, value_name.as_ptr()) };
-    if status != ERROR_SUCCESS {
-        return Err(io::Error::from_raw_os_error(status as i32).into());
-    }
-    let status = unsafe { RegFlushKey(key.0) };
-    if status != ERROR_SUCCESS {
-        return Err(io::Error::from_raw_os_error(status as i32).into());
-    }
-    if windows_registry_optional_string(&key, "InstallTransition")?.is_some() {
-        return Err(AppError::NotAuthorized(
-            "Windows NSIS transition remained present after consumption".into(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn windows_nsis_installation() -> AppResult<Option<WindowsNsisInstallation>> {
-    Err(AppError::NotAvailable(
-        "Windows NSIS installation registration is unavailable on this host".into(),
-    ))
 }
 
 #[cfg(windows)]
@@ -15937,89 +13147,6 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
-    struct FixedWindowsNsisInstallation {
-        installation: Mutex<Option<WindowsNsisInstallation>>,
-        local_app_data: PathBuf,
-        consume_failures_remaining: AtomicU64,
-        post_consume_failures_remaining: AtomicU64,
-    }
-
-    #[cfg(windows)]
-    impl FixedWindowsNsisInstallation {
-        fn install_transition(&self) -> Option<String> {
-            self.installation
-                .lock()
-                .expect("NSIS fixture")
-                .as_ref()
-                .and_then(|installation| installation.install_transition.clone())
-        }
-
-        fn set_install_transition(&self, transition: Option<&str>) {
-            self.installation
-                .lock()
-                .expect("NSIS fixture")
-                .as_mut()
-                .expect("installed NSIS fixture")
-                .install_transition = transition.map(str::to_owned);
-        }
-    }
-
-    #[cfg(windows)]
-    impl WindowsNsisInstallationReader for FixedWindowsNsisInstallation {
-        fn installation(&self) -> AppResult<Option<WindowsNsisInstallation>> {
-            Ok(self.installation.lock().expect("NSIS fixture").clone())
-        }
-
-        fn local_app_data_directory(&self) -> AppResult<PathBuf> {
-            Ok(self.local_app_data.clone())
-        }
-
-        fn consume_install_transition(
-            &self,
-            expected_installation: &WindowsNsisInstallation,
-            expected_receipt: &str,
-        ) -> AppResult<()> {
-            if self
-                .consume_failures_remaining
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
-                    remaining.checked_sub(1)
-                })
-                .is_ok()
-            {
-                return Err(AppError::Runtime(
-                    "injected NSIS transition-consumption failure".into(),
-                ));
-            }
-            let mut installation = self.installation.lock().expect("NSIS fixture");
-            let current = installation.as_mut().ok_or_else(|| {
-                AppError::NotAuthorized(
-                    "fixture NSIS installation disappeared before consumption".into(),
-                )
-            })?;
-            if &*current != expected_installation
-                || current.install_transition.as_deref() != Some(expected_receipt)
-            {
-                return Err(AppError::NotAuthorized(
-                    "fixture NSIS transition changed before consumption".into(),
-                ));
-            }
-            current.install_transition = None;
-            if self
-                .post_consume_failures_remaining
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
-                    remaining.checked_sub(1)
-                })
-                .is_ok()
-            {
-                return Err(AppError::Runtime(
-                    "injected failure after durable NSIS transition consumption".into(),
-                ));
-            }
-            Ok(())
-        }
-    }
-
     struct FakeDownloader {
         bytes: Vec<u8>,
         calls: Mutex<usize>,
@@ -16237,34 +13364,73 @@ mod tests {
     }
 
     #[test]
-    fn ghost_install_missing_manifest_is_left_byte_for_byte_while_current_generation_continues() {
+    fn n_minus_one_ghost_without_manifest_or_proof_is_preserved_while_fresh_generation_continues() {
         let mut fixture = fixture();
         let target = modeled_windows_target(&mut fixture);
+        let legacy_machine = "assm1-win-x64-e2b6cbcadd8b";
+        let legacy_distribution = format!("podman-{legacy_machine}");
         let legacy_provider = fixture
             .manager
             .state_root
             .join("provider-home")
-            .join(&WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256[..16]);
-        fs::create_dir_all(&legacy_provider).expect("legacy provider fixture");
+            .join("8b2257ace33ecb14");
+        let legacy_storage = legacy_provider
+            .join("data")
+            .join("containers")
+            .join("podman")
+            .join("machine")
+            .join("wsl")
+            .join(PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY)
+            .join(legacy_machine);
+        fs::create_dir_all(&legacy_storage).expect("N-1 ghost provider fixture");
+        let vhd = legacy_storage.join("ext4.vhdx");
         let sentinel = legacy_provider.join("legacy-provider-state.json");
-        fs::write(&sentinel, b"missing-manifest-ghost").expect("ghost bytes");
-        let before = fs::read(&sentinel).unwrap();
-        let unrelated_legacy_distribution =
-            format!("podman-{WINDOWS_GHOST_MIGRATION_MACHINE_NAME}");
+        fs::write(&vhd, b"N-1 ghost VHD bytes").expect("ghost VHD bytes");
+        fs::write(&sentinel, b"missing-manifest-ghost").expect("ghost provider bytes");
+        let vhd_before = fs::read(&vhd).unwrap();
+        let sentinel_before = fs::read(&sentinel).unwrap();
+        assert!(
+            !fixture
+                .manager
+                .versions_root()
+                .join("8b2257ace33ecb14")
+                .join("manifest.json")
+                .exists(),
+            "the N-1 ghost fixture intentionally has no versions manifest"
+        );
+        assert!(
+            !fixture
+                .manager
+                .windows_wsl_ownership_proof_path(
+                    legacy_machine,
+                    WindowsWslOwnershipBasis::ProvenMachine,
+                )
+                .exists(),
+            "the N-1 ghost fixture intentionally has no durable ownership proof"
+        );
 
         let selected = fixture
             .manager
             .select_windows_machine_generation_from_inventory_locked(
                 &target,
                 &[],
-                &[unrelated_legacy_distribution],
+                std::slice::from_ref(&legacy_distribution),
                 true,
             )
-            .expect("current generation continues");
+            .expect("a fresh product generation continues beside the N-1 ghost");
 
         assert_eq!(selected, machine_name(&target));
-        assert_eq!(fs::read(&sentinel).unwrap(), before);
+        assert_ne!(selected, legacy_machine);
+        assert_eq!(fs::read(&vhd).unwrap(), vhd_before);
+        assert_eq!(fs::read(&sentinel).unwrap(), sentinel_before);
         assert!(legacy_provider.is_dir());
+        let durable = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .unwrap()
+            .unwrap();
+        assert_eq!(durable.generation_index, 0);
+        assert!(durable.preserved_collision_names.is_empty());
         assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
     }
 
@@ -16295,41 +13461,16 @@ mod tests {
     }
 
     #[test]
-    fn current_windows_generation_skips_legacy_absence_recovery_without_inventory() {
-        let mut fixture = fixture();
-        fixture.manager.install().expect("verified runtime payload");
-        let target = modeled_windows_target(&mut fixture);
-        let command = fixture
-            .manager
-            .windows_wsl_read_only_command(&target)
-            .expect("read-only command shell");
-        let current_names = [
-            machine_name(&target),
-            fixture.manager.isolated_windows_machine_name(&target, 1),
-        ];
-
-        for current_name in current_names {
-            assert!(windows_machine_uses_current_compatibility_generation(
-                &current_name
-            ));
-            assert!(
-                !fixture
-                    .manager
-                    .prove_windows_wsl_distribution_absent_locked(
-                        &target,
-                        &command,
-                        &current_name,
-                        None,
-                    )
-                    .expect("current generation bypasses retired recovery")
-            );
-        }
-
-        assert_eq!(
-            fixture.commands.calls(),
-            Vec::<Vec<String>>::new(),
-            "current setup/start must not perform a legacy WSL inventory or recovery command"
-        );
+    fn current_windows_generation_has_no_legacy_recovery_route() {
+        let production = include_str!("managed_runtime.rs")
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("production source");
+        assert!(!production.contains("prove_windows_wsl_distribution_absent_locked"));
+        assert!(!production.contains("self.recover_windows_wsl_distribution_locked("));
+        assert!(!production.contains("WslDistributionExport"));
+        assert!(!production.contains("WslDistributionImport"));
+        assert!(!production.contains("WslDistributionRemoval"));
     }
 
     #[test]
@@ -16527,6 +13668,41 @@ mod tests {
         assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
     }
 
+    #[test]
+    fn exact_init_intent_reuses_its_in_progress_provider_home_on_retry() {
+        let mut fixture = fixture();
+        fixture.manager.install().expect("verified current payload");
+        let target = modeled_windows_target(&mut fixture);
+        let selected = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(&target, &[], &[], false)
+            .expect("clean setup selection");
+        fixture
+            .manager
+            .ensure_windows_wsl_ownership_proof_locked(
+                &target,
+                &selected,
+                WindowsWslOwnershipBasis::InitIntent,
+            )
+            .expect("exact one-shot initialization intent");
+
+        let provider_home = fixture
+            .manager
+            .windows_provider_home_for_generation(&target, 0);
+        fs::create_dir_all(&provider_home).expect("in-progress provider home");
+        let sentinel = provider_home.join("in-progress-state");
+        fs::write(&sentinel, b"product-owned-in-progress").unwrap();
+
+        let retried = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(&target, &[], &[], false)
+            .expect("retry reuses exact product-owned generation");
+
+        assert_eq!(retried, selected);
+        assert_eq!(fs::read(&sentinel).unwrap(), b"product-owned-in-progress");
+        assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
     fn machine_json_named(
         manager: &ManagedRuntimeManager,
         selected_machine_name: &str,
@@ -16586,469 +13762,50 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn bind_fixture_to_n_minus_one_windows_machine(fixture: &mut Fixture) -> ManagedTarget {
-        fixture.manager.bounded_ghost_fixture_manifest = true;
-        let mut manifest = fixture.manager.loaded.manifest.clone();
-        let machine_image_url = "https://github.com/podman-container-tools/podman-machine-os/releases/download/v5.8.2/podman-machine.x86_64.wsl.tar.zst";
-        let target = manifest.targets.first_mut().expect("one target");
-        target.operating_system = ManagedOperatingSystem::Windows;
-        target.architecture = ManagedArchitecture::X86_64;
-        target.provider = ManagedMachineProvider::Wsl;
-        target.machine_image.sha256 = WINDOWS_GHOST_MIGRATION_MACHINE_IMAGE_SHA256.into();
-        target.machine_image.size_bytes = 257_374_129;
-        target.machine_image.url = machine_image_url.into();
-        for artifact in manifest
-            .components
-            .iter_mut()
-            .flat_map(|component| component.artifacts.iter_mut())
-            .filter(|artifact| artifact.delivery == ManagedRuntimeArtifactDelivery::RuntimeDownload)
-        {
-            artifact.locator = machine_image_url.into();
-            artifact.sha256 = WINDOWS_GHOST_MIGRATION_MACHINE_IMAGE_SHA256.into();
-            artifact.size_bytes = 257_374_129;
-        }
-        fixture.manager.loaded = LoadedManagedRuntimeManifest::parse(
-            &serde_json::to_vec(&manifest).expect("encode current fixture manifest"),
-        )
-        .expect("current fixture manifest");
-        let target = fixture.manager.loaded.target().expect("target").clone();
-        assert_eq!(
-            machine_name(&target),
-            WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME
-        );
-        target
-    }
-
-    #[cfg(windows)]
-    fn seed_n_minus_one_windows_ghost_workspace(
+    fn seed_verified_existing_windows_machine(
         fixture: &mut Fixture,
-    ) -> (ManagedTarget, PathBuf, PathBuf, PathBuf) {
-        let target = bind_fixture_to_n_minus_one_windows_machine(fixture);
-        fixture
-            .manager
-            .install()
-            .expect("install current fixture release");
-
-        let previous_namespace = &WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256[..16];
-        let previous_provider = fixture
-            .manager
-            .state_root
-            .join("provider-home")
-            .join(previous_namespace);
-        ensure_managed_private_directory(&fixture.manager.state_root.join("provider-home"))
-            .expect("provider root");
-        ensure_managed_private_directory(&previous_provider).expect("previous provider");
-        let config_root = previous_provider.join("config");
-        ensure_managed_private_directory(&config_root).expect("previous config root");
-        let containers_config_root = config_root.join("containers");
-        ensure_managed_private_directory(&containers_config_root)
-            .expect("previous containers config root");
-        let previous_install = fixture
-            .manager
-            .versions_root()
-            .join(format!("podman-machine-5.8.2-{previous_namespace}"));
-        assert!(
-            !private_entry_exists(&previous_install.join("manifest.json")).unwrap(),
-            "the N-1 fixture deliberately has no versions manifest"
-        );
-        let config = format!(
-            "[engine]\nhelper_binaries_dir = [{}]\n\n[machine]\ncpus = 2\ndisk_size = 40\nmemory = 4096\nprovider = \"wsl\"\n",
-            toml_string(&previous_install.join("bin")).unwrap(),
-        );
-        write_private_atomic(
-            &containers_config_root.join("containers.conf"),
-            config.as_bytes(),
-        )
-        .expect("previous provider config");
-
-        let data_root = previous_provider.join("data");
-        ensure_managed_private_directory(&data_root).expect("previous data root");
-        let machine_root = data_root.join("containers").join("podman").join("machine");
-        ensure_private_directory_tree(&data_root, &machine_root).expect("previous machine root");
-        generate_managed_ssh_identity(&machine_root.join(PODMAN_MACHINE_IDENTITY_NAME))
-            .expect("previous product machine identity");
-        let wsl_root = machine_root.join("wsl");
-        ensure_private_directory_tree(&data_root, &wsl_root).expect("previous WSL root");
-        let wsldist = wsl_root.join(PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY);
-        ensure_managed_wsl_distribution_storage_directory(&wsldist)
-            .expect("previous WSL storage root");
-        let distribution_root = wsldist.join(WINDOWS_GHOST_MIGRATION_MACHINE_NAME);
-        ensure_managed_wsl_distribution_storage_directory(&distribution_root)
-            .expect("previous distribution root");
-        let vhd = distribution_root.join("ext4.vhdx");
-        fs::write(&vhd, b"real N-1 ghost-install fixture VHD").expect("previous distribution VHD");
-
-        let local_app_data = fixture._temp.path().join("LocalAppData");
-        ensure_private_directory(&local_app_data).expect("Windows LocalAppData fixture root");
-        let install_location = local_app_data.join(WINDOWS_NSIS_PRODUCT_NAME);
-        let quoted_install = format!("\"{}\"", install_location.display());
-        let quoted_uninstall = format!(
-            "\"{}\"",
-            install_location
-                .join(WINDOWS_NSIS_UNINSTALL_EXECUTABLE)
-                .display()
-        );
-        fixture.manager.nsis_installation = Arc::new(FixedWindowsNsisInstallation {
-            installation: Mutex::new(Some(WindowsNsisInstallation {
-                display_name: WINDOWS_NSIS_PRODUCT_NAME.into(),
-                display_version: "0.1.7".into(),
-                publisher: WINDOWS_NSIS_PUBLISHER.into(),
-                install_location: quoted_install,
-                uninstall_string: quoted_uninstall,
-                main_binary_name: WINDOWS_NSIS_MAIN_EXECUTABLE.into(),
-                install_transition: None,
-            })),
-            local_app_data,
-            consume_failures_remaining: AtomicU64::new(0),
-            post_consume_failures_remaining: AtomicU64::new(0),
-        });
-        let distribution = format!("podman-{WINDOWS_GHOST_MIGRATION_MACHINE_NAME}");
-        fixture.manager.wsl_registrations =
-            Arc::new(FixedWindowsWslRegistrations(vec![WindowsWslRegistration {
-                registration_id: "00000000-0000-0000-0000-000000000001".into(),
-                distribution_name: distribution,
-                base_path: distribution_root.clone(),
-            }]));
-        (
-            target,
-            previous_provider,
-            distribution_root,
-            install_location,
-        )
-    }
-
-    #[cfg(windows)]
-    fn install_current_windows_nsis_candidate(
-        fixture: &mut Fixture,
-        install_location: &Path,
-        install_transition: Option<&str>,
-    ) -> Arc<FixedWindowsNsisInstallation> {
-        ensure_private_directory(install_location).expect("current install location");
-        let bundled_runtime = install_location.join("managed-runtime");
-        ensure_private_directory(&bundled_runtime).expect("installed runtime resource");
-        fixture.manager.resource_root = bundled_runtime.canonicalize().unwrap();
-        fs::write(
-            install_location.join(WINDOWS_NSIS_MAIN_EXECUTABLE),
-            b"current application executable fixture",
-        )
-        .expect("current executable");
-        fs::write(
-            install_location.join(WINDOWS_NSIS_UNINSTALL_EXECUTABLE),
-            b"current NSIS uninstaller fixture",
-        )
-        .expect("current uninstaller");
-        let installation = Arc::new(FixedWindowsNsisInstallation {
-            installation: Mutex::new(Some(WindowsNsisInstallation {
-                display_name: WINDOWS_NSIS_PRODUCT_NAME.into(),
-                display_version: WINDOWS_GHOST_MIGRATION_CURRENT_VERSION.into(),
-                publisher: WINDOWS_NSIS_PUBLISHER.into(),
-                install_location: format!("\"{}\"", install_location.display()),
-                uninstall_string: format!(
-                    "\"{}\"",
-                    install_location
-                        .join(WINDOWS_NSIS_UNINSTALL_EXECUTABLE)
-                        .display()
-                ),
-                main_binary_name: WINDOWS_NSIS_MAIN_EXECUTABLE.into(),
-                install_transition: install_transition.map(str::to_owned),
-            })),
-            local_app_data: install_location.parent().unwrap().to_path_buf(),
-            consume_failures_remaining: AtomicU64::new(0),
-            post_consume_failures_remaining: AtomicU64::new(0),
-        });
-        fixture.manager.nsis_installation = installation.clone();
-        installation
-    }
-
-    #[cfg(windows)]
-    fn add_current_assm2_registration(
-        fixture: &mut Fixture,
-        target: &ManagedTarget,
-        legacy_distribution_root: &Path,
-    ) -> PathBuf {
-        let current_vhd = windows_fixture_vhd_path(&fixture.manager, target);
-        ensure_managed_wsl_distribution_storage_directory(current_vhd.parent().unwrap())
-            .expect("current assm2 distribution storage");
-        fs::write(&current_vhd, b"current assm2 workspace fixture").expect("current assm2 VHD");
-        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(vec![
-            WindowsWslRegistration {
-                registration_id: "00000000-0000-0000-0000-000000000001".into(),
-                distribution_name: format!("podman-{WINDOWS_GHOST_MIGRATION_MACHINE_NAME}"),
-                base_path: legacy_distribution_root.canonicalize().unwrap(),
-            },
-            WindowsWslRegistration {
-                registration_id: "00000000-0000-0000-0000-000000000002".into(),
-                distribution_name: format!("podman-{WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME}"),
-                base_path: current_vhd.parent().unwrap().canonicalize().unwrap(),
-            },
-        ]));
-        current_vhd
-    }
-
-    #[cfg(windows)]
-    fn replace_windows_wsl_recovery_pending(
-        manager: &ManagedRuntimeManager,
-        machine_name: &str,
-        bytes: &[u8],
-    ) {
-        let pending = manager.windows_wsl_recovery_pending_path(machine_name);
-        remove_regular_file(&pending).expect("remove prior recovery pointer");
-        write_private_atomic(&pending, bytes).expect("write replacement recovery pointer");
-    }
-
-    #[cfg(windows)]
-    fn assert_pending_windows_wsl_recovery_is_rejected_and_read_only(
-        fixture: &Fixture,
-        target: &ManagedTarget,
-        distribution_root: &Path,
-    ) {
-        let managed_command = fixture
-            .manager
-            .runtime_command(target)
-            .expect("current managed command");
-        assert_windows_wsl_recovery_is_rejected_and_read_only(
-            fixture,
-            target,
-            distribution_root,
-            &managed_command,
-            true,
-            WINDOWS_GHOST_MIGRATION_MACHINE_NAME,
-        );
-    }
-
-    #[cfg(windows)]
-    fn assert_windows_wsl_recovery_is_rejected_and_read_only(
-        fixture: &Fixture,
-        target: &ManagedTarget,
-        distribution_root: &Path,
-        managed_command: &ManagedRuntimeCommand,
-        pending_expected: bool,
-        machine: &str,
-    ) {
-        let distribution = format!("podman-{machine}");
-        fixture
-            .commands
-            .push(success(utf16le(&format!("{distribution}\r\n"))));
-        let setup = ManagedRuntimeSetupController::default();
-        let operation_id = setup.begin().expect("begin failed recovery fixture setup");
-
-        let error = fixture
-            .manager
-            .prove_windows_wsl_distribution_absent_locked(
-                target,
-                managed_command,
-                machine,
-                Some(&setup),
-            )
-            .expect_err("invalid legacy recovery must be rejected without mutation");
-        setup
-            .finish_failed(&operation_id, error.to_string())
-            .expect("finish failed recovery fixture setup");
-
-        assert!(
-            error
-                .to_string()
-                .contains("legacy in-place recovery is retired")
-        );
-        let status = setup.status().expect("terminal failed recovery status");
-        assert_eq!(status.phase, ManagedRuntimeSetupPhase::Failed);
-        assert_eq!(status.failure_reason, None);
-        assert_eq!(status.next_action, None);
-        assert_eq!(
-            fixture.commands.calls(),
-            vec![vec![String::from("--list"), String::from("--quiet")]]
-        );
-        assert!(distribution_root.join("ext4.vhdx").is_file());
-        assert_eq!(
-            fixture
-                .manager
-                .windows_wsl_recovery_pending_path(machine)
-                .is_file(),
-            pending_expected
-        );
-    }
-
-    #[cfg(windows)]
-    fn bounded_n_minus_one_pending_fixture() -> (
-        Fixture,
-        ManagedTarget,
-        PathBuf,
-        PathBuf,
-        WindowsWslRecoveryIntent,
-    ) {
-        let mut test_fixture = fixture();
-        let (target, _, distribution_root, install_location) =
-            seed_n_minus_one_windows_ghost_workspace(&mut test_fixture);
-        let _ = install_current_windows_nsis_candidate(
-            &mut test_fixture,
-            &install_location,
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
-        );
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        let distribution = format!("podman-{machine}");
-        let intent = test_fixture
-            .manager
-            .begin_windows_wsl_recovery_locked(
-                &target,
-                &machine,
-                &distribution,
-                std::slice::from_ref(&distribution),
-            )
-            .expect("create bounded N-1 recovery intent");
-        (
-            test_fixture,
-            target,
-            distribution_root,
-            install_location,
-            intent,
-        )
-    }
-
-    #[cfg(windows)]
-    fn finish_bounded_n_minus_one_recovery_fixture(
-        fixture: &mut Fixture,
-        target: &ManagedTarget,
-        intent: &WindowsWslRecoveryIntent,
-    ) {
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        let distribution = format!("podman-{machine}");
-        fixture
-            .manager
-            .runtime_command(target)
-            .expect("prepare current provider namespace");
-        let current_vhd = fixture
-            .manager
-            .provider_home()
-            .join("data")
-            .join("containers")
-            .join("podman")
-            .join("machine")
-            .join(target.provider.argument())
-            .join(PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY)
-            .join(&machine)
-            .join("ext4.vhdx");
-        ensure_managed_wsl_distribution_storage_directory(current_vhd.parent().unwrap())
-            .expect("current replacement storage");
-        fs::write(&current_vhd, b"verified replacement workspace")
-            .expect("current replacement VHD");
-        fixture.manager.wsl_registrations =
-            Arc::new(FixedWindowsWslRegistrations(vec![WindowsWslRegistration {
-                registration_id: "00000000-0000-0000-0000-000000000002".into(),
-                distribution_name: distribution.clone(),
-                base_path: current_vhd.parent().unwrap().canonicalize().unwrap(),
-            }]));
-
-        let recovery_archive = intent.attempt_directory.join("workspace-recovery.tar");
-        fs::write(&recovery_archive, b"durable bounded recovery archive")
-            .expect("bounded recovery archive");
-        sync_windows_wsl_recovery_file(&recovery_archive, "bounded recovery archive fixture")
-            .expect("sync bounded recovery archive");
-        let backup = WindowsWslRecoveryBackupProof {
-            schema_version: WINDOWS_WSL_RECOVERY_BACKUP_SCHEMA.into(),
-            recovery_id: intent.recovery_id.clone(),
-            distribution_name: distribution.clone(),
-            quarantine_distribution_name: intent.quarantine_distribution_name.clone(),
-            recovery_archive: recovery_archive.clone(),
-            size_bytes: b"durable bounded recovery archive".len() as u64,
-            sha256: sha256_bytes(b"durable bounded recovery archive"),
-        };
-        write_private_atomic(
-            &intent.attempt_directory.join("backup.json"),
-            &serde_json::to_vec(&backup).unwrap(),
-        )
-        .expect("bounded backup proof");
-        let imported = WindowsWslRecoveryImportProof {
-            schema_version: WINDOWS_WSL_RECOVERY_IMPORT_SCHEMA.into(),
-            recovery_id: intent.recovery_id.clone(),
-            quarantine_distribution_name: intent.quarantine_distribution_name.clone(),
-            quarantine_install_directory: intent.quarantine_install_directory.clone(),
-            recovery_archive,
-            archive_size_bytes: backup.size_bytes,
-            archive_sha256: backup.sha256.clone(),
-        };
-        write_private_atomic(
-            &intent.attempt_directory.join("import.json"),
-            &serde_json::to_vec(&imported).unwrap(),
-        )
-        .expect("bounded import proof");
-
-        fixture
-            .commands
-            .push(success(utf16le(&format!("{distribution}\r\n"))));
-        let managed_command = fixture
-            .manager
-            .runtime_command(target)
-            .expect("current managed command");
-        fixture
-            .manager
-            .complete_windows_wsl_recovery_locked(target, &managed_command, &machine, None)
-            .expect("complete bounded recovery");
-    }
-
-    #[cfg(windows)]
-    fn current_verified_pending_fixture() -> (
-        Fixture,
-        ManagedTarget,
-        PathBuf,
-        WindowsWslRecoveryIntent,
-        ManagedRuntimeCommand,
-    ) {
-        let mut test_fixture = fixture();
-        test_fixture
-            .manager
-            .install()
-            .expect("install current payload");
-        let target = test_fixture
+    ) -> (ManagedTarget, String, PathBuf, WindowsWslRegistration) {
+        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(Vec::new()));
+        fixture.manager.install().expect("install current payload");
+        let target = fixture
             .manager
             .loaded
             .target()
-            .expect("current target")
+            .expect("Windows target")
             .clone();
-        assert_eq!(target.operating_system, ManagedOperatingSystem::Windows);
-        assert_eq!(target.provider, ManagedMachineProvider::Wsl);
-        let managed_command = test_fixture
+        let machine = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(&target, &[], &[], false)
+            .expect("select current Windows generation");
+        fixture
             .manager
             .runtime_command(&target)
-            .expect("create current provider namespace");
-        let vhd = windows_fixture_vhd_path(&test_fixture.manager, &target);
-        ensure_managed_wsl_distribution_storage_directory(vhd.parent().unwrap())
-            .expect("current distribution storage");
-        fs::write(&vhd, b"verified current workspace fixture").expect("current fixture VHD");
-        let distribution_root = vhd.parent().unwrap().canonicalize().unwrap();
-        let machine = machine_name(&target);
-        let distribution = format!("podman-{machine}");
-        test_fixture.manager.wsl_registrations =
-            Arc::new(FixedWindowsWslRegistrations(vec![WindowsWslRegistration {
-                registration_id: "00000000-0000-0000-0000-000000000003".into(),
-                distribution_name: distribution.clone(),
-                base_path: distribution_root.clone(),
-            }]));
-        let intent = test_fixture
+            .expect("prepare current provider home");
+        fixture
             .manager
-            .begin_windows_wsl_recovery_locked(
+            .prepare_machine_ssh_identity_locked()
+            .expect("prepare current product identity");
+        let vhd = fixture
+            .manager
+            .windows_wsl_distribution_storage_path(&target, &machine, 0)
+            .join("ext4.vhdx");
+        ensure_managed_wsl_distribution_storage_directory(vhd.parent().expect("VHD parent"))
+            .expect("create verified existing WSL storage");
+        fs::write(&vhd, b"verified-existing-generation").expect("write existing VHD fixture");
+        fixture
+            .manager
+            .ensure_windows_wsl_ownership_proof_locked(
                 &target,
                 &machine,
-                &distribution,
-                std::slice::from_ref(&distribution),
+                WindowsWslOwnershipBasis::ProvenMachine,
             )
-            .expect("create verified-manifest recovery intent");
-        (
-            test_fixture,
-            target,
-            distribution_root,
-            intent,
-            managed_command,
-        )
-    }
-
-    #[cfg(windows)]
-    fn remove_windows_fixture_file(path: &Path) {
-        let mut permissions = fs::metadata(path)
-            .expect("fixture file metadata")
-            .permissions();
-        permissions.set_readonly(false);
-        fs::set_permissions(path, permissions).expect("make fixture file removable");
-        fs::remove_file(path).expect("remove fixture file");
+            .expect("prove current product generation");
+        let registration = WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000051".into(),
+            distribution_name: format!("podman-{machine}"),
+            base_path: vhd.parent().expect("registration base").to_path_buf(),
+        };
+        (target, machine, vhd, registration)
     }
 
     #[cfg(windows)]
@@ -17074,33 +13831,6 @@ mod tests {
             .open(path)
             .expect("open fixture without write or delete sharing")
     }
-
-    #[cfg(windows)]
-    fn open_without_windows_sharing(path: &Path) -> File {
-        use std::os::windows::fs::OpenOptionsExt;
-
-        OpenOptions::new()
-            .read(true)
-            .share_mode(0)
-            .open(path)
-            .expect("open fixture without sharing")
-    }
-
-    #[cfg(windows)]
-    fn open_windows_writer_with_full_sharing(path: &Path) -> File {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::{
-            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        };
-
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .open(path)
-            .expect("open write-capable fixture with full sharing")
-    }
-
     #[test]
     fn machine_names_are_deterministic_unique_and_within_podman_limit() {
         let image = ManagedMachineImage {
@@ -17162,64 +13892,6 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn windows_ghost_migration_ledger_is_one_release_and_full_digest_bounded() {
-        assert_eq!(
-            env!("CARGO_PKG_VERSION"),
-            WINDOWS_GHOST_MIGRATION_CURRENT_VERSION,
-            "the v0.1.7 receipt must not be inherited by another release"
-        );
-        validate_sha256(
-            WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256,
-            "N-1 Windows manifest",
-        )
-        .unwrap();
-        assert_eq!(
-            WINDOWS_GHOST_MIGRATION_CURRENT_MANIFEST_SHA256,
-            "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a",
-            "the migration must stay pinned to the reviewed v0.1.8 staged manifest"
-        );
-        validate_sha256(
-            WINDOWS_GHOST_MIGRATION_CURRENT_MANIFEST_SHA256,
-            "current Windows manifest",
-        )
-        .unwrap();
-        validate_sha256(
-            WINDOWS_GHOST_MIGRATION_MACHINE_IMAGE_SHA256,
-            "N-1 Windows machine image",
-        )
-        .unwrap();
-        assert!(
-            WINDOWS_GHOST_MIGRATION_MACHINE_NAME
-                .ends_with(&WINDOWS_GHOST_MIGRATION_MACHINE_IMAGE_SHA256[..12])
-        );
-        assert_eq!(WINDOWS_MACHINE_PREFIX, "assm2");
-        assert_eq!(
-            WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME,
-            "assm2-win-x64-e2b6cbcadd8b"
-        );
-        assert_ne!(
-            WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME, WINDOWS_GHOST_MIGRATION_MACHINE_NAME,
-            "the current Windows compatibility generation must not collide with v0.1.7"
-        );
-        assert_eq!(
-            [
-                WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT,
-                WINDOWS_GHOST_MIGRATION_UNINSTALLED_RECEIPT,
-                WINDOWS_GHOST_MIGRATION_UPDATED_RECEIPT,
-                WINDOWS_GHOST_MIGRATION_OVERLAID_RECEIPT,
-            ],
-            [
-                "recovered-ghost-v0.1.7",
-                "uninstalled-0.1.7",
-                "updated-0.1.7",
-                "overlaid-0.1.7",
-            ],
-            "the bounded installer receipts must not silently widen"
-        );
-    }
-
     #[cfg(unix)]
     #[test]
     fn linux_short_runtime_is_domain_separated_private_and_socket_bounded() {
@@ -18194,43 +14866,6 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn recovery_phase_is_serialized_and_cannot_be_cancelled_mid_handoff() {
-        assert_eq!(
-            serde_json::to_string(&ManagedRuntimeSetupPhase::Recovery).unwrap(),
-            "\"recovery\""
-        );
-        let controller = ManagedRuntimeSetupController::default();
-        controller.begin().unwrap();
-        controller
-            .set_phase(ManagedRuntimeSetupPhase::Recovery, "saving a recovery copy")
-            .unwrap();
-        let status = controller.request_cancel().unwrap();
-        assert!(status.active);
-        assert!(!status.can_cancel);
-        assert!(!status.cancel_requested);
-        assert!(!controller.cancel_requested.load(Ordering::Acquire));
-        assert!(status.detail.contains("safe recovery copy"));
-    }
-
-    #[test]
-    fn recovery_backup_is_nonempty_bounded_and_content_addressed() {
-        let directory = TempDir::new().unwrap();
-        let backup = directory.path().join("workspace-recovery.vhdx");
-        fs::write(&backup, b"fixture recovery VHD").unwrap();
-        assert_eq!(
-            hash_bounded_regular_file(&backup, 1024, "fixture recovery").unwrap(),
-            (
-                b"fixture recovery VHD".len() as u64,
-                sha256_bytes(b"fixture recovery VHD")
-            )
-        );
-        assert!(hash_bounded_regular_file(&backup, 4, "fixture recovery").is_err());
-        fs::write(&backup, b"").unwrap();
-        assert!(hash_bounded_regular_file(&backup, 1024, "fixture recovery").is_err());
-    }
-
     #[test]
     fn windows_console_diagnostics_decode_utf16le_and_reject_mixed_garbage() {
         let localized =
@@ -18315,6 +14950,78 @@ mod tests {
     }
 
     #[test]
+    fn installer_prerequisite_coordinator_is_zero_input_and_reprobes_after_service() {
+        let probes = Mutex::new(VecDeque::from([
+            Err(WindowsWslPrerequisiteFailure::not_installed(Some(1))),
+            Ok(()),
+        ]));
+        let actions = Mutex::new(Vec::new());
+        let result = coordinate_windows_installer_prerequisite(
+            || probes.lock().unwrap().pop_front().expect("bounded probe"),
+            |action| {
+                actions.lock().unwrap().push(action);
+                Ok(ManagedRuntimePrerequisiteRepairResult {
+                    outcome: ManagedRuntimePrerequisiteRepairOutcome::Completed,
+                    restart_required: false,
+                    detail: "serviced".into(),
+                })
+            },
+        )
+        .expect("coordinator");
+
+        assert_eq!(result.class, WindowsInstallerPrerequisiteClass::Serviced);
+        assert_eq!(
+            actions.into_inner().unwrap(),
+            [ManagedRuntimeSetupNextAction::InstallWsl]
+        );
+        assert!(probes.into_inner().unwrap().is_empty());
+    }
+
+    #[test]
+    fn installer_prerequisite_coordinator_never_services_restart_or_unknown_failure() {
+        for (failure, expected) in [
+            (
+                WindowsWslPrerequisiteFailure::restart_required(Some(3010)),
+                WindowsInstallerPrerequisiteClass::RestartRequired,
+            ),
+            (
+                WindowsWslPrerequisiteFailure::command_failed(Some(125)),
+                WindowsInstallerPrerequisiteClass::Failed,
+            ),
+        ] {
+            let repair_calls = AtomicU64::new(0);
+            let result = coordinate_windows_installer_prerequisite(
+                || Err(failure),
+                |_| {
+                    repair_calls.fetch_add(1, Ordering::AcqRel);
+                    unreachable!("restart/unknown failure cannot select a servicing action")
+                },
+            )
+            .expect("terminal classification");
+            assert_eq!(result.class, expected);
+            assert_eq!(repair_calls.load(Ordering::Acquire), 0);
+        }
+    }
+
+    #[test]
+    fn installer_prerequisite_coordinator_preserves_cancel_as_terminal() {
+        let result = coordinate_windows_installer_prerequisite(
+            || Err(WindowsWslPrerequisiteFailure::update_required(Some(1))),
+            |action| {
+                assert_eq!(action, ManagedRuntimeSetupNextAction::UpdateWsl);
+                Ok(ManagedRuntimePrerequisiteRepairResult {
+                    outcome: ManagedRuntimePrerequisiteRepairOutcome::Cancelled,
+                    restart_required: false,
+                    detail: "cancelled".into(),
+                })
+            },
+        )
+        .expect("cancelled classification");
+        assert_eq!(result.class, WindowsInstallerPrerequisiteClass::Cancelled);
+        assert_eq!(result.detail, "cancelled");
+    }
+
+    #[test]
     fn windows_prerequisite_details_never_assign_wsl_administration_to_the_user() {
         for failure in [
             WindowsWslPrerequisiteFailure::not_installed(Some(1)),
@@ -18376,31 +15083,125 @@ mod tests {
     }
 
     #[test]
-    fn rejected_legacy_distribution_never_becomes_a_user_setup_action() {
-        let controller = ManagedRuntimeSetupController::default();
-        let operation_id = controller.begin().expect("begin setup");
-        let distribution = "podman-assm1-win-x64-0123456789ab";
-        let error = reject_legacy_windows_wsl_recovery_without_mutation::<()>(distribution)
-            .expect_err("legacy recovery is rejected without mutation");
-        controller
-            .finish_failed(&operation_id, error.to_string())
-            .expect("finish failed setup");
-
-        let status = controller.status().expect("generic failed setup status");
-        assert_eq!(status.phase, ManagedRuntimeSetupPhase::Failed);
-        assert_eq!(status.failure_reason, None);
-        assert_eq!(status.next_action, None);
-        assert!(status.detail.contains(distribution));
-        assert!(
-            status
-                .detail
-                .contains("legacy in-place recovery is retired")
+    fn missing_wsl_binary_uses_only_two_fixed_bounded_system32_dism_stages() {
+        let commands =
+            windows_wsl_servicing_commands(ManagedRuntimeSetupNextAction::InstallWsl, false)
+                .expect("fixed missing-WSL bootstrap");
+        assert_eq!(
+            commands,
+            [
+                WindowsWslServicingCommand::EnableWindowsSubsystemForLinux,
+                WindowsWslServicingCommand::EnableVirtualMachinePlatform,
+            ]
         );
-        assert!(controller.begin_prerequisite_repair(&operation_id).is_err());
+        assert_eq!(
+            commands
+                .iter()
+                .map(|command| command.timeout())
+                .sum::<Duration>(),
+            WINDOWS_WSL_PREREQUISITE_REPAIR_TIMEOUT
+        );
+        for command in commands {
+            assert_eq!(command.executable_name(), "dism.exe");
+            let parameters = command.parameters();
+            assert!(parameters.starts_with("/Online /Enable-Feature /FeatureName:"));
+            assert!(parameters.ends_with(" /All /NoRestart"));
+            for forbidden in [
+                "powershell",
+                "pwsh",
+                "cmd.exe",
+                "&",
+                "|",
+                ">",
+                "<",
+                "\\",
+                "\"",
+                "'",
+            ] {
+                assert!(
+                    !parameters.to_ascii_lowercase().contains(forbidden),
+                    "fixed DISM bootstrap exposed shell syntax: {parameters}"
+                );
+            }
+        }
+        assert!(
+            windows_wsl_servicing_commands(ManagedRuntimeSetupNextAction::UpdateWsl, false,)
+                .is_err(),
+            "a missing WSL binary cannot be redirected into an unrelated update action"
+        );
+        assert!(windows_wsl_servicing_completion_requires_restart(
+            false, false
+        ));
+        assert!(windows_wsl_servicing_completion_requires_restart(
+            true, true
+        ));
+        assert!(!windows_wsl_servicing_completion_requires_restart(
+            true, false
+        ));
+    }
 
-        let encoded = serde_json::to_value(&status).expect("serialize failed setup status");
-        assert_eq!(encoded["failure_reason"], serde_json::Value::Null);
-        assert_eq!(encoded["next_action"], serde_json::Value::Null);
+    #[test]
+    fn servicing_cooldown_is_bounded_and_never_becomes_readiness_proof() {
+        let now = 10_000_u64;
+        assert_eq!(
+            bounded_windows_wsl_servicing_cooldown_remaining(now, now + 42),
+            Some(Duration::from_secs(42))
+        );
+        assert_eq!(
+            bounded_windows_wsl_servicing_cooldown_remaining(now, now),
+            None
+        );
+        assert_eq!(
+            bounded_windows_wsl_servicing_cooldown_remaining(now, now - 1),
+            None
+        );
+        assert_eq!(
+            bounded_windows_wsl_servicing_cooldown_remaining(
+                now,
+                now + WINDOWS_WSL_SERVICING_COOLDOWN.as_secs() + 1,
+            ),
+            None,
+            "a corrupt far-future receipt must not create a permanent gate"
+        );
+
+        let repair_calls = AtomicU64::new(0);
+        let waiting = repair_windows_wsl_prerequisite_with_cooldown(
+            ManagedRuntimeSetupNextAction::InstallWsl,
+            || Ok(Some(Duration::from_secs(60))),
+            |_| {
+                repair_calls.fetch_add(1, Ordering::AcqRel);
+                unreachable!("active reconciliation cooldown cannot re-elevate")
+            },
+        )
+        .expect("cooldown degrades runtime-dependent work only");
+        assert_eq!(
+            waiting.outcome,
+            ManagedRuntimePrerequisiteRepairOutcome::Failed
+        );
+        assert!(!waiting.restart_required);
+        assert_eq!(repair_calls.load(Ordering::Acquire), 0);
+        assert!(waiting.detail.contains("checked the current state"));
+        assert!(!waiting.detail.contains("ready"));
+
+        let completed = repair_windows_wsl_prerequisite_with_cooldown(
+            ManagedRuntimeSetupNextAction::InstallWsl,
+            || Ok(None),
+            |action| {
+                repair_calls.fetch_add(1, Ordering::AcqRel);
+                assert_eq!(action, ManagedRuntimeSetupNextAction::InstallWsl);
+                Ok(ManagedRuntimePrerequisiteRepairResult {
+                    outcome: ManagedRuntimePrerequisiteRepairOutcome::Completed,
+                    restart_required: false,
+                    detail: "completed".into(),
+                })
+            },
+        )
+        .expect("expired cooldown permits one fixed action");
+        assert_eq!(
+            completed.outcome,
+            ManagedRuntimePrerequisiteRepairOutcome::Completed
+        );
+        assert_eq!(repair_calls.load(Ordering::Acquire), 1);
     }
 
     #[test]
@@ -18674,8 +15475,10 @@ mod tests {
             ManagedRuntimePrerequisiteRepairOutcome::Failed
         );
         assert!(!result.restart_required);
-        assert!(result.detail.contains("stopped waiting"));
-        assert!(result.detail.contains("may continue in the background"));
+        assert!(result.detail.contains("bounded wait"));
+        assert!(result.detail.contains("keep checking"));
+        assert!(result.detail.contains("before it asks"));
+        assert!(!result.detail.contains("ready"));
     }
 
     #[test]
@@ -19177,187 +15980,6 @@ mod tests {
         )
         .expect("a concurrently removed exact entry is already clean");
     }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_wsl_vhd_verification_waits_for_exact_read_holder_release() {
-        let fixture = fixture();
-        let versions_root = fixture.manager.versions_root();
-        ensure_private_directory(&versions_root).unwrap();
-        let base_path = versions_root.join("exclusive-reader");
-        ensure_private_directory(&base_path).unwrap();
-        let vhd = base_path.join("ext4.vhdx");
-        fs::write(&vhd, b"exclusive read VHD fixture").unwrap();
-        let expected_size = fs::metadata(&vhd).unwrap().len();
-        let read_holder = open_without_windows_sharing(&vhd);
-        let started = Instant::now();
-        let release = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(250));
-            drop(read_holder);
-        });
-
-        let snapshot = verify_windows_wsl_recovery_vhd_with_timing(
-            || Ok(base_path.clone()),
-            Duration::from_secs(5),
-            Duration::from_millis(25),
-        )
-        .expect("VHD proof resumes after the exact reader is released");
-        release.join().expect("release fixture VHD reader");
-
-        assert_eq!(snapshot.size, expected_size);
-        assert!(started.elapsed() >= Duration::from_millis(250));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_wsl_vhd_verification_blocks_writers_and_deleters_while_guarded() {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::{
-            DELETE, FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        };
-
-        let fixture = fixture();
-        let versions_root = fixture.manager.versions_root();
-        ensure_private_directory(&versions_root).unwrap();
-        let base_path = versions_root.join("guarded-vhd");
-        ensure_private_directory(&base_path).unwrap();
-        let vhd = base_path.join("ext4.vhdx");
-        fs::write(&vhd, b"guarded VHD fixture").unwrap();
-        let renamed = base_path.join("renamed.vhdx");
-        let guard = open_windows_wsl_vhd_quiescence_guard(&vhd).expect("open VHD guard");
-
-        let reader = OpenOptions::new()
-            .read(true)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .open(&vhd)
-            .expect("the guard still permits a reader");
-        let writer_error = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .open(&vhd)
-            .expect_err("the guard must reject a writer");
-        assert!(windows_error_is_sharing_violation(&writer_error));
-        let delete_error = OpenOptions::new()
-            .access_mode(FILE_GENERIC_READ | DELETE)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .open(&vhd)
-            .expect_err("the guard must reject delete access");
-        assert!(windows_error_is_sharing_violation(&delete_error));
-        assert!(fs::rename(&vhd, &renamed).is_err());
-
-        drop(reader);
-        drop(guard);
-        fs::rename(&vhd, &renamed).expect("rename after guard release");
-        fs::rename(&renamed, &vhd).expect("restore guarded fixture name");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_wsl_vhd_observation_allows_live_writers_and_blocks_replacement() {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::{
-            DELETE, FILE_READ_DATA, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        };
-
-        let fixture = fixture();
-        let versions_root = fixture.manager.versions_root();
-        ensure_private_directory(&versions_root).unwrap();
-        let base_path = versions_root.join("observed-live-vhd");
-        ensure_private_directory(&base_path).unwrap();
-        let vhd = base_path.join("ext4.vhdx");
-        fs::write(&vhd, b"observed live VHD fixture").unwrap();
-        let renamed = base_path.join("renamed.vhdx");
-        let live_writer = open_windows_writer_with_full_sharing(&vhd);
-        let guard = open_windows_wsl_vhd_observation_guard(&vhd)
-            .expect("observe a VHD that already has a fully shared writer");
-
-        live_writer
-            .set_len(32)
-            .expect("the existing live writer remains usable");
-        let concurrent_writer = open_windows_writer_with_full_sharing(&vhd);
-        let delete_error = OpenOptions::new()
-            .access_mode(FILE_READ_DATA | DELETE)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .open(&vhd)
-            .expect_err("the observation guard must reject delete access");
-        assert!(windows_error_is_sharing_violation(&delete_error));
-        assert!(fs::rename(&vhd, &renamed).is_err());
-
-        drop(concurrent_writer);
-        drop(guard);
-        fs::rename(&vhd, &renamed).expect("rename after observation guard release");
-        fs::rename(&renamed, &vhd).expect("restore observed fixture name");
-        drop(live_writer);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_wsl_vhd_verification_waits_for_exact_writer_release() {
-        let fixture = fixture();
-        let versions_root = fixture.manager.versions_root();
-        ensure_private_directory(&versions_root).unwrap();
-        let base_path = versions_root.join("release-wait");
-        ensure_private_directory(&base_path).unwrap();
-        let vhd = base_path.join("ext4.vhdx");
-        fs::write(&vhd, b"bounded VHD release fixture").unwrap();
-        let expected_size = fs::metadata(&vhd).unwrap().len();
-        let locked_vhd = open_windows_writer_with_full_sharing(&vhd);
-        let started = Instant::now();
-        let release = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(250));
-            drop(locked_vhd);
-        });
-
-        let snapshot = verify_windows_wsl_recovery_vhd_with_timing(
-            || Ok(base_path.clone()),
-            Duration::from_secs(5),
-            Duration::from_millis(25),
-        )
-        .expect("VHD proof resumes after the exact writer is released");
-        release.join().expect("release fixture VHD handle");
-
-        assert_eq!(snapshot.size, expected_size);
-        assert!(started.elapsed() >= Duration::from_millis(250));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_wsl_vhd_writer_timeout_is_typed_and_preserves_the_file() {
-        let fixture = fixture();
-        let versions_root = fixture.manager.versions_root();
-        ensure_private_directory(&versions_root).unwrap();
-        let base_path = versions_root.join("release-timeout");
-        ensure_private_directory(&base_path).unwrap();
-        let vhd = base_path.join("ext4.vhdx");
-        fs::write(&vhd, b"bounded VHD timeout fixture").unwrap();
-        let locked_vhd = open_windows_writer_with_full_sharing(&vhd);
-        let started = Instant::now();
-
-        let error = verify_windows_wsl_recovery_vhd_with_timing(
-            || Ok(base_path.clone()),
-            Duration::from_millis(150),
-            Duration::from_millis(25),
-        )
-        .expect_err("an unreleased VHD must hit the bounded deadline");
-
-        assert!(matches!(error, AppError::Runtime(_)));
-        assert!(
-            error
-                .to_string()
-                .contains("remained writable or replaceable")
-        );
-        assert!(started.elapsed() >= Duration::from_millis(150));
-        assert!(vhd.is_file());
-        drop(locked_vhd);
-        verify_windows_wsl_recovery_vhd_with_timing(
-            || Ok(base_path.clone()),
-            Duration::from_secs(1),
-            Duration::from_millis(25),
-        )
-        .expect("the retained VHD can be verified on retry");
-    }
-
     #[cfg(windows)]
     #[test]
     fn uninstall_waits_for_exact_windows_wsl_vhd_release() {
@@ -20132,6 +16754,239 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn verified_windows_machine_start_failure_is_preserved_and_rebuilt_once_side_by_side() {
+        let mut fixture = fixture();
+        let (target, existing_machine, existing_vhd, existing_registration) =
+            seed_verified_existing_windows_machine(&mut fixture);
+        let existing_bytes = fs::read(&existing_vhd).expect("existing VHD snapshot");
+        let replacement_machine = fixture.manager.isolated_windows_machine_name(&target, 1);
+        let replacement_storage =
+            fixture
+                .manager
+                .windows_wsl_distribution_storage_path(&target, &replacement_machine, 1);
+        let replacement_vhd = replacement_storage.join("ext4.vhdx");
+        let replacement_registration = WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000052".into(),
+            distribution_name: format!("podman-{replacement_machine}"),
+            base_path: replacement_storage,
+        };
+        let mut registration_snapshots = VecDeque::new();
+        for _ in 0..6 {
+            registration_snapshots.push_back(vec![existing_registration.clone()]);
+        }
+        registration_snapshots.push_back(vec![existing_registration, replacement_registration]);
+        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrations(Mutex::new(
+            registration_snapshots,
+        )));
+
+        let existing_distribution = format!("podman-{existing_machine}");
+        push_windows_wsl_ready(&fixture.commands);
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{existing_distribution}\r\n"))));
+        fixture.commands.push(success(machine_json_named(
+            &fixture.manager,
+            &existing_machine,
+            false,
+        )));
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{existing_distribution}\r\n"))));
+        for _ in 0..2 {
+            fixture.commands.push(success(machine_json_named(
+                &fixture.manager,
+                &existing_machine,
+                false,
+            )));
+        }
+        fixture
+            .commands
+            .push(failure(b"verified machine could not start"));
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{existing_distribution}\r\n"))));
+        fixture.commands.push(success(machine_json_named(
+            &fixture.manager,
+            &existing_machine,
+            false,
+        )));
+        fixture.commands.push_with_side_effect(
+            success(Vec::new()),
+            FakeCommandSideEffect::CreateManagedWslVhd {
+                path: replacement_vhd.clone(),
+                bytes: b"replacement-after-start-failure".to_vec(),
+            },
+        );
+        fixture.commands.push(success(machine_json_named(
+            &fixture.manager,
+            &replacement_machine,
+            false,
+        )));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(b"5.8.2\n".to_vec()));
+
+        let command = fixture
+            .manager
+            .start()
+            .expect("start failure is reconciled with one isolated replacement");
+
+        assert_eq!(command.runtime_version(), "5.8.2");
+        assert_eq!(fs::read(&existing_vhd).unwrap(), existing_bytes);
+        assert_eq!(
+            fs::read(&replacement_vhd).unwrap(),
+            b"replacement-after-start-failure"
+        );
+        let selection = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .unwrap()
+            .unwrap();
+        assert_eq!(selection.generation_index, 1);
+        assert_eq!(selection.selected_machine_name, replacement_machine);
+        assert_eq!(selection.preserved_collision_names, vec![existing_machine]);
+        let calls = fixture.commands.calls();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.len() >= 2 && call[0] == "machine" && call[1] == "init")
+                .count(),
+            1
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.len() >= 2 && call[0] == "machine" && call[1] == "start")
+                .count(),
+            2
+        );
+        assert!(calls.iter().flatten().all(|argument| {
+            argument != "--unregister" && argument != "--export" && argument != "--import"
+        }));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verified_windows_readiness_failure_is_preserved_and_rebuilt_once_side_by_side() {
+        let mut fixture = fixture();
+        let (target, existing_machine, existing_vhd, existing_registration) =
+            seed_verified_existing_windows_machine(&mut fixture);
+        let existing_bytes = fs::read(&existing_vhd).expect("existing VHD snapshot");
+        let replacement_machine = fixture.manager.isolated_windows_machine_name(&target, 1);
+        let replacement_storage =
+            fixture
+                .manager
+                .windows_wsl_distribution_storage_path(&target, &replacement_machine, 1);
+        let replacement_vhd = replacement_storage.join("ext4.vhdx");
+        let replacement_registration = WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000053".into(),
+            distribution_name: format!("podman-{replacement_machine}"),
+            base_path: replacement_storage,
+        };
+        let mut registration_snapshots = VecDeque::new();
+        for _ in 0..6 {
+            registration_snapshots.push_back(vec![existing_registration.clone()]);
+        }
+        registration_snapshots.push_back(vec![existing_registration, replacement_registration]);
+        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrations(Mutex::new(
+            registration_snapshots,
+        )));
+
+        let existing_distribution = format!("podman-{existing_machine}");
+        push_windows_wsl_ready(&fixture.commands);
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{existing_distribution}\r\n"))));
+        fixture.commands.push(success(machine_json_named(
+            &fixture.manager,
+            &existing_machine,
+            true,
+        )));
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{existing_distribution}\r\n"))));
+        for _ in 0..2 {
+            fixture.commands.push(success(machine_json_named(
+                &fixture.manager,
+                &existing_machine,
+                true,
+            )));
+        }
+        fixture
+            .commands
+            .push(failure(b"server preflight unavailable"));
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{existing_distribution}\r\n"))));
+        fixture.commands.push(success(machine_json_named(
+            &fixture.manager,
+            &existing_machine,
+            true,
+        )));
+        fixture.commands.push_with_side_effect(
+            success(Vec::new()),
+            FakeCommandSideEffect::CreateManagedWslVhd {
+                path: replacement_vhd.clone(),
+                bytes: b"replacement-after-readiness-failure".to_vec(),
+            },
+        );
+        fixture.commands.push(success(machine_json_named(
+            &fixture.manager,
+            &replacement_machine,
+            false,
+        )));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(b"5.8.2\n".to_vec()));
+
+        let _lock = fixture.manager.lock().expect("lifecycle lock");
+        let command = fixture
+            .manager
+            .start_locked_with_readiness_timeout(None, Duration::from_millis(1))
+            .expect("readiness failure is reconciled with one isolated replacement");
+
+        assert_eq!(command.runtime_version(), "5.8.2");
+        assert_eq!(fs::read(&existing_vhd).unwrap(), existing_bytes);
+        assert_eq!(
+            fs::read(&replacement_vhd).unwrap(),
+            b"replacement-after-readiness-failure"
+        );
+        let selection = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .unwrap()
+            .unwrap();
+        assert_eq!(selection.generation_index, 1);
+        assert_eq!(selection.selected_machine_name, replacement_machine);
+        assert_eq!(selection.preserved_collision_names, vec![existing_machine]);
+        let calls = fixture.commands.calls();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.len() >= 2 && call[0] == "machine" && call[1] == "init")
+                .count(),
+            1
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.len() >= 2 && call[0] == "machine" && call[1] == "start")
+                .count(),
+            1,
+            "the already-running unhealthy machine is preserved; only its replacement is started"
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.first().is_some_and(|argument| argument == "version"))
+                .count(),
+            2
+        );
+        assert!(calls.iter().flatten().all(|argument| {
+            argument != "--unregister" && argument != "--export" && argument != "--import"
+        }));
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn windows_machine_init_retries_once_after_reproving_complete_absence() {
         let mut fixture = fixture();
         fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(Vec::new()));
@@ -20555,1552 +17410,6 @@ mod tests {
             "the retry requires a fresh parsed WSL inventory"
         );
     }
-
-    #[cfg(windows)]
-    #[test]
-    fn n_minus_one_ghost_install_without_current_receipt_is_rejected_without_user_action() {
-        let mut fixture = fixture();
-        let (target, _, distribution_root, _) =
-            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        let distribution = format!("podman-{machine}");
-        let managed_command = fixture
-            .manager
-            .runtime_command(&target)
-            .expect("current managed command");
-        fixture
-            .commands
-            .push(success(utf16le(&format!("{distribution}\r\n"))));
-        let setup = ManagedRuntimeSetupController::default();
-        let operation_id = setup.begin().expect("begin failed recovery fixture setup");
-
-        let error = fixture
-            .manager
-            .prove_windows_wsl_distribution_absent_locked(
-                &target,
-                &managed_command,
-                &machine,
-                Some(&setup),
-            )
-            .expect_err("a stale v0.1.7 registry name is not an ownership receipt");
-        setup
-            .finish_failed(&operation_id, error.to_string())
-            .expect("finish failed recovery fixture setup");
-
-        assert!(
-            error
-                .to_string()
-                .contains("legacy in-place recovery is retired")
-        );
-        let status = setup.status().expect("terminal failed recovery status");
-        assert_eq!(status.phase, ManagedRuntimeSetupPhase::Failed);
-        assert_eq!(status.failure_reason, None);
-        assert_eq!(status.next_action, None);
-        assert_eq!(
-            fixture.commands.calls(),
-            vec![vec![String::from("--list"), String::from("--quiet")]]
-        );
-        assert!(distribution_root.join("ext4.vhdx").is_file());
-        assert!(
-            !fixture
-                .manager
-                .windows_wsl_recovery_pending_path(&machine)
-                .exists()
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn side_by_side_ghost_retention_keeps_a_live_legacy_vhd_and_consumes_only_the_receipt() {
-        let mut fixture = fixture();
-        let (target, previous_provider, distribution_root, install_location) =
-            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let installation = install_current_windows_nsis_candidate(
-            &mut fixture,
-            &install_location,
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
-        );
-        fixture
-            .manager
-            .runtime_command(&target)
-            .expect("prepare current assm2 provider");
-        let current_vhd = add_current_assm2_registration(&mut fixture, &target, &distribution_root);
-        let legacy_vhd = distribution_root.join("ext4.vhdx");
-        let legacy_before = fs::read(&legacy_vhd).expect("legacy VHD before observation");
-        let config = previous_provider
-            .join("config")
-            .join("containers")
-            .join("containers.conf");
-        let config_before = fs::read(&config).expect("legacy config before observation");
-        let writer = open_windows_writer_with_full_sharing(&legacy_vhd);
-
-        fixture
-            .manager
-            .record_bounded_windows_legacy_workspace_retained(
-                &target,
-                WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME,
-            )
-            .expect("record observation without stopping the legacy writer");
-
-        assert_eq!(installation.install_transition(), None);
-        assert_eq!(fs::read(&legacy_vhd).unwrap(), legacy_before);
-        assert_eq!(fs::read(&config).unwrap(), config_before);
-        assert!(current_vhd.is_file());
-        assert!(fixture.commands.calls().is_empty());
-        let proof_path = fixture
-            .manager
-            .windows_wsl_legacy_retained_path("00000000-0000-0000-0000-000000000001")
-            .unwrap();
-        let proof: WindowsWslLegacyWorkspaceRetainedProof =
-            read_bounded_private_json(&proof_path, 64 * 1024, "retained legacy fixture proof")
-                .unwrap();
-        assert_eq!(proof.schema_version, WINDOWS_WSL_LEGACY_RETAINED_SCHEMA);
-        assert!(!proof.authorizes_cleanup);
-        assert_eq!(
-            proof.transition_evidence_source,
-            WindowsWslLegacyTransitionEvidenceSource::NsisInstallTransition
-        );
-        assert_eq!(
-            proof.legacy_registration_id,
-            "00000000-0000-0000-0000-000000000001"
-        );
-        assert_eq!(
-            proof.current_machine_name,
-            WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME
-        );
-        drop(writer);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn side_by_side_retention_accepts_only_the_exact_duplicated_pending_intent_after_consumption() {
-        let mut fixture = fixture();
-        let (target, _, distribution_root, install_location) =
-            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let installation = install_current_windows_nsis_candidate(
-            &mut fixture,
-            &install_location,
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
-        );
-        let legacy_distribution = format!("podman-{WINDOWS_GHOST_MIGRATION_MACHINE_NAME}");
-        let intent = fixture
-            .manager
-            .begin_windows_wsl_recovery_locked(
-                &target,
-                WINDOWS_GHOST_MIGRATION_MACHINE_NAME,
-                &legacy_distribution,
-                std::slice::from_ref(&legacy_distribution),
-            )
-            .expect("persist exact legacy recovery intent");
-        fixture
-            .manager
-            .claim_bounded_windows_ghost_migration_receipt(&intent)
-            .expect("consume transition before the simulated candidate failure");
-        assert_eq!(installation.install_transition(), None);
-        let pending_path = fixture
-            .manager
-            .windows_wsl_recovery_pending_path(WINDOWS_GHOST_MIGRATION_MACHINE_NAME);
-        let pending_before = fs::read(&pending_path).expect("pending pointer before restart");
-        let durable_before = fs::read(intent.attempt_directory.join("intent.json"))
-            .expect("durable intent before restart");
-
-        fixture
-            .manager
-            .runtime_command(&target)
-            .expect("prepare current assm2 provider");
-        add_current_assm2_registration(&mut fixture, &target, &distribution_root);
-        fixture
-            .manager
-            .record_bounded_windows_legacy_workspace_retained(
-                &target,
-                WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME,
-            )
-            .expect("retain legacy workspace from duplicated pending evidence");
-
-        assert_eq!(fs::read(&pending_path).unwrap(), pending_before);
-        assert_eq!(
-            fs::read(intent.attempt_directory.join("intent.json")).unwrap(),
-            durable_before
-        );
-        let proof_path = fixture
-            .manager
-            .windows_wsl_legacy_retained_path("00000000-0000-0000-0000-000000000001")
-            .unwrap();
-        let proof: WindowsWslLegacyWorkspaceRetainedProof = read_bounded_private_json(
-            &proof_path,
-            64 * 1024,
-            "pending-backed retained legacy proof",
-        )
-        .unwrap();
-        assert_eq!(
-            proof.transition_evidence_source,
-            WindowsWslLegacyTransitionEvidenceSource::LegacyPendingRecoveryIntent
-        );
-        assert_eq!(proof.legacy_recovery_id, Some(intent.recovery_id.clone()));
-        assert_eq!(
-            proof.legacy_recovery_intent_sha256,
-            Some(sha256_bytes(&pending_before))
-        );
-        assert!(!proof.authorizes_cleanup);
-        assert!(distribution_root.join("ext4.vhdx").is_file());
-        assert!(fixture.commands.calls().is_empty());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn ambiguous_legacy_registrations_are_ignored_without_consuming_or_mutating_them() {
-        let mut fixture = fixture();
-        let (target, _, distribution_root, install_location) =
-            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let installation = install_current_windows_nsis_candidate(
-            &mut fixture,
-            &install_location,
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
-        );
-        fixture
-            .manager
-            .runtime_command(&target)
-            .expect("prepare current assm2 provider");
-        let current_vhd = add_current_assm2_registration(&mut fixture, &target, &distribution_root);
-        let mut registrations = fixture
-            .manager
-            .wsl_registrations
-            .registrations()
-            .expect("fixture registrations");
-        registrations.push(WindowsWslRegistration {
-            registration_id: "00000000-0000-0000-0000-000000000003".into(),
-            distribution_name: format!("podman-{WINDOWS_GHOST_MIGRATION_MACHINE_NAME}"),
-            base_path: distribution_root.canonicalize().unwrap(),
-        });
-        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(registrations));
-        let legacy_before = fs::read(distribution_root.join("ext4.vhdx")).unwrap();
-
-        fixture
-            .manager
-            .retain_bounded_windows_legacy_workspace_nonblocking(
-                &target,
-                WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME,
-            );
-
-        assert_eq!(
-            installation.install_transition().as_deref(),
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT)
-        );
-        assert_eq!(
-            fs::read(distribution_root.join("ext4.vhdx")).unwrap(),
-            legacy_before
-        );
-        assert!(current_vhd.is_file());
-        assert!(fixture.commands.calls().is_empty());
-        assert!(
-            !fixture
-                .manager
-                .state_root
-                .join(WINDOWS_WSL_LEGACY_RETAINED_DIRECTORY)
-                .exists()
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn n_minus_one_ghost_install_without_versions_manifest_starts_verified_recovery() {
-        let mut fixture = fixture();
-        let (target, previous_provider, distribution_root, install_location) =
-            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        let distribution = format!("podman-{machine}");
-
-        assert_eq!(
-            previous_provider.file_name(),
-            Some(OsStr::new(
-                &WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256[..16]
-            ))
-        );
-        assert!(
-            !fixture
-                .manager
-                .versions_root()
-                .join(format!(
-                    "podman-machine-5.8.2-{}",
-                    &WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256[..16]
-                ))
-                .join("manifest.json")
-                .exists()
-        );
-        assert!(
-            !fixture
-                .manager
-                .versions_root()
-                .join(format!(
-                    "podman-machine-5.8.2-{}",
-                    &WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256[..16]
-                ))
-                .exists(),
-            "the real ghost state has no retained N-1 payload directory"
-        );
-        assert!(
-            !install_location.exists(),
-            "the stale registry entry may outlive the entire old install directory"
-        );
-        assert!(!install_location.join(WINDOWS_NSIS_MAIN_EXECUTABLE).exists());
-        assert!(
-            !install_location
-                .join(WINDOWS_NSIS_UNINSTALL_EXECUTABLE)
-                .exists()
-        );
-
-        let _ = install_current_windows_nsis_candidate(
-            &mut fixture,
-            &install_location,
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
-        );
-
-        let intent = fixture
-            .manager
-            .begin_windows_wsl_recovery_locked(
-                &target,
-                &machine,
-                &distribution,
-                std::slice::from_ref(&distribution),
-            )
-            .expect("bounded N-1 proof starts the ordinary recovery transaction");
-
-        assert_eq!(intent.schema_version, WINDOWS_WSL_RECOVERY_INTENT_SCHEMA);
-        assert_eq!(intent.manifest_sha256, fixture.manager.loaded.sha256);
-        assert_eq!(
-            intent.ownership_basis,
-            WindowsWslRecoveryOwnershipBasis::BoundedNMinusOneGhostMigration
-        );
-        assert_eq!(
-            intent.source_provider_manifest_sha256,
-            WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256
-        );
-        assert_eq!(
-            intent.install_transition_receipt.as_deref(),
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT)
-        );
-        assert_eq!(
-            intent.provider_home,
-            previous_provider.canonicalize().unwrap()
-        );
-        assert_eq!(
-            intent.registration_base_path,
-            distribution_root.canonicalize().unwrap()
-        );
-        assert!(
-            fixture
-                .manager
-                .windows_wsl_recovery_pending_path(&machine)
-                .is_file()
-        );
-        assert!(fixture.commands.calls().is_empty());
-        assert!(distribution_root.join("ext4.vhdx").is_file());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn n_minus_one_ghost_admission_is_pinned_to_the_exact_v018_manifest() {
-        let mut fixture = fixture();
-        let (_target, _, distribution_root, install_location) =
-            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        let _installation = install_current_windows_nsis_candidate(
-            &mut fixture,
-            &install_location,
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
-        );
-
-        fixture.manager.bounded_ghost_fixture_manifest = false;
-        let error = fixture
-            .manager
-            .verify_windows_wsl_registration_binding_is_product_owned(&machine, &distribution_root)
-            .expect_err("a different current manifest must not inherit the v0.1.7 migration");
-
-        assert!(matches!(error, AppError::NotAuthorized(_)));
-        assert!(distribution_root.join("ext4.vhdx").is_file());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn changed_installer_receipt_is_never_consumed() {
-        let mut fixture = fixture();
-        let (target, _, distribution_root, install_location) =
-            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let installation = install_current_windows_nsis_candidate(
-            &mut fixture,
-            &install_location,
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
-        );
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        let distribution = format!("podman-{machine}");
-        let intent = fixture
-            .manager
-            .begin_windows_wsl_recovery_locked(
-                &target,
-                &machine,
-                &distribution,
-                std::slice::from_ref(&distribution),
-            )
-            .expect("persist exact bounded recovery transaction");
-        installation.set_install_transition(Some(WINDOWS_GHOST_MIGRATION_UPDATED_RECEIPT));
-
-        let error = fixture
-            .manager
-            .claim_bounded_windows_ghost_migration_receipt(&intent)
-            .expect_err("a changed receipt must fail before consumption");
-
-        assert!(matches!(error, AppError::NotAuthorized(_)));
-        assert_eq!(
-            installation.install_transition().as_deref(),
-            Some(WINDOWS_GHOST_MIGRATION_UPDATED_RECEIPT)
-        );
-        assert!(
-            fixture
-                .manager
-                .windows_wsl_recovery_pending_path(&machine)
-                .is_file()
-        );
-        assert!(distribution_root.join("ext4.vhdx").is_file());
-        assert!(fixture.commands.calls().is_empty());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn receipt_consumption_failure_leaves_the_durable_recovery_resumable() {
-        let mut fixture = fixture();
-        let (target, _, distribution_root, install_location) =
-            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let installation = install_current_windows_nsis_candidate(
-            &mut fixture,
-            &install_location,
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
-        );
-        installation
-            .consume_failures_remaining
-            .store(1, Ordering::Release);
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        let distribution = format!("podman-{machine}");
-        let intent = fixture
-            .manager
-            .begin_windows_wsl_recovery_locked(
-                &target,
-                &machine,
-                &distribution,
-                std::slice::from_ref(&distribution),
-            )
-            .expect("persist exact bounded recovery transaction");
-
-        let managed_command = fixture
-            .manager
-            .runtime_command(&target)
-            .expect("current managed command");
-        fixture
-            .commands
-            .push(success(utf16le(&format!("{distribution}\r\n"))));
-        let error = fixture
-            .manager
-            .prove_windows_wsl_distribution_absent_locked(&target, &managed_command, &machine, None)
-            .expect_err("injected claim failure");
-        assert!(matches!(error, AppError::Runtime(_)));
-        assert_eq!(
-            installation.install_transition().as_deref(),
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT)
-        );
-        assert_eq!(
-            fixture
-                .manager
-                .read_windows_wsl_recovery_intent_locked(&machine)
-                .expect("read durable retry transaction"),
-            Some(intent.clone())
-        );
-
-        fixture
-            .manager
-            .claim_bounded_windows_ghost_migration_receipt(&intent)
-            .expect("retry consumes the same exact receipt");
-        assert_eq!(installation.install_transition(), None);
-        fixture
-            .manager
-            .claim_bounded_windows_ghost_migration_receipt(&intent)
-            .expect("post-delete retry is idempotent");
-        fixture
-            .manager
-            .verify_pending_windows_wsl_registration_binding(&intent)
-            .expect("claimed pending intent replaces the deleted receipt on retry");
-        assert!(distribution_root.join("ext4.vhdx").is_file());
-        assert_eq!(
-            fixture.commands.calls(),
-            vec![vec![String::from("--list"), String::from("--quiet")]],
-            "receipt consumption must fail before terminate/export/import/unregister"
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn n_minus_one_vhd_release_reproof_rejects_a_rebound_distribution_before_export() {
-        let (mut fixture, target, distribution_root, _, intent) =
-            bounded_n_minus_one_pending_fixture();
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        let distribution = format!("podman-{machine}");
-        fixture
-            .manager
-            .claim_bounded_windows_ghost_migration_receipt(&intent)
-            .expect("consume the exact installer receipt before WSL mutation");
-        let managed_command = fixture
-            .manager
-            .runtime_command(&target)
-            .expect("current managed command");
-        let pending_path = fixture.manager.windows_wsl_recovery_pending_path(&machine);
-        let durable_intent_path = intent.attempt_directory.join("intent.json");
-        let pending_before = fs::read(&pending_path).expect("pending recovery pointer");
-        let intent_before = fs::read(&durable_intent_path).expect("durable recovery intent");
-
-        let rebound_base_path = fixture._temp.path().join("rebound-wsl-registration");
-        fs::create_dir(&rebound_base_path).expect("rebound registration directory");
-        fs::write(
-            rebound_base_path.join("ext4.vhdx"),
-            b"unrelated rebound workspace",
-        )
-        .expect("rebound registration VHD");
-        let before = vec![WindowsWslRegistration {
-            registration_id: "00000000-0000-0000-0000-000000000005".into(),
-            distribution_name: distribution.clone(),
-            base_path: distribution_root.clone(),
-        }];
-        let after = vec![WindowsWslRegistration {
-            registration_id: "00000000-0000-0000-0000-000000000006".into(),
-            distribution_name: distribution.clone(),
-            base_path: rebound_base_path,
-        }];
-        let armed = Arc::new(AtomicBool::new(false));
-        let rebound = Arc::new(AtomicBool::new(false));
-        fixture.manager.wsl_registrations = Arc::new(RebindingWindowsWslRegistrations {
-            before,
-            after,
-            // Read #1 is the recovery precheck, #2 is the first binding-aware
-            // VHD attempt (which is still locked), and #3 proves that the
-            // retry re-reads registration state before another open.
-            arm_on_read: 3,
-            reads: AtomicU64::new(0),
-            armed: armed.clone(),
-            rebound: rebound.clone(),
-        });
-        fixture.manager.windows_wsl_vhd_release_timing =
-            Some((Duration::from_secs(5), Duration::from_millis(25)));
-        let source_vhd = distribution_root.join("ext4.vhdx");
-        let locked_vhd = open_windows_writer_with_full_sharing(&source_vhd);
-        let rebind = thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while !armed.load(Ordering::Acquire) {
-                if Instant::now() >= deadline {
-                    drop(locked_vhd);
-                    return false;
-                }
-                thread::sleep(Duration::from_millis(1));
-            }
-            rebound.store(true, Ordering::Release);
-            drop(locked_vhd);
-            true
-        });
-        fixture.commands.push(success(Vec::new()));
-
-        let error = fixture
-            .manager
-            .recover_windows_wsl_distribution_locked(
-                &managed_command,
-                &machine,
-                vec![distribution.clone()],
-                Some(intent.clone()),
-                None,
-            )
-            .expect_err("a rebound same-name registration must stop recovery");
-
-        assert!(
-            rebind
-                .join()
-                .expect("rebind fixture thread was not panicked")
-        );
-        assert!(matches!(error, AppError::NotAuthorized(_)));
-        assert_eq!(fs::read(&pending_path).unwrap(), pending_before);
-        assert_eq!(fs::read(&durable_intent_path).unwrap(), intent_before);
-        assert_eq!(
-            fixture
-                .manager
-                .nsis_installation
-                .installation()
-                .unwrap()
-                .unwrap()
-                .install_transition,
-            None
-        );
-        assert!(source_vhd.is_file());
-        assert!(!intent.attempt_directory.join("backup.json").exists());
-        assert_eq!(
-            fixture.commands.calls(),
-            vec![vec![String::from("--terminate"), distribution]],
-            "a rebound registration must stop before export or unregister"
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn n_minus_one_vhd_timeout_preserves_the_full_recovery_checkpoint() {
-        let (mut fixture, target, distribution_root, _, intent) =
-            bounded_n_minus_one_pending_fixture();
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        let distribution = format!("podman-{machine}");
-        fixture
-            .manager
-            .claim_bounded_windows_ghost_migration_receipt(&intent)
-            .expect("consume the exact installer receipt before WSL mutation");
-        let managed_command = fixture
-            .manager
-            .runtime_command(&target)
-            .expect("current managed command");
-
-        let archive_bytes = b"durable recovery checkpoint archive";
-        fs::write(&intent.recovery_archive, archive_bytes).expect("recovery archive checkpoint");
-        sync_windows_wsl_recovery_file(&intent.recovery_archive, "recovery archive checkpoint")
-            .expect("durable recovery archive checkpoint");
-        let backup = WindowsWslRecoveryBackupProof {
-            schema_version: WINDOWS_WSL_RECOVERY_BACKUP_SCHEMA.into(),
-            recovery_id: intent.recovery_id.clone(),
-            distribution_name: distribution.clone(),
-            quarantine_distribution_name: intent.quarantine_distribution_name.clone(),
-            recovery_archive: intent.recovery_archive.clone(),
-            size_bytes: archive_bytes.len() as u64,
-            sha256: sha256_bytes(archive_bytes),
-        };
-        let backup_path = intent.attempt_directory.join("backup.json");
-        write_private_atomic(&backup_path, &serde_json::to_vec(&backup).unwrap())
-            .expect("backup checkpoint");
-        ensure_managed_wsl_distribution_storage_directory(
-            &fixture.manager.windows_wsl_recovery_workspace_root(),
-        )
-        .expect("recovery workspace root");
-        ensure_managed_wsl_distribution_storage_directory(&intent.quarantine_install_directory)
-            .expect("quarantine workspace");
-        fs::write(
-            intent.quarantine_install_directory.join("ext4.vhdx"),
-            b"quarantine checkpoint VHD",
-        )
-        .expect("quarantine checkpoint VHD");
-        let imported = WindowsWslRecoveryImportProof {
-            schema_version: WINDOWS_WSL_RECOVERY_IMPORT_SCHEMA.into(),
-            recovery_id: intent.recovery_id.clone(),
-            quarantine_distribution_name: intent.quarantine_distribution_name.clone(),
-            quarantine_install_directory: intent.quarantine_install_directory.clone(),
-            recovery_archive: intent.recovery_archive.clone(),
-            archive_size_bytes: backup.size_bytes,
-            archive_sha256: backup.sha256.clone(),
-        };
-        let import_path = intent.attempt_directory.join("import.json");
-        write_private_atomic(&import_path, &serde_json::to_vec(&imported).unwrap())
-            .expect("import checkpoint");
-
-        let original_registration = WindowsWslRegistration {
-            registration_id: "00000000-0000-0000-0000-000000000007".into(),
-            distribution_name: distribution.clone(),
-            base_path: distribution_root.clone(),
-        };
-        let quarantine_registration = WindowsWslRegistration {
-            registration_id: "00000000-0000-0000-0000-000000000008".into(),
-            distribution_name: intent.quarantine_distribution_name.clone(),
-            base_path: intent.quarantine_install_directory.clone(),
-        };
-        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(vec![
-            original_registration,
-            quarantine_registration,
-        ]));
-        fixture.manager.windows_wsl_vhd_release_timing =
-            Some((Duration::from_millis(250), Duration::from_millis(25)));
-        let pending_path = fixture.manager.windows_wsl_recovery_pending_path(&machine);
-        let durable_intent_path = intent.attempt_directory.join("intent.json");
-        let preserved = [
-            pending_path.clone(),
-            durable_intent_path.clone(),
-            backup_path.clone(),
-            import_path.clone(),
-            intent.recovery_archive.clone(),
-        ]
-        .map(|path| (path.clone(), fs::read(path).expect("checkpoint bytes")));
-        let source_vhd = distribution_root.join("ext4.vhdx");
-        let locked_vhd = open_windows_writer_with_full_sharing(&source_vhd);
-        fixture.commands.push(success(Vec::new()));
-
-        let error = fixture
-            .manager
-            .recover_windows_wsl_distribution_locked(
-                &managed_command,
-                &machine,
-                vec![
-                    distribution.clone(),
-                    intent.quarantine_distribution_name.clone(),
-                ],
-                Some(intent.clone()),
-                None,
-            )
-            .expect_err("an unreleased old VHD must retain the complete retry checkpoint");
-
-        assert!(matches!(error, AppError::Runtime(_)));
-        assert!(
-            error
-                .to_string()
-                .contains("remained writable or replaceable")
-        );
-        for (path, expected) in preserved {
-            assert_eq!(
-                fs::read(&path).unwrap(),
-                expected,
-                "{} changed",
-                path.display()
-            );
-        }
-        assert_eq!(
-            fixture
-                .manager
-                .read_windows_wsl_recovery_intent_locked(&machine)
-                .unwrap(),
-            Some(intent.clone())
-        );
-        assert_eq!(
-            fixture
-                .manager
-                .nsis_installation
-                .installation()
-                .unwrap()
-                .unwrap()
-                .install_transition,
-            None
-        );
-        assert!(
-            !fixture
-                .manager
-                .windows_wsl_ghost_migration_consumed_path(&machine)
-                .exists(),
-            "the permanent consumed tombstone is written only after the replacement commits"
-        );
-        assert_eq!(
-            fixture.commands.calls(),
-            vec![vec![String::from("--terminate"), distribution]],
-            "timeout must stop before export or either unregister"
-        );
-        assert!(source_vhd.is_file());
-        assert!(
-            intent
-                .quarantine_install_directory
-                .join("ext4.vhdx")
-                .is_file()
-        );
-        drop(locked_vhd);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn uncheckpointed_quarantine_without_a_vhd_is_exactly_unregistered() {
-        let (mut fixture, _target, distribution_root, intent, managed_command) =
-            current_verified_pending_fixture();
-        let machine = intent.machine_name.clone();
-        ensure_managed_wsl_distribution_storage_directory(
-            &fixture.manager.windows_wsl_recovery_workspace_root(),
-        )
-        .expect("recovery workspace root");
-        ensure_managed_wsl_distribution_storage_directory(&intent.quarantine_install_directory)
-            .expect("incomplete quarantine workspace");
-        let quarantine_vhd = intent.quarantine_install_directory.join("ext4.vhdx");
-        assert!(
-            !quarantine_vhd.exists(),
-            "the interrupted-import fixture deliberately has no VHD"
-        );
-        fs::write(
-            &intent.recovery_archive,
-            b"preserved recovery archive for incomplete import cleanup",
-        )
-        .expect("recovery archive");
-        let pending_path = fixture.manager.windows_wsl_recovery_pending_path(&machine);
-        let durable_intent_path = intent.attempt_directory.join("intent.json");
-        let preserved = [
-            pending_path.clone(),
-            durable_intent_path,
-            intent.recovery_archive.clone(),
-        ]
-        .map(|path| {
-            (
-                path.clone(),
-                fs::read(path).expect("preserved recovery bytes"),
-            )
-        });
-        let quarantine_registration = WindowsWslRegistration {
-            registration_id: "00000000-0000-0000-0000-000000000009".into(),
-            distribution_name: intent.quarantine_distribution_name.clone(),
-            base_path: intent.quarantine_install_directory.clone(),
-        };
-        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrations(Mutex::new(
-            VecDeque::from(vec![
-                vec![quarantine_registration.clone()],
-                vec![quarantine_registration],
-                Vec::new(),
-            ]),
-        )));
-        fixture.commands.push(success(Vec::new()));
-        fixture.commands.push(success(Vec::new()));
-        push_windows_wsl_absent(&fixture.commands);
-
-        let distributions = fixture
-            .manager
-            .remove_uncheckpointed_windows_wsl_quarantine_locked(&managed_command, &intent)
-            .expect("the exact incomplete registration remains safely removable without a VHD");
-
-        assert!(distributions.is_empty());
-        for (path, expected) in preserved {
-            assert_eq!(
-                fs::read(&path).unwrap(),
-                expected,
-                "{} changed",
-                path.display()
-            );
-        }
-        assert!(distribution_root.join("ext4.vhdx").is_file());
-        assert!(!intent.attempt_directory.join("import.json").exists());
-        assert!(!intent.quarantine_install_directory.exists());
-        assert_eq!(
-            fixture.commands.calls(),
-            vec![
-                vec![
-                    String::from("--terminate"),
-                    intent.quarantine_distribution_name.clone(),
-                ],
-                vec![
-                    String::from("--unregister"),
-                    intent.quarantine_distribution_name.clone(),
-                ],
-                vec![String::from("--list"), String::from("--quiet")],
-            ]
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn consumed_receipt_error_survives_manager_restart_without_name_only_reclaim() {
-        let mut fixture = fixture();
-        let (target, _, distribution_root, install_location) =
-            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let installation = install_current_windows_nsis_candidate(
-            &mut fixture,
-            &install_location,
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
-        );
-        installation
-            .post_consume_failures_remaining
-            .store(1, Ordering::Release);
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        let distribution = format!("podman-{machine}");
-        let intent = fixture
-            .manager
-            .begin_windows_wsl_recovery_locked(
-                &target,
-                &machine,
-                &distribution,
-                std::slice::from_ref(&distribution),
-            )
-            .expect("persist the exact bounded recovery transaction");
-
-        let managed_command = fixture
-            .manager
-            .runtime_command(&target)
-            .expect("current managed command");
-        fixture
-            .commands
-            .push(success(utf16le(&format!("{distribution}\r\n"))));
-        let error = fixture
-            .manager
-            .prove_windows_wsl_distribution_absent_locked(&target, &managed_command, &machine, None)
-            .expect_err("inject an error after the registry receipt is durably consumed");
-        assert!(matches!(error, AppError::Runtime(_)));
-        assert_eq!(installation.install_transition(), None);
-        assert_eq!(
-            fixture
-                .manager
-                .read_windows_wsl_recovery_intent_locked(&machine)
-                .expect("read retry transaction after post-consumption error"),
-            Some(intent.clone())
-        );
-        assert_eq!(
-            fixture.commands.calls(),
-            vec![vec![String::from("--list"), String::from("--quiet")]],
-            "the injected post-consumption error must still precede every WSL mutation"
-        );
-
-        // Recreate the manager over the same private state. There is no
-        // in-memory claim flag to carry across this boundary: only the two
-        // exact durable intent copies can authorize the retry.
-        let state_root = fixture.manager.state_root.clone();
-        let loaded = fixture.manager.loaded.clone();
-        let candidate_resource_root = fixture.manager.resource_root.clone();
-        let bundled_resource_root = fixture._temp.path().join("resources");
-        let Fixture {
-            manager,
-            _temp,
-            commands,
-            downloader,
-            image,
-        } = fixture;
-        drop(manager);
-        let mut restarted_manager = ManagedRuntimeManager::with_backends(
-            state_root,
-            bundled_resource_root,
-            loaded,
-            commands.clone(),
-            downloader.clone(),
-        )
-        .expect("restart the managed runtime manager over durable state");
-        restarted_manager.resource_root = candidate_resource_root;
-        restarted_manager.bounded_ghost_fixture_manifest = true;
-        restarted_manager.nsis_installation = installation.clone();
-        restarted_manager.wsl_registrations =
-            Arc::new(FixedWindowsWslRegistrations(vec![WindowsWslRegistration {
-                registration_id: "00000000-0000-0000-0000-000000000010".into(),
-                distribution_name: distribution.clone(),
-                base_path: distribution_root.clone(),
-            }]));
-        let mut fixture = Fixture {
-            manager: restarted_manager,
-            _temp,
-            commands,
-            downloader,
-            image,
-        };
-
-        let restarted_intent = fixture
-            .manager
-            .read_windows_wsl_recovery_intent_locked(&machine)
-            .expect("read retry transaction after manager restart")
-            .expect("pending transaction survives manager restart");
-        assert_eq!(restarted_intent, intent);
-        let fresh_claim = fixture
-            .manager
-            .verify_windows_wsl_registration_binding_is_product_owned(&machine, &distribution_root)
-            .expect_err("a missing receipt cannot create a fresh name-only claim");
-        assert!(matches!(fresh_claim, AppError::NotAuthorized(_)));
-        fixture
-            .manager
-            .claim_bounded_windows_ghost_migration_receipt(&restarted_intent)
-            .expect("the exact persisted transaction retries after receipt deletion");
-        fixture
-            .manager
-            .verify_pending_windows_wsl_registration_binding(&restarted_intent)
-            .expect("the exact persisted binding, not a name, authorizes the retry");
-
-        finish_bounded_n_minus_one_recovery_fixture(&mut fixture, &target, &restarted_intent);
-        assert!(
-            fixture
-                .manager
-                .windows_wsl_ghost_migration_consumed_path(&machine)
-                .is_file()
-        );
-        assert!(
-            !fixture
-                .manager
-                .windows_wsl_recovery_pending_path(&machine)
-                .exists()
-        );
-
-        fixture.manager.wsl_registrations =
-            Arc::new(FixedWindowsWslRegistrations(vec![WindowsWslRegistration {
-                registration_id: "00000000-0000-0000-0000-000000000011".into(),
-                distribution_name: distribution,
-                base_path: distribution_root.clone(),
-            }]));
-        let replay = fixture
-            .manager
-            .verify_windows_wsl_registration_binding_is_product_owned(&machine, &distribution_root)
-            .expect_err("the completed marker permanently blocks replay of the old workspace");
-        assert!(matches!(replay, AppError::NotAuthorized(_)));
-        assert!(distribution_root.join("ext4.vhdx").is_file());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn completed_ghost_recovery_cannot_be_replayed_by_reconstructing_the_old_workspace() {
-        let mut fixture = fixture();
-        let (target, _, distribution_root, install_location) =
-            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let installation = install_current_windows_nsis_candidate(
-            &mut fixture,
-            &install_location,
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
-        );
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        let distribution = format!("podman-{machine}");
-        let intent = fixture
-            .manager
-            .begin_windows_wsl_recovery_locked(
-                &target,
-                &machine,
-                &distribution,
-                std::slice::from_ref(&distribution),
-            )
-            .expect("persist bounded recovery");
-        fixture
-            .manager
-            .claim_bounded_windows_ghost_migration_receipt(&intent)
-            .expect("consume installer receipt before recovery mutation");
-        finish_bounded_n_minus_one_recovery_fixture(&mut fixture, &target, &intent);
-
-        assert_eq!(installation.install_transition(), None);
-        assert!(
-            !fixture
-                .manager
-                .windows_wsl_recovery_pending_path(&machine)
-                .exists()
-        );
-        let consumed = fixture
-            .manager
-            .read_windows_wsl_ghost_migration_consumed_proof(&intent)
-            .expect("read permanent one-shot marker")
-            .expect("one-shot marker exists");
-        assert_eq!(
-            consumed.schema_version,
-            WINDOWS_WSL_GHOST_MIGRATION_CONSUMED_SCHEMA
-        );
-        assert_eq!(consumed.recovery_id, intent.recovery_id);
-
-        // Reconstruct every name and even restore the original static NSIS
-        // value. The durable consumed marker still denies a second admission.
-        installation.set_install_transition(Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT));
-        fixture.manager.wsl_registrations =
-            Arc::new(FixedWindowsWslRegistrations(vec![WindowsWslRegistration {
-                registration_id: "00000000-0000-0000-0000-000000000012".into(),
-                distribution_name: distribution.clone(),
-                base_path: distribution_root.clone(),
-            }]));
-        let managed_command = fixture
-            .manager
-            .runtime_command(&target)
-            .expect("current managed command");
-        let calls_before = fixture.commands.calls().len();
-        fixture
-            .commands
-            .push(success(utf16le(&format!("{distribution}\r\n"))));
-        let setup = ManagedRuntimeSetupController::default();
-
-        let error = fixture
-            .manager
-            .prove_windows_wsl_distribution_absent_locked(
-                &target,
-                &managed_command,
-                &machine,
-                Some(&setup),
-            )
-            .expect_err("a completed one-shot migration cannot be replayed");
-
-        assert!(
-            error
-                .to_string()
-                .contains("legacy in-place recovery is retired")
-        );
-        assert_eq!(fixture.commands.calls().len(), calls_before + 1);
-        assert!(distribution_root.join("ext4.vhdx").is_file());
-        assert!(
-            fixture
-                .manager
-                .windows_wsl_ghost_migration_consumed_path(&machine)
-                .is_file()
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn malformed_consumed_marker_blocks_fresh_ghost_admission() {
-        let mut fixture = fixture();
-        let (_target, _, distribution_root, install_location) =
-            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let installation = install_current_windows_nsis_candidate(
-            &mut fixture,
-            &install_location,
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
-        );
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        write_private_atomic(
-            &fixture
-                .manager
-                .windows_wsl_ghost_migration_consumed_path(&machine),
-            br#"{"schema_version":"unknown"}"#,
-        )
-        .expect("malformed consumed marker fixture");
-
-        let error = fixture
-            .manager
-            .verify_windows_wsl_registration_binding_is_product_owned(&machine, &distribution_root)
-            .expect_err("any consumed marker must fail fresh admission closed");
-
-        assert!(matches!(error, AppError::NotAuthorized(_)));
-        assert_eq!(
-            installation.install_transition().as_deref(),
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT)
-        );
-        assert!(distribution_root.join("ext4.vhdx").is_file());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn pending_v1_recovery_intent_is_rejected_without_wsl_mutation() {
-        let (fixture, target, distribution_root, _, intent) = bounded_n_minus_one_pending_fixture();
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        let mut legacy = serde_json::to_value(&intent).expect("encode v1 fixture");
-        let legacy = legacy.as_object_mut().expect("recovery intent object");
-        legacy.insert(
-            "schema_version".into(),
-            serde_json::Value::String(WINDOWS_WSL_RECOVERY_INTENT_SCHEMA_V1.into()),
-        );
-        legacy.remove("ownership_basis");
-        legacy.remove("source_provider_manifest_sha256");
-        legacy.remove("install_transition_receipt");
-        replace_windows_wsl_recovery_pending(
-            &fixture.manager,
-            &machine,
-            &serde_json::to_vec(legacy).unwrap(),
-        );
-
-        assert_pending_windows_wsl_recovery_is_rejected_and_read_only(
-            &fixture,
-            &target,
-            &distribution_root,
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn pending_v2_with_wrong_current_manifest_is_rejected_without_wsl_mutation() {
-        let (fixture, target, distribution_root, _, mut intent) =
-            bounded_n_minus_one_pending_fixture();
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        intent.manifest_sha256 = "a".repeat(64);
-        replace_windows_wsl_recovery_pending(
-            &fixture.manager,
-            &machine,
-            &serde_json::to_vec(&intent).unwrap(),
-        );
-
-        assert_pending_windows_wsl_recovery_is_rejected_and_read_only(
-            &fixture,
-            &target,
-            &distribution_root,
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn pending_bounded_v2_without_receipt_is_rejected_without_wsl_mutation() {
-        let (fixture, target, distribution_root, _, mut intent) =
-            bounded_n_minus_one_pending_fixture();
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        intent.install_transition_receipt = None;
-        replace_windows_wsl_recovery_pending(
-            &fixture.manager,
-            &machine,
-            &serde_json::to_vec(&intent).unwrap(),
-        );
-
-        assert_pending_windows_wsl_recovery_is_rejected_and_read_only(
-            &fixture,
-            &target,
-            &distribution_root,
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn pending_bounded_v2_with_changed_receipt_is_rejected_without_wsl_mutation() {
-        let (mut fixture, target, distribution_root, install_location, _) =
-            bounded_n_minus_one_pending_fixture();
-        let _ = install_current_windows_nsis_candidate(
-            &mut fixture,
-            &install_location,
-            Some(WINDOWS_GHOST_MIGRATION_UPDATED_RECEIPT),
-        );
-
-        assert_pending_windows_wsl_recovery_is_rejected_and_read_only(
-            &fixture,
-            &target,
-            &distribution_root,
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn pending_bounded_v2_with_consumed_current_receipt_remains_resumable() {
-        let (mut fixture, _target, distribution_root, install_location, intent) =
-            bounded_n_minus_one_pending_fixture();
-        let _ = install_current_windows_nsis_candidate(&mut fixture, &install_location, None);
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-
-        assert_eq!(
-            fixture
-                .manager
-                .read_windows_wsl_recovery_intent_locked(&machine)
-                .expect("read claimed recovery transaction"),
-            Some(intent.clone())
-        );
-        fixture
-            .manager
-            .verify_pending_windows_wsl_registration_binding(&intent)
-            .expect("durable pending transaction replaces the consumed registry receipt");
-        assert!(distribution_root.join("ext4.vhdx").is_file());
-        assert!(fixture.commands.calls().is_empty());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn pending_bounded_v2_with_wrong_source_manifest_is_rejected_without_wsl_mutation() {
-        let (fixture, target, distribution_root, _, mut intent) =
-            bounded_n_minus_one_pending_fixture();
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        intent.source_provider_manifest_sha256 = "b".repeat(64);
-        replace_windows_wsl_recovery_pending(
-            &fixture.manager,
-            &machine,
-            &serde_json::to_vec(&intent).unwrap(),
-        );
-
-        assert_pending_windows_wsl_recovery_is_rejected_and_read_only(
-            &fixture,
-            &target,
-            &distribution_root,
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn hard_linked_pending_recovery_intent_is_rejected_without_wsl_mutation() {
-        let (fixture, target, distribution_root, _, _) = bounded_n_minus_one_pending_fixture();
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        let pending = fixture.manager.windows_wsl_recovery_pending_path(&machine);
-        fs::hard_link(&pending, pending.with_extension("alias.json"))
-            .expect("create adversarial hard link to pending intent");
-
-        assert_pending_windows_wsl_recovery_is_rejected_and_read_only(
-            &fixture,
-            &target,
-            &distribution_root,
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn current_prefix_provider_without_installed_manifest_is_rejected() {
-        let (fixture, target, distribution_root, _, managed_command) =
-            current_verified_pending_fixture();
-        let machine = machine_name(&target);
-        remove_regular_file(&fixture.manager.windows_wsl_recovery_pending_path(&machine))
-            .expect("remove pending intent so ownership is proved from scratch");
-        remove_windows_fixture_file(&fixture.manager.install_directory().join("manifest.json"));
-
-        assert_windows_wsl_recovery_is_rejected_and_read_only(
-            &fixture,
-            &target,
-            &distribution_root,
-            &managed_command,
-            false,
-            &machine,
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn pending_verified_manifest_with_forged_source_sha_is_rejected() {
-        let (fixture, target, distribution_root, mut intent, managed_command) =
-            current_verified_pending_fixture();
-        let machine = machine_name(&target);
-        intent.source_provider_manifest_sha256 = "c".repeat(64);
-        replace_windows_wsl_recovery_pending(
-            &fixture.manager,
-            &machine,
-            &serde_json::to_vec(&intent).unwrap(),
-        );
-
-        assert_windows_wsl_recovery_is_rejected_and_read_only(
-            &fixture,
-            &target,
-            &distribution_root,
-            &managed_command,
-            true,
-            &machine,
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn pending_verified_manifest_with_removed_source_manifest_is_rejected() {
-        let (fixture, target, distribution_root, _, managed_command) =
-            current_verified_pending_fixture();
-        remove_windows_fixture_file(&fixture.manager.install_directory().join("manifest.json"));
-
-        assert_windows_wsl_recovery_is_rejected_and_read_only(
-            &fixture,
-            &target,
-            &distribution_root,
-            &managed_command,
-            true,
-            &machine_name(&target),
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn n_minus_one_ghost_migration_fails_closed_when_any_independent_proof_is_missing() {
-        let mut fixture = fixture();
-        let (_target, previous_provider, distribution_root, install_location) =
-            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-
-        let _ = install_current_windows_nsis_candidate(
-            &mut fixture,
-            &install_location,
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
-        );
-        fixture
-            .manager
-            .verify_windows_wsl_registration_binding_is_product_owned(&machine, &distribution_root)
-            .expect("all independent N-1 proofs are present");
-
-        let local_app_data = install_location.parent().unwrap().to_path_buf();
-        fixture.manager.nsis_installation = Arc::new(FixedWindowsNsisInstallation {
-            installation: Mutex::new(None),
-            local_app_data,
-            consume_failures_remaining: AtomicU64::new(0),
-            post_consume_failures_remaining: AtomicU64::new(0),
-        });
-        let no_install_history = fixture
-            .manager
-            .verify_windows_wsl_registration_binding_is_product_owned(&machine, &distribution_root)
-            .expect_err("provider and distro names do not replace install history");
-        assert!(matches!(no_install_history, AppError::NotAuthorized(_)));
-
-        let identity = previous_provider
-            .join("data")
-            .join("containers")
-            .join("podman")
-            .join("machine")
-            .join(PODMAN_MACHINE_IDENTITY_NAME);
-        remove_repairable_managed_ssh_identity(&identity).expect("remove fixture key pair");
-        let _ = install_current_windows_nsis_candidate(
-            &mut fixture,
-            &install_location,
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
-        );
-        let no_cryptographic_provider_identity = fixture
-            .manager
-            .verify_windows_wsl_registration_binding_is_product_owned(&machine, &distribution_root)
-            .expect_err("a known namespace and name do not replace the product key pair");
-        assert!(matches!(
-            no_cryptographic_provider_identity,
-            AppError::NotAuthorized(_)
-        ));
-        assert!(distribution_root.join("ext4.vhdx").is_file());
-        assert!(fixture.commands.calls().is_empty());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn installed_current_nsis_record_preserves_bounded_n_minus_one_migration_after_upgrade() {
-        let mut fixture = fixture();
-        let (_target, _, distribution_root, install_location) =
-            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
-        ensure_private_directory(&install_location).expect("current install location");
-        let bundled_runtime = install_location.join("managed-runtime");
-        ensure_private_directory(&bundled_runtime).expect("installed runtime resource");
-        fixture.manager.resource_root = bundled_runtime.canonicalize().unwrap();
-        fs::write(
-            install_location.join(WINDOWS_NSIS_MAIN_EXECUTABLE),
-            b"current application executable fixture",
-        )
-        .expect("current executable");
-        fs::write(
-            install_location.join(WINDOWS_NSIS_UNINSTALL_EXECUTABLE),
-            b"current NSIS uninstaller fixture",
-        )
-        .expect("current uninstaller");
-        let current_registration = |install_transition: Option<&str>, main_binary_name: &str| {
-            Arc::new(FixedWindowsNsisInstallation {
-                installation: Mutex::new(Some(WindowsNsisInstallation {
-                    display_name: WINDOWS_NSIS_PRODUCT_NAME.into(),
-                    display_version: WINDOWS_GHOST_MIGRATION_CURRENT_VERSION.into(),
-                    publisher: WINDOWS_NSIS_PUBLISHER.into(),
-                    install_location: format!("\"{}\"", install_location.display()),
-                    uninstall_string: format!(
-                        "\"{}\"",
-                        install_location
-                            .join(WINDOWS_NSIS_UNINSTALL_EXECUTABLE)
-                            .display()
-                    ),
-                    main_binary_name: main_binary_name.into(),
-                    install_transition: install_transition.map(str::to_owned),
-                })),
-                local_app_data: install_location.parent().unwrap().to_path_buf(),
-                consume_failures_remaining: AtomicU64::new(0),
-                post_consume_failures_remaining: AtomicU64::new(0),
-            })
-        };
-
-        for missing_or_unbounded_receipt in [None, Some("fresh-install"), Some("uninstalled-0.1.6")]
-        {
-            fixture.manager.nsis_installation =
-                current_registration(missing_or_unbounded_receipt, WINDOWS_NSIS_MAIN_EXECUTABLE);
-            let error = fixture
-                .manager
-                .verify_windows_wsl_registration_binding_is_product_owned(
-                    &machine,
-                    &distribution_root,
-                )
-                .expect_err("a current install without the exact N-1 receipt must fail closed");
-            assert!(matches!(error, AppError::NotAuthorized(_)));
-        }
-
-        fixture.manager.nsis_installation = current_registration(
-            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
-            "different-product.exe",
-        );
-        let wrong_main_binary = fixture
-            .manager
-            .verify_windows_wsl_registration_binding_is_product_owned(&machine, &distribution_root)
-            .expect_err("a changed NSIS main-binary identity must fail closed");
-        assert!(matches!(wrong_main_binary, AppError::NotAuthorized(_)));
-
-        for bounded_receipt in [
-            WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT,
-            WINDOWS_GHOST_MIGRATION_UNINSTALLED_RECEIPT,
-            WINDOWS_GHOST_MIGRATION_UPDATED_RECEIPT,
-            WINDOWS_GHOST_MIGRATION_OVERLAID_RECEIPT,
-        ] {
-            fixture.manager.nsis_installation =
-                current_registration(Some(bounded_receipt), WINDOWS_NSIS_MAIN_EXECUTABLE);
-            let (actual_distribution, actual_provider) = fixture
-                .manager
-                .verify_windows_wsl_registration_binding_is_product_owned(
-                    &machine,
-                    &distribution_root,
-                )
-                .expect("current NSIS entry carries an exact N-1 transition receipt");
-
-            assert_eq!(
-                actual_distribution,
-                distribution_root.canonicalize().unwrap()
-            );
-            assert_eq!(
-                actual_provider.file_name(),
-                Some(OsStr::new(
-                    &WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256[..16]
-                ))
-            );
-        }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn pending_assm2_checkpoint_is_preserved_without_blocking_current_generation() {
-        let (mut fixture, target, distribution_root, intent, _) =
-            current_verified_pending_fixture();
-        let machine = machine_name(&target);
-        assert!(windows_machine_uses_current_compatibility_generation(
-            &machine
-        ));
-        let distribution = format!("podman-{machine}");
-        let quarantine = intent.quarantine_distribution_name.clone();
-
-        fixture
-            .manager
-            .prepare_machine_ssh_identity_locked()
-            .expect("current assm2 SSH identity");
-        ensure_managed_wsl_distribution_storage_directory(
-            &fixture.manager.windows_wsl_recovery_workspace_root(),
-        )
-        .expect("recovery workspace root");
-        ensure_managed_wsl_distribution_storage_directory(&intent.quarantine_install_directory)
-            .expect("pending assm2 quarantine workspace");
-        let quarantine_vhd = intent.quarantine_install_directory.join("ext4.vhdx");
-        fs::write(&quarantine_vhd, b"pending assm2 quarantine VHD")
-            .expect("pending assm2 quarantine VHD");
-        let recovery_archive = intent.recovery_archive.clone();
-        fs::write(&recovery_archive, b"pending assm2 recovery archive")
-            .expect("pending assm2 recovery archive");
-        let backup_path = intent.attempt_directory.join("backup.json");
-        write_private_atomic(&backup_path, b"{\"pending\":\"assm2-backup\"}")
-            .expect("pending assm2 backup bytes");
-        let import_path = intent.attempt_directory.join("import.json");
-        write_private_atomic(&import_path, b"{\"pending\":\"assm2-import\"}")
-            .expect("pending assm2 import bytes");
-
-        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(vec![
-            WindowsWslRegistration {
-                registration_id: "00000000-0000-0000-0000-000000000003".into(),
-                distribution_name: distribution.clone(),
-                base_path: distribution_root.clone(),
-            },
-            WindowsWslRegistration {
-                registration_id: "00000000-0000-0000-0000-000000000004".into(),
-                distribution_name: quarantine.clone(),
-                base_path: intent.quarantine_install_directory.clone(),
-            },
-        ]));
-
-        let pending_path = fixture.manager.windows_wsl_recovery_pending_path(&machine);
-        let intent_path = intent.attempt_directory.join("intent.json");
-        let preserved = [
-            pending_path.clone(),
-            intent_path,
-            recovery_archive.clone(),
-            backup_path,
-            import_path,
-            distribution_root.join("ext4.vhdx"),
-            quarantine_vhd.clone(),
-        ]
-        .map(|path| {
-            (
-                path.clone(),
-                fs::read(&path).unwrap_or_else(|error| {
-                    panic!("could not snapshot {}: {error}", path.display())
-                }),
-            )
-        });
-
-        let command = fixture
-            .manager
-            .runtime_command(&target)
-            .expect("current generation command");
-        fixture
-            .manager
-            .complete_windows_wsl_recovery_locked(&target, &command, &machine, None)
-            .expect("current generation ignores the retained old checkpoint");
-        for (path, expected) in preserved {
-            assert_eq!(
-                fs::read(&path).unwrap(),
-                expected,
-                "pending assm2 state changed: {}",
-                path.display()
-            );
-        }
-        assert!(
-            !fixture
-                .manager
-                .windows_wsl_ghost_migration_consumed_path(&machine)
-                .exists()
-        );
-        let calls = fixture.commands.calls();
-        assert!(calls.is_empty());
-        assert!(calls.iter().all(|arguments| {
-            arguments.iter().all(|argument| {
-                !matches!(
-                    argument.as_str(),
-                    "--terminate" | "--export" | "--import" | "--unregister" | "--shutdown"
-                )
-            })
-        }));
-        assert!(distribution_root.join("ext4.vhdx").is_file());
-        assert!(quarantine_vhd.is_file());
-    }
-
     #[test]
     fn machine_application_data_volume_is_linux_only() {
         let fixture = fixture();
@@ -22224,345 +17533,29 @@ mod tests {
                 .exists()
         );
     }
-
     #[test]
-    fn direct_wsl_unregister_is_whitelisted_only_for_verified_backup_recovery() {
-        let forbidden = ["--", "unregister"].concat();
-        // Git may check this source out with CRLF on the native Windows
-        // qualification runner. Normalize only the in-memory contract input
-        // so the assertions describe Rust structure rather than line endings.
-        let normalized_source = include_str!("managed_runtime.rs").replace("\r\n", "\n");
-        let source = normalized_source.as_str();
-        let production = source
+    fn legacy_destructive_wsl_recovery_surface_is_absent() {
+        let production = include_str!("managed_runtime.rs")
             .split("\n#[cfg(test)]")
             .next()
             .expect("production source");
-        let current_generation = &production[production
-            .find("fn windows_machine_uses_current_compatibility_generation")
-            .expect("current Windows compatibility-generation predicate")
-            ..production
-                .find("fn machine_name(target: &ManagedTarget)")
-                .expect("current Windows compatibility-generation predicate end")];
-        assert!(current_generation.contains("strip_prefix(WINDOWS_MACHINE_PREFIX)"));
-        assert!(current_generation.contains("suffix.strip_prefix('-')"));
-        assert!(current_generation.contains("!suffix.is_empty()"));
-        assert!(
-            source.contains(
-                "fn current_windows_compatibility_generation_match_is_exact_and_bounded()"
-            )
-        );
-        assert!(source.contains(
-            "fn pending_assm2_checkpoint_is_preserved_without_blocking_current_generation()"
-        ));
-        let absence_proof = &production[production
-            .find("fn prove_windows_wsl_distribution_absent_locked")
-            .expect("current Windows distribution absence proof")
-            ..production
-                .find("fn windows_wsl_distribution_inventory")
-                .expect("current Windows distribution absence proof end")];
-        let absence_current_guard = absence_proof
-            .find("if windows_machine_uses_current_compatibility_generation(machine_name)")
-            .expect("assm2 absence-proof guard");
-        let absence_side_by_side_return = absence_proof[absence_current_guard..]
-            .find("return Ok(false)")
-            .map(|index| index + absence_current_guard)
-            .expect("assm2 absence-proof side-by-side return");
-        let legacy_inventory = absence_proof
-            .find("let distributions = self.windows_wsl_distribution_inventory")
-            .expect("retired legacy distribution inventory");
-        let legacy_recovery = absence_proof
-            .find("self.recover_windows_wsl_distribution_locked")
-            .expect("legacy recovery call after assm2 guard");
-        let legacy_rejection = absence_proof
-            .find("reject_legacy_windows_wsl_recovery_without_mutation")
-            .expect("retired legacy rejection after assm2 guard");
-        assert!(absence_current_guard < absence_side_by_side_return);
-        assert!(absence_side_by_side_return < legacy_inventory);
-        assert!(absence_side_by_side_return < legacy_recovery);
-        assert!(absence_side_by_side_return < legacy_rejection);
-        assert!(!production.contains("ResolveWslDistributionManually"));
-        assert!(!production.contains("WslDistributionRequiresManualAction"));
-        assert_eq!(
-            production
-                .matches("self.recover_windows_wsl_distribution_locked(")
-                .count(),
-            1,
-            "legacy recovery must retain one guarded production caller"
-        );
-        for forbidden_operation in [
-            "ManagedCommandOperation::MachineInitialization",
-            "ManagedCommandOperation::MachineStop",
-            "ManagedCommandOperation::MachineRemoval",
-            "ManagedCommandOperation::WslDistributionTerminate",
-            "ManagedCommandOperation::WslDistributionExport",
-            "ManagedCommandOperation::WslDistributionImport",
-            "ManagedCommandOperation::WslDistributionRemoval",
-            "--shutdown",
+        for forbidden in [
+            "recover_windows_wsl_distribution_locked",
+            "complete_windows_wsl_recovery_locked",
+            "WslDistributionTerminate",
+            "WslDistributionExport",
+            "WslDistributionImport",
+            "WslDistributionRemoval",
+            "\"--unregister\"",
+            "\"--export\"",
+            "\"--import\"",
+            "\"--shutdown\"",
         ] {
             assert!(
-                !absence_proof[..legacy_recovery].contains(forbidden_operation),
-                "assm2 absence proof must fail before {forbidden_operation}"
+                !production.contains(forbidden),
+                "retired destructive WSL recovery surface remains: {forbidden}"
             );
         }
-        assert!(
-            production.contains(
-                "const WINDOWS_WSL_VHD_RELEASE_TIMEOUT: Duration = MACHINE_STOP_TIMEOUT;"
-            )
-        );
-        assert!(!production.contains("--shutdown"));
-        assert_eq!(production.matches(&forbidden).count(), 4);
-        let recovery = &production[production
-            .find("fn recover_windows_wsl_distribution_locked")
-            .expect("recovery function")
-            ..production
-                .find("fn prepare_windows_wsl_quarantine_import_directory")
-                .expect("recovery function end")];
-        assert_eq!(recovery.matches(&forbidden).count(), 2);
-        assert!(
-            recovery
-                .matches("verify_windows_wsl_recovery_archive")
-                .count()
-                >= 2
-        );
-        assert!(recovery.contains("verify_windows_wsl_quarantine_registration"));
-        assert!(recovery.contains("verify_pending_windows_wsl_registration"));
-        let first_terminate = recovery
-            .find("ManagedCommandOperation::WslDistributionTerminate")
-            .expect("first exact WSL terminate");
-        let first_vhd_proof = recovery
-            .find("let source_vhd = self.verify_pending_windows_wsl_registration")
-            .expect("first bounded VHD proof");
-        let first_free_space = recovery
-            .find("require_windows_wsl_recovery_free_space")
-            .expect("first recovery free-space check");
-        let first_export = recovery
-            .find("ManagedCommandOperation::WslDistributionExport")
-            .expect("first exact WSL export");
-        assert!(first_terminate < first_vhd_proof);
-        assert!(first_vhd_proof < first_free_space);
-        assert!(first_free_space < first_export);
-        assert!(recovery.contains("source_vhd.size"));
-        assert!(
-            recovery
-                .find("claim_bounded_windows_ghost_migration_receipt")
-                .expect("one-shot registry claim")
-                < recovery
-                    .find("ManagedCommandOperation::WslDistributionTerminate")
-                    .expect("first WSL mutation"),
-            "the exact installer receipt must be consumed before any WSL mutation"
-        );
-        let free_space = &source[source
-            .find("fn require_windows_wsl_recovery_free_space")
-            .expect("recovery free-space function")
-            ..source
-                .find("fn require_windows_wsl_recovery_import_space")
-                .expect("recovery free-space function end")];
-        assert!(free_space.contains("source_vhd_size: u64"));
-        assert!(!free_space.contains("symlink_metadata"));
-        let vhd_wait = &source[source
-            .find("fn verify_windows_wsl_recovery_vhd_with_timing")
-            .expect("bounded VHD release verifier")
-            ..source
-                .find("#[cfg(not(windows))]\nfn verify_windows_wsl_recovery_vhd_with_timing")
-                .expect("bounded VHD release verifier end")];
-        assert!(vhd_wait.contains("windows_error_is_sharing_violation"));
-        assert!(vhd_wait.contains("checked_add(timeout)"));
-        assert!(vhd_wait.contains("thread::sleep"));
-        assert!(vhd_wait.contains("open_windows_wsl_vhd_quiescence_guard"));
-        assert!(vhd_wait.contains("validate_windows_wsl_recovery_file_information"));
-        assert_eq!(
-            vhd_wait.matches("verify_registration_base_path()?").count(),
-            2
-        );
-        assert!(
-            vhd_wait
-                .find("let base_path = verify_registration_base_path()?")
-                .expect("registration proof before VHD open")
-                < vhd_wait
-                    .find("open_windows_wsl_vhd_quiescence_guard(&path)")
-                    .expect("first VHD open")
-        );
-        assert!(vhd_wait.contains("let rebound_base_path = verify_registration_base_path()?"));
-        assert!(vhd_wait.contains("windows_paths_refer_to_same_location"));
-        assert!(vhd_wait.contains("rebound_information != information"));
-        assert!(vhd_wait.contains("last_sharing_error"));
-        let directory_guard = &source[source
-            .find("fn open_windows_real_directory_security_handle")
-            .expect("Windows real-directory guard")
-            ..source
-                .find("fn verify_windows_managed_namespace_ancestor_chain")
-                .expect("Windows real-directory guard end")];
-        assert!(directory_guard.contains("FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL,"));
-        assert!(directory_guard.contains("FILE_SHARE_READ | FILE_SHARE_WRITE,"));
-        assert!(directory_guard.contains("FILE_FLAG_OPEN_REPARSE_POINT"));
-        let managed_directory_guard = &source[source
-            .find("fn open_or_create_windows_managed_directory_guard")
-            .expect("Windows managed-directory guard")
-            ..source
-                .find("fn ensure_windows_managed_private_directory")
-                .expect("Windows managed-directory guard end")];
-        assert!(
-            managed_directory_guard
-                .contains("FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL,")
-        );
-        assert!(managed_directory_guard.contains("FILE_SHARE_READ | FILE_SHARE_WRITE,"));
-        assert!(managed_directory_guard.contains("FILE_FLAG_OPEN_REPARSE_POINT"));
-        let vhd_guard = &source[source
-            .find("fn open_windows_wsl_vhd_quiescence_guard")
-            .expect("Windows WSL VHD quiescence guard")
-            ..source
-                .find("fn open_windows_wsl_vhd_observation_guard")
-                .expect("Windows WSL VHD quiescence guard end")];
-        assert!(vhd_guard.contains("CreateFileW"));
-        assert!(vhd_guard.contains("            FILE_READ_DATA,"));
-        assert!(vhd_guard.contains("            FILE_SHARE_READ,"));
-        assert!(vhd_guard.contains("FILE_FLAG_OPEN_REPARSE_POINT"));
-        assert!(!vhd_guard.contains("FILE_GENERIC_READ"));
-        assert!(!vhd_guard.contains("FILE_SHARE_WRITE"));
-        assert!(!vhd_guard.contains("FILE_SHARE_DELETE"));
-        let observation_guard = &source[source
-            .find("fn open_windows_wsl_vhd_observation_guard")
-            .expect("Windows WSL VHD observation guard")
-            ..source
-                .find("fn open_windows_managed_ssh_cleanup_file")
-                .expect("Windows WSL VHD observation guard end")];
-        assert!(observation_guard.contains("CreateFileW"));
-        assert!(observation_guard.contains("            FILE_READ_DATA,"));
-        assert!(observation_guard.contains("FILE_SHARE_READ | FILE_SHARE_WRITE"));
-        assert!(observation_guard.contains("FILE_FLAG_OPEN_REPARSE_POINT"));
-        assert!(!observation_guard.contains("FILE_GENERIC_READ"));
-        assert!(!observation_guard.contains("FILE_SHARE_DELETE"));
-        let retained = &production[production
-            .find("fn record_bounded_windows_legacy_workspace_retained")
-            .expect("bounded retained-legacy recorder")
-            ..production
-                .find("fn record_bounded_windows_ghost_migration_consumed")
-                .expect("bounded retained-legacy recorder end")];
-        assert!(retained.contains("authorizes_cleanup: false"));
-        assert!(retained.contains("legacy_registration.registration_id"));
-        assert!(retained.contains("legacy_vhd_volume_serial_number"));
-        assert!(retained.contains("legacy_provider_config_sha256"));
-        assert!(retained.contains("legacy_ssh_public_key_sha256"));
-        for forbidden_operation in [
-            "ManagedCommandOperation::MachineInitialization",
-            "ManagedCommandOperation::MachineStop",
-            "ManagedCommandOperation::MachineRemoval",
-            "ManagedCommandOperation::WslDistributionTerminate",
-            "ManagedCommandOperation::WslDistributionExport",
-            "ManagedCommandOperation::WslDistributionImport",
-            "ManagedCommandOperation::WslDistributionRemoval",
-            "--shutdown",
-        ] {
-            assert!(
-                !retained.contains(forbidden_operation),
-                "retained observation must not contain {forbidden_operation}"
-            );
-        }
-        let start = &production[production
-            .find("fn start_locked")
-            .expect("managed runtime start")
-            ..production
-                .find("fn require_windows_wsl_prerequisite_locked")
-                .expect("managed runtime start end")];
-        assert!(
-            start
-                .find("self.wait_for_server")
-                .expect("assm2 server preflight")
-                < start
-                    .find("retain_bounded_windows_legacy_workspace_nonblocking")
-                    .expect("legacy observation after assm2 preflight")
-        );
-        let provider_delete = &source[source
-            .find("fn remove_windows_private_file")
-            .expect("Windows provider file deletion")
-            ..source
-                .find("fn set_windows_entry_readonly_nofollow")
-                .expect("Windows provider file deletion end")];
-        assert_eq!(
-            provider_delete
-                .matches("wait_for_windows_private_file_release_if_allowed")
-                .count(),
-            2,
-            "attribute-open and file deletion must share one bounded deadline"
-        );
-        let provider_metadata = &source[source
-            .find("fn windows_private_entry_metadata_with_policy")
-            .expect("Windows provider metadata retry")
-            ..source
-                .find("fn remove_windows_private_file")
-                .expect("Windows provider metadata retry end")];
-        assert!(provider_metadata.contains("wait_for_windows_private_file_release_if_allowed"));
-        let incomplete_import_cleanup = &production[production
-            .find("fn remove_uncheckpointed_windows_wsl_quarantine_locked")
-            .expect("incomplete import cleanup")
-            ..production
-                .find("fn verify_windows_wsl_quarantine_registration")
-                .expect("incomplete import cleanup end")];
-        assert_eq!(incomplete_import_cleanup.matches(&forbidden).count(), 1);
-        assert!(
-            incomplete_import_cleanup.contains("verify_windows_wsl_quarantine_registration_path")
-        );
-        let incomplete_terminate = incomplete_import_cleanup
-            .find("ManagedCommandOperation::WslDistributionTerminate")
-            .expect("incomplete quarantine terminate");
-        let incomplete_reproof = incomplete_import_cleanup
-            .rfind("verify_windows_wsl_quarantine_registration_path(intent)?")
-            .expect("incomplete quarantine exact registration-path reproof");
-        let incomplete_unregister = incomplete_import_cleanup
-            .find("ManagedCommandOperation::WslDistributionRemoval")
-            .expect("incomplete quarantine unregister");
-        assert!(incomplete_terminate < incomplete_reproof);
-        assert!(incomplete_reproof < incomplete_unregister);
-        let completion = &production[production
-            .find("fn complete_windows_wsl_recovery_locked")
-            .expect("recovery completion function")
-            ..production
-                .find("fn windows_wsl_ownership_proof_path")
-                .expect("recovery completion end")];
-        let completion_current_guard = completion
-            .find("if windows_machine_uses_current_compatibility_generation(machine_name)")
-            .expect("assm2 completion guard");
-        let completion_current_ok = completion[completion_current_guard..]
-            .find("return Ok(());")
-            .map(|index| index + completion_current_guard)
-            .expect("assm2 preserved-checkpoint completion");
-        let completion_legacy_pending = completion[completion_current_ok + 1..]
-            .find("if private_entry_exists(&pending)?")
-            .map(|index| index + completion_current_ok + 1)
-            .expect("legacy pending recovery branch");
-        assert!(completion_current_guard < completion_current_ok);
-        assert!(completion_current_ok < completion_legacy_pending);
-        assert!(
-            !completion[..completion_legacy_pending].contains("ResolveWslDistributionManually")
-        );
-        for forbidden_operation in [
-            "windows_wsl_distribution_inventory",
-            "read_windows_wsl_recovery_intent_locked",
-            "ManagedCommandOperation::WslDistributionTerminate",
-            "ManagedCommandOperation::WslDistributionExport",
-            "ManagedCommandOperation::WslDistributionImport",
-            "ManagedCommandOperation::WslDistributionRemoval",
-            "remove_regular_file(&pending)",
-            "--shutdown",
-        ] {
-            assert!(
-                !completion[..completion_legacy_pending].contains(forbidden_operation),
-                "assm2 completion guard must precede {forbidden_operation}"
-            );
-        }
-        assert_eq!(completion.matches(&forbidden).count(), 1);
-        assert!(completion.contains("verify_windows_wsl_recovery_archive"));
-        assert!(completion.contains("verify_windows_wsl_quarantine_registration"));
-        assert!(
-            completion
-                .find("record_bounded_windows_ghost_migration_consumed")
-                .expect("permanent one-shot marker")
-                < completion
-                    .find("remove_regular_file(&pending)")
-                    .expect("pending transaction deletion"),
-            "successful completion must persist its consumed marker before deleting pending state"
-        );
-        assert!(!production.contains("--import-in-place"));
     }
 
     #[test]
