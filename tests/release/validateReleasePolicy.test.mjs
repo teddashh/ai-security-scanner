@@ -137,7 +137,13 @@ function minimalSecurePublicationWorkflow() {
       },
       publish_supported_artifacts: {
         needs: [identityJobName, "finalize_supported_artifacts"],
-        if: `github.event_name == 'push' && github.ref == format('refs/tags/{0}', needs.${identityJobName}.outputs.tag)`,
+        if: [
+          "always()",
+          `needs.${identityJobName}.result == 'success'`,
+          "needs['finalize_supported_artifacts'].result == 'success'",
+          "github.event_name == 'push'",
+          `github.ref == format('refs/tags/{0}', needs.${identityJobName}.outputs.tag)`,
+        ].join(" && "),
         permissions: {
           contents: "write",
           "id-token": "write",
@@ -312,7 +318,7 @@ test("release workflow validation rejects a decoy verifier outside the publicati
   workflow.jobs.publish_supported_artifacts.needs = ["source_identity"];
   assert.throws(
     () => validateReleaseWorkflow(workflow),
-    /depend on exactly one job that produced its finalized artifact/u,
+    /consume the version-derived identity and exactly one finalizer/u,
   );
 });
 
@@ -360,7 +366,17 @@ test("release workflow validation rejects a tag condition with an unsafe escape"
   workflow.jobs.publish_supported_artifacts.if += " || true";
   assert.throws(
     () => validateReleaseWorkflow(workflow),
-    /publish job must require an exact version-derived tag-push identity/u,
+    /publish job must survive optional skipped ancestors while requiring successful identity\/finalization and an exact version-derived tag push/u,
+  );
+});
+
+test("release workflow publication survives optional skipped ancestors without ignoring required failures", () => {
+  const workflow = minimalSecurePublicationWorkflow();
+  workflow.jobs.publish_supported_artifacts.if =
+    `github.event_name == 'push' && github.ref == format('refs/tags/{0}', needs.source_identity.outputs.tag)`;
+  assert.throws(
+    () => validateReleaseWorkflow(workflow),
+    /publish job must survive optional skipped ancestors while requiring successful identity\/finalization/u,
   );
 });
 

@@ -331,17 +331,22 @@ export function validateReleaseWorkflow(workflow) {
   );
   assert(publicationEntries.length === 1, "release workflow must have one GitHub Release publication job");
   const [publishJobName, publish] = publicationEntries[0];
+  const publishNeeds = Array.isArray(publish.needs) ? publish.needs : [publish.needs].filter(Boolean);
+  const finalizerNeedNames = publishNeeds.filter((jobName) => jobName !== identityJobName);
+  assert(
+    publishNeeds.includes(identityJobName) && finalizerNeedNames.length === 1,
+    "publish job must consume the version-derived identity and exactly one finalizer",
+  );
+  const publicationFinalizerJobName = finalizerNeedNames[0];
   const publishCondition = String(publish.if ?? "").replaceAll(/\s+/gu, " ").trim();
   const expectedPublishCondition =
-    `github.event_name == 'push' && github.ref == format('refs/tags/{0}', needs.${identityJobName}.outputs.tag)`;
+    `always() && needs.${identityJobName}.result == 'success' && ` +
+    `needs['${publicationFinalizerJobName}'].result == 'success' && ` +
+    `github.event_name == 'push' && ` +
+    `github.ref == format('refs/tags/{0}', needs.${identityJobName}.outputs.tag)`;
   assert(
     publishCondition === expectedPublishCondition,
-    "publish job must require an exact version-derived tag-push identity",
-  );
-  const publishNeeds = Array.isArray(publish.needs) ? publish.needs : [publish.needs].filter(Boolean);
-  assert(
-    publishNeeds.includes(identityJobName),
-    "publish job must consume the version-derived identity",
+    "publish job must survive optional skipped ancestors while requiring successful identity/finalization and an exact version-derived tag push",
   );
   assert(publish.permissions?.contents === "write", "publish job needs contents: write");
   assert(publish.permissions?.["id-token"] === "write", "publish job needs id-token: write");
@@ -390,6 +395,10 @@ export function validateReleaseWorkflow(workflow) {
     "publish job must depend on exactly one job that produced its finalized artifact",
   );
   const [finalizerJobName, finalizer] = finalizerEntries[0];
+  assert(
+    finalizerJobName === publicationFinalizerJobName,
+    "publish condition result guard must name the exact finalized-artifact producer",
+  );
   assert(finalizer["continue-on-error"] === undefined, "finalizer job cannot continue after failure");
   const finalizerNeeds = Array.isArray(finalizer.needs)
     ? finalizer.needs

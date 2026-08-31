@@ -812,6 +812,9 @@ jobs:
   publish:
     name: Attest and publish supported artifacts
     if: >-
+      always() &&
+      needs.validate.result == 'success' &&
+      needs['finalize-supported-artifacts'].result == 'success' &&
       github.event_name == 'push' &&
       github.ref == format('refs/tags/{0}', needs.validate.outputs.tag)
     needs: [validate, finalize-supported-artifacts]
