@@ -3528,7 +3528,6 @@ impl<'a> CaseService<'a> {
         verification_baseline_run_id: Option<&str>,
         effective: &[ScopeGrant],
         code: ScanRequestOutcomeCode,
-        explanation: &str,
         now: DateTime<Utc>,
     ) -> AppResult<ScanPlan> {
         let requested_asset_ids = case
@@ -3543,7 +3542,17 @@ impl<'a> CaseService<'a> {
             code,
             requested_asset_ids,
             request.engine_ids.clone(),
-            explanation,
+            match code {
+                ScanRequestOutcomeCode::EffectiveScopeRequired => {
+                    "No checks ran because this scan has no active permission for a selected target."
+                }
+                ScanRequestOutcomeCode::OwnershipConfirmationRequired => {
+                    "No checks ran because none of the selected targets is confirmed as yours to scan."
+                }
+                ScanRequestOutcomeCode::NoApplicableChecks => {
+                    "No installed check applies to the selected target and permission. Nothing contacted the target."
+                }
+            },
         )
         .map_err(AppError::InvalidRequest)?;
         let ai_system_applicable = case.assessment_intent == Some(AssessmentIntent::AiApplication);
@@ -3665,8 +3674,7 @@ impl<'a> CaseService<'a> {
                     &request,
                     verification_baseline_run_id,
                     &[],
-                    ScanRequestOutcomeCode::NoEffectiveScopeGrants,
-                    "No checks ran because this scan has no active permission for a selected target.",
+                    ScanRequestOutcomeCode::EffectiveScopeRequired,
                     now,
                 );
             }
@@ -3697,8 +3705,7 @@ impl<'a> CaseService<'a> {
                     &request,
                     verification_baseline_run_id,
                     &frozen_effective,
-                    ScanRequestOutcomeCode::NoOwnershipConfirmedTargets,
-                    "No checks ran because none of the selected targets is confirmed as yours to scan.",
+                    ScanRequestOutcomeCode::OwnershipConfirmationRequired,
                     now,
                 );
             }
@@ -3731,7 +3738,6 @@ impl<'a> CaseService<'a> {
                 verification_baseline_run_id,
                 &frozen_effective,
                 ScanRequestOutcomeCode::NoApplicableChecks,
-                "No installed check applies to the selected target and permission. Nothing contacted the target.",
                 now,
             );
         }
@@ -13094,7 +13100,8 @@ mod tests {
             &execution.engine_run_id,
             frozen_at,
         );
-        let work_plan = build_naabu_work_plan(identity, &[resolved.clone()], None).unwrap();
+        let work_plan =
+            build_naabu_work_plan(identity, std::slice::from_ref(&resolved), None).unwrap();
         (created.id, scan_plan, resolved, work_plan)
     }
 
@@ -13922,7 +13929,10 @@ mod tests {
             .iter()
             .find(|engine_run| engine_run.id == prepared.engine_run_id)
             .unwrap();
-        assert_eq!(engine_run.naabu_attempt_results, [prepared.result.clone()]);
+        assert_eq!(
+            engine_run.naabu_attempt_results.as_slice(),
+            std::slice::from_ref(&prepared.result)
+        );
         assert_eq!(
             engine_run
                 .raw_artifact_ids
@@ -15055,8 +15065,10 @@ mod tests {
             .unwrap();
         assert_eq!(appended.storage_revision, before.storage_revision + 1);
         assert_eq!(
-            appended.scan_runs[0].engine_runs[0].naabu_attempt_results,
-            [prepared.result.clone()]
+            appended.scan_runs[0].engine_runs[0]
+                .naabu_attempt_results
+                .as_slice(),
+            std::slice::from_ref(&prepared.result)
         );
         let append_events = fixture.storage.list_case_events(&prepared.case_id).unwrap();
         assert_eq!(append_events.len(), events_before + 1);
@@ -19948,7 +19960,10 @@ mod tests {
             .unwrap();
         let engine = &persisted.scan_runs[0].engine_runs[0];
         assert_eq!(engine.naabu_work_plan.as_ref(), Some(&work_plan));
-        assert_eq!(engine.naabu_attempt_requests, [request.clone()]);
+        assert_eq!(
+            engine.naabu_attempt_requests.as_slice(),
+            std::slice::from_ref(&request)
+        );
         assert_eq!(
             fixture.storage.list_case_events(&case_id).unwrap().len(),
             events_before + 1,
@@ -19957,8 +19972,10 @@ mod tests {
 
         let reopened = service.show_case(&case_id).unwrap();
         assert_eq!(
-            reopened.scan_runs[0].engine_runs[0].naabu_attempt_requests,
-            [request.clone()]
+            reopened.scan_runs[0].engine_runs[0]
+                .naabu_attempt_requests
+                .as_slice(),
+            std::slice::from_ref(&request)
         );
         service
             .persist_naabu_attempt_request(
@@ -21020,8 +21037,10 @@ mod tests {
         ));
         let unchanged = service.show_case(&case_id).unwrap();
         assert_eq!(
-            unchanged.scan_runs[0].engine_runs[0].naabu_attempt_requests,
-            [first.clone()]
+            unchanged.scan_runs[0].engine_runs[0]
+                .naabu_attempt_requests
+                .as_slice(),
+            std::slice::from_ref(&first)
         );
 
         let mut cleaned = unchanged;
@@ -21164,7 +21183,7 @@ mod tests {
                 &execution.engine_run_id,
                 work_plan.identity.frozen_at,
             ),
-            &[resolved.clone()],
+            std::slice::from_ref(&resolved),
             None,
         )
         .unwrap();
@@ -22245,7 +22264,7 @@ mod tests {
         assert!(matches!(
             plan.scan_run.request_outcome,
             Some(ScanRequestOutcome::NoChecksCompleted {
-                code: ScanRequestOutcomeCode::NoEffectiveScopeGrants,
+                code: ScanRequestOutcomeCode::EffectiveScopeRequired,
                 ..
             })
         ));
@@ -22530,7 +22549,7 @@ mod tests {
                 requested_engine_ids,
                 ..
             } => {
-                assert_eq!(*code, ScanRequestOutcomeCode::NoEffectiveScopeGrants);
+                assert_eq!(*code, ScanRequestOutcomeCode::EffectiveScopeRequired);
                 assert_eq!(requested_asset_ids, &[no_grant_asset_id]);
                 assert_eq!(requested_engine_ids, &["gitleaks"]);
             }
@@ -22556,7 +22575,7 @@ mod tests {
         assert!(matches!(
             no_owner.scan_run.request_outcome,
             Some(ScanRequestOutcome::NoChecksCompleted {
-                code: ScanRequestOutcomeCode::NoOwnershipConfirmedTargets,
+                code: ScanRequestOutcomeCode::OwnershipConfirmationRequired,
                 ..
             })
         ));

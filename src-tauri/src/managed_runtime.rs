@@ -2330,7 +2330,7 @@ pub struct ManagedRuntimeManager {
 /// attacker-controlled bytes; callers expose only the stable typed reason.
 #[cfg(any(feature = "desktop", test))]
 pub(crate) enum PackagedManagedRuntimeAdmission {
-    Verified(ManagedRuntimeManager),
+    Verified(Box<ManagedRuntimeManager>),
     Missing,
     VerificationFailed,
 }
@@ -2364,7 +2364,7 @@ pub(crate) fn admit_packaged_managed_runtime(
             resource_root,
             &manifest_path,
         ) {
-            Ok(manager) => PackagedManagedRuntimeAdmission::Verified(manager),
+            Ok(manager) => PackagedManagedRuntimeAdmission::Verified(Box::new(manager)),
             Err(_) => PackagedManagedRuntimeAdmission::VerificationFailed,
         },
         Err(_) => PackagedManagedRuntimeAdmission::VerificationFailed,
@@ -4092,11 +4092,10 @@ impl ManagedRuntimeManager {
         if let Some(machine) = machines
             .iter()
             .find(|machine| machine.name.eq_ignore_ascii_case(selected))
+            && self.prove_machine_named(machine, target, selected).is_ok()
+            && exact_product_binding
         {
-            if self.prove_machine_named(machine, target, selected).is_ok() && exact_product_binding
-            {
-                return Ok(selected.to_owned());
-            }
+            return Ok(selected.to_owned());
         }
         let selected_provider_home =
             self.windows_provider_home_for_generation(target, selected_generation_index);
@@ -4104,7 +4103,7 @@ impl ManagedRuntimeManager {
             target,
             selected,
             selected_generation_index,
-            &distributions,
+            distributions,
             machines,
         )? || (private_entry_exists(&selected_provider_home)?
             && !exact_product_binding
@@ -4150,7 +4149,7 @@ impl ManagedRuntimeManager {
                 target,
                 &candidate,
                 generation_index,
-                &distributions,
+                distributions,
                 machines,
             )? || private_entry_exists(
                 &self.windows_provider_home_for_generation(target, generation_index),
@@ -13118,31 +13117,6 @@ mod tests {
                 snapshots.front().cloned().ok_or_else(|| {
                     AppError::Internal("no fake Windows WSL registration snapshot".into())
                 })
-            }
-        }
-    }
-
-    #[cfg(windows)]
-    struct RebindingWindowsWslRegistrations {
-        before: Vec<WindowsWslRegistration>,
-        after: Vec<WindowsWslRegistration>,
-        arm_on_read: u64,
-        reads: AtomicU64,
-        armed: Arc<AtomicBool>,
-        rebound: Arc<AtomicBool>,
-    }
-
-    #[cfg(windows)]
-    impl WindowsWslRegistrationReader for RebindingWindowsWslRegistrations {
-        fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>> {
-            let read = self.reads.fetch_add(1, Ordering::AcqRel) + 1;
-            if read == self.arm_on_read {
-                self.armed.store(true, Ordering::Release);
-            }
-            if self.rebound.load(Ordering::Acquire) {
-                Ok(self.after.clone())
-            } else {
-                Ok(self.before.clone())
             }
         }
     }

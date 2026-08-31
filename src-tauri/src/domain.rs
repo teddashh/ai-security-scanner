@@ -920,8 +920,10 @@ where
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanRequestOutcomeCode {
-    NoEffectiveScopeGrants,
-    NoOwnershipConfirmedTargets,
+    #[serde(rename = "no_effective_scope_grants")]
+    EffectiveScopeRequired,
+    #[serde(rename = "no_ownership_confirmed_targets")]
+    OwnershipConfirmationRequired,
     NoApplicableChecks,
 }
 
@@ -1937,7 +1939,7 @@ mod tests {
     fn no_checks_explanation_is_bounded_plain_language() {
         assert!(
             ScanRequestOutcome::no_checks_completed(
-                ScanRequestOutcomeCode::NoEffectiveScopeGrants,
+                ScanRequestOutcomeCode::EffectiveScopeRequired,
                 vec![],
                 vec![],
                 ""
@@ -1946,7 +1948,7 @@ mod tests {
         );
         assert!(
             ScanRequestOutcome::no_checks_completed(
-                ScanRequestOutcomeCode::NoOwnershipConfirmedTargets,
+                ScanRequestOutcomeCode::OwnershipConfirmationRequired,
                 vec![],
                 vec![],
                 "A line with\na hidden second line."

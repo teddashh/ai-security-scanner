@@ -1735,7 +1735,7 @@ fn checked_add(left: usize, right: usize) -> Result<usize, NaabuWorkPlanError> {
 }
 
 fn div_ceil(value: usize, divisor: usize) -> usize {
-    value / divisor + usize::from(value % divisor != 0)
+    value / divisor + usize::from(!value.is_multiple_of(divisor))
 }
 
 fn usize_from_u64(value: u64) -> Result<usize, NaabuWorkPlanError> {
@@ -2722,7 +2722,8 @@ mod tests {
             [8_443, 443, 80],
             default_policy(),
         );
-        let saved = build_naabu_work_plan(identity(), &[original.clone()], None).expect("plan");
+        let saved =
+            build_naabu_work_plan(identity(), std::slice::from_ref(&original), None).expect("plan");
         let reconstructed = saved.resolved_plans().expect("frozen gateway plan");
 
         assert_eq!(reconstructed.len(), 1);
@@ -2759,7 +2760,8 @@ mod tests {
             [80, 443, 8443],
             default_policy(),
         );
-        let first = build_naabu_work_plan(identity(), &[resolved.clone()], None).expect("first");
+        let first = build_naabu_work_plan(identity(), std::slice::from_ref(&resolved), None)
+            .expect("first");
         let reused = build_naabu_work_plan(identity(), &[resolved], Some(&first)).expect("reuse");
 
         assert_eq!(reused, first);
@@ -2786,8 +2788,8 @@ mod tests {
             [443],
             default_policy(),
         );
-        let saved =
-            build_naabu_work_plan(identity(), &[original.clone()], None).expect("saved plan");
+        let saved = build_naabu_work_plan(identity(), std::slice::from_ref(&original), None)
+            .expect("saved plan");
 
         let mut changed_dns = original.clone();
         changed_dns
@@ -2832,7 +2834,8 @@ mod tests {
     #[test]
     fn saved_ids_and_hashes_are_closed_and_revalidated() {
         let resolved = network_plan("10.20.30.0/24", 3, default_policy());
-        let saved = build_naabu_work_plan(identity(), &[resolved.clone()], None).expect("plan");
+        let saved =
+            build_naabu_work_plan(identity(), std::slice::from_ref(&resolved), None).expect("plan");
         let mut ids = BTreeSet::new();
         for unit in &saved.work_units {
             assert!(valid_work_unit_id(&unit.unit_id));
@@ -2843,7 +2846,11 @@ mod tests {
         let mut invalid_id = saved.clone();
         invalid_id.work_units[0].unit_id = "192.0.2.10".into();
         assert!(matches!(
-            build_naabu_work_plan(identity(), &[resolved.clone()], Some(&invalid_id)),
+            build_naabu_work_plan(
+                identity(),
+                std::slice::from_ref(&resolved),
+                Some(&invalid_id),
+            ),
             Err(NaabuWorkPlanError::ExistingPlanMismatch(_))
         ));
 
@@ -2858,7 +2865,8 @@ mod tests {
     #[test]
     fn random_ids_do_not_change_deterministic_semantic_shapes_or_hashes() {
         let resolved = network_plan("172.16.8.0/24", 40, default_policy());
-        let first = build_naabu_work_plan(identity(), &[resolved.clone()], None).expect("first");
+        let first = build_naabu_work_plan(identity(), std::slice::from_ref(&resolved), None)
+            .expect("first");
         let second = build_naabu_work_plan(identity(), &[resolved], None).expect("second");
         assert_eq!(first.frozen_grants, second.frozen_grants);
         assert_eq!(first.work_units.len(), second.work_units.len());
@@ -2882,7 +2890,8 @@ mod tests {
     #[test]
     fn intrinsic_v1_validation_accepts_an_exact_nonpreferred_partition() {
         let resolved = network_plan("192.168.70.0/30", 2, default_policy());
-        let mut saved = build_naabu_work_plan(identity(), &[resolved.clone()], None).expect("plan");
+        let mut saved =
+            build_naabu_work_plan(identity(), std::slice::from_ref(&resolved), None).expect("plan");
         let grant = &saved.frozen_grants[0];
         let templates = [
             unit_template(grant, NaabuWorkStage::QuickDiscovery, 0, 0, 1, 0, 1).unwrap(),

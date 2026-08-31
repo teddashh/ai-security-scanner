@@ -87,7 +87,7 @@ impl AppState {
         let failure_reason = admission.failure_reason();
         match admission {
             PackagedManagedRuntimeAdmission::Verified(manager) => {
-                self = self.with_managed_runtime(manager);
+                self = self.with_managed_runtime(*manager);
             }
             PackagedManagedRuntimeAdmission::Missing
             | PackagedManagedRuntimeAdmission::VerificationFailed => {

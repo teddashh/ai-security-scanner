@@ -1494,11 +1494,11 @@ fn append_request_outcome_gaps(
         return;
     };
     let (next_action_code, next_action) = match code {
-        ScanRequestOutcomeCode::NoEffectiveScopeGrants => (
+        ScanRequestOutcomeCode::EffectiveScopeRequired => (
             NextActionCode::ReviewScopeAndRetry,
             "Review the exact target and permission, then start the scan again.",
         ),
-        ScanRequestOutcomeCode::NoOwnershipConfirmedTargets => (
+        ScanRequestOutcomeCode::OwnershipConfirmationRequired => (
             NextActionCode::ReviewScopeAndRetry,
             "Choose a target you control, then start the scan again.",
         ),

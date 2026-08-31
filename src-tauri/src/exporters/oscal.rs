@@ -158,10 +158,10 @@ fn selected_run_last_durable_activity(
     for observation in observations {
         latest = latest.max(observation.observed_at);
     }
-    if run_is_authoritatively_final(run) {
-        if let Some(completed_at) = run.completed_at {
-            latest = latest.max(completed_at);
-        }
+    if run_is_authoritatively_final(run)
+        && let Some(completed_at) = run.completed_at
+    {
+        latest = latest.max(completed_at);
     }
     latest
 }

@@ -44,9 +44,8 @@ use crate::managed_network::{
 };
 use crate::managed_runtime::ManagedRuntimeSetupStatus;
 use crate::naabu_work_plan::{
-    NAABU_ENGINE_ID, NAABU_LAUNCHER_PLAN_SCHEMA_VERSION, NaabuAttemptSelection,
-    NaabuLauncherPlanDocument, NaabuWorkPlanIdentity, NaabuWorkPlanV1, build_naabu_work_plan,
-    select_naabu_attempt,
+    NAABU_ENGINE_ID, NaabuAttemptSelection, NaabuLauncherPlanDocument, NaabuWorkPlanIdentity,
+    NaabuWorkPlanV1, build_naabu_work_plan, select_naabu_attempt,
 };
 use crate::source_authorization::discovery::{
     LiveProviderFailure, LiveProviderFailureKind, capture_provider_inventory,
@@ -7875,7 +7874,7 @@ mod tests {
         engine_run.error_code = None;
         engine_run.error_message = None;
         engine_run.naabu_attempt_requests.push(NaabuAttemptRequest {
-            schema_version: crate::execution_coverage::NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
+            schema_version: NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
             execution_attempt: 2,
             requested_unit_ids: vec!["unit-2".into()],
             launcher_plan_sha256: "a".repeat(64),
@@ -7897,12 +7896,21 @@ mod tests {
             runtime_provider: None,
             managed_network: None,
         };
-        engine_run.resume_token = Some(checkpoint.resume_token().unwrap());
+        let checkpoint_token = checkpoint.resume_token().unwrap();
+        engine_run.resume_token = Some(checkpoint_token.clone());
 
         let continued = continued_naabu_launcher_v2_execution(&execution, &case)
             .expect("exact saved next phase");
         assert_eq!(continued.attempt, 2);
-        assert_eq!(continued.resume_checkpoint, Some(checkpoint));
+        assert_eq!(
+            continued
+                .resume_checkpoint
+                .as_ref()
+                .expect("continued checkpoint")
+                .resume_token()
+                .expect("continued checkpoint token"),
+            checkpoint_token
+        );
     }
 
     #[test]

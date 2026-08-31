@@ -3014,8 +3014,8 @@ mod tests {
         let report =
             beginner_report_for_export(&case, "run-1", RedactionProfile::Standard).unwrap();
         assert_eq!(
-            report.requested.requested_check_ids,
-            [stable_check_id.clone()]
+            report.requested.requested_check_ids.as_slice(),
+            std::slice::from_ref(&stable_check_id)
         );
         assert_eq!(report.actual.checks[0].check_id, stable_check_id);
         assert!(matches!(

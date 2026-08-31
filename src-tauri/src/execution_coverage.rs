@@ -372,7 +372,7 @@ pub fn parse_launcher_v2_journal(
         let line = line_with_newline
             .strip_suffix('\n')
             .expect("complete journal lines end in a newline");
-        if line.as_bytes().len() > MAX_JOURNAL_LINE_BYTES {
+        if line.len() > MAX_JOURNAL_LINE_BYTES {
             return Err(ExecutionCoverageError::LineTooLarge {
                 record: record_number,
             });
@@ -1350,7 +1350,7 @@ fn validate_final_artifact(artifact: &FinalArtifactIdentity) -> Result<(), Strin
 
 fn validate_opaque_id(value: &str, label: &str) -> Result<(), String> {
     if value.is_empty()
-        || value.as_bytes().len() > MAX_OPAQUE_ID_BYTES
+        || value.len() > MAX_OPAQUE_ID_BYTES
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
@@ -1391,7 +1391,7 @@ fn validate_sha256(value: &str, label: &str) -> Result<(), String> {
 
 fn validate_relative_artifact_path(path: &str) -> Result<(), String> {
     if path.is_empty()
-        || path.as_bytes().len() > MAX_RELATIVE_ARTIFACT_PATH_BYTES
+        || path.len() > MAX_RELATIVE_ARTIFACT_PATH_BYTES
         || path.starts_with('/')
         || path.ends_with('/')
         || path.contains('\\')
@@ -2013,8 +2013,9 @@ mod tests {
         let mut unknown = second_result.clone();
         unknown.execution_attempt = 3;
         unknown.coverage.execution_attempt = 3;
-        let unknown = reduce_naabu_attempt_coverage(&plan, &[first.clone()], &[unknown])
-            .expect_err("unrequested result attempt fails closed");
+        let unknown =
+            reduce_naabu_attempt_coverage(&plan, std::slice::from_ref(&first), &[unknown])
+                .expect_err("unrequested result attempt fails closed");
         assert!(unknown.to_string().contains("no matching durable request"));
 
         let mut wrong_scope = first_result;
