@@ -16483,7 +16483,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("Windows still registers the selected scan workspace")
+                .contains("Windows still reports the selected scan workspace")
         );
         assert!(error.to_string().contains("provider data was preserved"));
         assert!(fixture.manager.install_directory().exists());
