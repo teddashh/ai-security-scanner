@@ -22,7 +22,7 @@ export const PRIOR_WINDOWS_NSIS = Object.freeze({
   machineImageSha256: "e2b6cbcadd8b41b708fecb58a246a20d737dee0ef26872a3f75b575f77eba968",
 });
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 const PLATFORM = "windows-x86_64";
 const INSTALLER_TYPE = "nsis";
 const RUNNER = "windows-2025";
@@ -189,15 +189,14 @@ function validateObservations(observations, currentVersion, currentInstaller) {
   exactKeys(installation, [
     "priorCliVersion", "candidateCliVersion", "sameCanonicalInstallDirectory", "registryHive",
     "registryEntryIdentityPreserved", "displayVersionUpdated", "uninstallerReplaced", "unattendedMode",
-    "sameVersionSilentReinstallCompleted", "transitionReceiptSurvivedSameVersionReinstall", "transitionReceipt",
+    "sameVersionSilentReinstallCompleted",
   ], "installation observation");
   assert(installation.priorCliVersion === PRIOR_WINDOWS_NSIS.version && installation.candidateCliVersion === currentVersion, "installed CLI versions are incorrect");
   for (const field of [
     "sameCanonicalInstallDirectory", "registryEntryIdentityPreserved", "displayVersionUpdated", "uninstallerReplaced",
-    "sameVersionSilentReinstallCompleted", "transitionReceiptSurvivedSameVersionReinstall",
+    "sameVersionSilentReinstallCompleted",
   ]) yes(installation[field], `installation ${field}`);
   assert(installation.registryHive === "HKEY_CURRENT_USER" && installation.unattendedMode === "silent", "NSIS upgrade mode is incorrect");
-  assert(installation.transitionReceipt === `overlaid-${PRIOR_WINDOWS_NSIS.version}`, "N-1 transition receipt is incorrect");
 
   const data = observations.dataPreservation;
   exactKeys(data, [

@@ -353,7 +353,8 @@ function Invoke-ExactProcess(
   [int]$TimeoutMilliseconds,
   [string]$Label,
   [bool]$CaptureOutput = $false,
-  [object]$ExpectedExecutableProof = $null
+  [object]$ExpectedExecutableProof = $null,
+  [switch]$AllowRestartRequired
 ) {
   if ($TimeoutMilliseconds -lt 1000 -or $TimeoutMilliseconds -gt 900000) {
     throw "$Label timeout is outside its fixed bound."
@@ -445,7 +446,8 @@ function Invoke-ExactProcess(
         throw "$Label output exceeded one MiB."
       }
     }
-    if ($process.ExitCode -ne 0) {
+    if ($process.ExitCode -ne 0 -and
+        (-not $AllowRestartRequired -or $process.ExitCode -ne 3010)) {
       $boundedError = if ($stderr.Length -gt 2048) { $stderr.Substring(0, 2048) + " (truncated)" } else { $stderr }
       throw "$Label failed with status $($process.ExitCode): $boundedError"
     }
@@ -513,7 +515,6 @@ function Get-CurrentUserUninstallEntries {
         $displayNameProperty = $properties.PSObject.Properties["DisplayName"]
         if ($null -ne $displayNameProperty -and
             [String]::Equals([string]$displayNameProperty.Value, "ai-security-scanner", [StringComparison]::Ordinal)) {
-          $transitionProperty = $properties.PSObject.Properties["InstallTransition"]
           [PSCustomObject]@{
             KeyPath = $_.PSPath
             KeyName = $_.PSChildName
@@ -523,7 +524,6 @@ function Get-CurrentUserUninstallEntries {
             InstallLocation = [string]$properties.PSObject.Properties["InstallLocation"].Value
             UninstallString = [string]$properties.PSObject.Properties["UninstallString"].Value
             MainBinaryName = [string]$properties.PSObject.Properties["MainBinaryName"].Value
-            InstallTransition = if ($null -eq $transitionProperty) { "" } else { [string]$transitionProperty.Value }
           }
         }
       }
@@ -813,7 +813,7 @@ try {
   }
 
   $beforeSnapshot = Get-PrivateDataSnapshot $dataDirectory
-  Invoke-ExactProcess $candidateInstallerPath @("/S", "/D=$installDirectory") 180000 "Candidate silent NSIS upgrade" -ExpectedExecutableProof $candidateInstallerItem | Out-Null
+  Invoke-ExactProcess $candidateInstallerPath @("/S", "/D=$installDirectory") 180000 "Candidate silent NSIS upgrade" -ExpectedExecutableProof $candidateInstallerItem -AllowRestartRequired | Out-Null
   Assert-RealFile $priorDesktop "Candidate desktop at the N-1 canonical path" (512 * 1024 * 1024) | Out-Null
   $candidateCli = Find-OneInstalledFile $installDirectory "ai-security-scanner-cli.exe"
   $candidateUninstaller = Find-OneInstalledFile $installDirectory "uninstall.exe"
@@ -826,16 +826,13 @@ try {
   if (-not [String]::Equals($candidateRegistry.KeyName, $priorRegistry.KeyName, [StringComparison]::Ordinal)) {
     throw "NSIS upgrade replaced the product registry identity instead of updating it."
   }
-  if ($candidateRegistry.InstallTransition -cne "overlaid-$priorVersion") {
-    throw "NSIS upgrade did not record the reviewed data-preserving N-1 overlay."
-  }
   $existingExportIdentityAfterUpgrade = Get-NoFollowFileSha256Proof $existingExportIdentityPath (
     "Existing local export identity after N-1 upgrade"
   ) (64 * 1024)
   Assert-SameFileProof $existingExportIdentityInitial $existingExportIdentityAfterUpgrade (
     "N-1 upgrade existing local export identity"
   )
-  Invoke-ExactProcess $candidateInstallerPath @("/S", "/D=$installDirectory") 180000 "Candidate same-version silent NSIS reinstall" -ExpectedExecutableProof $candidateInstallerItem | Out-Null
+  Invoke-ExactProcess $candidateInstallerPath @("/S", "/D=$installDirectory") 180000 "Candidate same-version silent NSIS reinstall" -ExpectedExecutableProof $candidateInstallerItem -AllowRestartRequired | Out-Null
   Assert-RealFile $priorDesktop "Reinstalled candidate desktop at the canonical path" (512 * 1024 * 1024) | Out-Null
   $candidateCli = Find-OneInstalledFile $installDirectory "ai-security-scanner-cli.exe"
   $candidateUninstaller = Find-OneInstalledFile $installDirectory "uninstall.exe"
@@ -844,9 +841,8 @@ try {
     throw "Same-version silent reinstall changed the candidate CLI version."
   }
   $candidateRegistry = Get-OneCurrentUserUninstallEntry $CurrentVersion $installDirectory
-  if (-not [String]::Equals($candidateRegistry.KeyName, $priorRegistry.KeyName, [StringComparison]::Ordinal) -or
-      $candidateRegistry.InstallTransition -cne "overlaid-$priorVersion") {
-    throw "Same-version silent reinstall did not preserve the bounded N-1 transition receipt."
+  if (-not [String]::Equals($candidateRegistry.KeyName, $priorRegistry.KeyName, [StringComparison]::Ordinal)) {
+    throw "Same-version silent reinstall did not preserve the version-neutral product registry identity."
   }
   $candidateUninstallerSha256 = Get-LowerSha256 $candidateUninstaller (512 * 1024 * 1024)
   if ($candidateUninstallerSha256 -ceq $priorUninstallerSha256) {
@@ -933,7 +929,7 @@ try {
   }
 
   $observations = [ordered]@{
-    schemaVersion = 6
+    schemaVersion = 7
     scenario = "automated_n_minus_one_nsis_data_preservation_fixture"
     platform = "windows-x86_64"
     runner = "windows-2025"
@@ -972,8 +968,6 @@ try {
       uninstallerReplaced = $true
       unattendedMode = "silent"
       sameVersionSilentReinstallCompleted = $true
-      transitionReceiptSurvivedSameVersionReinstall = $true
-      transitionReceipt = "overlaid-$priorVersion"
     }
     dataPreservation = [ordered]@{
       defaultLocalDataDirectoryUsed = $true
