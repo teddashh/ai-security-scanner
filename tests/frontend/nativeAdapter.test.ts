@@ -15,7 +15,7 @@ const scannerSource = readFileSync(
 
 const bundled = await build({
   stdin: {
-    contents: 'export { adaptBeginnerMasterReport, adaptDeclaredWebServiceMetadata, adaptLocalNetworkCandidateInventory, adaptManagedRuntimePrerequisiteRepairResult, adaptManagedRuntimeSetupStatus, adaptNativeCase, adaptNativeSnapshot } from "./src/services/nativeAdapter.ts";',
+    contents: 'export { adaptBeginnerMasterReport, adaptDeclaredWebServiceMetadata, adaptLocalNetworkCandidateInventory, adaptManagedRuntimePrerequisiteRepairResult, adaptManagedRuntimeSetupStatus, adaptNativeCase, adaptNativeExport, adaptNativeExportPreview, adaptNativeSnapshot, exportRunFileIdentity } from "./src/services/nativeAdapter.ts"; export { caseDisplayLabels } from "./src/caseIdentityPresentation.ts";',
     loader: "ts",
     resolveDir: process.cwd(),
     sourcefile: "native-adapter-test-entry.ts",
@@ -35,10 +35,85 @@ const {
   adaptManagedRuntimePrerequisiteRepairResult,
   adaptManagedRuntimeSetupStatus,
   adaptNativeCase,
+  adaptNativeExport,
+  adaptNativeExportPreview,
   adaptNativeSnapshot,
+  caseDisplayLabels,
+  exportRunFileIdentity,
 } = await import(
   `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
 );
+
+const nativeExportPreview = (locale: string) => ({
+  case_id: "case-1",
+  run_id: "run-1",
+  locale,
+  format: "html",
+  redaction_profile: "standard",
+  include_raw_evidence: false,
+  data_source_count: 1,
+  coverage_entry_count: 1,
+  asset_count: 1,
+  candidate_asset_count: 0,
+  canonical_finding_count: 0,
+  selected_run_finding_count: 0,
+  evidence_index_count: 0,
+  selected_run_evidence_count: 0,
+  scan_run_count: 1,
+  selected_engine_run_count: 1,
+  external_scope_grant_count: 0,
+  incomplete_engine_run_count: 0,
+  not_executed_engine_run_count: 0,
+  unknown_source_count: 0,
+  connected_no_asset_count: 0,
+  raw_artifact_count: 0,
+  raw_artifacts_included: 0,
+  raw_artifacts_omitted: 0,
+  sensitive_raw_artifacts_omitted: 0,
+  sensitive_data_warning: "warning",
+  coverage_manifest_included: false,
+});
+
+test("native export previews preserve only the closed report locale coordinate", () => {
+  assert.equal(adaptNativeExportPreview(nativeExportPreview("en")).locale, "en");
+  assert.equal(adaptNativeExportPreview(nativeExportPreview("zh-Hant")).locale, "zh-Hant");
+  assert.throws(
+    () => adaptNativeExportPreview(nativeExportPreview("fr")),
+    /Unsupported report locale/u,
+  );
+});
+
+test("native exports preserve their immutable scan-run coordinate", () => {
+  const adapted = adaptNativeExport({
+    id: "export-1",
+    case_id: "case-1",
+    run_id: "run-history-2",
+    created_at: "2026-09-01T01:02:03Z",
+    format: "html",
+    path: "C:\\reports\\report.html",
+    sha256: "abc123",
+    signature: null,
+    redaction_profile: "standard",
+  });
+
+  assert.equal(adapted.caseId, "case-1");
+  assert.equal(adapted.runId, "run-history-2");
+  assert.equal(adapted.fileName, "report.html");
+});
+
+test("suggested export filenames use a stable readable sequence and opaque short identity", () => {
+  const untrustedId = "../../private/person@example.com?token=secret";
+  const canonical = exportRunFileIdentity({ id: untrustedId, sequence: 7 });
+  const repeated = exportRunFileIdentity({ id: untrustedId, sequence: 7 });
+  const different = exportRunFileIdentity({ id: `${untrustedId}-other`, sequence: 7 });
+  const legacy = exportRunFileIdentity({ id: untrustedId });
+
+  assert.match(canonical, /^scan-7-[0-9a-f]{8}$/u);
+  assert.equal(repeated, canonical);
+  assert.notEqual(different, canonical);
+  assert.match(legacy, /^run-[0-9a-f]{8}$/u);
+  assert.doesNotMatch(`${canonical} ${legacy}`, /private|person|example|token|secret|\.\./u);
+});
 
 const localCandidate = (overrides: Record<string, unknown> = {}) => ({
   id: `local-ipv4-${"a".repeat(64)}`,
@@ -689,6 +764,137 @@ const platformCaseFixture = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const localhostSelectedCaseFixture = ({
+  id,
+  title,
+  createdAt,
+  port,
+}: {
+  id: string;
+  title: string;
+  createdAt: string;
+  port: number;
+}) => platformCaseFixture({
+  id,
+  title,
+  created_at: createdAt,
+  updated_at: createdAt,
+  data_sources: [],
+  assets: [{
+    id: `${id}-asset`,
+    kind: "web_service",
+    name: `127.0.0.1:${port}`,
+    provider: null,
+    region: null,
+    identifiers: [{ namespace: "localhost_tcp_endpoint", value: `127.0.0.1:${port}` }],
+    discovered_from: [],
+    candidate: false,
+    owner_confirmed: true,
+    internet_exposed: false,
+    metadata: {},
+  }],
+  scan_runs: [{
+    id: `${id}-run`,
+    case_id: id,
+    sequence: 1,
+    created_at: createdAt,
+    completed_at: createdAt,
+    knowledge_cutoff: createdAt,
+    engine_runs: [{
+      id: `${id}-task`,
+      engine_id: "built-in-localhost-tcp",
+      task_kind: {
+        kind: "built_in_localhost_tcp",
+        port,
+        timeout_ms: 3000,
+        payload_bytes: 0,
+      },
+      localhost_tcp_observation: {
+        outcome: "reachable",
+        observed_at: createdAt,
+      },
+      asset_ids: [`${id}-asset`],
+      status: "completed",
+      progress_percent: 100,
+      phase: "completed",
+      started_at: createdAt,
+      finished_at: createdAt,
+      resume_token: null,
+      engine_version: null,
+      image_digest: null,
+      rule_version: null,
+      adapter_version: "",
+      raw_artifact_ids: [],
+      error_code: null,
+      error_message: null,
+    }],
+  }],
+});
+
+test("structured localhost identities remain stable while switching selected cases", () => {
+  const createdAt = "2026-08-30T12:00:00Z";
+  const summaries = [
+    summaryFixture({
+      id: "quick-a",
+      title: "Persisted legacy name A",
+      created_at: createdAt,
+      product_identity: { kind: "localhost_quick_scan", port: 9001 },
+    }),
+    summaryFixture({
+      id: "quick-b",
+      title: "Persisted legacy name B",
+      created_at: createdAt,
+      product_identity: { kind: "localhost_quick_scan", port: 9001 },
+    }),
+  ];
+  const selectedA = adaptNativeSnapshot({
+    ...snapshotFixture(summaries),
+    selected_case: localhostSelectedCaseFixture({
+      id: "quick-a",
+      title: "Persisted legacy name A",
+      createdAt,
+      port: 9001,
+    }),
+  }, []);
+  const selectedB = adaptNativeSnapshot({
+    ...snapshotFixture(summaries),
+    selected_case: localhostSelectedCaseFixture({
+      id: "quick-b",
+      title: "Persisted legacy name B",
+      createdAt,
+      port: 9001,
+    }),
+  }, []);
+
+  for (const snapshot of [selectedA, selectedB]) {
+    assert.deepEqual(snapshot.cases.map((assessmentCase: { productIdentity?: unknown }) => (
+      assessmentCase.productIdentity
+    )), [
+      { kind: "localhost_quick_scan", port: 9001 },
+      { kind: "localhost_quick_scan", port: 9001 },
+    ]);
+  }
+
+  const labelsA = [...caseDisplayLabels(selectedA.cases, "zh-TW")];
+  const labelsB = [...caseDisplayLabels(selectedB.cases, "zh-TW")];
+  assert.deepEqual(labelsA, labelsB);
+  assert.notEqual(labelsA[0]?.[1], labelsA[1]?.[1]);
+  assert.match(labelsA[0]?.[1] ?? "", /quick-a$/u);
+  assert.match(labelsA[1]?.[1] ?? "", /quick-b$/u);
+});
+
+test("malformed summary product identities fail closed", () => {
+  for (const product_identity of [
+    { kind: "localhost_quick_scan", port: 0 },
+    { kind: "localhost_quick_scan", port: 65_536 },
+    { kind: "localhost_quick_scan", port: 9001.5 },
+    { kind: "lookalike", port: 9001 },
+  ]) {
+    const snapshot = adaptNativeSnapshot(snapshotFixture([summaryFixture({ product_identity })]), []);
+    assert.equal(snapshot.cases[0]?.productIdentity, undefined);
+  }
+});
+
 test("full cases combine asset and applicable source platforms without questionnaire placeholders", () => {
   const workspace = adaptNativeCase(platformCaseFixture());
 
@@ -1181,6 +1387,11 @@ test("built-in localhost work exposes its exact task and observation without cat
   }]);
 
   const task = workspace.runs[0]?.engineRuns[0];
+  assert.equal(workspace.runs[0]?.sequence, 1);
+  assert.deepEqual(workspace.case.productIdentity, {
+    kind: "localhost_quick_scan",
+    port: 9001,
+  });
   assert.equal(workspace.runs[0]?.coveredAssetCount, 1);
   assert.deepEqual(task?.taskKind, {
     kind: "built_in_localhost_tcp",
@@ -1322,6 +1533,7 @@ test("a lookalike engine cannot claim built-in localhost provenance or coverage"
   assert.equal(task?.digest, "sha256:lookalike");
   assert.equal(task?.localhostTcpObservation, undefined);
   assert.equal(workspace.runs[0]?.coveredAssetCount, 0);
+  assert.equal(workspace.case.productIdentity, undefined);
 });
 
 test("a durable no-checks request is terminal and excludes the raw backend explanation", () => {

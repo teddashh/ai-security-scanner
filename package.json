@@ -29,7 +29,7 @@
     "test:usability-evidence": "node --test tests/usability/*.test.mjs",
     "validate:aidefend": "node scripts/validate-aidefend-snapshot.mjs",
     "validate:engine-line-endings": "node scripts/validate-engine-line-endings.mjs",
-    "validate:engines": "node scripts/validate-engine-line-endings.mjs && node scripts/validate-engine-catalog.mjs",
+    "validate:engines": "node scripts/validate-engine-line-endings.mjs && node scripts/validate-engine-catalog.mjs && node --test tests/engines/prowlerCatalogContract.test.mjs",
     "validate:usability-evidence": "node scripts/validate-usability-evidence.mjs",
     "desktop:prepare-sidecar": "node scripts/release/build-sidecar.mjs",
     "desktop:check": "node scripts/release/check-desktop.mjs",

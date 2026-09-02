@@ -1014,6 +1014,7 @@ const demoWorkspace: CaseWorkspace = {
     {
       id: "export-demo-001",
       caseId: sampleCase.id,
+      runId: "run-demo-001",
       format: "case_bundle",
       createdAt: "2026-08-18T11:14:00-04:00",
       fileName: "northstar-case-demo-001.case.tar.gz",

@@ -6772,14 +6772,21 @@ mod tests {
 
     fn test_paths() -> (TempDir, PathBuf, PathBuf) {
         let temporary = tempfile::tempdir().expect("temporary directory");
-        let gateway = temporary.path().join("ai-security-scanner-egress-gateway");
+        // Production deliberately accepts only paths that are already in their
+        // canonical platform form. On Windows `tempfile` exposes a regular
+        // `C:\\...` path while `fs::canonicalize` returns the equivalent
+        // `\\\\?\\C:\\...` form, so constructing fixture children from the
+        // former would make every test fail at the alias guard before reaching
+        // the behavior it is meant to exercise.
+        let root = fs::canonicalize(temporary.path()).expect("canonical temporary directory");
+        let gateway = root.join("ai-security-scanner-egress-gateway");
         fs::write(&gateway, b"fake executable").expect("gateway file");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&gateway, fs::Permissions::from_mode(0o700)).expect("gateway mode");
         }
-        let policies = temporary.path().join("policies");
+        let policies = root.join("policies");
         fs::create_dir(&policies).expect("policy directory");
         (temporary, gateway, policies)
     }
@@ -6796,14 +6803,15 @@ mod tests {
 
     fn recovery_paths() -> (TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
         let temporary = tempfile::tempdir().expect("temporary directory");
-        let gateway = temporary.path().join("ai-security-scanner-egress-gateway");
+        let root = fs::canonicalize(temporary.path()).expect("canonical temporary directory");
+        let gateway = root.join("ai-security-scanner-egress-gateway");
         fs::write(&gateway, b"fake executable").expect("gateway file");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&gateway, fs::Permissions::from_mode(0o700)).expect("gateway mode");
         }
-        let artifacts = temporary.path().join("artifacts");
+        let artifacts = root.join("artifacts");
         let case_root = artifacts.join("case-1");
         let policies = case_root.join("network-policies");
         let registry = artifacts.join(".managed-egress-registry");

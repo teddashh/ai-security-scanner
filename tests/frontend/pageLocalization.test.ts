@@ -78,7 +78,7 @@ test("scan readiness only blocks unsafe empty runs and sends each fix to the use
   const progress = await readPage("ProgressPage.tsx");
   const app = await readFile(new URL("../../src/App.tsx", import.meta.url), "utf8");
 
-  assert.match(progress, /const canStart = canStartPreparedScan\([\s\S]*action=\{starting \? \([\s\S]*\) : canStart \?/u);
+  assert.match(progress, /const canStart = !terminalExactLocalhostQuickScan[\s\S]*canStartPreparedScan\([\s\S]*action=\{starting \? \([\s\S]*\) : canStart \?/u);
   assert.doesNotMatch(progress, /action=\{starting \? \([\s\S]*\) : readiness\?\.ready \?/u);
   assert.match(progress, /readiness\?\.nextStep === "scanner_setup"[\s\S]*copy\.setupTools/u);
   assert.match(progress, /provider_capability_unavailable:[\s\S]*action: copy\.reconnectCloud/u);
@@ -427,8 +427,8 @@ test("export preview, export, and both verification paths remain wired", async (
     readFile(new URL("../../src/App.tsx", import.meta.url), "utf8"),
     readPage("FindingsPage.tsx"),
   ]);
-  assert.match(app, /<FindingsPage[\s\S]*onOpenExport=\{\(\) => navigate\("export"\)\}/u);
-  assert.match(findings, /onClick=\{onOpenExport\}/u);
+  assert.match(app, /<FindingsPage[\s\S]*onOpenExport=\{\(runId\) => \{[\s\S]*setSelectedReportRunId\(runId\);[\s\S]*navigate\("export"\);/u);
+  assert.match(findings, /onClick=\{\(\) => onOpenExport\(latestRun\.id\)\}/u);
   assert.match(findings, /Save or share report/u);
   assert.match(findings, /保存或分享報告/u);
 
@@ -477,12 +477,12 @@ test("active and incomplete scans never present findings or exports as final", a
   for (const phrase of [
     "This would be an interim report",
     "這會是一份暫時報告",
-    "Save interim file",
-    "儲存暫時檔案",
+    "Save interim {format}",
+    "儲存暫時的「{format}」",
     "This report is incomplete",
     "這份報告尚不完整",
-    "Save incomplete file",
-    "儲存不完整檔案",
+    "Save incomplete {format}",
+    "儲存不完整的「{format}」",
   ]) assert.ok(exportPage.includes(phrase), phrase);
   assert.match(exportPage, /workspaceExportRevision/u);
   assert.match(exportPage, /activeRun[\s\S]*createInterimExport/u);

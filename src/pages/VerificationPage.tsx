@@ -5,6 +5,7 @@ import { EmptyState, InlineNotice, MetricCard, PageHeader } from "../components/
 import { StatusPill } from "../components/StatusPill";
 import { useI18n } from "../i18n";
 import { diffMeta, runStatusMeta, severityMeta } from "../lib";
+import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import type { DiffState, Finding, ScanRun, VerificationSummary } from "../types";
 import { affectedEngineCount, isOnlyMappingVersionDrift } from "../verificationPresentation";
 import "./page-technical-details.css";
@@ -171,7 +172,7 @@ const mappingDiffSummary = {
 } as const;
 
 export function VerificationPage({ verification, runs, findings, baselineRunId, busy, onSelectBaseline, onStartRescan, onOpenFinding }: VerificationPageProps) {
-  const { text, formatDateTime, formatNumber } = useI18n();
+  const { locale, text, formatDateTime, formatNumber } = useI18n();
   const [filter, setFilter] = useState<DiffState | "all">("all");
 
   const counts = useMemo(
@@ -195,7 +196,7 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
         <select value={baselineRunId ?? ""} onChange={(event) => onSelectBaseline(event.target.value)}>
           {terminalRuns.map((run) => (
             <option key={run.id} value={run.id}>
-              {run.label} · {runStatusMeta[run.status].label} · {showRunDate(run)}
+              {scanRunIdentityPresentation(run, locale)} · {runStatusMeta[run.status].label} · {showRunDate(run)}
             </option>
           ))}
         </select>
@@ -220,8 +221,8 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
         {activeRun && (
           <InlineNotice tone="warning" title={text(copy.activeTitle)}>
             <p>{activeRun.status === "paused"
-              ? text(copy.activePaused, { run: activeRun.label })
-              : text(copy.activeRunning, { run: activeRun.label })}</p>
+              ? text(copy.activePaused, { run: scanRunIdentityPresentation(activeRun, locale) })
+              : text(copy.activeRunning, { run: scanRunIdentityPresentation(activeRun, locale) })}</p>
           </InlineNotice>
         )}
         <EmptyState
@@ -229,7 +230,10 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
           title={terminalRuns.length === 0 ? text(copy.noBaselineTitle) : text(copy.readyTitle)}
           description={!selectedBaselineRun
             ? text(copy.noBaselineDescription)
-            : text(copy.selectedDescription, { run: selectedBaselineRun.label, date: showRunDate(selectedBaselineRun) })}
+            : text(copy.selectedDescription, {
+              run: scanRunIdentityPresentation(selectedBaselineRun, locale),
+              date: showRunDate(selectedBaselineRun),
+            })}
           action={terminalRuns.length > 0 ? (
             <button className="button button--primary" type="button" disabled={busy || !canStart} onClick={() => selectedBaselineRun && void onStartRescan(selectedBaselineRun.id)}>
               <Icon name="refresh" size={17} />{busy ? text(copy.preparing) : activeRun ? text(copy.handleActiveFirst) : text(copy.start)}

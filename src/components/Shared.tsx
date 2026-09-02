@@ -18,7 +18,7 @@ export function PageHeader({
     <header className="page-header">
       <div className="page-header__copy">
         {eyebrow && <p className="eyebrow">{eyebrow}</p>}
-        <h1>{title}</h1>
+        <h1 data-page-heading tabIndex={-1}>{title}</h1>
         <p>{description}</p>
       </div>
       {actions && <div className="page-header__actions">{actions}</div>}

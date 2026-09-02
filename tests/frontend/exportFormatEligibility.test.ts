@@ -72,9 +72,10 @@ test("interim and incomplete runs retain every export with coverage companions w
 test("the export page explains mandatory coverage companions", () => {
   const source = readFileSync(new URL("../../src/pages/ExportPage.tsx", import.meta.url), "utf8");
 
-  assert.match(source, /resetUnavailableExportFormat\(format, latestRun\)/u);
+  assert.match(source, /resetUnavailableExportFormat\(format, selectedRun\)/u);
   assert.match(source, /if \(selectedFormatUnavailable\) \{[\s\S]*setPreviewPending\(false\);[\s\S]*return;/u);
-  assert.match(source, /disabled=\{unavailableWithoutRun\}/u);
+  assert.match(source, /disabled=\{unavailable\}/u);
+  assert.match(source, /const unavailableInDemo = demoMode && id !== "json"/u);
   assert.match(source, /OCSF findings plus a required coverage manifest/u);
   assert.match(source, /OCSF 問題資料，並附上必要的涵蓋說明檔/u);
   assert.match(source, /OSCAL observations plus a required coverage manifest/u);

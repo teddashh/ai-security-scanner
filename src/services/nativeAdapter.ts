@@ -8,6 +8,7 @@ import type {
   BeginnerMasterReport,
   CaseExport,
   ExportPreview,
+  ReportLocale,
   CasePhase,
   CaseWorkspace,
   CloudPlatform,
@@ -54,7 +55,10 @@ import type {
 } from "../types";
 import { getActiveLocale } from "../i18n/core";
 import { explicitTargetRequiresSensitiveNetworkAllowance } from "../caseForm";
-import { isExactBuiltInLocalhostQuickScanEngine } from "../localhostQuickScan";
+import {
+  isExactBuiltInLocalhostQuickScanEngine,
+  isExactBuiltInLocalhostQuickScanRun,
+} from "../localhostQuickScan";
 import { useCaseById } from "../useCases";
 import type { UseCaseId } from "../useCases";
 
@@ -65,6 +69,11 @@ const localizedList = (values: string[]): string =>
   values.join(getActiveLocale() === "en" ? ", " : "、");
 
 /** Snake-case DTOs emitted by src-tauri/src/domain.rs. */
+type NativeCaseProductIdentity = {
+  kind: "localhost_quick_scan";
+  port: number;
+};
+
 export interface NativeCaseSummary {
   id: string;
   title: string;
@@ -85,6 +94,7 @@ export interface NativeCaseSummary {
   asset_count: number;
   finding_count: number;
   latest_run_id: string | null;
+  product_identity?: NativeCaseProductIdentity | null;
 }
 
 interface NativeDataSource {
@@ -467,6 +477,7 @@ interface NativeFindingWorkflowEvent {
 export interface NativeCaseExport {
   id: string;
   case_id: string;
+  run_id: string;
   created_at: string;
   format?: string | null;
   path: string;
@@ -482,8 +493,10 @@ export interface NativeCaseExport {
 export interface NativeExportPreview {
   case_id: string;
   run_id: string;
+  locale: string;
   format: string;
   redaction_profile: string;
+  include_raw_evidence: boolean;
   data_source_count: number;
   coverage_entry_count: number;
   asset_count: number;
@@ -506,6 +519,11 @@ export interface NativeExportPreview {
   sensitive_data_warning: string;
   coverage_manifest_included: boolean;
 }
+
+const adaptNativeReportLocale = (value: string): ReportLocale => {
+  if (value === "en" || value === "zh-Hant") return value;
+  throw new Error(`Unsupported report locale returned by the native service: ${value}`);
+};
 
 interface NativeDiffReason {
   code: string;
@@ -1339,6 +1357,7 @@ const storedExportFormat = (format?: string | null): ExportFormat | undefined =>
 export const adaptNativeExport = (item: NativeCaseExport): CaseExport => ({
   id: item.id,
   caseId: item.case_id,
+  runId: item.run_id,
   format: storedExportFormat(item.format),
   createdAt: item.created_at,
   fileName: item.path.split(/[\\/]/).at(-1) ?? item.path,
@@ -1354,11 +1373,36 @@ export const adaptNativeExport = (item: NativeCaseExport): CaseExport => ({
   path: item.path,
 });
 
+const stableExportIdentityHash = (value: string): string => {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+};
+
+/**
+ * A filename-safe, deterministic run coordinate. The canonical sequence is
+ * readable, while the hash distinguishes the immutable ID without copying an
+ * imported or otherwise untrusted identifier into a suggested filename.
+ */
+export const exportRunFileIdentity = (
+  run: Pick<CaseWorkspace["runs"][number], "id" | "sequence">,
+): string => {
+  const shortIdentity = stableExportIdentityHash(run.id);
+  return Number.isSafeInteger(run.sequence) && (run.sequence ?? 0) > 0
+    ? `scan-${run.sequence}-${shortIdentity}`
+    : `run-${shortIdentity}`;
+};
+
 export const adaptNativeExportPreview = (item: NativeExportPreview): ExportPreview => ({
   caseId: item.case_id,
   runId: item.run_id,
+  locale: adaptNativeReportLocale(item.locale),
   format: storedExportFormat(item.format) ?? "case_bundle",
   redactionProfile: item.redaction_profile === "none" ? "none" : "standard",
+  includeRawEvidence: item.include_raw_evidence,
   dataSourceCount: item.data_source_count,
   coverageEntryCount: item.coverage_entry_count,
   assetCount: item.asset_count,
@@ -1416,6 +1460,21 @@ export const adaptNativeManifest = (manifest: NativeEngineManifest): EngineManif
   };
 };
 
+const adaptCaseProductIdentity = (
+  identity: NativeCaseProductIdentity | null | undefined,
+): AssessmentCase["productIdentity"] => {
+  if (
+    identity?.kind !== "localhost_quick_scan" ||
+    !Number.isInteger(identity.port) ||
+    identity.port < 1 ||
+    identity.port > 65_535
+  ) {
+    return undefined;
+  }
+
+  return { kind: identity.kind, port: identity.port };
+};
+
 const adaptSummary = (summary: NativeCaseSummary): AssessmentCase => {
   const assessmentIntent = mapAssessmentIntent(summary.assessment_intent);
   const sourceKinds = summary.applicable_source_kinds ?? summary.source_kinds;
@@ -1450,6 +1509,7 @@ const adaptSummary = (summary: NativeCaseSummary): AssessmentCase => {
     latestRunId: summary.latest_run_id ?? undefined,
     assetCount: summary.asset_count,
     findingCount: summary.finding_count,
+    productIdentity: adaptCaseProductIdentity(summary.product_identity),
   };
 };
 
@@ -1764,6 +1824,7 @@ export const adaptNativeCase = (
       id: run.id,
       caseId: run.case_id,
       label: adapterText(`Scan ${run.sequence}`, `第 ${run.sequence} 次掃描`),
+      sequence: run.sequence,
       verificationBaselineRunId: run.verification_baseline_run_id ?? undefined,
       requestOutcome,
       status,
@@ -1897,6 +1958,19 @@ export const adaptNativeCase = (
     latestRunId: runs[0]?.id,
     assetCount: nativeCase.assets.length,
     findingCount: nativeCase.findings.length,
+    productIdentity: (() => {
+      const productRuns = runs.filter(isExactBuiltInLocalhostQuickScanRun);
+      if (productRuns.length === 0 || productRuns.length !== runs.length) return undefined;
+      const ports = new Set(productRuns.map((run) => {
+        const taskKind = run.engineRuns[0]?.taskKind;
+        return taskKind?.kind === "built_in_localhost_tcp" ? taskKind.port : undefined;
+      }));
+      if (ports.size !== 1) return undefined;
+      const port = [...ports][0];
+      return typeof port === "number"
+        ? { kind: "localhost_quick_scan" as const, port }
+        : undefined;
+    })(),
   };
   return { case: assessmentCase, sources, coverage, assets, scopeGrants, runs, findings, findingGroups, findingGroupEvents, workflowEvents, exports, verification };
 };

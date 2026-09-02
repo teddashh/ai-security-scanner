@@ -84,6 +84,56 @@ fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+fn make_test_file_writable(path: &Path) {
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(permissions.mode() | 0o200);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY, GetFileAttributesW,
+            INVALID_FILE_ATTRIBUTES, SetFileAttributesW,
+        };
+
+        let encoded = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        // SAFETY: `encoded` is NUL-terminated and lives for both API calls.
+        let attributes = unsafe { GetFileAttributesW(encoded.as_ptr()) };
+        assert_ne!(
+            attributes,
+            INVALID_FILE_ATTRIBUTES,
+            "inspect test file attributes: {}",
+            std::io::Error::last_os_error()
+        );
+        if attributes & FILE_ATTRIBUTE_READONLY != 0 {
+            let writable_attributes = match attributes & !FILE_ATTRIBUTE_READONLY {
+                0 => FILE_ATTRIBUTE_NORMAL,
+                remaining => remaining,
+            };
+            // SAFETY: `encoded` remains valid and the new mask preserves every
+            // attribute except read-only.
+            let status = unsafe { SetFileAttributesW(encoded.as_ptr(), writable_attributes) };
+            assert_ne!(
+                status,
+                0,
+                "make test file writable: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+    }
+}
+
 fn deterministic_tar(path: &str, contents: &[u8]) -> Vec<u8> {
     let mut builder = tar::Builder::new(Vec::new());
     let mut header = tar::Header::new_ustar();
@@ -683,14 +733,7 @@ fn legacy_v1_snapshot_manifest_without_policy_remains_verifiable() {
     let resolved =
         resolve_workspace_snapshot(&artifact_root, "case-legacy-v1", &snapshot.reference).unwrap();
     let manifest_path = resolved.manifest_path;
-    #[cfg(unix)]
-    fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o600)).unwrap();
-    #[cfg(not(unix))]
-    {
-        let mut permissions = fs::metadata(&manifest_path).unwrap().permissions();
-        permissions.set_readonly(false);
-        fs::set_permissions(&manifest_path, permissions).unwrap();
-    }
+    make_test_file_writable(&manifest_path);
     let mut legacy: serde_json::Value =
         serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
     legacy["schema_version"] =
@@ -722,14 +765,7 @@ fn legacy_v2_gitignore_manifest_without_audit_fields_remains_verifiable() {
     let resolved =
         resolve_workspace_snapshot(&artifact_root, "case-legacy-v2", &snapshot.reference).unwrap();
     let manifest_path = resolved.manifest_path;
-    #[cfg(unix)]
-    fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o600)).unwrap();
-    #[cfg(not(unix))]
-    {
-        let mut permissions = fs::metadata(&manifest_path).unwrap().permissions();
-        permissions.set_readonly(false);
-        fs::set_permissions(&manifest_path, permissions).unwrap();
-    }
+    make_test_file_writable(&manifest_path);
     let mut legacy: serde_json::Value =
         serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
     legacy["schema_version"] =
@@ -1147,14 +1183,7 @@ fn resolver_rejects_tampered_content_and_injected_storage_ids() {
     let resolved = resolve_workspace_snapshot(&artifact_root, "case-tamper", &snapshot.reference)
         .expect("initial verification");
     let copied = resolved.tree_path.join("code.rs");
-    #[cfg(unix)]
-    fs::set_permissions(&copied, fs::Permissions::from_mode(0o600)).unwrap();
-    #[cfg(not(unix))]
-    {
-        let mut permissions = fs::metadata(&copied).unwrap().permissions();
-        permissions.set_readonly(false);
-        fs::set_permissions(&copied, permissions).unwrap();
-    }
+    make_test_file_writable(&copied);
     fs::write(&copied, b"fn tampered() {}\n").unwrap();
 
     let tampered = resolve_workspace_snapshot(&artifact_root, "case-tamper", &snapshot.reference)
@@ -1210,14 +1239,7 @@ fn preflight_inspector_is_read_only_and_rejects_missing_or_tampered_snapshots() 
     );
 
     let copied = inspected.tree_path.join("code.rs");
-    #[cfg(unix)]
-    fs::set_permissions(&copied, fs::Permissions::from_mode(0o600)).unwrap();
-    #[cfg(not(unix))]
-    {
-        let mut permissions = fs::metadata(&copied).unwrap().permissions();
-        permissions.set_readonly(false);
-        fs::set_permissions(&copied, permissions).unwrap();
-    }
+    make_test_file_writable(&copied);
     fs::write(&copied, b"fn tampered() {}\n").unwrap();
 
     let error = inspect_workspace_snapshot(&artifact_root, "case-inspect", &snapshot.reference)

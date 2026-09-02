@@ -64,6 +64,26 @@ function expectFailure(action, label) {
   throw new Error(`${label} unexpectedly passed`);
 }
 
+async function createFixtureSymlink(target, link) {
+  try {
+    await symlink(target, link);
+  } catch (error) {
+    if (process.platform !== "win32" || error?.code !== "EPERM") throw error;
+
+    // Creating file symlinks on Windows normally requires Developer Mode or an
+    // elevated token. A directory junction still exercises lstat's symlink
+    // boundary without making the release self-test depend on host policy.
+    const junctionTarget = `${link}.junction-target`;
+    await mkdir(junctionTarget, { recursive: true });
+    await symlink(junctionTarget, link, "junction");
+  }
+
+  const metadata = await lstat(link);
+  if (!metadata.isSymbolicLink()) {
+    throw new Error(`release self-test fixture is not a symlink: ${link}`);
+  }
+}
+
 async function createPlatformFixture(
   root,
   platform,
@@ -111,7 +131,7 @@ async function createPlatformFixture(
   if (stagingDirectory) {
     await mkdir(stagingDirectory, { recursive: true });
     await writeFile(path.join(stagingDirectory, "application-icon.png"), Buffer.alloc(2048, "icon"));
-    await symlink("application-icon.png", path.join(stagingDirectory, ".DirIcon"));
+    await createFixtureSymlink("application-icon.png", path.join(stagingDirectory, ".DirIcon"));
   }
   if (signUpdaters) {
     for (const updaterPayload of updaterPayloads) {
@@ -130,7 +150,7 @@ async function createPlatformFixture(
     const installer = path.join(bundleRoot, kind, filename);
     const regularTarget = `${installer}.regular`;
     await rename(installer, regularTarget);
-    await symlink(path.basename(regularTarget), installer);
+    await createFixtureSymlink(path.basename(regularTarget), installer);
   }
   const sidecarExtension = platform === "windows-x86_64" ? ".exe" : "";
   const magic =

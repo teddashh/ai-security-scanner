@@ -11,6 +11,7 @@ const startBlockingReasons = new Set([
   "scan_already_active",
   "no_effective_scope_grants",
   "no_ownership_confirmed_targets",
+  "no_compatible_authorized_targets",
 ]);
 
 export const hasActiveScanWork = (

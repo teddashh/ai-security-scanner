@@ -45,7 +45,7 @@ pub mod workspace_snapshot;
 #[cfg(feature = "desktop")]
 use artifact_store::ArtifactStore;
 #[cfg(feature = "desktop")]
-use managed_runtime::admit_packaged_managed_runtime;
+use managed_runtime::{admit_packaged_managed_runtime, ensure_private_product_data_directory};
 #[cfg(feature = "desktop")]
 use process_lease::DataDirectoryExclusiveLease;
 #[cfg(feature = "desktop")]
@@ -114,9 +114,13 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let app_data = app.path().app_local_data_dir()?;
-            std::fs::create_dir_all(&app_data)?;
+            let product_data_guard = ensure_private_product_data_directory(&app_data)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
             let process_lease = DataDirectoryExclusiveLease::acquire(&app_data)
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
+            // The process lease now pins the exact root and its parent for the
+            // desktop lifetime, so the creation/verification guard can yield.
+            drop(product_data_guard);
             let managed_bundle = app.path().resource_dir()?.join("managed-runtime");
             let managed_runtime_admission =
                 admit_packaged_managed_runtime(&app_data, &managed_bundle);
@@ -201,10 +205,10 @@ pub fn run() {
             }
             app.manage(state);
             let startup_app = app.handle().clone();
-            let _ = tauri::async_runtime::spawn_blocking(move || {
+            std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
                 let state = startup_app.state::<AppState>();
                 reconcile_live_startup_resources(&state);
-            });
+            }));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -255,9 +259,13 @@ pub fn run() {
 
 #[cfg(test)]
 mod desktop_nonblocking_source_invariants {
+    fn normalized_source(source: &str) -> String {
+        source.replace("\r\n", "\n")
+    }
+
     #[test]
     fn desktop_manages_state_before_scheduling_live_startup_reconciliation() {
-        let source = include_str!("lib.rs");
+        let source = normalized_source(include_str!("lib.rs"));
         let setup_start = source.find(".setup(|app| {").expect("desktop setup");
         let manage = source[setup_start..]
             .find("app.manage(state);")
@@ -294,7 +302,7 @@ mod desktop_nonblocking_source_invariants {
 
     #[test]
     fn snapshot_and_resume_paths_do_not_wait_or_plan_through_an_active_terminal_claim() {
-        let source = include_str!("commands.rs");
+        let source = normalized_source(include_str!("commands.rs"));
         let snapshot_start = source
             .find("pub async fn get_app_snapshot(")
             .expect("snapshot command");
@@ -345,7 +353,7 @@ mod desktop_nonblocking_source_invariants {
 
     #[test]
     fn cached_runtime_health_is_advisory_and_never_blocks_scan_readiness() {
-        let source = include_str!("commands.rs");
+        let source = normalized_source(include_str!("commands.rs"));
         let readiness_start = source
             .find("pub fn get_scan_readiness(")
             .expect("scan readiness command");
@@ -362,7 +370,7 @@ mod desktop_nonblocking_source_invariants {
 
     #[test]
     fn cancel_preserves_terminal_truth_and_never_waits_for_no_worker_cleanup() {
-        let source = include_str!("commands.rs");
+        let source = normalized_source(include_str!("commands.rs"));
         let cancel_start = source.find("pub fn cancel_scan(").expect("cancel command");
         let cancel_end = source[cancel_start..]
             .find("\n#[tauri::command]\npub async fn start_rescan")
@@ -504,7 +512,7 @@ mod desktop_nonblocking_source_invariants {
 
     #[test]
     fn localhost_first_value_path_has_one_managed_detached_lifecycle() {
-        let commands = include_str!("commands.rs");
+        let commands = normalized_source(include_str!("commands.rs"));
         let start = commands
             .find("pub async fn start_localhost_quick_scan(")
             .expect("localhost start command");
@@ -532,7 +540,7 @@ mod desktop_nonblocking_source_invariants {
             "old terminals cannot replace the new action"
         );
 
-        let localhost = include_str!("localhost_quick_scan.rs");
+        let localhost = normalized_source(include_str!("localhost_quick_scan.rs"));
         assert!(!localhost.contains("execute_prepared_localhost_quick_scan"));
         assert!(localhost.contains("pub fn execute_managed_localhost_quick_scan("));
         assert!(localhost.contains("cancelled_without_observation"));

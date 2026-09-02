@@ -1,5 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
+import { caseDisplayLabels, caseIdentityPresentation } from "../caseIdentityPresentation";
 import {
   classifyRuntimeIssue,
   useI18n,
@@ -7,7 +8,15 @@ import {
   type TranslationKey,
 } from "../i18n";
 import { cx, phaseMeta } from "../lib";
-import { isManagedRuntimePackageAdmissionFailure } from "../runtimeSetupPresentation";
+import {
+  MOBILE_NAVIGATION_MEDIA_QUERY,
+  reconcileMobileNavigationOpen,
+} from "../mobileNavigation";
+import { completePageTransition } from "../pageNavigation";
+import {
+  hasUnconfirmedManagedRuntimeCompletion,
+  isManagedRuntimePackageAdmissionFailure,
+} from "../runtimeSetupPresentation";
 import type {
   AppMode,
   AppSnapshot,
@@ -26,6 +35,7 @@ const navigation = [
   { id: "start", labelKey: "nav.start.label", hintKey: "nav.start.hint", icon: "spark" },
   { id: "cases", labelKey: "nav.cases.label", hintKey: "nav.cases.hint", icon: "cases" },
   { id: "findings", labelKey: "nav.findings.label", hintKey: "nav.findings.hint", icon: "findings" },
+  { id: "settings", labelKey: "nav.settings.label", hintKey: "nav.settings.hint", icon: "settings" },
 ] as const satisfies ReadonlyArray<{
   id: PageId;
   labelKey: TranslationKey;
@@ -40,6 +50,7 @@ const pageLabelKeys = {
   progress: "nav.progress.label",
   findings: "nav.findings.label",
   export: "nav.export.label",
+  settings: "nav.settings.label",
   verification: "nav.verification.label",
 } as const satisfies Record<PageId, TranslationKey>;
 
@@ -154,7 +165,21 @@ export function AppShell({
   onCancelRuntime,
 }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [narrowViewport, setNarrowViewport] = useState(
+    () => window.matchMedia?.(MOBILE_NAVIGATION_MEDIA_QUERY).matches ?? false,
+  );
+  const mobileNavigationRef = useRef<HTMLElement>(null);
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const mobileCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const pageTransitionKey = `${page}:${selectedCase?.id ?? ""}`;
+  const previousPageTransitionKey = useRef(pageTransitionKey);
+  const mobileDialogOpen = reconcileMobileNavigationOpen(mobileOpen, narrowViewport);
   const { locale, setLocale, t, formatNumber } = useI18n();
+  const displayedCaseLabels = caseDisplayLabels(cases, locale);
+  const selectedCaseDisplayName = selectedCase
+    ? displayedCaseLabels.get(selectedCase.id)
+      ?? caseIdentityPresentation(selectedCase, locale).name
+    : undefined;
 
   const exactBytes = (value: number): string =>
     t(value === 1 ? "common.byte" : "common.bytes", { value: formatNumber(value) });
@@ -177,7 +202,15 @@ export function AppShell({
   const runtimeSetupStarting = runtimeBusy
     && runtimeSetup?.active !== true
     && runtimeSetup?.prerequisiteRepairActive !== true;
-  const displayedRuntimeSetupPhase = runtimeSetupStarting ? "install" : runtimeSetup?.phase;
+  const runtimeSetupCompletionUnconfirmed = hasUnconfirmedManagedRuntimeCompletion(
+    runtime?.available,
+    runtimeSetup?.phase,
+  );
+  const displayedRuntimeSetupPhase = runtimeSetupStarting
+    ? "install"
+    : runtimeSetupCompletionUnconfirmed
+      ? undefined
+      : runtimeSetup?.phase;
   const genericSetupFailure = !runtimeSetupWorking
     && !runtimeSetupNonRetryable
     && runtimeSetup?.phase === "failed"
@@ -193,18 +226,90 @@ export function AppShell({
       : runtimeSetupDetailKeys[displayedRuntimeSetupPhase]
     : undefined;
   const runtimeSetupAction: TranslationKey = runtimeSetup?.phase === "failed"
+    || runtimeSetupCompletionUnconfirmed
     ? "runtime.setup.retry"
     : runtimeSetup?.phase === "cancelled"
       ? "runtime.setup.continue"
       : "runtime.setup.action";
 
-  useEffect(() => setMobileOpen(false), [page]);
+  useEffect(() => setMobileOpen(false), [page, selectedCase?.id]);
+
+  useEffect(() => {
+    const viewport = window.matchMedia(MOBILE_NAVIGATION_MEDIA_QUERY);
+    const reconcileViewport = (matches: boolean) => {
+      setNarrowViewport(matches);
+      setMobileOpen((current) => reconcileMobileNavigationOpen(current, matches));
+    };
+    const onViewportChange = (event: MediaQueryListEvent) => reconcileViewport(event.matches);
+    reconcileViewport(viewport.matches);
+    viewport.addEventListener("change", onViewportChange);
+    return () => viewport.removeEventListener("change", onViewportChange);
+  }, []);
+
+  useEffect(() => {
+    if (!mobileDialogOpen) return undefined;
+    mobileCloseButtonRef.current?.focus();
+    const containMobileNavigationFocus = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMobileOpen(false);
+        window.setTimeout(() => mobileMenuButtonRef.current?.focus(), 0);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const navigation = mobileNavigationRef.current;
+      if (!navigation) return;
+      const focusable = Array.from(navigation.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ));
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) {
+        event.preventDefault();
+        mobileCloseButtonRef.current?.focus();
+        return;
+      }
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !navigation.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !navigation.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", containMobileNavigationFocus);
+    return () => document.removeEventListener("keydown", containMobileNavigationFocus);
+  }, [mobileDialogOpen]);
+
+  const closeMobileNavigation = () => {
+    setMobileOpen(false);
+    if (narrowViewport) {
+      window.setTimeout(() => mobileMenuButtonRef.current?.focus(), 0);
+    }
+  };
+
+  useLayoutEffect(() => {
+    completePageTransition({
+      previousKey: previousPageTransitionKey.current,
+      nextKey: pageTransitionKey,
+      mainContent: document.getElementById("main-content"),
+      viewport: window,
+    });
+    previousPageTransitionKey.current = pageTransitionKey;
+  }, [pageTransitionKey]);
 
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">{t("shell.skipToContent")}</a>
 
-      <aside className={cx("sidebar", mobileOpen && "sidebar--open")} aria-label={t("shell.primaryNavigation")}>
+      <aside
+        ref={mobileNavigationRef}
+        id="primary-navigation"
+        className={cx("sidebar", mobileDialogOpen && "sidebar--open")}
+        aria-label={t("shell.primaryNavigation")}
+        aria-modal={mobileDialogOpen || undefined}
+        role={mobileDialogOpen ? "dialog" : undefined}
+      >
         <div className="brand">
           <span className="brand__mark"><Icon name="shield" size={22} /></span>
           <span className="brand__copy">
@@ -212,10 +317,11 @@ export function AppShell({
             <small>{t("shell.brandSubtitle")}</small>
           </span>
           <button
+            ref={mobileCloseButtonRef}
             className="icon-button sidebar__close"
             type="button"
             aria-label={t("shell.closeNavigation")}
-            onClick={() => setMobileOpen(false)}
+            onClick={closeMobileNavigation}
           >
             <Icon name="close" />
           </button>
@@ -233,7 +339,7 @@ export function AppShell({
               {cases.length === 0 && <option value="">{t("shell.noCases")}</option>}
               {cases.map((assessmentCase) => (
                 <option key={assessmentCase.id} value={assessmentCase.id}>
-                  {assessmentCase.name}
+                  {displayedCaseLabels.get(assessmentCase.id) ?? assessmentCase.name}
                 </option>
               ))}
             </select>
@@ -366,28 +472,30 @@ export function AppShell({
         </div>
       </aside>
 
-      {mobileOpen && (
-        <button
+      {mobileDialogOpen && (
+        <div
           className="sidebar-backdrop"
-          aria-label={t("shell.closeNavigation")}
-          type="button"
-          onClick={() => setMobileOpen(false)}
+          aria-hidden="true"
+          onClick={closeMobileNavigation}
         />
       )}
 
-      <div className="workspace">
+      <div className="workspace" aria-hidden={mobileDialogOpen || undefined}>
         <header className="topbar">
           <button
+            ref={mobileMenuButtonRef}
             className="icon-button topbar__menu"
             type="button"
             aria-label={t("shell.openNavigation")}
+            aria-controls="primary-navigation"
+            aria-expanded={mobileDialogOpen}
             onClick={() => setMobileOpen(true)}
           >
             <Icon name="menu" />
           </button>
           <div className="topbar__context">
             <span>{t(pageLabelKeys[page])}</span>
-            {selectedCase && <strong>{selectedCase.name}</strong>}
+            {selectedCaseDisplayName && <strong>{selectedCaseDisplayName}</strong>}
           </div>
           <div className="topbar__right">
             <AppUpdateControl

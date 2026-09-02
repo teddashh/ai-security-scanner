@@ -2769,6 +2769,13 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
   gap: 9px;
 }
 
+.export-format-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 .format-card {
   position: relative;
   display: grid;
@@ -2996,6 +3003,8 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
 .toast span { color: var(--muted); font-size: 0.67rem; line-height: 1.45; }
 .toast button { display: grid; width: 27px; height: 27px; place-items: center; padding: 0; border: 0; border-radius: 7px; color: var(--muted); background: transparent; }
 .toast button:hover { background: var(--surface-tint); }
+.toast .toast__action { width: fit-content; height: auto; margin-top: 5px; padding: 6px 9px; border: 1px solid var(--line-strong); color: var(--ink-strong); background: var(--surface-tint); font: inherit; font-weight: 700; }
+.toast .toast__action:hover { background: var(--teal-soft); }
 
 .sidebar-backdrop { display: none; }
 
@@ -3033,10 +3042,10 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
 
 @media (max-width: 820px) {
   :root { --sidebar-width: 272px; }
-  .sidebar { transform: translateX(-105%); box-shadow: 15px 0 35px rgba(8, 26, 33, 0.22); transition: transform 180ms ease; }
-  .sidebar--open { transform: translateX(0); }
+  .sidebar { visibility: hidden; pointer-events: none; transform: translateX(-105%); box-shadow: 15px 0 35px rgba(8, 26, 33, 0.22); transition: transform 180ms ease; }
+  .sidebar--open { visibility: visible; pointer-events: auto; transform: translateX(0); }
   .sidebar__close, .topbar__menu { display: grid !important; }
-  .sidebar-backdrop { position: fixed; z-index: 25; inset: 0; display: block; width: 100%; height: 100%; padding: 0; border: 0; background: rgba(8, 25, 31, 0.42); backdrop-filter: blur(2px); }
+  .sidebar-backdrop { position: fixed; z-index: 25; inset: 0; display: block; width: 100%; height: 100%; padding: 0; border: 0; cursor: pointer; background: rgba(8, 25, 31, 0.42); backdrop-filter: blur(2px); overscroll-behavior: contain; touch-action: none; }
   .workspace { margin-left: 0; }
   .topbar { padding-inline: 18px; }
   .topbar__menu { margin-right: 5px; }

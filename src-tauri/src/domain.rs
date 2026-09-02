@@ -1558,6 +1558,41 @@ impl AssessmentCase {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CaseProductIdentity {
+    LocalhostQuickScan { port: u16 },
+}
+
+fn case_product_identity(value: &AssessmentCase) -> Option<CaseProductIdentity> {
+    if value.scan_runs.is_empty() {
+        return None;
+    }
+
+    let mut bound_port = None;
+    for run in &value.scan_runs {
+        let [engine_run] = run.engine_runs.as_slice() else {
+            return None;
+        };
+        if engine_run.engine_id != BUILT_IN_LOCALHOST_TCP_ENGINE_ID
+            || !engine_run
+                .task_kind
+                .is_exact_built_in_localhost_tcp_contract()
+        {
+            return None;
+        }
+        let EngineTaskKind::BuiltInLocalhostTcp { port, .. } = &engine_run.task_kind else {
+            return None;
+        };
+        if bound_port.is_some_and(|expected| expected != *port) {
+            return None;
+        }
+        bound_port = Some(*port);
+    }
+
+    bound_port.map(|port| CaseProductIdentity::LocalhostQuickScan { port })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaseSummary {
     pub id: Id,
@@ -1585,6 +1620,8 @@ pub struct CaseSummary {
     pub asset_count: usize,
     pub finding_count: usize,
     pub latest_run_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product_identity: Option<CaseProductIdentity>,
 }
 
 impl From<&AssessmentCase> for CaseSummary {
@@ -1629,6 +1666,7 @@ impl From<&AssessmentCase> for CaseSummary {
                         .then_with(|| left.id.cmp(&right.id))
                 })
                 .map(|run| run.id.clone()),
+            product_identity: case_product_identity(value),
         }
     }
 }
@@ -2151,5 +2189,88 @@ mod tests {
         assert_eq!(summary.notes.as_deref(), Some("Local note"));
         assert_eq!(summary.created_at, case.created_at);
         assert_eq!(summary.latest_run_id.as_deref(), Some("newer"));
+        assert_eq!(summary.product_identity, None);
+    }
+
+    #[test]
+    fn case_summary_exposes_only_canonical_localhost_quick_scan_identity() {
+        fn localhost_engine_run(scan_run_id: &str, port: u16) -> EngineRun {
+            serde_json::from_value(serde_json::json!({
+                "id": format!("engine-{scan_run_id}"),
+                "scan_run_id": scan_run_id,
+                "engine_id": BUILT_IN_LOCALHOST_TCP_ENGINE_ID,
+                "task_kind": {
+                    "kind": "built_in_localhost_tcp",
+                    "port": port,
+                    "timeout_ms": BUILT_IN_LOCALHOST_TCP_TIMEOUT_MS,
+                    "payload_bytes": BUILT_IN_LOCALHOST_TCP_PAYLOAD_BYTES
+                },
+                "asset_ids": ["localhost-asset"],
+                "status": "completed",
+                "progress_percent": 100,
+                "phase": "completed",
+                "started_at": "2026-08-30T12:00:00Z",
+                "finished_at": "2026-08-30T12:00:01Z",
+                "resume_token": null,
+                "engine_version": null,
+                "image_digest": null,
+                "rule_version": null,
+                "adapter_version": "",
+                "raw_artifact_ids": [],
+                "error_code": null,
+                "error_message": null
+            }))
+            .unwrap()
+        }
+
+        fn localhost_scan_run(case_id: &str, id: &str, sequence: u32, port: u16) -> ScanRun {
+            let now = "2026-08-30T12:00:00Z".parse().unwrap();
+            ScanRun {
+                id: id.into(),
+                case_id: case_id.into(),
+                sequence,
+                created_at: now,
+                completed_at: Some(now),
+                request_outcome: None,
+                knowledge_cutoff: now,
+                ai_system_applicable: false,
+                ai_system_applicability: Default::default(),
+                ai_generated_artifact: Default::default(),
+                verification_baseline_run_id: None,
+                scope_grant_ids: vec![],
+                scope_grant_snapshots: vec![],
+                engine_admission_issues: Vec::new(),
+                engine_runs: vec![localhost_engine_run(id, port)],
+            }
+        }
+
+        let mut case = AssessmentCase::new(
+            "Persisted display name".into(),
+            OrganizationProfile {
+                organization_name: "Persisted organization".into(),
+                employee_range: "1-10".into(),
+                data_classes: vec![],
+                notes: None,
+            },
+        );
+        case.scan_runs = vec![
+            localhost_scan_run(&case.id, "run-a", 1, 9_001),
+            localhost_scan_run(&case.id, "run-b", 2, 9_001),
+        ];
+
+        let summary = CaseSummary::from(&case);
+        assert_eq!(
+            summary.product_identity,
+            Some(CaseProductIdentity::LocalhostQuickScan { port: 9_001 })
+        );
+        let encoded = serde_json::to_value(&summary).unwrap();
+        assert_eq!(encoded["product_identity"]["kind"], "localhost_quick_scan");
+        assert_eq!(encoded["product_identity"]["port"], 9_001);
+
+        case.scan_runs[1].engine_runs[0].engine_id = "lookalike-localhost".into();
+        assert_eq!(CaseSummary::from(&case).product_identity, None);
+
+        case.scan_runs[1] = localhost_scan_run(&case.id, "run-b", 2, 9_002);
+        assert_eq!(CaseSummary::from(&case).product_identity, None);
     }
 }

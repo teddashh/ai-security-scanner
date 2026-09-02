@@ -43,6 +43,8 @@ export const en = {
   "nav.findings.hint": "See what needs attention first",
   "nav.export.label": "Share results",
   "nav.export.hint": "Download or send a clear report",
+  "nav.settings.label": "Settings",
+  "nav.settings.hint": "Language, privacy, and local tools",
   "nav.verification.label": "Check fixes",
   "nav.verification.hint": "Compare before and after",
 

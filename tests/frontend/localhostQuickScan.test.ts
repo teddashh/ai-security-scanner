@@ -6,6 +6,7 @@ import {
   DEFAULT_LOCALHOST_QUICK_SCAN_PORT,
   isExactBuiltInLocalhostQuickScanRun,
   isLocalhostQuickScanCancelRequested,
+  isTerminalExactBuiltInLocalhostQuickScanRun,
   isValidLocalhostQuickScanPort,
   LOCALHOST_QUICK_SCAN_TIMEOUT_MS,
   parseLocalhostQuickScanPort,
@@ -67,6 +68,12 @@ test("localhost quick-scan port editing is bounded and defaults to 9001", () => 
 test("only the exact single built-in task receives localhost lifecycle controls", () => {
   const exact = run([engine()]);
   assert.equal(isExactBuiltInLocalhostQuickScanRun(exact), true);
+  assert.equal(isTerminalExactBuiltInLocalhostQuickScanRun(exact), false);
+  assert.equal(isTerminalExactBuiltInLocalhostQuickScanRun({
+    ...exact,
+    status: "completed",
+    progress: 100,
+  }), true);
   assert.equal(isLocalhostQuickScanCancelRequested(exact), false);
   assert.equal(isLocalhostQuickScanCancelRequested(run([
     engine({ phase: "cancel_requested" }),
@@ -82,6 +89,10 @@ test("only the exact single built-in task receives localhost lifecycle controls"
   assert.equal(isExactBuiltInLocalhostQuickScanRun(run([
     engine({ taskKind: { kind: "catalog_engine" } }),
   ])), false);
+  assert.equal(isTerminalExactBuiltInLocalhostQuickScanRun({
+    ...run([engine({ taskKind: { kind: "catalog_engine" } })]),
+    status: "completed",
+  }), false, "lookalike terminal work must not suppress generic scan readiness");
   assert.equal(isExactBuiltInLocalhostQuickScanRun(run([
     engine({ taskKind: { kind: "built_in_localhost_tcp", port: 9001, timeoutMs: 4_000, payloadBytes: 0 } }),
   ])), false);
@@ -117,7 +128,25 @@ test("the installed start page leads with the bounded localhost action and keeps
 test("progress hides pause and resume for the exact task and makes a stop request non-repeatable", async () => {
   const progress = await readFile(new URL("../../src/pages/ProgressPage.tsx", import.meta.url), "utf8");
 
-  assert.match(progress, /const exactLocalhostQuickScan = isExactBuiltInLocalhostQuickScanRun\(selectedRun\)/u);
+  assert.match(
+    progress,
+    /const exactLocalhostQuickScan = Boolean\(\s*selectedRun && isExactBuiltInLocalhostQuickScanRun\(selectedRun\)/u,
+  );
+  assert.match(progress, /const terminalExactLocalhostQuickScan = Boolean\([\s\S]*isTerminalExactBuiltInLocalhostQuickScanRun\(selectedRun\)/u);
+  assert.match(progress, /const canStart = !terminalExactLocalhostQuickScan[\s\S]*canStartPreparedScan/u);
+  assert.match(
+    progress,
+    /terminalLocalhostSummary && \(\s*terminalLocalhostSummary\.outcome === "closed"\s*\|\| terminalLocalhostSummary\.outcome === "timed_out"\s*\|\| needsFreshLocalhostTcpAttempt\(terminalLocalhostSummary\.outcome\)/u,
+  );
+  assert.doesNotMatch(
+    progress,
+    /terminalLocalhostSummary\.outcome === "reachable"[\s\S]{0,160}needsFreshLocalhostTcpAttempt/u,
+  );
+  assert.match(progress, /onRetryLocalhostQuickScan\(terminalLocalhostSummary\.port\)/u);
+  assert.match(progress, /Running it again creates a new saved attempt for 127\.0\.0\.1:\{port\}\. This result stays unchanged\./u);
+  assert.match(progress, /重新執行會為 127\.0\.0\.1:\{port\} 建立一筆新的已保存嘗試；這筆結果會保持不變。/u);
+  assert.match(progress, /\{!terminalExactLocalhostQuickScan && readinessCheckFailed/u);
+  assert.match(progress, /\{!terminalExactLocalhostQuickScan && readiness && !readiness\.ready/u);
   assert.match(progress, /const localhostCancelRequested = isLocalhostQuickScanCancelRequested\(selectedRun\)/u);
   assert.match(progress, /const canPause = selectedRun\.status === "running" && !exactLocalhostQuickScan/u);
   assert.match(progress, /const canResume = !startFreshScan &&[\s\S]*\) && !exactLocalhostQuickScan;/u);
@@ -125,6 +154,15 @@ test("progress hides pause and resume for the exact task and makes a stop reques
   assert.match(progress, /\{localhostCancelRequested && \([\s\S]*role="status"[\s\S]*aria-live="polite"[\s\S]*copy\.stopping/u);
   assert.doesNotMatch(progress, /localhostCancelRequested[\s\S]{0,300}<button/u);
   assert.match(progress, /engine\.phase === "cancel_requested"[\s\S]*copy\.cancelRequestedPhase/u);
+});
+
+test("localhost endpoints keep protocol ports ungrouped while measurements stay locale-formatted", async () => {
+  const progress = await readFile(new URL("../../src/pages/ProgressPage.tsx", import.meta.url), "utf8");
+
+  assert.doesNotMatch(progress, /formatNumber\(localhostSummary\.port\)/u);
+  assert.equal(progress.match(/String\(localhostSummary\.port\)/gu)?.length, 3);
+  assert.match(progress, /formatNumber\(localhostSummary\.timeoutMs\)/u);
+  assert.match(progress, /formatNumber\(localhostSummary\.payloadBytes\)/u);
 });
 
 test("App immediately selects the returned native workspace, opens progress, then refreshes authoritatively", async () => {
@@ -151,6 +189,8 @@ test("App immediately selects the returned native workspace, opens progress, the
   assert.match(app, /nativeMode=\{mode === "native"\}/u);
   assert.match(app, /localhostQuickScanBusy=\{busyAction === "localhost-quick-scan"\}/u);
   assert.match(app, /onStartLocalhostQuickScan=\{\(port\) => void startLocalhostQuickScan\(port\)\}/u);
+  assert.match(app, /onRetryLocalhostQuickScan=\{startLocalhostQuickScan\}/u);
+  assert.match(app, /retryingLocalhostQuickScan=\{busyAction === "localhost-quick-scan"\}/u);
 });
 
 test("the scanner service adapts the queued localhost workspace without loading catalog manifests", async () => {

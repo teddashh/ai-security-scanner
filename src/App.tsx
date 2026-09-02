@@ -10,6 +10,7 @@ import { CoveragePage } from "./pages/CoveragePage";
 import { ExportPage } from "./pages/ExportPage";
 import { FindingsPage } from "./pages/FindingsPage";
 import { ProgressPage } from "./pages/ProgressPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { StartPage } from "./pages/StartPage";
 import { VerificationPage } from "./pages/VerificationPage";
 import {
@@ -27,6 +28,11 @@ import {
   scanLifecycleToastPresentation,
 } from "./scanLifecycleDisposition";
 import { findRunCreatedAfterStart, hasActiveScanWork } from "./freshScanSelection";
+import { reconcileReportRunId } from "./exportRunSelection";
+import {
+  appendExportToMatchingSnapshot,
+  selectVerificationBaselineRunId,
+} from "./caseScopedUiState";
 import { isExactBuiltInLocalhostQuickScanRun } from "./localhostQuickScan";
 import { shouldAutomaticallyPrepareRuntime } from "./runtimeFirstLaunch";
 import {
@@ -69,6 +75,7 @@ import type {
   CreateCaseInput,
   ExportPreview,
   ExportFormat,
+  ReportLocale,
   ManagedRuntimeSetupStatus,
   PageId,
   ScanReadiness,
@@ -78,9 +85,20 @@ import type {
   ToastMessage,
 } from "./types";
 
+interface AppToastMessage extends ToastMessage {
+  persistent?: boolean;
+  actionLabel?: string;
+  actionLabelText?: BilingualText;
+  titleText?: BilingualText;
+  detailText?: BilingualText;
+  actionCaseId?: string;
+  actionPage?: PageId;
+  action?: () => void;
+}
+
 const pageFromHash = (): PageId => {
   const value = window.location.hash.replace(/^#\/?/, "") as PageId;
-  return ["start", "cases", "coverage", "progress", "findings", "export", "verification"].includes(value)
+  return ["start", "cases", "coverage", "progress", "findings", "export", "settings", "verification"].includes(value)
     ? value
     : "start";
 };
@@ -290,7 +308,7 @@ const SELECTED_SNAPSHOT_READ_KEY = "__currently_selected_case__";
 const MANAGED_RUNTIME_STATUS_READ_KEY = "__managed_runtime_setup_status__";
 
 export default function App() {
-  const { locale, t, text, formatNumber } = useI18n();
+  const { locale, setLocale, t, text, formatNumber } = useI18n();
   const [page, setPage] = useState<PageId>(pageFromHash);
   const [snapshot, setSnapshot] = useState<AppSnapshot>();
   const [mode, setMode] = useState<AppMode>(scannerService.isNative() ? "native" : "demo");
@@ -299,7 +317,7 @@ export default function App() {
   const [caseSelectionUnavailableId, setCaseSelectionUnavailableId] = useState<string>();
   const [busyAction, setBusyAction] = useState<string>();
   const [startingScanCaseId, setStartingScanCaseId] = useState<string>();
-  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [toasts, setToasts] = useState<AppToastMessage[]>([]);
   const [artifactCleanupPlan, setArtifactCleanupPlan] = useState<CaseArtifactDeletionPlan>();
   const [artifactCleanupResult, setArtifactCleanupResult] = useState<CaseArtifactCleanupResult>();
   const [runtimeSetup, setRuntimeSetup] = useState<ManagedRuntimeSetupStatus>();
@@ -324,6 +342,8 @@ export default function App() {
   const scanReadinessRequestGeneration = useRef(0);
   const scanReadinessResponseGeneration = useRef(0);
   const selectedCaseIdRef = useRef<string | undefined>(undefined);
+  const reportSelectionCaseIdRef = useRef<string | undefined>(undefined);
+  const verificationBaselineCaseIdRef = useRef<string | undefined>(undefined);
   const scanWorkspaceEventGeneration = useRef(0);
   const observedScanWorkspaces = useRef(new Map<string, {
     generation: number;
@@ -336,7 +356,7 @@ export default function App() {
   const runtimeSetupStatusReadCoalescer = useRef(
     createInFlightReadCoalescer<string, ServiceResult<ManagedRuntimeSetupStatus>>(),
   ).current;
-  const runtimeSnapshotRefreshInFlight = useRef<Promise<void> | undefined>(undefined);
+  const runtimeSnapshotRefreshInFlight = useRef<Promise<AppSnapshot | undefined> | undefined>(undefined);
   const snapshotReadCoalescer = useRef(
     createInFlightReadCoalescer<string, ServiceResult<AppSnapshot>>(),
   ).current;
@@ -351,10 +371,12 @@ export default function App() {
   } | undefined>(undefined);
   const reconciledRuntimeTerminalKey = useRef<string | undefined>(undefined);
 
-  const pushToast = useCallback((toast: Omit<ToastMessage, "id">) => {
+  const pushToast = useCallback((toast: Omit<AppToastMessage, "id">) => {
     const id = ++toastId.current;
     setToasts((current) => [...current, { ...toast, id }]);
-    window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 5200);
+    if (!toast.persistent) {
+      window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 5200);
+    }
   }, []);
 
   const applyServiceMeta = useCallback(<T,>(result: ServiceResult<T>) => {
@@ -466,6 +488,7 @@ export default function App() {
         setScanReadinessErrorCaseId(undefined);
       }
       setArtifactCleanupPlan((current) => current ?? result.data.artifactCleanupObligations?.[0]);
+      return result.data;
     };
 
     if (!quiet) setLoading(true);
@@ -494,9 +517,9 @@ export default function App() {
         throw new Error("read-only snapshot refresh timed out");
       }
       if (boundedSnapshotRead.outcome === "failed") throw boundedSnapshotRead.error;
-      await applySnapshotResult(boundedSnapshotRead.value);
+      return await applySnapshotResult(boundedSnapshotRead.value);
     } catch (error) {
-      if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
+      if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return undefined;
       recordTechnicalError("load local cases", error);
       setSnapshotRefreshUnavailable(true);
       if (!quiet) {
@@ -509,6 +532,7 @@ export default function App() {
           }),
         });
       }
+      return undefined;
     } finally {
       if (!quiet) setLoading(false);
     }
@@ -770,8 +794,10 @@ export default function App() {
         retainActiveSetup();
         return;
       }
-      await refreshRuntimeSnapshot();
+      const refreshedSnapshot = await refreshRuntimeSnapshot();
       const completed = setupStatus.phase === "completed";
+      const runtimeReady = refreshedSnapshot?.runtime?.available === true;
+      const completedAndReady = completed && runtimeReady;
       const cancelled = setupStatus.phase === "cancelled";
       const nonRetryable = isManagedRuntimePackageAdmissionFailure(setupStatus);
       if (!automatic && !completed && !cancelled) {
@@ -779,23 +805,30 @@ export default function App() {
         setPage("start");
       }
       pushToast({
-        tone: completed ? "success" : "warning",
+        tone: completedAndReady ? "success" : "warning",
         title: completed
-          ? text({ en: "The private scan engine is ready", zhTW: "私有掃描引擎已就緒" })
+          ? completedAndReady
+            ? text({ en: "The private scan engine is ready", zhTW: "私有掃描引擎已就緒" })
+            : text({ en: "Setup finished; checking availability", zhTW: "設定已完成，正在確認可用狀態" })
           : nonRetryable
             ? text({ en: "One local check cannot run in this app version", zhTW: "這個程式版本有一項本機檢查無法執行" })
             : cancelled
             ? text({ en: "Scan-tool setup paused", zhTW: "掃描工具設定已暫停" })
             : text({ en: "Scan-tool setup stopped", zhTW: "掃描工具設定已停止" }),
         detail: completed
-          ? automatic
-            ? text({
-              en: "Setup is complete. You can start using ai-security-scanner.",
-              zhTW: "安裝已完成，現在可以直接使用 ai-security-scanner。",
-            })
+          ? completedAndReady
+            ? automatic
+              ? text({
+                en: "Setup is complete. You can start using ai-security-scanner.",
+                zhTW: "安裝已完成，現在可以直接使用 ai-security-scanner。",
+              })
+              : text({
+                en: "You can continue with your chosen check.",
+                zhTW: "現在可以繼續設定你選擇的檢查。",
+              })
             : text({
-              en: "You can continue with your chosen check.",
-              zhTW: "現在可以繼續設定你選擇的檢查。",
+              en: "The setup operation finished, but the app has not confirmed that the scan engine is available. Your projects are unchanged; use Retry if this does not update.",
+              zhTW: "設定操作已完成，但程式尚未確認掃描引擎可用。你的專案沒有變更；若狀態沒有更新，請按「再試一次」。",
             })
           : nonRetryable
             ? text({
@@ -989,7 +1022,6 @@ export default function App() {
     if (target !== "findings") setFocusedFindingId(undefined);
     window.location.hash = target;
     setPage(target);
-    document.getElementById("main-content")?.focus();
   };
 
   const selectCase = async (caseId: string) => {
@@ -1001,6 +1033,8 @@ export default function App() {
       applyServiceMeta(result);
       selectedCaseIdRef.current = caseId;
       setCaseSelectionUnavailableId(undefined);
+      setToasts((current) => current.filter((toast) =>
+        toast.actionCaseId === undefined || toast.actionCaseId === caseId));
       setSnapshot((current) => current ? { ...current, selectedCaseId: caseId, workspace: result.data } : current);
       const readinessResponseGeneration = ++scanReadinessResponseGeneration.current;
       const handleReadinessError = (error: unknown) => {
@@ -1129,6 +1163,9 @@ export default function App() {
   const startLocalhostQuickScan = async (port: number): Promise<void> => {
     setBusyAction("localhost-quick-scan");
     const workspaceEventGenerationAtRequest = scanWorkspaceEventGeneration.current;
+    const recoverScanProgress = () => {
+      void loadSnapshot(undefined, true).finally(() => navigate("progress"));
+    };
     try {
       const result = await scannerService.startLocalhostQuickScan(port);
       applyServiceMeta(result);
@@ -1136,9 +1173,26 @@ export default function App() {
       if (result.mode !== "native" || !result.data.accepted || !quickWorkspace) {
         pushToast({
           tone: result.mode === "demo" ? "info" : "warning",
+          persistent: result.mode === "native",
+          actionLabelText: result.mode === "native"
+            ? { en: "Open Scan progress", zhTW: "開啟掃描進度" }
+            : undefined,
+          actionLabel: result.mode === "native"
+            ? text({ en: "Open Scan progress", zhTW: "開啟掃描進度" })
+            : undefined,
+          action: result.mode === "native" ? recoverScanProgress : undefined,
+          titleText: result.mode === "native"
+            ? { en: "This computer check needs attention", zhTW: "這台電腦的檢查需要留意" }
+            : undefined,
           title: result.mode === "demo"
             ? text({ en: "Browser demo did not run a real check", zhTW: "瀏覽器展示模式沒有執行真實檢查" })
             : text({ en: "This computer check needs attention", zhTW: "這台電腦的檢查需要留意" }),
+          detailText: result.mode === "native"
+            ? {
+              en: "The app could not confirm the saved state. Open Scan progress first; if no new check appears, try again. Existing projects and results were kept.",
+              zhTW: "程式無法確認已保存的狀態。請先開啟「掃描進度」查看；若沒有新的檢查，再試一次。既有專案與結果都已保留。",
+            }
+            : undefined,
           detail: result.mode === "demo"
             ? text({
               en: "Nothing on this computer was contacted or changed.",
@@ -1190,7 +1244,16 @@ export default function App() {
       recordTechnicalError("start localhost quick scan", error);
       pushToast({
         tone: "danger",
+        persistent: true,
+        actionLabelText: { en: "Open Scan progress", zhTW: "開啟掃描進度" },
+        actionLabel: text({ en: "Open Scan progress", zhTW: "開啟掃描進度" }),
+        action: recoverScanProgress,
+        titleText: { en: "This computer check needs attention", zhTW: "這台電腦的檢查需要留意" },
         title: text({ en: "This computer check needs attention", zhTW: "這台電腦的檢查需要留意" }),
+        detailText: {
+          en: "The app could not confirm the saved state. Open Scan progress first; if no new check appears, try again. Existing projects and results were kept.",
+          zhTW: "程式無法確認已保存的狀態。請先開啟「掃描進度」查看；若沒有新的檢查，再試一次。既有專案與結果都已保留。",
+        },
         detail: text({
           en: "The app could not confirm the saved state. Open Scan progress first; if no new check appears, try again. Existing projects and results were kept.",
           zhTW: "程式無法確認已保存的狀態。請先開啟「掃描進度」查看；若沒有新的檢查，再試一次。既有專案與結果都已保留。",
@@ -1459,16 +1522,20 @@ export default function App() {
   };
 
   const workspace = snapshot?.workspace;
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
   useEffect(() => {
     const runs = workspace?.runs ?? [];
-    const newest = runs[0];
-    if (!newest) {
-      setSelectedReportRunId(undefined);
-      return;
-    }
-    const selectedStillExists = runs.some((run) => run.id === selectedReportRunId);
-    if (!selectedStillExists) setSelectedReportRunId(newest.id);
-  }, [selectedReportRunId, workspace?.case.id, workspace?.runs]);
+    const caseId = workspace?.case.id;
+    const previousCaseId = reportSelectionCaseIdRef.current;
+    reportSelectionCaseIdRef.current = caseId;
+    setSelectedReportRunId((current) => reconcileReportRunId(
+      previousCaseId,
+      caseId,
+      current,
+      runs,
+    ));
+  }, [workspace?.case.id, workspace?.runs]);
   const activeScanCaseId = mode === "native"
     && !loading
     && workspace
@@ -1543,12 +1610,23 @@ export default function App() {
   );
 
   useEffect(() => {
-    setVerificationBaselineRunId((current) =>
-      terminalRuns.some((run) => run.id === current) ? current : terminalRuns[0]?.id,
-    );
-  }, [workspace?.case.id, terminalRuns]);
+    const nextCaseId = workspace?.case.id;
+    setVerificationBaselineRunId((current) => {
+      const selected = selectVerificationBaselineRunId({
+        previousCaseId: verificationBaselineCaseIdRef.current,
+        nextCaseId,
+        currentRunId: current,
+        savedRunId: workspace?.verification?.baselineRunId,
+        terminalRunIds: terminalRuns.map((run) => run.id),
+      });
+      verificationBaselineCaseIdRef.current = nextCaseId;
+      return selected;
+    });
+  }, [workspace?.case.id, workspace?.verification?.baselineRunId, terminalRuns]);
 
   const previewExport = useCallback(async (options: {
+    runId: string;
+    locale: ReportLocale;
     format: ExportFormat;
     includeRawEvidence: boolean;
     redactSensitiveValues: boolean;
@@ -1563,34 +1641,35 @@ export default function App() {
   }, [applyServiceMeta, workspace]);
 
   const exportCase = async (options: {
+    runId: string;
+    locale: ReportLocale;
     format: ExportFormat;
     includeRawEvidence: boolean;
     redactSensitiveValues: boolean;
   }) => {
-    if (!workspace) return;
+    const exportWorkspace = workspaceRef.current;
+    if (!exportWorkspace) return;
+    const exportCaseId = exportWorkspace.case.id;
     setBusyAction("export");
     try {
       const result = await scannerService.exportCase(
-        { caseId: workspace.case.id, ...options },
-        workspace,
+        { caseId: exportCaseId, ...options },
+        exportWorkspace,
       );
       applyServiceMeta(result);
       if (!result.data) {
-        pushToast({
-          tone: "info",
-          title: text({ en: "Export cancelled", zhTW: "已取消匯出" }),
-          detail: text({ en: "No file was created or written.", zhTW: "沒有建立或寫出任何檔案。" }),
-        });
+        if (selectedCaseIdRef.current === exportCaseId) {
+          pushToast({
+            tone: "info",
+            title: text({ en: "Export cancelled", zhTW: "已取消匯出" }),
+            detail: text({ en: "No file was created or written.", zhTW: "沒有建立或寫出任何檔案。" }),
+          });
+        }
         return;
       }
       const exported = result.data;
-      setSnapshot((current) => current?.workspace ? {
-        ...current,
-        workspace: {
-          ...current.workspace,
-          exports: [exported, ...current.workspace.exports],
-        },
-      } : current);
+      setSnapshot((current) => appendExportToMatchingSnapshot(current, exportCaseId, exported));
+      if (selectedCaseIdRef.current !== exportCaseId) return;
       pushToast({
         tone: result.mode === "native" ? "success" : "info",
         title: result.mode === "native"
@@ -1608,9 +1687,22 @@ export default function App() {
       });
     } catch (error) {
       recordTechnicalError("export case", error);
+      if (selectedCaseIdRef.current !== exportCaseId) return;
       pushToast({
         tone: "danger",
+        persistent: true,
+        actionCaseId: exportCaseId,
+        actionLabelText: { en: "Try export again", zhTW: "再次嘗試匯出" },
+        actionLabel: text({ en: "Try export again", zhTW: "再次嘗試匯出" }),
+        action: () => {
+          if (selectedCaseIdRef.current === exportCaseId) void exportCase(options);
+        },
+        titleText: { en: "The case was not exported", zhTW: "案件沒有匯出成功" },
         title: text({ en: "The case was not exported", zhTW: "案件沒有匯出成功" }),
+        detailText: {
+          en: "No output file was written. Try another report type or location; open Technical details if it keeps happening.",
+          zhTW: "沒有寫出檔案；請改用另一種報告格式或儲存位置。如果問題持續發生，請查看「技術細節」。",
+        },
         detail: text({
           en: "No output file was written. Try another report type or location; open Technical details if it keeps happening.",
           zhTW: "沒有寫出檔案；請改用另一種報告格式或儲存位置。如果問題持續發生，請查看「技術細節」。",
@@ -1656,8 +1748,9 @@ export default function App() {
   };
 
   const currentCaseId = workspace?.case.id ?? selectedCase?.id;
-  const currentRun = workspace?.runs.find((run) => run.id === selectedReportRunId)
-    ?? workspace?.runs[0];
+  const currentRun = selectedReportRunId === undefined
+    ? workspace?.runs[0]
+    : workspace?.runs.find((run) => run.id === selectedReportRunId);
   const currentBeginnerReport = currentRun
     ? workspace?.beginnerReports?.find((report) => report.runId === currentRun.id)
     : undefined;
@@ -1769,6 +1862,19 @@ export default function App() {
       );
     }
 
+    if (page === "settings") {
+      return (
+        <SettingsPage
+          locale={locale}
+          mode={mode}
+          runtimeAvailable={snapshot?.runtime?.available}
+          onLocaleChange={setLocale}
+          onOpenNewScan={() => navigate("start")}
+          onOpenProjects={() => navigate("cases")}
+        />
+      );
+    }
+
     if (!workspace || !currentCaseId) {
       return (
         <EmptyState
@@ -1807,7 +1913,9 @@ export default function App() {
             onChooseWorkspace={() => scannerService.chooseWorkspaceDirectory()}
             onAttachWorkspaceSnapshot={(input) => executeAction("attach-workspace", () => scannerService.attachWorkspaceSnapshot(input))}
             onStartDiscovery={() => runAction("discovery", () => scannerService.startDiscovery(currentCaseId))}
-            onAuthorizationChanged={() => loadSnapshot(currentCaseId, true)}
+            onAuthorizationChanged={async () => {
+              await loadSnapshot(currentCaseId, true);
+            }}
             onStartScan={(assetIds, modes, confirmation, externalScope) => startScan({
               caseId: currentCaseId,
               authorization: { assetIds, modes, confirmation, externalScope },
@@ -1828,9 +1936,11 @@ export default function App() {
             }}
             busy={Boolean(busyAction)}
             starting={Boolean(currentCaseId && busyAction === "start-scan" && startingScanCaseId === currentCaseId)}
+            retryingLocalhostQuickScan={busyAction === "localhost-quick-scan"}
             onStart={async () => {
               if (currentCaseId) await startScan({ caseId: currentCaseId });
             }}
+            onRetryLocalhostQuickScan={startLocalhostQuickScan}
             onFixSetup={() => {
               if (scanReadinessErrorCaseId === currentCaseId) {
                 void retryScanReadiness(currentCaseId);
@@ -1867,7 +1977,8 @@ export default function App() {
         return (
           <FindingsPage
             report={currentBeginnerReport}
-            reportUnavailable={Boolean(currentRun && workspace.beginnerReports && !currentBeginnerReport)}
+            selectedRunId={selectedReportRunId}
+            reportUnavailable={Boolean((currentRun || selectedReportRunId) && !currentBeginnerReport)}
             findings={workspace.findings}
             findingGroups={workspace.findingGroups}
             findingGroupEvents={workspace.findingGroupEvents}
@@ -1893,7 +2004,10 @@ export default function App() {
             }))}
             onOpenCoverage={() => navigate("coverage")}
             onOpenProgress={() => navigate("progress")}
-            onOpenExport={() => navigate("export")}
+            onOpenExport={(runId) => {
+              setSelectedReportRunId(runId);
+              navigate("export");
+            }}
             onSelectRun={setSelectedReportRunId}
           />
         );
@@ -1901,6 +2015,7 @@ export default function App() {
         return (
           <ExportPage
             workspace={workspace}
+            selectedRunId={selectedReportRunId}
             exports={workspace.exports}
             demoMode={mode === "demo" || Boolean(workspace.case.isDemo)}
             busy={busyAction === "export" || busyAction === "verify-export"}
@@ -1977,7 +2092,25 @@ export default function App() {
         {toasts.map((toast) => (
           <div key={toast.id} className={`toast toast--${toast.tone}`}>
             <Icon name={toast.tone === "success" ? "check" : toast.tone === "danger" || toast.tone === "warning" ? "warning" : "info"} size={19} />
-            <div><strong>{toast.title}</strong>{toast.detail && <span>{toast.detail}</span>}</div>
+            <div>
+              <strong>{toast.titleText ? text(toast.titleText) : toast.title}</strong>
+              {(toast.detailText || toast.detail) && (
+                <span>{toast.detailText ? text(toast.detailText) : toast.detail}</span>
+              )}
+              {toast.actionLabel && (toast.action || toast.actionPage) && (
+                <button
+                  className="toast__action"
+                  type="button"
+                  onClick={() => {
+                    setToasts((current) => current.filter((item) => item.id !== toast.id));
+                    if (toast.action) toast.action();
+                    else if (toast.actionPage) navigate(toast.actionPage);
+                  }}
+                >
+                  {toast.actionLabelText ? text(toast.actionLabelText) : toast.actionLabel}
+                </button>
+              )}
+            </div>
             <button
               type="button"
               aria-label={text({ en: "Close notification", zhTW: "關閉通知" })}

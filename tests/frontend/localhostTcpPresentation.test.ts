@@ -16,7 +16,11 @@ const bundled = await build({
 });
 const source = bundled.outputFiles[0]?.text;
 assert.ok(source, "localhost result presentation bundle should contain JavaScript");
-const { localhostTcpBeginnerSummary } = await import(
+const {
+  localhostTcpBeginnerSummary,
+  localhostTestedDimensionValue,
+  needsFreshLocalhostTcpAttempt,
+} = await import(
   `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
 );
 
@@ -84,6 +88,50 @@ test("missing observations never turn completed, failed, or cancelled work into 
       `${summary.title.en} ${summary.description.en} ${summary.nextStep.en}`,
       /came from one TCP connection attempt|made one TCP|connection attempt finishes/iu,
     );
+  }
+});
+
+test("the localhost master-report boundary is localized only in first-layer presentation", () => {
+  const dimension = "bounded connection contract";
+  const frozen = "one connection attempt; 3000 ms timeout; 0 application-payload bytes";
+
+  assert.equal(
+    localhostTestedDimensionValue(engine(), dimension, frozen, "zh-TW"),
+    "只進行 1 次 TCP 連線嘗試 · 逾時上限 3,000 毫秒 · 傳送 0 位元組應用資料",
+  );
+  assert.equal(
+    localhostTestedDimensionValue(engine(), dimension, frozen, "en"),
+    "One TCP connection attempt · 3,000 ms timeout · 0 application-data bytes",
+  );
+  assert.equal(
+    localhostTestedDimensionValue(engine({
+      engineId: "catalog-check",
+      taskKind: { kind: "catalog_engine" },
+    }), dimension, frozen, "zh-TW"),
+    frozen,
+    "an unrelated check must retain its exact value",
+  );
+  assert.equal(
+    localhostTestedDimensionValue(engine(), dimension, "legacy boundary", "zh-TW"),
+    "legacy boundary",
+    "legacy or malformed canonical values must remain visible",
+  );
+});
+
+test("a colliding report check id cannot claim localhost presentation without the canonical task", () => {
+  const frozen = "one connection attempt; 3000 ms timeout; 0 application-payload bytes";
+  assert.equal(
+    localhostTestedDimensionValue(undefined, "bounded connection contract", frozen, "zh-TW"),
+    frozen,
+  );
+});
+
+test("only terminal localhost records without a usable observation offer a fresh saved attempt", () => {
+  for (const outcome of ["failed", "missing", "inconsistent", "cancelled"] as const) {
+    assert.equal(needsFreshLocalhostTcpAttempt(outcome), true, outcome);
+  }
+  for (const outcome of ["reachable", "closed", "timed_out", "in_progress", "cancelling"] as const) {
+    assert.equal(needsFreshLocalhostTcpAttempt(outcome), false, outcome);
   }
 });
 

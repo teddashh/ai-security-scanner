@@ -9,6 +9,7 @@ export type PageId =
   | "progress"
   | "findings"
   | "export"
+  | "settings"
   | "verification";
 
 export type CloudPlatform =
@@ -67,6 +68,11 @@ export interface AssessmentCase {
   assetCount?: number;
   /** Canonical finding count across the case, not a selected-run count. */
   findingCount?: number;
+  /** Frontend-only identity derived from a canonical product-owned execution contract. */
+  productIdentity?: {
+    kind: "localhost_quick_scan";
+    port: number;
+  };
 }
 
 export interface CreateCaseInput {
@@ -661,6 +667,8 @@ export interface ScanRun {
   id: string;
   caseId: string;
   label: string;
+  /** Canonical backend sequence used to present product-generated run labels. */
+  sequence?: number;
   verificationBaselineRunId?: string;
   requestOutcome?: ScanRequestOutcome;
   status: RunStatus;
@@ -1124,6 +1132,8 @@ export type ExportFormat =
 export interface CaseExport {
   id: string;
   caseId: string;
+  /** Immutable scan-run coordinate captured when this export was created. */
+  runId: string;
   /** Missing only for a record written before exact export metadata existed. */
   format?: ExportFormat;
   createdAt: string;
@@ -1142,8 +1152,11 @@ export interface CaseExport {
 export interface ExportPreview {
   caseId: string;
   runId: string;
+  /** Presentation locale bound to this exact preview coordinate. */
+  locale: ReportLocale;
   format: ExportFormat;
   redactionProfile: "standard" | "none";
+  includeRawEvidence: boolean;
   dataSourceCount: number;
   coverageEntryCount: number;
   assetCount: number;
@@ -1307,11 +1320,15 @@ export interface ServiceResult<T> {
 
 export interface ExportCaseInput {
   caseId: string;
+  runId: string;
+  locale: ReportLocale;
   format: ExportFormat;
   includeRawEvidence: boolean;
   redactSensitiveValues: boolean;
   destination?: string;
 }
+
+export type ReportLocale = "en" | "zh-Hant";
 
 export interface ToastMessage {
   id: number;

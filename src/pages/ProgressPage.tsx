@@ -8,9 +8,14 @@ import { engineStatusMeta, executionStageMeta, runStatusMeta } from "../lib";
 import {
   isExactBuiltInLocalhostQuickScanRun,
   isLocalhostQuickScanCancelRequested,
+  isTerminalExactBuiltInLocalhostQuickScanRun,
 } from "../localhostQuickScan";
-import { localhostTcpBeginnerSummary } from "../localhostTcpPresentation";
+import {
+  localhostTcpBeginnerSummary,
+  needsFreshLocalhostTcpAttempt,
+} from "../localhostTcpPresentation";
 import { scanRequestOutcomeBeginnerSummary } from "../scanRequestOutcomePresentation";
+import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import {
   buildScanActivity,
   type ScanActivityEvent,
@@ -56,7 +61,9 @@ interface ProgressPageProps {
   diagnosticContext?: ScanDiagnosticContext;
   busy?: boolean;
   starting?: boolean;
+  retryingLocalhostQuickScan?: boolean;
   onStart: () => Promise<void>;
+  onRetryLocalhostQuickScan: (port: number) => Promise<void>;
   onFixSetup: () => void;
   onPause: (runId: string) => Promise<void>;
   onResume: (runId: string) => Promise<void>;
@@ -101,6 +108,16 @@ const copy = {
   },
   start: { en: "Start scan", zhTW: "開始掃描" },
   startFreshScan: { en: "Start a new scan for fresh results", zhTW: "開始新的掃描取得新結果" },
+  retryLocalhostQuickScan: { en: "Run this check again", zhTW: "重新執行這項檢查" },
+  retryingLocalhostQuickScan: { en: "Starting a new attempt…", zhTW: "正在開始新的嘗試…" },
+  retryLocalhostQuickScanTitle: {
+    en: "Run another localhost check",
+    zhTW: "再次執行本機檢查",
+  },
+  retryLocalhostQuickScanDescription: {
+    en: "Running it again creates a new saved attempt for 127.0.0.1:{port}. This result stays unchanged.",
+    zhTW: "重新執行會為 127.0.0.1:{port} 建立一筆新的已保存嘗試；這筆結果會保持不變。",
+  },
   releaseIncompatibleTitle: {
     en: "Some saved checks need a new scan",
     zhTW: "部分已保存的檢查需要新的掃描",
@@ -645,6 +662,13 @@ const engineStates: EngineRunStatus[] = [
 ];
 
 const terminalEngineStates: EngineRunStatus[] = ["completed", "partial", "failed", "not_executed", "cancelled"];
+const terminalRunStatuses = new Set<ScanRun["status"]>([
+  "completed",
+  "no_checks_completed",
+  "partial",
+  "failed",
+  "cancelled",
+]);
 
 const isExecutionStage = (phase: string): phase is ExecutionStage =>
   Object.prototype.hasOwnProperty.call(executionStageMeta, phase);
@@ -667,14 +691,16 @@ export function ProgressPage({
   diagnosticContext,
   busy,
   starting,
+  retryingLocalhostQuickScan,
   onStart,
+  onRetryLocalhostQuickScan,
   onFixSetup,
   onPause,
   onResume,
   onCancel,
   onSelectRun,
 }: ProgressPageProps) {
-  const { locale, text, formatDate, formatDateTime, formatNumber } = useI18n();
+  const { locale, t, text, formatDate, formatDateTime, formatNumber } = useI18n();
   const [localSelectedRunId, setLocalSelectedRunId] = useState(runs[0]?.id);
   const selectedRunId = controlledSelectedRunId ?? localSelectedRunId;
   const selectRun = (runId: string) => {
@@ -682,8 +708,29 @@ export function ProgressPage({
     onSelectRun?.(runId);
   };
   const startRunIds = useRef<{ caseId?: string; ids: Set<string> } | undefined>(undefined);
+  const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0];
+  const exactLocalhostQuickScan = Boolean(
+    selectedRun && isExactBuiltInLocalhostQuickScanRun(selectedRun),
+  );
+  const terminalExactLocalhostQuickScan = Boolean(
+    selectedRun && isTerminalExactBuiltInLocalhostQuickScanRun(selectedRun),
+  );
+  const terminalLocalhostSummary = terminalExactLocalhostQuickScan && selectedRun
+    ? localhostTcpBeginnerSummary(selectedRun.engineRuns[0]!)
+    : undefined;
+  const canRetryLocalhostQuickScan = Boolean(
+    terminalLocalhostSummary && (
+      terminalLocalhostSummary.outcome === "closed"
+      || terminalLocalhostSummary.outcome === "timed_out"
+      || needsFreshLocalhostTcpAttempt(terminalLocalhostSummary.outcome)
+    ),
+  );
+  const showResultsAction = Boolean(
+    selectedRun && terminalRunStatuses.has(selectedRun.status),
+  );
   const scanWorkActive = hasActiveScanWork(runs);
-  const canStart = canStartPreparedScan(readiness, Boolean(readinessCheckFailed), runs);
+  const canStart = !terminalExactLocalhostQuickScan
+    && canStartPreparedScan(readiness, Boolean(readinessCheckFailed), runs);
   const blockerPresentation = readiness?.blockerCode
     ? readinessPresentation[readiness.blockerCode]
     : undefined;
@@ -748,7 +795,6 @@ export function ProgressPage({
     }
   }, [caseId, runs, starting]);
 
-  const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0];
   const [activityClock, setActivityClock] = useState(() => new Date());
   useEffect(() => {
     if (!selectedRun || !["queued", "running", "paused"].includes(selectedRun.status)) return undefined;
@@ -940,7 +986,6 @@ export function ProgressPage({
   const visibleWorkCount = sharedInfrastructureFailure
     ? 1 + (skipped && !blocked ? 1 : 0)
     : visibleEngineRuns.length + (skipped && !blocked ? 1 : 0);
-  const exactLocalhostQuickScan = isExactBuiltInLocalhostQuickScanRun(selectedRun);
   const localhostCancelRequested = isLocalhostQuickScanCancelRequested(selectedRun);
   const canPause = selectedRun.status === "running" && !exactLocalhostQuickScan;
   const recoverableEngines = selectedRun.engineRuns.filter((engine) => engine.resumable);
@@ -994,6 +1039,23 @@ export function ProgressPage({
         description={text(copy.description)}
         actions={(
           <div className="button-group">
+            {canRetryLocalhostQuickScan && terminalLocalhostSummary && (
+              <button
+                className="button button--primary"
+                type="button"
+                disabled={busy || retryingLocalhostQuickScan}
+                aria-busy={retryingLocalhostQuickScan}
+                onClick={() => void onRetryLocalhostQuickScan(terminalLocalhostSummary.port)}
+              >
+                <Icon name={retryingLocalhostQuickScan ? "progress" : "refresh"} size={17} />
+                {text(retryingLocalhostQuickScan ? copy.retryingLocalhostQuickScan : copy.retryLocalhostQuickScan)}
+              </button>
+            )}
+            {showResultsAction && (
+              <a className="button button--secondary" href="#findings">
+                <Icon name="findings" size={17} />{t("nav.findings.label")}
+              </a>
+            )}
             {canStart && !hasReleaseIncompatibleWork && (
               <button className="button button--primary" type="button" disabled={busy || starting} aria-busy={starting} onClick={requestStart}>
                 <Icon name={starting ? "progress" : "play"} size={17} />{text(starting ? copy.startingAction : copy.start)}
@@ -1023,6 +1085,12 @@ export function ProgressPage({
         )}
       />
 
+      {canRetryLocalhostQuickScan && terminalLocalhostSummary && (
+        <InlineNotice tone="warning" title={text(copy.retryLocalhostQuickScanTitle)}>
+          <p>{text(copy.retryLocalhostQuickScanDescription, { port: String(terminalLocalhostSummary.port) })}</p>
+        </InlineNotice>
+      )}
+
       {starting && (
         <InlineNotice tone="info" title={text(copy.startingNewTitle)}>
           <p role="status">{text(copy.startingNewDescription)}</p>
@@ -1044,7 +1112,7 @@ export function ProgressPage({
         </InlineNotice>
       )}
 
-      {readinessCheckFailed && (
+      {!terminalExactLocalhostQuickScan && readinessCheckFailed && (
         <InlineNotice tone="warning" title={text(copy.readinessUnavailableTitle)}>
           <p>{text(copy.readinessUnavailableDescription)}</p>
           <button className="button button--primary button--small" type="button" disabled={busy} onClick={onFixSetup}>
@@ -1053,7 +1121,7 @@ export function ProgressPage({
         </InlineNotice>
       )}
 
-      {readiness && !readiness.ready && readiness.blockerCode && (readiness.nextStep !== "progress" || startFreshScan) && (
+      {!terminalExactLocalhostQuickScan && readiness && !readiness.ready && readiness.blockerCode && (readiness.nextStep !== "progress" || startFreshScan) && (
         <InlineNotice tone="warning" title={text(blockerTitle)}>
           <p>{text(blockerDescription)}</p>
           {needsLatestInstaller ? (
@@ -1080,7 +1148,7 @@ export function ProgressPage({
                 aria-pressed={run.id === selectedRun.id}
                 onClick={() => selectRun(run.id)}
               >
-                <strong>{run.label}</strong>
+                <strong>{scanRunIdentityPresentation(run, locale)}</strong>
                 <span>{index === 0 ? text(copy.latest) : ""}{runStatusMeta[run.status].label} · {showDateTime(run.startedAt)}</span>
               </button>
             ))}
@@ -1123,7 +1191,7 @@ export function ProgressPage({
                   : runMeta.label}
               tone={requestOutcomeSummary || blocked ? "warning" : sharedInfrastructureFailure ? "danger" : runMeta.tone}
             />
-            <span>{selectedRun.label}</span>
+            <span>{scanRunIdentityPresentation(selectedRun, locale)}</span>
           </div>
           <h2>{requestOutcomeSummary
             ? text(requestOutcomeSummary.title)
@@ -1393,7 +1461,7 @@ export function ProgressPage({
                       {localhostSummary ? (
                         <dl>
                           <div><dt>{text(copy.builtInCheck)}</dt><dd>{text(localhostSummary.outcomeLabel)}</dd></div>
-                          <div><dt>{text(copy.endpoint)}</dt><dd><code>127.0.0.1:{formatNumber(localhostSummary.port)}</code></dd></div>
+                          <div><dt>{text(copy.endpoint)}</dt><dd><code>127.0.0.1:{String(localhostSummary.port)}</code></dd></div>
                           <div><dt>{text(copy.timeout)}</dt><dd>{formatNumber(localhostSummary.timeoutMs)} ms</dd></div>
                           <div><dt>{text(copy.payload)}</dt><dd>{text(copy.bytes, { count: formatNumber(localhostSummary.payloadBytes) })}</dd></div>
                         </dl>
@@ -1445,7 +1513,7 @@ export function ProgressPage({
                       tone={localhostTone ?? meta.tone}
                     />
                     <span>{localhostSummary
-                      ? `127.0.0.1:${formatNumber(localhostSummary.port)}`
+                      ? `127.0.0.1:${String(localhostSummary.port)}`
                       : engine.findingCountKnown === false
                         ? text(copy.legacyFindingUnknown)
                         : text(copy.findingCount, { count: formatNumber(engine.findingCount) })}</span>
@@ -1458,7 +1526,7 @@ export function ProgressPage({
                     {localhostSummary ? (
                       <dl>
                         <div><dt>{text(copy.taskId)}</dt><dd><code>{engine.id}</code></dd></div>
-                        <div><dt>{text(copy.endpoint)}</dt><dd><code>127.0.0.1:{formatNumber(localhostSummary.port)}</code></dd></div>
+                        <div><dt>{text(copy.endpoint)}</dt><dd><code>127.0.0.1:{String(localhostSummary.port)}</code></dd></div>
                         <div><dt>{text(copy.timeout)}</dt><dd>{formatNumber(localhostSummary.timeoutMs)} ms</dd></div>
                         <div><dt>{text(copy.payload)}</dt><dd>{text(copy.bytes, { count: formatNumber(localhostSummary.payloadBytes) })}</dd></div>
                         <div><dt>{text(copy.observedOutcome)}</dt><dd>{text(localhostSummary.outcomeLabel)}</dd></div>
@@ -1528,7 +1596,7 @@ export function ProgressPage({
               <button key={run.id} type="button" className={run.id === selectedRun.id ? "history-row history-row--active" : "history-row"} onClick={() => selectRun(run.id)}>
                 <span className="history-row__line" aria-hidden="true" />
                 <span className="history-row__copy">
-                  <strong>{run.label}</strong>
+                  <strong>{scanRunIdentityPresentation(run, locale)}</strong>
                   <span>{showDateTime(run.startedAt)} · {text(copy.historySnapshot, { date: showDateTime(run.knowledgeDate) })}</span>
                 </span>
                 <StatusPill

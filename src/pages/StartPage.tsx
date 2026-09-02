@@ -344,7 +344,7 @@ export function StartPage({
       <section className="start-page__hero" aria-labelledby="start-page-title">
         <div className="start-page__hero-copy">
           <p className="eyebrow">{marketing.eyebrow}</p>
-          <h1 id="start-page-title">{marketing.title}</h1>
+          <h1 id="start-page-title" data-page-heading tabIndex={-1}>{marketing.title}</h1>
           <p className="start-page__hero-description">{marketing.description}</p>
           <div className="start-page__hero-actions">
             {nativeMode && (
@@ -381,6 +381,8 @@ export function StartPage({
                   <small
                     id="localhost-quick-scan-port-help"
                     className={localhostPort === undefined ? "start-page__localhost-port-error" : undefined}
+                    aria-live="polite"
+                    aria-atomic="true"
                   >
                     {localhostPort === undefined
                       ? marketing.localhostQuickScanPortError

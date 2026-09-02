@@ -12,14 +12,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Take, Write};
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
 /// The sole `DataSource.metadata` key from which connectors accept a path.
 ///
@@ -40,6 +38,8 @@ pub const LIVE_PROVIDER_ARTIFACT_SET_SCHEMA: &str =
 pub const MAX_SNAPSHOT_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_LIVE_PROVIDER_PAGES: usize = 24;
 const MAX_REFERENCE_TEXT: usize = 512;
+const PROVIDER_ARTIFACT_COLLISION_ERROR: &str =
+    "content-addressed provider artifact failed collision verification";
 
 /// Non-secret reference to an immutable, already-preserved source response.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -140,8 +140,8 @@ pub(crate) struct ReadSnapshot {
 /// dialog into the backend-owned artifact root.
 ///
 /// There is intentionally no destination-path parameter. The backend chooses
-/// a collision-resistant staging and final name, creates both without
-/// overwriting, and returns the only relative path connectors will later read.
+/// a collision-resistant final name, creates it without overwriting, and
+/// returns the only relative path connectors will later read.
 pub(crate) fn ingest_selected_source(
     root: &Path,
     selected_source_path: &Path,
@@ -161,45 +161,32 @@ pub(crate) fn ingest_selected_source(
     let sha256 = hex::encode(Sha256::digest(&bytes));
     let nonce = Uuid::new_v4().simple().to_string();
     let artifact_id = format!("source-snapshot-{nonce}");
-    let staging_name = format!(".connector-ingest-{nonce}.staging");
     let final_name = format!("connector-snapshot-{}-{nonce}.json", &sha256[..16]);
-    let staging_path = root.join(&staging_name);
     let final_path = root.join(&final_name);
 
-    let mut staging = create_private_new_file(&staging_path)?;
+    let mut final_file = create_private_new_file(&final_path).map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "connector snapshot final file could not be created without overwrite: {error}"
+        ))
+    })?;
     let result = (|| -> Result<(), DiscoveryError> {
-        staging.write_all(&bytes).map_err(|error| {
-            DiscoveryError::Connector(format!("connector snapshot staging write failed: {error}"))
+        final_file.write_all(&bytes).map_err(|error| {
+            DiscoveryError::Connector(format!("connector snapshot final write failed: {error}"))
         })?;
-        staging.sync_all().map_err(|error| {
-            DiscoveryError::Connector(format!("connector snapshot staging sync failed: {error}"))
-        })?;
-        drop(staging);
-
-        // `hard_link` has create-new semantics for the destination and never
-        // overwrites an existing file. Staging and final remain on the same
-        // backend-owned filesystem.
-        fs::hard_link(&staging_path, &final_path).map_err(|error| {
-            DiscoveryError::Connector(format!(
-                "connector snapshot finalization failed without overwriting: {error}"
-            ))
-        })?;
-        set_private_file_permissions(&final_path)?;
-        fs::remove_file(&staging_path).map_err(|error| {
-            DiscoveryError::Connector(format!(
-                "connector snapshot staging cleanup failed: {error}"
-            ))
+        final_file.sync_all().map_err(|error| {
+            DiscoveryError::Connector(format!("connector snapshot final sync failed: {error}"))
         })?;
         Ok(())
     })();
 
     if let Err(error) = result {
-        // Best-effort rollback. Paths are backend-generated concrete names and
-        // neither removal follows a directory supplied by the caller.
-        let _ = fs::remove_file(&staging_path);
-        let _ = fs::remove_file(&final_path);
+        // Retain the incomplete product-owned file. After the handle closes a
+        // permissive custom parent could replace its pathname, so path-based
+        // rollback could delete an unrelated object. No reference is returned.
+        drop(final_file);
         return Err(error);
     }
+    drop(final_file);
 
     Ok(SnapshotArtifactReference::new(
         final_name,
@@ -210,10 +197,12 @@ pub(crate) fn ingest_selected_source(
     ))
 }
 
-/// Persists an exact provider HTTP response body under its SHA-256 address.
+/// Persists an exact provider HTTP response body under a backend-owned name.
 /// The caller supplies neither a destination nor a filename. A repeated body
-/// reuses the already-verified regular file, while each capture retains its own
-/// observation time and parser profile in the reference.
+/// normally reuses the already-verified SHA-256-addressed regular file. If an
+/// earlier interrupted write left different bytes at that address, the
+/// collision is preserved for forensic safety and this capture is published
+/// under a fresh private recovery name so later retries are not poisoned.
 pub(crate) fn ingest_provider_response(
     root: &Path,
     bytes: &[u8],
@@ -235,49 +224,49 @@ pub(crate) fn ingest_provider_response(
     }
 
     let sha256 = hex::encode(Sha256::digest(bytes));
-    let nonce = Uuid::new_v4().simple().to_string();
     let artifact_id = format!("provider-response-sha256-{sha256}");
-    let staging_path = root.join(format!(".provider-response-{nonce}.staging"));
-    let final_name = format!("provider-response-{sha256}.raw");
-    let final_path = root.join(&final_name);
-    let mut staging = create_private_new_file(&staging_path)?;
-    let result = (|| -> Result<(), DiscoveryError> {
-        staging.write_all(bytes).map_err(|error| {
-            DiscoveryError::Connector(format!("provider response staging write failed: {error}"))
-        })?;
-        staging.sync_all().map_err(|error| {
-            DiscoveryError::Connector(format!("provider response staging sync failed: {error}"))
-        })?;
-        drop(staging);
-
-        match fs::hard_link(&staging_path, &final_path) {
-            Ok(()) => set_private_file_permissions(&final_path)?,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                let existing = read_bounded_regular_file(&final_path)?;
-                if existing.len() != bytes.len()
-                    || Sha256::digest(&existing) != Sha256::digest(bytes)
-                {
-                    return Err(DiscoveryError::Connector(
-                        "content-addressed provider artifact failed collision verification".into(),
-                    ));
-                }
-                set_private_file_permissions(&final_path)?;
+    let canonical_name = format!("provider-response-{sha256}.raw");
+    let final_path = root.join(&canonical_name);
+    let final_name;
+    match create_private_new_file(&final_path) {
+        Ok(mut final_file) => {
+            let result = (|| -> Result<(), DiscoveryError> {
+                final_file.write_all(bytes).map_err(|error| {
+                    DiscoveryError::Connector(format!(
+                        "provider response final write failed: {error}"
+                    ))
+                })?;
+                final_file.sync_all().map_err(|error| {
+                    DiscoveryError::Connector(format!(
+                        "provider response final sync failed: {error}"
+                    ))
+                })?;
+                Ok(())
+            })();
+            if let Err(error) = result {
+                // Retain the incomplete, exact-DACL product file rather than
+                // risk deleting a replacement through a permissive parent.
+                drop(final_file);
+                return Err(error);
             }
-            Err(error) => {
-                return Err(DiscoveryError::Connector(format!(
-                    "provider response finalization failed without overwriting: {error}"
-                )));
+            final_name = canonical_name;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            match verify_and_restrict_matching_provider_artifact(&final_path, root, bytes) {
+                Ok(()) => final_name = canonical_name,
+                Err(error) if is_provider_artifact_content_collision(&error) => {
+                    let nonce = Uuid::new_v4().simple().to_string();
+                    final_name = format!("provider-response-{sha256}-recovered-{nonce}.raw");
+                    write_new_provider_artifact(&root.join(&final_name), bytes)?;
+                }
+                Err(error) => return Err(error),
             }
         }
-        fs::remove_file(&staging_path).map_err(|error| {
-            DiscoveryError::Connector(format!("provider response staging cleanup failed: {error}"))
-        })?;
-        Ok(())
-    })();
-
-    if let Err(error) = result {
-        let _ = fs::remove_file(&staging_path);
-        return Err(error);
+        Err(error) => {
+            return Err(DiscoveryError::Connector(format!(
+                "provider response final file could not be created without overwrite: {error}"
+            )));
+        }
     }
 
     Ok(SnapshotArtifactReference::new(
@@ -287,6 +276,220 @@ pub(crate) fn ingest_provider_response(
         observed_at,
         Some(sha256),
     ))
+}
+
+fn write_new_provider_artifact(path: &Path, bytes: &[u8]) -> Result<(), DiscoveryError> {
+    let mut file = create_private_new_file(path).map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "provider response recovery file could not be created without overwrite: {error}"
+        ))
+    })?;
+    let result = (|| -> Result<(), DiscoveryError> {
+        file.write_all(bytes).map_err(|error| {
+            DiscoveryError::Connector(format!("provider response recovery write failed: {error}"))
+        })?;
+        file.sync_all().map_err(|error| {
+            DiscoveryError::Connector(format!("provider response recovery sync failed: {error}"))
+        })?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        // The fresh random name prevents this incomplete file from poisoning
+        // the next retry. Retain it rather than risk a pathname-based delete
+        // through a permissive custom parent.
+        drop(file);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn is_provider_artifact_content_collision(error: &DiscoveryError) -> bool {
+    matches!(
+        error,
+        DiscoveryError::Connector(message) if message == PROVIDER_ARTIFACT_COLLISION_ERROR
+    )
+}
+
+fn verify_provider_artifact_contents(
+    existing: &[u8],
+    expected: &[u8],
+) -> Result<(), DiscoveryError> {
+    if existing.len() != expected.len() || Sha256::digest(existing) != Sha256::digest(expected) {
+        return Err(DiscoveryError::Connector(
+            PROVIDER_ARTIFACT_COLLISION_ERROR.into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn verify_and_restrict_matching_provider_artifact(
+    path: &Path,
+    authority_root: &Path,
+    expected: &[u8],
+) -> Result<(), DiscoveryError> {
+    crate::managed_runtime::verify_then_repair_canonical_or_verify_private_product_file_dacl(
+        path,
+        authority_root,
+        |file| verify_provider_artifact_open_file(file, expected),
+        |error| {
+            DiscoveryError::Connector(format!(
+                "matching provider artifact could not be safely verified or restricted: {error}"
+            ))
+        },
+    )
+}
+
+#[cfg(windows)]
+fn verify_provider_artifact_open_file(
+    file: &mut File,
+    expected: &[u8],
+) -> Result<(), DiscoveryError> {
+    let existing = read_bounded_open_file(file)?;
+    verify_provider_artifact_contents(&existing, expected)
+}
+
+#[cfg(unix)]
+fn verify_and_restrict_matching_provider_artifact(
+    path: &Path,
+    authority_root: &Path,
+    expected: &[u8],
+) -> Result<(), DiscoveryError> {
+    let parent = path.parent().ok_or_else(|| {
+        DiscoveryError::Connector("matching provider artifact has no parent".into())
+    })?;
+    if parent.canonicalize().map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "matching provider artifact parent could not be resolved: {error}"
+        ))
+    })? != authority_root.canonicalize().map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "provider artifact authority could not be resolved: {error}"
+        ))
+    })? {
+        return Err(DiscoveryError::Connector(
+            "matching provider artifact escaped its authority root".into(),
+        ));
+    }
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "matching provider artifact could not be inspected: {error}"
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(DiscoveryError::Connector(
+            "matching provider artifact must be a real regular file".into(),
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let mut file = options.open(path).map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "matching provider artifact could not be opened without following links: {error}"
+        ))
+    })?;
+    let opened = file.metadata().map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "matching provider artifact handle could not be inspected: {error}"
+        ))
+    })?;
+    let stable_snapshot = |metadata: &fs::Metadata| {
+        (
+            metadata.dev(),
+            metadata.ino(),
+            metadata.nlink(),
+            metadata.uid(),
+            metadata.size(),
+            metadata.mtime(),
+            metadata.mtime_nsec(),
+            metadata.ctime(),
+            metadata.ctime_nsec(),
+        )
+    };
+    if stable_snapshot(&metadata) != stable_snapshot(&opened)
+        || opened.nlink() != 1
+        // SAFETY: geteuid has no preconditions and does not mutate process state.
+        || opened.uid() != unsafe { libc::geteuid() }
+    {
+        return Err(DiscoveryError::Connector(
+            "matching provider artifact is not the current user's single-link opened file".into(),
+        ));
+    }
+    let existing = read_bounded_open_file(&mut file)?;
+    verify_provider_artifact_contents(&existing, expected)?;
+    let verified_handle = file.metadata().map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "verified provider artifact handle could not be reinspected: {error}"
+        ))
+    })?;
+    let verified_path = fs::symlink_metadata(path).map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "verified provider artifact path could not be reinspected: {error}"
+        ))
+    })?;
+    if stable_snapshot(&verified_handle) != stable_snapshot(&opened)
+        || stable_snapshot(&verified_path) != stable_snapshot(&opened)
+    {
+        return Err(DiscoveryError::Connector(
+            "matching provider artifact changed during content verification".into(),
+        ));
+    }
+    restrict_existing_file_handle_to_owner(&file)?;
+    let restricted_handle = file.metadata().map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "restricted provider artifact handle could not be reinspected: {error}"
+        ))
+    })?;
+    let restricted_path = fs::symlink_metadata(path).map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "restricted provider artifact path could not be reinspected: {error}"
+        ))
+    })?;
+    let identity = |metadata: &fs::Metadata| {
+        (
+            metadata.dev(),
+            metadata.ino(),
+            metadata.nlink(),
+            metadata.uid(),
+            metadata.size(),
+        )
+    };
+    if identity(&restricted_handle) != identity(&opened)
+        || identity(&restricted_path) != identity(&opened)
+        || restricted_handle.permissions().mode() & 0o777 != 0o600
+    {
+        return Err(DiscoveryError::Connector(
+            "matching provider artifact changed during handle-based permission restriction".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(all(not(windows), not(unix)))]
+fn verify_and_restrict_matching_provider_artifact(
+    _path: &Path,
+    _authority_root: &Path,
+    _expected: &[u8],
+) -> Result<(), DiscoveryError> {
+    Err(DiscoveryError::Connector(
+        "safe existing-artifact permission verification is unavailable on this platform".into(),
+    ))
+}
+
+#[cfg(all(test, windows))]
+fn verify_and_restrict_matching_provider_artifact_in_isolated_root(
+    path: &Path,
+    expected: &[u8],
+    product_root: &Path,
+) -> Result<(), DiscoveryError> {
+    crate::managed_runtime::verify_then_repair_isolated_product_file_dacl(
+        path,
+        product_root,
+        |file| verify_provider_artifact_open_file(file, expected),
+        |error| DiscoveryError::Connector(error.to_string()),
+    )
 }
 
 pub(crate) fn prepare_artifact_root(root: impl AsRef<Path>) -> Result<PathBuf, DiscoveryError> {
@@ -492,9 +695,13 @@ fn read_bounded_regular_file(path: &Path) -> Result<Vec<u8>, DiscoveryError> {
     options.read(true);
     #[cfg(unix)]
     options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    let file: File = options.open(path).map_err(|error| {
+    let mut file: File = options.open(path).map_err(|error| {
         DiscoveryError::Connector(format!("connector artifact could not be opened: {error}"))
     })?;
+    read_bounded_open_file(&mut file)
+}
+
+fn read_bounded_open_file(file: &mut File) -> Result<Vec<u8>, DiscoveryError> {
     let opened_metadata = file.metadata().map_err(|error| {
         DiscoveryError::Connector(format!(
             "connector artifact metadata could not be read: {error}"
@@ -507,7 +714,7 @@ fn read_bounded_regular_file(path: &Path) -> Result<Vec<u8>, DiscoveryError> {
     }
 
     let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
-    let mut reader: Take<File> = file.take(MAX_SNAPSHOT_BYTES + 1);
+    let mut reader = file.take(MAX_SNAPSHOT_BYTES + 1);
     reader.read_to_end(&mut bytes).map_err(|error| {
         DiscoveryError::Connector(format!("connector artifact could not be read: {error}"))
     })?;
@@ -615,50 +822,44 @@ fn validate_selected_source_path(path: &Path) -> Result<(), DiscoveryError> {
     Ok(())
 }
 
-fn create_private_new_file(path: &Path) -> Result<File, DiscoveryError> {
+fn create_private_new_file(path: &Path) -> std::io::Result<File> {
+    #[cfg(windows)]
+    {
+        crate::managed_runtime::create_current_user_only_product_file(path)
+    }
+    #[cfg(not(windows))]
     let mut options = OpenOptions::new();
+    #[cfg(not(windows))]
     options.write(true).create_new(true);
     #[cfg(unix)]
     options
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    let file = options.open(path).map_err(|error| {
-        DiscoveryError::Connector(format!(
-            "connector snapshot staging file could not be created without overwrite: {error}"
-        ))
-    })?;
-    if let Err(error) = set_private_file_permissions(path) {
+    #[cfg(not(windows))]
+    let file = options.open(path)?;
+    #[cfg(not(windows))]
+    if let Err(error) = restrict_existing_file_handle_to_owner(&file) {
         drop(file);
-        let _ = fs::remove_file(path);
-        return Err(error);
+        return Err(std::io::Error::other(error.to_string()));
     }
+    #[cfg(not(windows))]
     Ok(file)
 }
 
-fn set_private_file_permissions(path: &Path) -> Result<(), DiscoveryError> {
+#[cfg(not(windows))]
+fn restrict_existing_file_handle_to_owner(file: &File) -> Result<(), DiscoveryError> {
     #[cfg(unix)]
     {
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|error| {
-            DiscoveryError::Connector(format!(
-                "connector snapshot permissions could not be restricted: {error}"
-            ))
-        })?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|error| {
+                DiscoveryError::Connector(format!(
+                    "connector snapshot permissions could not be restricted: {error}"
+                ))
+            })?;
     }
     #[cfg(not(unix))]
     {
-        let mut permissions = fs::metadata(path)
-            .map_err(|error| {
-                DiscoveryError::Connector(format!(
-                    "connector snapshot permissions could not be inspected: {error}"
-                ))
-            })?
-            .permissions();
-        permissions.set_readonly(false);
-        fs::set_permissions(path, permissions).map_err(|error| {
-            DiscoveryError::Connector(format!(
-                "connector snapshot permissions could not be restricted: {error}"
-            ))
-        })?;
+        let _ = file;
     }
     Ok(())
 }
@@ -740,4 +941,470 @@ fn safe_text(value: &str) -> String {
         .filter(|character| !character.is_control())
         .take(128)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_collision_proof_rejects_different_bytes() {
+        let error = verify_provider_artifact_contents(b"expected", b"different")
+            .expect_err("different bytes must not authorize artifact reuse");
+        assert!(error.to_string().contains("collision verification"));
+    }
+
+    #[test]
+    fn partial_content_addressed_provider_file_does_not_poison_a_later_retry() {
+        let temporary = tempfile::tempdir().expect("provider artifact root");
+        let expected = b"complete provider response";
+        let canonical = provider_artifact_path(temporary.path(), expected);
+        let mut partial = create_private_new_file(&canonical).expect("partial artifact fixture");
+        partial
+            .write_all(b"partial")
+            .expect("write partial fixture");
+        partial.sync_all().expect("sync partial fixture");
+        drop(partial);
+
+        let reference = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("a fresh recovery artifact should allow the retry to succeed");
+
+        assert_ne!(
+            reference.canonical_relative_path,
+            canonical.file_name().unwrap().to_string_lossy()
+        );
+        assert_eq!(fs::read(&canonical).unwrap(), b"partial");
+        assert_eq!(
+            fs::read(temporary.path().join(reference.canonical_relative_path)).unwrap(),
+            expected
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    fn provider_artifact_path(root: &Path, expected: &[u8]) -> PathBuf {
+        root.join(format!(
+            "provider-response-{}.raw",
+            hex::encode(Sha256::digest(expected))
+        ))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_matching_collision_restricts_the_verified_open_file() {
+        let temporary = tempfile::tempdir().expect("provider artifact root");
+        let expected = b"matching provider response";
+        let artifact = provider_artifact_path(temporary.path(), expected);
+        fs::write(&artifact, expected).expect("pre-existing provider artifact");
+        fs::set_permissions(&artifact, fs::Permissions::from_mode(0o666))
+            .expect("permissive fixture mode");
+
+        ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("matching collision");
+
+        assert_eq!(fs::read(&artifact).unwrap(), expected);
+        assert_eq!(
+            fs::metadata(&artifact).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_content_mismatch_is_preserved_while_a_fresh_artifact_is_published() {
+        let temporary = tempfile::tempdir().expect("provider artifact root");
+        let expected = b"expected provider response";
+        let artifact = provider_artifact_path(temporary.path(), expected);
+        fs::write(&artifact, b"different existing bytes").expect("pre-existing colliding artifact");
+        fs::set_permissions(&artifact, fs::Permissions::from_mode(0o666))
+            .expect("permissive fixture mode");
+
+        let reference = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("content mismatch should use a fresh backend-owned artifact");
+
+        assert_ne!(
+            reference.canonical_relative_path,
+            artifact.file_name().unwrap().to_string_lossy()
+        );
+        assert_eq!(
+            fs::read(temporary.path().join(reference.canonical_relative_path)).unwrap(),
+            expected
+        );
+        assert_eq!(fs::read(&artifact).unwrap(), b"different existing bytes");
+        assert_eq!(
+            fs::metadata(&artifact).unwrap().permissions().mode() & 0o777,
+            0o666
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_multilink_collision_is_rejected_without_chmod_on_the_external_alias() {
+        let temporary = tempfile::tempdir().expect("provider artifact root");
+        let expected = b"matching hard-linked provider response";
+        let artifact = provider_artifact_path(temporary.path(), expected);
+        let outside = temporary.path().join("outside-alias.raw");
+        fs::write(&outside, expected).expect("outside hardlink object");
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o666))
+            .expect("permissive outside mode");
+        fs::hard_link(&outside, &artifact).expect("artifact hardlink alias");
+
+        let error = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect_err("a multi-link collision must fail before handle chmod");
+
+        assert!(error.to_string().contains("single-link"));
+        assert_eq!(fs::read(&outside).unwrap(), expected);
+        assert_eq!(
+            fs::metadata(&outside).unwrap().permissions().mode() & 0o777,
+            0o666,
+            "the external alias mode must remain unchanged"
+        );
+        assert_eq!(
+            fs::metadata(&artifact).unwrap().permissions().mode() & 0o777,
+            0o666,
+            "the artifact alias must identify the same unchanged object"
+        );
+    }
+
+    #[cfg(windows)]
+    fn isolated_product_root() -> (
+        tempfile::TempDir,
+        PathBuf,
+        crate::managed_runtime::PrivateProductDataDirectoryGuard,
+    ) {
+        let temporary = tempfile::tempdir().expect("isolated Windows artifact parent");
+        let product_root = temporary.path().join("isolated-product-data");
+        let guard =
+            crate::managed_runtime::ensure_private_product_data_directory_for_isolated_test(
+                &product_root,
+            )
+            .expect("isolated private product root");
+        (temporary, product_root, guard)
+    }
+
+    #[cfg(windows)]
+    fn write_private_fixture(path: &Path, bytes: &[u8]) {
+        let mut file = create_private_new_file(path).expect("private connector artifact");
+        file.write_all(bytes).expect("write connector artifact");
+        file.sync_all().expect("sync connector artifact");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_fresh_connector_file_has_an_exact_current_user_only_dacl() {
+        let (_temporary, product_root, _guard) = isolated_product_root();
+        let connector_root = product_root.join("connector-snapshots");
+        fs::create_dir(&connector_root).expect("connector root");
+        let expected = b"private provider response";
+
+        let reference = ingest_provider_response(
+            &connector_root,
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("finalize a fresh connector artifact");
+        let artifact = connector_root.join(reference.canonical_relative_path);
+
+        assert_eq!(fs::read(&artifact).unwrap(), expected);
+        crate::managed_runtime::test_verify_current_user_only_product_file(&artifact)
+            .expect("fresh connector artifact must have an exact private DACL");
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_information(&artifact)
+                .expect("final connector file information")
+                .3,
+            1,
+            "direct final creation must leave exactly one name"
+        );
+        assert!(
+            fs::read_dir(&connector_root).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("staging")),
+            "direct final creation must not publish through a staging path"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_repeated_ingest_under_a_permissive_custom_parent_is_verify_only() {
+        let temporary = tempfile::tempdir().expect("custom artifact authority");
+        let connector_root = temporary.path().join("custom-connector-snapshots");
+        fs::create_dir(&connector_root).expect("custom connector root");
+        crate::managed_runtime::set_test_world_writable_product_directory_dacl(&connector_root)
+            .expect("grant replacement rights on the custom parent fixture");
+        let expected = b"repeatable custom provider response";
+
+        let first = ingest_provider_response(
+            &connector_root,
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("fresh custom-root ingest");
+        let artifact = connector_root.join(&first.canonical_relative_path);
+        crate::managed_runtime::test_verify_current_user_only_product_file(&artifact)
+            .expect("fresh custom-root artifact has an exact private DACL");
+        let descriptor_before =
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&artifact)
+                .expect("custom artifact descriptor before repeat");
+        let information_before =
+            crate::managed_runtime::test_windows_product_file_information(&artifact)
+                .expect("custom artifact information before repeat");
+
+        let second = ingest_provider_response(
+            &connector_root,
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("matching custom-root collision is accepted without repair authority");
+
+        assert_eq!(
+            second.canonical_relative_path,
+            first.canonical_relative_path
+        );
+        assert_eq!(fs::read(&artifact).unwrap(), expected);
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_information(&artifact).unwrap(),
+            information_before,
+            "verify-only reuse must preserve identity, size, links, and attributes"
+        );
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&artifact)
+                .unwrap(),
+            descriptor_before,
+            "verify-only reuse must not rewrite the exact private descriptor"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_custom_collision_mismatch_preserves_original_and_publishes_recovery() {
+        let temporary = tempfile::tempdir().expect("custom artifact authority");
+        let connector_root = temporary.path().join("custom-connector-snapshots");
+        fs::create_dir(&connector_root).expect("custom connector root");
+        let expected = b"expected custom provider response";
+        let artifact = provider_artifact_path(&connector_root, expected);
+        write_private_fixture(&artifact, b"different existing bytes");
+        let descriptor_before =
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&artifact)
+                .expect("custom collision descriptor before proof");
+        let information_before =
+            crate::managed_runtime::test_windows_product_file_information(&artifact)
+                .expect("custom collision information before proof");
+
+        let reference = ingest_provider_response(
+            &connector_root,
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("custom collision mismatch should publish a fresh private artifact");
+
+        assert_ne!(
+            reference.canonical_relative_path,
+            artifact.file_name().unwrap().to_string_lossy()
+        );
+        let recovered = connector_root.join(reference.canonical_relative_path);
+        assert_eq!(fs::read(&recovered).unwrap(), expected);
+        crate::managed_runtime::test_verify_current_user_only_product_file(&recovered)
+            .expect("recovery artifact must have an exact private DACL");
+        assert_eq!(fs::read(&artifact).unwrap(), b"different existing bytes");
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_information(&artifact).unwrap(),
+            information_before,
+            "failed custom collision proof must preserve the exact file object"
+        );
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&artifact)
+                .unwrap(),
+            descriptor_before,
+            "failed custom collision proof must not rewrite its descriptor"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_custom_matching_permissive_artifact_is_rejected_without_repair() {
+        let temporary = tempfile::tempdir().expect("custom artifact authority");
+        let connector_root = temporary.path().join("custom-connector-snapshots");
+        fs::create_dir(&connector_root).expect("custom connector root");
+        let expected = b"matching but non-private custom response";
+        let artifact = provider_artifact_path(&connector_root, expected);
+        write_private_fixture(&artifact, expected);
+        crate::managed_runtime::set_test_world_readable_product_file_dacl(&artifact)
+            .expect("make custom artifact explicitly permissive");
+        let descriptor_before =
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&artifact)
+                .expect("custom descriptor before rejected reuse");
+
+        let error = ingest_provider_response(
+            &connector_root,
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect_err("custom verify-only authority must not repair a permissive artifact");
+
+        assert!(error.to_string().contains("safely verified"));
+        assert_eq!(fs::read(&artifact).unwrap(), expected);
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&artifact)
+                .unwrap(),
+            descriptor_before,
+            "custom-root rejection must not rewrite the artifact descriptor"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_matching_canonical_provider_file_repairs_only_its_dacl() {
+        let (_temporary, product_root, _guard) = isolated_product_root();
+        let connector_root = product_root.join("connector-snapshots");
+        fs::create_dir(&connector_root).expect("connector root");
+        let artifact = connector_root.join("provider-response.raw");
+        let expected = b"matching provider response";
+        write_private_fixture(&artifact, expected);
+        crate::managed_runtime::set_test_world_readable_product_file_dacl(&artifact)
+            .expect("make fixture explicitly permissive");
+        assert!(
+            crate::managed_runtime::test_verify_current_user_only_product_file(&artifact).is_err(),
+            "fixture must start with an unsafe explicit ACE"
+        );
+        let information_before =
+            crate::managed_runtime::test_windows_product_file_information(&artifact)
+                .expect("file identity before repair");
+
+        verify_and_restrict_matching_provider_artifact_in_isolated_root(
+            &artifact,
+            expected,
+            &product_root,
+        )
+        .expect("matching canonical artifact DACL repair");
+
+        assert_eq!(fs::read(&artifact).unwrap(), expected);
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_information(&artifact).unwrap(),
+            information_before,
+            "DACL repair must preserve identity, bytes, links, and attributes"
+        );
+        crate::managed_runtime::test_verify_current_user_only_product_file(&artifact)
+            .expect("matching artifact has the exact repaired DACL");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_content_mismatch_does_not_rewrite_an_existing_dacl() {
+        let (_temporary, product_root, _guard) = isolated_product_root();
+        let connector_root = product_root.join("connector-snapshots");
+        fs::create_dir(&connector_root).expect("connector root");
+        let artifact = connector_root.join("provider-response.raw");
+        write_private_fixture(&artifact, b"existing bytes");
+        crate::managed_runtime::set_test_world_readable_product_file_dacl(&artifact)
+            .expect("make fixture explicitly permissive");
+        let descriptor_before =
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&artifact)
+                .expect("descriptor before rejected collision");
+
+        let error = verify_and_restrict_matching_provider_artifact_in_isolated_root(
+            &artifact,
+            b"different bytes",
+            &product_root,
+        )
+        .expect_err("content mismatch must fail before DACL repair");
+
+        assert!(error.to_string().contains("collision verification"));
+        assert_eq!(fs::read(&artifact).unwrap(), b"existing bytes");
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&artifact)
+                .unwrap(),
+            descriptor_before,
+            "content mismatch must not mutate the existing descriptor"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_arbitrary_and_multilink_files_are_preserved_without_dacl_repair() {
+        let (temporary, product_root, _guard) = isolated_product_root();
+        let arbitrary_root = temporary.path().join("caller-selected-data");
+        fs::create_dir(&arbitrary_root).expect("arbitrary root");
+        let arbitrary = arbitrary_root.join("provider-response.raw");
+        write_private_fixture(&arbitrary, b"matching bytes");
+        crate::managed_runtime::set_test_world_readable_product_file_dacl(&arbitrary)
+            .expect("make arbitrary fixture permissive");
+        let arbitrary_before =
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&arbitrary)
+                .unwrap();
+
+        assert!(
+            verify_and_restrict_matching_provider_artifact_in_isolated_root(
+                &arbitrary,
+                b"matching bytes",
+                &product_root,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&arbitrary)
+                .unwrap(),
+            arbitrary_before,
+            "arbitrary roots must never receive ACL repair"
+        );
+
+        let connector_root = product_root.join("connector-snapshots");
+        fs::create_dir(&connector_root).expect("connector root");
+        let linked = connector_root.join("linked.raw");
+        write_private_fixture(&linked, b"matching bytes");
+        let second_name = connector_root.join("second-name.raw");
+        fs::hard_link(&linked, &second_name).expect("second hard link");
+        crate::managed_runtime::set_test_world_readable_product_file_dacl(&linked)
+            .expect("make multi-link fixture permissive");
+        let linked_before =
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&linked).unwrap();
+
+        assert!(
+            verify_and_restrict_matching_provider_artifact_in_isolated_root(
+                &linked,
+                b"matching bytes",
+                &product_root,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&linked).unwrap(),
+            linked_before,
+            "multi-link files must never receive ACL repair"
+        );
+    }
 }

@@ -7,8 +7,14 @@ import {
   workflowMeta,
 } from "../lib";
 import { useI18n } from "../i18n";
-import { localhostTcpBeginnerSummary } from "../localhostTcpPresentation";
+import { unavailableRunBoundReportCopy } from "../findingsReportAvailability";
+import {
+  localhostTcpBeginnerSummary,
+  localhostTestedDimensionValue,
+} from "../localhostTcpPresentation";
+import { isExactBuiltInLocalhostQuickScanEngine } from "../localhostQuickScan";
 import { scanRequestOutcomeBeginnerSummary } from "../scanRequestOutcomePresentation";
+import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import type {
   BeginnerCoverageGapKind,
   BeginnerCoverageStatus,
@@ -34,6 +40,7 @@ import "./page-technical-details.css";
 
 interface FindingsPageProps {
   report?: BeginnerMasterReport;
+  selectedRunId?: string;
   reportUnavailable?: boolean;
   findings: Finding[];
   findingGroups: FindingGroup[];
@@ -48,7 +55,7 @@ interface FindingsPageProps {
   onUngroupFindings: (groupId: string) => Promise<void>;
   onOpenCoverage: () => void;
   onOpenProgress: () => void;
-  onOpenExport: () => void;
+  onOpenExport: (runId: string) => void;
   onSelectRun?: (runId: string) => void;
 }
 
@@ -286,6 +293,7 @@ const copy = {
   reportLive: { en: "Still updating", zhTW: "仍在更新" },
   reportFinal: { en: "Final for this run", zhTW: "本輪已結束" },
   reportRun: { en: "Report run", zhTW: "報告輪次" },
+  reportRunUnavailable: { en: "Previously selected scan unavailable", zhTW: "先前選擇的掃描已無法使用" },
   lastSaved: { en: "Last saved {time}", zhTW: "最後保存：{time}" },
   requestedTargets: { en: "Targets requested", zhTW: "要求檢查的目標" },
   testedComplete: { en: "Checks completed", zhTW: "完成的檢查" },
@@ -383,11 +391,6 @@ const copy = {
   taskNoError: { en: "No diagnostic code", zhTW: "沒有診斷代碼" },
   dataWarnings: { en: "Saved-data limitations: {count}", zhTW: "已保存資料的限制：{count} 項" },
   genericExpert: { en: "Security or IT specialist", zhTW: "資安或 IT 專業人員" },
-  reportUnavailableTitle: { en: "The saved report could not be rebuilt", zhTW: "目前無法重建已保存的報告" },
-  reportUnavailableBody: {
-    en: "The original project data is still here. This page is showing the older result view; start a new scan if you need one complete run-bound report.",
-    zhTW: "原始專案資料仍完整保留。這裡暫時顯示舊版結果畫面；如果需要完整且綁定本輪的報告，請開始新的掃描。",
-  },
 } as const;
 
 const reportSummaryPresentation = (summary: BeginnerReportSummary) => {
@@ -445,11 +448,13 @@ const nextActionCopy = (code: BeginnerNextActionCode) => {
   }
 };
 
-const localizedCheckName = (checkId: string, locale: "en" | "zh-TW"): string => {
-  const localPrefix = "native localhost TCP check on ";
-  if (checkId.startsWith(localPrefix)) {
-    const endpoint = checkId.slice(localPrefix.length);
-    return `${locale === "en" ? "Local connection check" : "本機連線檢查"} · ${endpoint}`;
+const localizedCheckName = (
+  checkId: string,
+  locale: "en" | "zh-TW",
+  engine?: ScanRun["engineRuns"][number],
+): string => {
+  if (engine && isExactBuiltInLocalhostQuickScanEngine(engine) && engine.taskKind.kind === "built_in_localhost_tcp") {
+    return `${locale === "en" ? "Local connection check" : "本機連線檢查"} · 127.0.0.1:${engine.taskKind.port}`;
   }
   return checkId;
 };
@@ -577,7 +582,7 @@ const projectReportFindings = (
   });
 };
 
-function BeginnerReportOverview({ report }: { report: BeginnerMasterReport }) {
+function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport; run?: ScanRun }) {
   const { locale, text, formatDateTime, formatNumber } = useI18n();
   const summary = reportSummaryPresentation(report.state.summary);
   const testedChecks = report.actual.checks.filter((check) =>
@@ -594,6 +599,7 @@ function BeginnerReportOverview({ report }: { report: BeginnerMasterReport }) {
   const targetLabelById = new Map(
     report.requested.targets.map((target) => [target.assetId, target.label ?? target.assetId]),
   );
+  const engineByTaskId = new Map(run?.engineRuns.map((engine) => [engine.id, engine]) ?? []);
   const countBreakdown = [
     [copy.testedComplete, report.coverageCounts.testedComplete],
     [copy.testedPartialCount, report.coverageCounts.testedPartial],
@@ -713,18 +719,26 @@ function BeginnerReportOverview({ report }: { report: BeginnerMasterReport }) {
           )}
           {testedChecks.length > 0 ? (
             <ul className="detail-list">
-              {testedChecks.map((check) => (
+              {testedChecks.map((check) => {
+                const engine = engineByTaskId.get(check.taskId);
+                return (
                 <li key={check.taskId}>
-                  <strong>{localizedCheckName(check.checkId, locale)}</strong>
+                  <strong>{localizedCheckName(check.checkId, locale, engine)}</strong>
                   <span>{text(testedStatusCopy(check.status))}</span>
                   {check.testedDimensions.map((dimension, index) => (
                     <span key={`${dimension.dimension}-${dimension.value}-${index}`}>
-                      {localizedDimension(dimension.dimension, locale)}: {dimension.value}
+                      {localizedDimension(dimension.dimension, locale)}: {localhostTestedDimensionValue(
+                        engine,
+                        dimension.dimension,
+                        dimension.value,
+                        locale,
+                      )}
                       {dimension.observedAt && ` · ${text(copy.savedAt, { time: formatDateTime(dimension.observedAt) })}`}
                     </span>
                   ))}
                 </li>
-              ))}
+                );
+              })}
             </ul>
           ) : <p>{text(copy.noTestedDimension)}</p>}
           {testedNetworkScopes.length > 0 && (
@@ -810,10 +824,11 @@ function BeginnerReportOverview({ report }: { report: BeginnerMasterReport }) {
         <div className="evidence-list">
           {report.technicalDetails.tasks.map((task) => {
             const check = report.actual.checks.find((item) => item.taskId === task.taskId);
+            const engine = engineByTaskId.get(task.taskId);
             return (
               <article key={task.taskId} className="evidence-item">
                 <div>
-                  <strong>{check ? localizedCheckName(check.checkId, locale) : text(copy.coverageDetail)}</strong>
+                  <strong>{check ? localizedCheckName(check.checkId, locale, engine) : text(copy.coverageDetail)}</strong>
                   <span>{engineStatusMeta[task.status].label}</span>
                 </div>
                 <dl>
@@ -846,6 +861,7 @@ const workflowTone = (state: FindingWorkflowState): string => {
 
 export function FindingsPage({
   report,
+  selectedRunId,
   reportUnavailable,
   findings: canonicalFindings,
   findingGroups,
@@ -865,8 +881,12 @@ export function FindingsPage({
 }: FindingsPageProps) {
   const { locale, text, formatDateTime, formatNumber } = useI18n();
   const findings = useMemo(
-    () => report ? projectReportFindings(report, canonicalFindings, locale) : canonicalFindings,
-    [canonicalFindings, locale, report],
+    () => report
+      ? projectReportFindings(report, canonicalFindings, locale)
+      : reportUnavailable
+        ? []
+        : canonicalFindings,
+    [canonicalFindings, locale, report, reportUnavailable],
   );
   const collationLocale = locale === "en" ? "en" : "zh-Hant";
   const [query, setQuery] = useState("");
@@ -967,7 +987,12 @@ export function FindingsPage({
     setGroupFindingIds((current) => current.filter((findingId) => !groupedFindingIds.has(findingId)));
   }, [groupedFindingIds]);
 
-  const latestRun = report ? runs.find((run) => run.id === report.runId) ?? runs[0] : runs[0];
+  const explicitlySelectedRun = selectedRunId === undefined
+    ? undefined
+    : runs.find((run) => run.id === selectedRunId);
+  const latestRun = selectedRunId === undefined
+    ? (report ? runs.find((run) => run.id === report.runId) : undefined) ?? runs[0]
+    : explicitlySelectedRun;
   const activeRun = latestRun && activeRunStatuses.has(latestRun.status) ? latestRun : undefined;
   const incompleteTerminalRun = latestRun
     && !activeRun
@@ -975,11 +1000,14 @@ export function FindingsPage({
     ? latestRun
     : undefined;
   const latestRequestOutcomeSummary = scanRequestOutcomeBeginnerSummary(latestRun?.requestOutcome);
-  const reportRunPicker = runs.length > 1 ? (
+  const reportRunPicker = runs.length > 1 || (runs.length > 0 && !latestRun) ? (
     <label className="select-filter">
       <span>{text(copy.reportRun)}</span>
       <select value={latestRun?.id ?? ""} onChange={(event) => onSelectRun?.(event.target.value)}>
-        {runs.map((run) => <option key={run.id} value={run.id}>{run.label}</option>)}
+        {!latestRun && <option value="" disabled>{text(copy.reportRunUnavailable)}</option>}
+        {runs.map((run) => (
+          <option key={run.id} value={run.id}>{scanRunIdentityPresentation(run, locale)}</option>
+        ))}
       </select>
     </label>
   ) : undefined;
@@ -987,7 +1015,7 @@ export function FindingsPage({
     <div className="button-group">
       {reportRunPicker}
       {latestRun && (
-        <button className="button button--primary button--small" type="button" onClick={onOpenExport}>
+        <button className="button button--primary button--small" type="button" onClick={() => onOpenExport(latestRun.id)}>
           <Icon name="export" size={16} />{text(copy.openExport)}
         </button>
       )}
@@ -1036,8 +1064,8 @@ export function FindingsPage({
     return (
       <div className="page">
         <PageHeader eyebrow={text(copy.eyebrow)} title={text(copy.emptyHeaderTitle)} description={text(copy.emptyHeaderDescription)} actions={reportActions} />
-        {report && <BeginnerReportOverview report={report} />}
-        {reportUnavailable && <InlineNotice tone="warning" title={text(copy.reportUnavailableTitle)}><p>{text(copy.reportUnavailableBody)}</p></InlineNotice>}
+        {report && <BeginnerReportOverview report={report} run={latestRun} />}
+        {reportUnavailable && <InlineNotice tone="warning" title={text(unavailableRunBoundReportCopy.title)}><p>{text(unavailableRunBoundReportCopy.body)}</p></InlineNotice>}
         <EmptyState
           icon={latestRunIsActive
             || incompleteRun
@@ -1118,8 +1146,8 @@ export function FindingsPage({
         actions={reportActions}
       />
 
-      {report && <BeginnerReportOverview report={report} />}
-      {reportUnavailable && <InlineNotice tone="warning" title={text(copy.reportUnavailableTitle)}><p>{text(copy.reportUnavailableBody)}</p></InlineNotice>}
+      {report && <BeginnerReportOverview report={report} run={latestRun} />}
+      {reportUnavailable && <InlineNotice tone="warning" title={text(unavailableRunBoundReportCopy.title)}><p>{text(unavailableRunBoundReportCopy.body)}</p></InlineNotice>}
 
       {activeRun && (
         <InlineNotice tone="warning" title={text(copy.activeTitle)}>

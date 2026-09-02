@@ -1,4 +1,4 @@
-import type { BilingualText } from "./i18n";
+import { formatLocaleNumber, type BilingualText, type Locale } from "./i18n";
 import {
   BUILT_IN_LOCALHOST_QUICK_SCAN_ENGINE_ID,
   isExactBuiltInLocalhostQuickScanEngine,
@@ -25,6 +25,50 @@ export interface LocalhostTcpBeginnerSummary {
   nextStep: BilingualText;
   outcomeLabel: BilingualText;
 }
+
+const boundedConnectionDimension = "bounded connection contract";
+const boundedConnectionValue = /^one connection attempt; (\d+) ms timeout; (\d+) application-payload bytes$/u;
+
+/**
+ * Presents the frozen localhost connection boundary in the reader's current
+ * locale without changing the run-bound value retained in the master report.
+ * Unknown checks and legacy/malformed values remain untouched.
+ */
+export const localhostTestedDimensionValue = (
+  engine: Pick<EngineRun, "engineId" | "taskKind"> | undefined,
+  dimension: string,
+  value: string,
+  locale: Locale,
+): string => {
+  if (!engine || !isExactBuiltInLocalhostQuickScanEngine(engine) || dimension !== boundedConnectionDimension) {
+    return value;
+  }
+  const match = boundedConnectionValue.exec(value);
+  if (!match) return value;
+  const timeoutMs = Number(match[1]);
+  const payloadBytes = Number(match[2]);
+  if (!Number.isSafeInteger(timeoutMs) || !Number.isSafeInteger(payloadBytes)) return value;
+
+  const timeout = formatLocaleNumber(locale, timeoutMs);
+  const payload = formatLocaleNumber(locale, payloadBytes);
+  if (locale === "zh-TW") {
+    return `只進行 1 次 TCP 連線嘗試 · 逾時上限 ${timeout} 毫秒 · 傳送 ${payload} 位元組應用資料`;
+  }
+  const payloadUnit = payloadBytes === 1 ? "application-data byte" : "application-data bytes";
+  return `One TCP connection attempt · ${timeout} ms timeout · ${payload} ${payloadUnit}`;
+};
+
+const freshAttemptOutcomes = new Set<LocalhostTcpDisplayedOutcome>([
+  "cancelled",
+  "failed",
+  "missing",
+  "inconsistent",
+]);
+
+/** A fresh attempt is offered only when the saved record has no usable TCP observation. */
+export const needsFreshLocalhostTcpAttempt = (
+  outcome: LocalhostTcpDisplayedOutcome,
+): boolean => freshAttemptOutcomes.has(outcome);
 
 const exclusions: BilingualText = {
   en: "Not checked: vulnerabilities, protocol behavior, website or API content, other ports, or other hosts.",

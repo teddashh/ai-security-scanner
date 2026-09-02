@@ -45,6 +45,8 @@ export const zhTW = {
   "nav.findings.hint": "先看最需要處理的問題",
   "nav.export.label": "分享結果",
   "nav.export.hint": "下載或傳送清楚的報告",
+  "nav.settings.label": "設定",
+  "nav.settings.hint": "語言、隱私與本機工具",
   "nav.verification.label": "確認修復",
   "nav.verification.hint": "比較修復前後的差異",
 

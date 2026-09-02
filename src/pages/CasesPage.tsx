@@ -6,11 +6,13 @@ import {
   type CaseAssetDraftError,
   type WebsiteInputError,
 } from "../caseForm";
+import { caseDisplayLabels, caseIdentityPresentation } from "../caseIdentityPresentation";
 import { Icon } from "../components/Icon";
 import { EmptyState, InlineNotice, MetricCard, PageHeader } from "../components/Shared";
 import { StatusPill } from "../components/StatusPill";
 import { useI18n, type BilingualText, type StaticTranslationKey } from "../i18n";
 import { phaseMeta, runStatusMeta } from "../lib";
+import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import { scannerService } from "../services/scanner";
 import type {
   AiGeneratedArtifactAnswer,
@@ -498,7 +500,11 @@ export function CasesPage({
   onStartRescan,
   onOpenVerification,
 }: CasesPageProps) {
-  const { t, text, formatDateTime, formatNumber } = useI18n();
+  const { locale, t, text, formatDateTime, formatNumber } = useI18n();
+  const displayedCaseLabels = caseDisplayLabels(cases, locale);
+  const selectedCaseIdentity = selectedCase
+    ? caseIdentityPresentation(selectedCase, locale)
+    : undefined;
   const [showForm, setShowForm] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [name, setName] = useState("");
@@ -1136,8 +1142,10 @@ export function CasesPage({
               {selectedCase.isDemo && <StatusPill label={text(pageCopy.demo)} tone="demo" />}
               {latestRun && <StatusPill label={text(pageCopy.latestRun, { status: t(runStatusKeys[latestRun.status]) })} tone={runStatusMeta[latestRun.status].tone} />}
             </div>
-            <h2 id="current-case-title">{selectedCase.name}</h2>
-            <p>{selectedCase.organizationName ? `${selectedCase.organizationName} · ` : ""}{text(pageCopy.updated, { date: formatDateTime(selectedCase.updatedAt) })}</p>
+            <h2 id="current-case-title">
+              {displayedCaseLabels.get(selectedCase.id) ?? selectedCaseIdentity?.name}
+            </h2>
+            <p>{selectedCaseIdentity?.organizationName ? `${selectedCaseIdentity.organizationName} · ` : ""}{text(pageCopy.updated, { date: formatDateTime(selectedCase.updatedAt) })}</p>
             <div className="platform-list" aria-label={text(pageCopy.caseSystems)}>
               {selectedCase.platforms.map((platform) => <span key={platform}>{platformLabel(platform)}</span>)}
             </div>
@@ -1169,7 +1177,7 @@ export function CasesPage({
             <select value={verificationBaselineRunId ?? ""} onChange={(event) => onSelectVerificationBaseline(event.target.value)}>
               {terminalRuns.map((run) => (
                 <option key={run.id} value={run.id}>
-                  {run.label} · {t(runStatusKeys[run.status])} · {formatDateTime(run.finishedAt ?? run.startedAt)}
+                  {scanRunIdentityPresentation(run, locale)} · {t(runStatusKeys[run.status])} · {formatDateTime(run.finishedAt ?? run.startedAt)}
                 </option>
               ))}
             </select>
@@ -1179,7 +1187,7 @@ export function CasesPage({
           </label>
           <div className="form-actions">
             <p>{activeRun
-              ? text(pageCopy.activeRun, { label: activeRun.label })
+              ? text(pageCopy.activeRun, { label: scanRunIdentityPresentation(activeRun, locale) })
               : text(pageCopy.verificationOutcome)}</p>
             <button className="button button--primary" type="button" disabled={busy || Boolean(activeRun) || !selectedVerificationBaseline} onClick={() => selectedVerificationBaseline && void onStartRescan(selectedVerificationBaseline.id)}>
               <Icon name="refresh" size={17} />
@@ -1289,14 +1297,16 @@ export function CasesPage({
               const confirmingDelete = pendingDeleteId === assessmentCase.id;
               const listedAssets = assessmentCase.assetCount === undefined ? "—" : formatNumber(assessmentCase.assetCount);
               const listedFindings = assessmentCase.findingCount === undefined ? "—" : formatNumber(assessmentCase.findingCount);
+              const displayedIdentity = caseIdentityPresentation(assessmentCase, locale);
+              const displayedName = displayedCaseLabels.get(assessmentCase.id) ?? displayedIdentity.name;
               return (
                 <Fragment key={assessmentCase.id}>
                   <article className={active ? "case-row case-row--active" : "case-row"}>
                     <button type="button" className="case-row__main" onClick={() => onSelect(assessmentCase.id)}>
                       <span className="case-row__icon"><Icon name="cases" /></span>
                       <span className="case-row__copy">
-                        <span className="case-row__title"><strong>{assessmentCase.name}</strong>{assessmentCase.isDemo && <small>{text(pageCopy.demo)}</small>}</span>
-                        {assessmentCase.organizationName && <span>{assessmentCase.organizationName}</span>}
+                        <span className="case-row__title"><strong>{displayedName}</strong>{assessmentCase.isDemo && <small>{text(pageCopy.demo)}</small>}</span>
+                        {displayedIdentity.organizationName && <span>{displayedIdentity.organizationName}</span>}
                         <span>{text(pageCopy.assetFindingCount, { assets: listedAssets, findings: listedFindings })}</span>
                         <span className="case-row__platforms">
                           {assessmentCase.platforms.slice(0, 4).map(platformLabel).join(" · ")}
@@ -1310,12 +1320,12 @@ export function CasesPage({
                     </div>
                     <div className="case-row__actions">
                       {assessmentCase.phase !== "archived" && (
-                        <button className="icon-button case-row__archive" type="button" disabled={busy} aria-label={text(pageCopy.archiveAria, { name: assessmentCase.name })} title={text(pageCopy.archiveTitle)} onClick={() => void onArchive(assessmentCase.id)}><Icon name="archive" size={17} /></button>
+                        <button className="icon-button case-row__archive" type="button" disabled={busy} aria-label={text(pageCopy.archiveAria, { name: displayedName })} title={text(pageCopy.archiveTitle)} onClick={() => void onArchive(assessmentCase.id)}><Icon name="archive" size={17} /></button>
                       )}
-                      <button className="icon-button icon-button--danger" type="button" disabled={busy} aria-label={text(pageCopy.beginDeleteAria, { name: assessmentCase.name })} title={text(pageCopy.deleteRecordTitle)} aria-expanded={confirmingDelete} aria-controls={`delete-confirm-${assessmentCase.id}`} onClick={() => confirmingDelete ? cancelDelete() : beginDelete(assessmentCase.id)}>
+                      <button className="icon-button icon-button--danger" type="button" disabled={busy} aria-label={text(pageCopy.beginDeleteAria, { name: displayedName })} title={text(pageCopy.deleteRecordTitle)} aria-expanded={confirmingDelete} aria-controls={`delete-confirm-${assessmentCase.id}`} onClick={() => confirmingDelete ? cancelDelete() : beginDelete(assessmentCase.id)}>
                         <Icon name={confirmingDelete ? "close" : "trash"} size={17} />
                       </button>
-                      <button className="icon-button" type="button" aria-label={text(pageCopy.selectAria, { name: assessmentCase.name })} onClick={() => onSelect(assessmentCase.id)}><Icon name="chevron" /></button>
+                      <button className="icon-button" type="button" aria-label={text(pageCopy.selectAria, { name: displayedName })} onClick={() => onSelect(assessmentCase.id)}><Icon name="chevron" /></button>
                     </div>
                   </article>
                   {confirmingDelete && (

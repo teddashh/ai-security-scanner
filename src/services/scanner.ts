@@ -53,6 +53,11 @@ import type {
   ScanReadiness,
 } from "../types";
 import { buildNativeExportCaseArguments } from "../exportRequest";
+import { findRequestedExportRun } from "../exportRunSelection";
+import {
+  normalizeDemoExportInput,
+  projectDemoSelectedRun,
+} from "../demoExportProjection";
 import { subscribeBufferedEvents } from "./bufferedEventSubscription";
 import {
   adaptLocalNetworkCandidateInventory,
@@ -62,6 +67,7 @@ import {
   adaptNativeExportPreview,
   adaptNativeManifest,
   adaptNativeSnapshot,
+  exportRunFileIdentity,
   type NativeAppSnapshot,
   type NativeAssessmentCase,
   type NativeCaseExport,
@@ -954,56 +960,62 @@ export const scannerService = {
     input: ExportCaseInput,
     workspace: CaseWorkspace,
   ): Promise<ServiceResult<ExportPreview>> {
+    const run = findRequestedExportRun(input, workspace);
+    if (!run) throw new Error(serviceText(
+      "The selected scan run is no longer available. Return to Problems found and choose a saved run again.",
+      "選取的掃描紀錄已無法使用。請回到「發現的問題」並重新選擇已保存的掃描紀錄。",
+    ));
     if (isNativeSurface()) {
       const preview = await invoke<NativeExportPreview>(COMMANDS.previewExport, { input });
       return nativeResult(adaptNativeExportPreview(preview));
     }
-    const run = workspace.runs[0];
-    if (!run) throw new Error(serviceText(
-      "This demo case has no scan run to preview.",
-      "這個展示案件沒有可預覽的掃描紀錄。",
-    ));
-    const engineRuns = workspace.runs.flatMap((item) => item.engineRuns);
-    const evidence = workspace.findings.flatMap((finding) => finding.evidence);
+    const demoInput = normalizeDemoExportInput(input);
+    const engineRuns = run.engineRuns;
+    const projection = projectDemoSelectedRun(workspace, run);
+    const evidence = projection.findings.flatMap((finding) => finding.evidence);
     const rawArtifactCount = engineRuns.reduce((total, engine) => total + engine.rawArtifactCount, 0);
-    const rawArtifactsIncluded = input.format === "case_bundle" && input.includeRawEvidence
-      ? rawArtifactCount
-      : 0;
+    const rawArtifactsIncluded = 0;
     return demoResult({
       caseId: workspace.case.id,
       runId: run.id,
-      format: input.format,
-      redactionProfile: input.redactSensitiveValues ? "standard" : "none",
-      dataSourceCount: workspace.coverage.length,
-      coverageEntryCount: workspace.coverage.length,
-      assetCount: workspace.assets.length,
-      candidateAssetCount: workspace.assets.filter((asset) => asset.authorizationState === "pending").length,
-      canonicalFindingCount: workspace.findings.length,
-      selectedRunFindingCount: workspace.findings.filter((finding) =>
-        finding.evidence.some((item) => item.runId === run.id)).length,
+      locale: demoInput.locale,
+      format: demoInput.format,
+      redactionProfile: "none",
+      includeRawEvidence: false,
+      dataSourceCount: 0,
+      coverageEntryCount: projection.coverage.length,
+      assetCount: projection.assets.length,
+      candidateAssetCount: projection.assets.filter((asset) => asset.authorizationState === "pending").length,
+      canonicalFindingCount: projection.findings.length,
+      selectedRunFindingCount: projection.findings.length,
       evidenceIndexCount: evidence.length,
-      selectedRunEvidenceCount: evidence.filter((item) => item.runId === run.id).length,
-      scanRunCount: workspace.runs.length,
+      selectedRunEvidenceCount: evidence.length,
+      scanRunCount: 1,
       selectedEngineRunCount: run.engineRuns.length,
-      externalScopeGrantCount: workspace.scopeGrants.filter((grant) => grant.externalScope).length,
+      externalScopeGrantCount: 0,
       incompleteEngineRunCount: engineRuns.filter((engine) =>
         ["partial", "failed", "cancelled"].includes(engine.status)).length,
       notExecutedEngineRunCount: engineRuns.filter((engine) => engine.status === "not_executed").length,
-      unknownSourceCount: workspace.coverage.filter((item) => item.state === "source_unavailable_unknown").length,
-      connectedNoAssetCount: workspace.coverage.filter((item) => item.state === "source_connected_none").length,
+      unknownSourceCount: 0,
+      connectedNoAssetCount: 0,
       rawArtifactCount,
       rawArtifactsIncluded,
       rawArtifactsOmitted: rawArtifactCount - rawArtifactsIncluded,
       sensitiveRawArtifactsOmitted: 0,
-      coverageManifestIncluded: input.format === "ocsf" || input.format === "oscal",
+      coverageManifestIncluded: false,
       sensitiveDataWarning: serviceText(
-        "This is an approximate demo preview. A DEMO_ONLY_NOT_A_SCAN file is not a signed case package and contains no verifiable original evidence.",
-        "這是展示資料的近似預覽；DEMO_ONLY_NOT_A_SCAN 檔不是正式案件包，也不含可驗證的原始證據。",
+        "This selected-run-only demo preview omits mutable case-wide coverage and cross-run verification. A DEMO_ONLY_NOT_A_SCAN file is not a signed case package and contains no verifiable original evidence.",
+        "這份僅限所選掃描紀錄的展示預覽，會略過可變動的案件整體涵蓋資料與跨掃描複驗。DEMO_ONLY_NOT_A_SCAN 檔不是正式案件包，也不含可驗證的原始證據。",
       ),
     });
   },
 
   async exportCase(input: ExportCaseInput, workspace: CaseWorkspace): Promise<ServiceResult<CaseExport | null>> {
+    const run = findRequestedExportRun(input, workspace);
+    if (!run) throw new Error(serviceText(
+      "The selected scan run is no longer available. No export was created.",
+      "選取的掃描紀錄已無法使用，因此沒有建立匯出檔。",
+    ));
     if (isNativeSurface()) {
       const fileType = exportFileTypes[input.format];
       const safeName = workspace.case.name
@@ -1013,7 +1025,7 @@ export const scannerService = {
         .slice(0, 80) || "assessment-case";
       const destination = await save({
         title: serviceText("Export ai-security-scanner case", "匯出 ai-security-scanner 案件"),
-        defaultPath: `${safeName}.${fileType.suffix}`,
+        defaultPath: `${safeName}-${exportRunFileIdentity(run)}.${fileType.suffix}`,
         filters: [{ name: fileType.label, extensions: fileType.extensions }],
       });
       if (!destination) return nativeResult(null);
@@ -1024,8 +1036,9 @@ export const scannerService = {
       return nativeResult(adaptNativeExport(exported));
     }
 
-    const exported = createDemoExport(input, workspace);
-    downloadDemoExport(exported, workspace, input);
+    const demoInput = normalizeDemoExportInput(input);
+    const exported = createDemoExport(demoInput, workspace, run);
+    downloadDemoExport(exported, workspace, demoInput, run);
     return demoResult(exported);
   },
 
@@ -1093,18 +1106,27 @@ export const scannerService = {
   },
 };
 
-const createDemoExport = (input: ExportCaseInput, workspace: CaseWorkspace): CaseExport => {
+const createDemoExport = (
+  input: ExportCaseInput,
+  workspace: CaseWorkspace,
+  run: CaseWorkspace["runs"][number],
+): CaseExport => {
   const timestamp = new Date();
-  const safeName = workspace.case.name.replace(/[^\p{L}\p{N}-]+/gu, "-").replace(/^-|-$/g, "");
+  const safeName = workspace.case.name
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}-]+/gu, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80);
   return {
     id: `export-demo-${timestamp.getTime()}`,
     caseId: input.caseId,
-    format: input.format,
+    runId: input.runId,
+    format: "json",
     createdAt: timestamp.toISOString(),
-    fileName: `${safeName || "case"}-${input.format}.demo.json`,
+    fileName: `${safeName || "case"}-${exportRunFileIdentity(run)}-selected-run.demo.json`,
     sha256: "demo-export-has-no-cryptographic-signature",
     signatureState: "unsigned",
-    includesRawEvidence: input.includeRawEvidence,
+    includesRawEvidence: false,
     isDemo: true,
   };
 };
@@ -1113,19 +1135,19 @@ const downloadDemoExport = (
   exported: CaseExport,
   workspace: CaseWorkspace,
   input: ExportCaseInput,
+  run: CaseWorkspace["runs"][number],
 ): void => {
+  const projection = projectDemoSelectedRun(workspace, run);
   const demoPayload = {
     provenance: "DEMO_ONLY_NOT_A_SCAN",
     warning: getDemoNotice(),
-    requestedFormat: input.format,
+    format: "selected_run_json",
     case: workspace.case,
-    coverage: workspace.coverage,
-    assets: workspace.assets,
-    findings: workspace.findings,
-    verification: workspace.verification,
+    ...projection,
     options: {
-      includeRawEvidence: input.includeRawEvidence,
-      redactSensitiveValues: input.redactSensitiveValues,
+      locale: input.locale,
+      includeRawEvidence: false,
+      redactSensitiveValues: false,
     },
   };
   const blob = new Blob([JSON.stringify(demoPayload, null, 2)], { type: "application/json" });

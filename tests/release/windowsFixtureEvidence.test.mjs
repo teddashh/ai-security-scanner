@@ -51,7 +51,8 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
       "ghost-install NSIS qualification",
     ],
   ]) {
-    const source = await readFile(new URL(relative, import.meta.url), "utf8");
+    const source = (await readFile(new URL(relative, import.meta.url), "utf8"))
+      .replaceAll(/\r\n?/gu, "\n");
     const registryRemovalProof = source.includes("Get-CurrentUserUninstallEntries")
       ? '  if (@(Get-CurrentUserUninstallEntries).Count -ne 0) {\n    throw "Candidate NSIS uninstall left its current-user product registration behind."\n  }\n'
       : '  if (@(Get-ProductRegistryEntries).Count -ne 0) {\n    throw "Candidate NSIS uninstaller left the product registry entry."\n  }\n';

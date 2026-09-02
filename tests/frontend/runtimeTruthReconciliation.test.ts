@@ -98,3 +98,23 @@ test("setup command timeout is an unknown outcome reconciled through authoritati
   assert.match(rejectionCatch, /pushToast/u, "only an unconfirmed real rejection becomes retryable failure feedback");
   assert.match(setup, /!keepFollowingAuthoritativeOperation[\s\S]*setRuntimeSetupAdmissionPending\(false\)[\s\S]*setRuntimeSetupCommandPolling\(false\)/u);
 });
+
+test("a completed setup claims ready only after the refreshed runtime is authoritatively available", () => {
+  const loadSnapshot = appSource.slice(
+    appSource.indexOf("const loadSnapshot ="),
+    appSource.indexOf("const refreshRuntimeSnapshot ="),
+  );
+  const setup = appSource.slice(
+    appSource.indexOf("const setupManagedRuntime ="),
+    appSource.indexOf("useEffect(() => {", appSource.indexOf("const setupManagedRuntime =")),
+  );
+
+  assert.match(loadSnapshot, /return await applySnapshotResult\(boundedSnapshotRead\.value\)/u);
+  assert.match(loadSnapshot, /catch \(error\)[\s\S]*return undefined/u);
+  assert.match(setup, /const refreshedSnapshot = await refreshRuntimeSnapshot\(\)/u);
+  assert.match(setup, /const runtimeReady = refreshedSnapshot\?\.runtime\?\.available === true/u);
+  assert.match(setup, /const completedAndReady = completed && runtimeReady/u);
+  assert.match(setup, /tone: completedAndReady \? "success" : "warning"/u);
+  assert.match(setup, /completedAndReady[\s\S]*The private scan engine is ready[\s\S]*Setup finished; checking availability/u);
+  assert.match(setup, /has not confirmed that the scan engine is available/u);
+});

@@ -22,3 +22,5 @@ mod managed_runtime;
 mod naabu_work_plan;
 #[path = "../src/orchestrator.rs"]
 mod orchestrator;
+#[path = "../src/process_lease.rs"]
+mod process_lease;

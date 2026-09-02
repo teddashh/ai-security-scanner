@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { caseIdentityPresentation } from "../caseIdentityPresentation";
 import { Icon } from "../components/Icon";
 import { EmptyState, InlineNotice, PageHeader } from "../components/Shared";
 import { StatusPill } from "../components/StatusPill";
@@ -10,21 +11,28 @@ import {
   runSupportsFindingOnlyExport,
 } from "../exportFormatEligibility";
 import { useI18n } from "../i18n";
+import { reportLocaleForUiLocale } from "../reportLocale";
+import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import type { CaseExport, CaseWorkspace, ExportFormat, ExportPreview } from "../types";
 import "./page-technical-details.css";
 import { displayTechnicalDetail } from "./pageTechnicalDetails";
 
 interface ExportPageProps {
   workspace: CaseWorkspace;
+  selectedRunId?: string;
   exports: CaseExport[];
   demoMode: boolean;
   busy?: boolean;
   onPreview: (options: {
+    runId: string;
+    locale: "en" | "zh-Hant";
     format: ExportFormat;
     includeRawEvidence: boolean;
     redactSensitiveValues: boolean;
   }) => Promise<ExportPreview | undefined>;
   onExport: (options: {
+    runId: string;
+    locale: "en" | "zh-Hant";
     format: ExportFormat;
     includeRawEvidence: boolean;
     redactSensitiveValues: boolean;
@@ -41,10 +49,10 @@ const copy = {
     zhTW: "一般分享可選人看得懂的報告，或讓其他工具讀取的主要報告 JSON；需要時再打開進階技術格式。檔案在你主動分享前只會留在這台電腦上。",
   },
   preparing: { en: "Preparing…", zhTW: "準備中…" },
-  exportDemo: { en: "Download clearly marked demo file", zhTW: "下載明確標示的展示檔" },
-  createExport: { en: "Save selected file", zhTW: "儲存選定檔案" },
-  createInterimExport: { en: "Save interim file", zhTW: "儲存暫時檔案" },
-  createIncompleteExport: { en: "Save incomplete file", zhTW: "儲存不完整檔案" },
+  exportDemo: { en: "Download {format} demo file", zhTW: "下載「{format}」展示檔" },
+  createExport: { en: "Save {format}", zhTW: "儲存「{format}」" },
+  createInterimExport: { en: "Save interim {format}", zhTW: "儲存暫時的「{format}」" },
+  createIncompleteExport: { en: "Save incomplete {format}", zhTW: "儲存不完整的「{format}」" },
   activeTitle: { en: "This would be an interim report", zhTW: "這會是一份暫時報告" },
   activeBody: {
     en: "A scan is still running. A file saved now may omit later findings and will record unfinished checks. Wait for every check to finish unless you specifically need a progress snapshot.",
@@ -57,19 +65,25 @@ const copy = {
   },
   demoTitle: { en: "This downloads a sample report", zhTW: "這次會下載一份範例報告" },
   demoBody: {
-    en: "Use it to explore the report format. It does not contain results from a real scan.",
-    zhTW: "你可以用它體驗報告格式；內容不是來自真實掃描。",
+    en: "The browser demo downloads one selected-run JSON sample. It does not contain results from a real scan.",
+    zhTW: "瀏覽器展示模式只會下載一份所選掃描輪次的 JSON 範例；內容不是來自真實掃描。",
   },
   demoDetails: { en: "About sample reports", zhTW: "關於範例報告" },
   demoTechnical: {
-    en: "The file is marked DEMO_ONLY_NOT_A_SCAN. It is not a signed scan package and cannot be used as scan, audit, or verification evidence.",
-    zhTW: "檔案會標示 DEMO_ONLY_NOT_A_SCAN；它不是已簽章的掃描結果包，也不能當成掃描、稽核或複驗證據。",
+    en: "The file is marked DEMO_ONLY_NOT_A_SCAN. Demo mode does not serialize HTML, OCSF, OSCAL, framework, or case-bundle formats; it includes no source files, redaction transform, coverage companion, or local signature.",
+    zhTW: "檔案會標示 DEMO_ONLY_NOT_A_SCAN。展示模式不會產生 HTML、OCSF、OSCAL、框架或案件包格式，也不含來源檔案、遮罩轉換、涵蓋附檔或本機簽章。",
   },
   previewErrorTitle: { en: "The exact export preview is unavailable", zhTW: "目前無法取得精確匯出預覽" },
   previewErrorBody: {
     en: "No file has been created. Try again before exporting so you can review the exact contents first.",
     zhTW: "目前沒有建立任何檔案。請先重試，取得精確內容預覽後再匯出。",
   },
+  runUnavailableTitle: { en: "Choose a saved scan before exporting", zhTW: "請先選擇一筆已保存的掃描" },
+  runUnavailableBody: {
+    en: "No available saved scan is selected. Go to Results and choose a saved scan, or return to Scan progress to start one.",
+    zhTW: "目前沒有選定可用的已保存掃描。請前往「結果」選擇一筆掃描，或回到「掃描進度」開始新的掃描。",
+  },
+  chooseRun: { en: "Choose a scan in Results", zhTW: "前往「結果」選擇掃描" },
   retryPreview: { en: "Try preview again", zhTW: "重新取得預覽" },
   sensitiveTitle: { en: "This scan contains sensitive asset and security information", zhTW: "這次掃描包含敏感的資產與資安資訊" },
   sensitiveBody: {
@@ -160,6 +174,8 @@ const copy = {
   savedReport: { en: "Saved security report", zhTW: "已儲存的資安報告" },
   fileDetails: { en: "File details and integrity check", zhTW: "檔案細節與完整性檢查" },
   fileName: { en: "File name", zhTW: "檔案名稱" },
+  scanRunId: { en: "Immutable scan-run ID", zhTW: "不可變更的掃描輪次 ID" },
+  savedRunUnavailable: { en: "Saved scan is no longer available", zhTW: "這筆已保存的掃描已無法使用" },
   fileHash: { en: "SHA-256", zhTW: "SHA-256" },
   coverageManifest: { en: "Coverage companion", zhTW: "涵蓋說明檔" },
   coverageManifestIncluded: { en: "Included next to this file", zhTW: "已存放在此檔案旁" },
@@ -251,60 +267,84 @@ const findingOnlyCoverageCopy = {
   },
 } as const;
 
-export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onExport, onVerify, onVerifyReceived }: ExportPageProps) {
-  const { text, formatDateTime, formatNumber } = useI18n();
-  const latestRun = workspace.runs[0];
-  const activeRun = latestRun && ["queued", "running", "paused"].includes(latestRun.status)
-    ? latestRun
+export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, onPreview, onExport, onVerify, onVerifyReceived }: ExportPageProps) {
+  const { locale, text, formatDateTime, formatNumber } = useI18n();
+  const reportLocale = reportLocaleForUiLocale(locale);
+  const selectedRun = workspace.runs.find((run) => run.id === selectedRunId);
+  const selectedRunUnavailable = !selectedRun;
+  const activeRun = selectedRun && ["queued", "running", "paused"].includes(selectedRun.status)
+    ? selectedRun
     : undefined;
-  const incompleteTerminalRun = latestRun
+  const incompleteTerminalRun = selectedRun
     && !activeRun
-    && latestRun.status !== "completed"
-    ? latestRun
+    && selectedRun.status !== "completed"
+    ? selectedRun
     : undefined;
   const workspaceExportRevision = `${workspace.findings.length}|${workspace.runs
     .map((run) => `${run.id}:${run.status}:${run.progress}:${run.finishedAt ?? ""}`)
     .join("|")}`;
   const [format, setFormat] = useState<ExportFormat>("html");
   const [includeRawEvidence, setIncludeRawEvidence] = useState(false);
-  const [redactSensitiveValues, setRedactSensitiveValues] = useState(true);
+  const [redactSensitiveValues, setRedactSensitiveValues] = useState(!demoMode);
   const [preview, setPreview] = useState<ExportPreview>();
   const [previewError, setPreviewError] = useState<string>();
   const [previewPending, setPreviewPending] = useState(true);
   const [previewRequest, setPreviewRequest] = useState(0);
-  const findingOnlyFormatsAvailable = runSupportsFindingOnlyExport(latestRun);
-  const selectedFormatUnavailable = !exportFormatIsAvailable(format, latestRun);
+  const findingOnlyFormatsAvailable = runSupportsFindingOnlyExport(selectedRun);
+  const selectedFormatUnavailable = !selectedRun || !exportFormatIsAvailable(format, selectedRun);
 
   useEffect(() => {
-    const availableFormat = resetUnavailableExportFormat(format, latestRun);
+    if (!demoMode) return;
+    setFormat("json");
+    setIncludeRawEvidence(false);
+    setRedactSensitiveValues(false);
+  }, [demoMode]);
+
+  useEffect(() => {
+    const availableFormat = resetUnavailableExportFormat(format, selectedRun);
     if (availableFormat !== format) {
       setFormat(availableFormat);
       setIncludeRawEvidence(false);
     }
-  }, [findingOnlyFormatsAvailable, format, latestRun]);
+  }, [findingOnlyFormatsAvailable, format, selectedRun]);
 
   useEffect(() => {
     let active = true;
     setPreviewPending(true);
     setPreview(undefined);
     setPreviewError(undefined);
+    if (demoMode && format !== "json") {
+      return () => {
+        active = false;
+      };
+    }
+    if (!selectedRun) {
+      setPreviewError("export_run_unavailable");
+      setPreviewPending(false);
+      return () => {
+        active = false;
+      };
+    }
     if (selectedFormatUnavailable) {
       setPreviewPending(false);
       return () => {
         active = false;
       };
     }
-    void onPreview({ format, includeRawEvidence, redactSensitiveValues })
+    void onPreview({ runId: selectedRun.id, locale: reportLocale, format, includeRawEvidence, redactSensitiveValues })
       .then((result) => {
         if (!active) return;
         const expectedRedaction = redactSensitiveValues ? "standard" : "none";
         if (
           !result
           || result.caseId !== workspace.case.id
+          || result.runId !== selectedRun.id
+          || result.locale !== reportLocale
           || result.format !== format
           || result.redactionProfile !== expectedRedaction
+          || result.includeRawEvidence !== includeRawEvidence
         ) {
-          console.error("[ai-security-scanner] export preview did not match the requested case, format, or redaction profile");
+          console.error("[ai-security-scanner] export preview did not match the requested case, run, locale, format, or redaction profile");
           setPreview(undefined);
           setPreviewError(result ? "export_preview_coordinate_mismatch" : "export_preview_unavailable");
           return;
@@ -324,7 +364,18 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
     return () => {
       active = false;
     };
-  }, [format, includeRawEvidence, onPreview, previewRequest, redactSensitiveValues, selectedFormatUnavailable, workspace.case.id, workspaceExportRevision]);
+  }, [demoMode, format, includeRawEvidence, onPreview, previewRequest, redactSensitiveValues, reportLocale, selectedFormatUnavailable, selectedRun, workspace.case.id, workspaceExportRevision]);
+
+  const previewMatchesSelection = Boolean(
+    preview
+    && selectedRun
+    && preview.caseId === workspace.case.id
+    && preview.runId === selectedRun.id
+    && preview.locale === reportLocale
+    && preview.format === format
+    && preview.redactionProfile === (redactSensitiveValues ? "standard" : "none")
+    && preview.includeRawEvidence === includeRawEvidence,
+  );
 
   const unknownSourceCount = preview?.unknownSourceCount;
   const connectedNoAssetCount = preview?.connectedNoAssetCount;
@@ -335,18 +386,20 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
   const renderFormatCard = (id: ExportFormat) => {
     const item = formatCopy[id];
     const unavailableWithoutRun = isFindingOnlyExportFormat(id) && !findingOnlyFormatsAvailable;
+    const unavailableInDemo = demoMode && id !== "json";
+    const unavailable = unavailableWithoutRun || unavailableInDemo;
     return (
       <label
         key={id}
-        className={`${format === id ? "format-card format-card--active" : "format-card"}${unavailableWithoutRun ? " format-card--disabled" : ""}`}
-        aria-disabled={unavailableWithoutRun || undefined}
+        className={`${format === id ? "format-card format-card--active" : "format-card"}${unavailable ? " format-card--disabled" : ""}`}
+        aria-disabled={unavailable || undefined}
       >
         <input
           type="radio"
           name="export-format"
           value={id}
           checked={format === id}
-          disabled={unavailableWithoutRun}
+          disabled={unavailable}
           onChange={() => {
             setFormat(id);
             if (id !== "case_bundle") setIncludeRawEvidence(false);
@@ -371,19 +424,23 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
           <button
             className="button button--primary"
             type="button"
-            disabled={busy || previewPending || !preview}
-            onClick={() => void onExport({ format, includeRawEvidence, redactSensitiveValues })}
+            disabled={busy || previewPending || !previewMatchesSelection}
+            aria-busy={busy || previewPending}
+            onClick={() => {
+              if (!selectedRun || !previewMatchesSelection) return;
+              void onExport({ runId: selectedRun.id, locale: reportLocale, format, includeRawEvidence, redactSensitiveValues });
+            }}
           >
             <Icon name="download" size={18} />
             {busy || previewPending
               ? text(copy.preparing)
               : demoMode
-                ? text(copy.exportDemo)
+                ? text(copy.exportDemo, { format: text(currentFormat.title) })
                 : activeRun
-                  ? text(copy.createInterimExport)
+                  ? text(copy.createInterimExport, { format: text(currentFormat.title) })
                   : incompleteTerminalRun
-                    ? text(copy.createIncompleteExport)
-                    : text(copy.createExport)}
+                    ? text(copy.createIncompleteExport, { format: text(currentFormat.title) })
+                    : text(copy.createExport, { format: text(currentFormat.title) })}
           </button>
         )}
       />
@@ -410,9 +467,30 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
         </InlineNotice>
       )}
 
-      <InlineNotice tone={previewError ? "danger" : "warning"} title={previewError ? text(copy.previewErrorTitle) : text(copy.sensitiveTitle)}>
-        <p>{previewError ? text(copy.previewErrorBody) : previewPending ? text(copy.previewPending) : text(copy.sensitiveBody)}</p>
-        {previewError && (
+      <InlineNotice
+        tone={previewError ? "danger" : "warning"}
+        title={previewError
+          ? text(selectedRunUnavailable ? copy.runUnavailableTitle : copy.previewErrorTitle)
+          : text(copy.sensitiveTitle)}
+      >
+        <p
+          id="export-preview-status"
+          role={previewError ? undefined : "status"}
+          aria-live={previewError ? undefined : "polite"}
+          aria-atomic={previewError ? undefined : "true"}
+        >
+          {previewError
+            ? text(selectedRunUnavailable ? copy.runUnavailableBody : copy.previewErrorBody)
+            : previewPending
+              ? text(copy.previewPending)
+              : text(copy.sensitiveBody)}
+        </p>
+        {previewError && selectedRunUnavailable && (
+          <a className="button button--secondary button--small" href="#findings">
+            <Icon name="findings" size={15} /> {text(copy.chooseRun)}
+          </a>
+        )}
+        {previewError && !selectedRunUnavailable && (
           <button className="button button--secondary button--small" type="button" disabled={busy || previewPending} onClick={() => setPreviewRequest((request) => request + 1)}>
             <Icon name="refresh" size={15} /> {text(copy.retryPreview)}
           </button>
@@ -436,24 +514,27 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
             <p>{text(copy.formatDescription)}</p>
           </div>
 
-          <div className="format-grid">
-            {primaryFormats.map(renderFormatCard)}
-          </div>
+          <fieldset className="export-format-fieldset">
+            <legend className="sr-only">{text(copy.formatTitle)}</legend>
+            <div className="format-grid">
+              {primaryFormats.map(renderFormatCard)}
+            </div>
 
-          <details className="page-secondary-feature export-advanced-formats">
-            <summary>{text(copy.advancedFormats)}</summary>
-            <p className="page-secondary-feature__intro">
-              {text(findingOnlyFormatsAvailable ? copy.advancedFormatsHint : copy.advancedFormatsIncomplete)}
-            </p>
-            <div className="format-grid">{advancedFormats.map(renderFormatCard)}</div>
-          </details>
+            <details className="page-secondary-feature export-advanced-formats">
+              <summary>{text(copy.advancedFormats)}</summary>
+              <p className="page-secondary-feature__intro">
+                {text(findingOnlyFormatsAvailable ? copy.advancedFormatsHint : copy.advancedFormatsIncomplete)}
+              </p>
+              <div className="format-grid">{advancedFormats.map(renderFormatCard)}</div>
+            </details>
+          </fieldset>
 
           <div className="export-options">
             <label className="toggle-row">
               <input
                 type="checkbox"
                 checked={includeRawEvidence}
-                disabled={format !== "case_bundle"}
+                disabled={demoMode || format !== "case_bundle"}
                 onChange={(event) => setIncludeRawEvidence(event.target.checked)}
               />
               <span>
@@ -462,7 +543,7 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
               </span>
             </label>
             <label className="toggle-row">
-              <input type="checkbox" checked={redactSensitiveValues} onChange={(event) => setRedactSensitiveValues(event.target.checked)} />
+              <input type="checkbox" checked={redactSensitiveValues} disabled={demoMode} onChange={(event) => setRedactSensitiveValues(event.target.checked)} />
               <span><strong>{text(copy.redact)}</strong><small>{text(copy.redactDetail)}</small></span>
             </label>
           </div>
@@ -475,9 +556,12 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
           </summary>
           <p className="export-summary__note">{text(copy.signatureLimit)}</p>
           <dl className="export-facts">
-            <div><dt>{text(copy.case)}</dt><dd>{workspace.case.name}</dd></div>
+            <div><dt>{text(copy.case)}</dt><dd>{caseIdentityPresentation(workspace.case, locale).name}</dd></div>
             <div><dt>{text(copy.exactType)}</dt><dd>{text(currentFormat.title)} · <code>{currentFormat.extension}</code></dd></div>
-            <div><dt>{text(copy.selectedRun)}</dt><dd><code>{preview?.runId ?? text(copy.calculating)}</code></dd></div>
+            <div>
+              <dt>{text(copy.selectedRun)}</dt>
+              <dd>{selectedRun ? scanRunIdentityPresentation(selectedRun, locale) : text(copy.calculating)} · <code>{preview?.runId ?? text(copy.calculating)}</code></dd>
+            </div>
             <div><dt>{text(copy.dataSources)}</dt><dd>{shownCount(preview?.dataSourceCount)}</dd></div>
             <div><dt>{text(copy.coverageEntries)}</dt><dd>{shownCount(preview?.coverageEntryCount)}</dd></div>
             <div><dt>{text(copy.assets)}</dt><dd>{preview ? `${formatNumber(preview.assetCount)} / ${formatNumber(preview.candidateAssetCount)}` : "—"}</dd></div>
@@ -542,18 +626,24 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
           <div className="export-history">
             {exports.map((item) => {
               const itemFormat = item.format ? formatCopy[item.format] : undefined;
+              const historyRun = workspace.runs.find((run) => run.id === item.runId);
+              const historyRunName = historyRun
+                ? scanRunIdentityPresentation(historyRun, locale)
+                : text(copy.savedRunUnavailable);
               return (
                 <article key={item.id} className="export-row">
                   <span className="export-row__icon"><Icon name="file" size={19} /></span>
                   <div>
                     <strong>{itemFormat ? text(itemFormat.title) : text(copy.savedReport)}</strong>
-                    <span>{formatDateTime(item.createdAt)}</span>
+                    <span>{historyRunName} · {formatDateTime(item.createdAt)}</span>
                   </div>
                   <details className="page-technical-details export-row__technical">
                     <summary>{text(copy.fileDetails)}</summary>
                     <dl>
                       <div><dt>{text(copy.fileName)}</dt><dd>{item.fileName}</dd></div>
                       <div><dt>{text(copy.exactType)}</dt><dd>{itemFormat ? `${text(itemFormat.title)} · ${itemFormat.extension}` : text(copy.legacyUnknownFormat)}</dd></div>
+                      <div><dt>{text(copy.selectedRun)}</dt><dd>{historyRunName}</dd></div>
+                      <div><dt>{text(copy.scanRunId)}</dt><dd><code>{item.runId}</code></dd></div>
                       <div><dt>{text(copy.fileHash)}</dt><dd><code>{item.sha256}</code></dd></div>
                       {item.coverageManifestPath && <div><dt>{text(copy.coverageManifest)}</dt><dd>
                         <StatusPill label={text(copy.coverageManifestIncluded)} tone="neutral" />

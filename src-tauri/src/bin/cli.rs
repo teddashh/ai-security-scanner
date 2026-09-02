@@ -32,7 +32,8 @@ use ai_security_scanner_lib::managed_network::{
 };
 use ai_security_scanner_lib::managed_runtime::{
     ManagedRuntimeManager, ManagedStopMode, ManagedUninstallOptions,
-    WindowsInstallerPrerequisiteClass, prepare_windows_installer_prerequisite,
+    WindowsInstallerPrerequisiteClass, ensure_private_product_data_directory,
+    prepare_windows_installer_prerequisite,
 };
 use ai_security_scanner_lib::orchestrator::{ExecutionCheckpoint, ExecutionStage};
 use ai_security_scanner_lib::process_lease::DataDirectoryExclusiveLease;
@@ -873,8 +874,37 @@ async fn execute(cli: Cli, option_sources: GlobalOptionSources) -> AppResult<u8>
     }
 
     let managed_runtime_bundle = cli.managed_runtime_bundle;
+    let data_dir_was_overridden = cli.data_dir.is_some();
     let data_dir = resolve_data_dir(cli.data_dir)?;
-    fs::create_dir_all(&data_dir)?;
+    let _product_data_guard: Option<_> = if data_dir_was_overridden {
+        prepare_overridden_data_directory(&data_dir)?;
+        None
+    } else {
+        Some(ensure_private_product_data_directory(&data_dir)?)
+    };
+    if !data_dir_was_overridden {
+        let legacy_data_dir = legacy_project_data_dir();
+        if let Some(notice) = preserved_legacy_data_notice(&data_dir, legacy_data_dir.as_deref()) {
+            eprintln!("{notice}");
+        }
+    }
+    // A managed-runtime status query does not need the case database, engine
+    // catalog, artifact tree, or signing key. Dispatch it before any of those
+    // workspace resources are created or opened. Manager admission can create
+    // or restrict its own state directory, so coordinate that bounded mutation
+    // with the same data-directory lease used by other runtime commands.
+    if command_is_managed_runtime_status(&cli.command) {
+        let _exclusive_lease = DataDirectoryExclusiveLease::acquire(&data_dir)?;
+        execute_managed_runtime_cli_command(
+            &data_dir,
+            &data_dir.join("artifacts"),
+            managed_runtime_bundle.as_deref(),
+            ManagedRuntimeCliCommand::Status,
+            cli.json,
+        )
+        .await?;
+        return Ok(0);
+    }
     let _exclusive_lease = command_requires_exclusive_data_directory(&cli.command)
         .then(|| DataDirectoryExclusiveLease::acquire(&data_dir))
         .transpose()?;
@@ -1176,13 +1206,24 @@ fn command_requires_exclusive_data_directory(command: &Command) -> bool {
             command: RuntimeCommand::Cleanup { .. },
         } => true,
         Command::Runtime {
-            command: RuntimeCommand::Managed { command },
-        } => !matches!(command, ManagedRuntimeCliCommand::Status),
+            command: RuntimeCommand::Managed { .. },
+        } => true,
         Command::Export {
             command: ExportCommand::Identity { .. },
         } => true,
         _ => false,
     }
+}
+
+fn command_is_managed_runtime_status(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Runtime {
+            command: RuntimeCommand::Managed {
+                command: ManagedRuntimeCliCommand::Status,
+            },
+        }
+    )
 }
 
 fn execute_case(
@@ -1680,6 +1721,7 @@ fn execute_export(
                 ExportOptions {
                     redaction: args.redaction.into(),
                     include_raw_artifacts: args.include_raw_artifacts,
+                    locale: ai_security_scanner_lib::export::ReportLocale::En,
                 },
             )?;
             print_value(&export, json_output)?;
@@ -1795,24 +1837,14 @@ async fn execute_runtime(
 ) -> AppResult<()> {
     match command {
         RuntimeCommand::Managed { command } => {
-            let data_dir = data_dir.to_path_buf();
-            let artifact_root = artifact_root.to_path_buf();
-            let bundle = managed_runtime_bundle.map(Path::to_path_buf);
-            let value = tokio::task::spawn_blocking(move || {
-                execute_managed_runtime_command(
-                    &data_dir,
-                    &artifact_root,
-                    bundle.as_deref(),
-                    command,
-                )
-            })
-            .await
-            .map_err(|error| {
-                AppError::Internal(format!(
-                    "managed runtime worker could not be joined: {error}"
-                ))
-            })??;
-            print_value(&value, json_output)?;
+            execute_managed_runtime_cli_command(
+                data_dir,
+                artifact_root,
+                managed_runtime_bundle,
+                command,
+                json_output,
+            )
+            .await?;
         }
         RuntimeCommand::Inspect(args) => {
             let cases = service.list_cases()?;
@@ -2087,6 +2119,28 @@ async fn execute_runtime(
         }
     }
     Ok(())
+}
+
+async fn execute_managed_runtime_cli_command(
+    data_dir: &Path,
+    artifact_root: &Path,
+    managed_runtime_bundle: Option<&Path>,
+    command: ManagedRuntimeCliCommand,
+    json_output: bool,
+) -> AppResult<()> {
+    let data_dir = data_dir.to_path_buf();
+    let artifact_root = artifact_root.to_path_buf();
+    let bundle = managed_runtime_bundle.map(Path::to_path_buf);
+    let value = tokio::task::spawn_blocking(move || {
+        execute_managed_runtime_command(&data_dir, &artifact_root, bundle.as_deref(), command)
+    })
+    .await
+    .map_err(|error| {
+        AppError::Internal(format!(
+            "managed runtime worker could not be joined: {error}"
+        ))
+    })??;
+    print_value(&value, json_output)
 }
 
 fn inspect_cleanup(
@@ -3003,11 +3057,88 @@ fn resolve_data_dir(override_path: Option<PathBuf>) -> AppResult<PathBuf> {
         return Ok(path);
     }
 
-    ProjectDirs::from("dev", "teddashh", "ai-security-scanner")
-        .map(|dirs| dirs.data_local_dir().to_path_buf())
+    BaseDirs::new()
+        .map(|directories| canonical_product_data_dir(directories.data_local_dir()))
         .ok_or_else(|| {
-            AppError::Internal("could not determine local application data directory".into())
+            AppError::Internal("could not determine the platform local-data directory".into())
         })
+}
+
+fn canonical_product_data_dir(local_data_dir: &Path) -> PathBuf {
+    local_data_dir.join(PRODUCT_DATA_DIRECTORY_NAME)
+}
+
+fn prepare_overridden_data_directory(path: &Path) -> AppResult<()> {
+    fs::create_dir_all(path)?;
+    Ok(())
+}
+
+fn legacy_project_data_dir() -> Option<PathBuf> {
+    ProjectDirs::from("dev", "teddashh", "ai-security-scanner")
+        .map(|directories| directories.data_local_dir().to_path_buf())
+}
+
+fn legacy_data_dir_contains_durable_entries(path: &Path) -> bool {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+    };
+    if legacy_path_is_reparse_point(&metadata) || !metadata.is_dir() {
+        return true;
+    }
+
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+    };
+
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return true;
+        };
+        if entry.file_name() != std::ffi::OsStr::new(".exclusive-process.lock") {
+            return true;
+        }
+        match entry.file_type() {
+            Ok(file_type) if file_type.is_file() => {}
+            _ => return true,
+        }
+    }
+    false
+}
+
+fn legacy_path_is_reparse_point(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
+
+fn preserved_legacy_data_notice(
+    selected_data_dir: &Path,
+    legacy_data_dir: Option<&Path>,
+) -> Option<String> {
+    let legacy_data_dir = legacy_data_dir?;
+    if legacy_data_dir == selected_data_dir
+        || !legacy_data_dir_contains_durable_entries(legacy_data_dir)
+    {
+        return None;
+    }
+
+    Some(format!(
+        "notice: legacy CLI data was preserved at \"{}\"; use --data-dir \"{}\" to open it explicitly.",
+        legacy_data_dir.display(),
+        legacy_data_dir.display()
+    ))
 }
 
 fn parse_data_class(value: &str) -> AppResult<DataClass> {
@@ -3070,6 +3201,64 @@ mod tests {
             Ok(DataClass::PersonallyIdentifiableInformation)
         ));
         assert!(parse_data_class("legal-opinion").is_err());
+    }
+
+    #[test]
+    fn cli_data_root_default_uses_the_fixed_product_root() {
+        let local_data_dir = Path::new("platform-local-data");
+
+        assert_eq!(
+            canonical_product_data_dir(local_data_dir),
+            local_data_dir.join(PRODUCT_DATA_DIRECTORY_NAME)
+        );
+    }
+
+    #[test]
+    fn cli_data_root_explicit_override_is_preserved_exactly() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let override_path = temporary.path().join("legacy").join("caller-selected-data");
+
+        assert_eq!(
+            resolve_data_dir(Some(override_path.clone())).unwrap(),
+            override_path
+        );
+        prepare_overridden_data_directory(&override_path)
+            .expect("ordinary override creation remains available");
+        assert!(override_path.is_dir());
+    }
+
+    #[test]
+    fn cli_data_root_legacy_notice_requires_durable_state_and_never_rewrites_it() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let canonical = temporary.path().join("canonical");
+        let legacy = temporary.path().join("legacy");
+        fs::create_dir(&legacy).expect("legacy directory");
+
+        assert!(preserved_legacy_data_notice(&canonical, Some(&legacy)).is_none());
+
+        let transient_lock = legacy.join(".exclusive-process.lock");
+        fs::write(&transient_lock, b"transient lease").expect("transient lease fixture");
+        assert!(preserved_legacy_data_notice(&canonical, Some(&legacy)).is_none());
+
+        let case_database = legacy.join("casework.db");
+        fs::write(&case_database, b"preserved case bytes").expect("legacy case fixture");
+        let notice = preserved_legacy_data_notice(&canonical, Some(&legacy))
+            .expect("durable legacy state notice");
+
+        assert!(notice.starts_with("notice: legacy CLI data was preserved at "));
+        assert!(notice.contains("--data-dir"));
+        assert!(notice.contains(&legacy.display().to_string()));
+        assert_eq!(
+            fs::read(&case_database).expect("preserved case bytes"),
+            b"preserved case bytes"
+        );
+        assert_eq!(
+            fs::read(&transient_lock).expect("preserved transient lease bytes"),
+            b"transient lease"
+        );
+        assert!(!canonical.exists());
+        assert!(preserved_legacy_data_notice(&legacy, Some(&legacy)).is_none());
+        assert!(preserved_legacy_data_notice(&canonical, None).is_none());
     }
 
     #[test]
@@ -3354,8 +3543,12 @@ mod tests {
         assert!(command_requires_exclusive_data_directory(
             &qualify_egress.command
         ));
-        assert!(!command_requires_exclusive_data_directory(&status.command));
+        assert!(command_requires_exclusive_data_directory(&status.command));
         assert!(!command_requires_exclusive_data_directory(&doctor.command));
+        assert!(command_is_managed_runtime_status(&status.command));
+        assert!(!command_is_managed_runtime_status(&install.command));
+        assert!(!command_is_managed_runtime_status(&qualify.command));
+        assert!(!command_is_managed_runtime_status(&doctor.command));
     }
 
     #[test]

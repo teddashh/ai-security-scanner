@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -36,11 +48,21 @@ const sbomSpecs = [
   { format: "cyclonedx-json", suffix: "cyclonedx", predicateType: "https://cyclonedx.org/bom" },
 ];
 let fakeGhDirectory;
+let fakeGhImplementation;
 
 test.before(async () => {
   fakeGhDirectory = await mkdtemp(path.join(os.tmpdir(), "publication-fake-gh-"));
-  const executable = path.join(fakeGhDirectory, "gh");
-  await writeFile(executable, `#!/usr/bin/env node
+  fakeGhImplementation = path.join(
+    fakeGhDirectory,
+    process.platform === "win32" ? "attestation" : "fake-gh.cjs",
+  );
+  await writeFile(fakeGhImplementation, `
+const { basename } = require("node:path");
+if (
+  process.platform !== "win32" ||
+  basename(process.execPath).toLowerCase() === "gh.exe" ||
+  basename(process.argv[1] ?? "").toLowerCase() === "attestation"
+) {
 const { readFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 const value = (flag) => args[args.indexOf(flag) + 1];
@@ -74,8 +96,24 @@ process.stdout.write(JSON.stringify([{
     statement,
   },
 }]) + "\\n");
+}
 `);
-  await chmod(executable, 0o755);
+  if (process.platform === "win32") {
+    const executable = path.join(fakeGhDirectory, "gh.exe");
+    try {
+      await link(process.execPath, executable);
+    } catch (error) {
+      if (!["EXDEV", "EPERM"].includes(error?.code)) throw error;
+      await copyFile(process.execPath, executable);
+    }
+  } else {
+    const executable = path.join(fakeGhDirectory, "gh");
+    await writeFile(
+      executable,
+      `#!/usr/bin/env node\n${await readFile(fakeGhImplementation, "utf8")}`,
+    );
+    await chmod(executable, 0o755);
+  }
 });
 
 test.after(async () => {
@@ -352,6 +390,14 @@ async function createArtifact(testContext, engine) {
 }
 
 function runVerifier(engine, artifact, overrides = {}) {
+  const environment = { ...process.env };
+  for (const key of Object.keys(environment)) {
+    if (key.toLowerCase() === "path") delete environment[key];
+  }
+  environment.PATH = `${fakeGhDirectory}${path.delimiter}${process.env.PATH ?? ""}`;
+  environment.FAKE_GH_RUN_ID = overrides.runId ?? runId;
+  environment.FAKE_GH_ATTEMPT = overrides.attempt ?? attempt;
+  environment.FAKE_GH_ATTESTATION_FAILURE = overrides.cryptographicFailure ? "1" : "0";
   return spawnSync(process.execPath, [
     verifier,
     "--engine", engine,
@@ -360,16 +406,10 @@ function runVerifier(engine, artifact, overrides = {}) {
     "--run-id", overrides.runId ?? runId,
     "--attempt", overrides.attempt ?? attempt,
   ], {
-    cwd: projectRoot,
+    cwd: process.platform === "win32" ? fakeGhDirectory : projectRoot,
     encoding: "utf8",
     maxBuffer: 8 * 1024 * 1024,
-    env: {
-      ...process.env,
-      PATH: `${fakeGhDirectory}${path.delimiter}${process.env.PATH ?? ""}`,
-      FAKE_GH_RUN_ID: overrides.runId ?? runId,
-      FAKE_GH_ATTEMPT: overrides.attempt ?? attempt,
-      FAKE_GH_ATTESTATION_FAILURE: overrides.cryptographicFailure ? "1" : "0",
-    },
+    env: environment,
   });
 }
 
@@ -516,7 +556,13 @@ test("publication verifier rejects unsafe checksum paths and symlinks", async (t
   assert.equal(result.stdout, "");
 
   const symlinkArtifact = await createArtifact(t, "nuclei");
-  await symlink("nuclei-image-manifest.json", path.join(symlinkArtifact, "unexpected-link"));
+  const unexpectedLink = path.join(symlinkArtifact, "unexpected-link");
+  try {
+    await symlink("nuclei-image-manifest.json", unexpectedLink);
+  } catch (error) {
+    if (process.platform !== "win32" || error?.code !== "EPERM") throw error;
+    await symlink(path.join(symlinkArtifact, "nuclei"), unexpectedLink, "junction");
+  }
   result = runVerifier("nuclei", symlinkArtifact);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /contains a symlink/u);

@@ -9,6 +9,46 @@ import {
   githubOutputLines,
 } from "../../scripts/ci/classify-changes.mjs";
 
+function normalizeLineEndings(source) {
+  return source.replace(/\r\n?/gu, "\n");
+}
+
+const ciWorkflow = normalizeLineEndings(
+  readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8"),
+);
+
+function assertRequiredCheckContract(source) {
+  const workflow = normalizeLineEndings(source);
+  assert.match(workflow, /\n  frontend:\n    name: Frontend\n/);
+  assert.match(workflow, /\n  windows-managed-runtime:\n    name: Windows managed-runtime repair\n/);
+  assert.match(workflow, /\n  ci-result:\n    name: CI result\n    if: always\(\)\n/);
+  for (const dependency of [
+    "changes",
+    "frontend",
+    "engine-admission",
+    "framework-contract",
+    "release-contract",
+    "rust-core",
+    "windows-managed-runtime",
+    "desktop-linux",
+  ]) {
+    assert.match(workflow, new RegExp(`ci-result:[\\s\\S]*?needs:[\\s\\S]*?- ${dependency.replaceAll("-", "\\-")}`));
+  }
+  assert.match(workflow, /ci-result:[\s\S]*?uses: actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1[\s\S]*?uses: actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020/);
+  assert.match(workflow, /run: node scripts\/ci\/classify-changes\.mjs --verify-results/);
+  for (const expected of [
+    "FRONTEND_EXPECTED",
+    "ENGINE_EXPECTED",
+    "FRAMEWORK_EXPECTED",
+    "RELEASE_EXPECTED",
+    "RUST_EXPECTED",
+    "WINDOWS_EXPECTED",
+    "DESKTOP_EXPECTED",
+  ]) {
+    assert.match(workflow, new RegExp(`\\n      ${expected}: \\$\\{\\{ needs\\.changes\\.outputs\\.`));
+  }
+}
+
 test("documentation-only changes do not schedule product or release lanes", () => {
   assert.deepEqual(classifyChangedPaths([
     "README.md",
@@ -59,8 +99,9 @@ test("engine inputs schedule engine admission without release or installer work"
   assert.deepEqual(classifyChangedPaths([
     "engines/images/gitleaks/Dockerfile",
     ".github/workflows/engine-image-gitleaks.yml",
+    "tests/engines/prowlerCatalogContract.test.mjs",
   ]), {
-    changed_path_count: 2,
+    changed_path_count: 3,
     docs_only: false,
     frontend: false,
     rust_core: false,
@@ -187,59 +228,34 @@ test("an unavailable push base schedules every lane instead of silently omitting
     windows_runtime: true,
   });
 
-  const workflow = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
-  assert.match(workflow, /if \[\[ -z "\$base_sha" \]\]; then/);
-  assert.match(workflow, /classify-changes\.mjs --all/);
-  assert.match(workflow, /git diff-tree --root --no-renames/);
-  assert.match(workflow, /git diff --no-renames --name-only/);
-  assert.match(workflow, /if git cat-file -e "\$\{base_sha\}\^\{commit\}"; then[\s\S]*Base commit is not present[\s\S]*classify-changes\.mjs --all/);
+  assert.match(ciWorkflow, /if \[\[ -z "\$base_sha" \]\]; then/);
+  assert.match(ciWorkflow, /classify-changes\.mjs --all/);
+  assert.match(ciWorkflow, /git diff-tree --root --no-renames/);
+  assert.match(ciWorkflow, /git diff --no-renames --name-only/);
+  assert.match(ciWorkflow, /if git cat-file -e "\$\{base_sha\}\^\{commit\}"; then[\s\S]*Base commit is not present[\s\S]*classify-changes\.mjs --all/);
 });
 
 test("heavyweight commands stay behind their focused job conditions", () => {
-  const workflow = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
-  const frontendBlock = workflow.split("\n  engine-admission:", 1)[0].split("\n  frontend:")[1];
+  const frontendBlock = ciWorkflow.split("\n  engine-admission:", 1)[0].split("\n  frontend:")[1];
   assert.ok(frontendBlock, "frontend job block is missing");
   assert.doesNotMatch(frontendBlock, /validate:engines|validate:aidefend|release:self-test|vendor-managed-runtime|bundles nsis/);
 
-  assert.match(workflow, /Record intentional documentation-only scope[\s\S]*?steps\.classify\.outputs\.docs_only == 'true'/);
-  assert.match(workflow, /Record classifier-only scope[\s\S]*?an unclassified path; only classifier tests are scheduled/);
-  assert.match(workflow, /engine-admission:[\s\S]*?if: needs\.changes\.outputs\.engine == 'true'[\s\S]*?npm run validate:engines/);
-  assert.match(workflow, /engine-admission:[\s\S]*?node --check scripts\/engine-image-evidence\.mjs[\s\S]*?node --check scripts\/generate-oci-layout-fixture\.mjs/);
-  assert.match(workflow, /framework-contract:[\s\S]*?if: needs\.changes\.outputs\.framework == 'true'[\s\S]*?npm run validate:aidefend/);
-  assert.match(workflow, /release-contract:[\s\S]*?if: needs\.changes\.outputs\.release_contract == 'true'[\s\S]*?npm run release:self-test/);
-  assert.match(workflow, /windows-managed-runtime:[\s\S]*?if: needs\.changes\.outputs\.windows_runtime == 'true'[\s\S]*?vendor-managed-runtime[\s\S]*?bundles nsis/);
+  assert.match(ciWorkflow, /Record intentional documentation-only scope[\s\S]*?steps\.classify\.outputs\.docs_only == 'true'/);
+  assert.match(ciWorkflow, /Record classifier-only scope[\s\S]*?an unclassified path; only classifier tests are scheduled/);
+  assert.match(ciWorkflow, /engine-admission:[\s\S]*?if: needs\.changes\.outputs\.engine == 'true'[\s\S]*?npm run validate:engines/);
+  assert.match(ciWorkflow, /engine-admission:[\s\S]*?node --check scripts\/engine-image-evidence\.mjs[\s\S]*?node --check scripts\/generate-oci-layout-fixture\.mjs/);
+  assert.match(ciWorkflow, /framework-contract:[\s\S]*?if: needs\.changes\.outputs\.framework == 'true'[\s\S]*?npm run validate:aidefend/);
+  assert.match(ciWorkflow, /release-contract:[\s\S]*?if: needs\.changes\.outputs\.release_contract == 'true'[\s\S]*?npm run release:self-test/);
+  assert.match(ciWorkflow, /windows-managed-runtime:[\s\S]*?if: needs\.changes\.outputs\.windows_runtime == 'true'[\s\S]*?vendor-managed-runtime[\s\S]*?bundles nsis/);
 });
 
 test("existing required-check names remain stable and one aggregate verifies scheduled lanes", () => {
-  const workflow = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
-  assert.match(workflow, /\n  frontend:\n    name: Frontend\n/);
-  assert.match(workflow, /\n  windows-managed-runtime:\n    name: Windows managed-runtime repair\n/);
-  assert.match(workflow, /\n  ci-result:\n    name: CI result\n    if: always\(\)\n/);
-  for (const dependency of [
-    "changes",
-    "frontend",
-    "engine-admission",
-    "framework-contract",
-    "release-contract",
-    "rust-core",
-    "windows-managed-runtime",
-    "desktop-linux",
-  ]) {
-    assert.match(workflow, new RegExp(`ci-result:[\\s\\S]*?needs:[\\s\\S]*?- ${dependency.replaceAll("-", "\\-")}`));
-  }
-  assert.match(workflow, /ci-result:[\s\S]*?uses: actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1[\s\S]*?uses: actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020/);
-  assert.match(workflow, /run: node scripts\/ci\/classify-changes\.mjs --verify-results/);
-  for (const expected of [
-    "FRONTEND_EXPECTED",
-    "ENGINE_EXPECTED",
-    "FRAMEWORK_EXPECTED",
-    "RELEASE_EXPECTED",
-    "RUST_EXPECTED",
-    "WINDOWS_EXPECTED",
-    "DESKTOP_EXPECTED",
-  ]) {
-    assert.match(workflow, new RegExp(`\\n      ${expected}: \\$\\{\\{ needs\\.changes\\.outputs\\.`));
-  }
+  assertRequiredCheckContract(ciWorkflow);
+});
+
+test("required-check contract accepts both LF and CRLF workflow text", () => {
+  assertRequiredCheckContract(ciWorkflow);
+  assertRequiredCheckContract(ciWorkflow.replaceAll("\n", "\r\n"));
 });
 
 test("aggregate result logic accepts intentional skips and rejects every incomplete scheduled lane", () => {

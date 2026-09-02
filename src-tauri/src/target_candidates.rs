@@ -617,7 +617,7 @@ fn platform_observations() -> Result<Vec<InterfaceObservation>, LocalNetworkCand
         return Err(LocalNetworkCandidateStatus::Unavailable);
     }
 
-    let words = (required as usize + align_of::<usize>() - 1) / align_of::<usize>();
+    let words = (required as usize).div_ceil(align_of::<usize>());
     let mut buffer = vec![0usize; words];
     let mut available = (buffer.len() * size_of::<usize>()) as u32;
     // SAFETY: the buffer is aligned and at least as large as available reports.
@@ -673,8 +673,10 @@ fn platform_observations() -> Result<Vec<InterfaceObservation>, LocalNetworkCand
             continue;
         }
 
-        let mut interface_row = MIB_IF_ROW2::default();
-        interface_row.InterfaceLuid = current.Luid;
+        let mut interface_row = MIB_IF_ROW2 {
+            InterfaceLuid: current.Luid,
+            ..Default::default()
+        };
         // SAFETY: interface_row is a fully initialized writable structure.
         if unsafe { GetIfEntry2(&mut interface_row) } != NO_ERROR
             || interface_row.OperStatus != IfOperStatusUp

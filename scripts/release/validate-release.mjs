@@ -610,6 +610,7 @@ export function validateProductEngineRegistry(catalog) {
 }
 
 export function validateWindowsQualificationLifecycle(source) {
+  source = source.replaceAll(/\r\n?/gu, "\n");
   const install = '  $installStatus = Invoke-Managed "install" @("install")\n';
   const preStartAbsence =
     '    throw "Managed runtime install/status created a provider namespace before start."\n';
@@ -660,6 +661,7 @@ export function validateSynchronousNsisQualificationFixture(
   label,
   { allowsRetainedState = false } = {},
 ) {
+  source = source.replaceAll(/\r\n?/gu, "\n");
   for (const required of [
     'function Invoke-BoundedCopiedNsisUninstaller(',
     '$copyName = "bounded-nsis-uninstaller-copy.exe"',

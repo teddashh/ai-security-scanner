@@ -26,7 +26,7 @@ use crate::execution_coverage::{
     LAUNCHER_V2_JOURNAL_SCHEMA_VERSION, reduce_naabu_attempt_coverage,
 };
 use crate::export::verify_case_bundle;
-use crate::export::{ExportOptions, RedactionProfile};
+use crate::export::{ExportOptions, RedactionProfile, ReportLocale};
 use crate::external_scope::{ExternalScopeGrant, ResolvedExternalPlan, resolve_external_plan};
 use crate::gateway_release::managed_egress_gateway_spec;
 use crate::local_tcp_probe::DesktopHostTcpConnector;
@@ -110,6 +110,8 @@ const PRE_DISPATCH_CANCEL_RETRY_DELAY: StdDuration = StdDuration::from_millis(25
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExportCaseInput {
     pub case_id: Id,
+    pub run_id: Id,
+    pub locale: ReportLocale,
     pub format: CaseExportFormat,
     #[serde(default)]
     pub include_raw_evidence: bool,
@@ -122,6 +124,8 @@ pub struct ExportCaseInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PreviewExportInput {
     pub case_id: Id,
+    pub run_id: Id,
+    pub locale: ReportLocale,
     pub format: CaseExportFormat,
     #[serde(default)]
     pub include_raw_evidence: bool,
@@ -948,7 +952,7 @@ fn reconcile_retained_terminal_jobs(state: &AppState) -> RetainedTerminalReconci
 /// harmless while retaining same-process eventual convergence.
 fn schedule_retained_terminal_reconciliation(app: &AppHandle) {
     let background_app = app.clone();
-    let _ = tauri::async_runtime::spawn_blocking(move || {
+    std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
         let state = background_app.state::<AppState>();
         let summary = reconcile_retained_terminal_jobs(&state);
         if summary.reconciled > 0 || summary.pending > 0 {
@@ -958,7 +962,7 @@ fn schedule_retained_terminal_reconciliation(app: &AppHandle) {
                 "retained terminal scan outcomes were reconciled in the background"
             );
         }
-    });
+    }));
 }
 
 /// Reconciles one exact retained terminal generation without making the UI
@@ -968,7 +972,7 @@ fn schedule_retained_terminal_reconciliation(app: &AppHandle) {
 /// that owner.
 fn schedule_exact_terminal_reconciliation(app: &AppHandle, key: JobKey, snapshot: JobSnapshot) {
     let background_app = app.clone();
-    let _ = tauri::async_runtime::spawn_blocking(move || {
+    std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
         if let Err(error) = reconcile_terminal_job(&background_app, &key, &snapshot) {
             tracing::warn!(
                 error = %error,
@@ -977,7 +981,7 @@ fn schedule_exact_terminal_reconciliation(app: &AppHandle, key: JobKey, snapshot
                 "exact retained terminal scan outcome is still waiting for durable reconciliation"
             );
         }
-    });
+    }));
 }
 
 /// Retries exact product-owned cleanup for one durable run off the command
@@ -985,7 +989,7 @@ fn schedule_exact_terminal_reconciliation(app: &AppHandle, key: JobKey, snapshot
 /// ownership rules preserve any resource whose exact identity is unavailable.
 fn schedule_exact_runtime_cleanup_reconciliation(app: &AppHandle, case_id: String, run_id: String) {
     let background_app = app.clone();
-    let _ = tauri::async_runtime::spawn_blocking(move || {
+    std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
         let state = background_app.state::<AppState>();
         match reconcile_interrupted_scan_resources(&state, Some((&case_id, &run_id))) {
             Ok(summary) if summary.reconciled > 0 || summary.pending > 0 => tracing::info!(
@@ -1004,7 +1008,7 @@ fn schedule_exact_runtime_cleanup_reconciliation(app: &AppHandle, case_id: Strin
                 "exact scanner runtime cleanup remains pending after a background retry"
             ),
         }
-    });
+    }));
 }
 
 fn load_readable_desktop_cases(state: &AppState) -> AppResult<ReadableDesktopCases> {
@@ -2811,7 +2815,7 @@ struct PreparedPersistedNewScan {
 }
 
 enum RuntimePreparationOutcome {
-    Prepared(ProcessContainerRuntime),
+    Prepared(Box<ProcessContainerRuntime>),
     Cancelled,
     Unavailable,
 }
@@ -2842,7 +2846,7 @@ fn prepare_runtime_with_deadline(
             return RuntimePreparationOutcome::Unavailable;
         }
         match receiver.recv_timeout(remaining.min(SCAN_RUNTIME_PREPARATION_POLL)) {
-            Ok(Some(runtime)) => return RuntimePreparationOutcome::Prepared(runtime),
+            Ok(Some(runtime)) => return RuntimePreparationOutcome::Prepared(Box::new(runtime)),
             Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                 return RuntimePreparationOutcome::Unavailable;
             }
@@ -2957,7 +2961,7 @@ fn prepare_runtime_task_groups(
         match prepare(&group.identity, representative) {
             RuntimePreparationOutcome::Prepared(runtime) => {
                 if prepared_runtimes
-                    .insert_for_execution(representative, runtime)
+                    .insert_for_execution(representative, *runtime)
                     .is_ok()
                 {
                     runnable.extend(group.executions);
@@ -3936,22 +3940,9 @@ pub fn preview_export(
     state: State<'_, AppState>,
 ) -> AppResult<ExportPreview> {
     let service = state.case_service();
-    let case = service.show_case(&input.case_id)?;
-    let run_id = case
-        .scan_runs
-        .iter()
-        .max_by(|left, right| {
-            (left.sequence, left.created_at, left.id.as_str()).cmp(&(
-                right.sequence,
-                right.created_at,
-                right.id.as_str(),
-            ))
-        })
-        .map(|run| run.id.as_str())
-        .ok_or_else(|| AppError::InvalidRequest("case has no scan run to export".into()))?;
     service.preview_export(
         &input.case_id,
-        run_id,
+        &input.run_id,
         input.format,
         &ExportOptions {
             redaction: if input.redact_sensitive_values {
@@ -3960,6 +3951,7 @@ pub fn preview_export(
                 RedactionProfile::None
             },
             include_raw_artifacts: input.include_raw_evidence,
+            locale: input.locale,
         },
     )
 }
@@ -3976,19 +3968,6 @@ pub fn export_case(
         ));
     }
     let service = state.case_service();
-    let case = service.show_case(&input.case_id)?;
-    let run_id = case
-        .scan_runs
-        .iter()
-        .max_by(|left, right| {
-            (left.sequence, left.created_at, left.id.as_str()).cmp(&(
-                right.sequence,
-                right.created_at,
-                right.id.as_str(),
-            ))
-        })
-        .map(|run| run.id.as_str())
-        .ok_or_else(|| AppError::InvalidRequest("case has no scan run to export".into()))?;
     let options = ExportOptions {
         redaction: if input.redact_sensitive_values {
             RedactionProfile::Standard
@@ -3996,11 +3975,12 @@ pub fn export_case(
             RedactionProfile::None
         },
         include_raw_artifacts: input.include_raw_evidence,
+        locale: input.locale,
     };
     emit(&app, EXPORT_PROGRESS_EVENT, &"preparing")?;
     let exported = service.export_case(
         &input.case_id,
-        run_id,
+        &input.run_id,
         input.format,
         Path::new(&input.destination),
         options,
@@ -4851,14 +4831,16 @@ fn run_scan_worker(
             }
             Ok(artifacts) => match prepared_runtimes.runtime_for(&execution) {
                 Some(runtime) => execute_planned_engine(
-                    &app,
-                    &state,
-                    runtime,
-                    artifacts,
+                    PlannedEngineExecutionContext {
+                        app: &app,
+                        state: &state,
+                        runtime,
+                        artifacts,
+                        cancellation: &control.cancellation_token(),
+                        job_context: &context,
+                    },
                     &execution,
                     reserved_provider.as_mut(),
-                    &control.cancellation_token(),
-                    &context,
                 ),
                 None => Err(AppError::Internal(
                     "scan worker received no prepared runtime matching its durable execution"
@@ -5134,10 +5116,9 @@ fn prepare_naabu_launcher_attempt(
             execution.engine_run_id.clone(),
             now,
         );
-        let plan = build_naabu_work_plan(identity, &resolved, None).map_err(|error| {
+        build_naabu_work_plan(identity, &resolved, None).map_err(|error| {
             AppError::InvalidRequest(format!("Naabu work could not be divided safely: {error}"))
-        })?;
-        plan
+        })?
     };
 
     let existing_request = engine_run
@@ -5249,16 +5230,28 @@ fn prepare_naabu_launcher_attempt(
     }))
 }
 
+struct PlannedEngineExecutionContext<'a> {
+    app: &'a AppHandle,
+    state: &'a AppState,
+    runtime: &'a ProcessContainerRuntime,
+    artifacts: &'a ArtifactStore,
+    cancellation: &'a crate::container_runtime::CancellationToken,
+    job_context: &'a JobContext,
+}
+
 fn execute_planned_engine(
-    app: &AppHandle,
-    state: &AppState,
-    runtime: &ProcessContainerRuntime,
-    artifacts: &ArtifactStore,
+    context: PlannedEngineExecutionContext<'_>,
     execution: &PlannedEngineExecution,
     reserved_provider: Option<&mut ReservedProviderExecutionBundle>,
-    cancellation: &crate::container_runtime::CancellationToken,
-    job_context: &JobContext,
 ) -> AppResult<DurableExecutionReport> {
+    let PlannedEngineExecutionContext {
+        app,
+        state,
+        runtime,
+        artifacts,
+        cancellation,
+        job_context,
+    } = context;
     let mut reconciled_cleanup = None::<ManagedNetworkCleanupOutcome>;
     let runtime_context = runtime.command_context();
     let runtime_provider = runtime_context.provider();
@@ -5410,8 +5403,10 @@ fn execute_planned_engine(
                 network_identity.as_ref(),
                 &mut network_lease,
                 reconciled_cleanup.as_ref(),
-                &runtime_provenance,
-                runtime_provider,
+                RuntimeCheckpointIdentity {
+                    provenance: &runtime_provenance,
+                    provider: runtime_provider,
+                },
                 prepared_naabu
                     .as_ref()
                     .map(|prepared| prepared.request.launcher_plan_sha256.as_str()),
@@ -5471,8 +5466,10 @@ fn execute_planned_engine(
                     network_identity.as_ref(),
                     &mut network_lease,
                     reconciled_cleanup.as_ref(),
-                    &runtime_provenance,
-                    runtime_provider,
+                    RuntimeCheckpointIdentity {
+                        provenance: &runtime_provenance,
+                        provider: runtime_provider,
+                    },
                     prepared_naabu
                         .as_ref()
                         .map(|prepared| prepared.request.launcher_plan_sha256.as_str()),
@@ -6842,20 +6839,24 @@ fn record_managed_cleanup_failure(
     warnings.push(warning.into());
 }
 
+struct RuntimeCheckpointIdentity<'a> {
+    provenance: &'a RuntimeCommandProvenance,
+    provider: RuntimeProvider,
+}
+
 fn terminal_after_prestart_error(
     execution: &PlannedEngineExecution,
     error: &AppError,
     network_identity: Option<&crate::managed_network::ManagedNetworkIdentity>,
     network_lease: &mut Option<ManagedNetworkLease>,
     reconciled_cleanup: Option<&ManagedNetworkCleanupOutcome>,
-    runtime_provenance: &RuntimeCommandProvenance,
-    runtime_provider: RuntimeProvider,
+    runtime_identity: RuntimeCheckpointIdentity<'_>,
     launcher_plan_sha256: Option<&str>,
 ) -> DurableExecutionReport {
     let mut durable = terminal_report(execution, ExecutionStage::Failed, &bounded_error(error));
     durable.checkpoint.launcher_plan_sha256 = launcher_plan_sha256.map(str::to_owned);
-    durable.checkpoint.runtime_command_provenance = Some(runtime_provenance.clone());
-    durable.checkpoint.runtime_provider = Some(runtime_provider);
+    durable.checkpoint.runtime_command_provenance = Some(runtime_identity.provenance.clone());
+    durable.checkpoint.runtime_provider = Some(runtime_identity.provider);
     durable.checkpoint.managed_network = network_identity.cloned();
     if let Some(outcome) = reconciled_cleanup {
         merge_managed_cleanup(&mut durable.cleanup, outcome);
@@ -6984,10 +6985,25 @@ fn persist_terminal_job_reconciliation(
     key: &JobKey,
     snapshot: &JobSnapshot,
 ) -> AppResult<AssessmentCase> {
+    persist_terminal_job_reconciliation_with(state, key, snapshot, |obligation| {
+        reconcile_exact_runtime_cleanup(state, obligation)
+    })
+}
+
+fn persist_terminal_job_reconciliation_with<F>(
+    state: &AppState,
+    key: &JobKey,
+    snapshot: &JobSnapshot,
+    cleanup_exact: F,
+) -> AppResult<AssessmentCase>
+where
+    F: FnMut(&ExactRuntimeCleanupObligation) -> AppResult<(CleanupOutcome, usize)>,
+{
     persist_terminal_job_state_reconciliation(state, key, snapshot)?;
-    let cleanup = reconcile_pending_scan_cleanup(
+    let cleanup = reconcile_pending_scan_cleanup_with(
         state,
         Some((key.case_id.as_str(), key.scan_run_id.as_str())),
+        cleanup_exact,
     )?;
     if cleanup.reconciled > 0 || cleanup.pending > 0 {
         tracing::info!(
@@ -7181,6 +7197,58 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use zeroize::Zeroizing;
 
+    fn make_test_file_writable(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = std::fs::metadata(path).unwrap().permissions();
+            permissions.set_mode(permissions.mode() | 0o200);
+            std::fs::set_permissions(path, permissions).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY, GetFileAttributesW,
+                INVALID_FILE_ATTRIBUTES, SetFileAttributesW,
+            };
+
+            let encoded = path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect::<Vec<_>>();
+            // SAFETY: `encoded` is NUL-terminated and lives for both API calls.
+            let attributes = unsafe { GetFileAttributesW(encoded.as_ptr()) };
+            assert_ne!(
+                attributes,
+                INVALID_FILE_ATTRIBUTES,
+                "inspect test file attributes: {}",
+                std::io::Error::last_os_error()
+            );
+            if attributes & FILE_ATTRIBUTE_READONLY != 0 {
+                let writable_attributes = match attributes & !FILE_ATTRIBUTE_READONLY {
+                    0 => FILE_ATTRIBUTE_NORMAL,
+                    remaining => remaining,
+                };
+                // SAFETY: `encoded` remains valid and the new mask preserves every
+                // attribute except read-only.
+                let status = unsafe { SetFileAttributesW(encoded.as_ptr(), writable_attributes) };
+                assert_ne!(
+                    status,
+                    0,
+                    "make test file writable: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = path;
+        }
+    }
+
     #[test]
     fn product_events_use_a_versioned_consistent_envelope() {
         let value = serde_json::to_value(ProductEventEnvelope {
@@ -7194,6 +7262,68 @@ mod tests {
         assert_eq!(value["eventType"], RUN_PROGRESS_EVENT);
         assert_eq!(value["occurredAt"], "2026-08-24T12:00:00Z");
         assert_eq!(value["payload"]["case_id"], "case-1");
+    }
+
+    #[test]
+    fn export_commands_require_and_preserve_an_explicit_run_id() {
+        let preview: PreviewExportInput = serde_json::from_value(serde_json::json!({
+            "caseId": "case-1",
+            "runId": "run-history",
+            "locale": "zh-Hant",
+            "format": "html",
+            "includeRawEvidence": false,
+            "redactSensitiveValues": true
+        }))
+        .unwrap();
+        assert_eq!(preview.run_id, "run-history");
+        assert_eq!(preview.locale, ReportLocale::ZhHant);
+
+        let exported: ExportCaseInput = serde_json::from_value(serde_json::json!({
+            "caseId": "case-1",
+            "runId": "run-history",
+            "locale": "zh-Hant",
+            "format": "html",
+            "includeRawEvidence": false,
+            "redactSensitiveValues": true,
+            "destination": "C:\\\\Users\\\\example\\\\report.html"
+        }))
+        .unwrap();
+        assert_eq!(exported.run_id, "run-history");
+        assert_eq!(exported.locale, ReportLocale::ZhHant);
+
+        assert!(
+            serde_json::from_value::<PreviewExportInput>(serde_json::json!({
+                "caseId": "case-1",
+                "runId": "run-history",
+                "locale": "fr",
+                "format": "html"
+            }))
+            .is_err()
+        );
+
+        assert!(
+            serde_json::from_value::<PreviewExportInput>(serde_json::json!({
+                "caseId": "case-1",
+                "runId": "run-history",
+                "format": "html"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<PreviewExportInput>(serde_json::json!({
+                "caseId": "case-1",
+                "format": "html"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<ExportCaseInput>(serde_json::json!({
+                "caseId": "case-1",
+                "format": "html",
+                "destination": "report.html"
+            }))
+            .is_err()
+        );
     }
 
     #[test]
@@ -7519,9 +7649,7 @@ mod tests {
         }
         #[cfg(windows)]
         {
-            let mut permissions = std::fs::metadata(&stored_file).unwrap().permissions();
-            permissions.set_readonly(false);
-            std::fs::set_permissions(&stored_file, permissions).unwrap();
+            make_test_file_writable(&stored_file);
         }
         std::fs::remove_file(stored_file).unwrap();
 
@@ -7555,17 +7683,7 @@ mod tests {
             .unwrap();
         validate_execution_inputs_static(&state, &preview).unwrap();
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&stored_file, std::fs::Permissions::from_mode(0o600)).unwrap();
-        }
-        #[cfg(not(unix))]
-        {
-            let mut permissions = std::fs::metadata(&stored_file).unwrap().permissions();
-            permissions.set_readonly(false);
-            std::fs::set_permissions(&stored_file, permissions).unwrap();
-        }
+        make_test_file_writable(&stored_file);
         std::fs::write(&stored_file, b"fn changed_after_setup() {}\n").unwrap();
         let plan = service
             .persist_scan_before_execution_preflight(
@@ -9404,10 +9522,10 @@ mod tests {
             match identity {
                 RuntimePreparationIdentity::Fresh => RuntimePreparationOutcome::Unavailable,
                 RuntimePreparationIdentity::Recorded { .. } => {
-                    RuntimePreparationOutcome::Prepared(ProcessContainerRuntime::new(
+                    RuntimePreparationOutcome::Prepared(Box::new(ProcessContainerRuntime::new(
                         RuntimeProvider::Docker,
                         "prepared-recorded-runtime",
-                    ))
+                    )))
                 }
             }
         });
@@ -9759,7 +9877,19 @@ mod tests {
             generation: 0,
         };
 
-        let reconciled = persist_terminal_job_reconciliation(&state, &key, &snapshot).unwrap();
+        // Terminal projection and cleanup persistence are the behavior under
+        // test. Inject the exact absent-resource result so the fixture never
+        // depends on a host Podman installation or contacts a real runtime.
+        let reconciled = persist_terminal_job_reconciliation_with(&state, &key, &snapshot, |_| {
+            Ok((
+                CleanupOutcome {
+                    removed: false,
+                    detail: "ownership-proven container was already absent".into(),
+                },
+                0,
+            ))
+        })
+        .unwrap();
         let run = reconciled
             .scan_runs
             .iter()

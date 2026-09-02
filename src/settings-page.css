@@ -1,0 +1,92 @@
+.page--settings .settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.page--settings .settings-section {
+  position: relative;
+}
+
+.page--settings .settings-section__icon {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  margin-bottom: 14px;
+  border-radius: 12px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.page--settings .settings-language-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.page--settings .settings-choice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 74px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--ink);
+  background: var(--surface-soft);
+  text-align: left;
+  cursor: pointer;
+}
+
+.page--settings .settings-choice:hover,
+.page--settings .settings-choice:focus-visible {
+  border-color: var(--accent);
+}
+
+.page--settings .settings-choice > svg {
+  flex: 0 0 auto;
+  color: transparent;
+}
+
+.page--settings .settings-choice--selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.page--settings .settings-choice--selected > svg {
+  color: var(--accent-ink);
+}
+
+.page--settings .settings-choice span {
+  display: grid;
+  gap: 3px;
+}
+
+.page--settings .settings-choice small {
+  color: var(--muted);
+}
+
+.page--settings .settings-section--actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.page--settings .settings-section--actions .section-heading {
+  margin-bottom: 0;
+}
+
+@media (max-width: 760px) {
+  .page--settings .settings-grid,
+  .page--settings .settings-language-options {
+    grid-template-columns: 1fr;
+  }
+
+  .page--settings .settings-section--actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

@@ -65,6 +65,26 @@ impl RedactionProfile {
     }
 }
 
+/// Closed locale contract for the human-readable HTML report. This remains a
+/// presentation preference and never changes canonical scan facts.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ReportLocale {
+    #[default]
+    #[serde(rename = "en")]
+    En,
+    #[serde(rename = "zh-Hant")]
+    ZhHant,
+}
+
+impl ReportLocale {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::En => "en",
+            Self::ZhHant => "zh-Hant",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExportOptions {
     #[serde(default)]
@@ -73,6 +93,9 @@ pub struct ExportOptions {
     /// contains credentials, internal identifiers, and exploitable details.
     #[serde(default)]
     pub include_raw_artifacts: bool,
+    /// Presentation-only locale used by the readable HTML renderer.
+    #[serde(default)]
+    pub locale: ReportLocale,
 }
 
 impl Default for ExportOptions {
@@ -80,6 +103,7 @@ impl Default for ExportOptions {
         Self {
             redaction: RedactionProfile::Standard,
             include_raw_artifacts: false,
+            locale: ReportLocale::En,
         }
     }
 }
@@ -2634,6 +2658,7 @@ mod tests {
         let options = ExportOptions {
             redaction: RedactionProfile::None,
             include_raw_artifacts: true,
+            locale: ReportLocale::En,
         };
 
         let first_export = create_case_bundle_at(
@@ -2922,6 +2947,7 @@ mod tests {
             ExportOptions {
                 redaction: RedactionProfile::Standard,
                 include_raw_artifacts: true,
+                locale: ReportLocale::En,
             },
             Utc.with_ymd_and_hms(2026, 8, 24, 13, 0, 0).unwrap(),
         )
@@ -3538,6 +3564,7 @@ mod tests {
             ExportOptions {
                 redaction: RedactionProfile::None,
                 include_raw_artifacts: true,
+                locale: ReportLocale::En,
             },
             Utc.with_ymd_and_hms(2026, 8, 24, 13, 0, 0).unwrap(),
         );

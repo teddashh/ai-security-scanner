@@ -2407,16 +2407,29 @@ fn ensure_canonical_inside(path: &Path, root: &Path) -> AppResult<()> {
 }
 
 fn create_private_new_file(path: &Path) -> AppResult<File> {
+    #[cfg(windows)]
+    {
+        crate::managed_runtime::create_current_user_only_product_file(path).map_err(|error| {
+            AppError::Runtime(format!(
+                "private workspace snapshot file could not be created: {error}"
+            ))
+        })
+    }
+    #[cfg(not(windows))]
     let mut options = OpenOptions::new();
+    #[cfg(not(windows))]
     options.write(true).create_new(true);
     #[cfg(unix)]
     options.mode(0o600).custom_flags(libc::O_CLOEXEC);
+    #[cfg(not(windows))]
     let file = options.open(path).map_err(|error| {
         AppError::Runtime(format!(
             "private workspace snapshot file could not be created: {error}"
         ))
     })?;
+    #[cfg(unix)]
     set_private_file(path)?;
+    #[cfg(not(windows))]
     Ok(file)
 }
 
@@ -2693,7 +2706,7 @@ fn make_tree_deletable(path: &Path) {
             }
         }
     } else {
-        let _ = set_private_file(path);
+        let _ = make_file_deletable(path);
     }
 }
 
@@ -2742,12 +2755,47 @@ fn set_private_file(path: &Path) -> AppResult<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
-fn set_private_file(path: &Path) -> AppResult<()> {
-    let mut permissions = fs::metadata(path)?.permissions();
-    permissions.set_readonly(false);
-    fs::set_permissions(path, permissions)?;
+#[cfg(windows)]
+fn make_file_deletable(path: &Path) -> AppResult<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY, GetFileAttributesW,
+        INVALID_FILE_ATTRIBUTES, SetFileAttributesW,
+    };
+
+    let encoded = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: `encoded` is NUL-terminated and lives for the duration of each
+    // Windows API call.
+    let attributes = unsafe { GetFileAttributesW(encoded.as_ptr()) };
+    if attributes == INVALID_FILE_ATTRIBUTES {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    if attributes & FILE_ATTRIBUTE_READONLY != 0 {
+        let writable_attributes = match attributes & !FILE_ATTRIBUTE_READONLY {
+            0 => FILE_ATTRIBUTE_NORMAL,
+            remaining => remaining,
+        };
+        // SAFETY: `encoded` is a valid NUL-terminated path and the new
+        // attribute mask preserves every bit except read-only.
+        if unsafe { SetFileAttributesW(encoded.as_ptr(), writable_attributes) } == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
     Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn make_file_deletable(_path: &Path) -> AppResult<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn make_file_deletable(path: &Path) -> AppResult<()> {
+    set_private_file(path)
 }
 
 #[cfg(unix)]
@@ -2778,6 +2826,27 @@ fn sync_directory(_path: &Path) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_fresh_workspace_file_has_an_exact_current_user_only_dacl() {
+        let temporary = tempfile::tempdir().expect("isolated Windows workspace parent");
+        let product_root = temporary.path().join("isolated-product-data");
+        let _guard =
+            crate::managed_runtime::ensure_private_product_data_directory_for_isolated_test(
+                &product_root,
+            )
+            .expect("isolated private product root");
+        let snapshot = product_root.join("workspace-snapshot.json");
+        let mut file = create_private_new_file(&snapshot).expect("private workspace file");
+        file.write_all(b"private workspace snapshot")
+            .expect("write workspace fixture");
+        file.sync_all().expect("sync workspace fixture");
+        drop(file);
+
+        crate::managed_runtime::test_verify_current_user_only_product_file(&snapshot)
+            .expect("fresh workspace file must have an exact private DACL");
+    }
 
     #[test]
     fn case_insensitive_tracked_path_keys_protect_case_only_variants_and_ancestors() {

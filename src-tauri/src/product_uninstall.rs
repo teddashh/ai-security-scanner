@@ -8,19 +8,28 @@
 
 use crate::error::{AppError, AppResult};
 use crate::managed_network::ManagedNetworkRegistry;
-use crate::managed_runtime::{ManagedRuntimeManager, ManagedStopMode, ManagedUninstallOptions};
+use crate::managed_runtime::{
+    ManagedRuntimeManager, ManagedStopMode, ManagedUninstallOptions,
+    PrivateProductDataDirectoryGuard, ensure_private_product_data_directory,
+};
 use crate::process_lease::DataDirectoryExclusiveLease;
 use chrono::Utc;
+#[cfg(windows)]
+use serde::Deserialize;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
+#[cfg(windows)]
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 pub const ALL_DATA_CONFIRMATION: &str = "REMOVE ALL AI-SECURITY-SCANNER DATA";
-pub const PRODUCT_DATA_DIRECTORY_NAME: &str = "dev.teddashh.ai-security-scanner";
+pub const PRODUCT_DATA_DIRECTORY_NAME: &str = crate::managed_runtime::PRODUCT_DATA_DIRECTORY_NAME;
 pub const PRODUCT_UNINSTALL_COMPLETED_EXIT_CODE: u8 = 0;
 pub const PRODUCT_UNINSTALL_RETAINED_EXIT_CODE: u8 = 10;
 pub const PRODUCT_UNINSTALL_CONTACT_NOT_STOPPED_EXIT_CODE: u8 = 20;
@@ -30,6 +39,25 @@ const MANAGED_RUNTIME_VERSIONS_DIRECTORY: &str = "versions";
 const MANAGED_RUNTIME_PROVIDER_DIRECTORY: &str = "provider-home";
 const MANAGED_RUNTIME_LIFECYCLE_LOCK: &str = "lifecycle.lock";
 const DATA_DIRECTORY_LEASE_FILE: &str = ".exclusive-process.lock";
+#[cfg(windows)]
+const ALL_DATA_STAGE_JOURNAL_FILE: &str =
+    ".dev.teddashh.ai-security-scanner.uninstall-stage-journal-v1.json";
+#[cfg(windows)]
+const ALL_DATA_STAGE_JOURNAL_TEMP_PREFIX: &str = ".uninstall-stage-journal-v1-tmp-";
+#[cfg(windows)]
+const ALL_DATA_STAGE_DELETE_AUTHORIZED_RECORD: &[u8] = b"delete_authorized_v1\n";
+#[cfg(windows)]
+const ALL_DATA_STAGE_PREFIX: &str = ".dev.teddashh.ai-security-scanner.uninstall-staged-";
+#[cfg(windows)]
+const ALL_DATA_STAGE_JOURNAL_SCHEMA_VERSION: u32 = 1;
+#[cfg(windows)]
+const MAX_ALL_DATA_STAGE_JOURNAL_BYTES: u64 = 4 * 1024;
+#[cfg(windows)]
+const MAX_ALL_DATA_STAGE_PARENT_ENTRIES: usize = 4096;
+#[cfg(windows)]
+const MAX_ALL_DATA_STAGE_CANDIDATES: usize = 16;
+#[cfg(windows)]
+const ALL_DATA_STAGE_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(2);
 const MANAGED_RUNTIME_MANIFEST: &str = "manifest.json";
 const ARTIFACT_DIRECTORY: &str = "artifacts";
 const MANAGED_NETWORK_REGISTRY_DIRECTORY: &str = ".managed-egress-registry";
@@ -807,37 +835,70 @@ pub fn validate_fixed_product_data_root(data_root: &Path, local_data_root: &Path
     Ok(())
 }
 
-/// Creates the one fixed product root when absent and pins that real,
-/// non-reparse directory before the caller acquires its process lease.
+/// Pins the one fixed product root, creating it with private permissions when
+/// absent, before the caller acquires its process lease.
 ///
 /// Keeping the returned handle alive prevents Windows from replacing the root
 /// while uninstall inventory, target-contact stop, and bounded cleanup run. A
 /// concurrent desktop that wins the lease race still causes the lease acquire
 /// to fail before the coordinator mutates product state.
+pub struct PreparedProductDataRootGuard {
+    _directory: File,
+    _private_directory: PrivateProductDataDirectoryGuard,
+}
+
 pub fn prepare_fixed_product_data_root(
     data_root: &Path,
     local_data_root: &Path,
-) -> AppResult<(bool, File)> {
+) -> AppResult<(bool, PreparedProductDataRootGuard)> {
+    prepare_fixed_product_data_root_with(
+        data_root,
+        local_data_root,
+        ensure_private_product_data_directory,
+    )
+}
+
+fn prepare_fixed_product_data_root_with(
+    data_root: &Path,
+    local_data_root: &Path,
+    prepare_private_directory: impl FnOnce(&Path) -> AppResult<PrivateProductDataDirectoryGuard>,
+) -> AppResult<(bool, PreparedProductDataRootGuard)> {
     validate_fixed_product_data_root(data_root, local_data_root)?;
-    let existed_before = match fs::symlink_metadata(data_root) {
-        Ok(_) => true,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => match fs::create_dir(data_root) {
-            Ok(()) => false,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => true,
-            Err(error) => return Err(error.into()),
-        },
-        Err(error) => return Err(error.into()),
-    };
-    let guard = open_directory_no_follow(data_root).map_err(|_| {
+    let private_directory = prepare_private_directory(data_root)?;
+    // Keep the verified namespace pinned while opening the exact final
+    // component. The caller retains both handles until the process lease owns
+    // the same root, so there is no pathname-only handoff.
+    let directory = open_directory_no_follow(data_root).map_err(|_| {
         AppError::NotAuthorized(
             "product-uninstall could not pin the real application-data directory".into(),
         )
     })?;
-    Ok((existed_before, guard))
+    let existed_before = !private_directory.was_created();
+    Ok((
+        existed_before,
+        PreparedProductDataRootGuard {
+            _directory: directory,
+            _private_directory: private_directory,
+        },
+    ))
 }
 
-/// Atomically moves a fully cleaned canonical product root out of the path
-/// used by the desktop while the caller still owns its exclusive lease.
+#[cfg(test)]
+fn prepare_fixed_product_data_root_for_isolated_test(
+    data_root: &Path,
+    local_data_root: &Path,
+) -> AppResult<(bool, PreparedProductDataRootGuard)> {
+    #[cfg(windows)]
+    let prepare_private_directory =
+        crate::managed_runtime::ensure_private_product_data_directory_for_isolated_test;
+    #[cfg(not(windows))]
+    let prepare_private_directory = ensure_private_product_data_directory;
+    prepare_fixed_product_data_root_with(data_root, local_data_root, prepare_private_directory)
+}
+
+/// On Windows, atomically moves a fully cleaned canonical product root out of
+/// the path used by the desktop while the caller still owns its exclusive
+/// lease. Other platforms fail closed before any pathname mutation.
 ///
 /// Dropping the lease and then deleting the canonical root would allow a newly
 /// launched process to recreate or write that path between those two steps.
@@ -845,10 +906,564 @@ pub fn prepare_fixed_product_data_root(
 /// any later launch gets a fresh canonical directory, while finalization stays
 /// bound to the already isolated empty root. A failed rename is reported and
 /// leaves the canonical root untouched.
+#[derive(Debug)]
+pub struct StagedAllDataRoot {
+    path: PathBuf,
+    #[cfg(windows)]
+    directory: Mutex<Option<File>>,
+    #[cfg(windows)]
+    journal: Mutex<Option<File>>,
+}
+
+impl StagedAllDataRoot {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AllDataStageJournalState {
+    Prepared,
+    DeleteAuthorized,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AllDataStageJournal {
+    schema_version: u32,
+    staging_id: String,
+    destination_leaf: String,
+    volume_serial_number: u64,
+    file_id_hex: String,
+    state: AllDataStageJournalState,
+}
+
+#[cfg(windows)]
+fn windows_file_identity(file: &File) -> io::Result<(u64, [u8; 16])> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ID_INFO, FileIdInfo, GetFileInformationByHandleEx,
+    };
+
+    let mut information = FILE_ID_INFO::default();
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            (&raw mut information).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((
+        information.VolumeSerialNumber,
+        information.FileId.Identifier,
+    ))
+}
+
+#[cfg(windows)]
+fn open_windows_all_data_stage_journal(
+    path: &Path,
+    create_new: bool,
+    share_delete: bool,
+) -> io::Result<File> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    let mut options = OpenOptions::new();
+    let share_mode = if share_delete {
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+    } else {
+        // Once the fixed journal has been published, withhold both write and
+        // delete sharing. Its immutable prepared frame and append-only state
+        // tail stay pinned through identity validation and exact cleanup.
+        FILE_SHARE_READ
+    };
+    options
+        .read(true)
+        .write(true)
+        .access_mode(GENERIC_READ | GENERIC_WRITE | DELETE)
+        .share_mode(share_mode)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    if create_new {
+        options.create_new(true);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "all-data staging journal is not one real non-reparse regular file",
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn windows_all_data_stage_prepared_frame(journal: &AllDataStageJournal) -> io::Result<Vec<u8>> {
+    if journal.state != AllDataStageJournalState::Prepared {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the immutable all-data staging frame must be prepared",
+        ));
+    }
+    let mut bytes = serde_json::to_vec(journal)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    bytes.push(b'\n');
+    if bytes
+        .len()
+        .checked_add(ALL_DATA_STAGE_DELETE_AUTHORIZED_RECORD.len())
+        .is_none_or(|length| length as u64 > MAX_ALL_DATA_STAGE_JOURNAL_BYTES)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "all-data staging journal exceeded its fixed bound",
+        ));
+    }
+    Ok(bytes)
+}
+
+#[cfg(windows)]
+fn write_windows_all_data_stage_prepared_frame(
+    file: &mut File,
+    journal: &AllDataStageJournal,
+) -> io::Result<()> {
+    let bytes = windows_all_data_stage_prepared_frame(journal)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.set_len(0)?;
+    file.write_all(&bytes)?;
+    file.sync_all()
+}
+
+#[cfg(windows)]
+struct ParsedWindowsAllDataStageJournal {
+    journal: AllDataStageJournal,
+    prepared_frame_len: u64,
+}
+
+#[cfg(windows)]
+fn read_windows_all_data_stage_journal(
+    file: &mut File,
+) -> io::Result<ParsedWindowsAllDataStageJournal> {
+    let metadata = file.metadata()?;
+    if metadata.len() == 0 || metadata.len() > MAX_ALL_DATA_STAGE_JOURNAL_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "all-data staging journal is empty or oversized",
+        ));
+    }
+    file.seek(SeekFrom::Start(0))?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    std::io::Read::by_ref(file)
+        .take(MAX_ALL_DATA_STAGE_JOURNAL_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != metadata.len() || bytes.len() as u64 > MAX_ALL_DATA_STAGE_JOURNAL_BYTES
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "all-data staging journal changed during its bounded read",
+        ));
+    }
+    let newline = bytes
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "all-data staging journal has no complete prepared frame",
+            )
+        })?;
+    let prepared_frame_len = newline
+        .checked_add(1)
+        .and_then(|length| u64::try_from(length).ok())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "all-data staging prepared frame length overflowed",
+            )
+        })?;
+    let mut journal: AllDataStageJournal = serde_json::from_slice(&bytes[..newline])
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if journal.state != AllDataStageJournalState::Prepared {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "all-data staging prepared frame has a mutable state",
+        ));
+    }
+    let tail = &bytes[newline + 1..];
+    if tail == ALL_DATA_STAGE_DELETE_AUTHORIZED_RECORD {
+        journal.state = AllDataStageJournalState::DeleteAuthorized;
+    } else if !ALL_DATA_STAGE_DELETE_AUTHORIZED_RECORD.starts_with(tail) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "all-data staging journal has an invalid append-only state tail",
+        ));
+    }
+    Ok(ParsedWindowsAllDataStageJournal {
+        journal,
+        prepared_frame_len,
+    })
+}
+
+#[cfg(windows)]
+fn authorize_windows_all_data_stage_deletion(file: &mut File) -> io::Result<()> {
+    let parsed = read_windows_all_data_stage_journal(file)?;
+    if parsed.journal.state == AllDataStageJournalState::DeleteAuthorized {
+        return Ok(());
+    }
+
+    // A hard crash at any point in this transition leaves either no tail or a
+    // strict prefix of the one fixed authorization record. Both are safely
+    // interpreted as Prepared and retried; the synced JSON authority is never
+    // truncated or rewritten.
+    file.set_len(parsed.prepared_frame_len)?;
+    file.seek(SeekFrom::Start(parsed.prepared_frame_len))?;
+    file.write_all(ALL_DATA_STAGE_DELETE_AUTHORIZED_RECORD)?;
+    file.sync_all()
+}
+
+#[cfg(windows)]
+fn create_windows_all_data_stage_journal(
+    data_root: &Path,
+    parent: &Path,
+    parent_guard: &File,
+    staging_id: uuid::Uuid,
+    journal: &AllDataStageJournal,
+) -> AppResult<File> {
+    let prepared_frame = windows_all_data_stage_prepared_frame(journal)?;
+    let temp_leaf = format!(
+        "{ALL_DATA_STAGE_JOURNAL_TEMP_PREFIX}{}.json",
+        staging_id.hyphenated()
+    );
+    let temp_path = data_root.join(&temp_leaf);
+    let fixed_path = parent.join(ALL_DATA_STAGE_JOURNAL_FILE);
+    let mut temp =
+        open_windows_all_data_stage_journal(&temp_path, true, true).map_err(|error| {
+            AppError::NotAvailable(format!(
+                "all-data finalization could not create its isolated journal draft: {error}"
+            ))
+        })?;
+    let temp_identity = windows_file_identity(&temp)?;
+    if let Err(error) = write_windows_all_data_stage_prepared_frame(&mut temp, journal) {
+        let _ = windows_delete_file_or_empty_directory_handle(&temp);
+        drop(temp);
+        return Err(AppError::NotAvailable(format!(
+            "all-data finalization could not durably prepare recovery: {error}"
+        )));
+    }
+    if let Err(error) = windows_rename_handle_no_replace(
+        &temp,
+        parent_guard,
+        std::ffi::OsStr::new(ALL_DATA_STAGE_JOURNAL_FILE),
+    ) {
+        let _ = windows_delete_file_or_empty_directory_handle(&temp);
+        drop(temp);
+        return Err(AppError::NotAvailable(format!(
+            "all-data finalization could not atomically publish its recovery journal: {error}"
+        )));
+    }
+
+    // The draft needed delete sharing for its native handle rename. Reopen the
+    // published name without write/delete sharing and verify its stable file
+    // identity after the necessarily narrow close/reopen handoff. Any namespace
+    // substitution fails before the product root is moved.
+    drop(temp);
+    let mut fixed =
+        open_windows_all_data_stage_journal(&fixed_path, false, false).map_err(|error| {
+            AppError::NotAvailable(format!(
+                "all-data finalization could not pin its published recovery journal: {error}"
+            ))
+        })?;
+    if windows_file_identity(&fixed)? != temp_identity {
+        return Err(AppError::NotAuthorized(
+            "all-data finalization recovery journal changed during publication".into(),
+        ));
+    }
+    let fixed_len = fixed.metadata()?.len();
+    let parsed = read_windows_all_data_stage_journal(&mut fixed).map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "all-data finalization could not validate its published recovery journal: {error}"
+        ))
+    })?;
+    if parsed.journal != *journal
+        || fixed_len != u64::try_from(prepared_frame.len()).unwrap_or(u64::MAX)
+    {
+        return Err(AppError::NotAuthorized(
+            "all-data finalization published recovery journal did not retain its prepared frame"
+                .into(),
+        ));
+    }
+    Ok(fixed)
+}
+
+#[cfg(windows)]
+fn validate_windows_all_data_stage_journal(journal: &AllDataStageJournal) -> AppResult<[u8; 16]> {
+    if journal.schema_version != ALL_DATA_STAGE_JOURNAL_SCHEMA_VERSION {
+        return Err(AppError::NotAuthorized(
+            "all-data staging journal has an unsupported schema".into(),
+        ));
+    }
+    let staging_id = uuid::Uuid::parse_str(&journal.staging_id).map_err(|_| {
+        AppError::NotAuthorized("all-data staging journal has an invalid identifier".into())
+    })?;
+    if journal.staging_id != staging_id.hyphenated().to_string()
+        || journal.destination_leaf != format!("{ALL_DATA_STAGE_PREFIX}{}", staging_id.hyphenated())
+    {
+        return Err(AppError::NotAuthorized(
+            "all-data staging journal has a non-canonical destination".into(),
+        ));
+    }
+    let decoded = hex::decode(&journal.file_id_hex).map_err(|_| {
+        AppError::NotAuthorized("all-data staging journal has an invalid file identity".into())
+    })?;
+    let identity: [u8; 16] = decoded.try_into().map_err(|_| {
+        AppError::NotAuthorized("all-data staging journal has an invalid file identity".into())
+    })?;
+    if journal.file_id_hex != hex::encode(identity) {
+        return Err(AppError::NotAuthorized(
+            "all-data staging journal file identity is not canonical".into(),
+        ));
+    }
+    Ok(identity)
+}
+
+#[cfg(windows)]
+fn windows_ordinal_ignore_case_equal(
+    left: &std::ffi::OsStr,
+    right: &std::ffi::OsStr,
+) -> io::Result<bool> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CompareStringOrdinal(
+            left: *const u16,
+            left_length: i32,
+            right: *const u16,
+            right_length: i32,
+            ignore_case: i32,
+        ) -> i32;
+    }
+
+    const CSTR_EQUAL: i32 = 2;
+    let left = left.encode_wide().collect::<Vec<_>>();
+    let right = right.encode_wide().collect::<Vec<_>>();
+    let left_length = i32::try_from(left.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Windows name is too long"))?;
+    let right_length = i32::try_from(right.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Windows name is too long"))?;
+    let comparison = unsafe {
+        CompareStringOrdinal(left.as_ptr(), left_length, right.as_ptr(), right_length, 1)
+    };
+    if comparison == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(comparison == CSTR_EQUAL)
+}
+
+#[cfg(windows)]
+fn windows_ordinal_ignore_case_starts_with(
+    name: &std::ffi::OsStr,
+    prefix: &std::ffi::OsStr,
+) -> io::Result<bool> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    let prefix = prefix.encode_wide().collect::<Vec<_>>();
+    let name_prefix = name.encode_wide().take(prefix.len()).collect::<Vec<_>>();
+    if name_prefix.len() != prefix.len() {
+        return Ok(false);
+    }
+    windows_ordinal_ignore_case_equal(
+        &std::ffi::OsString::from_wide(&name_prefix),
+        &std::ffi::OsString::from_wide(&prefix),
+    )
+}
+
+#[cfg(windows)]
+struct WindowsAllDataStageParentInventory {
+    candidates: Vec<std::ffi::OsString>,
+    journals: Vec<std::ffi::OsString>,
+}
+
+#[cfg(windows)]
+fn windows_all_data_stage_parent_inventory(
+    parent: &Path,
+) -> AppResult<WindowsAllDataStageParentInventory> {
+    let stage_prefix = std::ffi::OsStr::new(ALL_DATA_STAGE_PREFIX);
+    let journal_name = std::ffi::OsStr::new(ALL_DATA_STAGE_JOURNAL_FILE);
+    let deadline = Instant::now() + ALL_DATA_STAGE_DISCOVERY_TIMEOUT;
+    let mut candidates = Vec::new();
+    let mut journals = Vec::new();
+    for (index, entry) in fs::read_dir(parent)?.enumerate() {
+        if index >= MAX_ALL_DATA_STAGE_PARENT_ENTRIES || Instant::now() >= deadline {
+            return Err(AppError::NotAvailable(
+                "all-data staging recovery could not complete its bounded parent inventory".into(),
+            ));
+        }
+        let entry = entry?;
+        let name = entry.file_name();
+        if windows_ordinal_ignore_case_starts_with(&name, stage_prefix)? {
+            if candidates.len() >= MAX_ALL_DATA_STAGE_CANDIDATES {
+                return Err(AppError::NotAvailable(
+                    "all-data staging recovery found too many candidate roots".into(),
+                ));
+            }
+            candidates.push(name.clone());
+        }
+        if windows_ordinal_ignore_case_equal(&name, journal_name)? {
+            journals.push(name);
+            if journals.len() > 1 {
+                return Err(AppError::NotAvailable(
+                    "all-data staging recovery found ambiguous fixed journals".into(),
+                ));
+            }
+        }
+    }
+    Ok(WindowsAllDataStageParentInventory {
+        candidates,
+        journals,
+    })
+}
+
+#[cfg(windows)]
+fn recover_windows_interrupted_all_data_stage(
+    data_root_guard: &File,
+    parent: &Path,
+    lease: &DataDirectoryExclusiveLease,
+) -> AppResult<()> {
+    let inventory = windows_all_data_stage_parent_inventory(parent)?;
+    let journal_name = match inventory.journals.as_slice() {
+        [] => {
+            if inventory.candidates.is_empty() {
+                return Ok(());
+            }
+            return Err(AppError::NotAvailable(
+                "all-data staging recovery preserved an unjournaled candidate root".into(),
+            ));
+        }
+        [journal_name] => journal_name,
+        _ => {
+            return Err(AppError::NotAvailable(
+                "all-data staging recovery found ambiguous fixed journals".into(),
+            ));
+        }
+    };
+    let journal_path = parent.join(journal_name);
+    let mut journal_file = match open_windows_all_data_stage_journal(&journal_path, false, false) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(AppError::NotAvailable(
+                "all-data staging recovery lost its inventoried fixed journal".into(),
+            ));
+        }
+        Err(error) => {
+            return Err(AppError::NotAvailable(format!(
+                "all-data staging recovery could not open its fixed journal: {error}"
+            )));
+        }
+    };
+    let parsed = read_windows_all_data_stage_journal(&mut journal_file).map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "all-data staging recovery preserved an invalid journal: {error}"
+        ))
+    })?;
+    let journal = parsed.journal;
+    let expected_file_id = validate_windows_all_data_stage_journal(&journal)?;
+    let expected_name = std::ffi::OsString::from(journal.destination_leaf.as_str());
+    if inventory
+        .candidates
+        .iter()
+        .map(|candidate| windows_ordinal_ignore_case_equal(candidate, &expected_name))
+        .collect::<io::Result<Vec<_>>>()?
+        .into_iter()
+        .any(|equal| !equal)
+        || inventory.candidates.len() > 1
+    {
+        return Err(AppError::NotAvailable(
+            "all-data staging recovery preserved untracked candidate roots".into(),
+        ));
+    }
+
+    let expected_identity = (journal.volume_serial_number, expected_file_id);
+    if inventory.candidates.is_empty()
+        && journal.state == AllDataStageJournalState::Prepared
+        && windows_file_identity(data_root_guard)? == expected_identity
+    {
+        // The atomic root rename never happened. Removing only the exact
+        // pinned journal restores the pre-transition state.
+        windows_delete_file_or_empty_directory_handle(&journal_file).map_err(|error| {
+            AppError::NotAvailable(format!(
+                "all-data staging recovery could not remove its completed journal: {error}"
+            ))
+        })?;
+        drop(journal_file);
+        return Ok(());
+    }
+
+    let Some(candidate_name) = inventory.candidates.first() else {
+        return Err(AppError::NotAvailable(
+            "all-data staging recovery retained its journal because the journaled destination leaf was absent"
+                .into(),
+        ));
+    };
+    let candidate_path = parent.join(candidate_name);
+    let candidate = lease
+        .open_windows_staged_directory_for_identity_check(&candidate_path)
+        .map_err(|error| {
+            AppError::NotAvailable(format!(
+                "all-data staging recovery preserved a non-directory or reparse journaled candidate: {error}"
+            ))
+        })?;
+    if windows_file_identity(&candidate)? != expected_identity {
+        return Err(AppError::NotAuthorized(
+            "all-data staging recovery journaled candidate identity did not match its durable journal"
+                .into(),
+        ));
+    }
+    if journal.state != AllDataStageJournalState::DeleteAuthorized {
+        authorize_windows_all_data_stage_deletion(&mut journal_file).map_err(|error| {
+            AppError::NotAvailable(format!(
+                "all-data staging recovery could not durably authorize exact deletion: {error}"
+            ))
+        })?;
+    }
+    windows_delete_file_or_empty_directory_handle(&candidate).map_err(|error| {
+        AppError::NotAvailable(format!(
+            "all-data staging recovery preserved a nonempty or busy candidate: {error}"
+        ))
+    })?;
+    drop(candidate);
+    windows_delete_file_or_empty_directory_handle(&journal_file).map_err(|error| {
+        AppError::NotAvailable(format!(
+            "all-data staging recovery could not remove its completed journal: {error}"
+        ))
+    })?;
+    drop(journal_file);
+    Ok(())
+}
+
 pub fn stage_all_data_root_for_finalization(
     data_root: &Path,
     lease: &DataDirectoryExclusiveLease,
-) -> AppResult<PathBuf> {
+) -> AppResult<StagedAllDataRoot> {
+    stage_all_data_root_for_finalization_with_id(data_root, lease, uuid::Uuid::new_v4())
+}
+
+#[cfg(windows)]
+fn stage_all_data_root_for_finalization_with_id(
+    data_root: &Path,
+    lease: &DataDirectoryExclusiveLease,
+    staging_id: uuid::Uuid,
+) -> AppResult<StagedAllDataRoot> {
     if lease.path() != data_root.join(DATA_DIRECTORY_LEASE_FILE) {
         return Err(AppError::NotAuthorized(
             "all-data finalization requires the exact product-directory lease".into(),
@@ -859,26 +1474,35 @@ pub fn stage_all_data_root_for_finalization(
             "all-data finalization preserved a non-directory or reparse product root".into(),
         )
     })?;
-    let mut entries = fs::read_dir(data_root)?;
-    let only = entries.next().transpose()?.ok_or_else(|| {
-        AppError::Internal("all-data finalization lost its lease sentinel".into())
-    })?;
-    let lease_guard = open_file_no_follow(&only.path()).map_err(|error| {
-        AppError::NotAvailable(format!(
-            "all-data finalization could not recheck its lease sentinel: {error}"
-        ))
-    })?;
-    if entries.next().transpose()?.is_some() || only.file_name() != DATA_DIRECTORY_LEASE_FILE {
-        return Err(AppError::NotAvailable(
-            "all-data finalization retained product state that was not empty".into(),
+    #[cfg(windows)]
+    if !lease.windows_directory_matches(&data_root_guard)? {
+        return Err(AppError::NotAuthorized(
+            "all-data finalization product root changed after lease acquisition".into(),
         ));
     }
     let parent = data_root.parent().ok_or_else(|| {
         AppError::NotAuthorized("product data root has no local-data parent".into())
     })?;
+    #[cfg(windows)]
+    recover_windows_interrupted_all_data_stage(&data_root_guard, parent, lease)?;
+    let mut entries = fs::read_dir(data_root)?;
+    let only = entries.next().transpose()?.ok_or_else(|| {
+        AppError::Internal("all-data finalization lost its lease sentinel".into())
+    })?;
+    #[cfg(windows)]
+    if !lease.windows_sentinel_is_held()? {
+        return Err(AppError::NotAuthorized(
+            "all-data finalization lease sentinel is no longer held by this lease".into(),
+        ));
+    }
+    if entries.next().transpose()?.is_some() || only.file_name() != DATA_DIRECTORY_LEASE_FILE {
+        return Err(AppError::NotAvailable(
+            "all-data finalization retained product state that was not empty".into(),
+        ));
+    }
     let staged = parent.join(format!(
         ".{PRODUCT_DATA_DIRECTORY_NAME}.uninstall-staged-{}",
-        uuid::Uuid::new_v4().hyphenated()
+        staging_id.hyphenated()
     ));
     match fs::symlink_metadata(&staged) {
         Ok(_) => {
@@ -893,63 +1517,295 @@ pub fn stage_all_data_root_for_finalization(
             )));
         }
     }
-    // Windows deliberately denies root replacement while the no-reparse guard
-    // is open. The exclusive sentinel remains locked while the exact root is
-    // atomically renamed, so another desktop cannot acquire product state in
-    // this short handoff.
-    drop(lease_guard);
+    #[cfg(windows)]
+    let mut stage_journal_file = {
+        let identity = windows_file_identity(&data_root_guard)?;
+        let journal = AllDataStageJournal {
+            schema_version: ALL_DATA_STAGE_JOURNAL_SCHEMA_VERSION,
+            staging_id: staging_id.hyphenated().to_string(),
+            destination_leaf: staged
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    AppError::NotAuthorized("product staging path is not canonical UTF-16".into())
+                })?
+                .to_owned(),
+            volume_serial_number: identity.0,
+            file_id_hex: hex::encode(identity.1),
+            state: AllDataStageJournalState::Prepared,
+        };
+        validate_windows_all_data_stage_journal(&journal)?;
+        create_windows_all_data_stage_journal(
+            data_root,
+            parent,
+            lease.windows_parent(),
+            staging_id,
+            &journal,
+        )?
+    };
+    // The lifetime mutex continues to own the canonical Windows pathname after
+    // its ordinary sentinel handle is closed for the one pinned-handle rename.
     drop(data_root_guard);
-    fs::rename(data_root, &staged).map_err(|error| {
-        AppError::NotAvailable(format!(
-            "all-data finalization could not isolate the empty product root: {error}"
-        ))
-    })?;
-    Ok(staged)
+    #[cfg(windows)]
+    {
+        let staged_directory = lease.prepare_windows_directory_for_staging()?;
+        windows_rename_handle_no_replace(
+            &staged_directory,
+            lease.windows_parent(),
+            staged.file_name().ok_or_else(|| {
+                AppError::NotAuthorized("product staging path has no final component".into())
+            })?,
+        )
+        .map_err(|error| {
+            AppError::NotAvailable(format!(
+                "all-data finalization could not isolate the empty product root without replacement: {error}"
+            ))
+        })?;
+        let staged_guard = lease
+            .open_windows_staged_directory_for_identity_check(&staged)
+            .map_err(|error| {
+                AppError::NotAvailable(format!(
+                    "all-data finalization could not recheck its staged product root: {error}"
+                ))
+            })?;
+        if !lease.windows_directory_matches(&staged_guard)? {
+            return Err(AppError::NotAuthorized(
+                "all-data finalization staged path did not retain the leased product-root identity"
+                    .into(),
+            ));
+        }
+        authorize_windows_all_data_stage_deletion(&mut stage_journal_file).map_err(|error| {
+            AppError::NotAvailable(format!(
+                "all-data finalization could not durably authorize exact staged cleanup: {error}"
+            ))
+        })?;
+        Ok(StagedAllDataRoot {
+            path: staged,
+            directory: Mutex::new(Some(staged_directory)),
+            journal: Mutex::new(Some(stage_journal_file)),
+        })
+    }
 }
 
-/// Removes the lease sentinel and one already staged empty product root after
-/// the coordinator and process lease have both been dropped. A nonempty root
-/// is retained. This never traverses or removes the local-data parent.
-pub fn finalize_all_data_root(data_root: &Path) -> Vec<ProductUninstallRetainedItem> {
-    let mut retained = Vec::new();
-    let root_guard = match open_directory_no_follow(data_root) {
-        Ok(guard) => guard,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return retained,
-        _ => {
-            retained.push(ProductUninstallRetainedItem::new(
-                "product_data",
-                "ambiguous_product_data_root_preserved",
-            ));
-            return retained;
-        }
+#[cfg(not(windows))]
+fn stage_all_data_root_for_finalization_with_id(
+    data_root: &Path,
+    lease: &DataDirectoryExclusiveLease,
+    _staging_id: uuid::Uuid,
+) -> AppResult<StagedAllDataRoot> {
+    if lease.path() != data_root.join(DATA_DIRECTORY_LEASE_FILE) {
+        return Err(AppError::NotAuthorized(
+            "all-data finalization requires the exact product-directory lease".into(),
+        ));
+    }
+    Err(AppError::NotAvailable(
+        "all-data finalization retained the product root because handle-bound staging and durable recovery are unavailable on this platform"
+            .into(),
+    ))
+}
+
+#[cfg(windows)]
+fn windows_rename_handle_no_replace(
+    source: &File,
+    parent: &File,
+    destination_leaf: &std::ffi::OsStr,
+) -> io::Result<()> {
+    use std::os::windows::{ffi::OsStrExt, io::AsRawHandle};
+    use windows_sys::Win32::Foundation::HANDLE;
+
+    #[repr(C)]
+    struct NativeIoStatusBlock {
+        // IO_STATUS_BLOCK starts with a union of NTSTATUS and PVOID. Using the
+        // pointer-sized member preserves the native union's size/alignment on
+        // both supported Windows architectures.
+        status_or_pointer: usize,
+        information: usize,
+    }
+
+    #[repr(C)]
+    struct NativeFileRenameInformation {
+        replace_if_exists: u8,
+        root_directory: HANDLE,
+        file_name_length: u32,
+        file_name: [u16; 1],
+    }
+
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn NtSetInformationFile(
+            file_handle: HANDLE,
+            io_status_block: *mut NativeIoStatusBlock,
+            file_information: *mut std::ffi::c_void,
+            length: u32,
+            file_information_class: u32,
+        ) -> i32;
+        fn RtlNtStatusToDosError(status: i32) -> u32;
+    }
+
+    const FILE_RENAME_INFORMATION_CLASS: u32 = 10;
+
+    let destination = destination_leaf.encode_wide().collect::<Vec<_>>();
+    if destination.is_empty()
+        || destination == [b'.' as u16]
+        || destination == [b'.' as u16, b'.' as u16]
+        || destination.iter().any(|unit| {
+            let unit = *unit;
+            unit != u16::from(b'-')
+                && unit != u16::from(b'.')
+                && !(u16::from(b'0')..=u16::from(b'9')).contains(&unit)
+                && !(u16::from(b'A')..=u16::from(b'Z')).contains(&unit)
+                && !(u16::from(b'a')..=u16::from(b'z')).contains(&unit)
+        })
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "product staging destination is not one safe final path component",
+        ));
+    }
+    let name_bytes = destination
+        .len()
+        .checked_mul(std::mem::size_of::<u16>())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "staging name overflowed"))?;
+    let prefix = std::mem::offset_of!(NativeFileRenameInformation, file_name);
+    let total = prefix
+        .checked_add(name_bytes)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "rename buffer overflowed"))?;
+    let total_u32 = u32::try_from(total)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "rename buffer is too large"))?;
+    let name_bytes_u32 = u32::try_from(name_bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "staging name is too large"))?;
+    let mut storage = vec![0_usize; total.div_ceil(std::mem::size_of::<usize>())];
+    let information = storage.as_mut_ptr().cast::<NativeFileRenameInformation>();
+    unsafe {
+        (*information).replace_if_exists = 0;
+        (*information).root_directory = parent.as_raw_handle();
+        (*information).file_name_length = name_bytes_u32;
+        std::ptr::copy_nonoverlapping(
+            destination.as_ptr(),
+            std::ptr::addr_of_mut!((*information).file_name).cast::<u16>(),
+            destination.len(),
+        );
+    }
+
+    // SetFileInformationByHandle rejects RootDirectory-relative rename
+    // requests on supported Windows versions. NtSetInformationFile's legacy
+    // FileRenameInformation contract accepts the pinned parent handle. With
+    // ReplaceIfExists=FALSE this is one atomic, no-replace namespace operation
+    // and never re-resolves an attacker-controlled ancestor pathname.
+    let mut io_status = NativeIoStatusBlock {
+        status_or_pointer: 0,
+        information: 0,
     };
-    let lease = data_root.join(DATA_DIRECTORY_LEASE_FILE);
-    match open_file_no_follow(&lease) {
-        Ok(lease_guard) => {
-            drop(lease_guard);
-            if fs::remove_file(&lease).is_err() {
+    let status = unsafe {
+        NtSetInformationFile(
+            source.as_raw_handle(),
+            &raw mut io_status,
+            information.cast(),
+            total_u32,
+            FILE_RENAME_INFORMATION_CLASS,
+        )
+    };
+    if status < 0 {
+        let win32 = unsafe { RtlNtStatusToDosError(status) };
+        return Err(io::Error::from_raw_os_error(win32 as i32));
+    }
+    Ok(())
+}
+
+/// On Windows, removes one handle-pinned staged product root after the
+/// coordinator and process lease have both been dropped. A nonempty root is
+/// retained. Other platforms return a retained-state result without pathname
+/// deletion. This never traverses or removes the local-data parent.
+pub fn finalize_all_data_root(staged: &StagedAllDataRoot) -> Vec<ProductUninstallRetainedItem> {
+    #[cfg(windows)]
+    {
+        let mut retained = Vec::new();
+        let mut journal = match staged.journal.lock() {
+            Ok(journal) => journal,
+            Err(_) => {
                 retained.push(ProductUninstallRetainedItem::new(
                     "product_data",
-                    "lease_file_removal_incomplete",
+                    "staged_product_data_journal_guard_poisoned",
                 ));
+                return retained;
             }
+        };
+        if journal.is_none() {
+            return retained;
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(_) => retained.push(ProductUninstallRetainedItem::new(
-            "product_data",
-            "ambiguous_lease_entry_preserved",
-        )),
+        let mut directory = match staged.directory.lock() {
+            Ok(directory) => directory,
+            Err(_) => {
+                retained.push(ProductUninstallRetainedItem::new(
+                    "product_data",
+                    "staged_product_data_guard_poisoned",
+                ));
+                return retained;
+            }
+        };
+        let Some(directory) = directory.take() else {
+            retained.push(ProductUninstallRetainedItem::new(
+                "product_data",
+                "staged_product_data_handle_missing",
+            ));
+            return retained;
+        };
+        if windows_delete_file_or_empty_directory_handle(&directory).is_err() {
+            retained.push(ProductUninstallRetainedItem::new(
+                "product_data",
+                "product_data_root_retained",
+            ));
+            drop(directory);
+            return retained;
+        }
+        drop(directory);
+        let Some(journal_file) = journal.take() else {
+            retained.push(ProductUninstallRetainedItem::new(
+                "product_data",
+                "staged_product_data_journal_missing",
+            ));
+            return retained;
+        };
+        if windows_delete_file_or_empty_directory_handle(&journal_file).is_err() {
+            retained.push(ProductUninstallRetainedItem::new(
+                "product_data",
+                "staged_product_data_journal_retained",
+            ));
+        }
+        drop(journal_file);
+        retained
     }
-    drop(root_guard);
-    match fs::remove_dir(data_root) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(_) => retained.push(ProductUninstallRetainedItem::new(
+
+    #[cfg(not(windows))]
+    {
+        let _ = staged;
+        vec![ProductUninstallRetainedItem::new(
             "product_data",
-            "product_data_root_retained",
-        )),
+            "handle_bound_finalization_unavailable_on_platform",
+        )]
     }
-    retained
+}
+
+#[cfg(windows)]
+fn windows_delete_file_or_empty_directory_handle(file: &File) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_DISPOSITION_INFO, FileDispositionInfo, SetFileInformationByHandle,
+    };
+
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    if unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            (&raw const disposition).cast(),
+            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn bounded_regular_file_sha256(path: &Path) -> AppResult<String> {
@@ -971,7 +1827,7 @@ fn bounded_regular_file_sha256(path: &Path) -> AppResult<String> {
         ));
     }
     let mut bytes = Vec::with_capacity(opened.len() as usize);
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(MAX_RUNTIME_MANIFEST_BYTES + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 != opened.len() || bytes.len() as u64 > MAX_RUNTIME_MANIFEST_BYTES {
@@ -1009,7 +1865,7 @@ fn open_file_no_follow(path: &Path) -> io::Result<File> {
                 "file is not one real non-reparse regular file",
             ));
         }
-        return Ok(file);
+        Ok(file)
     }
     #[cfg(not(windows))]
     {
@@ -1050,7 +1906,7 @@ fn open_directory_no_follow(path: &Path) -> io::Result<File> {
                 "directory is not one real non-reparse directory",
             ));
         }
-        return Ok(directory);
+        Ok(directory)
     }
     #[cfg(not(windows))]
     {
@@ -1282,11 +2138,10 @@ mod tests {
         let output = Command::new(command)
             .arg("/d")
             .arg("/c")
-            .arg(format!(
-                "mklink /J \"{}\" \"{}\"",
-                link.display(),
-                target.display()
-            ))
+            .arg("mklink")
+            .arg("/J")
+            .arg(link)
+            .arg(target)
             .output()
             .expect("create Windows junction fixture");
         assert!(
@@ -1769,10 +2624,21 @@ mod tests {
     fn newly_created_product_root_is_pinned_and_always_leased() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let sibling = temporary.path().join("unrelated-sibling");
+        fs::write(&sibling, b"must remain byte-exact").unwrap();
 
         let (existed_before, guard) =
-            prepare_fixed_product_data_root(&root, temporary.path()).unwrap();
+            prepare_fixed_product_data_root_for_isolated_test(&root, temporary.path()).unwrap();
         assert!(!existed_before);
+        #[cfg(windows)]
+        let private_verification_guard =
+            crate::managed_runtime::ensure_private_product_data_directory_for_isolated_test(&root)
+                .expect("product-uninstall must create the absent root with a protected DACL");
+        #[cfg(windows)]
+        assert!(
+            !private_verification_guard.was_created(),
+            "verification must observe the exact root prepared by product-uninstall"
+        );
         let first = DataDirectoryExclusiveLease::acquire(&root).unwrap();
         assert!(matches!(
             DataDirectoryExclusiveLease::acquire(&root),
@@ -1780,8 +2646,38 @@ mod tests {
         ));
 
         drop(guard);
+        #[cfg(windows)]
+        drop(private_verification_guard);
         drop(first);
         assert!(root.exists());
+        assert_eq!(fs::read(&sibling).unwrap(), b"must remain byte-exact");
+    }
+
+    #[test]
+    fn existing_product_root_is_pinned_without_rewriting_product_or_sibling_data() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let product_data = root.join("casework.db");
+        let sibling = temporary.path().join("unrelated-sibling");
+        #[cfg(windows)]
+        let creation_guard =
+            crate::managed_runtime::ensure_private_product_data_directory_for_isolated_test(&root)
+                .expect("create an existing secure product root fixture");
+        #[cfg(not(windows))]
+        let creation_guard = ensure_private_product_data_directory(&root)
+            .expect("create an existing secure product root fixture");
+        assert!(creation_guard.was_created());
+        drop(creation_guard);
+        fs::write(&product_data, b"preserved product bytes").unwrap();
+        fs::write(&sibling, b"preserved unrelated bytes").unwrap();
+
+        let (existed_before, guard) =
+            prepare_fixed_product_data_root_for_isolated_test(&root, temporary.path()).unwrap();
+
+        assert!(existed_before);
+        assert_eq!(fs::read(&product_data).unwrap(), b"preserved product bytes");
+        assert_eq!(fs::read(&sibling).unwrap(), b"preserved unrelated bytes");
+        drop(guard);
     }
 
     #[cfg(unix)]
@@ -2011,18 +2907,51 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn successful_all_data_finalization_removes_only_the_empty_exact_root() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
-        fs::create_dir(&root).unwrap();
-        fs::write(root.join(DATA_DIRECTORY_LEASE_FILE), b"lease").unwrap();
+        let (_, root_guard) =
+            prepare_fixed_product_data_root_for_isolated_test(&root, temporary.path()).unwrap();
+        let lease = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        drop(root_guard);
+        let staged = stage_all_data_root_for_finalization(&root, &lease).unwrap();
+        let staged_path = staged.path().to_path_buf();
+        drop(lease);
 
-        assert!(finalize_all_data_root(&root).is_empty());
-        assert!(!root.exists());
+        assert!(finalize_all_data_root(&staged).is_empty());
+        assert!(!staged_path.exists());
         assert!(temporary.path().exists());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn failed_root_handle_transition_restores_the_live_lease_for_a_safe_retry() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let (_, external_guard) =
+            prepare_fixed_product_data_root_for_isolated_test(&root, temporary.path()).unwrap();
+        let lease = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+
+        // This reproduces a caller retaining the ordinary no-delete guard. The
+        // DELETE-capable staging handle cannot open, and staging must fail
+        // without consuming the sentinel or moving the root.
+        assert!(stage_all_data_root_for_finalization(&root, &lease).is_err());
+        assert!(root.is_dir());
+        assert!(root.join(DATA_DIRECTORY_LEASE_FILE).is_file());
+        assert!(matches!(
+            DataDirectoryExclusiveLease::acquire(&root),
+            Err(AppError::NotAvailable(_))
+        ));
+
+        drop(external_guard);
+        let staged = stage_all_data_root_for_finalization(&root, &lease).unwrap();
+        drop(lease);
+        assert!(finalize_all_data_root(&staged).is_empty());
+    }
+
+    #[cfg(windows)]
     #[test]
     fn staged_finalization_cannot_delete_a_newly_recreated_canonical_root() {
         let temporary = tempfile::tempdir().unwrap();
@@ -2031,11 +2960,22 @@ mod tests {
 
         let staged = stage_all_data_root_for_finalization(&root, &first).unwrap();
         assert!(!root.exists());
-        assert!(staged.exists());
+        assert!(staged.path().exists());
 
+        // Acquiring recreates the canonical path, so this assertion proves the
+        // lifetime mutex is keyed to the canonical namespace rather than only
+        // the now-renamed directory object or its former sentinel.
+        assert!(matches!(
+            DataDirectoryExclusiveLease::acquire(&root),
+            Err(AppError::NotAvailable(_))
+        ));
+
+        // The Windows namespace mutex deliberately continues to own the
+        // canonical path until the lease is dropped, even after its directory
+        // has been staged. A replacement process may acquire only afterward.
+        drop(first);
         let second = DataDirectoryExclusiveLease::acquire(&root).unwrap();
         fs::write(root.join("new-process-data"), b"must remain").unwrap();
-        drop(first);
         assert!(finalize_all_data_root(&staged).is_empty());
 
         assert_eq!(
@@ -2043,5 +2983,388 @@ mod tests {
             b"must remain"
         );
         drop(second);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn staging_refuses_a_preexisting_destination_without_touching_either_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let lease = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let staging_id = uuid::Uuid::from_u128(0x9a4e_7fb9_0f21_4ea6_8d17_018b_b521_4763);
+        let staged = temporary.path().join(format!(
+            ".{PRODUCT_DATA_DIRECTORY_NAME}.uninstall-staged-{}",
+            staging_id.hyphenated()
+        ));
+        fs::create_dir(&staged).unwrap();
+        fs::write(staged.join("unrelated"), b"must remain").unwrap();
+
+        assert!(stage_all_data_root_for_finalization_with_id(&root, &lease, staging_id).is_err());
+        assert!(root.is_dir());
+        assert_eq!(fs::read(staged.join("unrelated")).unwrap(), b"must remain");
+        drop(lease);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn all_data_staging_fails_closed_without_pathname_mutation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let lease = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let lease_path = root.join(DATA_DIRECTORY_LEASE_FILE);
+        let before = fs::read(&lease_path).unwrap();
+
+        let error = stage_all_data_root_for_finalization(&root, &lease)
+            .expect_err("non-Windows finalization must retain the canonical root");
+
+        assert!(matches!(error, AppError::NotAvailable(_)));
+        assert!(root.is_dir());
+        assert_eq!(fs::read(&lease_path).unwrap(), before);
+        assert_eq!(
+            fs::read_dir(temporary.path()).unwrap().count(),
+            1,
+            "fail-closed staging must not create a pathname-based staged root"
+        );
+        drop(lease);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pinned_handle_rename_never_replaces_a_late_directory_collision() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let lease = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let destination_leaf =
+            std::ffi::OsStr::new(".ai-security-scanner.uninstall-staged-late-directory-collision");
+        let destination = temporary.path().join(destination_leaf);
+
+        // This models the destination appearing after the path precheck but
+        // before the one namespace operation.
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("unrelated"), b"must remain").unwrap();
+        let source = lease.prepare_windows_directory_for_staging().unwrap();
+
+        assert!(
+            windows_rename_handle_no_replace(&source, lease.windows_parent(), destination_leaf,)
+                .is_err()
+        );
+        assert!(root.is_dir());
+        assert_eq!(
+            fs::read(destination.join("unrelated")).unwrap(),
+            b"must remain"
+        );
+        drop(source);
+        drop(lease);
+        drop(DataDirectoryExclusiveLease::acquire(&root).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pinned_handle_rename_never_replaces_a_late_junction_collision() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("unrelated"), b"must remain").unwrap();
+        let lease = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let destination_leaf =
+            std::ffi::OsStr::new(".ai-security-scanner.uninstall-staged-late-junction-collision");
+        let destination = temporary.path().join(destination_leaf);
+
+        // This models a junction swap after the staging-path precheck. The
+        // no-replace handle rename must fail without traversing the junction.
+        create_windows_directory_junction(&destination, &outside);
+        let source = lease.prepare_windows_directory_for_staging().unwrap();
+
+        assert!(
+            windows_rename_handle_no_replace(&source, lease.windows_parent(), destination_leaf,)
+                .is_err()
+        );
+        assert!(root.is_dir());
+        assert_eq!(fs::read(outside.join("unrelated")).unwrap(), b"must remain");
+
+        // remove_dir removes the junction itself and never follows it.
+        fs::remove_dir(&destination).unwrap();
+        assert!(outside.is_dir());
+        drop(source);
+        drop(lease);
+        drop(DataDirectoryExclusiveLease::acquire(&root).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn finalization_deletes_only_the_pinned_staged_identity_after_path_replacement() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let lease = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let staged = stage_all_data_root_for_finalization(&root, &lease).unwrap();
+        let staged_path = staged.path().to_path_buf();
+        let moved_original = temporary.path().join("moved-original-staged-root");
+        drop(lease);
+
+        fs::rename(&staged_path, &moved_original).unwrap();
+        fs::create_dir(&staged_path).unwrap();
+        fs::write(
+            staged_path.join(DATA_DIRECTORY_LEASE_FILE),
+            b"not product data",
+        )
+        .unwrap();
+
+        assert!(finalize_all_data_root(&staged).is_empty());
+        assert!(!moved_original.exists());
+        assert_eq!(
+            fs::read(staged_path.join(DATA_DIRECTORY_LEASE_FILE)).unwrap(),
+            b"not product data"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restart_discards_a_prepared_journal_when_the_canonical_identity_never_moved() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let first = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let first_id = uuid::Uuid::from_u128(0x0100_0000_0000_4000_8000_0000_0000_0001);
+        let expected_staged = temporary.path().join(format!(
+            ".{PRODUCT_DATA_DIRECTORY_NAME}.uninstall-staged-{}",
+            first_id.hyphenated()
+        ));
+        let data_root_guard = open_directory_no_follow(&root).unwrap();
+        let identity = windows_file_identity(&data_root_guard).unwrap();
+        let journal = AllDataStageJournal {
+            schema_version: ALL_DATA_STAGE_JOURNAL_SCHEMA_VERSION,
+            staging_id: first_id.hyphenated().to_string(),
+            destination_leaf: expected_staged
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            volume_serial_number: identity.0,
+            file_id_hex: hex::encode(identity.1),
+            state: AllDataStageJournalState::Prepared,
+        };
+        let fixed_journal = create_windows_all_data_stage_journal(
+            &root,
+            temporary.path(),
+            first.windows_parent(),
+            first_id,
+            &journal,
+        )
+        .unwrap();
+        drop(fixed_journal);
+        drop(data_root_guard);
+        drop(first);
+        assert!(!expected_staged.exists());
+
+        let second = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let second_id = uuid::Uuid::from_u128(0x0200_0000_0000_4000_8000_0000_0000_0002);
+        let staged =
+            stage_all_data_root_for_finalization_with_id(&root, &second, second_id).unwrap();
+
+        assert!(!expected_staged.exists());
+        drop(second);
+        assert!(finalize_all_data_root(&staged).is_empty());
+        assert!(!temporary.path().join(ALL_DATA_STAGE_JOURNAL_FILE).exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restart_recovers_one_durably_journaled_staged_root_before_staging_again() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let first = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let first_id = uuid::Uuid::from_u128(0x1000_0000_0000_4000_8000_0000_0000_0001);
+        let interrupted =
+            stage_all_data_root_for_finalization_with_id(&root, &first, first_id).unwrap();
+        let interrupted_path = interrupted.path().to_path_buf();
+        let journal_path = temporary.path().join(ALL_DATA_STAGE_JOURNAL_FILE);
+
+        // Dropping live handles without finalization models process death: the
+        // staged root and synced journal remain, but no in-memory identity does.
+        drop(interrupted);
+        drop(first);
+        assert!(interrupted_path.is_dir());
+        assert!(journal_path.is_file());
+
+        let second = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let second_id = uuid::Uuid::from_u128(0x2000_0000_0000_4000_8000_0000_0000_0002);
+        let staged =
+            stage_all_data_root_for_finalization_with_id(&root, &second, second_id).unwrap();
+
+        assert!(!interrupted_path.exists());
+        assert!(staged.path().is_dir());
+        drop(second);
+        assert!(finalize_all_data_root(&staged).is_empty());
+        assert!(!journal_path.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restart_preserves_a_replacement_at_the_journaled_staged_path() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let first = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let first_id = uuid::Uuid::from_u128(0x3000_0000_0000_4000_8000_0000_0000_0003);
+        let interrupted =
+            stage_all_data_root_for_finalization_with_id(&root, &first, first_id).unwrap();
+        let interrupted_path = interrupted.path().to_path_buf();
+        let moved_original = temporary.path().join("moved-interrupted-product-root");
+        let journal_path = temporary.path().join(ALL_DATA_STAGE_JOURNAL_FILE);
+        drop(interrupted);
+        drop(first);
+
+        fs::rename(&interrupted_path, &moved_original).unwrap();
+        fs::create_dir(&interrupted_path).unwrap();
+        fs::write(interrupted_path.join("unrelated"), b"must remain").unwrap();
+
+        let second = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        assert!(stage_all_data_root_for_finalization(&root, &second).is_err());
+        assert_eq!(
+            fs::read(interrupted_path.join("unrelated")).unwrap(),
+            b"must remain"
+        );
+        assert!(moved_original.is_dir());
+        assert!(journal_path.is_file());
+        drop(second);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restart_retains_a_delete_authorized_journal_when_the_root_is_absent() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let first = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let first_id = uuid::Uuid::from_u128(0x4000_0000_0000_4000_8000_0000_0000_0004);
+        let interrupted =
+            stage_all_data_root_for_finalization_with_id(&root, &first, first_id).unwrap();
+        let interrupted_path = interrupted.path().to_path_buf();
+        let journal_path = temporary.path().join(ALL_DATA_STAGE_JOURNAL_FILE);
+
+        // Model a crash after exact root deletion but before journal deletion.
+        let directory = interrupted.directory.lock().unwrap().take().unwrap();
+        windows_delete_file_or_empty_directory_handle(&directory).unwrap();
+        drop(directory);
+        drop(interrupted);
+        drop(first);
+        assert!(!interrupted_path.exists());
+        assert!(journal_path.is_file());
+
+        let second = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        assert!(stage_all_data_root_for_finalization(&root, &second).is_err());
+        drop(second);
+        assert!(journal_path.is_file());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restart_preserves_a_journaled_stage_renamed_outside_its_exact_leaf() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let first = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let first_id = uuid::Uuid::from_u128(0x5000_0000_0000_4000_8000_0000_0000_0005);
+        let interrupted =
+            stage_all_data_root_for_finalization_with_id(&root, &first, first_id).unwrap();
+        let interrupted_path = interrupted.path().to_path_buf();
+        let unrelated_path = temporary.path().join("renamed-away-from-staging-prefix");
+        let journal_path = temporary.path().join(ALL_DATA_STAGE_JOURNAL_FILE);
+        drop(interrupted);
+        drop(first);
+
+        fs::rename(&interrupted_path, &unrelated_path).unwrap();
+        let second = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let second_id = uuid::Uuid::from_u128(0x5100_0000_0000_4000_8000_0000_0000_0005);
+        let error = stage_all_data_root_for_finalization_with_id(&root, &second, second_id)
+            .expect_err("recovery must not chase a journaled identity to another parent leaf");
+        assert!(matches!(error, AppError::NotAvailable(_)));
+        assert!(unrelated_path.is_dir());
+        assert!(journal_path.is_file());
+        assert!(root.join(DATA_DIRECTORY_LEASE_FILE).is_file());
+        drop(second);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restart_repairs_a_partial_append_only_authorization_record() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let first = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let first_id = uuid::Uuid::from_u128(0x6000_0000_0000_4000_8000_0000_0000_0006);
+        let interrupted =
+            stage_all_data_root_for_finalization_with_id(&root, &first, first_id).unwrap();
+        let interrupted_path = interrupted.path().to_path_buf();
+        let journal_path = temporary.path().join(ALL_DATA_STAGE_JOURNAL_FILE);
+        drop(interrupted);
+        drop(first);
+
+        // Model power/process loss part-way through only the append-only state
+        // record. The complete synced Prepared JSON frame remains untouched.
+        let mut journal = open_windows_all_data_stage_journal(&journal_path, false, false).unwrap();
+        let parsed = read_windows_all_data_stage_journal(&mut journal).unwrap();
+        assert_eq!(
+            parsed.journal.state,
+            AllDataStageJournalState::DeleteAuthorized
+        );
+        journal.set_len(parsed.prepared_frame_len).unwrap();
+        journal
+            .seek(SeekFrom::Start(parsed.prepared_frame_len))
+            .unwrap();
+        journal
+            .write_all(&ALL_DATA_STAGE_DELETE_AUTHORIZED_RECORD[..7])
+            .unwrap();
+        journal.sync_all().unwrap();
+        drop(journal);
+
+        let second = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let second_id = uuid::Uuid::from_u128(0x7000_0000_0000_4000_8000_0000_0000_0007);
+        let staged =
+            stage_all_data_root_for_finalization_with_id(&root, &second, second_id).unwrap();
+        assert!(!interrupted_path.exists());
+        drop(second);
+        assert!(finalize_all_data_root(&staged).is_empty());
+        assert!(!journal_path.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restart_recovers_case_only_renamed_candidate_and_journal() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let first = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let first_id = uuid::Uuid::from_u128(0x8000_0000_0000_4000_8000_0000_0000_0008);
+        let interrupted =
+            stage_all_data_root_for_finalization_with_id(&root, &first, first_id).unwrap();
+        let interrupted_path = interrupted.path().to_path_buf();
+        let journal_path = temporary.path().join(ALL_DATA_STAGE_JOURNAL_FILE);
+        drop(interrupted);
+        drop(first);
+
+        // NTFS normally resolves these names case-insensitively. Use a neutral
+        // intermediate name so the directory entries actually retain a case-
+        // variant spelling for the bounded recovery inventory.
+        let candidate_intermediate = temporary.path().join("case-candidate-intermediate");
+        fs::rename(&interrupted_path, &candidate_intermediate).unwrap();
+        let case_candidate = temporary.path().join(
+            interrupted_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_uppercase(),
+        );
+        fs::rename(&candidate_intermediate, &case_candidate).unwrap();
+        let journal_intermediate = temporary.path().join("case-journal-intermediate");
+        fs::rename(&journal_path, &journal_intermediate).unwrap();
+        let case_journal = temporary
+            .path()
+            .join(ALL_DATA_STAGE_JOURNAL_FILE.to_uppercase());
+        fs::rename(&journal_intermediate, &case_journal).unwrap();
+
+        let second = DataDirectoryExclusiveLease::acquire(&root).unwrap();
+        let second_id = uuid::Uuid::from_u128(0x9000_0000_0000_4000_8000_0000_0000_0009);
+        let staged =
+            stage_all_data_root_for_finalization_with_id(&root, &second, second_id).unwrap();
+        assert!(!case_candidate.exists());
+        drop(second);
+        assert!(finalize_all_data_root(&staged).is_empty());
+        assert!(!case_journal.exists());
     }
 }

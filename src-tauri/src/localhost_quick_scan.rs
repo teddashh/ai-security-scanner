@@ -1024,7 +1024,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier, Mutex, mpsc};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use std::{fs, io};
 
     fn storage() -> (tempfile::TempDir, Storage) {
@@ -1123,6 +1123,30 @@ mod tests {
             )
             .expect("managed job starts");
         (manager, key, terminal_rx)
+    }
+
+    fn wait_for_job_status(manager: &JobManager, key: &JobKey, expected: JobStatus) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let snapshot = manager
+                .snapshot(key)
+                .expect("job remains observable at the synchronization point");
+            if snapshot.status == expected {
+                return;
+            }
+            assert!(
+                !matches!(
+                    snapshot.status,
+                    JobStatus::Completed | JobStatus::Cancelled | JobStatus::Failed
+                ),
+                "job became terminal before reaching {expected:?}: {snapshot:?}"
+            );
+            assert!(
+                Instant::now() < deadline,
+                "job did not reach {expected:?} before the test deadline: {snapshot:?}"
+            );
+            thread::yield_now();
+        }
     }
 
     fn run_managed_test_job(
@@ -1321,6 +1345,7 @@ mod tests {
                 ExportOptions {
                     redaction: RedactionProfile::None,
                     include_raw_artifacts: false,
+                    locale: crate::export::ReportLocale::En,
                 },
             )
             .expect("export reopened beginner report");
@@ -1437,8 +1462,11 @@ mod tests {
         let cancel_key = key.clone();
         let cancel_storage = Arc::clone(&storage);
         let cancel_prepared = prepared.clone();
+        let cancel_started = Arc::new(Barrier::new(2));
+        let thread_started = Arc::clone(&cancel_started);
         let (cancel_tx, cancel_rx) = mpsc::channel();
         let cancel_thread = thread::spawn(move || {
+            thread_started.wait();
             cancel_tx
                 .send(
                     cancel_manager.cancel_with_durable_transition(&cancel_key, || {
@@ -1447,8 +1475,10 @@ mod tests {
                 )
                 .expect("cancel receiver");
         });
+        cancel_started.wait();
+        wait_for_job_status(&manager, &key, JobStatus::CancelRequested);
         let outcome = cancel_rx
-            .recv_timeout(Duration::from_millis(250))
+            .recv_timeout(Duration::from_secs(2))
             .expect("cancel must not wait for connector")
             .expect("manager cancellation")
             .expect("durable cancellation");
@@ -1515,8 +1545,11 @@ mod tests {
         let writes = Arc::clone(&durable_writes);
         let cancel_manager = manager.clone();
         let cancel_key = key.clone();
+        let cancel_started = Arc::new(Barrier::new(2));
+        let thread_started = Arc::clone(&cancel_started);
         let (cancel_tx, cancel_rx) = mpsc::channel();
         let cancel_thread = thread::spawn(move || {
+            thread_started.wait();
             cancel_tx
                 .send(
                     cancel_manager.cancel_with_durable_transition(&cancel_key, move || {
@@ -1526,7 +1559,12 @@ mod tests {
                 )
                 .expect("cancel receiver");
         });
-        assert!(cancel_rx.recv_timeout(Duration::from_millis(100)).is_err());
+        cancel_started.wait();
+        wait_for_job_status(&manager, &key, JobStatus::CancelRequested);
+        assert!(matches!(
+            cancel_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         terminal_release.wait();
 
         let outcome = cancel_rx

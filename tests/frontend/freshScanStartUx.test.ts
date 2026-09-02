@@ -62,6 +62,11 @@ test("a prepared case can start a new scan while terminal history remains visibl
   assert.equal(hasActiveScanWork(terminalHistory), false);
   assert.equal(canStartPreparedScan({ ready: true }, false, terminalHistory), true);
   assert.equal(
+    canStartPreparedScan({ ready: false, blockerCode: "no_compatible_authorized_targets" }, false, terminalHistory),
+    false,
+    "an unsupported target cannot expose a Start action that the backend rejects without a run",
+  );
+  assert.equal(
     canStartPreparedScan({ ready: false, blockerCode: "runtime_unavailable" }, false, terminalHistory),
     true,
     "a disposable runtime failure must become a task outcome after Start",
@@ -92,7 +97,10 @@ test("scan history renders the prepared Start action instead of trapping the use
   const historyStart = progress.indexOf("const runMeta");
   const historyPage = progress.slice(historyStart);
 
-  assert.match(progress, /const canStart = canStartPreparedScan\(readiness, Boolean\(readinessCheckFailed\), runs\)/u);
+  assert.match(
+    progress,
+    /const canStart = !terminalExactLocalhostQuickScan\s*&& canStartPreparedScan\(readiness, Boolean\(readinessCheckFailed\), runs\)/u,
+  );
   assert.match(
     historyPage,
     /\{canStart && !hasReleaseIncompatibleWork && \([\s\S]*?onClick=\{requestStart\}[\s\S]*?copy\.start/u,
@@ -112,7 +120,7 @@ test("fresh-start feedback is visible, bilingual, and does not invent a scan rec
   ]) assert.ok(progress.includes(phrase), phrase);
 
   const historyStart = progress.indexOf("{starting && (", progress.indexOf("const runMeta"));
-  const historyEnd = progress.indexOf("{readinessCheckFailed && (", historyStart);
+  const historyEnd = progress.indexOf("{!terminalExactLocalhostQuickScan && readinessCheckFailed && (", historyStart);
   const historyStartingNotice = progress.slice(historyStart, historyEnd);
   assert.ok(historyStart >= 0 && historyEnd > historyStart);
   assert.match(historyStartingNotice, /<InlineNotice tone="info" title=\{text\(copy\.startingNewTitle\)\}>/u);
@@ -151,7 +159,7 @@ test("release-incompatible saved checks offer a static safe fresh-scan path", as
     "release-incompatible history must suppress the generic header Start action",
   );
   const noticeStart = progress.indexOf("{hasReleaseIncompatibleWork && (");
-  const noticeEnd = progress.indexOf("{readinessCheckFailed && (", noticeStart);
+  const noticeEnd = progress.indexOf("{!terminalExactLocalhostQuickScan && readinessCheckFailed && (", noticeStart);
   const notice = progress.slice(noticeStart, noticeEnd);
   assert.ok(noticeStart >= 0 && noticeEnd > noticeStart);
   assert.match(notice, /<InlineNotice tone="warning" title=\{text\(copy\.releaseIncompatibleTitle\)\}>/u);

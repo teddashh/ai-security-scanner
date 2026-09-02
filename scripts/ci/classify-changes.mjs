@@ -34,6 +34,7 @@ const DESKTOP_PATHS = [
 
 const ENGINE_PATHS = [
   /^engines\//,
+  /^tests\/engines\//,
   /^scripts\/(?:validate-engine-|prowler-catalog-contract\.mjs$|prepare-offline-engine-data\.mjs$|lock-upstreams\.mjs$|engine-image-evidence\.mjs$|generate-oci-layout-fixture\.mjs$)/,
   /^\.github\/actions\/engine-image-evidence(?:\/|$)/,
   /^\.github\/workflows\/(?:engine-image|engine-images|managed-egress-gateway-image)[^/]*\.ya?ml$/,

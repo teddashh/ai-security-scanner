@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  hasUnconfirmedManagedRuntimeCompletion,
   hasManagedRuntimeSetupRequestStarted,
   isManagedRuntimePackageAdmissionFailure,
   resolveRuntimeSetupPresentation,
@@ -230,7 +231,7 @@ test("a pre-existing terminal result does not override a newly clicked retry", (
   assert.match(appSource, /requestStarted && isManagedRuntimeSetupTerminal\(result\.data\)/u);
   assert.match(appSource, /runtimeSetupPolling = runtimeSetupCommandPolling/u);
   assert.match(shellSource, /runtimeSetupStarting = runtimeBusy/u);
-  assert.match(shellSource, /displayedRuntimeSetupPhase = runtimeSetupStarting \? "install"/u);
+  assert.match(shellSource, /displayedRuntimeSetupPhase = runtimeSetupStarting\s*\? "install"/u);
 });
 
 test("new backend operation identity terminalizes a lost Retry invocation", () => {
@@ -270,6 +271,17 @@ test("idle unavailable runtime always offers an explicit retry fallback", () => 
   ]) assert.ok(source.includes(phrase), phrase);
   assert.match(source, /setupNonRetryable \|\| \(!setupFailed && !setupCancelled && !setupIdleUnavailable\) \? null/u);
   assert.match(shellSource, /\) : !runtimeSetupWorking && !runtimeSetupNonRetryable \? \(/u);
+});
+
+test("completed setup copy stays hidden until authoritative runtime truth is ready", () => {
+  assert.equal(hasUnconfirmedManagedRuntimeCompletion(false, "completed"), true);
+  assert.equal(hasUnconfirmedManagedRuntimeCompletion(undefined, "completed"), true);
+  assert.equal(hasUnconfirmedManagedRuntimeCompletion(true, "completed"), false);
+  assert.equal(hasUnconfirmedManagedRuntimeCompletion(false, "start"), false);
+
+  assert.match(shellSource, /runtimeSetupCompletionUnconfirmed = hasUnconfirmedManagedRuntimeCompletion\([\s\S]*runtime\?\.available,[\s\S]*runtimeSetup\?\.phase/u);
+  assert.match(shellSource, /runtimeSetupCompletionUnconfirmed[\s\S]*\? undefined[\s\S]*: runtimeSetup\?\.phase/u);
+  assert.match(shellSource, /runtimeSetup\?\.phase === "failed"[\s\S]*\|\| runtimeSetupCompletionUnconfirmed[\s\S]*\? "runtime\.setup\.retry"/u);
 });
 
 test("backend stale state is visible without the UI inventing a terminal failure", () => {

@@ -10,6 +10,8 @@ import type { ExportCaseInput } from "../../src/types.ts";
 
 const input = (format: ExportCaseInput["format"]): ExportCaseInput => ({
   caseId: "case-1",
+  runId: "run-history",
+  locale: "zh-Hant",
   format,
   includeRawEvidence: false,
   redactSensitiveValues: true,

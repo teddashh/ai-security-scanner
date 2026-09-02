@@ -32,6 +32,11 @@ export const isExactBuiltInLocalhostQuickScanRun = (
 ): boolean => run.engineRuns.length === 1
   && isExactBuiltInLocalhostQuickScanEngine(run.engineRuns[0]!);
 
+export const isTerminalExactBuiltInLocalhostQuickScanRun = (
+  run: Pick<ScanRun, "status" | "engineRuns">,
+): boolean => !["queued", "running", "paused"].includes(run.status)
+  && isExactBuiltInLocalhostQuickScanRun(run);
+
 /** A cancel request is not a terminal cancellation result. */
 export const isLocalhostQuickScanCancelRequested = (
   run: Pick<ScanRun, "status" | "engineRuns">,

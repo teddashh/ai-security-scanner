@@ -22,6 +22,12 @@ export interface ManagedRuntimeSetupRequestBaseline {
   operationId?: string;
 }
 
+/** A setup completion is not user-visible readiness until runtime truth agrees. */
+export const hasUnconfirmedManagedRuntimeCompletion = (
+  runtimeAvailable: boolean | undefined,
+  setupPhase: ManagedRuntimeSetupStatus["phase"] | undefined,
+): boolean => runtimeAvailable !== true && setupPhase === "completed";
+
 /** Only immutable packaged-runtime admission failures are terminal without Retry. */
 export const isManagedRuntimePackageAdmissionFailure = (
   status: Pick<ManagedRuntimeSetupStatus, "active" | "phase">

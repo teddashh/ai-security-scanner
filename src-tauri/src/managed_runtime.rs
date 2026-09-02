@@ -31,6 +31,7 @@ use zeroize::Zeroizing;
 const LEGACY_MANIFEST_SCHEMA_VERSION: &str = "2";
 const MANIFEST_SCHEMA_VERSION: &str = "3";
 const MANAGEMENT_CONTRACT_REVISION: &str = "2026-08-29.1";
+pub const PRODUCT_DATA_DIRECTORY_NAME: &str = "dev.teddashh.ai-security-scanner";
 const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
 const MAX_BUNDLE_FILES: usize = 128;
 const MAX_INSTALLED_VERSIONS: usize = 32;
@@ -42,6 +43,14 @@ const MAX_COMMAND_DIAGNOSTIC_CHARS: usize = 4096;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const MACHINE_INIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MACHINE_START_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const SERVER_READINESS_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const SERVER_READINESS_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+// Status is a foreground/read-only UX boundary, not a lifecycle operation. A
+// wedged provider inventory must therefore never inherit the ordinary 30-second
+// command timeout. Keep all provider commands issued by one status
+// reconciliation inside one shared three-second budget; the direct runner may
+// then spend at most two additional seconds draining terminated child pipes.
+const STATUS_RECONCILIATION_COMMAND_BUDGET: Duration = Duration::from_secs(3);
 const MACHINE_STOP_TIMEOUT: Duration = Duration::from_secs(90);
 #[cfg(any(windows, test))]
 const WINDOWS_WSL_PREREQUISITE_REPAIR_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -326,6 +335,13 @@ enum MachineInitializationAttemptFailure {
     OwnershipJournal(AppError),
 }
 
+#[derive(Debug)]
+enum MachineStartAttemptFailure {
+    Lifecycle(AppError),
+    MachineStart(AppError),
+    ServerReadiness(AppError),
+}
+
 impl std::fmt::Display for MachineInitializationAttemptFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -355,6 +371,62 @@ struct WindowsWslRegistration {
     registration_id: String,
     distribution_name: String,
     base_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct WindowsWslRegistrationInventory {
+    registrations: Vec<WindowsWslRegistration>,
+    observed_distribution_names: Vec<String>,
+    complete: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WindowsWslGenerationSelectionInput<'a> {
+    machines: &'a [MachineListEntry],
+    distributions: &'a [String],
+    registrations: &'a [WindowsWslRegistration],
+    observed_registration_names: &'a [String],
+    registration_inventory_complete: bool,
+    provider_inventory_complete: bool,
+}
+
+impl WindowsWslRegistrationInventory {
+    fn complete(registrations: Vec<WindowsWslRegistration>) -> Self {
+        let observed_distribution_names = registrations
+            .iter()
+            .map(|registration| registration.distribution_name.clone())
+            .collect();
+        Self {
+            registrations,
+            observed_distribution_names,
+            complete: true,
+        }
+    }
+
+    fn merge_conservatively(mut self, newer: Self) -> Self {
+        for name in newer.observed_distribution_names {
+            if !self
+                .observed_distribution_names
+                .iter()
+                .any(|observed| observed.eq_ignore_ascii_case(&name))
+            {
+                self.observed_distribution_names.push(name);
+            }
+        }
+        for registration in newer.registrations {
+            if !self.registrations.iter().any(|observed| {
+                observed.registration_id == registration.registration_id
+                    && observed
+                        .distribution_name
+                        .eq_ignore_ascii_case(&registration.distribution_name)
+                    && observed.base_path == registration.base_path
+            }) {
+                self.registrations.push(registration);
+            }
+        }
+        self.complete = self.complete || newer.complete;
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1330,6 +1402,12 @@ struct ManagedCommandOutput {
     stderr: Vec<u8>,
 }
 
+#[derive(Debug)]
+enum StatusMachineInventoryFailure {
+    Reconciliation(AppError),
+    Invalid(AppError),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ManagedCommandOperation {
     MachineInitialization,
@@ -1368,6 +1446,11 @@ trait ManagedCommandRunner: Send + Sync {
 
 trait WindowsWslRegistrationReader: Send + Sync {
     fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>>;
+
+    fn inventory(&self) -> AppResult<WindowsWslRegistrationInventory> {
+        self.registrations()
+            .map(WindowsWslRegistrationInventory::complete)
+    }
 }
 
 trait WindowsWslPrerequisiteRepairer: Send + Sync {
@@ -1382,7 +1465,18 @@ struct DirectWindowsWslRegistrationReader;
 
 impl WindowsWslRegistrationReader for DirectWindowsWslRegistrationReader {
     fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>> {
-        windows_wsl_registrations()
+        let inventory = windows_wsl_registration_inventory()?;
+        if !inventory.complete {
+            return Err(AppError::NotAvailable(
+                "Windows WSL registration inventory was incomplete; no existing registration may be adopted or changed"
+                    .into(),
+            ));
+        }
+        Ok(inventory.registrations)
+    }
+
+    fn inventory(&self) -> AppResult<WindowsWslRegistrationInventory> {
+        windows_wsl_registration_inventory()
     }
 }
 
@@ -1607,6 +1701,11 @@ fn managed_command_deadline_error() -> io::Error {
         io::ErrorKind::TimedOut,
         "managed runtime command exceeded its deadline",
     )
+}
+
+fn remaining_command_budget(deadline: Instant) -> Option<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    (!remaining.is_zero()).then_some(remaining)
 }
 
 fn managed_command_error_with_cleanup(primary: io::Error, cleanup: io::Result<()>) -> io::Error {
@@ -1986,12 +2085,12 @@ impl ManagedCommandProcessTree {
             }
             let mut primary_thread = None;
             loop {
-                if entry.th32OwnerProcessID == child.id() {
-                    if primary_thread.replace(entry.th32ThreadID).is_some() {
-                        return Err(io::Error::other(
-                            "managed runtime suspended child had more than one initial thread",
-                        ));
-                    }
+                if entry.th32OwnerProcessID == child.id()
+                    && primary_thread.replace(entry.th32ThreadID).is_some()
+                {
+                    return Err(io::Error::other(
+                        "managed runtime suspended child had more than one initial thread",
+                    ));
                 }
                 if unsafe { Thread32Next(snapshot.as_raw_handle().cast(), &mut entry) } == 0 {
                     let error = io::Error::last_os_error();
@@ -2389,13 +2488,16 @@ impl ManagedRuntimeManager {
         manifest_path: &Path,
     ) -> AppResult<Self> {
         let state_root = app_local_data_directory.join("managed-runtime");
-        ensure_private_directory(app_local_data_directory)?;
+        let product_data_guard = ensure_private_product_data_directory(app_local_data_directory)?;
         #[cfg(windows)]
         let (state_root, state_root_guard) =
             open_or_create_windows_managed_private_directory_guard(&state_root, true)
                 .map_err(windows_managed_namespace_error)?;
         #[cfg(not(windows))]
         ensure_managed_private_directory(&state_root)?;
+        // The Windows state-root guard now pins the same complete ancestor
+        // chain. Non-Windows platforms need no long-lived creation guard.
+        drop(product_data_guard);
         let resource_root = canonical_real_directory(resource_root, "managed runtime resource")?;
         verify_regular_file(manifest_path, "managed runtime release manifest")?;
         let canonical_manifest = manifest_path.canonicalize()?;
@@ -2635,9 +2737,11 @@ impl ManagedRuntimeManager {
         controller: &ManagedRuntimeSetupController,
     ) -> AppResult<ManagedRuntimeStatus> {
         let _lock = self.lock()?;
-        let command = self.start_locked(Some(controller))?;
+        let (_command, version) = self.start_locked_with_startup_timeout_and_version(
+            Some(controller),
+            MACHINE_START_TIMEOUT,
+        )?;
         let target = self.loaded.target()?;
-        let version = self.server_version(&command)?;
         Ok(self.status_value(
             ManagedRuntimePhase::Running,
             true,
@@ -2767,14 +2871,23 @@ impl ManagedRuntimeManager {
         &self,
         setup: Option<&ManagedRuntimeSetupController>,
     ) -> AppResult<ManagedRuntimeCommand> {
-        self.start_locked_with_readiness_timeout(setup, MACHINE_START_TIMEOUT)
+        self.start_locked_with_startup_timeout(setup, MACHINE_START_TIMEOUT)
     }
 
-    fn start_locked_with_readiness_timeout(
+    fn start_locked_with_startup_timeout(
         &self,
         setup: Option<&ManagedRuntimeSetupController>,
-        readiness_timeout: Duration,
+        startup_timeout: Duration,
     ) -> AppResult<ManagedRuntimeCommand> {
+        self.start_locked_with_startup_timeout_and_version(setup, startup_timeout)
+            .map(|(command, _version)| command)
+    }
+
+    fn start_locked_with_startup_timeout_and_version(
+        &self,
+        setup: Option<&ManagedRuntimeSetupController>,
+        startup_timeout: Duration,
+    ) -> AppResult<(ManagedRuntimeCommand, String)> {
         if let Some(setup) = setup {
             setup.set_phase(
                 ManagedRuntimeSetupPhase::Install,
@@ -2851,30 +2964,35 @@ impl ManagedRuntimeManager {
             if target.operating_system == ManagedOperatingSystem::Windows {
                 self.prove_machine_named(machine, target, &machine_name)?;
                 self.verify_current_windows_wsl_machine_registration_binding(&machine_name)?;
-                if let Err(identity_error) = self.require_existing_machine_ssh_identity_locked() {
-                    // The selected workspace may still trust the original key,
-                    // so never rotate or remove its inconsistent pair in
-                    // place. Preserve the entire generation and continue once
-                    // in a fresh isolated provider home instead.
-                    return self.rebuild_unhealthy_windows_machine_once_locked(
-                        &command,
-                        target,
-                        &machine_name,
-                        identity_error,
-                        setup,
-                        readiness_timeout,
-                    );
+                match self.require_existing_machine_ssh_identity_locked() {
+                    Ok(()) => {}
+                    Err(identity_error @ AppError::NotAuthorized(_)) => {
+                        // A positively invalid immutable identity must never be
+                        // rotated in place because the selected workspace may
+                        // still trust its original key. Preserve the complete
+                        // generation and continue once in a fresh isolated
+                        // provider home instead.
+                        return self.rebuild_unhealthy_windows_machine_once_locked(
+                            &command,
+                            target,
+                            &machine_name,
+                            identity_error,
+                            setup,
+                            startup_timeout,
+                        );
+                    }
+                    Err(error) => return Err(error),
                 }
                 self.ensure_windows_wsl_ownership_proof_locked(
                     target,
                     &machine_name,
                     WindowsWslOwnershipBasis::ProvenMachine,
                 )?;
-                self.remove_windows_wsl_ownership_basis_proof_locked(
-                    target,
-                    &machine_name,
-                    WindowsWslOwnershipBasis::InitIntent,
-                )?;
+                // ProvenMachine is the stronger, durable proof. A stale or
+                // unreadable one-shot InitIntent must not make an otherwise
+                // exact existing generation unavailable; preserve it here and
+                // leave destructive cleanup to the fully verified uninstall
+                // path.
             } else {
                 self.require_existing_machine_ssh_identity_locked()?;
                 self.prove_machine_named(machine, target, &machine_name)?;
@@ -2919,19 +3037,16 @@ impl ManagedRuntimeManager {
             &machine_name,
             machine.running,
             setup,
-            readiness_timeout,
+            startup_timeout,
         ) {
-            Ok(()) => Ok(command),
-            Err(error) if target.operating_system == ManagedOperatingSystem::Windows => self
-                .rebuild_unhealthy_windows_machine_once_locked(
-                    &command,
-                    target,
-                    &machine_name,
-                    error,
-                    setup,
-                    readiness_timeout,
-                ),
-            Err(error) => Err(error),
+            Ok(version) => Ok((command, version)),
+            Err(MachineStartAttemptFailure::Lifecycle(error)) => Err(error),
+            Err(MachineStartAttemptFailure::MachineStart(error)) => {
+                Err(retryable_machine_start_error(error))
+            }
+            Err(MachineStartAttemptFailure::ServerReadiness(error)) => {
+                Err(retryable_server_readiness_error(error))
+            }
         }
     }
 
@@ -2941,38 +3056,134 @@ impl ManagedRuntimeManager {
         machine_name: &str,
         machine_running: bool,
         setup: Option<&ManagedRuntimeSetupController>,
-        readiness_timeout: Duration,
-    ) -> AppResult<()> {
+        startup_timeout: Duration,
+    ) -> Result<String, MachineStartAttemptFailure> {
+        let deadline = Instant::now().checked_add(startup_timeout).ok_or_else(|| {
+            MachineStartAttemptFailure::Lifecycle(AppError::Runtime(
+                "managed runtime startup deadline overflowed".into(),
+            ))
+        })?;
         if let Some(setup) = setup {
-            setup.set_phase(
-                ManagedRuntimeSetupPhase::Start,
-                "starting the private rootless managed runtime machine",
-            )?;
+            setup
+                .set_phase(
+                    ManagedRuntimeSetupPhase::Start,
+                    "starting the private rootless managed runtime machine",
+                )
+                .map_err(MachineStartAttemptFailure::Lifecycle)?;
         }
         if !machine_running {
-            let output = self.run_command(
-                ManagedCommandOperation::MachineStart,
-                command,
-                ["machine", "start", "--quiet", machine_name],
-                MACHINE_START_TIMEOUT,
-            )?;
-            require_success("managed runtime machine start", &output)?;
+            let target = self
+                .loaded
+                .target()
+                .map_err(MachineStartAttemptFailure::MachineStart)?;
+            let can_reconcile_in_place = target.operating_system == ManagedOperatingSystem::Windows
+                && target.provider == ManagedMachineProvider::Wsl;
+            let mut first_start_error = None;
+            for start_attempt in 1..=2 {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(MachineStartAttemptFailure::MachineStart(
+                        AppError::Runtime(
+                            "managed runtime machine start did not begin before the shared startup deadline"
+                                .into(),
+                        ),
+                    ));
+                }
+                let start_result = self
+                    .run_command(
+                        ManagedCommandOperation::MachineStart,
+                        command,
+                        ["machine", "start", "--quiet", machine_name],
+                        remaining.min(MACHINE_START_TIMEOUT),
+                    )
+                    .and_then(|output| require_success("managed runtime machine start", &output));
+                let Err(start_error) = start_result else {
+                    break;
+                };
+                let first_detail = first_start_error
+                    .get_or_insert_with(|| start_error.to_string())
+                    .clone();
+                if !can_reconcile_in_place {
+                    return Err(MachineStartAttemptFailure::MachineStart(start_error));
+                }
+                if let Some(setup) = setup {
+                    setup
+                        .check_cancelled()
+                        .map_err(MachineStartAttemptFailure::Lifecycle)?;
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(MachineStartAttemptFailure::MachineStart(AppError::Runtime(
+                        format!(
+                            "managed runtime machine start failed and exhausted the shared startup deadline before authoritative reconciliation: {first_detail}"
+                        ),
+                    )));
+                }
+                let machines = self
+                    .list_machines_with_timeout(command, remaining.min(COMMAND_TIMEOUT))
+                    .map_err(|reconciliation_error| {
+                        MachineStartAttemptFailure::MachineStart(AppError::Runtime(format!(
+                            "managed runtime machine start failed and its exact selected machine could not be reconciled: {first_detail}; reconciliation: {reconciliation_error}"
+                        )))
+                    })?;
+                let machine = machines
+                    .iter()
+                    .find(|machine| machine.name.eq_ignore_ascii_case(machine_name))
+                    .ok_or_else(|| {
+                        MachineStartAttemptFailure::MachineStart(AppError::Runtime(format!(
+                            "managed runtime machine start failed and authoritative inventory did not report the exact selected machine: {first_detail}"
+                        )))
+                    })?;
+                self.prove_machine_named(machine, target, machine_name)
+                    .and_then(|_| {
+                        self.prove_current_windows_machine_ownership_locked(target, machine_name)
+                    })
+                    .map_err(|reconciliation_error| {
+                        MachineStartAttemptFailure::MachineStart(AppError::Runtime(format!(
+                            "managed runtime machine start failed and the exact selected machine could not be re-proven: {first_detail}; reconciliation: {reconciliation_error}"
+                        )))
+                    })?;
+                if machine.running {
+                    break;
+                }
+                if start_attempt == 2 {
+                    return Err(MachineStartAttemptFailure::MachineStart(AppError::Runtime(
+                        format!(
+                            "managed runtime machine start failed twice while the exact selected machine remained stopped: {first_detail}; retry: {start_error}"
+                        ),
+                    )));
+                }
+            }
         }
         if let Some(setup) = setup {
-            setup.set_phase(
-                ManagedRuntimeSetupPhase::Verify,
-                "verifying the managed runtime server is ready",
-            )?;
+            setup
+                .set_phase(
+                    ManagedRuntimeSetupPhase::Verify,
+                    "verifying the managed runtime server is ready",
+                )
+                .map_err(MachineStartAttemptFailure::Lifecycle)?;
         }
-        self.wait_for_server(command, readiness_timeout, setup)
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(MachineStartAttemptFailure::ServerReadiness(
+                AppError::Runtime(
+                    "managed runtime machine start consumed the shared startup budget before server readiness could be verified"
+                        .into(),
+                ),
+            ));
+        }
+        self.wait_for_server(command, remaining, setup)
+            .map_err(MachineStartAttemptFailure::ServerReadiness)
     }
 
-    /// A selected Windows machine can still become unusable because its SSH
-    /// identity, start, or server preflight failed. Preserve that complete
-    /// generation exactly as it stands, append one fresh isolated generation,
-    /// and try the replacement once. This path never unregisters, exports,
-    /// imports, or deletes WSL state, and it does not recurse if the replacement
-    /// is also unhealthy.
+    /// A selected Windows machine can still become unusable when its immutable
+    /// SSH identity is positively proven missing or inconsistent. Preserve that
+    /// complete generation exactly as it stands, append one fresh isolated
+    /// generation, and try the replacement once. Machine-start and
+    /// server-readiness failures never enter this path: neither proves the
+    /// machine is corrupt, so both preserve and retry the exact owned
+    /// generation. This path never unregisters, exports, imports, or deletes WSL
+    /// state, and it does not recurse if the replacement is also unhealthy.
     fn rebuild_unhealthy_windows_machine_once_locked(
         &self,
         failed_command: &ManagedRuntimeCommand,
@@ -2980,8 +3191,8 @@ impl ManagedRuntimeManager {
         failed_machine_name: &str,
         first_error: AppError,
         setup: Option<&ManagedRuntimeSetupController>,
-        readiness_timeout: Duration,
-    ) -> AppResult<ManagedRuntimeCommand> {
+        startup_timeout: Duration,
+    ) -> AppResult<(ManagedRuntimeCommand, String)> {
         if target.operating_system != ManagedOperatingSystem::Windows {
             return Err(first_error);
         }
@@ -2993,8 +3204,18 @@ impl ManagedRuntimeManager {
             )?;
         }
         let first_detail = first_error.to_string();
-        let replacement = (|| -> AppResult<ManagedRuntimeCommand> {
-            let distributions = self.windows_wsl_distribution_inventory(failed_command)?;
+        let replacement = (|| -> AppResult<(ManagedRuntimeCommand, String)> {
+            let mut distributions = self.windows_wsl_distribution_inventory(failed_command)?;
+            let registration_inventory =
+                self.windows_wsl_registration_inventory_with_one_retry()?;
+            for name in registration_inventory.observed_distribution_names {
+                if !distributions
+                    .iter()
+                    .any(|observed| observed.eq_ignore_ascii_case(&name))
+                {
+                    distributions.push(name);
+                }
+            }
             let machines = self.list_machines(failed_command)?;
             let fresh_machine_name = self
                 .select_fresh_windows_machine_generation_after_runtime_failure_locked(
@@ -3039,19 +3260,33 @@ impl ManagedRuntimeManager {
                 &fresh_machine_name,
                 WindowsWslOwnershipBasis::ProvenMachine,
             )?;
-            self.start_machine_and_wait_locked(
+            let version = match self.start_machine_and_wait_locked(
                 &fresh_command,
                 &fresh_machine_name,
                 fresh_machine.running,
                 setup,
-                readiness_timeout,
-            )?;
-            Ok(fresh_command)
+                startup_timeout,
+            ) {
+                Ok(version) => version,
+                Err(MachineStartAttemptFailure::Lifecycle(error)) => return Err(error),
+                Err(MachineStartAttemptFailure::MachineStart(error)) => {
+                    return Err(retryable_machine_start_error(error));
+                }
+                Err(MachineStartAttemptFailure::ServerReadiness(error)) => {
+                    return Err(retryable_server_readiness_error(error));
+                }
+            };
+            Ok((fresh_command, version))
         })();
         replacement.map_err(|replacement_error| {
-            AppError::Runtime(format!(
+            let detail = format!(
                 "the selected Windows scan workspace became unavailable and was preserved ({first_detail}); its one automatic isolated replacement also did not finish: {replacement_error}"
-            ))
+            );
+            if matches!(replacement_error, AppError::NotAvailable(_)) {
+                AppError::NotAvailable(detail)
+            } else {
+                AppError::Runtime(detail)
+            }
         })
     }
 
@@ -3428,7 +3663,18 @@ impl ManagedRuntimeManager {
     }
 
     pub fn status(&self) -> AppResult<ManagedRuntimeStatus> {
-        let _lock = self.lock()?;
+        ensure_managed_private_directory(&self.state_root)?;
+        let Some(_lock) = ManagedRuntimeLock::try_acquire(&self.state_root.join("lifecycle.lock"))?
+        else {
+            let target = self.loaded.target().ok();
+            return Ok(self.status_value(
+                ManagedRuntimePhase::Starting,
+                false,
+                target,
+                "a managed runtime lifecycle operation is active; status will reconcile after it completes"
+                    .into(),
+            ));
+        };
         self.status_locked()
     }
 
@@ -3454,13 +3700,27 @@ impl ManagedRuntimeManager {
         {
             return Ok(None);
         }
-        if !machine.running || self.server_version(&command).is_err() {
+        if !machine.running
+            || self
+                .server_version_with_timeout(&command, SERVER_READINESS_PROBE_TIMEOUT)
+                .is_err()
+        {
             return Ok(None);
         }
         Ok(Some(command))
     }
 
     fn status_locked(&self) -> AppResult<ManagedRuntimeStatus> {
+        self.status_locked_with_command_budget(STATUS_RECONCILIATION_COMMAND_BUDGET)
+    }
+
+    fn status_locked_with_command_budget(
+        &self,
+        command_budget: Duration,
+    ) -> AppResult<ManagedRuntimeStatus> {
+        let command_deadline = Instant::now().checked_add(command_budget).ok_or_else(|| {
+            AppError::Runtime("managed runtime status deadline overflowed".into())
+        })?;
         let target = match self.loaded.target() {
             Ok(target) => target,
             Err(error) => {
@@ -3499,7 +3759,44 @@ impl ManagedRuntimeManager {
             ));
         }
         let command = self.runtime_command(target)?;
-        let machines = self.list_machines(&command)?;
+        let Some(inventory_timeout) = remaining_command_budget(command_deadline) else {
+            return Ok(self.status_value(
+                // The payload is installed, but the machine truth is unknown.
+                // `Installed` is an actionable first-launch state in the UI;
+                // reporting it here would turn a read-only status timeout into
+                // an automatic lifecycle mutation. `Starting` is the existing
+                // transient/reconciling state and is deliberately not eligible
+                // for automatic setup.
+                ManagedRuntimePhase::Starting,
+                false,
+                Some(target),
+                "managed runtime payload is verified, but its machine state was not queried because the bounded status budget elapsed"
+                    .into(),
+            ));
+        };
+        let machines = match self.list_machines_for_status(&command, inventory_timeout) {
+            Ok(machines) => machines,
+            Err(StatusMachineInventoryFailure::Reconciliation(error)) => {
+                return Ok(self.status_value(
+                    ManagedRuntimePhase::Starting,
+                    false,
+                    Some(target),
+                    format!(
+                        "managed runtime payload is verified, but its machine state could not be confirmed within the bounded status budget: {error}"
+                    ),
+                ));
+            }
+            Err(StatusMachineInventoryFailure::Invalid(error)) => {
+                return Ok(self.status_value(
+                    ManagedRuntimePhase::Corrupt,
+                    false,
+                    Some(target),
+                    format!(
+                        "managed runtime payload is verified, but its machine inventory contract is invalid and needs repair: {error}"
+                    ),
+                ));
+            }
+        };
         let machine_name = self.effective_machine_name_locked(target)?;
         let Some(machine) = machines.iter().find(|machine| machine.name == machine_name) else {
             return Ok(self.status_value(
@@ -3536,7 +3833,16 @@ impl ManagedRuntimeManager {
                 "managed runtime machine is stopped".into(),
             ));
         }
-        match self.server_version(&command) {
+        let Some(probe_timeout) = remaining_command_budget(command_deadline) else {
+            return Ok(self.status_value(
+                ManagedRuntimePhase::Starting,
+                false,
+                Some(target),
+                "managed runtime machine is running, but the bounded status budget elapsed before its rootless server could be checked"
+                    .into(),
+            ));
+        };
+        match self.server_version_with_timeout(&command, probe_timeout) {
             Ok(version) => Ok(self.status_value(
                 ManagedRuntimePhase::Running,
                 true,
@@ -3547,7 +3853,9 @@ impl ManagedRuntimeManager {
                 ManagedRuntimePhase::Starting,
                 false,
                 Some(target),
-                error.to_string(),
+                format!(
+                    "managed runtime machine is running, but its rootless server is not ready; retry is safe and preserves the exact owned machine: {error}"
+                ),
             )),
         }
     }
@@ -3939,25 +4247,40 @@ impl ManagedRuntimeManager {
         let mut selected = None;
         for generation_index in 0..=MAX_WINDOWS_WSL_ISOLATED_GENERATION_ATTEMPTS {
             let path = self.windows_wsl_generation_selection_path(generation_index);
-            if !private_entry_exists(&path)? {
+            if !private_entry_exists(&path)
+                .map_err(retryable_generation_selection_inspection_error)?
+            {
                 continue;
             }
             // A malformed old routing record is observation-only state. Never
             // overwrite or delete it; a later valid append-only generation can
             // still let setup reconcile automatically.
-            let Ok(selection) = read_bounded_private_json::<WindowsWslGenerationSelection>(
+            let encoded = match read_bounded_regular_bytes(
                 &path,
                 64 * 1024,
                 "managed Windows WSL generation selection",
-            ) else {
+            ) {
+                Ok(encoded) => encoded,
+                // Structurally invalid append-only entries are preserved and
+                // remain occupied, but cannot permanently hide a later valid
+                // generation. Actual I/O/sharing failures remain retryable.
+                Err(AppError::NotAuthorized(_)) => continue,
+                Err(error) => {
+                    return Err(retryable_generation_selection_inspection_error(error));
+                }
+            };
+            let Ok(selection) = serde_json::from_slice::<WindowsWslGenerationSelection>(&encoded)
+            else {
                 continue;
             };
-            if self
-                .validate_windows_wsl_generation_selection(target, &selection)
-                .is_ok()
-                && selection.generation_index == generation_index
-            {
-                selected = Some(selection);
+            match self.validate_windows_wsl_generation_selection(target, &selection) {
+                Ok(()) if selection.generation_index == generation_index => {
+                    selected = Some(selection);
+                }
+                Ok(()) | Err(AppError::NotAuthorized(_)) => {}
+                Err(error) => {
+                    return Err(retryable_generation_selection_inspection_error(error));
+                }
             }
         }
         Ok(selected)
@@ -4050,17 +4373,7 @@ impl ManagedRuntimeManager {
                 "managed Windows runtime target did not use the WSL provider".into(),
             ));
         }
-        let mut distributions = self.windows_wsl_distribution_inventory(managed_command)?;
-        if let Ok(registrations) = self.wsl_registrations.registrations() {
-            for registration in registrations {
-                if !distributions
-                    .iter()
-                    .any(|name| name.eq_ignore_ascii_case(&registration.distribution_name))
-                {
-                    distributions.push(registration.distribution_name);
-                }
-            }
-        }
+        let distributions = self.windows_wsl_distribution_inventory(managed_command)?;
         self.select_windows_machine_generation_from_inventory_locked(
             target,
             machines,
@@ -4076,6 +4389,90 @@ impl ManagedRuntimeManager {
         distributions: &[String],
         provider_inventory_complete: bool,
     ) -> AppResult<String> {
+        if target.operating_system != ManagedOperatingSystem::Windows {
+            return Ok(machine_name(target));
+        }
+        if target.provider != ManagedMachineProvider::Wsl {
+            return Err(AppError::NotAuthorized(
+                "managed Windows runtime target did not use the WSL provider".into(),
+            ));
+        }
+        let registration_inventory = self.windows_wsl_registration_inventory_with_one_retry()?;
+        self.select_windows_machine_generation_with_registration_inventory_locked(
+            target,
+            WindowsWslGenerationSelectionInput {
+                machines,
+                distributions,
+                registrations: &registration_inventory.registrations,
+                observed_registration_names: &registration_inventory.observed_distribution_names,
+                registration_inventory_complete: registration_inventory.complete,
+                provider_inventory_complete,
+            },
+        )
+    }
+
+    /// One complete retry distinguishes a transient registry race from a
+    /// persistently partial inventory. Partial observations are still useful
+    /// collision evidence, but can never authorize adoption or mutation.
+    fn windows_wsl_registration_inventory_with_one_retry(
+        &self,
+    ) -> AppResult<WindowsWslRegistrationInventory> {
+        let first = self
+            .wsl_registrations
+            .inventory()
+            .map_err(retryable_windows_registration_inspection_error)?;
+        if first.complete {
+            return Ok(first);
+        }
+        let second = self
+            .wsl_registrations
+            .inventory()
+            .map_err(retryable_windows_registration_inspection_error)?;
+        if second.complete {
+            return Ok(second);
+        }
+        Ok(first.merge_conservatively(second))
+    }
+
+    fn select_windows_machine_generation_from_complete_inventory_locked(
+        &self,
+        target: &ManagedTarget,
+        machines: &[MachineListEntry],
+        distributions: &[String],
+        registrations: &[WindowsWslRegistration],
+        provider_inventory_complete: bool,
+    ) -> AppResult<String> {
+        let observed_distribution_names = registrations
+            .iter()
+            .map(|registration| registration.distribution_name.clone())
+            .collect::<Vec<_>>();
+        self.select_windows_machine_generation_with_registration_inventory_locked(
+            target,
+            WindowsWslGenerationSelectionInput {
+                machines,
+                distributions,
+                registrations,
+                observed_registration_names: &observed_distribution_names,
+                registration_inventory_complete: true,
+                provider_inventory_complete,
+            },
+        )
+    }
+
+    fn select_windows_machine_generation_with_registration_inventory_locked(
+        &self,
+        target: &ManagedTarget,
+        input: WindowsWslGenerationSelectionInput<'_>,
+    ) -> AppResult<String> {
+        let mut complete_distributions = input.distributions.to_vec();
+        for distribution_name in input.observed_registration_names {
+            if !complete_distributions
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(distribution_name))
+            {
+                complete_distributions.push(distribution_name.clone());
+            }
+        }
         let existing = self.read_windows_wsl_generation_selection_locked(target)?;
         let default_machine_name = machine_name(target);
         let selected = existing
@@ -4087,26 +4484,56 @@ impl ManagedRuntimeManager {
             .as_ref()
             .map(|selection| selection.generation_index)
             .unwrap_or(0);
-        let exact_product_binding = self
-            .verify_current_windows_wsl_machine_registration_binding(selected)
-            .is_ok()
-            && inspect_managed_ssh_identity(&self.machine_ssh_identity_path())?
+        let exact_registration_binding = (input.registration_inventory_complete
+            || existing.is_some())
+            && match self.verify_windows_wsl_machine_registration_binding_from_inventory(
+                selected,
+                input.registrations,
+            ) {
+                Ok(_) => true,
+                Err(AppError::NotAuthorized(_)) => false,
+                Err(error) => {
+                    return Err(retryable_windows_registration_inspection_error(error));
+                }
+            };
+        // No matching complete registration means this namespace is not ours.
+        // Do not inspect a possibly locked identity or ownership journal in an
+        // ambiguous provider home merely to decide that it must be preserved.
+        let exact_product_binding = if exact_registration_binding {
+            inspect_managed_ssh_identity(&self.machine_ssh_identity_path())
+                .map_err(retryable_machine_identity_inspection_error)?
                 == ManagedSshIdentityState::Valid
-            && self.has_exact_windows_wsl_ownership_proof_locked(
+                && self.has_exact_windows_wsl_ownership_proof_locked(
+                    target,
+                    selected,
+                    WindowsWslOwnershipBasis::ProvenMachine,
+                )?
+        } else {
+            false
+        };
+        let selected_has_init_entry = self
+            .windows_wsl_ownership_entry_exists(selected, WindowsWslOwnershipBasis::InitIntent)?;
+        let selected_has_proven_entry = self.windows_wsl_ownership_entry_exists(
+            selected,
+            WindowsWslOwnershipBasis::ProvenMachine,
+        )?;
+        let exact_initialization_intent = if exact_product_binding {
+            false
+        } else if existing.is_some() || exact_registration_binding {
+            self.has_exact_windows_wsl_ownership_proof_locked(
                 target,
                 selected,
-                WindowsWslOwnershipBasis::ProvenMachine,
-            )?;
-        let exact_initialization_intent = self.has_exact_windows_wsl_ownership_proof_locked(
-            target,
-            selected,
-            WindowsWslOwnershipBasis::InitIntent,
-        )?;
+                WindowsWslOwnershipBasis::InitIntent,
+            )?
+        } else {
+            false
+        };
         // A name match alone is never ownership. Reuse requires the exact
         // frozen machine contract, product SSH identity, and WSL registration
         // binding to this verified provider generation. Any failed proof turns
         // the row into a preserved collision and routes setup side-by-side.
-        if let Some(machine) = machines
+        if let Some(machine) = input
+            .machines
             .iter()
             .find(|machine| machine.name.eq_ignore_ascii_case(selected))
             && self.prove_machine_named(machine, target, selected).is_ok()
@@ -4120,14 +4547,27 @@ impl ManagedRuntimeManager {
             target,
             selected,
             selected_generation_index,
-            distributions,
-            machines,
+            &complete_distributions,
+            input.machines,
         )? || (private_entry_exists(&selected_provider_home)?
             && !exact_product_binding
             && !exact_initialization_intent)
+            || (selected_has_init_entry && !exact_initialization_intent)
+            || (selected_has_proven_entry && !exact_product_binding)
             || (existing.is_none()
-                && self.windows_generation_selection_exists(selected_generation_index)?);
-        if !occupied || (exact_product_binding && !provider_inventory_complete) {
+                && self.windows_generation_selection_exists(selected_generation_index)?)
+            || (!input.registration_inventory_complete
+                && existing.is_none()
+                && selected_generation_index == 0);
+        // Generation zero is a compatibility namespace for an exact runtime
+        // selected by an older build. A genuinely new preparation must start
+        // in the isolated append-only namespace, even when the deterministic
+        // compatibility name is currently unused.
+        let allocating_new_generation =
+            existing.is_none() && !exact_product_binding && !exact_initialization_intent;
+        if (!occupied || (exact_product_binding && !input.provider_inventory_complete))
+            && !allocating_new_generation
+        {
             if existing.is_none() {
                 self.write_windows_wsl_generation_selection_locked(
                     target,
@@ -4150,9 +4590,10 @@ impl ManagedRuntimeManager {
             .as_ref()
             .map(|selection| selection.preserved_collision_names.clone())
             .unwrap_or_default();
-        if !preserved_collision_names
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case(selected))
+        if occupied
+            && !preserved_collision_names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(selected))
         {
             preserved_collision_names.push(selected.to_owned());
         }
@@ -4166,11 +4607,12 @@ impl ManagedRuntimeManager {
                 target,
                 &candidate,
                 generation_index,
-                distributions,
-                machines,
+                &complete_distributions,
+                input.machines,
             )? || private_entry_exists(
                 &self.windows_provider_home_for_generation(target, generation_index),
             )? || self.windows_generation_selection_exists(generation_index)?
+                || self.windows_wsl_any_ownership_entry_exists(&candidate)?
             {
                 continue;
             }
@@ -4243,6 +4685,7 @@ impl ManagedRuntimeManager {
             )? || private_entry_exists(
                 &self.windows_provider_home_for_generation(target, generation_index),
             )? || self.windows_generation_selection_exists(generation_index)?
+                || self.windows_wsl_any_ownership_entry_exists(&candidate)?
             {
                 continue;
             }
@@ -4289,11 +4732,26 @@ impl ManagedRuntimeManager {
         &self,
         machine_name: &str,
     ) -> AppResult<PathBuf> {
+        // This is a non-destructive proof for one already selected product
+        // generation. An unrelated malformed WSL registry entry must not make
+        // that exact generation unusable: a partial inventory may prove one
+        // exact name/path binding, but it may never authorize adoption or
+        // cleanup of anything else.
+        let inventory = self.windows_wsl_registration_inventory_with_one_retry()?;
+        self.verify_windows_wsl_machine_registration_binding_from_inventory(
+            machine_name,
+            &inventory.registrations,
+        )
+    }
+
+    fn verify_windows_wsl_machine_registration_binding_from_inventory(
+        &self,
+        machine_name: &str,
+        registrations: &[WindowsWslRegistration],
+    ) -> AppResult<PathBuf> {
         let distribution_name = format!("podman-{machine_name}");
-        let matching = self
-            .wsl_registrations
-            .registrations()?
-            .into_iter()
+        let matching = registrations
+            .iter()
             .filter(|registration| {
                 registration
                     .distribution_name
@@ -4389,17 +4847,20 @@ impl ManagedRuntimeManager {
         // been committed. The installed current manifest is independently
         // re-verified before either proof is considered.
         self.verify_installation()?;
-        let has_init_intent = self.has_exact_windows_wsl_ownership_proof_locked(
-            target,
-            machine_name,
-            WindowsWslOwnershipBasis::InitIntent,
-        )?;
         let has_proven_machine = self.has_exact_windows_wsl_ownership_proof_locked(
             target,
             machine_name,
             WindowsWslOwnershipBasis::ProvenMachine,
         )?;
-        if !has_init_intent && !has_proven_machine {
+        if has_proven_machine {
+            return Ok(());
+        }
+        let has_init_intent = self.has_exact_windows_wsl_ownership_proof_locked(
+            target,
+            machine_name,
+            WindowsWslOwnershipBasis::InitIntent,
+        )?;
+        if !has_init_intent {
             return Err(AppError::NotAuthorized(
                 "Windows WSL isolated generation has no exact product ownership proof".into(),
             ));
@@ -4507,6 +4968,28 @@ impl ManagedRuntimeManager {
             .join(format!("{machine_name}.{suffix}.json"))
     }
 
+    fn windows_wsl_any_ownership_entry_exists(&self, machine_name: &str) -> AppResult<bool> {
+        for ownership_basis in [
+            WindowsWslOwnershipBasis::InitIntent,
+            WindowsWslOwnershipBasis::ProvenMachine,
+        ] {
+            if private_entry_exists(
+                &self.windows_wsl_ownership_proof_path(machine_name, ownership_basis),
+            )? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn windows_wsl_ownership_entry_exists(
+        &self,
+        machine_name: &str,
+        ownership_basis: WindowsWslOwnershipBasis,
+    ) -> AppResult<bool> {
+        private_entry_exists(&self.windows_wsl_ownership_proof_path(machine_name, ownership_basis))
+    }
+
     fn expected_windows_wsl_ownership_proof(
         &self,
         target: &ManagedTarget,
@@ -4565,15 +5048,24 @@ impl ManagedRuntimeManager {
             return Ok(false);
         }
         let path = self.windows_wsl_ownership_proof_path(machine_name, ownership_basis);
-        if !private_entry_exists(&path)? {
+        if !private_entry_exists(&path).map_err(retryable_ownership_proof_inspection_error)? {
             return Ok(false);
         }
-        let Ok(actual) = read_bounded_private_json::<WindowsWslOwnershipProof>(
+        let encoded = match read_bounded_regular_bytes(
             &path,
             64 * 1024,
             "managed Windows WSL ownership proof",
-        ) else {
-            return Ok(false);
+        ) {
+            Ok(encoded) => encoded,
+            // A directory, reparse point, hard link, or oversized file cannot
+            // prove ownership. Preserve it and route safely instead of turning
+            // unrelated malformed state into a permanent setup gate.
+            Err(AppError::NotAuthorized(_)) => return Ok(false),
+            Err(error) => return Err(retryable_ownership_proof_inspection_error(error)),
+        };
+        let actual = match serde_json::from_slice::<WindowsWslOwnershipProof>(&encoded) {
+            Ok(actual) => actual,
+            Err(_) => return Ok(false),
         };
         Ok(actual
             == self.expected_windows_wsl_ownership_proof(target, machine_name, ownership_basis))
@@ -4859,7 +5351,9 @@ impl ManagedRuntimeManager {
     /// already trusts this exact public key, so a missing or inconsistent pair
     /// must fail closed instead of silently rotating the identity.
     fn require_existing_machine_ssh_identity_locked(&self) -> AppResult<()> {
-        match inspect_managed_ssh_identity(&self.machine_ssh_identity_path())? {
+        let state = inspect_managed_ssh_identity(&self.machine_ssh_identity_path())
+            .map_err(retryable_machine_identity_inspection_error)?;
+        match state {
             ManagedSshIdentityState::Valid => Ok(()),
             ManagedSshIdentityState::Absent | ManagedSshIdentityState::Invalid => {
                 Err(AppError::NotAuthorized(
@@ -5144,20 +5638,29 @@ impl ManagedRuntimeManager {
         self.require_windows_wsl_prerequisite_locked(target, command, setup)?;
 
         let distributions = self.windows_wsl_distribution_inventory(command)?;
+        let registration_inventory = self.windows_wsl_registration_inventory_with_one_retry()?;
+        let mut collision_distributions = distributions.clone();
+        for name in &registration_inventory.observed_distribution_names {
+            if !collision_distributions
+                .iter()
+                .any(|observed| observed.eq_ignore_ascii_case(name))
+            {
+                collision_distributions.push(name.clone());
+            }
+        }
         let expected_distribution = format!("podman-{machine_name}");
-        let distribution_present = distributions
+        let distribution_present = collision_distributions
             .iter()
             .any(|distribution| distribution.eq_ignore_ascii_case(&expected_distribution));
-        let (registrations, registration_inventory_unknown) =
-            match self.wsl_registrations.registrations() {
-                Ok(registrations) => (registrations, false),
-                Err(_) => (Vec::new(), true),
-            };
-        let registration_present = registrations.iter().any(|registration| {
-            registration
-                .distribution_name
-                .eq_ignore_ascii_case(&expected_distribution)
-        });
+        let registration_present =
+            registration_inventory
+                .registrations
+                .iter()
+                .any(|registration| {
+                    registration
+                        .distribution_name
+                        .eq_ignore_ascii_case(&expected_distribution)
+                });
 
         let machines = self.list_machines(command)?;
         // Podman 5.8.2 creates only the fixed `wsldist` parent before calling
@@ -5173,7 +5676,7 @@ impl ManagedRuntimeManager {
             self.windows_wsl_distribution_storage_path(target, machine_name, generation_index);
         let partial_or_ambiguous = distribution_present
             || registration_present
-            || registration_inventory_unknown
+            || !registration_inventory.complete
             || !machines.is_empty()
             || private_entry_exists(&distribution_storage)?;
         if partial_or_ambiguous {
@@ -5183,12 +5686,22 @@ impl ManagedRuntimeManager {
                     "preserving the interrupted scan workspace and preparing a fresh isolated one",
                 )?;
             }
-            let fresh_machine_name = self.select_windows_machine_generation_from_inventory_locked(
-                target,
-                &machines,
-                &distributions,
-                true,
-            )?;
+            let fresh_machine_name = if registration_inventory.complete {
+                self.select_windows_machine_generation_from_complete_inventory_locked(
+                    target,
+                    &machines,
+                    &collision_distributions,
+                    &registration_inventory.registrations,
+                    true,
+                )?
+            } else {
+                self.select_fresh_windows_machine_generation_after_runtime_failure_locked(
+                    target,
+                    machine_name,
+                    &machines,
+                    &collision_distributions,
+                )?
+            };
             if fresh_machine_name.eq_ignore_ascii_case(machine_name) {
                 return Ok((command.clone(), machine_name.into()));
             }
@@ -5227,17 +5740,63 @@ impl ManagedRuntimeManager {
     }
 
     fn list_machines(&self, command: &ManagedRuntimeCommand) -> AppResult<Vec<MachineListEntry>> {
+        self.list_machines_with_timeout(command, COMMAND_TIMEOUT)
+    }
+
+    fn list_machines_with_timeout(
+        &self,
+        command: &ManagedRuntimeCommand,
+        timeout: Duration,
+    ) -> AppResult<Vec<MachineListEntry>> {
         let output = self.run_command(
             ManagedCommandOperation::MachineInventory,
             command,
             ["machine", "list", "--format", "json"],
-            COMMAND_TIMEOUT,
+            timeout,
         )?;
         require_success("managed runtime machine inventory", &output)?;
         serde_json::from_slice(&output.stdout).map_err(|error| {
             AppError::Runtime(format!(
                 "managed runtime returned malformed machine inventory: {error}"
             ))
+        })
+    }
+
+    fn list_machines_for_status(
+        &self,
+        command: &ManagedRuntimeCommand,
+        timeout: Duration,
+    ) -> Result<Vec<MachineListEntry>, StatusMachineInventoryFailure> {
+        let args = ["machine", "list", "--format", "json"]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let output = self
+            .commands
+            .output(command, &args, timeout)
+            .map_err(|error| {
+                let transient = matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut
+                        | io::ErrorKind::WouldBlock
+                        | io::ErrorKind::Interrupted
+                );
+                let error = AppError::Runtime(format!(
+                    "{} could not execute: {error}",
+                    ManagedCommandOperation::MachineInventory.label()
+                ));
+                if transient {
+                    StatusMachineInventoryFailure::Reconciliation(error)
+                } else {
+                    StatusMachineInventoryFailure::Invalid(error)
+                }
+            })?;
+        require_success("managed runtime machine inventory", &output)
+            .map_err(StatusMachineInventoryFailure::Invalid)?;
+        serde_json::from_slice(&output.stdout).map_err(|error| {
+            StatusMachineInventoryFailure::Invalid(AppError::Runtime(format!(
+                "managed runtime returned malformed machine inventory: {error}"
+            )))
         })
     }
 
@@ -5288,30 +5847,48 @@ impl ManagedRuntimeManager {
         command: &ManagedRuntimeCommand,
         timeout: Duration,
         setup: Option<&ManagedRuntimeSetupController>,
-    ) -> AppResult<()> {
-        let deadline = Instant::now() + timeout;
+    ) -> AppResult<String> {
+        let deadline = Instant::now().checked_add(timeout).ok_or_else(|| {
+            AppError::Runtime("managed runtime server readiness deadline overflowed".into())
+        })?;
         let mut last_error = None;
-        while Instant::now() < deadline {
+        loop {
             if let Some(setup) = setup {
                 setup.check_cancelled()?;
             }
-            match self.server_version(command) {
-                Ok(_) => return Ok(()),
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let probe_timeout = remaining.min(SERVER_READINESS_PROBE_TIMEOUT);
+            match self.server_version_with_timeout(command, probe_timeout) {
+                Ok(version) => return Ok(version),
                 Err(error) => last_error = Some(error),
             }
-            thread::sleep(Duration::from_millis(250));
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            thread::sleep(remaining.min(SERVER_READINESS_RETRY_INTERVAL));
         }
-        Err(last_error.unwrap_or_else(|| {
-            AppError::Runtime("managed runtime server did not become ready".into())
-        }))
+        let last_detail = last_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "no readiness probe completed within the budget".into());
+        Err(AppError::Runtime(format!(
+            "managed runtime server did not become ready before its bounded deadline; last preflight: {last_detail}"
+        )))
     }
 
-    fn server_version(&self, command: &ManagedRuntimeCommand) -> AppResult<String> {
+    fn server_version_with_timeout(
+        &self,
+        command: &ManagedRuntimeCommand,
+        timeout: Duration,
+    ) -> AppResult<String> {
         let output = self.run_command(
             ManagedCommandOperation::VersionPreflight,
             command,
             ["version", "--format", "{{.Server.Version}}"],
-            COMMAND_TIMEOUT,
+            timeout,
         )?;
         require_success("managed runtime version preflight", &output)?;
         let version = bounded_utf8(&output.stdout, "managed runtime version")?
@@ -5452,17 +6029,29 @@ struct ManagedRuntimeLock {
 }
 
 impl ManagedRuntimeLock {
-    fn acquire(path: &Path) -> AppResult<Self> {
+    fn try_acquire(path: &Path) -> AppResult<Option<Self>> {
         let file = open_nofollow_lock_file(path)?;
         let contention = fs2::lock_contended_error();
+        match fs2::FileExt::try_lock_exclusive(&file) {
+            Ok(()) => Ok(Some(Self { file })),
+            Err(error)
+                if error.kind() == contention.kind()
+                    && error.raw_os_error() == contention.raw_os_error() =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(AppError::Runtime(format!(
+                "managed runtime lifecycle lock failed: {error}"
+            ))),
+        }
+    }
+
+    fn acquire(path: &Path) -> AppResult<Self> {
         let deadline = Instant::now() + COMMAND_TIMEOUT;
         loop {
-            match fs2::FileExt::try_lock_exclusive(&file) {
-                Ok(()) => return Ok(Self { file }),
-                Err(error)
-                    if error.kind() == contention.kind()
-                        && error.raw_os_error() == contention.raw_os_error() =>
-                {
+            match Self::try_acquire(path)? {
+                Some(lock) => return Ok(lock),
+                None => {
                     if Instant::now() >= deadline {
                         return Err(AppError::Runtime(
                             "managed runtime lifecycle is busy past its bounded deadline".into(),
@@ -5470,14 +6059,45 @@ impl ManagedRuntimeLock {
                     }
                     thread::sleep(Duration::from_millis(50));
                 }
-                Err(error) => {
-                    return Err(AppError::Runtime(format!(
-                        "managed runtime lifecycle lock failed: {error}"
-                    )));
-                }
             }
         }
     }
+}
+
+fn retryable_server_readiness_error(error: AppError) -> AppError {
+    AppError::NotAvailable(format!(
+        "managed runtime server readiness is temporarily unavailable; the exact managed machine was preserved for retry: {error}"
+    ))
+}
+
+fn retryable_machine_start_error(error: AppError) -> AppError {
+    AppError::NotAvailable(format!(
+        "managed runtime machine start did not complete; this can be a transient provider or SSH-port race, so the exact managed machine was preserved for retry: {error}"
+    ))
+}
+
+fn retryable_machine_identity_inspection_error(error: AppError) -> AppError {
+    AppError::NotAvailable(format!(
+        "managed runtime could not finish its immutable machine-identity check; the exact managed machine was preserved for retry: {error}"
+    ))
+}
+
+fn retryable_windows_registration_inspection_error(error: AppError) -> AppError {
+    AppError::NotAvailable(format!(
+        "managed runtime could not finish the Windows registration binding check; the exact selected generation was preserved for retry: {error}"
+    ))
+}
+
+fn retryable_generation_selection_inspection_error(error: AppError) -> AppError {
+    AppError::NotAvailable(format!(
+        "managed runtime could not finish reading its durable Windows generation selection; the current generations were preserved for retry: {error}"
+    ))
+}
+
+fn retryable_ownership_proof_inspection_error(error: AppError) -> AppError {
+    AppError::NotAvailable(format!(
+        "managed runtime could not finish reading its Windows ownership proof; the exact managed machine was preserved for retry: {error}"
+    ))
 }
 
 impl Drop for ManagedRuntimeLock {
@@ -6107,7 +6727,7 @@ fn read_bounded_regular_bytes(path: &Path, max_bytes: u64, label: &str) -> AppRe
             label,
             ManagedSshIdentityFileKind::Private,
         )?;
-        return Ok(bytes.to_vec());
+        Ok(bytes.to_vec())
     }
 
     #[cfg(not(windows))]
@@ -6211,15 +6831,18 @@ enum WindowsManagedDirectoryAclPolicy {
 enum WindowsManagedNamespaceAncestorAclPolicy {
     Strict,
     PinnedLocalAppDataCapability,
+    ProductDataRoot,
 }
 
 #[cfg(windows)]
+#[derive(Debug)]
 struct WindowsManagedDirectoryGuard {
     directory: File,
     // These handles deliberately omit FILE_SHARE_DELETE. Keeping the complete
     // canonical chain alive prevents a principal with delete-child rights on
     // an ordinary LocalAppData ancestor from replacing a verified component.
     _ancestor_guards: Vec<File>,
+    created: bool,
 }
 
 #[cfg(windows)]
@@ -6396,6 +7019,17 @@ fn windows_local_system_sid() -> io::Result<WindowsLocalSystemSid> {
 fn windows_current_user_only_acl(
     user: &WindowsCurrentUserSid,
 ) -> io::Result<WindowsCurrentUserOnlyAcl> {
+    use windows_sys::Win32::Security::NO_INHERITANCE;
+
+    windows_current_user_acl(user, NO_INHERITANCE, 0)
+}
+
+#[cfg(windows)]
+fn windows_current_user_acl(
+    user: &WindowsCurrentUserSid,
+    inheritance: u32,
+    expected_ace_flags: u8,
+) -> io::Result<WindowsCurrentUserOnlyAcl> {
     use std::ffi::c_void;
     use windows_sys::Win32::Security::Authorization::{
         EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SET_ACCESS, SetEntriesInAclW, TRUSTEE_IS_SID,
@@ -6403,7 +7037,7 @@ fn windows_current_user_only_acl(
     };
     use windows_sys::Win32::Security::{
         ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, EqualSid,
-        GetAce, GetAclInformation, GetLengthSid, IsValidAcl, IsValidSid, NO_INHERITANCE,
+        GetAce, GetAclInformation, GetLengthSid, IsValidAcl, IsValidSid,
     };
     use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
     use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
@@ -6411,7 +7045,7 @@ fn windows_current_user_only_acl(
     let explicit = EXPLICIT_ACCESS_W {
         grfAccessPermissions: FILE_ALL_ACCESS,
         grfAccessMode: SET_ACCESS,
-        grfInheritance: NO_INHERITANCE,
+        grfInheritance: inheritance,
         Trustee: TRUSTEE_W {
             pMultipleTrustee: std::ptr::null_mut(),
             MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
@@ -6474,7 +7108,7 @@ fn windows_current_user_only_acl(
     // SAFETY: GetAce returned a pointer to at least an ACE_HEADER in the live ACL.
     let header = unsafe { &*raw_ace.cast::<ACE_HEADER>() };
     if u32::from(header.AceType) != ACCESS_ALLOWED_ACE_TYPE
-        || header.AceFlags != 0
+        || header.AceFlags != expected_ace_flags
         || usize::from(header.AceSize) < std::mem::size_of::<ACCESS_ALLOWED_ACE>()
     {
         return Err(io::Error::new(
@@ -6618,6 +7252,16 @@ fn verify_windows_current_user_only_dacl(file: &File) -> io::Result<()> {
 }
 
 #[cfg(windows)]
+fn verify_windows_current_user_only_dacl_allowing_defaulted_owner(file: &File) -> io::Result<()> {
+    verify_windows_managed_directory_dacl_with_ace_flags(
+        file,
+        0,
+        WindowsManagedDirectoryAclPolicy::CurrentUserOnly,
+        true,
+    )
+}
+
+#[cfg(windows)]
 fn verify_windows_current_user_only_dacl_with_ace_flags(
     file: &File,
     expected_ace_flags: u8,
@@ -6626,6 +7270,7 @@ fn verify_windows_current_user_only_dacl_with_ace_flags(
         file,
         expected_ace_flags,
         WindowsManagedDirectoryAclPolicy::CurrentUserOnly,
+        false,
     )
 }
 
@@ -6638,6 +7283,7 @@ fn verify_windows_wsl_distribution_storage_dacl_with_ace_flags(
         file,
         expected_ace_flags,
         WindowsManagedDirectoryAclPolicy::CurrentUserAndLocalSystem,
+        false,
     )
 }
 
@@ -6646,6 +7292,7 @@ fn verify_windows_managed_directory_dacl_with_ace_flags(
     file: &File,
     expected_ace_flags: u8,
     policy: WindowsManagedDirectoryAclPolicy,
+    allow_defaulted_owner: bool,
 ) -> io::Result<()> {
     use std::ffi::c_void;
     use windows_sys::Win32::Security::{
@@ -6714,7 +7361,7 @@ fn verify_windows_managed_directory_dacl_with_ace_flags(
     // owner. Keep that provenance check separate from the actual SID check so
     // a default TokenOwner (commonly Administrators on hosted runners) cannot
     // be mistaken for an app-owned namespace.
-    if owner_defaulted != 0 {
+    if owner_defaulted != 0 && !allow_defaulted_owner {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "file owner was supplied by the Windows default mechanism",
@@ -6956,6 +7603,19 @@ fn mark_windows_managed_ssh_staging_handle_for_deletion(file: &File) -> AppResul
 }
 
 #[cfg(windows)]
+fn windows_managed_acl_verification_error(label: &str, error: io::Error) -> AppError {
+    if error.raw_os_error().is_some() {
+        AppError::NotAvailable(format!(
+            "{label} ownership and permissions could not be inspected: {error}"
+        ))
+    } else {
+        AppError::NotAuthorized(format!(
+            "{label} has unsafe ownership or permissions: {error}"
+        ))
+    }
+}
+
+#[cfg(windows)]
 fn windows_managed_ssh_identity_handle_information(
     file: &File,
     label: &str,
@@ -6965,7 +7625,7 @@ fn windows_managed_ssh_identity_handle_information(
     };
 
     let information = windows_file_information(file).map_err(|error| {
-        AppError::NotAuthorized(format!("{label} could not be verified by handle: {error}"))
+        AppError::NotAvailable(format!("{label} could not be inspected by handle: {error}"))
     })?;
     if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
         return Err(AppError::NotAuthorized(format!(
@@ -6988,11 +7648,8 @@ fn verify_windows_managed_ssh_identity_handle(
         )));
     }
     if kind == ManagedSshIdentityFileKind::Private {
-        verify_windows_current_user_only_dacl(file).map_err(|error| {
-            AppError::NotAuthorized(format!(
-                "{label} has unsafe Windows ownership or permissions: {error}"
-            ))
-        })?;
+        verify_windows_current_user_only_dacl(file)
+            .map_err(|error| windows_managed_acl_verification_error(label, error))?;
     }
     Ok(ManagedSshIdentityFileSnapshot {
         size: information.size,
@@ -7057,7 +7714,7 @@ fn inspect_managed_ssh_identity_file(
             #[cfg(windows)]
             let snapshot = {
                 let file = open_windows_managed_ssh_identity_file(path).map_err(|error| {
-                    AppError::NotAuthorized(format!(
+                    AppError::NotAvailable(format!(
                         "{label} could not be opened without following links: {error}"
                     ))
                 })?;
@@ -7097,7 +7754,7 @@ fn read_managed_ssh_identity_file(
     }
     #[cfg(windows)]
     let mut file = open_windows_managed_ssh_identity_file(path).map_err(|error| {
-        AppError::NotAuthorized(format!(
+        AppError::NotAvailable(format!(
             "{label} could not be opened without following links: {error}"
         ))
     })?;
@@ -7926,12 +8583,9 @@ fn clear_windows_wsl_servicing_cooldown() -> AppResult<()> {
 
 #[cfg(windows)]
 fn active_windows_wsl_servicing_cooldown() -> AppResult<Option<Duration>> {
-    let Some(deadline) = (match windows_wsl_servicing_cooldown_deadline() {
-        Ok(deadline) => deadline,
-        // This receipt is intentionally non-authoritative. An unreadable or
-        // malformed value cannot become a permanent setup gate.
-        Err(_) => None,
-    }) else {
+    // This receipt is intentionally non-authoritative. An unreadable or
+    // malformed value cannot become a permanent setup gate.
+    let Some(deadline) = windows_wsl_servicing_cooldown_deadline().unwrap_or_default() else {
         return Ok(None);
     };
     let now = std::time::SystemTime::now()
@@ -8772,26 +9426,25 @@ fn verify_windows_wsl_product_storage_directory(
         ));
     }
     let storage = open_windows_real_directory_security_handle(wsldist).map_err(|error| {
-        AppError::NotAuthorized(format!(
-            "Windows WSL storage could not be verified safely: {error}"
+        AppError::NotAvailable(format!(
+            "Windows WSL storage could not be inspected safely: {error}"
         ))
     })?;
     let inheritance = u8::try_from(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)
         .expect("Windows inheritance flags fit in an ACE header");
-    verify_windows_wsl_distribution_storage_dacl_with_ace_flags(&storage, inheritance).map_err(
-        |error| {
-            AppError::NotAuthorized(format!(
-                "Windows WSL storage permissions do not match ai-security-scanner: {error}"
-            ))
-        },
-    )?;
+    verify_windows_wsl_distribution_storage_dacl_with_ace_flags(&storage, inheritance)
+        .map_err(|error| windows_managed_acl_verification_error("Windows WSL storage", error))?;
     let distribution = open_windows_real_directory_security_handle(registration_base_path)
         .map_err(|error| {
-            AppError::NotAuthorized(format!(
-                "Windows WSL workspace could not be verified safely: {error}"
+            AppError::NotAvailable(format!(
+                "Windows WSL workspace could not be inspected safely: {error}"
             ))
         })?;
-    let information = windows_file_information(&distribution)?;
+    let information = windows_file_information(&distribution).map_err(|error| {
+        AppError::NotAvailable(format!(
+            "Windows WSL workspace metadata could not be inspected: {error}"
+        ))
+    })?;
     if information.attributes & FILE_ATTRIBUTE_DIRECTORY == 0
         || information.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
     {
@@ -8989,7 +9642,7 @@ fn windows_registry_string(key: &WindowsRegistryKey, value_name: &str) -> AppRes
 }
 
 #[cfg(windows)]
-fn windows_wsl_registrations() -> AppResult<Vec<WindowsWslRegistration>> {
+fn windows_wsl_registration_inventory() -> AppResult<WindowsWslRegistrationInventory> {
     use windows_sys::Win32::Foundation::{
         ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS,
     };
@@ -9009,18 +9662,23 @@ fn windows_wsl_registrations() -> AppResult<Vec<WindowsWslRegistration>> {
         )
     };
     if status == ERROR_FILE_NOT_FOUND {
-        return Ok(Vec::new());
+        return Ok(WindowsWslRegistrationInventory::complete(Vec::new()));
     }
     if status != ERROR_SUCCESS || raw_root.is_null() {
-        return Err(io::Error::from_raw_os_error(status as i32).into());
+        return Err(AppError::NotAvailable(format!(
+            "Windows could not open the WSL registration inventory root (Win32 status {status}): {}",
+            io::Error::from_raw_os_error(status as i32)
+        )));
     }
     let root = WindowsRegistryKey(raw_root);
-    let mut registrations = Vec::new();
+    let mut inventory = WindowsWslRegistrationInventory {
+        complete: true,
+        ..WindowsWslRegistrationInventory::default()
+    };
     for index in 0..=MAX_WSL_DISTRIBUTIONS {
         if index == MAX_WSL_DISTRIBUTIONS {
-            return Err(AppError::NotAuthorized(format!(
-                "Windows reported more than {MAX_WSL_DISTRIBUTIONS} WSL registrations"
-            )));
+            inventory.complete = false;
+            break;
         }
         let mut name = vec![0_u16; 256];
         let mut name_length = u32::try_from(name.len()).expect("registry buffer fits u32");
@@ -9040,23 +9698,26 @@ fn windows_wsl_registrations() -> AppResult<Vec<WindowsWslRegistration>> {
             break;
         }
         if status == ERROR_MORE_DATA {
-            return Err(AppError::NotAuthorized(
-                "Windows WSL registry key name is oversized".into(),
-            ));
+            inventory.complete = false;
+            continue;
         }
         if status != ERROR_SUCCESS || name_length == 0 || name_length as usize >= name.len() {
-            return Err(io::Error::from_raw_os_error(status as i32).into());
+            inventory.complete = false;
+            continue;
         }
-        let subkey_name = String::from_utf16(&name[..name_length as usize]).map_err(|_| {
-            AppError::NotAuthorized("Windows WSL registry key is not valid UTF-16".into())
-        })?;
-        let registration_id = Uuid::parse_str(subkey_name.trim_matches(['{', '}']))
-            .map_err(|_| {
-                AppError::NotAuthorized("Windows WSL registry key is not one GUID".into())
-            })?
-            .hyphenated()
-            .to_string();
-        let subkey_name_wide = windows_registry_wide(&subkey_name)?;
+        let Ok(subkey_name) = String::from_utf16(&name[..name_length as usize]) else {
+            inventory.complete = false;
+            continue;
+        };
+        let Ok(registration_id) = Uuid::parse_str(subkey_name.trim_matches(['{', '}'])) else {
+            inventory.complete = false;
+            continue;
+        };
+        let registration_id = registration_id.hyphenated().to_string();
+        let Ok(subkey_name_wide) = windows_registry_wide(&subkey_name) else {
+            inventory.complete = false;
+            continue;
+        };
         let mut raw_subkey = std::ptr::null_mut();
         let status = unsafe {
             RegOpenKeyExW(
@@ -9068,22 +9729,54 @@ fn windows_wsl_registrations() -> AppResult<Vec<WindowsWslRegistration>> {
             )
         };
         if status != ERROR_SUCCESS || raw_subkey.is_null() {
-            return Err(io::Error::from_raw_os_error(status as i32).into());
+            inventory.complete = false;
+            continue;
         }
         let subkey = WindowsRegistryKey(raw_subkey);
-        let distribution_name = windows_registry_string(&subkey, "DistributionName")?;
-        let base_path = PathBuf::from(windows_registry_string(&subkey, "BasePath")?);
-        registrations.push(WindowsWslRegistration {
+        let Ok(distribution_name) = windows_registry_string(&subkey, "DistributionName") else {
+            inventory.complete = false;
+            continue;
+        };
+        if distribution_name.is_empty()
+            || distribution_name.len() > MAX_WSL_DISTRIBUTION_NAME_BYTES
+            || distribution_name.trim() != distribution_name
+            || distribution_name.chars().any(|character| {
+                character.is_control()
+                    || matches!(character, '\u{2028}' | '\u{2029}')
+                    || unicode_code_point_is_noncharacter(character)
+            })
+        {
+            inventory.complete = false;
+            continue;
+        }
+        if !inventory
+            .observed_distribution_names
+            .iter()
+            .any(|observed| observed.eq_ignore_ascii_case(&distribution_name))
+        {
+            inventory
+                .observed_distribution_names
+                .push(distribution_name.clone());
+        }
+        let Ok(base_path) = windows_registry_string(&subkey, "BasePath").map(PathBuf::from) else {
+            inventory.complete = false;
+            continue;
+        };
+        if base_path.as_os_str().is_empty() {
+            inventory.complete = false;
+            continue;
+        }
+        inventory.registrations.push(WindowsWslRegistration {
             registration_id,
             distribution_name,
             base_path,
         });
     }
-    Ok(registrations)
+    Ok(inventory)
 }
 
 #[cfg(not(windows))]
-fn windows_wsl_registrations() -> AppResult<Vec<WindowsWslRegistration>> {
+fn windows_wsl_registration_inventory() -> AppResult<WindowsWslRegistrationInventory> {
     Err(AppError::NotAvailable(
         "Windows WSL registrations are unavailable on this host".into(),
     ))
@@ -10884,8 +11577,9 @@ fn verify_windows_managed_namespace_ancestor_handle(
         WinBuiltinAdministratorsSid, WinLocalSystemSid,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        DELETE, FILE_ALL_ACCESS, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
-        FILE_GENERIC_WRITE, WRITE_DAC, WRITE_OWNER,
+        DELETE, FILE_ALL_ACCESS, FILE_APPEND_DATA, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE,
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA,
+        FILE_WRITE_EA, WRITE_DAC, WRITE_OWNER,
     };
     use windows_sys::Win32::System::SystemServices::{
         ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_ACE_TYPE,
@@ -10975,7 +11669,9 @@ fn verify_windows_managed_namespace_ancestor_handle(
         }
         // SAFETY: GetAce returned at least an ACE_HEADER inside the live ACL.
         let header = unsafe { &*raw_ace.cast::<ACE_HEADER>() };
-        if header.AceFlags & (INHERIT_ONLY_ACE as u8) != 0 {
+        if header.AceFlags & (INHERIT_ONLY_ACE as u8) != 0
+            && policy != WindowsManagedNamespaceAncestorAclPolicy::ProductDataRoot
+        {
             continue;
         }
         let ace_type = u32::from(header.AceType);
@@ -10991,12 +11687,26 @@ fn verify_windows_managed_namespace_ancestor_handle(
                 let pinned_local_app_data_capability = policy
                     == WindowsManagedNamespaceAncestorAclPolicy::PinnedLocalAppDataCapability
                     && windows_sid_is_app_capability(sid);
-                if mask & dangerous != 0 && !trusted_principal && !pinned_local_app_data_capability
+                let forbidden =
+                    if policy == WindowsManagedNamespaceAncestorAclPolicy::ProductDataRoot {
+                        dangerous
+                            | FILE_WRITE_DATA
+                            | FILE_APPEND_DATA
+                            | FILE_WRITE_EA
+                            | FILE_WRITE_ATTRIBUTES
+                    } else {
+                        dangerous
+                    };
+                if mask & forbidden != 0 && !trusted_principal && !pinned_local_app_data_capability
                 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "managed runtime namespace ancestor grants replacement rights to an untrusted Windows principal",
-                    ));
+                    let detail = if policy
+                        == WindowsManagedNamespaceAncestorAclPolicy::ProductDataRoot
+                    {
+                        "product data root grants write or replacement rights to an untrusted Windows principal"
+                    } else {
+                        "managed runtime namespace ancestor grants replacement rights to an untrusted Windows principal"
+                    };
+                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, detail));
                 }
                 // Ordinary Users/AppPackages read/execute rules are harmless
                 // and remain compatible with LocalAppData/runner temp roots.
@@ -11375,6 +12085,7 @@ fn open_or_create_windows_managed_directory_guard(
         WindowsManagedDirectoryGuard {
             directory,
             _ancestor_guards: ancestor_guards,
+            created: created != 0,
         },
     ))
 }
@@ -11415,6 +12126,219 @@ fn ensure_managed_wsl_distribution_storage_directory(path: &Path) -> io::Result<
     }
 }
 
+/// Pins the verified product-data namespace until the caller has acquired its
+/// process lease or another longer-lived child guard.
+#[derive(Debug)]
+pub struct PrivateProductDataDirectoryGuard {
+    #[cfg(windows)]
+    _directories: Vec<File>,
+    created: bool,
+}
+
+#[cfg(not(windows))]
+fn ensure_known_canonical_product_data_parent(
+    path: &Path,
+    platform_local_data: &Path,
+) -> io::Result<()> {
+    if path == platform_local_data.join(PRODUCT_DATA_DIRECTORY_NAME) {
+        fs::create_dir_all(platform_local_data)?;
+    }
+    Ok(())
+}
+
+impl PrivateProductDataDirectoryGuard {
+    /// Reports whether this guarded call won the atomic final-component
+    /// creation. Callers use this only to distinguish a genuinely empty
+    /// first-run root from a directory created concurrently by another owner.
+    pub fn was_created(&self) -> bool {
+        self.created
+    }
+}
+
+/// Creates or verifies the data directory before any database, artifact, or
+/// managed-runtime state is written beneath it.
+///
+/// On Windows an absent final component is created with the same protected,
+/// current-user-only DACL used by the managed runtime. Every existing real
+/// ancestor is pinned without delete sharing and checked for namespace-
+/// replacement grants. A fixed canonical root created by an older release may
+/// retain its bounded inherited LocalAppData DACL so upgrades can reopen saved
+/// work; it is pinned and verified in place but never repaired. Existing roots
+/// with untrusted replacement rights still fail closed without rewriting their
+/// descriptor or any descendants.
+pub fn ensure_private_product_data_directory(
+    path: &Path,
+) -> AppResult<PrivateProductDataDirectoryGuard> {
+    #[cfg(windows)]
+    {
+        let (directories, created) = match fs::symlink_metadata(path) {
+            Ok(_) => {
+                let directories = if windows_is_canonical_product_data_directory(path)? {
+                    verify_windows_existing_product_data_directory(path)
+                } else {
+                    // Caller-selected and legacy roots are verified in place,
+                    // but never receive automatic owner or ACL changes.
+                    verify_windows_managed_namespace_ancestor_chain(path)
+                }
+                .map_err(windows_product_data_namespace_error)?;
+                (directories, false)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let (_, guard) = open_or_create_windows_managed_private_directory_guard(path, true)
+                    .map_err(windows_product_data_namespace_error)?;
+                let WindowsManagedDirectoryGuard {
+                    directory,
+                    mut _ancestor_guards,
+                    created,
+                } = guard;
+                _ancestor_guards.push(directory);
+                (_ancestor_guards, created)
+            }
+            Err(error) => return Err(error.into()),
+        };
+        Ok(PrivateProductDataDirectoryGuard {
+            _directories: directories,
+            created,
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let platform_local_data = directories::BaseDirs::new()
+            .map(|directories| directories.data_local_dir().to_path_buf())
+            .ok_or_else(|| {
+                AppError::Internal("could not determine the platform local-data directory".into())
+            })?;
+        // Only the desktop/default-CLI root may bootstrap a missing platform
+        // parent. Managed-runtime fixtures and caller-selected roots retain the
+        // ordinary single-component creation contract.
+        ensure_known_canonical_product_data_parent(path, &platform_local_data)?;
+        let existed_before = match fs::symlink_metadata(path) {
+            Ok(_) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error.into()),
+        };
+        ensure_private_directory(path)?;
+        Ok(PrivateProductDataDirectoryGuard {
+            created: !existed_before,
+        })
+    }
+}
+
+/// Test-only Windows seam for isolated temporary roots whose `%TEMP%`
+/// ancestors intentionally do not satisfy the production LocalAppData
+/// namespace policy. The final component still receives and verifies the exact
+/// protected current-user DACL and remains pinned without delete sharing.
+#[cfg(all(test, windows))]
+pub(crate) fn ensure_private_product_data_directory_for_isolated_test(
+    path: &Path,
+) -> AppResult<PrivateProductDataDirectoryGuard> {
+    let (_, guard) = open_or_create_windows_managed_private_directory_guard(path, false)
+        .map_err(windows_product_data_namespace_error)?;
+    let WindowsManagedDirectoryGuard {
+        directory,
+        mut _ancestor_guards,
+        created,
+    } = guard;
+    _ancestor_guards.push(directory);
+    Ok(PrivateProductDataDirectoryGuard {
+        _directories: _ancestor_guards,
+        created,
+    })
+}
+
+#[cfg(windows)]
+fn windows_product_data_namespace_error(error: io::Error) -> AppError {
+    if error.kind() == io::ErrorKind::PermissionDenied {
+        AppError::NotAuthorized(format!(
+            "product data Windows namespace is replaceable or unsafe: {error}"
+        ))
+    } else {
+        error.into()
+    }
+}
+
+#[cfg(all(windows, test))]
+fn verify_windows_product_data_directory_dacl(directory: &File) -> io::Result<()> {
+    use windows_sys::Win32::Security::{CONTAINER_INHERIT_ACE, OBJECT_INHERIT_ACE};
+
+    verify_windows_current_user_only_dacl_with_ace_flags(
+        directory,
+        u8::try_from(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)
+            .expect("Windows inheritance flags fit in an ACE header"),
+    )
+}
+
+/// Verifies an existing product-data root after the caller has established
+/// that it is the fixed canonical LocalAppData child. The ancestor-chain policy
+/// accepts both the exact protected DACL used for fresh roots and the bounded
+/// inherited LocalAppData DACL produced by older releases. It rejects any
+/// untrusted namespace-replacement grant. No accepted or rejected descriptor is
+/// rewritten because Windows ACL setters may propagate an inheritable change
+/// into existing descendants, violating product-data preservation.
+#[cfg(windows)]
+fn verify_windows_existing_product_data_directory(path: &Path) -> io::Result<Vec<File>> {
+    let directories = verify_windows_managed_namespace_ancestor_chain(path)?;
+    let directory = directories.first().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "canonical product data directory has no pinned Windows root",
+        )
+    })?;
+    verify_windows_directory_owner_is_current_user(directory)?;
+    verify_windows_managed_namespace_ancestor_handle(
+        directory,
+        false,
+        WindowsManagedNamespaceAncestorAclPolicy::ProductDataRoot,
+    )?;
+    Ok(directories)
+}
+
+#[cfg(windows)]
+fn windows_is_canonical_product_data_directory(path: &Path) -> io::Result<bool> {
+    let Some(parent) = path.parent() else {
+        return Ok(false);
+    };
+    let Some(leaf) = path.file_name().and_then(|leaf| leaf.to_str()) else {
+        return Ok(false);
+    };
+    if !leaf.eq_ignore_ascii_case(PRODUCT_DATA_DIRECTORY_NAME) {
+        return Ok(false);
+    }
+    Ok(parent.canonicalize()? == windows_local_app_data_directory()?.canonicalize()?)
+}
+
+#[cfg(windows)]
+fn verify_windows_directory_owner_is_current_user(directory: &File) -> io::Result<()> {
+    use windows_sys::Win32::Security::{EqualSid, GetSecurityDescriptorOwner, IsValidSid};
+
+    let user = windows_current_user_sid()?;
+    let mut descriptor = windows_owner_dacl_security_descriptor(directory)?;
+    let mut owner = std::ptr::null_mut();
+    let mut owner_defaulted = 0;
+    // SAFETY: descriptor is the live, kernel-returned security descriptor and
+    // both output pointers are writable.
+    if unsafe {
+        GetSecurityDescriptorOwner(
+            descriptor.as_mut_ptr().cast(),
+            &raw mut owner,
+            &raw mut owner_defaulted,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if owner.is_null()
+        || unsafe { IsValidSid(owner) } == 0
+        || unsafe { EqualSid(owner, user.as_ptr()) } == 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "canonical product data directory is not owned by the current Windows user",
+        ));
+    }
+    Ok(())
+}
+
 fn ensure_private_directory_tree(root: &Path, destination: &Path) -> AppResult<()> {
     if !destination.starts_with(root) {
         return Err(AppError::NotAuthorized(
@@ -11437,6 +12361,7 @@ fn ensure_private_directory_tree(root: &Path, destination: &Path) -> AppResult<(
     Ok(())
 }
 
+#[cfg(any(not(windows), test))]
 fn ensure_private_directory(path: &Path) -> io::Result<()> {
     match fs::create_dir(path) {
         Ok(()) => {}
@@ -11471,7 +12396,17 @@ fn canonical_real_directory(path: &Path, label: &str) -> AppResult<PathBuf> {
 }
 
 #[cfg(windows)]
-fn create_windows_private_file(path: &Path) -> io::Result<File> {
+#[derive(Clone, Copy)]
+enum WindowsPrivateFileParentPolicy {
+    ExactCurrentUserOnly,
+    PinnedRealDirectory,
+}
+
+#[cfg(windows)]
+fn create_windows_current_user_only_file(
+    path: &Path,
+    parent_policy: WindowsPrivateFileParentPolicy,
+) -> io::Result<File> {
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::FromRawHandle;
     use windows_sys::Win32::Foundation::{FALSE, INVALID_HANDLE_VALUE, TRUE};
@@ -11565,16 +12500,21 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     } else {
         parent.canonicalize()?
     };
-    // A Windows filesystem can replace a caller-provided creation DACL with
-    // inherited ACEs even while reporting successful descriptor application.
-    // Pin and verify the exact immediate parent before creating any entry so
-    // an unsafe namespace fails closed with no transient secret file.
+    // Pin the exact immediate parent through creation. Managed-runtime callers
+    // additionally require its exact inheritable DACL; generic product files
+    // still receive and read back their own protected descriptor without
+    // rewriting a caller-selected or legacy parent.
     let parent_guard = open_windows_real_directory_security_handle(&canonical_parent)?;
-    let inheritance = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
-    verify_windows_current_user_only_dacl_with_ace_flags(
-        &parent_guard,
-        u8::try_from(inheritance).expect("Windows inheritance flags fit in an ACE header"),
-    )?;
+    if matches!(
+        parent_policy,
+        WindowsPrivateFileParentPolicy::ExactCurrentUserOnly
+    ) {
+        let inheritance = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+        verify_windows_current_user_only_dacl_with_ace_flags(
+            &parent_guard,
+            u8::try_from(inheritance).expect("Windows inheritance flags fit in an ACE header"),
+        )?;
+    }
     let creation_path = canonical_parent.join(file_name);
     let mut encoded = creation_path.as_os_str().encode_wide().collect::<Vec<_>>();
     if encoded.contains(&0) {
@@ -11632,6 +12572,519 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     // readback so its checked namespace component cannot be swapped mid-create.
     drop(parent_guard);
     Ok(file)
+}
+
+#[cfg(windows)]
+fn create_windows_private_file(path: &Path) -> io::Result<File> {
+    create_windows_current_user_only_file(
+        path,
+        WindowsPrivateFileParentPolicy::ExactCurrentUserOnly,
+    )
+}
+
+/// Creates one new product-owned file with an exact protected current-user
+/// Windows DACL. The immediate real parent is pinned through creation, but is
+/// never repaired: caller-selected and legacy directory ACLs remain unchanged.
+#[cfg(windows)]
+pub(crate) fn create_current_user_only_product_file(path: &Path) -> io::Result<File> {
+    create_windows_current_user_only_file(path, WindowsPrivateFileParentPolicy::PinnedRealDirectory)
+}
+
+/// A same-handle proof boundary for one existing file below the fixed
+/// canonical product-data root. Opening this guard never changes the file.
+#[cfg(windows)]
+struct CanonicalProductFileDaclRepairGuard {
+    file: File,
+    information: WindowsFileInformation,
+    _product_root_guard: PrivateProductDataDirectoryGuard,
+    _directory_guards: Vec<File>,
+}
+
+#[cfg(windows)]
+impl CanonicalProductFileDaclRepairGuard {
+    fn repair_after_content_proof(self) -> io::Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Security::Authorization::{SE_FILE_OBJECT, SetSecurityInfo};
+        use windows_sys::Win32::Security::{
+            DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+        };
+
+        let observed = windows_file_information(&self.file)?;
+        if observed != self.information || observed.number_of_links != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "canonical product file changed before its Windows DACL repair",
+            ));
+        }
+        verify_windows_directory_owner_is_current_user(&self.file)?;
+        if verify_windows_current_user_only_dacl_allowing_defaulted_owner(&self.file).is_ok() {
+            return Ok(());
+        }
+
+        let user = windows_current_user_sid()?;
+        let acl = windows_current_user_only_acl(&user)?;
+        // SAFETY: the guard owns an exact live file handle opened with
+        // WRITE_DAC; the current-user ACL remains live for the call. Owner and
+        // bytes are intentionally not changed.
+        let status = unsafe {
+            SetSecurityInfo(
+                self.file.as_raw_handle(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                acl.raw,
+                std::ptr::null_mut(),
+            )
+        };
+        if status != 0 {
+            return Err(io::Error::from_raw_os_error(status as i32));
+        }
+        if windows_file_information(&self.file)? != self.information {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "canonical product file changed during its Windows DACL repair",
+            ));
+        }
+        verify_windows_current_user_only_dacl_allowing_defaulted_owner(&self.file)
+    }
+}
+
+#[cfg(windows)]
+fn open_canonical_product_file_dacl_repair_guard_at_root(
+    path: &Path,
+    product_root: &Path,
+    product_root_guard: PrivateProductDataDirectoryGuard,
+) -> io::Result<CanonicalProductFileDaclRepairGuard> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_GENERIC_READ, FILE_SHARE_READ, READ_CONTROL, WRITE_DAC,
+    };
+
+    let canonical_root = product_root.canonicalize()?;
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "canonical product file has no parent",
+        )
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "canonical product file has no final component",
+        )
+    })?;
+    let relative_parent = parent.strip_prefix(product_root).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "existing file parent escaped the fixed canonical product-data root",
+        )
+    })?;
+    let canonical_parent = parent.canonicalize()?;
+    if canonical_parent != canonical_root && !canonical_parent.starts_with(&canonical_root) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "existing file is outside the fixed canonical product-data root",
+        ));
+    }
+
+    let mut directory_guards = Vec::new();
+    let mut current = canonical_root.clone();
+    for component in relative_parent.components() {
+        let Component::Normal(component) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "existing file parent contains an unsafe component",
+            ));
+        };
+        current.push(component);
+        let guard = open_windows_real_directory_security_handle(&current)?;
+        verify_windows_managed_namespace_ancestor_handle(
+            &guard,
+            false,
+            WindowsManagedNamespaceAncestorAclPolicy::Strict,
+        )?;
+        directory_guards.push(guard);
+    }
+    if current.canonicalize()? != canonical_parent {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "existing file parent traversed a reparse point",
+        ));
+    }
+
+    let exact_path = current.join(file_name);
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .access_mode(FILE_GENERIC_READ | READ_CONTROL | WRITE_DAC)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(&exact_path)?;
+    let information = windows_file_information(&file)?;
+    if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
+        || information.number_of_links != 1
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "existing canonical product file is not a single-link real file",
+        ));
+    }
+    verify_windows_directory_owner_is_current_user(&file)?;
+
+    // FILE_SHARE_READ deliberately excludes write and delete sharing. The
+    // exact file cannot be modified, renamed, or unlinked while content proof
+    // and repair use this handle. Reopen the still-pinned pathname without
+    // following a final reparse point and prove it resolves to this object.
+    let mut probe_options = OpenOptions::new();
+    probe_options
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let path_probe = probe_options.open(&exact_path)?;
+    if windows_file_information(&path_probe)? != information {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "canonical product file pathname does not identify the guarded file",
+        ));
+    }
+    let canonical_file = exact_path.canonicalize()?;
+    if canonical_file.parent() != Some(canonical_parent.as_path())
+        || !canonical_file.starts_with(&canonical_root)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "existing file escaped the fixed canonical product-data root",
+        ));
+    }
+
+    Ok(CanonicalProductFileDaclRepairGuard {
+        file,
+        information,
+        _product_root_guard: product_root_guard,
+        _directory_guards: directory_guards,
+    })
+}
+
+#[cfg(windows)]
+fn open_canonical_product_file_dacl_repair_guard(
+    path: &Path,
+) -> io::Result<CanonicalProductFileDaclRepairGuard> {
+    let product_root = windows_local_app_data_directory()?.join(PRODUCT_DATA_DIRECTORY_NAME);
+    let canonical_root = product_root.canonicalize()?;
+    let canonical_path = path.canonicalize()?;
+    if canonical_path == canonical_root || !canonical_path.starts_with(&canonical_root) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "existing file is outside the fixed canonical product-data root",
+        ));
+    }
+    let product_root_guard = ensure_private_product_data_directory(&product_root)
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    open_canonical_product_file_dacl_repair_guard_at_root(path, &product_root, product_root_guard)
+}
+
+#[cfg(windows)]
+fn verify_then_repair_product_file_dacl<E>(
+    mut guard: CanonicalProductFileDaclRepairGuard,
+    verify: impl FnOnce(&mut File) -> Result<(), E>,
+    map_io_error: impl Fn(io::Error) -> E,
+) -> Result<(), E> {
+    verify(&mut guard.file)?;
+    guard.repair_after_content_proof().map_err(map_io_error)
+}
+
+#[cfg(windows)]
+fn windows_product_file_has_canonical_repair_authority(path: &Path) -> io::Result<bool> {
+    let mut root = None;
+    for ancestor in path.ancestors() {
+        if ancestor
+            .file_name()
+            .and_then(|leaf| leaf.to_str())
+            .is_some_and(|leaf| leaf.eq_ignore_ascii_case(PRODUCT_DATA_DIRECTORY_NAME))
+            && windows_is_canonical_product_data_directory(ancestor)?
+        {
+            root = Some(ancestor);
+            break;
+        }
+    }
+    let Some(root) = root else {
+        return Ok(false);
+    };
+    let canonical_root = root.canonicalize()?;
+    let canonical_path = path.canonicalize()?;
+    if canonical_path == canonical_root || !canonical_path.starts_with(&canonical_root) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "canonical product file escaped its fixed product-data root",
+        ));
+    }
+    Ok(true)
+}
+
+#[cfg(windows)]
+fn verify_private_product_file_without_repair<E>(
+    path: &Path,
+    authority_root: &Path,
+    verify: impl FnOnce(&mut File) -> Result<(), E>,
+    map_io_error: impl Fn(io::Error) -> E,
+) -> Result<(), E> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_GENERIC_READ, FILE_SHARE_READ, READ_CONTROL,
+    };
+
+    let parent = path.parent().ok_or_else(|| {
+        map_io_error(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "private product file has no parent",
+        ))
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        map_io_error(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "private product file has no final component",
+        ))
+    })?;
+    let canonical_authority_root = authority_root.canonicalize().map_err(&map_io_error)?;
+    if parent.canonicalize().map_err(&map_io_error)? != canonical_authority_root {
+        return Err(map_io_error(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "private product file is not a direct child of its artifact authority root",
+        )));
+    }
+    let _parent_guard = open_windows_real_directory_security_handle(&canonical_authority_root)
+        .map_err(&map_io_error)?;
+    let exact_path = canonical_authority_root.join(file_name);
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .access_mode(FILE_GENERIC_READ | READ_CONTROL)
+        // Excluding write and delete sharing pins the verified object while
+        // the caller proves its contents. This path never requests WRITE_DAC.
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let mut file = options.open(&exact_path).map_err(&map_io_error)?;
+    let information = windows_file_information(&file).map_err(&map_io_error)?;
+    if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
+        || information.number_of_links != 1
+    {
+        return Err(map_io_error(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "existing private product file is not a single-link real file",
+        )));
+    }
+    verify_windows_directory_owner_is_current_user(&file).map_err(&map_io_error)?;
+    verify_windows_current_user_only_dacl(&file).map_err(&map_io_error)?;
+
+    let mut probe_options = OpenOptions::new();
+    probe_options
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let path_probe = probe_options.open(&exact_path).map_err(&map_io_error)?;
+    if windows_file_information(&path_probe).map_err(&map_io_error)? != information {
+        return Err(map_io_error(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "private product file pathname does not identify the guarded file",
+        )));
+    }
+    let canonical_file = exact_path.canonicalize().map_err(&map_io_error)?;
+    if canonical_file.parent() != Some(canonical_authority_root.as_path()) {
+        return Err(map_io_error(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "private product file escaped its pinned parent",
+        )));
+    }
+
+    verify(&mut file)?;
+    if windows_file_information(&file).map_err(&map_io_error)? != information {
+        return Err(map_io_error(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "private product file changed during content verification",
+        )));
+    }
+    verify_windows_directory_owner_is_current_user(&file).map_err(&map_io_error)?;
+    verify_windows_current_user_only_dacl(&file).map_err(map_io_error)
+}
+
+/// Runs `verify` against one exact, non-replaceable existing file handle. A
+/// file lexically below the fixed canonical product-data root may receive the
+/// bounded DACL repair after successful proof; every other path is strictly
+/// verify-only and must already have the exact product-created descriptor.
+#[cfg(windows)]
+pub(crate) fn verify_then_repair_canonical_or_verify_private_product_file_dacl<E>(
+    path: &Path,
+    authority_root: &Path,
+    verify: impl FnOnce(&mut File) -> Result<(), E>,
+    map_io_error: impl Fn(io::Error) -> E,
+) -> Result<(), E> {
+    let parent = path.parent().ok_or_else(|| {
+        map_io_error(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "private product file has no parent",
+        ))
+    })?;
+    if parent.canonicalize().map_err(&map_io_error)?
+        != authority_root.canonicalize().map_err(&map_io_error)?
+    {
+        return Err(map_io_error(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "private product file is not a direct child of its artifact authority root",
+        )));
+    }
+    if windows_product_file_has_canonical_repair_authority(path).map_err(&map_io_error)? {
+        let guard = open_canonical_product_file_dacl_repair_guard(path).map_err(&map_io_error)?;
+        verify_then_repair_product_file_dacl(guard, verify, map_io_error)
+    } else {
+        verify_private_product_file_without_repair(path, authority_root, verify, map_io_error)
+    }
+}
+
+#[cfg(all(test, windows))]
+pub(crate) fn verify_then_repair_isolated_product_file_dacl<E>(
+    path: &Path,
+    product_root: &Path,
+    verify: impl FnOnce(&mut File) -> Result<(), E>,
+    map_io_error: impl Fn(io::Error) -> E,
+) -> Result<(), E> {
+    let product_root_guard = ensure_private_product_data_directory_for_isolated_test(product_root)
+        .map_err(|error| map_io_error(io::Error::other(error.to_string())))?;
+    let guard = open_canonical_product_file_dacl_repair_guard_at_root(
+        path,
+        product_root,
+        product_root_guard,
+    )
+    .map_err(&map_io_error)?;
+    verify_then_repair_product_file_dacl(guard, verify, map_io_error)
+}
+
+#[cfg(all(test, windows))]
+fn set_test_world_product_entry_dacl(path: &Path, world_permissions: u32) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Security::Authorization::{
+        EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, SET_ACCESS, SetEntriesInAclW,
+        SetNamedSecurityInfoW, TRUSTEE_IS_GROUP, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+    };
+    use windows_sys::Win32::Security::{
+        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, WinWorldSid,
+    };
+    use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+
+    let user = windows_current_user_sid()?;
+    let world = windows_well_known_sid(WinWorldSid)?;
+    let mut entries = [
+        EXPLICIT_ACCESS_W {
+            grfAccessPermissions: FILE_ALL_ACCESS,
+            grfAccessMode: SET_ACCESS,
+            grfInheritance: 0,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: std::ptr::null_mut(),
+                MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_USER,
+                ptstrName: user.as_ptr().cast(),
+            },
+        },
+        EXPLICIT_ACCESS_W {
+            grfAccessPermissions: world_permissions,
+            grfAccessMode: SET_ACCESS,
+            grfInheritance: 0,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: std::ptr::null_mut(),
+                MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_GROUP,
+                ptstrName: world.as_ptr().cast(),
+            },
+        },
+    ];
+    let mut raw_acl = std::ptr::null_mut();
+    // SAFETY: entries contain two live SID-backed trustees and raw_acl is
+    // writable output storage.
+    let status = unsafe {
+        SetEntriesInAclW(
+            entries.len() as u32,
+            entries.as_mut_ptr(),
+            std::ptr::null(),
+            &raw mut raw_acl,
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    if raw_acl.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned a null test ACL",
+        ));
+    }
+    let acl = WindowsCurrentUserOnlyAcl { raw: raw_acl };
+    let mut encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if encoded.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Windows test path contains a NUL code unit",
+        ));
+    }
+    encoded.push(0);
+    // SAFETY: encoded and ACL remain live for this bounded test-fixture
+    // mutation. Owner, bytes, and attributes are not changed.
+    let status = unsafe {
+        SetNamedSecurityInfoW(
+            encoded.as_mut_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl.raw,
+            std::ptr::null_mut(),
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    Ok(())
+}
+
+#[cfg(all(test, windows))]
+pub(crate) fn set_test_world_readable_product_file_dacl(path: &Path) -> io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
+
+    set_test_world_product_entry_dacl(path, FILE_GENERIC_READ)
+}
+
+#[cfg(all(test, windows))]
+pub(crate) fn set_test_world_writable_product_directory_dacl(path: &Path) -> io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+
+    set_test_world_product_entry_dacl(path, FILE_ALL_ACCESS)
+}
+
+#[cfg(all(test, windows))]
+pub(crate) fn test_windows_product_file_security_descriptor(path: &Path) -> io::Result<Vec<usize>> {
+    windows_owner_dacl_security_descriptor(&File::open(path)?)
+}
+
+#[cfg(all(test, windows))]
+pub(crate) fn test_verify_current_user_only_product_file(path: &Path) -> io::Result<()> {
+    verify_windows_current_user_only_dacl_allowing_defaulted_owner(&File::open(path)?)
+}
+
+#[cfg(all(test, windows))]
+pub(crate) fn test_windows_product_file_information(
+    path: &Path,
+) -> io::Result<(u32, u64, u64, u32, u32)> {
+    let information = windows_file_information(&File::open(path)?)?;
+    Ok((
+        information.identity.volume_serial_number,
+        information.identity.file_index,
+        information.size,
+        information.number_of_links,
+        information.attributes,
+    ))
 }
 
 fn create_private_file(path: &Path) -> io::Result<File> {
@@ -11879,7 +13332,7 @@ fn remove_private_tree(path: &Path, expected_parent: &Path) -> AppResult<()> {
         let _ = metadata;
         remove_windows_private_entry_tree(path, WindowsPrivateFileDeletePolicy::Immediate)?;
         sync_directory(&parent)?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(windows))]
     {
@@ -12187,6 +13640,30 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::TempDir;
 
+    #[cfg(windows)]
+    fn windows_test_nofollow_security_file(path: &Path) -> File {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+            FILE_SHARE_WRITE, READ_CONTROL,
+        };
+
+        let mut options = OpenOptions::new();
+        options
+            .access_mode(FILE_READ_ATTRIBUTES | READ_CONTROL)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        options.open(path).expect("open no-follow security fixture")
+    }
+
+    #[cfg(windows)]
+    fn windows_test_security_snapshot(file: &File) -> (WindowsFileInformation, Vec<usize>) {
+        (
+            windows_file_information(file).expect("fixture file information"),
+            windows_owner_dacl_security_descriptor(file).expect("fixture security descriptor"),
+        )
+    }
+
     fn assert_redacted_terminal_packaged_runtime_admission(
         admission: PackagedManagedRuntimeAdmission,
         expected_reason: ManagedRuntimeSetupFailureReason,
@@ -12280,10 +13757,14 @@ mod tests {
     }
 
     fn failure(stderr: impl Into<Vec<u8>>) -> ManagedCommandOutput {
+        failure_with_status(1, stderr)
+    }
+
+    fn failure_with_status(code: i32, stderr: impl Into<Vec<u8>>) -> ManagedCommandOutput {
         #[cfg(unix)]
-        let status = ExitStatus::from_raw(1 << 8);
+        let status = ExitStatus::from_raw(code << 8);
         #[cfg(windows)]
-        let status = ExitStatus::from_raw(1);
+        let status = ExitStatus::from_raw(code as u32);
         ManagedCommandOutput {
             status,
             stdout: Vec::new(),
@@ -12368,6 +13849,23 @@ mod tests {
         sid_kind: windows_sys::Win32::Security::WELL_KNOWN_SID_TYPE,
         mask: u32,
     ) {
+        use windows_sys::Win32::Security::{CONTAINER_INHERIT_ACE, OBJECT_INHERIT_ACE};
+
+        set_windows_allow_dacl_with_flags(
+            path,
+            sid_kind,
+            mask,
+            OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+        );
+    }
+
+    #[cfg(windows)]
+    fn set_windows_allow_dacl_with_flags(
+        path: &Path,
+        sid_kind: windows_sys::Win32::Security::WELL_KNOWN_SID_TYPE,
+        mask: u32,
+        principal_ace_flags: u32,
+    ) {
         use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Foundation::TRUE;
         use windows_sys::Win32::Security::{
@@ -12436,7 +13934,7 @@ mod tests {
                 AddAccessAllowedAceEx(
                     acl.as_mut_ptr().cast(),
                     ACL_REVISION,
-                    OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+                    principal_ace_flags,
                     mask,
                     principal.as_mut_ptr().cast(),
                 )
@@ -12526,6 +14024,340 @@ mod tests {
         assert!(
             guards.len() >= 2,
             "the canonical chain must retain its ancestors"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn non_windows_parent_bootstrap_is_limited_to_the_known_canonical_product_root() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let platform_local_data = temporary.path().join("missing-platform-local-data");
+        let canonical = platform_local_data.join(PRODUCT_DATA_DIRECTORY_NAME);
+
+        ensure_known_canonical_product_data_parent(&canonical, &platform_local_data)
+            .expect("bootstrap the known canonical platform parent");
+        assert!(platform_local_data.is_dir());
+
+        let arbitrary_parent = temporary.path().join("missing-arbitrary-parent");
+        let arbitrary = arbitrary_parent.join("caller-selected-data");
+        ensure_known_canonical_product_data_parent(&arbitrary, &platform_local_data)
+            .expect("arbitrary roots remain untouched");
+        assert!(!arbitrary_parent.exists());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn non_windows_private_product_root_does_not_create_an_arbitrary_missing_parent() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let arbitrary_parent = temporary.path().join("missing-arbitrary-parent");
+        let arbitrary = arbitrary_parent.join("caller-selected-data");
+
+        assert!(ensure_private_product_data_directory(&arbitrary).is_err());
+        assert!(!arbitrary_parent.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_private_product_data_directory_is_secure_on_first_creation() {
+        use windows_sys::Win32::Security::{CONTAINER_INHERIT_ACE, OBJECT_INHERIT_ACE};
+
+        let local_app_data = windows_local_app_data_directory()
+            .expect("resolve the canonical LocalAppData test parent");
+        let temporary = tempfile::Builder::new()
+            .prefix("ai-security-scanner-product-data-test-")
+            .tempdir_in(&local_app_data)
+            .expect("reserve a unique product-data path");
+        fs::remove_dir(temporary.path()).expect("remove the inherited-ACL reservation");
+
+        let guard = ensure_private_product_data_directory(temporary.path())
+            .expect("create the product-data root with a protected DACL");
+        assert!(
+            guard.was_created(),
+            "the guard must report that this call won final-component creation"
+        );
+
+        let existing_guard = ensure_private_product_data_directory(temporary.path())
+            .expect("verify the already-created protected product-data root");
+        assert!(
+            !existing_guard.was_created(),
+            "an existing root must never be treated as empty first-run state"
+        );
+
+        let handle = open_windows_real_directory_security_handle(temporary.path())
+            .expect("open the new product-data root");
+        verify_windows_current_user_only_dacl_with_ace_flags(
+            &handle,
+            (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE) as u8,
+        )
+        .expect("new product-data root has the exact protected DACL");
+
+        let renamed = temporary.path().with_extension("replacement-attempt");
+        assert!(
+            fs::rename(temporary.path(), &renamed).is_err(),
+            "the preparation guard must pin the root until lease handoff"
+        );
+        let lease = crate::process_lease::DataDirectoryExclusiveLease::acquire(temporary.path())
+            .expect("acquire the process lease while the preparation guard is live");
+        drop(guard);
+        drop(existing_guard);
+        assert!(
+            fs::rename(temporary.path(), &renamed).is_err(),
+            "the process lease must keep the exact root pinned after handoff"
+        );
+        drop(lease);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_legacy_existing_product_root_reopens_without_rewriting_its_inherited_dacl() {
+        use windows_sys::Win32::Security::WinWorldSid;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
+
+        let local_app_data = windows_local_app_data_directory()
+            .expect("resolve the canonical LocalAppData test parent");
+        let temporary = tempfile::Builder::new()
+            .prefix("ai-security-scanner-existing-legacy-test-")
+            .tempdir_in(&local_app_data)
+            .expect("create ordinary inherited-ACL legacy root");
+        let data_root = temporary.path().to_path_buf();
+        set_windows_inheritable_allow_dacl(
+            &data_root,
+            WinWorldSid,
+            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        );
+
+        let before_handle = open_windows_real_directory_security_handle(&data_root)
+            .expect("open inherited-ACL legacy root");
+        let before = windows_owner_dacl_security_descriptor(&before_handle)
+            .expect("snapshot inherited legacy ACL");
+        let _error = verify_windows_product_data_directory_dacl(&before_handle)
+            .expect_err("legacy fixture must not already have the product-created DACL");
+        drop(before_handle);
+
+        let guards = verify_windows_existing_product_data_directory(&data_root)
+            .expect("a bounded inherited legacy root must reopen without ACL repair");
+        assert!(
+            !guards.is_empty(),
+            "the legacy root and its real ancestor chain must remain pinned"
+        );
+        drop(guards);
+
+        let after_handle = open_windows_real_directory_security_handle(&data_root)
+            .expect("reopen inherited-ACL legacy root");
+        let after = windows_owner_dacl_security_descriptor(&after_handle)
+            .expect("snapshot legacy ACL after verification");
+        assert_eq!(
+            after, before,
+            "legacy roots must never receive automatic ACL repair"
+        );
+        assert!(
+            verify_windows_product_data_directory_dacl(&after_handle).is_err(),
+            "accepted legacy root must retain its inherited non-product ACL shape"
+        );
+        drop(after_handle);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_legacy_product_root_rejects_foreign_write_without_rewriting() {
+        use windows_sys::Win32::Security::WinWorldSid;
+        use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
+
+        let local_app_data = windows_local_app_data_directory()
+            .expect("resolve the canonical LocalAppData test parent");
+        let temporary = tempfile::Builder::new()
+            .prefix("ai-security-scanner-legacy-write-test-")
+            .tempdir_in(&local_app_data)
+            .expect("create legacy product-data fixture");
+        let data_root = temporary.path().to_path_buf();
+        set_windows_inheritable_allow_dacl(&data_root, WinWorldSid, FILE_WRITE_DATA);
+        let before = windows_test_security_snapshot(
+            &open_windows_real_directory_security_handle(&data_root)
+                .expect("open foreign-writable legacy root"),
+        );
+
+        let error = verify_windows_existing_product_data_directory(&data_root)
+            .expect_err("foreign write access must not become legacy compatibility");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("write or replacement rights"));
+        assert_eq!(
+            windows_test_security_snapshot(
+                &open_windows_real_directory_security_handle(&data_root)
+                    .expect("reopen foreign-writable legacy root"),
+            ),
+            before,
+            "legacy rejection must not rewrite the root descriptor"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_legacy_product_root_rejects_inherit_only_foreign_write_without_rewriting() {
+        use windows_sys::Win32::Security::{
+            CONTAINER_INHERIT_ACE, INHERIT_ONLY_ACE, OBJECT_INHERIT_ACE, WinWorldSid,
+        };
+        use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+
+        let local_app_data = windows_local_app_data_directory()
+            .expect("resolve the canonical LocalAppData test parent");
+        let temporary = tempfile::Builder::new()
+            .prefix("ai-security-scanner-legacy-inherit-only-test-")
+            .tempdir_in(&local_app_data)
+            .expect("create legacy product-data fixture");
+        let data_root = temporary.path().to_path_buf();
+        set_windows_allow_dacl_with_flags(
+            &data_root,
+            WinWorldSid,
+            FILE_ALL_ACCESS,
+            OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE,
+        );
+        let before = windows_test_security_snapshot(
+            &open_windows_real_directory_security_handle(&data_root)
+                .expect("open inherit-only foreign-writable legacy root"),
+        );
+
+        let error = verify_windows_existing_product_data_directory(&data_root)
+            .expect_err("foreign inherited write access must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("write or replacement rights"));
+        assert_eq!(
+            windows_test_security_snapshot(
+                &open_windows_real_directory_security_handle(&data_root)
+                    .expect("reopen inherit-only foreign-writable legacy root"),
+            ),
+            before,
+            "inherit-only rejection must not rewrite the root descriptor"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_private_product_data_directory_rejects_existing_unsafe_acl_without_rewriting() {
+        let temporary = managed_runtime_fixture_tempdir();
+        let data_root = temporary.path().join("existing-product-data");
+        fs::create_dir(&data_root).expect("existing product-data root");
+        set_windows_permissive_inheritable_dacl(&data_root);
+        let before_handle =
+            open_windows_real_directory_security_handle(&data_root).expect("open unsafe root");
+        let before = windows_owner_dacl_security_descriptor(&before_handle)
+            .expect("snapshot unsafe root ACL");
+        drop(before_handle);
+
+        let error = ensure_private_product_data_directory(&data_root)
+            .expect_err("existing unsafe product-data root must fail closed");
+        assert!(matches!(error, AppError::NotAuthorized(_)));
+
+        let after_handle =
+            open_windows_real_directory_security_handle(&data_root).expect("reopen unsafe root");
+        let after = windows_owner_dacl_security_descriptor(&after_handle)
+            .expect("snapshot root ACL after rejection");
+        assert_eq!(after, before, "rejection must not rewrite existing ACLs");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_unsafe_existing_product_root_rejects_without_rewriting_descendants() {
+        use std::os::windows::fs::symlink_file;
+        use windows_sys::Win32::Foundation::ERROR_PRIVILEGE_NOT_HELD;
+
+        let temporary = managed_runtime_fixture_tempdir();
+        let data_root = temporary.path().join("canonical-product-data-fixture");
+        fs::create_dir(&data_root).expect("existing product-data fixture");
+        set_windows_permissive_inheritable_dacl(&data_root);
+
+        let ordinary = data_root.join("existing-child.txt");
+        fs::write(&ordinary, b"existing child").expect("ordinary child");
+        let ordinary_before = windows_test_security_snapshot(&File::open(&ordinary).unwrap());
+
+        let outside_hardlink = temporary.path().join("outside-hardlink.txt");
+        fs::write(&outside_hardlink, b"outside hardlink object").expect("outside hardlink");
+        let inside_hardlink = data_root.join("existing-hardlink.txt");
+        fs::hard_link(&outside_hardlink, &inside_hardlink).expect("inside hardlink name");
+        let outside_hardlink_before =
+            windows_test_security_snapshot(&File::open(&outside_hardlink).unwrap());
+        let inside_hardlink_before =
+            windows_test_security_snapshot(&File::open(&inside_hardlink).unwrap());
+
+        let outside_symlink_target = temporary.path().join("outside-symlink-target.txt");
+        fs::write(&outside_symlink_target, b"outside symlink target").expect("symlink target");
+        let inside_symlink = data_root.join("existing-symlink.txt");
+        let symlink_before = match symlink_file(&outside_symlink_target, &inside_symlink) {
+            Ok(()) => Some(windows_test_security_snapshot(
+                &windows_test_nofollow_security_file(&inside_symlink),
+            )),
+            Err(error) if error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD as i32) => {
+                eprintln!("skipping symlink portion: host lacks symbolic-link privilege");
+                None
+            }
+            Err(error) => panic!("create file symlink: {error}"),
+        };
+        let symlink_target_before =
+            windows_test_security_snapshot(&File::open(&outside_symlink_target).unwrap());
+        let root_before = windows_test_security_snapshot(
+            &open_windows_real_directory_security_handle(&data_root).expect("open unsafe root"),
+        );
+
+        let error = verify_windows_existing_product_data_directory(&data_root)
+            .expect_err("an unsafe existing root must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+
+        assert_eq!(
+            windows_test_security_snapshot(
+                &open_windows_real_directory_security_handle(&data_root)
+                    .expect("reopen unsafe root")
+            ),
+            root_before,
+            "rejection must preserve the unsafe root's identity and descriptor"
+        );
+
+        assert_eq!(
+            windows_test_security_snapshot(&File::open(&ordinary).unwrap()),
+            ordinary_before,
+            "rejection must preserve an ordinary existing child's identity and descriptor"
+        );
+        assert_eq!(
+            windows_test_security_snapshot(&File::open(&outside_hardlink).unwrap()),
+            outside_hardlink_before,
+            "rejection must not change an outside object through an inside hardlink"
+        );
+        assert_eq!(
+            windows_test_security_snapshot(&File::open(&inside_hardlink).unwrap()),
+            inside_hardlink_before,
+            "rejection must preserve the inside hardlink name's identity and descriptor"
+        );
+        if let Some(symlink_before) = symlink_before {
+            assert_eq!(
+                windows_test_security_snapshot(&windows_test_nofollow_security_file(
+                    &inside_symlink,
+                )),
+                symlink_before,
+                "rejection must preserve the existing reparse point"
+            );
+        }
+        assert_eq!(
+            windows_test_security_snapshot(&File::open(&outside_symlink_target).unwrap()),
+            symlink_target_before,
+            "rejection must not reach an outside reparse target"
+        );
+        assert!(
+            verify_windows_product_data_directory_dacl(
+                &open_windows_real_directory_security_handle(&data_root)
+                    .expect("inspect retained unsafe root")
+            )
+            .is_err(),
+            "rejection must retain the root's unsafe ACL for explicit recovery"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_canonical_product_data_path_matches_the_tauri_identifier_leaf() {
+        let expected = windows_local_app_data_directory()
+            .expect("LocalAppData")
+            .join(PRODUCT_DATA_DIRECTORY_NAME);
+        assert!(
+            windows_is_canonical_product_data_directory(&expected)
+                .expect("validate canonical product-data path")
         );
     }
 
@@ -12738,7 +14570,7 @@ mod tests {
             FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
         };
 
-        let temp = TempDir::new().expect("temporary root");
+        let temp = managed_runtime_fixture_tempdir();
         let data_root = temp.path().join("ordinary-data-root");
         fs::create_dir(&data_root).expect("ordinary data root");
         let requested_state_root = data_root.join("managed-runtime");
@@ -12955,6 +14787,7 @@ mod tests {
 
     struct FakeCommandResponse {
         output: ManagedCommandOutput,
+        delay: Duration,
         #[cfg(windows)]
         side_effect: Option<FakeCommandSideEffect>,
     }
@@ -12967,6 +14800,29 @@ mod tests {
         outputs: Mutex<VecDeque<FakeCommandResponse>>,
     }
 
+    #[derive(Default)]
+    struct DeadlineFailingCommands {
+        calls: Mutex<Vec<Vec<String>>>,
+        timeouts: Mutex<Vec<Duration>>,
+    }
+
+    impl ManagedCommandRunner for DeadlineFailingCommands {
+        fn output(
+            &self,
+            _command: &ManagedRuntimeCommand,
+            args: &[OsString],
+            timeout: Duration,
+        ) -> io::Result<ManagedCommandOutput> {
+            self.calls.lock().expect("calls").push(
+                args.iter()
+                    .map(|value| value.to_string_lossy().into_owned())
+                    .collect(),
+            );
+            self.timeouts.lock().expect("timeouts").push(timeout);
+            Err(managed_command_deadline_error())
+        }
+    }
+
     impl FakeCommands {
         fn push(&self, output: ManagedCommandOutput) {
             self.outputs
@@ -12974,6 +14830,19 @@ mod tests {
                 .expect("outputs")
                 .push_back(FakeCommandResponse {
                     output,
+                    delay: Duration::ZERO,
+                    #[cfg(windows)]
+                    side_effect: None,
+                });
+        }
+
+        fn push_with_delay(&self, output: ManagedCommandOutput, delay: Duration) {
+            self.outputs
+                .lock()
+                .expect("outputs")
+                .push_back(FakeCommandResponse {
+                    output,
+                    delay,
                     #[cfg(windows)]
                     side_effect: None,
                 });
@@ -12990,6 +14859,7 @@ mod tests {
                 .expect("outputs")
                 .push_back(FakeCommandResponse {
                     output,
+                    delay: Duration::ZERO,
                     side_effect: Some(side_effect),
                 });
         }
@@ -13031,6 +14901,9 @@ mod tests {
                 .expect("outputs")
                 .pop_front()
                 .ok_or_else(|| io::Error::other("no fake output"))?;
+            if !response.delay.is_zero() {
+                thread::sleep(response.delay);
+            }
             #[cfg(windows)]
             if let Some(effect) = response.side_effect {
                 match effect {
@@ -13125,6 +14998,45 @@ mod tests {
         }
     }
 
+    struct SequencedWindowsWslRegistrationInventories(
+        Mutex<VecDeque<WindowsWslRegistrationInventory>>,
+    );
+
+    impl WindowsWslRegistrationReader for SequencedWindowsWslRegistrationInventories {
+        fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>> {
+            let inventory = self.inventory()?;
+            if inventory.complete {
+                Ok(inventory.registrations)
+            } else {
+                Err(AppError::NotAvailable(
+                    "injected incomplete WSL registration inventory".into(),
+                ))
+            }
+        }
+
+        fn inventory(&self) -> AppResult<WindowsWslRegistrationInventory> {
+            let mut snapshots = self.0.lock().expect("WSL registration inventories");
+            let snapshot = snapshots
+                .front()
+                .cloned()
+                .unwrap_or_else(WindowsWslRegistrationInventory::default);
+            if snapshots.len() > 1 {
+                snapshots.pop_front();
+            }
+            Ok(snapshot)
+        }
+    }
+
+    struct FailingWindowsWslRegistrations;
+
+    impl WindowsWslRegistrationReader for FailingWindowsWslRegistrations {
+        fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>> {
+            Err(AppError::Internal(
+                "injected transient WSL registration reader failure".into(),
+            ))
+        }
+    }
+
     #[cfg(windows)]
     struct SequencedWindowsWslRegistrations(Mutex<VecDeque<Vec<WindowsWslRegistration>>>);
 
@@ -13139,6 +15051,68 @@ mod tests {
                     AppError::Internal("no fake Windows WSL registration snapshot".into())
                 })
             }
+        }
+    }
+
+    #[cfg(windows)]
+    struct WindowsWslRegistrationAfterVhdExists {
+        registration: WindowsWslRegistration,
+        vhd: PathBuf,
+    }
+
+    #[cfg(windows)]
+    impl WindowsWslRegistrationReader for WindowsWslRegistrationAfterVhdExists {
+        fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>> {
+            if self.vhd.is_file() {
+                Ok(vec![self.registration.clone()])
+            } else {
+                Ok(Vec::new())
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    struct PartialWindowsWslRegistrationAfterVhdExists {
+        registration: WindowsWslRegistration,
+        vhd: PathBuf,
+    }
+
+    #[cfg(windows)]
+    impl WindowsWslRegistrationReader for PartialWindowsWslRegistrationAfterVhdExists {
+        fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>> {
+            Err(AppError::NotAvailable(
+                "injected unrelated malformed WSL registration entry".into(),
+            ))
+        }
+
+        fn inventory(&self) -> AppResult<WindowsWslRegistrationInventory> {
+            let mut observed_distribution_names = vec!["Malformed-Unrelated-Entry".into()];
+            let registrations = if self.vhd.is_file() {
+                observed_distribution_names.push(self.registration.distribution_name.clone());
+                vec![self.registration.clone()]
+            } else {
+                Vec::new()
+            };
+            Ok(WindowsWslRegistrationInventory {
+                registrations,
+                observed_distribution_names,
+                complete: false,
+            })
+        }
+    }
+
+    #[cfg(windows)]
+    struct WindowsWslRegistrationsForExistingPaths(Vec<(PathBuf, WindowsWslRegistration)>);
+
+    #[cfg(windows)]
+    impl WindowsWslRegistrationReader for WindowsWslRegistrationsForExistingPaths {
+        fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>> {
+            Ok(self
+                .0
+                .iter()
+                .filter(|(path, _)| path.is_file())
+                .map(|(_, registration)| registration.clone())
+                .collect())
         }
     }
 
@@ -13174,6 +15148,39 @@ mod tests {
         image: Vec<u8>,
     }
 
+    #[cfg(windows)]
+    fn managed_runtime_fixture_tempdir() -> TempDir {
+        let local_app_data = windows_local_app_data_directory()
+            .expect("resolve the canonical LocalAppData test parent");
+        let temp = tempfile::Builder::new()
+            .prefix("ai-security-scanner-managed-runtime-test-")
+            .tempdir_in(&local_app_data)
+            .expect("create a unique LocalAppData test directory");
+        let parent = temp
+            .path()
+            .parent()
+            .expect("test directory has a LocalAppData parent")
+            .canonicalize()
+            .expect("canonicalize the test directory parent");
+        assert_eq!(
+            parent,
+            local_app_data
+                .canonicalize()
+                .expect("canonicalize LocalAppData"),
+            "the removable empty fixture directory must be directly beneath LocalAppData"
+        );
+        fs::remove_dir(temp.path()).expect("remove the empty inherited-ACL fixture directory");
+        let (_, guard) = open_or_create_windows_managed_private_directory_guard(temp.path(), true)
+            .expect("recreate the fixture root with the product's protected DACL");
+        drop(guard);
+        temp
+    }
+
+    #[cfg(not(windows))]
+    fn managed_runtime_fixture_tempdir() -> TempDir {
+        tempfile::tempdir().expect("temp")
+    }
+
     #[cfg(all(unix, target_os = "linux"))]
     impl Drop for Fixture {
         fn drop(&mut self) {
@@ -13188,7 +15195,7 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
-        let temp = tempfile::tempdir().expect("temp");
+        let temp = managed_runtime_fixture_tempdir();
         let resources = temp.path().join("resources");
         let app_data = temp.path().join("app-data");
         fs::create_dir(&app_data).expect("app data");
@@ -13414,7 +15421,10 @@ mod tests {
             )
             .expect("a fresh product generation continues beside the N-1 ghost");
 
-        assert_eq!(selected, machine_name(&target));
+        assert_eq!(
+            selected,
+            fixture.manager.isolated_windows_machine_name(&target, 1)
+        );
         assert_ne!(selected, legacy_machine);
         assert_eq!(fs::read(&vhd).unwrap(), vhd_before);
         assert_eq!(fs::read(&sentinel).unwrap(), sentinel_before);
@@ -13424,13 +15434,13 @@ mod tests {
             .read_windows_wsl_generation_selection_locked(&target)
             .unwrap()
             .unwrap();
-        assert_eq!(durable.generation_index, 0);
+        assert_eq!(durable.generation_index, 1);
         assert!(durable.preserved_collision_names.is_empty());
         assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
     }
 
     #[test]
-    fn unrelated_wsl_distribution_does_not_change_or_block_current_generation() {
+    fn unrelated_wsl_distribution_does_not_change_or_block_unique_fresh_generation() {
         let mut fixture = fixture();
         let target = modeled_windows_target(&mut fixture);
 
@@ -13444,15 +15454,205 @@ mod tests {
             )
             .expect("unrelated WSL state is ignored");
 
-        assert_eq!(selected, machine_name(&target));
+        assert_eq!(
+            selected,
+            fixture.manager.isolated_windows_machine_name(&target, 1)
+        );
         let durable = fixture
             .manager
             .read_windows_wsl_generation_selection_locked(&target)
             .unwrap()
             .unwrap();
-        assert_eq!(durable.generation_index, 0);
+        assert_eq!(durable.generation_index, 1);
         assert!(durable.preserved_collision_names.is_empty());
         assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn structurally_invalid_old_generation_journal_does_not_hide_a_later_valid_generation() {
+        let mut fixture = fixture();
+        let target = modeled_windows_target(&mut fixture);
+        let default_machine = machine_name(&target);
+        let invalid_generation_zero = fixture.manager.windows_wsl_generation_selection_path(0);
+        let valid_generation_one = WindowsWslGenerationSelection {
+            schema_version: WINDOWS_WSL_GENERATION_SELECTION_SCHEMA.into(),
+            authorizes_cleanup: false,
+            manifest_sha256: fixture.manager.loaded.sha256.clone(),
+            machine_image_sha256: target.machine_image.sha256.clone(),
+            default_machine_name: default_machine.clone(),
+            selected_machine_name: fixture.manager.isolated_windows_machine_name(&target, 1),
+            generation_index: 1,
+            preserved_collision_names: vec![default_machine],
+        };
+        fixture
+            .manager
+            .write_windows_wsl_generation_selection_locked(&target, &valid_generation_one)
+            .expect("write later valid generation");
+        fs::create_dir(&invalid_generation_zero)
+            .expect("structurally invalid generation-zero journal fixture");
+
+        let selected = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .expect("structural old entry is preserved but skipped")
+            .expect("later valid generation remains visible");
+
+        assert_eq!(selected, valid_generation_one);
+        assert!(invalid_generation_zero.is_dir());
+        assert!(fixture.commands.calls().is_empty());
+    }
+
+    #[test]
+    fn orphan_ownership_entry_keeps_generation_occupied_and_routes_fresh_setup_forward() {
+        let mut fixture = fixture();
+        let target = modeled_windows_target(&mut fixture);
+        let default_machine = machine_name(&target);
+        let generation_one = fixture.manager.isolated_windows_machine_name(&target, 1);
+        let orphan = fixture.manager.windows_wsl_ownership_proof_path(
+            &generation_one,
+            WindowsWslOwnershipBasis::InitIntent,
+        );
+        fs::create_dir_all(&orphan).expect("orphan structural ownership entry");
+
+        let selected = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(
+                &target,
+                &[],
+                &[format!("podman-{default_machine}")],
+                true,
+            )
+            .expect("fresh setup should skip the occupied orphan generation");
+
+        assert_eq!(
+            selected,
+            fixture.manager.isolated_windows_machine_name(&target, 2)
+        );
+        assert!(orphan.is_dir());
+        assert!(
+            !fixture
+                .manager
+                .windows_generation_selection_exists(1)
+                .expect("inspect skipped generation")
+        );
+        assert!(
+            fixture
+                .manager
+                .windows_generation_selection_exists(2)
+                .expect("inspect selected generation")
+        );
+        assert!(fixture.commands.calls().is_empty());
+    }
+
+    #[test]
+    fn structurally_invalid_proof_on_selected_generation_routes_retry_forward_without_mutation() {
+        let mut fixture = fixture();
+        let target = modeled_windows_target(&mut fixture);
+        let default_machine = machine_name(&target);
+        let generation_one = fixture.manager.isolated_windows_machine_name(&target, 1);
+        let selection = WindowsWslGenerationSelection {
+            schema_version: WINDOWS_WSL_GENERATION_SELECTION_SCHEMA.into(),
+            authorizes_cleanup: false,
+            manifest_sha256: fixture.manager.loaded.sha256.clone(),
+            machine_image_sha256: target.machine_image.sha256.clone(),
+            default_machine_name: default_machine.clone(),
+            selected_machine_name: generation_one.clone(),
+            generation_index: 1,
+            preserved_collision_names: vec![default_machine],
+        };
+        fixture
+            .manager
+            .write_windows_wsl_generation_selection_locked(&target, &selection)
+            .expect("write selected generation");
+        let invalid_proof = fixture.manager.windows_wsl_ownership_proof_path(
+            &generation_one,
+            WindowsWslOwnershipBasis::ProvenMachine,
+        );
+        fs::create_dir_all(&invalid_proof).expect("structurally invalid selected proof");
+
+        let selected = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(&target, &[], &[], true)
+            .expect("retry should preserve and advance past the invalid proof");
+
+        assert_eq!(
+            selected,
+            fixture.manager.isolated_windows_machine_name(&target, 2)
+        );
+        assert!(invalid_proof.is_dir());
+        assert!(
+            fixture
+                .manager
+                .windows_generation_selection_exists(1)
+                .expect("preserve old selection")
+        );
+        assert!(
+            fixture
+                .manager
+                .windows_generation_selection_exists(2)
+                .expect("append replacement selection")
+        );
+        assert!(fixture.commands.calls().is_empty());
+    }
+
+    #[test]
+    fn exact_init_intent_never_masks_an_invalid_proven_machine_entry() {
+        let mut fixture = fixture();
+        let target = modeled_windows_target(&mut fixture);
+        fixture.manager.install().expect("install current payload");
+        let default_machine = machine_name(&target);
+        let generation_one = fixture.manager.isolated_windows_machine_name(&target, 1);
+        let selection = WindowsWslGenerationSelection {
+            schema_version: WINDOWS_WSL_GENERATION_SELECTION_SCHEMA.into(),
+            authorizes_cleanup: false,
+            manifest_sha256: fixture.manager.loaded.sha256.clone(),
+            machine_image_sha256: target.machine_image.sha256.clone(),
+            default_machine_name: default_machine.clone(),
+            selected_machine_name: generation_one.clone(),
+            generation_index: 1,
+            preserved_collision_names: vec![default_machine],
+        };
+        fixture
+            .manager
+            .write_windows_wsl_generation_selection_locked(&target, &selection)
+            .expect("write selected generation");
+        fixture
+            .manager
+            .ensure_windows_wsl_ownership_proof_locked(
+                &target,
+                &generation_one,
+                WindowsWslOwnershipBasis::InitIntent,
+            )
+            .expect("write exact initialization intent");
+        let init_intent = fixture.manager.windows_wsl_ownership_proof_path(
+            &generation_one,
+            WindowsWslOwnershipBasis::InitIntent,
+        );
+        let init_before = fs::read(&init_intent).expect("snapshot exact intent");
+        let invalid_proven = fixture.manager.windows_wsl_ownership_proof_path(
+            &generation_one,
+            WindowsWslOwnershipBasis::ProvenMachine,
+        );
+        fs::create_dir(&invalid_proven).expect("structurally invalid proven-machine entry");
+
+        let selected = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(&target, &[], &[], true)
+            .expect("invalid stronger proof should route setup forward immediately");
+
+        assert_eq!(
+            selected,
+            fixture.manager.isolated_windows_machine_name(&target, 2)
+        );
+        assert_eq!(fs::read(&init_intent).unwrap(), init_before);
+        assert!(invalid_proven.is_dir());
+        assert!(
+            fixture
+                .manager
+                .windows_generation_selection_exists(2)
+                .expect("append replacement selection")
+        );
+        assert!(fixture.commands.calls().is_empty());
     }
 
     #[test]
@@ -13586,7 +15786,7 @@ mod tests {
         fs::write(&provider_sentinel, b"preserve-provider").unwrap();
         let selection_path = fixture.manager.windows_wsl_generation_selection_path(1);
         ensure_managed_private_directory(selection_path.parent().unwrap()).unwrap();
-        fs::write(&selection_path, b"malformed-routing-record").unwrap();
+        write_private_atomic(&selection_path, b"malformed-routing-record").unwrap();
 
         let selected = fixture
             .manager
@@ -13632,12 +15832,15 @@ mod tests {
     }
 
     #[test]
-    fn clean_read_then_setup_selection_stays_on_default_generation_without_provider_mutation() {
+    fn clean_read_then_setup_allocates_one_durable_unique_generation_without_provider_mutation() {
         let mut fixture = fixture();
         let target = modeled_windows_target(&mut fixture);
         let default_home = fixture
             .manager
             .windows_provider_home_for_generation(&target, 0);
+        let isolated_home = fixture
+            .manager
+            .windows_provider_home_for_generation(&target, 1);
 
         assert!(
             !fixture
@@ -13651,8 +15854,17 @@ mod tests {
             .manager
             .select_windows_machine_generation_from_inventory_locked(&target, &[], &[], false)
             .expect("clean setup selection");
+        let repeated = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(&target, &[], &[], false)
+            .expect("clean setup retry reuses its durable selection");
 
-        assert_eq!(selected, machine_name(&target));
+        assert_eq!(
+            selected,
+            fixture.manager.isolated_windows_machine_name(&target, 1)
+        );
+        assert_ne!(selected, machine_name(&target));
+        assert_eq!(repeated, selected);
         assert!(
             fixture
                 .manager
@@ -13660,7 +15872,78 @@ mod tests {
                 .unwrap()
         );
         assert!(!private_entry_exists(&default_home).unwrap());
+        assert!(!private_entry_exists(&isolated_home).unwrap());
+        let durable = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .unwrap()
+            .expect("one fresh generation selection");
+        assert_eq!(durable.generation_index, 1);
+        assert_eq!(durable.selected_machine_name, selected);
+        assert!(durable.preserved_collision_names.is_empty());
+        assert!(
+            !fixture
+                .manager
+                .windows_generation_selection_exists(2)
+                .expect("inspect unused next generation")
+        );
         assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exact_deployed_generation_zero_is_reused_without_allocating_a_new_generation() {
+        let mut fixture = fixture();
+        let (target, machine, vhd, registration) =
+            seed_verified_existing_windows_machine(&mut fixture);
+        let vhd_before = fs::read(&vhd).expect("generation-zero VHD snapshot");
+        let selection_before = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .expect("read deployed selection")
+            .expect("deployed generation-zero selection");
+        let machines = [MachineListEntry {
+            name: machine.clone(),
+            running: true,
+            vm_type: target.provider.argument().into(),
+            cpus: u64::from(fixture.manager.loaded.manifest.resources.cpus),
+            memory: u64::from(fixture.manager.loaded.manifest.resources.memory_mb) * 1024 * 1024,
+            disk_size: u64::from(fixture.manager.loaded.manifest.resources.disk_size_gb)
+                * 1024
+                * 1024
+                * 1024,
+        }];
+        let distributions = [registration.distribution_name.clone()];
+
+        let selected = fixture
+            .manager
+            .select_windows_machine_generation_from_complete_inventory_locked(
+                &target,
+                &machines,
+                &distributions,
+                std::slice::from_ref(&registration),
+                true,
+            )
+            .expect("exact deployed generation remains reusable");
+
+        assert_eq!(selected, machine);
+        assert_eq!(selection_before.generation_index, 0);
+        assert_eq!(
+            fixture
+                .manager
+                .read_windows_wsl_generation_selection_locked(&target)
+                .unwrap()
+                .unwrap(),
+            selection_before
+        );
+        assert!(
+            !fixture
+                .manager
+                .windows_generation_selection_exists(1)
+                .expect("inspect unused isolated generation")
+        );
+        assert_eq!(fs::read(vhd).unwrap(), vhd_before);
+        assert!(fixture.commands.calls().is_empty());
     }
 
     #[test]
@@ -13683,7 +15966,7 @@ mod tests {
 
         let provider_home = fixture
             .manager
-            .windows_provider_home_for_generation(&target, 0);
+            .windows_provider_home_for_generation(&target, 1);
         fs::create_dir_all(&provider_home).expect("in-progress provider home");
         let sentinel = provider_home.join("in-progress-state");
         fs::write(&sentinel, b"product-owned-in-progress").unwrap();
@@ -13718,6 +16001,16 @@ mod tests {
     fn machine_json(manager: &ManagedRuntimeManager, running: bool) -> Vec<u8> {
         let target = manager.loaded.target().expect("target");
         machine_json_named(manager, &machine_name(target), running)
+    }
+
+    fn fresh_machine_json(manager: &ManagedRuntimeManager, running: bool) -> Vec<u8> {
+        let target = manager.loaded.target().expect("target");
+        let selected = if target.operating_system == ManagedOperatingSystem::Windows {
+            manager.isolated_windows_machine_name(target, 1)
+        } else {
+            machine_name(target)
+        };
+        machine_json_named(manager, &selected, running)
     }
 
     #[cfg(windows)]
@@ -13768,10 +16061,23 @@ mod tests {
             .target()
             .expect("Windows target")
             .clone();
-        let machine = fixture
+        let machine = machine_name(&target);
+        fixture
             .manager
-            .select_windows_machine_generation_from_inventory_locked(&target, &[], &[], false)
-            .expect("select current Windows generation");
+            .write_windows_wsl_generation_selection_locked(
+                &target,
+                &WindowsWslGenerationSelection {
+                    schema_version: WINDOWS_WSL_GENERATION_SELECTION_SCHEMA.into(),
+                    authorizes_cleanup: false,
+                    manifest_sha256: fixture.manager.loaded.sha256.clone(),
+                    machine_image_sha256: target.machine_image.sha256.clone(),
+                    default_machine_name: machine.clone(),
+                    selected_machine_name: machine.clone(),
+                    generation_index: 0,
+                    preserved_collision_names: Vec::new(),
+                },
+            )
+            .expect("seed deployed generation-zero selection");
         fixture
             .manager
             .runtime_command(&target)
@@ -13842,44 +16148,33 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn configure_fresh_windows_machine_registration(
-        fixture: &mut Fixture,
-        empty_snapshots_before_registration: usize,
-    ) -> PathBuf {
+    fn configure_fresh_windows_machine_registration(fixture: &mut Fixture) -> PathBuf {
         let target = fixture
             .manager
             .loaded
             .target()
             .expect("Windows target")
             .clone();
-        let machine = machine_name(&target);
+        let machine = fixture.manager.isolated_windows_machine_name(&target, 1);
         let storage = fixture
             .manager
-            .windows_wsl_distribution_storage_path(&target, &machine, 0);
+            .windows_wsl_distribution_storage_path(&target, &machine, 1);
         let registration = WindowsWslRegistration {
             registration_id: "00000000-0000-0000-0000-000000000061".into(),
             distribution_name: format!("podman-{machine}"),
-            base_path: storage,
+            base_path: storage.clone(),
         };
-        let mut snapshots = VecDeque::new();
-        for _ in 0..empty_snapshots_before_registration {
-            snapshots.push_back(Vec::new());
-        }
-        snapshots.push_back(vec![registration]);
-        fixture.manager.wsl_registrations =
-            Arc::new(SequencedWindowsWslRegistrations(Mutex::new(snapshots)));
-        fixture
-            .manager
-            .windows_wsl_distribution_storage_path(&target, &machine, 0)
-            .join("ext4.vhdx")
+        let vhd = storage.join("ext4.vhdx");
+        fixture.manager.wsl_registrations = Arc::new(WindowsWslRegistrationAfterVhdExists {
+            registration,
+            vhd: vhd.clone(),
+        });
+        vhd
     }
 
     #[cfg(not(windows))]
-    fn configure_fresh_windows_machine_registration(
-        fixture: &mut Fixture,
-        empty_snapshots_before_registration: usize,
-    ) -> PathBuf {
-        let _ = (fixture, empty_snapshots_before_registration);
+    fn configure_fresh_windows_machine_registration(fixture: &mut Fixture) -> PathBuf {
+        let _ = fixture;
         PathBuf::new()
     }
 
@@ -13906,6 +16201,48 @@ mod tests {
             .open(path)
             .expect("open fixture without write or delete sharing")
     }
+
+    #[cfg(windows)]
+    fn open_without_windows_sharing(path: &Path) -> File {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(path)
+            .expect("open fixture without sharing")
+    }
+
+    #[cfg(windows)]
+    fn open_windows_directory_without_sharing(path: &Path) -> File {
+        use std::os::windows::ffi::OsStrExt;
+        use std::os::windows::io::FromRawHandle;
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::Storage::FileSystem::{
+            CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_READ_ATTRIBUTES, FILE_TRAVERSE, OPEN_EXISTING, READ_CONTROL,
+        };
+
+        let mut encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+        assert!(!encoded.contains(&0), "fixture directory contains a NUL");
+        encoded.push(0);
+        // SAFETY: encoded is NUL-terminated and remains live for the call.
+        let raw = unsafe {
+            CreateFileW(
+                encoded.as_ptr(),
+                FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL,
+                0,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(raw, INVALID_HANDLE_VALUE, "open fixture without sharing");
+        // SAFETY: CreateFileW returned a uniquely owned handle.
+        unsafe { File::from_raw_handle(raw) }
+    }
+
     #[test]
     fn machine_names_are_deterministic_unique_and_within_podman_limit() {
         let image = ManagedMachineImage {
@@ -13946,6 +16283,331 @@ mod tests {
         assert!(names.contains("assm1-linux-arm64-0123456789ab"));
         assert!(names.contains("assm1-macos-arm64-0123456789ab"));
         assert!(names.contains("assm2-win-x64-0123456789ab"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn transient_incomplete_windows_registration_inventory_reuses_verified_selection_after_retry() {
+        let mut fixture = fixture();
+        let (target, selected_machine, _selected_vhd, registration) =
+            seed_verified_existing_windows_machine(&mut fixture);
+        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrationInventories(
+            Mutex::new(VecDeque::from([
+                WindowsWslRegistrationInventory {
+                    registrations: Vec::new(),
+                    observed_distribution_names: vec![registration.distribution_name.clone()],
+                    complete: false,
+                },
+                WindowsWslRegistrationInventory::complete(vec![registration]),
+            ])),
+        ));
+        let machines = [MachineListEntry {
+            name: selected_machine.clone(),
+            running: true,
+            vm_type: target.provider.argument().into(),
+            cpus: u64::from(fixture.manager.loaded.manifest.resources.cpus),
+            memory: u64::from(fixture.manager.loaded.manifest.resources.memory_mb) * 1024 * 1024,
+            disk_size: u64::from(fixture.manager.loaded.manifest.resources.disk_size_gb)
+                * 1024
+                * 1024
+                * 1024,
+        }];
+        let distributions = [format!("podman-{selected_machine}")];
+        let selection_before = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .expect("read generation selection")
+            .expect("selected generation");
+        let _lock = fixture.manager.lock().expect("lifecycle lock");
+
+        let selected = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(
+                &target,
+                &machines,
+                &distributions,
+                true,
+            )
+            .expect("bounded reread should recover the exact registration binding");
+
+        assert_eq!(selected, selected_machine);
+        assert_eq!(
+            fixture
+                .manager
+                .read_windows_wsl_generation_selection_locked(&target)
+                .expect("read preserved selection")
+                .expect("preserved generation"),
+            selection_before
+        );
+        assert!(fixture.commands.calls().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unrelated_incomplete_windows_inventory_does_not_block_exact_product_binding() {
+        let mut fixture = fixture();
+        let (_target, selected_machine, selected_vhd, registration) =
+            seed_verified_existing_windows_machine(&mut fixture);
+        let partial = WindowsWslRegistrationInventory {
+            registrations: vec![registration.clone()],
+            observed_distribution_names: vec![
+                "Malformed-Unrelated-Entry".into(),
+                registration.distribution_name,
+            ],
+            complete: false,
+        };
+        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrationInventories(
+            Mutex::new(VecDeque::from([partial.clone(), partial])),
+        ));
+
+        let verified_base = fixture
+            .manager
+            .verify_current_windows_wsl_machine_registration_binding(&selected_machine)
+            .expect("one exact product registration remains provable in a partial inventory");
+
+        assert_eq!(
+            verified_base,
+            selected_vhd
+                .parent()
+                .expect("registration base")
+                .canonicalize()
+                .expect("canonical registration base")
+        );
+        assert_eq!(
+            fs::read(&selected_vhd).expect("preserved selected VHD"),
+            b"verified-existing-generation"
+        );
+        assert!(fixture.commands.calls().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn persistently_incomplete_fresh_windows_inventory_uses_isolated_generation_without_reading_old_intent()
+     {
+        let mut fixture = fixture();
+        let target = modeled_windows_target(&mut fixture);
+        fixture.manager.install().expect("install current payload");
+        let default_machine = machine_name(&target);
+        let stale_intent = fixture.manager.windows_wsl_ownership_proof_path(
+            &default_machine,
+            WindowsWslOwnershipBasis::InitIntent,
+        );
+        ensure_managed_private_directory(
+            stale_intent
+                .parent()
+                .expect("ownership proof parent directory"),
+        )
+        .expect("private ownership proof parent");
+        fs::create_dir_all(&stale_intent).expect("unreadable old intent fixture");
+        let partial = WindowsWslRegistrationInventory {
+            registrations: Vec::new(),
+            observed_distribution_names: vec![format!("podman-{default_machine}")],
+            complete: false,
+        };
+        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrationInventories(
+            Mutex::new(VecDeque::from([partial.clone(), partial])),
+        ));
+        let _lock = fixture.manager.lock().expect("lifecycle lock");
+
+        let selected = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(&target, &[], &[], true)
+            .expect("partial fresh inventory should route to a private isolated generation");
+
+        assert_ne!(selected, default_machine);
+        assert_eq!(
+            selected,
+            fixture.manager.isolated_windows_machine_name(&target, 1)
+        );
+        assert!(stale_intent.is_dir());
+        let durable = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .expect("read isolated selection")
+            .expect("isolated generation");
+        assert_eq!(durable.generation_index, 1);
+        assert_eq!(durable.preserved_collision_names, vec![default_machine]);
+
+        fixture
+            .manager
+            .runtime_command(&target)
+            .expect("prepare isolated provider home");
+        fixture
+            .manager
+            .prepare_machine_ssh_identity_locked()
+            .expect("prepare exact product identity");
+        let selected_storage = fixture
+            .manager
+            .windows_wsl_distribution_storage_path(&target, &selected, 1);
+        ensure_managed_wsl_distribution_storage_directory(&selected_storage)
+            .expect("create selected WSL storage");
+        let selected_vhd = selected_storage.join("ext4.vhdx");
+        fs::write(&selected_vhd, b"isolated-product-generation")
+            .expect("write selected VHD fixture");
+        fixture
+            .manager
+            .ensure_windows_wsl_ownership_proof_locked(
+                &target,
+                &selected,
+                WindowsWslOwnershipBasis::ProvenMachine,
+            )
+            .expect("prove selected product generation");
+        let registration = WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000071".into(),
+            distribution_name: format!("podman-{selected}"),
+            base_path: selected_storage,
+        };
+        let partial = WindowsWslRegistrationInventory {
+            registrations: vec![registration.clone()],
+            observed_distribution_names: vec![
+                "Malformed-Unrelated-Entry".into(),
+                registration.distribution_name.clone(),
+            ],
+            complete: false,
+        };
+        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrationInventories(
+            Mutex::new(VecDeque::from([partial.clone(), partial])),
+        ));
+        let machines = [MachineListEntry {
+            name: selected.clone(),
+            running: true,
+            vm_type: target.provider.argument().into(),
+            cpus: u64::from(fixture.manager.loaded.manifest.resources.cpus),
+            memory: u64::from(fixture.manager.loaded.manifest.resources.memory_mb) * 1024 * 1024,
+            disk_size: u64::from(fixture.manager.loaded.manifest.resources.disk_size_gb)
+                * 1024
+                * 1024
+                * 1024,
+        }];
+
+        let repeated = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(
+                &target,
+                &machines,
+                &[registration.distribution_name],
+                true,
+            )
+            .expect("exact selected generation should remain reusable in a partial inventory");
+
+        assert_eq!(repeated, selected);
+        assert!(
+            !fixture
+                .manager
+                .windows_generation_selection_exists(2)
+                .expect("inspect next generation selection"),
+            "partial unrelated registry state must not advance a proven product generation"
+        );
+        assert_eq!(
+            fs::read(&selected_vhd).expect("preserved selected VHD"),
+            b"isolated-product-generation"
+        );
+        assert!(fixture.commands.calls().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn transient_windows_registration_reader_error_preserves_selected_generation() {
+        let mut fixture = fixture();
+        let (target, selected_machine, selected_vhd, _registration) =
+            seed_verified_existing_windows_machine(&mut fixture);
+        let selected_vhd_bytes = fs::read(&selected_vhd).expect("selected VHD snapshot");
+        let selection_before = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .expect("read generation selection")
+            .expect("selected generation");
+        fixture.manager.wsl_registrations = Arc::new(FailingWindowsWslRegistrations);
+        let machines = [MachineListEntry {
+            name: selected_machine.clone(),
+            running: true,
+            vm_type: target.provider.argument().into(),
+            cpus: u64::from(fixture.manager.loaded.manifest.resources.cpus),
+            memory: u64::from(fixture.manager.loaded.manifest.resources.memory_mb) * 1024 * 1024,
+            disk_size: u64::from(fixture.manager.loaded.manifest.resources.disk_size_gb)
+                * 1024
+                * 1024
+                * 1024,
+        }];
+        let distributions = [format!("podman-{selected_machine}")];
+        let _lock = fixture.manager.lock().expect("lifecycle lock");
+
+        let error = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(
+                &target,
+                &machines,
+                &distributions,
+                true,
+            )
+            .expect_err("transient registry failure must not allocate another generation");
+
+        assert!(matches!(&error, AppError::NotAvailable(_)));
+        assert!(error.to_string().contains("preserved for retry"));
+        assert_eq!(
+            fixture
+                .manager
+                .read_windows_wsl_generation_selection_locked(&target)
+                .expect("read preserved selection")
+                .expect("preserved generation"),
+            selection_before
+        );
+        assert_eq!(fs::read(&selected_vhd).unwrap(), selected_vhd_bytes);
+        assert!(fixture.commands.calls().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn transient_windows_wsl_storage_sharing_violation_preserves_selected_generation() {
+        let mut fixture = fixture();
+        let (target, selected_machine, selected_vhd, registration) =
+            seed_verified_existing_windows_machine(&mut fixture);
+        let selected_vhd_bytes = fs::read(&selected_vhd).expect("selected VHD snapshot");
+        let selection_before = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .expect("read generation selection")
+            .expect("selected generation");
+        fixture.manager.wsl_registrations =
+            Arc::new(FixedWindowsWslRegistrations(vec![registration.clone()]));
+        let machines = [MachineListEntry {
+            name: selected_machine.clone(),
+            running: true,
+            vm_type: target.provider.argument().into(),
+            cpus: u64::from(fixture.manager.loaded.manifest.resources.cpus),
+            memory: u64::from(fixture.manager.loaded.manifest.resources.memory_mb) * 1024 * 1024,
+            disk_size: u64::from(fixture.manager.loaded.manifest.resources.disk_size_gb)
+                * 1024
+                * 1024
+                * 1024,
+        }];
+        let distributions = [registration.distribution_name.clone()];
+        let storage = registration.base_path.parent().expect("WSL storage parent");
+        let _exclusive_storage = open_windows_directory_without_sharing(storage);
+        let _lock = fixture.manager.lock().expect("lifecycle lock");
+
+        let error = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(
+                &target,
+                &machines,
+                &distributions,
+                true,
+            )
+            .expect_err("a transient storage-sharing failure must preserve the generation");
+
+        assert!(matches!(&error, AppError::NotAvailable(_)));
+        assert!(error.to_string().contains("preserved for retry"));
+        assert_eq!(
+            fixture
+                .manager
+                .read_windows_wsl_generation_selection_locked(&target)
+                .expect("read preserved selection")
+                .expect("preserved generation"),
+            selection_before
+        );
+        assert_eq!(fs::read(&selected_vhd).unwrap(), selected_vhd_bytes);
+        assert!(fixture.commands.calls().is_empty());
     }
 
     #[test]
@@ -14726,7 +17388,7 @@ mod tests {
         let mut legacy = fixture().manager.loaded.manifest.clone();
         legacy.schema_version = LEGACY_MANIFEST_SCHEMA_VERSION.into();
         legacy.management_contract_revision = None;
-        let temporary = tempfile::tempdir().expect("temporary bundle");
+        let temporary = managed_runtime_fixture_tempdir();
         let app_data = temporary.path().join("app-data");
         let resources = temporary.path().join("resources");
         ensure_private_directory(&app_data).expect("private app data");
@@ -16006,6 +18668,7 @@ mod tests {
     #[test]
     fn readonly_windows_child_symlink_is_unlinked_without_touching_target() {
         use std::os::windows::fs::symlink_file;
+        use windows_sys::Win32::Foundation::ERROR_PRIVILEGE_NOT_HELD;
 
         let fixture = fixture();
         let versions = fixture.manager.versions_root();
@@ -16015,7 +18678,13 @@ mod tests {
         let outside = fixture._temp.path().join("outside-readonly-target");
         fs::write(&outside, b"outside remains").unwrap();
         let link = install.join("payload-link");
-        symlink_file(&outside, &link).expect("create file symlink");
+        if let Err(error) = symlink_file(&outside, &link) {
+            if error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD as i32) {
+                eprintln!("skipping symlink test: host lacks symbolic-link privilege");
+                return;
+            }
+            panic!("create file symlink: {error}");
+        }
         set_windows_entry_readonly_nofollow(&link, true).unwrap();
 
         remove_private_tree(&install, &versions).expect("remove tree with readonly link");
@@ -16750,7 +19419,7 @@ mod tests {
     #[test]
     fn start_acquires_exact_image_initializes_rootless_machine_and_preflights() {
         let mut fixture = fixture();
-        let _initialized_vhd = configure_fresh_windows_machine_registration(&mut fixture, 4);
+        let _initialized_vhd = configure_fresh_windows_machine_registration(&mut fixture);
         push_windows_wsl_ready(&fixture.commands);
         push_windows_wsl_absent(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
@@ -16769,7 +19438,7 @@ mod tests {
         fixture.commands.push(success(Vec::new()));
         fixture
             .commands
-            .push(success(machine_json(&fixture.manager, false)));
+            .push(success(fresh_machine_json(&fixture.manager, false)));
         fixture.commands.push(success(Vec::new()));
         fixture.commands.push(success(b"5.8.2\n".to_vec()));
 
@@ -16839,13 +19508,19 @@ mod tests {
         } else {
             expected_timeouts.push(COMMAND_TIMEOUT);
         }
-        expected_timeouts.extend([
-            MACHINE_INIT_TIMEOUT,
-            COMMAND_TIMEOUT,
-            MACHINE_START_TIMEOUT,
-            COMMAND_TIMEOUT,
-        ]);
-        assert_eq!(fixture.commands.timeouts(), expected_timeouts);
+        expected_timeouts.extend([MACHINE_INIT_TIMEOUT, COMMAND_TIMEOUT]);
+        let actual_timeouts = fixture.commands.timeouts();
+        assert_eq!(
+            &actual_timeouts[..actual_timeouts.len() - 2],
+            expected_timeouts.as_slice()
+        );
+        let machine_start_timeout = actual_timeouts[actual_timeouts.len() - 2];
+        assert!(machine_start_timeout > Duration::ZERO);
+        assert!(machine_start_timeout <= MACHINE_START_TIMEOUT);
+        assert_eq!(
+            actual_timeouts.last(),
+            Some(&SERVER_READINESS_PROBE_TIMEOUT)
+        );
         let cached = fixture
             .manager
             .machine_image_path(fixture.manager.loaded.target().expect("target"));
@@ -16883,30 +19558,179 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn verified_windows_machine_start_failure_is_preserved_and_rebuilt_once_side_by_side() {
+    fn persistent_unrelated_malformed_registration_does_not_churn_a_proven_isolated_runtime() {
+        let mut fixture = fixture();
+        let target = fixture
+            .manager
+            .loaded
+            .target()
+            .expect("Windows target")
+            .clone();
+        let selected_machine = fixture.manager.isolated_windows_machine_name(&target, 1);
+        let selected_storage =
+            fixture
+                .manager
+                .windows_wsl_distribution_storage_path(&target, &selected_machine, 1);
+        let selected_vhd = selected_storage.join("ext4.vhdx");
+        let registration = WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000081".into(),
+            distribution_name: format!("podman-{selected_machine}"),
+            base_path: selected_storage,
+        };
+        fixture.manager.wsl_registrations = Arc::new(PartialWindowsWslRegistrationAfterVhdExists {
+            registration: registration.clone(),
+            vhd: selected_vhd.clone(),
+        });
+
+        push_windows_wsl_ready(&fixture.commands);
+        push_windows_wsl_absent(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        fixture.commands.push_with_side_effect(
+            success(Vec::new()),
+            FakeCommandSideEffect::CreateManagedWslVhd {
+                path: selected_vhd.clone(),
+                bytes: b"partial-inventory-product-generation".to_vec(),
+            },
+        );
+        fixture.commands.push(success(machine_json_named(
+            &fixture.manager,
+            &selected_machine,
+            false,
+        )));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(b"5.8.2\n".to_vec()));
+
+        fixture
+            .manager
+            .start()
+            .expect("fresh partial inventory should initialize one isolated generation");
+
+        let first_selection = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .expect("read first selection")
+            .expect("first isolated generation");
+        assert_eq!(first_selection.generation_index, 1);
+        assert_eq!(first_selection.selected_machine_name, selected_machine);
+        assert!(
+            fixture
+                .manager
+                .has_exact_windows_wsl_ownership_proof_locked(
+                    &target,
+                    &selected_machine,
+                    WindowsWslOwnershipBasis::ProvenMachine,
+                )
+                .expect("read promoted product proof")
+        );
+        let stale_intent = fixture.manager.windows_wsl_ownership_proof_path(
+            &selected_machine,
+            WindowsWslOwnershipBasis::InitIntent,
+        );
+        fs::create_dir_all(&stale_intent).expect("unreadable stale init-intent fixture");
+
+        fixture.commands.push(success(machine_json_named(
+            &fixture.manager,
+            &selected_machine,
+            true,
+        )));
+        fixture.commands.push(success(b"5.8.2\n".to_vec()));
+        let status = fixture
+            .manager
+            // This fixture proves inventory classification, not the production
+            // timeout boundary. Full-suite Windows ACL and filesystem load can
+            // otherwise consume the synthetic two-second budget before the
+            // queued fake machine/server probes run.
+            .status_locked_with_command_budget(COMMAND_TIMEOUT)
+            .expect("status should prove the selected runtime from the exact partial binding");
+        assert_eq!(status.phase, ManagedRuntimePhase::Running);
+        assert!(status.available);
+        assert!(stale_intent.is_dir());
+
+        let selected_distribution = registration.distribution_name.clone();
+        push_windows_wsl_ready(&fixture.commands);
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{selected_distribution}\r\n"))));
+        fixture.commands.push(success(machine_json_named(
+            &fixture.manager,
+            &selected_machine,
+            true,
+        )));
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{selected_distribution}\r\n"))));
+        for _ in 0..2 {
+            fixture.commands.push(success(machine_json_named(
+                &fixture.manager,
+                &selected_machine,
+                true,
+            )));
+        }
+        fixture.commands.push(success(b"5.8.2\n".to_vec()));
+
+        fixture
+            .manager
+            .start()
+            .expect("a second start should reuse the same proven generation");
+
+        let repeated_selection = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .expect("read repeated selection")
+            .expect("reused isolated generation");
+        assert_eq!(repeated_selection, first_selection);
+        assert!(stale_intent.is_dir());
+        assert!(
+            !fixture
+                .manager
+                .windows_generation_selection_exists(2)
+                .expect("inspect generation two selection")
+        );
+        assert_eq!(
+            fixture
+                .commands
+                .calls()
+                .iter()
+                .filter(|call| call.len() >= 2 && call[0] == "machine" && call[1] == "init")
+                .count(),
+            1
+        );
+        assert_eq!(
+            fs::read(&selected_vhd).expect("preserved selected VHD"),
+            b"partial-inventory-product-generation"
+        );
+
+        let command = fixture
+            .manager
+            .runtime_command(&target)
+            .expect("selected runtime command");
+        push_windows_wsl_absent(&fixture.commands);
+        let cleanup_error = fixture
+            .manager
+            .require_current_windows_wsl_distribution_absent_for_cleanup_locked(
+                &target,
+                &command,
+                &selected_machine,
+            )
+            .expect_err("partial registration inventory must never authorize cleanup");
+        assert!(matches!(cleanup_error, AppError::NotAvailable(_)));
+        assert_eq!(
+            fs::read(&selected_vhd).expect("VHD remains after refused cleanup"),
+            b"partial-inventory-product-generation"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verified_windows_machine_start_exit_125_reconciles_running_state_in_one_call() {
         let mut fixture = fixture();
         let (target, existing_machine, existing_vhd, existing_registration) =
             seed_verified_existing_windows_machine(&mut fixture);
         let existing_bytes = fs::read(&existing_vhd).expect("existing VHD snapshot");
-        let replacement_machine = fixture.manager.isolated_windows_machine_name(&target, 1);
-        let replacement_storage =
-            fixture
-                .manager
-                .windows_wsl_distribution_storage_path(&target, &replacement_machine, 1);
-        let replacement_vhd = replacement_storage.join("ext4.vhdx");
-        let replacement_registration = WindowsWslRegistration {
-            registration_id: "00000000-0000-0000-0000-000000000052".into(),
-            distribution_name: format!("podman-{replacement_machine}"),
-            base_path: replacement_storage,
-        };
-        let mut registration_snapshots = VecDeque::new();
-        for _ in 0..6 {
-            registration_snapshots.push_back(vec![existing_registration.clone()]);
-        }
-        registration_snapshots.push_back(vec![existing_registration, replacement_registration]);
-        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrations(Mutex::new(
-            registration_snapshots,
-        )));
+        fixture.manager.wsl_registrations =
+            Arc::new(FixedWindowsWslRegistrations(vec![existing_registration]));
 
         let existing_distribution = format!("podman-{existing_machine}");
         push_windows_wsl_ready(&fixture.commands);
@@ -16930,63 +19754,44 @@ mod tests {
         }
         fixture
             .commands
-            .push(failure(b"verified machine could not start"));
-        fixture
-            .commands
-            .push(success(utf16le(&format!("{existing_distribution}\r\n"))));
+            .push(failure_with_status(125, b"transient SSH port race"));
         fixture.commands.push(success(machine_json_named(
             &fixture.manager,
             &existing_machine,
-            false,
+            true,
         )));
-        fixture.commands.push_with_side_effect(
-            success(Vec::new()),
-            FakeCommandSideEffect::CreateManagedWslVhd {
-                path: replacement_vhd.clone(),
-                bytes: b"replacement-after-start-failure".to_vec(),
-            },
-        );
-        fixture.commands.push(success(machine_json_named(
-            &fixture.manager,
-            &replacement_machine,
-            false,
-        )));
-        fixture.commands.push(success(Vec::new()));
         fixture.commands.push(success(b"5.8.2\n".to_vec()));
 
-        let command = fixture
+        let retried = fixture
             .manager
             .start()
-            .expect("start failure is reconciled with one isolated replacement");
+            .expect("the same setup call should reconcile a transient start race");
 
-        assert_eq!(command.runtime_version(), "5.8.2");
+        assert_eq!(retried.runtime_version(), "5.8.2");
         assert_eq!(fs::read(&existing_vhd).unwrap(), existing_bytes);
-        assert_eq!(
-            fs::read(&replacement_vhd).unwrap(),
-            b"replacement-after-start-failure"
-        );
         let selection = fixture
             .manager
             .read_windows_wsl_generation_selection_locked(&target)
             .unwrap()
             .unwrap();
-        assert_eq!(selection.generation_index, 1);
-        assert_eq!(selection.selected_machine_name, replacement_machine);
-        assert_eq!(selection.preserved_collision_names, vec![existing_machine]);
+        assert_eq!(selection.generation_index, 0);
+        assert_eq!(selection.selected_machine_name, existing_machine);
+        assert!(selection.preserved_collision_names.is_empty());
         let calls = fixture.commands.calls();
         assert_eq!(
             calls
                 .iter()
                 .filter(|call| call.len() >= 2 && call[0] == "machine" && call[1] == "init")
                 .count(),
-            1
+            0
         );
         assert_eq!(
             calls
                 .iter()
                 .filter(|call| call.len() >= 2 && call[0] == "machine" && call[1] == "start")
                 .count(),
-            2
+            1,
+            "exit 125 can race with a machine that is already running; one setup call must reconcile it without another mutation"
         );
         assert!(calls.iter().flatten().all(|argument| {
             argument != "--unregister" && argument != "--export" && argument != "--import"
@@ -16995,30 +19800,13 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn verified_windows_readiness_failure_is_preserved_and_rebuilt_once_side_by_side() {
+    fn verified_windows_readiness_failure_is_retryable_without_creating_a_generation() {
         let mut fixture = fixture();
         let (target, existing_machine, existing_vhd, existing_registration) =
             seed_verified_existing_windows_machine(&mut fixture);
         let existing_bytes = fs::read(&existing_vhd).expect("existing VHD snapshot");
-        let replacement_machine = fixture.manager.isolated_windows_machine_name(&target, 1);
-        let replacement_storage =
-            fixture
-                .manager
-                .windows_wsl_distribution_storage_path(&target, &replacement_machine, 1);
-        let replacement_vhd = replacement_storage.join("ext4.vhdx");
-        let replacement_registration = WindowsWslRegistration {
-            registration_id: "00000000-0000-0000-0000-000000000053".into(),
-            distribution_name: format!("podman-{replacement_machine}"),
-            base_path: replacement_storage,
-        };
-        let mut registration_snapshots = VecDeque::new();
-        for _ in 0..6 {
-            registration_snapshots.push_back(vec![existing_registration.clone()]);
-        }
-        registration_snapshots.push_back(vec![existing_registration, replacement_registration]);
-        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrations(Mutex::new(
-            registration_snapshots,
-        )));
+        fixture.manager.wsl_registrations =
+            Arc::new(FixedWindowsWslRegistrations(vec![existing_registration]));
 
         let existing_distribution = format!("podman-{existing_machine}");
         push_windows_wsl_ready(&fixture.commands);
@@ -17043,6 +19831,21 @@ mod tests {
         fixture
             .commands
             .push(failure(b"server preflight unavailable"));
+
+        let _lock = fixture.manager.lock().expect("lifecycle lock");
+        let error = fixture
+            .manager
+            .start_locked_with_startup_timeout(None, Duration::from_millis(20))
+            .expect_err("readiness failure must remain retryable on the exact owned machine");
+
+        assert!(matches!(&error, AppError::NotAvailable(_)));
+        assert!(error.to_string().contains("preserved for retry"));
+        assert_eq!(fs::read(&existing_vhd).unwrap(), existing_bytes);
+        let first_probe_timeout = *fixture.commands.timeouts().last().expect("probe timeout");
+        assert!(first_probe_timeout > Duration::ZERO);
+        assert!(first_probe_timeout <= Duration::from_millis(20));
+
+        push_windows_wsl_ready(&fixture.commands);
         fixture
             .commands
             .push(success(utf16le(&format!("{existing_distribution}\r\n"))));
@@ -17051,56 +19854,47 @@ mod tests {
             &existing_machine,
             true,
         )));
-        fixture.commands.push_with_side_effect(
-            success(Vec::new()),
-            FakeCommandSideEffect::CreateManagedWslVhd {
-                path: replacement_vhd.clone(),
-                bytes: b"replacement-after-readiness-failure".to_vec(),
-            },
-        );
-        fixture.commands.push(success(machine_json_named(
-            &fixture.manager,
-            &replacement_machine,
-            false,
-        )));
-        fixture.commands.push(success(Vec::new()));
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{existing_distribution}\r\n"))));
+        for _ in 0..2 {
+            fixture.commands.push(success(machine_json_named(
+                &fixture.manager,
+                &existing_machine,
+                true,
+            )));
+        }
         fixture.commands.push(success(b"5.8.2\n".to_vec()));
 
-        let _lock = fixture.manager.lock().expect("lifecycle lock");
-        let command = fixture
+        let retried = fixture
             .manager
-            .start_locked_with_readiness_timeout(None, Duration::from_millis(1))
-            .expect("readiness failure is reconciled with one isolated replacement");
+            .start_locked_with_startup_timeout(None, Duration::from_secs(1))
+            .expect("retry must reuse the same generation once its server is ready");
+        assert_eq!(retried.runtime_version(), "5.8.2");
 
-        assert_eq!(command.runtime_version(), "5.8.2");
-        assert_eq!(fs::read(&existing_vhd).unwrap(), existing_bytes);
-        assert_eq!(
-            fs::read(&replacement_vhd).unwrap(),
-            b"replacement-after-readiness-failure"
-        );
         let selection = fixture
             .manager
             .read_windows_wsl_generation_selection_locked(&target)
             .unwrap()
             .unwrap();
-        assert_eq!(selection.generation_index, 1);
-        assert_eq!(selection.selected_machine_name, replacement_machine);
-        assert_eq!(selection.preserved_collision_names, vec![existing_machine]);
+        assert_eq!(selection.generation_index, 0);
+        assert_eq!(selection.selected_machine_name, existing_machine);
+        assert!(selection.preserved_collision_names.is_empty());
         let calls = fixture.commands.calls();
         assert_eq!(
             calls
                 .iter()
                 .filter(|call| call.len() >= 2 && call[0] == "machine" && call[1] == "init")
                 .count(),
-            1
+            0
         );
         assert_eq!(
             calls
                 .iter()
                 .filter(|call| call.len() >= 2 && call[0] == "machine" && call[1] == "start")
                 .count(),
-            1,
-            "the already-running unhealthy machine is preserved; only its replacement is started"
+            0,
+            "the already-running exact-owned machine must be left in place"
         );
         assert_eq!(
             calls
@@ -17114,11 +19908,279 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn server_readiness_probe_is_capped_by_the_remaining_total_budget() {
+        let fixture = fixture();
+        let command = ManagedRuntimeCommand {
+            binary: fixture._temp.path().join("managed-podman"),
+            environment: BTreeMap::new(),
+            working_directory: fixture.manager.state_root.clone(),
+            runtime_version: "5.8.2".into(),
+            manifest_sha256: "a".repeat(64),
+            machine_image_sha256: "b".repeat(64),
+        };
+        fixture
+            .commands
+            .push(failure(b"server transport unavailable"));
+        let total_budget = Duration::from_millis(20);
+
+        let error = fixture
+            .manager
+            .wait_for_server(&command, total_budget, None)
+            .expect_err("server must remain unavailable within the fixture budget");
+
+        assert!(error.to_string().contains("bounded deadline"));
+        assert_eq!(
+            fixture.commands.calls(),
+            [vec![
+                String::from("version"),
+                String::from("--format"),
+                String::from("{{.Server.Version}}"),
+            ]]
+        );
+        let timeouts = fixture.commands.timeouts();
+        assert_eq!(timeouts.len(), 1);
+        assert!(timeouts[0] > Duration::ZERO);
+        assert!(timeouts[0] <= total_budget);
+        assert!(timeouts[0] < COMMAND_TIMEOUT);
+    }
+
+    #[test]
+    fn machine_start_and_server_readiness_share_one_total_budget() {
+        let fixture = fixture();
+        let command = ManagedRuntimeCommand {
+            binary: fixture._temp.path().join("managed-podman"),
+            environment: BTreeMap::new(),
+            working_directory: fixture.manager.state_root.clone(),
+            runtime_version: "5.8.2".into(),
+            manifest_sha256: "a".repeat(64),
+            machine_image_sha256: "b".repeat(64),
+        };
+        let total_budget = Duration::from_millis(10);
+        fixture
+            .commands
+            .push_with_delay(success(Vec::new()), Duration::from_millis(30));
+        let started = Instant::now();
+
+        let error = fixture
+            .manager
+            .start_machine_and_wait_locked(
+                &command,
+                "exact-owned-machine",
+                false,
+                None,
+                total_budget,
+            )
+            .expect_err("an exhausted shared budget must not open a second readiness window");
+
+        match error {
+            MachineStartAttemptFailure::ServerReadiness(error) => {
+                assert!(error.to_string().contains("shared startup budget"));
+            }
+            other => panic!("unexpected startup failure classification: {other:?}"),
+        }
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(
+            fixture.commands.calls(),
+            [vec![
+                String::from("machine"),
+                String::from("start"),
+                String::from("--quiet"),
+                String::from("exact-owned-machine"),
+            ]],
+            "no version probe may begin after machine start exhausts the shared budget"
+        );
+        let timeouts = fixture.commands.timeouts();
+        assert_eq!(timeouts.len(), 1);
+        assert!(timeouts[0] > Duration::ZERO);
+        assert!(timeouts[0] <= total_budget);
+    }
+
+    #[test]
+    fn status_reports_lifecycle_contention_without_waiting_for_the_lock_deadline() {
+        let fixture = fixture();
+        let _lock = fixture.manager.lock().expect("hold lifecycle lock");
+        let started = Instant::now();
+
+        let status = fixture.manager.status().expect("busy status");
+
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(status.phase, ManagedRuntimePhase::Starting);
+        assert!(!status.available);
+        assert!(status.detail.contains("lifecycle operation is active"));
+        assert!(fixture.commands.calls().is_empty());
+    }
+
+    #[test]
+    fn status_machine_inventory_uses_a_short_budget_and_returns_truthful_state_on_timeout() {
+        let mut fixture = fixture();
+        #[cfg(windows)]
+        {
+            let (_, _, _, registration) = seed_verified_existing_windows_machine(&mut fixture);
+            fixture.manager.wsl_registrations =
+                Arc::new(FixedWindowsWslRegistrations(vec![registration]));
+        }
+        #[cfg(not(windows))]
+        fixture.manager.install().expect("install current payload");
+        let commands = Arc::new(DeadlineFailingCommands::default());
+        fixture.manager.commands = commands.clone();
+
+        let status = fixture.manager.status().expect("bounded status result");
+
+        assert_eq!(status.phase, ManagedRuntimePhase::Starting);
+        assert!(!status.available);
+        assert!(
+            status
+                .detail
+                .contains("machine state could not be confirmed")
+        );
+        assert!(status.detail.contains("command exceeded its deadline"));
+        assert_eq!(
+            commands.calls.lock().expect("calls").as_slice(),
+            [vec![
+                String::from("machine"),
+                String::from("list"),
+                String::from("--format"),
+                String::from("json"),
+            ]]
+        );
+        let timeouts = commands.timeouts.lock().expect("timeouts");
+        assert_eq!(timeouts.len(), 1);
+        assert!(timeouts[0] > Duration::ZERO);
+        assert!(timeouts[0] <= STATUS_RECONCILIATION_COMMAND_BUDGET);
+        assert!(timeouts[0] < COMMAND_TIMEOUT);
+    }
+
+    #[test]
+    fn status_reports_invalid_machine_inventory_as_repairable_corruption() {
+        for output in [
+            success(b"not-json".to_vec()),
+            failure(b"inventory failed".to_vec()),
+        ] {
+            let mut fixture = fixture();
+            #[cfg(windows)]
+            {
+                let (_, _, _, registration) = seed_verified_existing_windows_machine(&mut fixture);
+                fixture.manager.wsl_registrations =
+                    Arc::new(FixedWindowsWslRegistrations(vec![registration]));
+            }
+            #[cfg(not(windows))]
+            fixture.manager.install().expect("install current payload");
+            fixture.commands.push(output);
+
+            // This test classifies an immediate fake response, not the
+            // separate bounded-status timeout path. Leave enough budget for
+            // fixture ACL and manifest verification under a parallel suite.
+            let status = fixture
+                .manager
+                .status_locked_with_command_budget(COMMAND_TIMEOUT)
+                .expect("invalid inventory status");
+
+            assert_eq!(status.phase, ManagedRuntimePhase::Corrupt);
+            assert!(!status.available);
+            assert!(
+                status
+                    .detail
+                    .contains("machine inventory contract is invalid and needs repair")
+            );
+            assert!(!status.detail.contains("within the bounded status budget"));
+        }
+    }
+
+    #[test]
+    fn status_with_no_inventory_budget_reports_reconciling_without_running_a_command() {
+        let mut fixture = fixture();
+        #[cfg(windows)]
+        {
+            let (_, _, _, registration) = seed_verified_existing_windows_machine(&mut fixture);
+            fixture.manager.wsl_registrations =
+                Arc::new(FixedWindowsWslRegistrations(vec![registration]));
+        }
+        #[cfg(not(windows))]
+        fixture.manager.install().expect("install current payload");
+
+        let status = fixture
+            .manager
+            .status_locked_with_command_budget(Duration::ZERO)
+            .expect("bounded status result");
+
+        assert_eq!(status.phase, ManagedRuntimePhase::Starting);
+        assert!(!status.available);
+        assert!(status.detail.contains("was not queried"));
+        assert!(fixture.commands.calls().is_empty());
+    }
+
+    #[test]
+    fn status_with_confirmed_empty_inventory_remains_first_launch_installed() {
+        let mut fixture = fixture();
+        #[cfg(windows)]
+        {
+            let (_, _, _, registration) = seed_verified_existing_windows_machine(&mut fixture);
+            fixture.manager.wsl_registrations =
+                Arc::new(FixedWindowsWslRegistrations(vec![registration]));
+        }
+        #[cfg(not(windows))]
+        fixture.manager.install().expect("install current payload");
+        fixture.commands.push(success(b"[]".to_vec()));
+
+        let status = fixture
+            .manager
+            .status_locked_with_command_budget(Duration::from_secs(2))
+            .expect("confirmed first-launch status");
+
+        assert_eq!(status.phase, ManagedRuntimePhase::Installed);
+        assert!(!status.available);
+        assert!(status.detail.contains("has not been initialized"));
+        assert_eq!(
+            fixture.commands.calls(),
+            [vec![
+                String::from("machine"),
+                String::from("list"),
+                String::from("--format"),
+                String::from("json"),
+            ]]
+        );
+    }
+
+    #[test]
+    fn status_inventory_and_server_probe_share_one_command_deadline() {
+        let mut fixture = fixture();
+        #[cfg(windows)]
+        {
+            let (_, _, _, registration) = seed_verified_existing_windows_machine(&mut fixture);
+            fixture.manager.wsl_registrations =
+                Arc::new(FixedWindowsWslRegistrations(vec![registration]));
+        }
+        #[cfg(not(windows))]
+        fixture.manager.install().expect("install current payload");
+        fixture.commands.push_with_delay(
+            success(machine_json(&fixture.manager, true)),
+            Duration::from_millis(25),
+        );
+        fixture.commands.push(success(b"5.8.2\n".to_vec()));
+        let budget = Duration::from_secs(2);
+
+        let status = fixture
+            .manager
+            .status_locked_with_command_budget(budget)
+            .expect("running status");
+
+        assert_eq!(status.phase, ManagedRuntimePhase::Running);
+        assert!(status.available);
+        let timeouts = fixture.commands.timeouts();
+        assert_eq!(timeouts.len(), 2);
+        assert!(timeouts[0] > Duration::ZERO);
+        assert!(timeouts[0] <= budget);
+        assert!(timeouts[1] > Duration::ZERO);
+        assert!(timeouts[1] < timeouts[0]);
+        assert!(timeouts[1] <= budget);
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_machine_init_retries_once_after_reproving_complete_absence() {
         let mut fixture = fixture();
-        let initialized_vhd = configure_fresh_windows_machine_registration(&mut fixture, 5);
+        let initialized_vhd = configure_fresh_windows_machine_registration(&mut fixture);
 
         push_windows_wsl_ready(&fixture.commands);
         push_windows_wsl_absent(&fixture.commands);
@@ -17142,7 +20204,7 @@ mod tests {
 
         fixture
             .commands
-            .push(success(machine_json(&fixture.manager, false)));
+            .push(success(fresh_machine_json(&fixture.manager, false)));
         fixture.commands.push(success(Vec::new()));
         fixture.commands.push(success(b"5.8.2\n".to_vec()));
 
@@ -17186,31 +20248,26 @@ mod tests {
             .target()
             .expect("Windows target")
             .clone();
-        let default_machine = machine_name(&target);
-        let default_distribution = format!("podman-{default_machine}");
-        let default_vhd = fixture
+        let initial_machine = fixture.manager.isolated_windows_machine_name(&target, 1);
+        let initial_distribution = format!("podman-{initial_machine}");
+        let initial_vhd = fixture
             .manager
-            .windows_wsl_distribution_storage_path(&target, &default_machine, 0)
+            .windows_wsl_distribution_storage_path(&target, &initial_machine, 1)
             .join("ext4.vhdx");
-        let isolated_machine = fixture.manager.isolated_windows_machine_name(&target, 1);
-        let isolated_storage =
+        let replacement_machine = fixture.manager.isolated_windows_machine_name(&target, 2);
+        let replacement_storage =
             fixture
                 .manager
-                .windows_wsl_distribution_storage_path(&target, &isolated_machine, 1);
-        let isolated_vhd = isolated_storage.join("ext4.vhdx");
-        let isolated_registration = WindowsWslRegistration {
+                .windows_wsl_distribution_storage_path(&target, &replacement_machine, 2);
+        let replacement_vhd = replacement_storage.join("ext4.vhdx");
+        let replacement_registration = WindowsWslRegistration {
             registration_id: "00000000-0000-0000-0000-000000000041".into(),
-            distribution_name: format!("podman-{isolated_machine}"),
-            base_path: isolated_storage,
+            distribution_name: format!("podman-{replacement_machine}"),
+            base_path: replacement_storage,
         };
-        let mut registration_snapshots = VecDeque::new();
-        for _ in 0..6 {
-            registration_snapshots.push_back(Vec::new());
-        }
-        registration_snapshots.push_back(vec![isolated_registration]);
-        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrations(Mutex::new(
-            registration_snapshots,
-        )));
+        fixture.manager.wsl_registrations = Arc::new(WindowsWslRegistrationsForExistingPaths(
+            vec![(replacement_vhd.clone(), replacement_registration)],
+        ));
 
         push_windows_wsl_ready(&fixture.commands);
         push_windows_wsl_absent(&fixture.commands);
@@ -17220,25 +20277,25 @@ mod tests {
         fixture.commands.push_with_side_effect(
             failure(b"partial WSL import failure"),
             FakeCommandSideEffect::CreateManagedWslVhd {
-                path: default_vhd.clone(),
-                bytes: b"interrupted-default-generation".to_vec(),
+                path: initial_vhd.clone(),
+                bytes: b"interrupted-initial-generation".to_vec(),
             },
         );
         push_windows_wsl_ready(&fixture.commands);
         fixture
             .commands
-            .push(success(utf16le(&format!("{default_distribution}\r\n"))));
+            .push(success(utf16le(&format!("{initial_distribution}\r\n"))));
         fixture.commands.push(success(b"[]".to_vec()));
         fixture.commands.push_with_side_effect(
             success(Vec::new()),
             FakeCommandSideEffect::CreateManagedWslVhd {
-                path: isolated_vhd.clone(),
+                path: replacement_vhd.clone(),
                 bytes: b"fresh-isolated-generation".to_vec(),
             },
         );
         fixture.commands.push(success(machine_json_named(
             &fixture.manager,
-            &isolated_machine,
+            &replacement_machine,
             false,
         )));
         fixture.commands.push(success(Vec::new()));
@@ -17251,11 +20308,11 @@ mod tests {
 
         assert_eq!(command.runtime_version(), "5.8.2");
         assert_eq!(
-            fs::read(&default_vhd).expect("preserved interrupted workspace"),
-            b"interrupted-default-generation"
+            fs::read(&initial_vhd).expect("preserved interrupted workspace"),
+            b"interrupted-initial-generation"
         );
         assert_eq!(
-            fs::read(&isolated_vhd).expect("fresh isolated workspace"),
+            fs::read(&replacement_vhd).expect("fresh isolated workspace"),
             b"fresh-isolated-generation"
         );
         let selection = fixture
@@ -17263,9 +20320,12 @@ mod tests {
             .read_windows_wsl_generation_selection_locked(&target)
             .expect("durable generation selection")
             .expect("one generation selection");
-        assert_eq!(selection.generation_index, 1);
-        assert_eq!(selection.selected_machine_name, isolated_machine);
-        assert_eq!(selection.preserved_collision_names, vec![default_machine]);
+        assert_eq!(selection.generation_index, 2);
+        assert_eq!(selection.selected_machine_name, replacement_machine);
+        assert_eq!(
+            selection.preserved_collision_names,
+            vec![initial_machine.clone()]
+        );
 
         let calls = fixture.commands.calls();
         let init_calls = calls
@@ -17275,7 +20335,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(init_calls.len(), 2);
-        assert_eq!(init_calls[0].last(), Some(&selection.default_machine_name));
+        assert_eq!(init_calls[0].last(), Some(&initial_machine));
         assert_eq!(init_calls[1].last(), Some(&selection.selected_machine_name));
         assert!(calls.iter().flatten().all(|argument| {
             argument != "--unregister" && argument != "--export" && argument != "--import"
@@ -17356,14 +20416,11 @@ mod tests {
             distribution_name: format!("podman-{isolated_machine}"),
             base_path: isolated_storage,
         };
-        let mut registration_snapshots = VecDeque::new();
-        for _ in 0..4 {
-            registration_snapshots.push_back(vec![hidden_registration.clone()]);
-        }
-        registration_snapshots.push_back(vec![hidden_registration.clone(), isolated_registration]);
-        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrations(Mutex::new(
-            registration_snapshots,
-        )));
+        fixture.manager.wsl_registrations =
+            Arc::new(WindowsWslRegistrationsForExistingPaths(vec![
+                (sentinel.clone(), hidden_registration),
+                (isolated_vhd.clone(), isolated_registration),
+            ]));
 
         push_windows_wsl_ready(&fixture.commands);
         push_windows_wsl_absent(&fixture.commands);
@@ -17420,8 +20477,9 @@ mod tests {
         let mut fixture = fixture();
         fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(Vec::new()));
         let target = fixture.manager.loaded.target().expect("Windows target");
+        let selected_machine = fixture.manager.isolated_windows_machine_name(target, 1);
         let intent = fixture.manager.windows_wsl_ownership_proof_path(
-            &machine_name(target),
+            &selected_machine,
             WindowsWslOwnershipBasis::InitIntent,
         );
 
@@ -17794,6 +20852,65 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn transient_windows_identity_sharing_violation_is_retryable_not_corruption() {
+        let mut fixture = fixture();
+        let (_target, _machine, _vhd, _registration) =
+            seed_verified_existing_windows_machine(&mut fixture);
+        let identity = fixture.manager.machine_ssh_identity_path();
+        let identity_before = fs::read(&identity).expect("identity snapshot");
+
+        let error = {
+            let _exclusive = open_without_windows_sharing(&identity);
+            fixture
+                .manager
+                .require_existing_machine_ssh_identity_locked()
+                .expect_err("sharing violation must be a retryable inspection failure")
+        };
+
+        assert!(matches!(&error, AppError::NotAvailable(_)));
+        assert!(error.to_string().contains("preserved for retry"));
+        assert_eq!(fs::read(&identity).unwrap(), identity_before);
+        assert_eq!(
+            inspect_managed_ssh_identity(&identity).unwrap(),
+            ManagedSshIdentityState::Valid
+        );
+        assert!(fixture.commands.calls().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn transient_generation_selection_sharing_violation_preserves_routing_record() {
+        let mut fixture = fixture();
+        let (target, _machine, _vhd, _registration) =
+            seed_verified_existing_windows_machine(&mut fixture);
+        let selection_path = fixture.manager.windows_wsl_generation_selection_path(0);
+        let selection_before = fs::read(&selection_path).expect("selection snapshot");
+
+        let error = {
+            let _exclusive = open_without_windows_sharing(&selection_path);
+            fixture
+                .manager
+                .read_windows_wsl_generation_selection_locked(&target)
+                .expect_err("sharing violation must not discard the routing record")
+        };
+
+        assert!(matches!(&error, AppError::NotAvailable(_)));
+        assert!(error.to_string().contains("generations were preserved"));
+        assert_eq!(fs::read(&selection_path).unwrap(), selection_before);
+        assert_eq!(
+            fixture
+                .manager
+                .read_windows_wsl_generation_selection_locked(&target)
+                .expect("read preserved routing record")
+                .expect("preserved selected generation")
+                .generation_index,
+            0
+        );
+        assert!(fixture.commands.calls().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn inconsistent_windows_machine_ssh_identity_is_preserved_and_rebuilt_side_by_side() {
         let mut fixture = fixture();
         let (target, existing_machine, existing_vhd, existing_registration) =
@@ -17823,16 +20940,11 @@ mod tests {
             distribution_name: format!("podman-{replacement_machine}"),
             base_path: replacement_storage,
         };
-        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrations(Mutex::new(
-            VecDeque::from([
-                vec![existing_registration.clone()],
-                vec![existing_registration.clone()],
-                vec![existing_registration.clone()],
-                vec![existing_registration.clone()],
-                vec![existing_registration.clone()],
-                vec![existing_registration, replacement_registration],
-            ]),
-        )));
+        fixture.manager.wsl_registrations =
+            Arc::new(WindowsWslRegistrationsForExistingPaths(vec![
+                (existing_vhd.clone(), existing_registration),
+                (replacement_vhd.clone(), replacement_registration),
+            ]));
 
         let existing_distribution = format!("podman-{existing_machine}");
         push_windows_wsl_ready(&fixture.commands);
@@ -18266,7 +21378,7 @@ mod tests {
     #[test]
     fn observable_setup_reaches_verified_completed_state() {
         let mut fixture = fixture();
-        let _initialized_vhd = configure_fresh_windows_machine_registration(&mut fixture, 4);
+        let _initialized_vhd = configure_fresh_windows_machine_registration(&mut fixture);
         push_windows_wsl_ready(&fixture.commands);
         push_windows_wsl_absent(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
@@ -18285,9 +21397,8 @@ mod tests {
         fixture.commands.push(success(Vec::new()));
         fixture
             .commands
-            .push(success(machine_json(&fixture.manager, false)));
+            .push(success(fresh_machine_json(&fixture.manager, false)));
         fixture.commands.push(success(Vec::new()));
-        fixture.commands.push(success(b"5.8.2\n".to_vec()));
         fixture.commands.push(success(b"5.8.2\n".to_vec()));
         let setup = ManagedRuntimeSetupController::default();
 
@@ -18303,6 +21414,16 @@ mod tests {
         assert_eq!(setup_status.progress_percent, Some(100.0));
         assert_eq!(setup_status.failure_reason, None);
         assert_eq!(setup_status.next_action, None);
+        assert_eq!(
+            fixture
+                .commands
+                .calls()
+                .iter()
+                .filter(|call| call.first().is_some_and(|argument| argument == "version"))
+                .count(),
+            1,
+            "setup must reuse the server version returned by its successful readiness probe"
+        );
     }
 
     #[test]

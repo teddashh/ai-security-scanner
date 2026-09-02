@@ -13,7 +13,10 @@ use crate::artifact_store::{
     ArtifactContext, LauncherV2OutputArtifact, classify_launcher_v2_output_artifact,
     inspect_raw_artifacts, read_verified_raw_artifact,
 };
-use crate::beginner_report::{BeginnerReportSummary, ReportLifecycle};
+use crate::beginner_report::{
+    BeginnerMasterReport, BeginnerReportSummary, CoverageDimensionStatus, CoverageGapKind,
+    FindingSnapshotSource, ReportLifecycle, ReportScanStage, RequestedLimitSource,
+};
 use crate::bootstrap::executor::list_bootstrap_cleanup_obligations;
 use crate::connectors::{
     LIVE_PROVIDER_ARTIFACT_SET_SCHEMA, LiveProviderArtifactSet, MAX_LIVE_PROVIDER_PAGES,
@@ -610,8 +613,10 @@ pub type SchemaExportFormat = CaseExportFormat;
 pub struct ExportPreview {
     pub case_id: Id,
     pub run_id: Id,
+    pub locale: crate::export::ReportLocale,
     pub format: String,
     pub redaction_profile: String,
+    pub include_raw_evidence: bool,
     pub data_source_count: usize,
     pub coverage_entry_count: usize,
     pub asset_count: usize,
@@ -6439,8 +6444,10 @@ impl<'a> CaseService<'a> {
         Ok(ExportPreview {
             case_id: case.id.clone(),
             run_id: selected_run.id.clone(),
+            locale: options.locale,
             format: format.as_str().into(),
             redaction_profile: options.redaction.as_str().into(),
+            include_raw_evidence: options.include_raw_artifacts,
             data_source_count: case.data_sources.len(),
             coverage_entry_count: case.coverage.len(),
             asset_count: case.assets.len(),
@@ -12059,6 +12066,331 @@ fn canonical_json_bytes(
     .map_err(Into::into)
 }
 
+fn readable_report_time(value: &DateTime<Utc>) -> String {
+    value.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+}
+
+#[derive(Clone, Copy)]
+struct HtmlReportCatalog {
+    locale: crate::export::ReportLocale,
+}
+
+impl HtmlReportCatalog {
+    fn new(locale: crate::export::ReportLocale) -> Self {
+        Self { locale }
+    }
+
+    fn text<'a>(&self, en: &'a str, zh_hant: &'a str) -> &'a str {
+        match self.locale {
+            crate::export::ReportLocale::En => en,
+            crate::export::ReportLocale::ZhHant => zh_hant,
+        }
+    }
+
+    fn html_lang(&self) -> &'static str {
+        self.locale.as_str()
+    }
+
+    fn format_time(&self, value: &DateTime<Utc>) -> String {
+        match self.locale {
+            crate::export::ReportLocale::En => readable_report_time(value),
+            crate::export::ReportLocale::ZhHant => {
+                value.format("%Y年%m月%d日 %H:%M:%S UTC").to_string()
+            }
+        }
+    }
+
+    fn format_number(&self, value: usize) -> String {
+        let digits = value.to_string();
+        let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+        for (index, character) in digits.chars().enumerate() {
+            if index > 0 && (digits.len() - index).is_multiple_of(3) {
+                grouped.push(',');
+            }
+            grouped.push(character);
+        }
+        grouped
+    }
+
+    fn format_time_range(&self, from: &str, until: &str) -> String {
+        match self.locale {
+            crate::export::ReportLocale::En => format!("{from} to {until}"),
+            crate::export::ReportLocale::ZhHant => format!("{from} 至 {until}"),
+        }
+    }
+
+    fn format_mapping_provenance(
+        &self,
+        sha256: &str,
+        reviewed_at: &str,
+        review_process: &str,
+    ) -> String {
+        match self.locale {
+            crate::export::ReportLocale::En => {
+                format!(" · Catalog SHA-256 {sha256} · Reviewed {reviewed_at} via {review_process}")
+            }
+            crate::export::ReportLocale::ZhHant => {
+                format!(" · 目錄 SHA-256 {sha256} · 於 {reviewed_at} 透過 {review_process} 檢閱")
+            }
+        }
+    }
+
+    fn report_stage(&self, stage: &ReportScanStage) -> &'static str {
+        match stage {
+            ReportScanStage::QuickDiscovery => self.text("Quick discovery", "快速探索"),
+            ReportScanStage::Inventory => self.text("Inventory", "資產盤點"),
+            ReportScanStage::Deep => self.text("Deep scan", "深度掃描"),
+        }
+    }
+
+    fn asset_kind(&self, kind: &AssetKind) -> &'static str {
+        match kind {
+            AssetKind::CloudOrganization => self.text("Cloud organization", "雲端組織"),
+            AssetKind::CloudAccount => self.text("Cloud account", "雲端帳戶"),
+            AssetKind::Subscription => self.text("Subscription", "訂閱"),
+            AssetKind::Project => self.text("Project", "專案"),
+            AssetKind::Tenant => self.text("Tenant", "租用戶"),
+            AssetKind::Domain => self.text("Domain", "網域"),
+            AssetKind::IpAddress => self.text("IP address", "IP 位址"),
+            AssetKind::Host => self.text("Host", "主機"),
+            AssetKind::WebService => self.text("Web service", "網站服務"),
+            AssetKind::CloudResource => self.text("Cloud resource", "雲端資源"),
+            AssetKind::Identity => self.text("Identity", "身分"),
+            AssetKind::Repository => self.text("Repository", "程式碼儲存庫"),
+            AssetKind::FileSystem => self.text("File system", "檔案系統"),
+            AssetKind::IacProject => {
+                self.text("Infrastructure-as-code project", "基礎設施即程式碼專案")
+            }
+            AssetKind::ContainerImage => self.text("Container image", "容器映像"),
+            AssetKind::ContainerRegistry => self.text("Container registry", "容器映像登錄檔"),
+            AssetKind::KubernetesCluster => self.text("Kubernetes cluster", "Kubernetes 叢集"),
+            AssetKind::Other => self.text("Other asset", "其他資產"),
+        }
+    }
+
+    fn coverage_status(&self, status: &CoverageDimensionStatus) -> &'static str {
+        match status {
+            CoverageDimensionStatus::TestedComplete => self.text("Completed", "已完成"),
+            CoverageDimensionStatus::TestedPartial => self.text("Partly completed", "部分完成"),
+            CoverageDimensionStatus::Failed => self.text("Failed", "失敗"),
+            CoverageDimensionStatus::TimedOut => self.text("Timed out", "逾時"),
+            CoverageDimensionStatus::Cancelled => self.text("Cancelled", "已取消"),
+            CoverageDimensionStatus::NotTested => self.text("Not tested", "未測試"),
+            CoverageDimensionStatus::InProgress => self.text("In progress", "進行中"),
+        }
+    }
+
+    fn work_unit_outcome(&self, outcome: &WorkUnitOutcome) -> &'static str {
+        match outcome {
+            WorkUnitOutcome::TestedComplete => self.text("Completed", "已完成"),
+            WorkUnitOutcome::TestedPartial => self.text("Partly completed", "部分完成"),
+            WorkUnitOutcome::Failed => self.text("Failed", "失敗"),
+            WorkUnitOutcome::TimedOut => self.text("Timed out", "逾時"),
+            WorkUnitOutcome::Cancelled => self.text("Cancelled", "已取消"),
+            WorkUnitOutcome::NotTested => self.text("Not tested", "未測試"),
+        }
+    }
+
+    fn gap_kind(&self, kind: &CoverageGapKind) -> &'static str {
+        match kind {
+            CoverageGapKind::NotTested => self.text("Not tested", "未測試"),
+            CoverageGapKind::Failed => self.text("Failed", "失敗"),
+            CoverageGapKind::TimedOut => self.text("Timed out", "逾時"),
+            CoverageGapKind::Cancelled => self.text("Cancelled", "已取消"),
+            CoverageGapKind::Excluded => self.text("Excluded", "已排除"),
+            CoverageGapKind::Truncated => {
+                self.text("Reduced by a saved limit", "受已保存的限制而縮減")
+            }
+            CoverageGapKind::Unavailable => self.text("Details unavailable", "詳細資料無法取得"),
+        }
+    }
+
+    fn limit_source(&self, source: &RequestedLimitSource) -> &'static str {
+        match source {
+            RequestedLimitSource::FrozenTaskContract => {
+                self.text("saved task settings", "已保存的工作設定")
+            }
+            RequestedLimitSource::FrozenScopeGrant => {
+                self.text("saved scope approval", "已保存的範圍授權")
+            }
+        }
+    }
+
+    fn finding_source(&self, source: &FindingSnapshotSource) -> &'static str {
+        match source {
+            FindingSnapshotSource::FrozenSelectedRun => {
+                self.text("Saved result from this run", "本輪已保存的結果")
+            }
+            FindingSnapshotSource::CurrentCanonicalLegacyFallback => self.text(
+                "Current saved finding (legacy run)",
+                "目前保存的問題（舊版掃描）",
+            ),
+            FindingSnapshotSource::ObservationOnly => {
+                self.text("Saved observation only", "只有已保存的觀察紀錄")
+            }
+        }
+    }
+
+    fn identifier(&self, value: &str) -> String {
+        if self.locale == crate::export::ReportLocale::En {
+            return readable_identifier(value);
+        }
+        match value.to_ascii_lowercase().as_str() {
+            "critical" => "嚴重".into(),
+            "high" => "高".into(),
+            "medium" => "中".into(),
+            "low" => "低".into(),
+            "informational" | "info" => "資訊".into(),
+            "confirmed" => "已確認".into(),
+            "high_confidence" => "高信心".into(),
+            "moderate" => "中等".into(),
+            "completed" => "已完成".into(),
+            "partial" => "部分完成".into(),
+            "failed" => "失敗".into(),
+            "cancelled" => "已取消".into(),
+            "unavailable" => "無法取得".into(),
+            "available" => "可取得".into(),
+            "created" => "已建立".into(),
+            "updated" => "已更新".into(),
+            "removed" => "已移除".into(),
+            _ => readable_identifier(value),
+        }
+    }
+}
+
+fn readable_identifier(value: &str) -> String {
+    let words = value
+        .split(['_', '-'])
+        .filter(|word| !word.is_empty())
+        .map(|word| match word.to_ascii_lowercase().as_str() {
+            "api" => "API".into(),
+            "http" => "HTTP".into(),
+            "https" => "HTTPS".into(),
+            "iac" => "IaC".into(),
+            "id" => "ID".into(),
+            "ip" => "IP".into(),
+            "ssh" => "SSH".into(),
+            "tcp" => "TCP".into(),
+            "tls" => "TLS".into(),
+            "udp" => "UDP".into(),
+            _ => {
+                let mut characters = word.chars();
+                match characters.next() {
+                    Some(first) => first.to_uppercase().chain(characters).collect(),
+                    None => String::new(),
+                }
+            }
+        })
+        .collect::<Vec<String>>();
+    if words.is_empty() {
+        value.into()
+    } else {
+        words.join(" ")
+    }
+}
+
+fn readable_target_labels(
+    report: &BeginnerMasterReport,
+    catalog: HtmlReportCatalog,
+) -> BTreeMap<Id, String> {
+    let mut labels = BTreeMap::new();
+    let mut next_number = 1usize;
+    for target in &report.requested.targets {
+        let label = target
+            .label
+            .as_deref()
+            .filter(|label| !label.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("{} {next_number}", catalog.text("Target", "目標")));
+        labels.entry(target.asset_id.clone()).or_insert(label);
+        next_number += 1;
+    }
+    for asset_id in report
+        .actual
+        .checks
+        .iter()
+        .flat_map(|check| &check.target_asset_ids)
+        .chain(
+            report
+                .findings
+                .iter()
+                .flat_map(|finding| &finding.target_asset_ids),
+        )
+        .chain(
+            report
+                .coverage_gaps
+                .iter()
+                .flat_map(|gap| &gap.target_asset_ids),
+        )
+    {
+        if !labels.contains_key(asset_id) {
+            labels.insert(
+                asset_id.clone(),
+                format!("{} {next_number}", catalog.text("Target", "目標")),
+            );
+            next_number += 1;
+        }
+    }
+    labels
+}
+
+fn readable_target_list(
+    asset_ids: &[Id],
+    labels: &BTreeMap<Id, String>,
+    catalog: HtmlReportCatalog,
+) -> String {
+    if asset_ids.is_empty() {
+        return catalog.text("none retained", "未保留").into();
+    }
+    asset_ids
+        .iter()
+        .map(|asset_id| {
+            html_escape(
+                labels
+                    .get(asset_id)
+                    .map(String::as_str)
+                    .unwrap_or(catalog.text("Saved target", "已保存的目標")),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn replace_target_ids(value: &str, labels: &BTreeMap<Id, String>) -> String {
+    let mut identities = labels
+        .iter()
+        .filter(|(id, _)| !id.is_empty())
+        .collect::<Vec<_>>();
+    identities.sort_by(|(left_id, _), (right_id, _)| {
+        right_id
+            .len()
+            .cmp(&left_id.len())
+            .then_with(|| left_id.cmp(right_id))
+    });
+
+    let mut display = String::with_capacity(value.len());
+    let mut cursor = 0usize;
+    while cursor < value.len() {
+        let remaining = &value[cursor..];
+        if let Some(&(id, label)) = identities
+            .iter()
+            .find(|(id, _)| remaining.starts_with(id.as_str()))
+        {
+            display.push_str(label);
+            cursor += id.len();
+            continue;
+        }
+
+        let character = remaining
+            .chars()
+            .next()
+            .expect("cursor remains on a valid non-empty UTF-8 suffix");
+        display.push(character);
+        cursor += character.len_utf8();
+    }
+    display
+}
+
 fn html_report_bytes(
     case: &AssessmentCase,
     run_id: &str,
@@ -12066,28 +12398,54 @@ fn html_report_bytes(
 ) -> AppResult<Vec<u8>> {
     let exported = case_for_document_export(case, options);
     let report = beginner_report_for_export(case, run_id, options.redaction)?;
+    let catalog = HtmlReportCatalog::new(options.locale);
     let display_time = |value: Option<&DateTime<Utc>>| {
         value
-            .map(|time| time.to_rfc3339())
-            .unwrap_or_else(|| "not recorded".into())
+            .map(|value| catalog.format_time(value))
+            .unwrap_or_else(|| catalog.text("not recorded", "未記錄").into())
     };
+    let target_labels = readable_target_labels(&report, catalog);
 
     let report_summary = match report.state.summary {
-        BeginnerReportSummary::Complete => "Complete",
-        BeginnerReportSummary::Partial => "Partial results",
-        BeginnerReportSummary::NoChecksCompleted => "No checks completed",
+        BeginnerReportSummary::Complete => catalog.text("Complete", "完整"),
+        BeginnerReportSummary::Partial => catalog.text("Partial results", "部分結果"),
+        BeginnerReportSummary::NoChecksCompleted => {
+            catalog.text("No checks completed", "沒有已完成的檢查")
+        }
     };
     let report_lifecycle = match report.state.lifecycle {
-        ReportLifecycle::Live => "This report is still updating",
-        ReportLifecycle::Final => "Final for this run",
+        ReportLifecycle::Live => catalog.text("This report is still updating", "這份報告仍在更新"),
+        ReportLifecycle::Final => catalog.text("Final for this run", "本輪最終報告"),
+    };
+    let report_explanation = match (report.state.summary, report.state.lifecycle) {
+        (BeginnerReportSummary::Complete, ReportLifecycle::Final) => catalog.text(
+            "Every saved check reached a complete terminal result for this run.",
+            "本輪每一項已保存的檢查都已取得完整的最終結果。",
+        ),
+        (BeginnerReportSummary::NoChecksCompleted, _) => catalog.text(
+            "No check reached a completed result; do not treat missing findings as a clean result.",
+            "沒有任何檢查完成；請勿把沒有問題紀錄解讀為安全無虞。",
+        ),
+        (BeginnerReportSummary::Partial, ReportLifecycle::Live) => catalog.text(
+            "Some work is incomplete and this report can still change.",
+            "部分工作尚未完成，這份報告仍可能變更。",
+        ),
+        (BeginnerReportSummary::Partial, ReportLifecycle::Final) => catalog.text(
+            "This run ended with incomplete, failed, timed-out, cancelled, or untested work.",
+            "本輪結束時仍有未完成、失敗、逾時、取消或未測試的工作。",
+        ),
+        (BeginnerReportSummary::Complete, ReportLifecycle::Live) => catalog.text(
+            "Saved checks are complete so far, but this live report can still change.",
+            "目前已保存的檢查均已完成，但這份即時報告仍可能變更。",
+        ),
     };
     let requested_stage = report
         .requested
         .stage
         .value
         .as_ref()
-        .map(enum_key)
-        .unwrap_or_else(|| "not retained by this run".into());
+        .map(|stage| catalog.report_stage(stage))
+        .unwrap_or(catalog.text("not retained by this run", "本輪未保留"));
     let mut requested_targets = report
         .requested
         .targets
@@ -12095,19 +12453,25 @@ fn html_report_bytes(
         .map(|target| {
             format!(
                 "<li><strong>{}</strong>{}</li>",
-                html_escape(target.label.as_deref().unwrap_or(&target.asset_id)),
+                html_escape(
+                    target_labels
+                        .get(&target.asset_id)
+                        .map(String::as_str)
+                        .unwrap_or(catalog.text("Saved target", "已保存的目標")),
+                ),
                 target
                     .asset_kind
                     .as_ref()
-                    .map(|kind| format!(" — {}", html_escape(&enum_key(kind))))
+                    .map(|kind| format!(" — {}", html_escape(catalog.asset_kind(kind))))
                     .unwrap_or_default(),
             )
         })
         .collect::<String>();
     if requested_targets.is_empty() {
-        requested_targets.push_str(
+        requested_targets.push_str(catalog.text(
             "<li>The saved run did not retain an exact requested target description.</li>",
-        );
+            "<li>已保存的掃描未保留精確的要求目標說明。</li>",
+        ));
     }
     let mut requested_limits = report
         .requested
@@ -12116,22 +12480,35 @@ fn html_report_bytes(
         .map(|limit| {
             format!(
                 "<li><strong>{}:</strong> {}</li>",
-                html_escape(&limit.name),
-                html_escape(&format!("{} ({})", limit.value, enum_key(&limit.source))),
+                html_escape(&readable_identifier(&replace_target_ids(
+                    &limit.name,
+                    &target_labels,
+                ))),
+                html_escape(&format!(
+                    "{} ({})",
+                    replace_target_ids(&limit.value, &target_labels),
+                    catalog.limit_source(&limit.source)
+                )),
             )
         })
         .collect::<String>();
     if requested_limits.is_empty() {
-        requested_limits.push_str("<li>No exact per-run limits were retained.</li>");
+        requested_limits.push_str(catalog.text(
+            "<li>No exact per-run limits were retained.</li>",
+            "<li>未保留本輪的精確限制。</li>",
+        ));
     }
     let mut requested_checks = report
         .requested
         .requested_check_ids
         .iter()
-        .map(|check_id| format!("<li>{}</li>", html_escape(check_id)))
+        .map(|check_id| format!("<li>{}</li>", html_escape(&readable_identifier(check_id))))
         .collect::<String>();
     if requested_checks.is_empty() {
-        requested_checks.push_str("<li>No exact requested check list was retained.</li>");
+        requested_checks.push_str(catalog.text(
+            "<li>No exact requested check list was retained.</li>",
+            "<li>未保留精確的要求檢查清單。</li>",
+        ));
     }
     let mut tested_items = report
         .actual
@@ -12145,61 +12522,126 @@ fn html_report_bytes(
                     format!(
                         concat!(
                             "<li><strong>{}:</strong> {} — {}",
-                            "<br><small>Observed: {}</small></li>"
+                            "<br><small>{}: {}</small></li>"
                         ),
-                        html_escape(&dimension.dimension),
+                        html_escape(&readable_identifier(&dimension.dimension)),
                         html_escape(&dimension.value),
                         html_escape(&dimension.observation),
+                        catalog.text("Observed", "觀察時間"),
                         html_escape(&display_time(dimension.observed_at.as_ref())),
                     )
                 })
                 .collect::<String>();
             if dimensions.is_empty() {
-                dimensions.push_str("<li>No completed dimension was retained.</li>");
+                dimensions.push_str(catalog.text(
+                    "<li>No completed dimension was retained.</li>",
+                    "<li>未保留已完成的檢查面向。</li>",
+                ));
             }
-            let targets = if check.target_asset_ids.is_empty() {
-                "none retained".into()
-            } else {
-                check
-                    .target_asset_ids
-                    .iter()
-                    .map(|asset_id| html_escape(asset_id))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
+            let targets = readable_target_list(&check.target_asset_ids, &target_labels, catalog);
             format!(
                 concat!(
                     "<li><strong>{}</strong> — {}",
-                    "<br><small>Started: {} · Finished: {}</small>",
-                    "<br><small>Targets: {}</small><ul>{}</ul></li>"
+                    "<br><small>{}: {} · {}: {}</small>",
+                    "<br><small>{}: {}</small><ul>{}</ul></li>"
                 ),
-                html_escape(&check.check_id),
-                html_escape(&enum_key(&check.status)),
+                html_escape(&readable_identifier(&check.check_id)),
+                html_escape(catalog.coverage_status(&check.status)),
+                catalog.text("Started", "開始"),
                 html_escape(&display_time(check.started_at.as_ref())),
+                catalog.text("Finished", "完成"),
                 html_escape(&display_time(check.finished_at.as_ref())),
+                catalog.text("Targets", "目標"),
                 targets,
                 dimensions,
             )
         })
         .collect::<String>();
     if tested_items.is_empty() {
-        tested_items.push_str("<li>No completed test dimension was saved for this run.</li>");
+        tested_items.push_str(catalog.text(
+            "<li>No completed test dimension was saved for this run.</li>",
+            "<li>本輪未保存任何已完成的測試面向。</li>",
+        ));
     }
+    let network_scope_section = if report.actual.network_scopes.is_empty() {
+        String::new()
+    } else {
+        let network_scope_items = report
+            .actual
+            .network_scopes
+            .iter()
+            .map(|scope| {
+                let target_label = target_labels
+                    .get(&scope.target_asset_id)
+                    .map(String::as_str)
+                    .unwrap_or(catalog.text("Saved target", "已保存的目標"));
+                let addresses = scope
+                    .address_ranges
+                    .iter()
+                    .map(|range| html_escape(range))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let ports = scope
+                    .port_ranges
+                    .iter()
+                    .map(|range| html_escape(range))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    concat!(
+                        "<li><strong>{} — {}</strong>",
+                        "<br><span>{}: {} (<code>{}</code>)</span>",
+                        "<br><span>{}: <code>{}</code> · {}: {} <code>{}</code></span>",
+                        "<br><small>{}: {} · {}: {}</small></li>"
+                    ),
+                    html_escape(&readable_identifier(&scope.check_id)),
+                    html_escape(catalog.report_stage(&scope.stage)),
+                    catalog.text("Target", "目標"),
+                    html_escape(target_label),
+                    html_escape(&scope.target),
+                    catalog.text("Addresses", "位址"),
+                    addresses,
+                    catalog.text("Ports", "連接埠"),
+                    html_escape(&scope.transport.to_uppercase()),
+                    ports,
+                    catalog.text("Outcome", "結果"),
+                    html_escape(catalog.work_unit_outcome(&scope.outcome)),
+                    catalog.text("Observed", "觀察時間"),
+                    html_escape(&display_time(scope.observed_at.as_ref())),
+                )
+            })
+            .collect::<String>();
+        format!(
+            "<h3>{}</h3><ul>{}</ul>",
+            catalog.text(
+                "Exact network coverage and outcome",
+                "精確網路涵蓋範圍與結果"
+            ),
+            network_scope_items,
+        )
+    };
     let mut gap_items = report
         .coverage_gaps
         .iter()
         .map(|gap| {
             format!(
-                "<li><strong>{} — {}</strong><br>{}<br><em>Next:</em> {}</li>",
-                html_escape(&enum_key(&gap.kind)),
-                html_escape(&gap.dimension),
-                html_escape(&gap.reason),
-                html_escape(&gap.next_action),
+                "<li><strong>{} — {}</strong><br>{}<br><em>{}:</em> {}</li>",
+                html_escape(catalog.gap_kind(&gap.kind)),
+                html_escape(&readable_identifier(&replace_target_ids(
+                    &gap.dimension,
+                    &target_labels,
+                ))),
+                html_escape(&replace_target_ids(&gap.reason, &target_labels)),
+                catalog.text("Next", "下一步"),
+                html_escape(&replace_target_ids(&gap.next_action, &target_labels)),
             )
         })
         .collect::<String>();
     if gap_items.is_empty() {
-        gap_items.push_str("<li>No known coverage gap was recorded.</li>");
+        gap_items.push_str(catalog.text(
+            "<li>No known coverage gap was recorded.</li>",
+            "<li>沒有記錄到已知的涵蓋缺口。</li>",
+        ));
     }
     let mut next_step_items = report
         .next_steps
@@ -12211,57 +12653,67 @@ fn html_report_bytes(
                 html_escape(&step.reason),
                 step.recommended_expert_type
                     .as_ref()
-                    .map(|expert| format!(" <em>Suggested expert: {}</em>", html_escape(expert)))
+                    .map(|expert| format!(
+                        " <em>{}: {}</em>",
+                        catalog.text("Suggested expert", "建議諮詢的專家"),
+                        html_escape(expert),
+                    ))
                     .unwrap_or_default(),
             )
         })
         .collect::<String>();
     if next_step_items.is_empty() {
-        next_step_items.push_str(
+        next_step_items.push_str(catalog.text(
             "<li>No additional action is required unless broader coverage is wanted.</li>",
-        );
+            "<li>除非需要更廣的涵蓋範圍，否則目前不需要其他動作。</li>",
+        ));
     }
     let report_counts = &report.coverage_counts;
 
-    let actual_window = format!(
-        "{} to {}",
-        display_time(report.actual.observed_from.as_ref()),
-        display_time(report.actual.observed_until.as_ref())
+    let actual_window = catalog.format_time_range(
+        &display_time(report.actual.observed_from.as_ref()),
+        &display_time(report.actual.observed_until.as_ref()),
     );
 
     let mut findings = String::new();
     for (index, finding) in report.findings.iter().enumerate() {
         let priority = finding
             .priority
-            .map(|priority| priority.to_string())
-            .unwrap_or_else(|| "not retained".into());
+            .map(|priority| catalog.format_number(priority as usize))
+            .unwrap_or_else(|| catalog.text("not retained", "未保留").into());
         let mut priority_reasons = finding
             .priority_reasons
             .iter()
             .map(|reason| format!("<li>{}</li>", html_escape(reason)))
             .collect::<String>();
         if priority_reasons.is_empty() {
-            priority_reasons.push_str("<li>No separate priority reason was retained.</li>");
+            priority_reasons.push_str(catalog.text(
+                "<li>No separate priority reason was retained.</li>",
+                "<li>未另外保留優先順序原因。</li>",
+            ));
         }
         let mut evidence = finding
             .evidence_references
             .iter()
             .map(|reference| {
                 format!(
-                    concat!(
-                        "<li><code>{}</code><br>",
-                        "Evidence {} · Check {} · Observed {}</li>"
-                    ),
+                    concat!("<li><code>{}</code><br>", "{} {} · {} {} · {} {}</li>"),
                     html_escape(&reference.artifact_sha256),
+                    catalog.text("Evidence", "證據"),
                     html_escape(&reference.evidence_id),
+                    catalog.text("Check", "檢查"),
                     html_escape(&reference.engine_id),
-                    html_escape(&reference.observed_at.to_rfc3339()),
+                    catalog.text("Observed", "觀察時間"),
+                    html_escape(&catalog.format_time(&reference.observed_at)),
                 )
             })
             .collect::<String>();
         if evidence.is_empty() {
             evidence.push_str(
-                "<li>No selected-run evidence SHA-256 reference was retained for this finding.</li>",
+                catalog.text(
+                    "<li>No selected-run evidence SHA-256 reference was retained for this finding.</li>",
+                    "<li>此問題未保留本輪證據的 SHA-256 參照。</li>",
+                ),
             );
         }
         let mut frameworks = finding
@@ -12272,80 +12724,96 @@ fn html_report_bytes(
                     .mapping_provenance
                     .as_ref()
                     .map(|provenance| {
-                        format!(
-                            " · Catalog SHA-256 {} · Reviewed {} via {}",
-                            provenance.catalog_sha256,
-                            provenance.reviewed_at,
-                            provenance.review_process,
+                        catalog.format_mapping_provenance(
+                            &provenance.catalog_sha256,
+                            &provenance.reviewed_at,
+                            &provenance.review_process,
                         )
                     })
-                    .unwrap_or_else(|| " · Mapping provenance unavailable".into());
+                    .unwrap_or_else(|| {
+                        catalog
+                            .text(" · Mapping provenance unavailable", " · 對照來源無法取得")
+                            .into()
+                    });
                 format!(
                     concat!(
                         "<li><strong>{} {} / {}</strong> — {}",
-                        "<br>Relationship: {}",
-                        "<br>Why related: {}",
-                        "<br>Mapping version: {}{}</li>"
+                        "<br>{}: {}",
+                        "<br>{}: {}",
+                        "<br>{}: {}{}</li>"
                     ),
                     html_escape(&reference.framework),
                     html_escape(&reference.framework_version),
                     html_escape(&reference.control_id),
                     html_escape(&reference.title),
+                    catalog.text("Relationship", "關係"),
                     html_escape(&reference.relationship),
+                    catalog.text("Why related", "關聯原因"),
                     html_escape(&reference.rationale),
+                    catalog.text("Mapping version", "對照版本"),
                     html_escape(&reference.mapping_version),
                     html_escape(&provenance),
                 )
             })
             .collect::<String>();
         if frameworks.is_empty() {
-            frameworks.push_str("<li>No selected-run framework coordinate was retained.</li>");
+            frameworks.push_str(catalog.text(
+                "<li>No selected-run framework coordinate was retained.</li>",
+                "<li>未保留本輪的框架座標。</li>",
+            ));
         }
-        let targets = if finding.target_asset_ids.is_empty() {
-            "none retained".into()
-        } else {
-            finding
-                .target_asset_ids
-                .iter()
-                .map(|asset_id| html_escape(asset_id))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
+        let targets = readable_target_list(&finding.target_asset_ids, &target_labels, catalog);
         findings.push_str(&format!(
             concat!(
                 "<article><h3>{}</h3>",
-                "<p><span class=\"pill\">Severity: {}</span> ",
-                "<span class=\"pill\">Confidence: {}</span> ",
-                "<span class=\"pill\">Priority: {}</span> Report order #{}</p>",
-                "<p><strong>Selected-run source:</strong> {} · ",
-                "<strong>Finding ID:</strong> <code>{}</code> · ",
-                "<strong>Targets:</strong> {}</p>",
-                "<p>{}</p><h4>Possible impact</h4><p>{}</p>",
-                "<h4>Why this priority</h4><ul>{}</ul>",
-                "<h4>What to do next</h4><p>{}</p>",
-                "<p><strong>Suggested expert:</strong> {}</p>",
-                "<h4>Evidence SHA-256</h4><ul>{}</ul>",
-                "<h4>Related framework coordinates</h4><ul>{}</ul></article>"
+                "<p><span class=\"pill\">{}: {}</span> ",
+                "<span class=\"pill\">{}: {}</span> ",
+                "<span class=\"pill\">{}: {}</span> {} #{}</p>",
+                "<p><strong>{}:</strong> {} · ",
+                "<strong>{}:</strong> <code>{}</code> · ",
+                "<strong>{}:</strong> {}</p>",
+                "<p>{}</p><h4>{}</h4><p>{}</p>",
+                "<h4>{}</h4><ul>{}</ul>",
+                "<h4>{}</h4><p>{}</p>",
+                "<p><strong>{}:</strong> {}</p>",
+                "<h4>{}</h4><ul>{}</ul>",
+                "<h4>{}</h4><ul>{}</ul></article>"
             ),
             html_escape(&finding.title),
-            html_escape(&enum_key(&finding.severity)),
-            html_escape(&enum_key(&finding.confidence)),
+            catalog.text("Severity", "嚴重程度"),
+            html_escape(&catalog.identifier(&enum_key(&finding.severity))),
+            catalog.text("Confidence", "信心程度"),
+            html_escape(&catalog.identifier(&enum_key(&finding.confidence))),
+            catalog.text("Priority", "優先順序"),
             html_escape(&priority),
-            index + 1,
-            html_escape(&enum_key(&finding.snapshot_source)),
+            catalog.text("Report order", "報告順序"),
+            catalog.format_number(index + 1),
+            catalog.text("Selected-run source", "本輪來源"),
+            html_escape(catalog.finding_source(&finding.snapshot_source)),
+            catalog.text("Finding ID", "問題 ID"),
             html_escape(&finding.finding_id),
+            catalog.text("Targets", "目標"),
             targets,
             html_escape(&finding.plain_language_risk),
+            catalog.text("Possible impact", "可能影響"),
             html_escape(&finding.possible_impact),
+            catalog.text("Why this priority", "此優先順序的原因"),
             priority_reasons,
+            catalog.text("What to do next", "下一步怎麼做"),
             html_escape(&finding.next_step),
+            catalog.text("Suggested expert", "建議諮詢的專家"),
             html_escape(&finding.recommended_expert_type),
+            catalog.text("Evidence SHA-256", "證據 SHA-256"),
             evidence,
+            catalog.text("Related framework coordinates", "相關框架座標"),
             frameworks,
         ));
     }
     if findings.is_empty() {
-        findings.push_str("<p>No finding was retained for this run. This does not by itself establish successful coverage.</p>");
+        findings.push_str(catalog.text(
+            "<p>No finding was retained for this run. This does not by itself establish successful coverage.</p>",
+            "<p>本輪未保留任何問題。這一點本身不能證明涵蓋完整或掃描成功。</p>",
+        ));
     }
 
     let mut technical_tasks = String::new();
@@ -12365,37 +12833,56 @@ fn html_report_bytes(
                 rule_version,
             } => {
                 let mut values = vec![
-                    format!("engine {engine_id}"),
-                    format!("adapter {adapter_version}"),
+                    format!("{} {engine_id}", catalog.text("engine", "引擎")),
+                    format!("{} {adapter_version}", catalog.text("adapter", "轉換器")),
                 ];
                 if let Some(value) = engine_version {
-                    values.push(format!("engine version {value}"));
+                    values.push(format!(
+                        "{} {value}",
+                        catalog.text("engine version", "引擎版本")
+                    ));
                 }
                 if let Some(value) = image_repository {
-                    values.push(format!("image repository {value}"));
+                    values.push(format!(
+                        "{} {value}",
+                        catalog.text("image repository", "映像儲存庫")
+                    ));
                 }
                 if let Some(value) = image_digest {
-                    values.push(format!("image {value}"));
+                    values.push(format!("{} {value}", catalog.text("image", "映像")));
                 }
                 if let Some(value) = command_sha256 {
-                    values.push(format!("command SHA-256 {value}"));
+                    values.push(format!(
+                        "{} {value}",
+                        catalog.text("command SHA-256", "命令 SHA-256")
+                    ));
                 }
                 if let Some(value) = runtime_provider {
-                    values.push(format!("runtime {value}"));
+                    values.push(format!("{} {value}", catalog.text("runtime", "執行環境")));
                 }
                 if let Some(value) = runtime_version {
-                    values.push(format!("runtime version {value}"));
+                    values.push(format!(
+                        "{} {value}",
+                        catalog.text("runtime version", "執行環境版本")
+                    ));
                 }
                 if let Some(value) = runtime_security_options {
-                    values.push(format!("runtime security {value}"));
+                    values.push(format!(
+                        "{} {value}",
+                        catalog.text("runtime security", "執行環境安全設定")
+                    ));
                 }
                 if let Some(value) = distribution_mode {
-                    values.push(format!("distribution {}", enum_key(value)));
+                    values.push(format!(
+                        "{} {}",
+                        catalog.text("distribution", "散布方式"),
+                        catalog.identifier(&enum_key(value))
+                    ));
                 }
                 if let Some(value) = rule_version {
-                    values.push(format!("rules {value}"));
+                    values.push(format!("{} {value}", catalog.text("rules", "規則")));
                 }
-                values.join("; ")
+                values.join(catalog.text("; ", "；"))
             }
             crate::beginner_report::TechnicalExecution::BuiltInLocalhostTcp {
                 endpoint,
@@ -12408,18 +12895,31 @@ fn html_report_bytes(
                     .as_ref()
                     .map(|observation| {
                         format!(
-                            "outcome {}; observed {}",
-                            enum_key(&observation.outcome),
-                            observation.observed_at.to_rfc3339()
+                            "{} {}; {} {}",
+                            catalog.text("outcome", "結果"),
+                            catalog.identifier(&enum_key(&observation.outcome)),
+                            catalog.text("observed", "觀察時間"),
+                            catalog.format_time(&observation.observed_at)
                         )
                     })
-                    .unwrap_or_else(|| "observation not retained".into());
+                    .unwrap_or_else(|| {
+                        catalog
+                            .text("observation not retained", "未保留觀察紀錄")
+                            .into()
+                    });
                 format!(
-                    "native endpoint {endpoint}; timeout {timeout_ms} ms; payload {payload_bytes} bytes; {observation}; {contract}"
+                    "{} {endpoint}; {} {timeout_ms} ms; {} {payload_bytes} {}; {observation}; {contract}",
+                    catalog.text("native endpoint", "原生端點"),
+                    catalog.text("timeout", "逾時"),
+                    catalog.text("payload", "承載資料"),
+                    catalog.text("bytes", "位元組"),
                 )
             }
             crate::beginner_report::TechnicalExecution::InvalidBuiltInTask { explanation } => {
-                format!("invalid built-in task record: {explanation}")
+                format!(
+                    "{}: {explanation}",
+                    catalog.text("invalid built-in task record", "無效的內建工作紀錄")
+                )
             }
         };
         let mut evidence = task
@@ -12428,10 +12928,13 @@ fn html_report_bytes(
             .map(|sha256| format!("<li><code>{}</code></li>", html_escape(sha256)))
             .collect::<String>();
         if evidence.is_empty() {
-            evidence.push_str("<li>No raw-evidence SHA-256 was retained for this task.</li>");
+            evidence.push_str(catalog.text(
+                "<li>No raw-evidence SHA-256 was retained for this task.</li>",
+                "<li>此工作未保留原始證據 SHA-256。</li>",
+            ));
         }
         let targets = if task.target_asset_ids.is_empty() {
-            "none retained".into()
+            catalog.text("none retained", "未保留").into()
         } else {
             task.target_asset_ids
                 .iter()
@@ -12447,45 +12950,79 @@ fn html_report_bytes(
             .unwrap_or_default();
         let cleanup = task
             .cleanup_removed
-            .map(|removed| format!("removed={removed}"))
-            .unwrap_or_else(|| "not recorded".into());
+            .map(|removed| {
+                format!(
+                    "{}={}",
+                    catalog.text("removed", "已移除"),
+                    catalog.text(
+                        if removed { "true" } else { "false" },
+                        if removed { "是" } else { "否" }
+                    ),
+                )
+            })
+            .unwrap_or_else(|| catalog.text("not recorded", "未記錄").into());
         technical_tasks.push_str(&format!(
             concat!(
-                "<article><h3>Task <code>{}</code></h3>",
-                "<p><strong>State:</strong> {} · <strong>Phase:</strong> {} · ",
-                "<strong>Progress:</strong> {}%</p>",
-                "<p><strong>Started:</strong> {} · <strong>Finished:</strong> {} · ",
-                "<strong>Targets:</strong> {}</p>",
-                "<p><strong>Exit code:</strong> {} · <strong>Error code:</strong> {} · ",
-                "<strong>Cleanup:</strong> {}</p>",
-                "<p><strong>Execution identity:</strong> {}</p>",
-                "<h4>Evidence SHA-256</h4><ul>{}</ul>",
-                "<h4>Redacted diagnostic log</h4>",
-                "<p><strong>Availability:</strong> {}{}<br>{}</p>",
-                "<p><small>Scanner messages are not included in this readable HTML report.</small></p>",
+                "<article><h3>{} <code>{}</code></h3>",
+                "<p><strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
+                "<strong>{}:</strong> {}%</p>",
+                "<p><strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
+                "<strong>{}:</strong> {}</p>",
+                "<p><strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
+                "<strong>{}:</strong> {}</p>",
+                "<p><strong>{}:</strong> {}</p>",
+                "<h4>{}</h4><ul>{}</ul>",
+                "<h4>{}</h4>",
+                "<p><strong>{}:</strong> {}{}<br>{}</p>",
+                "<p><small>{}</small></p>",
                 "</article>"
             ),
+            catalog.text("Task", "工作"),
             html_escape(&task.task_id),
-            html_escape(&enum_key(&task.status)),
+            catalog.text("State", "狀態"),
+            html_escape(&catalog.identifier(&enum_key(&task.status))),
+            catalog.text("Phase", "階段"),
             html_escape(&task.phase),
-            task.progress_percent,
+            catalog.text("Progress", "進度"),
+            catalog.format_number(task.progress_percent as usize),
+            catalog.text("Started", "開始"),
             html_escape(&display_time(task.started_at.as_ref())),
+            catalog.text("Finished", "完成"),
             html_escape(&display_time(task.finished_at.as_ref())),
+            catalog.text("Targets", "目標"),
             targets,
+            catalog.text("Exit code", "結束碼"),
             task.exit_code
                 .map(|code| code.to_string())
-                .unwrap_or_else(|| "not recorded".into()),
-            html_escape(task.error_code.as_deref().unwrap_or("none recorded")),
+                .unwrap_or_else(|| catalog.text("not recorded", "未記錄").into()),
+            catalog.text("Error code", "錯誤碼"),
+            html_escape(
+                task.error_code
+                    .as_deref()
+                    .unwrap_or(catalog.text("none recorded", "未記錄"))
+            ),
+            catalog.text("Cleanup", "清理"),
             html_escape(&cleanup),
+            catalog.text("Execution identity", "執行識別"),
             html_escape(&execution),
+            catalog.text("Evidence SHA-256", "證據 SHA-256"),
             evidence,
-            html_escape(&enum_key(&task.redacted_diagnostic_log.availability)),
+            catalog.text("Redacted diagnostic log", "已遮蔽的診斷紀錄"),
+            catalog.text("Availability", "可用狀態"),
+            html_escape(&catalog.identifier(&enum_key(&task.redacted_diagnostic_log.availability))),
             diagnostic_value,
             html_escape(&task.redacted_diagnostic_log.explanation),
+            catalog.text(
+                "Scanner messages are not included in this readable HTML report.",
+                "這份好讀的 HTML 報告不包含掃描器訊息。",
+            ),
         ));
     }
     if technical_tasks.is_empty() {
-        technical_tasks.push_str("<p>No technical task record was retained for this run.</p>");
+        technical_tasks.push_str(catalog.text(
+            "<p>No technical task record was retained for this run.</p>",
+            "<p>本輪未保留技術工作紀錄。</p>",
+        ));
     }
 
     let mut data_quality_warnings = report
@@ -12494,7 +13031,10 @@ fn html_report_bytes(
         .map(|warning| format!("<li>{}</li>", html_escape(warning)))
         .collect::<String>();
     if data_quality_warnings.is_empty() {
-        data_quality_warnings.push_str("<li>No report data-quality warning was recorded.</li>");
+        data_quality_warnings.push_str(catalog.text(
+            "<li>No report data-quality warning was recorded.</li>",
+            "<li>未記錄報告資料品質警告。</li>",
+        ));
     }
 
     let report_finding_titles = report
@@ -12515,11 +13055,17 @@ fn html_report_bytes(
                 let title = report_finding_titles
                     .get(finding_id.as_str())
                     .copied()
-                    .unwrap_or("Selected-run finding details unavailable");
+                    .unwrap_or(catalog.text(
+                        "Selected-run finding details unavailable",
+                        "本輪問題詳細資料無法取得",
+                    ));
                 let selected_run_note = if selected_finding_ids.contains(finding_id.as_str()) {
-                    "observed in selected run"
+                    catalog.text("observed in selected run", "本輪已觀察到")
                 } else {
-                    "not observed in selected run; retained as case history"
+                    catalog.text(
+                        "not observed in selected run; retained as case history",
+                        "本輪未觀察到；保留為案件歷史",
+                    )
                 };
                 format!(
                     "<li>{} <code>{}</code> — {}</li>",
@@ -12532,19 +13078,25 @@ fn html_report_bytes(
         active_group_articles.push_str(&format!(
             concat!(
                 "<article><h3>{}</h3><p>{}</p><ul>{}</ul>",
-                "<p><strong>Created by:</strong> {} · <strong>Created at:</strong> {} · ",
-                "<strong>Group ID:</strong> <code>{}</code></p></article>"
+                "<p><strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
+                "<strong>{}:</strong> <code>{}</code></p></article>"
             ),
             html_escape(&group.title),
             html_escape(&group.rationale),
             members,
+            catalog.text("Created by", "建立者"),
             html_escape(&group.grouped_by),
-            html_escape(&group.created_at.to_rfc3339()),
+            catalog.text("Created at", "建立時間"),
+            html_escape(&catalog.format_time(&group.created_at)),
+            catalog.text("Group ID", "群組 ID"),
             html_escape(&group.id),
         ));
     }
     if active_group_articles.is_empty() {
-        active_group_articles.push_str("<p>No active presentation groups are recorded.</p>");
+        active_group_articles.push_str(catalog.text(
+            "<p>No active presentation groups are recorded.</p>",
+            "<p>沒有記錄中的有效呈現群組。</p>",
+        ));
     }
 
     let mut grouping_history_rows = String::new();
@@ -12560,8 +13112,8 @@ fn html_report_bytes(
                 "<tr><td>{}</td><td>{}</td><td><code>{}</code></td>",
                 "<td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"
             ),
-            html_escape(&event.occurred_at.to_rfc3339()),
-            html_escape(&enum_key(&event.action)),
+            html_escape(&catalog.format_time(&event.occurred_at)),
+            html_escape(&catalog.identifier(&enum_key(&event.action))),
             html_escape(&event.group_id),
             html_escape(&event.title),
             member_ids,
@@ -12570,17 +13122,56 @@ fn html_report_bytes(
         ));
     }
     if grouping_history_rows.is_empty() {
-        grouping_history_rows
-            .push_str("<tr><td colspan=\"7\">No grouping events are recorded.</td></tr>");
+        grouping_history_rows.push_str(catalog.text(
+            "<tr><td colspan=\"7\">No grouping events are recorded.</td></tr>",
+            "<tr><td colspan=\"7\">沒有群組事件紀錄。</td></tr>",
+        ));
+    }
+
+    let mut technical_target_identities = report
+        .requested
+        .targets
+        .iter()
+        .map(|target| {
+            format!(
+                "<li>{}: <code>{}</code></li>",
+                html_escape(
+                    target_labels
+                        .get(&target.asset_id)
+                        .map(String::as_str)
+                        .unwrap_or(catalog.text("Saved target", "已保存的目標")),
+                ),
+                html_escape(&target.asset_id),
+            )
+        })
+        .collect::<String>();
+    if technical_target_identities.is_empty() {
+        technical_target_identities.push_str(catalog.text(
+            "<li>No exact requested target ID was retained.</li>",
+            "<li>未保留精確的要求目標 ID。</li>",
+        ));
+    }
+    let mut technical_check_identities = report
+        .requested
+        .requested_check_ids
+        .iter()
+        .map(|check_id| format!("<li><code>{}</code></li>", html_escape(check_id)))
+        .collect::<String>();
+    if technical_check_identities.is_empty() {
+        technical_check_identities.push_str(catalog.text(
+            "<li>No exact requested check ID was retained.</li>",
+            "<li>未保留精確的要求檢查 ID。</li>",
+        ));
     }
 
     let mut document = format!(
         concat!(
-            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">",
+            "<!doctype html><html lang=\"{}\"><head><meta charset=\"utf-8\">",
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
             "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\">",
             "<title>{} — ai-security-scanner</title>"
         ),
+        catalog.html_lang(),
         html_escape(&report.project_title),
     );
     document.push_str(concat!(
@@ -12592,89 +13183,166 @@ fn html_report_bytes(
         ".report-card{border:1px solid #ccd1d1;border-radius:.5rem;padding:1rem;background:#f8faf8}",
         ".report-state{display:flex;flex-wrap:wrap;gap:.75rem;align-items:center;padding:1rem;border:1px solid #ccd1d1;border-radius:.5rem}",
         "details.technical{margin-top:2rem;border-top:1px solid #ccd1d1;padding-top:1rem}",
-        "@media(max-width:760px){.report-grid{grid-template-columns:1fr}}",
+        "@media(max-width:760px){body{padding:1rem}.report-grid{grid-template-columns:1fr}table{display:block;overflow-x:auto}}",
         ".notice{background:#fff4d6;border-left:5px solid #b9770e;padding:1rem}",
         ".pill{border:1px solid currentColor;border-radius:1rem;padding:.1rem .5rem}</style></head><body>"
     ));
     document.push_str(&format!(
         concat!(
-            "<header><p>ai-security-scanner / local case export</p><h1>{}</h1>",
-            "<p>Selected run <code>{}</code></p></header>",
+            "<header><p>{}</p><h1>{}</h1>",
+            "<p>{} <code>{}</code></p></header>",
             "<section class=\"report-state\"><strong class=\"pill\">{}</strong>",
-            "<span>{}</span><span>{}</span><span>Last saved {}</span></section>",
-            "<p><strong>Checks completed:</strong> {} · <strong>Partly completed:</strong> {} · ",
-            "<strong>Failed:</strong> {} · <strong>Timed out:</strong> {} · ",
-            "<strong>Not tested:</strong> {} · <strong>Coverage gaps:</strong> {} · ",
-            "<strong>Problems found:</strong> {}</p>"
+            "<span>{}</span><span>{}</span><span>{} {}</span></section>",
+            "<p><strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
+            "<strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
+            "<strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
+            "<strong>{}:</strong> {}</p>"
+        ),
+        catalog.text(
+            "ai-security-scanner / local case export",
+            "ai-security-scanner／本機案件匯出"
         ),
         html_escape(&report.project_title),
+        catalog.text("Selected run", "選定的掃描輪次"),
         html_escape(&report.run_id),
         report_summary,
         report_lifecycle,
-        html_escape(&report.state.explanation),
-        html_escape(&report.state.last_durable_update.to_rfc3339()),
-        report_counts.tested_complete,
-        report_counts.tested_partial,
-        report_counts.failed,
-        report_counts.timed_out,
-        report_counts.not_tested,
-        report.coverage_gaps.len(),
-        report.findings.len(),
+        html_escape(report_explanation),
+        catalog.text("Last saved", "最後保存"),
+        html_escape(&catalog.format_time(&report.state.last_durable_update)),
+        catalog.text("Checks completed", "已完成檢查"),
+        catalog.format_number(report_counts.tested_complete),
+        catalog.text("Partly completed", "部分完成"),
+        catalog.format_number(report_counts.tested_partial),
+        catalog.text("Failed", "失敗"),
+        catalog.format_number(report_counts.failed),
+        catalog.text("Timed out", "逾時"),
+        catalog.format_number(report_counts.timed_out),
+        catalog.text("Not tested", "未測試"),
+        catalog.format_number(report_counts.not_tested),
+        catalog.text("Coverage gaps", "涵蓋缺口"),
+        catalog.format_number(report.coverage_gaps.len()),
+        catalog.text("Problems found", "發現的問題"),
+        catalog.format_number(report.findings.len()),
     ));
     document.push_str(&format!(
         concat!(
             "<section class=\"report-grid\"><div class=\"report-card\">",
-            "<h2>What you asked to scan</h2><p><strong>Scan depth:</strong> {}</p>",
-            "<h3>Targets</h3><ul>{}</ul><h3>Requested checks</h3><ul>{}</ul>",
-            "<h3>Limits</h3><ul>{}</ul></div>",
-            "<div class=\"report-card\"><h2>What was actually tested</h2>",
-            "<p><strong>Observed window:</strong> {}</p><ul>{}</ul></div>",
-            "<div class=\"report-card\"><h2>What was not tested</h2><ul>{}</ul></div></section>",
-            "<section><h2>What to do next</h2><ol>{}</ol></section>",
-            "<section class=\"notice\"><strong>Framework references:</strong> {}",
-            "<br><strong>AIDEFEND mapping:</strong> {}</section>",
-            "<h2>Problems found</h2>",
-            "<p>Problems follow the master report order. Severity describes possible impact; confidence describes evidence strength. Priority is the report's retained triage value, not a compliance score.</p>{}"
+            "<h2>{}</h2><p><strong>{}:</strong> {}</p>",
+            "<h3>{}</h3><ul>{}</ul><h3>{}</h3><ul>{}</ul>",
+            "<h3>{}</h3><ul>{}</ul></div>",
+            "<div class=\"report-card\"><h2>{}</h2>",
+            "<p><strong>{}:</strong> {}</p><ul>{}</ul>{}</div>",
+            "<div class=\"report-card\"><h2>{}</h2><ul>{}</ul></div></section>",
+            "<section><h2>{}</h2><ol>{}</ol></section>",
+            "<section class=\"notice\"><strong>{}:</strong> {}",
+            "<br><strong>{}:</strong> {}</section>",
+            "<h2>{}</h2>",
+            "<p>{}</p>{}"
         ),
-        html_escape(&requested_stage),
+        catalog.text("What you asked to scan", "你要求掃描的內容"),
+        catalog.text("Scan depth", "掃描深度"),
+        html_escape(requested_stage),
+        catalog.text("Targets", "目標"),
         requested_targets,
+        catalog.text("Requested checks", "要求的檢查"),
         requested_checks,
+        catalog.text("Limits", "限制"),
         requested_limits,
+        catalog.text("What was actually tested", "實際測試的內容"),
+        catalog.text("Observed window", "觀察時間範圍"),
         html_escape(&actual_window),
         tested_items,
+        network_scope_section,
+        catalog.text("What was not tested", "未測試的內容"),
         gap_items,
+        catalog.text("What to do next", "下一步怎麼做"),
         next_step_items,
-        html_escape(&report.framework_notice.non_certification),
-        html_escape(&report.framework_notice.aidefend_mapping_status),
+        catalog.text("Framework references", "框架參照"),
+        html_escape(catalog.text(
+            "Framework references are informational mappings and do not establish certification or compliance.",
+            "框架參照僅供資訊對照，不代表取得認證或符合規範。",
+        )),
+        catalog.text("AIDEFEND mapping", "AIDEFEND 對照"),
+        html_escape(catalog.text(
+            "AIDEFEND references are an independent, unofficial mapping unless the framework owner states otherwise.",
+            "除非框架擁有者另有聲明，AIDEFEND 參照屬於獨立、非官方的對照。",
+        )),
+        catalog.text("Problems found", "發現的問題"),
+        catalog.text(
+            "Problems follow the master report order. Severity describes possible impact; confidence describes evidence strength. Priority is the report's retained triage value, not a compliance score.",
+            "問題依主要報告順序排列。嚴重程度描述可能影響；信心程度描述證據強度；優先順序是報告保存的分流值，不是合規分數。",
+        ),
         findings,
     ));
     document.push_str(&format!(
         concat!(
-            "<details class=\"technical\"{}><summary><strong>Technical details</strong></summary>",
-            "<h2>Selected-run task details</h2>{}",
-            "<h2>Report data-quality notes</h2><ul>{}</ul>",
-            "<h2>Reversible finding groups</h2>",
-            "<p>Groups are presentation metadata only. Every canonical finding, fingerprint, evidence record, and raw artifact remains independent; removing a group appends history and does not delete its members.</p>{}",
-            "<h3>Immutable grouping history</h3>",
-            "<table><thead><tr><th>Time</th><th>Action</th><th>Group ID</th><th>Title</th><th>Finding IDs</th><th>Reason</th><th>Actor</th></tr></thead><tbody>{}</tbody></table></details>"
+            "<details class=\"technical\"{}><summary><strong>{}</strong></summary>",
+            "<h2>{}</h2>",
+            "<h3>{}</h3><ul>{}</ul><h3>{}</h3><ul>{}</ul>",
+            "<h2>{}</h2>{}",
+            "<h2>{}</h2><ul>{}</ul>",
+            "<h2>{}</h2>",
+            "<p>{}</p>{}",
+            "<h3>{}</h3>",
+            "<table><thead><tr><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th></tr></thead><tbody>{}</tbody></table></details>"
         ),
         if report.technical_details.collapsed_by_default {
             ""
         } else {
             " open"
         },
+        catalog.text("Technical details", "技術詳細資料"),
+        catalog.text("Exact requested identities", "精確的要求識別"),
+        catalog.text("Target IDs", "目標 ID"),
+        technical_target_identities,
+        catalog.text("Check IDs", "檢查 ID"),
+        technical_check_identities,
+        catalog.text("Selected-run task details", "本輪工作詳細資料"),
         technical_tasks,
+        catalog.text("Report data-quality notes", "報告資料品質備註"),
         data_quality_warnings,
+        catalog.text("Reversible finding groups", "可還原的問題群組"),
+        catalog.text(
+            "Groups are presentation metadata only. Every canonical finding, fingerprint, evidence record, and raw artifact remains independent; removing a group appends history and does not delete its members.",
+            "群組只屬於呈現用中繼資料。每筆標準問題、指紋、證據紀錄與原始成品仍彼此獨立；移除群組只會附加歷史，不會刪除成員。",
+        ),
         active_group_articles,
+        catalog.text("Immutable grouping history", "不可變更的群組歷史"),
+        catalog.text("Time", "時間"),
+        catalog.text("Action", "動作"),
+        catalog.text("Group ID", "群組 ID"),
+        catalog.text("Title", "標題"),
+        catalog.text("Finding IDs", "問題 ID"),
+        catalog.text("Reason", "原因"),
+        catalog.text("Actor", "操作者"),
         grouping_history_rows,
     ));
     document.push_str(&format!(
         concat!(
-            "<footer><p>Redaction profile: {}. Integrity: unsigned HTML with SHA-256 retained in the local case. ",
-            "Raw evidence is excluded. No scripts, forms, remote resources, scanner messages, or executable remediation are included.</p></footer>",
+            "<footer><p>{}: {}. {} ",
+            "{}</p></footer>",
             "</body></html>"
         ),
-        html_escape(options.redaction.as_str()),
+        catalog.text("Redaction profile", "遮蔽設定"),
+        html_escape(catalog.text(
+            match options.redaction {
+                crate::export::RedactionProfile::None => "none",
+                crate::export::RedactionProfile::Standard => "standard",
+            },
+            match options.redaction {
+                crate::export::RedactionProfile::None => "無",
+                crate::export::RedactionProfile::Standard => "標準",
+            },
+        )),
+        catalog.text(
+            "Integrity: unsigned HTML with SHA-256 retained in the local case.",
+            "完整性：未簽章的 HTML；SHA-256 保留在本機案件中。",
+        ),
+        catalog.text(
+            "Raw evidence is excluded. No scripts, forms, remote resources, scanner messages, or executable remediation are included.",
+            "不包含原始證據，也不包含指令碼、表單、遠端資源、掃描器訊息或可執行的修復動作。",
+        ),
     ));
     Ok(document.into_bytes())
 }
@@ -17908,6 +18576,9 @@ mod tests {
         .unwrap();
         assert!(html.contains("Partial results"));
         assert!(html.contains(&expected_unit_count));
+        assert!(html.contains("Exact network coverage and outcome"));
+        assert!(html.contains("[redacted address set 1]"));
+        assert!(html.contains("[redacted port set 1]"));
         for private_target in ["198.51.100.0/30", "198.51.100.1", "198.51.100.2"] {
             assert!(!html.contains(private_target));
         }
@@ -18320,6 +18991,7 @@ mod tests {
                 ExportOptions {
                     redaction: RedactionProfile::None,
                     include_raw_artifacts: false,
+                    locale: crate::export::ReportLocale::En,
                 },
             )
             .expect("export reopened internal beginner report");
@@ -19125,6 +19797,7 @@ mod tests {
                     &ExportOptions {
                         redaction: RedactionProfile::None,
                         include_raw_artifacts: false,
+                        locale: crate::export::ReportLocale::En,
                     },
                 )
                 .unwrap(),
@@ -23617,6 +24290,7 @@ mod tests {
                 &ExportOptions {
                     redaction: RedactionProfile::None,
                     include_raw_artifacts: false,
+                    locale: crate::export::ReportLocale::En,
                 },
             )
             .unwrap(),
@@ -23624,12 +24298,12 @@ mod tests {
         .unwrap();
 
         for expected in [
-            started.to_rfc3339(),
-            finished.to_rfc3339(),
+            readable_report_time(&started),
+            readable_report_time(&finished),
             "Frozen selected-run secret exposure".into(),
             "Finding details unavailable for this legacy run".into(),
-            "Severity: high".into(),
-            "Confidence: confirmed".into(),
+            "Severity: High".into(),
+            "Confidence: Confirmed".into(),
             "Priority: 73".into(),
             "Confirmed evidence and a reusable credential pattern raise the handoff priority."
                 .into(),
@@ -23638,19 +24312,192 @@ mod tests {
             "AIDEFEND 2026.1 / ADF-APP-01".into(),
             "map-2026-08".into(),
             "Redacted diagnostic log".into(),
-            "Availability:</strong> unavailable".into(),
+            "Availability:</strong> Unavailable".into(),
             "No run-bound redacted diagnostic log is retained in the case model.".into(),
         ] {
             assert!(html.contains(&expected), "HTML omitted {expected}");
         }
         assert!(html.contains(&format!(
             "Started: {} · Finished: {}",
-            started.to_rfc3339(),
-            finished.to_rfc3339()
+            readable_report_time(&started),
+            readable_report_time(&finished)
         )));
-        assert!(html.contains(&format!("Observed: {}", finished.to_rfc3339())));
+        assert!(html.contains(&format!("Observed: {}", readable_report_time(&finished))));
         assert!(!html.contains(RAW_SCANNER_SENTINEL));
         assert!(!html.contains(MUTABLE_CANONICAL_SENTINEL));
+    }
+
+    #[test]
+    fn target_id_replacement_prefers_the_longest_original_identity_without_reprocessing_labels() {
+        let labels = BTreeMap::from([
+            ("asset-1".into(), "Target 1".into()),
+            ("asset-10".into(), "Target 10".into()),
+            ("label-source".into(), "Label mentioning asset-1".into()),
+        ]);
+
+        assert_eq!(
+            replace_target_ids("asset-1, asset-10, label-source", &labels),
+            "Target 1, Target 10, Label mentioning asset-1"
+        );
+    }
+
+    #[test]
+    fn beginner_visible_html_uses_friendly_labels_and_keeps_exact_ids_collapsed() {
+        let fixture = Fixture::new();
+        let prepared = crate::localhost_quick_scan::prepare_localhost_quick_scan(
+            &fixture.storage,
+            fixture.engines.manifests(),
+            9001,
+        )
+        .unwrap();
+        let mut case = fixture
+            .storage
+            .get_case(&prepared.prepared.case_id)
+            .unwrap();
+        let observed = DateTime::parse_from_rfc3339("2026-09-01T12:34:56.123456789Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let started = observed - Duration::seconds(1);
+        let run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == prepared.prepared.scan_run_id)
+            .unwrap();
+        run.completed_at = Some(observed);
+        let task = run
+            .engine_runs
+            .iter_mut()
+            .find(|task| task.id == prepared.prepared.engine_run_id)
+            .unwrap();
+        let target_id = task.asset_ids[0].clone();
+        task.status = EngineRunStatus::Completed;
+        task.phase = "completed".into();
+        task.progress_percent = 100;
+        task.started_at = Some(started);
+        task.finished_at = Some(observed);
+        task.exit_code = Some(0);
+        task.cleanup_removed = Some(true);
+        task.localhost_tcp_observation = Some(crate::domain::LocalhostTcpObservation {
+            outcome: crate::domain::LocalhostTcpOutcome::Reachable,
+            observed_at: observed,
+        });
+        case.status = CaseStatus::ReadyForHandoff;
+        case.updated_at = observed;
+
+        let options = ExportOptions {
+            redaction: RedactionProfile::None,
+            include_raw_artifacts: false,
+            locale: crate::export::ReportLocale::En,
+        };
+        let html = String::from_utf8(
+            html_report_bytes(&case, &prepared.prepared.scan_run_id, &options).unwrap(),
+        )
+        .unwrap();
+        let (beginner_visible, technical_details) = html
+            .split_once("<details class=\"technical\"")
+            .expect("readable report keeps technical details in a separate collapsed section");
+
+        for expected in [
+            "Quick discovery",
+            "Web service",
+            "Completed",
+            "saved task settings",
+            "127.0.0.1:9001",
+            "2026-09-01 12:34:56 UTC",
+        ] {
+            assert!(
+                beginner_visible.contains(expected),
+                "beginner-visible HTML omitted friendly text {expected}"
+            );
+        }
+        for machine_facing in [
+            "quick_discovery",
+            "web_service",
+            "tested_complete",
+            "frozen_task_contract",
+            target_id.as_str(),
+            ".123456789",
+            "T12:34:56",
+        ] {
+            assert!(
+                !beginner_visible.contains(machine_facing),
+                "beginner-visible HTML leaked machine-facing value {machine_facing}"
+            );
+        }
+        assert!(
+            technical_details.contains(&target_id),
+            "collapsed technical details retain the exact target ID for auditability"
+        );
+        assert!(!html.contains("<details class=\"technical\" open"));
+        assert!(html.contains(concat!(
+            "Content-Security-Policy\" content=\"default-src 'none'; ",
+            "style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+        )));
+        assert!(html.contains("<html lang=\"en\">"));
+        assert!(html.contains("What was actually tested"));
+        assert!(html.contains("Framework references are informational mappings"));
+
+        let zh_options = ExportOptions {
+            redaction: RedactionProfile::None,
+            include_raw_artifacts: false,
+            locale: crate::export::ReportLocale::ZhHant,
+        };
+        let zh_html = String::from_utf8(
+            html_report_bytes(&case, &prepared.prepared.scan_run_id, &zh_options).unwrap(),
+        )
+        .unwrap();
+        let zh_preview = fixture
+            .service()
+            .preview_export(
+                &case.id,
+                &prepared.prepared.scan_run_id,
+                CaseExportFormat::Html,
+                &zh_options,
+            )
+            .unwrap();
+
+        assert_eq!(zh_preview.locale, crate::export::ReportLocale::ZhHant);
+        assert!(!zh_preview.include_raw_evidence);
+        for expected in [
+            "<html lang=\"zh-Hant\">",
+            "實際測試的內容",
+            "已完成",
+            "框架參照僅供資訊對照，不代表取得認證或符合規範。",
+            "AIDEFEND 參照屬於獨立、非官方的對照",
+            "2026年09月01日 12:34:56 UTC",
+        ] {
+            assert!(
+                zh_html.contains(expected),
+                "zh-Hant HTML omitted {expected}"
+            );
+        }
+        for english_only in [
+            "<html lang=\"en\">",
+            "What was actually tested",
+            "Framework references are informational mappings",
+        ] {
+            assert!(
+                !zh_html.contains(english_only),
+                "zh-Hant HTML retained English catalog text {english_only}"
+            );
+        }
+
+        let canonical = String::from_utf8(
+            canonical_json_bytes(&case, &prepared.prepared.scan_run_id, &options).unwrap(),
+        )
+        .unwrap();
+        for canonical_value in [
+            "quick_discovery",
+            "web_service",
+            "tested_complete",
+            "frozen_task_contract",
+            target_id.as_str(),
+        ] {
+            assert!(
+                canonical.contains(canonical_value),
+                "canonical JSON unexpectedly changed {canonical_value}"
+            );
+        }
     }
 
     #[test]
@@ -23778,6 +24625,7 @@ mod tests {
                 &ExportOptions {
                     redaction: RedactionProfile::None,
                     include_raw_artifacts: false,
+                    locale: crate::export::ReportLocale::En,
                 },
             )
             .unwrap(),
