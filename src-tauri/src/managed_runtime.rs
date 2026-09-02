@@ -13990,8 +13990,9 @@ mod tests {
         use windows_sys::Win32::Security::{
             ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAceEx, CONTAINER_INHERIT_ACE,
             CreateWellKnownSid, DACL_SECURITY_INFORMATION, GetLengthSid, InitializeAcl,
-            InitializeSecurityDescriptor, OBJECT_INHERIT_ACE, SECURITY_DESCRIPTOR,
-            SECURITY_MAX_SID_SIZE, SetFileSecurityW, SetSecurityDescriptorDacl,
+            InitializeSecurityDescriptor, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
+            SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE, SetFileSecurityW,
+            SetSecurityDescriptorDacl, SetSecurityDescriptorOwner,
         };
         use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
         use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
@@ -14090,6 +14091,23 @@ mod tests {
             "attach permissive parent DACL: {}",
             io::Error::last_os_error()
         );
+        // Hosted Windows runners can create a user-writable LocalAppData child
+        // whose default owner is the Administrators group. These fixtures model
+        // the product's accepted user-owned legacy root, so bind that ownership
+        // explicitly instead of relying on the runner token's default owner.
+        // SAFETY: descriptor is initialized and user owns a valid live SID.
+        assert_ne!(
+            unsafe {
+                SetSecurityDescriptorOwner(
+                    std::ptr::addr_of_mut!(descriptor).cast(),
+                    user.as_ptr(),
+                    0,
+                )
+            },
+            0,
+            "attach current-user fixture owner: {}",
+            io::Error::last_os_error()
+        );
         let mut encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
         assert!(!encoded.contains(&0), "fixture path contains NUL");
         encoded.push(0);
@@ -14098,7 +14116,7 @@ mod tests {
             unsafe {
                 SetFileSecurityW(
                     encoded.as_ptr(),
-                    DACL_SECURITY_INFORMATION,
+                    DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION,
                     std::ptr::addr_of_mut!(descriptor).cast(),
                 )
             },

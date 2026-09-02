@@ -240,10 +240,11 @@ const managedEvidenceWorkflows = [
   ".github/workflows/engine-image-syft.yml",
 ];
 const localK8sWorkflowRelative = ".github/workflows/engine-images-local-k8s.yml";
+const managedEgressGatewayWorkflowRelative = ".github/workflows/managed-egress-gateway-image.yml";
 const newlyPublishedEvidenceWorkflows = [
   ".github/workflows/engine-images-external.yml",
   localK8sWorkflowRelative,
-  ".github/workflows/managed-egress-gateway-image.yml",
+  managedEgressGatewayWorkflowRelative,
 ];
 const upstreamImageOnlyIds = new Set(["kics"]);
 const shellNames = new Set([
@@ -412,6 +413,13 @@ function validateManagedImageEvidence(catalogEntries) {
     ? readFileSync(localK8sWorkflowPath, "utf8")
     : "";
   const localK8sWorkflow = parseWorkflow(localK8sWorkflowRelative);
+  const managedEgressGatewayWorkflow = parseWorkflow(managedEgressGatewayWorkflowRelative);
+  const managedEgressGatewayTriggers = Object.keys(managedEgressGatewayWorkflow?.on ?? {}).sort();
+  if (JSON.stringify(managedEgressGatewayTriggers) !== JSON.stringify(["workflow_dispatch"])) {
+    errors.push(
+      `${managedEgressGatewayWorkflowRelative}: immutable gateway publication must be manual-only via workflow_dispatch`,
+    );
+  }
   const localK8sMatrix = localK8sWorkflow?.jobs?.publish?.strategy?.matrix?.include;
   const observedSmokeOutputs = new Map(
     Array.isArray(localK8sMatrix)

@@ -1,17 +1,6 @@
 name: Publish managed egress gateway image
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - engines/images/egress-gateway/Dockerfile
-      - src-tauri/src/bin/egress_gateway.rs
-      - src-tauri/src/bin/egress_probe.rs
-      - src-tauri/src/managed_network.rs
-      - src-tauri/Cargo.toml
-      - Cargo.toml
-      - Cargo.lock
   workflow_dispatch:
 
 permissions:
