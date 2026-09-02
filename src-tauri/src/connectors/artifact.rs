@@ -562,6 +562,7 @@ fn verify_and_restrict_matching_provider_artifact(
         )
 }
 
+#[cfg(windows)]
 fn verify_provider_artifact_open_file(
     file: &mut File,
     expected: &[u8],
