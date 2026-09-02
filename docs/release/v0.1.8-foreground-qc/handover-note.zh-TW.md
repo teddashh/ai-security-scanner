@@ -8,13 +8,15 @@
 - Branch：`codex/v0.1.8-foreground-qc`
 - Base：`fa1fa9d401995de45080fbfaffc6b39d99955387`（tag `v0.1.8`）
 - 功能 commit：`503542271ff8b2178ed2d334fd47d76c494d1c75`
-- Branch HEAD：`e0b21e66883fe214f108834a692d3eb8156be4c2`
+- 跨平台已驗證程式 commit：`20cf93516e9d45b83af15222db782c2d22c0c162`
 - Upstream：`origin/codex/v0.1.8-foreground-qc`
-- 最終狀態：local SHA = remote SHA，working tree clean。
+- 驗證當時狀態：Windows、GitHub、Castle code SHA 一致，兩個 working tree clean；文件更新後請以 GitHub branch HEAD 為準。
 
 GitHub branch：https://github.com/teddashh/ai-security-scanner/tree/codex/v0.1.8-foreground-qc
 
-`e0b21e6` 只把 handover 中的 Rust 版本從錯誤的 1.98.0 更正為實際 1.97.0；產品變更集中在 `5035422`。
+主要產品整合在 `5035422`；Castle Linux 發現並驗證的跨平台 lint 修正在 `20cf935`。產品 metadata 仍是 0.1.8，沒有新 tag／Release。
+
+Castle checkout：`/home/ted-h/projects/ai-security-scanner`，branch `codex/v0.1.8-foreground-qc`。直接 `git pull --ff-only` 即可接續，不需要 BAT 或此筆電的檔案。
 
 ## 本輪邊界
 
@@ -109,27 +111,25 @@ Readable report 已 selected-run scoped，但 bundle 仍可包含 case-wide reco
 - Settings 對 unknown runtime 與 known unavailable 的顯示仍可更清楚。
 - 少數舊測試 `Barrier::wait()` 沒有 deadline。
 - Vite main chunk 約 876 kB minified／265 kB gzip。
-- Unix-only／privilege-dependent paths 尚未在對應環境完整跑過。
+- 八個 Unix-only artifact／lease／uninstall symlink/hard-link guards 已在 Castle Linux 通過；其他 privilege-dependent、installed-runtime paths 仍需各自環境 qualification。
 - Enterprise ACL policy 尚未 qualification；目前對不明 ACE fail closed。
 - GitHub push 提示 default branch 有 1 個 moderate vulnerability；尚未評估。
 
 ## 建置與驗證命令
 
-最終可重現工具版本：
+已驗證工具版本：
 
-- `rustc 1.97.0 (2d8144b78 2026-07-07)`
-- `cargo 1.97.0 (c980f4866 2026-06-30)`
-- Node `v24.16.0`
-- npm `11.13.0`
+- Windows：`rustc/cargo 1.98.0`、Node `v24.16.0`、npm `11.13.0`
+- Castle Linux：`rustc/cargo 1.98.0`、Node `v24.15.0`、npm `11.12.1`
 
 主要命令：
 
 ```powershell
-cargo fmt --all -- --check
-cargo test --locked --package ai-security-scanner --features desktop
-cargo test --locked --workspace --no-default-features --features cli
+cargo +1.98.0 fmt --all -- --check
+cargo +1.98.0 test --locked --package ai-security-scanner --features desktop
+cargo +1.98.0 test --locked --workspace --no-default-features --features cli
 $env:RUSTFLAGS='-D warnings'
-cargo clippy --locked --package ai-security-scanner --features desktop --all-targets -- -D warnings
+cargo +1.98.0 clippy --locked --package ai-security-scanner --features desktop --all-targets -- -D warnings
 npm.cmd run typecheck
 npm.cmd run test:frontend
 npm.cmd run build

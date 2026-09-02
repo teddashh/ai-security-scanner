@@ -2,9 +2,9 @@
 
 日期：2026-09-02
 測試對象功能 commit：`503542271ff8b2178ed2d334fd47d76c494d1c75`
-最終 branch HEAD：`e0b21e66883fe214f108834a692d3eb8156be4c2`
-平台：Windows 11 Professional，x86_64-pc-windows-msvc
-Rust：rustc/cargo 1.97.0
+跨平台修正驗證 commit：`20cf93516e9d45b83af15222db782c2d22c0c162`
+平台：Windows 11 Professional／Castle Linux
+Rust：兩端 rustc/cargo 1.98.0
 Node：v24.16.0
 npm：11.13.0
 
@@ -21,7 +21,10 @@ npm：11.13.0
 | Rust format | `cargo fmt --all -- --check` | PASS | 最終 source format clean |
 | Desktop Rust | `cargo test --locked --package ai-security-scanner --features desktop` | PASS | 詳細 binary/suite 如下 |
 | CLI/workspace Rust | `cargo test --locked --workspace --no-default-features --features cli` | PASS | 與 desktop 有重疊，不合併灌總數 |
+| Castle Linux CLI workspace | 同一 locked CLI workspace | 1,298 PASS | 0 failed／ignored |
+| Unix-only security | artifact／lease／uninstall filters | 8/8 PASS | 每個 filter 各 1/1 |
 | Clippy | desktop、all targets、`-D warnings`，且 `RUSTFLAGS=-D warnings` | PASS | 最終 0 warning/error |
+| Castle Linux Clippy | CLI workspace、all targets、`-D warnings` | PASS | 首輪 8 findings 修正後重跑 |
 | TypeScript | `npm.cmd run typecheck` | PASS | TypeScript typecheck 通過 |
 | Frontend tests | `npm.cmd run test:frontend` | 358/358 PASS | 修正 3 個過時 assertion 後完整通過 |
 | Frontend build | `npm.cmd run build` | PASS | Vite 8.2.2，92 modules |
@@ -33,7 +36,7 @@ npm：11.13.0
 | Usability evidence | evidence schema tests | 5/5 PASS | 明確沒有 human session |
 | Windows bundle | unsigned NSIS build | PASS | Build only；未安裝／未啟動 |
 | Staged diff | `git diff --cached --check`（commit 前） | PASS | 74 檔，無 whitespace blocker |
-| Remote integrity | local SHA vs `git ls-remote` | PASS | final HEAD 都是 `e0b21e6…` |
+| Cross-machine integrity | Windows／GitHub／Castle SHA | PASS | 驗證 code HEAD 都是 `20cf935…` |
 
 ## Desktop Rust 詳細結果
 
@@ -62,6 +65,17 @@ npm：11.13.0
 
 Desktop 與 CLI feature set 會重編並重跑部分共同邏輯，所以「882 + 842」不是獨立測試總數。
 
+### Castle Linux CLI／Unix 結果
+
+在 `/home/ted-h/projects/ai-security-scanner`、Rust 1.98、commit `20cf935`：
+
+- 完整 CLI workspace：812 library + 35 CLI + 18 adapter + 15 connector + 11 discovery + 343 engine execution + 21 job manager + 2 lifecycle + 14 authorization + 24 workspace snapshot + 3 doctests = 1,298 passed，0 failed／ignored。
+- Unix-only targeted filters：3 個 connector artifact collision/hard-link、1 個 process lease symlink、4 個 product uninstall linked-root/provider-home guards，8/8 PASS。
+- `cargo clippy --locked --workspace --no-default-features --features cli --all-targets -- -D warnings`：PASS。
+- `cargo fmt --all -- --check`：PASS；worktree clean。
+
+這個 1,298 是該 Linux command 的 suite total，不與 Windows desktop suite相加成單一獨立測試數。
+
 ## Frontend 與 build 詳細結果
 
 - Typecheck：PASS。
@@ -72,6 +86,8 @@ Desktop 與 CLI feature set 會重編並重跑部分共同邏輯，所以「882 
 - Vite 仍顯示 >500 kB chunk warning；非本輪 blocking gate，但要在量測 startup 後安排 code splitting。
 
 Frontend tests 包含 presentation helper、case/run identity、demo export projection、navigation、locale、runtime truth reconciliation、primary path source regression 等。後者是 source-level regression，不是 browser human journey。
+
+Castle 另以 Node 24.15.0／npm 11.12.1 重跑：typecheck、358/358 frontend、Vite build、53/53 release evidence、5/5 usability schema、167 engine inputs／21 records／19 runnable／Prowler 8/8、AIDEFEND 6 records與 release validation，全數 PASS。`npm ci` audit 36 packages、0 vulnerabilities。
 
 ## 安全與資料完整性重點回歸
 
@@ -140,12 +156,14 @@ Frontend tests 包含 presentation helper、case/run identity、demo export proj
 - managed-runtime bootstrap transient access denied 曾讓 library 停於 879/880；修正後先精準回歸，再完整通過。
 - ACL startup denial 曾暴露 admission/bootstrap 次序問題；修正後重跑。
 - 兩個 ACL propagation 方案因會過度擴大權限而被否決；沒有以放寬安全界線換取綠燈。
+- Castle 首輪 Linux Clippy 報 8 項：2 `drop_non_drop`、4 platform-only `unused_mut`、2 Windows-test helper `dead_code`。以 lexical scope／精確 `cfg(windows)` 修正於 `20cf935`，完整 Linux tests、8 個 Unix filters與 Clippy重跑 PASS。
 
 ### Delivery／metadata 修復
 
 - 首次 commit 因 repo 未設定 author identity 被 Git 拒絕；只用既有作者設定 repo-local identity，重試成功。
 - clone 原 fetch refspec 只追蹤 tag；加入精確 branch refspec 後 upstream 正常。
-- handover 誤記 Rust 1.98.0；實際 `rustc -Vv`／`cargo -Vv` 是 1.97.0，已以 `e0b21e6` 修正。
+- 本機 default stable 是 1.97，但 repo 的 `rust-version = "1.98"`；第一次命令在測試開始前被 Cargo 拒絕。改用已安裝的 `cargo +1.98.0` 後完整 Windows suite與 Clippy PASS。先前將文件改成 1.97 是錯誤，現已恢復 1.98。
+- Castle 驗證有數次 SSH connect timeout，皆發生在遠端命令開始前；每次都重連、核對 SHA／clean worktree後才執行，不納入測試通過數。
 
 ## 未執行測試
 
@@ -155,7 +173,6 @@ Frontend tests 包含 presentation helper、case/run identity、demo export proj
 - 真實 localhost target 與真實 engine scan。
 - 真實 partial result、cancel、retry、export、signed bundle、recovery、uninstall human journey。
 - Screen reader、keyboard-only、mobile viewport 與十分鐘 first-value human study。
-- Unix-only connector regressions。
 - Authenticode signing、updater、GitHub Release download/install path。
 
 ## 最終判定

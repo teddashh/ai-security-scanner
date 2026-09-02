@@ -5,11 +5,11 @@ Repository：`teddashh/ai-security-scanner`
 分支：`codex/v0.1.8-foreground-qc`
 基底：`fa1fa9d401995de45080fbfaffc6b39d99955387`（`v0.1.8`）
 功能提交：`503542271ff8b2178ed2d334fd47d76c494d1c75`
-最終分支 HEAD：`e0b21e66883fe214f108834a692d3eb8156be4c2`
+跨平台驗證程式提交：`20cf93516e9d45b83af15222db782c2d22c0c162`
 
 - 分支：https://github.com/teddashh/ai-security-scanner/tree/codex/v0.1.8-foreground-qc
 - 功能提交：https://github.com/teddashh/ai-security-scanner/commit/503542271ff8b2178ed2d334fd47d76c494d1c75
-- 文件更正提交：https://github.com/teddashh/ai-security-scanner/commit/e0b21e66883fe214f108834a692d3eb8156be4c2
+- 跨平台修正提交：https://github.com/teddashh/ai-security-scanner/commit/20cf93516e9d45b83af15222db782c2d22c0c162
 
 ## 結論先講
 
@@ -55,14 +55,23 @@ Repository：`teddashh/ai-security-scanner`
 - 驗證 engine catalog、line-ending fixtures、release policy、AIDEFEND snapshot 與 usability evidence schema。
 - 成功建立 unsigned NSIS installer，並複製到使用者輸出目錄；未安裝、未啟動。
 
+### 5. Castle 跨機器驗證
+
+- GitHub branch 已在 Castle 的 `/home/ted-h/projects/ai-security-scanner` checkout，沒有依賴此筆電的 `outputs` 或 BAT archive。
+- Castle Linux Rust 1.98：完整 CLI workspace 1,298 passed／0 failed、8/8 Unix-only security regressions、all-targets Clippy `-D warnings` PASS。
+- Castle Node 24.15.0／npm 11.12.1：typecheck、358/358 frontend、Vite build、53/53 release evidence、5/5 usability schema、engine、AIDEFEND、release validation 全 PASS。
+- Castle `npm ci` audit 36 packages，0 vulnerabilities；這只代表該 lockfile 安裝圖，不抵銷 GitHub 對 default branch 顯示的另一項 moderate vulnerability。
+- Windows 端以明確 Rust 1.98 重跑 desktop library 882/882，另加其餘 integration binaries、doctests及 desktop Clippy，全數 PASS。
+
 ## Git 與 GitHub 結果
 
 - 功能 commit：`503542271ff8b2178ed2d334fd47d76c494d1c75`
-- 文件準確性更正 commit：`e0b21e66883fe214f108834a692d3eb8156be4c2`
+- 跨平台 lint 修正 commit：`20cf93516e9d45b83af15222db782c2d22c0c162`
 - 遠端：`origin/codex/v0.1.8-foreground-qc`
-- 本地 HEAD 與 `git ls-remote` 遠端 HEAD 都是 `e0b21e66883fe214f108834a692d3eb8156be4c2`
+- 程式驗證時 Windows、GitHub 與 Castle code HEAD 都是 `20cf93516e9d45b83af15222db782c2d22c0c162`；後續文件 commit 請以 GitHub branch HEAD 為準。
 - upstream 已設定為 `origin/codex/v0.1.8-foreground-qc`
 - push 後工作樹乾淨。
+- Castle checkout：`/home/ted-h/projects/ai-security-scanner`，同一 branch、clean worktree。
 - 沒有建立 PR、tag 或 Release，避免把 foreground QC 分支包裝成正式發布。
 - GitHub push 回應指出 default branch 現有 1 個 moderate vulnerability；本輪沒有取得其細節、沒有評估是否影響這個分支，也沒有宣稱修復。
 
@@ -102,7 +111,9 @@ Packaged managed-runtime evidence：
 - managed-runtime bootstrap 曾因 transient access denied 停於 879/880；修正後先跑精準測試，再跑完整 882/882。
 - 第一次 commit 因 checkout 沒有 author identity 被 Git 拒絕；只在 repo-local 設定既有作者身份後重試，沒有改 global config。
 - push 後此 clone 的 fetch refspec 原本只追蹤 `v0.1.8` tag；加入這一個 branch 的精確 refspec 後 upstream 可正常解析。
-- repo handover 原寫 Rust 1.98.0，但最終可重現輸出是 rustc/cargo 1.97.0；另做純文件 commit 更正，沒有掩蓋差異。
+- 本機 default stable 一度仍是 Rust 1.97；Cargo 因 `rust-version = "1.98"` 在測試開始前正確拒絕。改用已安裝的 `cargo +1.98.0` 後重跑成功。先前把 handover 改成 1.97 是判讀錯誤，本次已恢復正確需求並留下紀錄。
+- Castle 第一次 Linux Clippy 找到 8 個跨平台 lint（2 `drop_non_drop`、4 `unused_mut`、2 `dead_code`）；以 lexical guard lifetime 與精確 `cfg(windows)` 修正，提交為 `20cf935`，重跑 tests／Clippy 後全綠。
+- Castle 驗證期間有 SSH connect timeout；都發生在遠端命令啟動前，重連並核對 HEAD/clean worktree 後才重跑，不算測試 PASS 或 FAIL。
 
 ## 「水分」稽核
 
