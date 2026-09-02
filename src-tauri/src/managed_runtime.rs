@@ -2488,7 +2488,10 @@ impl ManagedRuntimeManager {
         manifest_path: &Path,
     ) -> AppResult<Self> {
         let state_root = app_local_data_directory.join("managed-runtime");
+        #[cfg(windows)]
         let product_data_guard = ensure_private_product_data_directory(app_local_data_directory)?;
+        #[cfg(not(windows))]
+        ensure_private_product_data_directory(app_local_data_directory)?;
         #[cfg(windows)]
         let (state_root, state_root_guard) =
             open_or_create_windows_managed_private_directory_guard(&state_root, true)
@@ -2497,6 +2500,7 @@ impl ManagedRuntimeManager {
         ensure_managed_private_directory(&state_root)?;
         // The Windows state-root guard now pins the same complete ancestor
         // chain. Non-Windows platforms need no long-lived creation guard.
+        #[cfg(windows)]
         drop(product_data_guard);
         let resource_root = canonical_real_directory(resource_root, "managed runtime resource")?;
         verify_regular_file(manifest_path, "managed runtime release manifest")?;
@@ -14998,10 +15002,12 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     struct SequencedWindowsWslRegistrationInventories(
         Mutex<VecDeque<WindowsWslRegistrationInventory>>,
     );
 
+    #[cfg(windows)]
     impl WindowsWslRegistrationReader for SequencedWindowsWslRegistrationInventories {
         fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>> {
             let inventory = self.inventory()?;
@@ -15027,8 +15033,10 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     struct FailingWindowsWslRegistrations;
 
+    #[cfg(windows)]
     impl WindowsWslRegistrationReader for FailingWindowsWslRegistrations {
         fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>> {
             Err(AppError::Internal(
@@ -20057,7 +20065,10 @@ mod tests {
             success(b"not-json".to_vec()),
             failure(b"inventory failed".to_vec()),
         ] {
+            #[cfg(windows)]
             let mut fixture = fixture();
+            #[cfg(not(windows))]
+            let fixture = fixture();
             #[cfg(windows)]
             {
                 let (_, _, _, registration) = seed_verified_existing_windows_machine(&mut fixture);
@@ -20089,7 +20100,10 @@ mod tests {
 
     #[test]
     fn status_with_no_inventory_budget_reports_reconciling_without_running_a_command() {
+        #[cfg(windows)]
         let mut fixture = fixture();
+        #[cfg(not(windows))]
+        let fixture = fixture();
         #[cfg(windows)]
         {
             let (_, _, _, registration) = seed_verified_existing_windows_machine(&mut fixture);
@@ -20112,7 +20126,10 @@ mod tests {
 
     #[test]
     fn status_with_confirmed_empty_inventory_remains_first_launch_installed() {
+        #[cfg(windows)]
         let mut fixture = fixture();
+        #[cfg(not(windows))]
+        let fixture = fixture();
         #[cfg(windows)]
         {
             let (_, _, _, registration) = seed_verified_existing_windows_machine(&mut fixture);
@@ -20144,7 +20161,10 @@ mod tests {
 
     #[test]
     fn status_inventory_and_server_probe_share_one_command_deadline() {
+        #[cfg(windows)]
         let mut fixture = fixture();
+        #[cfg(not(windows))]
+        let fixture = fixture();
         #[cfg(windows)]
         {
             let (_, _, _, registration) = seed_verified_existing_windows_machine(&mut fixture);

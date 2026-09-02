@@ -2659,15 +2659,18 @@ mod tests {
         let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
         let product_data = root.join("casework.db");
         let sibling = temporary.path().join("unrelated-sibling");
-        #[cfg(windows)]
-        let creation_guard =
-            crate::managed_runtime::ensure_private_product_data_directory_for_isolated_test(&root)
+        {
+            #[cfg(windows)]
+            let creation_guard =
+                crate::managed_runtime::ensure_private_product_data_directory_for_isolated_test(
+                    &root,
+                )
                 .expect("create an existing secure product root fixture");
-        #[cfg(not(windows))]
-        let creation_guard = ensure_private_product_data_directory(&root)
-            .expect("create an existing secure product root fixture");
-        assert!(creation_guard.was_created());
-        drop(creation_guard);
+            #[cfg(not(windows))]
+            let creation_guard = ensure_private_product_data_directory(&root)
+                .expect("create an existing secure product root fixture");
+            assert!(creation_guard.was_created());
+        }
         fs::write(&product_data, b"preserved product bytes").unwrap();
         fs::write(&sibling, b"preserved unrelated bytes").unwrap();
 
