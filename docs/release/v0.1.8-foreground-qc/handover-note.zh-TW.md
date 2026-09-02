@@ -157,4 +157,3 @@ Release evidence、classification、engine validation、policy、AIDEFEND、usab
 5. 決定 signed bundle scope 契約並增加端到端 acceptance test。
 6. 另行 triage GitHub moderate vulnerability。
 7. 只有安裝、人機、簽章與發行條件都成立後，才建立 PR／release candidate；不要把此 branch 直接稱為 production-ready。
-

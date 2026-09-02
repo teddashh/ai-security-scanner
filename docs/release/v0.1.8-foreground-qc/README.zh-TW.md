@@ -25,4 +25,3 @@ git rev-parse HEAD
 請以 GitHub branch HEAD 為準；不要以本機 `outputs` 目錄或 BAT archive 當交接來源。
 
 本分支的產品 metadata 仍是 `0.1.8`。它不是 `0.1.9`，也尚未建立新的 tag 或 GitHub Release。
-

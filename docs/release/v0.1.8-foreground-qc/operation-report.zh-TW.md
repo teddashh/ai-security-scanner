@@ -1,10 +1,10 @@
 # AI Security Scanner v0.1.8 前景 QC 作業報告
 
-日期：2026-09-02  
-Repository：`teddashh/ai-security-scanner`  
-分支：`codex/v0.1.8-foreground-qc`  
-基底：`fa1fa9d401995de45080fbfaffc6b39d99955387`（`v0.1.8`）  
-功能提交：`503542271ff8b2178ed2d334fd47d76c494d1c75`  
+日期：2026-09-02
+Repository：`teddashh/ai-security-scanner`
+分支：`codex/v0.1.8-foreground-qc`
+基底：`fa1fa9d401995de45080fbfaffc6b39d99955387`（`v0.1.8`）
+功能提交：`503542271ff8b2178ed2d334fd47d76c494d1c75`
 最終分支 HEAD：`e0b21e66883fe214f108834a692d3eb8156be4c2`
 
 - 分支：https://github.com/teddashh/ai-security-scanner/tree/codex/v0.1.8-foreground-qc
@@ -152,4 +152,3 @@ Packaged managed-runtime evidence：
 3. 決定 signed case bundle 的產品契約：嚴格 run-scoped，或明確定義為 case-wide bundle 內含 run-scoped report。
 4. 另行檢視 GitHub 提示的 moderate vulnerability；先確認 dependency、影響分支與 exploitability，再決定修補。
 5. 量測 startup 後再做 frontend code splitting，不把目前 chunk warning臨時升格成與產品價值無關的 gate。
-

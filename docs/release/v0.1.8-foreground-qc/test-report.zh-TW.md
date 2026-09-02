@@ -1,11 +1,11 @@
 # AI Security Scanner v0.1.8 Foreground QC 測試報告
 
-日期：2026-09-02  
-測試對象功能 commit：`503542271ff8b2178ed2d334fd47d76c494d1c75`  
-最終 branch HEAD：`e0b21e66883fe214f108834a692d3eb8156be4c2`  
-平台：Windows 11 Professional，x86_64-pc-windows-msvc  
-Rust：rustc/cargo 1.97.0  
-Node：v24.16.0  
+日期：2026-09-02
+測試對象功能 commit：`503542271ff8b2178ed2d334fd47d76c494d1c75`
+最終 branch HEAD：`e0b21e66883fe214f108834a692d3eb8156be4c2`
+平台：Windows 11 Professional，x86_64-pc-windows-msvc
+Rust：rustc/cargo 1.97.0
+Node：v24.16.0
 npm：11.13.0
 
 ## 測試範圍與限制
@@ -167,4 +167,3 @@ Frontend tests 包含 presentation helper、case/run identity、demo export proj
 **Human UX qualification：NOT RUN。** Source tests 與 demo tests 不等於真人證據。
 
 **Release/signing qualification：NOT READY。** Installer unsigned，A19 與 signed bundle scope 尚開放，也沒有 PR／tag／Release。
-
