@@ -7,14 +7,17 @@
 - Repo：`https://github.com/teddashh/ai-security-scanner`
 - Branch：`codex/v0.1.8-foreground-qc`
 - Base：`fa1fa9d401995de45080fbfaffc6b39d99955387`（tag `v0.1.8`）
-- 功能 commit：`503542271ff8b2178ed2d334fd47d76c494d1c75`
-- 跨平台已驗證程式 commit：`20cf93516e9d45b83af15222db782c2d22c0c162`
+- 原始功能整合 commit：`503542271ff8b2178ed2d334fd47d76c494d1c75`
+- Provider／case bundle／Settings 強化 commit：`a538778a34cd7db72b28256591575aee77937ab8`
+- 最終已驗證程式 checkpoint：`0077b2c5a6df8c758afbb44be5a1c6a9b2202a64`
 - Upstream：`origin/codex/v0.1.8-foreground-qc`
-- 驗證當時狀態：Windows、GitHub、Castle code SHA 一致，兩個 working tree clean；文件更新後請以 GitHub branch HEAD 為準。
+- 驗證當時狀態：Windows、GitHub、Castle code SHA 都是 `0077b2c5a6df8c758afbb44be5a1c6a9b2202a64`；Castle clean，本機只有本目錄文件待提交。文件 commit 之後請以 GitHub branch HEAD 為準。
 
 GitHub branch：https://github.com/teddashh/ai-security-scanner/tree/codex/v0.1.8-foreground-qc
 
-主要產品整合在 `5035422`；Castle Linux 發現並驗證的跨平台 lint 修正在 `20cf935`。產品 metadata 仍是 0.1.8，沒有新 tag／Release。
+主要產品整合在 `5035422`；本輪 provider durability、case-bundle scope、Settings runtime truth 在 `a538778`，Castle 揭露的 Unix unused helper 則以精確 `cfg(windows)` 修正在 `0077b2c`。產品 metadata 明確仍是 0.1.8，不是 0.1.9／0.1.9.8，也沒有新 tag／Release。
+
+這批增量程式已 commit、push 並同步到 Castle；現有 unsigned installer仍未重建，而且早於 `a538778`／`0077b2c`，不可當成最新 source 的 candidate。
 
 Castle checkout：`/home/ted-h/projects/ai-security-scanner`，branch `codex/v0.1.8-foreground-qc`。直接 `git pull --ff-only` 即可接續，不需要 BAT 或此筆電的檔案。
 
@@ -57,11 +60,15 @@ Castle checkout：`/home/ted-h/projects/ai-security-scanner`，branch `codex/v0.
 ### Artifact／report／export
 
 - `src-tauri/src/connectors/artifact.rs`
-  - deterministic canonical collision 不刪原檔；改發布 private recovered artifact。
+  - deterministic canonical collision 不刪原檔；使用固定 4 個 recovery slots，matching content 重用同一格，內容不符才依序前進。
+  - hardlink、custom/noncanonical authority 的不安全 DACL、identity 等非內容型安全錯誤立即 fail closed；不前進、不覆寫、不嘗試修補。4 格耗盡時回錯且完整保留既有內容。
+  - Windows 只在 canonical product root、內容與 pinned handle durability 已證明後做 bounded DACL repair；custom root 的 DACL policy 永遠 verify-only，matching reuse仍使用 write-capable pinned handle 完成 durability sync，但不要求 `WRITE_DAC`。
+  - Unix success path包含 file sync、pinned parent-directory sync、identity/mode proof；matching reuse 在 `chmod(0600)` 後再做第二次 file sync。Parent sync 失敗不會 chmod、回成功或前進 recovery slot。
 - `src-tauri/src/case_service.rs`
   - case/run report、exact network rectangles、standard redaction。
-- `src/demoExportProjection.ts`、`src/services/scanner.ts`、`src/pages/ExportPage.tsx`
+- `src-tauri/src/export.rs`、`src/demoExportProjection.ts`、`src/services/scanner.ts`、`src/pages/ExportPage.tsx`
   - browser demo 僅能誠實輸出 selected-run JSON，不得宣稱 raw/redaction/signature/其他 serializer。
+  - signed case bundle 是 case-wide records 加 run-bound reports；reports 選取所選 run 的 observations/evidence，但 legacy observation 缺 frozen presentation snapshot 時，文案可用目前 canonical finding，workflow status 與 asset display 也可能來自 current case projection。manifest、`case.json`、README 與 UI 皆揭露此限制。
 - `src/exportRunSelection.ts`、`src/reportLocale.ts`、`src/caseScopedUiState.ts`
   - run/locale/case coordinate selection。
 
@@ -69,8 +76,8 @@ Castle checkout：`/home/ted-h/projects/ai-security-scanner`，branch `codex/v0.
 
 - `src/App.tsx`、`src/components/AppShell.tsx`
   - route、navigation、mobile behavior。
-- `src/pages/SettingsPage.tsx`、`src/settings-page.css`
-  - bilingual Settings。
+- `src/pages/SettingsPage.tsx`、`src/settingsRuntimePresentation.ts`、`src/settings-page.css`
+  - bilingual Settings；unknown／尚未檢查與 confirmed unavailable 使用不同 presentation，不再共用同一警告語意。
 - `src/pages/CasesPage.tsx`、`FindingsPage.tsx`、`ProgressPage.tsx`、`VerificationPage.tsx`
   - explicit case/run identity、partial truth 與 primary path。
 - `src/localhostQuickScan.ts`、`src-tauri/src/localhost_quick_scan.rs`
@@ -78,7 +85,7 @@ Castle checkout：`/home/ted-h/projects/ai-security-scanner`，branch `codex/v0.
 
 ## 已知未完成事項
 
-### P1：A19 same-version component repair
+### P0：A19 same-version component repair
 
 目前 running app 沒有獨立 authenticated 同版本來源。Private installed copy 可以從 verified packaged tree 修復，但 packaged tree 自身若損壞，就沒有可信來源。不要做以下假修復：
 
@@ -95,23 +102,25 @@ Castle checkout：`/home/ted-h/projects/ai-security-scanner`，branch `codex/v0.
 4. repair/relaunch 與 NSIS coordination；
 5. 缺檔、tamper、locked file、interrupted repair、standard user、restart 與資料保留的 Windows qualification。
 
-### Signed case bundle scope
+### Case bundle scope 已定義，端到端 qualification 未完成
 
-Readable report 已 selected-run scoped，但 bundle 仍可包含 case-wide records。產品必須二選一：
+產品契約已選定為 **case-wide records + run-bound reports**：
 
-- 讓 bundle 每一項都嚴格 run-only；或
-- 明確稱它為 case-wide bundle，內含 selected-run report。
+- case-wide：assets、grants、coverage、history、findings、workflow、comparisons 與 source files；
+- run-bound reports：只選所選 run 的 observations/evidence；legacy 缺 frozen snapshot 的 presentation、workflow status 與 asset display 可能使用 current case projection；
+- signed manifest notice、`case.json` 的 scope fields、README 與 Export UI 使用一致 disclosure。
 
-在完成前，不可寫「整個 signed bundle 只含所選 run」。
+仍未執行真實簽章 bundle 的 installed／human end-to-end path，所以只能說 scope 契約與 automated disclosure 已落地；不可宣稱 signing qualification 完成，也不可寫「整個 bundle 只含所選 run」。
 
 ### 其他非阻擋風險
 
-- 永久損壞的 canonical provider artifact 可能讓相同 response 每次重試都新增 recovery artifact；需要不破壞 chain-of-custody 的 retention／orphan GC。
+- Provider recovery 已固定最多 4 格並重用 matching slot；4 格被不同內容占滿時會 fail closed。任何後續 GC 仍需保留 chain-of-custody，不能用 GC 當成覆寫安全邊界。
 - CLI canonical root 首次建立／ACL admission 仍在主要 lease 之前，有小型 concurrency surface。
-- Settings 對 unknown runtime 與 known unavailable 的顯示仍可更清楚。
+- Castle 已用 digest-pinned Go 1.26.0 container 對精確 `nuclei-templates@24858b4…` 執行真實 template-tree targeted test 1/1 PASS；production gate **NOT IMPLEMENTED**，image build／publication **NOT RUN**。下一個 image recipe 必須使用新 immutable tag、獨立 publication evidence，且只發布真正改動的 engine；不得拿既有 `3.11.1-5` digest／attestation 代替新 recipe。
 - 少數舊測試 `Barrier::wait()` 沒有 deadline。
-- Vite main chunk 約 876 kB minified／265 kB gzip。
-- 八個 Unix-only artifact／lease／uninstall symlink/hard-link guards 已在 Castle Linux 通過；其他 privilege-dependent、installed-runtime paths 仍需各自環境 qualification。
+- Vite main chunk 877.98 kB minified／265.59 kB gzip。
+- Castle provider artifact module 14/14 PASS（含 Unix hardlink、permission 與 durability regressions）；其他 privilege-dependent、installed-runtime paths 仍需各自環境 qualification。
+- Unix authority/artifact proof 仍是循序 pathname checks；same-user mutation 可發生在各次依序檢查之間，也可在最後驗證後或 pin 釋放後改變 namespace。Pinned directory fd 只保證 sync 的是已證明目錄，不讓 pathname 操作變成 atomic。完全消除需 dirfd-relative 操作或將 handle 保留到 consumption；在目前 current-user trust boundary 下列為非阻擋殘餘風險。
 - Enterprise ACL policy 尚未 qualification；目前對不明 ACE fail closed。
 - GitHub push 提示 default branch 有 1 個 moderate vulnerability；尚未評估。
 
@@ -130,12 +139,13 @@ cargo +1.98.0 test --locked --package ai-security-scanner --features desktop
 cargo +1.98.0 test --locked --workspace --no-default-features --features cli
 $env:RUSTFLAGS='-D warnings'
 cargo +1.98.0 clippy --locked --package ai-security-scanner --features desktop --all-targets -- -D warnings
+cargo +1.98.0 clippy --locked --workspace --no-default-features --features cli --all-targets -- -D warnings
 npm.cmd run typecheck
 npm.cmd run test:frontend
 npm.cmd run build
 ```
 
-Release evidence、classification、engine validation、policy、AIDEFEND、usability schema 與 NSIS bundle 的詳細結果見同目錄的 test report。不要把 desktop 與 CLI 的重疊 Rust suites 相加成虛假的單一總數。
+最新驗證：Windows desktop 1,347/1,347、CLI 1,340/1,340；provider artifact desktop／CLI 各 19/19；兩種 all-targets Clippy、Rustfmt 全 PASS。Castle Linux CLI 1,307/1,307、provider artifact 14/14、all-targets Clippy 與 Rustfmt PASS。Windows 與 Castle frontend 都是 364/364，release evidence 53/53、usability schema 5/5、Prowler 8/8；typecheck、Vite build、engine、AIDEFEND、release validation 也 PASS。Nuclei 真實 template-tree targeted test 1/1 PASS；production gate NOT IMPLEMENTED，image build／publication NOT RUN。詳細結果見 test report；不同 feature/platform 的重疊 suites 不相加成虛假的獨立總數。
 
 ## Installer candidate
 
@@ -146,14 +156,15 @@ Release evidence、classification、engine validation、policy、AIDEFEND、usab
 - Version：0.1.8
 - Signature：NotSigned
 
-此候選只證明 bundle build，沒有 installed qualification。下一位接手者在任何測試前都應先重新核對 SHA-256，而且只能在明確非 production 的 Windows test environment 使用。
+此候選只證明先前 bundle build，沒有 installed qualification，而且早於 `a538778`／`0077b2c`。下一位接手者不可用它驗證最新 source；必須先由最終 branch HEAD 重建，再核對新 SHA-256，且只能在明確非 production 的 Windows test environment 使用。
 
 ## 建議接手順序
 
 1. 先閱讀 `docs/product-spec.md`、`docs/product-audit.md` 與 `docs/release/v0.1.8-foreground-qc-handover.md`。
 2. 在乾淨 clone checkout 此 branch，跑上述 automated baseline。
-3. 建立 clean Windows VM human-path matrix；保持畫面、時間、hash、standard-user 與 reboot 證據。
-4. 優先處理 A19，不要先做 P2 美化掩蓋 recovery 缺口。
-5. 決定 signed bundle scope 契約並增加端到端 acceptance test。
-6. 另行 triage GitHub moderate vulnerability。
-7. 只有安裝、人機、簽章與發行條件都成立後，才建立 PR／release candidate；不要把此 branch 直接稱為 production-ready。
+3. 從最終 branch HEAD 重建新 installer，再建立 clean Windows VM human-path matrix；保持畫面、時間、hash、standard-user 與 reboot 證據。
+4. 優先處理 P0 A19；完整 same-version repair 尚未完成，不要先做 P2 美化掩蓋 recovery 缺口。
+5. 依既定 case-wide records + run-bound reports（含 current case projection caveat）契約增加真實簽章 bundle 的端到端 acceptance test。
+6. 為下一個 Nuclei image 建立新 immutable tag 與獨立 publication evidence 路徑，再把已在 Castle 實證通過的 template-tree test 放進新 recipe；不可改寫或沿用 `3.11.1-5` 的既有證據。
+7. 另行 triage GitHub moderate vulnerability。
+8. 只有安裝、人機、簽章與發行條件都成立後，才建立 PR／release candidate；不要把此 branch 直接稱為 production-ready。

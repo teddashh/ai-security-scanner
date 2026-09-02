@@ -1,8 +1,9 @@
 # AI Security Scanner v0.1.8 Foreground QC 測試報告
 
 日期：2026-09-02
-測試對象功能 commit：`503542271ff8b2178ed2d334fd47d76c494d1c75`
-跨平台修正驗證 commit：`20cf93516e9d45b83af15222db782c2d22c0c162`
+原始功能整合 commit：`503542271ff8b2178ed2d334fd47d76c494d1c75`
+本輪主要強化 commit：`a538778a34cd7db72b28256591575aee77937ab8`
+最終已驗證程式 checkpoint：`0077b2c5a6df8c758afbb44be5a1c6a9b2202a64`
 平台：Windows 11 Professional／Castle Linux
 Rust：兩端 rustc/cargo 1.98.0
 Node：v24.16.0
@@ -14,6 +15,8 @@ npm：11.13.0
 
 本輪沒有安裝、啟動或操作 App，沒有 BAT，沒有 clean VM／human session／real engine scan。因此「PASS」只代表對應 automated command 或 artifact check 成功，不能外推成 production qualification。
 
+0.1.8 後續增量程式已 commit／push，Windows 與 Castle 都在同一個 `0077b2c` code checkpoint 完成完整重跑。文件本身會形成其後的文件 commit；仍不可把不同 feature/platform 的重疊測試相加成一個行銷總數。
+
 ## 最終測試矩陣
 
 | 類別 | 命令／證據 | 最終結果 | 說明 |
@@ -21,28 +24,33 @@ npm：11.13.0
 | Rust format | `cargo fmt --all -- --check` | PASS | 最終 source format clean |
 | Desktop Rust | `cargo test --locked --package ai-security-scanner --features desktop` | PASS | 詳細 binary/suite 如下 |
 | CLI/workspace Rust | `cargo test --locked --workspace --no-default-features --features cli` | PASS | 與 desktop 有重疊，不合併灌總數 |
-| Castle Linux CLI workspace | 同一 locked CLI workspace | 1,298 PASS | 0 failed／ignored |
-| Unix-only security | artifact／lease／uninstall filters | 8/8 PASS | 每個 filter 各 1/1 |
+| Castle Linux CLI workspace | 同一 locked CLI workspace | 1,307/1,307 PASS | 0 failed／ignored／measured／filtered |
+| Castle provider artifact | targeted module | 14/14 PASS | 包含 Unix hardlink、permission、file/parent durability regressions |
 | Clippy | desktop、all targets、`-D warnings`，且 `RUSTFLAGS=-D warnings` | PASS | 最終 0 warning/error |
 | Castle Linux Clippy | CLI workspace、all targets、`-D warnings` | PASS | 首輪 8 findings 修正後重跑 |
 | TypeScript | `npm.cmd run typecheck` | PASS | TypeScript typecheck 通過 |
-| Frontend tests | `npm.cmd run test:frontend` | 358/358 PASS | 修正 3 個過時 assertion 後完整通過 |
-| Frontend build | `npm.cmd run build` | PASS | Vite 8.2.2，92 modules |
+| Frontend tests（最新增量） | `npm.cmd run test:frontend` | 364/364 PASS | 包含 Settings state 與 case bundle disclosure regression |
+| Frontend build | `npm.cmd run build` | PASS | Vite 8.2.2，93 modules |
 | Release evidence | release evidence tests | 53/53 PASS | fixture/evidence regression |
 | CI classification | classification tests | 22/22 PASS | change routing regression |
-| Engine validation | catalog／line endings／Prowler | PASS | 167 inputs、21 records、19 runnable、8 Prowler tests |
+| Engine validation | catalog／line endings／Prowler | PASS | 167 inputs、21 records、19 runnable、Prowler 8/8 |
 | Release policy | policy validator | PASS | automated policy checks |
 | AIDEFEND | snapshot validator | PASS | 6 records；captured snapshot ref `e10c…` |
 | Usability evidence | evidence schema tests | 5/5 PASS | 明確沒有 human session |
-| Windows bundle | unsigned NSIS build | PASS | Build only；未安裝／未啟動 |
-| Staged diff | `git diff --cached --check`（commit 前） | PASS | 74 檔，無 whitespace blocker |
-| Cross-machine integrity | Windows／GitHub／Castle SHA | PASS | 驗證 code HEAD 都是 `20cf935…` |
+| Provider artifact desktop module | targeted desktop module | 19/19 PASS | 固定 4 recovery slots、matching reuse、durability、security fail-closed |
+| Provider artifact CLI module | targeted CLI module | 19/19 PASS | 與 desktop run 重疊，不相加成獨立 38 tests |
+| Signed case bundle | targeted Rust regression | 1/1 PASS | case-wide records、selected-run observations/evidence 與 current-projection caveat皆有 sentinel 驗證 |
+| Nuclei real template tree | Castle；pinned Go 1.26.0 container；`nuclei-templates@24858b4…` | 1/1 PASS | 真實 tree targeted test；不是 image publication |
+| Nuclei production image gate | 新 immutable recipe／tag／attestation | NOT IMPLEMENTED／NOT RUN | `3.11.1-5` 是舊 recipe；本輪拒絕冒用其 digest／evidence |
+| Previous Windows bundle | unsigned NSIS build（pre-`a538778`） | HISTORICAL PASS；latest rebuild NOT RUN | 舊 candidate未安裝／未啟動，不能代表最新 source |
+| Historical original staged diff | `git diff --cached --check`（`5035422` commit 前） | PASS | 74 檔只屬原始功能整合，不是 `0077b2c` 最終 diff |
+| Cross-machine integrity | Windows／GitHub／Castle SHA | PASS | 驗證 code HEAD 都是 `0077b2c5…`，Castle clean |
 
 ## Desktop Rust 詳細結果
 
 `cargo test --locked --package ai-security-scanner --features desktop`：
 
-- library：882 passed
+- library：892 passed
 - adapter fixtures：18 passed
 - connector fixtures：14 passed
 - discovery coverage：11 passed
@@ -53,41 +61,63 @@ npm：11.13.0
 - workspace snapshot：18 passed
 - doctests：3 passed
 
+合計：1,347 passed，0 failed／ignored／measured／filtered。
+
 這些是不同 test binary／suite 的個別結果。報告不把它們與 CLI build 重疊測試相加成單一行銷數字。
 
 ## CLI／workspace 詳細結果
 
 `cargo test --locked --workspace --no-default-features --features cli`：
 
-- library：842 passed
+- library：852 passed
 - CLI binary：33 passed
-- 共用 integration suites 與 doctests：PASS
+- adapter fixtures：18 passed
+- connector fixtures：14 passed
+- discovery coverage：11 passed
+- engine execution：354 passed
+- job manager：21 passed
+- local lifecycle：2 passed
+- source authorization：14 passed
+- workspace snapshot：18 passed
+- doctests：3 passed
 
-Desktop 與 CLI feature set 會重編並重跑部分共同邏輯，所以「882 + 842」不是獨立測試總數。
+合計：1,340 passed，0 failed／ignored／measured／filtered。
+
+Desktop 與 CLI feature set 會重編並重跑部分共同邏輯，所以「1,347 + 1,340」不是獨立測試總數。
 
 ### Castle Linux CLI／Unix 結果
 
-在 `/home/ted-h/projects/ai-security-scanner`、Rust 1.98、commit `20cf935`：
+在 `/home/ted-h/projects/ai-security-scanner`、Rust 1.98、commit `0077b2c5a6df8c758afbb44be5a1c6a9b2202a64`：
 
-- 完整 CLI workspace：812 library + 35 CLI + 18 adapter + 15 connector + 11 discovery + 343 engine execution + 21 job manager + 2 lifecycle + 14 authorization + 24 workspace snapshot + 3 doctests = 1,298 passed，0 failed／ignored。
-- Unix-only targeted filters：3 個 connector artifact collision/hard-link、1 個 process lease symlink、4 個 product uninstall linked-root/provider-home guards，8/8 PASS。
+- 完整 CLI workspace：821 library + 35 CLI + 18 adapter + 15 connector + 11 discovery + 343 engine execution + 21 job manager + 2 lifecycle + 14 authorization + 24 workspace snapshot + 3 doctests = 1,307 passed，0 failed／ignored／measured／filtered。
+- Provider artifact targeted module：14/14 PASS（807 library tests filtered）；包含 Unix collision、hardlink、permission hardening、file sync、parent-directory sync 與 retry/no-slot-advance regressions。
 - `cargo clippy --locked --workspace --no-default-features --features cli --all-targets -- -D warnings`：PASS。
 - `cargo fmt --all -- --check`：PASS；worktree clean。
 
-這個 1,298 是該 Linux command 的 suite total，不與 Windows desktop suite相加成單一獨立測試數。
+這個 1,307 是該 Linux command 的 suite total，不與 Windows suites相加成單一獨立測試數。
 
 ## Frontend 與 build 詳細結果
 
 - Typecheck：PASS。
-- Frontend tests：358/358 PASS。
-- Vite：8.2.2，92 modules。
+- Frontend tests：最新增量 364/364 PASS；先前完整 checkpoint 是 358/358。
+- Vite：8.2.2，93 modules。
 - CSS：約 107.60 kB，gzip 約 19.69 kB。
-- Main JS：約 876.24–876.26 kB，gzip 約 264.96–264.97 kB。
+- Main JS：877.98 kB，gzip 265.59 kB。
 - Vite 仍顯示 >500 kB chunk warning；非本輪 blocking gate，但要在量測 startup 後安排 code splitting。
 
 Frontend tests 包含 presentation helper、case/run identity、demo export projection、navigation、locale、runtime truth reconciliation、primary path source regression 等。後者是 source-level regression，不是 browser human journey。
 
-Castle 另以 Node 24.15.0／npm 11.12.1 重跑：typecheck、358/358 frontend、Vite build、53/53 release evidence、5/5 usability schema、167 engine inputs／21 records／19 runnable／Prowler 8/8、AIDEFEND 6 records與 release validation，全數 PASS。`npm ci` audit 36 packages、0 vulnerabilities。
+Castle 以 Node 24.15.0／npm 11.12.1 在 `0077b2c` 重跑：typecheck、364/364 frontend、93-module Vite build、53/53 release evidence、5/5 usability schema、167 engine inputs／21 records／19 runnable／Prowler 8/8、AIDEFEND 6 records與 release validation，全數 PASS。Linux build main JS 同為 877.98／265.59 gzip kB。歷史 `npm ci` audit 曾對該 lockfile 安裝圖回報 36 packages／0 vulnerabilities，但不抵銷 GitHub default branch 顯示的 1 個 moderate vulnerability。
+
+### 0.1.8 後續增量結果
+
+- Frontend：364/364 PASS。
+- Release evidence：53/53 PASS。
+- Usability schema：5/5 PASS；仍明確不是 human session。
+- Prowler：8/8 PASS。
+- Typecheck、Vite build、engine validation、AIDEFEND validation：PASS。
+- Provider artifact targeted module：Windows desktop 19/19、CLI 19/19、Castle/Linux 14/14 PASS；feature/platform runs 有重疊，不合併灌總數。
+- Nuclei real template tree：Castle targeted test 1/1 PASS；production gate NOT IMPLEMENTED，image build／新 tag／publication NOT RUN。
 
 ## 安全與資料完整性重點回歸
 
@@ -101,9 +131,35 @@ Castle 另以 Node 24.15.0／npm 11.12.1 重跑：typecheck、358/358 frontend�
 ### Provider artifact recovery
 
 - canonical collision mismatch 會保留原檔。
-- 新資料發布為 private recovered artifact。
-- Windows DACL 與跨平台行為有 regression coverage。
+- recovery 使用固定 4 個 deterministic slots；相同內容會重用既有 slot，不新增重複 artifact。
+- 不同內容只會依序使用下一格，保留每個 collision 的 byte-exact 證據；4 格耗盡時回傳錯誤且不新增檔案。
+- hardlink、custom/noncanonical authority 的不安全 Windows DACL、identity 或其他非內容型安全失敗立即 fail closed，不會跳到下一格、修補或改寫既有 artifact。
+- Windows custom root 的 DACL policy 永遠 verify-only；matching reuse 仍以同一 write-capable pinned handle 執行 durability sync，但不要求 `WRITE_DAC`。Canonical root 只有在內容/identity與 sync 成功後才做 bounded DACL repair，sync failure 會在 repair 前停止。
+- Unix fresh canonical/recovery：file sync → identity/mode proof → pinned parent-directory sync → 再 proof。Matching reuse：content/identity proof → file sync → parent sync → `chmod(0600)` → 第二次 file sync → final proof。Parent sync failure 不 chmod、不成功、不前進 slot，retry 重用同一 object。
+- desktop targeted module 19/19、CLI 19/19、Castle/Linux 14/14 PASS；三組有重疊，不相加。
+- 非阻擋殘餘風險：部分 Unix namespace 操作仍是 pathname-relative，same-user mutation 可發生在循序 checks 之間及 final proof／authority pin 釋放之後。Identity rechecks 可偵測已觀察到的置換，但無法讓 namespace proof 原子化；完全消除需 dirfd-relative 操作或保留 handle到 consumption。
 - 沒有以路徑名稱粗暴刪除未知 artifact。
+
+### Signed case bundle scope
+
+- Bundle contract 明確是 **case-wide records + run-bound reports**，不是整包 run-only。
+- Signed manifest 的 notice、`case.json` scope fields、README 與 Export UI 使用同步 disclosure。
+- Case-wide records 涵蓋 assets、grants、coverage、history、findings、workflow、comparisons 與 source files；reports 選取 selected run 的 observations/evidence。Legacy observation 缺 frozen presentation snapshot 時可使用 current canonical finding，workflow status 與 asset display 也可能反映 current case projection；manifest／README／UI 明確揭露。
+- Targeted fixture 證明 distinct run 的 finding/observation 不進入四種 reports，卻仍留在 case-wide findings；current projection sentinel 只出現在 exporter 真正會使用它的欄位。
+- Automated disclosure regression 已通過；真實簽章 bundle 的 installed／human journey 仍未執行。
+
+### Settings runtime presentation
+
+- `undefined`／unknown 顯示為「尚未檢查」狀態，和已確認 unavailable 的 warning 分離。
+- `demo`、`ready`、`unavailable`、`unchecked` 由 pure presentation helper 統一產生。
+- 新增的 Settings presentation tests 已包含在最新 364/364 frontend PASS。
+
+### Nuclei pinned-template-tree 驗證與 image 邊界
+
+- Castle checkout 的 template repository HEAD 精確為 `24858b4bfabfa86f0bcfd36aea24fb535152b012`，工作樹乾淨。
+- 使用 `golang:1.26.0-alpine@sha256:d4c4845f5d60c6a974c6000ce58ae079328d03ab7f721a0734277e69905473e5` container，設定真實 `NUCLEI_TEMPLATE_ROOT` 後，`TestPinnedNucleiTemplateTreeWhenProvided` 1/1 PASS（0.42s）。
+- Review 發現 production Dockerfile／plan 仍綁定已發布 `3.11.1-5@sha256:2bd1e15a0ffdf450cdf85acd75bca2fb7f3cf4f9bc1d1fce80d5f8a659bc7488` 及 publication source revision `7514fd0642b28fe73ebdd2d48f0149b40f6eec17`；直接更改 recipe 卻沿用舊 tag 會讓 provenance guard 失敗，也會讓文件假稱舊 image 跑過新 gate。
+- 因此本輪撤回 Dockerfile／plan recipe 改動，只保留真實 targeted test 證據。新的 production gate 必須使用新 immutable tag、新 digest／attestation 與只處理實際變更 engine 的 publication path；production gate NOT IMPLEMENTED，image build／publication NOT RUN。
 
 ### Report/redaction
 
@@ -139,6 +195,8 @@ Castle 另以 Node 24.15.0／npm 11.12.1 重跑：typecheck、358/358 frontend�
 
 確認範圍只有檔案 metadata、hash 與 bundle build。沒有執行 installer、沒有 launch App、沒有檢查 installed files、upgrade、restart、uninstall 或 human UX。
 
+這個 unsigned installer 建於已提交的 provider／case bundle／Settings 增量修正之前；尚未重建，因此不能把它當成 `a538778`／`0077b2c` 或最終 branch HEAD 的 binary candidate。
+
 ## 過程失敗紀錄
 
 ### 命令／測試選擇錯誤
@@ -157,6 +215,8 @@ Castle 另以 Node 24.15.0／npm 11.12.1 重跑：typecheck、358/358 frontend�
 - ACL startup denial 曾暴露 admission/bootstrap 次序問題；修正後重跑。
 - 兩個 ACL propagation 方案因會過度擴大權限而被否決；沒有以放寬安全界線換取綠燈。
 - Castle 首輪 Linux Clippy 報 8 項：2 `drop_non_drop`、4 platform-only `unused_mut`、2 Windows-test helper `dead_code`。以 lexical scope／精確 `cfg(windows)` 修正於 `20cf935`，完整 Linux tests、8 個 Unix filters與 Clippy重跑 PASS。
+- 本輪第一次非互動 Castle Rust 指令因 PATH 找不到 `cargo`，測試未啟動；確認既有 stable toolchain 是 Rust/Cargo 1.98 後，以既有 `/home/ted-h/.cargo/bin` 重跑。
+- Unix refactor 後共用 open-file verifier 只在 Windows 使用，Castle ordinary build先揭露 1 個 `dead_code` warning。以精確 `#[cfg(windows)]` 修正並提交 `0077b2c`，再跑 Windows modules、Castle 14/14 與 Linux Clippy後全綠。
 
 ### Delivery／metadata 修復
 
@@ -171,16 +231,17 @@ Castle 另以 Node 24.15.0／npm 11.12.1 重跑：typecheck、358/358 frontend�
 - Clean Windows VM、standard user、N-1 upgrade、reboot、enterprise ACL。
 - 真實 WSL／Podman machine provisioning。
 - 真實 localhost target 與真實 engine scan。
+- Nuclei 新 immutable image recipe／tag／publication；真實 template-tree test 已 PASS，但 production gate NOT IMPLEMENTED，image build／publication NOT RUN。
 - 真實 partial result、cancel、retry、export、signed bundle、recovery、uninstall human journey。
 - Screen reader、keyboard-only、mobile viewport 與十分鐘 first-value human study。
 - Authenticode signing、updater、GitHub Release download/install path。
 
 ## 最終判定
 
-**Automated source/build checkpoint：PASS。** 目前分支適合 foreground review 與下一階段 installed qualification。
+**Automated source/build checkpoint：PASS（限定 automated source/build 範圍）。** Windows desktop 1,347/1,347、CLI 1,340/1,340、Castle CLI 1,307/1,307、兩端 frontend 364/364、release 53/53、usability 5/5、Prowler 8/8、provider Windows desktop／CLI 各 19/19與 Castle 14/14，以及 typecheck、Windows／Castle Vite build、engine、AIDEFEND、Rustfmt、Clippy 均 PASS。整體產品仍是 PARTIAL：新 Nuclei immutable image recipe／publication、installer rebuild、installed/human qualification與 P0 A19 都未完成。
 
 **Installed Windows qualification：NOT RUN。** 不可從本報告推論安裝成功。
 
 **Human UX qualification：NOT RUN。** Source tests 與 demo tests 不等於真人證據。
 
-**Release/signing qualification：NOT READY。** Installer unsigned，A19 與 signed bundle scope 尚開放，也沒有 PR／tag／Release。
+**Release/signing qualification：NOT READY。** Installer unsigned且早於最新 source；P0 A19 完整 same-version repair 仍未完成。Case bundle scope 已定義為 case-wide records + run-bound reports（含 current case projection caveat），但真實簽章／installed end-to-end qualification未做，也沒有 PR／tag／Release。
