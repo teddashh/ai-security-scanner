@@ -96,3 +96,29 @@ test("the export page defaults to a readable report without raw source files", (
   assert.match(source, /Advanced and technical formats/u);
   assert.match(source, /進階與技術格式/u);
 });
+
+test("the technical case bundle discloses its case-wide and run-bound scope before export", () => {
+  const source = readFileSync(new URL("../../src/pages/ExportPage.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /format === "case_bundle" && !demoMode/u);
+  assert.match(
+    source,
+    /<InlineNotice tone="warning" title=\{text\(copy\.caseBundleScopeTitle\)\}>\s*<p>\{text\(copy\.caseBundleScopeBody\)\}<\/p>\s*<\/InlineNotice>/u,
+  );
+  assert.match(source, /Case-wide records with run-bound reports/u);
+  assert.match(source, /案件全域紀錄與輪次綁定報告/u);
+  assert.match(
+    source,
+    /case-wide assets, grants, coverage, scan history, findings, workflow history, comparisons/u,
+  );
+  assert.match(source, /Reports select observations and evidence from the chosen scan run/u);
+  assert.match(source, /older observations without a frozen snapshot/u);
+  assert.match(source, /workflow status and asset names may also reflect the current case/u);
+  assert.match(source, /包內報告會選取所選掃描輪次的觀察與證據/u);
+  assert.match(source, /較舊且沒有凍結快照的觀察/u);
+  assert.match(source, /工作流程狀態與資產名稱也可能反映目前案件/u);
+  assert.doesNotMatch(source, /Reports inside the bundle remain limited to the selected scan run/u);
+  assert.doesNotMatch(source, /包內報告仍只涵蓋選定的掃描輪次/u);
+  assert.match(source, /Case \/ selected-run findings/u);
+  assert.match(source, /All \/ selected-run evidence records/u);
+});

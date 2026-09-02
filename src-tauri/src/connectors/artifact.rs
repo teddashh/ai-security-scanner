@@ -38,8 +38,11 @@ pub const LIVE_PROVIDER_ARTIFACT_SET_SCHEMA: &str =
 pub const MAX_SNAPSHOT_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_LIVE_PROVIDER_PAGES: usize = 24;
 const MAX_REFERENCE_TEXT: usize = 512;
+const MAX_PROVIDER_ARTIFACT_RECOVERY_SLOTS: usize = 4;
 const PROVIDER_ARTIFACT_COLLISION_ERROR: &str =
     "content-addressed provider artifact failed collision verification";
+const PROVIDER_ARTIFACT_RECOVERY_EXHAUSTED_ERROR: &str =
+    "bounded provider artifact recovery slots were exhausted";
 
 /// Non-secret reference to an immutable, already-preserved source response.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -197,12 +200,167 @@ pub(crate) fn ingest_selected_source(
     ))
 }
 
+struct ProviderArtifactAuthorityDirectory {
+    #[cfg(unix)]
+    directory: File,
+    #[cfg(unix)]
+    root: PathBuf,
+    #[cfg(unix)]
+    identity: (u64, u64, u32),
+}
+
+fn open_provider_artifact_authority_directory(
+    root: &Path,
+) -> Result<ProviderArtifactAuthorityDirectory, DiscoveryError> {
+    #[cfg(unix)]
+    {
+        let metadata = fs::symlink_metadata(root).map_err(|error| {
+            DiscoveryError::Connector(format!(
+                "provider artifact authority could not be inspected: {error}"
+            ))
+        })?;
+        // SAFETY: geteuid has no preconditions and does not mutate process state.
+        let effective_uid = unsafe { libc::geteuid() };
+        if metadata.file_type().is_symlink()
+            || !metadata.is_dir()
+            || metadata.uid() != effective_uid
+        {
+            return Err(DiscoveryError::Connector(
+                "provider artifact authority must be a current-user real directory".into(),
+            ));
+        }
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        let directory = options.open(root).map_err(|error| {
+            DiscoveryError::Connector(format!(
+                "provider artifact authority could not be pinned without following links: {error}"
+            ))
+        })?;
+        let opened = directory.metadata().map_err(|error| {
+            DiscoveryError::Connector(format!(
+                "pinned provider artifact authority could not be inspected: {error}"
+            ))
+        })?;
+        let identity = (metadata.dev(), metadata.ino(), metadata.uid());
+        if !opened.is_dir()
+            || (opened.dev(), opened.ino(), opened.uid()) != identity
+            || opened.uid() != effective_uid
+        {
+            return Err(DiscoveryError::Connector(
+                "provider artifact authority changed while it was being pinned".into(),
+            ));
+        }
+        Ok(ProviderArtifactAuthorityDirectory {
+            directory,
+            root: root.to_path_buf(),
+            identity,
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        Ok(ProviderArtifactAuthorityDirectory {})
+    }
+}
+
+#[cfg(unix)]
+fn verify_provider_artifact_authority_directory(
+    authority: &ProviderArtifactAuthorityDirectory,
+) -> Result<(), DiscoveryError> {
+    let path_metadata = fs::symlink_metadata(&authority.root).map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "provider artifact authority path could not be reinspected: {error}"
+        ))
+    })?;
+    let opened = authority.directory.metadata().map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "pinned provider artifact authority could not be reinspected: {error}"
+        ))
+    })?;
+    if path_metadata.file_type().is_symlink()
+        || !path_metadata.is_dir()
+        || !opened.is_dir()
+        || (
+            path_metadata.dev(),
+            path_metadata.ino(),
+            path_metadata.uid(),
+        ) != authority.identity
+        || (opened.dev(), opened.ino(), opened.uid()) != authority.identity
+    {
+        return Err(DiscoveryError::Connector(
+            "provider artifact authority changed while it was pinned".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn verify_fresh_provider_artifact_open_file(
+    authority: &ProviderArtifactAuthorityDirectory,
+    path: &Path,
+    file: &File,
+) -> Result<(), DiscoveryError> {
+    if path.parent() != Some(authority.root.as_path()) {
+        return Err(DiscoveryError::Connector(
+            "fresh provider artifact escaped its pinned authority".into(),
+        ));
+    }
+    verify_provider_artifact_authority_directory(authority)?;
+    let path_metadata = fs::symlink_metadata(path).map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "fresh provider artifact path could not be reinspected: {error}"
+        ))
+    })?;
+    let opened = file.metadata().map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "fresh provider artifact handle could not be reinspected: {error}"
+        ))
+    })?;
+    let identity = |metadata: &fs::Metadata| {
+        (
+            metadata.dev(),
+            metadata.ino(),
+            metadata.nlink(),
+            metadata.uid(),
+            metadata.size(),
+        )
+    };
+    // SAFETY: geteuid has no preconditions and does not mutate process state.
+    let effective_uid = unsafe { libc::geteuid() };
+    if path_metadata.file_type().is_symlink()
+        || !path_metadata.is_file()
+        || !opened.is_file()
+        || identity(&path_metadata) != identity(&opened)
+        || opened.nlink() != 1
+        || opened.uid() != effective_uid
+        || opened.permissions().mode() & 0o777 != 0o600
+    {
+        return Err(DiscoveryError::Connector(
+            "fresh provider artifact is not the pinned current-user single-link file".into(),
+        ));
+    }
+    verify_provider_artifact_authority_directory(authority)
+}
+
+#[cfg(not(unix))]
+fn verify_fresh_provider_artifact_open_file(
+    _authority: &ProviderArtifactAuthorityDirectory,
+    _path: &Path,
+    _file: &File,
+) -> Result<(), DiscoveryError> {
+    Ok(())
+}
+
 /// Persists an exact provider HTTP response body under a backend-owned name.
 /// The caller supplies neither a destination nor a filename. A repeated body
 /// normally reuses the already-verified SHA-256-addressed regular file. If an
 /// earlier interrupted write left different bytes at that address, the
 /// collision is preserved for forensic safety and this capture is published
-/// under a fresh private recovery name so later retries are not poisoned.
+/// under one of a fixed number of private recovery slots. Exact matching slots
+/// are reused, while different bytes are preserved and advance to the next
+/// slot, so repeated collisions cannot grow storage without bound.
 pub(crate) fn ingest_provider_response(
     root: &Path,
     bytes: &[u8],
@@ -222,6 +380,7 @@ pub(crate) fn ingest_provider_response(
             "provider response must contain between 1 and {MAX_SNAPSHOT_BYTES} bytes"
         )));
     }
+    let authority = open_provider_artifact_authority_directory(root)?;
 
     let sha256 = hex::encode(Sha256::digest(bytes));
     let artifact_id = format!("provider-response-sha256-{sha256}");
@@ -241,23 +400,33 @@ pub(crate) fn ingest_provider_response(
                         "provider response final sync failed: {error}"
                     ))
                 })?;
+                verify_fresh_provider_artifact_open_file(&authority, &final_path, &final_file)?;
+                sync_provider_artifact_authority_directory(&authority)?;
+                verify_fresh_provider_artifact_open_file(&authority, &final_path, &final_file)?;
                 Ok(())
             })();
             if let Err(error) = result {
-                // Retain the incomplete, exact-DACL product file rather than
-                // risk deleting a replacement through a permissive parent.
+                // Retain the incomplete or not-yet-namespace-durable private
+                // product file rather than risk deleting a replacement
+                // through a permissive parent. A retry re-verifies the same
+                // object and reattempts both durability barriers.
                 drop(final_file);
                 return Err(error);
             }
             final_name = canonical_name;
         }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            match verify_and_restrict_matching_provider_artifact(&final_path, root, bytes) {
+            match verify_and_restrict_matching_provider_artifact(
+                &final_path,
+                root,
+                bytes,
+                &authority,
+            ) {
                 Ok(()) => final_name = canonical_name,
                 Err(error) if is_provider_artifact_content_collision(&error) => {
-                    let nonce = Uuid::new_v4().simple().to_string();
-                    final_name = format!("provider-response-{sha256}-recovered-{nonce}.raw");
-                    write_new_provider_artifact(&root.join(&final_name), bytes)?;
+                    final_name = publish_bounded_provider_recovery_artifact(
+                        root, &sha256, bytes, &authority,
+                    )?;
                 }
                 Err(error) => return Err(error),
             }
@@ -278,12 +447,55 @@ pub(crate) fn ingest_provider_response(
     ))
 }
 
-fn write_new_provider_artifact(path: &Path, bytes: &[u8]) -> Result<(), DiscoveryError> {
-    let mut file = create_private_new_file(path).map_err(|error| {
-        DiscoveryError::Connector(format!(
-            "provider response recovery file could not be created without overwrite: {error}"
-        ))
-    })?;
+fn publish_bounded_provider_recovery_artifact(
+    root: &Path,
+    sha256: &str,
+    bytes: &[u8],
+    authority: &ProviderArtifactAuthorityDirectory,
+) -> Result<String, DiscoveryError> {
+    for slot in 1..=MAX_PROVIDER_ARTIFACT_RECOVERY_SLOTS {
+        let final_name = provider_recovery_artifact_name(sha256, slot);
+        let final_path = root.join(&final_name);
+        match create_private_new_file(&final_path) {
+            Ok(file) => {
+                write_open_provider_recovery_artifact(file, bytes, authority, &final_path)?;
+                return Ok(final_name);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                match verify_and_restrict_matching_provider_artifact(
+                    &final_path,
+                    root,
+                    bytes,
+                    authority,
+                ) {
+                    Ok(()) => return Ok(final_name),
+                    Err(error) if is_provider_artifact_content_collision(&error) => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(error) => {
+                return Err(DiscoveryError::Connector(format!(
+                    "provider response recovery slot could not be created without overwrite: {error}"
+                )));
+            }
+        }
+    }
+
+    Err(DiscoveryError::Connector(
+        PROVIDER_ARTIFACT_RECOVERY_EXHAUSTED_ERROR.into(),
+    ))
+}
+
+fn provider_recovery_artifact_name(sha256: &str, slot: usize) -> String {
+    format!("provider-response-{sha256}-recovered-{slot}.raw")
+}
+
+fn write_open_provider_recovery_artifact(
+    mut file: File,
+    bytes: &[u8],
+    authority: &ProviderArtifactAuthorityDirectory,
+    path: &Path,
+) -> Result<(), DiscoveryError> {
     let result = (|| -> Result<(), DiscoveryError> {
         file.write_all(bytes).map_err(|error| {
             DiscoveryError::Connector(format!("provider response recovery write failed: {error}"))
@@ -291,12 +503,16 @@ fn write_new_provider_artifact(path: &Path, bytes: &[u8]) -> Result<(), Discover
         file.sync_all().map_err(|error| {
             DiscoveryError::Connector(format!("provider response recovery sync failed: {error}"))
         })?;
+        verify_fresh_provider_artifact_open_file(authority, path, &file)?;
+        sync_provider_artifact_authority_directory(authority)?;
+        verify_fresh_provider_artifact_open_file(authority, path, &file)?;
         Ok(())
     })();
     if let Err(error) = result {
-        // The fresh random name prevents this incomplete file from poisoning
-        // the next retry. Retain it rather than risk a pathname-based delete
-        // through a permissive custom parent.
+        // Retain the incomplete or not-yet-namespace-durable fixed-slot file
+        // rather than risk a pathname-based delete through a permissive
+        // custom parent. A retry reuses matching bytes and reattempts both
+        // barriers; only a proven content collision advances the bounded slot.
         drop(file);
         return Err(error);
     }
@@ -327,20 +543,25 @@ fn verify_and_restrict_matching_provider_artifact(
     path: &Path,
     authority_root: &Path,
     expected: &[u8],
+    authority: &ProviderArtifactAuthorityDirectory,
 ) -> Result<(), DiscoveryError> {
-    crate::managed_runtime::verify_then_repair_canonical_or_verify_private_product_file_dacl(
-        path,
-        authority_root,
-        |file| verify_provider_artifact_open_file(file, expected),
-        |error| {
-            DiscoveryError::Connector(format!(
-                "matching provider artifact could not be safely verified or restricted: {error}"
-            ))
-        },
-    )
+    crate::managed_runtime::
+        verify_then_sync_and_repair_canonical_or_verify_private_product_file_dacl(
+            path,
+            authority_root,
+            |file| verify_provider_artifact_open_file(file, expected),
+            |file| {
+                sync_provider_artifact_open_file(file)?;
+                sync_provider_artifact_authority_directory(authority)
+            },
+            |error| {
+                DiscoveryError::Connector(format!(
+                    "matching provider artifact could not be safely verified or restricted: {error}"
+                ))
+            },
+        )
 }
 
-#[cfg(windows)]
 fn verify_provider_artifact_open_file(
     file: &mut File,
     expected: &[u8],
@@ -349,12 +570,110 @@ fn verify_provider_artifact_open_file(
     verify_provider_artifact_contents(&existing, expected)
 }
 
+#[cfg(test)]
+thread_local! {
+    static TEST_PROVIDER_ARTIFACT_REUSE_SYNC_FAILURE_AFTER: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+    static TEST_PROVIDER_ARTIFACT_PARENT_SYNC_FAILURES: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+fn sync_provider_artifact_open_file(file: &File) -> Result<(), DiscoveryError> {
+    #[cfg(test)]
+    if TEST_PROVIDER_ARTIFACT_REUSE_SYNC_FAILURE_AFTER.with(|remaining| match remaining.get() {
+        None => false,
+        Some(0) => {
+            remaining.set(None);
+            true
+        }
+        Some(current) => {
+            remaining.set(Some(current - 1));
+            false
+        }
+    }) {
+        return Err(DiscoveryError::Connector(
+            "matching provider artifact durability barrier failed: injected sync failure".into(),
+        ));
+    }
+
+    file.sync_all().map_err(|error| {
+        DiscoveryError::Connector(format!(
+            "matching provider artifact durability barrier failed: {error}"
+        ))
+    })
+}
+
+#[cfg(test)]
+fn fail_next_provider_artifact_reuse_sync() {
+    fail_provider_artifact_reuse_sync_after(0);
+}
+
+#[cfg(test)]
+fn fail_provider_artifact_reuse_sync_after(successful_barriers: usize) {
+    TEST_PROVIDER_ARTIFACT_REUSE_SYNC_FAILURE_AFTER.with(|remaining| {
+        assert_eq!(
+            remaining.replace(Some(successful_barriers)),
+            None,
+            "provider artifact sync failure injection was already armed"
+        );
+    });
+}
+
+fn sync_provider_artifact_authority_directory(
+    authority: &ProviderArtifactAuthorityDirectory,
+) -> Result<(), DiscoveryError> {
+    #[cfg(unix)]
+    verify_provider_artifact_authority_directory(authority)?;
+
+    #[cfg(test)]
+    if TEST_PROVIDER_ARTIFACT_PARENT_SYNC_FAILURES.with(|remaining| {
+        let current = remaining.get();
+        if current == 0 {
+            false
+        } else {
+            remaining.set(current - 1);
+            true
+        }
+    }) {
+        return Err(DiscoveryError::Connector(
+            "provider artifact authority durability barrier failed: injected parent sync failure"
+                .into(),
+        ));
+    }
+
+    #[cfg(unix)]
+    {
+        authority.directory.sync_all().map_err(|error| {
+            DiscoveryError::Connector(format!(
+                "provider artifact authority durability barrier failed: {error}"
+            ))
+        })?;
+        verify_provider_artifact_authority_directory(authority)?;
+    }
+    #[cfg(not(unix))]
+    let _ = authority;
+    Ok(())
+}
+
+#[cfg(test)]
+fn fail_next_provider_artifact_parent_sync() {
+    TEST_PROVIDER_ARTIFACT_PARENT_SYNC_FAILURES.with(|remaining| {
+        assert_eq!(
+            remaining.replace(1),
+            0,
+            "provider artifact parent sync failure injection was already armed"
+        );
+    });
+}
+
 #[cfg(unix)]
 fn verify_and_restrict_matching_provider_artifact(
     path: &Path,
     authority_root: &Path,
     expected: &[u8],
+    authority: &ProviderArtifactAuthorityDirectory,
 ) -> Result<(), DiscoveryError> {
+    verify_provider_artifact_authority_directory(authority)?;
     let parent = path.parent().ok_or_else(|| {
         DiscoveryError::Connector("matching provider artifact has no parent".into())
     })?;
@@ -382,7 +701,7 @@ fn verify_and_restrict_matching_provider_artifact(
         ));
     }
     let mut options = OpenOptions::new();
-    options.read(true);
+    options.read(true).write(true);
     #[cfg(unix)]
     options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     let mut file = options.open(path).map_err(|error| {
@@ -436,7 +755,10 @@ fn verify_and_restrict_matching_provider_artifact(
             "matching provider artifact changed during content verification".into(),
         ));
     }
+    sync_provider_artifact_open_file(&file)?;
+    sync_provider_artifact_authority_directory(authority)?;
     restrict_existing_file_handle_to_owner(&file)?;
+    sync_provider_artifact_open_file(&file)?;
     let restricted_handle = file.metadata().map_err(|error| {
         DiscoveryError::Connector(format!(
             "restricted provider artifact handle could not be reinspected: {error}"
@@ -472,6 +794,7 @@ fn verify_and_restrict_matching_provider_artifact(
     _path: &Path,
     _authority_root: &Path,
     _expected: &[u8],
+    _authority: &ProviderArtifactAuthorityDirectory,
 ) -> Result<(), DiscoveryError> {
     Err(DiscoveryError::Connector(
         "safe existing-artifact permission verification is unavailable on this platform".into(),
@@ -484,10 +807,11 @@ fn verify_and_restrict_matching_provider_artifact_in_isolated_root(
     expected: &[u8],
     product_root: &Path,
 ) -> Result<(), DiscoveryError> {
-    crate::managed_runtime::verify_then_repair_isolated_product_file_dacl(
+    crate::managed_runtime::verify_then_sync_and_repair_isolated_product_file_dacl(
         path,
         product_root,
         |file| verify_provider_artifact_open_file(file, expected),
+        sync_provider_artifact_open_file,
         |error| DiscoveryError::Connector(error.to_string()),
     )
 }
@@ -974,15 +1298,30 @@ mod tests {
             &["test-provider"],
         )
         .expect("a fresh recovery artifact should allow the retry to succeed");
+        let recovered_name = reference.canonical_relative_path.clone();
+        let repeated = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("the verified recovery artifact should be reused");
 
         assert_ne!(
             reference.canonical_relative_path,
             canonical.file_name().unwrap().to_string_lossy()
         );
+        assert_eq!(repeated.canonical_relative_path, recovered_name);
         assert_eq!(fs::read(&canonical).unwrap(), b"partial");
         assert_eq!(
-            fs::read(temporary.path().join(reference.canonical_relative_path)).unwrap(),
+            fs::read(temporary.path().join(recovered_name)).unwrap(),
             expected
+        );
+        assert_eq!(
+            fs::read_dir(temporary.path()).unwrap().count(),
+            2,
+            "a repeated response must not append another recovery artifact"
         );
     }
 
@@ -992,6 +1331,357 @@ mod tests {
             "provider-response-{}.raw",
             hex::encode(Sha256::digest(expected))
         ))
+    }
+
+    fn write_private_test_artifact(path: &Path, bytes: &[u8]) {
+        let mut file = create_private_new_file(path).expect("private artifact fixture");
+        file.write_all(bytes).expect("write artifact fixture");
+        file.sync_all().expect("sync artifact fixture");
+    }
+
+    #[test]
+    fn matching_canonical_reuse_requires_a_successful_durability_barrier() {
+        let temporary = tempfile::tempdir().expect("provider artifact root");
+        let expected = b"matching canonical response after an uncertain sync";
+        let canonical = provider_artifact_path(temporary.path(), expected);
+        write_private_test_artifact(&canonical, expected);
+        fail_next_provider_artifact_reuse_sync();
+
+        let error = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect_err("matching bytes without a completed durability barrier must fail");
+
+        assert!(error.to_string().contains("durability barrier failed"));
+        assert_eq!(fs::read(&canonical).unwrap(), expected);
+        assert_eq!(
+            fs::read_dir(temporary.path()).unwrap().count(),
+            1,
+            "a failed matching reuse must not publish a recovery artifact"
+        );
+
+        let retried = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("the same canonical file may be reused after a real barrier succeeds");
+        assert_eq!(
+            retried.canonical_relative_path,
+            canonical.file_name().unwrap().to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn matching_recovery_reuse_sync_failure_does_not_advance_a_slot() {
+        let temporary = tempfile::tempdir().expect("provider artifact root");
+        let expected = b"matching recovery response after an uncertain sync";
+        let sha256 = hex::encode(Sha256::digest(expected));
+        let canonical = provider_artifact_path(temporary.path(), expected);
+        write_private_test_artifact(&canonical, b"preserved canonical collision");
+        let recovery_name = provider_recovery_artifact_name(&sha256, 1);
+        let recovery = temporary.path().join(&recovery_name);
+        write_private_test_artifact(&recovery, expected);
+        fail_next_provider_artifact_reuse_sync();
+
+        let error = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect_err("a recovery-slot sync failure must fail instead of advancing");
+
+        assert!(error.to_string().contains("durability barrier failed"));
+        assert_eq!(
+            fs::read(&canonical).unwrap(),
+            b"preserved canonical collision"
+        );
+        assert_eq!(fs::read(&recovery).unwrap(), expected);
+        assert!(
+            !temporary
+                .path()
+                .join(provider_recovery_artifact_name(&sha256, 2))
+                .exists(),
+            "a non-content durability error must not advance to another slot"
+        );
+
+        let retried = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("the same recovery slot may be reused after a real barrier succeeds");
+        assert_eq!(retried.canonical_relative_path, recovery_name);
+        assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn fresh_canonical_parent_sync_failure_reuses_the_same_object_on_retry() {
+        let temporary = tempfile::tempdir().expect("provider artifact root");
+        let expected = b"fresh canonical response with uncertain namespace durability";
+        let canonical = provider_artifact_path(temporary.path(), expected);
+        fail_next_provider_artifact_parent_sync();
+
+        let error = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect_err("fresh canonical publication must fail when its parent sync fails");
+
+        assert!(
+            error
+                .to_string()
+                .contains("authority durability barrier failed")
+        );
+        assert_eq!(fs::read(&canonical).unwrap(), expected);
+        assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 1);
+
+        let retried = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("retry reuses and re-syncs the same canonical object");
+        assert_eq!(
+            retried.canonical_relative_path,
+            canonical.file_name().unwrap().to_string_lossy()
+        );
+        assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn fresh_recovery_parent_sync_failure_reuses_slot_one_on_retry() {
+        let temporary = tempfile::tempdir().expect("provider artifact root");
+        let expected = b"fresh recovery response with uncertain namespace durability";
+        let sha256 = hex::encode(Sha256::digest(expected));
+        let canonical = provider_artifact_path(temporary.path(), expected);
+        write_private_test_artifact(&canonical, b"preserved canonical collision");
+        let recovery_name = provider_recovery_artifact_name(&sha256, 1);
+        let recovery = temporary.path().join(&recovery_name);
+        fail_next_provider_artifact_parent_sync();
+
+        let error = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect_err("fresh recovery publication must fail when its parent sync fails");
+
+        assert!(
+            error
+                .to_string()
+                .contains("authority durability barrier failed")
+        );
+        assert_eq!(
+            fs::read(&canonical).unwrap(),
+            b"preserved canonical collision"
+        );
+        assert_eq!(fs::read(&recovery).unwrap(), expected);
+        assert!(
+            !temporary
+                .path()
+                .join(provider_recovery_artifact_name(&sha256, 2))
+                .exists(),
+            "a parent-sync failure must not advance recovery slots"
+        );
+
+        let retried = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("retry reuses and re-syncs the same recovery slot");
+        assert_eq!(retried.canonical_relative_path, recovery_name);
+        assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn matching_canonical_parent_sync_failure_is_not_reported_as_success() {
+        let temporary = tempfile::tempdir().expect("provider artifact root");
+        let expected = b"matching canonical response with uncertain namespace durability";
+        let canonical = provider_artifact_path(temporary.path(), expected);
+        write_private_test_artifact(&canonical, expected);
+        #[cfg(unix)]
+        fs::set_permissions(&canonical, fs::Permissions::from_mode(0o666))
+            .expect("permissive canonical fixture mode");
+        fail_next_provider_artifact_parent_sync();
+
+        let error = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect_err("matching canonical reuse must fail when its parent sync fails");
+
+        assert!(
+            error
+                .to_string()
+                .contains("authority durability barrier failed")
+        );
+        assert_eq!(fs::read(&canonical).unwrap(), expected);
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&canonical).unwrap().permissions().mode() & 0o777,
+            0o666,
+            "a parent-sync failure must return before permission hardening"
+        );
+        assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 1);
+
+        let retried = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("matching canonical retry reattempts both durability barriers");
+        assert_eq!(
+            retried.canonical_relative_path,
+            canonical.file_name().unwrap().to_string_lossy()
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&canonical).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "a successful retry hardens the same canonical object"
+        );
+    }
+
+    #[test]
+    fn matching_recovery_parent_sync_failure_does_not_advance_a_slot() {
+        let temporary = tempfile::tempdir().expect("provider artifact root");
+        let expected = b"matching recovery response with uncertain namespace durability";
+        let sha256 = hex::encode(Sha256::digest(expected));
+        let canonical = provider_artifact_path(temporary.path(), expected);
+        write_private_test_artifact(&canonical, b"preserved canonical collision");
+        let recovery_name = provider_recovery_artifact_name(&sha256, 1);
+        let recovery = temporary.path().join(&recovery_name);
+        write_private_test_artifact(&recovery, expected);
+        #[cfg(unix)]
+        fs::set_permissions(&recovery, fs::Permissions::from_mode(0o666))
+            .expect("permissive recovery fixture mode");
+        fail_next_provider_artifact_parent_sync();
+
+        let error = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect_err("matching recovery reuse must fail when its parent sync fails");
+
+        assert!(
+            error
+                .to_string()
+                .contains("authority durability barrier failed")
+        );
+        assert_eq!(fs::read(&recovery).unwrap(), expected);
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&recovery).unwrap().permissions().mode() & 0o777,
+            0o666,
+            "a parent-sync failure must return before recovery-slot hardening"
+        );
+        assert!(
+            !temporary
+                .path()
+                .join(provider_recovery_artifact_name(&sha256, 2))
+                .exists(),
+            "a matching parent-sync failure must not advance recovery slots"
+        );
+
+        let retried = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("matching recovery retry reattempts both durability barriers");
+        assert_eq!(retried.canonical_relative_path, recovery_name);
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&recovery).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "a successful retry hardens the same recovery slot"
+        );
+        assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn provider_recovery_slots_are_bounded_and_preserve_every_collision() {
+        let temporary = tempfile::tempdir().expect("provider artifact root");
+        let expected = b"provider response with exhausted recovery slots";
+        let sha256 = hex::encode(Sha256::digest(expected));
+        let canonical = provider_artifact_path(temporary.path(), expected);
+        let mut preserved = Vec::<(PathBuf, Vec<u8>)>::new();
+
+        let canonical_bytes = b"preserved canonical collision".to_vec();
+        write_private_test_artifact(&canonical, &canonical_bytes);
+        preserved.push((canonical, canonical_bytes));
+        for slot in 1..=MAX_PROVIDER_ARTIFACT_RECOVERY_SLOTS {
+            let path = temporary
+                .path()
+                .join(provider_recovery_artifact_name(&sha256, slot));
+            let bytes = format!("preserved recovery collision {slot}").into_bytes();
+            write_private_test_artifact(&path, &bytes);
+            preserved.push((path, bytes));
+        }
+        let mut names_before = fs::read_dir(temporary.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        names_before.sort();
+
+        let error = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect_err("exhausted recovery slots must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains(PROVIDER_ARTIFACT_RECOVERY_EXHAUSTED_ERROR)
+        );
+        let mut names_after = fs::read_dir(temporary.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        names_after.sort();
+        assert_eq!(names_after, names_before, "exhaustion must not add a file");
+        for (path, bytes) in preserved {
+            assert_eq!(
+                fs::read(path).unwrap(),
+                bytes,
+                "every collision must remain byte-exact"
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -1022,6 +1712,57 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn unix_permission_hardening_requires_a_second_file_sync() {
+        let temporary = tempfile::tempdir().expect("provider artifact root");
+        let expected = b"matching provider response requiring durable permission hardening";
+        let artifact = provider_artifact_path(temporary.path(), expected);
+        fs::write(&artifact, expected).expect("pre-existing provider artifact");
+        fs::set_permissions(&artifact, fs::Permissions::from_mode(0o666))
+            .expect("permissive fixture mode");
+        fail_provider_artifact_reuse_sync_after(1);
+
+        let error = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect_err("post-hardening file sync failure must prevent successful reuse");
+
+        assert!(error.to_string().contains("durability barrier failed"));
+        assert_eq!(fs::read(&artifact).unwrap(), expected);
+        assert_eq!(
+            fs::metadata(&artifact).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "permission hardening occurred but has not yet crossed its durability barrier"
+        );
+        assert_eq!(
+            fs::read_dir(temporary.path()).unwrap().count(),
+            1,
+            "a post-hardening sync error must not publish a recovery artifact"
+        );
+
+        let retried = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("retry reestablishes both file barriers around idempotent hardening");
+        assert_eq!(
+            retried.canonical_relative_path,
+            artifact.file_name().unwrap().to_string_lossy()
+        );
+        assert_eq!(
+            fs::metadata(&artifact).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn unix_content_mismatch_is_preserved_while_a_fresh_artifact_is_published() {
         let temporary = tempfile::tempdir().expect("provider artifact root");
         let expected = b"expected provider response";
@@ -1038,19 +1779,77 @@ mod tests {
             &["test-provider"],
         )
         .expect("content mismatch should use a fresh backend-owned artifact");
+        let repeated = ingest_provider_response(
+            temporary.path(),
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("the verified recovery artifact should be reused");
 
         assert_ne!(
             reference.canonical_relative_path,
             artifact.file_name().unwrap().to_string_lossy()
         );
         assert_eq!(
-            fs::read(temporary.path().join(reference.canonical_relative_path)).unwrap(),
+            repeated.canonical_relative_path,
+            reference.canonical_relative_path
+        );
+        assert_eq!(
+            fs::read(temporary.path().join(&reference.canonical_relative_path)).unwrap(),
             expected
         );
         assert_eq!(fs::read(&artifact).unwrap(), b"different existing bytes");
         assert_eq!(
             fs::metadata(&artifact).unwrap().permissions().mode() & 0o777,
             0o666
+        );
+        assert_eq!(
+            fs::read_dir(temporary.path()).unwrap().count(),
+            2,
+            "a repeated Unix collision must not append another recovery artifact"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_recovery_slot_hardlink_is_rejected_without_mutating_the_external_alias() {
+        let temporary = tempfile::tempdir().expect("provider artifact parent");
+        let artifact_root = temporary.path().join("artifacts");
+        fs::create_dir(&artifact_root).expect("provider artifact root");
+        let expected = b"provider response behind a recovery hardlink";
+        let sha256 = hex::encode(Sha256::digest(expected));
+        let canonical = provider_artifact_path(&artifact_root, expected);
+        fs::write(&canonical, b"different canonical bytes").expect("canonical collision");
+        let outside = temporary.path().join("outside-recovery-alias.raw");
+        fs::write(&outside, expected).expect("outside hardlink object");
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o666))
+            .expect("permissive outside mode");
+        let recovery = artifact_root.join(provider_recovery_artifact_name(&sha256, 1));
+        fs::hard_link(&outside, &recovery).expect("recovery hardlink alias");
+
+        let error = ingest_provider_response(
+            &artifact_root,
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect_err("a multi-link recovery slot must fail before trying another slot");
+
+        assert!(error.to_string().contains("single-link"));
+        assert_eq!(fs::read(&outside).unwrap(), expected);
+        assert_eq!(
+            fs::metadata(&outside).unwrap().permissions().mode() & 0o777,
+            0o666,
+            "the external recovery alias mode must remain unchanged"
+        );
+        assert!(
+            !artifact_root
+                .join(provider_recovery_artifact_name(&sha256, 2))
+                .exists(),
+            "a non-content security failure must not advance to another slot"
         );
     }
 
@@ -1234,10 +2033,46 @@ mod tests {
             reference.canonical_relative_path,
             artifact.file_name().unwrap().to_string_lossy()
         );
-        let recovered = connector_root.join(reference.canonical_relative_path);
+        let recovered = connector_root.join(&reference.canonical_relative_path);
         assert_eq!(fs::read(&recovered).unwrap(), expected);
         crate::managed_runtime::test_verify_current_user_only_product_file(&recovered)
             .expect("recovery artifact must have an exact private DACL");
+        let recovered_information_before =
+            crate::managed_runtime::test_windows_product_file_information(&recovered)
+                .expect("recovery artifact information before reuse");
+        let recovered_descriptor_before =
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&recovered)
+                .expect("recovery artifact descriptor before reuse");
+
+        let repeated = ingest_provider_response(
+            &connector_root,
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("a verified Windows recovery slot should be reused");
+
+        assert_eq!(
+            repeated.canonical_relative_path,
+            reference.canonical_relative_path
+        );
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_information(&recovered).unwrap(),
+            recovered_information_before,
+            "recovery reuse must preserve the exact file object"
+        );
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&recovered)
+                .unwrap(),
+            recovered_descriptor_before,
+            "recovery reuse must preserve the exact private descriptor"
+        );
+        assert_eq!(
+            fs::read_dir(&connector_root).unwrap().count(),
+            2,
+            "a repeated Windows collision must not append another recovery artifact"
+        );
         assert_eq!(fs::read(&artifact).unwrap(), b"different existing bytes");
         assert_eq!(
             crate::managed_runtime::test_windows_product_file_information(&artifact).unwrap(),
@@ -1250,6 +2085,106 @@ mod tests {
             descriptor_before,
             "failed custom collision proof must not rewrite its descriptor"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_unsafe_recovery_slot_is_rejected_without_advancing_or_repairing() {
+        let temporary = tempfile::tempdir().expect("custom artifact authority");
+        let connector_root = temporary.path().join("custom-connector-snapshots");
+        fs::create_dir(&connector_root).expect("custom connector root");
+        let expected = b"expected response behind an unsafe recovery slot";
+        let sha256 = hex::encode(Sha256::digest(expected));
+        let canonical = provider_artifact_path(&connector_root, expected);
+        write_private_fixture(&canonical, b"different existing bytes");
+        let recovery = connector_root.join(provider_recovery_artifact_name(&sha256, 1));
+        write_private_fixture(&recovery, expected);
+        crate::managed_runtime::set_test_world_readable_product_file_dacl(&recovery)
+            .expect("make the recovery slot explicitly permissive");
+        let information_before =
+            crate::managed_runtime::test_windows_product_file_information(&recovery)
+                .expect("unsafe recovery slot information before rejected reuse");
+        let descriptor_before =
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&recovery)
+                .expect("unsafe recovery slot descriptor before rejected reuse");
+
+        let error = ingest_provider_response(
+            &connector_root,
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect_err("an unsafe recovery slot must fail closed instead of advancing");
+
+        assert!(error.to_string().contains("safely verified"));
+        assert_eq!(fs::read(&canonical).unwrap(), b"different existing bytes");
+        assert_eq!(fs::read(&recovery).unwrap(), expected);
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_information(&recovery).unwrap(),
+            information_before,
+            "rejected recovery reuse must preserve the exact file object"
+        );
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&recovery)
+                .unwrap(),
+            descriptor_before,
+            "rejected recovery reuse must not repair its descriptor"
+        );
+        assert!(
+            !connector_root
+                .join(provider_recovery_artifact_name(&sha256, 2))
+                .exists(),
+            "a non-content security failure must not advance to the next recovery slot"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_read_only_helper_does_not_inherit_the_durability_write_requirement() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+
+        let temporary = tempfile::tempdir().expect("custom artifact authority");
+        let connector_root = temporary.path().join("custom-connector-snapshots");
+        fs::create_dir(&connector_root).expect("custom connector root");
+        let expected = b"matching response behind a read-sharing blocker";
+        let artifact = provider_artifact_path(&connector_root, expected);
+        write_private_fixture(&artifact, expected);
+        let blocker = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&artifact)
+            .expect("read-only blocker");
+
+        crate::managed_runtime::verify_then_repair_canonical_or_verify_private_product_file_dacl(
+            &artifact,
+            &connector_root,
+            |file| verify_provider_artifact_open_file(file, expected),
+            |error| DiscoveryError::Connector(error.to_string()),
+        )
+        .expect("the existing read-only helper must not require data-write access");
+
+        let error = ingest_provider_response(
+            &connector_root,
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect_err("durable reuse must fail while a write-capable pinned open is blocked");
+        assert!(error.to_string().contains("safely verified"));
+        assert_eq!(fs::read_dir(&connector_root).unwrap().count(), 1);
+
+        drop(blocker);
+        ingest_provider_response(
+            &connector_root,
+            expected,
+            "test-provider",
+            Utc::now(),
+            &["test-provider"],
+        )
+        .expect("durable reuse succeeds after write-capable pinned access is available");
     }
 
     #[cfg(windows)]
@@ -1320,6 +2255,56 @@ mod tests {
         );
         crate::managed_runtime::test_verify_current_user_only_product_file(&artifact)
             .expect("matching artifact has the exact repaired DACL");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_canonical_sync_failure_returns_before_dacl_repair() {
+        let (_temporary, product_root, _guard) = isolated_product_root();
+        let connector_root = product_root.join("connector-snapshots");
+        fs::create_dir(&connector_root).expect("connector root");
+        let artifact = connector_root.join("provider-response.raw");
+        let expected = b"matching canonical response with uncertain durability";
+        write_private_fixture(&artifact, expected);
+        crate::managed_runtime::set_test_world_readable_product_file_dacl(&artifact)
+            .expect("make fixture explicitly permissive");
+        let descriptor_before =
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&artifact)
+                .expect("descriptor before injected sync failure");
+        let information_before =
+            crate::managed_runtime::test_windows_product_file_information(&artifact)
+                .expect("identity before injected sync failure");
+        fail_next_provider_artifact_reuse_sync();
+
+        let error = verify_and_restrict_matching_provider_artifact_in_isolated_root(
+            &artifact,
+            expected,
+            &product_root,
+        )
+        .expect_err("sync failure must stop canonical DACL repair");
+
+        assert!(error.to_string().contains("durability barrier failed"));
+        assert_eq!(fs::read(&artifact).unwrap(), expected);
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_information(&artifact).unwrap(),
+            information_before,
+            "sync failure must preserve the exact canonical file object"
+        );
+        assert_eq!(
+            crate::managed_runtime::test_windows_product_file_security_descriptor(&artifact)
+                .unwrap(),
+            descriptor_before,
+            "sync failure must return before canonical DACL repair"
+        );
+
+        verify_and_restrict_matching_provider_artifact_in_isolated_root(
+            &artifact,
+            expected,
+            &product_root,
+        )
+        .expect("a later real barrier may authorize the bounded DACL repair");
+        crate::managed_runtime::test_verify_current_user_only_product_file(&artifact)
+            .expect("the later successful proof repairs the canonical DACL");
     }
 
     #[cfg(windows)]

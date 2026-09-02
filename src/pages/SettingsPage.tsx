@@ -1,6 +1,7 @@
 import { Icon } from "../components/Icon";
 import { PageHeader } from "../components/Shared";
 import { useI18n, type Locale } from "../i18n";
+import { getSettingsRuntimePresentation } from "../settingsRuntimePresentation";
 
 import "../settings-page.css";
 
@@ -22,20 +23,7 @@ export function SettingsPage({
   onOpenProjects,
 }: SettingsPageProps) {
   const { text } = useI18n();
-  const runtimeStatus = mode === "demo"
-    ? text({
-      en: "Sample mode is active. No real target is being tested.",
-      zhTW: "目前是範例模式，不會檢查真實目標。",
-    })
-    : runtimeAvailable
-      ? text({
-        en: "Local scan tools were ready at the last check.",
-        zhTW: "本機掃描工具在上次檢查時已就緒。",
-      })
-      : text({
-        en: "One or more local scan tools still need automatic preparation. Saved projects and reports remain available.",
-        zhTW: "一項或多項本機掃描工具仍需要自動準備；已保存的專案與報告仍可使用。",
-      });
+  const runtimePresentation = getSettingsRuntimePresentation(mode, runtimeAvailable);
 
   return (
     <div className="page page--settings">
@@ -91,10 +79,10 @@ export function SettingsPage({
         </article>
 
         <article className="section-block settings-section">
-          <span className="settings-section__icon"><Icon name={runtimeAvailable ? "check" : "settings"} size={20} /></span>
+          <span className="settings-section__icon"><Icon name={runtimePresentation.icon} size={20} /></span>
           <div className="section-heading">
             <h2>{text({ en: "Local scan tools", zhTW: "本機掃描工具" })}</h2>
-            <p>{runtimeStatus}</p>
+            <p>{text(runtimePresentation.status)}</p>
           </div>
         </article>
       </section>

@@ -95,6 +95,11 @@ const copy = {
     en: "A local integrity signature can show that the exported file was not changed later. It cannot prove the scan was complete or correct.",
     zhTW: "本機完整性簽章只能證明匯出後檔案沒有被修改；不能證明掃描完整或結果正確。",
   },
+  caseBundleScopeTitle: { en: "Case-wide records with run-bound reports", zhTW: "案件全域紀錄與輪次綁定報告" },
+  caseBundleScopeBody: {
+    en: "The bundle includes case-wide assets, grants, coverage, scan history, findings, workflow history, comparisons, and raw source files if you choose to include them. Reports select observations and evidence from the chosen scan run. For older observations without a frozen snapshot, wording may use the current finding; workflow status and asset names may also reflect the current case.",
+    zhTW: "案件包會包含整個案件的資產、授權、涵蓋、掃描歷史、問題、工作流程歷史、比較，以及你選擇附上的原始來源檔案。包內報告會選取所選掃描輪次的觀察與證據；較舊且沒有凍結快照的觀察，文字可能使用目前問題內容，工作流程狀態與資產名稱也可能反映目前案件。",
+  },
   technicalPreview: { en: "Technical preview details", zhTW: "預覽技術細節" },
   packageDetails: { en: "Coverage, file contents, and integrity details", zhTW: "涵蓋、檔案內容與完整性細節" },
   coverageDetails: { en: "See what was checked and what was not", zhTW: "查看哪些已檢查、哪些未完成" },
@@ -198,8 +203,8 @@ const formatCopy = {
   case_bundle: {
     title: { en: "Technical case bundle", zhTW: "技術案件包" },
     detail: {
-      en: "Give a security specialist the detailed case records needed to pick up the work.",
-      zhTW: "把資安專家接手工作需要的詳細案件紀錄一次交付。",
+      en: "Give a security specialist case-wide records plus reports bound to the selected run's observations and evidence.",
+      zhTW: "交付案件全域紀錄，以及依所選輪次觀察與證據綁定的報告，供資安專家接手。",
     },
     extension: ".case.tar.gz",
   },
@@ -454,6 +459,12 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
       {incompleteTerminalRun && !demoMode && (
         <InlineNotice tone="warning" title={text(copy.incompleteTitle)}>
           <p>{text(copy.incompleteBody)}</p>
+        </InlineNotice>
+      )}
+
+      {format === "case_bundle" && !demoMode && (
+        <InlineNotice tone="warning" title={text(copy.caseBundleScopeTitle)}>
+          <p>{text(copy.caseBundleScopeBody)}</p>
         </InlineNotice>
       )}
 

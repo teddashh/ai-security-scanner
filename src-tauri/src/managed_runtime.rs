@@ -12605,6 +12605,14 @@ struct CanonicalProductFileDaclRepairGuard {
 }
 
 #[cfg(windows)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WindowsExistingProductFileAccess {
+    #[allow(dead_code)] // Retained by the read-only wrapper's stable access contract.
+    ReadOnly,
+    DurableWrite,
+}
+
+#[cfg(windows)]
 impl CanonicalProductFileDaclRepairGuard {
     fn repair_after_content_proof(self) -> io::Result<()> {
         use std::os::windows::io::AsRawHandle;
@@ -12659,11 +12667,13 @@ fn open_canonical_product_file_dacl_repair_guard_at_root(
     path: &Path,
     product_root: &Path,
     product_root_guard: PrivateProductDataDirectoryGuard,
+    access: WindowsExistingProductFileAccess,
 ) -> io::Result<CanonicalProductFileDaclRepairGuard> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_GENERIC_READ, FILE_SHARE_READ, READ_CONTROL, WRITE_DAC,
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+        WRITE_DAC,
     };
 
     let canonical_root = product_root.canonicalize()?;
@@ -12719,10 +12729,14 @@ fn open_canonical_product_file_dacl_repair_guard_at_root(
     }
 
     let exact_path = current.join(file_name);
+    let mut desired_access = FILE_GENERIC_READ | READ_CONTROL | WRITE_DAC;
+    if access == WindowsExistingProductFileAccess::DurableWrite {
+        desired_access |= FILE_GENERIC_WRITE;
+    }
     let mut options = OpenOptions::new();
     options
         .read(true)
-        .access_mode(FILE_GENERIC_READ | READ_CONTROL | WRITE_DAC)
+        .access_mode(desired_access)
         .share_mode(FILE_SHARE_READ)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     let file = options.open(&exact_path)?;
@@ -12741,10 +12755,18 @@ fn open_canonical_product_file_dacl_repair_guard_at_root(
     // exact file cannot be modified, renamed, or unlinked while content proof
     // and repair use this handle. Reopen the still-pinned pathname without
     // following a final reparse point and prove it resolves to this object.
+    // A durability-capable primary handle has write access, so this read-only
+    // identity probe must share that already-pinned access. The primary handle
+    // itself still excludes write and delete sharing for every other opener.
+    let probe_share_mode = if access == WindowsExistingProductFileAccess::DurableWrite {
+        FILE_SHARE_READ | FILE_SHARE_WRITE
+    } else {
+        FILE_SHARE_READ
+    };
     let mut probe_options = OpenOptions::new();
     probe_options
         .read(true)
-        .share_mode(FILE_SHARE_READ)
+        .share_mode(probe_share_mode)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     let path_probe = probe_options.open(&exact_path)?;
     if windows_file_information(&path_probe)? != information {
@@ -12774,6 +12796,7 @@ fn open_canonical_product_file_dacl_repair_guard_at_root(
 #[cfg(windows)]
 fn open_canonical_product_file_dacl_repair_guard(
     path: &Path,
+    access: WindowsExistingProductFileAccess,
 ) -> io::Result<CanonicalProductFileDaclRepairGuard> {
     let product_root = windows_local_app_data_directory()?.join(PRODUCT_DATA_DIRECTORY_NAME);
     let canonical_root = product_root.canonicalize()?;
@@ -12786,16 +12809,23 @@ fn open_canonical_product_file_dacl_repair_guard(
     }
     let product_root_guard = ensure_private_product_data_directory(&product_root)
         .map_err(|error| io::Error::other(error.to_string()))?;
-    open_canonical_product_file_dacl_repair_guard_at_root(path, &product_root, product_root_guard)
+    open_canonical_product_file_dacl_repair_guard_at_root(
+        path,
+        &product_root,
+        product_root_guard,
+        access,
+    )
 }
 
 #[cfg(windows)]
 fn verify_then_repair_product_file_dacl<E>(
     mut guard: CanonicalProductFileDaclRepairGuard,
     verify: impl FnOnce(&mut File) -> Result<(), E>,
+    after_verify: impl FnOnce(&File) -> Result<(), E>,
     map_io_error: impl Fn(io::Error) -> E,
 ) -> Result<(), E> {
     verify(&mut guard.file)?;
+    after_verify(&guard.file)?;
     guard.repair_after_content_proof().map_err(map_io_error)
 }
 
@@ -12831,13 +12861,15 @@ fn windows_product_file_has_canonical_repair_authority(path: &Path) -> io::Resul
 fn verify_private_product_file_without_repair<E>(
     path: &Path,
     authority_root: &Path,
+    access: WindowsExistingProductFileAccess,
     verify: impl FnOnce(&mut File) -> Result<(), E>,
+    after_verify: impl FnOnce(&File) -> Result<(), E>,
     map_io_error: impl Fn(io::Error) -> E,
 ) -> Result<(), E> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_GENERIC_READ, FILE_SHARE_READ, READ_CONTROL,
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
     };
 
     let parent = path.parent().ok_or_else(|| {
@@ -12862,10 +12894,14 @@ fn verify_private_product_file_without_repair<E>(
     let _parent_guard = open_windows_real_directory_security_handle(&canonical_authority_root)
         .map_err(&map_io_error)?;
     let exact_path = canonical_authority_root.join(file_name);
+    let mut desired_access = FILE_GENERIC_READ | READ_CONTROL;
+    if access == WindowsExistingProductFileAccess::DurableWrite {
+        desired_access |= FILE_GENERIC_WRITE;
+    }
     let mut options = OpenOptions::new();
     options
         .read(true)
-        .access_mode(FILE_GENERIC_READ | READ_CONTROL)
+        .access_mode(desired_access)
         // Excluding write and delete sharing pins the verified object while
         // the caller proves its contents. This path never requests WRITE_DAC.
         .share_mode(FILE_SHARE_READ)
@@ -12883,10 +12919,15 @@ fn verify_private_product_file_without_repair<E>(
     verify_windows_directory_owner_is_current_user(&file).map_err(&map_io_error)?;
     verify_windows_current_user_only_dacl(&file).map_err(&map_io_error)?;
 
+    let probe_share_mode = if access == WindowsExistingProductFileAccess::DurableWrite {
+        FILE_SHARE_READ | FILE_SHARE_WRITE
+    } else {
+        FILE_SHARE_READ
+    };
     let mut probe_options = OpenOptions::new();
     probe_options
         .read(true)
-        .share_mode(FILE_SHARE_READ)
+        .share_mode(probe_share_mode)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     let path_probe = probe_options.open(&exact_path).map_err(&map_io_error)?;
     if windows_file_information(&path_probe).map_err(&map_io_error)? != information {
@@ -12904,6 +12945,7 @@ fn verify_private_product_file_without_repair<E>(
     }
 
     verify(&mut file)?;
+    after_verify(&file)?;
     if windows_file_information(&file).map_err(&map_io_error)? != information {
         return Err(map_io_error(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -12914,15 +12956,13 @@ fn verify_private_product_file_without_repair<E>(
     verify_windows_current_user_only_dacl(&file).map_err(map_io_error)
 }
 
-/// Runs `verify` against one exact, non-replaceable existing file handle. A
-/// file lexically below the fixed canonical product-data root may receive the
-/// bounded DACL repair after successful proof; every other path is strictly
-/// verify-only and must already have the exact product-created descriptor.
 #[cfg(windows)]
-pub(crate) fn verify_then_repair_canonical_or_verify_private_product_file_dacl<E>(
+fn verify_then_repair_canonical_or_verify_private_product_file_dacl_with_access<E>(
     path: &Path,
     authority_root: &Path,
+    access: WindowsExistingProductFileAccess,
     verify: impl FnOnce(&mut File) -> Result<(), E>,
+    after_verify: impl FnOnce(&File) -> Result<(), E>,
     map_io_error: impl Fn(io::Error) -> E,
 ) -> Result<(), E> {
     let parent = path.parent().ok_or_else(|| {
@@ -12940,14 +12980,68 @@ pub(crate) fn verify_then_repair_canonical_or_verify_private_product_file_dacl<E
         )));
     }
     if windows_product_file_has_canonical_repair_authority(path).map_err(&map_io_error)? {
-        let guard = open_canonical_product_file_dacl_repair_guard(path).map_err(&map_io_error)?;
-        verify_then_repair_product_file_dacl(guard, verify, map_io_error)
+        let guard =
+            open_canonical_product_file_dacl_repair_guard(path, access).map_err(&map_io_error)?;
+        verify_then_repair_product_file_dacl(guard, verify, after_verify, map_io_error)
     } else {
-        verify_private_product_file_without_repair(path, authority_root, verify, map_io_error)
+        verify_private_product_file_without_repair(
+            path,
+            authority_root,
+            access,
+            verify,
+            after_verify,
+            map_io_error,
+        )
     }
 }
 
+/// Runs `verify` against one exact, non-replaceable existing file handle. A
+/// file lexically below the fixed canonical product-data root may receive the
+/// bounded DACL repair after successful proof; every other path is strictly
+/// verify-only and must already have the exact product-created descriptor.
+/// This entry point remains read-only and does not require write access.
+#[cfg(windows)]
+#[allow(dead_code)] // Durable callers must not silently widen this read-only API.
+pub(crate) fn verify_then_repair_canonical_or_verify_private_product_file_dacl<E>(
+    path: &Path,
+    authority_root: &Path,
+    verify: impl FnOnce(&mut File) -> Result<(), E>,
+    map_io_error: impl Fn(io::Error) -> E,
+) -> Result<(), E> {
+    verify_then_repair_canonical_or_verify_private_product_file_dacl_with_access(
+        path,
+        authority_root,
+        WindowsExistingProductFileAccess::ReadOnly,
+        verify,
+        |_| Ok(()),
+        map_io_error,
+    )
+}
+
+/// Runs content proof and a caller-supplied durability barrier against the
+/// same write-capable, non-replaceable file handle. Canonical product files
+/// may then receive their bounded DACL repair; custom-authority files remain
+/// verify-only and are never opened with `WRITE_DAC`.
+#[cfg(windows)]
+pub(crate) fn verify_then_sync_and_repair_canonical_or_verify_private_product_file_dacl<E>(
+    path: &Path,
+    authority_root: &Path,
+    verify: impl FnOnce(&mut File) -> Result<(), E>,
+    durability_barrier: impl FnOnce(&File) -> Result<(), E>,
+    map_io_error: impl Fn(io::Error) -> E,
+) -> Result<(), E> {
+    verify_then_repair_canonical_or_verify_private_product_file_dacl_with_access(
+        path,
+        authority_root,
+        WindowsExistingProductFileAccess::DurableWrite,
+        verify,
+        durability_barrier,
+        map_io_error,
+    )
+}
+
 #[cfg(all(test, windows))]
+#[allow(dead_code)] // Kept as the read-only isolated sibling of the durability helper.
 pub(crate) fn verify_then_repair_isolated_product_file_dacl<E>(
     path: &Path,
     product_root: &Path,
@@ -12960,9 +13054,30 @@ pub(crate) fn verify_then_repair_isolated_product_file_dacl<E>(
         path,
         product_root,
         product_root_guard,
+        WindowsExistingProductFileAccess::ReadOnly,
     )
     .map_err(&map_io_error)?;
-    verify_then_repair_product_file_dacl(guard, verify, map_io_error)
+    verify_then_repair_product_file_dacl(guard, verify, |_| Ok(()), map_io_error)
+}
+
+#[cfg(all(test, windows))]
+pub(crate) fn verify_then_sync_and_repair_isolated_product_file_dacl<E>(
+    path: &Path,
+    product_root: &Path,
+    verify: impl FnOnce(&mut File) -> Result<(), E>,
+    durability_barrier: impl FnOnce(&File) -> Result<(), E>,
+    map_io_error: impl Fn(io::Error) -> E,
+) -> Result<(), E> {
+    let product_root_guard = ensure_private_product_data_directory_for_isolated_test(product_root)
+        .map_err(|error| map_io_error(io::Error::other(error.to_string())))?;
+    let guard = open_canonical_product_file_dacl_repair_guard_at_root(
+        path,
+        product_root,
+        product_root_guard,
+        WindowsExistingProductFileAccess::DurableWrite,
+    )
+    .map_err(&map_io_error)?;
+    verify_then_repair_product_file_dacl(guard, verify, durability_barrier, map_io_error)
 }
 
 #[cfg(all(test, windows))]

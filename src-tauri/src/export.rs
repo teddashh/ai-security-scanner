@@ -35,6 +35,7 @@ use std::path::{Component, Path, PathBuf};
 use tar::{Builder, EntryType, Header};
 
 pub const BUNDLE_SCHEMA_VERSION: &str = "1";
+const CASE_WIDE_BUNDLE_SCOPE_NOTICE: &str = "This portable case bundle contains case-wide project records and history. Reports under exports/ select observations and evidence from the selected run. For legacy observations without a frozen presentation snapshot, report wording may use the current canonical finding; current workflow status and asset display context may also reflect the current case projection. A distinct finding or observation from another run is not included in those reports.";
 pub const MANIFEST_PATH: &str = "manifest.json";
 pub const SIGNATURE_PATH: &str = "signature.json";
 pub const SIGNING_IDENTITY_PATH: &str = "integrity/local-signing-identity.json";
@@ -604,6 +605,7 @@ fn build_archive(
     schemas.insert("ocsf".into(), OCSF_SCHEMA_VERSION.into());
     schemas.insert("oscal".into(), OSCAL_VERSION.into());
     let mut notices = vec![
+        CASE_WIDE_BUNDLE_SCOPE_NOTICE.into(),
         PRELIMINARY_EVIDENCE_NOTICE.into(),
         INTEGRITY_ONLY_NOTICE.into(),
         "Raw artifact omission is recorded in raw-artifacts.json; omission is not evidence of a clean result.".into(),
@@ -734,6 +736,13 @@ fn build_documents(
     let run_id = beginner_report.run_id.as_str();
     let case_document = json!({
         "schema_version": BUNDLE_SCHEMA_VERSION,
+        "bundle_scope": "case_wide_records_with_run_bound_reports",
+        "selected_run_report_scope": "selected_run_observations_and_evidence_with_current_case_projection_context",
+        "current_case_projection_context": [
+            "legacy_missing_frozen_snapshot_presentation",
+            "workflow_status",
+            "asset_display"
+        ],
         "id": case.id,
         "title": case.title,
         "profile": case.profile,
@@ -945,6 +954,7 @@ fn readme(
     };
     format!(
         "ai-security-scanner portable case\n\n\
+         Package scope: case-wide project records and history; exports/ reports select observations and evidence from the selected run.\n\
          Case ID: {}\n\
          Selected run ID: {}\n\
          Selected run sequence: {}\n\
@@ -957,6 +967,7 @@ fn readme(
          Immutable finding-group events: {}\n\
          {}\n\
          IMPORTANT LIMITATIONS\n\
+         {}\n\
          {}\n\
          {}\n\
          Start with exports/beginner-master-report.json for what was tested, what was not tested, the problems found, and the next actions.\n\
@@ -978,6 +989,7 @@ fn readme(
         case.finding_groups.len(),
         case.finding_group_events.len(),
         demo_notice,
+        CASE_WIDE_BUNDLE_SCOPE_NOTICE,
         PRELIMINARY_EVIDENCE_NOTICE,
         INTEGRITY_ONLY_NOTICE,
     )
@@ -2461,6 +2473,161 @@ mod tests {
         case
     }
 
+    const LEGACY_CURRENT_FINDING_CONTEXT_SENTINEL: &str =
+        "CURRENT_FINDING_CONTEXT_SENTINEL_2f2f19b1";
+    const CURRENT_ASSET_DISPLAY_CONTEXT_SENTINEL: &str =
+        "CURRENT_ASSET_DISPLAY_CONTEXT_SENTINEL_48e7b34a";
+    const OTHER_RUN_REPORT_SENTINEL: &str = "RUN_TWO_REPORT_SENTINEL_7d7f2d60";
+
+    fn add_legacy_selected_run_projection_fixture(case: &mut AssessmentCase) {
+        let artifact = case.raw_artifacts[0].clone();
+        let finding_id = "finding-run-1-legacy".to_owned();
+        let mut finding = Finding {
+            id: finding_id.clone(),
+            case_id: case.id.clone(),
+            first_seen_run_id: "run-1".into(),
+            last_seen_run_id: "run-1".into(),
+            fingerprint: "engine:run-one-legacy".into(),
+            title: "Original run-one finding title".into(),
+            plain_language_summary: "Original run-one finding summary".into(),
+            possible_impact: "Original run-one impact".into(),
+            severity: Severity::Medium,
+            confidence: Confidence::High,
+            priority: 50,
+            priority_reasons: vec![],
+            asset_ids: vec!["asset-1".into()],
+            evidence: vec![Evidence {
+                id: "evidence-run-1-legacy".into(),
+                finding_id: finding_id.clone(),
+                run_id: "run-1".into(),
+                engine_run_id: Some("engine-run-1".into()),
+                kind: EvidenceKind::Observation,
+                engine_id: "engine-1".into(),
+                source_rule: None,
+                result_pointer_sha256: None,
+                observed_at: artifact.created_at,
+                summary: "Original run-one evidence".into(),
+                artifact_id: artifact.id.clone(),
+                artifact_sha256: artifact.sha256.clone(),
+                pointer: None,
+                redacted: false,
+            }],
+            control_references: vec![],
+            recommendation: "Review the retained run-one evidence".into(),
+            verification_guidance: "Repeat the selected run's check".into(),
+            rollback_considerations: None,
+            official_references: vec![],
+            recommended_expert_type: "Security reviewer".into(),
+            status: FindingStatus::Unreviewed,
+            tags: vec![],
+        };
+        case.finding_observations.push(FindingObservation {
+            id: "observation-run-1-legacy".into(),
+            run_id: "run-1".into(),
+            finding_id: finding_id.clone(),
+            fingerprint: finding.fingerprint.clone(),
+            asset_ids: finding.asset_ids.clone(),
+            engine_ids: vec!["engine-1".into()],
+            severity: finding.severity.clone(),
+            confidence: finding.confidence.clone(),
+            evidence_hashes: vec![artifact.sha256],
+            observed_at: artifact.created_at,
+            finding_snapshot: None,
+        });
+
+        // These changes deliberately leave the observation/evidence provenance
+        // untouched. Legacy exporters therefore use documented current case
+        // presentation and workflow context for this run-one observation.
+        finding.title = LEGACY_CURRENT_FINDING_CONTEXT_SENTINEL.into();
+        finding.plain_language_summary = LEGACY_CURRENT_FINDING_CONTEXT_SENTINEL.into();
+        finding.status = FindingStatus::FalsePositive;
+        case.findings.push(finding);
+        case.assets[0].name = CURRENT_ASSET_DISPLAY_CONTEXT_SENTINEL.into();
+    }
+
+    fn add_other_run_report_sentinel(case: &mut AssessmentCase, artifact_root: &Path) {
+        let time = Utc.with_ymd_and_hms(2026, 8, 24, 12, 10, 0).unwrap();
+        let bytes = b"scanner evidence from another run\n";
+        fs::write(artifact_root.join("raw/evidence-run-2.txt"), bytes).unwrap();
+
+        let mut second_run = case.scan_runs[0].clone();
+        second_run.id = "run-2".into();
+        second_run.sequence = 2;
+        second_run.created_at = time;
+        second_run.completed_at = Some(time);
+        second_run.knowledge_cutoff = time;
+        second_run.engine_runs[0].id = "engine-run-2".into();
+        second_run.engine_runs[0].scan_run_id = "run-2".into();
+        second_run.engine_runs[0].raw_artifact_ids = vec!["artifact-2".into()];
+        case.scan_runs.push(second_run);
+
+        case.raw_artifacts.push(RawArtifact {
+            id: "artifact-2".into(),
+            case_id: case.id.clone(),
+            run_id: "run-2".into(),
+            engine_run_id: "engine-run-2".into(),
+            relative_path: "raw/evidence-run-2.txt".into(),
+            media_type: "text/plain".into(),
+            sha256: sha256_bytes(bytes),
+            byte_length: bytes.len() as u64,
+            created_at: time,
+            contains_sensitive_data: false,
+        });
+        let second_finding = Finding {
+            id: "finding-run-2".into(),
+            case_id: case.id.clone(),
+            first_seen_run_id: "run-2".into(),
+            last_seen_run_id: "run-2".into(),
+            fingerprint: "engine:run-two-only".into(),
+            title: OTHER_RUN_REPORT_SENTINEL.into(),
+            plain_language_summary: OTHER_RUN_REPORT_SENTINEL.into(),
+            possible_impact: "Another-run-only fixture impact".into(),
+            severity: Severity::Medium,
+            confidence: Confidence::High,
+            priority: 50,
+            priority_reasons: vec![],
+            asset_ids: vec!["asset-1".into()],
+            evidence: vec![Evidence {
+                id: "evidence-run-2".into(),
+                finding_id: "finding-run-2".into(),
+                run_id: "run-2".into(),
+                engine_run_id: Some("engine-run-2".into()),
+                kind: EvidenceKind::Observation,
+                engine_id: "engine-1".into(),
+                source_rule: None,
+                result_pointer_sha256: None,
+                observed_at: time,
+                summary: OTHER_RUN_REPORT_SENTINEL.into(),
+                artifact_id: "artifact-2".into(),
+                artifact_sha256: sha256_bytes(bytes),
+                pointer: None,
+                redacted: false,
+            }],
+            control_references: vec![],
+            recommendation: "Review the other run independently".into(),
+            verification_guidance: "Select run 2 before interpreting this finding".into(),
+            rollback_considerations: None,
+            official_references: vec![],
+            recommended_expert_type: "Security reviewer".into(),
+            status: FindingStatus::Unreviewed,
+            tags: vec![],
+        };
+        case.finding_observations.push(FindingObservation {
+            id: "observation-run-2".into(),
+            run_id: "run-2".into(),
+            finding_id: second_finding.id.clone(),
+            fingerprint: second_finding.fingerprint.clone(),
+            asset_ids: second_finding.asset_ids.clone(),
+            engine_ids: vec!["engine-1".into()],
+            severity: second_finding.severity.clone(),
+            confidence: second_finding.confidence.clone(),
+            evidence_hashes: vec![sha256_bytes(bytes)],
+            observed_at: time,
+            finding_snapshot: Some(second_finding.clone()),
+        });
+        case.findings.push(second_finding);
+    }
+
     #[test]
     fn built_in_tasks_are_exported_as_exact_observations_not_engine_provenance() {
         let temp = tempdir().unwrap();
@@ -2650,7 +2817,9 @@ mod tests {
     fn creates_repeatable_signed_bundle_and_verifies_every_entry() {
         let temp = tempdir().unwrap();
         let artifact_root = temp.path().join("artifacts");
-        let case = fixture(&artifact_root, false);
+        let mut case = fixture(&artifact_root, false);
+        add_legacy_selected_run_projection_fixture(&mut case);
+        add_other_run_report_sentinel(&mut case, &artifact_root);
         let key = temp.path().join("signing.key");
         let first = temp.path().join("first.case.tar.gz");
         let second = temp.path().join("second.case.tar.gz");
@@ -2690,7 +2859,12 @@ mod tests {
         )
         .unwrap();
         assert!(verified.valid);
-        assert_eq!(verified.raw_artifacts_included, 1);
+        assert_eq!(verified.raw_artifacts_included, 2);
+        assert_eq!(
+            verified.manifest.notices.first().map(String::as_str),
+            Some(CASE_WIDE_BUNDLE_SCOPE_NOTICE),
+            "the signed manifest must lead with the exact mixed-scope contract"
+        );
         assert!(
             verified
                 .manifest
@@ -2739,6 +2913,117 @@ mod tests {
         .unwrap();
         assert_eq!(beginner_report["export_kind"], "beginner_master_report");
         assert_eq!(beginner_report["report"]["run_id"], "run-1");
+        let report_paths = [
+            "exports/beginner-master-report.json",
+            "exports/master-framework-report.json",
+            "exports/ocsf-detection-findings.json",
+            "exports/oscal-assessment-results.json",
+        ];
+        let exported_reports = report_paths
+            .into_iter()
+            .map(|path| {
+                (
+                    path,
+                    String::from_utf8(archive_entry(&first, path)).unwrap(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        for (path, exported_report) in &exported_reports {
+            assert!(
+                !exported_report.contains(OTHER_RUN_REPORT_SENTINEL),
+                "selected-run report {path} leaked a finding from another run"
+            );
+        }
+        for path in [
+            "exports/beginner-master-report.json",
+            "exports/ocsf-detection-findings.json",
+            "exports/oscal-assessment-results.json",
+        ] {
+            assert!(
+                exported_reports[path].contains(LEGACY_CURRENT_FINDING_CONTEXT_SENTINEL),
+                "documented legacy current-finding context was missing from {path}"
+            );
+        }
+        assert!(
+            !exported_reports["exports/master-framework-report.json"]
+                .contains(LEGACY_CURRENT_FINDING_CONTEXT_SENTINEL),
+            "the framework report must not reconstruct mappings from a mutable legacy finding"
+        );
+        for path in [
+            "exports/beginner-master-report.json",
+            "exports/ocsf-detection-findings.json",
+        ] {
+            assert!(
+                exported_reports[path].contains(CURRENT_ASSET_DISPLAY_CONTEXT_SENTINEL),
+                "documented current asset display context was missing from {path}"
+            );
+        }
+        for path in [
+            "exports/master-framework-report.json",
+            "exports/oscal-assessment-results.json",
+        ] {
+            assert!(
+                !exported_reports[path].contains(CURRENT_ASSET_DISPLAY_CONTEXT_SENTINEL),
+                "{path} unexpectedly exported current asset display text"
+            );
+        }
+        let legacy_beginner_finding = beginner_report["report"]["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|finding| finding["finding_id"] == "finding-run-1-legacy")
+            .expect("legacy run-one finding in beginner report");
+        assert_eq!(
+            legacy_beginner_finding["snapshot_source"],
+            "current_canonical_legacy_fallback"
+        );
+        let ocsf_report: Value =
+            serde_json::from_str(&exported_reports["exports/ocsf-detection-findings.json"])
+                .unwrap();
+        let legacy_ocsf_event = ocsf_report
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["finding_info"]["uid"] == "finding-run-1-legacy")
+            .expect("legacy run-one event in OCSF report");
+        assert_eq!(legacy_ocsf_event["status"], "Suppressed");
+        assert_eq!(
+            legacy_ocsf_event["resources"][0]["name"],
+            CURRENT_ASSET_DISPLAY_CONTEXT_SENTINEL
+        );
+        let case_wide_findings = String::from_utf8(archive_entry(&first, "findings.json")).unwrap();
+        assert!(
+            case_wide_findings.contains(OTHER_RUN_REPORT_SENTINEL),
+            "the case-wide record must retain the other run's finding"
+        );
+        let case_document: Value =
+            serde_json::from_slice(&archive_entry(&first, "case.json")).unwrap();
+        assert_eq!(
+            case_document["bundle_scope"],
+            "case_wide_records_with_run_bound_reports"
+        );
+        assert_eq!(
+            case_document["selected_run_report_scope"],
+            "selected_run_observations_and_evidence_with_current_case_projection_context"
+        );
+        assert_eq!(
+            case_document["current_case_projection_context"],
+            json!([
+                "legacy_missing_frozen_snapshot_presentation",
+                "workflow_status",
+                "asset_display"
+            ])
+        );
+        let readme = String::from_utf8(archive_entry(&first, "README.txt")).unwrap();
+        assert!(readme.contains(
+            "Package scope: case-wide project records and history; exports/ reports select observations and evidence from the selected run.\n"
+        ));
+        assert!(readme.contains("Raw artifact option selected: true\n"));
+        assert!(readme.contains("Raw artifacts included: 2\n"));
+        assert!(readme.contains(&format!(
+            "IMPORTANT LIMITATIONS\n{}\n{}\n{}\nStart with exports/beginner-master-report.json",
+            CASE_WIDE_BUNDLE_SCOPE_NOTICE, PRELIMINARY_EVIDENCE_NOTICE, INTEGRITY_ONLY_NOTICE
+        )));
         let signing_identity: LocalSigningIdentityDocument =
             serde_json::from_slice(&archive_entry(&first, SIGNING_IDENTITY_PATH)).unwrap();
         verify_identity_document(&signing_identity, 1).unwrap();
