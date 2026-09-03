@@ -49,6 +49,27 @@ the [v0.1.8 foreground QC handover](docs/release/v0.1.8-foreground-qc-handover.m
 for the exact source, validation, and remaining-gap record; do not treat the
 older downloadable installer as a build of current `main`.
 
+The current security follow-up is `main@09ff38e`. Commit `8ba7231` replaced the
+Linux raw `getifaddrs` pointer traversal with the Linux-only `nix 0.30.1` safe
+API and removed three CodeQL-reported dynamic test panic/log paths. Windows CLI
+tests passed 1,340/1,340; Castle then passed the target-candidate regression
+10/10, the complete Linux CLI workspace 1,307/1,307, Clippy, Rustfmt, and locked
+Cargo metadata/tree checks at `09ff38e`, with a clean aligned checkout. GitHub
+CI at `8ba7231` nevertheless found a real Linux `-D warnings` failure: the old
+network-byte-order helper had become Linux dead code. `09ff38e` scopes that
+helper to macOS. The follow-up [CI run 33701122412](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122412)
+completed successfully: the affected Rust core/CLI and Tauri Linux compile jobs
+passed, the classifier skipped unrelated lanes as expected, and the aggregate
+job passed. The follow-up [CodeQL run 33701122410](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122410)
+also completed successfully for Rust and JavaScript/TypeScript. Independently,
+the completed `8ba7231`
+[CodeQL run 33700815840](https://github.com/teddashh/ai-security-scanner/actions/runs/33700815840)
+succeeded for Rust and JavaScript/TypeScript, and GitHub now reports zero open
+code-scanning alerts: #2, #4, #5, and #7 were fixed by the new analysis at
+`2026-09-03T00:54:32Z`, with no dismissal. The API remains at zero open alerts.
+The `31f137d` run remains the historical full GitHub affected-lane baseline;
+the `09ff38e` run was the narrower security-fix affected-lane follow-up.
+
 Before installing:
 
 - Windows may show an **Unknown publisher** warning because Authenticode signing has not been verified;

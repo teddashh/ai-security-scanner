@@ -5,7 +5,9 @@
 本輪主要強化 commit：`a538778a34cd7db72b28256591575aee77937ab8`
 完整跨平台 baseline checkpoint：`0077b2c5a6df8c758afbb44be5a1c6a9b2202a64`
 Foreground QC fast-forward point：`1d4054e18b5b8a4014ffd2634ac507fa569e72a7`
-合併後 CI 修正 code checkpoint：`31f137d03997c221e7c81ba8fc5ae579348b0c14`
+歷史完整 GitHub affected-lane baseline：`31f137d03997c221e7c81ba8fc5ae579348b0c14`
+CodeQL source remediation：`8ba72315b6d136bdaf89617d95aa06aea0c72e8c`
+Linux Clippy follow-up／目前 source checkpoint：`09ff38e2d7ba8d9b3ca1fcc63faa73d41092dcef`
 平台：Windows 11 Professional／Castle Linux
 Rust：兩端 rustc/cargo 1.98.0
 Windows Node／npm：v24.16.0／11.13.0
@@ -17,7 +19,7 @@ Castle Node／npm：v24.15.0／11.12.1
 
 本輪沒有安裝、啟動或操作 App，沒有 BAT，沒有 clean VM／human session／real engine scan。因此「PASS」只代表對應 automated command 或 artifact check 成功，不能外推成 production qualification。
 
-0.1.8 增量程式已 commit／push；Windows 與 Castle 在 `0077b2c` 完成完整跨平台 baseline。合併後在 Windows 對修正後 source 重跑 desktop 1,347/1,347、CLI 1,340/1,340、managed-runtime targeted 141/141、frontend 364/364、release self-test與三個 sidecar builds；Castle 對 `fa13835` 的 minimal-feature builds 與 engine/CI contracts PASS，再同步到 `main@31f137d`。文件本身會形成其後的文件 commit；仍不可把不同 feature/platform 的重疊測試相加成一個行銷總數。
+0.1.8 增量程式已 commit／push；Windows 與 Castle 在 `0077b2c` 完成完整跨平台 baseline，`31f137d` 形成歷史完整 GitHub affected-lane baseline。之後 `8ba7231` 修補四條 CodeQL-reported alert paths，Windows local locked CLI 1,340/1,340 PASS；`09ff38e` 修正 `8ba7231` GitHub Linux Clippy揭露的 dead-code regression。Castle已在 `09ff38e` 完成 target-candidate 10/10、完整 CLI 1,307/1,307、Clippy、Rustfmt與locked Cargo metadata/tree PASS並保持clean aligned SHA。`09ff38e` affected-lane GitHub CI與CodeQL均已terminal SUCCESS，API維持0 open alerts；`31f137d` 仍是歷史完整 affected-lane baseline。文件本身會形成其後的文件 commit；仍不可把不同 feature/platform 的重疊測試相加成一個行銷總數。
 
 ## 完整 baseline + post-merge scoped 測試矩陣
 
@@ -45,13 +47,20 @@ Castle Node／npm：v24.15.0／11.12.1
 | Nuclei real template tree | Castle；pinned Go 1.26.0 container；`nuclei-templates@24858b4…` | 1/1 PASS | 真實 tree targeted test；不是 image publication |
 | Nuclei production image gate | 新 immutable recipe／tag／attestation | NOT IMPLEMENTED／NOT RUN | `3.11.1-5` 是舊 recipe；本輪拒絕冒用其 digest／evidence |
 | Historical local Windows bundle | unsigned NSIS build（pre-`a538778`） | HISTORICAL PASS | 舊 candidate未安裝／未啟動，不能代表最新 source |
-| Current-source Windows bundle compile | GitHub CI `31f137d` ephemeral NSIS step | PASS | workflow未保存／上傳檔案；未hash、簽章、發布或安裝，不是可交付 candidate |
+| `31f137d` Windows bundle compile | GitHub CI historical ephemeral NSIS step | PASS | workflow未保存／上傳檔案；未hash、簽章、發布或安裝，不是目前 source的可交付 candidate |
 | Historical original staged diff | `git diff --cached --check`（`5035422` commit 前） | PASS | 74 檔只屬原始功能整合，不是 `0077b2c` 最終 diff |
 | Post-merge managed runtime | Windows targeted tests | 141/141 PASS | hosted-runner fixture owner 修正；production ACL policy未放寬 |
 | Post-merge sidecar builds | Windows x86_64 egress gateway／bootstrap broker／CLI | PASS | 修正 minimal-feature dependency 後重建 |
-| GitHub affected-lane CI | `main@31f137d` run `33697821312` | SUCCESS | classifier、Rust/CLI、release、Tauri Linux compile、Windows repair/NSIS與aggregate成功；不相關三 lanes明確skipped |
-| GitHub CodeQL | `main@31f137d` run `33697821316` | SUCCESS | Rust與JavaScript/TypeScript analysis成功；不外推為零finding |
-| Cross-machine SHA alignment | Windows／GitHub／Castle branch | ALIGNED at code checkpoint | 文件提交前曾在 `main@31f137d…` 對齊；這不是測試或永久同步保證 |
+| Historical GitHub affected-lane CI | `main@31f137d` run `33697821312` | SUCCESS | classifier、Rust/CLI、release、Tauri Linux compile、Windows repair/NSIS與aggregate成功；不相關三 lanes明確skipped |
+| Historical GitHub CodeQL | `main@31f137d` run `33697821316` | SUCCESS | Rust與JavaScript/TypeScript analysis成功；不外推為零finding |
+| Security follow-up Windows CLI | `main@8ba7231` locked CLI workspace | 1,340/1,340 PASS | Windows run不編譯或執行Linux-only `nix` path |
+| Security follow-up Castle target | `main@09ff38e` target-candidate regression | 10/10 PASS | Linux build整合通過；10項既有純邏輯classification／netmask／route-parser regression均通過，沒有直接mock或呼叫`nix::ifaddrs::getifaddrs` |
+| Security follow-up Castle CLI | `main@09ff38e` complete locked CLI workspace | 1,307/1,307 PASS | 同時Clippy／Rustfmt／locked metadata/tree PASS；不可與其他feature/platform run相加 |
+| `8ba7231` GitHub CI | run `33700815872` Rust core/CLI job `100479547294` | FAIL | Linux Clippy dead code，exit 101；CLI test step skipped；由`09ff38e`修正 |
+| `8ba7231` GitHub CodeQL | run `33700815840` | SUCCESS／0 open alerts | Rust與JavaScript/TypeScript成功；#2/#4/#5/#7由新分析判定fixed，非人工dismiss |
+| `09ff38e` GitHub affected-lane CI | run [`33701122412`](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122412) | SUCCESS | Rust core/CLI、Tauri Linux compile與aggregate成功；不相關lanes依classifier預期skipped；不是完整矩陣重跑 |
+| `09ff38e` GitHub CodeQL | run [`33701122410`](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122410) | SUCCESS | Rust與JavaScript/TypeScript成功；API維持0 open alerts |
+| Cross-machine SHA alignment | Windows／GitHub／Castle branch | ALIGNED at source checkpoint | 在 `main@09ff38e…` clean對齊；這不是測試或永久同步保證 |
 
 ## Desktop Rust 詳細結果
 
@@ -92,6 +101,8 @@ Castle Node／npm：v24.15.0／11.12.1
 
 Desktop 與 CLI feature set 會重編並重跑部分共同邏輯，所以「1,347 + 1,340」不是獨立測試總數。
 
+安全 follow-up另在 Windows `main@8ba7231` 以同一locked CLI command重跑，結果仍是1,340 passed、0 failed／ignored／measured／filtered。這個Windows run沒有編譯或執行Linux-only `nix` path，也不是新的desktop full-suite證據。
+
 ### Castle Linux CLI／Unix 結果
 
 在 `/home/ted-h/projects/ai-security-scanner`、Rust 1.98、commit `0077b2c5a6df8c758afbb44be5a1c6a9b2202a64`：
@@ -102,6 +113,8 @@ Desktop 與 CLI feature set 會重編並重跑部分共同邏輯，所以「1,34
 - `cargo fmt --all -- --check`：PASS；worktree clean。
 
 這個 1,307 是該 Linux command 的 suite total，不與 Windows suites相加成單一獨立測試數。
+
+在安全 follow-up `main@09ff38e`，Castle再跑target-candidate targeted regression 10/10與完整locked CLI workspace 1,307/1,307；all-targets Clippy `-D warnings`、Rustfmt、locked Cargo metadata與dependency-tree checks也都PASS。Checkout clean，Castle／Windows／GitHub source SHA同為`09ff38e2d7ba8d9b3ca1fcc63faa73d41092dcef`。這組結果證明Linux-only `nix 0.30.1` 可在實際Linux build與完整CLI test graph整合；10個target-candidate tests只覆蓋synthetic classification、netmask與route parser，沒有直接mock或呼叫`platform_observations()`／`nix::ifaddrs::getifaddrs`。它仍不等於Linux desktop packaging或installed qualification。
 
 ## Frontend 與 build 詳細結果
 
@@ -195,12 +208,20 @@ Castle 以 Node 24.15.0／npm 11.12.1 在 `0077b2c` 重跑：typecheck、364/364
 - CLI managed status 在隱性 managed-runtime mutation 前取得 data-directory lease。
 - localhost polling tests 使用 2 秒 deadline 與 `recv_timeout`，避免主要 regression 無限等待。
 
+### CodeQL remediation／Linux interface enumeration
+
+- `main@0b5498f` 的GitHub CodeQL API曾列四個open high alerts：production Linux `rust/access-invalid-pointer` #2（`src-tauri/src/target_candidates.rs`），以及test code的`rust/cleartext-logging` #4／#5（`src-tauri/tests/connector_fixtures.rs`）與#7（`src-tauri/src/case_service.rs` test module）。這是analyzer findings，不等於四個已證實可利用漏洞。
+- `8ba7231` 以`nix::ifaddrs::getifaddrs`的safe iterator取代Linux raw `libc::getifaddrs` list ownership與unsafe pointer traversal；interface flags改用`nix::net::if_::InterfaceFlags`。`nix 0.30.1`／feature `net`只在`cfg(target_os = "linux")`啟用，`Cargo.lock`同步更新。
+- 三個cleartext-logging paths都位於test code；修正移除動態fixture資料的panic/assert輸出，改用固定invariant message／bounded extraction，不把測試修正冒充production logging overhaul。
+- `8ba7231` CodeQL run [`33700815840`](https://github.com/teddashh/ai-security-scanner/actions/runs/33700815840) 對Rust與JavaScript/TypeScript均SUCCESS。GitHub API目前回報0個open code-scanning alerts；#2／#4／#5／#7的state均為fixed、`fixed_at=2026-09-03T00:54:32Z`，`dismissed_at`與dismiss reason為空，並非人工dismiss。
+- `09ff38e` CodeQL run [`33701122410`](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122410) 也對Rust與JavaScript/TypeScript SUCCESS；API仍為0 open alerts。
+
 ### Dependabot／Linux desktop dependency
 
 - GitHub alert #1：`glib 0.18.5`，`GHSA-wrw7-89jp-8q8g`／`RUSTSEC-2024-0429`，Moderate 6.9；affected `>=0.15,<0.20`，first patched `0.20.0`。Alert建立於 `2026-08-25T02:00:49Z`；本次 `2026-09-02` 觀察仍 open、`fixed_at: null`。
 - Dependency path只存在 Linux desktop Tauri／GTK3 graph；Windows 與 Linux CLI-only graph排除 `glib`。
 - `gtk 0.18.2` 明確要求 `glib ^0.18`，所以不能靠更新 `Cargo.lock` 單獨升到 `0.20.0`。截至本次 triage，現用 Tauri／Wry line 仍受 GTK3 graph限制。
-- 這是 inherited risk：base `fa1fa9d` 已鎖 `glib 0.18.5`，`fa1fa9d..31f137d` 沒有變更 `Cargo.lock`；foreground line 未引入、也未修復它。本輪沒有引入未稽核 fork/vendor來假裝關閉警報。短期可行修補需要 audited immutable backport加 Linux release-mode regression／desktop packaging smoke；長期是 GTK4/Tauri migration。
+- 這是 inherited risk：base `fa1fa9d` 已鎖 `glib 0.18.5`，`fa1fa9d..31f137d` 沒有變更 `Cargo.lock`；foreground line 未引入、也未修復它。`8ba7231` 的lockfile變更只加入Linux-only `nix 0.30.1`，不修補或取代`glib`。本輪沒有引入未稽核 fork/vendor來假裝關閉警報。短期可行修補需要 audited immutable backport加 Linux release-mode regression／desktop packaging smoke；長期是 GTK4/Tauri migration。
 - 目前證據是版本範圍告警與平台 dependency graph；本輪未證明 advisory涉及的 `VariantStrIter` path在產品中可達或可被利用，也未因缺少 reachability proof而自行降級警報。
 
 ## Installer 驗證
@@ -252,6 +273,9 @@ Castle 以 Node 24.15.0／npm 11.12.1 在 `0077b2c` 重跑：typecheck、364/364
 - `main@fa13835` 的 CI run `33696772321`：FAILED at classifier，因新 test import `yaml` 但該 job 刻意不執行 `npm ci`。改成零 dependency 測試並提交 `2cb7a23` 後，23/23 PASS。
 - `main@2cb7a23` 的 CI run `33696908514` 與 CodeQL `33696908521`：SUCCESS，但 boundary classifier 對只改 test file 的提交跳過 heavy lanes。因此只記為 classifier/aggregate與 CodeQL成功，不冒充完整跨平台 CI。
 - `main@31f137d` 的 affected-lane CI run `33697821312`：SUCCESS。所有 scheduled jobs成功；frontend、engine、framework因這個 Cargo-path change不受影響而由 classifier skipped。CodeQL run `33697821316` 也 SUCCESS，Rust與JavaScript/TypeScript兩個 analysis jobs均成功；不把 workflow conclusion冒充零finding證明。
+- `main@8ba7231` 的 CI run `33700815872`：Rust core/CLI job `100479547294` 在Ubuntu 24.04執行`cargo clippy --locked --workspace --no-default-features --features cli --all-targets -- -D warnings`時FAIL。`src-tauri/src/target_candidates.rs:190` 的`ipv4_from_network_order`在Linux已無呼叫者，dead code被`-D warnings`升為error，exit 101；同job的CLI test step因前一步失敗而skipped。這不是測試PASS，也不是`nix`下載或編譯失敗。
+- `09ff38e` 將該helper精確限於macOS。Castle已完成target-candidate 10/10、CLI 1,307/1,307、Clippy／Rustfmt／locked metadata/tree PASS；GitHub affected-lane CI `33701122412` 也已terminal SUCCESS，Rust core/CLI、Tauri Linux compile與aggregate均成功，不相關lanes依classifier預期skipped。歷史完整 affected-lane baseline仍是`31f137d` run `33697821312`。
+- `8ba7231` CodeQL `33700815840`與`09ff38e` CodeQL `33701122410`都對Rust及JavaScript/TypeScript SUCCESS；API目前0 open alerts，#2／#4／#5／#7由新分析判定fixed，未經人工dismiss。
 
 ## 未執行測試
 
@@ -267,7 +291,11 @@ Castle 以 Node 24.15.0／npm 11.12.1 在 `0077b2c` 重跑：typecheck、364/364
 
 ## 最終判定
 
-**Automated source/build checkpoint：PASS（限定 automated source/build 範圍）。** Windows desktop 1,347/1,347、CLI 1,340/1,340、Castle CLI 1,307/1,307、兩端 frontend 364/364、release 53/53、usability 5/5、Prowler 8/8、provider Windows desktop／CLI 各 19/19與 Castle 14/14，以及 typecheck、Windows／Castle Vite build、engine、AIDEFEND、Rustfmt、Clippy 均 PASS。合併後修正另有 Windows managed-runtime 141/141、CI contract 23/23、release self-test、sidecar builds與 ephemeral NSIS compile PASS。整體產品仍是 PARTIAL：`glib` Linux desktop advisory、新 Nuclei immutable image recipe／publication、可保存且可核對 hash的 installer candidate、installed/human qualification與 P0 A19 都未完成。
+**歷史 automated source/build baseline：`31f137d` PASS（限定其已執行範圍）。** Windows desktop 1,347/1,347、CLI 1,340/1,340、Castle CLI 1,307/1,307、兩端 frontend 364/364、release 53/53、usability 5/5、Prowler 8/8、provider Windows desktop／CLI 各19/19與Castle 14/14，以及typecheck、Windows／Castle Vite build、engine、AIDEFEND、Rustfmt、Clippy均PASS。合併後修正另有Windows managed-runtime 141/141、CI contract 23/23、release self-test、sidecar builds與ephemeral NSIS compile PASS。
+
+**目前 security source checkpoint：`09ff38e` LOCAL／CASTLE／CODEQL／AFFECTED-LANE GITHUB CI PASS。** Windows在`8ba7231`的locked CLI 1,340/1,340，以及Castle在`09ff38e`的target-candidate 10/10、完整CLI 1,307/1,307、Clippy／Rustfmt／locked metadata/tree均PASS；兩次CodeQL均SUCCESS且API目前0 open alerts。`8ba7231` GitHub CI的真實Linux dead-code failure已由`09ff38e`修正，`33701122412`的Rust core/CLI、Tauri Linux compile與aggregate均terminal SUCCESS，不相關lanes依classifier預期skipped。這是安全修正 affected-lane run；完整歷史baseline仍是`31f137d`，不是宣稱在`09ff38e`重跑全部平台／feature suites。
+
+整體產品仍是 **PARTIAL**：`glib` Linux desktop advisory、新 Nuclei immutable image recipe／publication、可保存且可核對hash的current-source installer candidate、installed/human qualification與P0 A19都未完成。
 
 **Installed Windows qualification：NOT RUN。** 不可從本報告推論安裝成功。
 

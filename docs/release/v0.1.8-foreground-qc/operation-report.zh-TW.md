@@ -7,7 +7,9 @@ Canonical 分支：`main`
 原始功能整合提交：`503542271ff8b2178ed2d334fd47d76c494d1c75`
 Provider／case bundle／Settings 強化提交：`a538778a34cd7db72b28256591575aee77937ab8`
 Foreground QC fast-forward point：`1d4054e18b5b8a4014ffd2634ac507fa569e72a7`
-合併後 CI 修正 code checkpoint：`31f137d03997c221e7c81ba8fc5ae579348b0c14`
+歷史完整 GitHub affected-lane baseline：`31f137d03997c221e7c81ba8fc5ae579348b0c14`
+CodeQL source remediation：`8ba72315b6d136bdaf89617d95aa06aea0c72e8c`
+Linux Clippy follow-up／目前 source checkpoint：`09ff38e2d7ba8d9b3ca1fcc63faa73d41092dcef`
 
 - Canonical source：https://github.com/teddashh/ai-security-scanner/tree/main
 - 原始功能整合：https://github.com/teddashh/ai-security-scanner/commit/503542271ff8b2178ed2d334fd47d76c494d1c75
@@ -20,11 +22,11 @@ Foreground QC fast-forward point：`1d4054e18b5b8a4014ffd2634ac507fa569e72a7`
 
 我沒有安裝、啟動或操作 App，沒有使用 BAT，沒有建立新的 Git tag／GitHub Release、updater artifact，也沒有簽章。使用者後來要求先停止操作 App，因此本輪所有 UI/UX 結論都來自程式碼、結構化 fixture、automated tests 與 build，不冒充真人操作證據。`main` 是依使用者明確授權直接 fast-forward，所以沒有另建 PR。
 
-9-commit foreground line 已從 `fa1fa9d` fast-forward 到 GitHub `main`，fast-forward整合點是 `1d4054e`；整合後另有三個 CI 修正，使 `main` 自基底起共前進 12 commits 到 `31f137d`。Windows、GitHub 與 Castle 的 canonical branch 均為 `main`。GitHub CI 對 `31f137d` 的 ephemeral NSIS compile已 PASS，但 workflow沒有上傳或保存該檔，也未做 hash／sign／publish／install；本機列出的 unsigned installer仍是 pre-`a538778` historical candidate，不能代表最新 source。
+9-commit foreground line 已從 `fa1fa9d` fast-forward 到 GitHub `main`，fast-forward整合點是 `1d4054e`；整合後三個 CI 修正形成歷史完整 GitHub baseline `31f137d`，其後文件 commit、CodeQL source remediation `8ba7231` 與 Linux Clippy follow-up `09ff38e` 又推進 `main`。Windows、GitHub 與 Castle clean checkout目前在 `09ff38e` 對齊。GitHub CI 對 `31f137d` 的 ephemeral NSIS compile已 PASS，但 workflow沒有上傳或保存該檔，也未做 hash／sign／publish／install；本機列出的 unsigned installer仍是 pre-`a538778` historical candidate，不能代表最新 source。`09ff38e` 的 affected-lane GitHub CI與CodeQL均已terminal SUCCESS；這不改變installer與human qualification邊界。
 
 ## 實際交付
 
-`fa1fa9d..31f137d` 合計 12 commits、84 個檔案、14,046 additions、1,421 deletions。原始 `5035422` 功能提交占 74 個檔案、11,778 additions、1,423 deletions；後續包含安全修正、測試、文件與 CI 契約。這些數字只描述變更規模，不等於價值；實質推進如下。
+歷史 `fa1fa9d..31f137d` 範圍合計 12 commits、84 個檔案、14,046 additions、1,421 deletions。原始 `5035422` 功能提交占 74 個檔案、11,778 additions、1,423 deletions；後續包含安全修正、測試、文件與 CI 契約。`8ba7231` 是另計的 5-file security remediation（52 additions／55 deletions），`09ff38e` 是 1-line platform-scope follow-up；不把文件 commit或重疊測試數灌入產品價值。這些數字只描述變更規模，不等於價值；實質推進如下。
 
 ### 1. Managed runtime 與資料安全
 
@@ -68,15 +70,26 @@ Foreground QC fast-forward point：`1d4054e18b5b8a4014ffd2634ac507fa569e72a7`
 - 合併後第一次 GitHub CI 真正找到兩個移植問題：minimal-feature binaries 看不到 optional `directories` dependency，以及 Windows hosted runner 測試 fixture 預設 owner 是 Administrators。修正方式是讓共用 library dependency 永遠可用，並只在測試 helper 明確設定 current-user owner；production ACL admission 沒有放寬。
 - Managed egress gateway 的既有 immutable tag `0.1.8-1` 已由 run `33243068682` 綁定 source `59e34af14f4aa829419ae8cafa9fa352e2e450c2` 與 index digest `sha256:9f0575f58a6329740eca6a042f8c9d44a3af25144fc80946956823924c445725`。`main@1d4054e` 的 run `33695158567` 嘗試同一 tag 時，publication guard 正確拒絕覆寫，後續 build／publish／evidence／promote 均 skipped；既有 tag 未被改寫。Workflow 已改成只接受手動觸發，並以 dependency-free CI contract 鎖定，不再讓每次 `main` push 嘗試重綁舊 tag。
 
-### 5. Castle 跨機器驗證
+### 5. CodeQL follow-up
+
+- `main@0b5498f` 的 CodeQL API列出四個 open high alerts：production Linux `rust/access-invalid-pointer` #2，以及 test code 的 `rust/cleartext-logging` #4、#5、#7。這是 analyzer回報，不外推成四個已證實可利用漏洞。
+- `8ba7231` 以 `nix::ifaddrs::getifaddrs` safe iterator取代 Linux raw `libc::getifaddrs` list ownership／pointer traversal，並把三個 test panic/log paths改成不輸出動態 fixture資料的 invariant messages。
+- `8ba7231` CodeQL run [`33700815840`](https://github.com/teddashh/ai-security-scanner/actions/runs/33700815840) 的 Rust與JavaScript/TypeScript analysis均SUCCESS。GitHub API目前回報0個open code-scanning alerts；#2／#4／#5／#7均在`2026-09-03T00:54:32Z`由新分析判定fixed，`dismissed_at`與dismiss reason皆空，並非人工略過。
+- `nix 0.30.1`（feature `net`）只在 `cfg(target_os = "linux")` dependency table啟用；lockfile因此變更。這個新增 dependency不修復、不取代 Linux desktop graph中的 `glib 0.18.5`。
+- Windows 在 `8ba7231` 重跑 locked CLI 1,340/1,340 PASS；Windows run不編譯或執行 Linux-only `nix` path，因此另以 Castle/Linux驗證。
+- `8ba7231` GitHub CI run `33700815872` 的 Rust core/CLI job `100479547294` 在 Linux Clippy `-D warnings` FAIL：`src-tauri/src/target_candidates.rs:190` 的 `ipv4_from_network_order` 已成 dead code，exit 101，CLI test step skipped。`09ff38e` 以 macOS-only `cfg`修正。
+- `09ff38e` GitHub affected-lane [CI `33701122412`](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122412) 已 terminal SUCCESS：Rust core/CLI、Tauri Linux compile與aggregate均SUCCESS，不相關lanes依classifier預期skipped。[CodeQL `33701122410`](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122410) 也已對Rust與JavaScript/TypeScript terminal SUCCESS，API維持0 open alerts。歷史完整 affected-lane baseline仍是`31f137d` run `33697821312`，不可把這次安全修正run冒充完整矩陣重跑。
+
+### 6. Castle 跨機器驗證
 
 - GitHub `main` 已在 Castle 的 `/home/ted-h/projects/ai-security-scanner` checkout，沒有依賴此筆電的 `outputs` 或 BAT archive。
 - Castle Linux Rust 1.98：完整 CLI workspace 1,307/1,307、provider artifact module 14/14（包含 Unix hardlink/permission/durability regressions）、all-targets Clippy `-D warnings`、Rustfmt與 diff check 全 PASS。
 - Castle Node 24.15.0／npm 11.12.1：typecheck、364/364 frontend、93-module Vite build、53/53 release evidence、5/5 usability schema、engine validation 167 inputs／21 records／19 runnable、Prowler 8/8、AIDEFEND 6 records、release validation 全 PASS。一次 build 與一次 final status query 在命令啟動前遇到 SSH timeout；重連後相同 validation command PASS，不算測試 failure。
 - Castle `npm ci` audit 36 packages，0 vulnerabilities；這只代表 npm lockfile 安裝圖，不抵銷 Cargo `glib 0.18.5` 的 open moderate alert。
 - Windows 端以明確 Rust 1.98 完整重跑 desktop 1,347/1,347（library 892）與 CLI 1,340/1,340（library 852），desktop／CLI all-targets Clippy `-D warnings`、Rustfmt均 PASS。
+- 安全 follow-up在 Castle `main@09ff38e` 重跑 target-candidate 10/10、完整 locked CLI workspace 1,307/1,307、all-targets Clippy `-D warnings`、Rustfmt、locked Cargo metadata/tree，全數 PASS；checkout clean，並與 Windows／GitHub SHA對齊。
 
-### 6. 0.1.8 後續增量修正與驗證
+### 7. 0.1.8 後續增量修正與驗證
 
 - Provider artifact recovery 的 Windows desktop module 19/19、CLI module 19/19，Castle/Linux module 14/14 PASS；不同 feature/platform 的重疊測試不相加成獨立總數。
 - Frontend 364/364、release evidence 53/53、usability schema 5/5、Prowler 8/8 PASS。
@@ -92,13 +105,15 @@ Foreground QC fast-forward point：`1d4054e18b5b8a4014ffd2634ac507fa569e72a7`
 - Linux warning 修正 commit：`0077b2c5a6df8c758afbb44be5a1c6a9b2202a64`
 - Foreground line fast-forward integration：`1d4054e18b5b8a4014ffd2634ac507fa569e72a7`
 - 整合後 CI 修正：`fa13835902346fbe9590d09d5fede93e0a6dc813`、`2cb7a23a4d8b17d8e1c5c4bc5c3dbfab787e5a92`、`31f137d03997c221e7c81ba8fc5ae579348b0c14`
+- CodeQL source remediation：`8ba72315b6d136bdaf89617d95aa06aea0c72e8c`
+- Linux dead-code scope follow-up：`09ff38e2d7ba8d9b3ca1fcc63faa73d41092dcef`
 - 遠端／upstream：`origin/main`
-- 文件提交前的 code checkpoint `31f137d` 曾確認 Windows HEAD、GitHub `origin/main` 與 Castle HEAD一致；文件提交後請以 GitHub `main` HEAD 為準，這不是永久同步保證。
-- Castle checkout：`/home/ted-h/projects/ai-security-scanner`，branch `main`；code checkpoint 同步後 clean。
+- 目前 source checkpoint `09ff38e` 已確認 Windows HEAD、GitHub `origin/main` 與 Castle HEAD一致；本次文件提交後請以新的 GitHub `main` HEAD 為準，這不是永久同步保證。
+- Castle checkout：`/home/ted-h/projects/ai-security-scanner`，branch `main`；`09ff38e` 驗證後 clean。
 - 依使用者授權採 fast-forward direct push，沒有建立 PR；沒有建立新 tag 或 Release。
 - 以 `main@31f137d` 做的 remote ancestry audit顯示，所有 `codex/*` 工作線（包括 foreground、ghost/VHD/WSL lines）與 `release/gateway-v0.1.6-candidate` 都已是 `main` ancestor，沒有遺漏的 branch-only commit。原 branch保留作稽核。
-- 同一 checkpoint下，尚非 `main` ancestor 的只有 7 個舊-base Dependabot branches與 2 個 engine-publication branches；每個只有 1 個 branch-only commit，但都從明顯較舊的 base分岔。它們不是本 foreground 工作線，涉及 dependency或 image publication，不因「全部 merge」而盲合併；應各自 rebase/recreate並跑對應 qualification。
-- GitHub Dependabot alert #1 已查明為 Linux desktop graph 的 `glib 0.18.5`：`GHSA-wrw7-89jp-8q8g`／`RUSTSEC-2024-0429`，Moderate 6.9。Windows 與 Linux CLI-only graph 不受此依賴影響；因 GTK3 graph 限制，不能用 lockfile 單獨升到 patched `0.20.0`。本輪未做未稽核 fork/vendor，也不宣稱此警報已修復。
+- `31f137d` 當時的歷史 inventory 中，尚非 `main` ancestor 的是 7 個舊-base Dependabot branches與 2 個 engine-publication branches；每個只有 1 個 branch-only commit，且都從明顯較舊的 base分岔。之後 GitHub 又建立 PR #24（`dependabot/cargo/rust-81a2f3bcd0`、`67f80fb`），從 `8ba7231` 分岔並一次更新5項Rust dependencies，包括把本輪新增的`nix 0.30.1`升到`0.31.3`。它們都不是本 foreground產品工作線，且涉及dependency或image publication，因此不因「全部 merge」而盲合併；應在最新`main`上重建／更新後跑對應qualification。
+- GitHub Dependabot alert #1 已查明為 Linux desktop graph 的 `glib 0.18.5`：`GHSA-wrw7-89jp-8q8g`／`RUSTSEC-2024-0429`，Moderate 6.9。Windows 與 Linux CLI-only graph 不受此依賴影響；因 GTK3 graph 限制，不能用 lockfile 單獨升到 patched `0.20.0`。`8ba7231` 的 lockfile變更只加入Linux-only `nix 0.30.1`；本輪未做未稽核 fork/vendor，也不宣稱 `glib` 警報已修復。
 
 ## Installer 與供應鏈輸出
 
@@ -146,6 +161,8 @@ Packaged managed-runtime evidence：
 - `fa13835` 的下一次 CI classifier 因新測試 import `yaml`、但 classifier job 刻意不做 `npm ci` 而失敗。這是測試設計錯誤；`2cb7a23` 改成零 dependency 的文字契約測試，23/23 PASS。該次 GitHub CI 雖綠但重型 jobs 因 classifier 判定只有 test file 變更而跳過，因此沒有把它冒充完整 CI；`31f137d` 另形成 Cargo-path checkpoint以跑真正受影響的重型 lanes。
 - `main@31f137d` 的 affected-lane CI run [`33697821312`](https://github.com/teddashh/ai-security-scanner/actions/runs/33697821312) 最終 SUCCESS：classifier、Rust core/CLI、release contracts、Tauri Linux compile、Windows managed-runtime/sidecars/runtime manifest/desktop/NSIS compile與 aggregate都成功；frontend、engine、framework三個不受 Cargo-path變更影響的 lanes由 classifier明確 skipped。這是「所有應跑 lanes成功」，不是虛構每個 lane都重跑。
 - 同一 SHA 的 CodeQL run [`33697821316`](https://github.com/teddashh/ai-security-scanner/actions/runs/33697821316) 最終 SUCCESS，Rust與 JavaScript/TypeScript analysis jobs都成功。Workflow成功只證明分析完成，不等於宣稱零安全 finding。
+- `main@8ba7231` 的 CodeQL run [`33700815840`](https://github.com/teddashh/ai-security-scanner/actions/runs/33700815840) 最終SUCCESS，並由新分析把#2／#4／#5／#7判定fixed；GitHub API目前0個open code-scanning alerts，沒有人工dismiss。相同SHA的CI run [`33700815872`](https://github.com/teddashh/ai-security-scanner/actions/runs/33700815872) 則留下真實Linux Clippy failure：Rust core/CLI job `100479547294` 因macOS-only byte-order helper仍在Linux編譯而以dead code／exit 101失敗，CLI test step skipped。
+- `09ff38e` 加上精確macOS-only `cfg`；Castle target-candidate 10/10、CLI 1,307/1,307、Clippy／Rustfmt／locked metadata/tree已PASS。GitHub affected-lane [CI `33701122412`](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122412) 也已terminal SUCCESS：Rust core/CLI、Tauri Linux compile與aggregate成功，不相關lanes依classifier預期skipped。[CodeQL `33701122410`](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122410) 對Rust與JavaScript/TypeScript同樣terminal SUCCESS，API維持0 open alerts。
 
 ## 「水分」稽核
 
@@ -169,7 +186,7 @@ Packaged managed-runtime evidence：
 
 ### 實際完成度判斷
 
-- 原始碼與 automated regression：本輪目標已實質推進並達到乾淨 checkpoint。
+- 原始碼與 automated regression：`31f137d` 保留歷史完整 affected-lane baseline；`09ff38e` 的安全修正範圍另由Windows local、Castle Linux、GitHub affected-lane CI與CodeQL實證為綠。這是乾淨 source checkpoint，不宣稱在`09ff38e`重新執行整套歷史跨平台矩陣。
 - P0/P1 產品方向：大部分核心切片已落地，但 **A19 是 P0，完整 A19 仍未完成**，因此不能說 canonical P0 或 canonical spec 全部完成。
 - installed Windows qualification：0 次；沒有操作 App。
 - human UX qualification：0 個 session。
@@ -188,7 +205,7 @@ Packaged managed-runtime evidence：
 9. Administrators-owned、conditional/object ACE、foreign inheritable-write 的 legacy roots 目前故意 fail closed；尚未做 enterprise policy qualification。
 10. 沒有 clean VM、standard-user、N-1 upgrade、restart、WSL、real localhost、real engine、export、uninstall 或 accessibility/mobile human path。
 11. Installer 未簽章，未發布為新的 GitHub Release／updater artifact；現有 installer早於最新 `main` source，不能代表最新 source。
-12. GitHub Dependabot alert #1 的 `glib 0.18.5` moderate advisory 尚未修復。它只在 Linux desktop Tauri/GTK3 dependency graph；目前 `gtk 0.18.2` 對 `glib ^0.18` 的限制讓單獨 lockfile bump 不成立。真正短期修補需 audited、immutable fork/vendor backport，長期需 GTK4/Tauri migration，兩者都不能用未稽核的臨時 dependency substitution 代替。
+12. GitHub Dependabot alert #1 的 `glib 0.18.5` moderate advisory 尚未修復。它只在 Linux desktop Tauri/GTK3 dependency graph；目前 `gtk 0.18.2` 對 `glib ^0.18` 的限制讓單獨 lockfile bump 不成立。`8ba7231` 新增的 Linux-only `nix 0.30.1` 只取代interface enumeration pointer traversal，不修復或取代`glib`。真正短期修補需 audited、immutable fork/vendor backport，長期需 GTK4/Tauri migration，兩者都不能用未稽核的臨時 dependency substitution 代替。
 
 ## 建議下一步
 

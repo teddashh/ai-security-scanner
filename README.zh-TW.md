@@ -49,6 +49,25 @@ NIST CSF、ISO/IEC 27001 與 AIDEFEND 關聯只是幫助你理解發現項目與
 其中有精確 source、驗證與未完成項目；不要把舊的可下載 installer 當成目前
 `main` 的 build。
 
+目前安全後續 checkpoint 是 `main@09ff38e`。`8ba7231` 以 Linux-only
+`nix 0.30.1` 的安全 API 取代 Linux raw `getifaddrs` pointer traversal，並移除三條
+CodeQL 回報的動態測試 panic／log 路徑。Windows CLI 1,340/1,340 PASS；Castle 在
+`09ff38e` 又完成 target-candidate 10/10、完整 Linux CLI 1,307/1,307、Clippy、
+Rustfmt、locked Cargo metadata/tree，checkout clean 且 SHA 對齊。GitHub CI 在
+`8ba7231` 仍抓到一個真實 Linux `-D warnings` failure：舊 network-byte-order helper
+已成 Linux dead code；`09ff38e` 已把它精確限於 macOS。後續
+[CI run 33701122412](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122412)
+已 terminal SUCCESS：受影響的 Rust core/CLI 與 Tauri Linux compile jobs 均 PASS，
+不相關 lanes 依 classifier 預期 skipped，aggregate job 也 PASS。
+[CodeQL run 33701122410](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122410)
+也已對 Rust 與 JavaScript/TypeScript terminal SUCCESS。獨立來看，`8ba7231` 的
+[CodeQL run 33700815840](https://github.com/teddashh/ai-security-scanner/actions/runs/33700815840)
+已完成 Rust 與 JavaScript/TypeScript analysis並 SUCCESS；GitHub API目前回報
+0 個 open code-scanning alerts，#2／#4／#5／#7 都由新分析在
+`2026-09-03T00:54:32Z` 判定 fixed，沒有人工 dismissal；API 維持 0 個 open alerts。
+`31f137d` 仍是完整 GitHub affected-lane 歷史基線；`09ff38e` 是範圍較窄的安全修正
+affected-lane follow-up。
+
 安裝前先知道三件事：
 
 - Authenticode 簽章尚未完成驗證，因此 Windows 可能顯示「未知的發行者」；
