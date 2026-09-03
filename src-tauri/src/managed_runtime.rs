@@ -15362,17 +15362,36 @@ mod tests {
         ];
         let manifest_path = fixture.manager.install_directory().join("manifest.json");
         let moved_manifest = manifest_path.with_extension("guarded-move");
-        let worker = thread::spawn(move || {
+        let mut worker = Some(thread::spawn(move || {
             DirectManagedCommandRunner.output(&command, &long_args, Duration::from_secs(10))
-        });
+        }));
         let ready_deadline = Instant::now() + Duration::from_secs(10);
+        // The launch can fail before the child ever runs (guard rejection, spawn
+        // error). Report that outcome instead of only observing a missing marker.
+        let mut early_exit = None;
         while !ready.exists() && Instant::now() < ready_deadline {
+            if worker.as_ref().is_some_and(thread::JoinHandle::is_finished) {
+                early_exit = Some(worker.take().expect("worker handle").join());
+                break;
+            }
             thread::sleep(Duration::from_millis(10));
         }
         assert!(
             ready.exists(),
-            "the guarded PE child did not reach its marker"
+            "the guarded PE child did not reach its marker; launch outcome: {}",
+            match &early_exit {
+                None => "the worker is still running".to_owned(),
+                Some(Err(_)) => "the worker panicked".to_owned(),
+                Some(Ok(Err(error))) => format!("the launch failed: {error}"),
+                Some(Ok(Ok(output))) => format!(
+                    "the child exited early with {:?}; stdout={:?}; stderr={:?}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                ),
+            }
         );
+        let worker = worker.expect("the guarded PE worker is still running");
 
         assert!(
             OpenOptions::new()
