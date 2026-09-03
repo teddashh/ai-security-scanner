@@ -377,18 +377,6 @@ export interface NativeBeginnerMasterReport {
       mapping_version: string;
     }>;
   }>;
-  finding_groups?: Array<{
-    group_id: string;
-    presentation_scope: "current_case_presentation";
-    title: string;
-    rationale: string;
-    actor: string;
-    created_at: string;
-    members: Array<{
-      finding_id: string;
-      observed_in_selected_run: boolean;
-    }>;
-  }>;
   next_steps: Array<{
     priority: number;
     code: BeginnerMasterReport["nextSteps"][number]["code"];
@@ -2268,18 +2256,6 @@ export const adaptBeginnerMasterReport = (
       relationship: reference.relationship,
       rationale: reference.rationale,
       mappingVersion: reference.mapping_version,
-    })),
-  })),
-  findingGroups: (report.finding_groups ?? []).map((group) => ({
-    groupId: group.group_id,
-    presentationScope: group.presentation_scope,
-    title: group.title,
-    rationale: group.rationale,
-    actor: group.actor,
-    createdAt: group.created_at,
-    members: group.members.map((member) => ({
-      findingId: member.finding_id,
-      observedInSelectedRun: member.observed_in_selected_run,
     })),
   })),
   nextSteps: report.next_steps.map((step) => ({

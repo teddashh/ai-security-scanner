@@ -886,21 +886,6 @@ export interface BeginnerReportFinding {
   }>;
 }
 
-export interface BeginnerReportFindingGroupMember {
-  findingId: string;
-  observedInSelectedRun: boolean;
-}
-
-export interface BeginnerReportFindingGroup {
-  groupId: string;
-  presentationScope: "current_case_presentation";
-  title: string;
-  rationale: string;
-  actor: string;
-  createdAt: string;
-  members: BeginnerReportFindingGroupMember[];
-}
-
 export interface BeginnerTechnicalTaskDetails {
   taskId: string;
   targetAssetIds: string[];
@@ -935,7 +920,6 @@ export interface BeginnerMasterReport {
     number
   >;
   findings: BeginnerReportFinding[];
-  findingGroups: BeginnerReportFindingGroup[];
   nextSteps: Array<{
     priority: number;
     code: BeginnerNextActionCode;

@@ -221,21 +221,6 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
       }],
       framework_references: [],
     }],
-    finding_groups: [{
-      group_id: "group-1",
-      presentation_scope: "current_case_presentation",
-      title: "Related observations",
-      rationale: "Review the shared path together.",
-      actor: "Human reviewer",
-      created_at: "2026-08-30T12:00:04Z",
-      members: [{
-        finding_id: "finding-1",
-        observed_in_selected_run: true,
-      }, {
-        finding_id: "finding-history",
-        observed_in_selected_run: false,
-      }],
-    }],
     next_steps: [{
       priority: 1,
       code: "start_expected_service_and_retry",
@@ -258,21 +243,6 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
   assert.equal(report.actual.checks[0]?.status, "tested_partial");
   assert.equal(report.coverageGaps[0]?.nextActionCode, "start_expected_service_and_retry");
   assert.equal(report.findings[0]?.findingId, "finding-1");
-  assert.deepEqual(report.findingGroups, [{
-    groupId: "group-1",
-    presentationScope: "current_case_presentation",
-    title: "Related observations",
-    rationale: "Review the shared path together.",
-    actor: "Human reviewer",
-    createdAt: "2026-08-30T12:00:04Z",
-    members: [{
-      findingId: "finding-1",
-      observedInSelectedRun: true,
-    }, {
-      findingId: "finding-history",
-      observedInSelectedRun: false,
-    }],
-  }]);
   assert.equal(report.nextSteps[0]?.taskId, "task-1");
 });
 
@@ -386,7 +356,6 @@ test("beginner report adapter preserves exact tested and untested network scope 
     outcome: "not_tested",
     observedAt: undefined,
   }]);
-  assert.deepEqual(report.findingGroups, []);
 });
 
 test("local network candidate adapter accepts one canonical private range", () => {
