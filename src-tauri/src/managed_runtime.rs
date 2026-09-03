@@ -15352,12 +15352,21 @@ mod tests {
             OsString::from("AI_SECURITY_SCANNER_GUARD_READY"),
             ready.as_os_str().to_owned(),
         );
+        // `Command` quotes this argument with CRT rules and escapes an embedded
+        // quote as `\"`. cmd.exe has no backslash escaping, so those arrive
+        // literally and corrupt both the redirect target and the ping path.
+        // Keep the command line quote-free, which requires space-free paths.
+        assert!(
+            !ready.as_os_str().to_string_lossy().contains(' '),
+            "the readiness marker path must be space-free to stay quote-free: {}",
+            ready.display()
+        );
         let long_args = [
             OsString::from("/D"),
             OsString::from("/Q"),
             OsString::from("/C"),
             OsString::from(
-                r#"(echo ready)>"%AI_SECURITY_SCANNER_GUARD_READY%" & "%SystemRoot%\System32\ping.exe" -n 4 127.0.0.1 >nul"#,
+                r"(echo ready)>%AI_SECURITY_SCANNER_GUARD_READY% & %SystemRoot%\System32\ping.exe -n 4 127.0.0.1 >nul",
             ),
         ];
         let manifest_path = fixture.manager.install_directory().join("manifest.json");
@@ -15365,7 +15374,9 @@ mod tests {
         let mut worker = Some(thread::spawn(move || {
             DirectManagedCommandRunner.output(&command, &long_args, Duration::from_secs(10))
         }));
-        let ready_deadline = Instant::now() + Duration::from_secs(10);
+        // Outlast the worker's own ten-second timeout so a stalled child always
+        // resolves into a reported outcome rather than racing this deadline.
+        let ready_deadline = Instant::now() + Duration::from_secs(30);
         // The launch can fail before the child ever runs (guard rejection, spawn
         // error). Report that outcome instead of only observing a missing marker.
         let mut early_exit = None;
