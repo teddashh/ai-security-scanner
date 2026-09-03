@@ -1289,6 +1289,11 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
             }
         }
     }
+    for group in &mut report.finding_groups {
+        group.title = "[redacted finding group]".into();
+        group.rationale = "[redacted grouping rationale]".into();
+        group.actor = "[redacted]".into();
+    }
     for step in &mut report.next_steps {
         redact_known_literals(&mut step.action, &replacements);
         redact_known_literals(&mut step.reason, &replacements);

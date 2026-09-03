@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::IpAddr;
 
-pub const BEGINNER_MASTER_REPORT_SCHEMA_VERSION: &str = "1.0.0";
+pub const BEGINNER_MASTER_REPORT_SCHEMA_VERSION: &str = "1.1.0";
 
 pub const FRAMEWORK_NON_CERTIFICATION_NOTICE: &str = "These references do not establish certification, compliance, control implementation, control effectiveness, endorsement, or a pass/fail result.";
 
@@ -36,10 +36,35 @@ pub struct BeginnerMasterReport {
     pub coverage_gaps: Vec<CoverageGap>,
     pub coverage_counts: CoverageCounts,
     pub findings: Vec<BeginnerFinding>,
+    #[serde(default)]
+    pub finding_groups: Vec<BeginnerFindingGroup>,
     pub next_steps: Vec<BeginnerNextStep>,
     pub technical_details: TechnicalDetails,
     pub framework_notice: FrameworkNotice,
     pub data_quality_warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BeginnerFindingGroup {
+    pub group_id: Id,
+    pub presentation_scope: FindingGroupPresentationScope,
+    pub title: String,
+    pub rationale: String,
+    pub actor: String,
+    pub created_at: DateTime<Utc>,
+    pub members: Vec<BeginnerFindingGroupMember>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingGroupPresentationScope {
+    CurrentCasePresentation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BeginnerFindingGroupMember {
+    pub finding_id: Id,
+    pub observed_in_selected_run: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -476,6 +501,7 @@ pub fn build_beginner_master_report(
     }
 
     let (findings, finding_warnings) = project_findings(case, run);
+    let finding_groups = project_finding_groups(case, &findings);
     data_quality_warnings.extend(finding_warnings);
     if findings
         .iter()
@@ -547,6 +573,7 @@ pub fn build_beginner_master_report(
         coverage_gaps,
         coverage_counts,
         findings,
+        finding_groups,
         next_steps,
         technical_details,
         framework_notice: FrameworkNotice {
@@ -1645,6 +1672,42 @@ fn project_findings(case: &AssessmentCase, run: &ScanRun) -> (Vec<BeginnerFindin
     (findings, warnings)
 }
 
+fn project_finding_groups(
+    case: &AssessmentCase,
+    findings: &[BeginnerFinding],
+) -> Vec<BeginnerFindingGroup> {
+    let observed_finding_ids = findings
+        .iter()
+        .map(|finding| finding.finding_id.as_str())
+        .collect::<BTreeSet<_>>();
+
+    case.finding_groups
+        .iter()
+        .filter(|group| {
+            group
+                .finding_ids
+                .iter()
+                .any(|finding_id| observed_finding_ids.contains(finding_id.as_str()))
+        })
+        .map(|group| BeginnerFindingGroup {
+            group_id: group.id.clone(),
+            presentation_scope: FindingGroupPresentationScope::CurrentCasePresentation,
+            title: group.title.clone(),
+            rationale: group.rationale.clone(),
+            actor: group.grouped_by.clone(),
+            created_at: group.created_at,
+            members: group
+                .finding_ids
+                .iter()
+                .map(|finding_id| BeginnerFindingGroupMember {
+                    finding_id: finding_id.clone(),
+                    observed_in_selected_run: observed_finding_ids.contains(finding_id.as_str()),
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 fn project_finding(
     observation: &FindingObservation,
     snapshot_source: FindingSnapshotSource,
@@ -2149,7 +2212,7 @@ mod tests {
         Asset, AssetIdentifier, BUILT_IN_LOCALHOST_TCP_ASSET_IDENTIFIER_NAMESPACE,
         BUILT_IN_LOCALHOST_TCP_AUTHORIZATION_REFERENCE, BUILT_IN_LOCALHOST_TCP_ENGINE_ID,
         CaseStatus, ControlReference, CoverageEntry, CoverageStatus, DataClass, EngineRun,
-        Evidence, EvidenceKind, FindingStatus, NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
+        Evidence, EvidenceKind, FindingGroup, FindingStatus, NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
         NAABU_ATTEMPT_RESULT_SCHEMA_VERSION, NaabuAttemptRequest, NaabuAttemptResult,
         OrganizationProfile, RawArtifact, ScopeGrant, SourceKind, new_id,
     };
@@ -2947,6 +3010,104 @@ mod tests {
             report.framework_notice.non_certification,
             FRAMEWORK_NON_CERTIFICATION_NOTICE
         );
+    }
+
+    #[test]
+    fn active_groups_project_selected_and_historical_members_without_changing_run_results() {
+        let mut case = localhost_case(
+            LocalhostTcpOutcome::Reachable,
+            EngineRunStatus::Completed,
+            true,
+        );
+        let selected = frozen_finding(&case, "finding-selected", 90, Severity::High);
+        let historical = frozen_finding(&case, "finding-historical", 40, Severity::Medium);
+        let other_historical = frozen_finding(&case, "finding-other-historical", 10, Severity::Low);
+        case.findings = vec![
+            selected.clone(),
+            historical.clone(),
+            other_historical.clone(),
+        ];
+        case.finding_observations = vec![observation(&selected, "run-1", instant(18))];
+
+        let without_groups = build_beginner_master_report(&case, "run-1").unwrap();
+        case.finding_groups = vec![
+            FindingGroup {
+                id: "group-mixed".into(),
+                case_id: case.id.clone(),
+                title: "Related observations".into(),
+                finding_ids: vec![selected.id.clone(), historical.id.clone()],
+                rationale: "Review the shared path together.".into(),
+                grouped_by: "Human reviewer".into(),
+                created_at: instant(19),
+            },
+            FindingGroup {
+                id: "group-history-only".into(),
+                case_id: case.id.clone(),
+                title: "Historical observations".into(),
+                finding_ids: vec![historical.id.clone(), other_historical.id.clone()],
+                rationale: "This group has no selected-run observation.".into(),
+                grouped_by: "Human reviewer".into(),
+                created_at: instant(20),
+            },
+        ];
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(report.schema_version, "1.1.0");
+        assert_eq!(report.finding_groups.len(), 1);
+        let group = &report.finding_groups[0];
+        assert_eq!(group.group_id, "group-mixed");
+        assert_eq!(
+            group.presentation_scope,
+            FindingGroupPresentationScope::CurrentCasePresentation
+        );
+        assert_eq!(group.title, "Related observations");
+        assert_eq!(group.rationale, "Review the shared path together.");
+        assert_eq!(group.actor, "Human reviewer");
+        assert_eq!(group.created_at, instant(19));
+        assert_eq!(
+            group.members,
+            vec![
+                BeginnerFindingGroupMember {
+                    finding_id: "finding-selected".into(),
+                    observed_in_selected_run: true,
+                },
+                BeginnerFindingGroupMember {
+                    finding_id: "finding-historical".into(),
+                    observed_in_selected_run: false,
+                },
+            ]
+        );
+        let report_json = serde_json::to_value(&report).unwrap();
+        assert_eq!(
+            report_json.pointer("/finding_groups/0/presentation_scope"),
+            Some(&serde_json::json!("current_case_presentation"))
+        );
+
+        assert_eq!(report.findings, without_groups.findings);
+        assert_eq!(report.requested, without_groups.requested);
+        assert_eq!(report.actual, without_groups.actual);
+        assert_eq!(report.coverage_gaps, without_groups.coverage_gaps);
+        assert_eq!(report.coverage_counts, without_groups.coverage_counts);
+        assert_eq!(report.next_steps, without_groups.next_steps);
+    }
+
+    #[test]
+    fn legacy_report_without_group_projection_deserializes_with_an_empty_projection() {
+        let case = localhost_case(
+            LocalhostTcpOutcome::Reachable,
+            EngineRunStatus::Completed,
+            true,
+        );
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        let mut legacy = serde_json::to_value(report).unwrap();
+        let legacy = legacy.as_object_mut().unwrap();
+        legacy.insert("schema_version".into(), serde_json::json!("1.0.0"));
+        legacy.remove("finding_groups");
+
+        let decoded: BeginnerMasterReport =
+            serde_json::from_value(serde_json::Value::Object(legacy.clone())).unwrap();
+        assert_eq!(decoded.schema_version, "1.0.0");
+        assert!(decoded.finding_groups.is_empty());
     }
 
     fn frozen_finding(

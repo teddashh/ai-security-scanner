@@ -14,8 +14,9 @@ use crate::artifact_store::{
     inspect_raw_artifacts, read_verified_raw_artifact,
 };
 use crate::beginner_report::{
-    BeginnerMasterReport, BeginnerReportSummary, CoverageDimensionStatus, CoverageGapKind,
-    FindingSnapshotSource, ReportLifecycle, ReportScanStage, RequestedLimitSource,
+    BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerMasterReport, BeginnerReportSummary,
+    CoverageDimensionStatus, CoverageGapKind, FindingSnapshotSource, ReportLifecycle,
+    ReportScanStage, RequestedLimitSource,
 };
 use crate::bootstrap::executor::list_bootstrap_cleanup_obligations;
 use crate::connectors::{
@@ -12053,7 +12054,7 @@ fn canonical_json_bytes(
 ) -> AppResult<Vec<u8>> {
     let report = beginner_report_for_export(case, run_id, options.redaction)?;
     serde_json::to_vec_pretty(&serde_json::json!({
-        "schema_version": "1.0.0",
+        "schema_version": BEGINNER_MASTER_REPORT_SCHEMA_VERSION,
         "product_name": "ai-security-scanner",
         "product_version": env!("CARGO_PKG_VERSION"),
         "export_kind": "beginner_master_report",
@@ -24668,6 +24669,61 @@ mod tests {
             assert!(!redacted_html.contains(sensitive));
         }
 
+        let unredacted_report =
+            beginner_report_for_export(&grouped, "run-1", RedactionProfile::None).unwrap();
+        assert_eq!(unredacted_report.schema_version, "1.1.0");
+        assert_eq!(unredacted_report.finding_groups.len(), 1);
+        assert_eq!(unredacted_report.finding_groups[0].title, group_title);
+        assert_eq!(
+            unredacted_report.finding_groups[0].rationale,
+            group_rationale
+        );
+        assert_eq!(unredacted_report.finding_groups[0].actor, group_actor);
+        assert!(
+            unredacted_report.finding_groups[0]
+                .members
+                .iter()
+                .all(|member| member.observed_in_selected_run)
+        );
+
+        let redacted_report =
+            beginner_report_for_export(&grouped, "run-1", RedactionProfile::Standard).unwrap();
+        assert_eq!(
+            redacted_report.finding_groups[0].title,
+            "[redacted finding group]"
+        );
+        assert_eq!(
+            redacted_report.finding_groups[0].rationale,
+            "[redacted grouping rationale]"
+        );
+        assert_eq!(redacted_report.finding_groups[0].actor, "[redacted]");
+        assert_eq!(
+            redacted_report.finding_groups[0].group_id,
+            unredacted_report.finding_groups[0].group_id
+        );
+        assert_eq!(
+            redacted_report.finding_groups[0].members,
+            unredacted_report.finding_groups[0].members
+        );
+        assert_eq!(
+            redacted_report.coverage_counts,
+            unredacted_report.coverage_counts
+        );
+
+        let grouped_canonical =
+            canonical_json_bytes(&grouped, "run-1", &ExportOptions::default()).unwrap();
+        let grouped_canonical: Value = serde_json::from_slice(&grouped_canonical).unwrap();
+        assert_eq!(grouped_canonical["schema_version"], "1.1.0");
+        assert_eq!(grouped_canonical["report"]["schema_version"], "1.1.0");
+        assert_eq!(
+            grouped_canonical
+                .pointer("/report/finding_groups")
+                .and_then(Value::as_array)
+                .unwrap()
+                .len(),
+            1
+        );
+
         assert!(
             fixture
                 .service()
@@ -24748,6 +24804,8 @@ mod tests {
         }
         let canonical: Value = serde_json::from_slice(&canonical).unwrap();
         assert_eq!(canonical["export_kind"], "beginner_master_report");
+        assert_eq!(canonical["schema_version"], "1.1.0");
+        assert_eq!(canonical["report"]["schema_version"], "1.1.0");
         assert_eq!(
             canonical
                 .pointer("/report/findings")
@@ -24755,6 +24813,13 @@ mod tests {
                 .unwrap()
                 .len(),
             2
+        );
+        assert!(
+            canonical
+                .pointer("/report/finding_groups")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty()
         );
         assert!(canonical.get("case").is_none());
     }
