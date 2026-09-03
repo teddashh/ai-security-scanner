@@ -301,6 +301,17 @@ jobs:
       - name: Install locked frontend dependencies
         run: npm ci --ignore-scripts
 
+      - name: Validate the pinned Windows NSIS source patch
+        if: matrix.platform == 'windows-x86_64'
+        run: node scripts/release/validate-windows-nsis-template.mjs
+
+      - name: Verify, build, and stage the release-managed local runtime
+        shell: bash
+        run: >-
+          node runtime/vendor-managed-runtime.mjs
+          --target "${{ matrix.managed_runtime_target }}"
+          --output runtime/staged/managed-runtime
+
       - name: Build and stage the Linux managed egress sidecar
         if: matrix.platform == 'linux-x86_64'
         run: npm run desktop:prepare-sidecar -- --target x86_64-unknown-linux-gnu
@@ -312,13 +323,6 @@ jobs:
       - name: Build and stage the Windows managed egress sidecar
         if: matrix.platform == 'windows-x86_64'
         run: npm run desktop:prepare-sidecar -- --target x86_64-pc-windows-msvc
-
-      - name: Verify, build, and stage the release-managed local runtime
-        shell: bash
-        run: >-
-          node runtime/vendor-managed-runtime.mjs
-          --target "${{ matrix.managed_runtime_target }}"
-          --output runtime/staged/managed-runtime
 
       - name: Build the application once without installers
         id: build_unbundled

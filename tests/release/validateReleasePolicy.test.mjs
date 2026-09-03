@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
 
 import {
   validateProductEngineRegistry,
@@ -478,4 +479,17 @@ test("product release validation does not depend on subordinate marketing prose"
       `generic release policy still invokes a platform/engine contract: ${platformCoupling}`,
     );
   }
+});
+
+test("Windows NSIS source validation is isolated to the Windows installer matrix", async () => {
+  const workflow = parse(await readFile(path.join(projectRoot, ".github/workflows/release.yml"), "utf8"));
+  const validationCommand = "node scripts/release/validate-windows-nsis-template.mjs";
+  const commonSteps = workflow.jobs.validate.steps;
+  const buildSteps = workflow.jobs.build.steps;
+
+  assert.equal(commonSteps.some((step) => step?.run === validationCommand), false);
+  const platformSteps = buildSteps.filter((step) => step?.run === validationCommand);
+  assert.equal(platformSteps.length, 1);
+  assert.equal(platformSteps[0].if, "matrix.platform == 'windows-x86_64'");
+  assert.equal(workflow.jobs.build["continue-on-error"], true);
 });

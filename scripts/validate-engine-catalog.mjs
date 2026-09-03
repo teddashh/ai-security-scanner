@@ -243,6 +243,7 @@ const localK8sWorkflowRelative = ".github/workflows/engine-images-local-k8s.yml"
 const managedEgressGatewayWorkflowRelative = ".github/workflows/managed-egress-gateway-image.yml";
 const newlyPublishedEvidenceWorkflows = [
   ".github/workflows/engine-images-external.yml",
+  ".github/workflows/engine-images-m365.yml",
   localK8sWorkflowRelative,
   managedEgressGatewayWorkflowRelative,
 ];
@@ -2375,9 +2376,24 @@ if (!existsSync(m365WorkflowPath)) {
     "docker logout ghcr.io",
     "Verify anonymous multi-platform access",
     "Run the anonymous amd64 smoke contract",
-    "protectedMountFailClosed: true",
+    "Validate the shared launcher in the pinned toolchain",
+    "gofmt -d main.go main_test.go",
+    "go test ./...",
+    "missingOutputMountRejected: true",
+    "missingScopeMountRejected: true",
+    "missingCredentialMountRejected: true",
   ]) {
     if (!workflowText.includes(required)) errors.push(`managed Microsoft 365 workflow lacks ${required}`);
+  }
+  const publishSteps = workflow?.jobs?.publish?.steps;
+  const launcherTestIndex = Array.isArray(publishSteps)
+    ? publishSteps.findIndex((step) => step?.name === "Validate the shared launcher in the pinned toolchain")
+    : -1;
+  const imageBuildIndex = Array.isArray(publishSteps)
+    ? publishSteps.findIndex((step) => step?.name === "Build and publish the immutable multi-platform image")
+    : -1;
+  if (launcherTestIndex < 0 || imageBuildIndex < 0 || launcherTestIndex >= imageBuildIndex) {
+    errors.push("managed Microsoft 365 launcher tests must complete before either image is built or published");
   }
 }
 

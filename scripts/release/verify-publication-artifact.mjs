@@ -35,6 +35,8 @@ const ENGINE_SPECS = Object.freeze({
   grype: { tag: "0.117.0-3", group: "local", workflow: ".github/workflows/engine-images-local-k8s.yml", smokeFiles: ["grype.json"] },
   kubescape: { tag: "4.0.12-3", group: "local", workflow: ".github/workflows/engine-images-local-k8s.yml", smokeFiles: ["kubescape.json"] },
   "kube-bench": { tag: "0.16.0-3", group: "local", workflow: ".github/workflows/engine-images-local-k8s.yml", smokeFiles: ["kube-bench.json"] },
+  scubagear: { tag: "1.8.0-2", group: "m365", workflow: ".github/workflows/engine-images-m365.yml" },
+  maester: { tag: "2.0.0-2", group: "m365", workflow: ".github/workflows/engine-images-m365.yml" },
   "egress-gateway": { tag: "0.1.8-1", group: "gateway", workflow: ".github/workflows/managed-egress-gateway-image.yml" },
 });
 
@@ -43,6 +45,16 @@ const SBOM_SPECS = [
   { format: "spdx-json", suffix: "spdx", predicateType: "https://spdx.dev/Document/v2.3" },
   { format: "cyclonedx-json", suffix: "cyclonedx", predicateType: "https://cyclonedx.org/bom" },
 ];
+const M365_SMOKE_CONTRACT = Object.freeze({
+  platform: "linux/amd64",
+  nonRoot: true,
+  fixedEntrypoint: true,
+  missingOutputMountRejected: true,
+  missingScopeMountRejected: true,
+  missingCredentialMountRejected: true,
+  moduleLockVerified: true,
+  dependencyNoticesVerified: true,
+});
 const PROVENANCE_PREDICATE = "https://slsa.dev/provenance/v1";
 
 function fail(message) {
@@ -565,6 +577,8 @@ async function verifyRootSummary({ files, engine, spec, sourceRevision, evidence
     summary,
     spec.group === "local"
       ? [...common, "platformDigests", "anonymousPullVerified", "managedSmokeEvidenceSha256"]
+      : spec.group === "m365"
+        ? [...common, "platforms", "platformDigests", "public", "anonymousPullVerified", "smoke"]
       : [...common, "platforms", "public"],
     "root image summary",
   );
@@ -575,6 +589,18 @@ async function verifyRootSummary({ files, engine, spec, sourceRevision, evidence
   if (spec.group === "external") {
     assert(summary.public === true, "external root summary must record public access");
     assert(isDeepStrictEqual(summary.platforms, PLATFORMS), "external root summary platform list mismatch");
+    return undefined;
+  }
+  if (spec.group === "m365") {
+    assert(summary.public === true, "Microsoft 365 root summary must record public access");
+    assert(summary.anonymousPullVerified === true, "Microsoft 365 root summary must record anonymous pull verification");
+    assert(isDeepStrictEqual(summary.platforms, PLATFORMS), "Microsoft 365 root summary platform list mismatch");
+    exactKeys(summary.platformDigests, PLATFORMS, "Microsoft 365 root platform digests");
+    for (const platform of PLATFORMS) {
+      assert(summary.platformDigests[platform] === platformRecords.get(platform).digest, `Microsoft 365 root platform digest mismatch: ${platform}`);
+    }
+    exactKeys(summary.smoke, Object.keys(M365_SMOKE_CONTRACT), "Microsoft 365 smoke summary");
+    assert(isDeepStrictEqual(summary.smoke, M365_SMOKE_CONTRACT), "Microsoft 365 smoke summary does not match the fixed publication contract");
     return undefined;
   }
   assert(summary.anonymousPullVerified === true, "local root summary must record anonymous pull verification");

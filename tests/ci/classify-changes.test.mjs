@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { parse } from "yaml";
 
 import {
   ciBoundaryResultErrors,
@@ -171,10 +172,11 @@ test("AIDEFEND machine inputs use the focused framework lane without full releas
 test("installer and managed-runtime inputs schedule their focused heavyweight lanes", () => {
   assert.deepEqual(classifyChangedPaths([
     "runtime/managed-runtime.schema.json",
+    "src-tauri/src/bin/cli.rs",
     "src-tauri/src/managed_runtime.rs",
     "src-tauri/windows/nsis/installer.nsi",
   ]), {
-    changed_path_count: 3,
+    changed_path_count: 4,
     docs_only: false,
     frontend: false,
     rust_core: true,
@@ -215,6 +217,20 @@ test("CI classifier changes rely on the always-run classifier test, not heavywei
   });
 });
 
+test("the Windows NSIS validator stays in the focused Windows lane", () => {
+  const workflow = parse(ciWorkflow);
+  const validationCommand = "node scripts/release/validate-windows-nsis-template.mjs";
+  assert.equal(
+    workflow.jobs["release-contract"].steps.some((step) => step?.run === validationCommand),
+    false,
+  );
+  const windowsSteps = workflow.jobs["windows-managed-runtime"].steps;
+  const validatorIndexes = windowsSteps
+    .map((step, index) => step?.run === validationCommand ? index : -1)
+    .filter((index) => index >= 0);
+  assert.deepEqual(validatorIndexes, [windowsSteps.findIndex((step) => step?.run === "npm ci --ignore-scripts") + 1]);
+});
+
 test("an unavailable push base schedules every lane instead of silently omitting work", () => {
   assert.deepEqual(classifyAllBoundaries(), {
     changed_path_count: 0,
@@ -246,7 +262,10 @@ test("heavyweight commands stay behind their focused job conditions", () => {
   assert.match(ciWorkflow, /engine-admission:[\s\S]*?node --check scripts\/engine-image-evidence\.mjs[\s\S]*?node --check scripts\/generate-oci-layout-fixture\.mjs/);
   assert.match(ciWorkflow, /framework-contract:[\s\S]*?if: needs\.changes\.outputs\.framework == 'true'[\s\S]*?npm run validate:aidefend/);
   assert.match(ciWorkflow, /release-contract:[\s\S]*?if: needs\.changes\.outputs\.release_contract == 'true'[\s\S]*?npm run release:self-test/);
-  assert.match(ciWorkflow, /windows-managed-runtime:[\s\S]*?if: needs\.changes\.outputs\.windows_runtime == 'true'[\s\S]*?vendor-managed-runtime[\s\S]*?bundles nsis/);
+  assert.match(
+    ciWorkflow,
+    /windows-managed-runtime:[\s\S]*?if: needs\.changes\.outputs\.windows_runtime == 'true'[\s\S]*?vendor-managed-runtime[\s\S]*?desktop:prepare-sidecar[\s\S]*?cli,installer-runtime-cache[\s\S]*?bundles nsis/,
+  );
 });
 
 test("existing required-check names remain stable and one aggregate verifies scheduled lanes", () => {

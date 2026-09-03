@@ -20,8 +20,8 @@ const PINNED_UPSTREAM = Object.freeze({
     "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi",
   upstreamSha256: "20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079",
   patchContract:
-    "ai-security-scanner.windows-prerequisite-version-neutral-repair-and-bounded-uninstall/v7",
-  vendoredSha256: "48d1865797eadba261fca35711b37c6f0cc662d8293da5bbc974b7b6e5a399d6",
+    "ai-security-scanner.windows-runtime-cache-prerequisite-version-neutral-repair-and-bounded-uninstall/v8",
+  vendoredSha256: "cbafe3897bd535fe77978bf4f4b8c6feb96278f5ac0f727b507926a460011bae",
 });
 
 function assert(condition, message) {
@@ -117,7 +117,7 @@ function reconstructPinnedUpstream(vendored) {
         "; Upstream license: Apache-2.0 OR MIT",
         "; Local patch: version-neutral stale-registration and same-version repair,",
         "; data-preserving upgrade overlays, synchronous copied-uninstaller execution,",
-        "; fixed Windows-prerequisite preparation with",
+        "; exact private runtime-cache seeding, fixed Windows-prerequisite preparation with",
         "; durable restart/resume state, and a bilingual three-choice uninstall",
         "; delegated to the fixed product CLI with bounded, visible coordinator records",
         "; and exact registration postconditions.",
@@ -258,8 +258,17 @@ function reconstructPinnedUpstream(vendored) {
       upstream: "",
     },
     {
-      label: "fixed Windows prerequisite preparation dispatch",
+      label: "fixed runtime-cache and Windows prerequisite preparation dispatch",
       patched: block([
+        "",
+        "  ; Seed a verified private recovery copy before first launch. This bounded,",
+        "  ; non-executing optimization is deliberately non-fatal: app installation and",
+        "  ; independent work remain available even when the cache cannot be prepared.",
+        "  ; Registration overlays (stale/same-version/upgrade) preserve private runtime",
+        "  ; bytes exactly and leave any new-version preparation to the reopened app.",
+        "  ${If} $RegistrationOverlayMode = 0",
+        "    Call SeedManagedRuntimePrivateCache",
+        "  ${EndIf}",
         "",
         "  ; Prepare Windows support only after every application binary and its",
         "  ; registration have been installed. Failure can therefore never roll back or",
@@ -308,6 +317,7 @@ function reconstructPinnedUpstream(vendored) {
       : replaceOnce(reconstructed, rewrite.patched, rewrite.upstream, rewrite.label);
   }
   reconstructed = removeFunction(reconstructed, "DetectVersionNeutralProductRepair");
+  reconstructed = removeFunction(reconstructed, "SeedManagedRuntimePrivateCache");
   reconstructed = removeFunction(
     reconstructed,
     "RunWindowsInstallerPrerequisiteCoordinator",
@@ -447,6 +457,13 @@ function modeledWindowsPrerequisiteOutcome({ invocation, exitCode, resultClass }
   return "retry";
 }
 
+function modeledRuntimeCacheSeedOutcome({ invocation, exitCode, resultClass }) {
+  if (invocation === "complete" && exitCode === 0 && resultClass === "seeded") {
+    return "seeded";
+  }
+  return "unavailable";
+}
+
 function validateModeledDecisionTable() {
   const fixtures = [
     [{ exactIdentity: false, mainBinaryPresent: false, uninstallerPresent: false, compare: 1 }, "normal"],
@@ -526,6 +543,196 @@ function validateModeledDecisionTable() {
     assert(
       modeledWindowsPrerequisiteOutcome(input) === expected,
       `Windows prerequisite outcome drifted for ${JSON.stringify(input)}`,
+    );
+  }
+
+  const cacheFixtures = [
+    [{ invocation: "complete", exitCode: 0, resultClass: "seeded" }, "seeded"],
+    [{ invocation: "complete", exitCode: 30, resultClass: "unavailable" }, "unavailable"],
+    [{ invocation: "missing", exitCode: null, resultClass: null }, "unavailable"],
+    [{ invocation: "timeout", exitCode: null, resultClass: null }, "unavailable"],
+    [{ invocation: "complete", exitCode: 0, resultClass: "unavailable" }, "unavailable"],
+    [{ invocation: "complete", exitCode: 30, resultClass: "seeded" }, "unavailable"],
+  ];
+  for (const [input, expected] of cacheFixtures) {
+    assert(
+      modeledRuntimeCacheSeedOutcome(input) === expected,
+      `Windows runtime-cache seed outcome drifted for ${JSON.stringify(input)}`,
+    );
+  }
+}
+
+function validateManagedRuntimeCacheSeedPatch(vendored) {
+  const coordinator = extractFunction(vendored, "SeedManagedRuntimePrivateCache").source;
+  const fixedCommand =
+    'nsExec::ExecToStack /TIMEOUT=180000 \'"$INSTDIR\\ai-security-scanner-cli.exe" --json windows-installer-runtime-cache\'';
+  const seededEnvelope =
+    '{"schema_version":"ai-security-scanner.windows-installer-runtime-cache/v1","result_class":"seeded","exit_code":0,"terminal":"complete"}';
+  const unavailableEnvelope =
+    '{"schema_version":"ai-security-scanner.windows-installer-runtime-cache/v1","result_class":"unavailable","exit_code":30,"terminal":"complete"}';
+  assertOrdered(
+    coordinator,
+    [
+      '${IfNot} ${FileExists} "$INSTDIR\\ai-security-scanner-cli.exe"',
+      "Return",
+      fixedCommand,
+      "Pop $R0",
+      "Pop $R1",
+      '${If} $R0 = 0',
+      `'${seededEnvelope}'`,
+      "Return",
+      '${If} $R0 = 30',
+      `'${unavailableEnvelope}'`,
+      "Return",
+    ],
+    "fixed managed-runtime private-cache seed coordinator",
+  );
+  assert(
+    coordinator.split(fixedCommand).length === 2,
+    "installer must invoke exactly one fixed runtime-cache seed command",
+  );
+  for (const envelope of [seededEnvelope, unavailableEnvelope]) {
+    assert(
+      coordinator.split(`'${envelope}'`).length === 2,
+      `installer does not accept exactly one complete runtime-cache envelope: ${envelope}`,
+    );
+  }
+  assert(
+    coordinator.split("ai-security-scanner.windows-installer-runtime-cache/v1").length === 3,
+    "installer accepts an incomplete or extra runtime-cache seed envelope",
+  );
+  for (const forbidden of [
+    "$CMDLINE",
+    "${GetOptions}",
+    "${GetParameters}",
+    "wsl.exe",
+    "powershell",
+    "pwsh",
+    "cmd.exe",
+    "--data-dir",
+    "--managed-runtime-bundle",
+    "--path",
+    "--action",
+    "--executable",
+    "--arguments",
+    "ExecWait",
+    "ExecShell",
+    "ShellExec",
+    "Abort",
+    "Quit",
+    "MessageBox",
+  ]) {
+    assert(
+      !coordinator.toLowerCase().includes(forbidden.toLowerCase()),
+      `runtime-cache seed coordinator exposes or invokes an unreviewed surface: ${forbidden}`,
+    );
+  }
+  assert(
+    !coordinator.includes("DetailPrint $R1") &&
+      !coordinator.includes('DetailPrint "$R1"') &&
+      !coordinator.includes("FileWrite") &&
+      !coordinator.includes("CopyFiles"),
+    "runtime-cache seed coordinator persists, displays, or independently copies helper output",
+  );
+  assert(
+    coordinator.includes("without executing Podman, WSL, or another runtime helper") &&
+      coordinator.includes("never an application") &&
+      coordinator.includes("leaves the installed shell/resources intact"),
+    "runtime-cache seed boundary or non-blocking failure contract is missing",
+  );
+
+  const installStart = vendored.indexOf("Section Install\n");
+  const installEnd = vendored.indexOf("SectionEnd\n", installStart);
+  assert(installStart !== -1 && installEnd > installStart, "Install section is missing");
+  const install = vendored.slice(installStart, installEnd);
+  assertOrdered(
+    install,
+    [
+      'File "${MAINBINARYSRCPATH}"',
+      "; Copy external binaries",
+      'WriteUninstaller "$INSTDIR\\uninstall.exe"',
+      'WriteRegStr SHCTX "${UNINSTKEY}" "DisplayVersion" "${VERSION}"',
+      "!insertmacro NSIS_HOOK_POSTINSTALL",
+      "${If} $RegistrationOverlayMode = 0",
+      "    Call SeedManagedRuntimePrivateCache",
+      "${EndIf}",
+      "Call RunWindowsInstallerPrerequisiteCoordinator",
+      "SetAutoClose true",
+    ],
+    "application-first runtime-cache seed dispatch",
+  );
+  assert(
+    install.split("Call SeedManagedRuntimePrivateCache").length === 2,
+    "Install section must run the runtime-cache seed coordinator exactly once",
+  );
+  assert(
+    install.includes("Registration overlays (stale/same-version/upgrade) preserve private runtime") &&
+      install.indexOf("${If} $RegistrationOverlayMode = 0") <
+        install.indexOf("Call SeedManagedRuntimePrivateCache") &&
+      install.indexOf("Call SeedManagedRuntimePrivateCache") <
+        install.indexOf("${EndIf}", install.indexOf("Call SeedManagedRuntimePrivateCache")),
+    "runtime-cache seed must remain fresh-install-only and preserve every registration overlay",
+  );
+}
+
+function validateInstallerRuntimeCacheBuildWiring({
+  cargoManifest,
+  buildScript,
+  buildSidecar,
+  ciWorkflow,
+  releaseWorkflow,
+}) {
+  assert(
+    /^installer-runtime-cache = \[\]$/mu.test(cargoManifest),
+    "the installed CLI has no dedicated runtime-cache build feature",
+  );
+  for (const marker of [
+    'std::env::var_os("CARGO_FEATURE_INSTALLER_RUNTIME_CACHE")',
+    "let needs_managed_runtime_anchor = desktop || installer_runtime_cache;",
+    "cargo:rustc-env={MANAGED_RUNTIME_MANIFEST_SHA256_ENV}={manifest_sha256}",
+  ]) {
+    assert(buildScript.includes(marker), `installer runtime-cache build anchor is missing: ${marker}`);
+  }
+  assert(
+    buildSidecar.includes(
+      'binary.name === "ai-security-scanner-cli" && target.includes("windows")',
+    ) && buildSidecar.includes("`${binary.feature},installer-runtime-cache`"),
+    "Windows sidecar staging does not compile the fixed cache coordinator with its build anchor",
+  );
+  assertOrdered(
+    ciWorkflow,
+    [
+      "Vendor the release-equivalent Windows managed runtime",
+      "node runtime/vendor-managed-runtime.mjs",
+      "Verify the staged Windows managed-runtime manifest and files",
+      "Build and stage required Windows sidecars",
+      "npm run desktop:prepare-sidecar -- --target x86_64-pc-windows-msvc",
+      "Test the installer runtime-cache coordinator and build trust anchor",
+      "--features cli,installer-runtime-cache",
+      "Compile the reviewed custom NSIS installer",
+    ],
+    "Windows CI runtime-cache build wiring",
+  );
+  assertOrdered(
+    releaseWorkflow,
+    [
+      "Verify, build, and stage the release-managed local runtime",
+      "node runtime/vendor-managed-runtime.mjs",
+      "Build and stage the Linux managed egress sidecar",
+      "Build and stage the universal macOS managed egress sidecar",
+      "Build and stage the Windows managed egress sidecar",
+      "npm run desktop:prepare-sidecar -- --target x86_64-pc-windows-msvc",
+      "Build the application once without installers",
+    ],
+    "release runtime-cache build wiring",
+  );
+  for (const [workflow, label] of [
+    [ciWorkflow, "CI"],
+    [releaseWorkflow, "release"],
+  ]) {
+    assert(
+      workflow.split("node scripts/release/validate-windows-nsis-template.mjs").length === 2,
+      `${label} workflow must validate the reviewed Windows NSIS source exactly once`,
     );
   }
 }
@@ -1275,6 +1482,57 @@ function expectRepairMutationRejected(vendored, functionName, before, after, lab
 function validateMutationGuards(vendored) {
   for (const [before, after, label] of [
     [
+      'nsExec::ExecToStack /TIMEOUT=180000 \'"$INSTDIR\\ai-security-scanner-cli.exe" --json windows-installer-runtime-cache\'',
+      'nsExec::ExecToStack \'"$INSTDIR\\ai-security-scanner-cli.exe" --json windows-installer-runtime-cache\'',
+      "runtime-cache seed outer timeout removed",
+    ],
+    [
+      "--json windows-installer-runtime-cache'",
+      "--json windows-installer-runtime-cache --data-dir C:\\unreviewed'",
+      "runtime-cache seed mutable data directory added",
+    ],
+    [
+      '"result_class":"seeded","exit_code":0,"terminal":"complete"',
+      '"result_class":"seeded","exit_code":0,"terminal":"partial"',
+      "runtime-cache seed complete-envelope sentinel changed",
+    ],
+    [
+      '"result_class":"unavailable","exit_code":30,"terminal":"complete"',
+      '"result_class":"unavailable","exit_code":0,"terminal":"complete"',
+      "runtime-cache unavailable exit binding changed",
+    ],
+    [
+      "  ${If} $RegistrationOverlayMode = 0\n    Call SeedManagedRuntimePrivateCache\n  ${EndIf}\n",
+      "  ${If} $RegistrationOverlayMode <> 0\n    Call SeedManagedRuntimePrivateCache\n  ${EndIf}\n",
+      "runtime-cache seed fresh-install guard inverted",
+    ],
+    [
+      "    Call SeedManagedRuntimePrivateCache\n",
+      "",
+      "runtime-cache seed installer dispatch removed",
+    ],
+  ]) {
+    const first = vendored.indexOf(before);
+    assert(first !== -1, `runtime-cache seed mutation fixture is missing: ${label}`);
+    assert(
+      vendored.indexOf(before, first + before.length) === -1,
+      `runtime-cache seed mutation fixture is ambiguous: ${label}`,
+    );
+    const mutated = `${vendored.slice(0, first)}${after}${vendored.slice(first + before.length)}`;
+    let cacheSeedRejected = false;
+    try {
+      validateManagedRuntimeCacheSeedPatch(mutated);
+    } catch {
+      cacheSeedRejected = true;
+    }
+    assert(
+      cacheSeedRejected,
+      `NSIS runtime-cache seed validator accepted mutation: ${label}`,
+    );
+  }
+
+  for (const [before, after, label] of [
+    [
       'nsExec::ExecToStack /TIMEOUT=360000 \'"$INSTDIR\\ai-security-scanner-cli.exe" --json windows-installer-prerequisite\'',
       'nsExec::ExecToStack \'"$INSTDIR\\ai-security-scanner-cli.exe" --json windows-installer-prerequisite\'',
       "Windows prerequisite outer timeout removed",
@@ -1533,12 +1791,28 @@ function validateMutationGuards(vendored) {
 }
 
 export async function validateWindowsNsisTemplate() {
-  const [provenance, tauri, packageLock, vendored, noticeGenerator] = await Promise.all([
+  const [
+    provenance,
+    tauri,
+    packageLock,
+    vendored,
+    noticeGenerator,
+    cargoManifest,
+    buildScript,
+    buildSidecar,
+    ciWorkflow,
+    releaseWorkflow,
+  ] = await Promise.all([
     readJson(PROVENANCE_PATH),
     readJson(path.join(PROJECT_ROOT, "src-tauri/tauri.conf.json")),
     readJson(path.join(PROJECT_ROOT, "package-lock.json")),
     readFile(TEMPLATE_PATH, "utf8"),
     readFile(path.join(PROJECT_ROOT, "scripts/release/generate-notices.mjs"), "utf8"),
+    readFile(path.join(PROJECT_ROOT, "src-tauri/Cargo.toml"), "utf8"),
+    readFile(path.join(PROJECT_ROOT, "src-tauri/build.rs"), "utf8"),
+    readFile(path.join(PROJECT_ROOT, "scripts/release/build-sidecar.mjs"), "utf8"),
+    readFile(path.join(PROJECT_ROOT, ".github/workflows/ci.yml"), "utf8"),
+    readFile(path.join(PROJECT_ROOT, ".github/workflows/release.yml"), "utf8"),
   ]);
   exactKeys(provenance, Object.keys(PINNED_UPSTREAM), "NSIS template provenance");
   assert(
@@ -1564,7 +1838,7 @@ export async function validateWindowsNsisTemplate() {
   );
   assert(
     tauri.bundle?.externalBin?.includes("binaries/ai-security-scanner-cli") === true,
-    "the fixed NSIS prerequisite coordinator CLI is not packaged as an installed Windows sidecar",
+    "the fixed NSIS installer coordinator CLI is not packaged as an installed Windows sidecar",
   );
   assert(
     packageLock.packages?.["node_modules/@tauri-apps/cli"]?.version === "2.11.4",
@@ -1583,6 +1857,14 @@ export async function validateWindowsNsisTemplate() {
     );
   }
   validateModeledDecisionTable();
+  validateInstallerRuntimeCacheBuildWiring({
+    cargoManifest,
+    buildScript,
+    buildSidecar,
+    ciWorkflow,
+    releaseWorkflow,
+  });
+  validateManagedRuntimeCacheSeedPatch(vendored);
   validateWindowsPrerequisitePatch(vendored);
   validateSynchronousPreviousUninstallerPatch(vendored);
   validateProductRepairPatch(vendored);
@@ -1594,7 +1876,7 @@ export async function validateWindowsNsisTemplate() {
     "reversing the reviewed patch does not reconstruct the pinned upstream template",
   );
   process.stdout.write(
-    `Source-validated fixed Windows prerequisite preparation, version-neutral NSIS repair, bilingual bounded uninstall, and exact postconditions against ${provenance.upstreamTag} (${provenance.upstreamCommit}); this is not Windows installer qualification\n`,
+    `Source-validated exact private runtime-cache seeding, fixed Windows prerequisite preparation, version-neutral NSIS repair, bilingual bounded uninstall, and exact postconditions against ${provenance.upstreamTag} (${provenance.upstreamCommit}); this is not Windows installer qualification\n`,
   );
 }
 

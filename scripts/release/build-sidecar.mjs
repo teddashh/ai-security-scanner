@@ -19,6 +19,9 @@ const SUPPORTED_TARGETS = new Set([
 
 function cargoBuild(binary, target) {
   const cargo = process.env.CARGO || "cargo";
+  const features = binary.name === "ai-security-scanner-cli" && target.includes("windows")
+    ? `${binary.feature},installer-runtime-cache`
+    : binary.feature;
   execFileSync(
     cargo,
     [
@@ -29,7 +32,7 @@ function cargoBuild(binary, target) {
       "ai-security-scanner",
       "--no-default-features",
       "--features",
-      binary.feature,
+      features,
       "--bin",
       binary.name,
       "--target",

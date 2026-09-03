@@ -220,8 +220,8 @@ jobs:
           managed_network::tests::installed_gateway_is_resolved_from_the_canonical_desktop_directory
           -- --exact
       - run: npm ci --ignore-scripts
-      - name: Build and stage required Windows sidecars
-        run: npm run desktop:prepare-sidecar -- --target x86_64-pc-windows-msvc
+      - name: Validate the pinned Windows NSIS source patch
+        run: node scripts/release/validate-windows-nsis-template.mjs
       - name: Vendor the release-equivalent Windows managed runtime
         run: >-
           node runtime/vendor-managed-runtime.mjs
@@ -234,6 +234,18 @@ jobs:
           --out target/ci-managed-runtime-evidence
           --platform windows-x86_64
           --expected-manifest-sha256 a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a
+      - name: Build and stage required Windows sidecars
+        run: npm run desktop:prepare-sidecar -- --target x86_64-pc-windows-msvc
+      - name: Test the installer runtime-cache coordinator and build trust anchor
+        run: >-
+          cargo test --locked --package ai-security-scanner --no-default-features
+          --features cli,installer-runtime-cache --bin ai-security-scanner-cli
+          windows_installer_runtime_cache
+      - name: Test the desktop build-to-runtime manifest trust anchor
+        run: >-
+          cargo test --locked --package ai-security-scanner --features desktop --lib
+          managed_runtime::tests::desktop_build_anchor_matches_the_staged_manifest_used_for_packaging
+          -- --exact
       - name: Compile Windows desktop
         run: cargo check --locked --package ai-security-scanner --features desktop --lib
       - name: Compile the reviewed custom NSIS installer

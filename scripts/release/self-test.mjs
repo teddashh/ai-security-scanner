@@ -388,6 +388,9 @@ async function createQualificationFixture(output, platform, installerType) {
     ? installedPath.join("C:\\fixture-installed", platform, installerType)
     : installedPath.join("/fixture-installed", platform, installerType);
   const extension = platform === "windows-x86_64" ? ".exe" : "";
+  const initialRuntimePhase = platform === "windows-x86_64" && installerType === "nsis"
+    ? "installed"
+    : "not_installed";
   const observations = {
     installedLayout: {
       pathsVerifiedAbsolute: true,
@@ -421,7 +424,7 @@ async function createQualificationFixture(output, platform, installerType) {
           notObserved("final_status"),
         ]
       : [
-          passed("initial_status", "not_installed", false),
+          passed("initial_status", initialRuntimePhase, false),
           passed("install", "installed", false),
           passed("installed_status", "installed", false),
           passed("start", "running", true),
@@ -761,6 +764,36 @@ async function main() {
     await createQualificationFixture(outputs[1], "macos-universal", "dmg");
     await createQualificationFixture(outputs[2], "windows-x86_64", "msi");
     await createQualificationFixture(outputs[2], "windows-x86_64", "nsis");
+    for (const [platformOutput, platform, installerType, wrongInitialPhase] of [
+      [outputs[0], "linux-x86_64", "deb", "installed"],
+      [outputs[2], "windows-x86_64", "msi", "installed"],
+      [outputs[2], "windows-x86_64", "nsis", "not_installed"],
+    ]) {
+      const invalidInitialStatusFile = path.join(
+        platformOutput,
+        `platform-qualification-${platform}-${installerType}-wrong-initial-status.json`,
+      );
+      const invalidInitialStatus = await readJson(
+        path.join(platformOutput, `platform-qualification-${platform}-${installerType}.json`),
+      );
+      invalidInitialStatus.managedRuntime.operations[0].status.phase = wrongInitialPhase;
+      await writeFile(invalidInitialStatusFile, `${JSON.stringify(invalidInitialStatus, null, 2)}\n`);
+      expectFailure(
+        () => run("platform-qualification.mjs", [
+          "validate",
+          "--file", invalidInitialStatusFile,
+          "--artifact-dir", platformOutput,
+          "--platform", platform,
+          "--installer-type", installerType,
+          "--version", VERSION,
+          "--tag", TAG,
+          "--commit", COMMIT,
+          "--release-channel", "prerelease",
+        ]),
+        `${platform}/${installerType} qualification with the wrong initial managed-runtime phase`,
+      );
+      await rm(invalidInitialStatusFile);
+    }
     const wrongSourceQualification = path.join(outputs[2], "platform-qualification-wrong-source.json");
     const wrongSourceEvidence = await readJson(
       path.join(outputs[2], "platform-qualification-windows-x86_64-nsis.json"),

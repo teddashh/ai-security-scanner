@@ -275,11 +275,11 @@ function gatewayImageFromReleaseManifest(manifest, version) {
   return `${manifest.image.repository}@${manifest.image.digest}`;
 }
 
-function validateFullOperations(operations, runtime, target) {
+function validateFullOperations(operations, runtime, target, initialPhase) {
   assert(Array.isArray(operations), "managed lifecycle operations must be an array");
   assert(JSON.stringify(operations.map((operation) => operation?.name)) === JSON.stringify(LIFECYCLE_OPERATION_NAMES), "managed lifecycle operation order is incomplete or unexpected");
   const expectedPhases = new Map([
-    ["initial_status", ["not_installed", false]],
+    ["initial_status", [initialPhase, false]],
     ["install", ["installed", false]],
     ["installed_status", ["installed", false]],
     ["start", ["running", true]],
@@ -415,7 +415,19 @@ export function validatePlatformQualification(evidence, context = {}) {
     assert(evidence.cleanup.managedRuntimeState === "not_created", "macOS qualification made an unsupported managed-runtime cleanup claim");
     assert(evidence.cleanup.machineImageCacheState === "not_created", "macOS qualification made an unsupported machine-image cleanup claim");
   } else {
-    validateFullOperations(evidence.managedRuntime.operations, evidence.runtime, evidence.runtime.selectedTarget);
+    // A fresh NSIS `installed` status is the exact pre-desktop observation for
+    // installer_runtime_cache_seed. It does not qualify packaged corruption,
+    // cache re-admission, or installed-resource replacement.
+    const initialRuntimePhase = evidence.platform === "windows-x86_64" &&
+      evidence.installer.bundleType === "nsis"
+      ? "installed"
+      : "not_installed";
+    validateFullOperations(
+      evidence.managedRuntime.operations,
+      evidence.runtime,
+      evidence.runtime.selectedTarget,
+      initialRuntimePhase,
+    );
     exactKeys(evidence.egressGateway, ["outcome", "result"], "egress gateway execution");
     assert(evidence.egressGateway.outcome === "passed", "managed egress gateway qualification did not pass");
     assert(

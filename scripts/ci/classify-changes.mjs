@@ -67,7 +67,7 @@ const WINDOWS_RUNTIME_PATHS = [
   /^src-tauri\/windows\//,
   /^src-tauri\/binaries\//,
   /^src-tauri\/(?:Cargo\.toml|app-icon\.svg$|build\.rs|icons\/|tauri\.conf\.json$)/,
-  /^src-tauri\/src\/(?:lib\.rs$|bootstrap\.rs$|bootstrap\/|container_runtime\.rs$|export_identity\.rs$|gateway_release\.rs$|managed_network\.rs$|managed_runtime\.rs$|product_uninstall\.rs$|runtime\.rs$|runtime_health_monitor\.rs$|bin\/(?:bootstrap_broker|egress_gateway)\.rs$)/,
+  /^src-tauri\/src\/(?:lib\.rs$|bootstrap\.rs$|bootstrap\/|container_runtime\.rs$|export_identity\.rs$|gateway_release\.rs$|managed_network\.rs$|managed_runtime\.rs$|product_uninstall\.rs$|runtime\.rs$|runtime_health_monitor\.rs$|bin\/(?:bootstrap_broker|cli|egress_gateway)\.rs$)/,
   /^scripts\/release\/(?:build-sidecar|stage-sidecar|generate-runtime-evidence|validate-windows-nsis-template|windows-nsis-[^/]+-evidence)\.mjs$/,
   /^scripts\/release\/qualify-windows[^/]*\.ps1$/,
 ];

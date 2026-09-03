@@ -40,7 +40,15 @@ const specs = {
   grype: { tag: "0.117.0-3", group: "local", smokeFiles: ["grype.json"] },
   kubescape: { tag: "4.0.12-3", group: "local", smokeFiles: ["kubescape.json"] },
   "kube-bench": { tag: "0.16.0-3", group: "local", smokeFiles: ["kube-bench.json"] },
+  scubagear: { tag: "1.8.0-2", group: "m365" },
+  maester: { tag: "2.0.0-2", group: "m365" },
   "egress-gateway": { tag: "0.1.8-1", group: "gateway" },
+};
+const workflows = {
+  external: ".github/workflows/engine-images-external.yml",
+  local: ".github/workflows/engine-images-local-k8s.yml",
+  m365: ".github/workflows/engine-images-m365.yml",
+  gateway: ".github/workflows/managed-egress-gateway-image.yml",
 };
 const platforms = ["linux/amd64", "linux/arm64"];
 const sbomSpecs = [
@@ -201,6 +209,7 @@ function fakeBundle(image, digest, predicateType, predicate) {
 
 async function createArtifact(testContext, engine) {
   const spec = specs[engine];
+  const workflow = workflows[spec.group];
   const root = await mkdtemp(path.join(os.tmpdir(), `publication-${engine}-`));
   testContext.after(() => rm(root, { recursive: true, force: true }));
   const nested = path.join(root, engine);
@@ -243,11 +252,7 @@ async function createArtifact(testContext, engine) {
             workflow: {
               ref: "refs/heads/main",
               repository: `https://github.com/${repository}`,
-              path: spec.group === "external"
-                ? ".github/workflows/engine-images-external.yml"
-                : spec.group === "local"
-                  ? ".github/workflows/engine-images-local-k8s.yml"
-                  : ".github/workflows/managed-egress-gateway-image.yml",
+              path: workflow,
             },
           },
           resolvedDependencies: [{
@@ -257,11 +262,7 @@ async function createArtifact(testContext, engine) {
         },
         runDetails: {
           builder: {
-            id: `https://github.com/${repository}/${spec.group === "external"
-              ? ".github/workflows/engine-images-external.yml"
-              : spec.group === "local"
-                ? ".github/workflows/engine-images-local-k8s.yml"
-                : ".github/workflows/managed-egress-gateway-image.yml"}@refs/heads/main`,
+            id: `https://github.com/${repository}/${workflow}@refs/heads/main`,
           },
           metadata: {
             invocationId: `https://github.com/${repository}/actions/runs/${runId}/attempts/${attempt}`,
@@ -382,7 +383,25 @@ async function createArtifact(testContext, engine) {
         anonymousPullVerified: true,
         managedSmokeEvidenceSha256: smokeReceipt,
       }
-      : { ...common, platforms, public: true };
+      : spec.group === "m365"
+        ? {
+          ...common,
+          platforms,
+          platformDigests,
+          public: true,
+          anonymousPullVerified: true,
+          smoke: {
+            platform: "linux/amd64",
+            nonRoot: true,
+            fixedEntrypoint: true,
+            missingOutputMountRejected: true,
+            missingScopeMountRejected: true,
+            missingCredentialMountRejected: true,
+            moduleLockVerified: true,
+            dependencyNoticesVerified: true,
+          },
+        }
+        : { ...common, platforms, public: true };
     await writeJson(path.join(root, `${engine}-image-manifest.json`), summary);
   }
   await sealRoot(root);
@@ -422,7 +441,15 @@ async function mutateNested(root, engine, mutate) {
   await sealRoot(root);
 }
 
-test("publication verifier accepts all nine fixed engines and the gateway with one normalized JSON result", async (t) => {
+async function mutateRootSummary(root, engine, mutate) {
+  const summaryFile = path.join(root, `${engine}-image-manifest.json`);
+  const summary = JSON.parse(await readFile(summaryFile, "utf8"));
+  mutate(summary);
+  await writeJson(summaryFile, summary);
+  await sealRoot(root);
+}
+
+test("publication verifier accepts every fixed engine and the gateway with one normalized JSON result", async (t) => {
   for (const [engine, spec] of Object.entries(specs)) {
     const artifact = await createArtifact(t, engine);
     const result = runVerifier(engine, artifact);
@@ -446,6 +473,100 @@ test("publication verifier accepts all nine fixed engines and the gateway with o
     if (spec.group === "local") assert.match(payload.evidence.managedSmokeEvidenceSha256, /^sha256:[0-9a-f]{64}$/u);
     if (spec.group === "gateway") assert.deepEqual(payload.evidence.sbomTransformationPlatforms, platforms);
   }
+});
+
+test("Microsoft 365 workflow seals the exact downloadable evidence inventory before upload", async () => {
+  const workflow = await readFile(path.join(projectRoot, workflows.m365), "utf8");
+  const sealStep = workflow.indexOf("- name: Seal the downloadable evidence inventory");
+  const uploadStep = workflow.indexOf("- name: Upload publication and signed supply-chain evidence");
+
+  assert.notEqual(sealStep, -1);
+  assert.notEqual(uploadStep, -1);
+  assert.ok(sealStep < uploadStep);
+  assert.match(workflow, /find \. -type f ! -path '\.\/SHA256SUMS\.txt' -print0/u);
+  assert.match(workflow, /xargs -0 sha256sum > SHA256SUMS\.txt/u);
+  assert.match(workflow, /sha256sum --check SHA256SUMS\.txt/u);
+});
+
+test("publication verifier rejects resealed Microsoft 365 root-manifest drift", async (t) => {
+  const cases = [
+    {
+      engine: "scubagear",
+      mutate: (summary) => { summary.public = false; },
+      error: /Microsoft 365 root summary must record public access/u,
+    },
+    {
+      engine: "maester",
+      mutate: (summary) => { summary.anonymousPullVerified = false; },
+      error: /Microsoft 365 root summary must record anonymous pull verification/u,
+    },
+    {
+      engine: "scubagear",
+      mutate: (summary) => { summary.platformDigests["linux/amd64"] = `sha256:${"ff".repeat(32)}`; },
+      error: /Microsoft 365 root platform digest mismatch/u,
+    },
+    {
+      engine: "maester",
+      mutate: (summary) => { summary.platforms = ["linux/amd64"]; },
+      error: /Microsoft 365 root summary platform list mismatch/u,
+    },
+    {
+      engine: "maester",
+      mutate: (summary) => { summary.smoke.fixedEntrypoint = false; },
+      error: /Microsoft 365 smoke summary does not match the fixed publication contract/u,
+    },
+    {
+      engine: "scubagear",
+      mutate: (summary) => { summary.smoke.unreviewedClaim = true; },
+      error: /Microsoft 365 smoke summary fields are not the exact publication contract/u,
+    },
+  ];
+  for (const fixture of cases) {
+    const artifact = await createArtifact(t, fixture.engine);
+    await mutateRootSummary(artifact, fixture.engine, fixture.mutate);
+    const result = runVerifier(fixture.engine, artifact);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, fixture.error);
+    assert.equal(result.stdout, "");
+  }
+});
+
+test("publication verifier binds Microsoft 365 tags, workflow identity, and run attempt", async (t) => {
+  let artifact = await createArtifact(t, "scubagear");
+  await mutateNested(artifact, "scubagear", (evidence) => {
+    evidence.tag = "1.8.0-1";
+  });
+  let result = runVerifier("scubagear", artifact);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /supply-chain image tag mismatch/u);
+
+  artifact = await createArtifact(t, "maester");
+  await mutateNested(artifact, "maester", (evidence) => {
+    evidence.verification.runAttempt = 1;
+  });
+  result = runVerifier("maester", artifact);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /publication workflow attempt mismatch/u);
+
+  artifact = await createArtifact(t, "scubagear");
+  const bundleFile = path.join(artifact, "scubagear", "scubagear-provenance.sigstore.json");
+  const bundle = JSON.parse(await readFile(bundleFile, "utf8"));
+  const statement = JSON.parse(Buffer.from(bundle.dsseEnvelope.payload, "base64").toString("utf8"));
+  statement.predicate.buildDefinition.externalParameters.workflow.path = ".github/workflows/engine-images-external.yml";
+  bundle.dsseEnvelope.payload = Buffer.from(JSON.stringify(statement)).toString("base64");
+  await writeJson(bundleFile, bundle);
+  const manifestFile = path.join(artifact, "scubagear", "scubagear-image-supply-chain.json");
+  const manifest = JSON.parse(await readFile(manifestFile, "utf8"));
+  const record = await fileRecord(bundleFile);
+  manifest.attestations[0].bundleSha256 = record.sha256;
+  manifest.attestations[0].bundleSizeBytes = record.sizeBytes;
+  await writeJson(manifestFile, manifest);
+  await sealNested(artifact, "scubagear");
+  await sealRoot(artifact);
+  result = runVerifier("scubagear", artifact);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /provenance workflow path mismatch/u);
+  assert.equal(result.stdout, "");
 });
 
 test("publication verifier rejects a root-seal mismatch before trusting nested evidence", async (t) => {
