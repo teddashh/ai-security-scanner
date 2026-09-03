@@ -187,6 +187,7 @@ fn prefix_from_mask(mask: Ipv4Addr) -> Option<u8> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 fn ipv4_from_network_order(value: u32) -> Ipv4Addr {
     Ipv4Addr::from(u32::from_be(value))
 }
