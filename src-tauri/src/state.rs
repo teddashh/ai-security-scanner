@@ -86,7 +86,8 @@ impl AppState {
     ) -> Self {
         let failure_reason = admission.failure_reason();
         match admission {
-            PackagedManagedRuntimeAdmission::Verified(manager) => {
+            PackagedManagedRuntimeAdmission::Verified(manager)
+            | PackagedManagedRuntimeAdmission::RecoveredFromPrivateCache { manager, .. } => {
                 self = self.with_managed_runtime(*manager);
             }
             PackagedManagedRuntimeAdmission::Missing
@@ -155,10 +156,10 @@ impl AppState {
                 ProcessContainerRuntime::from_managed(manager.start()?)?
             }
             (RuntimeProvider::Docker, RuntimeCommandProvenance::Compatibility) => {
-                ProcessContainerRuntime::new(RuntimeProvider::Docker, "docker")
+                ProcessContainerRuntime::new(RuntimeProvider::Docker, "docker")?
             }
             (RuntimeProvider::Podman, RuntimeCommandProvenance::Compatibility) => {
-                ProcessContainerRuntime::new(RuntimeProvider::Podman, "podman")
+                ProcessContainerRuntime::new(RuntimeProvider::Podman, "podman")?
             }
             _ => {
                 return Err(AppError::NotAuthorized(

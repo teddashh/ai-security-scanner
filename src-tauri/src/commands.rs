@@ -9459,10 +9459,10 @@ mod tests {
                 },
             )
             .unwrap();
-        let prepared = PreparedRuntimeSet::with_fresh(ProcessContainerRuntime::new(
-            RuntimeProvider::Docker,
-            "prepared-runtime",
-        ));
+        let prepared = PreparedRuntimeSet::with_fresh(
+            ProcessContainerRuntime::new(RuntimeProvider::Docker, "prepared-runtime")
+                .expect("construct compatibility runtime"),
+        );
 
         assert_eq!(plan.executable.len(), 2);
         for execution in &plan.executable {
@@ -9522,10 +9522,13 @@ mod tests {
             match identity {
                 RuntimePreparationIdentity::Fresh => RuntimePreparationOutcome::Unavailable,
                 RuntimePreparationIdentity::Recorded { .. } => {
-                    RuntimePreparationOutcome::Prepared(Box::new(ProcessContainerRuntime::new(
-                        RuntimeProvider::Docker,
-                        "prepared-recorded-runtime",
-                    )))
+                    RuntimePreparationOutcome::Prepared(Box::new(
+                        ProcessContainerRuntime::new(
+                            RuntimeProvider::Docker,
+                            "prepared-recorded-runtime",
+                        )
+                        .expect("construct compatibility runtime"),
+                    ))
                 }
             }
         });

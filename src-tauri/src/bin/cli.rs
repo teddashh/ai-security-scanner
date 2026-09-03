@@ -100,6 +100,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[cfg(feature = "installer-runtime-cache")]
+    /// Verify and seed the installed package's exact managed-runtime payload
+    /// into private state before the desktop first opens.
+    #[command(hide = true)]
+    WindowsInstallerRuntimeCache,
     /// Run the installed package's fixed Windows prerequisite check/servicing
     /// coordinator before opening any project or accepting any caller input.
     #[command(hide = true)]
@@ -855,6 +860,23 @@ struct WindowsInstallerPrerequisiteCoordinatorEnvelope {
     terminal: &'static str,
 }
 
+#[cfg(feature = "installer-runtime-cache")]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum WindowsInstallerRuntimeCacheClass {
+    Seeded,
+    Unavailable,
+}
+
+#[cfg(feature = "installer-runtime-cache")]
+#[derive(Debug, Serialize)]
+struct WindowsInstallerRuntimeCacheCoordinatorEnvelope {
+    schema_version: &'static str,
+    result_class: WindowsInstallerRuntimeCacheClass,
+    exit_code: u8,
+    terminal: &'static str,
+}
+
 impl GlobalOptionSources {
     fn data_dir_was_explicit(self) -> bool {
         self.data_dir == Some(ValueSource::CommandLine)
@@ -866,6 +888,10 @@ impl GlobalOptionSources {
 }
 
 async fn execute(cli: Cli, option_sources: GlobalOptionSources) -> AppResult<u8> {
+    #[cfg(feature = "installer-runtime-cache")]
+    if matches!(cli.command, Command::WindowsInstallerRuntimeCache) {
+        return execute_windows_installer_runtime_cache_early(option_sources);
+    }
     if matches!(cli.command, Command::WindowsInstallerPrerequisite) {
         return execute_windows_installer_prerequisite_early(option_sources);
     }
@@ -923,6 +949,10 @@ async fn execute(cli: Cli, option_sources: GlobalOptionSources) -> AppResult<u8>
     );
 
     match cli.command {
+        #[cfg(feature = "installer-runtime-cache")]
+        Command::WindowsInstallerRuntimeCache => {
+            unreachable!("Windows installer runtime cache is early-dispatched")
+        }
         Command::WindowsInstallerPrerequisite => {
             unreachable!("Windows installer prerequisite is early-dispatched")
         }
@@ -1048,6 +1078,71 @@ fn validate_windows_installer_prerequisite_option_sources(
         ));
     }
     Ok(())
+}
+
+#[cfg(feature = "installer-runtime-cache")]
+fn validate_windows_installer_runtime_cache_option_sources(
+    option_sources: GlobalOptionSources,
+) -> AppResult<()> {
+    if option_sources.data_dir_was_explicit() {
+        return Err(AppError::NotAuthorized(
+            "windows-installer-runtime-cache refuses an explicit global --data-dir override".into(),
+        ));
+    }
+    if option_sources.managed_runtime_bundle_was_explicit() {
+        return Err(AppError::NotAuthorized(
+            "windows-installer-runtime-cache refuses an explicit managed-runtime bundle override"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "installer-runtime-cache")]
+fn windows_installer_runtime_cache_result<F>(seed: F) -> WindowsInstallerRuntimeCacheClass
+where
+    F: FnOnce() -> AppResult<()>,
+{
+    match seed() {
+        Ok(()) => WindowsInstallerRuntimeCacheClass::Seeded,
+        Err(_) => WindowsInstallerRuntimeCacheClass::Unavailable,
+    }
+}
+
+#[cfg(feature = "installer-runtime-cache")]
+fn execute_windows_installer_runtime_cache_early(
+    option_sources: GlobalOptionSources,
+) -> AppResult<u8> {
+    // Environment-backed development overrides are ignored. The installed
+    // package owns both fixed roots; no command-line path can redirect this
+    // bounded copy into caller-selected state or toward another bundle.
+    validate_windows_installer_runtime_cache_option_sources(option_sources)?;
+    let result_class = windows_installer_runtime_cache_result(|| {
+        let data_dir = resolve_data_dir(None)?;
+        let _product_data_guard = ensure_private_product_data_directory(&data_dir)?;
+        let _exclusive_lease = DataDirectoryExclusiveLease::acquire(&data_dir)?;
+        let manager = open_exact_packaged_installer_runtime_cache_source(&data_dir)?;
+        manager.install()?;
+        Ok(())
+    });
+    let exit_code = match result_class {
+        WindowsInstallerRuntimeCacheClass::Seeded => 0,
+        WindowsInstallerRuntimeCacheClass::Unavailable => 30,
+    };
+    let envelope = WindowsInstallerRuntimeCacheCoordinatorEnvelope {
+        schema_version: "ai-security-scanner.windows-installer-runtime-cache/v1",
+        result_class,
+        exit_code,
+        terminal: "complete",
+    };
+    // Never expose the package path, private-data path, parser failure, or
+    // attacker-controlled bytes to the installer. NSIS accepts only this exact
+    // terminal envelope and treats every failure as non-blocking degradation.
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    serde_json::to_writer(&mut stdout, &envelope)?;
+    stdout.flush()?;
+    Ok(exit_code)
 }
 
 fn windows_installer_prerequisite_exit(
@@ -1193,8 +1288,10 @@ fn execute_product_uninstall_early(
 
 fn command_requires_exclusive_data_directory(command: &Command) -> bool {
     match command {
-        // Both package coordinators are early-dispatched before the data root,
-        // database, catalog, or any caller-selected runtime state is opened.
+        // Package coordinators are early-dispatched before the database,
+        // catalog, or any caller-selected runtime state is opened.
+        #[cfg(feature = "installer-runtime-cache")]
+        Command::WindowsInstallerRuntimeCache => false,
         Command::WindowsInstallerPrerequisite => false,
         // ProductUninstall is early-dispatched and acquires the same lease
         // before database/catalog initialization.
@@ -2378,6 +2475,91 @@ fn open_managed_runtime_manager(
     }
 }
 
+#[cfg(feature = "installer-runtime-cache")]
+fn installer_runtime_cache_manifest_digest_anchor() -> AppResult<&'static str> {
+    let digest = option_env!("AI_SECURITY_SCANNER_MANAGED_RUNTIME_MANIFEST_SHA256")
+        .filter(|digest| !digest.is_empty())
+        .ok_or_else(|| {
+            AppError::NotAvailable(
+                "the installed cache coordinator has no managed-runtime build anchor".into(),
+            )
+        })?;
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(AppError::NotAuthorized(
+            "the installed cache coordinator has an invalid managed-runtime build anchor".into(),
+        ));
+    }
+    Ok(digest)
+}
+
+/// Opens only the one packaged sibling bundle embedded beside this installed
+/// CLI and binds it to the manifest digest compiled into this exact sidecar.
+/// Unlike the ordinary maintainer CLI resolver, this path never falls back to
+/// an existing private installation when the packaged source is absent.
+#[cfg(feature = "installer-runtime-cache")]
+fn open_exact_packaged_installer_runtime_cache_source(
+    data_dir: &Path,
+) -> AppResult<ManagedRuntimeManager> {
+    let expected_manifest_sha256 = installer_runtime_cache_manifest_digest_anchor()?;
+    let executable = std::env::current_exe().map_err(|_| {
+        AppError::NotAvailable(
+            "the installed cache coordinator could not resolve its executable".into(),
+        )
+    })?;
+    let bundle = exact_packaged_installer_runtime_bundle(&executable)?;
+    let manager = ManagedRuntimeManager::open(data_dir, &bundle, &bundle.join("manifest.json"))?;
+    if manager.manifest_sha256() != expected_manifest_sha256 {
+        return Err(AppError::NotAuthorized(
+            "the packaged managed-runtime manifest differs from this installer sidecar build"
+                .into(),
+        ));
+    }
+    Ok(manager)
+}
+
+#[cfg(feature = "installer-runtime-cache")]
+fn exact_packaged_installer_runtime_bundle(executable: &Path) -> AppResult<PathBuf> {
+    let executable_directory = executable.parent().ok_or_else(|| {
+        AppError::NotAvailable(
+            "the installed cache coordinator executable has no package directory".into(),
+        )
+    })?;
+    let directory_metadata = fs::symlink_metadata(executable_directory).map_err(|_| {
+        AppError::NotAvailable(
+            "the installed cache coordinator package directory is unavailable".into(),
+        )
+    })?;
+    if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
+        return Err(AppError::NotAuthorized(
+            "the installed cache coordinator package directory is not a real directory".into(),
+        ));
+    }
+    let canonical_executable_directory = executable_directory.canonicalize()?;
+    let packaged_bundle = executable_directory.join("managed-runtime");
+    let bundle_metadata = fs::symlink_metadata(&packaged_bundle).map_err(|_| {
+        AppError::NotAvailable(
+            "the installed cache coordinator packaged source is unavailable".into(),
+        )
+    })?;
+    if bundle_metadata.file_type().is_symlink() || !bundle_metadata.is_dir() {
+        return Err(AppError::NotAuthorized(
+            "the installed cache coordinator packaged source is not a real directory".into(),
+        ));
+    }
+    let bundle = packaged_bundle.canonicalize()?;
+    if bundle != canonical_executable_directory.join("managed-runtime") {
+        return Err(AppError::NotAuthorized(
+            "the installed cache coordinator packaged source is not the fixed package sibling"
+                .into(),
+        ));
+    }
+    Ok(bundle)
+}
+
 fn packaged_managed_runtime_candidates(executable: &Path) -> Vec<PathBuf> {
     let Some(parent) = executable.parent() else {
         return Vec::new();
@@ -2918,10 +3100,10 @@ fn runtime_for_cleanup(
             ProcessContainerRuntime::from_managed(manager.start()?)?
         }
         (RuntimeProvider::Docker, RuntimeCommandProvenance::Compatibility) => {
-            ProcessContainerRuntime::new(RuntimeProvider::Docker, "docker")
+            ProcessContainerRuntime::new(RuntimeProvider::Docker, "docker")?
         }
         (RuntimeProvider::Podman, RuntimeCommandProvenance::Compatibility) => {
-            ProcessContainerRuntime::new(RuntimeProvider::Podman, "podman")
+            ProcessContainerRuntime::new(RuntimeProvider::Podman, "podman")?
         }
         _ => {
             return Err(AppError::NotAuthorized(
@@ -3264,6 +3446,165 @@ mod tests {
     #[test]
     fn complete_command_tree_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[cfg(feature = "installer-runtime-cache")]
+    #[test]
+    fn windows_installer_runtime_cache_is_hidden_zero_input_and_early_dispatched() {
+        let parsed = Cli::try_parse_from([
+            "ai-security-scanner",
+            "--json",
+            "windows-installer-runtime-cache",
+        ])
+        .expect("fixed installed-package runtime-cache invocation");
+        assert!(matches!(
+            parsed.command,
+            Command::WindowsInstallerRuntimeCache
+        ));
+        assert!(!command_requires_exclusive_data_directory(&parsed.command));
+
+        for unexpected in ["--action", "--path", "--executable", "--arguments"] {
+            assert!(
+                Cli::try_parse_from([
+                    "ai-security-scanner",
+                    "--json",
+                    "windows-installer-runtime-cache",
+                    unexpected,
+                    "caller-selected",
+                ])
+                .is_err(),
+                "hidden package cache coordinator accepted {unexpected}",
+            );
+        }
+    }
+
+    #[cfg(feature = "installer-runtime-cache")]
+    #[test]
+    fn windows_installer_runtime_cache_envelopes_are_exact_redacted_and_bounded() {
+        for (result_class, expected_exit, encoded_class) in [
+            (WindowsInstallerRuntimeCacheClass::Seeded, 0, "seeded"),
+            (
+                WindowsInstallerRuntimeCacheClass::Unavailable,
+                30,
+                "unavailable",
+            ),
+        ] {
+            let envelope = WindowsInstallerRuntimeCacheCoordinatorEnvelope {
+                schema_version: "ai-security-scanner.windows-installer-runtime-cache/v1",
+                result_class,
+                exit_code: expected_exit,
+                terminal: "complete",
+            };
+            let encoded = serde_json::to_string(&envelope).unwrap();
+            assert!(encoded.len() < 192);
+            assert!(encoded.starts_with(
+                "{\"schema_version\":\"ai-security-scanner.windows-installer-runtime-cache/v1\""
+            ));
+            assert!(encoded.contains(&format!("\"result_class\":\"{encoded_class}\"")));
+            assert!(encoded.contains(&format!("\"exit_code\":{expected_exit}")));
+            assert!(encoded.ends_with("\"terminal\":\"complete\"}"));
+            for forbidden in [
+                "detail",
+                "target",
+                "path",
+                "argument",
+                "executable",
+                "provider",
+                "runtime_name",
+                "manifest",
+            ] {
+                assert!(!encoded.contains(forbidden));
+            }
+        }
+    }
+
+    #[cfg(feature = "installer-runtime-cache")]
+    #[test]
+    fn windows_installer_runtime_cache_degrades_without_exposing_the_failure() {
+        assert_eq!(
+            windows_installer_runtime_cache_result(|| Ok(())),
+            WindowsInstallerRuntimeCacheClass::Seeded
+        );
+        assert_eq!(
+            windows_installer_runtime_cache_result(|| {
+                Err(AppError::NotAuthorized(
+                    "attacker-controlled package path and parser detail".into(),
+                ))
+            }),
+            WindowsInstallerRuntimeCacheClass::Unavailable
+        );
+    }
+
+    #[cfg(feature = "installer-runtime-cache")]
+    #[test]
+    fn windows_installer_runtime_cache_ignores_environment_overrides_but_rejects_cli_overrides() {
+        validate_windows_installer_runtime_cache_option_sources(GlobalOptionSources {
+            data_dir: Some(ValueSource::EnvVariable),
+            managed_runtime_bundle: Some(ValueSource::EnvVariable),
+        })
+        .expect("inherited development overrides cannot redirect package cache seeding");
+
+        for option_sources in [
+            GlobalOptionSources {
+                data_dir: Some(ValueSource::CommandLine),
+                managed_runtime_bundle: None,
+            },
+            GlobalOptionSources {
+                data_dir: None,
+                managed_runtime_bundle: Some(ValueSource::CommandLine),
+            },
+        ] {
+            assert!(
+                validate_windows_installer_runtime_cache_option_sources(option_sources).is_err()
+            );
+        }
+    }
+
+    #[cfg(feature = "installer-runtime-cache")]
+    #[test]
+    fn windows_installer_runtime_cache_resolves_only_the_real_direct_package_sibling() {
+        let temporary = tempfile::tempdir().unwrap();
+        let package = temporary.path().join("package");
+        fs::create_dir(&package).unwrap();
+        let executable = package.join("ai-security-scanner-cli.exe");
+        fs::write(&executable, b"test executable").unwrap();
+        let direct = package.join("managed-runtime");
+        fs::create_dir(&direct).unwrap();
+        assert_eq!(
+            exact_packaged_installer_runtime_bundle(&executable).unwrap(),
+            direct.canonicalize().unwrap()
+        );
+
+        fs::remove_dir(&direct).unwrap();
+        fs::create_dir_all(package.join("resources/managed-runtime")).unwrap();
+        assert!(exact_packaged_installer_runtime_bundle(&executable).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let outside = temporary.path().join("outside-runtime");
+            fs::create_dir(&outside).unwrap();
+            symlink(&outside, &direct).unwrap();
+            assert!(exact_packaged_installer_runtime_bundle(&executable).is_err());
+            assert!(outside.is_dir());
+        }
+    }
+
+    #[cfg(feature = "installer-runtime-cache")]
+    #[test]
+    fn windows_installer_runtime_cache_build_anchor_matches_the_staged_manifest() {
+        use sha2::{Digest, Sha256};
+
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../runtime/staged/managed-runtime/manifest.json");
+        let bytes = fs::read(manifest).expect("staged managed-runtime manifest");
+        let actual = hex::encode(Sha256::digest(bytes));
+        assert_eq!(
+            installer_runtime_cache_manifest_digest_anchor()
+                .expect("installer runtime-cache build anchor"),
+            actual
+        );
     }
 
     #[test]

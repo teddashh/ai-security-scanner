@@ -124,6 +124,15 @@ pub fn run() {
             let managed_bundle = app.path().resource_dir()?.join("managed-runtime");
             let managed_runtime_admission =
                 admit_packaged_managed_runtime(&app_data, &managed_bundle);
+            if let Some(receipt) = managed_runtime_admission.recovery_receipt() {
+                tracing::warn!(
+                    boundary = receipt.boundary,
+                    source = receipt.source,
+                    manifest_sha256 = receipt.manifest_sha256,
+                    packaged_failure_reason = receipt.packaged_failure_reason.as_str(),
+                    "packaged scan tools were recovered from the exact verified private copy; installed application resources still require repair"
+                );
+            }
             if let Some(reason) = managed_runtime_admission.failure_reason() {
                 tracing::warn!(
                     failure_reason = reason.as_str(),

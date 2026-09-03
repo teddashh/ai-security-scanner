@@ -132,22 +132,31 @@ pub struct RuntimeCommandContext {
     working_directory: Option<PathBuf>,
     clear_environment: bool,
     provenance: RuntimeCommandProvenance,
+    #[cfg(windows)]
+    windows_launch_contract:
+        Option<Arc<crate::managed_runtime::WindowsManagedRuntimeLaunchContract>>,
 }
 
 impl RuntimeCommandContext {
-    pub(crate) fn compatibility(provider: RuntimeProvider, binary: PathBuf) -> Self {
-        debug_assert!(matches!(
-            provider,
-            RuntimeProvider::Docker | RuntimeProvider::Podman
-        ));
-        Self {
+    pub(crate) fn compatibility(provider: RuntimeProvider, binary: PathBuf) -> AppResult<Self> {
+        match provider {
+            RuntimeProvider::Docker | RuntimeProvider::Podman => {}
+            RuntimeProvider::ManagedLocal => {
+                return Err(AppError::NotAuthorized(
+                    "managed-local runtime requires its verified private command context".into(),
+                ));
+            }
+        }
+        Ok(Self {
             provider,
             binary,
             environment: BTreeMap::new(),
             working_directory: None,
             clear_environment: false,
             provenance: RuntimeCommandProvenance::Compatibility,
-        }
+            #[cfg(windows)]
+            windows_launch_contract: None,
+        })
     }
 
     fn managed(command: crate::managed_runtime::ManagedRuntimeCommand) -> AppResult<Self> {
@@ -158,6 +167,12 @@ impl RuntimeCommandContext {
         }
         validate_mount_file(command.binary(), "managed runtime driver")?;
         validate_mount_directory(command.working_directory(), "managed runtime home")?;
+        #[cfg(windows)]
+        let windows_launch_contract = Some(command.windows_launch_contract().ok_or_else(|| {
+            AppError::NotAuthorized(
+                "managed Windows runtime command is missing its pre-spawn launch contract".into(),
+            )
+        })?);
         Ok(Self {
             provider: RuntimeProvider::ManagedLocal,
             binary: command.binary().to_path_buf(),
@@ -169,6 +184,8 @@ impl RuntimeCommandContext {
                 manifest_sha256: command.manifest_sha256().to_owned(),
                 machine_image_sha256: command.machine_image_sha256().to_owned(),
             },
+            #[cfg(windows)]
+            windows_launch_contract,
         })
     }
 
@@ -190,10 +207,30 @@ impl RuntimeCommandContext {
         maximum: u64,
         timeout: StdDuration,
     ) -> io::Result<std::process::Output> {
+        let deadline = std::time::Instant::now()
+            .checked_add(timeout)
+            .ok_or_else(runtime_command_deadline_error)?;
+        #[cfg(windows)]
+        let _execution_guard = self.acquire_windows_execution_guard(deadline, &|| false)?;
+        if std::time::Instant::now() >= deadline {
+            return Err(runtime_command_deadline_error());
+        }
         let mut command = Command::new(&self.binary);
         command.args(args);
         self.apply(&mut command);
-        bounded_command_output(&mut command, maximum, timeout)
+        bounded_command_output_until(&mut command, maximum, deadline)
+    }
+
+    #[cfg(windows)]
+    fn acquire_windows_execution_guard(
+        &self,
+        deadline: std::time::Instant,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> io::Result<Option<crate::managed_runtime::WindowsManagedRuntimeExecutionGuard>> {
+        self.windows_launch_contract
+            .as_deref()
+            .map(|contract| contract.acquire(&self.binary, deadline, is_cancelled))
+            .transpose()
     }
 
     fn apply(&self, command: &mut Command) {
@@ -1923,16 +1960,41 @@ fn prove_managed_internal_network(
     Ok(())
 }
 
+#[cfg(test)]
 fn bounded_command_output(
     command: &mut Command,
     maximum: u64,
     timeout: StdDuration,
 ) -> io::Result<std::process::Output> {
+    let deadline = std::time::Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(runtime_command_deadline_error)?;
+    bounded_command_output_until(command, maximum, deadline)
+}
+
+fn runtime_command_deadline_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        "runtime command exceeded its deadline",
+    )
+}
+
+fn bounded_command_output_until(
+    command: &mut Command,
+    maximum: u64,
+    deadline: std::time::Instant,
+) -> io::Result<std::process::Output> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if std::time::Instant::now() >= deadline {
+        return Err(runtime_command_deadline_error());
+    }
     let mut process_tree = CommandProcessTree::prepare(command)?;
+    if std::time::Instant::now() >= deadline {
+        return Err(runtime_command_deadline_error());
+    }
     let mut child = command.spawn()?;
     if let Err(error) = process_tree.attach(&child) {
         let _ = child.kill();
@@ -1951,7 +2013,6 @@ fn bounded_command_output(
     let oversized = Arc::new(AtomicBool::new(false));
     let stdout_capture = spawn_memory_capture(stdout, captured.clone(), oversized.clone(), maximum);
     let stderr_capture = spawn_memory_capture(stderr, captured, oversized.clone(), maximum);
-    let deadline = std::time::Instant::now() + timeout;
     let process_result = loop {
         if let Some(status) = child.try_wait()? {
             break Ok(status);
@@ -1965,10 +2026,7 @@ fn bounded_command_output(
         }
         if std::time::Instant::now() >= deadline {
             process_tree.terminate_and_wait(&mut child);
-            break Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "runtime command exceeded its deadline",
-            ));
+            break Err(runtime_command_deadline_error());
         }
         thread::sleep(StdDuration::from_millis(25));
     };
@@ -2436,15 +2494,15 @@ fn output_limit_error(maximum: u64) -> AppError {
 }
 
 impl ProcessContainerRuntime {
-    pub fn new(provider: RuntimeProvider, binary: impl Into<PathBuf>) -> Self {
-        Self {
-            context: RuntimeCommandContext::compatibility(provider, binary.into()),
+    pub fn new(provider: RuntimeProvider, binary: impl Into<PathBuf>) -> AppResult<Self> {
+        Ok(Self {
+            context: RuntimeCommandContext::compatibility(provider, binary.into())?,
             preflight_cache: Arc::default(),
             #[cfg(test)]
             test_execution_timeout: None,
             #[cfg(test)]
             test_capture_drain_timeout: None,
-        }
+        })
     }
 
     pub fn from_managed(command: crate::managed_runtime::ManagedRuntimeCommand) -> AppResult<Self> {
@@ -2561,7 +2619,7 @@ impl ProcessContainerRuntime {
     pub fn detect() -> AppResult<Self> {
         let mut errors = Vec::new();
         for provider in [RuntimeProvider::Docker, RuntimeProvider::Podman] {
-            let runtime = Self::new(provider, provider.program_name());
+            let runtime = Self::new(provider, provider.program_name())?;
             match runtime.preflight() {
                 Ok(_) => return Ok(runtime),
                 Err(error) => errors.push(format!("{}: {error}", provider.program_name())),
@@ -2917,6 +2975,43 @@ impl ContainerRuntime for ProcessContainerRuntime {
             let post_termination_capture_drain_timeout =
                 capture_drain_timeout.max(RUNTIME_PIPE_DRAIN_TIMEOUT);
             let execution_started = std::time::Instant::now();
+            let execution_deadline = execution_started
+                .checked_add(execution_timeout)
+                .ok_or_else(|| AppError::Runtime(CONTAINER_EXECUTION_TIMEOUT_ERROR.into()))?;
+            #[cfg(windows)]
+            let _execution_guard = match self
+                .context
+                .acquire_windows_execution_guard(execution_deadline, &|| {
+                    cancellation.is_cancelled()
+                }) {
+                Ok(guard) => guard,
+                Err(error)
+                    if error.kind() == io::ErrorKind::Interrupted
+                        && cancellation.is_cancelled() =>
+                {
+                    return Ok(RuntimeOutcome {
+                        exit_code: None,
+                        cancelled: true,
+                    });
+                }
+                Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                    return Err(AppError::Runtime(CONTAINER_EXECUTION_TIMEOUT_ERROR.into()));
+                }
+                Err(error) => {
+                    return Err(AppError::NotAuthorized(format!(
+                        "managed runtime launch identity could not be pinned: {error}"
+                    )));
+                }
+            };
+            if cancellation.is_cancelled() {
+                return Ok(RuntimeOutcome {
+                    exit_code: None,
+                    cancelled: true,
+                });
+            }
+            if std::time::Instant::now() >= execution_deadline {
+                return Err(AppError::Runtime(CONTAINER_EXECUTION_TIMEOUT_ERROR.into()));
+            }
             let mut command = Command::new(&self.context.binary);
             command.args(&runtime_args);
             self.context.apply(&mut command);
@@ -2929,6 +3024,15 @@ impl ContainerRuntime for ProcessContainerRuntime {
                     "container process tree could not be prepared: {error}"
                 ))
             })?;
+            if cancellation.is_cancelled() {
+                return Ok(RuntimeOutcome {
+                    exit_code: None,
+                    cancelled: true,
+                });
+            }
+            if std::time::Instant::now() >= execution_deadline {
+                return Err(AppError::Runtime(CONTAINER_EXECUTION_TIMEOUT_ERROR.into()));
+            }
             let mut child = command.spawn().map_err(|error| {
                 AppError::Runtime(format!("container run could not start: {error}"))
             })?;
@@ -4090,6 +4194,33 @@ mod tests {
     use std::time::Instant;
 
     #[test]
+    fn compatibility_runtime_rejects_an_arbitrary_managed_local_binary() {
+        let assert_rejected = |error: AppError| {
+            assert!(matches!(error, AppError::NotAuthorized(_)));
+            assert!(
+                error
+                    .to_string()
+                    .contains("requires its verified private command context")
+            );
+        };
+
+        assert_rejected(
+            RuntimeCommandContext::compatibility(
+                RuntimeProvider::ManagedLocal,
+                PathBuf::from("attacker-selected-managed-runtime"),
+            )
+            .expect_err("managed-local compatibility context must be rejected"),
+        );
+        assert_rejected(
+            ProcessContainerRuntime::new(
+                RuntimeProvider::ManagedLocal,
+                "attacker-selected-managed-runtime",
+            )
+            .expect_err("managed-local runtime must require a verified private command"),
+        );
+    }
+
+    #[test]
     fn direct_runtime_operations_keep_image_pull_timeout_separate() {
         assert_eq!(
             DirectRuntimeOperation::PinnedImagePull.timeout(),
@@ -4174,7 +4305,8 @@ mod tests {
         fs::write(&binary, "#!/bin/sh\nsleep 5\n").expect("write slow runtime fixture");
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
             .expect("make slow runtime fixture executable");
-        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, binary);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, binary)
+            .expect("construct compatibility runtime");
         let sensitive_argument =
             "ghcr.io/example/private@sha256:do-not-echo-this-sensitive-reference";
 
@@ -4315,7 +4447,8 @@ esac
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
             .expect("make runtime fixture executable");
 
-        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, &binary);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, &binary)
+            .expect("construct compatibility runtime");
         let preflight = runtime.preflight().expect("Podman preflight");
         let reused = runtime
             .clone()
@@ -4369,7 +4502,8 @@ esac
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
             .expect("make runtime fixture executable");
 
-        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, &binary);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, &binary)
+            .expect("construct compatibility runtime");
         let prepared = runtime.preflight().expect("prepare-time preflight");
         assert_eq!(prepared.server_version, "5.8.2");
         assert!(prepared.security_options.contains("/old-profile"));
@@ -5072,7 +5206,8 @@ esac\n",
             .expect("inspect document"),
         )
         .expect("inspect fixture");
-        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .expect("construct compatibility runtime");
         assert!(runtime.cleanup_owned_container(&request).unwrap().removed);
         let commands = fs::read_to_string(log).expect("runtime log");
         assert!(commands.lines().any(|line| {
@@ -5113,7 +5248,8 @@ esac\n",
             .expect("inspect document"),
         )
         .expect("inspect fixture");
-        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .expect("construct compatibility runtime");
 
         let error = runtime
             .cleanup_owned_container(&request)
@@ -5154,7 +5290,8 @@ esac\n",
             .expect("inspect document"),
         )
         .expect("inspect fixture");
-        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .expect("construct compatibility runtime");
         let created = CreatedContainer::from_runtime_id(&"9".repeat(64)).expect("created ID");
 
         assert!(runtime.cleanup(&request, Some(&created)).unwrap().removed);
@@ -5894,7 +6031,8 @@ esac\n",
     fn process_runtime_inspects_full_network_state_and_disabled_needs_no_runtime_call() {
         let temp = tempfile::tempdir().expect("temp directory");
         let (binary, log, response) = fake_network_inspect_runtime(&temp);
-        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .expect("construct compatibility runtime");
         let policy = NetworkPolicy::managed(
             "ass-egress",
             "policy-1",
@@ -5962,7 +6100,8 @@ esac\n",
         let (binary, log, response) = fake_network_inspect_runtime(&temp);
         fs::write(&response, docker_network_inspect(false, "policy-1"))
             .expect("non-internal inspect response");
-        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .expect("construct compatibility runtime");
 
         let error = runtime
             .run(
@@ -6113,7 +6252,8 @@ esac\n",
         symlink(&outside_stdout, &capture.stdout).expect("replace stdout path");
         symlink(&outside_stderr, &capture.stderr).expect("replace stderr path");
         let (binary, _log) = fake_capture_runtime(&temp, &plan);
-        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .expect("construct compatibility runtime");
         let mut created = None;
         let mut creation_may_be_untracked = false;
 
@@ -6167,6 +6307,7 @@ esac\n",
         let capture = store.prepare_capture(&directories).expect("capture");
         let binary = fake_inherited_capture_runtime(&temp, &plan);
         let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .expect("construct compatibility runtime")
             .with_test_capture_drain_timeout(StdDuration::from_millis(100));
 
         let error = runtime
@@ -6234,7 +6375,8 @@ esac\n",
         let immutable_id = "e".repeat(64);
         let capture = store.prepare_capture(&directories).expect("capture");
         let (binary, log) = fake_output_flood_runtime(&temp, &plan);
-        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .expect("construct compatibility runtime");
 
         let error = runtime
             .run(
@@ -6283,6 +6425,7 @@ esac\n",
         let capture = store.prepare_capture(&directories).expect("capture");
         let (binary, log) = fake_runtime(&temp, &plan, false);
         let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .expect("construct compatibility runtime")
             .with_test_execution_timeout(StdDuration::from_millis(200));
         let mut created = None;
 
@@ -6355,6 +6498,7 @@ esac\n",
         let capture = store.prepare_capture(&directories).expect("capture");
         let (binary, log) = fake_runtime(&temp, &plan, false);
         let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .expect("construct compatibility runtime")
             .with_test_execution_timeout(StdDuration::from_millis(750));
         let cancellation = CancellationToken::default();
         let worker_token = cancellation.clone();
@@ -6485,7 +6629,8 @@ esac\n",
         .expect("plan");
         let capture = store.prepare_capture(&directories).expect("capture");
         let (binary, log) = fake_name_collision_runtime(&temp);
-        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .expect("construct compatibility runtime");
         let cancellation = CancellationToken::default();
         let worker_token = cancellation.clone();
         let worker = thread::spawn(move || {
@@ -6545,7 +6690,8 @@ esac\n",
         let immutable_id = "c".repeat(64);
         let capture = store.prepare_capture(&directories).expect("capture");
         let (binary, log) = fake_runtime(&temp, &plan, false);
-        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .expect("construct compatibility runtime");
         let cancellation = CancellationToken::default();
         let worker_token = cancellation.clone();
         let worker = thread::spawn(move || {
@@ -6619,7 +6765,8 @@ esac\n",
         let immutable_id = "c".repeat(64);
         let capture = store.prepare_capture(&directories).expect("capture");
         let (binary, log) = fake_runtime(&temp, &plan, false);
-        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, binary);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, binary)
+            .expect("construct compatibility runtime");
         let cancellation = CancellationToken::default();
         let worker_token = cancellation.clone();
         let worker = thread::spawn(move || {
@@ -6685,7 +6832,8 @@ esac\n",
         let immutable_id = "c".repeat(64);
         let capture = store.prepare_capture(&directories).expect("capture");
         let (binary, log) = fake_runtime(&temp, &plan, true);
-        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .expect("construct compatibility runtime");
         let cancellation = CancellationToken::default();
         let worker_token = cancellation.clone();
         let worker = thread::spawn(move || {

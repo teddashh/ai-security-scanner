@@ -2119,7 +2119,8 @@ impl RuntimeCommands for DirectRuntimeCommands {
         let context = RuntimeCommandContext::compatibility(
             provider,
             PathBuf::from(runtime_program(provider)),
-        );
+        )
+        .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error.to_string()))?;
         let output = context.output(args, MAX_INSPECT_BYTES as u64, RUNTIME_COMMAND_TIMEOUT)?;
         Ok(RuntimeOutput {
             success: output.status.success(),

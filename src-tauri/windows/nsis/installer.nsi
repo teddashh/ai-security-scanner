@@ -6,7 +6,7 @@
 ; Upstream license: Apache-2.0 OR MIT
 ; Local patch: version-neutral stale-registration and same-version repair,
 ; data-preserving upgrade overlays, synchronous copied-uninstaller execution,
-; fixed Windows-prerequisite preparation with
+; exact private runtime-cache seeding, fixed Windows-prerequisite preparation with
 ; durable restart/resume state, and a bilingual three-choice uninstall
 ; delegated to the fixed product CLI with bounded, visible coordinator records
 ; and exact registration postconditions.
@@ -661,6 +661,34 @@ LangString unPostconditionPartial ${LANG_ENGLISH} "Windows could not remove ever
 LangString unPostconditionPartial ${LANG_TRADCHINESE} "Windows 無法移除所有應用程式檔案或登錄資料。無法確認的內容都保持原狀。請重新啟動 Windows，然後再次解除安裝。"
 ; END AI SECURITY SCANNER BILINGUAL PRODUCT STRINGS
 
+Function SeedManagedRuntimePrivateCache
+  ; Copy only the current installer's already-extracted, manifest-verified
+  ; runtime payload into the product's exact private version namespace. The
+  ; hidden CLI owns the fixed LocalAppData and sibling bundle resolution; this
+  ; installer supplies no path, action, executable, or other mutable input.
+  ; manager.install verifies every source byte and commits through a private
+  ; staging directory without executing Podman, WSL, or another runtime helper.
+  ${IfNot} ${FileExists} "$INSTDIR\ai-security-scanner-cli.exe"
+    Return
+  ${EndIf}
+
+  ; Cache preparation is useful recovery redundancy, never an application
+  ; installation gate. Any missing helper, timeout, nonzero exit, malformed
+  ; envelope, or rejected payload leaves the installed shell/resources intact;
+  ; the desktop will retry ordinary verified preparation when needed.
+  nsExec::ExecToStack /TIMEOUT=180000 '"$INSTDIR\ai-security-scanner-cli.exe" --json windows-installer-runtime-cache'
+  Pop $R0
+  Pop $R1
+  ${If} $R0 = 0
+  ${AndIf} $R1 == '{"schema_version":"ai-security-scanner.windows-installer-runtime-cache/v1","result_class":"seeded","exit_code":0,"terminal":"complete"}'
+    Return
+  ${EndIf}
+  ${If} $R0 = 30
+  ${AndIf} $R1 == '{"schema_version":"ai-security-scanner.windows-installer-runtime-cache/v1","result_class":"unavailable","exit_code":30,"terminal":"complete"}'
+    Return
+  ${EndIf}
+FunctionEnd
+
 Function RunWindowsInstallerPrerequisiteCoordinator
   ; Application binaries and registration already exist when this runs. The
   ; fixed CLI command accepts no action, executable, argument, path, target, or
@@ -1004,6 +1032,15 @@ Section Install
   !ifmacrodef NSIS_HOOK_POSTINSTALL
     !insertmacro NSIS_HOOK_POSTINSTALL
   !endif
+
+  ; Seed a verified private recovery copy before first launch. This bounded,
+  ; non-executing optimization is deliberately non-fatal: app installation and
+  ; independent work remain available even when the cache cannot be prepared.
+  ; Registration overlays (stale/same-version/upgrade) preserve private runtime
+  ; bytes exactly and leave any new-version preparation to the reopened app.
+  ${If} $RegistrationOverlayMode = 0
+    Call SeedManagedRuntimePrivateCache
+  ${EndIf}
 
   ; Prepare Windows support only after every application binary and its
   ; registration have been installed. Failure can therefore never roll back or

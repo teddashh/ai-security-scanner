@@ -25,6 +25,7 @@ desktop = [
     "dep:tauri-plugin-updater",
 ]
 cli = ["dep:clap"]
+installer-runtime-cache = []
 broker = []
 adapter-launcher = []
 egress-gateway = []
@@ -66,6 +67,7 @@ path = "src/bin/updater_verifier.rs"
 required-features = ["release-verifier"]
 
 [build-dependencies]
+sha2 = "0.11.0"
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]

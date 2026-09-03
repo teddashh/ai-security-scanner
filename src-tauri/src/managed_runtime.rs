@@ -1340,6 +1340,16 @@ pub struct ManagedRuntimeCommand {
     runtime_version: String,
     manifest_sha256: String,
     machine_image_sha256: String,
+    #[cfg(windows)]
+    windows_launch_authorization: WindowsManagedRuntimeLaunchAuthorization,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone)]
+enum WindowsManagedRuntimeLaunchAuthorization {
+    PrivateBundle(Arc<WindowsManagedRuntimeLaunchContract>),
+    VerifiedSystem32Wsl,
+    MetadataOnly,
 }
 
 impl ManagedRuntimeCommand {
@@ -1366,6 +1376,265 @@ impl ManagedRuntimeCommand {
     pub fn machine_image_sha256(&self) -> &str {
         &self.machine_image_sha256
     }
+
+    #[cfg(windows)]
+    pub(crate) fn windows_launch_contract(
+        &self,
+    ) -> Option<Arc<WindowsManagedRuntimeLaunchContract>> {
+        match &self.windows_launch_authorization {
+            WindowsManagedRuntimeLaunchAuthorization::PrivateBundle(contract) => {
+                Some(contract.clone())
+            }
+            WindowsManagedRuntimeLaunchAuthorization::VerifiedSystem32Wsl
+            | WindowsManagedRuntimeLaunchAuthorization::MetadataOnly => None,
+        }
+    }
+
+    #[cfg(windows)]
+    fn acquire_windows_execution_guard(
+        &self,
+        deadline: Instant,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> io::Result<Option<WindowsManagedRuntimeExecutionGuard>> {
+        match &self.windows_launch_authorization {
+            WindowsManagedRuntimeLaunchAuthorization::PrivateBundle(contract) => contract
+                .acquire(&self.binary, deadline, is_cancelled)
+                .map(Some),
+            WindowsManagedRuntimeLaunchAuthorization::VerifiedSystem32Wsl => {
+                check_windows_launch_guard_budget(deadline, is_cancelled)?;
+                verify_windows_system32_wsl_command(self)?;
+                check_windows_launch_guard_budget(deadline, is_cancelled)?;
+                Ok(None)
+            }
+            WindowsManagedRuntimeLaunchAuthorization::MetadataOnly => Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "managed runtime metadata-only command is not authorized for execution",
+            )),
+        }
+    }
+}
+
+#[cfg(windows)]
+fn verify_windows_system32_wsl_command(command: &ManagedRuntimeCommand) -> io::Result<()> {
+    let directories = windows_system_directories()
+        .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error.to_string()))?;
+    if command.binary != directories.system32.join("wsl.exe") {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "managed runtime system command is not the verified System32 wsl.exe",
+        ));
+    }
+    verify_regular_file(&command.binary, "Windows System32 wsl.exe")
+        .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error.to_string()))
+}
+
+/// Immutable release identity needed to re-prove and pin one Windows managed
+/// runtime invocation. It contains no live handles so commands may be cloned
+/// and retained without preventing an idle repair or uninstall.
+#[cfg(windows)]
+#[derive(Debug, Clone)]
+pub(crate) struct WindowsManagedRuntimeLaunchContract {
+    install_root: PathBuf,
+    versions_root: PathBuf,
+    driver: PathBuf,
+    bundle_directories: Vec<PathBuf>,
+    files: Vec<WindowsManagedRuntimeLaunchFile>,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone)]
+struct WindowsManagedRuntimeLaunchFile {
+    path: PathBuf,
+    size_bytes: u64,
+    sha256: String,
+}
+
+/// Live only for one invocation. The directory handles deny rename/delete of
+/// the verified namespace, while the file handles deny write/delete access to
+/// the exact objects that were hashed for this launch.
+#[cfg(windows)]
+#[derive(Debug)]
+pub(crate) struct WindowsManagedRuntimeExecutionGuard {
+    _directory_handles: Vec<File>,
+    _file_handles: Vec<File>,
+}
+
+#[cfg(windows)]
+impl WindowsManagedRuntimeLaunchContract {
+    /// Re-proves the exact installed bundle immediately before one process
+    /// launch and keeps every directory/file handle alive until that process
+    /// has finished. Listed-file handles deliberately allow only read sharing:
+    /// an already-open writer makes admission fail, existing hard links are
+    /// rejected, and a later writer, rename, or delete of those files remains
+    /// blocked for the guard's life. Directory handles pin the checked
+    /// directory objects against rename/delete; the closed inventory is a
+    /// pre-launch check, not a same-user directory-write isolation boundary.
+    pub(crate) fn acquire(
+        &self,
+        requested_binary: &Path,
+        deadline: Instant,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> io::Result<WindowsManagedRuntimeExecutionGuard> {
+        use windows_sys::Win32::Security::{CONTAINER_INHERIT_ACE, OBJECT_INHERIT_ACE};
+
+        check_windows_launch_guard_budget(deadline, is_cancelled)?;
+        if requested_binary != self.driver
+            || self.install_root.parent() != Some(self.versions_root.as_path())
+            || !self.driver.starts_with(&self.install_root)
+            || !self.files.iter().any(|file| file.path == self.driver)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "managed runtime launch contract does not identify the requested driver",
+            ));
+        }
+
+        // Pin every canonical ancestor first. In particular, moving an
+        // otherwise verified parent must not let the path used by
+        // CreateProcess resolve into a replacement tree.
+        let mut directory_handles =
+            verify_windows_managed_namespace_ancestor_chain(&self.versions_root)?;
+        check_windows_launch_guard_budget(deadline, is_cancelled)?;
+        let inheritance = u8::try_from(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)
+            .expect("Windows inheritance flags fit in an ACE header");
+        let versions = directory_handles.first().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "managed runtime versions directory could not be pinned",
+            )
+        })?;
+        verify_windows_current_user_only_dacl_with_ace_flags(versions, inheritance)?;
+        verify_windows_directory_path_identity(&self.versions_root, versions)?;
+
+        for directory in &self.bundle_directories {
+            check_windows_launch_guard_budget(deadline, is_cancelled)?;
+            if directory != &self.install_root && !directory.starts_with(&self.install_root) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "managed runtime bundle directory escaped its installed root",
+                ));
+            }
+            let handle = open_windows_managed_runtime_directory(directory, inheritance)?;
+            directory_handles.push(handle);
+        }
+
+        let mut file_handles = Vec::with_capacity(self.files.len());
+        for expected in &self.files {
+            check_windows_launch_guard_budget(deadline, is_cancelled)?;
+            if !expected.path.starts_with(&self.install_root) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "managed runtime launch file escaped its installed root",
+                ));
+            }
+            let mut handle =
+                open_windows_managed_runtime_file(&expected.path, Some(expected.size_bytes))?;
+            verify_windows_managed_runtime_file_hash(
+                &mut handle,
+                expected.size_bytes,
+                &expected.sha256,
+                deadline,
+                is_cancelled,
+            )?;
+            file_handles.push(handle);
+        }
+        self.verify_closed_bundle_inventory(deadline, is_cancelled)?;
+        check_windows_launch_guard_budget(deadline, is_cancelled)?;
+
+        Ok(WindowsManagedRuntimeExecutionGuard {
+            _directory_handles: directory_handles,
+            _file_handles: file_handles,
+        })
+    }
+
+    fn verify_closed_bundle_inventory(
+        &self,
+        deadline: Instant,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> io::Result<()> {
+        check_windows_launch_guard_budget(deadline, is_cancelled)?;
+        let expected_directories = self
+            .bundle_directories
+            .iter()
+            .filter(|path| *path != &self.install_root)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let expected_files = self
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<BTreeSet<_>>();
+        if expected_files.len() != self.files.len()
+            || !self
+                .bundle_directories
+                .iter()
+                .any(|directory| directory == &self.install_root)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "managed runtime launch contract contains a duplicate or incomplete inventory",
+            ));
+        }
+
+        let mut observed_directories = BTreeSet::new();
+        let mut observed_files = BTreeSet::new();
+        for directory in &self.bundle_directories {
+            check_windows_launch_guard_budget(deadline, is_cancelled)?;
+            for entry in fs::read_dir(directory)? {
+                check_windows_launch_guard_budget(deadline, is_cancelled)?;
+                let entry = entry?;
+                let path = entry.path();
+                let metadata = fs::symlink_metadata(&path)?;
+                if expected_directories.contains(&path) {
+                    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "managed runtime bundle inventory contains a non-directory entry",
+                        ));
+                    }
+                    observed_directories.insert(path);
+                } else if expected_files.contains(&path) {
+                    if metadata.file_type().is_symlink() || !metadata.is_file() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "managed runtime bundle inventory contains a non-file entry",
+                        ));
+                    }
+                    observed_files.insert(path);
+                } else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "managed runtime bundle contains an unlisted launch-time entry",
+                    ));
+                }
+            }
+        }
+        check_windows_launch_guard_budget(deadline, is_cancelled)?;
+        if observed_directories != expected_directories || observed_files != expected_files {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "managed runtime bundle inventory differs from the release manifest",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn check_windows_launch_guard_budget(
+    deadline: Instant,
+    is_cancelled: &dyn Fn() -> bool,
+) -> io::Result<()> {
+    if is_cancelled() {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "managed runtime launch verification was cancelled",
+        ));
+    }
+    if Instant::now() >= deadline {
+        return Err(managed_command_deadline_error());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1510,6 +1779,11 @@ impl ManagedCommandRunner for DirectManagedCommandRunner {
                 "managed runtime command deadline exceeded the platform range",
             )
         })?;
+        #[cfg(windows)]
+        let _execution_guard = command.acquire_windows_execution_guard(deadline, &|| false)?;
+        if Instant::now() >= deadline {
+            return Err(managed_command_deadline_error());
+        }
         let mut process = Command::new(&command.binary);
         process
             .args(args)
@@ -1520,6 +1794,9 @@ impl ManagedCommandRunner for DirectManagedCommandRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut process_tree = ManagedCommandProcessTree::prepare(&mut process)?;
+        if Instant::now() >= deadline {
+            return Err(managed_command_deadline_error());
+        }
         let mut child = process.spawn()?;
         if let Err(error) = process_tree.attach(&child) {
             return Err(managed_command_error_with_cleanup(
@@ -2430,19 +2707,51 @@ pub struct ManagedRuntimeManager {
 #[cfg(any(feature = "desktop", test))]
 pub(crate) enum PackagedManagedRuntimeAdmission {
     Verified(Box<ManagedRuntimeManager>),
+    /// The packaged resource tree was missing or rejected, but the desktop
+    /// build's independently embedded manifest digest selected one exact,
+    /// fully verified private copy. This keeps the manager available without
+    /// treating the damaged packaged bytes as a repair source.
+    RecoveredFromPrivateCache {
+        manager: Box<ManagedRuntimeManager>,
+        packaged_failure_reason: ManagedRuntimeSetupFailureReason,
+    },
     Missing,
     VerificationFailed,
+}
+
+#[cfg(any(feature = "desktop", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PackagedManagedRuntimeRecoveryReceipt<'a> {
+    pub(crate) boundary: &'static str,
+    pub(crate) source: &'static str,
+    pub(crate) manifest_sha256: &'a str,
+    pub(crate) packaged_failure_reason: ManagedRuntimeSetupFailureReason,
 }
 
 #[cfg(any(feature = "desktop", test))]
 impl PackagedManagedRuntimeAdmission {
     pub(crate) fn failure_reason(&self) -> Option<ManagedRuntimeSetupFailureReason> {
         match self {
-            Self::Verified(_) => None,
+            Self::Verified(_) | Self::RecoveredFromPrivateCache { .. } => None,
             Self::Missing => Some(ManagedRuntimeSetupFailureReason::PackagedRuntimeMissing),
             Self::VerificationFailed => {
                 Some(ManagedRuntimeSetupFailureReason::PackagedRuntimeVerificationFailed)
             }
+        }
+    }
+
+    pub(crate) fn recovery_receipt(&self) -> Option<PackagedManagedRuntimeRecoveryReceipt<'_>> {
+        match self {
+            Self::RecoveredFromPrivateCache {
+                manager,
+                packaged_failure_reason,
+            } => Some(PackagedManagedRuntimeRecoveryReceipt {
+                boundary: "packaged_component_auto_recovery",
+                source: "private_installed_copy",
+                manifest_sha256: manager.manifest_sha256(),
+                packaged_failure_reason: *packaged_failure_reason,
+            }),
+            Self::Verified(_) | Self::Missing | Self::VerificationFailed => None,
         }
     }
 }
@@ -2455,18 +2764,60 @@ pub(crate) fn admit_packaged_managed_runtime(
     app_local_data_directory: &Path,
     resource_root: &Path,
 ) -> PackagedManagedRuntimeAdmission {
+    admit_packaged_managed_runtime_with_recovery_digest(
+        app_local_data_directory,
+        resource_root,
+        packaged_managed_runtime_manifest_digest_anchor(),
+    )
+}
+
+/// The recovery selector is compiled into the already-running desktop binary
+/// from the staged release manifest. An empty or malformed value disables the
+/// fallback; it is never replaced with data from the rejected resource tree,
+/// registry, case database, or a directory scan.
+#[cfg(any(feature = "desktop", test))]
+fn packaged_managed_runtime_manifest_digest_anchor() -> Option<&'static str> {
+    let digest = option_env!("AI_SECURITY_SCANNER_MANAGED_RUNTIME_MANIFEST_SHA256")?;
+    validate_sha256(digest, "packaged managed runtime manifest digest anchor")
+        .ok()
+        .map(|()| digest)
+}
+
+#[cfg(any(feature = "desktop", test))]
+fn admit_packaged_managed_runtime_with_recovery_digest(
+    app_local_data_directory: &Path,
+    resource_root: &Path,
+    expected_manifest_sha256: Option<&str>,
+) -> PackagedManagedRuntimeAdmission {
     let manifest_path = resource_root.join("manifest.json");
-    match manifest_path.try_exists() {
+    let rejected = match manifest_path.try_exists() {
         Ok(false) => PackagedManagedRuntimeAdmission::Missing,
         Ok(true) => match ManagedRuntimeManager::open(
             app_local_data_directory,
             resource_root,
             &manifest_path,
         ) {
-            Ok(manager) => PackagedManagedRuntimeAdmission::Verified(Box::new(manager)),
+            Ok(manager) => return PackagedManagedRuntimeAdmission::Verified(Box::new(manager)),
             Err(_) => PackagedManagedRuntimeAdmission::VerificationFailed,
         },
         Err(_) => PackagedManagedRuntimeAdmission::VerificationFailed,
+    };
+
+    let Some(expected_manifest_sha256) = expected_manifest_sha256 else {
+        return rejected;
+    };
+    let packaged_failure_reason = rejected
+        .failure_reason()
+        .expect("rejected packaged runtime has a stable typed failure reason");
+    match ManagedRuntimeManager::open_exact_private_recovery_cache(
+        app_local_data_directory,
+        expected_manifest_sha256,
+    ) {
+        Ok(manager) => PackagedManagedRuntimeAdmission::RecoveredFromPrivateCache {
+            manager: Box::new(manager),
+            packaged_failure_reason,
+        },
+        Err(_) => rejected,
     }
 }
 
@@ -2559,6 +2910,26 @@ impl ManagedRuntimeManager {
         )
     }
 
+    /// Reopens only the private copy selected by the desktop build's exact
+    /// manifest digest. Malformed or unrelated siblings are preserved and
+    /// ignored, while the selected copy must satisfy the current management
+    /// contract plus every ordinary private-tree, manifest, size, and file
+    /// digest check before any command can be constructed from it.
+    #[cfg(any(feature = "desktop", test))]
+    fn open_exact_private_recovery_cache(
+        app_local_data_directory: &Path,
+        expected_manifest_sha256: &str,
+    ) -> AppResult<Self> {
+        let manager = Self::open_installed_with_sibling_policy(
+            app_local_data_directory,
+            Some(expected_manifest_sha256),
+            true,
+        )?;
+        validate_current_release_manifest(manager.manifest())?;
+        manager.loaded.target()?;
+        Ok(manager)
+    }
+
     fn open_installed_with_sibling_policy(
         app_local_data_directory: &Path,
         expected_manifest_sha256: Option<&str>,
@@ -2577,14 +2948,19 @@ impl ManagedRuntimeManager {
         let versions_root =
             canonical_real_directory(&state_root.join("versions"), "managed runtime versions")?;
         let mut entries = fs::read_dir(&versions_root)?.collect::<Result<Vec<_>, _>>()?;
-        if entries.len() > MAX_INSTALLED_VERSIONS {
-            return Err(AppError::NotAuthorized(format!(
-                "managed runtime has more than {MAX_INSTALLED_VERSIONS} installed payloads"
-            )));
-        }
         entries.sort_by_key(|entry| entry.file_name());
         let mut candidates = Vec::new();
+        let mut retained_entry_count = 0_usize;
         for entry in entries {
+            let is_install_staging = is_managed_runtime_install_staging_name(&entry.file_name());
+            if !is_install_staging {
+                retained_entry_count += 1;
+                if retained_entry_count > MAX_INSTALLED_VERSIONS {
+                    return Err(AppError::NotAuthorized(format!(
+                        "managed runtime has more than {MAX_INSTALLED_VERSIONS} installed payloads"
+                    )));
+                }
+            }
             let path = entry.path();
             let metadata = match fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
@@ -2602,11 +2978,7 @@ impl ManagedRuntimeManager {
             if !metadata.is_dir() {
                 continue;
             }
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".installing-")
-            {
+            if is_install_staging {
                 continue;
             }
             let manifest_path = path.join("manifest.json");
@@ -3894,6 +4266,7 @@ impl ManagedRuntimeManager {
         self.loaded.target()?;
         self.verify_resource_bundle()?;
         ensure_managed_private_directory(&self.versions_root())?;
+        self.remove_abandoned_install_staging_directories_locked()?;
         let destination = self.install_directory();
         if private_entry_exists(&destination)? {
             match self.verify_installation() {
@@ -3940,13 +4313,31 @@ impl ManagedRuntimeManager {
         result
     }
 
+    /// A terminated copy can leave only its random private staging directory.
+    /// The lifecycle lock proves no other product install is active, so a later
+    /// attempt may remove exactly names this implementation generates. Similar
+    /// or malformed siblings remain untouched as ambiguous user state.
+    fn remove_abandoned_install_staging_directories_locked(&self) -> AppResult<()> {
+        let versions_root = self.versions_root();
+        let staging_paths = fs::read_dir(&versions_root)?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|entry| is_managed_runtime_install_staging_name(&entry.file_name()))
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        for staging in staging_paths {
+            remove_private_tree(&staging, &versions_root)?;
+        }
+        Ok(())
+    }
+
     fn verify_resource_bundle(&self) -> AppResult<()> {
         verify_bundle_files(&self.resource_root, &self.loaded.manifest.files)
     }
 
     fn verify_installation(&self) -> AppResult<()> {
         let root = canonical_real_directory(&self.install_directory(), "managed runtime install")?;
-        verify_installed_permissions(&root, &self.loaded.manifest.files)?;
+        verify_installed_permissions(&root, &self.versions_root(), &self.loaded.manifest.files)?;
         verify_bundle_files(&root, &self.loaded.manifest.files)?;
         let installed_manifest = LoadedManagedRuntimeManifest::read(&root.join("manifest.json"))?;
         if installed_manifest.sha256 != self.loaded.sha256 {
@@ -3957,12 +4348,83 @@ impl ManagedRuntimeManager {
         Ok(())
     }
 
+    #[cfg(windows)]
+    fn windows_launch_contract(
+        &self,
+        install_root: &Path,
+    ) -> AppResult<Arc<WindowsManagedRuntimeLaunchContract>> {
+        let versions_root = install_root.parent().ok_or_else(|| {
+            AppError::Internal("managed runtime installation has no versions directory".into())
+        })?;
+        let canonical_versions =
+            canonical_real_directory(&self.versions_root(), "managed runtime versions")?;
+        if versions_root != canonical_versions.as_path() {
+            return Err(AppError::NotAuthorized(
+                "managed runtime installation is outside this manager's canonical versions directory"
+                    .into(),
+            ));
+        }
+
+        let driver = safe_join(install_root, &self.loaded.manifest.driver_path)?;
+        let mut bundle_directories = BTreeSet::from([install_root.to_path_buf()]);
+        let mut files = Vec::with_capacity(self.loaded.manifest.files.len() + 1);
+        files.push(WindowsManagedRuntimeLaunchFile {
+            path: install_root.join("manifest.json"),
+            size_bytes: u64::try_from(self.loaded.encoded.len()).map_err(|_| {
+                AppError::Internal("managed runtime manifest length exceeded this platform".into())
+            })?,
+            sha256: self.loaded.sha256.clone(),
+        });
+        for entry in &self.loaded.manifest.files {
+            let path = safe_join(install_root, &entry.path)?;
+            let parent = path.parent().ok_or_else(|| {
+                AppError::Internal("managed runtime payload has no parent directory".into())
+            })?;
+            let relative_parent = parent.strip_prefix(install_root).map_err(|_| {
+                AppError::NotAuthorized(
+                    "managed runtime payload escaped its installation directory".into(),
+                )
+            })?;
+            let mut current = install_root.to_path_buf();
+            for component in relative_parent.components() {
+                let Component::Normal(component) = component else {
+                    return Err(AppError::NotAuthorized(
+                        "managed runtime payload contains an unsafe directory component".into(),
+                    ));
+                };
+                current.push(component);
+                bundle_directories.insert(current.clone());
+            }
+            files.push(WindowsManagedRuntimeLaunchFile {
+                path,
+                size_bytes: entry.size_bytes,
+                sha256: entry.sha256.clone(),
+            });
+        }
+        let mut bundle_directories = bundle_directories.into_iter().collect::<Vec<_>>();
+        bundle_directories.sort_by(|left, right| {
+            left.components()
+                .count()
+                .cmp(&right.components().count())
+                .then_with(|| left.cmp(right))
+        });
+        Ok(Arc::new(WindowsManagedRuntimeLaunchContract {
+            install_root: install_root.to_path_buf(),
+            versions_root: canonical_versions,
+            driver,
+            bundle_directories,
+            files,
+        }))
+    }
+
     fn runtime_command(&self, target: &ManagedTarget) -> AppResult<ManagedRuntimeCommand> {
         self.verify_installation()?;
         let install =
             canonical_real_directory(&self.install_directory(), "managed runtime install")?;
         let binary = safe_join(&install, &self.loaded.manifest.driver_path)?;
         verify_regular_file(&binary, "managed runtime driver")?;
+        #[cfg(windows)]
+        let windows_launch_contract = self.windows_launch_contract(&install)?;
         let provider_root = self.state_root.join("provider-home");
         ensure_managed_private_directory(&provider_root)?;
         let provider_home = self.effective_provider_home_locked(target)?;
@@ -4088,6 +4550,10 @@ impl ManagedRuntimeManager {
             runtime_version: self.loaded.manifest.runtime_version.clone(),
             manifest_sha256: self.loaded.sha256.clone(),
             machine_image_sha256: target.machine_image.sha256.clone(),
+            #[cfg(windows)]
+            windows_launch_authorization: WindowsManagedRuntimeLaunchAuthorization::PrivateBundle(
+                windows_launch_contract,
+            ),
         })
     }
 
@@ -4118,6 +4584,8 @@ impl ManagedRuntimeManager {
             runtime_version: self.loaded.manifest.runtime_version.clone(),
             manifest_sha256: self.loaded.sha256.clone(),
             machine_image_sha256: target.machine_image.sha256.clone(),
+            #[cfg(windows)]
+            windows_launch_authorization: WindowsManagedRuntimeLaunchAuthorization::MetadataOnly,
         })
     }
 
@@ -4905,25 +5373,25 @@ impl ManagedRuntimeManager {
             return Ok(None);
         };
         let mut entries = fs::read_dir(self.versions_root())?.collect::<Result<Vec<_>, _>>()?;
-        if entries.len() > MAX_INSTALLED_VERSIONS {
-            return Err(AppError::NotAuthorized(format!(
-                "managed runtime has more than {MAX_INSTALLED_VERSIONS} installed payloads"
-            )));
-        }
         entries.sort_by_key(|entry| entry.file_name());
+        let mut retained_entry_count = 0_usize;
         for entry in entries {
+            let is_install_staging = is_managed_runtime_install_staging_name(&entry.file_name());
+            if !is_install_staging {
+                retained_entry_count += 1;
+                if retained_entry_count > MAX_INSTALLED_VERSIONS {
+                    return Err(AppError::NotAuthorized(format!(
+                        "managed runtime has more than {MAX_INSTALLED_VERSIONS} installed payloads"
+                    )));
+                }
+            }
             let metadata = fs::symlink_metadata(entry.path())?;
             if metadata.file_type().is_symlink() {
                 return Err(AppError::NotAuthorized(
                     "managed runtime versions directory contains a symlink".into(),
                 ));
             }
-            if !metadata.is_dir()
-                || entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".installing-")
-            {
+            if !metadata.is_dir() || is_install_staging {
                 continue;
             }
             let manifest_path = entry.path().join("manifest.json");
@@ -4941,7 +5409,7 @@ impl ManagedRuntimeManager {
             }
             let root =
                 canonical_real_directory(&entry.path(), "previous managed runtime installation")?;
-            verify_installed_permissions(&root, &loaded.manifest.files)?;
+            verify_installed_permissions(&root, &self.versions_root(), &loaded.manifest.files)?;
             verify_bundle_files(&root, &loaded.manifest.files)?;
             if namespace.eq_ignore_ascii_case(&loaded.sha256[..16]) {
                 if namespace.eq_ignore_ascii_case(&self.loaded.sha256[..16])
@@ -5976,7 +6444,11 @@ impl ManagedRuntimeManager {
 }
 
 #[cfg(unix)]
-fn verify_installed_permissions(root: &Path, files: &[ManagedRuntimeFile]) -> AppResult<()> {
+fn verify_installed_permissions(
+    root: &Path,
+    _versions_root: &Path,
+    files: &[ManagedRuntimeFile],
+) -> AppResult<()> {
     use std::os::unix::fs::PermissionsExt;
 
     let root_mode = fs::symlink_metadata(root)?.permissions().mode() & 0o777;
@@ -6023,8 +6495,128 @@ fn verify_installed_permissions(root: &Path, files: &[ManagedRuntimeFile]) -> Ap
     Ok(())
 }
 
-#[cfg(not(unix))]
-fn verify_installed_permissions(_root: &Path, _files: &[ManagedRuntimeFile]) -> AppResult<()> {
+#[cfg(windows)]
+fn verify_installed_permissions(
+    root: &Path,
+    expected_versions_root: &Path,
+    files: &[ManagedRuntimeFile],
+) -> AppResult<()> {
+    use windows_sys::Win32::Security::{CONTAINER_INHERIT_ACE, OBJECT_INHERIT_ACE};
+
+    let versions_root = root.parent().ok_or_else(|| {
+        AppError::NotAuthorized("managed runtime install has no versions directory".into())
+    })?;
+    let canonical_expected_versions =
+        canonical_real_directory(expected_versions_root, "managed runtime expected versions")?;
+    if versions_root != canonical_expected_versions.as_path() {
+        return Err(AppError::NotAuthorized(
+            "managed runtime install is outside its canonical versions directory".into(),
+        ));
+    }
+    let inheritance = u8::try_from(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)
+        .expect("Windows inheritance flags fit in an ACE header");
+
+    // Keep the canonical ancestor chain and every admitted subtree object
+    // pinned for this whole verification pass. This function never repairs an
+    // inherited or legacy descriptor: anything except the exact protected
+    // current-user policy is rejected.
+    let mut directory_handles = verify_windows_managed_namespace_ancestor_chain(versions_root)
+        .map_err(|error| {
+            AppError::NotAuthorized(format!(
+                "managed runtime installed namespace could not be verified: {error}"
+            ))
+        })?;
+    let versions = directory_handles.first().ok_or_else(|| {
+        AppError::NotAuthorized("managed runtime versions directory could not be pinned".into())
+    })?;
+    verify_windows_current_user_only_dacl_with_ace_flags(versions, inheritance).map_err(
+        |error| {
+            AppError::NotAuthorized(format!(
+                "managed runtime versions directory has an unsafe Windows DACL: {error}"
+            ))
+        },
+    )?;
+    verify_windows_directory_path_identity(versions_root, versions).map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "managed runtime versions directory identity could not be pinned: {error}"
+        ))
+    })?;
+
+    let mut directories = BTreeSet::from([root.to_path_buf()]);
+    for entry in files {
+        let path = safe_join(root, &entry.path)?;
+        let mut parent = path.parent();
+        while let Some(directory) = parent {
+            if directory == root {
+                break;
+            }
+            if !directory.starts_with(root) {
+                return Err(AppError::NotAuthorized(
+                    "managed runtime installed directory escaped its release root".into(),
+                ));
+            }
+            directories.insert(directory.to_path_buf());
+            parent = directory.parent();
+        }
+    }
+    let mut directories = directories.into_iter().collect::<Vec<_>>();
+    directories.sort_by(|left, right| {
+        left.components()
+            .count()
+            .cmp(&right.components().count())
+            .then_with(|| left.cmp(right))
+    });
+    for directory in directories {
+        let handle = open_windows_managed_runtime_directory(&directory, inheritance).map_err(
+            |error| {
+                AppError::NotAuthorized(format!(
+                    "managed runtime installed directory has unsafe Windows permissions or identity: {error}"
+                ))
+            },
+        )?;
+        directory_handles.push(handle);
+    }
+
+    let manifest = open_windows_managed_runtime_file(&root.join("manifest.json"), None).map_err(
+        |error| {
+            AppError::NotAuthorized(format!(
+                "managed runtime installed manifest has unsafe Windows permissions or identity: {error}"
+            ))
+        },
+    )?;
+    let manifest_size = windows_file_information(&manifest)?.size;
+    if manifest_size == 0 || manifest_size > MAX_MANIFEST_BYTES {
+        return Err(AppError::NotAuthorized(
+            "managed runtime installed manifest is empty or oversized".into(),
+        ));
+    }
+    let mut file_handles = Vec::with_capacity(files.len() + 1);
+    file_handles.push(manifest);
+    for entry in files {
+        let path = safe_join(root, &entry.path)?;
+        let handle = open_windows_managed_runtime_file(&path, Some(entry.size_bytes)).map_err(
+            |error| {
+                AppError::NotAuthorized(format!(
+                    "managed runtime installed file has unsafe Windows permissions or identity: {error}"
+                ))
+            },
+        )?;
+        file_handles.push(handle);
+    }
+
+    // Explicit drops document the intended lifetime: no checked directory or
+    // file can be replaced until the complete subtree has passed admission.
+    drop(file_handles);
+    drop(directory_handles);
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn verify_installed_permissions(
+    _root: &Path,
+    _versions_root: &Path,
+    _files: &[ManagedRuntimeFile],
+) -> AppResult<()> {
     Ok(())
 }
 
@@ -6800,6 +7392,13 @@ struct WindowsFileInformation {
 }
 
 #[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WindowsStableFileIdentity {
+    volume_serial_number: u64,
+    file_id: [u8; 16],
+}
+
+#[cfg(windows)]
 struct WindowsCurrentUserSid {
     storage: Vec<u32>,
 }
@@ -7171,6 +7770,161 @@ fn windows_file_information(file: &File) -> io::Result<WindowsFileInformation> {
         number_of_links: information.nNumberOfLinks,
         attributes: information.dwFileAttributes,
     })
+}
+
+#[cfg(windows)]
+fn windows_stable_file_identity(file: &File) -> io::Result<WindowsStableFileIdentity> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ID_INFO, FileIdInfo, GetFileInformationByHandleEx,
+    };
+
+    let mut information = FILE_ID_INFO::default();
+    // SAFETY: file owns a live filesystem handle and information is a
+    // correctly sized writable FILE_ID_INFO output buffer.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            (&raw mut information).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(WindowsStableFileIdentity {
+        volume_serial_number: information.VolumeSerialNumber,
+        file_id: information.FileId.Identifier,
+    })
+}
+
+#[cfg(windows)]
+fn verify_windows_directory_path_identity(path: &Path, directory: &File) -> io::Result<()> {
+    let expected = windows_stable_file_identity(directory)?;
+    let path_probe = open_windows_real_directory_security_handle(path)?;
+    if windows_stable_file_identity(&path_probe)? != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "managed runtime directory path changed while it was being pinned",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn open_windows_managed_runtime_directory(path: &Path, inheritance: u8) -> io::Result<File> {
+    let directory = open_windows_real_directory_security_handle(path)?;
+    verify_windows_current_user_only_dacl_with_ace_flags(&directory, inheritance)?;
+    verify_windows_directory_path_identity(path, &directory)?;
+    Ok(directory)
+}
+
+#[cfg(windows)]
+fn open_windows_managed_runtime_file(path: &Path, expected_size: Option<u64>) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_GENERIC_READ, FILE_SHARE_READ, READ_CONTROL,
+    };
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .access_mode(FILE_GENERIC_READ | READ_CONTROL)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path)?;
+    let information = windows_file_information(&file)?;
+    if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
+        || information.number_of_links != 1
+        || expected_size.is_some_and(|size| information.size != size)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "managed runtime installed file is not the expected single-link real file",
+        ));
+    }
+    verify_windows_current_user_only_dacl(&file)?;
+
+    // The primary handle already denies write/delete sharing. Reopen the same
+    // still-pinned name without following a final reparse point and bind that
+    // namespace to a 128-bit stable file ID before retaining the primary.
+    let path_identity = windows_stable_file_identity(&file)?;
+    let mut probe_options = OpenOptions::new();
+    probe_options
+        .read(true)
+        .access_mode(FILE_GENERIC_READ | READ_CONTROL)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let path_probe = probe_options.open(path)?;
+    if windows_stable_file_identity(&path_probe)? != path_identity
+        || windows_file_information(&path_probe)? != information
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "managed runtime installed file path changed while it was being pinned",
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn verify_windows_managed_runtime_file_hash(
+    file: &mut File,
+    expected_size: u64,
+    expected_sha256: &str,
+    deadline: Instant,
+    is_cancelled: &dyn Fn() -> bool,
+) -> io::Result<()> {
+    check_windows_launch_guard_budget(deadline, is_cancelled)?;
+    let before = windows_file_information(file)?;
+    if before.size != expected_size || before.number_of_links != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "managed runtime installed file size or link count changed before launch",
+        ));
+    }
+
+    let mut hasher = Sha256::new();
+    let mut observed = 0_u64;
+    let mut buffer = [0_u8; 128 * 1024];
+    loop {
+        check_windows_launch_guard_budget(deadline, is_cancelled)?;
+        let read = file.read(&mut buffer)?;
+        check_windows_launch_guard_budget(deadline, is_cancelled)?;
+        if read == 0 {
+            break;
+        }
+        observed = observed.checked_add(read as u64).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "managed runtime installed file size overflowed while hashing",
+            )
+        })?;
+        if observed > expected_size {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "managed runtime installed file exceeded its release-locked size",
+            ));
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let actual = hex::encode(hasher.finalize());
+    if observed != expected_size || !actual.eq_ignore_ascii_case(expected_sha256) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "managed runtime installed file failed its release-locked digest",
+        ));
+    }
+    if windows_file_information(file)? != before {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "managed runtime installed file changed while it was being hashed",
+        ));
+    }
+    check_windows_launch_guard_budget(deadline, is_cancelled)?;
+    verify_windows_current_user_only_dacl(file)
 }
 
 #[cfg(windows)]
@@ -8743,6 +9497,7 @@ fn probe_windows_installer_wsl_prerequisite() -> Result<(), WindowsWslPrerequisi
         runtime_version: "installer-prerequisite".into(),
         manifest_sha256: "installer-prerequisite".into(),
         machine_image_sha256: "installer-prerequisite".into(),
+        windows_launch_authorization: WindowsManagedRuntimeLaunchAuthorization::MetadataOnly,
     };
     let command = windows_wsl_inventory_command_with_directories(&seed, &directories)
         .map_err(|_| WindowsWslPrerequisiteFailure::command_failed(None))?;
@@ -9057,6 +9812,24 @@ fn installation_directory_name(loaded: &LoadedManagedRuntimeManifest) -> String 
     )
 }
 
+fn is_managed_runtime_install_staging_name(name: &OsStr) -> bool {
+    let Some(encoded) = name
+        .to_str()
+        .and_then(|name| name.strip_prefix(".installing-"))
+    else {
+        return false;
+    };
+    let Ok(identifier) = Uuid::parse_str(encoded) else {
+        return false;
+    };
+    // `Uuid::new_v4()` is the only producer. Requiring its exact lower-case,
+    // hyphenated representation and version bits prevents cleanup from
+    // broadening to merely similar or caller-chosen names.
+    identifier.as_bytes()[6] & 0xf0 == 0x40
+        && identifier.as_bytes()[8] & 0xc0 == 0x80
+        && identifier.hyphenated().to_string() == encoded
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct WindowsWslPrerequisiteFailure {
     reason: ManagedRuntimeSetupFailureReason,
@@ -9334,6 +10107,8 @@ fn windows_wsl_inventory_command_with_directories(
         runtime_version: managed_command.runtime_version.clone(),
         manifest_sha256: managed_command.manifest_sha256.clone(),
         machine_image_sha256: managed_command.machine_image_sha256.clone(),
+        #[cfg(windows)]
+        windows_launch_authorization: WindowsManagedRuntimeLaunchAuthorization::VerifiedSystem32Wsl,
     })
 }
 
@@ -11217,7 +11992,11 @@ fn managed_path(
                     )
                 })?
                 .system32;
-            std::env::join_paths([PathBuf::from(rendered), system32.clone()])
+            // Resolve Windows-owned utilities (notably wsl.exe) from the
+            // verified System32 directory before consulting the managed
+            // helper bundle. Podman's explicit helper_binaries_dir still
+            // selects release-pinned gvproxy/win-sshproxy binaries.
+            std::env::join_paths([system32.clone(), PathBuf::from(rendered)])
                 .map_err(|_| AppError::Runtime("managed Windows runtime PATH is invalid".into()))?
         }
         ManagedOperatingSystem::Linux | ManagedOperatingSystem::Macos => std::env::join_paths([
@@ -13789,8 +14568,10 @@ mod tests {
         forbidden: &[&str],
     ) {
         assert_eq!(admission.failure_reason(), Some(expected_reason));
+        assert_eq!(admission.recovery_receipt(), None);
         match admission {
-            PackagedManagedRuntimeAdmission::Verified(manager) => {
+            PackagedManagedRuntimeAdmission::Verified(manager)
+            | PackagedManagedRuntimeAdmission::RecoveredFromPrivateCache { manager, .. } => {
                 let _ = manager.manifest_sha256();
                 panic!("rejected fixture unexpectedly admitted a runtime manager");
             }
@@ -13864,6 +14645,759 @@ mod tests {
             admission,
             ManagedRuntimeSetupFailureReason::PackagedRuntimeVerificationFailed,
             &[&private_path, rejected_bytes, "DO-NOT-LEAK-REJECTED-BYTES"],
+        );
+    }
+
+    #[test]
+    fn missing_packaged_runtime_recovers_only_the_exact_intact_private_copy() {
+        let fixture = fixture();
+        fixture
+            .manager
+            .install()
+            .expect("seed private runtime copy");
+        let app_data = fixture
+            .manager
+            .state_root
+            .parent()
+            .expect("application data parent")
+            .to_path_buf();
+        let resources = fixture.manager.resource_root.clone();
+        let expected_digest = fixture.manager.manifest_sha256().to_owned();
+        let expected_private_root = fixture
+            .manager
+            .install_directory()
+            .canonicalize()
+            .expect("canonical private runtime copy");
+        fs::remove_dir_all(&resources).expect("remove packaged runtime tree");
+
+        let admission = admit_packaged_managed_runtime_with_recovery_digest(
+            &app_data,
+            &resources,
+            Some(&expected_digest),
+        );
+
+        assert_eq!(admission.failure_reason(), None);
+        assert_eq!(
+            admission.recovery_receipt(),
+            Some(PackagedManagedRuntimeRecoveryReceipt {
+                boundary: "packaged_component_auto_recovery",
+                source: "private_installed_copy",
+                manifest_sha256: &expected_digest,
+                packaged_failure_reason: ManagedRuntimeSetupFailureReason::PackagedRuntimeMissing,
+            })
+        );
+        let recovered = match admission {
+            PackagedManagedRuntimeAdmission::RecoveredFromPrivateCache { manager, .. } => manager,
+            PackagedManagedRuntimeAdmission::Verified(_) => {
+                panic!("a missing packaged tree cannot be the verified source")
+            }
+            PackagedManagedRuntimeAdmission::Missing
+            | PackagedManagedRuntimeAdmission::VerificationFailed => {
+                panic!("the exact intact private copy was not recovered")
+            }
+        };
+        assert_eq!(recovered.manifest_sha256(), expected_digest);
+        assert_eq!(recovered.resource_root, expected_private_root);
+        recovered
+            .verify_installation()
+            .expect("recovered private copy remains fully verified");
+        assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn tampered_packaged_runtime_never_becomes_the_recovered_command_source() {
+        let fixture = fixture();
+        fixture
+            .manager
+            .install()
+            .expect("seed private runtime copy");
+        let app_data = fixture
+            .manager
+            .state_root
+            .parent()
+            .expect("application data parent")
+            .to_path_buf();
+        let resources = fixture.manager.resource_root.clone();
+        let expected_digest = fixture.manager.manifest_sha256().to_owned();
+        let expected_private_root = fixture
+            .manager
+            .install_directory()
+            .canonicalize()
+            .expect("canonical private runtime copy");
+        let rejected_driver = b"DO-NOT-EXECUTE-TAMPERED-PACKAGED-DRIVER";
+        fs::write(
+            resources.join("manifest.json"),
+            &fixture.manager.loaded.encoded,
+        )
+        .expect("write packaged manifest");
+        fs::write(resources.join("bin/podman"), rejected_driver).expect("tamper packaged driver");
+
+        let admission = admit_packaged_managed_runtime_with_recovery_digest(
+            &app_data,
+            &resources,
+            Some(&expected_digest),
+        );
+
+        assert_eq!(admission.failure_reason(), None);
+        assert_eq!(
+            admission.recovery_receipt(),
+            Some(PackagedManagedRuntimeRecoveryReceipt {
+                boundary: "packaged_component_auto_recovery",
+                source: "private_installed_copy",
+                manifest_sha256: &expected_digest,
+                packaged_failure_reason:
+                    ManagedRuntimeSetupFailureReason::PackagedRuntimeVerificationFailed,
+            })
+        );
+        let recovered = match admission {
+            PackagedManagedRuntimeAdmission::RecoveredFromPrivateCache { manager, .. } => manager,
+            PackagedManagedRuntimeAdmission::Verified(_) => {
+                panic!("tampered packaged bytes were admitted as verified")
+            }
+            PackagedManagedRuntimeAdmission::Missing
+            | PackagedManagedRuntimeAdmission::VerificationFailed => {
+                panic!("the exact intact private copy was not recovered")
+            }
+        };
+        assert_eq!(recovered.resource_root, expected_private_root);
+        assert_ne!(
+            recovered.resource_root,
+            resources
+                .canonicalize()
+                .expect("canonical packaged resources")
+        );
+        assert_eq!(
+            fs::read(resources.join("bin/podman")).expect("read rejected driver"),
+            rejected_driver
+        );
+        recovered
+            .verify_installation()
+            .expect("recovered command source remains fully verified");
+        assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn missing_packaged_runtime_rejects_absent_wrong_or_malformed_recovery_digests() {
+        let fixture = fixture();
+        fixture
+            .manager
+            .install()
+            .expect("seed private runtime copy");
+        let app_data = fixture
+            .manager
+            .state_root
+            .parent()
+            .expect("application data parent")
+            .to_path_buf();
+        let resources = fixture.manager.resource_root.clone();
+        let wrong_digest = sha256_bytes(b"different private runtime identity");
+        let malformed_digest = "DO-NOT-LEAK-MALFORMED-RECOVERY-DIGEST";
+        let private_path = app_data.to_string_lossy().into_owned();
+        fs::remove_dir_all(&resources).expect("remove packaged runtime tree");
+
+        for recovery_digest in [None, Some(wrong_digest.as_str()), Some(malformed_digest)] {
+            let admission = admit_packaged_managed_runtime_with_recovery_digest(
+                &app_data,
+                &resources,
+                recovery_digest,
+            );
+            assert_redacted_terminal_packaged_runtime_admission(
+                admission,
+                ManagedRuntimeSetupFailureReason::PackagedRuntimeMissing,
+                &[
+                    &private_path,
+                    wrong_digest.as_str(),
+                    malformed_digest,
+                    "managed-podman-driver",
+                ],
+            );
+        }
+        assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn tampered_private_copy_retains_the_original_redacted_package_rejection() {
+        let fixture = fixture();
+        fixture
+            .manager
+            .install()
+            .expect("seed private runtime copy");
+        let app_data = fixture
+            .manager
+            .state_root
+            .parent()
+            .expect("application data parent")
+            .to_path_buf();
+        let resources = fixture.manager.resource_root.clone();
+        let expected_digest = fixture.manager.manifest_sha256().to_owned();
+        let installed_driver = fixture.manager.install_directory().join("bin/podman");
+        let rejected_packaged_driver = b"DO-NOT-LEAK-TAMPERED-PACKAGED-DRIVER";
+        let rejected_private_driver = b"tampered-runtime";
+        fs::write(
+            resources.join("manifest.json"),
+            &fixture.manager.loaded.encoded,
+        )
+        .expect("write packaged manifest");
+        fs::write(resources.join("bin/podman"), rejected_packaged_driver)
+            .expect("tamper packaged driver");
+        tamper_installed_driver(&fixture.manager);
+        let packaged_path = resources.to_string_lossy().into_owned();
+        let private_path = installed_driver.to_string_lossy().into_owned();
+
+        let admission = admit_packaged_managed_runtime_with_recovery_digest(
+            &app_data,
+            &resources,
+            Some(&expected_digest),
+        );
+
+        assert_redacted_terminal_packaged_runtime_admission(
+            admission,
+            ManagedRuntimeSetupFailureReason::PackagedRuntimeVerificationFailed,
+            &[
+                &packaged_path,
+                &private_path,
+                std::str::from_utf8(rejected_packaged_driver).expect("UTF-8 fixture"),
+                std::str::from_utf8(rejected_private_driver).expect("UTF-8 fixture"),
+            ],
+        );
+        assert_eq!(
+            fs::read(resources.join("bin/podman")).expect("read rejected packaged driver"),
+            rejected_packaged_driver
+        );
+        assert_eq!(
+            fs::read(installed_driver).expect("read rejected private driver"),
+            rejected_private_driver
+        );
+        assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn healthy_packaged_runtime_wins_without_consulting_a_recovery_digest() {
+        let fixture = fixture();
+        let app_data = fixture
+            .manager
+            .state_root
+            .parent()
+            .expect("application data parent")
+            .to_path_buf();
+        let resources = fixture.manager.resource_root.clone();
+        fs::write(
+            resources.join("manifest.json"),
+            &fixture.manager.loaded.encoded,
+        )
+        .expect("write healthy packaged manifest");
+
+        let admission = admit_packaged_managed_runtime_with_recovery_digest(
+            &app_data,
+            &resources,
+            Some("not-a-valid-or-consulted-recovery-digest"),
+        );
+
+        assert_eq!(admission.recovery_receipt(), None);
+        match admission {
+            PackagedManagedRuntimeAdmission::Verified(manager) => {
+                assert_eq!(manager.manifest_sha256(), fixture.manager.manifest_sha256());
+            }
+            PackagedManagedRuntimeAdmission::RecoveredFromPrivateCache { .. } => {
+                panic!("healthy packaged resources must remain the primary source")
+            }
+            PackagedManagedRuntimeAdmission::Missing
+            | PackagedManagedRuntimeAdmission::VerificationFailed => {
+                panic!("healthy packaged resources were unexpectedly rejected")
+            }
+        }
+        assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn exact_legacy_private_copy_is_not_a_current_desktop_recovery_source() {
+        let mut fixture = fixture();
+        let mut legacy_manifest = fixture.manager.loaded.manifest.clone();
+        legacy_manifest.schema_version = LEGACY_MANIFEST_SCHEMA_VERSION.into();
+        legacy_manifest.management_contract_revision = None;
+        let legacy_bytes = serde_json::to_vec(&legacy_manifest).expect("legacy manifest");
+        fixture.manager.loaded =
+            LoadedManagedRuntimeManifest::parse(&legacy_bytes).expect("strict legacy manifest");
+        fixture
+            .manager
+            .install()
+            .expect("seed exact legacy private copy");
+        let app_data = fixture
+            .manager
+            .state_root
+            .parent()
+            .expect("application data parent")
+            .to_path_buf();
+        let resources = fixture.manager.resource_root.clone();
+        let legacy_digest = fixture.manager.manifest_sha256().to_owned();
+        fs::remove_dir_all(&resources).expect("remove packaged runtime tree");
+
+        let admission = admit_packaged_managed_runtime_with_recovery_digest(
+            &app_data,
+            &resources,
+            Some(&legacy_digest),
+        );
+
+        assert_redacted_terminal_packaged_runtime_admission(
+            admission,
+            ManagedRuntimeSetupFailureReason::PackagedRuntimeMissing,
+            &[legacy_digest.as_str()],
+        );
+        assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn desktop_build_anchor_matches_the_staged_manifest_used_for_packaging() {
+        if !cfg!(feature = "desktop") {
+            assert_eq!(
+                packaged_managed_runtime_manifest_digest_anchor(),
+                None,
+                "a non-desktop build must not embed a packaged-runtime anchor"
+            );
+            return;
+        }
+        let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../runtime/staged/managed-runtime/manifest.json");
+        match fs::read(&manifest_path) {
+            Ok(manifest) => {
+                let expected_digest = sha256_bytes(&manifest);
+                assert_eq!(
+                    packaged_managed_runtime_manifest_digest_anchor(),
+                    Some(expected_digest.as_str()),
+                    "the runtime trust anchor must be emitted from the staged manifest"
+                );
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => assert_eq!(
+                packaged_managed_runtime_manifest_digest_anchor(),
+                None,
+                "a debug desktop build without staged resources must not invent an anchor"
+            ),
+            Err(error) => panic!("could not read staged managed-runtime manifest: {error}"),
+        }
+    }
+
+    #[cfg(windows)]
+    fn installed_windows_runtime_command(fixture: &Fixture) -> ManagedRuntimeCommand {
+        fixture
+            .manager
+            .install()
+            .expect("install protected Windows runtime fixture");
+        let target = fixture.manager.loaded.target().expect("Windows target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("construct protected Windows runtime command")
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_installed_runtime_rejects_non_exact_directory_and_file_dacls() {
+        let directory_fixture = fixture();
+        directory_fixture
+            .manager
+            .install()
+            .expect("install directory-DACL fixture");
+        let unsafe_directory = directory_fixture.manager.install_directory().join("bin");
+        set_windows_permissive_inheritable_dacl(&unsafe_directory);
+        let directory_before = windows_test_security_snapshot(
+            &open_windows_real_directory_security_handle(&unsafe_directory)
+                .expect("open widened directory"),
+        );
+        assert!(
+            directory_fixture.manager.verify_installation().is_err(),
+            "an extra directory principal must invalidate the installed runtime"
+        );
+        assert_eq!(
+            windows_test_security_snapshot(
+                &open_windows_real_directory_security_handle(&unsafe_directory)
+                    .expect("reopen widened directory"),
+            ),
+            directory_before,
+            "verification must not repair a rejected directory DACL"
+        );
+
+        let file_fixture = fixture();
+        file_fixture
+            .manager
+            .install()
+            .expect("install file-DACL fixture");
+        let unsafe_file = file_fixture.manager.install_directory().join("bin/podman");
+        set_test_world_readable_product_file_dacl(&unsafe_file)
+            .expect("add one foreign read principal to payload");
+        let file_before =
+            windows_test_security_snapshot(&windows_test_nofollow_security_file(&unsafe_file));
+        assert!(
+            file_fixture.manager.verify_installation().is_err(),
+            "an extra file principal must invalidate the installed runtime"
+        );
+        assert_eq!(
+            windows_test_security_snapshot(&windows_test_nofollow_security_file(&unsafe_file)),
+            file_before,
+            "verification must not repair a rejected file DACL"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_installed_runtime_rejects_a_non_exact_versions_root_dacl() {
+        let fixture = fixture();
+        fixture
+            .manager
+            .install()
+            .expect("install versions-DACL fixture");
+        let versions = fixture.manager.versions_root();
+        set_windows_permissive_inheritable_dacl(&versions);
+        let before = windows_test_security_snapshot(
+            &open_windows_real_directory_security_handle(&versions)
+                .expect("open widened versions root"),
+        );
+
+        assert!(
+            fixture.manager.verify_installation().is_err(),
+            "an extra versions-root principal must invalidate the installed runtime"
+        );
+        assert_eq!(
+            windows_test_security_snapshot(
+                &open_windows_real_directory_security_handle(&versions)
+                    .expect("reopen widened versions root"),
+            ),
+            before,
+            "verification must not repair a rejected versions-root DACL"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_launch_guard_pins_ancestor_directories_and_payload_until_drop() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+
+        let fixture = fixture();
+        let command = installed_windows_runtime_command(&fixture);
+        let state_root = fixture.manager.state_root.clone();
+        let contract = command
+            .windows_launch_contract()
+            .expect("managed command carries its Windows launch contract");
+        let install_root = contract.install_root.clone();
+        drop(fixture.manager);
+        let guard = contract
+            .acquire(command.binary(), Instant::now() + COMMAND_TIMEOUT, &|| {
+                false
+            })
+            .expect("acquire exact Windows execution guard");
+
+        let write_attempt = OpenOptions::new()
+            .write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(command.binary());
+        assert!(
+            write_attempt.is_err(),
+            "a guarded payload must reject a concurrent writer"
+        );
+        let moved = command.binary().with_extension("guarded-move");
+        let moved_install = install_root.with_extension("guarded-move");
+        let moved_state = state_root.with_extension("guarded-move");
+        assert!(
+            fs::rename(command.binary(), &moved).is_err(),
+            "a guarded payload must reject rename/delete replacement"
+        );
+        assert!(
+            fs::rename(&install_root, &moved_install).is_err(),
+            "the guard must pin the installed directory"
+        );
+        assert!(
+            fs::rename(&state_root, &moved_state).is_err(),
+            "the guard must pin the state-root ancestor even after the manager is dropped"
+        );
+
+        drop(guard);
+        drop(
+            OpenOptions::new()
+                .write(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .open(command.binary())
+                .expect("idle payload becomes writable for bounded repair"),
+        );
+        fs::rename(command.binary(), &moved).expect("idle payload can be moved for repair");
+        fs::rename(&moved, command.binary()).expect("restore payload after lock-lifetime proof");
+        fs::rename(&install_root, &moved_install)
+            .expect("idle install root can be moved for repair");
+        fs::rename(&moved_install, &install_root).expect("restore install root after guard proof");
+        fs::rename(&state_root, &moved_state).expect("idle state root can be moved for repair");
+        fs::rename(&moved_state, &state_root).expect("restore state root after guard proof");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_launch_contract_rejects_post_command_tamper_and_survives_manager_drop() {
+        let fixture = fixture();
+        let command = installed_windows_runtime_command(&fixture);
+        let binary = command.binary().to_path_buf();
+        let runtime = crate::container_runtime::ProcessContainerRuntime::from_managed(command)
+            .expect("retain managed runtime context");
+
+        let mut tampered = fs::read(&binary).expect("read idle payload");
+        tampered[0] ^= 0xff;
+        fs::write(&binary, tampered).expect("tamper idle payload without changing its size");
+        drop(fixture.manager);
+
+        let error = runtime
+            .command_context()
+            .output(&[], 1024, Duration::from_secs(1))
+            .expect_err("context must re-prove the payload before process creation");
+        assert!(
+            error.to_string().contains("release-locked digest"),
+            "the retained context must fail in its pre-spawn guard: {error}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_managed_container_context_rejects_a_missing_launch_contract() {
+        let fixture = fixture();
+        let command = ManagedRuntimeCommand {
+            binary: fixture.manager.resource_root.join("bin/podman"),
+            environment: BTreeMap::new(),
+            working_directory: fixture.manager.resource_root.clone(),
+            runtime_version: "fixture".into(),
+            manifest_sha256: "a".repeat(64),
+            machine_image_sha256: "b".repeat(64),
+            windows_launch_authorization: WindowsManagedRuntimeLaunchAuthorization::MetadataOnly,
+        };
+
+        let error = crate::container_runtime::ProcessContainerRuntime::from_managed(command)
+            .expect_err("Windows managed-local context must fail closed without a contract");
+        assert!(error.to_string().contains("missing its pre-spawn"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_metadata_only_command_cannot_reach_the_direct_runner() {
+        let fixture = fixture();
+        let command = ManagedRuntimeCommand {
+            binary: fixture.manager.resource_root.join("bin/podman"),
+            environment: BTreeMap::new(),
+            working_directory: fixture.manager.resource_root.clone(),
+            runtime_version: "fixture".into(),
+            manifest_sha256: "a".repeat(64),
+            machine_image_sha256: "b".repeat(64),
+            windows_launch_authorization: WindowsManagedRuntimeLaunchAuthorization::MetadataOnly,
+        };
+
+        let error = DirectManagedCommandRunner
+            .output(&command, &[], COMMAND_TIMEOUT)
+            .expect_err("metadata-only commands must fail before process creation");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("metadata-only"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_system32_authorization_rejects_a_forged_binary_path() {
+        let fixture = fixture();
+        let command = ManagedRuntimeCommand {
+            binary: fixture.manager.resource_root.join("bin/podman"),
+            environment: BTreeMap::new(),
+            working_directory: fixture.manager.resource_root.clone(),
+            runtime_version: "fixture".into(),
+            manifest_sha256: "a".repeat(64),
+            machine_image_sha256: "b".repeat(64),
+            windows_launch_authorization:
+                WindowsManagedRuntimeLaunchAuthorization::VerifiedSystem32Wsl,
+        };
+
+        let error = DirectManagedCommandRunner
+            .output(&command, &[], COMMAND_TIMEOUT)
+            .expect_err("a forged system-command path must fail before process creation");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("System32"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_launch_contract_rejects_a_post_command_hard_link() {
+        let fixture = fixture();
+        let command = installed_windows_runtime_command(&fixture);
+        let contract = command
+            .windows_launch_contract()
+            .expect("managed command carries its Windows launch contract");
+        let alias = command.binary().with_extension("hard-link-alias");
+        fs::hard_link(command.binary(), &alias).expect("add adversarial hard link");
+
+        let error = contract
+            .acquire(command.binary(), Instant::now() + COMMAND_TIMEOUT, &|| {
+                false
+            })
+            .expect_err("multi-link payload must fail before process creation");
+        assert!(
+            error.to_string().contains("single-link"),
+            "hard-link rejection should remain attributable: {error}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_launch_contract_rejects_an_unlisted_helper_added_after_verification() {
+        let fixture = fixture();
+        let command = installed_windows_runtime_command(&fixture);
+        let contract = command
+            .windows_launch_contract()
+            .expect("managed command carries its Windows launch contract");
+        let injected = fixture.manager.install_directory().join("bin/wsl.exe");
+        fs::write(&injected, b"unlisted helper").expect("add unlisted helper");
+
+        let error = contract
+            .acquire(command.binary(), Instant::now() + COMMAND_TIMEOUT, &|| {
+                false
+            })
+            .expect_err("an unlisted helper must fail before process creation");
+        assert!(
+            error.to_string().contains("unlisted launch-time entry"),
+            "closed-inventory rejection should remain attributable: {error}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_launch_contract_honors_deadline_and_cooperative_cancellation() {
+        use std::cell::Cell;
+
+        let fixture = fixture();
+        let command = installed_windows_runtime_command(&fixture);
+        let contract = command
+            .windows_launch_contract()
+            .expect("managed command carries its Windows launch contract");
+
+        let timeout = contract
+            .acquire(command.binary(), Instant::now(), &|| false)
+            .expect_err("an expired command budget must stop launch verification");
+        assert_eq!(timeout.kind(), io::ErrorKind::TimedOut);
+
+        let cancelled = contract
+            .acquire(command.binary(), Instant::now() + COMMAND_TIMEOUT, &|| true)
+            .expect_err("cancellation must stop launch verification");
+        assert_eq!(cancelled.kind(), io::ErrorKind::Interrupted);
+
+        let checks = Cell::new(0_usize);
+        let cancel_during_file_verification = || {
+            let next = checks.get() + 1;
+            checks.set(next);
+            next >= 15
+        };
+        let cancelled = contract
+            .acquire(
+                command.binary(),
+                Instant::now() + COMMAND_TIMEOUT,
+                &cancel_during_file_verification,
+            )
+            .expect_err("cancellation between hash chunks must stop launch verification");
+        assert_eq!(cancelled.kind(), io::ErrorKind::Interrupted);
+        assert!(
+            checks.get() >= 15,
+            "launch verification must poll beyond its initial filesystem checks"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_launch_guard_is_compatible_with_a_real_pe_and_lives_through_child_exit() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+
+        let mut fixture = fixture();
+        let system = windows_system_directories().expect("verified Windows system directories");
+        let source = system.system32.join("cmd.exe");
+        let resource_driver = fixture.manager.resource_root.join("bin/podman.exe");
+        fs::copy(&source, &resource_driver).expect("copy a real PE test driver");
+        let driver_bytes = fs::read(&resource_driver).expect("read PE fixture");
+        let driver_digest = sha256_bytes(&driver_bytes);
+        let mut manifest = fixture.manager.loaded.manifest.clone();
+        manifest.driver_path = "bin/podman.exe".into();
+        manifest.files[0].path = manifest.driver_path.clone();
+        manifest.files[0].size_bytes = driver_bytes.len() as u64;
+        manifest.files[0].sha256 = driver_digest.clone();
+        let driver_artifact = manifest
+            .components
+            .iter_mut()
+            .flat_map(|component| component.artifacts.iter_mut())
+            .find(|artifact| artifact.delivery == ManagedRuntimeArtifactDelivery::BundledFile)
+            .expect("bundled driver artifact");
+        driver_artifact.locator = manifest.driver_path.clone();
+        driver_artifact.size_bytes = driver_bytes.len() as u64;
+        driver_artifact.sha256 = driver_digest;
+        let encoded = serde_json::to_vec(&manifest).expect("PE fixture manifest");
+        fixture.manager.loaded =
+            LoadedManagedRuntimeManifest::parse(&encoded).expect("validated PE fixture manifest");
+
+        let mut command = installed_windows_runtime_command(&fixture);
+        let context =
+            crate::container_runtime::ProcessContainerRuntime::from_managed(command.clone())
+                .expect("construct retained PE command context")
+                .command_context();
+        let simple_args = ["/D", "/Q", "/C", "exit /b 0"]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let simple = context
+            .output(&simple_args, 1024, Duration::from_secs(10))
+            .expect("a guarded PE can be launched through the retained context");
+        assert!(simple.status.success());
+
+        let ready = fixture._temp.path().join("guarded-child-ready");
+        command.environment.insert(
+            OsString::from("AI_SECURITY_SCANNER_GUARD_READY"),
+            ready.as_os_str().to_owned(),
+        );
+        let long_args = [
+            OsString::from("/D"),
+            OsString::from("/Q"),
+            OsString::from("/C"),
+            OsString::from(
+                r#"(echo ready)>"%AI_SECURITY_SCANNER_GUARD_READY%" & "%SystemRoot%\System32\ping.exe" -n 4 127.0.0.1 >nul"#,
+            ),
+        ];
+        let manifest_path = fixture.manager.install_directory().join("manifest.json");
+        let moved_manifest = manifest_path.with_extension("guarded-move");
+        let worker = thread::spawn(move || {
+            DirectManagedCommandRunner.output(&command, &long_args, Duration::from_secs(10))
+        });
+        let ready_deadline = Instant::now() + Duration::from_secs(10);
+        while !ready.exists() && Instant::now() < ready_deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            ready.exists(),
+            "the guarded PE child did not reach its marker"
+        );
+
+        assert!(
+            OpenOptions::new()
+                .write(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .open(&manifest_path)
+                .is_err(),
+            "the manifest must remain write-locked while the child is alive"
+        );
+        assert!(
+            fs::rename(&manifest_path, &moved_manifest).is_err(),
+            "the manifest must remain rename-locked while the child is alive"
+        );
+        let output = worker
+            .join()
+            .expect("guarded PE worker")
+            .expect("guarded PE output");
+        assert!(output.status.success());
+
+        drop(
+            OpenOptions::new()
+                .write(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .open(&manifest_path)
+                .expect("manifest write lock is released after child output drains"),
         );
     }
 
@@ -14024,6 +15558,11 @@ mod tests {
             + user_size
             + ace_prefix
             + principal_size as usize;
+        let user_ace_flags = if path.is_dir() {
+            OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+        } else {
+            0
+        };
         let mut acl = vec![0_u32; acl_bytes.div_ceil(std::mem::size_of::<u32>())];
         // SAFETY: acl is DWORD-aligned and provides at least acl_bytes writable bytes.
         assert_ne!(
@@ -14039,7 +15578,7 @@ mod tests {
                 AddAccessAllowedAceEx(
                     acl.as_mut_ptr().cast(),
                     ACL_REVISION,
-                    OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+                    user_ace_flags,
                     FILE_ALL_ACCESS,
                     user.as_ptr(),
                 )
@@ -17596,6 +19135,48 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_install_staging_does_not_wedge_recovery_and_is_cleaned_exactly() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install current payload");
+        let versions = fixture.manager.versions_root();
+        let expected_digest = fixture.manager.manifest_sha256().to_owned();
+        let app_data = fixture
+            .manager
+            .state_root
+            .parent()
+            .expect("application data parent")
+            .to_path_buf();
+        let mut abandoned = Vec::new();
+        for _ in 0..=MAX_INSTALLED_VERSIONS {
+            let path = versions.join(format!(".installing-{}", Uuid::new_v4()));
+            ensure_managed_private_directory(&path).expect("abandoned private staging directory");
+            abandoned.push(path);
+        }
+
+        let reopened = ManagedRuntimeManager::open_installed(&app_data, Some(&expected_digest))
+            .expect("exact committed payload remains recoverable despite abandoned staging");
+        assert_eq!(reopened.manifest_sha256(), expected_digest);
+        drop(reopened);
+
+        let malformed = versions.join(".installing-not-a-product-uuid");
+        ensure_managed_private_directory(&malformed).expect("ambiguous similar sibling");
+        let uppercase = versions.join(format!(
+            ".installing-{}",
+            Uuid::new_v4().hyphenated().to_string().to_ascii_uppercase()
+        ));
+        ensure_managed_private_directory(&uppercase).expect("noncanonical similar sibling");
+
+        fixture
+            .manager
+            .install()
+            .expect("retry cleans only exact abandoned product staging");
+        assert!(abandoned.iter().all(|path| !path.exists()));
+        assert!(malformed.is_dir());
+        assert!(uppercase.is_dir());
+        assert!(fixture.manager.install_directory().is_dir());
+    }
+
+    #[test]
     fn windows_registry_string_accepts_a_bounded_size_probe_overestimate_only_when_reads_stabilize()
     {
         let mut first = "C:\\Users\\runner\\AppData\\Local\\Packages"
@@ -18619,6 +20200,8 @@ mod tests {
             runtime_version: "test".into(),
             manifest_sha256: "a".repeat(64),
             machine_image_sha256: "b".repeat(64),
+            #[cfg(windows)]
+            windows_launch_authorization: WindowsManagedRuntimeLaunchAuthorization::MetadataOnly,
         };
 
         let command =
@@ -20059,6 +21642,8 @@ mod tests {
             runtime_version: "5.8.2".into(),
             manifest_sha256: "a".repeat(64),
             machine_image_sha256: "b".repeat(64),
+            #[cfg(windows)]
+            windows_launch_authorization: WindowsManagedRuntimeLaunchAuthorization::MetadataOnly,
         };
         fixture
             .commands
@@ -20096,6 +21681,8 @@ mod tests {
             runtime_version: "5.8.2".into(),
             manifest_sha256: "a".repeat(64),
             machine_image_sha256: "b".repeat(64),
+            #[cfg(windows)]
+            windows_launch_authorization: WindowsManagedRuntimeLaunchAuthorization::MetadataOnly,
         };
         let total_budget = Duration::from_millis(10);
         fixture
@@ -21832,7 +23419,7 @@ mod tests {
                     .expect("managed PATH"),
             )
             .collect::<Vec<_>>();
-            assert_eq!(managed_paths.last(), Some(&system_root.join("System32")));
+            assert_eq!(managed_paths.first(), Some(&system_root.join("System32")));
         } else {
             assert!(windows_lookup_guard.is_none());
         }
