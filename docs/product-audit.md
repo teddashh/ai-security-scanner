@@ -411,6 +411,16 @@ This compact inventory records the current semantics for paths not all represent
 - **Simpler behavior:** Keep first-layer English/Traditional Chinese content to outcome, plain-language use cases, current download/quick start, three-step first scan, one example report, and language link. Move authorization, WSL ownership, engine manifests/provenance, qualification, and release blockers to second-level linked docs; keep limitations near the claim they qualify.
 - **Acceptance test:** A reader with no repository context can choose/download/start and understand the first report from either README. Before expanding technical detail, no WSL ownership, manifest, provenance, or global release-gate vocabulary appears; both languages describe the same implemented journey.
 
+### A30 — Source capability and engine lifecycle are disclosed at selection but not in the report
+
+- **Priority / disposition:** P2 — Extend the existing view to reporting; do not narrow the specification.
+- **Problem:** Specification §6.4 requires the versioned source capability view in source selection **and reporting**, and §8.5 requires every catalog entry to disclose its maintenance owner and update procedure. The implemented view is reachable only from source selection, and the frontend engine manifest does not carry those two lifecycle fields, so a report reader cannot see which dimensions the product can cover at all, or who maintains a given engine.
+- **Evidence:** view construction `src/sourceCapabilityPresentation.ts`; its single production caller `src/components/ProviderAuthorizationPanel.tsx` via `src/pages/CoveragePage.tsx`; no capability field on `BeginnerMasterReport` in `src/types.ts` and none produced by `src-tauri/src/beginner_report.rs`; `maintenance_owner` and `update_procedure` exist in `engines/catalog.json` but are not read by `NativeEngineManifest` in `src/services/nativeAdapter.ts`.
+- **Real user impact:** A beginner reading the master report cannot distinguish "this dimension was not covered by this run" from "the product cannot cover this dimension for this source", which is exactly the honest-partial-result distinction the report exists to make. When an engine is stale or unavailable, the report offers no maintenance owner or update procedure to act on.
+- **Wrong design belief:** Disclosing capability once at source selection is sufficient, because the user has already seen it.
+- **Simpler behavior:** Carry the same versioned capability view onto the report as product-capability context, kept visibly separate from run coverage, which continues to derive exclusively from the frozen Requested contract and append-only Executed outcomes. Surface the catalog's maintenance owner and update procedure alongside an engine's support state.
+- **Acceptance test:** A report for a source with an unavailable dimension shows that dimension as a product-capability limitation with its exact scope and engine, without changing any Requested/Executed coverage count; a stale or unavailable engine names its maintenance owner and update procedure.
+
 ## 6. Controls worth keeping
 
 The rewrite is not a request to remove all safeguards. These mechanisms directly support user outcomes and should remain, with technical detail progressively disclosed:
