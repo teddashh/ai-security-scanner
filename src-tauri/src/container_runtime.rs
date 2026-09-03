@@ -1960,7 +1960,9 @@ fn prove_managed_internal_network(
     Ok(())
 }
 
-#[cfg(test)]
+// Only the Unix inherited-pipe test constructs a relative deadline; scoping this
+// helper to that exact configuration keeps `-D warnings` clean on Windows.
+#[cfg(all(test, unix))]
 fn bounded_command_output(
     command: &mut Command,
     maximum: u64,
