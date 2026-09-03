@@ -13600,9 +13600,13 @@ mod tests {
         }
 
         fn discovered_aws_account(&self, case_id: &str, account_id: &str) -> (AssessmentCase, Id) {
-            let (case, mut asset_ids) =
+            let (case, asset_ids) =
                 self.discovered_aws_accounts(case_id, account_id, &[account_id]);
-            (case, asset_ids.remove(0))
+            assert!(
+                !asset_ids.is_empty(),
+                "single-account fixture must create an asset"
+            );
+            (case, asset_ids.into_iter().next().unwrap_or_default())
         }
     }
 

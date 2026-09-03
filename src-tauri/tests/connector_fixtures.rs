@@ -359,15 +359,11 @@ fn all_source_kinds_parse_only_their_bounded_snapshot_profiles() {
         );
         assert!(
             batch.assets.len() >= fixture_case.minimum_assets,
-            "{} produced {} assets",
-            fixture_case.fixture,
-            batch.assets.len()
+            "fixture must produce its minimum asset count"
         );
         assert!(
             batch.relations.len() >= fixture_case.minimum_relations,
-            "{} produced {} relations",
-            fixture_case.fixture,
-            batch.relations.len()
+            "fixture must produce its minimum relation count"
         );
         assert!(batch.notices.iter().any(|notice| {
             notice.contains("consumes preserved provider output")

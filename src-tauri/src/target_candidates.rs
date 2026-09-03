@@ -258,19 +258,9 @@ fn linux_interface_is_physical(name: &str) -> bool {
 
 #[cfg(target_os = "linux")]
 fn platform_observations() -> Result<Vec<InterfaceObservation>, LocalNetworkCandidateStatus> {
-    use std::ffi::CStr;
+    use nix::ifaddrs::getifaddrs;
+    use nix::net::if_::InterfaceFlags;
     use std::fs;
-    use std::ptr;
-
-    struct IfAddrs(*mut libc::ifaddrs);
-    impl Drop for IfAddrs {
-        fn drop(&mut self) {
-            if !self.0.is_null() {
-                // SAFETY: getifaddrs allocated this list and ownership remains here.
-                unsafe { libc::freeifaddrs(self.0) };
-            }
-        }
-    }
 
     let route_table = fs::read_to_string("/proc/net/route")
         .map_err(|_| LocalNetworkCandidateStatus::Unavailable)?;
@@ -279,51 +269,40 @@ fn platform_observations() -> Result<Vec<InterfaceObservation>, LocalNetworkCand
         return Ok(Vec::new());
     }
 
-    let mut raw = ptr::null_mut();
-    // SAFETY: raw is a valid out-pointer and is released by IfAddrs below.
-    if unsafe { libc::getifaddrs(&mut raw) } != 0 || raw.is_null() {
-        return Err(LocalNetworkCandidateStatus::Unavailable);
-    }
-    let guard = IfAddrs(raw);
     let mut observations = Vec::new();
-    let mut cursor = guard.0;
-    let mut visited = 0usize;
-    while !cursor.is_null() && visited < 4096 {
-        visited += 1;
-        // SAFETY: cursor belongs to the live getifaddrs list.
-        let entry = unsafe { &*cursor };
-        cursor = entry.ifa_next;
-        if entry.ifa_name.is_null() || entry.ifa_addr.is_null() || entry.ifa_netmask.is_null() {
+    let interfaces = getifaddrs().map_err(|_| LocalNetworkCandidateStatus::Unavailable)?;
+    for entry in interfaces.take(4096) {
+        let name = entry.interface_name;
+        if !default_interfaces.contains(&name) || !linux_interface_is_physical(&name) {
             continue;
         }
-        // SAFETY: getifaddrs provides a NUL-terminated interface name.
-        let Ok(name) = unsafe { CStr::from_ptr(entry.ifa_name) }.to_str() else {
-            continue;
-        };
-        if !default_interfaces.contains(name) || !linux_interface_is_physical(name) {
-            continue;
-        }
-        // SAFETY: non-null sockaddr pointers were checked above.
-        if unsafe { (*entry.ifa_addr).sa_family as i32 } != libc::AF_INET
-            || unsafe { (*entry.ifa_netmask).sa_family as i32 } != libc::AF_INET
-        {
-            continue;
-        }
-        // SAFETY: AF_INET guarantees sockaddr_in layout for both pointers.
-        let address = unsafe { &*(entry.ifa_addr.cast::<libc::sockaddr_in>()) };
-        let netmask = unsafe { &*(entry.ifa_netmask.cast::<libc::sockaddr_in>()) };
-        let Some(prefix_len) = prefix_from_mask(ipv4_from_network_order(netmask.sin_addr.s_addr))
+        let Some(address) = entry
+            .address
+            .as_ref()
+            .and_then(|address| address.as_sockaddr_in())
+            .map(|address| address.ip())
         else {
             continue;
         };
-        let flags = entry.ifa_flags as i32;
+        let Some(netmask) = entry
+            .netmask
+            .as_ref()
+            .and_then(|netmask| netmask.as_sockaddr_in())
+            .map(|netmask| netmask.ip())
+        else {
+            continue;
+        };
+        let Some(prefix_len) = prefix_from_mask(netmask) else {
+            continue;
+        };
+        let flags = entry.flags;
         observations.push(InterfaceObservation {
-            address: ipv4_from_network_order(address.sin_addr.s_addr),
+            address,
             prefix_len,
-            is_up: flags & libc::IFF_UP != 0,
-            is_running: flags & libc::IFF_RUNNING != 0,
-            is_loopback: flags & libc::IFF_LOOPBACK != 0,
-            is_point_to_point: flags & libc::IFF_POINTOPOINT != 0,
+            is_up: flags.contains(InterfaceFlags::IFF_UP),
+            is_running: flags.contains(InterfaceFlags::IFF_RUNNING),
+            is_loopback: flags.contains(InterfaceFlags::IFF_LOOPBACK),
+            is_point_to_point: flags.contains(InterfaceFlags::IFF_POINTOPOINT),
             is_virtual_or_tunnel: false,
             is_default_route: true,
             has_gateway: true,
