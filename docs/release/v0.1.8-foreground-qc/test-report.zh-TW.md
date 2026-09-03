@@ -3,11 +3,13 @@
 日期：2026-09-02
 原始功能整合 commit：`503542271ff8b2178ed2d334fd47d76c494d1c75`
 本輪主要強化 commit：`a538778a34cd7db72b28256591575aee77937ab8`
-最終已驗證程式 checkpoint：`0077b2c5a6df8c758afbb44be5a1c6a9b2202a64`
+完整跨平台 baseline checkpoint：`0077b2c5a6df8c758afbb44be5a1c6a9b2202a64`
+Foreground QC fast-forward point：`1d4054e18b5b8a4014ffd2634ac507fa569e72a7`
+合併後 CI 修正 code checkpoint：`31f137d03997c221e7c81ba8fc5ae579348b0c14`
 平台：Windows 11 Professional／Castle Linux
 Rust：兩端 rustc/cargo 1.98.0
-Node：v24.16.0
-npm：11.13.0
+Windows Node／npm：v24.16.0／11.13.0
+Castle Node／npm：v24.15.0／11.12.1
 
 ## 測試範圍與限制
 
@@ -15,9 +17,9 @@ npm：11.13.0
 
 本輪沒有安裝、啟動或操作 App，沒有 BAT，沒有 clean VM／human session／real engine scan。因此「PASS」只代表對應 automated command 或 artifact check 成功，不能外推成 production qualification。
 
-0.1.8 後續增量程式已 commit／push，Windows 與 Castle 都在同一個 `0077b2c` code checkpoint 完成完整重跑。文件本身會形成其後的文件 commit；仍不可把不同 feature/platform 的重疊測試相加成一個行銷總數。
+0.1.8 增量程式已 commit／push；Windows 與 Castle 在 `0077b2c` 完成完整跨平台 baseline。合併後在 Windows 對修正後 source 重跑 desktop 1,347/1,347、CLI 1,340/1,340、managed-runtime targeted 141/141、frontend 364/364、release self-test與三個 sidecar builds；Castle 對 `fa13835` 的 minimal-feature builds 與 engine/CI contracts PASS，再同步到 `main@31f137d`。文件本身會形成其後的文件 commit；仍不可把不同 feature/platform 的重疊測試相加成一個行銷總數。
 
-## 最終測試矩陣
+## 完整 baseline + post-merge scoped 測試矩陣
 
 | 類別 | 命令／證據 | 最終結果 | 說明 |
 |---|---|---:|---|
@@ -32,7 +34,7 @@ npm：11.13.0
 | Frontend tests（最新增量） | `npm.cmd run test:frontend` | 364/364 PASS | 包含 Settings state 與 case bundle disclosure regression |
 | Frontend build | `npm.cmd run build` | PASS | Vite 8.2.2，93 modules |
 | Release evidence | release evidence tests | 53/53 PASS | fixture/evidence regression |
-| CI classification | classification tests | 22/22 PASS | change routing regression |
+| CI classification／gateway workflow contract | `node --test tests/ci/*.test.mjs` | 23/23 PASS | 零 dependency；含 manual-only publication trigger/order guard |
 | Engine validation | catalog／line endings／Prowler | PASS | 167 inputs、21 records、19 runnable、Prowler 8/8 |
 | Release policy | policy validator | PASS | automated policy checks |
 | AIDEFEND | snapshot validator | PASS | 6 records；captured snapshot ref `e10c…` |
@@ -42,9 +44,14 @@ npm：11.13.0
 | Signed case bundle | targeted Rust regression | 1/1 PASS | case-wide records、selected-run observations/evidence 與 current-projection caveat皆有 sentinel 驗證 |
 | Nuclei real template tree | Castle；pinned Go 1.26.0 container；`nuclei-templates@24858b4…` | 1/1 PASS | 真實 tree targeted test；不是 image publication |
 | Nuclei production image gate | 新 immutable recipe／tag／attestation | NOT IMPLEMENTED／NOT RUN | `3.11.1-5` 是舊 recipe；本輪拒絕冒用其 digest／evidence |
-| Previous Windows bundle | unsigned NSIS build（pre-`a538778`） | HISTORICAL PASS；latest rebuild NOT RUN | 舊 candidate未安裝／未啟動，不能代表最新 source |
+| Historical local Windows bundle | unsigned NSIS build（pre-`a538778`） | HISTORICAL PASS | 舊 candidate未安裝／未啟動，不能代表最新 source |
+| Current-source Windows bundle compile | GitHub CI `31f137d` ephemeral NSIS step | PASS | workflow未保存／上傳檔案；未hash、簽章、發布或安裝，不是可交付 candidate |
 | Historical original staged diff | `git diff --cached --check`（`5035422` commit 前） | PASS | 74 檔只屬原始功能整合，不是 `0077b2c` 最終 diff |
-| Cross-machine integrity | Windows／GitHub／Castle SHA | PASS | 驗證 code HEAD 都是 `0077b2c5…`，Castle clean |
+| Post-merge managed runtime | Windows targeted tests | 141/141 PASS | hosted-runner fixture owner 修正；production ACL policy未放寬 |
+| Post-merge sidecar builds | Windows x86_64 egress gateway／bootstrap broker／CLI | PASS | 修正 minimal-feature dependency 後重建 |
+| GitHub affected-lane CI | `main@31f137d` run `33697821312` | SUCCESS | classifier、Rust/CLI、release、Tauri Linux compile、Windows repair/NSIS與aggregate成功；不相關三 lanes明確skipped |
+| GitHub CodeQL | `main@31f137d` run `33697821316` | SUCCESS | Rust與JavaScript/TypeScript analysis成功；不外推為零finding |
+| Cross-machine SHA alignment | Windows／GitHub／Castle branch | ALIGNED at code checkpoint | 文件提交前曾在 `main@31f137d…` 對齊；這不是測試或永久同步保證 |
 
 ## Desktop Rust 詳細結果
 
@@ -107,7 +114,7 @@ Desktop 與 CLI feature set 會重編並重跑部分共同邏輯，所以「1,34
 
 Frontend tests 包含 presentation helper、case/run identity、demo export projection、navigation、locale、runtime truth reconciliation、primary path source regression 等。後者是 source-level regression，不是 browser human journey。
 
-Castle 以 Node 24.15.0／npm 11.12.1 在 `0077b2c` 重跑：typecheck、364/364 frontend、93-module Vite build、53/53 release evidence、5/5 usability schema、167 engine inputs／21 records／19 runnable／Prowler 8/8、AIDEFEND 6 records與 release validation，全數 PASS。Linux build main JS 同為 877.98／265.59 gzip kB。歷史 `npm ci` audit 曾對該 lockfile 安裝圖回報 36 packages／0 vulnerabilities，但不抵銷 GitHub default branch 顯示的 1 個 moderate vulnerability。
+Castle 以 Node 24.15.0／npm 11.12.1 在 `0077b2c` 重跑：typecheck、364/364 frontend、93-module Vite build、53/53 release evidence、5/5 usability schema、167 engine inputs／21 records／19 runnable／Prowler 8/8、AIDEFEND 6 records與 release validation，全數 PASS。Linux build main JS 同為 877.98／265.59 gzip kB。歷史 `npm ci` audit 曾對該 lockfile 安裝圖回報 36 packages／0 vulnerabilities，但不抵銷 GitHub Dependabot 對 Cargo `glib 0.18.5` 的 open moderate alert。
 
 ### 0.1.8 後續增量結果
 
@@ -118,6 +125,14 @@ Castle 以 Node 24.15.0／npm 11.12.1 在 `0077b2c` 重跑：typecheck、364/364
 - Typecheck、Vite build、engine validation、AIDEFEND validation：PASS。
 - Provider artifact targeted module：Windows desktop 19/19、CLI 19/19、Castle/Linux 14/14 PASS；feature/platform runs 有重疊，不合併灌總數。
 - Nuclei real template tree：Castle targeted test 1/1 PASS；production gate NOT IMPLEMENTED，image build／新 tag／publication NOT RUN。
+
+### 合併後本機與 Castle 回歸
+
+- Windows managed-runtime targeted：141/141 PASS。三個 hosted-runner-only failures 的根因是測試 fixture 建立後 owner 為 Administrators；helper 改為明確 current-user owner。production DACL admission／foreign-write fail-closed 邏輯沒有放寬。
+- Windows desktop：1,347/1,347 PASS；CLI：1,340/1,340 PASS。兩者共享大量 tests，不相加成 2,687 個獨立產品行為。
+- Windows frontend：364/364 PASS；typecheck、release self-test、engine catalog validation、engine-image-evidence self-test與 CI contracts 23/23 PASS。
+- Windows x86_64 sidecars：managed egress gateway、managed-runtime bootstrap broker 與 CLI 全部 build/stage PASS。這不等於 OCI image publication／qualification；舊 `0.1.8-1` evidence不適用目前 source。
+- Castle 對修正後 dependency graph 執行 release-verifier minimal feature check、egress-gateway minimal feature check、gateway workflow contract與 engine validation，全部 PASS；之後 fast-forward 並保持 `main` clean。
 
 ## 安全與資料完整性重點回歸
 
@@ -180,6 +195,14 @@ Castle 以 Node 24.15.0／npm 11.12.1 在 `0077b2c` 重跑：typecheck、364/364
 - CLI managed status 在隱性 managed-runtime mutation 前取得 data-directory lease。
 - localhost polling tests 使用 2 秒 deadline 與 `recv_timeout`，避免主要 regression 無限等待。
 
+### Dependabot／Linux desktop dependency
+
+- GitHub alert #1：`glib 0.18.5`，`GHSA-wrw7-89jp-8q8g`／`RUSTSEC-2024-0429`，Moderate 6.9；affected `>=0.15,<0.20`，first patched `0.20.0`。Alert建立於 `2026-08-25T02:00:49Z`；本次 `2026-09-02` 觀察仍 open、`fixed_at: null`。
+- Dependency path只存在 Linux desktop Tauri／GTK3 graph；Windows 與 Linux CLI-only graph排除 `glib`。
+- `gtk 0.18.2` 明確要求 `glib ^0.18`，所以不能靠更新 `Cargo.lock` 單獨升到 `0.20.0`。截至本次 triage，現用 Tauri／Wry line 仍受 GTK3 graph限制。
+- 這是 inherited risk：base `fa1fa9d` 已鎖 `glib 0.18.5`，`fa1fa9d..31f137d` 沒有變更 `Cargo.lock`；foreground line 未引入、也未修復它。本輪沒有引入未稽核 fork/vendor來假裝關閉警報。短期可行修補需要 audited immutable backport加 Linux release-mode regression／desktop packaging smoke；長期是 GTK4/Tauri migration。
+- 目前證據是版本範圍告警與平台 dependency graph；本輪未證明 advisory涉及的 `VariantStrIter` path在產品中可達或可被利用，也未因缺少 reachability proof而自行降級警報。
+
 ## Installer 驗證
 
 檔案：`C:\Users\tedjc\Documents\Codex\2026-08-27\t\outputs\ai-security-scanner_0.1.8_x64-setup-foreground-qc-unsigned.exe`
@@ -195,7 +218,7 @@ Castle 以 Node 24.15.0／npm 11.12.1 在 `0077b2c` 重跑：typecheck、364/364
 
 確認範圍只有檔案 metadata、hash 與 bundle build。沒有執行 installer、沒有 launch App、沒有檢查 installed files、upgrade、restart、uninstall 或 human UX。
 
-這個 unsigned installer 建於已提交的 provider／case bundle／Settings 增量修正之前；尚未重建，因此不能把它當成 `a538778`／`0077b2c` 或最終 branch HEAD 的 binary candidate。
+這個本機 unsigned installer 建於已提交的 provider／case bundle／Settings 增量修正之前，因此不能把它當成 `a538778`／`0077b2c` 或最新 `main` HEAD 的 binary candidate。`31f137d` 的 GitHub CI另有 ephemeral NSIS compile PASS，但 workflow未保存或上傳產物，沒有可核對的本輪 SHA-256，亦未簽章、發布或安裝。
 
 ## 過程失敗紀錄
 
@@ -224,6 +247,11 @@ Castle 以 Node 24.15.0／npm 11.12.1 在 `0077b2c` 重跑：typecheck、364/364
 - clone 原 fetch refspec 只追蹤 tag；加入精確 branch refspec 後 upstream 正常。
 - 本機 default stable 是 1.97，但 repo 的 `rust-version = "1.98"`；第一次命令在測試開始前被 Cargo 拒絕。改用已安裝的 `cargo +1.98.0` 後完整 Windows suite與 Clippy PASS。先前將文件改成 1.97 是錯誤，現已恢復 1.98。
 - Castle 驗證有數次 SSH connect timeout，皆發生在遠端命令開始前；每次都重連、核對 SHA／clean worktree後才執行，不納入測試通過數。
+- `main@1d4054e` 的 GitHub CI run `33695158579`：FAILED。Release self-test與 Linux sidecar都因共用 `directories` 被錯列為 optional feature而編譯失敗；Windows managed-runtime 138 PASS／3 FAIL，根因是 hosted-runner fixture ownership。這三個 failure 均先在本機重現／定位，修正後才推送。
+- 同 SHA 的 gateway run `33695158567`：FAILED at immutable guard，因 `0.1.8-1` 已綁 source `59e34af…`／digest `sha256:9f0575…`。Build／publish／evidence／promote均 skipped，既有 tag未覆寫；這是安全防線成功，不是 publication 成功。
+- `main@fa13835` 的 CI run `33696772321`：FAILED at classifier，因新 test import `yaml` 但該 job 刻意不執行 `npm ci`。改成零 dependency 測試並提交 `2cb7a23` 後，23/23 PASS。
+- `main@2cb7a23` 的 CI run `33696908514` 與 CodeQL `33696908521`：SUCCESS，但 boundary classifier 對只改 test file 的提交跳過 heavy lanes。因此只記為 classifier/aggregate與 CodeQL成功，不冒充完整跨平台 CI。
+- `main@31f137d` 的 affected-lane CI run `33697821312`：SUCCESS。所有 scheduled jobs成功；frontend、engine、framework因這個 Cargo-path change不受影響而由 classifier skipped。CodeQL run `33697821316` 也 SUCCESS，Rust與JavaScript/TypeScript兩個 analysis jobs均成功；不把 workflow conclusion冒充零finding證明。
 
 ## 未執行測試
 
@@ -235,13 +263,14 @@ Castle 以 Node 24.15.0／npm 11.12.1 在 `0077b2c` 重跑：typecheck、364/364
 - 真實 partial result、cancel、retry、export、signed bundle、recovery、uninstall human journey。
 - Screen reader、keyboard-only、mobile viewport 與十分鐘 first-value human study。
 - Authenticode signing、updater、GitHub Release download/install path。
+- Linux desktop `glib 0.18.5` advisory 的 audited backport或 GTK4/Tauri migration；Windows 與 Linux CLI-only graph不含此 dependency，但 Linux desktop 尚未修復。
 
 ## 最終判定
 
-**Automated source/build checkpoint：PASS（限定 automated source/build 範圍）。** Windows desktop 1,347/1,347、CLI 1,340/1,340、Castle CLI 1,307/1,307、兩端 frontend 364/364、release 53/53、usability 5/5、Prowler 8/8、provider Windows desktop／CLI 各 19/19與 Castle 14/14，以及 typecheck、Windows／Castle Vite build、engine、AIDEFEND、Rustfmt、Clippy 均 PASS。整體產品仍是 PARTIAL：新 Nuclei immutable image recipe／publication、installer rebuild、installed/human qualification與 P0 A19 都未完成。
+**Automated source/build checkpoint：PASS（限定 automated source/build 範圍）。** Windows desktop 1,347/1,347、CLI 1,340/1,340、Castle CLI 1,307/1,307、兩端 frontend 364/364、release 53/53、usability 5/5、Prowler 8/8、provider Windows desktop／CLI 各 19/19與 Castle 14/14，以及 typecheck、Windows／Castle Vite build、engine、AIDEFEND、Rustfmt、Clippy 均 PASS。合併後修正另有 Windows managed-runtime 141/141、CI contract 23/23、release self-test、sidecar builds與 ephemeral NSIS compile PASS。整體產品仍是 PARTIAL：`glib` Linux desktop advisory、新 Nuclei immutable image recipe／publication、可保存且可核對 hash的 installer candidate、installed/human qualification與 P0 A19 都未完成。
 
 **Installed Windows qualification：NOT RUN。** 不可從本報告推論安裝成功。
 
 **Human UX qualification：NOT RUN。** Source tests 與 demo tests 不等於真人證據。
 
-**Release/signing qualification：NOT READY。** Installer unsigned且早於最新 source；P0 A19 完整 same-version repair 仍未完成。Case bundle scope 已定義為 case-wide records + run-bound reports（含 current case projection caveat），但真實簽章／installed end-to-end qualification未做，也沒有 PR／tag／Release。
+**Release/signing qualification：NOT READY。** Installer unsigned且早於最新 source；P0 A19 完整 same-version repair 仍未完成。Case bundle scope 已定義為 case-wide records + run-bound reports（含 current case projection caveat），但真實簽章／installed end-to-end qualification未做，也沒有新 tag／Release。Source 已直接 fast-forward 到 `main`；這不等於 release qualification。

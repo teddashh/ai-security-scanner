@@ -44,6 +44,11 @@ NIST CSF, ISO/IEC 27001, and AIDEFEND references help you understand how a findi
 
 Want to try the real Windows app? Use the **v0.1.8 public testing prerelease** on the [GitHub Releases page](https://github.com/teddashh/ai-security-scanner/releases). It is a test build, not a stable or beginner-ready release yet.
 
+The `main` source is ahead of those prerelease binaries. Developers should use
+the [v0.1.8 foreground QC handover](docs/release/v0.1.8-foreground-qc-handover.md)
+for the exact source, validation, and remaining-gap record; do not treat the
+older downloadable installer as a build of current `main`.
+
 Before installing:
 
 - Windows may show an **Unknown publisher** warning because Authenticode signing has not been verified;
@@ -116,6 +121,7 @@ These source-development commands do not prove that the installed Windows beginn
 - [Provider authorization implementation reference](docs/provider-authorization.md)
 - [Engine catalog](docs/engine-catalog.md)
 - [Release, qualification, and publication policy](docs/release/README.md)
+- [Current v0.1.8 foreground QC handover](docs/release/v0.1.8-foreground-qc-handover.md)
 - [Security policy](SECURITY.md)
 - [Third-party inventory](THIRD_PARTY.md)
 - [Contributing](CONTRIBUTING.md)

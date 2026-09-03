@@ -44,6 +44,11 @@ NIST CSF、ISO/IEC 27001 與 AIDEFEND 關聯只是幫助你理解發現項目與
 
 想直接試真正的 Windows App？請到 [GitHub Releases 頁面](https://github.com/teddashh/ai-security-scanner/releases)下載 **v0.1.8 公開測試預發布版**。這是讓大家實機測試的版本，目前還不是穩定版或新手正式推薦版。
 
+目前 `main` 原始碼已領先這批預發布 binary。開發接手請看
+[v0.1.8 foreground QC 交接索引](docs/release/v0.1.8-foreground-qc/README.zh-TW.md)，
+其中有精確 source、驗證與未完成項目；不要把舊的可下載 installer 當成目前
+`main` 的 build。
+
 安裝前先知道三件事：
 
 - Authenticode 簽章尚未完成驗證，因此 Windows 可能顯示「未知的發行者」；
@@ -116,6 +121,7 @@ npm run tauri dev
 - [資料來源授權實作參考](docs/provider-authorization.md)
 - [掃描引擎目錄](docs/engine-catalog.md)
 - [發行、驗證與發布政策](docs/release/README.md)
+- [目前 v0.1.8 foreground QC 交接與測試證據](docs/release/v0.1.8-foreground-qc/README.zh-TW.md)
 - [安全政策](SECURITY.md)
 - [第三方元件清單](THIRD_PARTY.md)
 - [貢獻指南](CONTRIBUTING.md)
