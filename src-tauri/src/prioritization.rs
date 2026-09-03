@@ -5,15 +5,14 @@
 //! data never invents a finding and only affects wording when an affected asset
 //! independently carries the matching sensitivity or exposure attribute.
 
-use crate::domain::{AssessmentCase, DataClass, Finding};
+use crate::domain::{AssessmentCase, Asset, DataClass, Finding, SourceKind};
 use std::collections::BTreeSet;
 
 const CONTEXT_VERSION_TAG: &str = "context-priority:v1";
-const INTERNET_REASON: &str =
-    "An affected asset is explicitly marked internet-exposed in the case inventory.";
-const SENSITIVE_REASON: &str = "An affected asset is explicitly marked sensitive and matches data context retained by the case questionnaire.";
-const INTERNET_IMPACT: &str = " The affected asset is marked internet-exposed in the case inventory, which may increase the reachable attack surface; that inventory attribute still requires human confirmation.";
-const SENSITIVE_IMPACT: &str = " The affected asset is marked as containing sensitive data and the case questionnaire records a relevant data context, so a confirmed exposure may have greater impact; neither entry is itself proof of data exposure.";
+const INTERNET_REASON: &str = "An affected asset is marked internet-exposed, and all retained source attribution for that asset is non-questionnaire.";
+const SENSITIVE_REASON: &str = "An affected asset is marked sensitive, all retained source attribution for that asset is non-questionnaire, and the case questionnaire separately records sensitive-data context.";
+const INTERNET_IMPACT: &str = " The affected asset is marked internet-exposed and has only retained non-questionnaire source attribution, which may increase the reachable attack surface; field-level provenance for that attribute is not retained, so it still requires human confirmation.";
+const SENSITIVE_IMPACT: &str = " The affected asset is marked as containing sensitive data and has only retained non-questionnaire source attribution, while the case questionnaire separately records sensitive-data context. This may increase the impact of a confirmed exposure, but field-level data-class provenance is not retained and neither entry is itself proof of data exposure.";
 
 /// Adds bounded, explainable case-context factors without changing severity,
 /// confidence, fingerprints, evidence, workflow status, or any authorization.
@@ -23,12 +22,14 @@ pub fn apply_case_context(case: &AssessmentCase, finding: &mut Finding) {
         .iter()
         .filter(|asset| finding.asset_ids.contains(&asset.id))
         .collect::<Vec<_>>();
-    let internet_exposed = affected
-        .iter()
-        .any(|asset| asset.internet_exposed == Some(true));
-    let sensitive_asset = affected
-        .iter()
-        .any(|asset| asset.contains_sensitive_data == Some(true));
+    let internet_exposed = affected.iter().any(|asset| {
+        asset.internet_exposed == Some(true)
+            && has_only_retained_non_questionnaire_sources(case, asset)
+    });
+    let sensitive_asset = affected.iter().any(|asset| {
+        asset.contains_sensitive_data == Some(true)
+            && has_only_retained_non_questionnaire_sources(case, asset)
+    });
     let sensitive_context = case
         .profile
         .data_classes
@@ -57,6 +58,16 @@ pub fn apply_case_context(case: &AssessmentCase, finding: &mut Finding) {
     deduplicate(&mut finding.tags);
 }
 
+fn has_only_retained_non_questionnaire_sources(case: &AssessmentCase, asset: &Asset) -> bool {
+    !asset.discovered_from.is_empty()
+        && asset.discovered_from.iter().all(|source_id| {
+            case.data_sources
+                .iter()
+                .find(|source| source.id == *source_id)
+                .is_some_and(|source| source.kind != SourceKind::UserDeclared)
+        })
+}
+
 fn append_once(value: &mut String, suffix: &str) {
     if !value.contains(suffix.trim()) {
         value.push_str(suffix);
@@ -80,7 +91,8 @@ fn deduplicate(values: &mut Vec<String>) {
 mod tests {
     use super::*;
     use crate::domain::{
-        Asset, AssetIdentifier, AssetKind, Confidence, FindingStatus, OrganizationProfile, Severity,
+        Asset, AssetIdentifier, AssetKind, Confidence, DataSource, FindingStatus,
+        OrganizationProfile, Severity, SourceConnectionStatus,
     };
     use std::collections::BTreeMap;
 
@@ -138,6 +150,16 @@ mod tests {
             contains_sensitive_data: Some(true),
             metadata: BTreeMap::new(),
         });
+        case.data_sources.push(DataSource {
+            id: "source".into(),
+            kind: SourceKind::AwsOrganization,
+            label: "Retained AWS inventory".into(),
+            status: SourceConnectionStatus::Connected,
+            connected_at: None,
+            last_discovered_at: None,
+            read_only: true,
+            metadata: BTreeMap::new(),
+        });
         case
     }
 
@@ -145,10 +167,22 @@ mod tests {
     fn evidenced_case_context_changes_priority_and_wording_without_changing_severity() {
         let case = contextual_case();
         let mut finding = finding(&case);
+        let original_confidence = finding.confidence.clone();
+        let original_evidence = serde_json::to_value(&finding.evidence).unwrap();
+        let original_scope = serde_json::to_value(&case.scope_grants).unwrap();
         apply_case_context(&case, &mut finding);
 
         assert_eq!(finding.priority, 90);
         assert_eq!(finding.severity, Severity::High);
+        assert_eq!(finding.confidence, original_confidence);
+        assert_eq!(
+            serde_json::to_value(&finding.evidence).unwrap(),
+            original_evidence
+        );
+        assert_eq!(
+            serde_json::to_value(&case.scope_grants).unwrap(),
+            original_scope
+        );
         assert!(finding.priority_reasons.contains(&INTERNET_REASON.into()));
         assert!(finding.priority_reasons.contains(&SENSITIVE_REASON.into()));
         assert!(
@@ -163,6 +197,171 @@ mod tests {
         assert_eq!(finding.priority, once.priority);
         assert_eq!(finding.priority_reasons, once.priority_reasons);
         assert_eq!(finding.possible_impact, once.possible_impact);
+    }
+
+    #[test]
+    fn questionnaire_declared_exposure_alone_never_changes_priority() {
+        let mut case = contextual_case();
+        case.profile.data_classes = vec![DataClass::General];
+        case.assets[0].contains_sensitive_data = None;
+        case.data_sources[0].kind = SourceKind::UserDeclared;
+        let mut finding = finding(&case);
+        let original = finding.clone();
+
+        apply_case_context(&case, &mut finding);
+
+        assert_eq!(finding.priority, original.priority);
+        assert_eq!(finding.severity, original.severity);
+        assert_eq!(finding.confidence, original.confidence);
+        assert_eq!(
+            serde_json::to_value(&finding.evidence).unwrap(),
+            serde_json::to_value(&original.evidence).unwrap()
+        );
+        assert_eq!(finding.possible_impact, original.possible_impact);
+        assert!(!finding.priority_reasons.contains(&INTERNET_REASON.into()));
+        assert!(!finding.tags.contains(&CONTEXT_VERSION_TAG.into()));
+    }
+
+    #[test]
+    fn retained_non_questionnaire_source_can_support_internet_priority() {
+        let mut case = contextual_case();
+        case.profile.data_classes = vec![DataClass::General];
+        case.assets[0].contains_sensitive_data = None;
+        let mut finding = finding(&case);
+        let original_severity = finding.severity.clone();
+        let original_confidence = finding.confidence.clone();
+
+        apply_case_context(&case, &mut finding);
+
+        assert_eq!(finding.priority, 85);
+        assert_eq!(finding.severity, original_severity);
+        assert_eq!(finding.confidence, original_confidence);
+        assert!(finding.priority_reasons.contains(&INTERNET_REASON.into()));
+        assert!(finding.possible_impact.contains("field-level provenance"));
+        assert!(finding.tags.contains(&CONTEXT_VERSION_TAG.into()));
+    }
+
+    #[test]
+    fn retained_non_questionnaire_source_can_support_sensitive_priority() {
+        let mut case = contextual_case();
+        case.assets[0].internet_exposed = Some(false);
+        let mut finding = finding(&case);
+        let original_severity = finding.severity.clone();
+        let original_confidence = finding.confidence.clone();
+
+        apply_case_context(&case, &mut finding);
+
+        assert_eq!(finding.priority, 85);
+        assert_eq!(finding.severity, original_severity);
+        assert_eq!(finding.confidence, original_confidence);
+        assert!(finding.priority_reasons.contains(&SENSITIVE_REASON.into()));
+        assert!(
+            finding
+                .possible_impact
+                .contains("field-level data-class provenance")
+        );
+        assert!(finding.tags.contains(&CONTEXT_VERSION_TAG.into()));
+    }
+
+    #[test]
+    fn sensitive_context_fails_closed_for_questionnaire_mixed_and_unresolved_provenance() {
+        let mut questionnaire_only = contextual_case();
+        questionnaire_only.assets[0].internet_exposed = Some(false);
+        questionnaire_only.data_sources[0].kind = SourceKind::UserDeclared;
+
+        let mut mixed = contextual_case();
+        mixed.assets[0].internet_exposed = Some(false);
+        mixed.assets[0]
+            .discovered_from
+            .push("questionnaire-source".into());
+        mixed.data_sources.push(DataSource {
+            id: "questionnaire-source".into(),
+            kind: SourceKind::UserDeclared,
+            label: "Questionnaire entry".into(),
+            status: SourceConnectionStatus::Connected,
+            connected_at: None,
+            last_discovered_at: None,
+            read_only: true,
+            metadata: BTreeMap::new(),
+        });
+
+        let mut unresolved = contextual_case();
+        unresolved.assets[0].internet_exposed = Some(false);
+        unresolved.assets[0]
+            .discovered_from
+            .push("missing-source".into());
+
+        for (label, case) in [
+            ("questionnaire-only", questionnaire_only),
+            ("mixed", mixed),
+            ("unresolved", unresolved),
+        ] {
+            let mut finding = finding(&case);
+            let original = finding.clone();
+
+            apply_case_context(&case, &mut finding);
+
+            assert_eq!(finding.priority, original.priority, "{label}");
+            assert_eq!(finding.severity, original.severity, "{label}");
+            assert_eq!(finding.confidence, original.confidence, "{label}");
+            assert_eq!(finding.possible_impact, original.possible_impact, "{label}");
+            assert!(
+                !finding.priority_reasons.contains(&SENSITIVE_REASON.into()),
+                "{label}"
+            );
+            assert!(
+                !finding.tags.contains(&CONTEXT_VERSION_TAG.into()),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_questionnaire_and_observed_source_provenance_never_changes_priority() {
+        let mut case = contextual_case();
+        case.profile.data_classes = vec![DataClass::General];
+        case.assets[0].contains_sensitive_data = None;
+        case.assets[0]
+            .discovered_from
+            .push("questionnaire-source".into());
+        case.data_sources.push(DataSource {
+            id: "questionnaire-source".into(),
+            kind: SourceKind::UserDeclared,
+            label: "Questionnaire entry".into(),
+            status: SourceConnectionStatus::Connected,
+            connected_at: None,
+            last_discovered_at: None,
+            read_only: true,
+            metadata: BTreeMap::new(),
+        });
+        let mut finding = finding(&case);
+        let original = finding.clone();
+
+        apply_case_context(&case, &mut finding);
+
+        assert_eq!(finding.priority, original.priority);
+        assert_eq!(finding.severity, original.severity);
+        assert_eq!(finding.confidence, original.confidence);
+        assert_eq!(finding.possible_impact, original.possible_impact);
+        assert!(!finding.priority_reasons.contains(&INTERNET_REASON.into()));
+        assert!(!finding.tags.contains(&CONTEXT_VERSION_TAG.into()));
+    }
+
+    #[test]
+    fn unresolved_source_provenance_never_changes_priority() {
+        let mut case = contextual_case();
+        case.profile.data_classes = vec![DataClass::General];
+        case.assets[0].contains_sensitive_data = None;
+        case.assets[0].discovered_from.push("missing-source".into());
+        let mut finding = finding(&case);
+        let original = finding.clone();
+
+        apply_case_context(&case, &mut finding);
+
+        assert_eq!(finding.priority, original.priority);
+        assert_eq!(finding.possible_impact, original.possible_impact);
+        assert!(!finding.priority_reasons.contains(&INTERNET_REASON.into()));
+        assert!(!finding.tags.contains(&CONTEXT_VERSION_TAG.into()));
     }
 
     #[test]
