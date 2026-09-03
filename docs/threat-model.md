@@ -2,7 +2,7 @@
 
 Status: design-time threat model
 
-Last updated: 2026-08-30
+Last updated: 2026-09-03
 
 Normative status: this threat model is subordinate to the [canonical product specification](product-spec.md). It may require an operation-scoped safety control, but cannot turn optional-engine, mapping, signing, updater, or disposable-runtime failure into a product-wide gate unless the specification's hard-block rule permits it.
 
@@ -78,6 +78,49 @@ and the in-progress generation are durable so the application resumes automatica
 cancellation, or timeout does not roll back application binaries or hide projects/reports; only
 runtime-dependent tasks wait for bounded Retry. The main workspace opens while product-owned scan
 tools prepare in the background, and a beginner is never instructed to administer WSL.
+
+### Boundary A3: desktop build to packaged-component recovery source
+
+The running desktop may recover a rejected packaged managed-runtime component only from an
+independent source bound to that exact application release. The current cache slice admits a private
+installed copy only when an expected manifest SHA-256 was embedded from the staged manifest at
+desktop build time and the selected copy passes the current management contract, platform and
+architecture selection, private-namespace and canonical-path checks, and every manifest size/digest
+check. The rejected packaged manifest, registry, case database, webview, directory name, or
+newest-looking cache entry cannot select or authenticate recovery bytes. On Windows, each launch of
+the private installed-bundle driver reopens the checked canonical ancestor chain, requires exact
+protected current-user DACLs for `versions`, every manifest-derived installed directory, the
+manifest, and every listed file; rejects reparse points, multiple hard links, and unlisted entries;
+compares stable file IDs; and
+computes the release-locked digest through the retained handle. Listed-file handles deny
+write/delete sharing and remain live through process exit and output drain; directory handles deny
+rename/delete of the checked directory objects. The closed inventory is checked immediately before
+launch, and verification polls the command deadline plus any applicable cancellation between files,
+hash chunks, and directory entries. It does not prevent the same user from adding a new child
+afterward. Managed-local contexts without this contract fail closed. Verified System32 precedes the
+managed helper directory in
+`PATH`. The recovery diagnostic exposes only a fixed boundary/source, the digest read from the
+admitted manager, and the original typed packaged-failure reason—never rejected paths, bytes, or raw
+open/parser errors. This source boundary still lacks installed-artifact qualification and does not
+replace the damaged packaged application resource. Installer-based recovery must additionally bind
+the exact same-version installer or payload to its updater/OS signature and approved publisher, run
+replacement out of process, and resume idempotently. Missing or rejected recovery material disables
+only dependent tasks.
+
+On a fresh NSIS install, a separate feature-gated CLI command attempts to create that private copy
+before the desktop first opens. The release build stages and verifies the runtime manifest before
+building the Windows CLI, which embeds its SHA-256. The installed command accepts no paths or
+actions, ignores environment path overrides, rejects command-line path overrides, and resolves only
+the real direct `managed-runtime` sibling of its own executable. It takes the fixed private-data and
+lifecycle leases, re-verifies the anchored manifest and every payload byte, then uses private staging
+and atomic commit. It never downloads the machine image or launches Podman, WSL, a helper, or a
+scan. Missing/rejected input, contention, interruption, timeout, and malformed output degrade to one
+redacted non-fatal result. A later locked attempt removes only exact abandoned
+`.installing-<lowercase-v4-UUID>` directories; similar unknown siblings remain. Registration
+overlays do not invoke this seed path because Repair/upgrade must preserve existing private bytes.
+An NSIS qualification's pre-desktop `initial_status=installed` observation supports only
+`installer_runtime_cache_seed`; it does not exercise packaged corruption, installed-resource
+replacement, or `packaged_component_auto_recovery`.
 
 ### Boundary B: backend to bootstrap broker
 
@@ -222,6 +265,7 @@ Active template collections require policy classification. Destructive, denial-o
 | T-30 | A forged provider prompt sends the user to a credential-phishing site. | Provider account compromise. | Backend provider-host allowlist; frontend URL revalidation; OS-browser opening only through a Tauri capability scoped to the exact AWS, Microsoft, and Google HTTPS host families; no general URL or path opener permission. |
 | T-31 | A later provider bootstrap overwrites an earlier cleanup journal. | Orphaned privileged resources and unrecoverable cleanup obligations. | One private ledger per validated operation ID; immutable provider/resource binding; immediate atomic journal updates; explicit retryable cleanup surface. |
 | T-32 | A provider response redirects pagination, floods records, or becomes partial after some pages. | SSRF, resource exhaustion, or falsely complete inventory. | No redirects; exact continuation allowlists; per-page/aggregate/time/record limits; one bounded safe retry; raw-page-first storage; explicit connected-empty, failed, cancelled, partial, and needs-reauthorization states. |
+| T-33 | A tampered, replayed, wrong-version/platform/architecture, or path-swapped packaged-component repair source is treated as trusted. | Local code execution or a runtime/app version mismatch during automatic recovery. | The cache slice selects only the current desktop build's independently embedded exact manifest digest, then rechecks the current contract, target, namespace, canonical path, file type, size, and every payload digest. Unix private-mode checks apply. Windows source enforcement additionally proves exact DACLs for `versions` and the manifest-derived installed tree, a pre-launch closed bundle inventory, single-link real files, stable IDs, and same-handle digests while retaining no-write/no-delete-share handles for listed files through every private-bundle process execution. Directory handles deny rename/delete of the checked directory objects, not same-user child creation. Guard verification consumes the command deadline and polls applicable cancellation. A managed context without that contract fails closed. Installed-Windows artifact qualification remains required. Installer recovery must also verify the exact same-version updater/Authenticode identity and approved publisher and perform bounded out-of-process replacement with an idempotent journal. Material rejected by admission is never selected as the command source; absent or ineligible recovery material leaves only dependent tasks unavailable. |
 
 ## 9. Supply-chain policy
 
@@ -307,6 +351,7 @@ They must not:
   interrupted, expired, or otherwise incomplete capture remains unknown; a zero count by itself is
   never proof that the source is empty. Framework relationships do not define scan coverage.
 - If a runtime provider cannot enforce a manifest boundary, the affected engine does not run through that provider; unaffected tasks continue and a partial/no-checks master report is saved.
+- If packaged managed-runtime resources fail admission, the desktop may reinitialize from only the current build's exact digest-anchored, fully verified private copy. A missing, altered, stale, or otherwise ineligible copy is not executed; only dependent tasks are unavailable while projects, reports, and unsigned exports remain accessible. This cache path does not by itself prove installed-resource or installer Repair.
 - If product-owned disposable runtime state is corrupt, bounded automatic repair or side-by-side replacement runs. If ownership is ambiguous, the old object is preserved and a uniquely named generation is created; no name-only mutation is allowed.
 - If a lifecycle event is missed, authoritative startup/focus/resume/watchdog polling reconciles the durable journal within the canonical refresh bound or exposes Retry/offline-with-last-known-data.
 - If a re-scan lacks comparable scope or engine completion, the result is `unverifiable`.
@@ -319,6 +364,16 @@ The following cannot be eliminated by this design:
 - A user can lie about ownership or legal authority.
 - A read-only scan can still expose sensitive metadata and can trigger provider rate limits.
 - A correctly pinned upstream engine can contain an unknown vulnerability or malicious logic.
+- The private managed-runtime cache is not an independently privileged boundary against malicious
+  code already running as the same user. On Unix, same-user code can path-swap after admission; on
+  Windows, the launch guard narrows that window by pinning listed files and checked directory
+  objects, but same-user code can still mutate dynamic provider/configuration state or add an
+  unlisted child after the pre-launch inventory. The Windows slice has not been qualified through
+  the signed installed artifact. Fresh NSIS source wiring attempts to pre-seed the cache, but MSI,
+  registration overlays, and any failed/interrupted seed can still begin without it. The cache is
+  not a replacement for damaged installed application resources. Abandoned-staging cleanup has no
+  separate entry-count or elapsed-time budget; the outer NSIS timeout keeps a hostile or pathological
+  private tree from blocking application installation, but cache seeding can become unavailable.
 - Scanner findings can be false positives and scanners can miss real problems.
 - Public-data discovery cannot reveal assets for which no connected source or public trace exists.
 - External targets, CDNs, and shared hosting can make technical ownership differ from legal authorization.
@@ -340,6 +395,13 @@ Implementation should eventually provide evidence for at least:
 - SSRF, redirect, DNS rebinding, IPv4/IPv6 normalization, and metadata-address tests;
 - cancellation and crash-recovery tests that detect orphaned credentials, containers, and files;
 - dependency, image, signature, license, and SBOM checks for release artifacts;
+- an installed Windows packaged-component fixture that proves the staged manifest, bundled
+  manifest, binary-embedded digest, and recovered private copy share one exact identity, then
+  exercises DACL, hard-link, unlisted-entry, overwrite/rename, manager-drop, direct-command, and
+  retained container-context launch guards against the signed artifact;
+- a separate fresh-NSIS `installer_runtime_cache_seed` observation proving that the exact private
+  copy is already `installed` before desktop launch or an explicit lifecycle install, without
+  treating that observation as packaged-component corruption/recovery evidence;
 - export traversal, hash, signature, truncation, and redaction tests;
 - UI tests that distinguish demo, partial, failed, unknown, no-findings, and verified states;
 - mapping tests that reject unsupported AIDEFEND coordinates, missing attribution, and relationships on non-applicable scanner results;

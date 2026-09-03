@@ -4,7 +4,7 @@ Status: canonical product specification and sole source of truth for product beh
 
 Audience: product, design, desktop, runtime, engine, reporting, security, test, and release contributors
 
-Last updated: 2026-08-29
+Last updated: 2026-09-03
 
 This specification defines the intended product. It does not claim that every requirement is already implemented or verified. Implementation status and gaps belong in the [product audit](product-audit.md) and issue tracker, not in this document.
 
@@ -43,6 +43,8 @@ The primary user is a Windows owner, developer, small-business operator, or IT g
 - wants useful next steps, not an engineering contract.
 
 Security professionals and maintainers are secondary users. Their technical needs are served through progressive disclosure and exports; they do not define the first-run journey.
+
+“Beginner” is an experience assumption, not a permanent eligibility class. Readiness is evaluated per selected job: the user can continue independently, needs a named account/tenant administrator or specialist for one bounded handoff, or the specific job is not currently supported. Needing help for one advanced source never blocks another admitted task, an existing project, or report/export access.
 
 ### 1.2 Core jobs
 
@@ -143,6 +145,8 @@ A technically qualified Windows artifact may be offered earlier as a **public te
 6. **Act or share.** Give prioritized next steps and a readable HTML/print export first; expert formats remain available.
 
 Project name is generated from the target and date and can be edited. Company/team name and organizational questionnaire fields are optional and never block a local, website, code, or network scan.
+
+Questionnaire answers are context, not evidence, authorization, or engine selection by themselves. They may recommend assets or sources for a future frozen run, order observed findings and evidence gaps, adapt business-impact explanations, and suggest an appropriate expert type. A context factor affects priority only when retained finding or asset evidence supports that factor, and the reason remains visible. Questionnaire answers never fabricate a finding, asset fact, severity, confidence, tested status, or framework result; silently widen a run; select more intrusive activity; or treat a PII, PHI, or other business label as proof that a check ran.
 
 ### 4.2 Primary navigation
 
@@ -285,6 +289,12 @@ Any difference is a first-class coverage gap shown before Start when known and i
 
 For a single credible non-VPN local network, the product prefills the likely `/24` and lets the user edit it. With multiple credible adapters, it shows recognizable choices such as Wi-Fi, Ethernet, or VPN rather than route-table terminology. Detection failure falls back to localhost and a simple manual target field; it does not block the app.
 
+### 6.4 Source capability view
+
+For advanced sources, source selection and reporting expose a versioned capability view across the dimensions applicable to that source, including inventory, identity and access, network exposure, storage exposure, logging, and secret/configuration state. Each cell is `supported`, `partial`, `unavailable`, or `unknown` and names its exact account/project/subscription/tenant scope, relevant engine/profile, and known limitation. Providers and source types need not be symmetrical.
+
+This view describes available product capability only. It never claims that a particular run obtained evidence. Actual run coverage derives exclusively from that run's frozen Requested contract and append-only Executed outcomes. A missing, partial, stale, or unknown capability becomes a visible limitation for its dependent task and roadmap; it is not a product-wide, release-wide, compliance, or development gate.
+
 ## 7. Phased scanning model
 
 Each target progresses independently through three stages.
@@ -361,6 +371,10 @@ Queueing, preparing, pulling, running, normalizing, and cleaning are transient t
 - Exact historical engine/runtime versions remain attached to evidence. Inability to reproduce an old execution environment may prevent byte-equivalent resume, but must not prevent a new current-version attempt or access to historical results.
 - Events accelerate UI updates; bounded polling on startup, focus, resume, and stale heartbeat converges to the authoritative durable state.
 
+### 8.5 Engine lifecycle disclosure
+
+Every catalog entry exposes its support state, runnable state, exact admitted artifact when one exists, knowledge/support dates, maintenance owner, update procedure, and any publication, licensing, compatibility, or deprecation reason. Experimental, unavailable, stale, or deprecated engines never appear as generally available. Their state affects only dependent tasks and capability cells; it does not block unrelated engines, ordinary product development, or an independently supported release channel.
+
 ## 9. Findings and evidence model
 
 ### 9.1 Normalized finding
@@ -390,7 +404,9 @@ Each finding retains:
 ### 9.3 Deduplication and false positives
 
 - Exact duplicate observations from one task may be collapsed while preserving every evidence reference.
-- Cross-engine findings may be related or grouped, but are not destructively merged unless a stable, reviewed equivalence rule exists.
+- Cross-engine findings may be related or grouped for presentation, but are not destructively merged unless a stable, reviewed equivalence rule exists. Every underlying finding, source identifier, attempt, and evidence reference remains independently addressable.
+- Automatic correlation, when offered, is a non-mutating suggestion with its basis, rule version, and uncertainty visible. The user can accept, dismiss, expand, or later ungroup it. A generic asset-plus-CVE match is only one possible signal, and similar output from two engines is not described as independent corroboration unless the retained evidence sources are demonstrably independent.
+- Accepted active groups may reduce repetition in the beginner report, but the report keeps the original finding count and lets the user expand every member observed in the selected run. A group member not observed in that run is labeled as case history and remains independently addressable in case data and technical export; it is never inserted into the selected-run finding list. Removing a group changes presentation only and restores the independent list without deleting evidence or history.
 - Upstream finding identifiers and evidence references are retained beside the normalized comparison key. A changed key version or insufficient coordinates makes a comparison `unverifiable`; the product never guesses that two findings are the same.
 - A false-positive decision records actor, time, rationale, scope, and optional expiry. It never deletes original evidence and does not automatically suppress materially changed future evidence.
 - Remediation advice never runs commands or changes the target automatically in the beginner product. Prefer reviewed rule-specific bounded guidance; when unavailable, label the generic expert-review fallback rather than presenting boilerplate as a verified fix.
@@ -513,6 +529,9 @@ In the installed native app, failure to load real data must never substitute syn
 - Code, credentials, raw evidence, findings, and cases stay on the device unless the user explicitly connects a source or exports data.
 - Network requests are attributable to a selected target, provider sign-in, engine/image/update retrieval, or an explicitly documented product service.
 - Credentials are short-lived, scoped, held in protected memory/storage appropriate to the provider, redacted from arguments/logs, and never passed to unrelated engines.
+- The desktop webview, ordinary GUI fields, CLI, repository skill, agent interface, adapters, logs, and product-owned files never request, receive, or persist a provider password, long-lived access key, refresh token, client secret, administrator credential, or root secret. Provider sign-in stays on the provider-hosted surface.
+- When a dedicated read-only identity must be created, an explicit Advanced action may invoke the separately packaged fixed-action bootstrap broker. Only that isolated broker may temporarily consume provider-issued administrative authorization; it never passes that authority to the scanner and returns only a case-, source-, engine-, target-, permission-, and expiry-bound read-only capability. This provider mutation requires its own exact disclosure and confirmation, but is never a prerequisite for non-cloud work.
+- Password rotation is neither scanner authorization nor sufficient cleanup. The scanner and agent surfaces do not rotate credentials. Bootstrap cleanup is limited to the exact identities, roles, grants, keys, certificates, and sessions created or recorded by that operation; an unresolved item remains visible without blocking unrelated work.
 - Technical logs exclude target names, asset identifiers, filesystem paths, credentials, raw evidence, and unbounded scanner output by default.
 
 ### 13.2 External scanning policy
@@ -569,6 +588,12 @@ Engine digests, provenance, release manifests, Authenticode, updater signatures,
 - whether to call an export cryptographically signed.
 
 They must not prevent an already installed trusted build from opening projects, displaying reports, exporting unsigned readable data, or running unaffected admitted engines.
+
+### 14.4 Optional agent interfaces
+
+Agent assistance is an optional transport over bounded typed product operations, not a separate authority, scanner implementation, or prerequisite for the desktop journey. It may guide installation/status inspection, explain redacted failures, and request an already supported export or exact cleanup inspection. It may not receive credentials, approve or widen scope, contact a new target, invoke an upstream scanner or arbitrary shell as a substitute for a product adapter, or remediate a target. Human authorization in the desktop/provider flow remains controlling, and failures stay task-scoped.
+
+A universal MCP assessment-lifecycle server is not promised by this specification. If a future release advertises one, it follows the same typed backend, authorization, privacy, evidence, and degradation contracts. Its absence never blocks desktop development or publication of a channel that does not advertise that interface.
 
 ## 15. Test strategy
 

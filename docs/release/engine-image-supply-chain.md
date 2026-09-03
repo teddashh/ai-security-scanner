@@ -209,6 +209,53 @@ then protected by both checksum layers. Therefore use a fresh directory populate
 `gh run download` command above; do not treat an arbitrary pre-existing local directory as proof
 that the smoke files came from that workflow run.
 
+### Staged Microsoft 365 wrapper publications
+
+ScubaGear `1.8.0-2` and Maester `2.0.0-2` are immutable build coordinates, not publication or
+runnable claims. Until each exact `.github/workflows/engine-images-m365.yml` matrix job completes
+and its evidence is independently ingested, that engine keeps a null catalog image, null plan
+digest/publication, `experimental` status, and its own explicit non-runnable blocker.
+
+After the workflow completes on the exact `main` source commit, download and verify each artifact
+independently in a fresh directory:
+
+```sh
+engine=scubagear # repeat separately for maester
+run_id=REPLACE_WITH_WORKFLOW_RUN_ID
+attempt=REPLACE_WITH_RUN_ATTEMPT
+source_revision=REPLACE_WITH_EXACT_MAIN_COMMIT
+evidence_dir="$(mktemp -d)"
+
+gh run download "${run_id}" \
+  --name "${engine}-image-evidence-${run_id}-${attempt}" \
+  --dir "${evidence_dir}"
+
+node scripts/release/verify-publication-artifact.mjs \
+  --engine "${engine}" \
+  --artifact-dir "${evidence_dir}" \
+  --source-revision "${source_revision}" \
+  --run-id "${run_id}" \
+  --attempt "${attempt}"
+```
+
+The M365 verifier additionally requires the exact two-platform digest map, public and anonymous
+access flags, and the fixed amd64 smoke record for non-root execution, the fixed entrypoint,
+separate rejection of a missing output, scope, or credential mount, the module lock, and dependency
+notices. That record proves only the
+bounded image/launcher publication checks performed by the workflow. It is not a live-tenant run,
+scanner-correctness result, Microsoft Graph coverage claim, or desktop/Windows qualification.
+
+Adoption remains a separate checked-in change for one engine at a time. Use only the normalized
+verifier output for the corresponding plan publication record's exact `indexDigest`, source
+revision, platform digests, workflow URL, and run/attempt-derived evidence artifact name. Set
+`anonymous_pull_verified` to true only because that successful verification accepted the exact
+workflow manifest's true flag. Then set that engine's catalog image to the same
+repository/tag/digest, restore its artifact source revision and `attested_match`, clear only its
+blockers, and change only that engine to integrated/runnable and `published_managed_artifact`. Run
+`npm run validate:engines` and `npm run test:release-evidence`, and update the catalog's runnable
+count in the same adoption change. Never copy a sibling matrix result, infer a digest from a tag, or
+convert source-only tests into publication evidence.
+
 ## Consumer verification
 
 Use the immutable index digest printed by the publication workflow:

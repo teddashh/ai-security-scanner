@@ -77,6 +77,19 @@ The participant must be a qualifying beginner and the facilitator may observe bu
 
 Separate real-Windows integration/operator fixtures cover WSL absent/restart, unrelated WSL, healthy/damaged/ambiguous/ghost/interrupted runtime, Repair, N-1 upgrade, supported downgrade behavior, and the three uninstall choices. Those fixtures do not require a new novice session unless they change a user decision in the core path.
 
+Lifecycle evidence must name the boundary it actually exercised. Use separate records for
+`installer_runtime_cache_seed`, `installer_same_version_repair`,
+`packaged_component_auto_recovery`, and `runtime_reconciliation`; success at one boundary cannot
+qualify any other. For a fresh Windows NSIS candidate, an exact `initial_status` of
+`installed,false` before desktop launch or an explicit lifecycle install is supporting evidence for
+`installer_runtime_cache_seed` only. It proves that the installer-produced private copy was present
+and admitted; it does not inject packaged corruption or prove cache re-admission, installed-resource
+replacement, or an out-of-process Repair. Reopening a digest-anchored private runtime copy proves
+only that bounded cache path. The startup recovery warning is diagnostic, not a durable repair
+receipt: it may record only the fixed boundary/source, the admitted manifest digest, and the stable
+packaged-failure reason. Windows source-level DACL/launch-handle tests support that cache boundary
+but do not replace qualification against the signed installed artifact.
+
 The current NSIS N-1 and registered-WSL ghost fixtures are supporting data-preservation evidence only. They use a seeded case and CLI export to prove retained bytes; they do not prove the canonical installed-desktop `127.0.0.1:9001` report, reopen, and readable-export journey. NSIS and MSI may therefore be offered only as clearly labeled public testing prereleases while their exact-artifact human/lifecycle evidence is absent. They remain ineligible for beginner-ready or stable promotion until the applicable real app path passes. Commit-bound QC retains the same missing observations without making public-provenance claims.
 
 ### Feature-specific qualification
@@ -157,6 +170,15 @@ each optional updater pair transactionally, and `latest.json` contains only payl
 the embedded updater public key and their exact inline signatures.
 The installed updater is offered only for AppImage, the macOS app archive, and NSIS; DEB, RPM, and
 MSI installers never appear as updater targets.
+
+The source workflow stages and verifies the managed-runtime manifest before building Windows
+sidecars, and the Windows CLI is compiled with the dedicated installer-cache feature so its embedded
+digest is tied to those staged bytes. The pinned NSIS source validator checks this build order, the
+fresh-install-only zero-input dispatch, exact terminal envelopes, non-fatal failure behavior, and
+patch provenance. The Windows NSIS qualification contract now requires the pre-desktop initial
+runtime status to be `installed`; MSI and Linux remain `not_installed`. Until a new exact-candidate
+Windows record is actually produced, these are source wiring and evidence requirements—not a claim
+that cache seeding or packaged-component recovery passed on an installed artifact.
 
 Manual commit-bound QC may explicitly opt into the two long Windows NSIS data-preservation fixtures.
 They run on separate fresh Windows runners, are allowed to fail without changing sibling outcomes,
