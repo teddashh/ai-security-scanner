@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { parse } from "yaml";
 
 import {
   ciBoundaryResultErrors,
@@ -17,6 +16,20 @@ function normalizeLineEndings(source) {
 const ciWorkflow = normalizeLineEndings(
   readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8"),
 );
+
+// This guard runs in the always-on classifier lane, which deliberately has no
+// `npm ci`. Read the workflow as text instead of importing a YAML parser.
+function ciJobSteps(jobName) {
+  const jobs = ciWorkflow.slice(ciWorkflow.indexOf("\njobs:\n"));
+  const headers = [...jobs.matchAll(/^ {2}([\w-]+):$/gmu)];
+  const index = headers.findIndex((header) => header[1] === jobName);
+  assert.notEqual(index, -1, `the ${jobName} job must exist`);
+  const block = jobs.slice(
+    headers[index].index,
+    index + 1 < headers.length ? headers[index + 1].index : jobs.length,
+  );
+  return block.split(/^ {6}- /mu).slice(1);
+}
 
 function assertRequiredCheckContract(source) {
   const workflow = normalizeLineEndings(source);
@@ -218,17 +231,18 @@ test("CI classifier changes rely on the always-run classifier test, not heavywei
 });
 
 test("the Windows NSIS validator stays in the focused Windows lane", () => {
-  const workflow = parse(ciWorkflow);
   const validationCommand = "node scripts/release/validate-windows-nsis-template.mjs";
   assert.equal(
-    workflow.jobs["release-contract"].steps.some((step) => step?.run === validationCommand),
+    ciJobSteps("release-contract").some((step) => step.includes(validationCommand)),
     false,
   );
-  const windowsSteps = workflow.jobs["windows-managed-runtime"].steps;
+  const windowsSteps = ciJobSteps("windows-managed-runtime");
   const validatorIndexes = windowsSteps
-    .map((step, index) => step?.run === validationCommand ? index : -1)
+    .map((step, index) => (step.includes(validationCommand) ? index : -1))
     .filter((index) => index >= 0);
-  assert.deepEqual(validatorIndexes, [windowsSteps.findIndex((step) => step?.run === "npm ci --ignore-scripts") + 1]);
+  assert.deepEqual(validatorIndexes, [
+    windowsSteps.findIndex((step) => step.includes("npm ci --ignore-scripts")) + 1,
+  ]);
 });
 
 test("an unavailable push base schedules every lane instead of silently omitting work", () => {
