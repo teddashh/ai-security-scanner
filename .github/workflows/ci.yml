@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # A manual run carries no event ancestry, so the classifier's unavailable-base
+  # fallback schedules every lane. This is the only way to revalidate a commit
+  # whose original run was skipped or classified narrowly.
+  workflow_dispatch:
 
 permissions:
   contents: read
