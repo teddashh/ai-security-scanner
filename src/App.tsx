@@ -1903,6 +1903,7 @@ export default function App() {
             requestedActivities={workspace.case.requestedActivities}
             coverage={workspace.coverage}
             sources={workspace.sources}
+            engineManifests={snapshot?.engineManifests ?? []}
             assets={workspace.assets}
             scopeGrants={workspace.scopeGrants}
             nativeMode={mode === "native"}

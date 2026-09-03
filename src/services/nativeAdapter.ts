@@ -44,12 +44,14 @@ import type {
   ManagedRuntimeSetupNextAction,
   ManagedRuntimeSetupPhase,
   ManagedRuntimeSetupStatus,
+  ProviderSourceProfile,
   RunStatus,
   ScanRequestOutcome,
   ScopeGrant,
   ScopeMode,
   Severity,
   SourceKind,
+  SourceCapabilityProvider,
   TransportProtocol,
   VerificationSummary,
 } from "../types";
@@ -105,6 +107,7 @@ interface NativeDataSource {
   connected_at: string | null;
   last_discovered_at: string | null;
   read_only: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 interface NativeAsset {
@@ -374,6 +377,18 @@ export interface NativeBeginnerMasterReport {
       mapping_version: string;
     }>;
   }>;
+  finding_groups?: Array<{
+    group_id: string;
+    presentation_scope: "current_case_presentation";
+    title: string;
+    rationale: string;
+    actor: string;
+    created_at: string;
+    members: Array<{
+      finding_id: string;
+      observed_in_selected_run: boolean;
+    }>;
+  }>;
   next_steps: Array<{
     priority: number;
     code: BeginnerMasterReport["nextSteps"][number]["code"];
@@ -616,10 +631,17 @@ export interface NativeEngineManifest {
   license_spdx: string;
   supported_providers: string[];
   supported_asset_kinds: string[];
+  provider_execution_contracts?: Array<{
+    provider: string;
+    asset_kind: string;
+    profile: string;
+  }>;
   status: string;
   compatibility?: {
     knowledge_date?: string;
     support_until?: string;
+    runnable?: boolean;
+    blocked_by?: unknown[];
   };
 }
 
@@ -1076,6 +1098,45 @@ const mapSourceKind = (kind: string): SourceKind => {
   return sourceKinds.includes(kind as SourceKind) ? kind as SourceKind : "user_declared";
 };
 
+const providerBindingContracts: Partial<Record<SourceKind, {
+  profile: ProviderSourceProfile;
+  resourceScope: RegExp;
+}>> = {
+  aws_organization: {
+    profile: "aws_organization_read_only_session",
+    resourceScope: /^aws-account:[0-9]{12}$/u,
+  },
+  azure_tenant: {
+    profile: "azure_tenant_read_only_access_token",
+    resourceScope: /^azure-subscription:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu,
+  },
+  gcp_organization: {
+    profile: "gcp_organization_read_only_access_token",
+    resourceScope: /^gcp-organization:[0-9]{1,32}$/u,
+  },
+  microsoft365_tenant: {
+    profile: "microsoft365_tenant_read_only_access_token",
+    resourceScope: /^microsoft365-tenant:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu,
+  },
+};
+
+/** Project only the two non-secret, exact provider coordinates used by the UI. */
+export const adaptNativeProviderBinding = (
+  sourceKind: SourceKind,
+  metadata: Record<string, unknown> | undefined,
+): ConnectedSource["providerBinding"] => {
+  const contract = providerBindingContracts[sourceKind];
+  const profile = metadata?.provider_profile;
+  const resourceScope = metadata?.provider_resource_scope;
+  if (
+    !contract
+    || profile !== contract.profile
+    || typeof resourceScope !== "string"
+    || !contract.resourceScope.test(resourceScope)
+  ) return undefined;
+  return { profile: contract.profile, resourceScope };
+};
+
 const mapScopeMode = (permission: string): ScopeMode => {
   const modes: Record<string, ScopeMode> = {
     inventory_read: "inventory",
@@ -1436,10 +1497,63 @@ export const adaptNativeManifest = (manifest: NativeEngineManifest): EngineManif
   const distribution: EngineManifest["redistribution"] = manifest.distribution_mode === "bundled_image"
     ? "bundled"
     : manifest.distribution_mode === "external_executable" ? "external" : "on_demand";
-  const status: EngineManifest["status"] = manifest.status === "integrated"
+  const catalogStatus: EngineManifest["status"] = manifest.status === "integrated"
     ? "ready"
     : manifest.status === "deprecated" ? "outdated"
       : manifest.status === "experimental" ? "not_downloaded" : "unsupported";
+  const rawRunnable = manifest.compatibility?.runnable;
+  const rawBlockedBy = manifest.compatibility?.blocked_by;
+  const runnableShapeValid = rawRunnable === undefined || typeof rawRunnable === "boolean";
+  const blockedByShapeValid = rawBlockedBy === undefined || (
+    Array.isArray(rawBlockedBy)
+    && rawBlockedBy.every((item) =>
+      typeof item === "string"
+      && item.length > 0
+      && item.length <= 512
+      && !/[\u0000-\u001f\u007f]/u.test(item),
+    )
+  );
+  const blockedBy = blockedByShapeValid && Array.isArray(rawBlockedBy)
+    ? rawBlockedBy as string[]
+    : [];
+  const compatibilityValid = runnableShapeValid
+    && blockedByShapeValid
+    && !(rawRunnable === true && blockedBy.length > 0);
+  const runnable = compatibilityValid && typeof rawRunnable === "boolean"
+    ? rawRunnable
+    : undefined;
+  const status: EngineManifest["status"] = catalogStatus === "ready"
+    && (runnable === false || blockedBy.length > 0)
+    ? "not_downloaded"
+    : catalogStatus;
+  const contractAssetKinds: Partial<Record<SourceCapabilityProvider, string>> = {
+    aws: "cloud_account",
+    azure: "subscription",
+    gcp: "project",
+    microsoft365: "tenant",
+  };
+  const providerExecutionProfiles = (Array.isArray(manifest.provider_execution_contracts)
+    ? manifest.provider_execution_contracts
+    : [])
+    .flatMap((contract) => {
+      if (!contract || typeof contract !== "object") return [];
+      const provider = contract.provider;
+      if (!(["aws", "azure", "gcp", "microsoft365"] as const).includes(provider as SourceCapabilityProvider)) return [];
+      const safeProvider = provider as SourceCapabilityProvider;
+      if (
+        contract.asset_kind !== contractAssetKinds[safeProvider]
+        || typeof contract.profile !== "string"
+        || !/^[a-z0-9][a-z0-9_-]{2,95}$/u.test(contract.profile)
+      ) return [];
+      return [{ provider: safeProvider, assetKind: contract.asset_kind, profile: contract.profile }];
+    })
+    .filter((contract, index, values) =>
+      values.findIndex((candidate) =>
+        candidate.provider === contract.provider
+        && candidate.assetKind === contract.assetKind
+        && candidate.profile === contract.profile,
+      ) === index,
+    );
   const knowledgeDate = manifest.compatibility?.knowledge_date;
   const supportUntil = manifest.compatibility?.support_until;
   const today = new Date().toISOString().slice(0, 10);
@@ -1454,6 +1568,10 @@ export const adaptNativeManifest = (manifest: NativeEngineManifest): EngineManif
     platforms,
     supportedProviders,
     status,
+    runnable,
+    blockedBy,
+    compatibilityValid,
+    providerExecutionProfiles,
     knowledgeDate,
     supportUntil,
     supportStatus: supportUntil ? (supportUntil < today ? "expired" : "supported") : "unknown",
@@ -1517,15 +1635,19 @@ export const adaptNativeCase = (
   nativeCase: NativeAssessmentCase,
   manifests: EngineManifest[] = [],
 ): CaseWorkspace => {
-  const sources: ConnectedSource[] = nativeCase.data_sources.map((source) => ({
-    id: source.id,
-    kind: mapSourceKind(source.kind),
-    label: source.label,
-    status: source.status as ConnectedSource["status"],
-    readOnly: source.read_only,
-    connectedAt: source.connected_at ?? undefined,
-    lastDiscoveredAt: source.last_discovered_at ?? undefined,
-  }));
+  const sources: ConnectedSource[] = nativeCase.data_sources.map((source) => {
+    const kind = mapSourceKind(source.kind);
+    return {
+      id: source.id,
+      kind,
+      label: source.label,
+      status: source.status as ConnectedSource["status"],
+      readOnly: source.read_only,
+      connectedAt: source.connected_at ?? undefined,
+      lastDiscoveredAt: source.last_discovered_at ?? undefined,
+      providerBinding: adaptNativeProviderBinding(kind, source.metadata),
+    };
+  });
   const scanAttemptedAssetIds = new Set(
     nativeCase.scan_runs.flatMap((run) => run.engine_runs.flatMap((engineRun) => engineRun.asset_ids)),
   );
@@ -2146,6 +2268,18 @@ export const adaptBeginnerMasterReport = (
       relationship: reference.relationship,
       rationale: reference.rationale,
       mappingVersion: reference.mapping_version,
+    })),
+  })),
+  findingGroups: (report.finding_groups ?? []).map((group) => ({
+    groupId: group.group_id,
+    presentationScope: group.presentation_scope,
+    title: group.title,
+    rationale: group.rationale,
+    actor: group.actor,
+    createdAt: group.created_at,
+    members: group.members.map((member) => ({
+      findingId: member.finding_id,
+      observedInSelectedRun: member.observed_in_selected_run,
     })),
   })),
   nextSteps: report.next_steps.map((step) => ({

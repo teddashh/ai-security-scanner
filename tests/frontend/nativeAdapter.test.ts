@@ -15,7 +15,7 @@ const scannerSource = readFileSync(
 
 const bundled = await build({
   stdin: {
-    contents: 'export { adaptBeginnerMasterReport, adaptDeclaredWebServiceMetadata, adaptLocalNetworkCandidateInventory, adaptManagedRuntimePrerequisiteRepairResult, adaptManagedRuntimeSetupStatus, adaptNativeCase, adaptNativeExport, adaptNativeExportPreview, adaptNativeSnapshot, exportRunFileIdentity } from "./src/services/nativeAdapter.ts"; export { caseDisplayLabels } from "./src/caseIdentityPresentation.ts";',
+    contents: 'export { adaptBeginnerMasterReport, adaptDeclaredWebServiceMetadata, adaptLocalNetworkCandidateInventory, adaptManagedRuntimePrerequisiteRepairResult, adaptManagedRuntimeSetupStatus, adaptNativeCase, adaptNativeExport, adaptNativeExportPreview, adaptNativeManifest, adaptNativeProviderBinding, adaptNativeSnapshot, exportRunFileIdentity } from "./src/services/nativeAdapter.ts"; export { caseDisplayLabels } from "./src/caseIdentityPresentation.ts";',
     loader: "ts",
     resolveDir: process.cwd(),
     sourcefile: "native-adapter-test-entry.ts",
@@ -37,6 +37,8 @@ const {
   adaptNativeCase,
   adaptNativeExport,
   adaptNativeExportPreview,
+  adaptNativeManifest,
+  adaptNativeProviderBinding,
   adaptNativeSnapshot,
   caseDisplayLabels,
   exportRunFileIdentity,
@@ -128,7 +130,7 @@ const localCandidate = (overrides: Record<string, unknown> = {}) => ({
 
 test("beginner report adapter preserves the backend's run-bound coverage semantics", () => {
   const report = adaptBeginnerMasterReport({
-    schema_version: "1.0.0",
+    schema_version: "1.1.0",
     case_id: "case-1",
     run_id: "run-1",
     project_title: "Local check",
@@ -219,6 +221,21 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
       }],
       framework_references: [],
     }],
+    finding_groups: [{
+      group_id: "group-1",
+      presentation_scope: "current_case_presentation",
+      title: "Related observations",
+      rationale: "Review the shared path together.",
+      actor: "Human reviewer",
+      created_at: "2026-08-30T12:00:04Z",
+      members: [{
+        finding_id: "finding-1",
+        observed_in_selected_run: true,
+      }, {
+        finding_id: "finding-history",
+        observed_in_selected_run: false,
+      }],
+    }],
     next_steps: [{
       priority: 1,
       code: "start_expected_service_and_retry",
@@ -241,6 +258,21 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
   assert.equal(report.actual.checks[0]?.status, "tested_partial");
   assert.equal(report.coverageGaps[0]?.nextActionCode, "start_expected_service_and_retry");
   assert.equal(report.findings[0]?.findingId, "finding-1");
+  assert.deepEqual(report.findingGroups, [{
+    groupId: "group-1",
+    presentationScope: "current_case_presentation",
+    title: "Related observations",
+    rationale: "Review the shared path together.",
+    actor: "Human reviewer",
+    createdAt: "2026-08-30T12:00:04Z",
+    members: [{
+      findingId: "finding-1",
+      observedInSelectedRun: true,
+    }, {
+      findingId: "finding-history",
+      observedInSelectedRun: false,
+    }],
+  }]);
   assert.equal(report.nextSteps[0]?.taskId, "task-1");
 });
 
@@ -354,6 +386,7 @@ test("beginner report adapter preserves exact tested and untested network scope 
     outcome: "not_tested",
     observedAt: undefined,
   }]);
+  assert.deepEqual(report.findingGroups, []);
 });
 
 test("local network candidate adapter accepts one canonical private range", () => {
@@ -619,6 +652,84 @@ const snapshotFixture = (cases: ReturnType<typeof summaryFixture>[]) => ({
   engine_count: 0,
 });
 
+const nativeManifestFixture = (overrides: Record<string, unknown> = {}) => ({
+  id: "example-engine",
+  display_name: "Example engine",
+  category: "cloud_configuration",
+  distribution_mode: "pull_pinned_image",
+  image: { digest: "sha256:example" },
+  engine_version: "1.0.0",
+  rule_version: "rules-1",
+  license_spdx: "Apache-2.0",
+  supported_providers: ["aws"],
+  supported_asset_kinds: ["cloud_account"],
+  status: "integrated",
+  compatibility: {
+    knowledge_date: "2026-01-01",
+    support_until: "9999-12-31",
+    runnable: true,
+    blocked_by: [],
+  },
+  ...overrides,
+});
+
+test("native manifests safely project exact release availability and provider profiles", () => {
+  const m365 = adaptNativeManifest(nativeManifestFixture({
+    id: "scubagear",
+    display_name: "ScubaGear",
+    supported_providers: ["microsoft365"],
+    supported_asset_kinds: ["tenant"],
+    status: "experimental",
+    compatibility: {
+      knowledge_date: "2026-01-01",
+      support_until: "9999-12-31",
+      runnable: false,
+      blocked_by: ["not released"],
+    },
+  }));
+  assert.equal(m365.status, "not_downloaded");
+  assert.equal(m365.runnable, false);
+  assert.equal(m365.compatibilityValid, true);
+  assert.deepEqual(m365.blockedBy, ["not released"]);
+  assert.deepEqual(m365.supportedProviders, ["m365"]);
+
+  const prowlerManifest = adaptNativeManifest(nativeManifestFixture({
+    id: "prowler",
+    supported_providers: ["aws", "azure", "gcp"],
+    supported_asset_kinds: ["cloud_account", "subscription", "project"],
+    provider_execution_contracts: [
+      { provider: "aws", asset_kind: "cloud_account", profile: "aws_iam_service_exact_account" },
+      { provider: "azure", asset_kind: "subscription", profile: "azure_iam_service_static_token_exact_subscription" },
+      { provider: "gcp", asset_kind: "project", profile: "gcp_iam_four_checks_exact_project" },
+      { provider: "other", asset_kind: "project", profile: "broad_profile" },
+      { provider: "gcp", asset_kind: "organization", profile: "wrong_asset_kind" },
+    ],
+  }));
+  assert.deepEqual(prowlerManifest.providerExecutionProfiles, [
+    { provider: "aws", assetKind: "cloud_account", profile: "aws_iam_service_exact_account" },
+    { provider: "azure", assetKind: "subscription", profile: "azure_iam_service_static_token_exact_subscription" },
+    { provider: "gcp", assetKind: "project", profile: "gcp_iam_four_checks_exact_project" },
+  ]);
+});
+
+test("missing or malformed manifest compatibility fails soft instead of inventing availability", () => {
+  const missing = adaptNativeManifest(nativeManifestFixture({
+    compatibility: { knowledge_date: "2026-01-01", support_until: "9999-12-31", blocked_by: [] },
+  }));
+  assert.equal(missing.runnable, undefined);
+  assert.equal(missing.compatibilityValid, true);
+
+  for (const compatibility of [
+    { runnable: "yes", blocked_by: [] },
+    { runnable: true, blocked_by: ["safe blocker", 7] },
+    { runnable: true, blocked_by: ["contradicts runnable"] },
+  ]) {
+    const malformed = adaptNativeManifest(nativeManifestFixture({ compatibility }));
+    assert.equal(malformed.runnable, undefined);
+    assert.equal(malformed.compatibilityValid, false);
+  }
+});
+
 test("case summaries display only applicable source platforms and preserve real multi-platform scope", () => {
   const snapshot = adaptNativeSnapshot(snapshotFixture([summaryFixture()]), []);
 
@@ -762,6 +873,60 @@ const platformCaseFixture = (overrides: Record<string, unknown> = {}) => ({
   exports: [],
   comparisons: [],
   ...overrides,
+});
+
+test("native sources expose only an exact non-secret provider binding", () => {
+  const workspace = adaptNativeCase(platformCaseFixture({
+    data_sources: [{
+      id: "gcp-source",
+      kind: "gcp_organization",
+      label: "GCP organization",
+      status: "connected",
+      connected_at: "2026-08-26T00:00:00Z",
+      last_discovered_at: "2026-08-26T00:00:00Z",
+      read_only: true,
+      metadata: {
+        provider_profile: "gcp_organization_read_only_access_token",
+        provider_resource_scope: "gcp-organization:123456789012",
+        provider_identity: "MUST_NOT_SURVIVE",
+        access_token: "SECRET",
+        verification_evidence_sha256: "MUST_NOT_SURVIVE_EITHER",
+      },
+    }],
+  }));
+
+  assert.deepEqual(workspace.sources[0]?.providerBinding, {
+    profile: "gcp_organization_read_only_access_token",
+    resourceScope: "gcp-organization:123456789012",
+  });
+  assert.doesNotMatch(
+    JSON.stringify(workspace.sources[0]),
+    /MUST_NOT_SURVIVE|SECRET|"provider_identity"|"access_token"|"verification_evidence_sha256"/u,
+  );
+});
+
+test("provider binding projection fails closed for incomplete, mismatched, or malformed metadata", () => {
+  const invalid: Array<[string, Record<string, unknown> | undefined]> = [
+    ["missing scope", { provider_profile: "aws_organization_read_only_session" }],
+    ["missing profile", { provider_resource_scope: "aws-account:123456789012" }],
+    ["non-string scope", { provider_profile: "aws_organization_read_only_session", provider_resource_scope: 123456789012 }],
+    ["unknown profile", { provider_profile: "administrator", provider_resource_scope: "aws-account:123456789012" }],
+    ["wrong source profile", { provider_profile: "gcp_organization_read_only_access_token", provider_resource_scope: "gcp-organization:123" }],
+    ["wrong scope prefix", { provider_profile: "aws_organization_read_only_session", provider_resource_scope: "gcp-organization:123456789012" }],
+    ["short AWS account", { provider_profile: "aws_organization_read_only_session", provider_resource_scope: "aws-account:123" }],
+    ["malformed UUID", { provider_profile: "azure_tenant_read_only_access_token", provider_resource_scope: "azure-subscription:not-a-uuid" }],
+    ["long GCP organization", { provider_profile: "gcp_organization_read_only_access_token", provider_resource_scope: `gcp-organization:${"1".repeat(33)}` }],
+    ["suffix", { provider_profile: "aws_organization_read_only_session", provider_resource_scope: "aws-account:123456789012\n<script>" }],
+  ];
+
+  for (const [label, metadata] of invalid) {
+    const sourceKind = label === "wrong source profile"
+      ? "aws_organization"
+      : label === "malformed UUID" ? "azure_tenant"
+        : label === "long GCP organization" ? "gcp_organization"
+          : "aws_organization";
+    assert.equal(adaptNativeProviderBinding(sourceKind, metadata), undefined, label);
+  }
 });
 
 const localhostSelectedCaseFixture = ({

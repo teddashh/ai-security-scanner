@@ -20,11 +20,13 @@ import {
   type ProviderCoordinateField,
 } from "../providerAuthorizationPolicy";
 import { EVENTS, scannerService } from "../services/scanner";
+import { projectSourceCapabilityView } from "../sourceCapabilityPresentation";
 import type {
   BootstrapCleanupObligationSummary,
   BootstrapOperatorConfig,
   BootstrapRequest,
   ConnectedSource,
+  EngineManifest,
   InstalledProviderAuthorization,
   ProviderAuthorizationConfig,
   ProviderAuthorizationPrompt,
@@ -38,6 +40,7 @@ import { StatusPill } from "./StatusPill";
 interface ProviderAuthorizationPanelProps {
   caseId: string;
   sources: ConnectedSource[];
+  engineManifests: EngineManifest[];
   nativeMode: boolean;
   disabled?: boolean;
   findingAssets?: boolean;
@@ -204,25 +207,44 @@ const copy = {
     en: "Complete every required non-secret field from your IT or cloud admin, then continue to {provider}.",
     zhTW: "請填妥 IT 或雲端管理員提供的所有必要非機密資料，再前往 {provider}。",
   },
-  scopeTitle: { en: "What the cloud scan checks", zhTW: "雲端掃描會檢查什麼" },
-  scope: {
-    aws: {
-      en: "Cloud resources, configuration, identities and access, security posture, and audit metadata in the selected AWS boundary.",
-      zhTW: "選定 AWS 範圍內的雲端資源、設定、身分與存取、安全狀態及稽核中繼資料。",
-    },
-    azure: {
-      en: "Resources, configuration, identities and access, security posture, and audit metadata in one exact Azure tenant and subscription.",
-    zhTW: "一個明確 Azure 租用戶與訂閱內的資源、設定、身分與存取、安全狀態及稽核中繼資料。",
-    },
-    gcp: {
-      en: "Resources, configuration, identities and access, security posture, and audit metadata under one exact Google Cloud organization.",
-    zhTW: "一個明確 Google Cloud 組織下的資源、設定、身分與存取、安全狀態及稽核中繼資料。",
-    },
-    microsoft365: {
-      en: "Directory configuration, identities and access, security posture, and audit metadata in one exact Microsoft 365 tenant.",
-      zhTW: "一個明確 Microsoft 365 租用戶內的目錄設定、身分與存取、安全狀態及稽核中繼資料。",
-    },
-  } satisfies Record<Provider, BilingualText>,
+  capabilityTitle: { en: "What this installed product can inspect", zhTW: "目前安裝版本可檢查的項目" },
+  capabilityDisclaimerTitle: { en: "Capability is not scan evidence", zhTW: "產品能力不等於掃描證據" },
+  capabilityDisclaimer: {
+    en: "This is the declared capability of the product version installed now. It does not mean an engine was selected or ran, and it is not evidence or selected-run coverage.",
+    zhTW: "這裡顯示目前安裝產品版本所宣告的能力；不代表已選取或執行任何引擎，也不是證據或本次執行的涵蓋結果。",
+  },
+  capabilityVersion: { en: "Capability definition {version}", zhTW: "能力定義版本 {version}" },
+  capabilityScope: { en: "Verified connected source scope", zhTW: "已驗證的連線來源範圍" },
+  capabilityScopeUnknown: {
+    en: "The exact source scope will appear after provider verification.",
+    zhTW: "完成雲端服務商驗證後，才會顯示明確來源範圍。",
+  },
+  capabilityProfiles: { en: "Installed profiles", zhTW: "安裝的設定檔" },
+  capabilityNoProfile: { en: "No released profile", zhTW: "沒有已發布的設定檔" },
+  capabilityDimensions: {
+    inventory: { en: "Inventory", zhTW: "資產盤點" },
+    identity_and_access: { en: "Identity and access", zhTW: "身分與存取" },
+    network_exposure: { en: "Network exposure", zhTW: "網路暴露" },
+    storage_exposure: { en: "Storage exposure", zhTW: "儲存空間暴露" },
+    logging: { en: "Logging", zhTW: "記錄" },
+    secret_and_configuration: { en: "Secret and configuration", zhTW: "秘密與設定" },
+  },
+  capabilityStates: {
+    supported: { en: "Supported", zhTW: "支援" },
+    partial: { en: "Partial", zhTW: "部分支援" },
+    unavailable: { en: "Unavailable", zhTW: "不可用" },
+    unknown: { en: "Unknown", zhTW: "未知" },
+  },
+  capabilityAvailability: {
+    available: { en: "available", zhTW: "可用" },
+    unavailable: { en: "unavailable", zhTW: "不可用" },
+    unknown: { en: "availability unknown", zhTW: "可用狀態未知" },
+  },
+  capabilitySupport: {
+    supported: { en: "Maintained through {date}", zhTW: "維護至 {date}" },
+    expired: { en: "Catalog support date ended {date}; capability is not erased", zhTW: "目錄支援日期已於 {date} 結束；能力不因此被抹除" },
+    unknown: { en: "Maintenance date not declared", zhTW: "未宣告維護日期" },
+  },
   what: { en: "What it is:", zhTW: "這是什麼：" },
   where: { en: "Where to find it:", zhTW: "去哪裡找：" },
   example: { en: "Example:", zhTW: "範例：" },
@@ -776,6 +798,7 @@ const scanIdentityName = (provider: Provider, caseId: string): string => {
 export function ProviderAuthorizationPanel({
   caseId,
   sources,
+  engineManifests,
   nativeMode,
   disabled,
   findingAssets,
@@ -791,6 +814,12 @@ export function ProviderAuthorizationPanel({
   const [selectedSourceId, setSelectedSourceId] = useState(providerSources[0]?.id ?? "");
   const selectedSource = providerSources.find((source) => source.id === selectedSourceId) ?? providerSources[0];
   const provider = selectedSource ? providerBySourceKind[selectedSource.kind] : undefined;
+  const capabilityView = useMemo(
+    () => selectedSource && provider
+      ? projectSourceCapabilityView({ provider, source: selectedSource, manifests: engineManifests })
+      : undefined,
+    [engineManifests, provider, selectedSource],
+  );
   const [flowMode, setFlowMode] = useState<ProviderAuthorizationPath>("preferred");
   const [connectionDetailsOpen, setConnectionDetailsOpen] = useState(false);
   const [working, setWorking] = useState(false);
@@ -1394,6 +1423,58 @@ export function ProviderAuthorizationPanel({
         <small>{text(copy.sourceHelp)}</small>
       </label>
 
+      {capabilityView && (
+        <section className="provider-capability" aria-labelledby="provider-capability-title">
+          <div className="provider-capability__heading">
+            <div>
+              <h3 id="provider-capability-title">{text(copy.capabilityTitle)}</h3>
+              <small>{text(copy.capabilityVersion, { version: capabilityView.definitionVersion })}</small>
+            </div>
+          </div>
+          <InlineNotice tone="warning" title={text(copy.capabilityDisclaimerTitle)}>
+            <p>{text(copy.capabilityDisclaimer)}</p>
+          </InlineNotice>
+          <div className="provider-capability__scope">
+            <strong>{text(copy.capabilityScope)}</strong>
+            {capabilityView.resourceScope
+              ? <code>{capabilityView.resourceScope}</code>
+              : <span>{text(copy.capabilityScopeUnknown)}</span>}
+          </div>
+          <div className="provider-capability__grid">
+            {capabilityView.cells.map((cell) => (
+              <article className={`provider-capability-card provider-capability-card--${cell.state}`} key={cell.dimension}>
+                <div className="provider-capability-card__heading">
+                  <h4>{text(copy.capabilityDimensions[cell.dimension])}</h4>
+                  <StatusPill
+                    dot={false}
+                    label={text(copy.capabilityStates[cell.state])}
+                    tone={cell.state === "supported" ? "positive" : cell.state === "partial" ? "warning" : "unknown"}
+                  />
+                </div>
+                <p>{text(cell.limitation)}</p>
+                <div className="provider-capability-card__profiles">
+                  <strong>{text(copy.capabilityProfiles)}</strong>
+                  {cell.engines.length > 0 ? (
+                    <ul>
+                      {cell.engines.map((engine) => (
+                        <li key={`${engine.id}:${engine.profile}`}>
+                          <span>{engine.name}{engine.version ? ` ${engine.version}` : ""}</span>
+                          <code>{engine.profile}</code>
+                          <small>{text(copy.capabilityAvailability[engine.availability])}</small>
+                          {engine.id !== "provider-native-discovery" && (
+                            <small>{text(copy.capabilitySupport[engine.supportStatus], { date: engine.supportUntil ?? "—" })}</small>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : <span>{text(copy.capabilityNoProfile)}</span>}
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
       {installed && (
         <div className="provider-current-access">
           <div>
@@ -1538,11 +1619,6 @@ export function ProviderAuthorizationPanel({
           <div className="provider-auth-form__heading">
             <h3>{text(flowMode === "preferred" ? copy.formTitlePreferred : copy.formTitleBootstrap, { provider: providerName })}</h3>
             <p>{text(copy.formIntro, { provider: providerName })}</p>
-          </div>
-
-          <div className="provider-scope-summary">
-            <strong><Icon name="lock" size={17} />{text(copy.scopeTitle)}</strong>
-            <p>{text(copy.scope[provider])}</p>
           </div>
 
           <fieldset className="provider-auth-fields" disabled={working || disabled}>

@@ -36,6 +36,17 @@ test("problem grouping, review decisions, evidence, and navigation remain wired"
   }
   assert.match(source, /<details className="page-technical-details">[\s\S]*evidence\.rawArtifactHash[\s\S]*<\/details>/u);
   assert.match(source, /<details className="page-technical-details">[\s\S]*selected\.fingerprint[\s\S]*<\/details>/u);
+  assert.match(
+    source,
+    /visibleFindingGroups\.length > 0[\s\S]*aria-labelledby="finding-groups-title"[\s\S]*visibleFindingIds[\s\S]*finding-browser/u,
+    "accepted groups should be visible before the complete finding browser without replacing its members",
+  );
+  assert.match(source, /Every original problem and evidence record stays separate/u);
+  assert.match(source, /每項原始問題與證據仍分開保留/u);
+  assert.match(source, /matching scanner output into independent confirmation/u);
+  assert.match(source, /相似的掃描器輸出說成獨立確認/u);
+  assert.match(source, /Not observed in this selected report; kept as case history/u);
+  assert.match(source, /本次選取的報告未觀察到；僅保留為案件歷史/u);
   assert.match(source, /The product does not make the change/u);
   assert.match(source, /產品不會自動執行/u);
 });

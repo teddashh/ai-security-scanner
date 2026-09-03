@@ -403,6 +403,53 @@ export interface ConnectedSource {
   readOnly: boolean;
   connectedAt?: string;
   lastDiscoveredAt?: string;
+  /**
+   * Whitelisted, non-secret provider coordinates retained after backend
+   * verification. Raw source metadata is never exposed through this type.
+   */
+  providerBinding?: {
+    profile: ProviderSourceProfile;
+    resourceScope: string;
+  };
+}
+
+export type SourceCapabilityProvider = "aws" | "azure" | "gcp" | "microsoft365";
+
+export type SourceCapabilityDimension =
+  | "inventory"
+  | "identity_and_access"
+  | "network_exposure"
+  | "storage_exposure"
+  | "logging"
+  | "secret_and_configuration";
+
+export type SourceCapabilityState = "supported" | "partial" | "unavailable" | "unknown";
+
+export interface SourceCapabilityEngine {
+  id: string;
+  name: string;
+  profile: string;
+  version?: string;
+  availability: "available" | "unavailable" | "unknown";
+  supportStatus: "supported" | "expired" | "unknown";
+  supportUntil?: string;
+}
+
+export interface SourceCapabilityCell {
+  dimension: SourceCapabilityDimension;
+  state: SourceCapabilityState;
+  engines: SourceCapabilityEngine[];
+  limitation: { en: string; zhTW: string };
+}
+
+export interface SourceCapabilityView {
+  schemaVersion: "1.0.0";
+  definitionVersion: string;
+  provider: SourceCapabilityProvider;
+  sourceId: string;
+  sourceKind: SourceKind;
+  resourceScope?: string;
+  cells: SourceCapabilityCell[];
 }
 
 export type AssetType =
@@ -839,6 +886,21 @@ export interface BeginnerReportFinding {
   }>;
 }
 
+export interface BeginnerReportFindingGroupMember {
+  findingId: string;
+  observedInSelectedRun: boolean;
+}
+
+export interface BeginnerReportFindingGroup {
+  groupId: string;
+  presentationScope: "current_case_presentation";
+  title: string;
+  rationale: string;
+  actor: string;
+  createdAt: string;
+  members: BeginnerReportFindingGroupMember[];
+}
+
 export interface BeginnerTechnicalTaskDetails {
   taskId: string;
   targetAssetIds: string[];
@@ -873,6 +935,7 @@ export interface BeginnerMasterReport {
     number
   >;
   findings: BeginnerReportFinding[];
+  findingGroups: BeginnerReportFindingGroup[];
   nextSteps: Array<{
     priority: number;
     code: BeginnerNextActionCode;
@@ -1191,6 +1254,17 @@ export interface EngineManifest {
   platforms: CloudPlatform[];
   supportedProviders: CloudPlatform[];
   status: "ready" | "not_downloaded" | "unsupported" | "outdated";
+  /** Exact release-contract availability, distinct from local runtime setup. */
+  runnable?: boolean;
+  /** Release blockers are used only to classify this engine's capability cells. */
+  blockedBy: string[];
+  /** False means the compatibility payload was malformed or contradictory. */
+  compatibilityValid: boolean;
+  providerExecutionProfiles: Array<{
+    provider: SourceCapabilityProvider;
+    assetKind: string;
+    profile: string;
+  }>;
   knowledgeDate?: string;
   supportUntil?: string;
   supportStatus: "supported" | "expired" | "unknown";

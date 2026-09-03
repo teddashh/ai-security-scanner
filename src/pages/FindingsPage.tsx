@@ -8,6 +8,7 @@ import {
 } from "../lib";
 import { useI18n } from "../i18n";
 import { unavailableRunBoundReportCopy } from "../findingsReportAvailability";
+import { projectVisibleFindingGroups } from "../findingGroupPresentation";
 import {
   localhostTcpBeginnerSummary,
   localhostTestedDimensionValue,
@@ -150,8 +151,21 @@ const copy = {
   reversibleLinks: { en: "TEAM HANDOFF", zhTW: "團隊交接" },
   groupsTitle: { en: "Organize related issues for the right team", zhTW: "把相關問題整理給同一個團隊" },
   groupsDescription: {
-    en: "Bundle issues that should be reviewed together, so handoff is faster and easier to follow.",
-    zhTW: "把適合一起處理的問題放在同一組，讓交接更快、更容易追蹤。",
+    en: "These accepted groups reduce repetition for handoff. Every original problem and evidence record stays separate and can still be opened below.",
+    zhTW: "這些已接受的群組可減少交接時的重複內容；每項原始問題與證據仍分開保留，也都能在下方開啟。",
+  },
+  manageGroups: { en: "Create, remove, or review groups", zhTW: "建立、移除或檢視群組" },
+  manageGroupsDescription: {
+    en: "Grouping changes presentation only. It never deletes a problem, changes evidence, or turns matching scanner output into independent confirmation.",
+    zhTW: "群組只會改變呈現方式；不會刪除問題、改寫證據，也不會把相似的掃描器輸出說成獨立確認。",
+  },
+  caseHistoryMembers: {
+    en: "Other members kept in case history: {count}",
+    zhTW: "另有 {count} 項成員保留於案件歷史",
+  },
+  caseHistoryMember: {
+    en: "Not observed in this selected report; kept as case history",
+    zhTW: "本次選取的報告未觀察到；僅保留為案件歷史",
   },
   items: { en: "Items: {count}", zhTW: "{count} 項" },
   createdBy: { en: "Created by {actor}", zhTW: "建立者：{actor}" },
@@ -978,6 +992,10 @@ export function FindingsPage({
     () => new Map(findings.map((finding) => [finding.id, finding])),
     [findings],
   );
+  const visibleFindingGroups = useMemo(
+    () => projectVisibleFindingGroups(findingGroups, new Set(findingById.keys())),
+    [findingById, findingGroups],
+  );
   const orderedGroupEvents = useMemo(
     () => [...findingGroupEvents].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt) || right.id.localeCompare(left.id)),
     [findingGroupEvents],
@@ -1213,14 +1231,16 @@ export function FindingsPage({
         </section>
       )}
 
-      <details className="section-block page-secondary-feature">
-        <summary id="finding-groups-title">{text(copy.groupsTitle)}</summary>
-        <p className="page-secondary-feature__intro">{text(copy.groupsDescription)}</p>
-
-        {findingGroups.length > 0 && (
+      {visibleFindingGroups.length > 0 && (
+        <section className="section-block" aria-labelledby="finding-groups-title">
+          <div className="section-heading">
+            <p className="eyebrow">{text(copy.reversibleLinks)}</p>
+            <h2 id="finding-groups-title">{text(copy.groupsTitle)}</h2>
+            <p>{text(copy.groupsDescription)}</p>
+          </div>
           <div className="evidence-list">
-            {findingGroups.map((group) => {
-              const members = group.findingIds
+            {visibleFindingGroups.map(({ group, visibleFindingIds, caseHistoryFindingCount }) => {
+              const members = visibleFindingIds
                 .map((findingId) => findingById.get(findingId))
                 .filter((finding): finding is Finding => Boolean(finding));
               return (
@@ -1233,9 +1253,56 @@ export function FindingsPage({
                   <ul className="detail-list">
                     {members.map((finding) => (
                       <li key={finding.id}>
-                        <button className="clear-filters" type="button" onClick={() => setSelectedId(finding.id)}>
+                        <button
+                          className="clear-filters"
+                          type="button"
+                          onClick={() => {
+                            setSelectedId(finding.id);
+                            document.getElementById("finding-browser")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                          }}
+                        >
                           {finding.title}
                         </button>
+                      </li>
+                    ))}
+                  </ul>
+                  {caseHistoryFindingCount > 0 && (
+                    <small>{text(copy.caseHistoryMembers, { count: formatNumber(caseHistoryFindingCount) })}</small>
+                  )}
+                  <small>{text(copy.createdBy, { actor: group.groupedBy })}</small>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      <details className="section-block page-secondary-feature">
+        <summary id="finding-group-management-title">{text(copy.manageGroups)}</summary>
+        <p className="page-secondary-feature__intro">{text(copy.manageGroupsDescription)}</p>
+
+        {findingGroups.length > 0 && (
+          <div className="evidence-list">
+            {findingGroups.map((group) => {
+              const members = group.findingIds
+                .map((findingId) => ({ findingId, finding: findingById.get(findingId) }));
+              return (
+                <article key={group.id} className="evidence-item">
+                  <div>
+                    <strong>{group.title}</strong>
+                    <span>{text(copy.items, { count: formatNumber(members.length) })} · {formatDateTime(group.createdAt)}</span>
+                  </div>
+                  <p>{group.rationale}</p>
+                  <ul className="detail-list">
+                    {members.map(({ findingId, finding }) => (
+                      <li key={findingId}>
+                        {finding ? (
+                          <button className="clear-filters" type="button" onClick={() => setSelectedId(finding.id)}>
+                            {finding.title}
+                          </button>
+                        ) : (
+                          <span>{text(copy.caseHistoryMember)} · <code>{findingId}</code></span>
+                        )}
                       </li>
                     ))}
                   </ul>

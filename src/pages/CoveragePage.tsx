@@ -9,6 +9,7 @@ import type {
   ConnectedSource,
   CoverageRecord,
   CoverageState,
+  EngineManifest,
   ExternalActivity,
   ExternalScopeRequest,
   ScopeGrant,
@@ -47,6 +48,7 @@ interface CoveragePageProps {
   requestedActivities: AssessmentActivity[];
   coverage: CoverageRecord[];
   sources: ConnectedSource[];
+  engineManifests: EngineManifest[];
   assets: Asset[];
   scopeGrants: ScopeGrant[];
   nativeMode: boolean;
@@ -802,6 +804,7 @@ export function CoveragePage({
   requestedActivities,
   coverage,
   sources,
+  engineManifests,
   assets,
   scopeGrants,
   nativeMode,
@@ -1402,6 +1405,7 @@ export function CoveragePage({
             <ProviderAuthorizationPanel
               caseId={caseId}
               sources={sources}
+              engineManifests={engineManifests}
               nativeMode={nativeMode}
               disabled={busy}
               findingAssets={discoveryBusy}

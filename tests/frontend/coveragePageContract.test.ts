@@ -22,6 +22,7 @@ const scannerServiceSource = readFileSync(
 test("coverage onboarding keeps the complete input and permission surface", () => {
   for (const capability of [
     "ProviderAuthorizationPanel",
+    "engineManifests",
     "onConnectSourceSnapshot",
     "onAttachWorkspaceSnapshot",
     "onStartDiscovery",
@@ -38,6 +39,26 @@ test("coverage onboarding keeps the complete input and permission surface", () =
   ]) {
     assert.ok(source.includes(capability), `missing Coverage capability: ${capability}`);
   }
+});
+
+test("coverage source selection receives and labels installed-product capability without claiming run evidence", () => {
+  assert.match(source, /engineManifests: EngineManifest\[\]/u);
+  assert.match(appSource, /<CoveragePage[\s\S]*engineManifests=\{snapshot\?\.engineManifests \?\? \[\]\}/u);
+  assert.match(source, /<ProviderAuthorizationPanel[\s\S]*engineManifests=\{engineManifests\}/u);
+  assert.match(providerPanelSource, /projectSourceCapabilityView\(\{ provider, source: selectedSource, manifests: engineManifests \}\)/u);
+  for (const phrase of [
+    "This is the declared capability of the product version installed now.",
+    "it is not evidence or selected-run coverage",
+    "這裡顯示目前安裝產品版本所宣告的能力",
+    "也不是證據或本次執行的涵蓋結果",
+  ]) assert.ok(providerPanelSource.includes(phrase), phrase);
+
+  for (const retiredBroadClaim of [
+    "Cloud resources, configuration, identities and access, security posture, and audit metadata",
+    "Resources, configuration, identities and access, security posture, and audit metadata",
+    "Directory configuration, identities and access, security posture, and audit metadata",
+    "雲端資源、設定、身分與存取、安全狀態及稽核中繼資料",
+  ]) assert.ok(!providerPanelSource.includes(retiredBroadClaim), retiredBroadClaim);
 });
 
 test("coverage onboarding presents all required use-case next steps in both locales", () => {
