@@ -99,8 +99,8 @@ const copy = {
   disconnect: { en: "Disconnect account", zhTW: "中斷帳號連線" },
   connectCtaTitle: { en: "Prepare {provider} sign-in", zhTW: "準備登入 {provider}" },
   connectCtaBody: {
-    en: "Use your provider's official sign-in. Choose an existing read-only connection or prepare temporary read-only access inside the setup guide.",
-    zhTW: "使用雲端服務商的官方登入。你可以在設定指南中選擇既有唯讀連線，或準備暫時唯讀權限。",
+    en: "Cloud scanning needs a one-time setup file from your IT or cloud admin, because ai-security-scanner has no shared sign-in of its own. With that file you sign in on your provider's official page, using an existing read-only connection or temporary read-only access.",
+    zhTW: "掃描雲端需要 IT 或雲端管理員提供一次性的設定檔，因為 ai-security-scanner 沒有自己的共用登入。有了設定檔，你就能在雲端服務商的官方頁面登入，並使用既有的唯讀連線或暫時唯讀權限。",
   },
   connectCta: { en: "Open the connection guide", zhTW: "開啟連線指南" },
   connectionDetailsSummary: { en: "Connect {provider} when you are ready", zhTW: "準備好後連接 {provider}" },

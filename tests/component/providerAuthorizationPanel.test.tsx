@@ -160,3 +160,68 @@ test("every rendered card resolves its copy instead of leaking a translation key
     expect(heading?.textContent).not.toMatch(/^capability[A-Z]/u);
   }
 });
+
+// A closed `<details>` is still in the DOM under jsdom, which has no layout, so
+// `textContent` cannot tell a visible sentence from a collapsed one. This is the
+// only reading that matters for the tests below: what a user has read by the
+// time they decide whether this app can scan their cloud account at all.
+const textBeforeAnyDisclosureIsOpened = (root: HTMLElement): string => {
+  const clone = root.cloneNode(true) as HTMLElement;
+  for (const disclosure of Array.from(clone.querySelectorAll("details"))) {
+    const summary = disclosure.querySelector(":scope > summary");
+    disclosure.replaceChildren(...(summary ? [summary] : []));
+  }
+  return clone.textContent ?? "";
+};
+
+const setupSection = (): HTMLElement => {
+  const section = document.querySelector<HTMLElement>("section.provider-auth-details");
+  expect(section).not.toBeNull();
+  return section!;
+};
+
+test("the prerequisite that decides whether cloud scanning is possible is stated before any disclosure", () => {
+  // Connecting a cloud account is impossible until the user's organization
+  // registers its own application: `public_client_id` is a required field with
+  // no default, and the all-zero UUID is explicitly rejected. That was said only
+  // in `registrationNote`, which sits inside a "See the JSON template for IT"
+  // disclosure nested inside the connection-guide disclosure -- two collapsed
+  // layers below a first layer that read "Use your provider's official sign-in".
+  // For an individual, or an organization that will not do the registration,
+  // that first layer described a flow they can never complete.
+  renderPanel();
+
+  const firstLayer = textBeforeAnyDisclosureIsOpened(setupSection());
+  expect(firstLayer).toContain("one-time setup file from your IT or cloud admin");
+  expect(firstLayer).toContain("no shared sign-in of its own");
+  // The truthful half of the old sentence survives: it really is the provider's
+  // own page, once the prerequisite is met.
+  expect(firstLayer).toContain("official page");
+});
+
+test("stating the prerequisite did not flatten the engineering setup into the first layer", () => {
+  // The mirror. The test above is satisfiable by dumping every disclosure into
+  // the opening paragraph, which would replace one honesty problem with a wall
+  // of JSON no beginner can read. The first layer must gain the constraint and
+  // nothing else.
+  renderPanel();
+
+  const firstLayer = textBeforeAnyDisclosureIsOpened(setupSection());
+  expect(firstLayer).not.toContain("OAuth");
+  expect(firstLayer).not.toContain("clientId");
+  expect(firstLayer).not.toContain("Ask IT for the setup file");
+
+  // And the precise technical statement is still there to be opened.
+  expect(setupSection().textContent).toContain(
+    "ai-security-scanner does not provide a shared OAuth registration",
+  );
+});
+
+test("the Traditional Chinese first layer names the same prerequisite", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  renderPanel();
+
+  const firstLayer = textBeforeAnyDisclosureIsOpened(setupSection());
+  expect(firstLayer).toContain("需要 IT 或雲端管理員提供一次性的設定檔");
+  expect(firstLayer).toContain("沒有自己的共用登入");
+});
