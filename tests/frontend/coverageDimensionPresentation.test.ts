@@ -18,6 +18,13 @@ import {
 // Chinese mapping is otherwise invisible until a Traditional Chinese reader sees
 // a row that says nothing.
 
+// Scoped to `beginner_report.rs` on purpose. `export.rs` also assigns gap
+// dimensions -- redaction rewrites an excluded gap to "Excluded coverage area"
+// -- but that path runs only in `beginner_report_for_export`. The report the UI
+// renders comes from `commands.rs` calling `build_beginner_master_report`
+// directly, unredacted, so export-only strings never reach this localizer.
+// Widening this to `export.rs` would demand translations for strings no reader
+// ever sees.
 const source = readFileSync(new URL("../../src-tauri/src/beginner_report.rs", import.meta.url), "utf8");
 const production = source.slice(0, source.indexOf("#[cfg(test)]"));
 
