@@ -27819,11 +27819,39 @@ mod tests {
 
     #[test]
     fn published_microsoft365_engine_plans_its_authorized_tenant_for_execution() {
-        // The counterpart to the test above, against the shipped catalog. The
-        // published image only reaches a tenant if the catalog, the manifest,
-        // and the adapter all agree, so this is what would fail if a future
-        // change recorded a publication the product could not actually run.
-        let fixture = Fixture::new();
+        // The counterpart to the test above. A published image only reaches a
+        // tenant if the catalog, the manifest, and the adapter all agree, so
+        // this is what would fail if a publication were recorded that the
+        // product could not actually run.
+        //
+        // Like its counterpart, it publishes the engine synthetically rather
+        // than reading whichever engine happens to be published today. Binding
+        // it to the shipped catalog made it fail the moment ScubaGear went back
+        // to awaiting publication for a version bump, which says nothing about
+        // whether the property holds.
+        let mut entries: Vec<Value> =
+            serde_json::from_str(include_str!("../../engines/catalog.json")).unwrap();
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry["id"] == "scubagear")
+            .expect("scubagear catalog entry");
+        entry["compatibility"]["runnable"] = Value::Bool(true);
+        entry["compatibility"]["blocked_by"] = Value::Array(vec![]);
+        // "Published" is all three coordinates together: only an integrated,
+        // unblocked release with a digest-pinned image may be dispatched
+        // (registry.rs:500, domain.rs:620). Setting fewer of them would test a
+        // state the product never reaches.
+        entry["status"] = Value::String("integrated".into());
+        entry["image"] = serde_json::json!({
+            "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scubagear",
+            "tag": "1.8.0-4",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "signature_identity": null,
+        });
+        let fixture = Fixture::with_engines(
+            EngineRegistry::load_catalog(&serde_json::to_string(&entries).unwrap())
+                .expect("a published engine release is a valid catalog"),
+        );
         let case = fixture.create();
         let service = fixture.service();
         let tenant_id = "11111111-1111-4111-8111-111111111111";

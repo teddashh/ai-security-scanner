@@ -187,10 +187,13 @@ try {
         }
         Results = @($normalized)
     }
+    # Controls that could not be evaluated are reported in Diagnostics.errors,
+    # not by the exit status. A nonzero exit is the platform's signal that this
+    # run cannot be trusted at all: the host discards captured evidence without
+    # adapting it and the stage is terminal, so throwing here would delete every
+    # real finding in the document just written. The conditions above still
+    # throw, because each of them means there is no trustworthy document.
     Write-AtomicJson -Value $resultDocument -LiteralPath (Join-Path $outputRoot.FullName 'scubagear.json')
-    if ([int]$summary.Errors -gt 0) {
-        throw 'ScubaGear reported incomplete AAD control execution; retained evidence is diagnostic only.'
-    }
 }
 finally {
     $secureToken = $null

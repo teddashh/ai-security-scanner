@@ -218,12 +218,20 @@ digest/publication, `experimental` status, and its own explicit non-runnable blo
 
 ScubaGear `1.8.0-3` and Maester `2.0.0-3` completed that path in run
 [33846866230](https://github.com/teddashh/ai-security-scanner/actions/runs/33846866230) from
-`efd5e7827796eccf4595c9356d8444bac6e929a8`, and both are now recorded as published and runnable:
+`efd5e7827796eccf4595c9356d8444bac6e929a8`:
 
 | Engine | Tag | Immutable index digest |
 | --- | --- | --- |
 | ScubaGear | `1.8.0-3` | `sha256:fdce15e50507be61b0ac1bbf9dcf8268c69424416e9c87a8d4215672e481bc92` |
 | Maester | `2.0.0-3` | `sha256:cf6a195455bc4d647192da928df7da621fb088b3385163323cd218fcbef7ed9e` |
+
+Those images remain published and anonymously pullable, but the catalog no longer offers them. Both
+wrappers were changed afterwards to stop conflating "this run cannot be trusted" with "some controls
+could not be evaluated", so `-3` no longer corresponds to the reviewed source and claiming
+`attested_match` for it would be false. Both engines therefore returned to a null catalog image with
+an explicit blocker until `1.8.0-4` and `2.0.0-4` are published and independently verified. Each
+plan's reviewed `run-*.ps1` and Dockerfile digests were re-pinned because those files genuinely
+changed, which is the only condition under which a pin may be rewritten.
 
 The first attempt at that publication failed after every contract had passed, because the smoke
 step's `EXIT` trap could not remove the control directories it had deliberately made unwritable and
