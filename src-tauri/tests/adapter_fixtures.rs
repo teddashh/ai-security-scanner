@@ -757,29 +757,36 @@ fn wrapper_preserved_upstream_reports_are_not_normalized_a_second_time() {
     );
 }
 
-#[test]
-fn disclosing_unevaluated_controls_does_not_mark_the_run_incomplete() {
-    // A shortfall the engine itself reported is a coverage limit, not evidence
-    // that failed to normalize. If this disclosure ever flips `complete`, every
-    // healthy tenant scan stops reaching ExecutionStage::Completed and sits in
-    // CapturedAwaitingAdapter instead (orchestrator.rs:881).
+fn scubagear_run_with_diagnostics(diagnostics: serde_json::Value) -> AdapterOutput {
     let document = serde_json::json!({
-        "Diagnostics": { "passes": 1, "failures": 1, "errors": 0,
-                         "manual": 20, "omitted": 5, "normalized_results": 2 },
+        "Diagnostics": diagnostics,
         "Results": [{ "PolicyId": "MS.AAD.1.1v1", "Result": "Failed",
                       "Criticality": "Shall", "Requirement": "Block legacy authentication." }]
     });
     let bytes = serde_json::to_vec(&document).expect("serializable document");
-    let output = normalize_bytes(
+    normalize_bytes(
         "scubagear",
         &bytes,
         "attempt-1/output/scubagear.json",
         "application/json",
         "run-m365-coverage",
-    );
+    )
+}
+
+#[test]
+fn controls_passed_over_by_design_are_disclosed_without_marking_the_run_incomplete() {
+    // Manual and omitted controls were passed over deliberately, so the run is
+    // still a complete scan of what it set out to check. If this disclosure
+    // ever flips `complete`, every healthy tenant scan stops reaching
+    // ExecutionStage::Completed and sits in CapturedAwaitingAdapter instead
+    // (orchestrator.rs:881).
+    let output = scubagear_run_with_diagnostics(serde_json::json!({
+        "passes": 1, "failures": 1, "errors": 0,
+        "manual": 20, "omitted": 5, "normalized_results": 2
+    }));
     assert!(
         output.complete,
-        "a disclosed coverage limit must not read as a normalization failure: {:?}",
+        "a deliberate pass must not read as a normalization failure: {:?}",
         output.warnings
     );
     assert_eq!(output.findings.len(), 1);
@@ -789,6 +796,36 @@ fn disclosing_unevaluated_controls_does_not_mark_the_run_incomplete() {
             .iter()
             .any(|warning| warning.contains("20 reserved for manual review")),
         "the disclosure must reach the run: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn controls_the_engine_could_not_evaluate_keep_their_findings_but_withhold_completion() {
+    // Coverage was never established for the errored control, so the run must
+    // not claim completion. The findings it did produce are still real and are
+    // kept: orchestrator.rs:879 assigns them before consulting `complete`, so
+    // this becomes a PartiallyCompleted run with usable findings rather than a
+    // failure that discards them.
+    let output = scubagear_run_with_diagnostics(serde_json::json!({
+        "passes": 1, "failures": 1, "errors": 3,
+        "manual": 0, "omitted": 0, "normalized_results": 2
+    }));
+    assert!(
+        !output.complete,
+        "an unevaluable control means coverage was not established"
+    );
+    assert_eq!(
+        output.findings.len(),
+        1,
+        "withholding completion must not discard real findings"
+    );
+    assert!(
+        output
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("3 could not be evaluated")),
+        "the reason must be legible: {:?}",
         output.warnings
     );
 }

@@ -446,13 +446,16 @@ fn normalize_artifacts(
         if output.warnings.len() > warnings_before_extract {
             output.complete = false;
         }
-        // Deliberately after the window above: a control the engine itself
-        // reported as manual, omitted or not run was normalized correctly, so
-        // it is a coverage limit to disclose, not evidence that failed to
-        // normalize. Raising it before this point would flip `complete` and
-        // leave every healthy Microsoft 365 run stuck awaiting its adapter.
-        if let Some(note) = unrepresented_control_disclosure(adapter.profile, &parsed) {
-            push_warning(&mut output.warnings, note);
+        // Deliberately after the window above, so that disclosing a shortfall
+        // is not itself read as evidence that failed to normalize. A control
+        // the engine passed over by design was normalized correctly and must
+        // leave the run complete; only a control it could not evaluate
+        // withholds completion, and it says so for itself.
+        if let Some(unevaluated) = unevaluated_controls(adapter.profile, &parsed) {
+            push_warning(&mut output.warnings, unevaluated.disclosure);
+            if unevaluated.withholds_completion {
+                output.complete = false;
+            }
         }
         if records.len() >= MAX_RECORDS {
             output.complete = false;
@@ -1413,40 +1416,50 @@ fn extract_maester(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
     )
 }
 
-/// Controls the Microsoft 365 wrappers counted but deliberately did not turn
-/// into a normalized result, phrased for the person reading the run.
+/// What a Microsoft 365 run left unevaluated, and whether that shortfall is
+/// severe enough that the run must not claim completion.
+struct UnevaluatedControls {
+    disclosure: String,
+    /// True when the engine was asked to check controls and could not, as
+    /// opposed to passing over them by design or by tenant configuration. Such
+    /// a run produced usable findings but did not establish coverage, which is
+    /// exactly what `AdapterOutput::complete` exists to say.
+    withholds_completion: bool,
+}
+
+/// Controls the Microsoft 365 wrappers counted but did not turn into a
+/// normalized result, phrased for the person reading the run.
 ///
 /// Both wrappers drop any control whose upstream status they do not map
-/// (`run-scubagear.ps1:126`, `run-maester.ps1:123`), which is the right call:
-/// a control awaiting manual review is not a finding. They do record what they
-/// dropped in `Diagnostics`, but nothing read it, so a tenant with twenty
-/// controls reserved for manual review and five omitted by configuration
-/// rendered as an unqualified list of findings. Report the shortfall instead of
-/// letting partial coverage read as full coverage.
+/// (`run-scubagear.ps1:126`, `run-maester.ps1:123`), and they record what they
+/// dropped in `Diagnostics`. Nothing read it, so a tenant with twenty controls
+/// reserved for manual review and five omitted by configuration rendered as an
+/// unqualified list of findings.
 ///
-/// This is a disclosure, not a normalization failure, so it must never mark the
-/// output incomplete; see the call site.
-fn unrepresented_control_disclosure(profile: Profile, parsed: &ParsedArtifact) -> Option<String> {
-    // Each entry is a `Diagnostics` counter the wrapper increments for a
-    // control it did not represent, paired with how to say it out loud.
-    let (engine, counters) = match profile {
+/// The two kinds of shortfall are not equivalent. A control reserved for manual
+/// review or omitted in the tenant's own config was passed over deliberately, so
+/// the run is still a complete scan of what it set out to check. A control the
+/// engine *could not evaluate* means coverage was never established, and
+/// upstream is explicit that this is what its error counter means: a missing
+/// provider command becomes an error. Only the second withholds completion.
+fn unevaluated_controls(profile: Profile, parsed: &ParsedArtifact) -> Option<UnevaluatedControls> {
+    // `Diagnostics` counters for controls the wrapper did not represent, paired
+    // with how to say each one out loud. `by_design` was a deliberate pass;
+    // `unevaluable` means the engine tried and could not.
+    let (engine, by_design, unevaluable) = match profile {
         Profile::ScubaGear => (
             "ScubaGear",
             [
                 ("manual", "reserved for manual review"),
                 ("omitted", "omitted by configuration"),
-                ("errors", "failed to evaluate"),
             ]
             .as_slice(),
+            [("errors", "could not be evaluated")].as_slice(),
         ),
         Profile::Maester => (
             "Maester",
-            [
-                ("skipped", "skipped"),
-                ("not_run", "not run"),
-                ("errors", "failed to evaluate"),
-            ]
-            .as_slice(),
+            [("skipped", "skipped"), ("not_run", "not run")].as_slice(),
+            [("errors", "could not be evaluated")].as_slice(),
         ),
         _ => return None,
     };
@@ -1454,20 +1467,32 @@ fn unrepresented_control_disclosure(profile: Profile, parsed: &ParsedArtifact) -
         return None;
     };
     let diagnostics = root.get("Diagnostics")?.as_object()?;
-    let unrepresented = counters
-        .iter()
-        .filter_map(|(key, description)| {
-            let count = diagnostics.get(*key)?.as_u64().filter(|count| *count > 0)?;
-            Some(format!("{count} {description}"))
-        })
-        .collect::<Vec<_>>();
-    if unrepresented.is_empty() {
+    let count_of = |group: &[(&str, &str)]| {
+        group
+            .iter()
+            .filter_map(|(key, description)| {
+                let count = diagnostics.get(*key)?.as_u64().filter(|count| *count > 0)?;
+                Some(format!("{count} {description}"))
+            })
+            .collect::<Vec<_>>()
+    };
+    let passed_over = count_of(by_design);
+    let could_not_evaluate = count_of(unevaluable);
+    if passed_over.is_empty() && could_not_evaluate.is_empty() {
         return None;
     }
-    Some(format!(
-        "{engine} did not evaluate every control in scope ({}); those controls are absent from findings and this run does not establish their state",
-        unrepresented.join(", ")
-    ))
+    let all = passed_over
+        .iter()
+        .chain(could_not_evaluate.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    Some(UnevaluatedControls {
+        disclosure: format!(
+            "{engine} did not evaluate every control in scope ({}); those controls are absent from findings and this run does not establish their state",
+            all.join(", ")
+        ),
+        withholds_completion: !could_not_evaluate.is_empty(),
+    })
 }
 
 fn extract_m365(
@@ -3068,11 +3093,12 @@ mod tests {
             "Diagnostics": { "passes": 30, "failures": 2, "warnings": 0, "errors": 1,
                              "manual": 20, "omitted": 5, "normalized_results": 32 }
         }));
-        let note = unrepresented_control_disclosure(Profile::ScubaGear, &scubagear)
+        let unevaluated = unevaluated_controls(Profile::ScubaGear, &scubagear)
             .expect("a run with manual, omitted and errored controls discloses all three");
+        let note = &unevaluated.disclosure;
         assert!(note.contains("20 reserved for manual review"), "{note}");
         assert!(note.contains("5 omitted by configuration"), "{note}");
-        assert!(note.contains("1 failed to evaluate"), "{note}");
+        assert!(note.contains("1 could not be evaluated"), "{note}");
         // Passing controls are evaluated, so they are not a coverage shortfall.
         assert!(!note.contains("30"), "{note}");
 
@@ -3080,10 +3106,48 @@ mod tests {
             "Diagnostics": { "passes": 8, "failures": 1, "investigate": 0, "errors": 0,
                              "skipped": 3, "not_run": 0, "total": 12, "normalized_results": 9 }
         }));
-        let note = unrepresented_control_disclosure(Profile::Maester, &maester)
+        let unevaluated = unevaluated_controls(Profile::Maester, &maester)
             .expect("skipped tests are a coverage shortfall");
+        let note = &unevaluated.disclosure;
         assert!(note.contains("3 skipped"), "{note}");
         assert!(!note.contains("not run"), "{note}");
+    }
+
+    #[test]
+    fn only_controls_the_engine_could_not_evaluate_withhold_completion() {
+        // Passed over by design or by the tenant's own config: the run is still
+        // a complete scan of what it set out to check.
+        let by_design = ParsedArtifact::Json(serde_json::json!({
+            "Diagnostics": { "passes": 30, "failures": 2, "errors": 0,
+                             "manual": 20, "omitted": 5, "normalized_results": 32 }
+        }));
+        let unevaluated = unevaluated_controls(Profile::ScubaGear, &by_design)
+            .expect("a shortfall is still disclosed");
+        assert!(
+            !unevaluated.withholds_completion,
+            "{}",
+            unevaluated.disclosure
+        );
+
+        // Asked to check and could not: coverage was never established.
+        let unevaluable = ParsedArtifact::Json(serde_json::json!({
+            "Diagnostics": { "passes": 30, "failures": 2, "errors": 1,
+                             "manual": 0, "omitted": 0, "normalized_results": 32 }
+        }));
+        assert!(
+            unevaluated_controls(Profile::ScubaGear, &unevaluable)
+                .expect("an unevaluable control is a shortfall")
+                .withholds_completion
+        );
+        let maester_errors = ParsedArtifact::Json(serde_json::json!({
+            "Diagnostics": { "passes": 8, "failures": 1, "errors": 2,
+                             "skipped": 0, "not_run": 0, "normalized_results": 9 }
+        }));
+        assert!(
+            unevaluated_controls(Profile::Maester, &maester_errors)
+                .expect("an errored test is a shortfall")
+                .withholds_completion
+        );
     }
 
     #[test]
@@ -3092,12 +3156,12 @@ mod tests {
             "Diagnostics": { "passes": 30, "failures": 2, "warnings": 0, "errors": 0,
                              "manual": 0, "omitted": 0, "normalized_results": 32 }
         }));
-        assert!(unrepresented_control_disclosure(Profile::ScubaGear, &complete).is_none());
+        assert!(unevaluated_controls(Profile::ScubaGear, &complete).is_none());
         // Upstream's own report has no wrapper accounting to read.
         let upstream = ParsedArtifact::Json(serde_json::json!({ "Results": [] }));
-        assert!(unrepresented_control_disclosure(Profile::ScubaGear, &upstream).is_none());
+        assert!(unevaluated_controls(Profile::ScubaGear, &upstream).is_none());
         // The disclosure is specific to the wrappers that produce these counts.
-        assert!(unrepresented_control_disclosure(Profile::Semgrep, &complete).is_none());
+        assert!(unevaluated_controls(Profile::Semgrep, &complete).is_none());
     }
 
     #[test]
