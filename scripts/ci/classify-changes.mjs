@@ -18,6 +18,7 @@ const FRONTEND_PATHS = [
   // these entries a backend-only commit that breaks either contract runs the
   // Rust lane and skips the lane holding the test that would catch it.
   /^src-tauri\/src\/beginner_report\.rs$/,
+  /^src-tauri\/src\/prioritization\.rs$/,
   /^src-tauri\/src\/commands\.rs$/,
 ];
 

@@ -232,8 +232,8 @@ const pageCopy = {
   },
   dataTypes: { en: "Data this case may involve", zhTW: "這個案件可能涉及哪些資料" },
   dataTypesHelp: {
-    en: "This helps the app explain impact and put the most useful results first.",
-    zhTW: "這會幫助產品說明影響，並把更重要的結果排在前面。",
+    en: "This helps the app explain impact, but only where a scan independently finds a matching asset. Your answer on its own never raises a result's priority.",
+    zhTW: "這會幫助產品說明影響，但只有在掃描獨立發現對應資產時才會生效；僅憑你的回答不會提高任何結果的優先順序。",
   },
   createSafety: { en: "You can add or change targets before you run the scan.", zhTW: "正式掃描前，仍可隨時加入或修改目標。" },
   creating: { en: "Creating…", zhTW: "建立中…" },
