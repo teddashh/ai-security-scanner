@@ -25,6 +25,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false",
     "test:frontend": "node --experimental-strip-types --test tests/frontend/*.test.ts",
+    "test:component": "vitest run --config vitest.config.ts",
     "test:release-evidence": "node --test tests/release/*.test.mjs",
     "test:usability-evidence": "node --test tests/usability/*.test.mjs",
     "validate:aidefend": "node scripts/validate-aidefend-snapshot.mjs",
@@ -48,13 +49,16 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "^24.10.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.0",
     "esbuild": "^0.28.1",
+    "jsdom": "^30.0.1",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
+    "vitest": "^5.0.0",
     "yaml": "2.9.0"
   }
 }

@@ -6,10 +6,12 @@ import { pathToFileURL } from "node:url";
 const FRONTEND_PATHS = [
   /^src\//,
   /^tests\/frontend\//,
+  /^tests\/component\//,
   /^public\//,
   /^index\.html$/,
   /^tsconfig(?:\.[^/]+)?\.json$/,
-  /^vite\.config\.[cm]?[jt]s$/,
+  // Matches both the Vite build config and the Vitest component-test config.
+  /^vite(?:st)?\.config\.[cm]?[jt]s$/,
 ];
 
 const RUST_PATHS = [

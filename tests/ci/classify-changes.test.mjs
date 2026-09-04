@@ -109,6 +109,32 @@ test("ordinary frontend changes schedule only the fast frontend lane", () => {
   });
 });
 
+test("component render tests and their runner config reach the frontend lane", () => {
+  // These are the only tests that actually render a component, so a path that
+  // failed to classify would leave the render suite permanently unscheduled
+  // while the lane still reported green.
+  assert.deepEqual(classifyChangedPaths([
+    "tests/component/providerAuthorizationPanel.test.tsx",
+    "vitest.config.ts",
+  ]), {
+    changed_path_count: 2,
+    docs_only: false,
+    frontend: true,
+    rust_core: false,
+    desktop: false,
+    engine: false,
+    framework: false,
+    release_contract: false,
+    windows_runtime: false,
+  });
+});
+
+test("the frontend lane actually runs the component render suite", () => {
+  const frontendBlock = ciWorkflow.split("\n  engine-admission:", 1)[0].split("\n  frontend:")[1];
+  assert.ok(frontendBlock, "frontend job block is missing");
+  assert.match(frontendBlock, /npm run test:component/);
+});
+
 test("engine inputs schedule engine admission without release or installer work", () => {
   assert.deepEqual(classifyChangedPaths([
     "engines/images/gitleaks/Dockerfile",
