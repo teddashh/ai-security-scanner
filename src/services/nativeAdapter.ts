@@ -38,8 +38,6 @@ import type {
   LocalNetworkCandidateInventory,
   LocalNetworkCandidateStatus,
   LocalPrivateSubnetCandidate,
-  ManagedRuntimePrerequisiteRepairOutcome,
-  ManagedRuntimePrerequisiteRepairResult,
   ManagedRuntimeSetupFailureReason,
   ManagedRuntimeSetupNextAction,
   ManagedRuntimeSetupPhase,
@@ -690,38 +688,6 @@ export interface NativeManagedRuntimeSetupStatus {
   next_action: ManagedRuntimeSetupNextAction | null;
   detail: string;
 }
-
-export interface NativeManagedRuntimePrerequisiteRepairResult {
-  outcome: string;
-  restart_required: boolean;
-  detail: string;
-}
-
-const managedRuntimePrerequisiteRepairOutcomes = new Set<ManagedRuntimePrerequisiteRepairOutcome>([
-  "completed",
-  "cancelled",
-  "failed",
-]);
-
-export const adaptManagedRuntimePrerequisiteRepairResult = (
-  result: NativeManagedRuntimePrerequisiteRepairResult,
-): ManagedRuntimePrerequisiteRepairResult => {
-  const outcome = managedRuntimePrerequisiteRepairOutcomes.has(
-    result.outcome as ManagedRuntimePrerequisiteRepairOutcome,
-  )
-    ? result.outcome as ManagedRuntimePrerequisiteRepairOutcome
-    : "failed";
-  const detail = typeof result.detail === "string"
-    && result.detail.length <= 1_024
-    && !/[\0\u2028\u2029]/u.test(result.detail)
-    ? result.detail
-    : "Windows prerequisite repair returned no safe detail";
-  return {
-    outcome,
-    restartRequired: outcome === "completed" && result.restart_required === true,
-    detail,
-  };
-};
 
 const managedRuntimeRecoveryActions: Partial<
   Record<ManagedRuntimeSetupFailureReason, ManagedRuntimeSetupNextAction>

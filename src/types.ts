@@ -1359,17 +1359,6 @@ export interface ManagedRuntimeSetupStatus {
   detail: string;
 }
 
-export type ManagedRuntimePrerequisiteRepairOutcome =
-  | "completed"
-  | "cancelled"
-  | "failed";
-
-export interface ManagedRuntimePrerequisiteRepairResult {
-  outcome: ManagedRuntimePrerequisiteRepairOutcome;
-  restartRequired: boolean;
-  detail: string;
-}
-
 export interface ServiceResult<T> {
   data: T;
   mode: AppMode;
