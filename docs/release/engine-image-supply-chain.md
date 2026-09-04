@@ -257,7 +257,19 @@ the host discloses. The wrapper now takes the verdict from `OriginalResult`, lea
 tag to one source commit and the workflow matrix publishes both engines together, so Maester moves to
 `2.0.0-5` alongside it. Both Dockerfile digests were re-pinned because each embeds its version label.
 
-`1.8.0-5` and `2.0.0-5` are awaiting publication and independent verification.
+The replacements were published in run
+[33885514754](https://github.com/teddashh/ai-security-scanner/actions/runs/33885514754) from
+`cc3b455f380b467eed3835e674313fde380f3f46`, and are what the catalog now offers:
+
+| Engine | Tag | Immutable index digest |
+| --- | --- | --- |
+| ScubaGear | `1.8.0-5` | `sha256:dc219f8fdba3e19b38faeb59c02bbf2eccf38fea3c2d74a83401256a11c78ee3` |
+| Maester | `2.0.0-5` | `sha256:84a947e9f02056393c2a131adcab48a6de18efc322e939b846c51a38b6e4b128` |
+
+Both digests were read back from the registry with an anonymous pull token rather than copied
+from the job log, and `gh attestation verify` confirms each index digest carries a SLSA v1
+provenance statement binding it to `gitCommit cc3b455f380b467eed3835e674313fde380f3f46` and to
+attempt 1 of that run.
 
 The first attempt at that publication failed after every contract had passed, because the smoke
 step's `EXIT` trap could not remove the control directories it had deliberately made unwritable and
