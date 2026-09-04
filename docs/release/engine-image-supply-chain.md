@@ -211,10 +211,25 @@ that the smoke files came from that workflow run.
 
 ### Staged Microsoft 365 wrapper publications
 
-ScubaGear `1.8.0-3` and Maester `2.0.0-3` are immutable build coordinates, not publication or
-runnable claims. Until each exact `.github/workflows/engine-images-m365.yml` matrix job completes
-and its evidence is independently ingested, that engine keeps a null catalog image, null plan
+A version tag alone is an immutable build coordinate, not a publication or runnable claim. Until
+the exact `.github/workflows/engine-images-m365.yml` matrix job for an engine completes and its
+evidence is independently ingested, that engine keeps a null catalog image, null plan
 digest/publication, `experimental` status, and its own explicit non-runnable blocker.
+
+ScubaGear `1.8.0-3` and Maester `2.0.0-3` completed that path in run
+[33846866230](https://github.com/teddashh/ai-security-scanner/actions/runs/33846866230) from
+`efd5e7827796eccf4595c9356d8444bac6e929a8`, and both are now recorded as published and runnable:
+
+| Engine | Tag | Immutable index digest |
+| --- | --- | --- |
+| ScubaGear | `1.8.0-3` | `sha256:fdce15e50507be61b0ac1bbf9dcf8268c69424416e9c87a8d4215672e481bc92` |
+| Maester | `2.0.0-3` | `sha256:cf6a195455bc4d647192da928df7da621fb088b3385163323cd218fcbef7ed9e` |
+
+The first attempt at that publication failed after every contract had passed, because the smoke
+step's `EXIT` trap could not remove the control directories it had deliberately made unwritable and
+`bash -e` turns a failing EXIT trap into the step's exit status. The version tags were never
+created, since the workflow promotes to a version tag only after the contracts pass, so the retry
+reused the same coordinates rather than consuming new ones.
 
 After the workflow completes on the exact `main` source commit, download and verify each artifact
 independently in a fresh directory:
