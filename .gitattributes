@@ -1,3 +1,10 @@
+# Git for Windows defaults to core.autocrlf=true, so an unattributed text file
+# is rewritten to CRLF on checkout. The Windows CI lane pins byte-exact SHA-256
+# digests (the vendored NSIS template, the staged runtime manifest) and parses
+# anchored line regexes, all of which that rewrite breaks. Check every text file
+# out as LF on every platform so those digests are reproducible.
+* text=auto eol=lf
+
 *.patch -whitespace
 engines/** text=auto eol=lf
 mappings/vendor/aidefend/** text eol=lf
