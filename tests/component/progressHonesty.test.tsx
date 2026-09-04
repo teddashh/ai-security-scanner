@@ -158,3 +158,37 @@ test("no engine state is rendered without a label", () => {
   const labels = pillTexts(container).filter((label) => label.trim().length === 0);
   expect(labels).toEqual([]);
 });
+
+test("collapsing every check into one shared failure still states how many stopped", () => {
+  // When two or more checks all fail identically before binding scope, the page
+  // replaces the whole engine list with one aggregate row. That is honest only
+  // while the count survives: an empty list reads as nothing to report, and the
+  // collapse is precisely the case where the most was lost.
+  const preScannerFailure = (id: string): EngineRun => engine(id, "failed", {
+    errorCode: "execution_failed",
+    rawArtifactCount: 0,
+    findingCount: 0,
+    message: "The private scan engine did not start.",
+    checkpoint: {
+      attempt: 1,
+      stage: "failed",
+      artifactCount: 0,
+      cleanupCompleted: true,
+      scopeBound: false,
+      lastError: "gateway unavailable",
+    },
+  });
+
+  const { container } = renderProgress(
+    run([preScannerFailure("check-a"), preScannerFailure("check-b")], "failed"),
+  );
+
+  // No per-engine status row survives the collapse; the two checks appear only
+  // inside the collapsed technical record.
+  expect(container.querySelectorAll(".engine-row").length).toBe(0);
+  expect(container.querySelectorAll(".aggregate-engine-record").length).toBe(2);
+  // ...so the count and the reason have to carry it instead.
+  expect(container.textContent).toContain("stopped 2 checks before they inspected anything");
+  expect(container.textContent).toContain("The private scan engine did not start");
+  expect(container.textContent).toContain("Technical records — checks: 2");
+});
