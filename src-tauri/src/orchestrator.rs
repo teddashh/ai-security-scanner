@@ -4086,7 +4086,10 @@ mod tests {
         assert!(!report.checkpoint.cleanup_completed);
         assert_eq!(report.exit_code, None);
         let error = report.checkpoint.last_error.as_deref().unwrap();
-        assert!(error.contains("scan coverage is incomplete"));
+        assert!(
+            error.contains("scan coverage is incomplete"),
+            "the user must be told coverage is incomplete, but the error was: {error}"
+        );
         assert!(error.contains("container cleanup also failed"));
         assert!(error.contains("fake cleanup failure"));
         assert!(report.checkpoint.resume_token().is_ok());

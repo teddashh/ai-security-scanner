@@ -4191,8 +4191,6 @@ mod tests {
     };
     use chrono::Duration;
     #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
-    #[cfg(unix)]
     use std::time::Instant;
 
     #[test]
@@ -4304,9 +4302,7 @@ mod tests {
     fn direct_runtime_timeout_uses_a_fixed_label_without_echoing_arguments() {
         let temp = tempfile::tempdir().expect("temporary runtime");
         let binary = temp.path().join("slow-runtime");
-        fs::write(&binary, "#!/bin/sh\nsleep 5\n").expect("write slow runtime fixture");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
-            .expect("make slow runtime fixture executable");
+        write_executable_fixture(&binary, "#!/bin/sh\nsleep 5\n");
         let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, binary)
             .expect("construct compatibility runtime");
         let sensitive_argument =
@@ -4432,7 +4428,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary runtime");
         let binary = temp.path().join("podman-fixture");
         let log = temp.path().join("commands.log");
-        fs::write(
+        write_executable_fixture(
             &binary,
             r#"#!/bin/sh
 set -eu
@@ -4444,10 +4440,7 @@ case "$1" in
   *) exit 9 ;;
 esac
 "#,
-        )
-        .expect("write runtime fixture");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
-            .expect("make runtime fixture executable");
+        );
 
         let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, &binary)
             .expect("construct compatibility runtime");
@@ -4482,7 +4475,7 @@ esac
             r#"{"serverVersion":"5.9.0","securityOptions":{"apparmorEnabled":true,"capabilities":"CAP_CHOWN","rootless":true,"seccompEnabled":true,"seccompProfilePath":"/new-profile","selinuxEnabled":false}}"#,
         )
         .expect("write execution response");
-        fs::write(
+        write_executable_fixture(
             &binary,
             r#"#!/bin/sh
 set -eu
@@ -4499,10 +4492,7 @@ case "$1" in
   *) exit 9 ;;
 esac
 "#,
-        )
-        .expect("write runtime fixture");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
-            .expect("make runtime fixture executable");
+        );
 
         let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, &binary)
             .expect("construct compatibility runtime");
@@ -4685,6 +4675,46 @@ esac
         .expect("Podman network inspection JSON")
     }
 
+    /// Installs an executable fixture without this process ever holding a
+    /// writable descriptor on it.
+    ///
+    /// `fs::write` opens the fixture for writing, and a `Command::spawn` on any
+    /// other test thread can fork inside that window and inherit the descriptor
+    /// until it execs. Linux refuses to exec a file that anyone holds open for
+    /// writing, so the fixture intermittently failed with ETXTBSY ("Text file
+    /// busy") in roughly one full-suite run in six. Retrying at the call sites
+    /// would not work: the command logs are asserted byte for byte, and a
+    /// partially executed attempt has already appended to them.
+    ///
+    /// Delegating the write to a child process keeps the writable descriptor
+    /// out of this process entirely, so no fork of ours can inherit one. The
+    /// child's own descriptor dies with it, before `wait` returns.
+    #[cfg(unix)]
+    fn write_executable_fixture(path: &Path, script: impl AsRef<[u8]>) {
+        use std::io::Write;
+
+        let mut installer = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(r#"cat > "$1" && chmod 700 "$1""#)
+            .arg("sh")
+            .arg(path)
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("spawn the fixture installer");
+        installer
+            .stdin
+            .take()
+            .expect("fixture installer stdin")
+            .write_all(script.as_ref())
+            .expect("stream the fixture script");
+        let status = installer.wait().expect("await the fixture installer");
+        assert!(
+            status.success(),
+            "the fixture installer failed for {}: {status:?}",
+            path.display()
+        );
+    }
+
     #[cfg(unix)]
     fn fake_runtime(
         temp: &tempfile::TempDir,
@@ -4709,9 +4739,7 @@ esac\n",
             immutable_id,
             response.display(),
         );
-        fs::write(&binary, script).expect("fake runtime script");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
-            .expect("fake runtime executable");
+        write_executable_fixture(&binary, script);
         (binary, log)
     }
 
@@ -4732,9 +4760,7 @@ esac\n",
             immutable_id,
             response.display(),
         );
-        fs::write(&binary, script).expect("fake runtime script");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
-            .expect("fake runtime executable");
+        write_executable_fixture(&binary, script);
         (binary, log)
     }
 
@@ -4753,9 +4779,7 @@ esac\n",
             immutable_id,
             response.display(),
         );
-        fs::write(&binary, script).expect("fake runtime script");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
-            .expect("fake runtime executable");
+        write_executable_fixture(&binary, script);
         binary
     }
 
@@ -4776,9 +4800,7 @@ esac\n",
             immutable_id,
             response.display(),
         );
-        fs::write(&binary, script).expect("fake output flood runtime script");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
-            .expect("fake output flood runtime executable");
+        write_executable_fixture(&binary, script);
         (binary, log)
     }
 
@@ -4790,9 +4812,7 @@ esac\n",
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1\" in\n  run) exec /bin/sleep 30 ;;\n  *) exit 0 ;;\nesac\n",
             log.display(),
         );
-        fs::write(&binary, script).expect("fake name collision runtime script");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
-            .expect("fake name collision runtime executable");
+        write_executable_fixture(&binary, script);
         (binary, log)
     }
 
@@ -4832,9 +4852,7 @@ esac\n",
             log.display(),
             response.display()
         );
-        fs::write(&binary, script).expect("fake network runtime script");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
-            .expect("fake network runtime executable");
+        write_executable_fixture(&binary, script);
         wait_for_executable_fixture(&binary, "fake network runtime");
         (binary, log, response)
     }
@@ -4849,9 +4867,7 @@ esac\n",
             log.display(),
             response.display()
         );
-        fs::write(&binary, script).expect("fake owned cleanup runtime script");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
-            .expect("fake owned cleanup runtime executable");
+        write_executable_fixture(&binary, script);
         wait_for_executable_fixture(&binary, "fake owned cleanup runtime");
         (binary, log, response)
     }
@@ -6214,7 +6230,10 @@ esac\n",
                 &mut false,
             )
             .expect_err("aggregate output must be rejected");
-        assert!(error.to_string().contains("scan coverage is incomplete"));
+        assert!(
+            error.to_string().contains("scan coverage is incomplete"),
+            "the user must be told coverage is incomplete, but the error was: {error}"
+        );
         assert_eq!(fs::metadata(&capture.stdout).expect("stdout").len(), 0);
         assert_eq!(fs::metadata(&capture.stderr).expect("stderr").len(), 0);
         assert_eq!(fs::read_dir(plan.output()).expect("output").count(), 0);
@@ -6390,7 +6409,10 @@ esac\n",
                 &mut false,
             )
             .expect_err("stdout flood must terminate the run");
-        assert!(error.to_string().contains("scan coverage is incomplete"));
+        assert!(
+            error.to_string().contains("scan coverage is incomplete"),
+            "the user must be told coverage is incomplete, but the error was: {error}"
+        );
         assert!(
             fs::metadata(&capture.stdout).expect("stdout").len() <= MIN_OUTPUT_BYTES,
             "captured stdout must remain within the aggregate cap"
