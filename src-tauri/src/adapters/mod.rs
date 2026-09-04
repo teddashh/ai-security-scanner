@@ -1506,7 +1506,52 @@ fn extract_m365(
 ) -> Vec<SourceRecord> {
     let mut candidates = Vec::new();
     match parsed {
-        ParsedArtifact::Json(root) => collect_named_objects(root, "/", 0, &mut candidates),
+        ParsedArtifact::Json(root) => {
+            // The wrapper owns this document: it names the engine that wrote it
+            // and lists every control it normalized under `Results`. Walking the
+            // whole tree instead would let any object that happens to carry a
+            // status and a rule id become a finding, including one nested inside
+            // provenance or a vendor blob the wrapper merely quoted.
+            if let Some(declared) = root.get("Engine").and_then(Value::as_str)
+                && !declared.eq_ignore_ascii_case(engine)
+            {
+                push_warning(
+                    warnings,
+                    format!(
+                        "{engine} adapter was given a document declaring engine {declared}; nothing was normalized from it"
+                    ),
+                );
+                return Vec::new();
+            }
+            let Some(results) = root.get("Results").and_then(Value::as_array) else {
+                push_warning(
+                    warnings,
+                    format!("{engine} document declared no Results list and was not normalized"),
+                );
+                return Vec::new();
+            };
+            // The wrapper counts what it wrote. A disagreement means results were
+            // lost between writing and reading, which no rule-level check sees.
+            if let Some(declared) = root
+                .pointer("/Diagnostics/normalized_results")
+                .and_then(Value::as_u64)
+                && declared != results.len() as u64
+            {
+                push_warning(
+                    warnings,
+                    format!(
+                        "{engine} reported writing {declared} normalized results but its Results list holds {}",
+                        results.len()
+                    ),
+                );
+            }
+            candidates.extend(
+                results
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| (format!("/Results/{index}"), value)),
+            );
+        }
         _ => candidates.extend(json_rows(parsed, warnings)),
     }
     let mut seen = BTreeSet::new();

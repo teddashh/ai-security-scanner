@@ -758,10 +758,16 @@ fn wrapper_preserved_upstream_reports_are_not_normalized_a_second_time() {
 }
 
 fn scubagear_run_with_diagnostics(diagnostics: serde_json::Value) -> AdapterOutput {
+    // `Results` carries every control the wrapper normalized, passes included,
+    // so it must agree with the `normalized_results` count each caller declares.
     let document = serde_json::json!({
         "Diagnostics": diagnostics,
-        "Results": [{ "PolicyId": "MS.AAD.1.1v1", "Result": "Failed",
-                      "Criticality": "Shall", "Requirement": "Block legacy authentication." }]
+        "Results": [
+            { "PolicyId": "MS.AAD.1.1v1", "Result": "Failed",
+              "Criticality": "Shall", "Requirement": "Block legacy authentication." },
+            { "PolicyId": "MS.AAD.2.1v1", "Result": "Pass",
+              "Criticality": "Shall", "Requirement": "Risky users SHALL be blocked." }
+        ]
     });
     let bytes = serde_json::to_vec(&document).expect("serializable document");
     normalize_bytes(
@@ -771,6 +777,94 @@ fn scubagear_run_with_diagnostics(diagnostics: serde_json::Value) -> AdapterOutp
         "application/json",
         "run-m365-coverage",
     )
+}
+
+#[test]
+fn only_the_wrappers_declared_results_are_normalized() {
+    // Every one of these objects carries a status and a rule id, so the
+    // recursive walk this replaced would have turned each into a finding. Only
+    // the entry the wrapper listed under `Results` is a normalized control; the
+    // rest are provenance, a quoted vendor blob, and a nested annotation.
+    let document = serde_json::json!({
+        "Engine": "ScubaGear",
+        "Provenance": {
+            "raw_report": { "PolicyId": "MS.AAD.9.9v1", "Result": "Failed",
+                            "Requirement": "Provenance is not a control." }
+        },
+        "Diagnostics": { "passes": 0, "failures": 1, "errors": 0,
+                         "manual": 0, "omitted": 0, "normalized_results": 1 },
+        "Results": [{ "PolicyId": "MS.AAD.1.1v1", "Result": "Failed",
+                      "Criticality": "Shall", "Requirement": "Block legacy authentication.",
+                      "Upstream": { "PolicyId": "MS.AAD.8.8v1", "Result": "Failed",
+                                    "Requirement": "A nested quote is not a control." } }]
+    });
+    let bytes = serde_json::to_vec(&document).expect("serializable document");
+    let output = normalize_bytes(
+        "scubagear",
+        &bytes,
+        "attempt-1/output/scubagear.json",
+        "application/json",
+        "run-m365-envelope",
+    );
+    assert!(
+        output.complete,
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+    let rules = output
+        .findings
+        .iter()
+        .flat_map(|finding| &finding.evidence)
+        .filter_map(|evidence| evidence.source_rule.as_deref())
+        .collect::<Vec<_>>();
+    assert_eq!(rules, vec!["MS.AAD.1.1v1"], "{rules:?}");
+}
+
+#[test]
+fn a_document_another_engine_wrote_is_refused_rather_than_mined_for_findings() {
+    let document = serde_json::json!({
+        "Engine": "Maester",
+        "Results": [{ "PolicyId": "MS.AAD.1.1v1", "Result": "Failed",
+                      "Requirement": "Block legacy authentication." }]
+    });
+    let bytes = serde_json::to_vec(&document).expect("serializable document");
+    let output = normalize_bytes(
+        "scubagear",
+        &bytes,
+        "attempt-1/output/scubagear.json",
+        "application/json",
+        "run-m365-misrouted",
+    );
+    assert!(output.findings.is_empty());
+    assert!(!output.complete);
+    assert!(
+        output
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("declaring engine Maester")),
+        "the mismatch must be named: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn results_lost_between_the_wrapper_and_the_adapter_are_reported() {
+    // No rule-level check can see this: every result present parses cleanly,
+    // and only the wrapper's own count reveals that one went missing.
+    let output = scubagear_run_with_diagnostics(serde_json::json!({
+        "passes": 1, "failures": 1, "errors": 0,
+        "manual": 0, "omitted": 0, "normalized_results": 3
+    }));
+    assert!(!output.complete);
+    assert!(
+        output
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("writing 3 normalized results")
+                && warning.contains("holds 2")),
+        "the shortfall must be quantified: {:?}",
+        output.warnings
+    );
 }
 
 #[test]
