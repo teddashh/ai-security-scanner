@@ -1537,23 +1537,41 @@ fn extract_m365(
     source_rating_tag: &str,
 ) -> Vec<SourceRecord> {
     let mut candidates = Vec::new();
+    // Whether the candidates came from a wrapper's declared `Results` list. Every
+    // member of such a list is a control the wrapper says it normalized, so one
+    // that cannot become a finding is a loss worth naming. Rows recovered from a
+    // tabular artifact carry no such promise and are skipped quietly.
+    let mut declared_envelope = false;
     match parsed {
         ParsedArtifact::Json(root) => {
+            declared_envelope = true;
             // The wrapper owns this document: it names the engine that wrote it
             // and lists every control it normalized under `Results`. Walking the
             // whole tree instead would let any object that happens to carry a
             // status and a rule id become a finding, including one nested inside
             // provenance or a vendor blob the wrapper merely quoted.
-            if let Some(declared) = root.get("Engine").and_then(Value::as_str)
-                && !declared.eq_ignore_ascii_case(engine)
-            {
-                push_warning(
+            match root.get("Engine").and_then(Value::as_str) {
+                Some(declared) if declared.eq_ignore_ascii_case(engine) => {}
+                Some(declared) => {
+                    push_warning(
+                        warnings,
+                        format!(
+                            "{engine} adapter was given a document declaring engine {declared}; nothing was normalized from it"
+                        ),
+                    );
+                    return Vec::new();
+                }
+                // Checking the envelope only when it happens to be present would
+                // let a malformed or future-schema document skip every check
+                // below and still read as a clean run. Its results are kept,
+                // because they are probably real, but the run cannot claim to
+                // have accounted for a document it could not identify.
+                None => push_warning(
                     warnings,
                     format!(
-                        "{engine} adapter was given a document declaring engine {declared}; nothing was normalized from it"
+                        "{engine} document did not name the engine that wrote it; it was normalized but not verified as this engine's own output"
                     ),
-                );
-                return Vec::new();
+                ),
             }
             let Some(results) = root.get("Results").and_then(Value::as_array) else {
                 push_warning(
@@ -1564,18 +1582,24 @@ fn extract_m365(
             };
             // The wrapper counts what it wrote. A disagreement means results were
             // lost between writing and reading, which no rule-level check sees.
-            if let Some(declared) = root
+            match root
                 .pointer("/Diagnostics/normalized_results")
                 .and_then(Value::as_u64)
-                && declared != results.len() as u64
             {
-                push_warning(
+                Some(declared) if declared == results.len() as u64 => {}
+                Some(declared) => push_warning(
                     warnings,
                     format!(
                         "{engine} reported writing {declared} normalized results but its Results list holds {}",
                         results.len()
                     ),
-                );
+                ),
+                None => push_warning(
+                    warnings,
+                    format!(
+                        "{engine} document did not declare how many results it normalized, so nothing can confirm none were lost"
+                    ),
+                ),
             }
             candidates.extend(
                 results
@@ -1590,9 +1614,25 @@ fn extract_m365(
     let mut records = Vec::new();
     for (pointer, value) in candidates {
         let Some(object) = value.as_object() else {
+            if declared_envelope {
+                push_warning(
+                    warnings,
+                    format!(
+                        "{engine} listed a result at {pointer} that is not an object; it was not normalized"
+                    ),
+                );
+            }
             continue;
         };
         let Some(status) = string_any(object, status_keys) else {
+            if declared_envelope {
+                push_warning(
+                    warnings,
+                    format!(
+                        "{engine} result at {pointer} carried no recognizable status; it was not normalized"
+                    ),
+                );
+            }
             continue;
         };
         if !is_failure(&status) {

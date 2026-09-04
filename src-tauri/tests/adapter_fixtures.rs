@@ -444,6 +444,8 @@ fn m365_missing_and_unrecognized_source_ratings_stay_unknown_and_traceable() {
         (
             "scubagear",
             br#"{
+              "Engine": "ScubaGear",
+              "Diagnostics": {"normalized_results": 4},
               "Results": [
                 {"PolicyId":"missing", "Requirement":"Missing criticality", "Result":"Failed", "Severity":"unknown"},
                 {"PolicyId":"custom", "Requirement":"Custom criticality", "Result":"Failed", "Severity":"unknown", "SourceCriticality":"Vendor-Special"},
@@ -458,6 +460,8 @@ fn m365_missing_and_unrecognized_source_ratings_stay_unknown_and_traceable() {
         (
             "maester",
             br#"{
+              "Engine": "Maester",
+              "Diagnostics": {"normalized_results": 4},
               "Results": [
                 {"Id":"missing", "Title":"Missing rating", "Result":"Failed", "Severity":"unknown"},
                 {"Id":"custom", "Title":"Custom rating", "Result":"Failed", "Severity":"unknown", "SourceSeverity":"Vendor-Special"},
@@ -761,6 +765,7 @@ fn scubagear_run_with_diagnostics(diagnostics: serde_json::Value) -> AdapterOutp
     // `Results` carries every control the wrapper normalized, passes included,
     // so it must agree with the `normalized_results` count each caller declares.
     let document = serde_json::json!({
+        "Engine": "ScubaGear",
         "Diagnostics": diagnostics,
         "Results": [
             { "PolicyId": "MS.AAD.1.1v1", "Result": "Failed",
@@ -1347,4 +1352,53 @@ fn a_result_the_tenant_disputes_is_reported_rather_than_quietly_honoured() {
         "the run must say a dispute occurred: {:?}",
         output.warnings
     );
+}
+
+#[test]
+fn a_document_the_adapter_cannot_fully_account_for_does_not_read_as_a_clean_run() {
+    // The envelope checks used to run only when the fields they read happened to
+    // be present, and a `Results` member that could not become a finding was
+    // dropped without a word. A document like this one therefore produced one
+    // finding, no warnings, and a complete run while silently losing two of the
+    // three results the wrapper claimed to have normalized.
+    let document = serde_json::json!({
+        "Results": [
+            "a bare string is not a control",
+            { "PolicyId": "MS.AAD.3.3v1", "Requirement": "No status field at all." },
+            { "PolicyId": "MS.AAD.1.1v1", "Result": "Failed",
+              "Criticality": "Shall", "Requirement": "Block legacy authentication." }
+        ]
+    });
+    let bytes = serde_json::to_vec(&document).expect("serializable document");
+    let output = normalize_bytes(
+        "scubagear",
+        &bytes,
+        "attempt-1/output/scubagear.json",
+        "application/json",
+        "run-m365-unaccounted",
+    );
+
+    // The result that is a real control still becomes a finding: the point is to
+    // stop claiming completeness, not to discard evidence.
+    assert_eq!(output.findings.len(), 1, "{:?}", output.findings);
+    assert!(
+        !output.complete,
+        "two of three declared results were lost: {:?}",
+        output.warnings
+    );
+    for expected in [
+        "did not name the engine that wrote it",
+        "did not declare how many results it normalized",
+        "/Results/0 that is not an object",
+        "/Results/1 carried no recognizable status",
+    ] {
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(expected)),
+            "no warning mentioned {expected:?}: {:?}",
+            output.warnings
+        );
+    }
 }
