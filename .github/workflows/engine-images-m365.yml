@@ -123,7 +123,14 @@ jobs:
           test "${user}" = "65532:65532"
           test "${entrypoint}" = "/usr/local/bin/ai-security-scanner-m365-launcher"
           smoke_root="$(mktemp -d)"
-          trap 'rm -rf "${smoke_root}"' EXIT
+          # The control directories below are deliberately made unwritable to
+          # prove the launcher cannot write into them, which also stops a plain
+          # `rm -rf` from unlinking their contents. Under `bash -e` a failing
+          # EXIT trap becomes the step's exit status, so an unrestored `chmod`
+          # here fails the job even when every contract passed. Restore write
+          # access first, and never let cleanup of a scratch directory decide
+          # the outcome of a publication.
+          trap 'chmod -R u+rwX "${smoke_root}" >/dev/null 2>&1 || true; rm -rf "${smoke_root}" || true' EXIT
           mkdir -p \
             "${smoke_root}/missing-output-control" \
             "${smoke_root}/missing-scope-control" \
@@ -177,7 +184,10 @@ jobs:
             --mount "type=bind,source=${smoke_root}/output,target=/output"
           docker run --rm --platform linux/amd64 --entrypoint /opt/microsoft/powershell/7/pwsh \
             "${IMAGE}@${DIGEST}" -NoLogo -NoProfile -NonInteractive -Command \
-            '$files=@(Get-ChildItem -LiteralPath "/usr/share/licenses/${{ matrix.engine }}" -File -ErrorAction Stop); if ($files.Count -lt 5) { throw "dependency notices are incomplete" }; $lock=Get-Content -LiteralPath /opt/ai-security-scanner/dependencies.lock.json -Raw | ConvertFrom-Json; if ($lock.source.module_version -ne "${{ matrix.expected_version }}") { throw "engine lock version mismatch" }'
+            '$files=@(Get-ChildItem -LiteralPath "/usr/share/licenses/${{ matrix.engine }}" -File -ErrorAction Stop); if ($files.Count -lt 5) { throw "dependency notices are incomplete" }; $lock=Get-Content -LiteralPath /opt/ai-security-scanner/dependencies.lock.json -Raw | ConvertFrom-Json; if ($lock.source.module_version -ne "${{ matrix.expected_version }}") { throw "engine lock version mismatch" }; Write-Output "verified $($files.Count) dependency notices and engine lock version $($lock.source.module_version)"'
+          # This check passes silently, so a green step alone cannot prove the
+          # container ever ran it. Record that the contract was reached.
+          echo "amd64 smoke contract complete for ${{ matrix.engine }}"
 
       - name: Record publication and smoke evidence
         env:
