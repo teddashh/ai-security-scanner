@@ -6,7 +6,7 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "publication_in_progress",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/cisagov/ScubaGear",
     "revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
@@ -17,9 +17,22 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scubagear",
     "tag": "1.8.0-4",
-    "digest": null
+    "digest": "sha256:3c2e96e59346b5a4266f1c2c80c4067f9d4fb61e0cfe5527e34c0d5fe60b912c"
   },
-  "publication": null,
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33878473094",
+    "source_revision": "7048108d4ba07bcbef583582e9349144e9c8f74d",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:2d9170235b5499eeb3aa0efbfd6f25c0f8244acbeffa14b02c40708087b68826",
+      "linux/arm64": "sha256:10c598b400d0ef09be5acf31ae49dd5ce009608fcfc14ea2a9753ac1f4e5780d"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "scubagear-image-evidence-33878473094-1"
+  },
   "build_recipe": {
     "source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
     "source_archive": {
@@ -129,7 +142,5 @@
     "rationale": "CC0-1.0 engine source, MIT Graph authentication, and Apache-2.0 dependency notices are embedded in the managed image.",
     "source_offer_path": null
   },
-  "blockers": [
-    "Publish and independently verify the wrapper-hardened 1.8.0-4 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence."
-  ]
+  "blockers": []
 }

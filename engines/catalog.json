@@ -729,7 +729,12 @@
     "homepage_url": "https://www.cisa.gov/resources-tools/services/secure-cloud-business-applications-scuba-project",
     "license_spdx": "CC0-1.0",
     "distribution_mode": "pull_pinned_image",
-    "image": null,
+    "image": {
+      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scubagear",
+      "tag": "1.8.0-4",
+      "digest": "sha256:3c2e96e59346b5a4266f1c2c80c4067f9d4fb61e0cfe5527e34c0d5fe60b912c",
+      "signature_identity": null
+    },
     "source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
     "engine_version": "1.8.0",
     "rule_version": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
@@ -759,11 +764,11 @@
       "--output",
       "/output"
     ],
-    "status": "experimental",
+    "status": "integrated",
     "notices": [
       "The managed profile runs only ScubaGear's commercial AAD product with local OPA evaluation and a protected short-lived Microsoft Graph token.",
       "The multi-platform image is built from exact source, PowerShell module, OPA, base-image, and license pins; all direct dependency notices are embedded.",
-      "A wrapper-hardened image that preserves unrecognized upstream criticality as unknown is awaiting immutable publication; this engine remains independently unavailable until then."
+      "A wrapper-hardened image that preserves unrecognized upstream criticality as unknown is published at an immutable digest; anonymous multi-platform access and the linux/amd64 launcher contract were verified at publication."
     ],
     "license": {
       "disposition": "allow",
@@ -777,8 +782,8 @@
         "source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
         "source_ref": "main",
         "acquisition_source": "https://github.com/cisagov/ScubaGear/commit/4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
-        "artifact_source_revision": null,
-        "source_association": "source_build_required"
+        "artifact_source_revision": "7048108d4ba07bcbef583582e9349144e9c8f74d",
+        "source_association": "attested_match"
       },
       "rules": {
         "mode": "embedded",
@@ -805,11 +810,9 @@
       "support_until": "2026-11-22",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": false,
+      "runnable": true,
       "artifact_state": "managed_build_plan",
-      "blocked_by": [
-        "The wrapper-hardened ScubaGear image has not yet been published and independently verified."
-      ],
+      "blocked_by": [],
       "knowledge_input": {
         "kind": "runtime_live",
         "identifier": "Microsoft Entra ID configuration",
@@ -860,7 +863,12 @@
     "homepage_url": "https://maester.dev/",
     "license_spdx": "MIT",
     "distribution_mode": "pull_pinned_image",
-    "image": null,
+    "image": {
+      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-maester",
+      "tag": "2.0.0-4",
+      "digest": "sha256:5d174f51b9282099921d7b6fa9706afb420287477c83fa95342e2235faeb5274",
+      "signature_identity": null
+    },
     "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
     "engine_version": "2.0.0",
     "rule_version": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
@@ -890,12 +898,12 @@
       "--output",
       "/output"
     ],
-    "status": "experimental",
+    "status": "integrated",
     "notices": [
       "The managed profile runs only the pinned Entra test tree; long-running, preview, mutable raw-GitHub, and DNS-dependent tests are excluded from the Graph-only closure.",
       "Excluded tags are MT.1025-MT.1028, MT.1030-MT.1031, and MT.1182; the exact profile is recorded in the packaging plan and output provenance.",
       "The multi-platform image is built from exact source, PowerShell module, base-image, and license pins; all direct dependency notices are embedded.",
-      "A wrapper-hardened image that preserves missing or unrecognized upstream severity as unknown is awaiting immutable publication; this engine remains independently unavailable until then."
+      "A wrapper-hardened image that preserves missing or unrecognized upstream severity as unknown is published at an immutable digest; anonymous multi-platform access and the linux/amd64 launcher contract were verified at publication."
     ],
     "license": {
       "disposition": "allow",
@@ -909,8 +917,8 @@
         "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
         "source_ref": "main",
         "acquisition_source": "https://github.com/maester365/maester/commit/6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
-        "artifact_source_revision": null,
-        "source_association": "source_build_required"
+        "artifact_source_revision": "7048108d4ba07bcbef583582e9349144e9c8f74d",
+        "source_association": "attested_match"
       },
       "rules": {
         "mode": "embedded",
@@ -937,11 +945,9 @@
       "support_until": "2026-11-22",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": false,
+      "runnable": true,
       "artifact_state": "managed_build_plan",
-      "blocked_by": [
-        "The wrapper-hardened Maester image has not yet been published and independently verified."
-      ],
+      "blocked_by": [],
       "knowledge_input": {
         "kind": "runtime_live",
         "identifier": "Microsoft Entra ID configuration",

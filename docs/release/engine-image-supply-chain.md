@@ -228,10 +228,22 @@ ScubaGear `1.8.0-3` and Maester `2.0.0-3` completed that path in run
 Those images remain published and anonymously pullable, but the catalog no longer offers them. Both
 wrappers were changed afterwards to stop conflating "this run cannot be trusted" with "some controls
 could not be evaluated", so `-3` no longer corresponds to the reviewed source and claiming
-`attested_match` for it would be false. Both engines therefore returned to a null catalog image with
-an explicit blocker until `1.8.0-4` and `2.0.0-4` are published and independently verified. Each
-plan's reviewed `run-*.ps1` and Dockerfile digests were re-pinned because those files genuinely
-changed, which is the only condition under which a pin may be rewritten.
+`attested_match` for it would be false. Both engines returned to a null catalog image with an
+explicit blocker, and each plan's reviewed `run-*.ps1` and Dockerfile digests were re-pinned because
+those files genuinely changed, which is the only condition under which a pin may be rewritten.
+
+The replacements were published in run
+[33878473094](https://github.com/teddashh/ai-security-scanner/actions/runs/33878473094) from
+`7048108d4ba07bcbef583582e9349144e9c8f74d`, and are what the catalog now offers:
+
+| Engine | Tag | Immutable index digest |
+| --- | --- | --- |
+| ScubaGear | `1.8.0-4` | `sha256:3c2e96e59346b5a4266f1c2c80c4067f9d4fb61e0cfe5527e34c0d5fe60b912c` |
+| Maester | `2.0.0-4` | `sha256:5d174f51b9282099921d7b6fa9706afb420287477c83fa95342e2235faeb5274` |
+
+Every digest above was read back from the registry anonymously rather than copied from the job log,
+and `gh attestation verify` confirms each index digest carries a SLSA v1 provenance statement
+binding it to `gitCommit 7048108d4ba07bcbef583582e9349144e9c8f74d` and to attempt 1 of that run.
 
 The first attempt at that publication failed after every contract had passed, because the smoke
 step's `EXIT` trap could not remove the control directories it had deliberately made unwritable and
