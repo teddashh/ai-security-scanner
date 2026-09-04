@@ -70,6 +70,10 @@ test("Findings, Export, service, and native command preserve one explicit run co
   assert.match(findings, /runs\.find\(\(run\) => run\.id === selectedRunId\)/u);
   assert.match(findings, /selectedRunId === undefined[\s\S]*\? \(report \? runs\.find/u);
   assert.match(findings, /onOpenExport\(latestRun\.id\)/u);
+  // The four ExportPage assertions below match source text, so they break on
+  // reformatting alone. Do not simply delete one when that happens: the
+  // behaviour they stand for is pinned for real by rendering the page in
+  // `tests/component/exportPreviewHonesty.test.tsx`. Reconcile with that first.
   assert.match(exportPage, /workspace\.runs\.find\(\(run\) => run\.id === selectedRunId\)/u);
   assert.doesNotMatch(exportPage, /workspace\.runs\[0\]/u);
   assert.match(exportPage, /result\.runId !== selectedRun\.id/u);
