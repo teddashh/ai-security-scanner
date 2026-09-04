@@ -20,6 +20,13 @@ const FRONTEND_PATHS = [
   /^src-tauri\/src\/beginner_report\.rs$/,
   /^src-tauri\/src\/prioritization\.rs$/,
   /^src-tauri\/src\/commands\.rs$/,
+  // `setupPanelReportPromises.test.ts` reads this one for two contracts the
+  // setup panel makes user-facing claims about: which readiness blocker means
+  // zero runnable checks, and which engine-run status a preflight failure
+  // produces. It is large and frequently touched, so this entry runs the
+  // frontend lane often -- that is the price of the copy and the backend not
+  // being able to drift apart silently again.
+  /^src-tauri\/src\/case_service\.rs$/,
 ];
 
 const RUST_PATHS = [

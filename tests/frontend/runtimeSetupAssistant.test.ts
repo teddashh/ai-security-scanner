@@ -124,10 +124,10 @@ test("an exact packaged-runtime admission failure degrades gracefully without an
   for (const phrase of [
     "One local check cannot run in this app version",
     "Other checks, saved projects, reports, and exports remain available",
-    "Results will mark this check as not tested",
+    "The report lists this check under what was not tested, never as a pass",
     "這個程式版本有一項本機檢查無法執行",
     "其他檢查、已保存的專案、報告與匯出仍可使用",
-    "結果會把這項檢查標示為「未測試」",
+    "報告會把這項檢查列在「沒有測到的內容」裡，不會當成通過",
   ]) assert.ok(source.includes(phrase), phrase);
 
   assert.match(source, /setupNonRetryable \|\| \(!setupFailed[\s\S]*\? null : \(/u);

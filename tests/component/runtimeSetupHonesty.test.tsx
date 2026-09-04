@@ -89,7 +89,12 @@ test("a check that can never run says the results will record it as untested", (
   const { container } = renderAssistant({ status: packagedAdmissionFailure });
 
   expect(heading(container)).toBe("One local check cannot run in this app version");
-  expect(explanation(container)).toContain("Results will mark this check as not tested");
+  // Worded against the report heading the gap is actually rendered under, not
+  // against the "Not tested" count tile, which stays 0 on this path. See
+  // tests/frontend/setupPanelReportPromises.test.ts for the binding.
+  expect(explanation(container)).toContain(
+    "lists this check under what was not tested, never as a pass",
+  );
   expect(explanation(container)).toContain("saved projects, reports, and exports remain available");
   // No phase line: "Setup needs attention" beside a terminal failure implies
   // something is still being attempted.
@@ -214,8 +219,11 @@ test("a gap in the installed version promises the report will name it, and point
 
   expect(container.querySelector(".runtime-assistant--ready")).toBeNull();
   expect(heading(container)).toBe("This check is unavailable in the installed version");
-  expect(explanation(container)).toContain("the report will name this coverage gap");
-  expect(explanation(container)).toContain("Other available checks can continue");
+  expect(explanation(container)).toContain("The report will still name this coverage gap");
+  // This blocker is raised only when the runnable count over the compatible
+  // engines is zero, so there is no sibling check left to continue.
+  expect(explanation(container)).toContain("No check in this version can run for this target");
+  expect(explanation(container)).not.toContain("Other available checks can continue");
 
   const buttons = actionButtons(container);
   expect(buttons).toHaveLength(1);
@@ -287,7 +295,8 @@ test("the Traditional Chinese panel carries the same two report promises", () =>
   // Separate literals, and a reader of one locale never sees the other. These
   // are the two claims about a document the user has not opened yet.
   const untested = renderAssistant({ locale: "zh-TW", status: packagedAdmissionFailure });
-  expect(explanation(untested.container)).toContain("結果會把這項檢查標示為「未測試」");
+  // 「沒有測到的內容」 is the exact FindingsPage gaps heading in this locale.
+  expect(explanation(untested.container)).toContain("報告會把這項檢查列在「沒有測到的內容」裡，不會當成通過");
   expect(actionButtons(untested.container)).toHaveLength(0);
 
   cleanup();
@@ -298,5 +307,6 @@ test("the Traditional Chinese panel carries the same two report promises", () =>
     scannerSetupBlocker: "no_runnable_authorized_targets",
   });
   expect(heading(container)).toBe("目前安裝版本無法執行這項檢查");
-  expect(explanation(container)).toContain("報告也會列出這個涵蓋缺口");
+  expect(explanation(container)).toContain("報告仍會列出這個涵蓋缺口");
+  expect(explanation(container)).toContain("這個版本沒有任何檢查能處理這個目標");
 });

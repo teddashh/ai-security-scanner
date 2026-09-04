@@ -105,11 +105,11 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     failedTitle: "One local check is unavailable",
     failedDescription: "Other checks, saved projects, reports, and readable exports remain available. Try automatic preparation again when ready.",
     nonRetryableTitle: "One local check cannot run in this app version",
-    nonRetryableDescription: "Other checks, saved projects, reports, and exports remain available. Results will mark this check as not tested; install a newer complete app version when one is available.",
+    nonRetryableDescription: "Other checks, saved projects, reports, and exports remain available. The report lists this check under what was not tested, never as a pass; install a newer complete app version when one is available.",
     scannerIssues: {
       no_runnable_authorized_targets: {
         title: "This check is unavailable in the installed version",
-        description: "Other available checks can continue and the report will name this coverage gap. Update the app when convenient, then check again.",
+        description: "No check in this version can run for this target. The report will still name this coverage gap, and your saved projects and reports are unchanged. Update the app when convenient, then check again.",
         action: "Check availability again",
       },
       egress_gateway_unavailable: {
@@ -190,11 +190,11 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     failedTitle: "一項本機檢查目前無法使用",
     failedDescription: "其他檢查、已保存專案、報告與好讀匯出仍可使用；準備好時可再試一次自動準備。",
     nonRetryableTitle: "這個程式版本有一項本機檢查無法執行",
-    nonRetryableDescription: "其他檢查、已保存的專案、報告與匯出仍可使用。結果會把這項檢查標示為「未測試」；有新版完整程式時再更新即可。",
+    nonRetryableDescription: "其他檢查、已保存的專案、報告與匯出仍可使用。報告會把這項檢查列在「沒有測到的內容」裡，不會當成通過；有新版完整程式時再更新即可。",
     scannerIssues: {
       no_runnable_authorized_targets: {
         title: "目前安裝版本無法執行這項檢查",
-        description: "其他可用檢查可以繼續，報告也會列出這個涵蓋缺口；方便時更新程式，再重新檢查。",
+        description: "這個版本沒有任何檢查能處理這個目標。報告仍會列出這個涵蓋缺口，你已保存的專案與報告也不會變更。方便時更新程式，再重新檢查。",
         action: "重新檢查可用性",
       },
       egress_gateway_unavailable: {
