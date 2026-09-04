@@ -16,7 +16,7 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-maester",
-    "tag": "2.0.0-2",
+    "tag": "2.0.0-3",
     "digest": null
   },
   "publication": null,
@@ -88,7 +88,7 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/maester/Dockerfile",
-    "sha256": "sha256:ce5cf3e8bac78fb720de42315e377861c9571f8e49da3ab0c8e3c2daa299bc2a",
+    "sha256": "sha256:f29b3f2be0c49ce48390527d280ef1134b26aaf22b878895e96891a3d7c7b5c8",
     "reason": null
   },
   "wrapper": {
@@ -136,6 +136,6 @@
     "source_offer_path": null
   },
   "blockers": [
-    "Publish and independently verify the wrapper-hardened 2.0.0-2 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence."
+    "Publish and independently verify the wrapper-hardened 2.0.0-3 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence."
   ]
 }

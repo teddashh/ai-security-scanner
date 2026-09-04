@@ -211,7 +211,7 @@ that the smoke files came from that workflow run.
 
 ### Staged Microsoft 365 wrapper publications
 
-ScubaGear `1.8.0-2` and Maester `2.0.0-2` are immutable build coordinates, not publication or
+ScubaGear `1.8.0-3` and Maester `2.0.0-3` are immutable build coordinates, not publication or
 runnable claims. Until each exact `.github/workflows/engine-images-m365.yml` matrix job completes
 and its evidence is independently ingested, that engine keeps a null catalog image, null plan
 digest/publication, `experimental` status, and its own explicit non-runnable blocker.

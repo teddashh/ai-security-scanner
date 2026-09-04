@@ -16,7 +16,7 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scubagear",
-    "tag": "1.8.0-2",
+    "tag": "1.8.0-3",
     "digest": null
   },
   "publication": null,
@@ -82,7 +82,7 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/scubagear/Dockerfile",
-    "sha256": "sha256:e245f439a246ba1446293fc23e249bf1c5742f3e8880f9e07e0fc88964f7fc5a",
+    "sha256": "sha256:551ef320ad30289a2451c4f18b111a7a228e319ebd1cdc8b6c5bfc7c818b245b",
     "reason": null
   },
   "wrapper": {
@@ -130,6 +130,6 @@
     "source_offer_path": null
   },
   "blockers": [
-    "Publish and independently verify the wrapper-hardened 1.8.0-2 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence."
+    "Publish and independently verify the wrapper-hardened 1.8.0-3 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence."
   ]
 }
