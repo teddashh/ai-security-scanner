@@ -8,6 +8,10 @@ import {
 } from "../lib";
 import { useI18n } from "../i18n";
 import { unavailableRunBoundReportCopy } from "../findingsReportAvailability";
+import {
+  localizedCoverageDimension,
+  localizedRequestedLimitName,
+} from "../coverageDimensionPresentation";
 import { projectVisibleFindingGroups } from "../findingGroupPresentation";
 import {
   localhostTcpBeginnerSummary,
@@ -487,34 +491,6 @@ const localizedAssetKind = (kind: string, locale: "en" | "zh-TW"): string => {
   } as Record<string, string>)[kind] ?? "掃描目標";
 };
 
-const localizedLimitName = (name: string, locale: "en" | "zh-TW"): string => {
-  if (locale === "en") return name;
-  if (name === "endpoint") return "連線端點";
-  if (name === "connection timeout") return "連線逾時限制";
-  if (name === "application payload") return "應用資料量";
-  if (name.endsWith("approved ports")) return "允許檢查的連接埠";
-  if (name.endsWith("request rate")) return "請求速率";
-  if (name.endsWith("network timeout")) return "網路逾時限制";
-  if (name.endsWith("authorized network target")) return "已確認的網路目標";
-  if (name.endsWith("execution timeout")) return "檢查逾時限制";
-  return "本輪使用的限制";
-};
-
-const localizedDimension = (dimension: string, locale: "en" | "zh-TW"): string => {
-  if (locale === "en") return dimension;
-  const normalized = dimension.toLocaleLowerCase("en");
-  if (normalized.includes("tcp reachability")) return "TCP 連線狀態";
-  if (normalized.includes("bounded connection contract")) return "受限的連線檢查";
-  if (normalized.includes("completed check-to-target coordinate")) return "完成的目標檢查";
-  if (normalized.includes("requested scan stage")) return "要求的掃描深度";
-  if (normalized.includes("requested limits")) return "要求的掃描限制";
-  if (normalized.includes("scope reduction") || normalized.includes("truncation")) return "自動縮減的範圍";
-  if (normalized.includes("target label") || normalized.includes("target type")) return "目標的歷史顯示資料";
-  if (normalized.includes("finding presentation")) return "本輪問題顯示資料";
-  if (normalized.includes("request outcome")) return "掃描結果資料一致性";
-  return "涵蓋範圍細節";
-};
-
 const localizedExpert = (expert: string, locale: "en" | "zh-TW"): string => {
   if (locale === "en") return expert;
   const normalized = expert.toLocaleLowerCase("en");
@@ -700,7 +676,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
               <summary>{text(copy.requestedLimits)}</summary>
               <ul className="detail-list">
                 {report.requested.limits.map((limit, index) => (
-                  <li key={`${limit.name}-${limit.value}-${index}`}><strong>{localizedLimitName(limit.name, locale)}</strong><span>{limit.value}</span></li>
+                  <li key={`${limit.name}-${limit.value}-${index}`}><strong>{localizedRequestedLimitName(limit.name, locale)}</strong><span>{limit.value}</span></li>
                 ))}
               </ul>
             </details>
@@ -711,7 +687,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
               <ul className="detail-list">
                 {report.requested.automaticReductions.map((reduction, index) => (
                   <li key={`${reduction.dimension}-${index}`}>
-                    <strong>{localizedDimension(reduction.dimension, locale)}</strong>
+                    <strong>{localizedCoverageDimension(reduction.dimension, locale)}</strong>
                     <span>{text(copy.reductionLine, {
                       requested: reduction.requested,
                       executed: reduction.executed,
@@ -741,7 +717,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
                   <span>{text(testedStatusCopy(check.status))}</span>
                   {check.testedDimensions.map((dimension, index) => (
                     <span key={`${dimension.dimension}-${dimension.value}-${index}`}>
-                      {localizedDimension(dimension.dimension, locale)}: {localhostTestedDimensionValue(
+                      {localizedCoverageDimension(dimension.dimension, locale)}: {localhostTestedDimensionValue(
                         engine,
                         dimension.dimension,
                         dimension.value,
@@ -785,7 +761,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
                 return (
                   <li key={`${gap.taskId ?? "request"}-${gap.dimension}-${index}`}>
                     <strong>{targets || text(copy.requestedScope)}</strong>
-                    <span>{localizedDimension(gap.dimension, locale)} · {text(gapReasonCopy(gap.kind))}</span>
+                    <span>{localizedCoverageDimension(gap.dimension, locale)} · {text(gapReasonCopy(gap.kind))}</span>
                     <span>{text(nextActionCopy(gap.nextActionCode))}</span>
                   </li>
                 );

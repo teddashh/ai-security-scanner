@@ -129,6 +129,31 @@ test("component render tests and their runner config reach the frontend lane", (
   });
 });
 
+test("backend files a frontend test reads schedule the frontend lane too", () => {
+  // `coverageDimensionPresentation.test.ts` reads the beginner report's Rust
+  // source to enumerate every coverage dimension the backend can name, and
+  // `exportRunSelection.test.ts` reads the native export command. Both are
+  // cross-boundary contracts, so the commit most likely to break them is a
+  // backend-only one -- exactly the commit that would otherwise skip the lane
+  // these tests live in while CI still reported green.
+  assert.deepEqual(classifyChangedPaths([
+    "src-tauri/src/beginner_report.rs",
+  ]), {
+    changed_path_count: 1,
+    docs_only: false,
+    frontend: true,
+    rust_core: true,
+    desktop: true,
+    engine: false,
+    framework: false,
+    release_contract: false,
+    windows_runtime: false,
+  });
+  assert.equal(classifyChangedPaths(["src-tauri/src/commands.rs"]).frontend, true);
+  // Unrelated backend files must not drag the frontend suite in with them.
+  assert.equal(classifyChangedPaths(["src-tauri/src/orchestrator.rs"]).frontend, false);
+});
+
 test("the frontend lane actually runs the component render suite", () => {
   const frontendBlock = ciWorkflow.split("\n  engine-admission:", 1)[0].split("\n  frontend:")[1];
   assert.ok(frontendBlock, "frontend job block is missing");
