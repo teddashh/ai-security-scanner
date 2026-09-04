@@ -15361,13 +15361,22 @@ mod tests {
             "the readiness marker path must be space-free to stay quote-free: {}",
             ready.display()
         );
+        // `SystemRoot` carries the canonicalised `\\?\` form, which cmd.exe
+        // cannot execute, so resolve the sleep helper to its drive-letter form.
+        let ping = system.system32.join("ping.exe");
+        let ping = ping.to_string_lossy();
+        let ping = ping.strip_prefix(r"\\?\").unwrap_or(&ping);
+        assert!(
+            !ping.contains(' '),
+            "the sleep helper path must be space-free to stay quote-free: {ping}"
+        );
         let long_args = [
             OsString::from("/D"),
             OsString::from("/Q"),
             OsString::from("/C"),
-            OsString::from(
-                r"(echo ready)>%AI_SECURITY_SCANNER_GUARD_READY% & %SystemRoot%\System32\ping.exe -n 4 127.0.0.1 >nul",
-            ),
+            OsString::from(format!(
+                "(echo ready)>%AI_SECURITY_SCANNER_GUARD_READY% & {ping} -n 4 127.0.0.1 >nul"
+            )),
         ];
         let manifest_path = fixture.manager.install_directory().join("manifest.json");
         let moved_manifest = manifest_path.with_extension("guarded-move");
@@ -15420,7 +15429,13 @@ mod tests {
             .join()
             .expect("guarded PE worker")
             .expect("guarded PE output");
-        assert!(output.status.success());
+        assert!(
+            output.status.success(),
+            "the guarded PE child exited with {:?}; stdout={:?}; stderr={:?}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
 
         drop(
             OpenOptions::new()
