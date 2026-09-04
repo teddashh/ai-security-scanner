@@ -175,7 +175,13 @@ fn normalize_bytes_with_assets_and_context(
     applicability: FrameworkApplicability,
 ) -> AdapterOutput {
     let temp = tempfile::tempdir().expect("temporary artifact root");
-    std::fs::write(temp.path().join(filename), bytes).expect("write fixture artifact");
+    let artifact_path = temp.path().join(filename);
+    // `filename` becomes the artifact's `relative_path`, so a test that cares
+    // where inside a run an artifact sits passes a nested path here.
+    if let Some(parent) = artifact_path.parent() {
+        std::fs::create_dir_all(parent).expect("artifact parent directory");
+    }
+    std::fs::write(&artifact_path, bytes).expect("write fixture artifact");
 
     let engine_registry = EngineRegistry::load_builtin().expect("valid engine catalog");
     let manifest = engine_registry
@@ -707,6 +713,48 @@ fn semgrep_lossy_rule_ids_never_gain_mapping_proof() {
                 evidence.source_rule.is_none() && evidence.result_pointer_sha256.is_some()
             })
     }));
+}
+
+#[test]
+fn wrapper_preserved_upstream_reports_are_not_normalized_a_second_time() {
+    let bytes = include_bytes!("fixtures/adapters/scubagear.json");
+
+    let wrapper_document = normalize_bytes(
+        "scubagear",
+        bytes,
+        "attempt-1/output/scubagear.json",
+        "application/json",
+        "run-m365-upstream-routing",
+    );
+    assert!(
+        wrapper_document.complete,
+        "unexpected warnings: {:?}",
+        wrapper_document.warnings
+    );
+    assert!(!wrapper_document.findings.is_empty());
+
+    // Same engine, same run, byte-identical input: only the location differs.
+    // The managed wrapper preserves the vendor's own report under
+    // `output/upstream/` as evidence, and that copy is not a second opinion to
+    // normalize. Reaching into it would misparse it, because upstream spells
+    // the rule key differently than the document the wrapper owns.
+    let preserved_upstream = normalize_bytes(
+        "scubagear",
+        bytes,
+        "attempt-1/output/upstream/scubagear.json",
+        "application/json",
+        "run-m365-upstream-routing",
+    );
+    assert!(preserved_upstream.findings.is_empty());
+    assert!(!preserved_upstream.complete);
+    assert!(
+        preserved_upstream
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("produced no raw artifacts to normalize")),
+        "unexpected warnings: {:?}",
+        preserved_upstream.warnings
+    );
 }
 
 #[test]

@@ -395,6 +395,7 @@ fn normalize_artifacts(
                 && artifact.run_id == input.scan_run_id
                 && artifact.engine_run_id == input.engine_run_id
                 && !is_runtime_stream_capture_path(&artifact.relative_path)
+                && !is_preserved_upstream_evidence_path(&artifact.relative_path)
         })
         .collect();
 
@@ -577,6 +578,34 @@ pub(crate) fn is_runtime_stream_capture_path(relative_path: &str) -> bool {
             .is_some_and(|attempt| {
                 !attempt.is_empty() && attempt.bytes().all(|byte| byte.is_ascii_digit())
             })
+}
+
+/// Whether the artifact is a raw vendor report a managed wrapper preserved as
+/// evidence rather than the normalized document the wrapper owns.
+///
+/// The Microsoft 365 wrappers write the untouched upstream report under
+/// `output/upstream/` next to their own document (`run-scubagear.ps1` and
+/// `run-maester.ps1`). Both are captured, because the raw report is what a
+/// reviewer needs in order to check the wrapper against, but only the wrapper's
+/// document uses the field names the adapters read. Normalizing the raw report
+/// too is not a second opinion, it is a misparse: upstream ScubaGear spells the
+/// key `Control ID`, so every raw control is dropped with a "lacked a rule id"
+/// warning, and a raw report whose keys happen to match can contribute a second
+/// record for a control the wrapper already reported.
+pub(crate) fn is_preserved_upstream_evidence_path(relative_path: &str) -> bool {
+    let components = Path::new(relative_path)
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    components.windows(3).any(|window| {
+        window[0].strip_prefix("attempt-").is_some_and(|attempt| {
+            !attempt.is_empty() && attempt.bytes().all(|byte| byte.is_ascii_digit())
+        }) && window[1] == "output"
+            && window[2] == "upstream"
+    })
 }
 
 fn read_bounded_artifact(
@@ -2916,6 +2945,56 @@ mod tests {
         assert!(!is_runtime_stream_capture_path(
             "case/run/engine/attempt-1/raw/result.json"
         ));
+    }
+
+    #[test]
+    fn only_wrapper_preserved_upstream_evidence_is_excluded() {
+        assert!(is_preserved_upstream_evidence_path(
+            "case/run/engine/attempt-1/output/upstream/scubagear-raw.json"
+        ));
+        assert!(is_preserved_upstream_evidence_path(
+            "case/run/engine/attempt-7/output/upstream/nested/report.json"
+        ));
+        // The wrapper's own normalized document sits beside `upstream/`, not
+        // inside it, and must still be normalized.
+        assert!(!is_preserved_upstream_evidence_path(
+            "case/run/engine/attempt-1/output/scubagear.json"
+        ));
+        assert!(!is_preserved_upstream_evidence_path(
+            "case/run/engine/attempt-1/output/upstream.json"
+        ));
+        assert!(!is_preserved_upstream_evidence_path(
+            "case/run/engine/attempt-one/output/upstream/report.json"
+        ));
+    }
+
+    #[test]
+    fn upstream_scubagear_control_key_is_not_normalized_beside_the_wrapper_document() {
+        // Upstream ScubaGear spells the identifier `Control ID`, which the
+        // adapter cannot read, so normalizing the preserved raw report emits a
+        // warning per control and contributes nothing. Guard the exclusion with
+        // the real upstream shape rather than a synthetic one.
+        let upstream = serde_json::json!({
+            "Results": [{
+                "Control ID": "MS.AAD.1.1v1",
+                "Requirement": "Legacy authentication SHALL be blocked.",
+                "Result": "Fail",
+                "Criticality": "Shall"
+            }]
+        });
+        let mut warnings = Vec::new();
+        let parsed = ParsedArtifact::Json(upstream);
+        let records = extract_scubagear(&parsed, &mut warnings);
+        assert!(
+            records.is_empty(),
+            "the upstream key must remain unreadable, otherwise this exclusion is unnecessary: {records:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("lacked a rule id")),
+            "expected the misparse this exclusion exists to prevent, got: {warnings:?}"
+        );
     }
 
     #[test]
