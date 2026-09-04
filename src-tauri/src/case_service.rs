@@ -27844,7 +27844,7 @@ mod tests {
         entry["status"] = Value::String("integrated".into());
         entry["image"] = serde_json::json!({
             "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scubagear",
-            "tag": "1.8.0-4",
+            "tag": "1.8.0-test",
             "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
             "signature_identity": null,
         });

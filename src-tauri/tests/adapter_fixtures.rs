@@ -1276,3 +1276,75 @@ fn artifact_path_escape_is_rejected_without_reading_outside_root() {
             .any(|warning| warning.contains("escaped"))
     );
 }
+
+#[test]
+fn a_result_the_tenant_disputes_is_reported_rather_than_quietly_honoured() {
+    // What the wrapper writes for a control ScubaGear failed and the tenant's own
+    // ScubaGear config marked incorrect. Upstream rewrites such a control's
+    // `Result` to a sentinel and counts it in `IncorrectResults` instead of
+    // `Failures`, so reading `Result` alone erased a real failure from the audit
+    // with neither a finding nor a counter left behind. The wrapper now takes the
+    // verdict from ScubaGear's own `OriginalResult` and leaves the sentinel in
+    // `SourceResult`, so the dispute travels with the finding.
+    let document = serde_json::json!({
+        "Engine": "ScubaGear",
+        "Diagnostics": { "passes": 0, "failures": 1, "errors": 0, "manual": 0,
+                         "omitted": 0, "disputed": 1, "normalized_results": 2 },
+        "Results": [
+            { "PolicyId": "MS.AAD.1.1v1", "Result": "Failed",
+              "SourceResult": "Incorrect result", "Criticality": "Shall",
+              "Requirement": "Block legacy authentication." },
+            { "PolicyId": "MS.AAD.2.1v1", "Result": "Failed",
+              "SourceResult": "Fail", "Criticality": "Shall",
+              "Requirement": "Risky users SHALL be blocked." }
+        ]
+    });
+    let bytes = serde_json::to_vec(&document).expect("serializable document");
+    let output = normalize_bytes(
+        "scubagear",
+        &bytes,
+        "attempt-1/output/scubagear.json",
+        "application/json",
+        "run-m365-disputed",
+    );
+
+    let tags_of = |rule: &str| {
+        output
+            .findings
+            .iter()
+            .find(|finding| {
+                finding
+                    .evidence
+                    .iter()
+                    .any(|evidence| evidence.source_rule.as_deref() == Some(rule))
+            })
+            .unwrap_or_else(|| panic!("the disputed control must still be a finding: {rule}"))
+            .tags
+            .clone()
+    };
+    let disputed = tags_of("MS.AAD.1.1v1");
+    let undisputed = tags_of("MS.AAD.2.1v1");
+    assert!(
+        disputed.iter().any(|tag| tag == "tenant-disputed"),
+        "the dispute must be visible on the finding: {disputed:?}"
+    );
+    assert!(
+        !undisputed.iter().any(|tag| tag == "tenant-disputed"),
+        "an undisputed failure must not be marked: {undisputed:?}"
+    );
+    // The control was evaluated and became a finding, so this is not a coverage
+    // shortfall and must not be reported as one.
+    assert!(
+        output.complete,
+        "a disputed control is evaluated, not unevaluated: {:?}",
+        output.warnings
+    );
+    assert!(
+        output
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("disputes the result of 1 control")),
+        "the run must say a dispute occurred: {:?}",
+        output.warnings
+    );
+}

@@ -40,8 +40,8 @@ const specs = {
   grype: { tag: "0.117.0-3", group: "local", smokeFiles: ["grype.json"] },
   kubescape: { tag: "4.0.12-3", group: "local", smokeFiles: ["kubescape.json"] },
   "kube-bench": { tag: "0.16.0-3", group: "local", smokeFiles: ["kube-bench.json"] },
-  scubagear: { tag: "1.8.0-4", group: "m365" },
-  maester: { tag: "2.0.0-4", group: "m365" },
+  scubagear: { tag: "1.8.0-5", group: "m365" },
+  maester: { tag: "2.0.0-5", group: "m365" },
   "egress-gateway": { tag: "0.1.8-1", group: "gateway" },
 };
 const workflows = {

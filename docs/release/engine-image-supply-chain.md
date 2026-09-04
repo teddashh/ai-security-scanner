@@ -234,7 +234,7 @@ those files genuinely changed, which is the only condition under which a pin may
 
 The replacements were published in run
 [33878473094](https://github.com/teddashh/ai-security-scanner/actions/runs/33878473094) from
-`7048108d4ba07bcbef583582e9349144e9c8f74d`, and are what the catalog now offers:
+`7048108d4ba07bcbef583582e9349144e9c8f74d`:
 
 | Engine | Tag | Immutable index digest |
 | --- | --- | --- |
@@ -244,6 +244,20 @@ The replacements were published in run
 Every digest above was read back from the registry anonymously rather than copied from the job log,
 and `gh attestation verify` confirms each index digest carries a SLSA v1 provenance statement
 binding it to `gitCommit 7048108d4ba07bcbef583582e9349144e9c8f74d` and to attempt 1 of that run.
+
+Those images were withdrawn from the catalog in turn. ScubaGear's wrapper decided a control's verdict
+from the report's `Result` field, and upstream rewrites that field to the sentinel `Incorrect result`
+for any control the tenant marked incorrect in its own ScubaGear configuration, keeping the real
+verdict in `OriginalResult` and counting the control in `IncorrectResults` rather than `Failures`. A
+genuine failure the audited tenant disputed therefore produced no finding and appeared in no counter
+the host discloses. The wrapper now takes the verdict from `OriginalResult`, leaves the sentinel in
+`SourceResult` so the adapter can mark the finding `tenant-disputed`, and reports the count, so
+`1.8.0-4` no longer corresponds to the reviewed source. Maester's wrapper is unchanged and its
+`run-maester.ps1` digest was deliberately not re-pinned, but the publication guard binds each version
+tag to one source commit and the workflow matrix publishes both engines together, so Maester moves to
+`2.0.0-5` alongside it. Both Dockerfile digests were re-pinned because each embeds its version label.
+
+`1.8.0-5` and `2.0.0-5` are awaiting publication and independent verification.
 
 The first attempt at that publication failed after every contract had passed, because the smoke
 step's `EXIT` trap could not remove the control directories it had deliberately made unwritable and

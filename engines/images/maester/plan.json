@@ -6,7 +6,7 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "published_managed_artifact",
+  "publish_state": "publication_in_progress",
   "source": {
     "repository": "https://github.com/maester365/maester",
     "revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
@@ -16,23 +16,10 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-maester",
-    "tag": "2.0.0-4",
-    "digest": "sha256:5d174f51b9282099921d7b6fa9706afb420287477c83fa95342e2235faeb5274"
+    "tag": "2.0.0-5",
+    "digest": null
   },
-  "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33878473094",
-    "source_revision": "7048108d4ba07bcbef583582e9349144e9c8f74d",
-    "platforms": [
-      "linux/amd64",
-      "linux/arm64"
-    ],
-    "platform_digests": {
-      "linux/amd64": "sha256:f4419bc1e9effe4ae074d04ddc7c421261ab0d73ecd106de360db6daf258a1b4",
-      "linux/arm64": "sha256:ba2224833faf0f1ef02627502f039af78041ea9bc3f36faec2dae36d5eb169b6"
-    },
-    "anonymous_pull_verified": true,
-    "evidence_artifact": "maester-image-evidence-33878473094-1"
-  },
+  "publication": null,
   "build_recipe": {
     "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
     "source_archive": {
@@ -101,7 +88,7 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/maester/Dockerfile",
-    "sha256": "sha256:6a46905b45075a277aeab7cfe1e94eec9c5697862808a60cf7ff563046f2c1b2",
+    "sha256": "sha256:969c8fd9562cef9bfa7f3df42ba767277fcfb0ff71256bdbcd6e6e0b2053eff6",
     "reason": null
   },
   "wrapper": {
@@ -148,5 +135,7 @@
     "rationale": "MIT engine and Graph authentication source plus Apache-2.0 Pester notices are embedded in the managed image.",
     "source_offer_path": null
   },
-  "blockers": []
+  "blockers": [
+    "Publish and independently verify the dispute-preserving Maester 2.0.0-5 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence."
+  ]
 }

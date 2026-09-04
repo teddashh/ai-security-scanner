@@ -128,7 +128,19 @@ try {
         $reference = ConvertTo-SafeText -Value $group.GroupReferenceURL -MaximumLength 2048
         foreach ($control in @($group.Controls)) {
             $sourceResult = ConvertTo-SafeText -Value $control.Result -MaximumLength 64
-            $result = switch -Regex ($sourceResult) {
+            # A control the tenant marked incorrect in its own ScubaGear config
+            # arrives as the sentinel 'Incorrect result'. ScubaGear's actual
+            # determination survives in OriginalResult, and the control is counted
+            # in IncorrectResults instead of Failures, so it reaches neither the
+            # findings nor any counter the host discloses (CreateReport.psm1:331,
+            # :342, :348). Judging on Result alone therefore lets the audited
+            # tenant delete a real failure from its own audit without a trace.
+            # Judge on ScubaGear's verdict and leave the dispute in SourceResult.
+            $verdict = $sourceResult
+            if ($verdict -eq 'Incorrect result') {
+                $verdict = ConvertTo-SafeText -Value $control.OriginalResult -MaximumLength 64
+            }
+            $result = switch -Regex ($verdict) {
                 '^Pass$' { 'Pass'; break }
                 '^(Fail|Warning)$' { 'Failed'; break }
                 default { $null }
@@ -183,6 +195,7 @@ try {
             errors = [int]$summary.Errors
             manual = [int]$summary.Manual
             omitted = [int]$summary.Omits
+            disputed = [int]$summary.IncorrectResults
             normalized_results = $normalized.Count
         }
         Results = @($normalized)

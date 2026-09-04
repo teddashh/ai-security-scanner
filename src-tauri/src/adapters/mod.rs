@@ -457,6 +457,11 @@ fn normalize_artifacts(
                 output.complete = false;
             }
         }
+        // A disputed control was evaluated and still becomes a finding, so this
+        // discloses without touching `complete`.
+        if let Some(disputed) = tenant_disputed_controls(adapter.profile, &parsed) {
+            push_warning(&mut output.warnings, disputed);
+        }
         if records.len() >= MAX_RECORDS {
             output.complete = false;
             push_warning(
@@ -1495,6 +1500,33 @@ fn unevaluated_controls(profile: Profile, parsed: &ParsedArtifact) -> Option<Une
     })
 }
 
+/// Controls whose result the audited tenant's own configuration declares wrong.
+///
+/// ScubaGear rewrites such a control's `Result` to the sentinel `Incorrect
+/// result`, keeps its real determination in `OriginalResult`, and counts it in
+/// `IncorrectResults` rather than `Failures` (CreateReport.psm1:331, :342, :348).
+/// A tenant could therefore erase a genuine failure from its own audit and leave
+/// no finding and no counter behind. The wrapper now judges these on ScubaGear's
+/// verdict, so they are not a coverage gap and must not be reported as one — but
+/// the dispute is still material to whoever reads the run, so it is said plainly
+/// here and marked on each affected finding by `extract_m365`.
+fn tenant_disputed_controls(profile: Profile, parsed: &ParsedArtifact) -> Option<String> {
+    if !matches!(profile, Profile::ScubaGear) {
+        return None;
+    }
+    let ParsedArtifact::Json(root) = parsed else {
+        return None;
+    };
+    let disputed = root
+        .pointer("/Diagnostics/disputed")
+        .and_then(Value::as_u64)
+        .filter(|count| *count > 0)?;
+    let controls = if disputed == 1 { "control" } else { "controls" };
+    Some(format!(
+        "the tenant's ScubaGear configuration disputes the result of {disputed} {controls}; they are reported on ScubaGear's own determination and tagged tenant-disputed rather than suppressed"
+    ))
+}
+
 fn extract_m365(
     parsed: &ParsedArtifact,
     warnings: &mut Vec<String>,
@@ -1578,11 +1610,21 @@ fn extract_m365(
             continue;
         }
         let source_rating = string_any(object, source_rating_keys);
-        let source_rating_tags = source_rating
+        let mut tags = source_rating
             .as_deref()
             .filter(|rating| !rating.is_empty())
             .map(|rating| vec![format!("{source_rating_tag}:{}", safe_tag(rating))])
             .unwrap_or_default();
+        // The wrapper leaves the upstream status in `SourceResult` and judges the
+        // verdict elsewhere when the tenant disputed the result. Carrying the
+        // dispute onto the finding is the difference between reporting it and
+        // quietly honouring it; the run-level note alone would not say which
+        // control was disputed.
+        if string_any(object, &["SourceResult"])
+            .is_some_and(|source| source.eq_ignore_ascii_case("incorrect result"))
+        {
+            tags.push("tenant-disputed".into());
+        }
         records.push(record!(
             pointer,
             rule_id.clone(),
@@ -1595,7 +1637,7 @@ fn extract_m365(
             Confidence::High,
             EvidenceKind::Configuration,
             references_from(value),
-            source_rating_tags,
+            tags,
         ));
         if records.len() >= MAX_RECORDS {
             break;
