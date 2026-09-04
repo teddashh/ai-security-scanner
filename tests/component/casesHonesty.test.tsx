@@ -301,3 +301,43 @@ test("work interrupted by a restart is counted and does not claim it will resume
   expect(interrupted).toContain("Checks paused when the app restarted: 2");
   expect(interrupted).toContain("will not reconnect automatically");
 });
+
+test("a run that failed is offered as a baseline without being called completed", () => {
+  // `terminalRuns` deliberately admits failed and cancelled runs: comparing
+  // against one is legitimate, and the backend records the resulting comparison
+  // as incomplete. What is not legitimate is the label. The picker used to be
+  // headed "Completed baseline run", so a user choosing the only run they had
+  // was told it completed while its own option said Failed. The Traditional
+  // Chinese label has always said 已結束 -- finished, not succeeded.
+  const failedRun = run({ id: "run-failed", status: "failed", progress: 30 });
+  const { container } = renderCases({ runs: [failedRun], latestRun: failedRun });
+
+  const picker = Array.from(container.querySelectorAll<HTMLLabelElement>("label.field")).find(
+    (label) => label.querySelector("select") && label.textContent?.includes("baseline"),
+  );
+  expect(picker).toBeTruthy();
+  expect(picker!.querySelector("span")?.textContent).toBe("Finished baseline run");
+  expect(picker!.textContent).not.toContain("Completed baseline run");
+  expect(picker!.querySelector("small")?.textContent).toBe("Choose a finished run.");
+
+  // The run's real state is still shown, so the offer is not silent about it.
+  const option = picker!.querySelector("option");
+  expect(option?.textContent).toContain("Failed");
+});
+
+test("a page with no case selected reports no counts at all", () => {
+  // `assetCount` and `findingCount` default to 0 when no workspace is loaded.
+  // Rendering "Problems found: 0" then states a result for a scan that has not
+  // happened, which on first launch is the most reassuring possible lie.
+  const withoutCase = renderCases({ selectedCase: undefined, cases: [] });
+  const labels = (root: HTMLElement) =>
+    Array.from(root.querySelectorAll<HTMLElement>(".metric-card__label")).map((node) => node.textContent);
+
+  expect(labels(withoutCase.container)).not.toContain("Problems found");
+  expect(labels(withoutCase.container)).not.toContain("Systems found");
+
+  // With a case, the same counts are shown -- so this is a gate, not a removal.
+  const withCase = renderCases({ assetCount: 0, findingCount: 0 });
+  expect(labels(withCase.container)).toContain("Problems found");
+  expect(labels(withCase.container)).toContain("Systems found");
+});

@@ -259,9 +259,9 @@ const pageCopy = {
     zhTW: "選擇修復前的掃描；我們會再次執行相同檢查，直接顯示前後差異。",
   },
   viewDifference: { en: "View differences", zhTW: "查看差異" },
-  baseline: { en: "Completed baseline run", zhTW: "已結束的基準掃描" },
+  baseline: { en: "Finished baseline run", zhTW: "已結束的基準掃描" },
   baselineSelected: { en: "This earlier scan is ready for comparison.", zhTW: "已選好先前掃描，可以開始比較。" },
-  baselineChoose: { en: "Choose a completed run.", zhTW: "請選擇一個已結束的掃描。" },
+  baselineChoose: { en: "Choose a finished run.", zhTW: "請選擇一個已結束的掃描。" },
   activeRun: { en: "{label} is still active. Resume or cancel it first.", zhTW: "{label} 尚未結束，請先續跑或取消。" },
   verificationOutcome: {
     en: "When the new scan finishes, the case will show resolved, still present, new, and unverifiable results.",
@@ -1264,18 +1264,22 @@ export function CasesPage({
         </section>
       )}
 
-      <section className="metrics-grid page-outcome-metrics" aria-label={text(pageCopy.summaryAria)}>
-        <MetricCard label={text(pageCopy.assetsMetric)} value={formatNumber(assetCount)} detail={text(pageCopy.assetsMetricHelp)} icon="database" />
-        <MetricCard label={text(pageCopy.findingsMetric)} value={formatNumber(findingCount)} detail={text(pageCopy.findingsMetricHelp)} icon="findings" tone={findingCount ? "danger" : "default"} />
-      </section>
-
-      <details className="page-technical-details page-technical-details--guide">
-        <summary>{text(pageCopy.scanDiagnostics)}</summary>
-        <section className="metrics-grid page-diagnostic-metrics">
-          <MetricCard label={text(pageCopy.unknownMetric)} value={formatNumber(unknownSourceCount)} detail={text(pageCopy.unknownMetricHelp)} icon="warning" tone={unknownSourceCount ? "warning" : "default"} />
-          <MetricCard label={text(pageCopy.incompleteMetric)} value={formatNumber(incompleteEngineCount)} detail={text(pageCopy.incompleteMetricHelp, { count: formatNumber(connectedNoAssetSourceCount) })} icon="progress" tone={incompleteEngineCount ? "warning" : "default"} />
+      {selectedCase && (
+        <>
+        <section className="metrics-grid page-outcome-metrics" aria-label={text(pageCopy.summaryAria)}>
+          <MetricCard label={text(pageCopy.assetsMetric)} value={formatNumber(assetCount)} detail={text(pageCopy.assetsMetricHelp)} icon="database" />
+          <MetricCard label={text(pageCopy.findingsMetric)} value={formatNumber(findingCount)} detail={text(pageCopy.findingsMetricHelp)} icon="findings" tone={findingCount ? "danger" : "default"} />
         </section>
-      </details>
+
+        <details className="page-technical-details page-technical-details--guide">
+          <summary>{text(pageCopy.scanDiagnostics)}</summary>
+          <section className="metrics-grid page-diagnostic-metrics">
+            <MetricCard label={text(pageCopy.unknownMetric)} value={formatNumber(unknownSourceCount)} detail={text(pageCopy.unknownMetricHelp)} icon="warning" tone={unknownSourceCount ? "warning" : "default"} />
+            <MetricCard label={text(pageCopy.incompleteMetric)} value={formatNumber(incompleteEngineCount)} detail={text(pageCopy.incompleteMetricHelp, { count: formatNumber(connectedNoAssetSourceCount) })} icon="progress" tone={incompleteEngineCount ? "warning" : "default"} />
+          </section>
+        </details>
+        </>
+      )}
 
       <section className="section-block">
         <div className="section-heading section-heading--row">
