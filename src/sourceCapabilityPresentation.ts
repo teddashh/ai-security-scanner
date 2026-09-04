@@ -12,7 +12,7 @@ import type {
 } from "./types";
 
 export const SOURCE_CAPABILITY_SCHEMA_VERSION = "1.0.0" as const;
-export const SOURCE_CAPABILITY_DEFINITION_VERSION = "2026-09-03.1";
+export const SOURCE_CAPABILITY_DEFINITION_VERSION = "2026-09-04.1";
 
 interface EngineDefinition {
   id: string;
@@ -218,8 +218,8 @@ const definitions: Record<SourceCapabilityProvider, readonly CellDefinition[]> =
         { id: "maester", name: "Maester", profile: "fixed Graph-only Entra test profile" },
       ],
       limitation: {
-        en: "Only the fixed Entra profiles are planned. This becomes partial only when at least one pinned engine is runnable in this product.",
-        zhTW: "只規劃固定 Entra 設定檔；至少一個固定版本引擎可在本產品執行後，才會顯示為部分支援。",
+        en: "Only the fixed Entra profiles are covered: a commercial AAD-only ScubaGear baseline and a Graph-only Maester test profile. No other Microsoft 365 service is checked.",
+        zhTW: "只涵蓋固定的 Entra 設定檔：僅商業版 AAD 的 ScubaGear 基準，以及僅使用 Graph 的 Maester 測試設定檔。其他 Microsoft 365 服務都不檢查。",
       },
     },
     unavailable("network_exposure", "No released Microsoft 365 network-exposure profile is installed.", "目前產品沒有已發布的 Microsoft 365 網路暴露檢查設定檔。"),
@@ -233,8 +233,8 @@ const definitions: Record<SourceCapabilityProvider, readonly CellDefinition[]> =
         { id: "maester", name: "Maester", profile: "fixed Graph-only Entra test profile" },
       ],
       limitation: {
-        en: "Only fixed Entra configuration checks are planned; excluded tests and other Microsoft 365 services remain unavailable.",
-        zhTW: "只規劃固定 Entra 設定檢查；排除的測試與其他 Microsoft 365 服務仍不可用。",
+        en: "Only fixed Entra configuration checks are covered; excluded tests and other Microsoft 365 services remain unavailable.",
+        zhTW: "只涵蓋固定的 Entra 設定檢查；排除的測試與其他 Microsoft 365 服務仍不可用。",
       },
     },
   ],

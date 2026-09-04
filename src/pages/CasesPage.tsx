@@ -86,7 +86,7 @@ const pageCopy = {
   caseName: { en: "Scan project name", zhTW: "掃描專案名稱" },
   caseNamePlaceholder: { en: "Example: 2026 first security check", zhTW: "例如：2026 年首次安全健檢" },
   organizationName: { en: "Company or team name (optional)", zhTW: "公司或團隊名稱（選填）" },
-  organizationPlaceholder: { en: "You can add this later", zhTW: "之後再補也可以" },
+  organizationPlaceholder: { en: "Optional, and fixed once the project is created", zhTW: "選填，專案建立後就不能修改" },
   selectedGoal: { en: "What are you checking?", zhTW: "這次要檢查什麼？" },
   aiGeneratedQuestion: {
     en: "Did AI generate or substantially change any code in this project?",

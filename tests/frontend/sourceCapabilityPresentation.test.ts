@@ -228,3 +228,63 @@ test("contradictory compatibility data fails soft to unknown", () => {
   assert.equal(view.cells[1]?.state, "unknown");
   assert.equal(view.cells[1]?.engines[0]?.availability, "unknown");
 });
+
+test("a capability the product actually ships is not still described as planned", () => {
+  // Both Microsoft 365 engines were unpublished when this matrix was written,
+  // so their cells read "Only the fixed Entra profiles are planned. This
+  // becomes partial only when at least one pinned engine is runnable in this
+  // product." Both are now published at immutable digests, so once the runtime
+  // reports them ready the cell state resolves to "partial" while the sentence
+  // beside it still says the capability has not been reached. The state and the
+  // prose contradict each other, and the prose understates what ships.
+  const readyM365 = [
+    manifest("scubagear", ["m365"], { status: "ready", runnable: true }),
+    manifest("maester", ["m365"], { status: "ready", runnable: true }),
+  ];
+  const view = projectSourceCapabilityView({
+    provider: "microsoft365",
+    source: sourceByProvider.microsoft365,
+    manifests: readyM365,
+  });
+
+  const reached = view.cells.filter((cell) => cell.state === "partial" || cell.state === "supported");
+  assert.ok(reached.length >= 2, `expected the M365 engines to reach a state, saw ${JSON.stringify(view.cells.map((cell) => cell.state))}`);
+
+  for (const cell of reached) {
+    for (const locale of ["en", "zhTW"] as const) {
+      const limitation = cell.limitation[locale];
+      assert.doesNotMatch(
+        limitation,
+        /\bplanned\b|becomes partial only when|規劃|才會顯示為/u,
+        `${cell.dimension} (${locale}) reports state "${cell.state}" while its limitation calls the capability future: ${limitation}`,
+      );
+    }
+  }
+});
+
+test("a limitation still says what is out of scope rather than going silent", () => {
+  // The mirror of the test above: replacing the stale sentence with nothing
+  // would satisfy it while removing the disclosure entirely.
+  const readyM365 = [
+    manifest("scubagear", ["m365"], { status: "ready", runnable: true }),
+    manifest("maester", ["m365"], { status: "ready", runnable: true }),
+  ];
+  const view = projectSourceCapabilityView({
+    provider: "microsoft365",
+    source: sourceByProvider.microsoft365,
+    manifests: readyM365,
+  });
+
+  for (const cell of view.cells) {
+    for (const locale of ["en", "zhTW"] as const) {
+      assert.ok(
+        cell.limitation[locale].trim().length > 0,
+        `${cell.dimension} (${locale}) states no limit at all`,
+      );
+    }
+  }
+  const identity = view.cells.find((cell) => cell.dimension === "identity_and_access")!;
+  assert.match(identity.limitation.en, /Only the fixed Entra profiles/u);
+  assert.match(identity.limitation.en, /No other Microsoft 365 service is checked/u);
+  assert.match(identity.limitation.zhTW, /其他 Microsoft 365 服務都不檢查/u);
+});

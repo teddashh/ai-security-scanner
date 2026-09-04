@@ -341,3 +341,33 @@ test("a page with no case selected reports no counts at all", () => {
   expect(labels(withCase.container)).toContain("Problems found");
   expect(labels(withCase.container)).toContain("Systems found");
 });
+
+test("the optional organization field does not promise an edit the app cannot make", () => {
+  // There is no case-update path: `commands.rs` exposes create, select,
+  // archive and delete only, and `CasesPageProps` has no update callback. The
+  // placeholder used to read "You can add this later", which is an offer the
+  // product cannot honour -- the value can only be set at creation.
+  // The create button only opens the form once a use case has been chosen;
+  // without one it routes back to the start page instead.
+  const { container } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "deployed_website",
+    selectionKey: 1,
+  });
+
+  const openForm = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+    (button) => button.textContent?.includes("Start a new scan"),
+  );
+  expect(openForm).toBeTruthy();
+  fireEvent.click(openForm!);
+  expect(container.querySelector(".create-case-panel")).not.toBeNull();
+
+  const organization = Array.from(container.querySelectorAll<HTMLInputElement>("input")).find(
+    (input) => input.placeholder.length > 0
+      && input.placeholder !== "Example: 2026 first security check",
+  );
+  expect(organization).toBeTruthy();
+  expect(organization!.placeholder).not.toContain("later");
+  expect(organization!.placeholder).toBe("Optional, and fixed once the project is created");
+});
