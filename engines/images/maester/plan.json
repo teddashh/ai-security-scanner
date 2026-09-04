@@ -6,7 +6,7 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "publication_in_progress",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/maester365/maester",
     "revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
@@ -17,9 +17,22 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-maester",
     "tag": "2.0.0-3",
-    "digest": null
+    "digest": "sha256:cf6a195455bc4d647192da928df7da621fb088b3385163323cd218fcbef7ed9e"
   },
-  "publication": null,
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33846866230",
+    "source_revision": "efd5e7827796eccf4595c9356d8444bac6e929a8",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:03c7a5e10b32a9bdce1f4a89fcce8d7d7973b2d45b5d206d410901d6fe3341b4",
+      "linux/arm64": "sha256:5117fda73a5f1a0bc066041a849735d2d80ae9772311a12c064b70f2e086be0f"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "maester-image-evidence-33846866230-1"
+  },
   "build_recipe": {
     "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
     "source_archive": {
@@ -135,7 +148,5 @@
     "rationale": "MIT engine and Graph authentication source plus Apache-2.0 Pester notices are embedded in the managed image.",
     "source_offer_path": null
   },
-  "blockers": [
-    "Publish and independently verify the wrapper-hardened 2.0.0-3 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence."
-  ]
+  "blockers": []
 }

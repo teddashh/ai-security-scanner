@@ -27696,7 +27696,27 @@ mod tests {
 
     #[test]
     fn microsoft365_provider_engine_keeps_exact_tenants_in_an_unavailable_outcome() {
-        let fixture = Fixture::new();
+        // ScubaGear is published and runnable, so this outcome can no longer be
+        // reached through the shipped catalog. Block the release here instead.
+        // The property under test is that an unavailable engine still reports
+        // the exact tenants it did not scan, which must hold for any blocked
+        // release rather than only for one that happens to be unpublished
+        // today; binding it to the shipped state would silently retire the
+        // only coverage of that path the first time an engine ships.
+        let mut entries: Vec<Value> =
+            serde_json::from_str(include_str!("../../engines/catalog.json")).unwrap();
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry["id"] == "scubagear")
+            .expect("scubagear catalog entry");
+        entry["compatibility"]["runnable"] = Value::Bool(false);
+        entry["compatibility"]["blocked_by"] = Value::Array(vec![Value::String(
+            "The wrapper-hardened image is withheld for this test.".into(),
+        )]);
+        let fixture = Fixture::with_engines(
+            EngineRegistry::load_catalog(&serde_json::to_string(&entries).unwrap())
+                .expect("a blocked engine release is a degraded catalog, not a gate"),
+        );
         let case = fixture.create();
         let service = fixture.service();
         let tenant_identifiers = [
@@ -27794,6 +27814,117 @@ mod tests {
         assert_eq!(
             unavailable.asset_ids.iter().collect::<BTreeSet<_>>(),
             tenant_asset_ids.iter().collect::<BTreeSet<_>>()
+        );
+    }
+
+    #[test]
+    fn published_microsoft365_engine_plans_its_authorized_tenant_for_execution() {
+        // The counterpart to the test above, against the shipped catalog. The
+        // published image only reaches a tenant if the catalog, the manifest,
+        // and the adapter all agree, so this is what would fail if a future
+        // change recorded a publication the product could not actually run.
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let service = fixture.service();
+        let tenant_id = "11111111-1111-4111-8111-111111111111";
+        let source = service
+            .upsert_source(
+                &case.id,
+                SourceMutation {
+                    id: None,
+                    kind: SourceKind::Microsoft365Tenant,
+                    label: "Microsoft 365 tenant".into(),
+                    status: SourceConnectionStatus::Connected,
+                    read_only: true,
+                    metadata: BTreeMap::from([(
+                        PROVIDER_RESOURCE_SCOPE_METADATA_KEY.into(),
+                        Value::String(format!("microsoft365-tenant:{tenant_id}")),
+                    )]),
+                },
+            )
+            .unwrap();
+        service
+            .reconcile_discovery_batch(
+                &case.id,
+                &DiscoveryBatch {
+                    source_id: source.id,
+                    source_kind: SourceKind::Microsoft365Tenant,
+                    connector_id: "test-m365".into(),
+                    connector_version: "1".into(),
+                    observed_at: Utc::now(),
+                    assets: vec![DiscoveredAsset {
+                        observation_key: "tenant-0".into(),
+                        kind: AssetKind::Tenant,
+                        name: "Tenant 0".into(),
+                        provider: Some("microsoft365".into()),
+                        region: None,
+                        stable_identifier: AssetIdentifier {
+                            namespace: "microsoft_tenant_id".into(),
+                            value: tenant_id.into(),
+                        },
+                        additional_identifiers: vec![],
+                        internet_exposed: None,
+                        contains_sensitive_data: None,
+                        metadata: BTreeMap::new(),
+                    }],
+                    relations: vec![],
+                    notices: vec![],
+                },
+            )
+            .unwrap();
+        let tenant_asset_ids = service
+            .show_case(&case.id)
+            .unwrap()
+            .assets
+            .into_iter()
+            .map(|asset| asset.id)
+            .collect::<Vec<_>>();
+        service
+            .approve_scopes(
+                &case.id,
+                tenant_asset_ids
+                    .iter()
+                    .map(|asset_id| ScopeApprovalRequest {
+                        asset_id: asset_id.clone(),
+                        permissions: vec![
+                            ScanPermission::InventoryRead,
+                            ScanPermission::ConfigurationRead,
+                        ],
+                        confirmed_by: "Tenant administrator".into(),
+                        expires_at: None,
+                        authorization_reference: None,
+                        notes: None,
+                        external_scope: None,
+                    })
+                    .collect(),
+            )
+            .unwrap();
+
+        let plan = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["scubagear".into()],
+                },
+            )
+            .unwrap();
+        assert!(
+            plan.not_executed.is_empty(),
+            "the published engine must not be withheld, but got: {:?}",
+            plan.not_executed
+        );
+        assert_eq!(plan.executable.len(), 1);
+        assert_eq!(plan.executable[0].manifest.id, "scubagear");
+        assert_eq!(
+            plan.executable[0]
+                .assets
+                .iter()
+                .map(|asset| asset.id.as_str())
+                .collect::<BTreeSet<_>>(),
+            tenant_asset_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>()
         );
     }
 
