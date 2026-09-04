@@ -446,6 +446,14 @@ fn normalize_artifacts(
         if output.warnings.len() > warnings_before_extract {
             output.complete = false;
         }
+        // Deliberately after the window above: a control the engine itself
+        // reported as manual, omitted or not run was normalized correctly, so
+        // it is a coverage limit to disclose, not evidence that failed to
+        // normalize. Raising it before this point would flip `complete` and
+        // leave every healthy Microsoft 365 run stuck awaiting its adapter.
+        if let Some(note) = unrepresented_control_disclosure(adapter.profile, &parsed) {
+            push_warning(&mut output.warnings, note);
+        }
         if records.len() >= MAX_RECORDS {
             output.complete = false;
             push_warning(
@@ -1403,6 +1411,63 @@ fn extract_maester(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
         &["SourceSeverity"],
         "source-rating",
     )
+}
+
+/// Controls the Microsoft 365 wrappers counted but deliberately did not turn
+/// into a normalized result, phrased for the person reading the run.
+///
+/// Both wrappers drop any control whose upstream status they do not map
+/// (`run-scubagear.ps1:126`, `run-maester.ps1:123`), which is the right call:
+/// a control awaiting manual review is not a finding. They do record what they
+/// dropped in `Diagnostics`, but nothing read it, so a tenant with twenty
+/// controls reserved for manual review and five omitted by configuration
+/// rendered as an unqualified list of findings. Report the shortfall instead of
+/// letting partial coverage read as full coverage.
+///
+/// This is a disclosure, not a normalization failure, so it must never mark the
+/// output incomplete; see the call site.
+fn unrepresented_control_disclosure(profile: Profile, parsed: &ParsedArtifact) -> Option<String> {
+    // Each entry is a `Diagnostics` counter the wrapper increments for a
+    // control it did not represent, paired with how to say it out loud.
+    let (engine, counters) = match profile {
+        Profile::ScubaGear => (
+            "ScubaGear",
+            [
+                ("manual", "reserved for manual review"),
+                ("omitted", "omitted by configuration"),
+                ("errors", "failed to evaluate"),
+            ]
+            .as_slice(),
+        ),
+        Profile::Maester => (
+            "Maester",
+            [
+                ("skipped", "skipped"),
+                ("not_run", "not run"),
+                ("errors", "failed to evaluate"),
+            ]
+            .as_slice(),
+        ),
+        _ => return None,
+    };
+    let ParsedArtifact::Json(root) = parsed else {
+        return None;
+    };
+    let diagnostics = root.get("Diagnostics")?.as_object()?;
+    let unrepresented = counters
+        .iter()
+        .filter_map(|(key, description)| {
+            let count = diagnostics.get(*key)?.as_u64().filter(|count| *count > 0)?;
+            Some(format!("{count} {description}"))
+        })
+        .collect::<Vec<_>>();
+    if unrepresented.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{engine} did not evaluate every control in scope ({}); those controls are absent from findings and this run does not establish their state",
+        unrepresented.join(", ")
+    ))
 }
 
 fn extract_m365(
@@ -2995,6 +3060,44 @@ mod tests {
                 .any(|warning| warning.contains("lacked a rule id")),
             "expected the misparse this exclusion exists to prevent, got: {warnings:?}"
         );
+    }
+
+    #[test]
+    fn unevaluated_microsoft365_controls_are_disclosed_with_the_wrappers_own_counts() {
+        let scubagear = ParsedArtifact::Json(serde_json::json!({
+            "Diagnostics": { "passes": 30, "failures": 2, "warnings": 0, "errors": 1,
+                             "manual": 20, "omitted": 5, "normalized_results": 32 }
+        }));
+        let note = unrepresented_control_disclosure(Profile::ScubaGear, &scubagear)
+            .expect("a run with manual, omitted and errored controls discloses all three");
+        assert!(note.contains("20 reserved for manual review"), "{note}");
+        assert!(note.contains("5 omitted by configuration"), "{note}");
+        assert!(note.contains("1 failed to evaluate"), "{note}");
+        // Passing controls are evaluated, so they are not a coverage shortfall.
+        assert!(!note.contains("30"), "{note}");
+
+        let maester = ParsedArtifact::Json(serde_json::json!({
+            "Diagnostics": { "passes": 8, "failures": 1, "investigate": 0, "errors": 0,
+                             "skipped": 3, "not_run": 0, "total": 12, "normalized_results": 9 }
+        }));
+        let note = unrepresented_control_disclosure(Profile::Maester, &maester)
+            .expect("skipped tests are a coverage shortfall");
+        assert!(note.contains("3 skipped"), "{note}");
+        assert!(!note.contains("not run"), "{note}");
+    }
+
+    #[test]
+    fn a_microsoft365_run_that_evaluated_everything_is_not_qualified() {
+        let complete = ParsedArtifact::Json(serde_json::json!({
+            "Diagnostics": { "passes": 30, "failures": 2, "warnings": 0, "errors": 0,
+                             "manual": 0, "omitted": 0, "normalized_results": 32 }
+        }));
+        assert!(unrepresented_control_disclosure(Profile::ScubaGear, &complete).is_none());
+        // Upstream's own report has no wrapper accounting to read.
+        let upstream = ParsedArtifact::Json(serde_json::json!({ "Results": [] }));
+        assert!(unrepresented_control_disclosure(Profile::ScubaGear, &upstream).is_none());
+        // The disclosure is specific to the wrappers that produce these counts.
+        assert!(unrepresented_control_disclosure(Profile::Semgrep, &complete).is_none());
     }
 
     #[test]

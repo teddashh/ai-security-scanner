@@ -758,6 +758,42 @@ fn wrapper_preserved_upstream_reports_are_not_normalized_a_second_time() {
 }
 
 #[test]
+fn disclosing_unevaluated_controls_does_not_mark_the_run_incomplete() {
+    // A shortfall the engine itself reported is a coverage limit, not evidence
+    // that failed to normalize. If this disclosure ever flips `complete`, every
+    // healthy tenant scan stops reaching ExecutionStage::Completed and sits in
+    // CapturedAwaitingAdapter instead (orchestrator.rs:881).
+    let document = serde_json::json!({
+        "Diagnostics": { "passes": 1, "failures": 1, "errors": 0,
+                         "manual": 20, "omitted": 5, "normalized_results": 2 },
+        "Results": [{ "PolicyId": "MS.AAD.1.1v1", "Result": "Failed",
+                      "Criticality": "Shall", "Requirement": "Block legacy authentication." }]
+    });
+    let bytes = serde_json::to_vec(&document).expect("serializable document");
+    let output = normalize_bytes(
+        "scubagear",
+        &bytes,
+        "attempt-1/output/scubagear.json",
+        "application/json",
+        "run-m365-coverage",
+    );
+    assert!(
+        output.complete,
+        "a disclosed coverage limit must not read as a normalization failure: {:?}",
+        output.warnings
+    );
+    assert_eq!(output.findings.len(), 1);
+    assert!(
+        output
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("20 reserved for manual review")),
+        "the disclosure must reach the run: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
 fn versioned_control_references_are_allowlisted_relationships_not_assurance_claims() {
     let mapped_engines = [
         "steampipe",
