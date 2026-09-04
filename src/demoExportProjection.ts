@@ -38,6 +38,26 @@ export interface DemoSelectedRunFinding {
   tags?: string[];
 }
 
+/**
+ * The exact string a demo download is stamped with. A demo file carries real
+ * finding titles, severities and asset names, so nothing in its body
+ * distinguishes it from an assessment; this marker is what does. It is the
+ * first key in the written JSON so it is the first thing a reader sees.
+ */
+export const DEMO_EXPORT_PROVENANCE = "DEMO_ONLY_NOT_A_SCAN" as const;
+
+export interface DemoExportPayload {
+  provenance: typeof DEMO_EXPORT_PROVENANCE;
+  warning: string;
+  format: "selected_run_json";
+  case: CaseWorkspace["case"];
+  options: {
+    locale: ExportCaseInput["locale"];
+    includeRawEvidence: false;
+    redactSensitiveValues: false;
+  };
+}
+
 export interface DemoSelectedRunProjection {
   schemaVersion: "1.0.0";
   scope: "selected_run_only";
@@ -124,3 +144,31 @@ export const projectDemoSelectedRun = (
     },
   };
 };
+
+/**
+ * Assemble the exact object written to a demo download.
+ *
+ * The stamp is written first so it leads the serialized file. That position is
+ * only safe while the projection spread below carries no `provenance` or
+ * `warning` key of its own -- object spread is last-write-wins, so such a key
+ * would silently replace the stamp while leaving its position intact, and the
+ * file would read as an assessment. `demoExportProvenance.test.ts` asserts both
+ * the position and the surviving value, which is what holds that invariant.
+ */
+export const buildDemoExportPayload = (
+  workspace: ProjectionWorkspace & Pick<CaseWorkspace, "case">,
+  input: ExportCaseInput,
+  run: ScanRun,
+  notice: string,
+): DemoExportPayload & DemoSelectedRunProjection => ({
+  provenance: DEMO_EXPORT_PROVENANCE,
+  warning: notice,
+  format: "selected_run_json",
+  case: workspace.case,
+  ...projectDemoSelectedRun(workspace, run),
+  options: {
+    locale: input.locale,
+    includeRawEvidence: false,
+    redactSensitiveValues: false,
+  },
+});

@@ -218,6 +218,7 @@ test("a matching run id without a matching selected engine run still fails close
 
 test("the demo download and preview are wired to the same selected-run projection", () => {
   const scanner = readFileSync(new URL("../../src/services/scanner.ts", import.meta.url), "utf8");
+  const projection = readFileSync(new URL("../../src/demoExportProjection.ts", import.meta.url), "utf8");
   const previewStart = scanner.indexOf("async previewExport");
   const previewEnd = scanner.indexOf("async exportCase", previewStart);
   const downloadStart = scanner.indexOf("const downloadDemoExport");
@@ -226,8 +227,12 @@ test("the demo download and preview are wired to the same selected-run projectio
   const download = scanner.slice(downloadStart, downloadEnd);
 
   assert.match(preview, /const projection = projectDemoSelectedRun\(workspace, run\)/u);
-  assert.match(download, /const projection = projectDemoSelectedRun\(workspace, run\)/u);
-  assert.match(download, /\.\.\.projection/u);
+  // The download builds nothing itself; it delegates to the payload builder,
+  // which reaches the same projection. `demoExportProvenance.test.ts` asserts
+  // behaviourally that the resulting file carries only the selected run.
+  assert.match(download, /buildDemoExportPayload\(workspace, input, run, getDemoNotice\(\)\)/u);
+  assert.match(projection, /export const buildDemoExportPayload/u);
+  assert.match(projection, /\.\.\.projectDemoSelectedRun\(workspace, run\)/u);
   assert.doesNotMatch(
     download,
     /coverage: workspace\.coverage|assets: workspace\.assets|findings: workspace\.findings|verification: workspace\.verification/u,

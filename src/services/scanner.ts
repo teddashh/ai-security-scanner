@@ -55,6 +55,7 @@ import type {
 import { buildNativeExportCaseArguments } from "../exportRequest";
 import { findRequestedExportRun } from "../exportRunSelection";
 import {
+  buildDemoExportPayload,
   normalizeDemoExportInput,
   projectDemoSelectedRun,
 } from "../demoExportProjection";
@@ -1137,19 +1138,7 @@ const downloadDemoExport = (
   input: ExportCaseInput,
   run: CaseWorkspace["runs"][number],
 ): void => {
-  const projection = projectDemoSelectedRun(workspace, run);
-  const demoPayload = {
-    provenance: "DEMO_ONLY_NOT_A_SCAN",
-    warning: getDemoNotice(),
-    format: "selected_run_json",
-    case: workspace.case,
-    ...projection,
-    options: {
-      locale: input.locale,
-      includeRawEvidence: false,
-      redactSensitiveValues: false,
-    },
-  };
+  const demoPayload = buildDemoExportPayload(workspace, input, run, getDemoNotice());
   const blob = new Blob([JSON.stringify(demoPayload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
