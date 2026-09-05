@@ -5,7 +5,7 @@
 //! data never invents a finding and only affects wording when an affected asset
 //! independently carries the matching sensitivity or exposure attribute.
 
-use crate::domain::{AssessmentCase, Asset, DataClass, Finding, SourceKind};
+use crate::domain::{AssessmentCase, Asset, ContextFactor, DataClass, Finding, SourceKind};
 use std::collections::BTreeSet;
 
 const CONTEXT_VERSION_TAG: &str = "context-priority:v1";
@@ -42,12 +42,23 @@ pub fn apply_case_context(case: &AssessmentCase, finding: &mut Finding) {
             adjustment = adjustment.saturating_add(5);
         }
         append_once(&mut finding.possible_impact, INTERNET_IMPACT);
+        // Recorded beside the prose, never instead of it. A surface that
+        // composes its own impact sentence replaces the string this appendix
+        // was appended to, and reads the code to say the same thing.
+        push_factor_once(
+            &mut finding.context_factors,
+            ContextFactor::InternetExposedAsset,
+        );
     }
     if sensitive_asset && sensitive_context {
         if push_once(&mut finding.priority_reasons, SENSITIVE_REASON) {
             adjustment = adjustment.saturating_add(5);
         }
         append_once(&mut finding.possible_impact, SENSITIVE_IMPACT);
+        push_factor_once(
+            &mut finding.context_factors,
+            ContextFactor::SensitiveDataAsset,
+        );
     }
     if adjustment > 0 {
         finding.priority = finding.priority.saturating_add(adjustment).min(100);
@@ -71,6 +82,12 @@ fn has_only_retained_non_questionnaire_sources(case: &AssessmentCase, asset: &As
 fn append_once(value: &mut String, suffix: &str) {
     if !value.contains(suffix.trim()) {
         value.push_str(suffix);
+    }
+}
+
+fn push_factor_once(factors: &mut Vec<ContextFactor>, factor: ContextFactor) {
+    if !factors.contains(&factor) {
+        factors.push(factor);
     }
 }
 
@@ -100,6 +117,7 @@ mod tests {
         Finding {
             family: None,
             severity_basis_code: None,
+            context_factors: Vec::new(),
             id: "finding".into(),
             case_id: case.id.clone(),
             first_seen_run_id: "run".into(),
@@ -194,11 +212,25 @@ mod tests {
         );
         assert!(finding.tags.contains(&CONTEXT_VERSION_TAG.into()));
 
+        // Every appendix above must have a code beside it. These sentences are
+        // appended to `possible_impact`, and a surface that composes its own
+        // impact sentence replaces that whole string -- so a factor carrying
+        // prose but no code is a ten-point priority rise that only an English
+        // reader is ever given a reason for.
+        assert_eq!(
+            finding.context_factors,
+            vec![
+                ContextFactor::InternetExposedAsset,
+                ContextFactor::SensitiveDataAsset
+            ]
+        );
+
         let once = finding.clone();
         apply_case_context(&case, &mut finding);
         assert_eq!(finding.priority, once.priority);
         assert_eq!(finding.priority_reasons, once.priority_reasons);
         assert_eq!(finding.possible_impact, once.possible_impact);
+        assert_eq!(finding.context_factors, once.context_factors);
     }
 
     #[test]

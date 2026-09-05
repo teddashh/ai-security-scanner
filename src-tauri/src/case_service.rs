@@ -12722,6 +12722,7 @@ fn html_report_bytes(
                     &finding.possible_impact,
                     &severity_label,
                     finding.family,
+                    &finding.context_factors,
                 ),
                 crate::finding_narrative::action_zh_hant(
                     &finding.next_step,
@@ -24249,6 +24250,7 @@ mod tests {
             // rendered from the same codes a real run would supply.
             family: Some(crate::domain::FindingFamily::Secret),
             severity_basis_code: Some(crate::domain::SeverityBasisCode::SecretPatternMatch),
+            context_factors: Vec::new(),
             id: "finding-html".into(),
             case_id: case.id.clone(),
             first_seen_run_id: run_id.clone(),
@@ -24637,6 +24639,7 @@ mod tests {
             case.findings.push(Finding {
                 family: None,
                 severity_basis_code: None,
+                context_factors: Vec::new(),
                 id: id.into(),
                 case_id: case.id.clone(),
                 first_seen_run_id: "run-1".into(),
@@ -28231,6 +28234,7 @@ mod tests {
         let finding = Finding {
             family: None,
             severity_basis_code: None,
+            context_factors: Vec::new(),
             id: finding_id.clone(),
             case_id: case.id.clone(),
             first_seen_run_id: "scan-1".into(),
@@ -28508,6 +28512,7 @@ mod tests {
         case.findings.push(Finding {
             family: None,
             severity_basis_code: None,
+            context_factors: Vec::new(),
             id: "finding-1".into(),
             case_id: case.id.clone(),
             first_seen_run_id: "baseline".into(),
@@ -28704,6 +28709,7 @@ mod tests {
         let observed = |run_id: &str, title: &str, evidence_id: &str, hash: &str| Finding {
             family: None,
             severity_basis_code: None,
+            context_factors: Vec::new(),
             id: format!("finding-{run_id}"),
             case_id: case_id.clone(),
             first_seen_run_id: run_id.into(),
@@ -28804,6 +28810,7 @@ mod tests {
         let finding = |run_id: &str, title: &str, evidence_id: &str, hash_byte: char| Finding {
             family: None,
             severity_basis_code: None,
+            context_factors: Vec::new(),
             id: format!("finding-{run_id}"),
             case_id: case_id.clone(),
             first_seen_run_id: run_id.into(),

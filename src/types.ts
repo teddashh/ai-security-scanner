@@ -869,6 +869,17 @@ export interface BeginnerReportFinding {
   targetAssetIds: string[];
   nextStep: string;
   recommendedExpertType: string;
+  /**
+   * The codes the three sentences above were composed from. The findings list
+   * projects its rows from this frozen report rather than from the canonical
+   * findings, so a localized surface can only rewrite those sentences if the
+   * codes travel with them. Optional because a report frozen before they
+   * existed carries prose and nothing else.
+   */
+  family?: FindingFamily;
+  severityBasisCode?: SeverityBasisCode;
+  /** Empty unless this case raised the finding's priority. */
+  contextFactors?: ContextFactor[];
   evidenceReferences: Array<{
     evidenceId: string;
     engineId: string;
@@ -1059,6 +1070,15 @@ export type FindingFamily =
   | "vulnerable_component"
   | "kubernetes";
 
+/**
+ * Why this case raised a finding's priority above the scanner's own rating.
+ *
+ * The backend appends a sentence to `possibleImpact` for each of these. A
+ * surface that composes its own impact sentence replaces that string, so it
+ * has to put them back or the reader sees a raised priority with no reason.
+ */
+export type ContextFactor = "internet_exposed_asset" | "sensitive_data_asset";
+
 /// Why this product rated a finding the engine left unrated. Absent when the
 /// rating is the engine's own.
 export type SeverityBasisCode =
@@ -1090,6 +1110,12 @@ export interface Finding {
   /** Absent on findings stored before the codes were carried. */
   family?: FindingFamily;
   severityBasisCode?: SeverityBasisCode;
+  /**
+   * Why this case raised the priority. The backend appends a sentence to
+   * `impact` for each; a composed impact sentence replaces that string, so
+   * these have to be put back or the reason disappears.
+   */
+  contextFactors?: ContextFactor[];
   expertType: string;
   severity: Severity;
   confidence: Confidence;

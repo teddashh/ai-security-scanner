@@ -245,6 +245,117 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
   assert.equal(report.nextSteps[0]?.taskId, "task-1");
 });
 
+// Exactly the keys of `severityMeta` in src/lib.ts, which every severity
+// lookup on the findings page indexes without optional chaining.
+const RENDERABLE_SEVERITIES = ["critical", "high", "medium", "low", "unknown", "info"];
+
+test("the report the findings list is built from carries severity and codes the list can read", () => {
+  // This is the path the findings list actually uses: the page projects its
+  // rows from the frozen beginner report, not from the canonical findings.
+  // The canonical mapper normalizes severity and reads both codes; this one
+  // did neither, and the raw payload type annotated this field as the
+  // TypeScript `Severity` union when the backend fills it from a Rust enum,
+  // so the compiler could not see the difference.
+  //
+  // naabu and httpx always rate Informational, which Rust serializes as
+  // "informational" -- absent from that union and from `severityMeta`.
+  const report = adaptBeginnerMasterReport({
+    schema_version: "1.1.0",
+    case_id: "case-1",
+    run_id: "run-1",
+    project_title: "Port scan",
+    state: {
+      summary: "partial",
+      lifecycle: "final",
+      last_durable_update: "2026-08-30T12:00:03Z",
+      explanation: "Partial results are available.",
+    },
+    requested: {
+      targets: [{
+        asset_id: "asset-1",
+        label: "192.0.2.10",
+        asset_kind: "ip_address",
+        label_availability: "recorded",
+        asset_kind_availability: "recorded",
+      }],
+      stage: { value: "quick_discovery", availability: "recorded", explanation: "Frozen task." },
+      limits: [],
+      requested_check_ids: ["naabu"],
+      request_outcome_code: null,
+      automatic_reductions: [],
+      reductions_availability: "recorded",
+      unavailable_dimensions: [],
+    },
+    actual: {
+      observed_from: "2026-08-30T12:00:00Z",
+      observed_until: "2026-08-30T12:00:03Z",
+      checks: [],
+      unavailable_dimensions: [],
+    },
+    coverage_gaps: [],
+    coverage_counts: {
+      tested_complete: 1,
+      tested_partial: 0,
+      failed: 0,
+      timed_out: 0,
+      cancelled: 0,
+      not_tested: 0,
+      excluded: 0,
+      truncated: 0,
+      unavailable: 0,
+    },
+    findings: [{
+      finding_id: "finding-naabu",
+      fingerprint: "fp-naabu",
+      snapshot_source: "frozen_selected_run",
+      title: "Open TCP port",
+      plain_language_risk:
+        "naabu reported this condition on the assessed asset without rating it. This product rated it informational from an open port observation, not a defect.",
+      possible_impact:
+        "If the scanner result is confirmed, an internet-reachable service may expose unintended functionality.",
+      severity: "informational",
+      confidence: "high",
+      priority: 15,
+      priority_reasons: ["Direct scanner evidence is attached and still requires human review."],
+      target_asset_ids: ["asset-1"],
+      next_step: "Have the recommended specialist (Network security engineer) review it.",
+      recommended_expert_type: "Network security engineer",
+      family: "network_exposure",
+      severity_basis_code: "open_port",
+      evidence_references: [{
+        evidence_id: "evidence-1",
+        engine_id: "naabu",
+        artifact_sha256: "a".repeat(64),
+        observed_at: "2026-08-30T12:00:03Z",
+      }],
+      framework_references: [],
+    }],
+    next_steps: [],
+    technical_details: { collapsed_by_default: true, tasks: [] },
+    framework_notice: {
+      non_certification: "Not certification.",
+      aidefend_mapping_status: "Independent mapping.",
+    },
+    data_quality_warnings: [],
+  });
+
+  const finding = report.findings[0];
+  assert.ok(finding, "the report dropped its only finding");
+
+  assert.equal(finding.severity, "info");
+  assert.ok(
+    RENDERABLE_SEVERITIES.includes(finding.severity),
+    `severityMeta has no "${finding.severity}" entry, so every row renderer reads .label of undefined`,
+  );
+
+  // Without these the zh-TW page falls back to English for the impact and
+  // action sentences -- and the summary composer takes its no-basis branch,
+  // which states that the engine rated the finding when the English it
+  // replaces says the engine did not rate it and this product did.
+  assert.equal(finding.family, "network_exposure");
+  assert.equal(finding.severityBasisCode, "open_port");
+});
+
 test("beginner report adapter preserves exact tested and untested network scope slices", () => {
   const report = adaptBeginnerMasterReport({
     schema_version: "1.0.0",

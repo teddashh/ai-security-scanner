@@ -2490,6 +2490,7 @@ mod tests {
         let mut finding = Finding {
             family: None,
             severity_basis_code: None,
+            context_factors: Vec::new(),
             id: finding_id.clone(),
             case_id: case.id.clone(),
             first_seen_run_id: "run-1".into(),
@@ -2583,6 +2584,7 @@ mod tests {
         let second_finding = Finding {
             family: None,
             severity_basis_code: None,
+            context_factors: Vec::new(),
             id: "finding-run-2".into(),
             case_id: case.id.clone(),
             first_seen_run_id: "run-2".into(),
@@ -2724,6 +2726,7 @@ mod tests {
             case.findings.push(Finding {
                 family: None,
                 severity_basis_code: None,
+                context_factors: Vec::new(),
                 id: id.into(),
                 case_id: case.id.clone(),
                 first_seen_run_id: "run-1".into(),
@@ -3080,6 +3083,7 @@ mod tests {
         case.findings.push(Finding {
             family: None,
             severity_basis_code: None,
+            context_factors: Vec::new(),
             id: finding_id.clone(),
             case_id: case.id.clone(),
             first_seen_run_id: "run-1".into(),
@@ -3292,6 +3296,7 @@ mod tests {
         case.findings.push(Finding {
             family: None,
             severity_basis_code: None,
+            context_factors: Vec::new(),
             id: "finding-1".into(),
             case_id: case.id.clone(),
             first_seen_run_id: "run-1".into(),
@@ -3610,6 +3615,7 @@ mod tests {
             observed_at: Some(time),
         });
         case.findings.push(Finding { family: None, severity_basis_code: None,
+        context_factors: Vec::new(),
             id: "finding-1".into(),
             case_id: case.id.clone(),
             first_seen_run_id: "run-1".into(),

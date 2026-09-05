@@ -7,6 +7,7 @@ import type {
   AssetType,
   BeginnerMasterReport,
   CaseExport,
+  ContextFactor,
   ExportPreview,
   ReportLocale,
   CasePhase,
@@ -354,13 +355,21 @@ export interface NativeBeginnerMasterReport {
     title: string;
     plain_language_risk: string;
     possible_impact: string;
-    severity: Severity;
+    // The backend writes this from a Rust enum whose `Informational` variant
+    // serializes as "informational", which is not a member of the TypeScript
+    // union and not a key of `severityMeta`. Typing it as `Severity` here was
+    // an assertion about the wire, not a fact, and it hid that this mapper
+    // never normalized the value the way the canonical one does.
+    severity: string;
     confidence: Confidence;
     priority: number | null;
     priority_reasons: string[];
     target_asset_ids: string[];
     next_step: string;
     recommended_expert_type: string;
+    family?: string | null;
+    severity_basis_code?: string | null;
+    context_factors?: string[] | null;
     evidence_references: Array<{
       evidence_id: string;
       engine_id: string;
@@ -466,6 +475,7 @@ interface NativeFinding {
   tags?: string[];
   family?: string | null;
   severity_basis_code?: string | null;
+  context_factors?: string[] | null;
 }
 
 interface NativeFindingWorkflowEvent {
@@ -1178,6 +1188,11 @@ const mapFindingFamily = (value: string | null | undefined): FindingFamily | und
 const mapSeverityBasisCode = (value: string | null | undefined): SeverityBasisCode | undefined =>
   SEVERITY_BASIS_CODES.find((code) => code === value);
 
+const CONTEXT_FACTORS: readonly ContextFactor[] = ["internet_exposed_asset", "sensitive_data_asset"];
+
+const mapContextFactors = (values: string[] | null | undefined): ContextFactor[] =>
+  (values ?? []).flatMap((value) => CONTEXT_FACTORS.filter((factor) => factor === value));
+
 const mapConfidence = (confidence: string): Confidence => {
   if (confidence === "confirmed") return "high";
   return (["high", "medium", "low"].includes(confidence) ? confidence : "low") as Confidence;
@@ -1714,6 +1729,7 @@ export const adaptNativeCase = (
       recommendation: finding.recommendation,
       family: mapFindingFamily(finding.family),
       severityBasisCode: mapSeverityBasisCode(finding.severity_basis_code),
+      contextFactors: mapContextFactors(finding.context_factors),
       expertType: finding.recommended_expert_type,
       severity: mapSeverity(finding.severity),
       confidence: mapConfidence(finding.confidence),
@@ -2239,8 +2255,18 @@ export const adaptBeginnerMasterReport = (
     title: finding.title,
     plainLanguageRisk: finding.plain_language_risk,
     possibleImpact: finding.possible_impact,
-    severity: finding.severity,
+    // Normalized exactly as the canonical mapper does. This report is what the
+    // findings list renders from, so an un-normalized value here reaches every
+    // `severityMeta[...]` lookup on that page.
+    severity: mapSeverity(finding.severity),
     confidence: finding.confidence,
+    // The codes the localized surfaces compose their sentences from. Dropping
+    // them left the zh-TW page on the English fallback, and left the summary
+    // composer on its no-basis branch, which credits the engine with a rating
+    // the engine did not give.
+    family: mapFindingFamily(finding.family),
+    severityBasisCode: mapSeverityBasisCode(finding.severity_basis_code),
+    contextFactors: mapContextFactors(finding.context_factors),
     priority: finding.priority ?? undefined,
     priorityReasons: [...finding.priority_reasons],
     targetAssetIds: [...finding.target_asset_ids],

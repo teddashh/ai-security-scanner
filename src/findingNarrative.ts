@@ -1,4 +1,4 @@
-import type { FindingFamily, SeverityBasisCode } from "./types";
+import type { ContextFactor, FindingFamily, SeverityBasisCode } from "./types";
 
 /**
  * Writes the sentences this product says about a finding, in the reader's
@@ -146,15 +146,43 @@ export const findingSummarySentence = (
   return `${engineName} 在受評估的資產上回報了這項狀況，但未評定嚴重程度。本產品依據${basis}，將它評為${severityLabel}。${evidence}`;
 };
 
+/**
+ * The case-specific clauses the backend appends to `possible_impact`.
+ *
+ * They are appended to the English rather than composed into it, so a surface
+ * that rewrites the impact sentence replaces the string they live in and drops
+ * them unless it puts them back. That is not a missing translation but a
+ * missing fact: the same case raised this finding's priority by up to ten
+ * points, and these are the only text saying why.
+ */
+const CONTEXT: Record<ContextFactor, string> = {
+  internet_exposed_asset:
+    "受影響的資產被標記為可從網際網路存取，且其保留的來源歸屬皆非問卷填答，這可能擴大可被觸及的攻擊面；該屬性的欄位層級來源並未保留，因此仍需人工確認。",
+  sensitive_data_asset:
+    "受影響的資產被標記為含有敏感資料，且其保留的來源歸屬皆非問卷填答，同時案件問卷另有記錄敏感資料情境。這可能提高確認暴露後的影響程度，但資料類別的欄位層級來源並未保留，且兩項記錄本身都不構成資料外洩的證明。",
+};
+
 /** "If the scanner result is confirmed, {consequence}." */
 export const findingImpactSentence = (
   locale: "en" | "zh-TW",
-  options: { englishFallback: string; severityLabel: string; family?: FindingFamily },
+  options: {
+    englishFallback: string;
+    severityLabel: string;
+    family?: FindingFamily;
+    contextFactors?: readonly ContextFactor[];
+  },
 ): string => {
   if (locale === "en") return options.englishFallback;
   const consequence = options.family ? CONSEQUENCE[options.family] : undefined;
   if (!consequence) return options.englishFallback;
-  return `若掃描結果經人工確認，${consequence}。${options.severityLabel}這個等級來自來源工具，不代表整體合規分數。`;
+  // Appended after the sentence is composed, exactly as the Rust twin does it,
+  // so the two files hold the same literal. Interpolating the clauses into the
+  // template instead would leave one side's sentence ending in a hole that the
+  // other's does not have, which is a difference the parity test can see and a
+  // reader cannot -- and a test that fires on invisible differences gets
+  // relaxed until it stops finding the visible ones.
+  const composed = `若掃描結果經人工確認，${consequence}。${options.severityLabel}這個等級來自來源工具，不代表整體合規分數。`;
+  return composed + (options.contextFactors ?? []).map((factor) => CONTEXT[factor] ?? "").join("");
 };
 
 /** "Have the recommended specialist ({expert}) review ... then plan and approve {remedy}." */

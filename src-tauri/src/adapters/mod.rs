@@ -2907,6 +2907,7 @@ fn merge_finding(
             // than showing a translated heading over an English paragraph.
             family: Some(family_for(adapter.profile)),
             severity_basis_code: severity_basis,
+            context_factors: Vec::new(),
         },
     );
 }

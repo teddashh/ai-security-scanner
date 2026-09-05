@@ -6,10 +6,10 @@
 //! instead of reconstructing it from mutable case state.
 
 use crate::domain::{
-    AssessmentCase, AssetKind, Confidence, ControlMappingProvenance, DistributionMode, EngineRun,
-    EngineRunStatus, EngineTaskKind, Finding, FindingFamily, FindingObservation, Id,
-    LocalhostTcpObservation, LocalhostTcpOutcome, ScanRequestOutcome, ScanRequestOutcomeCode,
-    ScanRun, Severity, SeverityBasisCode,
+    AssessmentCase, AssetKind, Confidence, ContextFactor, ControlMappingProvenance,
+    DistributionMode, EngineRun, EngineRunStatus, EngineTaskKind, Finding, FindingFamily,
+    FindingObservation, Id, LocalhostTcpObservation, LocalhostTcpOutcome, ScanRequestOutcome,
+    ScanRequestOutcomeCode, ScanRun, Severity, SeverityBasisCode,
 };
 use crate::execution_coverage::{
     CumulativeNaabuCoverage, WorkUnitOutcome, reduce_naabu_attempt_coverage,
@@ -300,6 +300,11 @@ pub struct BeginnerFinding {
     pub family: Option<FindingFamily>,
     #[serde(default)]
     pub severity_basis_code: Option<SeverityBasisCode>,
+    /// The case-specific reasons this finding's priority was raised. Carried
+    /// for the same reason as the two codes above: the surfaces that compose
+    /// their own impact sentence replace the prose these were appended to.
+    #[serde(default)]
+    pub context_factors: Vec<ContextFactor>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1804,6 +1809,9 @@ fn project_finding(
         framework_references,
         family: details.and_then(|finding| finding.family),
         severity_basis_code: details.and_then(|finding| finding.severity_basis_code),
+        context_factors: details
+            .map(|finding| finding.context_factors.clone())
+            .unwrap_or_default(),
     }
 }
 
@@ -3159,6 +3167,7 @@ mod tests {
         Finding {
             family: None,
             severity_basis_code: None,
+            context_factors: Vec::new(),
             id: id.into(),
             case_id: case.id.clone(),
             first_seen_run_id: "run-1".into(),

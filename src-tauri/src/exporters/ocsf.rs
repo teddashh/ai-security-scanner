@@ -373,6 +373,7 @@ mod tests {
         case.findings.push(Finding {
             family: None,
             severity_basis_code: None,
+            context_factors: Vec::new(),
             id: "finding-1".into(),
             case_id: case.id.clone(),
             first_seen_run_id: "run-1".into(),

@@ -16,7 +16,7 @@
 //!  - A finding with no code keeps that prose. Untranslated beats blank.
 //!  - The engine's own title is never restated in another language.
 
-use crate::domain::{FindingFamily, SeverityBasisCode};
+use crate::domain::{ContextFactor, FindingFamily, SeverityBasisCode};
 
 /// The clause completing "If the scanner result is confirmed, ...".
 fn consequence(family: FindingFamily) -> &'static str {
@@ -141,19 +141,42 @@ pub fn summary_zh_hant(
     }
 }
 
+/// The case-specific clauses `apply_case_context` appends to `possible_impact`.
+///
+/// These are appended to the English rather than composed into it, so a
+/// surface that rewrites the impact sentence replaces the string they live in
+/// and drops them unless it puts them back. That is not a missing translation
+/// but a missing fact: the same case raised this finding's priority by up to
+/// ten points, and the reasons are the only thing that says why.
+fn context_clause(factor: ContextFactor) -> &'static str {
+    match factor {
+        ContextFactor::InternetExposedAsset => {
+            "受影響的資產被標記為可從網際網路存取，且其保留的來源歸屬皆非問卷填答，這可能擴大可被觸及的攻擊面；該屬性的欄位層級來源並未保留，因此仍需人工確認。"
+        }
+        ContextFactor::SensitiveDataAsset => {
+            "受影響的資產被標記為含有敏感資料，且其保留的來源歸屬皆非問卷填答，同時案件問卷另有記錄敏感資料情境。這可能提高確認暴露後的影響程度，但資料類別的欄位層級來源並未保留，且兩項記錄本身都不構成資料外洩的證明。"
+        }
+    }
+}
+
 /// "If the scanner result is confirmed, {consequence}."
 pub fn impact_zh_hant(
     english: &str,
     severity_label: &str,
     family: Option<FindingFamily>,
+    context_factors: &[ContextFactor],
 ) -> String {
     let Some(family) = family else {
         return english.to_owned();
     };
-    format!(
+    let mut composed = format!(
         "若掃描結果經人工確認，{}。{severity_label}這個等級來自來源工具，不代表整體合規分數。",
         consequence(family)
-    )
+    );
+    for factor in context_factors {
+        composed.push_str(context_clause(*factor));
+    }
+    composed
 }
 
 /// "Have the recommended specialist (...) review ... then plan and approve ..."
@@ -178,7 +201,7 @@ mod tests {
     fn a_finding_with_no_code_keeps_the_english_rather_than_losing_the_sentence() {
         // Legacy runs stored prose and no code. Untranslated beats blank.
         assert_eq!(
-            impact_zh_hant("English impact.", "中", None),
+            impact_zh_hant("English impact.", "中", None, &[]),
             "English impact."
         );
         assert_eq!(
@@ -190,6 +213,51 @@ mod tests {
             summary_zh_hant("Some other text.", "高", None),
             "Some other text."
         );
+    }
+
+    /// The case context this product added must survive being said in Chinese.
+    ///
+    /// `apply_case_context` appends its sentences to the English
+    /// `possible_impact` and raises the priority by up to ten points. Composing
+    /// a fresh Chinese sentence replaces the string those appendices live in,
+    /// so without this the zh-Hant reader saw a finding promoted above the
+    /// scanner's own rating with the explanation removed -- while the English
+    /// reader, reading the same finding, was told exactly why.
+    #[test]
+    fn case_context_that_raised_the_priority_is_not_lost_in_translation() {
+        let english = "If the scanner result is confirmed, something may happen.";
+        let plain = impact_zh_hant(english, "高", Some(FindingFamily::CloudPosture), &[]);
+        assert!(!plain.contains("受影響的資產被標記"), "{plain}");
+
+        for (factor, expected) in [
+            (ContextFactor::InternetExposedAsset, "可從網際網路存取"),
+            (ContextFactor::SensitiveDataAsset, "含有敏感資料"),
+        ] {
+            let composed =
+                impact_zh_hant(english, "高", Some(FindingFamily::CloudPosture), &[factor]);
+            assert!(composed.contains(expected), "{factor:?} lost: {composed}");
+            assert!(
+                composed.starts_with(&plain),
+                "{factor:?} rewrote the base sentence"
+            );
+        }
+
+        // Both at once, in the order the backend recorded them, and neither
+        // swallowing the other.
+        let both = impact_zh_hant(
+            english,
+            "高",
+            Some(FindingFamily::CloudPosture),
+            &[
+                ContextFactor::InternetExposedAsset,
+                ContextFactor::SensitiveDataAsset,
+            ],
+        );
+        let internet = both
+            .find("可從網際網路存取")
+            .expect("internet clause missing");
+        let sensitive = both.find("含有敏感資料").expect("sensitive clause missing");
+        assert!(internet < sensitive, "{both}");
     }
 
     #[test]

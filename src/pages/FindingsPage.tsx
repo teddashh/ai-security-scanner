@@ -636,6 +636,14 @@ const projectReportFindings = (
       expertType: localizedExpertType(frozen.recommendedExpertType, locale),
       severity: frozen.severity,
       confidence: frozen.confidence,
+      // Taken from the frozen snapshot rather than from `current`, because
+      // these describe the three sentences this row shows and those are the
+      // frozen run's. Without them the impact and action composers fall back
+      // to English, and the summary composer takes its no-basis branch, which
+      // tells the reader the engine assigned a rating this product derived.
+      family: frozen.family,
+      severityBasisCode: frozen.severityBasisCode,
+      contextFactors: frozen.contextFactors,
       priority: frozen.priority ?? report.findings.length - index,
       priorityReasons: [...frozen.priorityReasons],
       // Workflow is intentionally current user state; scan facts above remain
@@ -1346,6 +1354,7 @@ export function FindingsPage({
                   englishFallback: finding.impact,
                   severityLabel: severityMeta[finding.severity].label,
                   family: finding.family,
+                  contextFactors: finding.contextFactors,
                 })}</p>
                 <span className="priority-card__asset">{finding.assetName}</span>
                 <span className="priority-card__action">{text(copy.reviewEvidence)} <Icon name="arrow" size={15} /></span>
@@ -1759,6 +1768,7 @@ export function FindingsPage({
                   englishFallback: selected.impact,
                   severityLabel: severityMeta[selected.severity].label,
                   family: selected.family,
+                  contextFactors: selected.contextFactors,
                 })}</p>
               </section>
 

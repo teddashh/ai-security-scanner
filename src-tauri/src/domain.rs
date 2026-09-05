@@ -1333,6 +1333,30 @@ pub struct Finding {
     pub family: Option<FindingFamily>,
     #[serde(default)]
     pub severity_basis_code: Option<SeverityBasisCode>,
+    /// Why this case raised the finding's priority above what the scanner's own
+    /// rating would give it. `apply_case_context` appends a sentence to
+    /// `possible_impact` and a reason to `priority_reasons` for each of these.
+    ///
+    /// Carried as codes because a surface that composes its own impact sentence
+    /// replaces the prose those appendices live in, and would otherwise drop
+    /// them: the reader sees a priority raised by ten points and is told
+    /// nothing about why, while a reader in the other language is told exactly
+    /// why. Empty for a legacy finding and for a case with no such context.
+    #[serde(default)]
+    pub context_factors: Vec<ContextFactor>,
+}
+
+/// A case-specific reason this product raised a finding's priority.
+///
+/// Never a scanner verdict. Each one requires the affected asset to carry the
+/// attribute independently, with all retained source attribution for that asset
+/// being non-questionnaire, so answering a questionnaire alone cannot conjure
+/// one. See `prioritization::apply_case_context`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextFactor {
+    InternetExposedAsset,
+    SensitiveDataAsset,
 }
 
 /// A reversible, user-facing collection of related canonical findings. The

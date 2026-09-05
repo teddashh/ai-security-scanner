@@ -193,3 +193,45 @@ test("each recommended specialist is named, not sorted by whether their title co
   // An unknown title still says something, and says it generally.
   assert.ok(HAN.test(localizedExpertType("Quantum risk officer", "zh-TW")));
 });
+
+test("case context that raised the priority survives being said in Chinese", () => {
+  // `apply_case_context` appends these sentences to the English impact and
+  // raises the priority by up to ten points. Composing a fresh Chinese
+  // sentence replaces the string they live in, so without putting them back
+  // the zh-TW reader sees a finding promoted above the scanner's own rating
+  // with the explanation removed -- while the English reader, on the same
+  // finding, is told exactly why. Mirrors the Rust twin's test of the same
+  // name; the parity test pins the wording, this pins the behaviour.
+  const englishFallback = "If the scanner result is confirmed, something may happen.";
+  const base = findingImpactSentence("zh-TW", {
+    englishFallback,
+    severityLabel: "高",
+    family: "cloud_posture",
+  });
+  assert.ok(!base.includes("受影響的資產被標記"), base);
+
+  for (const [factor, expected] of [
+    ["internet_exposed_asset", "可從網際網路存取"],
+    ["sensitive_data_asset", "含有敏感資料"],
+  ] as const) {
+    const composed = findingImpactSentence("zh-TW", {
+      englishFallback,
+      severityLabel: "高",
+      family: "cloud_posture",
+      contextFactors: [factor],
+    });
+    assert.ok(composed.includes(expected), `${factor} lost: ${composed}`);
+    assert.ok(composed.startsWith(base), `${factor} rewrote the base sentence`);
+  }
+
+  // English stays the backend's own prose, appendices and all.
+  assert.equal(
+    findingImpactSentence("en", {
+      englishFallback,
+      severityLabel: "High",
+      family: "cloud_posture",
+      contextFactors: ["internet_exposed_asset"],
+    }),
+    englishFallback,
+  );
+});
