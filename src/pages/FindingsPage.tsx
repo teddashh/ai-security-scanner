@@ -296,7 +296,9 @@ const copy = {
   lastRun: { en: "Last-seen run", zhTW: "末見輪次" },
   firstObserved: { en: "First observed", zhTW: "首次觀察" },
   officialReferences: { en: "Official references", zhTW: "官方參考" },
-  noReferences: { en: "No official reference link was provided.", zhTW: "沒有提供官方參考連結。" },
+  // States what this record holds, not what the scanner published. A finding
+  // whose canonical entry is gone still reaches this branch.
+  noReferences: { en: "No official reference link is recorded for this finding.", zhTW: "這項問題沒有記錄官方參考連結。" },
   viewSource: { en: "Open source document", zhTW: "查看來源文件" },
   chooseProblem: { en: "Choose a problem", zhTW: "選擇一項問題" },
   chooseProblemDescription: {
@@ -369,9 +371,15 @@ const copy = {
   testedStatusCancelled: { en: "Cancelled", zhTW: "已取消" },
   testedStatusNotTested: { en: "Not tested", zhTW: "未測試" },
   testedStatusInProgress: { en: "In progress", zhTW: "進行中" },
+  // `not_tested` is the kind the backend assigns to five different situations,
+  // including a check that saved partial work and one that is still running
+  // (beginner_report.rs:1450,1490). Naming a single cause here contradicted the
+  // gap's own dimension on the same row. The shared truth is only that no
+  // completed coverage was recorded, which is what keeps it out of the pass
+  // column; the dimension and next action carry which situation it is.
   gapNotTested: {
-    en: "This part was not tested because no compatible check completed.",
-    zhTW: "這部分沒有相容的檢查完成，因此尚未測到。",
+    en: "No completed coverage was recorded for this part, so it is not a pass.",
+    zhTW: "這部分沒有記錄到完成的涵蓋範圍，因此不算通過。",
   },
   gapFailed: {
     en: "This part was not covered because its check stopped with an error.",
@@ -400,6 +408,16 @@ const copy = {
   frameworkNotice: {
     en: "NIST, ISO 27001, and AIDEFEND references are navigation aids—not certification, compliance, endorsement, or a pass/fail result.",
     zhTW: "NIST、ISO 27001 與 AIDEFEND 僅供對照，不代表認證、合規、背書或通過／不通過。",
+  },
+  // The backend writes this as a second, separate sentence
+  // (`FrameworkNotice::aidefend_mapping_status`) because the three catalogues do
+  // not have the same standing: NIST and ISO are official, AIDEFEND is not. The
+  // notice above lists all three in one breath, which reads as though they do.
+  // Kept as frontend copy rather than rendering the backend field, which is an
+  // English-only constant.
+  aidefendMappingNotice: {
+    en: "AIDEFEND references are an independent, unofficial mapping unless the framework owner states otherwise.",
+    zhTW: "除非該框架擁有者另有說明，AIDEFEND 的對照屬於獨立、非官方的對照。",
   },
   reportTechnicalDetails: { en: "Technical details", zhTW: "技術細節" },
   taskStatus: { en: "Status", zhTW: "狀態" },
@@ -560,7 +578,12 @@ const projectReportFindings = (
         rationale: reference.rationale,
         mappingVersion: reference.mappingVersion,
       })),
-      officialReferences: [],
+      // Adapter findings always carry at least the engine's repository URL
+      // (adapters/mod.rs:2440) and the frozen snapshot has no reference field of
+      // its own, so the canonical finding is the only source -- exactly as for
+      // the two fields below. Leaving this empty told every reader the scanner
+      // had published nothing to read.
+      officialReferences: current?.officialReferences ?? [],
       verificationGuidance: current?.verificationGuidance,
       rollbackConsiderations: current?.rollbackConsiderations,
       tags: current?.tags,
@@ -837,6 +860,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
 
       <InlineNotice tone="info" title={text(copy.notCompliance)}>
         <p>{text(copy.frameworkNotice)}</p>
+        <p>{text(copy.aidefendMappingNotice)}</p>
       </InlineNotice>
     </section>
   );

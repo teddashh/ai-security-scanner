@@ -3,7 +3,12 @@ import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { FindingsPage } from "../../src/pages/FindingsPage";
 import { I18nProvider, localeStorageKey } from "../../src/i18n";
-import type { BeginnerMasterReport, BeginnerReportSummary } from "../../src/types";
+import type {
+  BeginnerMasterReport,
+  BeginnerReportFinding,
+  BeginnerReportSummary,
+  Finding,
+} from "../../src/types";
 
 // The beginner report is the surface a non-expert reads to learn what the scan
 // actually established. Its most consequential state is `no_checks_completed`:
@@ -71,13 +76,56 @@ const report = (
   ...overrides,
 });
 
-const renderReport = (value: BeginnerMasterReport) =>
+const frozenFinding = (
+  overrides: Partial<BeginnerReportFinding> = {},
+): BeginnerReportFinding => ({
+  findingId: "finding-1",
+  fingerprint: "fp-1",
+  snapshotSource: "frozen_selected_run",
+  title: "Exposed management port",
+  plainLanguageRisk: "Anyone on the network can reach the admin interface.",
+  possibleImpact: "An attacker could try to sign in.",
+  severity: "high",
+  confidence: "high",
+  priority: 1,
+  priorityReasons: [],
+  targetAssetIds: ["asset-1"],
+  nextStep: "Restrict the port.",
+  recommendedExpertType: "security",
+  evidenceReferences: [],
+  frameworkReferences: [],
+  ...overrides,
+});
+
+const canonicalFinding = (overrides: Partial<Finding> = {}): Finding => ({
+  id: "finding-1",
+  fingerprint: "fp-1",
+  assetId: "asset-1",
+  assetName: "contoso.example",
+  title: "Exposed management port",
+  summary: "Anyone on the network can reach the admin interface.",
+  impact: "An attacker could try to sign in.",
+  recommendation: "Restrict the port.",
+  expertType: "security",
+  severity: "high",
+  confidence: "high",
+  priority: 1,
+  workflowState: "unreviewed",
+  evidence: [],
+  controls: [],
+  officialReferences: [],
+  firstSeenAt: "2026-09-04T12:00:00Z",
+  lastSeenAt: "2026-09-04T12:00:00Z",
+  ...overrides,
+});
+
+const renderReport = (value: BeginnerMasterReport, canonical: Finding[] = []) =>
   render(
     <I18nProvider>
       <FindingsPage
         report={value}
         selectedRunId="run-1"
-        findings={[]}
+        findings={canonical}
         findingGroups={[]}
         findingGroupEvents={[]}
         coverage={[]}
@@ -213,4 +261,90 @@ test("saved-data limitations are surfaced, not held in the model", () => {
   );
 
   expect(container.textContent).toContain("Saved-data limitations: 1");
+});
+
+// Whenever a run exists the page rebuilds every finding through
+// `projectReportFindings`, so the detail pane a user reads is that projection,
+// not the canonical finding. Anything the projection drops is invisible, and it
+// is invisible in a way that reads as a fact about the scan rather than about
+// this view.
+
+test("the published reading behind a finding reaches the pane that offers to open it", () => {
+  // Adapter findings are seeded unconditionally with the engine's repository
+  // URL (adapters/mod.rs:2440), so an empty list here is a claim no adapter
+  // finding can honestly make. The projection had hard-coded `[]`, which told
+  // every reader the rule behind the finding had no documentation to consult.
+  const { container } = renderReport(
+    report("partial", { findings: [frozenFinding()] }),
+    [canonicalFinding({
+      officialReferences: [
+        "https://github.com/example/engine",
+        "https://example.org/rules/exposed-port",
+      ],
+    })],
+  );
+
+  const links = Array.from(container.querySelectorAll<HTMLAnchorElement>('a[href^="https://"]'))
+    .filter((link) => link.href.includes("example"));
+  expect(links.map((link) => link.href)).toEqual([
+    "https://github.com/example/engine",
+    "https://example.org/rules/exposed-port",
+  ]);
+  expect(container.textContent).not.toContain("No official reference link");
+});
+
+test("a finding with nothing recorded says so about the record, not about the scanner", () => {
+  // The mirror, and the reason the copy changed as well as the wiring: this
+  // branch is also reached when the canonical finding is gone, where "the
+  // scanner provided none" would be a different and false claim.
+  const { container } = renderReport(
+    report("partial", { findings: [frozenFinding()] }),
+    [canonicalFinding({ officialReferences: [] })],
+  );
+
+  expect(container.textContent).toContain("No official reference link is recorded for this finding");
+  expect(container.textContent).not.toContain("was provided");
+});
+
+test("a coverage gap does not name a cause the kind cannot establish", () => {
+  // `not_tested` is assigned to a check that saved partial work, one that never
+  // started, and one still running. The row renders the gap's own dimension
+  // beside this sentence, so naming a single cause made the two halves of one
+  // row contradict each other.
+  const { container } = renderReport(
+    report("partial", {
+      coverageGaps: [{
+        kind: "not_tested",
+        taskId: "task-1",
+        targetAssetIds: ["asset-1"],
+        dimension: "trivy: remaining requested dimensions",
+        reason: "This check produced some durable work but did not complete every planned dimension.",
+        nextActionCode: "retry_check",
+        nextAction: "Review the saved results, then retry this check.",
+      }],
+    }),
+  );
+
+  const section = container.querySelector<HTMLElement>(
+    "section[aria-labelledby='beginner-master-report-title']",
+  );
+  const row = within(section!).getByText(/remaining requested dimensions/u).textContent ?? "";
+  expect(row).toContain("not a pass");
+  // The specific causes the kind cannot distinguish.
+  expect(row).not.toContain("no compatible check completed");
+  expect(row).not.toContain("did not start");
+});
+
+test("AIDEFEND is not presented as carrying the same standing as NIST and ISO", () => {
+  // The backend writes the non-certification notice and the AIDEFEND
+  // qualification as two separate sentences because the catalogues differ: NIST
+  // and ISO are official, AIDEFEND is not. Rendering only the first lists all
+  // three in one breath.
+  const { container } = renderReport(report("partial"));
+
+  const notice = Array.from(container.querySelectorAll<HTMLElement>(".inline-notice"))
+    .find((candidate) => candidate.textContent?.includes("AIDEFEND"));
+  expect(notice).toBeTruthy();
+  expect(notice!.textContent).toContain("not certification, compliance, endorsement, or a pass/fail result");
+  expect(notice!.textContent).toContain("independent, unofficial mapping");
 });

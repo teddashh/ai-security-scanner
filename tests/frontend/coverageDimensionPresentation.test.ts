@@ -41,6 +41,42 @@ test("the backend's dimension vocabulary was found", () => {
   assert.ok(staticDimensions.includes("partly completed planned work units"));
 });
 
+test("the not-tested row explains no more than its kind can establish", () => {
+  // The row's sentence comes from `kind` alone (`gapReasonCopy` in
+  // FindingsPage), but the backend assigns `CoverageGapKind::NotTested` to
+  // several different situations and writes a distinct `reason` for each -- a
+  // check that saved partial work, one that never started, one still running.
+  // A sentence naming one cause is therefore false for the others, and
+  // contradicts the dimension rendered beside it on the same row.
+  const notTestedProducers = [
+    ...production.matchAll(/CoverageGapKind::NotTested,\s*\n\s*"([^"]+)",\s*\n\s*"([^"]+)"/gu),
+  ].map((match) => ({ dimension: match[1], reason: match[2] }));
+  assert.ok(
+    notTestedProducers.length >= 2,
+    `found ${notTestedProducers.length} not-tested producers; the extraction above is stale`,
+  );
+  // The load-bearing part: they do not agree on a cause, so the UI cannot state
+  // one. This fires only when *every* producer collapses onto a single reason,
+  // which is correct -- the premise is the disagreement, not any one arm. One
+  // producer changing its wording leaves the constraint intact and should not
+  // fail here.
+  assert.ok(
+    new Set(notTestedProducers.map((producer) => producer.reason)).size > 1,
+    "the producers now share one reason; the shared row sentence could become specific again",
+  );
+
+  const findingsPage = readFileSync(
+    new URL("../../src/pages/FindingsPage.tsx", import.meta.url),
+    "utf8",
+  );
+  const rendered = findingsPage.match(/gapNotTested: \{\s*en: "([^"]+)"/u)?.[1];
+  assert.ok(rendered, "gapNotTested was not found; the extraction above is stale");
+  assert.match(rendered, /not a pass/u);
+  for (const cause of ["no compatible check completed", "did not start"]) {
+    assert.ok(!rendered.includes(cause), `the shared row sentence claims "${cause}"`);
+  }
+});
+
 test("every dimension the backend names has a Traditional Chinese label", () => {
   // Matched without the separator so this still fires if the fallback is ever
   // reshaped back into a label that simply replaces the name.
