@@ -72,7 +72,7 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 chrono = { version = "0.4.45", features = ["serde"] }
-base64 = "0.22.1"
+base64 = "0.23.1"
 clap = { version = "4.6.6", features = ["derive", "env"], optional = true }
 # Platform data-root verification is library code used by every binary feature.
 directories = "6.0.0"
@@ -86,7 +86,7 @@ idna = "1.1.0"
 ipnet = { version = "2.12.0", features = ["serde"] }
 libc = "0.2.183"
 minisign-verify = { version = "0.2.5", optional = true }
-quick-xml = { version = "0.41.0", default-features = false }
+quick-xml = { version = "0.42.0", default-features = false }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -112,7 +112,7 @@ tempfile = "3.27.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Keep getifaddrs ownership and pointer traversal behind a maintained safe API.
-nix = { version = "0.30.1", features = ["net"] }
+nix = { version = "0.31.3", features = ["net"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [
