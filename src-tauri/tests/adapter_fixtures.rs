@@ -2240,3 +2240,83 @@ fn engine_supplied_advisory_links_survive_and_unsafe_ones_do_not() {
         "KICS names the page documenting the query it failed, and it is dropped: {kics_references:?}"
     );
 }
+
+/// The one sentence in a finding that says what to do has to say the right
+/// thing. It carried a fixed "a least-privilege configuration or code change"
+/// for all twenty-one engines, which is the correct instruction for exactly one
+/// of the nine families and is wrong, invisibly, for the rest.
+#[test]
+fn the_action_a_finding_asks_for_matches_the_kind_of_problem_it_reports() {
+    let recommendation = |engine_id: &str| {
+        normalize_fixture(engine_id)
+            .findings
+            .first()
+            .unwrap_or_else(|| panic!("{engine_id} fixture must produce a finding"))
+            .recommendation
+            .clone()
+    };
+
+    // A leaked credential is valid until it is revoked. Anything that sends the
+    // reader to a permissions screen first leaves it valid for that long.
+    for engine_id in ["gitleaks", "trufflehog"] {
+        let text = recommendation(engine_id);
+        assert!(
+            text.contains("revocation and rotation"),
+            "{engine_id} must say to revoke the credential: {text}"
+        );
+        assert!(
+            !text.contains("least-privilege"),
+            "{engine_id} sends the reader to the wrong screen: {text}"
+        );
+    }
+
+    // A known CVE in a dependency is not fixed by a configuration change.
+    for engine_id in ["trivy", "grype"] {
+        let text = recommendation(engine_id);
+        assert!(
+            text.contains("upgrade to a fixed version"),
+            "{engine_id} must name the upgrade: {text}"
+        );
+    }
+
+    // A permissive cloud policy is the one family least-privilege does describe.
+    assert!(recommendation("prowler").contains("least-privilege"));
+
+    // Rewriting the running resource leaves the template that redeployed it.
+    for engine_id in ["checkov", "kics"] {
+        let text = recommendation(engine_id);
+        assert!(
+            text.contains("infrastructure-as-code template"),
+            "{engine_id} must point at the template: {text}"
+        );
+    }
+
+    // Guards the collapse this test exists to prevent: a later refactor that
+    // reintroduces one shared sentence still satisfies every assertion above
+    // for the engines it happens to name, so count the distinct advice too.
+    let distinct = BUILTIN_ENGINE_IDS
+        .iter()
+        .filter_map(|engine_id| {
+            let finding = normalize_fixture(engine_id).findings.first()?.clone();
+            // Strip the specialist, which already varies; what is under test is
+            // the action clause that used to be identical everywhere.
+            Some(
+                finding
+                    .recommendation
+                    .rsplit_once("then plan and approve ")?
+                    .1
+                    .to_owned(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    // One per family that produces findings, which is all nine: CloudQuery and
+    // Syft emit no findings but share a family with engines that do. Pinned
+    // exactly, so merging two families is a decision someone has to make here
+    // rather than a number that quietly drifts down.
+    assert_eq!(
+        distinct.len(),
+        9,
+        "one action clause per family, not {}: {distinct:#?}",
+        distinct.len()
+    );
+}

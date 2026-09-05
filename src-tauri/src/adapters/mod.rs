@@ -2861,8 +2861,9 @@ fn merge_finding(
                 input.ai_generated_artifact_applicable,
             ),
             recommendation: format!(
-                "Have the recommended specialist ({}) review the affected asset and the source rule's official guidance, then plan and approve a least-privilege configuration or code change.",
-                adapter.expert_type
+                "Have the recommended specialist ({}) review the affected asset and the source rule's official guidance, then plan and approve {}.",
+                adapter.expert_type,
+                remedy_for(adapter.profile)
             ),
             verification_guidance: format!(
                 "After an approved manual change, rerun {} with the same authorized scope and confirm that source rule {} is no longer reported.",
@@ -3152,6 +3153,51 @@ fn impact_for(profile: Profile, severity: &Severity) -> String {
         "If the scanner result is confirmed, {consequence}. The {} source severity is not a product-wide compliance score.",
         severity_label(severity)
     )
+}
+
+/// The kind of change that actually resolves this family of finding.
+///
+/// This clause completes the one sentence in a finding that tells a reader what
+/// to do, so it has to name the right action. It was a fixed "a least-privilege
+/// configuration or code change" for all twenty-one engines: correct for a
+/// permissive IAM policy, and wrong in a way a beginner cannot detect for the
+/// rest. Someone told that a leaked AWS key needs "a least-privilege
+/// configuration change" goes looking for a permissions setting instead of
+/// revoking the credential, and the key stays valid for however long that
+/// takes. Someone told the same about `CVE-2024-2511` in openssl has no reason
+/// to think the answer is an upgrade.
+///
+/// Grouped the way [`impact_for`] groups the same profiles, except that secret
+/// scanners split away from Semgrep: the three share a consequence but not a
+/// remedy, and the remedy is the half that is urgent.
+fn remedy_for(profile: Profile) -> &'static str {
+    match profile {
+        Profile::CloudQuery | Profile::Steampipe | Profile::Prowler | Profile::ScoutSuite => {
+            "a least-privilege change to the affected resource's configuration or policy"
+        }
+        Profile::Cloudsplaining => {
+            "a narrower policy that grants only the actions the identity's role requires"
+        }
+        Profile::ScubaGear | Profile::Maester => {
+            "a change to the Microsoft 365 tenant setting this control checks"
+        }
+        Profile::Naabu | Profile::Httpx | Profile::Nuclei | Profile::Greenbone => {
+            "either a record of why this service is meant to be reachable, or a change that removes or restricts that exposure"
+        }
+        Profile::Semgrep => "a code change that removes the reported unsafe pattern",
+        Profile::Gitleaks | Profile::Trufflehog => {
+            "revocation and rotation of the exposed credential first, then its removal from the source and from the history that still carries it"
+        }
+        Profile::Checkov | Profile::Kics => {
+            "a change to the infrastructure-as-code template, so that redeploying does not restore the reported setting"
+        }
+        Profile::Trivy | Profile::Grype | Profile::Syft => {
+            "an upgrade to a fixed version of the affected component, or a recorded reason it cannot be upgraded yet"
+        }
+        Profile::Kubescape | Profile::KubeBench => {
+            "a change to the workload or cluster setting this check names"
+        }
+    }
 }
 
 fn is_failure(value: &str) -> bool {
