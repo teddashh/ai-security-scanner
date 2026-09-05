@@ -551,7 +551,18 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
             assert!(!finding.recommendation.contains("Have a Application"));
             assert!(!finding.verification_guidance.is_empty());
             assert!(finding.rollback_considerations.is_some());
-            assert!(!finding.official_references.is_empty());
+            // Deliberately not `!is_empty()`: `merge_finding` seeds this list
+            // with the manifest's own repository URL before any engine
+            // reference is considered, so an emptiness check here can never
+            // fail -- it stays green with every JSON pointer deleted.
+            assert!(
+                finding
+                    .official_references
+                    .iter()
+                    .all(|reference| reference.starts_with("https://")),
+                "{engine_id} kept a reference that is not a plain https URL: {:?}",
+                finding.official_references
+            );
             assert!(!finding.recommended_expert_type.is_empty());
             assert!(
                 finding
@@ -2037,5 +2048,184 @@ fn kubescape_per_resource_results_are_read_not_only_the_summary_rollup() {
         output.findings.len(),
         3,
         "the roll-up must not duplicate what `results` already reported"
+    );
+}
+
+/// Engines whose artifact is JSON Lines, from `engines/catalog.json`.
+const JSON_LINES_ENGINES: &[&str] = &["naabu", "httpx", "nuclei", "trufflehog"];
+
+#[test]
+fn json_lines_fixtures_carry_more_than_one_record_so_the_line_loop_actually_runs() {
+    // `parse_artifact` only reaches its JSON-Lines branch when parsing the
+    // whole file as one JSON document fails. `serde_json` tolerates a trailing
+    // newline, so a one-record `.jsonl` fixture parses as a plain object and
+    // the line loop never executes even once. Every bug that lives past the
+    // first record -- a loop that returns early, an index that does not
+    // advance, a fingerprint that collides -- would then ship unseen.
+    for engine_id in JSON_LINES_ENGINES {
+        let (bytes, filename, _) = fixture(engine_id);
+        assert!(
+            filename.ends_with(".jsonl"),
+            "{engine_id} is listed as JSON Lines but its fixture is {filename}"
+        );
+        let records = bytes
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
+            .count();
+        assert!(
+            records >= 2,
+            "{engine_id}'s fixture holds {records} record(s); the line loop needs at least two"
+        );
+
+        let output = normalize_fixture(engine_id);
+        assert!(
+            output.findings.len() >= 2,
+            "{engine_id} produced {} finding(s) from {records} records; a record was dropped",
+            output.findings.len()
+        );
+        let fingerprints = output
+            .findings
+            .iter()
+            .map(|finding| finding.fingerprint.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            fingerprints.len(),
+            output.findings.len(),
+            "{engine_id} gave two records the same fingerprint, so one would overwrite the other"
+        );
+    }
+}
+
+#[test]
+fn the_container_mount_path_never_reaches_the_user() {
+    // Engines are handed `/workspace` as their scan target, so their output
+    // names files under a directory that does not exist on the user's machine.
+    // A beginner shown `/workspace/deploy/.env.production` cannot open it and
+    // cannot tell whether it is even their file.
+    for engine_id in BUILTIN_ENGINE_IDS {
+        let output = normalize_fixture(engine_id);
+        for finding in &output.findings {
+            let rendered = [
+                finding.title.as_str(),
+                finding.plain_language_summary.as_str(),
+                finding.recommendation.as_str(),
+                finding.verification_guidance.as_str(),
+            ]
+            .join("\n")
+                + &finding
+                    .evidence
+                    .iter()
+                    .map(|evidence| evidence.summary.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            assert!(
+                !rendered.contains("/workspace"),
+                "{engine_id} shows the container mount path to the user: {rendered}"
+            );
+        }
+    }
+}
+
+#[test]
+fn trufflehog_reports_paths_relative_to_the_directory_the_user_chose() {
+    // Guards the test above against passing for the wrong reason: trufflehog's
+    // fixture does carry absolute `/workspace/...` paths, exactly as the real
+    // binary emits them when the launcher hands it `/workspace`. If that ever
+    // stopped being true, the mount-path test would be vacuous.
+    let (bytes, _, _) = fixture("trufflehog");
+    let raw = std::str::from_utf8(bytes).expect("fixture is UTF-8");
+    assert!(
+        raw.contains("\"/workspace/"),
+        "the fixture no longer exercises the mount prefix at all"
+    );
+
+    let output = normalize_fixture("trufflehog");
+    let locations = output
+        .findings
+        .iter()
+        .flat_map(|finding| finding.evidence.iter().map(|e| e.summary.clone()))
+        .collect::<Vec<_>>();
+    assert!(
+        locations
+            .iter()
+            .any(|summary| summary.contains("deploy/.env.production")),
+        "the path lost more than the mount prefix: {locations:?}"
+    );
+}
+
+#[test]
+fn semgrep_findings_carry_the_engines_explanation_not_just_its_rule_id() {
+    // Semgrep's `extra.message` is a required field in its output schema and is
+    // the only sentence a reader can act on. A title of
+    // "Semgrep rule ai-security-scanner.python.shell-true" tells a beginner
+    // nothing about what is wrong.
+    let output = normalize_fixture("semgrep");
+    assert!(!output.findings.is_empty());
+    for finding in &output.findings {
+        assert!(
+            !finding.title.starts_with("Semgrep rule "),
+            "the rule id was used as the title while a message was available: {}",
+            finding.title
+        );
+        assert!(
+            finding
+                .title
+                .contains("subprocess launched through a shell"),
+            "the engine's own explanation is missing: {}",
+            finding.title
+        );
+        // The rule id is still recorded; it moved, it was not dropped.
+        assert!(
+            finding
+                .tags
+                .iter()
+                .any(|tag| tag == "source-rule:ai-security-scanner.python.shell-true"),
+            "{:?}",
+            finding.tags
+        );
+    }
+}
+
+#[test]
+fn engine_supplied_advisory_links_survive_and_unsafe_ones_do_not() {
+    // `official_references` is seeded with the manifest's own URLs, so the only
+    // way to prove an engine's links are read is to name one the manifest does
+    // not contain.
+    let trivy = normalize_fixture("trivy");
+    let trivy_references = trivy
+        .findings
+        .iter()
+        .flat_map(|finding| finding.official_references.clone())
+        .collect::<BTreeSet<_>>();
+    assert!(
+        trivy_references.contains("https://www.openssl.org/news/secadv/20240408.txt"),
+        "Trivy's `References` array is dropped; `PrimaryURL` alone is not the advisory: {trivy_references:?}"
+    );
+    // Trivy passes advisory links through verbatim, including plain http and
+    // mailing-list URLs carrying an @. Neither may be offered to the user.
+    assert!(
+        !trivy_references
+            .iter()
+            .any(|reference| reference.starts_with("http://")),
+        "{trivy_references:?}"
+    );
+    assert!(
+        !trivy_references
+            .iter()
+            .any(|reference| reference.contains('@')),
+        "{trivy_references:?}"
+    );
+
+    let kics = normalize_fixture("kics");
+    let kics_references = kics
+        .findings
+        .iter()
+        .flat_map(|finding| finding.official_references.clone())
+        .collect::<BTreeSet<_>>();
+    assert!(
+        kics_references
+            .iter()
+            .any(|reference| reference.starts_with("https://docs.kics.io/")),
+        "KICS names the page documenting the query it failed, and it is dropped: {kics_references:?}"
     );
 }

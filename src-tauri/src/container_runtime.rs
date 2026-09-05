@@ -28,7 +28,10 @@ pub(crate) const NAABU_LAUNCHER_PLAN_CONTROL_FILE: &str = "execution-journal-v2.
 pub(crate) const CONTAINER_NAABU_LAUNCHER_PLAN_PATH: &str =
     "/run/ai-security-scanner/execution-journal-v2.json";
 const CONTAINER_CREDENTIAL_PATH: &str = "/run/ai-security-scanner/credentials.json";
-const CONTAINER_WORKSPACE_PATH: &str = "/workspace";
+/// Also read by `adapters::redact_location`, which strips this prefix back off
+/// engine-reported paths. Sharing the constant is what keeps a finding from
+/// naming a directory the user does not have.
+pub(crate) const CONTAINER_WORKSPACE_PATH: &str = "/workspace";
 const CONTAINER_OUTPUT_PATH: &str = "/output";
 const MAX_SCOPE_DOCUMENT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_CREDENTIAL_DOCUMENT_BYTES: u64 = 256 * 1024;

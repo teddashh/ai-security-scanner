@@ -1,1 +1,2 @@
-{"host":"192.0.2.10","ip":"192.0.2.10","port":443,"protocol":"tcp","asset_id":"asset-1"}
+{"host":"192.0.2.10","ip":"192.0.2.10","port":443,"protocol":"tcp","tls":true,"timestamp":"2026-09-05T04:21:09.412Z","asset_id":"asset-1"}
+{"host":"service.example.test","ip":"192.0.2.11","port":8080,"protocol":"tcp","timestamp":"2026-09-05T04:21:09.688Z","asset_id":"asset-1"}

@@ -1,1 +1,2 @@
-{"url":"https://service.example.test/login?session=must-not-appear","status_code":200,"title":"target-controlled text is data","asset_id":"asset-1"}
+{"timestamp":"2026-09-05T04:22:11.004Z","url":"https://service.example.test/login?session=must-not-appear","input":"service.example.test","host":"192.0.2.11","port":"443","scheme":"https","status_code":200,"content_length":4821,"title":"target-controlled text is data","webserver":"nginx","asset_id":"asset-1"}
+{"timestamp":"2026-09-05T04:22:11.362Z","url":"http://service.example.test:8080/admin","input":"service.example.test","host":"192.0.2.11","port":"8080","scheme":"http","status_code":401,"content_length":178,"title":"Restricted","webserver":"nginx","asset_id":"asset-1"}

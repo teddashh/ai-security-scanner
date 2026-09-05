@@ -2067,8 +2067,12 @@ fn extract_semgrep(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
             Some(record!(
                 pointer,
                 rule_id.clone(),
-                nested_string(value, &["extra", "metadata", "shortlink"])
-                    .map(|_| format!("Semgrep rule {rule_id}"))
+                // Semgrep writes the human-readable explanation here and it is
+                // the only sentence a reader can act on; the rule id alone says
+                // nothing. Falls back to the id when a rule ships no message.
+                nested_string(value, &["extra", "message"])
+                    .map(|message| safe_text(&message, MAX_SHORT_TEXT))
+                    .filter(|message| !message.is_empty())
                     .unwrap_or_else(|| format!("Semgrep rule {rule_id}")),
                 nested_string(value, &["extra", "severity"]).unwrap_or_else(|| "unknown".into()),
                 path,
@@ -3211,6 +3215,12 @@ fn references_from(value: &Value) -> Vec<String> {
         "/reference",
         "/references",
         "/Reference",
+        // JSON Pointer is case-sensitive and Trivy emits `References` on every
+        // vulnerability. Without this the advisory links a user needs in order
+        // to act are dropped while `PrimaryURL` alone survives.
+        "/References",
+        // KICS names the page documenting the query it just failed.
+        "/query_url",
         "/PrimaryURL",
         "/primary_url",
         "/guideline",
@@ -3284,10 +3294,30 @@ fn collect_named_objects<'a>(
     }
 }
 
+/// Where `container_runtime` bind-mounts the directory the user chose. Engines
+/// are handed this path as their scan target, so their output names files under
+/// it -- a location that does not exist on the user's machine. Imported rather
+/// than repeated so the mount and the strip cannot drift apart.
+use crate::container_runtime::CONTAINER_WORKSPACE_PATH;
+
+/// Stands in for the scanned directory itself, matching the `"source-file"`
+/// placeholder the extractors use when an engine names no path at all.
+const SCANNED_DIRECTORY_LOCATION: &str = "scanned-directory";
+
 fn redact_location(value: &str) -> String {
     let value = value.split(['?', '#']).next().unwrap_or(value);
-    let value = value.replace('\\', "/");
-    safe_text(&value, MAX_SHORT_TEXT)
+    let normalized = value.replace('\\', "/");
+    // Reported relative to the directory the user picked. Showing the mount
+    // path instead would hand a beginner a filename they cannot open, and
+    // reading it as their own filesystem would be wrong on every platform.
+    let relative = match normalized.strip_prefix(CONTAINER_WORKSPACE_PATH) {
+        Some("") | Some("/") => SCANNED_DIRECTORY_LOCATION,
+        // Only a path *inside* the mount qualifies. `/workspaces/app.js` is an
+        // unrelated directory and must not silently lose its first characters.
+        Some(rest) if rest.starts_with('/') => rest.trim_start_matches('/'),
+        _ => &normalized,
+    };
+    safe_text(relative, MAX_SHORT_TEXT)
 }
 
 fn safe_tag(value: &str) -> String {
@@ -3363,6 +3393,37 @@ mod tests {
             priority_for(&Severity::Unknown) > priority_for(&Severity::Informational),
             "unknown impact must not be buried as a known informational observation"
         );
+    }
+
+    #[test]
+    fn the_container_mount_prefix_is_stripped_without_eating_look_alike_paths() {
+        // Engines are handed `/workspace` as their target, so their paths name
+        // a directory the user does not have. Reporting the remainder keeps the
+        // path true relative to the directory they chose.
+        assert_eq!(
+            redact_location("/workspace/deploy/.env.production"),
+            "deploy/.env.production"
+        );
+        assert_eq!(redact_location("/workspace//src/app.js"), "src/app.js");
+        // The mount root itself is the scanned directory, not an empty path.
+        assert_eq!(redact_location("/workspace"), SCANNED_DIRECTORY_LOCATION);
+        assert_eq!(redact_location("/workspace/"), SCANNED_DIRECTORY_LOCATION);
+
+        // A prefix match is not a path match. These are unrelated directories
+        // and must keep every character; a bare `strip_prefix` would turn the
+        // first into `s/app.js` and quietly point at a file that never existed.
+        assert_eq!(redact_location("/workspaces/app.js"), "/workspaces/app.js");
+        assert_eq!(
+            redact_location("/workspace-backup/app.js"),
+            "/workspace-backup/app.js"
+        );
+        // Not anchored at the root, so not the mount.
+        assert_eq!(
+            redact_location("/srv/workspace/app.js"),
+            "/srv/workspace/app.js"
+        );
+        // Windows separators are normalized first, so the strip still applies.
+        assert_eq!(redact_location("\\workspace\\src\\app.js"), "src/app.js");
     }
 
     #[test]
