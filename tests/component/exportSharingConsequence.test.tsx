@@ -25,6 +25,11 @@ import type { CaseWorkspace, ExportPreview, ScanRun } from "../../src/types";
 // These tests pin the sentence to the settings that produce it. They render the
 // page rather than matching its source because the defect was never a missing
 // string -- the string was there, and said the wrong thing.
+//
+// The same shape appears in the summary below the toggles, which described the
+// selected format using one format's properties. Those claims are pinned here
+// too: this file's subject is everything the screen asserts about the file it is
+// about to write.
 
 const CHOSEN = "run-2026-08-31";
 
@@ -158,6 +163,22 @@ const chooseCaseBundle = (container: HTMLElement) => {
   fireEvent.click(input);
 };
 
+/** The integrity sentence heading the "what will be included" summary. */
+const integrityNote = (container: HTMLElement): string => {
+  const note = container.querySelector<HTMLElement>(".export-summary__note");
+  if (!note) throw new Error("no integrity note rendered");
+  return note.textContent ?? "";
+};
+
+/** The asset-relationship line of that summary, located by its own wording. */
+const assetRelationsLine = (container: HTMLElement): HTMLElement => {
+  const line = Array.from(container.querySelectorAll<HTMLElement>(".export-contents li")).find(
+    (candidate) => candidate.textContent?.includes("Asset relationships"),
+  );
+  if (!line) throw new Error("no asset-relationship line rendered");
+  return line;
+};
+
 beforeEach(() => {
   window.localStorage.setItem(localeStorageKey, "en");
 });
@@ -234,4 +255,50 @@ test("the source-file option says it does nothing while private details are hidd
   expect(detail).toContain("only when private details are not hidden");
   expect(detail).toContain("this option changes nothing");
   expect(detail).not.toContain("Passwords and access keys are not included");
+});
+
+test("the recommended format says plainly that it is not signed", async () => {
+  // Only the case bundle is signed. Every other format takes the path that sets
+  // `signature: None` and stores UNSIGNED_SCHEMA_NOTICE -- a notice the backend
+  // writes and no screen has ever shown. HTML is the default and the
+  // recommended one, so this is the sentence most readers get.
+  const { container } = renderExport();
+  await waitFor(() => expect(consequence(container)).toContain("Private details are hidden"));
+
+  expect(integrityNote(container)).toContain("This format is not signed");
+  expect(integrityNote(container)).toContain("SHA-256 digest is kept in your project");
+  expect(integrityNote(container)).not.toContain("carries a local integrity signature");
+});
+
+test("the case bundle is the one format that describes a signature", async () => {
+  // The mirror. Without it the sentence above could be hard-coded and the
+  // page would understate the one format that does sign.
+  const { container } = renderExport();
+  await waitFor(() => expect(consequence(container)).toContain("Private details are hidden"));
+
+  chooseCaseBundle(container);
+  await waitFor(() => expect(integrityNote(container)).toContain("carries a local integrity signature"));
+  expect(integrityNote(container)).not.toContain("This format is not signed");
+});
+
+test("a format that cannot carry asset relationships says so instead of showing a check", async () => {
+  // `case.asset_relations` is serialized only into the bundle's assets.json;
+  // OCSF names asset relationships in its own omitted list. The line was
+  // rendered with a check icon for all six formats.
+  const { container } = renderExport();
+  await waitFor(() => expect(consequence(container)).toContain("Private details are hidden"));
+
+  const line = assetRelationsLine(container);
+  expect(line.className).toContain("export-contents__excluded");
+  expect(line.textContent).toContain("not carried by this format");
+});
+
+test("the case bundle still lists asset relationships as included", async () => {
+  const { container } = renderExport();
+  await waitFor(() => expect(consequence(container)).toContain("Private details are hidden"));
+
+  chooseCaseBundle(container);
+  await waitFor(() => expect(assetRelationsLine(container).className).not.toContain("export-contents__excluded"));
+  expect(assetRelationsLine(container).textContent).toContain("Asset relationships for specialist review");
+  expect(assetRelationsLine(container).textContent).not.toContain("not carried by this format");
 });

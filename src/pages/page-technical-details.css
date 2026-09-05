@@ -106,6 +106,15 @@
  * so it is set apart from the surrounding notice body rather than reading as
  * one more line of guidance.
  */
+/*
+ * A line in the "what will be included" list that this format does not carry.
+ * Kept in the list rather than dropped, so the reader learns the format lacks
+ * it instead of never learning the category exists.
+ */
+.export-contents__excluded {
+  color: #9aa8ab;
+}
+
 .export-sharing-consequence {
   margin: 10px 0 0;
   padding-left: 12px;

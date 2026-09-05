@@ -111,9 +111,19 @@ const copy = {
     zhTW: "你沒有遮罩私人資訊，而且來源檔案會照掃描器產出的原樣附上。掃描器找到的任何密碼或存取金鑰都會在這個檔案裡。只有在你願意把這些機密交給對方時，才分享這個檔案。",
   },
   previewPending: { en: "Calculating the exact contents on this device…", zhTW: "正在這台電腦上計算精確匯出內容…" },
+  // Only the case bundle is signed: `export.rs` attaches an envelope, while
+  // every other format takes the `case_service.rs` path that sets
+  // `signature: None` and stores UNSIGNED_SCHEMA_NOTICE. This sentence headed
+  // the summary for whichever format was selected, so five of the six were
+  // introduced by a description of a signature they do not carry. The backend's
+  // own notice says so and reaches no screen.
   signatureLimit: {
-    en: "A local integrity signature can show that the exported file was not changed later. It cannot prove the scan was complete or correct.",
-    zhTW: "本機完整性簽章只能證明匯出後檔案沒有被修改；不能證明掃描完整或結果正確。",
+    en: "This format carries a local integrity signature, which can show the file was not changed after it was written. It cannot prove the scan was complete or correct.",
+    zhTW: "這個格式會附上本機完整性簽章，可以顯示檔案寫出後沒有被修改；但不能證明掃描完整或結果正確。",
+  },
+  signatureUnsigned: {
+    en: "This format is not signed. A SHA-256 digest is kept in your project and can detect later changes to the file, but nothing in the file establishes who produced it, or that the scan was complete or correct.",
+    zhTW: "這個格式不會簽章。專案內會保存 SHA-256 摘要，可用來發現檔案之後被修改，但檔案本身無法證明是誰產出的，也不能證明掃描完整或結果正確。",
   },
   caseBundleScopeTitle: { en: "Case-wide records with run-bound reports", zhTW: "案件全域紀錄與輪次綁定報告" },
   caseBundleScopeBody: {
@@ -190,7 +200,16 @@ const copy = {
   contentsScope: { en: "Scope statement and coverage record", zhTW: "範圍聲明與涵蓋紀錄" },
   contentsVersions: { en: "Scanner, rule library, and result-adapter versions", zhTW: "掃描工具、規則庫與結果轉換器版本" },
   contentsHashes: { en: "Source-evidence hash for each finding", zhTW: "每個問題的原始證據雜湊" },
+  // `case.asset_relations` is serialized in exactly one place -- the bundle's
+  // `assets.json`. OCSF names "asset relationships" in its own
+  // `omitted_canonical_areas`, and the master JSON, HTML, OSCAL, and framework
+  // report all build from the beginner report, which has no such field. The
+  // bullet was rendered with a check for every format.
   contentsAssets: { en: "Asset relationships for specialist review", zhTW: "供專家查看的資產關聯資料" },
+  contentsAssetsExcluded: {
+    en: "Asset relationships are not carried by this format; the technical case bundle is the one that includes them",
+    zhTW: "這個格式不會帶出資產關聯資料；只有技術案件包會包含",
+  },
   contentsUnknown: { en: "Not-run, partial, failed, and unknown states", zhTW: "未執行、部分、失敗與未知狀態" },
   contentsLimits: { en: "Not-an-audit, not-forensics, and not-a-compliance-score statement", zhTW: "非稽核、非鑑識、非合規分數聲明" },
   localOnly: { en: "Nothing is uploaded before you export", zhTW: "匯出前不會上傳到任何服務" },
@@ -418,6 +437,13 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
   // already changed. Only the case bundle carries artifacts, and only when
   // redaction is off; see the copy note on `includeRawBundle`.
   const rawSourcesAttached = format === "case_bundle" && includeRawEvidence && !redactSensitiveValues;
+  // Named separately from `rawSourcesAttached` even though all three currently
+  // reduce to the case bundle: they are three different backend facts -- who
+  // signs, who serializes `asset_relations`, who carries artifacts -- and
+  // collapsing them into one flag is how the summary came to state one format's
+  // properties for all six.
+  const formatIsSigned = format === "case_bundle";
+  const formatCarriesAssetRelations = format === "case_bundle";
   const sharingConsequence = redactSensitiveValues
     ? copy.sharingRedacted
     : rawSourcesAttached
@@ -602,7 +628,7 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
             <Icon name="file" size={22} />
             <span><span className="eyebrow">{text(copy.includesEyebrow)}</span><strong>{text(currentFormat.title)}</strong></span>
           </summary>
-          <p className="export-summary__note">{text(copy.signatureLimit)}</p>
+          <p className="export-summary__note">{text(formatIsSigned ? copy.signatureLimit : copy.signatureUnsigned)}</p>
           <dl className="export-facts">
             <div><dt>{text(copy.case)}</dt><dd>{caseIdentityPresentation(workspace.case, locale).name}</dd></div>
             <div><dt>{text(copy.exactType)}</dt><dd>{text(currentFormat.title)} · <code>{currentFormat.extension}</code></dd></div>
@@ -626,7 +652,11 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
             <li><Icon name="check" size={15} /> {text(copy.contentsScope)}</li>
             <li><Icon name="check" size={15} /> {text(copy.contentsVersions)}</li>
             <li><Icon name="check" size={15} /> {text(copy.contentsHashes)}</li>
-            <li><Icon name="check" size={15} /> {text(copy.contentsAssets)}</li>
+            <li className={formatCarriesAssetRelations ? undefined : "export-contents__excluded"}>
+              <Icon name={formatCarriesAssetRelations ? "check" : "close"} size={15} />
+              {" "}
+              {text(formatCarriesAssetRelations ? copy.contentsAssets : copy.contentsAssetsExcluded)}
+            </li>
             <li><Icon name="check" size={15} /> {text(copy.contentsUnknown)}</li>
             <li><Icon name="check" size={15} /> {text(copy.contentsLimits)}</li>
           </ul>
