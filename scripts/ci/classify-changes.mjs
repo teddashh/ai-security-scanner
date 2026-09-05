@@ -20,6 +20,10 @@ const FRONTEND_PATHS = [
   /^src-tauri\/src\/beginner_report\.rs$/,
   /^src-tauri\/src\/prioritization\.rs$/,
   /^src-tauri\/src\/commands\.rs$/,
+  // `runtimeSetupAssistant.test.ts` reads the Tauri command registry to assert
+  // the prerequisite-repair command stays unregistered. Re-registering it in
+  // lib.rs alone would otherwise never run that test.
+  /^src-tauri\/src\/lib\.rs$/,
   // `setupPanelReportPromises.test.ts` reads this one for two contracts the
   // setup panel makes user-facing claims about: which readiness blocker means
   // zero runnable checks, and which engine-run status a preflight failure
