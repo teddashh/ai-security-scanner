@@ -574,6 +574,7 @@ pub fn build_beginner_master_report(
             .then_with(|| left.dimension.cmp(&right.dimension))
     });
     coverage_gaps.dedup();
+    debug_assert_coverage_prose_is_translatable(&coverage_gaps);
 
     let lifecycle = if run_is_authoritatively_final(run) {
         ReportLifecycle::Final
@@ -1678,6 +1679,45 @@ fn append_unattributed_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
                 ),
                 unattributed: Some(unattributed.clone()),
             });
+        }
+    }
+}
+
+/// Fails a debug build if this file writes a sentence no reader in Traditional
+/// Chinese can be shown.
+///
+/// The census lives here, at the producer, rather than in a test that reads
+/// this file for string literals. A regex over the source misses the ones
+/// composed in a local `push` closure, assembled from a conditional, or copied
+/// from an upstream struct -- which between them is most of them -- and reports
+/// full coverage while doing it. Every existing test that builds a report runs
+/// this instead, so a new sentence fails the test that exercises its own path.
+///
+/// An excluded area carries the words a person typed about their own case.
+/// There is nothing to look up and a fixed label would discard what they wrote.
+fn debug_assert_coverage_prose_is_translatable(gaps: &[CoverageGap]) {
+    if cfg!(debug_assertions) {
+        for gap in gaps {
+            if gap.kind == CoverageGapKind::Excluded || gap.unattributed.is_some() {
+                continue;
+            }
+            // A request-outcome gap prints an explanation stored in the case
+            // file. This build writes three of them and translates all three,
+            // but the field is validated only for length and control
+            // characters, so a case written by another build may hold anything.
+            // Asserting on it would panic on a legitimate record.
+            if !gap.dimension.starts_with("requested check") {
+                debug_assert!(
+                    crate::finding_narrative::coverage_gap_prose_zh_hant(&gap.reason).is_some(),
+                    "no Traditional Chinese for the coverage gap reason: {}",
+                    gap.reason
+                );
+            }
+            debug_assert!(
+                crate::finding_narrative::coverage_gap_prose_zh_hant(&gap.next_action).is_some(),
+                "no Traditional Chinese for the coverage gap next action: {}",
+                gap.next_action
+            );
         }
     }
 }

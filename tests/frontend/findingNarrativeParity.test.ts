@@ -122,26 +122,30 @@ test("the English keys the screen matches on are the ones the report writes", ()
  * other on " failed work unit" produces identical literals and different
  * output. The needle is the part that has to be the same.
  */
-test("both sides recognise a coverage name by the same English fragment", () => {
+test("both sides recognise the same English before writing the same Chinese", () => {
+  // Both files pair an English key with a Chinese sentence: coverage names
+  // matched on a fragment, and coverage prose matched on the whole sentence.
+  // rustfmt and prettier each break a long pair across lines, so runs of
+  // whitespace are flattened first and the brackets left out -- one side ends
+  // the pair with a trailing comma.
+  const flatten = (source: string): string => source.replaceAll(/\s+/gu, " ");
+  const flatRust = flatten(rust);
   const pairs = [
-    ...typescript.matchAll(/^\s*\["( ?[a-z][^"]*)", "([^"]*)"\],$/gmu),
-  ].map((match) => ({ needle: match[1] ?? "", label: match[2] ?? "" }));
+    ...flatten(typescript).matchAll(/\[ ?"( ?[A-Za-z][^"]*)", ?"([^"]*)",? ?\]/gu),
+  ].map((match) => ({ english: match[1] ?? "", chinese: match[2] ?? "" }));
 
-  assert.ok(pairs.length >= 30, `extractor found only ${pairs.length} rules`);
-  assert.ok(pairs.some((pair) => pair.needle === " granular executed scope"));
+  assert.ok(pairs.length >= 90, `extractor found only ${pairs.length} pairs`);
+  assert.ok(pairs.some((pair) => pair.english === " granular executed scope"));
+  assert.ok(pairs.some((pair) => pair.english === "This check did not start, so it is not a pass."));
 
-  // rustfmt breaks a long pair across three lines, so runs of whitespace are
-  // flattened before the two sides are compared. The brackets are left out for
-  // the same reason: one side ends the pair with a trailing comma.
-  const flattened = rust.replaceAll(/\s+/gu, " ");
   const unmatched = pairs.filter(
-    (pair) => !flattened.includes(`"${pair.needle}", "${pair.label}"`),
+    (pair) => !flatRust.includes(`"${pair.english}", "${pair.chinese}"`),
   );
   assert.deepEqual(
     unmatched,
     [],
-    `rules the screen has that the report does not, needle and label together:\n${unmatched
-      .map((pair) => `${pair.needle} -> ${pair.label}`)
+    `pairs the screen has that the report does not, English key and Chinese together:\n${unmatched
+      .map((pair) => `${pair.english} -> ${pair.chinese}`)
       .join("\n")}`,
   );
 });

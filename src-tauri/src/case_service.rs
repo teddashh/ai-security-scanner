@@ -12659,8 +12659,14 @@ fn html_report_bytes(
                 }
                 (crate::export::ReportLocale::ZhHant, None) => (
                     crate::finding_narrative::coverage_dimension_zh_hant(&gap.dimension),
-                    gap.reason.clone(),
-                    gap.next_action.clone(),
+                    // An unrecognized sentence keeps its stored English. An
+                    // excluded area carries the words a person typed about
+                    // their own case, and a run written by another build may
+                    // carry an explanation this one has never seen.
+                    crate::finding_narrative::coverage_gap_prose_zh_hant(&gap.reason)
+                        .unwrap_or_else(|| gap.reason.clone()),
+                    crate::finding_narrative::coverage_gap_prose_zh_hant(&gap.next_action)
+                        .unwrap_or_else(|| gap.next_action.clone()),
                 ),
                 _ => (
                     gap.dimension.clone(),
@@ -12733,6 +12739,15 @@ fn html_report_bytes(
                         crate::finding_narrative::unattributed_gap_zh_hant(engine_id, unattributed);
                     (next_action, reason)
                 }
+                // Every other gap-derived step carries the gap's own two
+                // sentences verbatim, so they are looked up the same way the
+                // coverage row above looks them up. An unrecognized one keeps
+                // its stored English.
+                (crate::export::ReportLocale::ZhHant, None) => (
+                    crate::finding_narrative::coverage_gap_prose_zh_hant(&action).unwrap_or(action),
+                    crate::finding_narrative::coverage_gap_prose_zh_hant(&step.reason)
+                        .unwrap_or_else(|| step.reason.clone()),
+                ),
                 _ => (action, step.reason.clone()),
             };
             format!(
@@ -24608,6 +24623,12 @@ mod tests {
             "自動縮減的範圍",
             "目標的歷史顯示資料",
             "本輪問題顯示資料",
+            // Why each row is a gap, and what to do about it. Both were stored
+            // as English prose and printed under translated headings.
+            "本輪記錄了完成的掃描工具與資產對應關係",
+            "本輪沒有保留精確的縮減記錄",
+            "至少有一筆舊版的問題觀察結果",
+            "請保留這項限制的說明；不要把缺少的歷史細節解讀為已完成的涵蓋。",
         ] {
             assert!(
                 zh_html.contains(composed),
@@ -24628,6 +24649,9 @@ mod tests {
             "granular executed scope",
             "requested scan stage",
             "run-frozen target label or type",
+            "The run records the completed engine/asset coordinate",
+            "This run did not retain an exact reduction record",
+            "Keep this limitation visible",
         ] {
             assert!(
                 !zh_html.contains(english_prose),

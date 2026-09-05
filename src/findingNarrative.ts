@@ -442,6 +442,324 @@ const withCheck = (check: string, label: string): string => {
   return `${trimmed} 的${label}`;
 };
 
+/**
+ * The sentences a coverage row says, paired with their Traditional Chinese.
+ *
+ * The backend writes these in English before any locale is known and freezes
+ * them into the case, so the English is canonical and this is a lookup rather
+ * than a second source of truth. `undefined` means the sentence is not one this
+ * product authored -- a case exclusion carries the words a person typed -- and
+ * the caller shows the stored text rather than inventing a label for it.
+ *
+ * `coverage_gap_prose_zh_hant` is the twin. Completeness against the producer
+ * is enforced on the Rust side, where a debug assertion in `beginner_report.rs`
+ * checks every gap the whole suite builds; the parity test holds this table to
+ * that one, English key and Chinese sentence together.
+ */
+const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
+  [
+    "The request-level outcome contradicts the run's durable task state and was ignored.",
+    "這次請求層級的結果與本輪儲存的檢查狀態互相矛盾，因此未被採用。",
+  ],
+  [
+    "At least one legacy finding observation did not retain its full run-specific presentation snapshot.",
+    "至少有一筆舊版的問題觀察結果，沒有保留該輪完整的顯示資料。",
+  ],
+  [
+    "The saved work-unit coverage for this check is internally inconsistent. The report did not guess which planned units were tested.",
+    "這項檢查儲存的工作單元涵蓋記錄本身互相矛盾。報告不會臆測哪些計畫中的單元已經被檢測。",
+  ],
+  [
+    "Usable results were saved for these work units, but their remaining planned operations were not tested complete.",
+    "這些工作單元已儲存可用的結果，但其餘計畫中的操作並未完成檢測。",
+  ],
+  [
+    "These planned work units stopped before establishing completed coverage.",
+    "這些計畫中的工作單元在建立完整涵蓋之前就停止了。",
+  ],
+  [
+    "These planned work units reached their bounded time limit before completed coverage was recorded.",
+    "這些計畫中的工作單元在記錄完整涵蓋之前就達到時間上限。",
+  ],
+  [
+    "These planned work units were cancelled before completed coverage was recorded.",
+    "這些計畫中的工作單元在記錄完整涵蓋之前就被取消。",
+  ],
+  [
+    "These frozen work units have no validated tested outcome in any saved attempt.",
+    "這些已凍結的工作單元，在任何一次已儲存的嘗試中都沒有通過驗證的檢測結果。",
+  ],
+  [
+    "At least one validated scanner result has not been fully processed into findings. Tested coverage remains saved, but the finding list may be incomplete.",
+    "至少有一筆通過驗證的掃描結果尚未完全轉換成問題項目。已檢測的涵蓋範圍仍然保留，但問題清單可能不完整。",
+  ],
+  [
+    "Every planned work unit has completed evidence, but the check itself has not recorded a completed final state.",
+    "每個計畫中的工作單元都有完成的證據，但這項檢查本身尚未記錄完成的最終狀態。",
+  ],
+  [
+    "The check reached its time limit after saving some usable results.",
+    "這項檢查在儲存了一部分可用結果之後達到時間上限。",
+  ],
+  [
+    "The check reached its time limit before saving a tested outcome.",
+    "這項檢查在儲存任何檢測結果之前就達到時間上限。",
+  ],
+  [
+    "The check stopped after saving some usable results.",
+    "這項檢查在儲存了一部分可用結果之後停止。",
+  ],
+  [
+    "The check stopped before saving a tested outcome.",
+    "這項檢查在儲存任何檢測結果之前就停止。",
+  ],
+  [
+    "The check was cancelled after saving some usable results.",
+    "這項檢查在儲存了一部分可用結果之後被取消。",
+  ],
+  [
+    "The check was cancelled before saving a tested outcome.",
+    "這項檢查在儲存任何檢測結果之前就被取消。",
+  ],
+  [
+    "This check produced some durable work but did not complete every planned dimension.",
+    "這項檢查產生了一部分已保存的成果，但沒有完成每一個計畫中的項目。",
+  ],
+  [
+    "The bounded check reached its time limit, so it cannot be treated as tested complete.",
+    "這項受限的檢查達到時間上限，因此不能視為已完整檢測。",
+  ],
+  [
+    "This check stopped before it could establish completed coverage.",
+    "這項檢查在建立完整涵蓋之前就停止了。",
+  ],
+  [
+    "This check was cancelled before completed coverage was recorded.",
+    "這項檢查在記錄完整涵蓋之前就被取消。",
+  ],
+  [
+    "This check did not start, so it is not a pass.",
+    "這項檢查沒有啟動，因此不代表通過。",
+  ],
+  [
+    "This check is still changing and has not recorded a complete result.",
+    "這項檢查仍在變動中，尚未記錄完整的結果。",
+  ],
+  [
+    "The packaged check list could not be loaded. Available checks may still run, but checks from that list are not tested.",
+    "無法載入內建的檢查清單。可用的檢查仍然可以執行，但該清單上的檢查未被檢測。",
+  ],
+  [
+    "One additional packaged check was unavailable before planning. Whether it applied to the selected target is unknown, so it is not tested.",
+    "有一項額外的內建檢查在規劃前無法使用。無法得知它是否適用於所選目標，因此未被檢測。",
+  ],
+  [
+    "At least one target identifier is frozen with the run, but its displayed label or type comes from current project data or is unavailable. The report labels that provenance and does not call it historical fact.",
+    "至少有一個目標的識別資料是與本輪一起凍結的，但畫面上顯示的名稱或類型來自目前的專案資料，或是無法取得。報告會標示這項來源，不會把它當成歷史事實。",
+  ],
+  [
+    "This run did not retain an exact reduction record. An empty list therefore cannot be interpreted as proof that no requested dimension was reduced.",
+    "本輪沒有保留精確的縮減記錄。因此清單為空，並不能證明沒有任何要求的項目被縮減。",
+  ],
+  [
+    "No exact per-run limits were retained. Current project settings are not substituted for historical requested limits.",
+    "沒有保留本輪的精確限制。目前的專案設定不會拿來代替當時要求的限制。",
+  ],
+  [
+    "This run did not freeze a quick-discovery, inventory, or deep-stage selection. The report does not infer one from engine names or current project settings.",
+    "本輪沒有凍結快速探索、清點或深度掃描的階段選擇。報告不會從掃描工具名稱或目前的專案設定推測階段。",
+  ],
+  [
+    "At least one readable frozen network plan includes full inventory, but another network check has no valid saved plan. Inventory is the highest known stage, not a complete run-wide record.",
+    "至少有一份可讀取的凍結網路計畫包含完整清點，但另一項網路檢查沒有有效的已儲存計畫。清點是目前已知的最高階段，不代表整輪的完整記錄。",
+  ],
+  [
+    "Readable frozen network plans contain quick discovery only, but another network check has no valid saved plan. Quick discovery is the highest known stage, not a complete run-wide record.",
+    "可讀取的凍結網路計畫只包含快速探索，但另一項網路檢查沒有有效的已儲存計畫。快速探索是目前已知的最高階段，不代表整輪的完整記錄。",
+  ],
+  [
+    "The run records the completed engine/asset coordinate but not exact observed hosts, services, ports, paths, files, branches, accounts, or resources.",
+    "本輪記錄了完成的掃描工具與資產對應關係，但沒有記錄實際觀察到的主機、服務、連接埠、路徑、檔案、分支、帳號或資源。",
+  ],
+  [
+    "The task says completed but has neither a finish time nor a bounded native observation time. The report does not invent when it was tested.",
+    "這項工作標示為已完成，卻既沒有結束時間，也沒有內建檢查的觀察時間。報告不會臆造檢測的時間。",
+  ],
+  [
+    "Let the scan continue or cancel it if you need to stop.",
+    "可以讓掃描繼續，或是在你需要停止時取消它。",
+  ],
+  [
+    "This report is still changing and keeps the durable work already saved.",
+    "這份報告仍在變動中，並保留已經儲存下來的成果。",
+  ],
+  [
+    "If you expected an app on this port, start it and run the check again.",
+    "如果你預期這個連接埠上有服務在執行，請先啟動它，再重新執行檢查。",
+  ],
+  [
+    "The port refused the bounded TCP connection at the recorded time; this is not a security pass or failure.",
+    "在記錄的時間點，這個連接埠拒絕了受限的 TCP 連線；這不代表安全性通過或失敗。",
+  ],
+  [
+    "Review what was tested before deciding whether you need a broader scan.",
+    "請先檢視已檢測的內容，再決定是否需要更大範圍的掃描。",
+  ],
+  [
+    "No actionable finding was recorded, but a no-findings result is only as broad as the displayed coverage.",
+    "沒有記錄到需要處理的問題，但「沒有發現問題」的結論，只在畫面上顯示的涵蓋範圍內成立。",
+  ],
+  [
+    "No checks ran because this scan has no active permission for a selected target.",
+    "沒有執行任何檢查，因為這次掃描對所選目標沒有有效的授權。",
+  ],
+  [
+    "No checks ran because none of the selected targets is confirmed as yours to scan.",
+    "沒有執行任何檢查，因為所選目標都尚未確認是你有權掃描的對象。",
+  ],
+  [
+    "No installed check applies to the selected target and permission. Nothing contacted the target.",
+    "沒有任何已安裝的檢查適用於所選的目標與授權範圍。沒有任何連線接觸過該目標。",
+  ],
+  [
+    "Review the exact target and permission, then start the scan again.",
+    "請確認目標與授權範圍，然後重新開始掃描。",
+  ],
+  [
+    "Choose a target you control, then start the scan again.",
+    "請選擇一個你有掌控權的目標，然後重新開始掃描。",
+  ],
+  [
+    "Choose another available check or add a compatible target source.",
+    "請改選其他可用的檢查，或新增相容的目標來源。",
+  ],
+  [
+    "Keep this limitation visible; do not interpret missing historical detail as completed coverage.",
+    "請保留這項限制的說明；不要把缺少的歷史細節解讀為已完成的涵蓋。",
+  ],
+  [
+    "Keep the saved results, then retry this scan if you need an internally consistent coverage record.",
+    "請保留已儲存的結果；如果你需要前後一致的涵蓋記錄，再重新執行這次掃描。",
+  ],
+  [
+    "Use the retained severity, confidence, and evidence for review; rerun to create a fully frozen report.",
+    "請以保留下來的嚴重程度、把握度與證據進行檢視；若要產生完全凍結的報告，請重新掃描。",
+  ],
+  [
+    "Keep the saved evidence and other results. Retry this check to create a new consistent coverage record.",
+    "請保留已儲存的證據與其他結果。重新執行這項檢查，以建立新的一致涵蓋記錄。",
+  ],
+  [
+    "Keep the saved results and retry only the unfinished work.",
+    "請保留已儲存的結果，只重新執行尚未完成的部分。",
+  ],
+  [
+    "Keep other saved results and retry only the failed work.",
+    "請保留其他已儲存的結果，只重新執行失敗的部分。",
+  ],
+  [
+    "Keep other saved results and retry only the timed-out work.",
+    "請保留其他已儲存的結果，只重新執行逾時的部分。",
+  ],
+  [
+    "Start only the cancelled work again when you want to finish it.",
+    "想要完成時，只需重新啟動被取消的那部分工作。",
+  ],
+  [
+    "Let the current check continue or cancel it; saved partial results remain available.",
+    "可以讓目前的檢查繼續，或是取消它；已儲存的部分結果仍然可以使用。",
+  ],
+  [
+    "Retry only the work that has not yet produced a tested outcome.",
+    "只需重新執行尚未產生檢測結果的那部分工作。",
+  ],
+  [
+    "Keep the saved results. The app should retry result processing automatically; keep this limitation visible until it succeeds.",
+    "請保留已儲存的結果。本程式應該會自動重試結果處理；在成功之前，請保留這項限制的說明。",
+  ],
+  [
+    "Keep the completed results. The app should reconcile the timed-out check before treating the run as final.",
+    "請保留已完成的結果。本程式應該先核對這項逾時的檢查，才能把本輪視為最終結果。",
+  ],
+  [
+    "Keep the completed results. The app should reconcile the stopped check before treating the run as final.",
+    "請保留已完成的結果。本程式應該先核對這項中止的檢查，才能把本輪視為最終結果。",
+  ],
+  [
+    "Keep the completed results. The app should reconcile the cancelled check before treating the run as final.",
+    "請保留已完成的結果。本程式應該先核對這項被取消的檢查，才能把本輪視為最終結果。",
+  ],
+  [
+    "Keep the completed results while the app reconciles the check's final state.",
+    "在本程式核對這項檢查的最終狀態期間，請保留已完成的結果。",
+  ],
+  [
+    "Keep saved results and retry only the unfinished work.",
+    "請保留已儲存的結果，只重新執行尚未完成的部分。",
+  ],
+  [
+    "Keep saved results and start only the unfinished work again when you are ready.",
+    "請保留已儲存的結果；準備好之後，只需重新啟動尚未完成的部分。",
+  ],
+  [
+    "Review the saved results, then retry this check to cover the unfinished dimensions.",
+    "請先檢視已儲存的結果，再重新執行這項檢查，以涵蓋尚未完成的項目。",
+  ],
+  [
+    "Retry once; if it times out again, review reachability or ask a network specialist.",
+    "請重試一次；如果再次逾時，請檢查連線是否可達，或詢問網路專業人員。",
+  ],
+  [
+    "Keep the saved results from other checks and retry this check.",
+    "請保留其他檢查已儲存的結果，並重新執行這項檢查。",
+  ],
+  [
+    "Start this check again when you want to finish the missing coverage.",
+    "想要補齊缺少的涵蓋範圍時，請重新執行這項檢查。",
+  ],
+  [
+    "Review the target and try this check again.",
+    "請檢視目標設定，然後重新執行這項檢查。",
+  ],
+  [
+    "Let it continue or cancel it; the partial report remains available.",
+    "可以讓它繼續，或是取消它；這份部分完成的報告仍然可以使用。",
+  ],
+  [
+    "Keep the available results. The app can include these checks in a later run after their packaged scanner information is restored.",
+    "請保留目前可用的結果。等這些檢查的內建掃描工具資訊恢復之後，本程式可以在之後的掃描中納入它們。",
+  ],
+  [
+    "No action is needed unless this area should be included in a future scan.",
+    "除非之後的掃描要納入這個範圍，否則不需要採取任何行動。",
+  ],
+];
+
+/**
+ * One sentence of a coverage row, in the reader's language.
+ *
+ * English returns the stored prose. It is what the backend wrote, and it is
+ * more specific than anything derivable from the gap's kind: the same
+ * `not_tested` kind is written for a check that saved partial work, one that
+ * never started, and one still running.
+ */
+export const coverageGapProse = (locale: "en" | "zh-TW", english: string): string => {
+  if (locale === "en") return english;
+  const trimmed = english.trim();
+  // Six reasons gain a diagnostic code when the task recorded one. It is the
+  // scanner's own code and stays verbatim; only the sentence around it moves.
+  const withCode = /^(.*\.) Diagnostic code: (.+)\.$/u.exec(trimmed);
+  if (withCode) {
+    const base = lookupProse(withCode[1] ?? "");
+    if (base) return `${base}診斷代碼：${withCode[2]}。`;
+    return english;
+  }
+  return lookupProse(trimmed) ?? english;
+};
+
+const lookupProse = (english: string): string | undefined =>
+  COVERAGE_GAP_PROSE.find(([candidate]) => candidate === english)?.[1];
+
 /** "Have the recommended specialist ({expert}) review ... then plan and approve {remedy}." */
 export const findingActionSentence = (
   locale: "en" | "zh-TW",

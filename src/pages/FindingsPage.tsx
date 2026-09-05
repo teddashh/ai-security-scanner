@@ -18,6 +18,7 @@ import {
   findingActionSentence,
   findingPriorityReason,
   findingUnattributedGap,
+  coverageGapProse,
   findingRollbackSentence,
   findingVerificationSentence,
   findingImpactSentence,
@@ -32,7 +33,6 @@ import { isExactBuiltInLocalhostQuickScanEngine } from "../localhostQuickScan";
 import { scanRequestOutcomeBeginnerSummary } from "../scanRequestOutcomePresentation";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import type {
-  BeginnerCoverageGapKind,
   BeginnerCoverageStatus,
   BeginnerMasterReport,
   BeginnerNextActionCode,
@@ -448,31 +448,6 @@ const copy = {
   testedStatusCancelled: { en: "Cancelled", zhTW: "已取消" },
   testedStatusNotTested: { en: "Not tested", zhTW: "未測試" },
   testedStatusInProgress: { en: "In progress", zhTW: "進行中" },
-  // `not_tested` is the kind the backend assigns to five different situations,
-  // including a check that saved partial work and one that is still running
-  // (beginner_report.rs:1450,1490). Naming a single cause here contradicted the
-  // gap's own dimension on the same row. The shared truth is only that no
-  // completed coverage was recorded, which is what keeps it out of the pass
-  // column; the dimension and next action carry which situation it is.
-  gapNotTested: {
-    en: "No completed coverage was recorded for this part, so it is not a pass.",
-    zhTW: "這部分沒有記錄到完成的涵蓋範圍，因此不算通過。",
-  },
-  gapFailed: {
-    en: "This part was not covered because its check stopped with an error.",
-    zhTW: "負責這部分的檢查因錯誤停止，因此沒有涵蓋。",
-  },
-  gapTimedOut: {
-    en: "The time limit was reached before this part completed.",
-    zhTW: "這部分在完成前已到達時間限制。",
-  },
-  gapCancelled: { en: "This part stopped when the scan was cancelled.", zhTW: "掃描取消時，這部分也停止了。" },
-  gapExcluded: { en: "This part was deliberately outside the requested scope.", zhTW: "這部分原本就不在要求的範圍內。" },
-  gapTruncated: { en: "A saved limit reduced this part of the scan.", zhTW: "已保存的限制縮減了這部分掃描。" },
-  gapUnavailable: {
-    en: "The run did not retain enough detail to claim this part was tested.",
-    zhTW: "本輪沒有保留足夠資料，不能宣稱這部分已測試。",
-  },
   actionReviewFinding: { en: "Review the problem and its evidence.", zhTW: "檢視這個問題與相關證據。" },
   actionRetry: { en: "Retry this check; saved results will remain.", zhTW: "重試這項檢查；已保存的結果會保留。" },
   actionScope: { en: "Review the requested scope, then retry.", zhTW: "確認要求的範圍後再重試。" },
@@ -485,10 +460,6 @@ const copy = {
   // findingNarrative.ts beside every other pair this product writes; these two
   // are the placeholder-free fallback for a report stored before the
   // structured payload existed.
-  gapUnattributedGeneric: {
-    en: "Results were reported for an identifier no authorized asset carries, so none of them are in this report.",
-    zhTW: "有結果是針對某個識別碼回報的，但你已授權的資產都沒有登記它，因此這份報告不會包含它們。",
-  },
   actionAddAssetIdentifierGeneric: {
     en: "Add the identifier the check reported on to the asset you authorized, then scan again.",
     zhTW: "請將這項檢查所回報的識別碼，新增到你已授權的資產上，然後重新掃描。",
@@ -554,22 +525,6 @@ const testedStatusCopy = (status: BeginnerCoverageStatus) => {
     case "cancelled": return copy.testedStatusCancelled;
     case "not_tested": return copy.testedStatusNotTested;
     case "in_progress": return copy.testedStatusInProgress;
-  }
-};
-
-const gapReasonCopy = (kind: BeginnerCoverageGapKind) => {
-  switch (kind) {
-    case "not_tested": return copy.gapNotTested;
-    case "failed": return copy.gapFailed;
-    case "timed_out": return copy.gapTimedOut;
-    case "cancelled": return copy.gapCancelled;
-    case "excluded": return copy.gapExcluded;
-    case "truncated": return copy.gapTruncated;
-    case "unavailable": return copy.gapUnavailable;
-    // The placeholder-free form. The caller interpolates the identifier when
-    // the structured payload is present; this is what a report written before
-    // it existed falls back to.
-    case "unattributed": return copy.gapUnattributedGeneric;
   }
 };
 
@@ -926,14 +881,22 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
                 return (
                   <li key={`${gap.taskId ?? "request"}-${gap.dimension}-${index}`}>
                     <strong>{targets || text(copy.requestedScope)}</strong>
+                    {/*
+                      * The backend's own reason, not a sentence derived from
+                      * the kind. It writes a distinct one for each situation --
+                      * `not_tested` covers a check that saved partial work, one
+                      * that never started, and one still running -- so a single
+                      * sentence per kind was false for all but one of them, and
+                      * contradicted the dimension printed beside it.
+                      */}
                     <span>{unattributedText
                       ? unattributedText.dimension
                       : localizedCoverageDimension(gap.dimension, locale)} · {unattributedText
                       ? unattributedText.reason
-                      : text(gapReasonCopy(gap.kind))}</span>
+                      : coverageGapProse(locale, gap.reason)}</span>
                     <span>{unattributedText
                       ? unattributedText.nextAction
-                      : text(nextActionCopy(gap.nextActionCode))}</span>
+                      : coverageGapProse(locale, gap.nextAction)}</span>
                   </li>
                 );
               })}

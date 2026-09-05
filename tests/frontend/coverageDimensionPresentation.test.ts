@@ -107,13 +107,12 @@ test("the backend's dimension vocabulary was found", () => {
   }
 });
 
-test("the not-tested row explains no more than its kind can establish", () => {
-  // The row's sentence comes from `kind` alone (`gapReasonCopy` in
-  // FindingsPage), but the backend assigns `CoverageGapKind::NotTested` to
-  // several different situations and writes a distinct `reason` for each -- a
-  // check that saved partial work, one that never started, one still running.
-  // A sentence naming one cause is therefore false for the others, and
-  // contradicts the dimension rendered beside it on the same row.
+test("the row's sentence is the backend's, not one derived from the kind", () => {
+  // The backend assigns `CoverageGapKind::NotTested` to several different
+  // situations and writes a distinct `reason` for each -- a check that saved
+  // partial work, one that never started, one still running. So a sentence
+  // composed from the kind is false for all but one of them and contradicts
+  // the dimension rendered beside it on the same row.
   const notTestedProducers = [
     ...production.matchAll(/CoverageGapKind::NotTested,\s*\n\s*"([^"]+)",\s*\n\s*"([^"]+)"/gu),
   ].map((match) => ({ dimension: match[1], reason: match[2] }));
@@ -121,26 +120,26 @@ test("the not-tested row explains no more than its kind can establish", () => {
     notTestedProducers.length >= 2,
     `found ${notTestedProducers.length} not-tested producers; the extraction above is stale`,
   );
-  // The load-bearing part: they do not agree on a cause, so the UI cannot state
-  // one. This fires only when *every* producer collapses onto a single reason,
-  // which is correct -- the premise is the disagreement, not any one arm. One
-  // producer changing its wording leaves the constraint intact and should not
-  // fail here.
+  // The premise: they do not agree on a cause, so no single sentence can name
+  // one. This fires only when *every* producer collapses onto one reason.
   assert.ok(
     new Set(notTestedProducers.map((producer) => producer.reason)).size > 1,
-    "the producers now share one reason; the shared row sentence could become specific again",
+    "the producers now share one reason; a kind-derived sentence could become specific again",
   );
 
+  // The conclusion, checked at the render rather than in the copy: the row
+  // shows `gap.reason`. A per-kind sentence would pass any assertion about its
+  // own wording while still being the wrong sentence for two rows in three.
   const findingsPage = readFileSync(
     new URL("../../src/pages/FindingsPage.tsx", import.meta.url),
     "utf8",
   );
-  const rendered = findingsPage.match(/gapNotTested: \{\s*en: "([^"]+)"/u)?.[1];
-  assert.ok(rendered, "gapNotTested was not found; the extraction above is stale");
-  assert.match(rendered, /not a pass/u);
-  for (const cause of ["no compatible check completed", "did not start"]) {
-    assert.ok(!rendered.includes(cause), `the shared row sentence claims "${cause}"`);
-  }
+  assert.match(findingsPage, /coverageGapProse\(locale, gap\.reason\)/u);
+  assert.match(findingsPage, /coverageGapProse\(locale, gap\.nextAction\)/u);
+  assert.ok(
+    !/gapReasonCopy/u.test(findingsPage),
+    "the kind-derived sentence is back on the row",
+  );
 });
 
 test("every dimension the backend names has a Traditional Chinese label", () => {

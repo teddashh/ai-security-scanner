@@ -240,6 +240,72 @@ test("an absent coverage gap is reported as unrecorded rather than as none exist
   expect(gapsCard.textContent).toContain("No known coverage gap was recorded.");
 });
 
+test("two gaps of the same kind give the reader two different reasons", () => {
+  // The row's sentence used to come from `kind` alone. The backend writes a
+  // distinct reason for each situation and `not_tested` covers three of them --
+  // a check that saved partial work, one that never started, one still running
+  // -- so one sentence per kind was false for two of every three rows, and
+  // contradicted the dimension printed beside it.
+  window.localStorage.setItem(localeStorageKey, "en");
+  const { container } = renderReport(
+    report("partial", {
+      coverageGaps: [
+        {
+          kind: "not_tested",
+          targetAssetIds: ["asset-1"],
+          dimension: "trivy: not-tested check dimension",
+          reason: "This check did not start, so it is not a pass.",
+          nextActionCode: "review_scope_and_retry",
+          nextAction: "Review the target and try this check again.",
+        },
+        {
+          kind: "not_tested",
+          targetAssetIds: ["asset-1"],
+          dimension: "trivy: unfinished check dimension",
+          reason: "This check is still changing and has not recorded a complete result.",
+          nextActionCode: "wait_or_cancel",
+          nextAction: "Let it continue or cancel it; the partial report remains available.",
+        },
+      ],
+    }),
+  );
+
+  const section = container.querySelector<HTMLElement>(
+    "section[aria-labelledby='beginner-master-report-title']",
+  );
+  expect(within(section!).getByText(/This check did not start, so it is not a pass\./u)).toBeTruthy();
+  expect(
+    within(section!).getByText(/This check is still changing and has not recorded a complete result\./u),
+  ).toBeTruthy();
+  expect(within(section!).getByText(/Review the target and try this check again\./u)).toBeTruthy();
+});
+
+test("a Traditional Chinese reader is told the same two reasons", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderReport(
+    report("partial", {
+      coverageGaps: [
+        {
+          kind: "not_tested",
+          targetAssetIds: ["asset-1"],
+          dimension: "trivy: not-tested check dimension",
+          reason: "This check did not start, so it is not a pass.",
+          nextActionCode: "review_scope_and_retry",
+          nextAction: "Review the target and try this check again.",
+        },
+      ],
+    }),
+  );
+
+  const section = container.querySelector<HTMLElement>(
+    "section[aria-labelledby='beginner-master-report-title']",
+  );
+  expect(within(section!).getByText(/這項檢查沒有啟動，因此不代表通過。/u)).toBeTruthy();
+  expect(within(section!).getByText(/trivy 的未檢測的檢查項目/u)).toBeTruthy();
+  expect(section!.textContent).not.toContain("This check did not start");
+  window.localStorage.setItem(localeStorageKey, "en");
+});
+
 test("what the run could not establish is shown with its own dimension", () => {
   // Every dimension the backend could not speak to arrives as a gap. Two gaps
   // sharing a kind are told apart by their dimension alone, so both must reach
@@ -397,11 +463,12 @@ test("a finding the case no longer holds reports no first-seen run rather than t
   expect(provenanceValue(container, "Last-seen run")).toBe("Not reported");
 });
 
-test("a coverage gap does not name a cause the kind cannot establish", () => {
+test("a coverage gap names the cause the backend actually recorded", () => {
   // `not_tested` is assigned to a check that saved partial work, one that never
-  // started, and one still running. The row renders the gap's own dimension
-  // beside this sentence, so naming a single cause made the two halves of one
-  // row contradict each other.
+  // started, and one still running. The row used to compose its sentence from
+  // the kind, which cannot tell those apart, so it named one cause and the
+  // dimension printed beside it named another. It now shows the reason the
+  // backend wrote for this gap, which is the one that matches.
   const { container } = renderReport(
     report("partial", {
       coverageGaps: [{
@@ -420,10 +487,11 @@ test("a coverage gap does not name a cause the kind cannot establish", () => {
     "section[aria-labelledby='beginner-master-report-title']",
   );
   const row = within(section!).getByText(/remaining requested dimensions/u).textContent ?? "";
-  expect(row).toContain("not a pass");
-  // The specific causes the kind cannot distinguish.
-  expect(row).not.toContain("no compatible check completed");
+  expect(row).toContain("did not complete every planned dimension");
+  // The causes this kind covers but this gap is not. Naming one of them here
+  // would contradict the dimension in the same row.
   expect(row).not.toContain("did not start");
+  expect(row).not.toContain("still changing");
 });
 
 test("AIDEFEND is not presented as carrying the same standing as NIST and ISO", () => {
