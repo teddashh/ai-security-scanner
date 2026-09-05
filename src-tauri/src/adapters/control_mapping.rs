@@ -617,8 +617,30 @@ fn validate_text(label: &str, value: &str, min: usize, max: usize) -> Result<(),
 mod tests {
     use super::*;
 
+    /// The one benchmark the kube-bench image ships, and the only source of
+    /// check identifiers this product can ever observe from that engine.
+    const KUBE_BENCH_SNAPSHOT_NODE_YAML: &str = include_str!(
+        "../../../engines/images/kube-bench/cfg/ai-security-scanner-snapshot/node.yaml"
+    );
+
     fn catalog_fixture() -> Value {
         serde_json::from_str(CATALOG_JSON).expect("embedded catalog JSON")
+    }
+
+    /// Check identifiers defined by the shipped benchmark. Group headings share
+    /// the `- id:` spelling, so only three-part numeric ids are collected.
+    fn kube_bench_snapshot_check_ids() -> Vec<&'static str> {
+        KUBE_BENCH_SNAPSHOT_NODE_YAML
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("- id: "))
+            .filter(|id| {
+                let parts = id.split('.').collect::<Vec<_>>();
+                parts.len() == 3
+                    && parts.iter().all(|part| {
+                        !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
+                    })
+            })
+            .collect()
     }
 
     fn catalog_json_with_recalculated_digest(mut value: Value) -> String {
@@ -656,7 +678,7 @@ mod tests {
     fn embedded_catalog_is_bounded_and_only_uses_known_engines() {
         validate_catalog(ENGINES).expect("valid embedded mappings");
         let provenance = catalog_provenance().expect("embedded provenance");
-        assert_eq!(provenance.mapping_version, "2026-09-05.3");
+        assert_eq!(provenance.mapping_version, "2026-09-05.4");
         assert_eq!(provenance.reviewed_at, "2026-09-05");
         assert_eq!(provenance.review_process, REVIEW_PROCESS_V1);
         assert_eq!(provenance.catalog_sha256.len(), 64);
@@ -673,6 +695,10 @@ mod tests {
     /// engine is the *shape* upstream guarantees for an identifier, and the
     /// prefix the launcher itself puts there. Each assertion below names the
     /// upstream fact it encodes.
+    ///
+    /// kube-bench is checked exactly rather than by shape, because the benchmark
+    /// this product ships is a tracked file. That is the strongest form of this
+    /// guard and the only entry that gets it.
     ///
     /// This does not cover every engine, and the gaps are real rather than
     /// oversights. Nuclei was the fifth broken entry, and no shape check would
@@ -757,6 +783,21 @@ mod tests {
                     );
                     checked += 1;
                 }
+                // This product ships one benchmark and runs only `--targets
+                // node` against it, so the reachable check ids are exactly the
+                // `- id:` lines of the tracked node.yaml. The previous value,
+                // `1.2.1`, is a control-plane check from upstream's own cfg
+                // tree, which the image never copies.
+                "kube-bench" => {
+                    let defined = kube_bench_snapshot_check_ids();
+                    assert!(!defined.is_empty(), "snapshot benchmark parsed as empty");
+                    assert!(
+                        defined.iter().any(|id| id == source_rule),
+                        "the shipped snapshot benchmark defines no check {source_rule:?}, \
+                         so kube-bench can never emit it; it defines {defined:?}"
+                    );
+                    checked += 1;
+                }
                 "trivy" | "grype" if match_kind == "prefix" => {
                     assert_eq!(source_rule, "CVE-");
                     checked += 1;
@@ -765,7 +806,7 @@ mod tests {
             }
         }
         assert!(
-            checked >= 6,
+            checked >= 7,
             "expected the engines whose identifier shape upstream fixes to be checked, saw {checked}"
         );
     }
@@ -781,10 +822,10 @@ mod tests {
         assert_eq!(overprivileged_policy.len(), 3);
         assert!(overprivileged_policy.iter().all(|item| {
             item.relationship == "related"
-                && item.mapping_version == "2026-09-05.3"
+                && item.mapping_version == "2026-09-05.4"
                 && item.mapping_provenance.as_ref().is_some_and(|provenance| {
                     provenance.catalog_sha256
-                        == "f36648a607048adbf8776c2b2542f6af2cd43df4f6cbd36ce293c3202b18551b"
+                        == "3d05194998a48d7a674f1d623f59cc4c7c07b6248f49f603e0700869fc3a21f1"
                 })
                 && !item.rationale.to_ascii_lowercase().contains("compliant")
         }));

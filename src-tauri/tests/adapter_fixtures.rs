@@ -390,11 +390,26 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
                     .iter()
                     .any(|tag| tag.starts_with("source-rule:"))
             );
-            assert!(
-                finding
-                    .tags
-                    .iter()
-                    .any(|tag| tag.starts_with("source-severity:"))
+            // Every finding states where its severity came from, and states it
+            // once: `source-severity:` when the engine rated it, or
+            // `severity-basis:derived` when the engine emits no severity and
+            // this product supplied one. Both at once would let a derived
+            // rating be read as the engine's own.
+            let reported = finding
+                .tags
+                .iter()
+                .filter(|tag| tag.starts_with("source-severity:"))
+                .count();
+            let derived = finding
+                .tags
+                .iter()
+                .filter(|tag| tag.as_str() == "severity-basis:derived")
+                .count();
+            assert_eq!(
+                reported + derived,
+                1,
+                "{engine_id} finding {} has {reported} source-severity and {derived} derived tags",
+                finding.id
             );
             assert!(!finding.evidence.is_empty());
             assert!(finding.evidence.iter().all(|evidence| {
@@ -438,6 +453,99 @@ fn checkov_missing_and_unrecognized_severity_stays_unknown() {
     assert_eq!(by_title["Missing rating"], &Severity::Unknown);
     assert_eq!(by_title["Custom rating"], &Severity::Unknown);
     assert_eq!(by_title["Information only"], &Severity::Informational);
+}
+
+/// kube-bench's `Check` struct has no severity field and `check/` overrides no
+/// `MarshalJSON`, so nothing this adapter could read would ever be populated.
+/// Treating that as "the engine said unknown" sank the whole engine to priority
+/// 20, below Low, and read to the user as a rating kube-bench had given.
+///
+/// The severity is therefore derived, and the finding has to say so: a derived
+/// rating that is indistinguishable from a reported one is the failure this
+/// replaces, not a fix for it.
+#[test]
+fn kube_bench_failures_are_rated_from_the_benchmark_and_labelled_as_derived() {
+    let output = normalize_fixture("kube-bench");
+    assert!(
+        output.complete,
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+    assert_eq!(output.findings.len(), 3, "only failing checks are findings");
+
+    // Read the priority an unrated finding actually gets rather than restating
+    // the table, so this still fails if the table changes underneath it.
+    let unrated_priority = normalize_bytes(
+        "checkov",
+        br#"{"results":{"failed_checks":[{"check_id":"missing","check_name":"Missing rating","file_path":"missing.tf"}]}}"#,
+        "checkov-unrated.json",
+        "application/json",
+        "run-unrated",
+    )
+    .findings
+    .first()
+    .expect("one unrated finding")
+    .priority;
+
+    for finding in &output.findings {
+        assert_eq!(
+            finding.severity,
+            Severity::High,
+            "{} was not rated",
+            finding.title
+        );
+        assert!(
+            finding.priority > unrated_priority,
+            "{} sorted at {}, no better than an unrated finding at {unrated_priority}",
+            finding.title,
+            finding.priority
+        );
+        assert!(
+            finding
+                .tags
+                .iter()
+                .any(|tag| tag == "severity-basis:derived"),
+            "{} does not disclose that its severity is derived: {:?}",
+            finding.title,
+            finding.tags
+        );
+        assert!(
+            !finding
+                .tags
+                .iter()
+                .any(|tag| tag.starts_with("source-severity:")),
+            "{} claims a source severity kube-bench never emits: {:?}",
+            finding.title,
+            finding.tags
+        );
+        assert!(
+            finding.priority_reasons.iter().any(|reason| {
+                reason.contains("Severity derived from a failed CIS Kubernetes Benchmark check")
+            }),
+            "{} does not explain the derivation: {:?}",
+            finding.title,
+            finding.priority_reasons
+        );
+        assert!(
+            finding.plain_language_summary.contains("without rating it"),
+            "{} reads as though kube-bench rated it: {}",
+            finding.title,
+            finding.plain_language_summary
+        );
+    }
+
+    let titles = output
+        .findings
+        .iter()
+        .map(|finding| finding.title.as_str())
+        .collect::<BTreeSet<_>>();
+    assert!(titles.contains("Ensure anonymous authentication is disabled"));
+    assert!(titles.contains("Ensure the read-only port is disabled"));
+    assert!(titles.contains("Ensure protectKernelDefaults is enabled"));
+    assert!(
+        !titles.contains("Ensure authorization mode is Webhook"),
+        "a passing check became a finding"
+    );
 }
 
 #[test]
@@ -966,7 +1074,7 @@ fn versioned_control_references_are_allowlisted_relationships_not_assurance_clai
         );
         assert!(references.iter().all(|reference| {
             reference.relationship == "related"
-                && reference.mapping_version == "2026-09-05.3"
+                && reference.mapping_version == "2026-09-05.4"
                 && matches!(reference.framework.as_str(), "NIST CSF" | "ISO/IEC 27001")
         }));
         assert!(
@@ -1090,6 +1198,10 @@ fn secret_values_and_target_instructions_never_enter_findings() {
     assert!(!httpx.contains("target-controlled text is data"));
     assert!(!httpx.contains("session=must-not-appear"));
 
+    // kube-bench's `actual_value` is the verbatim contents of a file read off
+    // the scanned node, so it is the one field of its output an attacker who
+    // controls the node controls too. The shipped snapshot benchmark carries no
+    // remediation text, which is why the sentinel lives here.
     let kube_bench = serde_json::to_string(&normalize_fixture("kube-bench").findings)
         .expect("serialize kube-bench findings");
     assert!(!kube_bench.contains("Do not execute this target-controlled command"));

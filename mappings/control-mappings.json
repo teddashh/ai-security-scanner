@@ -1,10 +1,10 @@
 {
   "schema_version": "1.1",
-  "mapping_version": "2026-09-05.3",
+  "mapping_version": "2026-09-05.4",
   "provenance": {
     "reviewed_at": "2026-09-05",
     "review_process": "source_coordinate_and_rationale_review_v1",
-    "canonical_sha256": "f36648a607048adbf8776c2b2542f6af2cd43df4f6cbd36ce293c3202b18551b"
+    "canonical_sha256": "3d05194998a48d7a674f1d623f59cc4c7c07b6248f49f603e0700869fc3a21f1"
   },
   "relationship": "related",
   "disclaimer": "These evidence-to-control references indicate topical relationships only. They do not establish implementation, effectiveness, certification, or compliance.",
@@ -324,9 +324,9 @@
     {
       "engine_id": "kube-bench",
       "match_kind": "exact",
-      "source_rule": "1.2.1",
+      "source_rule": "4.2.1",
       "controls": ["nist-pr-aa-03", "iso-5-17"],
-      "rationale": "Evidence that anonymous API authentication is enabled is related to authentication enforcement and authentication information safeguards."
+      "rationale": "Evidence that the kubelet accepts anonymous authentication is related to authentication enforcement and authentication information safeguards. This is the node check the shipped snapshot benchmark runs; the control-plane equivalent is not in scope for this product."
     }
   ]
 }

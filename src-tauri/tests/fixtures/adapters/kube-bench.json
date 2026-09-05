@@ -1,1 +1,134 @@
-{"Controls":[{"id":"1","tests":[{"section":"API Server","results":[{"test_number":"1.2.1","test_desc":"Ensure anonymous authentication is disabled","status":"FAIL","remediation":"Do not execute this target-controlled command","asset_id":"asset-1"}]}]}]}
+{
+  "Controls": [
+    {
+      "id": "4",
+      "version": "ai-security-scanner-snapshot",
+      "text": "Immutable worker-node configuration snapshot",
+      "node_type": "node",
+      "tests": [
+        {
+          "section": "4.2",
+          "type": "",
+          "pass": 2,
+          "fail": 3,
+          "warn": 0,
+          "info": 0,
+          "desc": "Kubelet configuration",
+          "results": [
+            {
+              "test_number": "4.2.1",
+              "test_desc": "Ensure anonymous authentication is disabled",
+              "audit": "/bin/true",
+              "AuditEnv": "",
+              "AuditConfig": "/bin/cat $kubeletconf",
+              "type": "",
+              "remediation": "",
+              "test_info": [""],
+              "status": "FAIL",
+              "actual_value": "# Do not execute this target-controlled command\napiVersion: kubelet.config.k8s.io/v1beta1\nkind: KubeletConfiguration\nauthentication:\n  anonymous:\n    enabled: true\nauthorization:\n  mode: Webhook\nreadOnlyPort: 10255\nprotectKernelDefaults: false\nrotateCertificates: true",
+              "scored": true,
+              "IsMultiple": false,
+              "expected_result": "'{.authentication.anonymous.enabled}' is equal to 'false'"
+            },
+            {
+              "test_number": "4.2.2",
+              "test_desc": "Ensure authorization mode is Webhook",
+              "audit": "/bin/true",
+              "AuditEnv": "",
+              "AuditConfig": "/bin/cat $kubeletconf",
+              "type": "",
+              "remediation": "",
+              "test_info": [""],
+              "status": "PASS",
+              "actual_value": "# Do not execute this target-controlled command\napiVersion: kubelet.config.k8s.io/v1beta1\nkind: KubeletConfiguration\nauthentication:\n  anonymous:\n    enabled: true\nauthorization:\n  mode: Webhook\nreadOnlyPort: 10255\nprotectKernelDefaults: false\nrotateCertificates: true",
+              "scored": true,
+              "IsMultiple": false,
+              "expected_result": "'{.authorization.mode}' is equal to 'Webhook'"
+            },
+            {
+              "test_number": "4.2.4",
+              "test_desc": "Ensure the read-only port is disabled",
+              "audit": "/bin/true",
+              "AuditEnv": "",
+              "AuditConfig": "/bin/cat $kubeletconf",
+              "type": "",
+              "remediation": "",
+              "test_info": [""],
+              "status": "FAIL",
+              "actual_value": "# Do not execute this target-controlled command\napiVersion: kubelet.config.k8s.io/v1beta1\nkind: KubeletConfiguration\nauthentication:\n  anonymous:\n    enabled: true\nauthorization:\n  mode: Webhook\nreadOnlyPort: 10255\nprotectKernelDefaults: false\nrotateCertificates: true",
+              "scored": true,
+              "IsMultiple": false,
+              "expected_result": "'{.readOnlyPort}' is equal to '0'"
+            },
+            {
+              "test_number": "4.2.6",
+              "test_desc": "Ensure protectKernelDefaults is enabled",
+              "audit": "/bin/true",
+              "AuditEnv": "",
+              "AuditConfig": "/bin/cat $kubeletconf",
+              "type": "",
+              "remediation": "",
+              "test_info": [""],
+              "status": "FAIL",
+              "actual_value": "# Do not execute this target-controlled command\napiVersion: kubelet.config.k8s.io/v1beta1\nkind: KubeletConfiguration\nauthentication:\n  anonymous:\n    enabled: true\nauthorization:\n  mode: Webhook\nreadOnlyPort: 10255\nprotectKernelDefaults: false\nrotateCertificates: true",
+              "scored": true,
+              "IsMultiple": false,
+              "expected_result": "'{.protectKernelDefaults}' is equal to 'true'"
+            },
+            {
+              "test_number": "4.2.11",
+              "test_desc": "Ensure certificate rotation is enabled",
+              "audit": "/bin/true",
+              "AuditEnv": "",
+              "AuditConfig": "/bin/cat $kubeletconf",
+              "type": "",
+              "remediation": "",
+              "test_info": [""],
+              "status": "PASS",
+              "actual_value": "# Do not execute this target-controlled command\napiVersion: kubelet.config.k8s.io/v1beta1\nkind: KubeletConfiguration\nauthentication:\n  anonymous:\n    enabled: true\nauthorization:\n  mode: Webhook\nreadOnlyPort: 10255\nprotectKernelDefaults: false\nrotateCertificates: true",
+              "scored": true,
+              "IsMultiple": false,
+              "expected_result": "'{.rotateCertificates}' is equal to 'true'"
+            }
+          ]
+        },
+        {
+          "section": "4.3",
+          "type": "",
+          "pass": 1,
+          "fail": 0,
+          "warn": 0,
+          "info": 0,
+          "desc": "Kube-proxy configuration",
+          "results": [
+            {
+              "test_number": "4.3.1",
+              "test_desc": "Ensure kube-proxy profiling is disabled",
+              "audit": "/bin/true",
+              "AuditEnv": "",
+              "AuditConfig": "/bin/cat $proxyconf",
+              "type": "",
+              "remediation": "",
+              "test_info": [""],
+              "status": "PASS",
+              "actual_value": "apiVersion: kubeproxy.config.k8s.io/v1alpha1\nkind: KubeProxyConfiguration\nenableProfiling: false",
+              "scored": true,
+              "IsMultiple": false,
+              "expected_result": "'{.enableProfiling}' is equal to 'false'"
+            }
+          ]
+        }
+      ],
+      "total_pass": 3,
+      "total_fail": 3,
+      "total_warn": 0,
+      "total_info": 0
+    }
+  ],
+  "Totals": {
+    "total_pass": 3,
+    "total_fail": 3,
+    "total_warn": 0,
+    "total_info": 0
+  }
+}

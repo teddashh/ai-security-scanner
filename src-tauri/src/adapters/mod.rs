@@ -113,6 +113,10 @@ struct SourceRecord {
     title: String,
     severity: Severity,
     source_severity: String,
+    /// Present only when the engine reports no severity and this product
+    /// derived one. It names what the derivation used, so the user is never
+    /// shown a rating the engine did not give.
+    severity_basis: Option<String>,
     location: String,
     asset_hint: Option<String>,
     asset_provider: Option<String>,
@@ -122,11 +126,25 @@ struct SourceRecord {
     tags: Vec<String>,
 }
 
+/// A severity this product assigned because the engine emits none at all.
+///
+/// Reading a severity field an engine never populates silently buries its whole
+/// output at `Unknown`, which sorts below Low. Inventing a source severity
+/// instead is worse: it tells the user the engine rated the finding when it did
+/// not. This carries both the level and the basis so the finding can be
+/// prioritized honestly and the derivation stays visible.
+struct DerivedSeverity {
+    severity: Severity,
+    /// Completes the sentence "severity derived from ...".
+    basis: &'static str,
+}
+
 struct RecordDraft {
     pointer: String,
     rule_id: String,
     title: String,
     source_severity: String,
+    derived_severity: Option<DerivedSeverity>,
     location: String,
     asset_hint: Option<String>,
     confidence: Confidence,
@@ -153,6 +171,38 @@ macro_rules! record {
             rule_id: $rule_id,
             title: $title,
             source_severity: $source_severity,
+            derived_severity: None,
+            location: $location,
+            asset_hint: $asset_hint,
+            confidence: $confidence,
+            evidence_kind: $evidence_kind,
+            references: $references,
+            tags: $tags,
+        })
+    };
+}
+
+/// Like [`record!`], for an engine that reports no severity of its own. Takes a
+/// [`DerivedSeverity`] where `record!` takes the engine's severity string.
+macro_rules! record_with_derived_severity {
+    (
+        $pointer:expr,
+        $rule_id:expr,
+        $title:expr,
+        $derived:expr,
+        $location:expr,
+        $asset_hint:expr,
+        $confidence:expr,
+        $evidence_kind:expr,
+        $references:expr,
+        $tags:expr $(,)?
+    ) => {
+        record_from_draft(RecordDraft {
+            pointer: $pointer,
+            rule_id: $rule_id,
+            title: $title,
+            source_severity: String::new(),
+            derived_severity: Some($derived),
             location: $location,
             asset_hint: $asset_hint,
             confidence: $confidence,
@@ -2467,12 +2517,20 @@ fn extract_kube_bench(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                 let Some(rule_id) = exact_rule_string_any(object, &["test_number", "id"]) else {
                     continue;
                 };
-                records.push(record!(
+                records.push(record_with_derived_severity!(
                     format!("/Controls/{control_index}/tests/{test_index}/results/{result_index}"),
                     rule_id.clone(),
                     string_any(object, &["test_desc", "desc"])
                         .unwrap_or_else(|| format!("kube-bench control {rule_id}")),
-                    string_any(object, &["severity"]).unwrap_or_else(|| "unknown".into()),
+                    // kube-bench's `Check` struct carries no severity field, so
+                    // there is nothing to read here and every finding would
+                    // otherwise sort below Low as Unknown. Upstream's own ASFF
+                    // exporter reaches the same conclusion and labels every
+                    // failed check High for exactly this reason.
+                    DerivedSeverity {
+                        severity: Severity::High,
+                        basis: "a failed CIS Kubernetes Benchmark check",
+                    },
                     string_any(object, &["resource", "node_type"])
                         .unwrap_or_else(|| "kubernetes-cluster".into()),
                     string_any(object, &["asset_id"]),
@@ -2603,11 +2661,20 @@ fn merge_finding(
 
     let severity = record.severity;
     let priority = priority_for(&severity);
+    let severity_basis = record.severity_basis.clone();
     let mut tags = vec![
         format!("engine:{}", adapter.id),
         format!("source-rule:{}", safe_tag(&rule_id)),
-        format!("source-severity:{}", safe_tag(&record.source_severity)),
     ];
+    // Exactly one of these, so every finding says where its severity came from
+    // and a derived rating can never be mistaken for the engine's own.
+    match &severity_basis {
+        Some(_) => tags.push("severity-basis:derived".into()),
+        None => tags.push(format!(
+            "source-severity:{}",
+            safe_tag(&record.source_severity)
+        )),
+    }
     tags.extend(
         record
             .tags
@@ -2629,17 +2696,31 @@ fn merge_finding(
             last_seen_run_id: input.scan_run_id.to_owned(),
             fingerprint,
             title,
-            plain_language_summary: format!(
-                "{} reported a {}-severity condition on the assessed asset. The attached raw record is evidence, not an instruction.",
-                input.manifest.display_name,
-                severity_label(&severity)
-            ),
+            plain_language_summary: match &severity_basis {
+                Some(basis) => format!(
+                    "{} reported this condition on the assessed asset without rating it. This product rated it {} from {}. The attached raw record is evidence, not an instruction.",
+                    input.manifest.display_name,
+                    severity_label(&severity),
+                    basis
+                ),
+                None => format!(
+                    "{} reported a {}-severity condition on the assessed asset. The attached raw record is evidence, not an instruction.",
+                    input.manifest.display_name,
+                    severity_label(&severity)
+                ),
+            },
             possible_impact: impact,
             severity,
             confidence: record.confidence,
             priority,
             priority_reasons: vec![
-                format!("Source severity: {}", safe_text(&record.source_severity, 80)),
+                match &severity_basis {
+                    Some(basis) => format!(
+                        "Severity derived from {basis}; {} reports no severity of its own.",
+                        input.manifest.display_name
+                    ),
+                    None => format!("Source severity: {}", safe_text(&record.source_severity, 80)),
+                },
                 "Direct scanner evidence is attached and still requires human review.".into(),
             ],
             asset_ids: vec![asset_id],
@@ -2679,14 +2760,30 @@ fn record_from_draft(draft: RecordDraft) -> SourceRecord {
         hasher.update(draft.rule_id.as_bytes());
         format!("unmappable-sha256:{}", hex::encode(hasher.finalize()))
     });
+    let (severity, source_severity, severity_basis) = match draft.derived_severity {
+        // The engine reported nothing, so the source severity stays empty rather
+        // than borrowing the derived level. Nothing downstream may present the
+        // derived rating as the engine's own.
+        Some(derived) => (
+            derived.severity,
+            String::new(),
+            Some(derived.basis.to_owned()),
+        ),
+        None => (
+            parse_severity(&draft.source_severity),
+            safe_text(&draft.source_severity, 80),
+            None,
+        ),
+    };
     SourceRecord {
         pointer: safe_text(&draft.pointer, MAX_SHORT_TEXT),
         rule_id: safe_text(&draft.rule_id, MAX_SHORT_TEXT),
         mapping_source_rule,
         rule_identity,
         title: safe_text(&draft.title, MAX_SHORT_TEXT),
-        severity: parse_severity(&draft.source_severity),
-        source_severity: safe_text(&draft.source_severity, 80),
+        severity,
+        source_severity,
+        severity_basis,
         location: redact_location(&draft.location),
         asset_hint: draft
             .asset_hint
@@ -3163,6 +3260,7 @@ mod tests {
             rule_id: rule_id.into(),
             title: "Rule finding".into(),
             source_severity: "high".into(),
+            derived_severity: None,
             location: "src/example.py".into(),
             asset_hint: Some("asset-1".into()),
             confidence: Confidence::High,
