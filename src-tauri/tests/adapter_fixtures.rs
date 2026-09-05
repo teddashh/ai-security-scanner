@@ -964,7 +964,7 @@ fn versioned_control_references_are_allowlisted_relationships_not_assurance_clai
         );
         assert!(references.iter().all(|reference| {
             reference.relationship == "related"
-                && reference.mapping_version == "2026-08-28.1"
+                && reference.mapping_version == "2026-09-05.1"
                 && matches!(reference.framework.as_str(), "NIST CSF" | "ISO/IEC 27001")
         }));
         assert!(
@@ -1401,4 +1401,145 @@ fn a_document_the_adapter_cannot_fully_account_for_does_not_read_as_a_clean_run(
             output.warnings
         );
     }
+}
+
+/// Return every finding's `source-rule:` tag paired with its severity.
+///
+/// The rule identity is asserted through the tag rather than a struct field
+/// because that tag is what reaches an export and a mapping lookup.
+fn rules_and_severities(output: &AdapterOutput) -> BTreeMap<String, Severity> {
+    output
+        .findings
+        .iter()
+        .map(|finding| {
+            let rule = finding
+                .tags
+                .iter()
+                .find_map(|tag| tag.strip_prefix("source-rule:"))
+                .expect("every finding carries its source rule")
+                .to_owned();
+            (rule, finding.severity.clone())
+        })
+        .collect()
+}
+
+#[test]
+fn scoutsuite_rule_identity_survives_being_stored_only_as_a_parent_key() {
+    // ScoutSuite writes `services.<service>.findings.<rule key>` and never
+    // repeats the key inside the object, so a parser that only reads fields
+    // finds no rule id and silently drops the entire run.
+    let output = normalize_fixture("scoutsuite");
+    let found = rules_and_severities(&output);
+
+    assert_eq!(
+        found.keys().cloned().collect::<Vec<_>>(),
+        vec![
+            "iam-ec2-role-without-instances".to_owned(),
+            "iam-password-policy-no-uppercase-required".to_owned(),
+            "s3-bucket-world-policy-star".to_owned(),
+        ],
+        "each flagged rule keeps the key ScoutSuite filed it under"
+    );
+
+    // 125 of ScoutSuite's 197 default AWS rules are graded `danger`; leaving
+    // that word unmapped sent the majority of the engine to `Unknown`.
+    assert_eq!(
+        found["iam-password-policy-no-uppercase-required"],
+        Severity::High
+    );
+    assert_eq!(found["s3-bucket-world-policy-star"], Severity::High);
+    assert_eq!(found["iam-ec2-role-without-instances"], Severity::Medium);
+
+    assert!(
+        !found.contains_key("iam-password-policy-minimum-length"),
+        "a rule with zero flagged items is not a finding"
+    );
+    // ScoutSuite's other rule type, `filters`, tags resources for the report
+    // and shares the findings object shape, flagged counts included. Deriving a
+    // rule id from any pointer would turn those into findings.
+    assert!(
+        !found.contains_key("s3-bucket-website-enabled"),
+        "a `filters` entry is not a finding"
+    );
+    assert!(
+        output.complete,
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn cloudsplaining_risks_are_read_from_policies_not_the_document_root() {
+    // `iam-findings-<account>.json` is `authorization_details.results`, keyed by
+    // principal and policy collection. Every risk array sits inside a policy
+    // object, so nothing recognisable appears at the root.
+    let output = normalize_fixture("cloudsplaining");
+    let found = rules_and_severities(&output);
+
+    // Severities are upstream's own grading (`shared/constants.py`), not a
+    // scale invented here, so this engine stays comparable with the others.
+    // The tag is lowercased by `safe_tag`; the mapping lookup keeps the exact
+    // case, which the control-reference assertion below covers.
+    assert_eq!(found["privilegeescalation"], Severity::High);
+    assert_eq!(found["credentialsexposure"], Severity::High);
+    assert_eq!(found["resourceexposure"], Severity::High);
+    assert_eq!(found["dataexfiltration"], Severity::Medium);
+    assert_eq!(found["servicewildcard"], Severity::Medium);
+    assert_eq!(found["infrastructuremodification"], Severity::Low);
+
+    // The catalog previously mapped `iam-privesc`, a rule Cloudsplaining never
+    // emits, so no real run could ever resolve a framework relationship.
+    let escalation = output
+        .findings
+        .iter()
+        .find(|finding| {
+            finding
+                .tags
+                .iter()
+                .any(|tag| tag == "source-rule:privilegeescalation")
+        })
+        .expect("a privilege-escalation finding");
+    assert!(
+        !escalation.control_references.is_empty(),
+        "the corrected mapping coordinate resolves for real output"
+    );
+
+    let titles = output
+        .findings
+        .iter()
+        .map(|finding| finding.title.as_str())
+        .collect::<BTreeSet<_>>();
+    assert!(
+        titles.contains("Privilege escalation path in policy IAMFullAccess"),
+        "a finding names the policy a reader has to change: {titles:?}"
+    );
+    assert!(
+        titles.contains("Resource exposure in policy InsecurePolicy"),
+        "customer-managed policies are read too: {titles:?}"
+    );
+    assert!(
+        titles.contains("Data exfiltration exposure in policy InlinePolicyForAdminGroup"),
+        "inline policies are read too: {titles:?}"
+    );
+
+    assert!(
+        !titles
+            .iter()
+            .any(|title| title.contains("AdministratorAccess")),
+        "Cloudsplaining already excluded that policy; re-reporting it overrules the tool: {titles:?}"
+    );
+
+    // Whether the account owner can edit the policy changes the remediation,
+    // so the distinction has to survive normalization.
+    let sources = output
+        .findings
+        .iter()
+        .flat_map(|finding| &finding.tags)
+        .filter_map(|tag| tag.strip_prefix("policy-source:"))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        sources,
+        BTreeSet::from(["aws-managed", "customer-managed", "inline"]),
+        "each policy collection is distinguishable in the findings list"
+    );
 }

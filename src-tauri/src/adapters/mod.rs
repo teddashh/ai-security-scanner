@@ -1313,7 +1313,12 @@ fn extract_scoutsuite(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
             if !flagged && !status.as_deref().is_some_and(is_failure) {
                 return None;
             }
-            let rule_id = exact_rule_string_any(object, &["id", "rule_id", "key"])?;
+            // ScoutSuite writes each rule under
+            // `services.<service>.findings.<rule key>` and never repeats that
+            // key inside the object (`core/processingengine.py`), so for real
+            // output the pointer holds the only copy of the rule identity.
+            let rule_id = exact_rule_string_any(object, &["id", "rule_id", "key"])
+                .or_else(|| scoutsuite_rule_key(&pointer))?;
             let title = string_any(object, &["description", "title", "name"])
                 .unwrap_or_else(|| format!("ScoutSuite rule {rule_id}"));
             Some(record!(
@@ -1334,67 +1339,113 @@ fn extract_scoutsuite(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
         .collect()
 }
 
+/// Recover a ScoutSuite rule key from the pointer of the object it names.
+///
+/// Scoped to the `findings` container ScoutSuite actually writes rules into, so
+/// an unrelated nested object cannot be admitted as a rule just because it sits
+/// somewhere under `services`.
+fn scoutsuite_rule_key(pointer: &str) -> Option<String> {
+    let mut segments = pointer.rsplit('/');
+    let leaf = segments.next()?;
+    if leaf.is_empty() || segments.next()? != "findings" {
+        return None;
+    }
+    Some(leaf.replace("~1", "/").replace("~0", "~"))
+}
+
+/// Where Cloudsplaining files policies in `iam-findings-<account>.json`, paired
+/// with the tag that tells a reader whether the account owner can edit the
+/// policy at all. An AWS-managed policy is fixed by detaching it, not by
+/// rewriting it, so the distinction changes the remediation.
+const CLOUDSPLAINING_POLICY_SECTIONS: [(&str, &str); 3] = [
+    ("customer_managed_policies", "customer-managed"),
+    ("inline_policies", "inline"),
+    ("aws_managed_policies", "aws-managed"),
+];
+
+/// The risk categories Cloudsplaining writes into every policy object, with the
+/// severity upstream assigns each one in `cloudsplaining/shared/constants.py`.
+/// Reading the tool's own grading keeps this engine comparable with the others
+/// instead of inventing a scale here.
+const CLOUDSPLAINING_RISKS: [(&str, &str, &str); 6] = [
+    ("PrivilegeEscalation", "high", "Privilege escalation path"),
+    ("DataExfiltration", "medium", "Data exfiltration exposure"),
+    ("ResourceExposure", "high", "Resource exposure"),
+    ("ServiceWildcard", "medium", "Service wildcard permission"),
+    ("CredentialsExposure", "high", "Credentials exposure"),
+    (
+        "InfrastructureModification",
+        "low",
+        "Infrastructure modification permission",
+    ),
+];
+
+/// Read Cloudsplaining's IAM findings document.
+///
+/// The artifact is `authorization_details.results` (`command/scan.py`), keyed by
+/// principal and policy collection. Each risk category is an array *inside* a
+/// policy object, so nothing recognisable appears at the document root.
 fn extract_cloudsplaining(
     parsed: &ParsedArtifact,
     warnings: &mut Vec<String>,
 ) -> Vec<SourceRecord> {
+    let Some(root) = json_root(parsed).and_then(Value::as_object) else {
+        warnings.push(
+            "Cloudsplaining results were not a single JSON object, so no policy findings could be read."
+                .into(),
+        );
+        return Vec::new();
+    };
     let mut records = Vec::new();
-    for (pointer, value) in json_rows(parsed, warnings) {
-        let Some(root) = value.as_object() else {
+    for (section, policy_source) in CLOUDSPLAINING_POLICY_SECTIONS {
+        let Some(policies) = root.get(section).and_then(Value::as_object) else {
             continue;
         };
-        if let Some(findings) = root.get("findings").and_then(Value::as_array) {
-            for (index, finding) in findings.iter().take(MAX_RECORDS).enumerate() {
-                if let Some(record) = cloudsplaining_record(
-                    finding,
-                    format!("{pointer}findings/{index}"),
-                    "unspecified-risk",
-                ) {
-                    records.push(record);
-                }
-            }
-            continue;
-        }
-        for (risk, entries) in root {
-            if !is_cloudsplaining_risk(risk) {
+        for (policy_key, policy) in policies {
+            let Some(policy) = policy.as_object() else {
+                continue;
+            };
+            // Cloudsplaining already applied the operator's exclusions file;
+            // re-reporting what it excluded would overrule the tool's own call.
+            if policy.get("is_excluded").and_then(Value::as_bool) == Some(true) {
                 continue;
             }
-            if let Some(values) = entries.as_array() {
-                for (index, finding) in values.iter().take(MAX_RECORDS - records.len()).enumerate()
-                {
-                    if let Some(record) =
-                        cloudsplaining_record(finding, format!("{pointer}{risk}/{index}"), risk)
-                    {
-                        records.push(record);
-                    }
+            let policy_name = string_any(policy, &["PolicyName", "PolicyId"])
+                .unwrap_or_else(|| policy_key.clone());
+            for (risk, severity, label) in CLOUDSPLAINING_RISKS {
+                if records.len() >= MAX_RECORDS {
+                    return records;
                 }
+                let Some(entries) = policy.get(risk).and_then(Value::as_array) else {
+                    continue;
+                };
+                if entries.is_empty() {
+                    continue;
+                }
+                let escaped = policy_key.replace('~', "~0").replace('/', "~1");
+                records.push(record!(
+                    format!("/{section}/{escaped}/{risk}"),
+                    risk.to_owned(),
+                    format!("{label} in policy {policy_name}"),
+                    severity.to_owned(),
+                    policy_name.clone(),
+                    // The findings document carries no account identifier at
+                    // any level, and a policy ARN is not an asset identity —
+                    // offering one as a hint would strand these records in a
+                    // multi-asset scope instead of resolving them.
+                    None,
+                    Confidence::High,
+                    EvidenceKind::Configuration,
+                    vec![],
+                    vec![
+                        format!("policy-source:{policy_source}"),
+                        format!("flagged-permissions:{}", entries.len()),
+                    ],
+                ));
             }
         }
     }
     records
-}
-
-fn cloudsplaining_record(value: &Value, pointer: String, risk: &str) -> Option<SourceRecord> {
-    let object = value.as_object()?;
-    let identity = string_any(object, &["arn", "principal", "name", "resource"])?;
-    let rule_id = exact_rule_string_any(object, &["finding_id", "rule_id"])
-        .unwrap_or_else(|| format!("cloudsplaining:{risk}"));
-    Some(record!(
-        pointer,
-        rule_id,
-        format!("IAM privilege risk: {}", humanize_identifier(risk)),
-        if risk.contains("admin") || risk.contains("privilege_escalation") {
-            "high".into()
-        } else {
-            "medium".into()
-        },
-        identity,
-        string_any(object, &["account_id", "asset_id"]),
-        Confidence::High,
-        EvidenceKind::Configuration,
-        references_from(value),
-        vec![format!("risk:{}", safe_tag(risk))],
-    ))
 }
 
 fn extract_scubagear(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
@@ -2692,7 +2743,10 @@ fn parse_severity(value: &str) -> Severity {
     }
     match normalized.as_str() {
         "critical" | "fatal" => Severity::Critical,
-        "high" | "error" => Severity::High,
+        // ScoutSuite grades every rule `danger` or `warning`; 125 of its 197
+        // default AWS rules are `danger`, so leaving it unmapped sent the
+        // majority of that engine's output to `Unknown`.
+        "high" | "error" | "danger" => Severity::High,
         "medium" | "moderate" | "warning" | "warn" => Severity::Medium,
         "low" | "minor" => Severity::Low,
         "informational" | "info" | "log" | "none" | "negligible" => Severity::Informational,
@@ -2779,15 +2833,6 @@ fn is_pass(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "pass" | "passed" | "ok" | "compliant" | "true"
     )
-}
-
-fn is_cloudsplaining_risk(value: &str) -> bool {
-    let value = value.to_ascii_lowercase();
-    value.contains("privilege")
-        || value.contains("admin")
-        || value.contains("resource_exposure")
-        || value.contains("data_exfiltration")
-        || value.contains("credentials_exposure")
 }
 
 fn json_root(parsed: &ParsedArtifact) -> Option<&Value> {
@@ -2961,10 +3006,6 @@ fn collect_named_objects<'a>(
         }
         _ => {}
     }
-}
-
-fn humanize_identifier(value: &str) -> String {
-    safe_text(&value.replace(['_', '-'], " "), 160)
 }
 
 fn redact_location(value: &str) -> String {

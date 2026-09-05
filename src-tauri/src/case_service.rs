@@ -24238,7 +24238,7 @@ mod tests {
                 mapping_version: "map-2026-08".into(),
                 mapping_provenance: Some(crate::domain::ControlMappingProvenance {
                     mapping_version: "map-2026-08".into(),
-                    reviewed_at: "2026-08-29".into(),
+                    reviewed_at: "2026-09-05".into(),
                     review_process: "human-coordinate-review".into(),
                     catalog_sha256: "e".repeat(64),
                 }),

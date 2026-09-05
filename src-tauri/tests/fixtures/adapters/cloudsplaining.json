@@ -1,1 +1,129 @@
-{"privilege_escalation":[{"arn":"arn:aws:iam::123456789012:role/example","account_id":"asset-1","finding_id":"iam-privesc"}]}
+{
+  "groups": {
+    "AdminGroup": {
+      "arn": "arn:aws:iam::012345678901:group/AdminGroup",
+      "name": "AdminGroup",
+      "create_date": "2026-08-24 12:00:00+00:00",
+      "id": "AGPAEXAMPLEGROUPID1",
+      "inline_policies": {
+        "ffd2b5250e18691dbd9f0fb8b36640ec574867835837f17d39f859c3193fb3f2": "InlinePolicyForAdminGroup"
+      },
+      "path": "/",
+      "customer_managed_policies": {},
+      "aws_managed_policies": {},
+      "is_excluded": false
+    }
+  },
+  "users": {
+    "ExampleUser": {
+      "arn": "arn:aws:iam::012345678901:user/ExampleUser",
+      "create_date": "2026-08-24 12:00:00+00:00",
+      "id": "AIDAEXAMPLEUSERID1",
+      "name": "ExampleUser",
+      "inline_policies": {},
+      "groups": ["AdminGroup"],
+      "path": "/",
+      "customer_managed_policies": {
+        "InsecurePolicy": "InsecurePolicy"
+      },
+      "aws_managed_policies": {},
+      "is_excluded": false
+    }
+  },
+  "roles": {},
+  "aws_managed_policies": {
+    "ANPAI7XKCFMBPM3QQRRVQ": {
+      "PolicyName": "IAMFullAccess",
+      "PolicyId": "ANPAI7XKCFMBPM3QQRRVQ",
+      "Arn": "arn:aws:iam::aws:policy/IAMFullAccess",
+      "Path": "/",
+      "DefaultVersionId": "v1",
+      "AttachmentCount": 1,
+      "IsAttachable": true,
+      "CreateDate": "2015-02-06 18:40:55+00:00",
+      "UpdateDate": "2019-05-31 16:44:59+00:00",
+      "PrivilegeEscalation": [
+        { "type": "CreateAccessKey", "actions": ["iam:createaccesskey"] },
+        { "type": "CreateLoginProfile", "actions": ["iam:createloginprofile"] }
+      ],
+      "DataExfiltration": [],
+      "ResourceExposure": [
+        "iam:AddClientIDToOpenIDConnectProvider",
+        "iam:AddRoleToInstanceProfile"
+      ],
+      "ServiceWildcard": ["iam"],
+      "CredentialsExposure": ["iam:CreateAccessKey", "iam:CreateLoginProfile"],
+      "InfrastructureModification": [
+        "iam:AddClientIDToOpenIDConnectProvider",
+        "iam:AddRoleToInstanceProfile"
+      ],
+      "is_excluded": false
+    },
+    "ANPAEXAMPLEADMINPOLICY": {
+      "PolicyName": "AdministratorAccess",
+      "PolicyId": "ANPAEXAMPLEADMINPOLICY",
+      "Arn": "arn:aws:iam::aws:policy/AdministratorAccess",
+      "Path": "/",
+      "DefaultVersionId": "v1",
+      "AttachmentCount": 1,
+      "IsAttachable": true,
+      "CreateDate": "2015-02-06 18:39:46+00:00",
+      "UpdateDate": "2015-02-06 18:39:46+00:00",
+      "PrivilegeEscalation": [
+        { "type": "CreateAccessKey", "actions": ["iam:createaccesskey"] }
+      ],
+      "DataExfiltration": ["s3:GetObject"],
+      "ResourceExposure": ["iam:PassRole"],
+      "ServiceWildcard": ["*"],
+      "CredentialsExposure": ["iam:CreateAccessKey"],
+      "InfrastructureModification": ["iam:AddUserToGroup"],
+      "is_excluded": true
+    }
+  },
+  "customer_managed_policies": {
+    "InsecurePolicy": {
+      "PolicyName": "InsecurePolicy",
+      "PolicyId": "InsecurePolicy",
+      "Arn": "arn:aws:iam::012345678901:policy/InsecurePolicy",
+      "Path": "/",
+      "DefaultVersionId": "v1",
+      "AttachmentCount": 1,
+      "IsAttachable": true,
+      "CreateDate": "2026-08-24 12:00:00+00:00",
+      "UpdateDate": "2026-08-24 12:00:00+00:00",
+      "PrivilegeEscalation": [],
+      "DataExfiltration": [],
+      "ResourceExposure": ["s3:PutObjectAcl"],
+      "ServiceWildcard": [],
+      "CredentialsExposure": [],
+      "InfrastructureModification": ["s3:PutObject", "s3:PutObjectAcl"],
+      "is_excluded": false
+    }
+  },
+  "inline_policies": {
+    "ffd2b5250e18691dbd9f0fb8b36640ec574867835837f17d39f859c3193fb3f2": {
+      "PolicyName": "InlinePolicyForAdminGroup",
+      "PolicyId": "ffd2b5250e18691dbd9f0fb8b36640ec574867835837f17d39f859c3193fb3f2",
+      "PrivilegeEscalation": [],
+      "DataExfiltration": ["s3:GetObject"],
+      "ResourceExposure": [
+        "s3:BypassGovernanceRetention",
+        "s3:DeleteAccessPointPolicy"
+      ],
+      "ServiceWildcard": ["s3"],
+      "CredentialsExposure": [],
+      "InfrastructureModification": [
+        "s3:AbortMultipartUpload",
+        "s3:BypassGovernanceRetention"
+      ],
+      "is_excluded": false
+    }
+  },
+  "exclusions": {
+    "policies": ["AdministratorAccess"],
+    "roles": ["service-role*"],
+    "users": [""],
+    "groups": [""]
+  },
+  "links": {}
+}

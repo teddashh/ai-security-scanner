@@ -656,8 +656,8 @@ mod tests {
     fn embedded_catalog_is_bounded_and_only_uses_known_engines() {
         validate_catalog(ENGINES).expect("valid embedded mappings");
         let provenance = catalog_provenance().expect("embedded provenance");
-        assert_eq!(provenance.mapping_version, "2026-08-28.1");
-        assert_eq!(provenance.reviewed_at, "2026-08-29");
+        assert_eq!(provenance.mapping_version, "2026-09-05.1");
+        assert_eq!(provenance.reviewed_at, "2026-09-05");
         assert_eq!(provenance.review_process, REVIEW_PROCESS_V1);
         assert_eq!(provenance.catalog_sha256.len(), 64);
     }
@@ -673,10 +673,10 @@ mod tests {
         assert_eq!(public_bucket.len(), 3);
         assert!(public_bucket.iter().all(|item| {
             item.relationship == "related"
-                && item.mapping_version == "2026-08-28.1"
+                && item.mapping_version == "2026-09-05.1"
                 && item.mapping_provenance.as_ref().is_some_and(|provenance| {
                     provenance.catalog_sha256
-                        == "7e53c9fe72584ee455ec2a94ee6bcf5705fc717b8bb3fbe97cd7377bb7fd5123"
+                        == "61623678ba46641f74109d3a01b7d5c373c1739a56caa374444fcf70e64f7f9a"
                 })
                 && !item.rationale.to_ascii_lowercase().contains("compliant")
         }));
@@ -781,7 +781,20 @@ mod tests {
         assert!(error.contains("real YYYY-MM-DD calendar date"));
 
         let mut predating_review = catalog_fixture();
-        predating_review["mapping_version"] = Value::String("2026-08-30.1".into());
+        // Derive the version date from the catalog's own review date so this
+        // stays a real ordering violation after any future review bump, rather
+        // than quietly becoming a valid catalog that asserts nothing.
+        let day_after_review = NaiveDate::parse_from_str(
+            predating_review["provenance"]["reviewed_at"]
+                .as_str()
+                .expect("catalog review date"),
+            "%Y-%m-%d",
+        )
+        .expect("catalog review date is a real calendar date")
+        .succ_opt()
+        .expect("a day after the catalog review date");
+        predating_review["mapping_version"] =
+            Value::String(format!("{}.1", day_after_review.format("%Y-%m-%d")));
         let error =
             parse_and_validate_json(&catalog_json_with_recalculated_digest(predating_review))
                 .unwrap_err();

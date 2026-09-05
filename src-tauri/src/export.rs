@@ -3734,13 +3734,17 @@ mod tests {
         let mut archive = tar::Archive::new(GzDecoder::new(file));
         for entry in archive.entries().unwrap() {
             let mut entry = entry.unwrap();
+            let archive_path = entry
+                .path()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| "<unreadable path>".to_owned());
             let mut bytes = Vec::new();
             entry.read_to_end(&mut bytes).unwrap();
             assert!(
                 !bytes
                     .windows(SENTINEL.len())
                     .any(|window| window == SENTINEL.as_bytes()),
-                "standard-redacted bundle entry leaked the sentinel"
+                "standard-redacted bundle entry {archive_path} leaked the sentinel"
             );
             for private_value in [
                 PLAN_HOSTNAME.to_owned(),
@@ -3749,12 +3753,23 @@ mod tests {
                 PLAN_PORT_ONE.to_string(),
                 PLAN_PORT_TWO.to_string(),
             ] {
-                assert!(
-                    !bytes
-                        .windows(private_value.len())
-                        .any(|window| window == private_value.as_bytes()),
-                    "standard-redacted bundle entry leaked private Naabu work-plan data"
-                );
+                // A port is only five decimal digits, so this raw byte scan can
+                // also trip on an unrelated length, offset, or count that
+                // happens to equal it. Name the value, the entry, and the
+                // surrounding bytes so a failure can be judged rather than
+                // guessed at.
+                if let Some(at) = bytes
+                    .windows(private_value.len())
+                    .position(|window| window == private_value.as_bytes())
+                {
+                    let from = at.saturating_sub(80);
+                    let to = (at + private_value.len() + 80).min(bytes.len());
+                    panic!(
+                        "standard-redacted bundle entry {archive_path} leaked private Naabu \
+                         work-plan data {private_value:?} at byte {at}; context: {:?}",
+                        String::from_utf8_lossy(&bytes[from..to])
+                    );
+                }
             }
             assert!(
                 !bytes
