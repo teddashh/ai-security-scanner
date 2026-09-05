@@ -418,18 +418,24 @@ fn engines_that_emit_no_severity_disclose_that_the_rating_is_this_products_own()
     }
 }
 
+/// Engines that report a severity for some findings and none for others, so
+/// neither blanket rule applies. Each has its own test; this list exists to keep
+/// them out of the two that assert one behaviour for every finding.
+const MIXED_SEVERITY_ENGINES: &[&str] = &["checkov"];
+
 /// The other side of the same contract. Deriving a severity is only defensible
 /// where the engine truly reports none, so an engine that does report one must
 /// keep showing what it said.
 #[test]
 fn engines_that_report_a_severity_still_present_the_engines_own_rating() {
-    let derived = DERIVED_SEVERITY_ENGINES
+    let exempt = DERIVED_SEVERITY_ENGINES
         .iter()
         .map(|(engine_id, _, _)| *engine_id)
+        .chain(MIXED_SEVERITY_ENGINES.iter().copied())
         .collect::<BTreeSet<_>>();
     let mut checked = 0;
     for engine_id in BUILTIN_ENGINE_IDS {
-        if derived.contains(engine_id) {
+        if exempt.contains(engine_id) {
             continue;
         }
         for finding in normalize_fixture(engine_id).findings {
@@ -581,12 +587,21 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
     }
 }
 
+/// Checkov is the one engine that both reports severities and mostly does not.
+/// `BaseCheck` hardcodes `severity = None`, and the values that fill it come
+/// from platform metadata that `--skip-download` switches off; exactly one of
+/// the 256 shipped graph-check YAMLs declares a severity locally. So a rating
+/// has to be derived for almost everything, and the exceptions have to survive
+/// that — including a rating this product does not recognize, which spec §9.2
+/// requires be shown as unknown and needing review rather than replaced.
 #[test]
-fn checkov_missing_and_unrecognized_severity_stays_unknown() {
+fn checkov_derives_a_rating_only_where_the_check_carries_none() {
     let bytes = br#"{
+      "check_type": "terraform",
       "results": {
         "failed_checks": [
-          {"check_id":"missing", "check_name":"Missing rating", "file_path":"missing.tf"},
+          {"check_id":"absent", "check_name":"No rating key", "file_path":"absent.tf"},
+          {"check_id":"null", "check_name":"Null rating", "file_path":"null.tf", "severity":null},
           {"check_id":"custom", "check_name":"Custom rating", "file_path":"custom.tf", "severity":"vendor-special"},
           {"check_id":"info", "check_name":"Information only", "file_path":"info.tf", "severity":"informational"}
         ]
@@ -608,11 +623,57 @@ fn checkov_missing_and_unrecognized_severity_stays_unknown() {
     let by_title = output
         .findings
         .iter()
-        .map(|finding| (finding.title.as_str(), &finding.severity))
+        .map(|finding| (finding.title.as_str(), finding))
         .collect::<BTreeMap<_, _>>();
-    assert_eq!(by_title["Missing rating"], &Severity::Unknown);
-    assert_eq!(by_title["Custom rating"], &Severity::Unknown);
-    assert_eq!(by_title["Information only"], &Severity::Informational);
+
+    // An absent key and an explicit null are the same statement: the check
+    // carries no rating. Both are derived, and both say so.
+    for title in ["No rating key", "Null rating"] {
+        let finding = by_title[title];
+        assert_eq!(finding.severity, Severity::Medium, "{title}");
+        assert!(
+            finding
+                .tags
+                .iter()
+                .any(|tag| tag == "severity-basis:derived"),
+            "{title}: {:?}",
+            finding.tags
+        );
+        assert!(
+            !finding
+                .tags
+                .iter()
+                .any(|tag| tag.starts_with("source-severity:")),
+            "{title}: {:?}",
+            finding.tags
+        );
+    }
+
+    // Checkov did rate these, so its words stand — including the one this
+    // product cannot map, which must not be quietly upgraded to the derivation.
+    assert_eq!(by_title["Custom rating"].severity, Severity::Unknown);
+    assert!(
+        by_title["Custom rating"]
+            .tags
+            .iter()
+            .any(|tag| tag == "source-severity:vendor-special"),
+        "{:?}",
+        by_title["Custom rating"].tags
+    );
+    assert_eq!(
+        by_title["Information only"].severity,
+        Severity::Informational
+    );
+    for title in ["Custom rating", "Information only"] {
+        assert!(
+            !by_title[title]
+                .tags
+                .iter()
+                .any(|tag| tag == "severity-basis:derived"),
+            "{title} lost the rating Checkov gave it: {:?}",
+            by_title[title].tags
+        );
+    }
 }
 
 /// kube-bench's `Check` struct has no severity field and `check/` overrides no

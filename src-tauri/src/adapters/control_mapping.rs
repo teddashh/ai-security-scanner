@@ -643,6 +643,18 @@ mod tests {
             .collect()
     }
 
+    /// The only rule pack the Semgrep image ships. `--config` names it and
+    /// nothing else, and `--no-rewrite-rule-ids` keeps `check_id` byte-identical
+    /// to the `- id:` written here, so these are exactly the ids observable.
+    const SEMGREP_RULES_YAML: &str = include_str!("../../../engines/images/semgrep/rules.yml");
+
+    fn semgrep_rule_ids() -> Vec<&'static str> {
+        SEMGREP_RULES_YAML
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("- id: "))
+            .collect()
+    }
+
     fn catalog_json_with_recalculated_digest(mut value: Value) -> String {
         value["provenance"]["canonical_sha256"] = Value::String("0".repeat(64));
         let digest = canonical_catalog_sha256(&value).expect("canonical fixture digest");
@@ -696,18 +708,20 @@ mod tests {
     /// prefix the launcher itself puts there. Each assertion below names the
     /// upstream fact it encodes.
     ///
-    /// kube-bench is checked exactly rather than by shape, because the benchmark
-    /// this product ships is a tracked file. That is the strongest form of this
-    /// guard and the only entry that gets it.
+    /// kube-bench and Semgrep are checked exactly rather than by shape, because
+    /// the benchmark and the rule pack this product ships are tracked files. An
+    /// exact check is the strongest form of this guard, and it is available
+    /// precisely where the reachable identifiers are decided in this repo rather
+    /// than upstream.
     ///
     /// This does not cover every engine, and the gaps are real rather than
     /// oversights. Nuclei was the fifth broken entry, and no shape check would
     /// have found it: `exposed-panel` is indistinguishable from the 13,613 real
     /// template ids, which are ordinary lowercase-hyphenated words. Checkov,
-    /// KICS by name, Semgrep, and Gitleaks are likewise unconstrained. Catching
-    /// those needs the pinned rule pack, which is not available here — the
-    /// upstream checkouts are 9.7 GB and untracked. Reviewing a new entry
-    /// against real engine output remains the only defence for them.
+    /// KICS by name, and Gitleaks are likewise unconstrained. Catching those
+    /// needs the pinned rule pack, which is not available here — the upstream
+    /// checkouts are 9.7 GB and untracked. Reviewing a new entry against real
+    /// engine output remains the only defence for them.
     #[test]
     fn engine_rule_identifiers_have_the_shape_their_engine_actually_emits() {
         let catalog = catalog_fixture();
@@ -798,6 +812,19 @@ mod tests {
                     );
                     checked += 1;
                 }
+                // The Semgrep image ships one rule pack, written in this repo,
+                // and passes `--no-rewrite-rule-ids`, so a mapped rule that is
+                // not in it can never match.
+                "semgrep" => {
+                    let defined = semgrep_rule_ids();
+                    assert!(!defined.is_empty(), "shipped rule pack parsed as empty");
+                    assert!(
+                        defined.iter().any(|id| id == source_rule),
+                        "the shipped rule pack defines no rule {source_rule:?}, \
+                         so Semgrep can never emit it; it defines {defined:?}"
+                    );
+                    checked += 1;
+                }
                 "trivy" | "grype" if match_kind == "prefix" => {
                     assert_eq!(source_rule, "CVE-");
                     checked += 1;
@@ -806,7 +833,7 @@ mod tests {
             }
         }
         assert!(
-            checked >= 7,
+            checked >= 11,
             "expected the engines whose identifier shape upstream fixes to be checked, saw {checked}"
         );
     }

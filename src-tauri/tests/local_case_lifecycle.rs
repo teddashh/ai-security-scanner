@@ -71,13 +71,15 @@ fn baseline_output(engine_id: &str) -> &'static [u8] {
 /// v2 shape with three failing controls across two resources; the Trivy and
 /// Grype fixtures each carry one exclusive vulnerability plus the one both
 /// engines report, which is the ordinary result of scanning one image twice;
-/// and the kube-bench fixture is a full run of the shipped six-check snapshot
-/// benchmark against an unhardened node, three of whose checks fail.
+/// the kube-bench fixture is a full run of the shipped six-check snapshot
+/// benchmark against an unhardened node, three of whose checks fail; and the
+/// Checkov fixture carries one check that publishes a severity offline and one
+/// that does not, since almost none of them do.
 fn expected_finding_count(engine_id: &str) -> usize {
     match engine_id {
         "syft" => 0,
         "kubescape" | "kube-bench" => 3,
-        "trivy" | "grype" => 2,
+        "trivy" | "grype" | "checkov" => 2,
         _ => 1,
     }
 }
@@ -480,8 +482,16 @@ fn local_case_lifecycle_preserves_scope_evidence_and_comparison_truth() {
             .all(|run| run.status == EngineRunStatus::Completed)
     );
     assert_eq!(baseline.status, CaseStatus::ReadyForHandoff);
-    assert_eq!(baseline.findings.len(), 6);
-    assert_eq!(baseline.finding_observations.len(), 6);
+    let expected_baseline_findings = plan
+        .executable
+        .iter()
+        .map(|execution| expected_finding_count(&execution.manifest.id))
+        .sum::<usize>();
+    assert_eq!(baseline.findings.len(), expected_baseline_findings);
+    assert_eq!(
+        baseline.finding_observations.len(),
+        expected_baseline_findings
+    );
     assert_eq!(baseline.raw_artifacts.len(), 24);
     assert!(
         baseline

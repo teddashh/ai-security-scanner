@@ -213,6 +213,40 @@ macro_rules! record_with_derived_severity {
     };
 }
 
+/// Like [`record!`], for an engine that has a severity field but leaves it
+/// unset for most findings. Takes both the engine's severity — empty when it
+/// gave none — and the [`DerivedSeverity`] used only in that case. Whatever the
+/// engine did say always wins, so the one rated finding keeps its rating.
+macro_rules! record_with_severity_fallback {
+    (
+        $pointer:expr,
+        $rule_id:expr,
+        $title:expr,
+        $source_severity:expr,
+        $derived:expr,
+        $location:expr,
+        $asset_hint:expr,
+        $confidence:expr,
+        $evidence_kind:expr,
+        $references:expr,
+        $tags:expr $(,)?
+    ) => {
+        record_from_draft(RecordDraft {
+            pointer: $pointer,
+            rule_id: $rule_id,
+            title: $title,
+            source_severity: $source_severity,
+            derived_severity: Some($derived),
+            location: $location,
+            asset_hint: $asset_hint,
+            confidence: $confidence,
+            evidence_kind: $evidence_kind,
+            references: $references,
+            tags: $tags,
+        })
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum XmlElement {
     Results,
@@ -2183,12 +2217,26 @@ fn extract_checkov(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
         .filter_map(|(index, value)| {
             let object = value.as_object()?;
             let rule_id = exact_rule_string_any(object, &["check_id"])?;
-            Some(record!(
+            Some(record_with_severity_fallback!(
                 format!("/results/failed_checks/{index}"),
                 rule_id.clone(),
                 string_any(object, &["check_name"])
                     .unwrap_or_else(|| format!("Checkov check {rule_id}")),
-                string_any(object, &["severity"]).unwrap_or_else(|| "unknown".into()),
+                // `Record.severity` is whatever the check object carried, and
+                // `BaseCheck` hardcodes `None`. The values that fill it come
+                // from downloaded platform metadata, which `--skip-download`
+                // switches off entirely. Of the 256 shipped graph-check YAMLs
+                // exactly one declares a severity locally, so this is populated
+                // for CKV2_AWS_34 and null for every other check.
+                string_any(object, &["severity"]).unwrap_or_default(),
+                // Rating the rest flat is the most that can be justified: the
+                // pack gives no per-check weight offline, and the alternative
+                // sinks a whole engine's output below Low as unknown.
+                DerivedSeverity {
+                    severity: Severity::Medium,
+                    basis: "a failed infrastructure-as-code policy check, rated flat because \
+                            Checkov publishes no per-check severity offline",
+                },
                 string_any(object, &["file_path", "repo_file_path"])
                     .unwrap_or_else(|| "iac-resource".into()),
                 string_any(object, &["asset_id"]),
@@ -2777,18 +2825,22 @@ fn record_from_draft(draft: RecordDraft) -> SourceRecord {
         hasher.update(draft.rule_id.as_bytes());
         format!("unmappable-sha256:{}", hex::encode(hasher.finalize()))
     });
+    let reported_severity = safe_text(&draft.source_severity, 80);
     let (severity, source_severity, severity_basis) = match draft.derived_severity {
         // The engine reported nothing, so the source severity stays empty rather
         // than borrowing the derived level. Nothing downstream may present the
         // derived rating as the engine's own.
-        Some(derived) => (
+        Some(derived) if reported_severity.is_empty() => (
             derived.severity,
             String::new(),
             Some(derived.basis.to_owned()),
         ),
-        None => (
+        // A rating the engine did give always wins, including one this product
+        // does not recognize: that has to surface as unknown and needing review,
+        // not be replaced by a derivation.
+        _ => (
             parse_severity(&draft.source_severity),
-            safe_text(&draft.source_severity, 80),
+            reported_severity,
             None,
         ),
     };
