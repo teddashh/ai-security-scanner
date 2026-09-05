@@ -602,15 +602,27 @@ fn normalize_artifacts(
     // reported on. Said once per identifier, naming the identifier, because
     // adding it to the authorized asset is the whole fix -- and without this
     // the run reads as a clean scan that found nothing.
-    for ((provider, identifier), count) in &unmatched_identifiers {
-        push_warning(
-            &mut output.warnings,
-            format!(
-                "{} reported {count} result(s) for {provider} identifier {identifier}, but no authorized asset carries that identifier; none of them were attributed. Add {identifier} to the asset you authorized and scan again.",
-                adapter.id
-            ),
-        );
-    }
+    //
+    // Put in front of the per-record warnings and exempt from MAX_WARNINGS,
+    // both deliberately. A real cloud account produces far more records than
+    // the cap, so appending this through `push_warning` meant the one sentence
+    // worth reading was the one silently dropped, and the surface that renders
+    // warnings joins them into a single truncated string, so arriving last is
+    // nearly the same as not arriving. Exempting it is safe because the map it
+    // comes from is capped at MAX_UNMATCHED_IDENTIFIERS entries.
+    let attribution_warnings = unmatched_identifiers
+        .iter()
+        .map(|((provider, identifier), count)| {
+            safe_text(
+                &format!(
+                    "{} reported {count} result(s) for {provider} identifier {identifier}, but no authorized asset carries that identifier; none of them were attributed. Add {identifier} to the asset you authorized and scan again.",
+                    adapter.id
+                ),
+                MAX_SHORT_TEXT,
+            )
+        })
+        .collect::<Vec<_>>();
+    output.warnings.splice(0..0, attribution_warnings);
 
     if relevant_count > MAX_ARTIFACTS {
         output.complete = false;

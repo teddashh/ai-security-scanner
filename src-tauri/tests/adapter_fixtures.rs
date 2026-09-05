@@ -2656,3 +2656,70 @@ fn prowler_names_the_account_it_could_not_attribute_rather_than_each_dropped_rul
         named_only.warnings
     );
 }
+
+/// A Prowler run the size a real one is.
+///
+/// The fixture holds three records, so the actionable warning fits easily. A
+/// default AWS scan emits hundreds, `push_warning` silently stops accepting at
+/// MAX_WARNINGS, and the per-record warnings are pushed inside the loop while
+/// the one sentence naming the account is pushed after it. Passing at three
+/// records and failing at three hundred is exactly the shape a fixture-sized
+/// test cannot see.
+#[test]
+fn the_account_warning_survives_a_run_with_more_records_than_the_warning_cap() {
+    let base: serde_json::Value = serde_json::from_slice(fixture("prowler").0).expect("fixture");
+    let template = base
+        .as_array()
+        .and_then(|records| records.first())
+        .expect("fixture record")
+        .clone();
+
+    // Comfortably past MAX_WARNINGS, which is what a real account produces.
+    let mut records = Vec::new();
+    for index in 0..400 {
+        let mut record = template.clone();
+        let rule = format!("check_{index:04}");
+        record["metadata"]["event_code"] = serde_json::json!(rule);
+        record["finding_info"]["analytic"]["uid"] = serde_json::json!(rule);
+        record["finding_info"]["uid"] = serde_json::json!(format!("instance-{index}"));
+        records.push(record);
+    }
+    let bytes = serde_json::to_vec(&serde_json::Value::Array(records)).expect("artifact");
+
+    let output = normalize_bytes_with_assets_and_context(
+        "prowler",
+        "application/json",
+        &bytes,
+        "prowler-ocsf.json",
+        "run-large",
+        &[authorized_asset(
+            "asset-1",
+            AssetKind::CloudAccount,
+            Some("aws"),
+            &[],
+        )],
+        FrameworkApplicability {
+            ai_system: false,
+            ai_generated_artifact: false,
+        },
+    );
+
+    assert!(output.findings.is_empty());
+    let position = output
+        .warnings
+        .iter()
+        .position(|warning| warning.contains("no authorized asset carries that identifier"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the one actionable sentence was dropped by the warning cap; {} warnings survived, all of them naming a rule instead of the account",
+                output.warnings.len()
+            )
+        });
+    // Reaching the list is not enough. The progress view joins every warning
+    // into one string and truncates it, so a sentence sitting behind hundreds
+    // of per-record lines is cut off before it is read.
+    assert_eq!(
+        position, 0,
+        "the actionable sentence is buried behind {position} per-record warnings"
+    );
+}
