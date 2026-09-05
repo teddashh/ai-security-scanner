@@ -157,9 +157,14 @@ const copy = {
     en: "Use these for a security-specialist handoff, framework review, or a tool that requires a specific industry format.",
     zhTW: "需要交給資安專家、檢視框架對照，或接收工具指定產業格式時再使用。",
   },
-  advancedFormatsIncomplete: {
-    en: "Every format remains available. OCSF and OSCAL include a companion coverage manifest when checks are unfinished or unavailable.",
-    zhTW: "所有格式都可使用。若有檢查尚未完成或無法執行，OCSF 與 OSCAL 會附上涵蓋說明檔。",
+  // Shown exactly when `runSupportsFindingOnlyExport` is false, and that
+  // predicate is `Boolean(run)` -- so the only state that reaches this sentence
+  // is the one where OCSF and OSCAL are the two cards being greyed out beneath
+  // it. It read "Every format remains available", written for older semantics
+  // where an unfinished run blocked these two.
+  advancedFormatsNeedRun: {
+    en: "OCSF and OSCAL are unavailable until a saved scan is selected, because the backend pairs both with a coverage manifest built from that run. The other formats are not affected.",
+    zhTW: "在選擇已保存的掃描之前，OCSF 與 OSCAL 無法使用，因為後端會為這兩種格式附上依該輪次產生的涵蓋說明檔。其他格式不受影響。",
   },
   includeRaw: { en: "Include source files for specialist review", zhTW: "附上來源檔案，供專家核對" },
   // Every artifact the desktop app captures is marked sensitive
@@ -597,7 +602,7 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
             <details className="page-secondary-feature export-advanced-formats">
               <summary>{text(copy.advancedFormats)}</summary>
               <p className="page-secondary-feature__intro">
-                {text(findingOnlyFormatsAvailable ? copy.advancedFormatsHint : copy.advancedFormatsIncomplete)}
+                {text(findingOnlyFormatsAvailable ? copy.advancedFormatsHint : copy.advancedFormatsNeedRun)}
               </p>
               <div className="format-grid">{advancedFormats.map(renderFormatCard)}</div>
             </details>

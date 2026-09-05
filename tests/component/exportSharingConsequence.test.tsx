@@ -302,3 +302,58 @@ test("the case bundle still lists asset relationships as included", async () => 
   expect(assetRelationsLine(container).textContent).toContain("Asset relationships for specialist review");
   expect(assetRelationsLine(container).textContent).not.toContain("not carried by this format");
 });
+
+test("the advanced-format note names the two formats it is greying out", async () => {
+  // This note is shown exactly when `runSupportsFindingOnlyExport` is false,
+  // and that predicate is `Boolean(run)` -- so it appears only in the state
+  // where OCSF and OSCAL are the two disabled cards directly beneath it. It
+  // used to open with "Every format remains available."
+  const onPreview = vi.fn(() => Promise.resolve(undefined));
+  const { container } = render(
+    <I18nProvider>
+      <ExportPage
+        workspace={{ ...workspace, runs: [] }}
+        selectedRunId={undefined}
+        exports={[]}
+        demoMode={false}
+        onPreview={onPreview}
+        onExport={() => Promise.resolve()}
+        onVerify={() => Promise.resolve()}
+        onVerifyReceived={() => Promise.resolve()}
+      />
+    </I18nProvider>,
+  );
+
+  const note = container.querySelector<HTMLElement>(".page-secondary-feature__intro");
+  expect(note?.textContent).toContain("OCSF and OSCAL are unavailable until a saved scan is selected");
+  expect(note?.textContent).not.toContain("Every format remains available");
+
+  // The claim and the controls have to agree: those two cards really are the
+  // disabled ones in this state.
+  // Compared by format id rather than card title: the titles are
+  // plain-language ("Send findings to a security platform"), so matching them
+  // would not show that the disabled pair is the pair the sentence names.
+  const disabled = Array.from(container.querySelectorAll<HTMLInputElement>("input[name=export-format]"))
+    .filter((input) => input.disabled)
+    .map((input) => input.value)
+    .sort();
+  expect(disabled).toEqual(["ocsf", "oscal"]);
+});
+
+test("with a run selected the advanced formats are introduced, not explained away", async () => {
+  // The mirror. Without it the no-run sentence could render in every state,
+  // telling a user with a perfectly good run that two formats are unavailable
+  // while both cards sit enabled beside it -- a mutation doing exactly that
+  // survived until this test existed.
+  const { container } = renderExport();
+  await waitFor(() => expect(consequence(container)).toContain("Private details are hidden"));
+
+  const note = container.querySelector<HTMLElement>(".page-secondary-feature__intro");
+  expect(note?.textContent).toContain("security-specialist handoff");
+  expect(note?.textContent).not.toContain("unavailable until a saved scan is selected");
+
+  const disabled = Array.from(container.querySelectorAll<HTMLInputElement>("input[name=export-format]"))
+    .filter((input) => input.disabled)
+    .map((input) => input.value);
+  expect(disabled).toEqual([]);
+});
