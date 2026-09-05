@@ -33,7 +33,12 @@ const HAN = /\p{Script=Han}/u;
 const chineseLiterals = (source: string): Set<string> => {
   const found = new Set<string>();
   // Double-quoted (both languages) and backtick template literals (TypeScript).
-  for (const match of source.matchAll(/"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`/gu)) {
+  // The escape class is [\s\S] rather than `.` because Rust continues a long
+  // literal with a backslash before a newline. With `.` the opening quote of
+  // such a literal never closes, every quote after it pairs with the wrong
+  // partner, and the extractor silently returns about half the file's strings
+  // -- which is what the size guards below are for.
+  for (const match of source.matchAll(/"((?:[^"\\]|\\[\s\S])*)"|`((?:[^`\\]|\\[\s\S])*)`/gu)) {
     const literal = match[1] ?? match[2] ?? "";
     if (!HAN.test(literal)) continue;
     found.add(literal.replaceAll(/\$\{[^}]*\}|\{[^}]*\}/gu, "⟦⟧").trim());
@@ -71,4 +76,39 @@ test("the extractor can tell two translations apart", () => {
   assert.notEqual(changed, typescript, "the sentence this guard edits has moved");
   const drifted = [...chineseLiterals(changed)].filter((line) => !chineseLiterals(rust).has(line));
   assert.ok(drifted.includes("雲端資源可能有風險"), drifted.join("\n"));
+});
+
+/**
+ * The English both sides now match on, not just the Chinese both sides print.
+ *
+ * The priority reasons carry no per-entry code, so these English strings are
+ * the matching key. If the Rust side rewords one, this side stops recognising
+ * it and quietly falls back to English -- no crash, no failed assertion, just a
+ * reader who is shown one Chinese bullet and two English ones. Comparing the
+ * output would never see it, because both sides would still be "correct".
+ */
+const rustLiterals = (() => {
+  // Rust continues a long literal with a backslash before the newline and
+  // swallows the following indentation.
+  const joined = rustSource.replaceAll(/\\\n\s*/gu, "");
+  return [...joined.matchAll(/"((?:[^"\\]|\\[\s\S])*)"/gu)].map(
+    (match) => match[1]?.replaceAll("\\'", "'") ?? "",
+  );
+})();
+
+test("the English keys the screen matches on are the ones the report writes", () => {
+  const matchedOnScreen = [
+    ...typescript.matchAll(/^\s*(?:[a-z_]+:|export const [A-Z_]+ =)\s*\n?\s*"((?:[^"\\]|\\.)*)",?$/gmu),
+  ]
+    .map((match) => match[1] ?? "")
+    .filter((literal) => !HAN.test(literal) && literal.length > 20);
+
+  assert.ok(matchedOnScreen.length > 5, `extractor found only ${matchedOnScreen.length} keys`);
+
+  const missing = matchedOnScreen.filter((literal) => !rustLiterals.includes(literal));
+  assert.deepEqual(
+    missing,
+    [],
+    `English the findings pane matches on that the report no longer writes:\n${missing.join("\n")}`,
+  );
 });

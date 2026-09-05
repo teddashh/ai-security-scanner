@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   ENGLISH_ROLLBACK,
   findingActionSentence,
+  findingPriorityReason,
   findingRollbackSentence,
   findingVerificationSentence,
   findingImpactSentence,
@@ -263,4 +264,34 @@ test("the verification sentence keeps the engine name and rule id verbatim", () 
   // Not this shape -> returned untouched rather than half-rewritten.
   const foreign = "Re-run the responsible engine.";
   assert.equal(findingVerificationSentence("zh-TW", foreign), foreign);
+});
+
+test("why this priority is said in Chinese, keeping the engine's own words", () => {
+  const derived =
+    "Severity derived from a secret pattern match in scanned source; Gitleaks reports no severity of its own.";
+  const zh = findingPriorityReason("zh-TW", derived);
+  assert.ok(HAN.test(zh), zh);
+  assert.ok(!LATIN_SENTENCE.test(zh), `left English behind: ${zh}`);
+  assert.ok(zh.includes("Gitleaks"), zh);
+
+  // The engine's raw severity word stays verbatim: rendering "High" as 高 stops
+  // it matching what the reader sees in the engine's own output.
+  const raw = findingPriorityReason("zh-TW", "Source severity: High");
+  assert.ok(HAN.test(raw), raw);
+  assert.ok(raw.includes("High"), raw);
+
+  assert.equal(findingPriorityReason("en", derived), derived);
+});
+
+test("a priority reason this build cannot identify is left alone, not invented", () => {
+  // A reason is the product's account of why it moved a finding up the list.
+  // A confident Chinese sentence here would be a different account.
+  const unknown = "Raised because the on-call rota flagged this asset last week.";
+  assert.equal(findingPriorityReason("zh-TW", unknown), unknown);
+  // Near-misses of the two parsed shapes fall back rather than half-translate.
+  assert.equal(findingPriorityReason("zh-TW", "Source severity: "), "Source severity: ");
+  assert.equal(
+    findingPriorityReason("zh-TW", "Severity derived from something unheard of; X reports no severity of its own."),
+    "Severity derived from something unheard of; X reports no severity of its own.",
+  );
 });

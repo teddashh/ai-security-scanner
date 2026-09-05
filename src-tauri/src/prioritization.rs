@@ -9,8 +9,8 @@ use crate::domain::{AssessmentCase, Asset, ContextFactor, DataClass, Finding, So
 use std::collections::BTreeSet;
 
 const CONTEXT_VERSION_TAG: &str = "context-priority:v1";
-const INTERNET_REASON: &str = "An affected asset is marked internet-exposed, and all retained source attribution for that asset is non-questionnaire.";
-const SENSITIVE_REASON: &str = "An affected asset is marked sensitive, all retained source attribution for that asset is non-questionnaire, and the case questionnaire separately records sensitive-data context.";
+pub(crate) const INTERNET_REASON: &str = "An affected asset is marked internet-exposed, and all retained source attribution for that asset is non-questionnaire.";
+pub(crate) const SENSITIVE_REASON: &str = "An affected asset is marked sensitive, all retained source attribution for that asset is non-questionnaire, and the case questionnaire separately records sensitive-data context.";
 const INTERNET_IMPACT: &str = " The affected asset is marked internet-exposed and has only retained non-questionnaire source attribution, which may increase the reachable attack surface; field-level provenance for that attribute is not retained, so it still requires human confirmation.";
 const SENSITIVE_IMPACT: &str = " The affected asset is marked as containing sensitive data and has only retained non-questionnaire source attribution, while the case questionnaire separately records sensitive-data context. This may increase the impact of a confirmed exposure, but field-level data-class provenance is not retained and neither entry is itself proof of data exposure.";
 
@@ -224,6 +224,18 @@ mod tests {
                 ContextFactor::SensitiveDataAsset
             ]
         );
+
+        // Both reasons are pushed here rather than by an adapter, so the
+        // fixture census over the engines cannot see them. Without this, the
+        // reader whose priority just rose ten points gets the two sentences
+        // saying why -- and only those two -- in English.
+        for reason in [INTERNET_REASON, SENSITIVE_REASON] {
+            let translated = crate::finding_narrative::priority_reason_zh_hant(reason);
+            assert_ne!(
+                translated, reason,
+                "case-context reason fell through untranslated: {reason}"
+            );
+        }
 
         let once = finding.clone();
         apply_case_context(&case, &mut finding);

@@ -144,24 +144,7 @@ struct DerivedSeverity {
 
 /// Completes the sentence "severity derived from ...".
 fn basis_text(code: SeverityBasisCode) -> &'static str {
-    match code {
-        SeverityBasisCode::OpenPort => "an open port observation rather than a defect",
-        SeverityBasisCode::ReachableHttpService => {
-            "a reachable HTTP service observation rather than a defect"
-        }
-        SeverityBasisCode::SecretPatternMatch => "a secret pattern match in scanned source",
-        SeverityBasisCode::UnverifiedCredentialDetector => {
-            "a credential detector match that this product does not verify"
-        }
-        SeverityBasisCode::IacPolicyCheck => {
-            "a failed infrastructure-as-code policy check, rated flat because \
-             Checkov publishes no per-check severity offline"
-        }
-        SeverityBasisCode::CisKubernetesBenchmark => "a failed CIS Kubernetes Benchmark check",
-        SeverityBasisCode::CloudControlQuery => {
-            "a failed IAM control from this product's own fixed query"
-        }
-    }
+    crate::finding_narrative::basis_english(code)
 }
 
 struct RecordDraft {
@@ -2875,7 +2858,7 @@ fn merge_finding(
                     ),
                     None => format!("Source severity: {}", safe_text(&record.source_severity, 80)),
                 },
-                "Direct scanner evidence is attached and still requires human review.".into(),
+                crate::finding_narrative::ENGLISH_EVIDENCE_REASON.into(),
             ],
             asset_ids: vec![asset_id],
             evidence: vec![evidence],

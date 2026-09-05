@@ -12773,10 +12773,20 @@ fn html_report_bytes(
                 )
             })
             .unwrap_or_default();
+        // The reasons are stored as English prose with no per-entry code, so
+        // each is recognised by shape. One this build cannot identify stays in
+        // English rather than being replaced by a confident guess about why
+        // this product moved the finding up the list.
         let mut priority_reasons = finding
             .priority_reasons
             .iter()
-            .map(|reason| format!("<li>{}</li>", html_escape(reason)))
+            .map(|reason| match catalog.locale {
+                crate::export::ReportLocale::En => format!("<li>{}</li>", html_escape(reason)),
+                crate::export::ReportLocale::ZhHant => format!(
+                    "<li>{}</li>",
+                    html_escape(&crate::finding_narrative::priority_reason_zh_hant(reason))
+                ),
+            })
             .collect::<String>();
         if priority_reasons.is_empty() {
             priority_reasons.push_str(catalog.text(
@@ -24310,9 +24320,17 @@ mod tests {
             severity: Severity::High,
             confidence: Confidence::Confirmed,
             priority: 73,
+            // What the adapter really writes: a derived-severity reason built
+            // from the basis code and the engine's name, and the evidence
+            // constant every finding carries.
             priority_reasons: vec![
-                "Confirmed evidence and a reusable credential pattern raise the handoff priority."
-                    .into(),
+                format!(
+                    "Severity derived from {}; Gitleaks reports no severity of its own.",
+                    crate::finding_narrative::basis_english(
+                        crate::domain::SeverityBasisCode::SecretPatternMatch
+                    )
+                ),
+                crate::finding_narrative::ENGLISH_EVIDENCE_REASON.into(),
             ],
             asset_ids: vec![asset_id.clone()],
             evidence: vec![Evidence {
@@ -24421,8 +24439,6 @@ mod tests {
             "Severity: High".into(),
             "Confidence: Confirmed".into(),
             "Priority: 73".into(),
-            "Confirmed evidence and a reusable credential pattern raise the handoff priority."
-                .into(),
             "then plan and approve revocation and rotation of the exposed credential first.".into(),
             evidence_sha256.clone(),
             "AIDEFEND 2026.1 / ADF-APP-01".into(),
@@ -24444,6 +24460,9 @@ mod tests {
             "Before any manual change, preserve",
             "How to confirm the fix",
             "After an approved manual change, rerun",
+            "Why this priority",
+            "Severity derived from a secret pattern match in scanned source",
+            "Direct scanner evidence is attached",
         ] {
             assert!(
                 html.contains(english_block),
@@ -24482,6 +24501,11 @@ mod tests {
             "本產品不會代為執行修復",
             "如何確認已修正",
             "並確認來源規則 generic-api-key 不再被回報",
+            // Why this priority. Stored as bare prose with no per-entry code,
+            // so a reader was given a Chinese heading over an English list.
+            "嚴重程度是由掃描到的原始碼中符合機密資料的樣式推導而來",
+            "Gitleaks 本身不提供嚴重程度",
+            "已附上掃描工具的直接證據，仍需人工檢視。",
         ] {
             assert!(
                 zh_html.contains(composed),
@@ -24494,6 +24518,8 @@ mod tests {
             "Secrets-response specialist",
             "Before any manual change, preserve",
             "After an approved manual change, rerun",
+            "Severity derived from",
+            "Direct scanner evidence is attached",
         ] {
             assert!(
                 !zh_html.contains(english_prose),

@@ -212,3 +212,20 @@ test("a finding whose safety sentence this build does not recognise keeps it rat
 
   expect(container.textContent ?? "").toContain(stale);
 });
+
+test("why this priority is not a Chinese heading over an English list", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const derived =
+    "Severity derived from a credential detector match that this product does not verify; TruffleHog reports no severity of its own.";
+  const evidence = "Direct scanner evidence is attached and still requires human review.";
+  const { container } = renderPage([
+    leakedCredential({ priorityReasons: [derived, evidence] }),
+  ]);
+  const rendered = container.textContent ?? "";
+
+  expect(rendered).not.toContain(derived);
+  expect(rendered).not.toContain(evidence);
+  expect(rendered).toContain("嚴重程度是由憑證偵測器的比對結果");
+  expect(rendered).toContain("已附上掃描工具的直接證據");
+  expect(rendered).toContain("TruffleHog");
+});

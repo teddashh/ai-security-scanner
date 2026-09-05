@@ -227,6 +227,75 @@ export const findingVerificationSentence = (locale: "en" | "zh-TW", english: str
   return `在核准的人工變更完成後，請以相同的授權範圍重新執行 ${engine}，並確認來源規則 ${rule} 不再被回報。`;
 };
 
+/**
+ * The canonical English basis clauses, as the backend writes them.
+ *
+ * Held here so a stored priority reason can be recognised by shape. Keyed by
+ * the same code the summary sentence uses, and pinned to the Rust definition by
+ * a fixture test, because a drifted string would show up as a silently
+ * untranslated reason rather than as a failure.
+ */
+const BASIS_ENGLISH: Record<SeverityBasisCode, string> = {
+  open_port: "an open port observation rather than a defect",
+  reachable_http_service: "a reachable HTTP service observation rather than a defect",
+  secret_pattern_match: "a secret pattern match in scanned source",
+  unverified_credential_detector: "a credential detector match that this product does not verify",
+  iac_policy_check:
+    "a failed infrastructure-as-code policy check, rated flat because Checkov publishes no per-check severity offline",
+  cis_kubernetes_benchmark: "a failed CIS Kubernetes Benchmark check",
+  cloud_control_query: "a failed IAM control from this product's own fixed query",
+};
+
+/** The one priority reason every adapter finding carries. */
+export const ENGLISH_EVIDENCE_REASON =
+  "Direct scanner evidence is attached and still requires human review.";
+
+/** The two reasons `apply_case_context` pushes when the case raises a finding. */
+const ENGLISH_INTERNET_REASON =
+  "An affected asset is marked internet-exposed, and all retained source attribution for that asset is non-questionnaire.";
+const ENGLISH_SENSITIVE_REASON =
+  "An affected asset is marked sensitive, all retained source attribution for that asset is non-questionnaire, and the case questionnaire separately records sensitive-data context.";
+
+/**
+ * "Why this priority", in the reader's language.
+ *
+ * priorityReasons is a bare string list with no per-entry code, so each entry
+ * is recognised by its shape. Anything this build cannot identify is returned
+ * unchanged: a reason is the product's account of why it moved a finding up the
+ * list, and printing a confident Chinese sentence for text it cannot read would
+ * be inventing that account.
+ */
+export const findingPriorityReason = (locale: "en" | "zh-TW", english: string): string => {
+  if (locale === "en") return english;
+  const trimmed = english.trim();
+  if (trimmed === ENGLISH_EVIDENCE_REASON) return "已附上掃描工具的直接證據，仍需人工檢視。";
+  if (trimmed === ENGLISH_INTERNET_REASON)
+    return "受影響的資產被標記為可從網際網路存取，且其保留的來源歸屬皆非問卷填答。";
+  if (trimmed === ENGLISH_SENSITIVE_REASON)
+    return "受影響的資產被標記為含有敏感資料，其保留的來源歸屬皆非問卷填答，且案件問卷另有記錄敏感資料情境。";
+  // The engine's own raw severity word, kept verbatim. Restating "high" as 高
+  // would stop it matching what the reader sees in the engine's own output.
+  const SOURCE = "Source severity: ";
+  if (trimmed.startsWith(SOURCE)) {
+    const value = trimmed.slice(SOURCE.length);
+    if (value) return `來源工具評定的嚴重程度：${value}`;
+  }
+  const DERIVED = "Severity derived from ";
+  const TAIL = " reports no severity of its own.";
+  if (!trimmed.startsWith(DERIVED) || !trimmed.endsWith(TAIL)) return english;
+  const middle = trimmed.slice(DERIVED.length, trimmed.length - TAIL.length);
+  // No basis text contains "; ", so the last one separates basis from engine.
+  const at = middle.lastIndexOf("; ");
+  if (at < 0) return english;
+  const basisText = middle.slice(0, at);
+  const engine = middle.slice(at + 2);
+  const code = (Object.keys(BASIS_ENGLISH) as SeverityBasisCode[]).find(
+    (key) => BASIS_ENGLISH[key] === basisText,
+  );
+  if (!code || !engine) return english;
+  return `嚴重程度是由${BASIS[code]}推導而來；${engine} 本身不提供嚴重程度。`;
+};
+
 /** "Have the recommended specialist ({expert}) review ... then plan and approve {remedy}." */
 export const findingActionSentence = (
   locale: "en" | "zh-TW",

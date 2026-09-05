@@ -16,6 +16,7 @@ import { projectVisibleFindingGroups } from "../findingGroupPresentation";
 import {
   engineNameFrom,
   findingActionSentence,
+  findingPriorityReason,
   findingRollbackSentence,
   findingVerificationSentence,
   findingImpactSentence,
@@ -1806,7 +1807,7 @@ export function FindingsPage({
               {(selected.priorityReasons?.length ?? 0) > 0 && (
                 <section className="detail-section">
                   <h3>{text(copy.whyPriority)}</h3>
-                  <ul className="detail-list">{selected.priorityReasons?.map((reason) => <li key={reason}>{reason}</li>)}</ul>
+                  <ul className="detail-list">{selected.priorityReasons?.map((reason) => <li key={reason}>{findingPriorityReason(locale, reason)}</li>)}</ul>
                 </section>
               )}
 

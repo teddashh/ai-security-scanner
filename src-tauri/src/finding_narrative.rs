@@ -62,6 +62,45 @@ fn remedy(family: FindingFamily) -> &'static str {
 }
 
 /// The clause completing "This product rated it {severity} from ...".
+/// The English clause completing "This product rated it {severity} from ...".
+///
+/// Lives here rather than in the adapter that prints it because two sentences
+/// are built from it -- the summary and the priority reason -- and the reader's
+/// language is derived by recognising this exact text. A second copy in the
+/// adapter would be a second thing to keep in step, and drift would show up as
+/// a silently untranslated reason rather than as a failure.
+pub fn basis_english(code: SeverityBasisCode) -> &'static str {
+    match code {
+        SeverityBasisCode::OpenPort => "an open port observation rather than a defect",
+        SeverityBasisCode::ReachableHttpService => {
+            "a reachable HTTP service observation rather than a defect"
+        }
+        SeverityBasisCode::SecretPatternMatch => "a secret pattern match in scanned source",
+        SeverityBasisCode::UnverifiedCredentialDetector => {
+            "a credential detector match that this product does not verify"
+        }
+        SeverityBasisCode::IacPolicyCheck => {
+            "a failed infrastructure-as-code policy check, rated flat because \
+             Checkov publishes no per-check severity offline"
+        }
+        SeverityBasisCode::CisKubernetesBenchmark => "a failed CIS Kubernetes Benchmark check",
+        SeverityBasisCode::CloudControlQuery => {
+            "a failed IAM control from this product's own fixed query"
+        }
+    }
+}
+
+/// Every basis code, so a new one cannot be added without being translated.
+pub const ALL_SEVERITY_BASIS_CODES: [SeverityBasisCode; 7] = [
+    SeverityBasisCode::OpenPort,
+    SeverityBasisCode::ReachableHttpService,
+    SeverityBasisCode::SecretPatternMatch,
+    SeverityBasisCode::UnverifiedCredentialDetector,
+    SeverityBasisCode::IacPolicyCheck,
+    SeverityBasisCode::CisKubernetesBenchmark,
+    SeverityBasisCode::CloudControlQuery,
+];
+
 fn basis(code: SeverityBasisCode) -> &'static str {
     match code {
         SeverityBasisCode::OpenPort => "開放連接埠的觀察結果，而非缺陷",
@@ -204,6 +243,70 @@ pub fn rollback_zh_hant(english: &str) -> String {
 /// engine's display name and the source rule id are the engine's own strings
 /// and have to appear in the Chinese exactly as they do in the English.
 /// Returns the English unchanged for any sentence not in this shape.
+/// The one priority reason every adapter finding carries.
+pub const ENGLISH_EVIDENCE_REASON: &str =
+    "Direct scanner evidence is attached and still requires human review.";
+
+/// "Why this priority", in the reader's language.
+///
+/// `priority_reasons` is a bare `Vec<String>` with no per-entry code, so each
+/// entry is recognised by its shape rather than looked up. There are four
+/// producers and they are all closed:
+///
+///  - the derived-severity reason, built from a basis code and an engine name
+///  - `Source severity: {value}`, whose value is the engine's own raw word
+///  - the evidence constant above
+///  - the two case-context reasons `apply_case_context` pushes
+///
+/// Anything else is returned unchanged. A reason is the product's account of
+/// why it moved a finding up the list; printing a confident Chinese sentence
+/// for text this build cannot identify would be inventing that account.
+pub fn priority_reason_zh_hant(english: &str) -> String {
+    let trimmed = english.trim();
+    if trimmed == ENGLISH_EVIDENCE_REASON {
+        return "已附上掃描工具的直接證據，仍需人工檢視。".to_owned();
+    }
+    if trimmed == crate::prioritization::INTERNET_REASON {
+        return "受影響的資產被標記為可從網際網路存取，且其保留的來源歸屬皆非問卷填答。".to_owned();
+    }
+    if trimmed == crate::prioritization::SENSITIVE_REASON {
+        return "受影響的資產被標記為含有敏感資料，其保留的來源歸屬皆非問卷填答，且案件問卷另有記錄敏感資料情境。".to_owned();
+    }
+    // The engine's own raw severity word, kept verbatim. Restating "high" as
+    // 高 would stop it matching what the reader sees in the engine's own output.
+    if let Some(value) = trimmed
+        .strip_prefix("Source severity: ")
+        .filter(|value| !value.is_empty())
+    {
+        return format!("來源工具評定的嚴重程度：{value}");
+    }
+    const DERIVED: &str = "Severity derived from ";
+    const TAIL: &str = " reports no severity of its own.";
+    let Some(rest) = trimmed.strip_prefix(DERIVED) else {
+        return english.to_owned();
+    };
+    let Some(rest) = rest.strip_suffix(TAIL) else {
+        return english.to_owned();
+    };
+    // No basis text contains "; ", so the last one separates basis from engine.
+    let Some((basis_text, engine)) = rest.rsplit_once("; ") else {
+        return english.to_owned();
+    };
+    let Some(code) = ALL_SEVERITY_BASIS_CODES
+        .into_iter()
+        .find(|code| basis_english(*code) == basis_text)
+    else {
+        return english.to_owned();
+    };
+    if engine.is_empty() {
+        return english.to_owned();
+    }
+    format!(
+        "嚴重程度是由{}推導而來；{engine} 本身不提供嚴重程度。",
+        basis(code)
+    )
+}
+
 pub fn verification_zh_hant(english: &str) -> String {
     const RERUN: &str = "After an approved manual change, rerun ";
     const SCOPE: &str = " with the same authorized scope and confirm that source rule ";

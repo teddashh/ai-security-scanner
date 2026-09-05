@@ -6,7 +6,8 @@ use ai_security_scanner_lib::domain::{
     FindingStatus, OrganizationProfile, RawArtifact, Severity, SeverityBasisCode,
 };
 use ai_security_scanner_lib::finding_narrative::{
-    ENGLISH_ROLLBACK, expert_type_zh_hant, rollback_zh_hant, verification_zh_hant,
+    ENGLISH_ROLLBACK, expert_type_zh_hant, priority_reason_zh_hant, rollback_zh_hant,
+    verification_zh_hant,
 };
 use ai_security_scanner_lib::registry::EngineRegistry;
 use chrono::{TimeZone, Utc};
@@ -2495,4 +2496,55 @@ fn the_safety_and_verification_sentences_are_the_ones_the_translator_knows() {
         }
     }
     assert!(engines_seen >= 21, "only {engines_seen} findings exercised");
+}
+
+/// Every priority reason the engines actually write is one the reader's
+/// language knows.
+///
+/// `priority_reasons` is a bare `Vec<String>`: no code, no enum, nothing that
+/// fails to compile when a producer invents a new sentence. So the census runs
+/// against the producer rather than against the translator's own table -- a
+/// test comparing the translator to itself proves it is consistent, never that
+/// it is complete, and a reason it does not recognise is returned in English
+/// with no error anywhere.
+#[test]
+fn every_priority_reason_the_engines_write_is_one_the_reader_can_read() {
+    let mut reasons_seen = 0_usize;
+    let mut derived_seen = 0_usize;
+    for engine_id in BUILTIN_ENGINE_IDS {
+        for finding in normalize_fixture(engine_id).findings {
+            assert!(
+                !finding.priority_reasons.is_empty(),
+                "{engine_id} explains nothing about why it set this priority"
+            );
+            for reason in &finding.priority_reasons {
+                reasons_seen += 1;
+                let translated = priority_reason_zh_hant(reason);
+                assert_ne!(
+                    &translated, reason,
+                    "{engine_id} writes a priority reason the translator does not know: {reason}"
+                );
+                // The derived-severity reason names the engine. That is the
+                // engine's own name and has to survive being said in Chinese,
+                // for the same reason the summary sentence keeps it.
+                if reason.starts_with("Severity derived from ") {
+                    derived_seen += 1;
+                    let engine_name = reason
+                        .rsplit_once("; ")
+                        .and_then(|(_, tail)| tail.strip_suffix(" reports no severity of its own."))
+                        .unwrap_or_else(|| panic!("{engine_id}: {reason}"));
+                    assert!(
+                        translated.contains(engine_name),
+                        "{engine_id} lost its own name {engine_name}: {translated}"
+                    );
+                }
+            }
+        }
+    }
+    assert!(reasons_seen >= 42, "only {reasons_seen} reasons exercised");
+    // The seven engines that publish no severity of their own.
+    assert!(
+        derived_seen >= 7,
+        "only {derived_seen} derived-severity reasons exercised"
+    );
 }
