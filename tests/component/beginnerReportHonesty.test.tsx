@@ -153,6 +153,27 @@ const statePill = (container: HTMLElement): HTMLElement => {
   return pill;
 };
 
+/**
+ * One row of the selected finding's provenance list, addressed by its own
+ * label. Read this way rather than from `textContent` so a row that stops
+ * rendering fails loudly instead of quietly satisfying an absence assertion,
+ * and so the four run/date rows cannot be confused with one another.
+ */
+const provenanceValue = (container: HTMLElement, label: string): string => {
+  const section = container.querySelector<HTMLElement>(".provenance-section");
+  if (!section) throw new Error("the provenance section did not render");
+  const row = Array.from(section.querySelectorAll("dl > div")).find(
+    (candidate) => candidate.querySelector("dt")?.textContent === label,
+  );
+  if (!row) {
+    const rendered = Array.from(section.querySelectorAll("dt"))
+      .map((term) => term.textContent)
+      .join(" / ");
+    throw new Error(`no provenance row labelled "${label}"; rendered: ${rendered}`);
+  }
+  return row.querySelector("dd")?.textContent ?? "";
+};
+
 beforeEach(() => {
   window.localStorage.setItem(localeStorageKey, "en");
 });
@@ -304,6 +325,75 @@ test("a finding with nothing recorded says so about the record, not about the sc
 
   expect(container.textContent).toContain("No official reference link is recorded for this finding");
   expect(container.textContent).not.toContain("was provided");
+});
+
+test("a finding carried over from earlier runs is not presented as new", () => {
+  // The frozen snapshot has no first/last-seen fields, so the projection had
+  // been stamping the run being viewed onto all four. Under labels that read
+  // "First-seen run" and "First observed" with no qualifier, that answered "is
+  // this new, or has it been here for months?" with "new" every time -- for a
+  // finding the backend deliberately carries a first-seen run across every
+  // merge and replacement precisely so the answer can be no.
+  const { container } = renderReport(
+    report("partial", { findings: [frozenFinding()] }),
+    [canonicalFinding({
+      firstSeenRunId: "run-0",
+      lastSeenRunId: "run-3",
+      firstSeenAt: "2024-03-02T09:00:00Z",
+      lastSeenAt: "2025-11-20T09:00:00Z",
+    })],
+  );
+
+  // The report under view is `run-1`, so neither id below can have come from it.
+  expect(provenanceValue(container, "First-seen run")).toBe("run-0");
+  expect(provenanceValue(container, "Last-seen run")).toBe("run-3");
+  // Asserted by calendar day rather than exact string because the value goes
+  // through `formatDateTime`. The frozen finding carries no evidence, so the old
+  // fallback was the report's own `lastDurableUpdate` -- Sep 4, the day that has
+  // to stay absent from both rows.
+  expect(provenanceValue(container, "First observed")).toContain("Mar 2");
+  expect(provenanceValue(container, "First observed")).not.toContain("Sep 4");
+  expect(provenanceValue(container, "Last observed")).toContain("Nov 20");
+  expect(provenanceValue(container, "Last observed")).not.toContain("Sep 4");
+});
+
+test("a first-seen date carries the year that makes it an age", () => {
+  // Wiring the real history through is spent if the renderer drops the part
+  // that makes it legible. The shared `formatDateTime` default is month, day,
+  // hour, minute -- so a finding first seen two years ago renders as "Mar 2,
+  // 04:00 AM", indistinguishable from one first seen this spring, and the row
+  // stops answering the only question it is there to answer.
+  const { container } = renderReport(
+    report("partial", { findings: [frozenFinding()] }),
+    [canonicalFinding({
+      firstSeenAt: "2024-03-02T09:00:00Z",
+      lastSeenAt: "2025-11-20T09:00:00Z",
+    })],
+  );
+
+  expect(provenanceValue(container, "First observed")).toContain("2024");
+  expect(provenanceValue(container, "Last observed")).toContain("2025");
+  // The same claim is repeated in the prominent facts list above the fold,
+  // where a year-less date is read first and by more people.
+  const facts = container.querySelector<HTMLElement>(".detail-facts");
+  expect(facts).toBeTruthy();
+  const lastObserved = Array.from(facts!.querySelectorAll("div")).find(
+    (row) => row.querySelector("dt")?.textContent === "Last observed",
+  );
+  expect(lastObserved?.querySelector("dd")?.textContent).toContain("2025");
+});
+
+test("a finding the case no longer holds reports no first-seen run rather than this one", () => {
+  // The mirror, and the reason the run ids are dropped instead of falling back:
+  // the finding appearing in this run does not establish that this run saw it
+  // first, so there is nothing left to say but that it is not recorded.
+  const { container } = renderReport(
+    report("partial", { findings: [frozenFinding()] }),
+    [],
+  );
+
+  expect(provenanceValue(container, "First-seen run")).toBe("Not reported");
+  expect(provenanceValue(container, "Last-seen run")).toBe("Not reported");
 });
 
 test("a coverage gap does not name a cause the kind cannot establish", () => {

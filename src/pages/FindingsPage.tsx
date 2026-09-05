@@ -520,6 +520,20 @@ const localizedExpert = (expert: string, locale: "en" | "zh-TW"): string => {
   return "資安或 IT 專業人員";
 };
 
+// A first/last-seen timestamp exists to answer one question: how long has this
+// been here? The shared `formatDateTime` default omits the year, which is right
+// for a task that ran minutes ago and wrong here -- it renders a finding carried
+// since 2024 identically to one first seen this March, which is the same erasure
+// of history as stamping the current run onto `firstSeenRunId`. Scoped to the
+// rows that make an age claim; run-local times elsewhere keep the terser form.
+const historyDateTime: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+};
+
 const projectReportFindings = (
   report: BeginnerMasterReport,
   canonicalFindings: Finding[],
@@ -587,10 +601,22 @@ const projectReportFindings = (
       verificationGuidance: current?.verificationGuidance,
       rollbackConsiderations: current?.rollbackConsiderations,
       tags: current?.tags,
-      firstSeenRunId: report.runId,
-      lastSeenRunId: report.runId,
-      firstSeenAt: observedTimes[0] ?? report.state.lastDurableUpdate,
-      lastSeenAt: observedTimes.at(-1) ?? report.state.lastDurableUpdate,
+      // The frozen snapshot carries no first/last-seen fields at all, so these
+      // were not the selected run's record of history -- they were invented from
+      // the run being viewed. The backend keeps the real first-seen run
+      // deliberately, carrying it across every merge and every replacement
+      // (case_service.rs), and the labels rendered beside these values say
+      // "First-seen run" and "First observed" with no qualifier. Stamping this
+      // run's id answered "is this new, or has it been here for months?" with
+      // "new" for every recurring finding. Falling back to the run's own
+      // evidence is only for a finding the case no longer holds, where that is
+      // the last thing still known about it; the run id is dropped there
+      // because being seen in this run does not establish it was seen here
+      // first.
+      firstSeenRunId: current?.firstSeenRunId,
+      lastSeenRunId: current?.lastSeenRunId,
+      firstSeenAt: current?.firstSeenAt ?? observedTimes[0] ?? report.state.lastDurableUpdate,
+      lastSeenAt: current?.lastSeenAt ?? observedTimes.at(-1) ?? report.state.lastDurableUpdate,
     };
   });
 };
@@ -1480,7 +1506,7 @@ export function FindingsPage({
                 <div><dt>{text(copy.asset)}</dt><dd>{selected.assetName}</dd></div>
                 <div><dt>{text(copy.reviewStatus)}</dt><dd>{workflowMeta[selected.workflowState]}</dd></div>
                 <div><dt>{text(copy.recommendedExpert)}</dt><dd>{selected.expertType}</dd></div>
-                <div><dt>{text(copy.lastObserved)}</dt><dd>{formatDateTime(selected.lastSeenAt)}</dd></div>
+                <div><dt>{text(copy.lastObserved)}</dt><dd>{formatDateTime(selected.lastSeenAt, historyDateTime)}</dd></div>
                 <div><dt>{text(copy.evidenceConfidence)}</dt><dd>{confidenceMeta[selected.confidence]}</dd></div>
                 <div><dt>{text(copy.relatedAssets)}</dt><dd>{text(copy.assetCount, { count: formatNumber(selected.assetIds?.length ?? 1) })}</dd></div>
               </dl>
@@ -1611,8 +1637,8 @@ export function FindingsPage({
                     <div><dt>{text(copy.findingId)}</dt><dd><code>{selected.id}</code></dd></div>
                     <div><dt>{text(copy.firstRun)}</dt><dd><code>{selected.firstSeenRunId ?? text(copy.notReported)}</code></dd></div>
                     <div><dt>{text(copy.lastRun)}</dt><dd><code>{selected.lastSeenRunId ?? text(copy.notReported)}</code></dd></div>
-                    <div><dt>{text(copy.firstObserved)}</dt><dd>{formatDateTime(selected.firstSeenAt)}</dd></div>
-                    <div><dt>{text(copy.lastObserved)}</dt><dd>{formatDateTime(selected.lastSeenAt)}</dd></div>
+                    <div><dt>{text(copy.firstObserved)}</dt><dd>{formatDateTime(selected.firstSeenAt, historyDateTime)}</dd></div>
+                    <div><dt>{text(copy.lastObserved)}</dt><dd>{formatDateTime(selected.lastSeenAt, historyDateTime)}</dd></div>
                   </dl>
                 </details>
                 {(selected.tags?.length ?? 0) > 0 && <div className="tag-row">{selected.tags?.map((tag) => <span className="tag tag--light" key={tag}>{tag}</span>)}</div>}
