@@ -90,6 +90,13 @@ const EXPERT: Record<string, string> = {
   "Container security engineer": "容器安全工程師",
   "Software supply-chain engineer": "軟體供應鏈工程師",
   "Kubernetes security engineer": "Kubernetes 安全工程師",
+  // Not from an adapter. A check that timed out is a network or system problem,
+  // and the report says so on purpose; letting it fall through would send the
+  // reader to a security specialist for a connectivity fault, which is the same
+  // misdirection the substring rule used to cause. The generic name is what a
+  // finding with no details gets.
+  "Network or system administrator": "網路或系統管理員",
+  "Security professional": "資安專業人員",
 };
 
 export const localizedExpertType = (expert: string, locale: "en" | "zh-TW"): string => {

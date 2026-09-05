@@ -2554,6 +2554,25 @@ mod tests {
                 .iter()
                 .any(|gap| gap.kind == CoverageGapKind::TimedOut)
         );
+
+        // A timeout is the one gap this report blames on the network rather
+        // than on security, and it names that role deliberately. The name is
+        // written here and translated in `finding_narrative`, so changing it on
+        // this side alone silently downgrades the Chinese reader to the generic
+        // "some security or IT professional" -- the very misdirection naming
+        // the role was meant to avoid.
+        let expert = report
+            .next_steps
+            .iter()
+            .find(|step| step.code == NextActionCode::RetryCheck)
+            .and_then(|step| step.recommended_expert_type.as_deref())
+            .expect("the timed-out gap contributed no next step naming an expert");
+        assert_eq!(expert, "Network or system administrator");
+        assert_eq!(
+            crate::finding_narrative::expert_type_zh_hant(expert),
+            "網路或系統管理員",
+            "the timed-out gap names a role no localized surface can render"
+        );
     }
 
     #[test]

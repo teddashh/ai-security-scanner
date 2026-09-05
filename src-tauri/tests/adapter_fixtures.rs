@@ -5,6 +5,7 @@ use ai_security_scanner_lib::domain::{
     AssessmentCase, Asset, AssetIdentifier, AssetKind, Confidence, DataClass, FindingFamily,
     FindingStatus, OrganizationProfile, RawArtifact, Severity, SeverityBasisCode,
 };
+use ai_security_scanner_lib::finding_narrative::expert_type_zh_hant;
 use ai_security_scanner_lib::registry::EngineRegistry;
 use chrono::{TimeZone, Utc};
 use sha2::{Digest, Sha256};
@@ -2396,5 +2397,47 @@ fn the_codes_a_localized_client_reads_agree_with_the_english_they_replace() {
         7,
         "only {} of the seven severity bases are exercised: {seen_basis:?}",
         seen_basis.len()
+    );
+}
+
+/// Every specialist an engine recommends can be named in the reader's language.
+///
+/// `expert_type_zh_hant` answers with a generic title for a name it has never
+/// seen. That is right for a finding restored from a build this one does not
+/// know, and wrong for a name this build ships: the reader is told to find
+/// someone in general when the product knows exactly who to ask.
+///
+/// No existing test can see that. The two translation tables agree with each
+/// other by construction -- `findingNarrativeParity.test.ts` reads both files
+/// and compares them -- so a name missing from both is missing consistently,
+/// and the unit tests either side assert on the tables' own contents, which
+/// cannot know what the adapters emit. This one asks the adapters. Adding a
+/// twenty-second engine with a new specialist fails here rather than shipping
+/// a Chinese report that shrugs.
+#[test]
+fn every_specialist_the_engines_recommend_is_named_in_the_readers_language() {
+    const GENERIC: &str = "資安或 IT 專業人員";
+    let mut named: BTreeMap<String, String> = BTreeMap::new();
+
+    for engine_id in BUILTIN_ENGINE_IDS {
+        for finding in normalize_fixture(engine_id).findings {
+            let expert = finding.recommended_expert_type.clone();
+            let chinese = expert_type_zh_hant(&expert).to_owned();
+            assert_ne!(
+                chinese, GENERIC,
+                "{engine_id} recommends {expert:?}, and no localized surface can name it"
+            );
+            named.insert(expert, chinese);
+        }
+    }
+
+    // A distinct English specialist that collapses onto another's Chinese name
+    // hands two different problems to the same person on one side of the
+    // product and not the other.
+    let distinct = named.values().collect::<BTreeSet<_>>();
+    assert_eq!(
+        distinct.len(),
+        named.len(),
+        "two specialists share one Chinese name: {named:#?}"
     );
 }

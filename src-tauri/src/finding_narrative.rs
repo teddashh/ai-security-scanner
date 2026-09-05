@@ -96,6 +96,13 @@ pub fn expert_type_zh_hant(expert: &str) -> &str {
         "Container security engineer" => "容器安全工程師",
         "Software supply-chain engineer" => "軟體供應鏈工程師",
         "Kubernetes security engineer" => "Kubernetes 安全工程師",
+        // Not from an adapter. A check that timed out is a network or system
+        // problem, and the report says so on purpose; letting it fall through
+        // would send the reader to a security specialist for a connectivity
+        // fault, which is the same misdirection the substring rule used to
+        // cause. The generic name is what a finding with no details gets.
+        "Network or system administrator" => "網路或系統管理員",
+        "Security professional" => "資安專業人員",
         // A name from a build this one has never seen still has to say
         // something, and a general answer beats a confidently wrong one.
         _ => "資安或 IT 專業人員",
