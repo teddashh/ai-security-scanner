@@ -857,7 +857,20 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         <summary>{text(copy.reportTechnicalDetails)}</summary>
         {report.dataQualityWarnings.length > 0 && (
           <InlineNotice tone="warning" title={text(copy.dataWarnings, { count: formatNumber(report.dataQualityWarnings.length) })}>
-            <p>{text(copy.gapUnavailable)}</p>
+            {/*
+              * The count used to be followed by `copy.gapUnavailable` -- a
+              * coverage-gap sentence about a run not retaining enough detail --
+              * while the warnings themselves were dropped. The backend writes a
+              * distinct plain-language explanation for each one (a run's stored
+              * project id not matching, a saved completion time beside a still
+              * active check, a coverage history that could not be reconciled),
+              * and that substituted sentence is false for most of them. They are
+              * rendered as written, inside this technical disclosure, the same
+              * way every other raw backend string on this surface is.
+              */}
+            <ul className="data-quality-warnings">
+              {report.dataQualityWarnings.map((warning) => <li key={warning}>{warning}</li>)}
+            </ul>
           </InlineNotice>
         )}
         <div className="evidence-list">

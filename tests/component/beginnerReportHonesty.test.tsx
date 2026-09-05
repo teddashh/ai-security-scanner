@@ -438,3 +438,36 @@ test("AIDEFEND is not presented as carrying the same standing as NIST and ISO", 
   expect(notice!.textContent).toContain("not certification, compliance, endorsement, or a pass/fail result");
   expect(notice!.textContent).toContain("independent, unofficial mapping");
 });
+
+test("each saved-data limitation is shown, not replaced by a coverage sentence", () => {
+  // The backend writes a distinct plain-language explanation per warning: a run
+  // whose stored project id does not match, a saved completion time beside a
+  // still-active check, a coverage history that could not be reconciled. The
+  // page rendered the count and then one fixed sentence about a run not
+  // retaining enough detail -- which is about coverage, and false for every one
+  // of those causes.
+  const warnings = [
+    "The selected run's stored project identifier does not match this project. The report remains limited to the selected in-project record.",
+    "This run has a saved completion time while at least one check is still active. The report follows the check state and remains live instead of presenting a final result.",
+  ];
+  const { container } = renderReport(report("partial", { dataQualityWarnings: warnings }));
+
+  const notice = Array.from(container.querySelectorAll<HTMLElement>(".inline-notice"))
+    .find((candidate) => candidate.textContent?.includes("Saved-data limitations"));
+  expect(notice).toBeTruthy();
+  expect(notice!.textContent).toContain("Saved-data limitations: 2");
+
+  const shown = Array.from(notice!.querySelectorAll("li")).map((item) => item.textContent);
+  expect(shown).toEqual(warnings);
+  expect(notice!.textContent).not.toContain("did not retain enough detail");
+});
+
+test("a report with no saved-data limitation shows no such notice", () => {
+  // The mirror: without it the list above could render unconditionally and the
+  // count would be the only thing distinguishing a clean report.
+  const { container } = renderReport(report("partial"));
+
+  const notice = Array.from(container.querySelectorAll<HTMLElement>(".inline-notice"))
+    .find((candidate) => candidate.textContent?.includes("Saved-data limitations"));
+  expect(notice).toBeUndefined();
+});
