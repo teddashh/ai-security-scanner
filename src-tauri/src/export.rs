@@ -3345,6 +3345,86 @@ mod tests {
         );
     }
 
+    /// Whether any string anywhere in the document contains `needle`.
+    ///
+    /// Walks the value tree rather than searching serialized bytes, so a hit
+    /// names a field that actually holds the text instead of an accident of
+    /// how two neighbouring fields happened to be printed next to each other.
+    fn json_holds_text(value: &serde_json::Value, needle: &str) -> bool {
+        match value {
+            serde_json::Value::String(text) => text.contains(needle),
+            serde_json::Value::Array(items) => {
+                items.iter().any(|item| json_holds_text(item, needle))
+            }
+            serde_json::Value::Object(fields) => fields
+                .iter()
+                .any(|(key, field)| key.contains(needle) || json_holds_text(field, needle)),
+            _ => false,
+        }
+    }
+
+    /// Whether the document carries `port` as a port: a JSON number equal to
+    /// it, or a string containing its digits bounded by non-digits.
+    ///
+    /// The digit bounding is what makes this safe to assert negatively. A bare
+    /// `contains("49151")` is true of `"149151"` and of a timestamp, so a leak
+    /// check written that way fails on documents that leaked nothing.
+    fn json_holds_port(value: &serde_json::Value, port: u16) -> bool {
+        let digits = port.to_string();
+        let bounded = |text: &str| {
+            text.match_indices(&digits).any(|(start, _)| {
+                let before_ok = text[..start]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|character| !character.is_ascii_digit());
+                let after_ok = text[start + digits.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|character| !character.is_ascii_digit());
+                before_ok && after_ok
+            })
+        };
+        match value {
+            serde_json::Value::Number(number) => number.as_u64() == Some(u64::from(port)),
+            serde_json::Value::String(text) => bounded(text),
+            serde_json::Value::Array(items) => items.iter().any(|item| json_holds_port(item, port)),
+            serde_json::Value::Object(fields) => fields
+                .iter()
+                .any(|(key, field)| bounded(key) || json_holds_port(field, port)),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn the_port_leak_check_distinguishes_a_real_port_from_matching_digits() {
+        // Guards `json_holds_port` itself: if it answered `true` for everything
+        // the presence assertions would pass vacuously, and if it answered
+        // `false` for everything the leak assertions would.
+        let carried = serde_json::json!({"ports": [49_151], "note": "nothing here"});
+        assert!(json_holds_port(&carried, 49_151));
+        assert!(!json_holds_port(&carried, 49_152));
+
+        // The exact false positive a substring search produces.
+        let coincidence = serde_json::json!({
+            "bytes": 149_151,
+            "started_at": "2026-09-05T04:49:15.100Z",
+            "label": "run-149151",
+        });
+        assert!(
+            !json_holds_port(&coincidence, 49_151),
+            "digits inside a larger number are not a leaked port"
+        );
+
+        // A port written into prose is still a leak.
+        let in_prose = serde_json::json!({"detail": "scanned port 49151 on the host"});
+        assert!(json_holds_port(&in_prose, 49_151));
+
+        // And the text walk must look inside nesting, not just at the top.
+        let nested = serde_json::json!({"a": [{"b": {"c": "work-plan-secret.example.test"}}]});
+        assert!(json_holds_text(&nested, "work-plan-secret.example.test"));
+        assert!(!json_holds_text(&nested, "absent.example.test"));
+    }
+
     #[test]
     fn standard_redaction_removes_sensitive_sentinels_from_every_bundle_document() {
         const SENTINEL: &str = "SENSITIVE_SENTINEL_DO_NOT_EXPORT_8f7c2a";
@@ -3607,22 +3687,27 @@ mod tests {
         });
         case.raw_artifacts[0].relative_path = format!("raw/{SENTINEL}.txt");
 
-        let unredacted =
-            serde_json::to_string(&case_for_export(&case, RedactionProfile::None)).unwrap();
+        let unredacted_value = serde_json::to_value(case_for_export(&case, RedactionProfile::None))
+            .expect("the unredacted case serializes");
+        let unredacted = serde_json::to_string(&unredacted_value).unwrap();
         assert!(
             unredacted.contains(SENTINEL),
             "the sentinel fixture must be meaningful"
         );
-        for private_value in [
-            PLAN_HOSTNAME,
-            PLAN_ADDRESS_ONE,
-            PLAN_ADDRESS_TWO,
-            &PLAN_PORT_ONE.to_string(),
-            &PLAN_PORT_TWO.to_string(),
-        ] {
+        for private_value in [PLAN_HOSTNAME, PLAN_ADDRESS_ONE, PLAN_ADDRESS_TWO] {
             assert!(
-                unredacted.contains(private_value),
+                json_holds_text(&unredacted_value, private_value),
                 "the work-plan redaction fixture must contain {private_value}"
+            );
+        }
+        // Ports are JSON numbers, so searching the serialized text is the wrong
+        // instrument in both directions: `contains("49151")` matches the digits
+        // inside an unrelated `149151` or a timestamp, and would keep passing
+        // after the plan stopped carrying the port at all.
+        for private_port in [PLAN_PORT_ONE, PLAN_PORT_TWO] {
+            assert!(
+                json_holds_port(&unredacted_value, private_port),
+                "the work-plan redaction fixture must carry port {private_port} as a value"
             );
         }
         assert!(
@@ -3638,12 +3723,22 @@ mod tests {
             "attempt-result redaction fixture must be meaningful"
         );
         let redacted = case_for_export(&case, RedactionProfile::Standard);
+        let redacted_value = serde_json::to_value(&redacted).expect("the redacted case serializes");
         let redacted_json = serde_json::to_string(&redacted).unwrap();
         assert!(!redacted_json.contains(SENTINEL));
         for private_target in [PLAN_HOSTNAME, PLAN_ADDRESS_ONE, PLAN_ADDRESS_TWO] {
             assert!(
                 !redacted_json.contains(private_target),
                 "standard-redacted case leaked frozen target {private_target} from finding prose"
+            );
+        }
+        // The ports were only ever checked for presence, never for leakage, so
+        // an export that kept them would have passed. Checked as values, since
+        // the beginner report promises `[redacted port set ...]` instead.
+        for private_port in [PLAN_PORT_ONE, PLAN_PORT_TWO] {
+            assert!(
+                !json_holds_port(&redacted_value, private_port),
+                "standard-redacted case leaked scanned port {private_port}"
             );
         }
         assert!(
