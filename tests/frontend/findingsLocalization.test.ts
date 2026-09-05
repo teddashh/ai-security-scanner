@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { assertInsideDisclosure } from "./sourceRegions.ts";
+
 const source = await readFile(
   new URL("../../src/pages/FindingsPage.tsx", import.meta.url),
   "utf8",
@@ -34,8 +36,11 @@ test("problem grouping, review decisions, evidence, and navigation remain wired"
   ]) {
     assert.match(source, new RegExp(`${callback}(?:\\(|=|\\})`, "u"));
   }
-  assert.match(source, /<details className="page-technical-details">[\s\S]*evidence\.rawArtifactHash[\s\S]*<\/details>/u);
-  assert.match(source, /<details className="page-technical-details">[\s\S]*selected\.fingerprint[\s\S]*<\/details>/u);
+  // Both of these are claims that a raw technical value stays behind a
+  // disclosure rather than being put in front of a non-expert reader. See
+  // `sourceRegions.ts` for why a `[\s\S]*` span cannot check that.
+  assertInsideDisclosure(source, "page-technical-details", "evidence.rawArtifactHash");
+  assertInsideDisclosure(source, "page-technical-details", "selected.fingerprint");
   assert.match(
     source,
     /visibleFindingGroups\.length > 0[\s\S]*aria-labelledby="finding-groups-title"[\s\S]*visibleFindingIds[\s\S]*finding-browser/u,

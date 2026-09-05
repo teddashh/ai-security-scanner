@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { displayTechnicalDetail } from "../../src/pages/pageTechnicalDetails.ts";
+import { assertInsideDisclosure } from "./sourceRegions.ts";
 
 const readPage = (name: string) => readFile(new URL(`../../src/pages/${name}`, import.meta.url), "utf8");
 
@@ -67,7 +68,21 @@ test("all progress controls remain wired while raw scanner status stays in detai
   for (const callback of ["onStart", "onPause", "onResume", "onCancel"]) {
     assert.match(source, new RegExp(`void ${callback}\\(`, "u"));
   }
-  assert.match(source, /<details className="page-technical-details">[\s\S]*engine\.phase[\s\S]*engine\.errorCode[\s\S]*engine\.message[\s\S]*checkpoint\?\.lastError[\s\S]*<\/details>/u);
+  // The claim in this test's name is containment: raw scanner status stays
+  // behind a disclosure instead of being pushed at a non-expert reader. A
+  // `[\s\S]*` span between the open and close tags cannot check that -- see
+  // `sourceRegions.ts`.
+  // Named in rendered form. The bare field names also appear in phase-to-copy
+  // logic outside any disclosure, which is correct and would make the
+  // every-occurrence rule below unsatisfiable.
+  for (const raw of [
+    "displayTechnicalDetail(engine.phase)",
+    "displayTechnicalDetail(engine.errorCode)",
+    "displayTechnicalDetail(engine.message)",
+    "checkpoint?.lastError)",
+  ]) {
+    assertInsideDisclosure(source, "page-technical-details", raw);
+  }
   assert.doesNotMatch(source, /<code>error:\s*\{engine\.errorCode\}/u);
   assert.doesNotMatch(source, /<small>\{engine\.category\}[\s\S]*\{engine\.version\}<\/small>/u);
   assert.match(source, /A check that did not run is not a passed check/u);
@@ -437,15 +452,15 @@ test("export preview, export, and both verification paths remain wired", async (
     assert.match(source, new RegExp(`${callback}\\(`, "u"));
   }
   assert.doesNotMatch(source, /\{previewError\s*\?\?/u);
-  assert.match(source, /<details className="page-technical-details">[\s\S]*\{previewError\}[\s\S]*<\/details>/u);
+  assertInsideDisclosure(source, "page-technical-details", "{previewError}");
   assert.match(source, /setPreviewRequest\(\(request\) => request \+ 1\)/u);
 
   const verification = await readPage("VerificationPage.tsx");
   for (const callback of ["onSelectBaseline", "onStartRescan", "onOpenFinding"]) {
     assert.match(verification, new RegExp(`${callback}\\(`, "u"));
   }
-  assert.match(verification, /<details className="page-technical-details">[\s\S]*displayTechnicalDetail\(issue\.detail\)[\s\S]*<\/details>/u);
-  assert.match(verification, /<details className="page-technical-details">[\s\S]*displayTechnicalDetail\(item\.explanation\)[\s\S]*<\/details>/u);
+  assertInsideDisclosure(verification, "page-technical-details", "displayTechnicalDetail(issue.detail)");
+  assertInsideDisclosure(verification, "page-technical-details", "displayTechnicalDetail(item.explanation)");
   assert.doesNotMatch(verification, /<p>\{item\.explanation\}<\/p>/u);
   assert.match(verification, /Affected findings stay under Could not verify and are not counted as fixed/u);
   assert.match(verification, /受影響的問題會保留在「無法確認」，不會算成已修復/u);
