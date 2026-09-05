@@ -31,6 +31,11 @@ const FRONTEND_PATHS = [
   // frontend lane often -- that is the price of the copy and the backend not
   // being able to drift apart silently again.
   /^src-tauri\/src\/case_service\.rs$/,
+  // `correlationWireContract.test.ts` reads this one to hold the correlation
+  // report's JSON field names identical on both sides of the boundary. Renaming
+  // a Rust field compiles on both sides and silently delivers `undefined`, so a
+  // backend-only commit must run the lane holding that test.
+  /^src-tauri\/src\/correlation\.rs$/,
   // `publicRecordsScopePromise.test.ts` reads the engine catalog to decide
   // whether the public-records scope mode may describe a review at all. Adding
   // an engine that declares `passive_external_discovery` changes what that copy

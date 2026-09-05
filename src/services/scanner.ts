@@ -31,6 +31,7 @@ import type {
   CaseWorkspace,
   CloudPlatform,
   ConnectSourceSnapshotInput,
+  CorrelationReport,
   CreateCaseInput,
   EngineManifest,
   ExportCaseInput,
@@ -96,6 +97,7 @@ export const COMMANDS = {
   updateFindingWorkflow: "update_finding_workflow",
   groupFindings: "group_findings",
   ungroupFindings: "ungroup_findings",
+  suggestFindingCorrelations: "suggest_finding_correlations",
   startLocalhostQuickScan: "start_localhost_quick_scan",
   startScan: "start_scan",
   pauseScan: "pause_scan",
@@ -824,6 +826,29 @@ export const scannerService = {
       ),
       serviceText("Demo mode does not change demo groups.", "展示模式不會變更展示群組。"),
     );
+  },
+
+  /**
+   * Asks which findings from different engines look like one issue. Read-only:
+   * it saves nothing and groups nothing. Acting on a suggestion is a separate
+   * `groupFindings` call the user makes.
+   *
+   * Demo mode returns an empty report, and the caller must read `mode` before
+   * treating that as "nothing is related" — the demo case was never compared.
+   */
+  async suggestFindingCorrelations(caseId: string): Promise<ServiceResult<CorrelationReport>> {
+    if (!isNativeSurface()) {
+      return demoResult({
+        keyVersion: "",
+        suggestions: [],
+        unverifiable: [],
+        truncatedSuggestions: 0,
+      });
+    }
+    return nativeResult(await invoke<CorrelationReport>(
+      COMMANDS.suggestFindingCorrelations,
+      { caseId },
+    ));
   },
 
   async pauseScan(caseId: string, runId: string): Promise<ServiceResult<ActionResponse>> {

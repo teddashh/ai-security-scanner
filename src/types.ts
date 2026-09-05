@@ -1124,6 +1124,57 @@ export interface FindingUngroupInput {
   reason: string;
 }
 
+/**
+ * Whether agreement between engines is independent confirmation. Only
+ * `not-established` exists today: the vulnerability-database provenance that
+ * would prove independence is not retained, so two engines agreeing must never
+ * be presented as two independent confirmations.
+ */
+export type CorroborationStatus = "not-established";
+
+export interface FindingCorrelationSuggestion {
+  /** Derived from the comparison key, so a dismissal survives recomputation. */
+  id: string;
+  caseId: string;
+  comparisonKey: string;
+  /** Version of the rule that produced `comparisonKey`. */
+  keyVersion: string;
+  /** The published identifier both engines named. */
+  vulnerabilityId: string;
+  /** The package both engines named. */
+  package: string;
+  /** Proposed group title, used as the default when the user accepts. */
+  title: string;
+  /**
+   * Plain-language statement of exactly what matched, in English only. The UI
+   * composes its own bilingual sentence from the structured fields instead of
+   * rendering this, so a zh-TW reader is never handed English prose.
+   */
+  basis: string;
+  /** What this suggestion does not establish. English only; see `basis`. */
+  uncertainty: string;
+  corroboration: CorroborationStatus;
+  findingIds: string[];
+  engineIds: string[];
+}
+
+/** Findings that share a vulnerability id but could not be compared. */
+export interface UnverifiableCorrelation {
+  caseId: string;
+  vulnerabilityId: string;
+  findingIds: string[];
+  /** Which coordinate was missing or inconsistent. */
+  reason: string;
+}
+
+export interface CorrelationReport {
+  keyVersion: string;
+  suggestions: FindingCorrelationSuggestion[];
+  unverifiable: UnverifiableCorrelation[];
+  /** Suggestions dropped by the backend's cap. Never silently zero. */
+  truncatedSuggestions: number;
+}
+
 export interface FindingWorkflowUpdateInput {
   caseId: string;
   findingId: string;

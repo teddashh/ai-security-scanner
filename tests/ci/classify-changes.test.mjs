@@ -150,6 +150,10 @@ test("backend files a frontend test reads schedule the frontend lane too", () =>
     windows_runtime: false,
   });
   assert.equal(classifyChangedPaths(["src-tauri/src/commands.rs"]).frontend, true);
+  // `correlationWireContract.test.ts` reads the correlation module to hold the
+  // report's JSON field names identical on both sides. Renaming a Rust field
+  // compiles everywhere and silently delivers `undefined` to the page.
+  assert.equal(classifyChangedPaths(["src-tauri/src/correlation.rs"]).frontend, true);
   // Unrelated backend files must not drag the frontend suite in with them.
   assert.equal(classifyChangedPaths(["src-tauri/src/orchestrator.rs"]).frontend, false);
 });

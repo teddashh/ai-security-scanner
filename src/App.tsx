@@ -72,6 +72,7 @@ import type {
   CaseArtifactCleanupResult,
   CaseArtifactDeletionPlan,
   CaseWorkspace,
+  CorrelationReport,
   CreateCaseInput,
   ExportPreview,
   ExportFormat,
@@ -328,6 +329,8 @@ export default function App() {
   const [scanReadinessErrorCaseId, setScanReadinessErrorCaseId] = useState<string>();
   const [runtimeSetupFocusKey, setRuntimeSetupFocusKey] = useState(0);
   const [focusedFindingId, setFocusedFindingId] = useState<string>();
+  const [correlationReport, setCorrelationReport] = useState<CorrelationReport>();
+  const correlationRequestGeneration = useRef(0);
   const [selectedReportRunId, setSelectedReportRunId] = useState<string>();
   const [verificationBaselineRunId, setVerificationBaselineRunId] = useState<string>();
   const [selectedUseCase, setSelectedUseCase] = useState<{
@@ -1755,6 +1758,38 @@ export default function App() {
     ? workspace?.beginnerReports?.find((report) => report.runId === currentRun.id)
     : undefined;
 
+  // Correlation is a pure function of the case's findings and its active
+  // groups, so recomputing on any other workspace change would be wasted work.
+  // Sorted ids, because arrival order is not a meaningful difference.
+  const correlationInputKey = useMemo(() => JSON.stringify([
+    currentCaseId ?? "",
+    workspace?.findings.map((finding) => finding.id).sort() ?? [],
+    workspace?.findingGroups.map((group) => group.id).sort() ?? [],
+  ]), [currentCaseId, workspace?.findings, workspace?.findingGroups]);
+
+  useEffect(() => {
+    const caseId = currentCaseId;
+    const generation = ++correlationRequestGeneration.current;
+    if (!caseId) {
+      setCorrelationReport(undefined);
+      return;
+    }
+    void (async () => {
+      let report: CorrelationReport | undefined;
+      try {
+        report = (await scannerService.suggestFindingCorrelations(caseId)).data;
+      } catch {
+        // A read that failed is not evidence that nothing is related. Clearing
+        // the report makes the panel disappear rather than assert an all-clear.
+        report = undefined;
+      }
+      if (generation !== correlationRequestGeneration.current) return;
+      setCorrelationReport(report);
+    })();
+    // `correlationInputKey` is the only dependency needed: it already folds in
+    // the case id and every finding and group the computation reads.
+  }, [correlationInputKey, currentCaseId]);
+
   const content = (() => {
     if (loading && !snapshot) {
       return (
@@ -1983,6 +2018,7 @@ export default function App() {
             findings={workspace.findings}
             findingGroups={workspace.findingGroups}
             findingGroupEvents={workspace.findingGroupEvents}
+            correlationReport={correlationReport}
             workflowEvents={workspace.workflowEvents}
             coverage={workspace.coverage}
             runs={workspace.runs}

@@ -27,6 +27,8 @@ import type {
   BeginnerNextActionCode,
   BeginnerReportStage,
   BeginnerReportSummary,
+  CorrelationReport,
+  CorroborationStatus,
   CoverageRecord,
   Finding,
   FindingGroup,
@@ -50,6 +52,11 @@ interface FindingsPageProps {
   findings: Finding[];
   findingGroups: FindingGroup[];
   findingGroupEvents: FindingGroupEvent[];
+  /**
+   * Undefined when the suggestion read has not returned or failed. That is not
+   * the same as an empty report, and must not be rendered as "nothing related".
+   */
+  correlationReport?: CorrelationReport;
   coverage: CoverageRecord[];
   runs: ScanRun[];
   focusedFindingId?: string;
@@ -152,6 +159,54 @@ const copy = {
   needsReviewDetail: { en: "Confirm these before your team acts", zhTW: "團隊採取行動前先確認" },
   affectedAssets: { en: "Affected assets", zhTW: "受影響資產" },
   completeListCount: { en: "Problems in the complete list: {count}", zhTW: "完整清單共 {count} 項" },
+  correlationEyebrow: { en: "SAME ISSUE, DIFFERENT TOOLS", zhTW: "同一問題，不同工具" },
+  correlationTitle: {
+    en: "These look like one issue reported more than once",
+    zhTW: "這些看起來是同一個問題被重複回報",
+  },
+  correlationDescription: {
+    en: "Two tools named the same published vulnerability on the same package and the same asset. Combining them is a presentation choice you make; nothing is combined until you choose it, and no problem is ever deleted.",
+    zhTW: "有兩個工具在同一資產、同一套件上指出同一個已公開的弱點編號。是否合併呈現由你決定；在你選擇之前不會合併，也不會刪除任何問題。",
+  },
+  correlationMatch: {
+    en: "{vulnerability} in {package}",
+    zhTW: "{vulnerability}（套件：{package}）",
+  },
+  // No count placeholder: the list itself shows how many, and "1 tools" would
+  // be ungrammatical if the backend's two-engine minimum ever changed.
+  correlationBasis: {
+    en: "Reported by these tools: {engines}",
+    zhTW: "回報的工具：{engines}",
+  },
+  listSeparator: { en: ", ", zhTW: "、" },
+  correlationMembers: { en: "Problems it would combine: {count}", zhTW: "會合併的問題：{count} 項" },
+  // Spec 9.3: agreement between tools is not independent confirmation unless
+  // the evidence sources are demonstrably independent, which is not recorded.
+  correlationNotEstablished: {
+    en: "Not double-checked: these tools may both rely on the same public vulnerability database, so agreement is not two independent confirmations.",
+    zhTW: "不算互相驗證：這些工具可能都引用同一個公開弱點資料庫，因此一致並不等於兩次獨立確認。",
+  },
+  correlationAccept: { en: "Combine these for handoff", zhTW: "合併呈現以利交接" },
+  correlationAcceptedRationale: {
+    en: "Accepted the product's suggestion that these findings describe one issue: the same published vulnerability identifier on the same package and asset, reported by different tools. Presentation only; every original problem and its evidence stay separate.",
+    zhTW: "採納產品建議：這些問題屬於同一件事——不同工具在同一資產、同一套件上回報了同一個已公開弱點編號。僅改變呈現方式；每項原始問題與證據仍分開保留。",
+  },
+  correlationUnverifiableTitle: {
+    en: "Shared an identifier, but could not be compared: {count}",
+    zhTW: "有相同編號但無法比對：{count} 組",
+  },
+  correlationUnverifiableDescription: {
+    en: "These carry the same vulnerability identifier, but at least one of them does not record both the affected package and the affected asset. The product does not guess, so they are listed separately below.",
+    zhTW: "這些帶有相同的弱點編號，但其中至少一項沒有同時記錄受影響的套件與資產。產品不會用猜的，因此它們在下方仍分開列出。",
+  },
+  correlationUnverifiableItem: {
+    en: "{vulnerability} — problems sharing this identifier: {count}; the package or asset needed to compare them is missing",
+    zhTW: "{vulnerability}——共用此編號的問題：{count} 項；缺少比對所需的套件或資產",
+  },
+  correlationTruncated: {
+    en: "Further suggestions not shown: {count}. The list is capped, so this page is not the complete set.",
+    zhTW: "另有 {count} 項建議未顯示。清單有數量上限，因此此頁並非完整結果。",
+  },
   reversibleLinks: { en: "TEAM HANDOFF", zhTW: "團隊交接" },
   groupsTitle: { en: "Organize related issues for the right team", zhTW: "把相關問題整理給同一個團隊" },
   groupsDescription: {
@@ -428,6 +483,15 @@ const copy = {
   dataWarnings: { en: "Saved-data limitations: {count}", zhTW: "已保存資料的限制：{count} 項" },
   genericExpert: { en: "Security or IT specialist", zhTW: "資安或 IT 專業人員" },
 } as const;
+
+/**
+ * What each corroboration status means to a beginner. Exhaustive by type: if
+ * the backend gains a status this map does not cover, the build fails rather
+ * than the page silently omitting the caveat.
+ */
+const corroborationCopy: Record<CorroborationStatus, typeof copy.correlationNotEstablished> = {
+  "not-established": copy.correlationNotEstablished,
+};
 
 const reportSummaryPresentation = (summary: BeginnerReportSummary) => {
   switch (summary) {
@@ -919,6 +983,7 @@ export function FindingsPage({
   findings: canonicalFindings,
   findingGroups,
   findingGroupEvents,
+  correlationReport,
   coverage,
   runs,
   focusedFindingId,
@@ -1039,6 +1104,27 @@ export function FindingsPage({
     () => [...findingGroupEvents].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt) || right.id.localeCompare(left.id)),
     [findingGroupEvents],
   );
+  // A suggestion computed against an older finding set can name a finding this
+  // page does not have, or one that has since been grouped. Neither is
+  // actionable: accepting it would be rejected, and the user could not open the
+  // members to check the claim. Dropping such a row hides no problem, because
+  // every finding it names is either absent or already listed on its own.
+  const correlationSuggestions = useMemo(() => {
+    const alreadyGrouped = new Set(findingGroups.flatMap((group) => group.findingIds));
+    return (correlationReport?.suggestions ?? []).filter((suggestion) =>
+      suggestion.findingIds.every((findingId) => findingById.has(findingId) && !alreadyGrouped.has(findingId)));
+  }, [correlationReport, findingById, findingGroups]);
+  const correlationUnverifiable = useMemo(
+    () => (correlationReport?.unverifiable ?? []).filter((entry) =>
+      entry.findingIds.every((findingId) => findingById.has(findingId))),
+    [correlationReport, findingById],
+  );
+  // Reported separately from the lists above: the backend capped its own output,
+  // and that must never read as "this is everything".
+  const correlationTruncated = correlationReport?.truncatedSuggestions ?? 0;
+  const hasCorrelationContent = correlationSuggestions.length > 0
+    || correlationUnverifiable.length > 0
+    || correlationTruncated > 0;
 
   useEffect(() => {
     setGroupFindingIds((current) => current.filter((findingId) => !groupedFindingIds.has(findingId)));
@@ -1267,6 +1353,101 @@ export function FindingsPage({
               </button>
             ))}
           </div>
+        </section>
+      )}
+
+      {hasCorrelationContent && (
+        <section className="section-block" aria-labelledby="finding-correlations-title">
+          <div className="section-heading">
+            <p className="eyebrow">{text(copy.correlationEyebrow)}</p>
+            <h2 id="finding-correlations-title">{text(copy.correlationTitle)}</h2>
+            <p>{text(copy.correlationDescription)}</p>
+          </div>
+          <div className="evidence-list">
+            {correlationSuggestions.map((suggestion) => (
+              <article key={suggestion.id} className="evidence-item">
+                <div>
+                  <strong>
+                    {text(copy.correlationMatch, {
+                      vulnerability: suggestion.vulnerabilityId,
+                      package: suggestion.package,
+                    })}
+                  </strong>
+                  <span>
+                    {/* Engine ids are proper names; they are not translated. */}
+                    {text(copy.correlationBasis, {
+                      engines: suggestion.engineIds.join(text(copy.listSeparator)),
+                    })}
+                  </span>
+                </div>
+                <ul className="detail-list">
+                  {suggestion.findingIds.map((findingId) => {
+                    const finding = findingById.get(findingId);
+                    return (
+                      <li key={findingId}>
+                        {finding
+                          ? (
+                            <button
+                              className="clear-filters"
+                              type="button"
+                              onClick={() => {
+                                setSelectedId(finding.id);
+                                document.getElementById("finding-browser")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                              }}
+                            >
+                              {finding.title}
+                            </button>
+                          )
+                          : findingId}
+                      </li>
+                    );
+                  })}
+                </ul>
+                <small>{text(copy.correlationMembers, { count: formatNumber(suggestion.findingIds.length) })}</small>
+                <small>{text(corroborationCopy[suggestion.corroboration])}</small>
+                <button
+                  className="button button--secondary button--small"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    void onGroupFindings({
+                      title: text(copy.correlationMatch, {
+                        vulnerability: suggestion.vulnerabilityId,
+                        package: suggestion.package,
+                      }),
+                      findingIds: suggestion.findingIds,
+                      rationale: text(copy.correlationAcceptedRationale),
+                    });
+                  }}
+                >
+                  {text(copy.correlationAccept)}
+                </button>
+              </article>
+            ))}
+          </div>
+          {correlationUnverifiable.length > 0 && (
+            <InlineNotice
+              tone="warning"
+              title={text(copy.correlationUnverifiableTitle, { count: formatNumber(correlationUnverifiable.length) })}
+            >
+              <p>{text(copy.correlationUnverifiableDescription)}</p>
+              <ul className="detail-list">
+                {correlationUnverifiable.map((entry) => (
+                  <li key={`${entry.vulnerabilityId}-${entry.findingIds.join("-")}`}>
+                    {text(copy.correlationUnverifiableItem, {
+                      vulnerability: entry.vulnerabilityId,
+                      count: formatNumber(entry.findingIds.length),
+                    })}
+                  </li>
+                ))}
+              </ul>
+            </InlineNotice>
+          )}
+          {correlationTruncated > 0 && (
+            <InlineNotice tone="warning" title={text(copy.correlationTruncated, { count: formatNumber(correlationTruncated) })}>
+              <p>{text(copy.correlationDescription)}</p>
+            </InlineNotice>
+          )}
         </section>
       )}
 

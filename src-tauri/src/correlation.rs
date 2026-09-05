@@ -70,6 +70,12 @@ pub struct FindingCorrelationSuggestion {
     pub comparison_key: String,
     /// Version of the rule that produced `comparison_key`.
     pub key_version: String,
+    /// The published identifier both engines named. Carried separately from
+    /// `title` so a caller can compose its own sentence in its own language
+    /// instead of parsing one out of English prose.
+    pub vulnerability_id: String,
+    /// The package both engines named, likewise carried structurally.
+    pub package: String,
     /// Proposed group title, suitable as the default when accepting.
     pub title: String,
     /// Plain-language statement of exactly what matched.
@@ -249,6 +255,8 @@ fn partition_members(
             case_id: case_id.to_owned(),
             comparison_key,
             key_version: CORRELATION_KEY_SCHEMA_VERSION.to_owned(),
+            vulnerability_id: vulnerability_id.to_owned(),
+            package: package.clone(),
             title: format!("{vulnerability_id} in {package}"),
             basis: format!(
                 "{} engines ({}) reported vulnerability {vulnerability_id} against package \
@@ -420,6 +428,15 @@ mod tests {
             "both observations stay addressable as members"
         );
         assert_eq!(suggestion.key_version, CORRELATION_KEY_SCHEMA_VERSION);
+        assert_eq!(
+            (
+                suggestion.vulnerability_id.as_str(),
+                suggestion.package.as_str()
+            ),
+            ("CVE-2024-3094", "xz-utils"),
+            "the matched coordinates are carried structurally, so a caller never \
+             has to parse them back out of the English title"
+        );
         assert!(
             suggestion.comparison_key.contains("CVE-2024-3094")
                 && suggestion.comparison_key.contains("xz-utils")
