@@ -602,9 +602,23 @@ const pageCopy = {
   noteHelp: bilingual("Never enter a secret or credential here.", "不要在這裡填入秘密值或憑證。"),
   activeAuthorityLength: bilingual("An active-test permission reference needs at least 8 characters.", "主動測試的授權參考至少需要 8 個字元。"),
   grantBoundaryHelp: bilingual("This saves the exact target and limits, then starts the scan. Unavailable checks will be listed without stopping the others.", "這會保存精確目標與限制並開始掃描；無法執行的檢查會列出，不會阻止其他檢查。"),
-  publicRecordsGrantDescription: bilingual("Review public DNS, certificate, and similar records without connecting to the selected system.", "只查看公開 DNS、憑證等紀錄，不會連線到所選系統。"),
-  publicRecordsBoundaryHelp: bilingual("This starts a public-record review. The selected system itself will not be contacted.", "這會開始查看公開紀錄，不會直接連線到所選系統。"),
-  publicRecordsStart: bilingual("Review public records", "查看公開紀錄"),
+  // These three used to describe a public-record review that no shipped check
+  // performs. The mode records a `passive_external_discovery` grant, and engine
+  // selection requires a manifest to declare the grant's own permission
+  // (`compatible_authorized_assets` in case_service.rs) -- no entry in
+  // engines/catalog.json declares it. DNS and certificate records enter a
+  // project through an imported saved response instead: both connectors are
+  // `live_discovery: false`. What the mode does establish is real and worth
+  // saying plainly, which is the boundary.
+  publicRecordsGrantDescription: bilingual(
+    "Record that this system must not be contacted, and that only public records already saved in this project may be used. No check in this version reads public records during a scan, so this permission adds nothing to what is tested.",
+    "記錄不會連線到這個系統，而且只使用專案裡已保存的公開紀錄。這個版本沒有任何檢查會在掃描時讀取公開紀錄，因此這項授權不會增加實際測試的內容。",
+  ),
+  publicRecordsBoundaryHelp: bilingual(
+    "This saves the boundary and starts a scan. The selected system will not be contacted. No check in this version reads public records, so this permission on its own adds nothing to what is tested.",
+    "這會保存界線並開始掃描，不會連線到所選系統。這個版本沒有任何檢查會讀取公開紀錄，因此這項授權本身不會增加實際測試的內容。",
+  ),
+  publicRecordsStart: bilingual("Start without contacting this system", "開始掃描，不連線這個系統"),
   startScan: bilingual("Start scan", "開始掃描"),
   confirmAndStart: bilingual("Confirm and start scan", "確認並開始掃描"),
   scanSignedInCloud: bilingual("Scan this signed-in account", "掃描這個已登入帳號"),

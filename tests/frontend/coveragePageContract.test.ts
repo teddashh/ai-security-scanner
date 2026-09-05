@@ -227,11 +227,17 @@ test("public-record review starts without an ownership or approval ceremony", ()
   assert.match(source, /passivePublicConsent[\s\S]*pageCopy\.publicRecordsConfirmation/u);
   assert.match(source, /passivePublicConsent[\s\S]*pageCopy\.publicRecordsStart/u);
   assert.match(source, /isDirectExternal && selectedExternalAsset && limits/u);
+  // The not-contacted promise is the part this mode actually keeps, and the
+  // part worth pinning. The wording beside it used to offer a "review" of
+  // public records that no shipped engine can perform; whether the copy may
+  // claim one is derived from the engine catalog in
+  // `publicRecordsScopePromise.test.ts` rather than fixed here, so that
+  // constraint lifts on its own if such an engine is ever added.
   for (const phrase of [
-    "Review public records",
-    "查看公開紀錄",
-    "The selected system itself will not be contacted.",
-    "不會直接連線到所選系統。",
+    "Start without contacting this system",
+    "開始掃描，不連線這個系統",
+    "The selected system will not be contacted.",
+    "不會連線到所選系統",
   ]) assert.ok(source.includes(phrase), phrase);
 });
 

@@ -31,6 +31,11 @@ const FRONTEND_PATHS = [
   // frontend lane often -- that is the price of the copy and the backend not
   // being able to drift apart silently again.
   /^src-tauri\/src\/case_service\.rs$/,
+  // `publicRecordsScopePromise.test.ts` reads the engine catalog to decide
+  // whether the public-records scope mode may describe a review at all. Adding
+  // an engine that declares `passive_external_discovery` changes what that copy
+  // is allowed to say, and touches no file under `src/`.
+  /^engines\/catalog\.json$/,
 ];
 
 const RUST_PATHS = [
