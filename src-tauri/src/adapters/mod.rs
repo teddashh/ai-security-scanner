@@ -1618,12 +1618,14 @@ fn unevaluated_controls(profile: Profile, parsed: &ParsedArtifact) -> Option<Une
     };
     let passed_over = count_of(by_design);
     let could_not_evaluate = count_of(unevaluable);
-    if passed_over.is_empty() && could_not_evaluate.is_empty() {
+    let lost = normalization_shortfall(profile, diagnostics);
+    if passed_over.is_empty() && could_not_evaluate.is_empty() && lost.is_none() {
         return None;
     }
     let all = passed_over
         .iter()
         .chain(could_not_evaluate.iter())
+        .chain(lost.iter())
         .cloned()
         .collect::<Vec<_>>();
     Some(UnevaluatedControls {
@@ -1631,8 +1633,54 @@ fn unevaluated_controls(profile: Profile, parsed: &ParsedArtifact) -> Option<Une
             "{engine} did not evaluate every control in scope ({}); those controls are absent from findings and this run does not establish their state",
             all.join(", ")
         ),
-        withholds_completion: !could_not_evaluate.is_empty(),
+        // Losing verdicts is not a smaller problem than failing to produce
+        // them: either way the run does not establish those controls' state.
+        withholds_completion: !could_not_evaluate.is_empty() || lost.is_some(),
     })
+}
+
+/// How many verdicts the engine reported that the wrapper did not carry across.
+///
+/// `Diagnostics.normalized_results` is the wrapper's count of the list it just
+/// built, so checking it against `Results.len()` is true by construction — it
+/// stays true when the wrapper's verdict `switch` matched nothing and silently
+/// dropped every control. These counters come from the engine itself, so they
+/// are the independent number. Without them, an upstream rename of `Passed` to
+/// `Success` produces a clean, confident, completely empty tenant audit.
+fn normalization_shortfall(
+    profile: Profile,
+    diagnostics: &serde_json::Map<String, Value>,
+) -> Option<String> {
+    let count = |key: &str| {
+        diagnostics
+            .get(key)
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
+    };
+    // Only the verdicts each wrapper actually converts into a result row. The
+    // by-design and unevaluable counters are disclosed separately above.
+    //
+    // Deliberately a lower bound. A ScubaGear control the tenant disputed is
+    // judged on `OriginalResult` and counted in `disputed` rather than
+    // `failures`, so it can add a row no verdict counter accounts for -- it can
+    // only push `normalized` above this floor, never below it.
+    let carried = match profile {
+        // `Passed`, `Failed`, and `Investigate` all become rows.
+        Profile::Maester => count("passes") + count("failures") + count("investigate"),
+        // `Pass`, `Fail`, and `Warning` become rows.
+        Profile::ScubaGear => count("passes") + count("failures") + count("warnings"),
+        _ => return None,
+    };
+    let normalized = diagnostics
+        .get("normalized_results")
+        .and_then(Value::as_u64)?;
+    if normalized >= carried {
+        return None;
+    }
+    let lost = carried - normalized;
+    Some(format!(
+        "{lost} reported by the engine but not carried into results"
+    ))
 }
 
 /// Controls whose result the audited tenant's own configuration declares wrong.
@@ -3653,6 +3701,58 @@ mod tests {
             unevaluated_controls(Profile::Maester, &maester_errors)
                 .expect("an errored test is a shortfall")
                 .withholds_completion
+        );
+    }
+
+    #[test]
+    fn verdicts_the_wrapper_dropped_are_disclosed_rather_than_read_as_a_clean_tenant() {
+        // The scenario: upstream renames a verdict, the wrapper's `switch`
+        // matches nothing, and every control is dropped by its `default { $null
+        // }`. `normalized_results` still equals `Results.len()` -- the wrapper
+        // counts the list it just built -- so the existing integrity check
+        // holds. Without the engine's own counters the user is handed a
+        // confident, completely empty tenant audit.
+        let everything_dropped = ParsedArtifact::Json(serde_json::json!({
+            "Diagnostics": { "passes": 300, "failures": 42, "investigate": 0, "errors": 0,
+                             "skipped": 0, "not_run": 0, "total": 342, "normalized_results": 0 },
+            "Results": []
+        }));
+        let unevaluated = unevaluated_controls(Profile::Maester, &everything_dropped)
+            .expect("342 evaluated tests and no results is not a clean run");
+        assert!(
+            unevaluated
+                .disclosure
+                .contains("342 reported by the engine but not carried into results"),
+            "{}",
+            unevaluated.disclosure
+        );
+        assert!(
+            unevaluated.withholds_completion,
+            "a run that lost every verdict cannot be reported as complete"
+        );
+
+        // Partial loss counts too: 3 of 33 verdicts never became rows.
+        let partially_dropped = ParsedArtifact::Json(serde_json::json!({
+            "Diagnostics": { "passes": 30, "failures": 2, "warnings": 1, "errors": 0,
+                             "manual": 0, "omitted": 0, "normalized_results": 30 }
+        }));
+        assert!(
+            unevaluated_controls(Profile::ScubaGear, &partially_dropped)
+                .expect("three lost verdicts are a shortfall")
+                .withholds_completion
+        );
+
+        // A disputed control is judged on ScubaGear's own `OriginalResult` and
+        // counted in `disputed` rather than `failures`, so it adds a row that
+        // no verdict counter accounts for. That is a surplus, not a loss, and
+        // must not be reported as one.
+        let disputed_surplus = ParsedArtifact::Json(serde_json::json!({
+            "Diagnostics": { "passes": 30, "failures": 2, "warnings": 0, "errors": 0,
+                             "manual": 0, "omitted": 0, "disputed": 4, "normalized_results": 36 }
+        }));
+        assert!(
+            unevaluated_controls(Profile::ScubaGear, &disputed_surplus).is_none(),
+            "a disputed control resolving to a verdict is not a lost one"
         );
     }
 

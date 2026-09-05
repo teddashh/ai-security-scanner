@@ -57,6 +57,9 @@ const managedM365Contracts = new Map([
       "'^Shall(?:/|$)'",
       "'^Should(?:/|$)'",
     ],
+    verdictSwitchExpression: "-Regex ($verdict)",
+    reviewedVerdicts: ["^Pass$", "^(Fail|Warning)$"],
+    carriedVerdictCounters: ["passes", "failures", "warnings"],
   }],
   ["maester", {
     tag: "2.0.0-5",
@@ -77,6 +80,9 @@ const managedM365Contracts = new Map([
     forbiddenNormalizationSnippets: [
       "'informational' { 'informational'; break }",
     ],
+    verdictSwitchExpression: "($sourceResult)",
+    reviewedVerdicts: ["Passed", "Failed", "Investigate"],
+    carriedVerdictCounters: ["passes", "failures", "investigate"],
   }],
 ]);
 const managedM365Ids = new Set(managedM365Contracts.keys());
@@ -2037,6 +2043,32 @@ function validateManagedM365Image(plan, planRelative, engine) {
       scriptText.includes("else { 'low' }") ||
       scriptText.includes("{ $severity = 'medium' }")) {
     errors.push(`${planRelative}: Microsoft 365 wrapper must safely retain the optional original source rating, map only its exact reviewed values, and leave missing or unrecognized values unknown`);
+  }
+
+  // Every verdict this switch does not name falls to `default { $null }` and is
+  // dropped. `Diagnostics.normalized_results` counts the list the wrapper just
+  // built, so it cannot notice that: an upstream verdict rename empties the
+  // audit while every counter stays self-consistent. The host catches it at
+  // runtime by comparing the counters named in `carriedVerdictCounters` against
+  // `normalized_results` (`adapters::normalization_shortfall`); pinning the arms
+  // here catches it at review time instead. Changing an arm without changing
+  // that list on the Rust side restores the silent empty audit.
+  const verdictStartText = `$result = switch ${contract.verdictSwitchExpression} {`;
+  const verdictStart = scriptText.indexOf(verdictStartText);
+  const verdictDefault = verdictStart < 0
+    ? -1
+    : scriptText.indexOf("default { $null }", verdictStart + verdictStartText.length);
+  const observedVerdicts = verdictStart < 0 || verdictDefault < 0
+    ? []
+    : [...scriptText.slice(verdictStart, verdictDefault).matchAll(/^\s*'([^']+)'\s*\{/gm)]
+      .map((match) => match[1]);
+  const carriedCountersDeclared = contract.carriedVerdictCounters
+    .every((counter) => new RegExp(`^\\s*${counter} = \\[int\\]`, "m").test(scriptText));
+  if (!deepEqual(observedVerdicts, contract.reviewedVerdicts) ||
+      !scriptText.includes("if ($null -eq $result) { continue }") ||
+      !carriedCountersDeclared ||
+      !scriptText.includes("normalized_results = $normalized.Count")) {
+    errors.push(`${planRelative}: Microsoft 365 wrapper must convert exactly the reviewed verdicts into results and publish the engine's own counts for each of them (${contract.carriedVerdictCounters.join(", ")}), so a dropped verdict cannot read as a clean tenant`);
   }
   const expectedCommand = ["--engine", engine.id, "--scope", "/run/ai-security-scanner/scope.json", "--output", "/output"];
   if (!deepEqual(plan.command, expectedCommand)) errors.push(`${planRelative}: Microsoft 365 command is not the fixed launcher contract`);
