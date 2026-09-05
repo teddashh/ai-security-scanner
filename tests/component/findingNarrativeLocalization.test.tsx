@@ -173,3 +173,42 @@ test("the row's rating caveat is not left in English for a zh-TW reader", () => 
   // The engine's own name is its wording, and survives in either language.
   expect(row).toContain("TruffleHog");
 });
+
+// The two sentences the drawer has shown since it existed. They are the only
+// place the app says "keep a way back" and "here is how you know it worked",
+// and both were still English under a Chinese heading.
+const ENGLISH_ROLLBACK_TEXT =
+  "Before any manual change, preserve the current approved configuration and document a tested restoration path; this product does not execute remediation.";
+const ENGLISH_VERIFICATION =
+  "After an approved manual change, rerun TruffleHog with the same authorized scope and confirm that source rule aws-access-key is no longer reported.";
+
+test("the safety and verification advice is not left in English for a zh-TW reader", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderPage([
+    leakedCredential({
+      rollbackConsiderations: ENGLISH_ROLLBACK_TEXT,
+      verificationGuidance: ENGLISH_VERIFICATION,
+    }),
+  ]);
+  const rendered = container.textContent ?? "";
+
+  expect(rendered).not.toContain(ENGLISH_ROLLBACK_TEXT);
+  expect(rendered).not.toContain(ENGLISH_VERIFICATION);
+  expect(rendered).toContain("本產品不會代為執行修復");
+  expect(rendered).toContain("並確認來源規則 aws-access-key 不再被回報");
+  // The engine name and the rule id are the engine's own strings and read the
+  // same either way. Restating them in Chinese would make the reader hunt for
+  // something that does not exist in the tool they are told to re-run.
+  expect(rendered).toContain("TruffleHog");
+});
+
+test("a finding whose safety sentence this build does not recognise keeps it rather than blanking it", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  // Frozen by an older build with different wording. Untranslated is worse
+  // than translated and much better than silently dropped, because this is
+  // the sentence telling the reader to keep a way back.
+  const stale = "Preserve the working config before touching anything.";
+  const { container } = renderPage([leakedCredential({ rollbackConsiderations: stale })]);
+
+  expect(container.textContent ?? "").toContain(stale);
+});

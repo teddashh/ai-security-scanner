@@ -880,6 +880,9 @@ export interface BeginnerReportFinding {
   severityBasisCode?: SeverityBasisCode;
   /** Empty unless this case raised the finding's priority. */
   contextFactors?: ContextFactor[];
+  /** What to preserve before changing anything, and how to confirm the fix. */
+  rollbackConsiderations?: string;
+  verificationGuidance?: string;
   evidenceReferences: Array<{
     evidenceId: string;
     engineId: string;

@@ -370,6 +370,8 @@ export interface NativeBeginnerMasterReport {
     family?: string | null;
     severity_basis_code?: string | null;
     context_factors?: string[] | null;
+    rollback_considerations?: string | null;
+    verification_guidance?: string | null;
     evidence_references: Array<{
       evidence_id: string;
       engine_id: string;
@@ -2267,6 +2269,8 @@ export const adaptBeginnerMasterReport = (
     family: mapFindingFamily(finding.family),
     severityBasisCode: mapSeverityBasisCode(finding.severity_basis_code),
     contextFactors: mapContextFactors(finding.context_factors),
+    rollbackConsiderations: finding.rollback_considerations ?? undefined,
+    verificationGuidance: finding.verification_guidance ?? undefined,
     priority: finding.priority ?? undefined,
     priorityReasons: [...finding.priority_reasons],
     targetAssetIds: [...finding.target_asset_ids],

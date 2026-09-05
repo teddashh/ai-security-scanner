@@ -179,6 +179,52 @@ pub fn impact_zh_hant(
     composed
 }
 
+/// The one sentence every adapter finding carries before any change is made.
+///
+/// Matched exactly rather than inferred from a code. If the adapter's wording
+/// ever changes, an exact match falls back to the English -- visible and
+/// honest -- where a code would keep confidently printing the old sentence in
+/// Chinese. `the_safety_sentence_this_module_translates_is_the_one_adapters_write`
+/// in tests/adapter_fixtures.rs pins the two together.
+pub const ENGLISH_ROLLBACK: &str = "Before any manual change, preserve the current approved configuration and document a tested restoration path; this product does not execute remediation.";
+
+/// "Before any manual change, preserve ... this product does not execute
+/// remediation."
+pub fn rollback_zh_hant(english: &str) -> String {
+    if english.trim() == ENGLISH_ROLLBACK {
+        return "進行任何人工變更前，請先保留目前已核准的設定，並記錄一條經過測試的還原路徑；本產品不會代為執行修復。".to_owned();
+    }
+    english.to_owned()
+}
+
+/// "After an approved manual change, rerun {engine} ... source rule {rule}
+/// is no longer reported."
+///
+/// Read back off the sentence for the same reason `engine_name_from` is: the
+/// engine's display name and the source rule id are the engine's own strings
+/// and have to appear in the Chinese exactly as they do in the English.
+/// Returns the English unchanged for any sentence not in this shape.
+pub fn verification_zh_hant(english: &str) -> String {
+    const RERUN: &str = "After an approved manual change, rerun ";
+    const SCOPE: &str = " with the same authorized scope and confirm that source rule ";
+    const TAIL: &str = " is no longer reported.";
+    let Some(rest) = english.trim().strip_prefix(RERUN) else {
+        return english.to_owned();
+    };
+    let Some(rest) = rest.strip_suffix(TAIL) else {
+        return english.to_owned();
+    };
+    let Some((engine, rule)) = rest.split_once(SCOPE) else {
+        return english.to_owned();
+    };
+    if engine.is_empty() || rule.is_empty() {
+        return english.to_owned();
+    }
+    format!(
+        "在核准的人工變更完成後，請以相同的授權範圍重新執行 {engine}，並確認來源規則 {rule} 不再被回報。"
+    )
+}
+
 /// "Have the recommended specialist (...) review ... then plan and approve ..."
 pub fn action_zh_hant(english: &str, expert_type: &str, family: Option<FindingFamily>) -> String {
     let Some(family) = family else {

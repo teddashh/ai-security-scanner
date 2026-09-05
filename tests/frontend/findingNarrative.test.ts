@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  ENGLISH_ROLLBACK,
   findingActionSentence,
+  findingRollbackSentence,
+  findingVerificationSentence,
   findingImpactSentence,
   findingSummarySentence,
   localizedExpertType,
@@ -234,4 +237,30 @@ test("case context that raised the priority survives being said in Chinese", () 
     }),
     englishFallback,
   );
+});
+
+test("the safety sentence is translated only when it is the one this product wrote", () => {
+  const zh = findingRollbackSentence("zh-TW", ENGLISH_ROLLBACK);
+  assert.ok(HAN.test(zh), zh);
+  assert.ok(!LATIN_SENTENCE.test(zh), `left English behind: ${zh}`);
+  // English keeps the canonical wording.
+  assert.equal(findingRollbackSentence("en", ENGLISH_ROLLBACK), ENGLISH_ROLLBACK);
+  // A sentence this product did not write is left exactly as found, rather
+  // than being confidently replaced with wording that no longer describes it.
+  const foreign = "Some other rollback advice from a build this one does not know.";
+  assert.equal(findingRollbackSentence("zh-TW", foreign), foreign);
+});
+
+test("the verification sentence keeps the engine name and rule id verbatim", () => {
+  const english =
+    "After an approved manual change, rerun kube-bench with the same authorized scope and confirm that source rule 4.2.1 is no longer reported.";
+  const zh = findingVerificationSentence("zh-TW", english);
+  assert.ok(HAN.test(zh), zh);
+  // Both are the engine's own strings and have to read identically either way.
+  assert.ok(zh.includes("kube-bench"), zh);
+  assert.ok(zh.includes("4.2.1"), zh);
+  assert.equal(findingVerificationSentence("en", english), english);
+  // Not this shape -> returned untouched rather than half-rewritten.
+  const foreign = "Re-run the responsible engine.";
+  assert.equal(findingVerificationSentence("zh-TW", foreign), foreign);
 });

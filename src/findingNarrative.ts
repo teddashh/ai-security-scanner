@@ -185,6 +185,48 @@ export const findingImpactSentence = (
   return composed + (options.contextFactors ?? []).map((factor) => CONTEXT[factor] ?? "").join("");
 };
 
+/**
+ * The one sentence every adapter finding carries before any change is made.
+ *
+ * Matched exactly rather than inferred from a code. If the adapter's wording
+ * ever changes, an exact match falls back to the English -- visible and honest
+ * -- where a code would keep confidently printing the old sentence in Chinese.
+ * A Rust test pins this string to the one the adapters actually write.
+ */
+export const ENGLISH_ROLLBACK =
+  "Before any manual change, preserve the current approved configuration and document a tested restoration path; this product does not execute remediation.";
+
+/** "Before any manual change, preserve ... does not execute remediation." */
+export const findingRollbackSentence = (locale: "en" | "zh-TW", english: string): string => {
+  if (locale === "en" || english.trim() !== ENGLISH_ROLLBACK) return english;
+  return "進行任何人工變更前，請先保留目前已核准的設定，並記錄一條經過測試的還原路徑；本產品不會代為執行修復。";
+};
+
+/**
+ * "After an approved manual change, rerun {engine} ... source rule {rule} is no
+ * longer reported."
+ *
+ * Read back off the sentence for the same reason `engineNameFrom` is: the
+ * engine's display name and the source rule id are the engine's own strings and
+ * have to appear in the Chinese exactly as they do in the English. Returns the
+ * English unchanged for any sentence not in this shape.
+ */
+export const findingVerificationSentence = (locale: "en" | "zh-TW", english: string): string => {
+  if (locale === "en") return english;
+  const RERUN = "After an approved manual change, rerun ";
+  const SCOPE = " with the same authorized scope and confirm that source rule ";
+  const TAIL = " is no longer reported.";
+  const trimmed = english.trim();
+  if (!trimmed.startsWith(RERUN) || !trimmed.endsWith(TAIL)) return english;
+  const middle = trimmed.slice(RERUN.length, trimmed.length - TAIL.length);
+  const at = middle.indexOf(SCOPE);
+  if (at < 0) return english;
+  const engine = middle.slice(0, at);
+  const rule = middle.slice(at + SCOPE.length);
+  if (!engine || !rule) return english;
+  return `在核准的人工變更完成後，請以相同的授權範圍重新執行 ${engine}，並確認來源規則 ${rule} 不再被回報。`;
+};
+
 /** "Have the recommended specialist ({expert}) review ... then plan and approve {remedy}." */
 export const findingActionSentence = (
   locale: "en" | "zh-TW",

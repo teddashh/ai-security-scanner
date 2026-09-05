@@ -16,6 +16,8 @@ import { projectVisibleFindingGroups } from "../findingGroupPresentation";
 import {
   engineNameFrom,
   findingActionSentence,
+  findingRollbackSentence,
+  findingVerificationSentence,
   findingImpactSentence,
   findingSummarySentence,
   localizedExpertType,
@@ -676,8 +678,10 @@ const projectReportFindings = (
       // the two fields below. Leaving this empty told every reader the scanner
       // had published nothing to read.
       officialReferences: current?.officialReferences ?? [],
-      verificationGuidance: current?.verificationGuidance,
-      rollbackConsiderations: current?.rollbackConsiderations,
+      // Prefer the frozen snapshot: these describe the selected run, and a
+      // finding the case no longer holds still has to explain itself.
+      verificationGuidance: frozen.verificationGuidance ?? current?.verificationGuidance,
+      rollbackConsiderations: frozen.rollbackConsiderations ?? current?.rollbackConsiderations,
       tags: current?.tags,
       // The frozen snapshot carries no first/last-seen fields at all, so these
       // were not the selected run's record of history -- they were invented from
@@ -1813,14 +1817,19 @@ export function FindingsPage({
                   expertType: selected.expertType,
                   family: selected.family,
                 })}</p>
-                {selected.rollbackConsiderations && <p><strong>{text(copy.beforeChanging)}</strong> {selected.rollbackConsiderations}</p>}
+                {selected.rollbackConsiderations && (
+                  <p>
+                    <strong>{text(copy.beforeChanging)}</strong>{" "}
+                    {findingRollbackSentence(locale, selected.rollbackConsiderations)}
+                  </p>
+                )}
                 <small>{text(copy.recommendationBoundary)}</small>
               </section>
 
               {selected.verificationGuidance && (
                 <section className="detail-section">
                   <h3>{text(copy.verification)}</h3>
-                  <p>{selected.verificationGuidance}</p>
+                  <p>{findingVerificationSentence(locale, selected.verificationGuidance)}</p>
                 </section>
               )}
 

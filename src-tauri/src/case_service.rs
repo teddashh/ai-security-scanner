@@ -12733,6 +12733,46 @@ fn html_report_bytes(
                     .to_owned(),
             ),
         };
+        // Shown in the app's finding drawer since it existed; the report an
+        // expert actually receives left both out, so the two surfaces
+        // disagreed about what this finding asks a person to do.
+        let safety = finding
+            .rollback_considerations
+            .as_ref()
+            .map(|english| match catalog.locale {
+                crate::export::ReportLocale::En => english.clone(),
+                crate::export::ReportLocale::ZhHant => {
+                    crate::finding_narrative::rollback_zh_hant(english)
+                }
+            });
+        let verification =
+            finding
+                .verification_guidance
+                .as_ref()
+                .map(|english| match catalog.locale {
+                    crate::export::ReportLocale::En => english.clone(),
+                    crate::export::ReportLocale::ZhHant => {
+                        crate::finding_narrative::verification_zh_hant(english)
+                    }
+                });
+        let safety_block = safety
+            .map(|text| {
+                format!(
+                    "<p><strong>{}:</strong> {}</p>",
+                    catalog.text("Before changing anything", "變更前考量"),
+                    html_escape(&text)
+                )
+            })
+            .unwrap_or_default();
+        let verification_block = verification
+            .map(|text| {
+                format!(
+                    "<h4>{}</h4><p>{}</p>",
+                    catalog.text("How to confirm the fix", "如何確認已修正"),
+                    html_escape(&text)
+                )
+            })
+            .unwrap_or_default();
         let mut priority_reasons = finding
             .priority_reasons
             .iter()
@@ -12815,6 +12855,10 @@ fn html_report_bytes(
             ));
         }
         let targets = readable_target_list(&finding.target_asset_ids, &target_labels, catalog);
+        let next_step_html = format!(
+            "{}{safety_block}{verification_block}",
+            html_escape(&next_step)
+        );
         findings.push_str(&format!(
             concat!(
                 "<article><h3>{}</h3>",
@@ -12852,7 +12896,7 @@ fn html_report_bytes(
             catalog.text("Why this priority", "此優先順序的原因"),
             priority_reasons,
             catalog.text("What to do next", "下一步怎麼做"),
-            html_escape(&next_step),
+            next_step_html,
             catalog.text("Suggested expert", "建議諮詢的專家"),
             html_escape(&expert_type),
             catalog.text("Evidence SHA-256", "證據 SHA-256"),
@@ -24305,8 +24349,15 @@ mod tests {
             recommendation:
                 "Have the recommended specialist (Secrets-response specialist) review the affected asset and the source rule's official guidance, then plan and approve revocation and rotation of the exposed credential first."
                 .into(),
-            verification_guidance: "Run the same check after replacement.".into(),
-            rollback_considerations: None,
+            // The adapters' own two sentences, verbatim. The fixture above
+            // claims to carry what a real Gitleaks run supplies, and these two
+            // did not: the report reads the engine name and the source rule
+            // back out of this sentence, so a paraphrase here would have tested
+            // the fallback path and called it the translated one.
+            verification_guidance:
+                "After an approved manual change, rerun Gitleaks with the same authorized scope and confirm that source rule generic-api-key is no longer reported."
+                    .into(),
+            rollback_considerations: Some(crate::finding_narrative::ENGLISH_ROLLBACK.into()),
             official_references: vec![],
             recommended_expert_type: "Secrets-response specialist".into(),
             status: FindingStatus::Unreviewed,
@@ -24388,6 +24439,17 @@ mod tests {
             readable_report_time(&finished)
         )));
         assert!(html.contains(&format!("Observed: {}", readable_report_time(&finished))));
+        for english_block in [
+            "Before changing anything",
+            "Before any manual change, preserve",
+            "How to confirm the fix",
+            "After an approved manual change, rerun",
+        ] {
+            assert!(
+                html.contains(english_block),
+                "English report omitted {english_block}"
+            );
+        }
         assert!(!html.contains(RAW_SCANNER_SENTINEL));
         assert!(!html.contains(MUTABLE_CANONICAL_SENTINEL));
 
@@ -24413,6 +24475,13 @@ mod tests {
             "原始碼或憑證可能導致未授權存取或不安全的程式行為",
             "先撤銷並輪替這組已外洩的憑證",
             "機密外洩應變專家",
+            // The app's drawer has shown both of these since it existed; the
+            // report the expert is actually handed printed neither, so the two
+            // surfaces disagreed about what the finding asks a person to do.
+            "變更前考量",
+            "本產品不會代為執行修復",
+            "如何確認已修正",
+            "並確認來源規則 generic-api-key 不再被回報",
         ] {
             assert!(
                 zh_html.contains(composed),
@@ -24423,6 +24492,8 @@ mod tests {
             "If the scanner result is confirmed,",
             "Have the recommended specialist",
             "Secrets-response specialist",
+            "Before any manual change, preserve",
+            "After an approved manual change, rerun",
         ] {
             assert!(
                 !zh_html.contains(english_prose),
@@ -24431,7 +24502,13 @@ mod tests {
         }
         // The engine named itself and the engine titled the finding. Both are
         // the engine's own words, and survive untouched in either language.
-        for verbatim in ["Gitleaks", "Frozen selected-run secret exposure"] {
+        for verbatim in [
+            "Gitleaks",
+            "Frozen selected-run secret exposure",
+            // The engine name and the source rule id are the engine's own
+            // strings and read identically in either language.
+            "generic-api-key",
+        ] {
             assert!(zh_html.contains(verbatim), "zh-Hant report lost {verbatim}");
             assert!(html.contains(verbatim), "English report lost {verbatim}");
         }

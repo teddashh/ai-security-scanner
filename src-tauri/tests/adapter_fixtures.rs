@@ -5,7 +5,9 @@ use ai_security_scanner_lib::domain::{
     AssessmentCase, Asset, AssetIdentifier, AssetKind, Confidence, DataClass, FindingFamily,
     FindingStatus, OrganizationProfile, RawArtifact, Severity, SeverityBasisCode,
 };
-use ai_security_scanner_lib::finding_narrative::expert_type_zh_hant;
+use ai_security_scanner_lib::finding_narrative::{
+    ENGLISH_ROLLBACK, expert_type_zh_hant, rollback_zh_hant, verification_zh_hant,
+};
 use ai_security_scanner_lib::registry::EngineRegistry;
 use chrono::{TimeZone, Utc};
 use sha2::{Digest, Sha256};
@@ -2440,4 +2442,57 @@ fn every_specialist_the_engines_recommend_is_named_in_the_readers_language() {
         named.len(),
         "two specialists share one Chinese name: {named:#?}"
     );
+}
+
+/// The safety and verification sentences are the ones the translator knows.
+///
+/// Both are matched against the English rather than composed from a code:
+/// the safety sentence by exact equality, the verification sentence by its
+/// shape. That is deliberate -- if the adapter's wording changes, an exact
+/// match falls back to English, which is visible, where a code would keep
+/// confidently printing the old sentence in Chinese. But it only degrades
+/// safely if something checks the two are still in step, and neither the
+/// translator's own tests nor the parity test can: one asserts on its own
+/// constants, the other compares the two translations to each other.
+#[test]
+fn the_safety_and_verification_sentences_are_the_ones_the_translator_knows() {
+    let mut engines_seen = 0_usize;
+    for engine_id in BUILTIN_ENGINE_IDS {
+        for finding in normalize_fixture(engine_id).findings {
+            engines_seen += 1;
+
+            let safety = finding
+                .rollback_considerations
+                .as_deref()
+                .unwrap_or_else(|| panic!("{engine_id} carries no safety sentence"));
+            assert_eq!(
+                safety, ENGLISH_ROLLBACK,
+                "{engine_id} writes a safety sentence the translator will not recognize"
+            );
+            assert_ne!(
+                rollback_zh_hant(safety),
+                safety,
+                "{engine_id} safety sentence fell through untranslated"
+            );
+
+            // Recognized, and the engine's own name and rule id survive it --
+            // they are the engine's strings and must read identically in both
+            // languages.
+            let english = &finding.verification_guidance;
+            let translated = verification_zh_hant(english);
+            assert_ne!(
+                &translated, english,
+                "{engine_id} verification sentence is not the shape the translator parses: {english}"
+            );
+            let rule_id = english
+                .rsplit_once("source rule ")
+                .and_then(|(_, tail)| tail.strip_suffix(" is no longer reported."))
+                .unwrap_or_else(|| panic!("{engine_id}: {english}"));
+            assert!(
+                translated.contains(rule_id),
+                "{engine_id} lost its rule id {rule_id}: {translated}"
+            );
+        }
+    }
+    assert!(engines_seen >= 21, "only {engines_seen} findings exercised");
 }

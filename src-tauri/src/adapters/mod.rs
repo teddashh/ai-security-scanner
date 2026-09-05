@@ -2894,10 +2894,7 @@ fn merge_finding(
                 "After an approved manual change, rerun {} with the same authorized scope and confirm that source rule {} is no longer reported.",
                 input.manifest.display_name, rule_id
             ),
-            rollback_considerations: Some(
-                "Before any manual change, preserve the current approved configuration and document a tested restoration path; this product does not execute remediation."
-                    .into(),
-            ),
+            rollback_considerations: Some(crate::finding_narrative::ENGLISH_ROLLBACK.into()),
             official_references,
             recommended_expert_type: adapter.expert_type.into(),
             status: FindingStatus::Unreviewed,

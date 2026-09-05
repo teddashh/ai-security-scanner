@@ -1279,6 +1279,19 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
         for reason in &mut finding.priority_reasons {
             redact_known_literals(reason, &replacements);
         }
+        // Both carry engine-authored text. `verification_guidance` names the
+        // source rule, and the network engines build a rule id out of the
+        // scanned address -- so leaving these out of this pass put a private
+        // address straight into a standard-redacted export.
+        for value in [
+            &mut finding.rollback_considerations,
+            &mut finding.verification_guidance,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            redact_known_literals(value, &replacements);
+        }
         for reference in &mut finding.framework_references {
             for value in [
                 &mut reference.title,

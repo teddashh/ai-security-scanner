@@ -305,6 +305,14 @@ pub struct BeginnerFinding {
     /// their own impact sentence replace the prose these were appended to.
     #[serde(default)]
     pub context_factors: Vec<ContextFactor>,
+    /// What to preserve before changing anything, and how to confirm the change
+    /// worked. The app has always shown both in the finding drawer; the report
+    /// handed to an expert omitted them, so the two surfaces disagreed about
+    /// what this finding asks a person to do.
+    #[serde(default)]
+    pub rollback_considerations: Option<String>,
+    #[serde(default)]
+    pub verification_guidance: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1812,6 +1820,10 @@ fn project_finding(
         context_factors: details
             .map(|finding| finding.context_factors.clone())
             .unwrap_or_default(),
+        rollback_considerations: details.and_then(|finding| finding.rollback_considerations.clone()),
+        verification_guidance: details
+            .map(|finding| finding.verification_guidance.clone())
+            .filter(|guidance| !guidance.trim().is_empty()),
     }
 }
 
