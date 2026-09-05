@@ -2548,3 +2548,111 @@ fn every_priority_reason_the_engines_write_is_one_the_reader_can_read() {
         "only {derived_seen} derived-severity reasons exercised"
     );
 }
+
+/// A cloud account added without its native account id.
+///
+/// `resolve_asset` treats a provider-qualified OCSF account as authoritative
+/// and refuses to fall back to the only selected asset. That is right --
+/// attributing an AWS finding to the wrong account is worse than not
+/// attributing it. But the identifier map is built only from
+/// `asset.identifiers` and nothing makes a person supply one, so someone who
+/// adds "Production" and authorizes it gets a run that finds everything,
+/// resolves nothing, and returns an empty list.
+///
+/// The per-record warnings name the rule that was dropped, which is the
+/// symptom. Every one of them is different and none of them names the account,
+/// so the reader is handed N variations of "something went wrong" and no way to
+/// act. The cause is one identifier, and it is said once, with the fix in it.
+#[test]
+fn prowler_names_the_account_it_could_not_attribute_rather_than_each_dropped_rule() {
+    let (bytes, filename, media_type) = fixture("prowler");
+    let normalize = |assets: &[Asset], run_id: &str| {
+        normalize_bytes_with_assets_and_context(
+            "prowler",
+            media_type,
+            bytes,
+            filename,
+            run_id,
+            assets,
+            FrameworkApplicability {
+                ai_system: false,
+                ai_generated_artifact: false,
+            },
+        )
+    };
+
+    // The same artifact against an asset that does carry the account id. The
+    // comparison is the point: the engine, the artifact and the authorization
+    // are identical, and only the identifier differs.
+    let identified = normalize(
+        &[authorized_asset(
+            "asset-1",
+            AssetKind::CloudAccount,
+            Some("aws"),
+            &[("aws_account_id", "123456789012")],
+        )],
+        "run-identified",
+    );
+    assert!(
+        !identified.findings.is_empty(),
+        "baseline found nothing, so the comparison below proves nothing"
+    );
+    assert!(identified.complete);
+
+    // Named, authorized, and never fingerprinted.
+    let named_only = normalize(
+        &[authorized_asset(
+            "asset-1",
+            AssetKind::CloudAccount,
+            Some("aws"),
+            &[],
+        )],
+        "run-unidentified",
+    );
+    assert!(
+        named_only.findings.is_empty(),
+        "the drop itself is deliberate; this test is about what the reader is told"
+    );
+    assert!(
+        !named_only.complete,
+        "a run that discarded every result must not claim completion"
+    );
+
+    let actionable = named_only
+        .warnings
+        .iter()
+        .find(|warning| warning.contains("no authorized asset carries that identifier"))
+        .unwrap_or_else(|| {
+            panic!(
+                "nothing told the reader why the list is empty: {:?}",
+                named_only.warnings
+            )
+        });
+    // The account id is the fix. Without it the reader knows only that
+    // something did not match, which is what the per-record warnings already
+    // failed to make actionable.
+    assert!(
+        actionable.contains("123456789012"),
+        "the warning does not name the identifier to add: {actionable}"
+    );
+    assert!(
+        actionable.contains(&format!("{} result(s)", identified.findings.len())),
+        "the warning does not say how much was discarded: {actionable}"
+    );
+    assert!(
+        actionable.contains("aws"),
+        "the warning does not name the provider: {actionable}"
+    );
+
+    // Said once for the account, not once per dropped rule.
+    assert_eq!(
+        named_only
+            .warnings
+            .iter()
+            .filter(|warning| warning.contains("no authorized asset carries that identifier"))
+            .count(),
+        1,
+        "one identifier should produce one warning: {:?}",
+        named_only.warnings
+    );
+}

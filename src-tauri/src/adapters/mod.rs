@@ -61,6 +61,8 @@ const MAX_TOTAL_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_RECORDS: usize = 10_000;
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 const MAX_WARNINGS: usize = 256;
+/// Distinct unresolved provider identifiers tracked per normalization.
+const MAX_UNMATCHED_IDENTIFIERS: usize = 32;
 const MAX_SHORT_TEXT: usize = 512;
 const MAX_LONG_TEXT: usize = 2_048;
 const MAX_XML_DEPTH: usize = 64;
@@ -478,6 +480,12 @@ fn normalize_artifacts(
     let mut findings: BTreeMap<String, Finding> = BTreeMap::new();
     let mut processed_bytes = 0_u64;
     let mut processed_records = 0_usize;
+    // Provider-qualified identifiers the engine reported on that no authorized
+    // asset claims. Counted per identifier rather than per record: the
+    // per-record warnings name the rule that was dropped, which is the symptom.
+    // The identifier is the cause, it is the same for every dropped record, and
+    // it is the one thing the reader can act on.
+    let mut unmatched_identifiers: BTreeMap<(String, String), usize> = BTreeMap::new();
 
     let relevant: Vec<&RawArtifact> = input
         .raw_artifacts
@@ -577,6 +585,7 @@ fn normalize_artifacts(
                 input.asset_ids,
                 input.asset_identifier_map,
                 &mut output.warnings,
+                &mut unmatched_identifiers,
             );
             if output.warnings.len() > warnings_before_resolution {
                 output.complete = false;
@@ -586,6 +595,21 @@ fn normalize_artifacts(
             };
             merge_finding(&mut findings, adapter, input, artifact, record, asset_id);
         }
+    }
+
+    // The engine ran, produced results, and every one of them was discarded
+    // because nothing the person authorized claims the identifier the engine
+    // reported on. Said once per identifier, naming the identifier, because
+    // adding it to the authorized asset is the whole fix -- and without this
+    // the run reads as a clean scan that found nothing.
+    for ((provider, identifier), count) in &unmatched_identifiers {
+        push_warning(
+            &mut output.warnings,
+            format!(
+                "{} reported {count} result(s) for {provider} identifier {identifier}, but no authorized asset carries that identifier; none of them were attributed. Add {identifier} to the asset you authorized and scan again.",
+                adapter.id
+            ),
+        );
     }
 
     if relevant_count > MAX_ARTIFACTS {
@@ -2974,6 +2998,7 @@ fn resolve_asset(
     allowed_assets: &[String],
     asset_identifier_map: &crate::adapter::AdapterAssetIdentifierMap,
     warnings: &mut Vec<String>,
+    unmatched_identifiers: &mut BTreeMap<(String, String), usize>,
 ) -> Option<String> {
     if let Some(hint) = &record.asset_hint {
         if record.asset_provider.is_none() && allowed_assets.iter().any(|asset| asset == hint) {
@@ -3005,7 +3030,7 @@ fn resolve_asset(
         // A provider-qualified OCSF account is authoritative. Falling back to
         // the only selected asset would silently misattribute a provider or
         // account mismatch.
-        if record.asset_provider.is_some() {
+        if let Some(provider) = &record.asset_provider {
             push_warning(
                 warnings,
                 format!(
@@ -3013,6 +3038,18 @@ fn resolve_asset(
                     safe_text(&record.rule_id, 120)
                 ),
             );
+            // Bounded because both halves come from the scanned artifact.
+            // Beyond the cap the counts stay accurate for what is already
+            // tracked rather than growing without limit on hostile input.
+            let key = (
+                safe_text(provider, 60).to_ascii_lowercase(),
+                safe_text(hint, 120),
+            );
+            if unmatched_identifiers.len() < MAX_UNMATCHED_IDENTIFIERS
+                || unmatched_identifiers.contains_key(&key)
+            {
+                *unmatched_identifiers.entry(key).or_insert(0) += 1;
+            }
             return None;
         }
     }
