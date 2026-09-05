@@ -365,6 +365,15 @@ const DERIVED_SEVERITY_ENGINES: &[(&str, Severity, &str)] = &[
         Severity::Informational,
         "a reachable HTTP service observation rather than a defect",
     ),
+    // Steampipe is the odd one: its output does carry a `severity` column, and
+    // reading it was still circular, because the value is a literal this
+    // product's own fixed query writes. The fixture keeps the column so this
+    // proves the adapter ignores it rather than merely never seeing it.
+    (
+        "steampipe",
+        Severity::High,
+        "a failed IAM control from this product's own fixed query",
+    ),
 ];
 
 #[test]

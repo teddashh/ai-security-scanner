@@ -2638,12 +2638,23 @@ fn extract_steampipe(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
             else {
                 continue;
             };
-            records.push(record!(
+            records.push(record_with_derived_severity!(
                 format!("{pointer}rows/{index}"),
                 rule_id.clone(),
                 string_any(object, &["title", "reason"])
                     .unwrap_or_else(|| format!("Steampipe control {rule_id}")),
-                string_any(object, &["severity"]).unwrap_or_else(|| "unknown".into()),
+                // The `severity` column exists, and reading it was still a
+                // misattribution: Steampipe answers whatever SQL it is given and
+                // has no severity of its own, and the value in that column is a
+                // literal this product wrote — `'high' as severity` in the fixed
+                // query at engines/images/cloud-launcher/main.go. Presenting our
+                // own constant back as the engine's rating is circular, so the
+                // column is deliberately not read. Removing it from the query
+                // needs an engine-image rebuild and is not done here.
+                DerivedSeverity {
+                    severity: Severity::High,
+                    basis: "a failed IAM control from this product's own fixed query",
+                },
                 string_any(object, &["resource", "resource_id", "title"])
                     .unwrap_or_else(|| "cloud-resource".into()),
                 string_any(object, &["asset_id"]),
