@@ -1,10 +1,10 @@
 {
   "schema_version": "1.1",
-  "mapping_version": "2026-09-05.1",
+  "mapping_version": "2026-09-05.2",
   "provenance": {
     "reviewed_at": "2026-09-05",
     "review_process": "source_coordinate_and_rationale_review_v1",
-    "canonical_sha256": "61623678ba46641f74109d3a01b7d5c373c1739a56caa374444fcf70e64f7f9a"
+    "canonical_sha256": "c18c0bb9ac574e11c2890ec7a37a8abb40631c96e6e9deff1743dd8947c9ca03"
   },
   "relationship": "related",
   "disclaimer": "These evidence-to-control references indicate topical relationships only. They do not establish implementation, effectiveness, certification, or compliance.",
@@ -319,7 +319,7 @@
       "match_kind": "exact",
       "source_rule": "C-0002",
       "controls": ["nist-pr-aa-05", "iso-8-2", "aidefend-i-001-001"],
-      "rationale": "Evidence of a privileged container is related to least-privilege authorization and container isolation. AIDEFEND's container-isolation coordinate applies when the workload is part of an AI system."
+      "rationale": "Evidence that subjects can run commands inside running containers is related to least-privilege authorization, privileged access safeguards, and container isolation. AIDEFEND's container-isolation coordinate applies when the workload is part of an AI system."
     },
     {
       "engine_id": "kube-bench",

@@ -2291,42 +2291,141 @@ fn extract_grype(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
         .collect()
 }
 
+/// What Kubescape's `summaryDetails.controls` roll-up knows about a control.
+struct KubescapeControlSummary {
+    name: Option<String>,
+    /// Kubescape grades controls 1-10, the same direction and range the shared
+    /// numeric severity branch already reads, so the roll-up's score passes
+    /// straight through rather than through a second scale invented here.
+    score_factor: Option<String>,
+}
+
+/// Read Kubescape's v2 posture report.
+///
+/// `results[].controls[].status` is an object (`{status, subStatus, info}`), so
+/// scanning for a string `status` matches only the `summaryDetails.controls`
+/// roll-up and silently loses every per-resource result. The roll-up says how
+/// bad a control is; `results` says which resource actually failed it, which is
+/// the part a reader needs in order to fix anything.
 fn extract_kubescape(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
-    let mut candidates = Vec::new();
-    match parsed {
-        ParsedArtifact::Json(root) => collect_named_objects(root, "/", 0, &mut candidates),
-        _ => candidates.extend(json_rows(parsed, warnings)),
+    let Some(root) = json_root(parsed).and_then(Value::as_object) else {
+        push_warning(warnings, "Kubescape expected a JSON document");
+        return Vec::new();
+    };
+
+    let summary_controls = root
+        .get("summaryDetails")
+        .and_then(Value::as_object)
+        .and_then(|summary| summary.get("controls"))
+        .and_then(Value::as_object);
+    let mut summaries: BTreeMap<String, KubescapeControlSummary> = BTreeMap::new();
+    for (control_id, control) in summary_controls.into_iter().flatten() {
+        let Some(control) = control.as_object() else {
+            continue;
+        };
+        summaries.insert(
+            control_id.clone(),
+            KubescapeControlSummary {
+                name: string_any(control, &["name"]),
+                score_factor: control
+                    .get("scoreFactor")
+                    .and_then(Value::as_f64)
+                    .map(|score| score.to_string()),
+            },
+        );
     }
+
     let mut records = Vec::new();
-    for (pointer, value) in candidates {
-        let Some(object) = value.as_object() else {
+    for (index, result) in root
+        .get("results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let Some(result) = result.as_object() else {
             continue;
         };
-        let status = string_any(object, &["status", "Status", "result"]);
-        if !status.as_deref().is_some_and(is_failure) {
-            continue;
+        let location = string_any(result, &["resourceID", "resource"])
+            .unwrap_or_else(|| "kubernetes-resource".into());
+        for (control_index, control) in result
+            .get("controls")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            if records.len() >= MAX_RECORDS {
+                return records;
+            }
+            let Some(control) = control.as_object() else {
+                continue;
+            };
+            // v2 nests the verdict; older shapes put a plain string here.
+            let status = control
+                .get("status")
+                .and_then(Value::as_object)
+                .and_then(|status| string_any(status, &["status"]))
+                .or_else(|| string_any(control, &["status"]));
+            if !status.as_deref().is_some_and(is_failure) {
+                continue;
+            }
+            let Some(rule_id) = exact_rule_string_any(control, &["controlID"]) else {
+                continue;
+            };
+            let summary = summaries.get(&rule_id);
+            records.push(record!(
+                format!("/results/{index}/controls/{control_index}"),
+                rule_id.clone(),
+                string_any(control, &["name"])
+                    .or_else(|| summary.and_then(|summary| summary.name.clone()))
+                    .unwrap_or_else(|| format!("Kubescape control {rule_id}")),
+                summary
+                    .and_then(|summary| summary.score_factor.clone())
+                    .unwrap_or_else(|| "unknown".into()),
+                location.clone(),
+                None,
+                Confidence::High,
+                EvidenceKind::Configuration,
+                references_from(control.get("rules").unwrap_or(&Value::Null)),
+                vec![],
+            ));
         }
-        let Some(rule_id) =
-            exact_rule_string_any(object, &["controlID", "control_id", "id", "rule_id"])
-        else {
-            continue;
-        };
-        records.push(record!(
-            pointer,
-            rule_id.clone(),
-            string_any(object, &["name", "title", "controlName"])
-                .unwrap_or_else(|| format!("Kubescape control {rule_id}")),
-            string_any(object, &["severity", "baseScore"]).unwrap_or_else(|| "unknown".into()),
-            string_any(object, &["resourceID", "resource", "object", "name"])
-                .unwrap_or_else(|| "kubernetes-resource".into()),
-            string_any(object, &["asset_id"]),
-            Confidence::High,
-            EvidenceKind::Configuration,
-            references_from(value),
-            vec![],
-        ));
-        if records.len() >= MAX_RECORDS {
-            break;
+    }
+
+    // A report can carry the roll-up without per-resource results. A failing
+    // control is still a finding then; it just cannot name a resource.
+    if records.is_empty() {
+        for (rule_id, control) in summary_controls.into_iter().flatten() {
+            if records.len() >= MAX_RECORDS {
+                break;
+            }
+            let Some(object) = control.as_object() else {
+                continue;
+            };
+            if !string_any(object, &["status"])
+                .as_deref()
+                .is_some_and(is_failure)
+            {
+                continue;
+            }
+            let summary = summaries.get(rule_id);
+            records.push(record!(
+                format!("/summaryDetails/controls/{rule_id}"),
+                rule_id.clone(),
+                summary
+                    .and_then(|summary| summary.name.clone())
+                    .unwrap_or_else(|| format!("Kubescape control {rule_id}")),
+                summary
+                    .and_then(|summary| summary.score_factor.clone())
+                    .unwrap_or_else(|| "unknown".into()),
+                "kubernetes-cluster".to_owned(),
+                None,
+                Confidence::High,
+                EvidenceKind::Configuration,
+                vec![],
+                vec![],
+            ));
         }
     }
     records

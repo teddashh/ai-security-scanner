@@ -66,6 +66,17 @@ fn baseline_output(engine_id: &str) -> &'static [u8] {
     }
 }
 
+/// Findings each lifecycle fixture is expected to yield. Syft emits an
+/// inventory rather than findings, and the Kubescape fixture carries the
+/// authentic v2 shape: three failing controls spread across two resources.
+fn expected_finding_count(engine_id: &str) -> usize {
+    match engine_id {
+        "syft" => 0,
+        "kubescape" => 3,
+        _ => 1,
+    }
+}
+
 fn execute_fixture(
     orchestrator: &Orchestrator<'_, FakeContainerRuntime>,
     runtime: &FakeContainerRuntime,
@@ -123,8 +134,10 @@ fn assert_report_provenance(
     assert_eq!(report.checkpoint.engine_run_id, execution.engine_run_id);
     assert_eq!(report.checkpoint.engine_id, execution.manifest.id);
     assert_eq!(report.raw_artifacts.len(), 3);
-    let expected_finding_count = usize::from(execution.manifest.id != "syft");
-    assert_eq!(report.findings.len(), expected_finding_count);
+    assert_eq!(
+        report.findings.len(),
+        expected_finding_count(&execution.manifest.id)
+    );
 
     let artifact_ids = report
         .raw_artifacts
@@ -141,33 +154,31 @@ fn assert_report_provenance(
         assert_eq!(artifact.sha256, hex::encode(Sha256::digest(&bytes)));
     }
 
-    if expected_finding_count == 0 {
-        return;
-    }
-    let finding = &report.findings[0];
-    assert_eq!(finding.case_id, execution.case_id);
-    assert_eq!(finding.first_seen_run_id, execution.scan_run_id);
-    assert_eq!(finding.last_seen_run_id, execution.scan_run_id);
-    assert_eq!(finding.asset_ids, [execution.assets[0].id.clone()]);
-    assert!(!finding.evidence.is_empty());
-    for evidence in &finding.evidence {
-        assert_eq!(evidence.run_id, execution.scan_run_id);
-        assert_eq!(evidence.engine_id, execution.manifest.id);
-        assert!(artifact_ids.contains(evidence.artifact_id.as_str()));
-        let artifact = report
-            .raw_artifacts
-            .iter()
-            .find(|artifact| artifact.id == evidence.artifact_id)
-            .expect("evidence artifact is part of the same execution report");
-        assert_eq!(evidence.artifact_sha256, artifact.sha256);
-    }
-    if execution.manifest.id == "gitleaks" {
-        assert!(finding.evidence.iter().all(|evidence| evidence.redacted));
-        assert!(
-            !serde_json::to_string(finding)
-                .expect("finding JSON")
-                .contains("SECRET_SENTINEL_MUST_NEVER_LEAK")
-        );
+    for finding in &report.findings {
+        assert_eq!(finding.case_id, execution.case_id);
+        assert_eq!(finding.first_seen_run_id, execution.scan_run_id);
+        assert_eq!(finding.last_seen_run_id, execution.scan_run_id);
+        assert_eq!(finding.asset_ids, [execution.assets[0].id.clone()]);
+        assert!(!finding.evidence.is_empty());
+        for evidence in &finding.evidence {
+            assert_eq!(evidence.run_id, execution.scan_run_id);
+            assert_eq!(evidence.engine_id, execution.manifest.id);
+            assert!(artifact_ids.contains(evidence.artifact_id.as_str()));
+            let artifact = report
+                .raw_artifacts
+                .iter()
+                .find(|artifact| artifact.id == evidence.artifact_id)
+                .expect("evidence artifact is part of the same execution report");
+            assert_eq!(evidence.artifact_sha256, artifact.sha256);
+        }
+        if execution.manifest.id == "gitleaks" {
+            assert!(finding.evidence.iter().all(|evidence| evidence.redacted));
+            assert!(
+                !serde_json::to_string(finding)
+                    .expect("finding JSON")
+                    .contains("SECRET_SENTINEL_MUST_NEVER_LEAK")
+            );
+        }
     }
 }
 
@@ -822,7 +833,12 @@ fn typed_container_and_kubernetes_inputs_complete_the_product_lifecycle() {
     }
 
     let completed = service.show_case(&case.id).unwrap();
-    assert_eq!(completed.findings.len(), 4);
+    let expected_total = plan
+        .executable
+        .iter()
+        .map(|execution| expected_finding_count(&execution.manifest.id))
+        .sum::<usize>();
+    assert_eq!(completed.findings.len(), expected_total);
     assert!(
         completed
             .coverage

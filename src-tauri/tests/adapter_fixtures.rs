@@ -964,7 +964,7 @@ fn versioned_control_references_are_allowlisted_relationships_not_assurance_clai
         );
         assert!(references.iter().all(|reference| {
             reference.relationship == "related"
-                && reference.mapping_version == "2026-09-05.1"
+                && reference.mapping_version == "2026-09-05.2"
                 && matches!(reference.framework.as_str(), "NIST CSF" | "ISO/IEC 27001")
         }));
         assert!(
@@ -1541,5 +1541,63 @@ fn cloudsplaining_risks_are_read_from_policies_not_the_document_root() {
         sources,
         BTreeSet::from(["aws-managed", "customer-managed", "inline"]),
         "each policy collection is distinguishable in the findings list"
+    );
+}
+
+#[test]
+fn kubescape_per_resource_results_are_read_not_only_the_summary_rollup() {
+    // v2 nests the verdict as `{status, subStatus, info}`. A scan for a string
+    // `status` matches only `summaryDetails.controls`, which names the control
+    // but not the resource, so every actionable result disappears.
+    let output = normalize_fixture("kubescape");
+    let found = rules_and_severities(&output);
+
+    assert_eq!(
+        found.keys().cloned().collect::<Vec<_>>(),
+        vec![
+            "c-0002".to_owned(),
+            "c-0009".to_owned(),
+            "c-0017".to_owned()
+        ],
+        "a passing control is not a finding, and failing ones survive"
+    );
+
+    // Severity comes from the roll-up's 1-10 `scoreFactor`, read through the
+    // shared numeric branch rather than a second scale.
+    assert_eq!(found["c-0009"], Severity::High, "scoreFactor 7");
+    assert_eq!(found["c-0002"], Severity::Medium, "scoreFactor 5");
+    assert_eq!(found["c-0017"], Severity::Low, "scoreFactor 3");
+
+    // The whole point of reading `results` is naming what has to change. The
+    // roll-up alone would put the control's own name here instead.
+    let summaries = output
+        .findings
+        .iter()
+        .flat_map(|finding| &finding.evidence)
+        .map(|evidence| evidence.summary.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        summaries
+            .iter()
+            .any(|summary| summary.contains("apps/v1/production/Deployment/payments-api")),
+        "a finding points at the resource, not the control name: {summaries:?}"
+    );
+    assert!(
+        summaries
+            .iter()
+            .any(|summary| summary.contains("apps/v1/production/StatefulSet/ledger-db")),
+        "each failing resource is reported: {summaries:?}"
+    );
+    assert!(
+        !summaries
+            .iter()
+            .any(|summary| summary.contains("kubernetes-cluster")),
+        "the resource-less roll-up fallback did not run: {summaries:?}"
+    );
+
+    assert_eq!(
+        output.findings.len(),
+        3,
+        "the roll-up must not duplicate what `results` already reported"
     );
 }

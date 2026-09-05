@@ -1,1 +1,89 @@
-{"results":[{"controlID":"C-0002","name":"Privileged container","status":"failed","severity":"high","resourceID":"default/Deployment/example","asset_id":"asset-1","references":["https://hub.armosec.io/docs/c-0002"]}]}
+{
+  "generationTime": "2026-08-24T12:00:00Z",
+  "clusterName": "example-cluster",
+  "results": [
+    {
+      "resourceID": "apps/v1/production/Deployment/payments-api",
+      "controls": [
+        {
+          "controlID": "C-0002",
+          "name": "Exec into container",
+          "status": { "status": "failed" },
+          "rules": [
+            {
+              "name": "exec-into-container",
+              "status": "failed",
+              "paths": [{ "failedPath": "rules[0].resources[1]" }]
+            }
+          ]
+        },
+        {
+          "controlID": "C-0005",
+          "name": "API server insecure port is enabled",
+          "status": { "status": "passed" },
+          "rules": []
+        }
+      ]
+    },
+    {
+      "resourceID": "apps/v1/production/StatefulSet/ledger-db",
+      "controls": [
+        {
+          "controlID": "C-0009",
+          "name": "Resource limits",
+          "status": { "status": "failed", "subStatus": "", "info": "" },
+          "rules": [{ "name": "resource-limits", "status": "failed" }]
+        },
+        {
+          "controlID": "C-0017",
+          "name": "Immutable container filesystem",
+          "status": { "status": "failed" },
+          "rules": [{ "name": "immutable-container-filesystem", "status": "failed" }]
+        }
+      ]
+    }
+  ],
+  "summaryDetails": {
+    "status": "failed",
+    "score": 41.5,
+    "complianceScore": 58.5,
+    "controls": {
+      "C-0002": {
+        "statusInfo": { "status": "failed" },
+        "controlID": "C-0002",
+        "name": "Exec into container",
+        "status": "failed",
+        "ResourceCounters": { "passedResources": 12, "failedResources": 1 },
+        "score": 1.3071896,
+        "scoreFactor": 5
+      },
+      "C-0005": {
+        "statusInfo": { "status": "passed" },
+        "controlID": "C-0005",
+        "name": "API server insecure port is enabled",
+        "status": "passed",
+        "ResourceCounters": { "passedResources": 1, "failedResources": 0 },
+        "score": 0,
+        "scoreFactor": 9
+      },
+      "C-0009": {
+        "statusInfo": { "status": "failed" },
+        "controlID": "C-0009",
+        "name": "Resource limits",
+        "status": "failed",
+        "ResourceCounters": { "passedResources": 3, "failedResources": 1 },
+        "score": 2.4,
+        "scoreFactor": 7
+      },
+      "C-0017": {
+        "statusInfo": { "status": "failed" },
+        "controlID": "C-0017",
+        "name": "Immutable container filesystem",
+        "status": "failed",
+        "ResourceCounters": { "passedResources": 2, "failedResources": 1 },
+        "score": 0.9,
+        "scoreFactor": 3
+      }
+    }
+  }
+}

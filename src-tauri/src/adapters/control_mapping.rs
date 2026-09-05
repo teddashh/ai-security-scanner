@@ -656,7 +656,7 @@ mod tests {
     fn embedded_catalog_is_bounded_and_only_uses_known_engines() {
         validate_catalog(ENGINES).expect("valid embedded mappings");
         let provenance = catalog_provenance().expect("embedded provenance");
-        assert_eq!(provenance.mapping_version, "2026-09-05.1");
+        assert_eq!(provenance.mapping_version, "2026-09-05.2");
         assert_eq!(provenance.reviewed_at, "2026-09-05");
         assert_eq!(provenance.review_process, REVIEW_PROCESS_V1);
         assert_eq!(provenance.catalog_sha256.len(), 64);
@@ -673,10 +673,10 @@ mod tests {
         assert_eq!(public_bucket.len(), 3);
         assert!(public_bucket.iter().all(|item| {
             item.relationship == "related"
-                && item.mapping_version == "2026-09-05.1"
+                && item.mapping_version == "2026-09-05.2"
                 && item.mapping_provenance.as_ref().is_some_and(|provenance| {
                     provenance.catalog_sha256
-                        == "61623678ba46641f74109d3a01b7d5c373c1739a56caa374444fcf70e64f7f9a"
+                        == "c18c0bb9ac574e11c2890ec7a37a8abb40631c96e6e9deff1743dd8947c9ca03"
                 })
                 && !item.rationale.to_ascii_lowercase().contains("compliant")
         }));
