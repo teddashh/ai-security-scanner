@@ -369,7 +369,11 @@ pub fn build_demo_case() -> AssessmentCase {
         case_id: case.id.clone(),
         first_seen_run_id: run_id.clone(),
         last_seen_run_id: run_id.clone(),
-        family: Some(FindingFamily::CloudPosture),
+        // No family. The field means "the prose above was composed from this
+        // code", and this finding's wording is written by hand for the demo. A
+        // family here would have a localized client discard that wording and
+        // compose the generic sentence for the family instead.
+        family: None,
         severity_basis_code: None,
         fingerprint: "demo:aws:s3:public-customer-export".into(),
         title: "客戶匯出資料儲存空間可能允許公開存取".into(),
@@ -455,7 +459,7 @@ pub fn build_demo_case() -> AssessmentCase {
         case_id: case.id.clone(),
         first_seen_run_id: run_id.clone(),
         last_seen_run_id: run_id.clone(),
-        family: Some(FindingFamily::NetworkExposure),
+        family: None,
         severity_basis_code: None,
         fingerprint: "demo:web:missing-hsts".into(),
         title: "公開網站的 HSTS 狀態尚未完成確認".into(),
