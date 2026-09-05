@@ -87,8 +87,28 @@ const copy = {
   retryPreview: { en: "Try preview again", zhTW: "重新取得預覽" },
   sensitiveTitle: { en: "This scan contains sensitive asset and security information", zhTW: "這次掃描包含敏感的資產與資安資訊" },
   sensitiveBody: {
-    en: "Choose whether to hide private details and include source files before sharing. Passwords and access keys are never included.",
-    zhTW: "分享前，請選擇是否遮罩私人資訊、是否附上來源檔案；密碼與存取金鑰永遠不會放進匯出檔。",
+    en: "Choose whether to hide private details and include source files before sharing. What those two choices leave in the file is described below.",
+    zhTW: "分享前，請選擇是否遮罩私人資訊、是否附上來源檔案。下面會說明這兩個選擇會在檔案裡留下什麼。",
+  },
+  // One of these three replaces the single unconditional sentence that used to
+  // sit here. That sentence promised "Passwords and access keys are never
+  // included", which holds only under standard redaction: with redaction off,
+  // `include = include_raw_artifacts && !(Standard && sensitive)` in
+  // export.rs admits every artifact, and gitleaks and trufflehog ship as
+  // engines whose raw output carries the values verbatim. The backend already
+  // computes the contradicting sentence -- it was rendered one disclosure down
+  // from the promise.
+  sharingRedacted: {
+    en: "Private details are hidden, so every source file a scanner captured is left out and passwords or access keys a scanner found stay out of this file. Findings, hashes, and coverage records remain.",
+    zhTW: "你已遮罩私人資訊，因此掃描器擷取的來源檔案全部不會附上，掃描器找到的密碼或存取金鑰也不會進入這個檔案。問題、雜湊值與涵蓋範圍紀錄仍會保留。",
+  },
+  sharingIdentifiable: {
+    en: "Private details are not hidden, so host names, addresses, and system identifiers stay readable in this file. No source files are attached with these settings, so scanner output is not copied in.",
+    zhTW: "你沒有遮罩私人資訊，因此主機名稱、位址與系統識別碼在這個檔案裡都可以直接讀取。目前設定不會附上來源檔案，掃描器的輸出不會被複製進去。",
+  },
+  sharingRawSources: {
+    en: "Private details are not hidden and source files are attached exactly as the scanners produced them. Any password or access key a scanner found is inside this file. Share it only with someone you would trust with those secrets.",
+    zhTW: "你沒有遮罩私人資訊，而且來源檔案會照掃描器產出的原樣附上。掃描器找到的任何密碼或存取金鑰都會在這個檔案裡。只有在你願意把這些機密交給對方時，才分享這個檔案。",
   },
   previewPending: { en: "Calculating the exact contents on this device…", zhTW: "正在這台電腦上計算精確匯出內容…" },
   signatureLimit: {
@@ -132,9 +152,15 @@ const copy = {
     zhTW: "所有格式都可使用。若有檢查尚未完成或無法執行，OCSF 與 OSCAL 會附上涵蓋說明檔。",
   },
   includeRaw: { en: "Include source files for specialist review", zhTW: "附上來源檔案，供專家核對" },
+  // Every artifact the desktop app captures is marked sensitive
+  // (artifact_store.rs sets it unconditionally), and standard redaction drops
+  // every sensitive artifact. So with private details hidden this option
+  // attaches nothing at all -- which the old wording, promising a larger file
+  // and no credentials, described as the opposite of what happens in both
+  // states.
   includeRawBundle: {
-    en: "The file will be larger, but a security specialist can check the source material. Passwords and access keys are not included.",
-    zhTW: "檔案會比較大，但資安專家能自行核對來源資料；內容不包含密碼或存取金鑰。",
+    en: "Source files are attached only when private details are not hidden. With them hidden every captured file is left out and this option changes nothing; with them shown the file is larger and carries the scanner output as captured.",
+    zhTW: "只有在未遮罩私人資訊時，才會附上來源檔案。若已遮罩，所有擷取的檔案都會被排除，這個選項不會有任何作用；若未遮罩，檔案會比較大，並且會照原樣附上掃描器的輸出。",
   },
   includeRawUnavailable: {
     en: "Source files are available only in the specialist handoff option.",
@@ -387,6 +413,16 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
   const incompleteEngineCount = preview?.incompleteEngineRunCount;
   const notExecutedCount = preview?.notExecutedEngineRunCount;
   const currentFormat = formatCopy[format];
+  // Read from the controls rather than from `preview`, which lags a toggle by a
+  // debounce -- the sentence below must never describe settings the user has
+  // already changed. Only the case bundle carries artifacts, and only when
+  // redaction is off; see the copy note on `includeRawBundle`.
+  const rawSourcesAttached = format === "case_bundle" && includeRawEvidence && !redactSensitiveValues;
+  const sharingConsequence = redactSensitiveValues
+    ? copy.sharingRedacted
+    : rawSourcesAttached
+      ? copy.sharingRawSources
+      : copy.sharingIdentifiable;
   const shownCount = (value: number | undefined): string => value === undefined ? "—" : formatNumber(value);
   const renderFormatCard = (id: ExportFormat) => {
     const item = formatCopy[id];
@@ -479,7 +515,7 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
       )}
 
       <InlineNotice
-        tone={previewError ? "danger" : "warning"}
+        tone={previewError || rawSourcesAttached ? "danger" : "warning"}
         title={previewError
           ? text(selectedRunUnavailable ? copy.runUnavailableTitle : copy.previewErrorTitle)
           : text(copy.sensitiveTitle)}
@@ -496,6 +532,7 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
               ? text(copy.previewPending)
               : text(copy.sensitiveBody)}
         </p>
+        {!previewError && <p className="export-sharing-consequence">{text(sharingConsequence)}</p>}
         {previewError && selectedRunUnavailable && (
           <a className="button button--secondary button--small" href="#findings">
             <Icon name="findings" size={15} /> {text(copy.chooseRun)}

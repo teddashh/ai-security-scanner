@@ -100,6 +100,19 @@
   line-height: 1.5;
 }
 
+/*
+ * What the current redaction and source-file choices leave in the file. This is
+ * the sentence a reader has to weigh before handing the export to someone else,
+ * so it is set apart from the surrounding notice body rather than reading as
+ * one more line of guidance.
+ */
+.export-sharing-consequence {
+  margin: 10px 0 0;
+  padding-left: 12px;
+  border-left: 2px solid currentColor;
+  font-weight: 600;
+}
+
 .page-secondary-feature > summary {
   cursor: pointer;
   color: var(--ink-strong);
