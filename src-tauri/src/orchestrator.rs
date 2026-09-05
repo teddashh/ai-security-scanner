@@ -197,6 +197,8 @@ pub struct ExecutionReport {
     pub raw_artifacts: Vec<RawArtifact>,
     pub findings: Vec<Finding>,
     pub warnings: Vec<String>,
+    /// Identifiers the adapter could not attribute to an authorized asset.
+    pub unattributed: Vec<crate::domain::UnattributedResults>,
     pub artifact_root: PathBuf,
     pub output_directory: PathBuf,
 }
@@ -215,6 +217,7 @@ impl ExecutionReport {
             raw_artifacts: Vec::new(),
             findings: Vec::new(),
             warnings: Vec::new(),
+            unattributed: Vec::new(),
             artifact_root,
             output_directory,
         }
@@ -878,6 +881,7 @@ fn adapt_captured_artifacts(
         Ok(Some(output)) => {
             report.findings = output.findings;
             report.warnings.extend(output.warnings);
+            report.unattributed = output.unattributed;
             if output.complete {
                 report.checkpoint.stage = ExecutionStage::Completed;
                 report.checkpoint.last_error = None;
@@ -1712,6 +1716,7 @@ mod tests {
 
         fn normalize(&self, _input: &AdapterInput<'_>) -> AppResult<AdapterOutput> {
             Ok(AdapterOutput {
+                unattributed: Vec::new(),
                 findings: Vec::new(),
                 warnings: vec!["one malformed record was retained only as raw evidence".into()],
                 complete: false,

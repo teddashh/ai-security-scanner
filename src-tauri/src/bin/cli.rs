@@ -2190,6 +2190,7 @@ async fn execute_runtime(
                         "A prior exact runtime cleanup obligation was resolved without executing a scanner."
                             .into(),
                     ],
+                    unattributed: Vec::new(),
                 };
                 match service.apply_execution_report(&case_id, &durable) {
                     Ok(_) => results.push(json!({

@@ -110,6 +110,10 @@ pub struct AdapterInput<'a> {
 pub struct AdapterOutput {
     pub findings: Vec<Finding>,
     pub warnings: Vec<String>,
+    /// Identifiers the engine reported on that no authorized asset claims.
+    /// Beside the warnings rather than instead of them: the warning is the
+    /// audit trail, this is what a reading surface composes a sentence from.
+    pub unattributed: Vec<crate::domain::UnattributedResults>,
     /// False when any captured evidence could not be fully normalized. Valid
     /// findings remain usable, but the engine run must not claim completion.
     pub complete: bool,
@@ -120,6 +124,7 @@ impl Default for AdapterOutput {
         Self {
             findings: Vec::new(),
             warnings: Vec::new(),
+            unattributed: Vec::new(),
             complete: true,
         }
     }
@@ -473,6 +478,7 @@ mod tests {
         bad_finding.evidence[0].artifact_sha256 = "forged".into();
         let adapter = TestAdapter {
             output: AdapterOutput {
+                unattributed: Vec::new(),
                 findings: vec![bad_finding],
                 warnings: vec![],
                 complete: true,
@@ -507,6 +513,7 @@ mod tests {
         bad_finding.evidence[0].engine_run_id = Some("another-engine-run".into());
         let adapter = TestAdapter {
             output: AdapterOutput {
+                unattributed: Vec::new(),
                 findings: vec![bad_finding],
                 warnings: vec![],
                 complete: true,

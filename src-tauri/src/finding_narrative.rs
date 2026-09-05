@@ -261,6 +261,30 @@ pub const ENGLISH_EVIDENCE_REASON: &str =
 /// Anything else is returned unchanged. A reason is the product's account of
 /// why it moved a finding up the list; printing a confident Chinese sentence
 /// for text this build cannot identify would be inventing that account.
+/// The two sentences of an unattributed-results coverage gap.
+///
+/// Composed from the structured payload rather than translated from the
+/// English, for the same reason every other pair here is: the identifier and
+/// the provider are the engine's own strings and have to read identically in
+/// both languages, and the reader has to copy the identifier onto their asset.
+pub fn unattributed_gap_zh_hant(
+    engine_id: &str,
+    unattributed: &crate::domain::UnattributedResults,
+) -> (String, String, String) {
+    let crate::domain::UnattributedResults {
+        provider,
+        identifier,
+        discarded_results,
+    } = unattributed;
+    (
+        format!("{engine_id}：針對 {provider} {identifier} 的結果"),
+        format!(
+            "{engine_id} 回報了 {discarded_results} 筆針對 {provider} 識別碼 {identifier} 的結果。你已授權的資產都沒有登記這個識別碼，因此這些結果都沒有被歸屬，也不會出現在這份報告中。"
+        ),
+        format!("請在你已授權的資產上，新增 {provider} 識別碼 {identifier}，然後重新掃描。"),
+    )
+}
+
 pub fn priority_reason_zh_hant(english: &str) -> String {
     let trimmed = english.trim();
     if trimmed == ENGLISH_EVIDENCE_REASON {

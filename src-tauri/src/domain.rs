@@ -872,6 +872,12 @@ pub struct EngineRun {
     pub cleanup_detail: Option<String>,
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// Identifiers this run reported results for that no authorized asset
+    /// claims. Kept structurally beside `warnings` because the warning is
+    /// English prose in a collapsed technical block, and the reader who needs
+    /// this is the one looking at an empty findings list.
+    #[serde(default)]
+    pub unattributed: Vec<UnattributedResults>,
     pub raw_artifact_ids: Vec<Id>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
@@ -1350,6 +1356,25 @@ pub struct Finding {
 ///
 /// Never a scanner verdict. Each one requires the affected asset to carry the
 /// attribute independently, with all retained source attribution for that asset
+/// Results an engine reported against an identifier no authorized asset claims.
+///
+/// The adapter refuses to guess which asset these belong to, which is right --
+/// attributing a cloud finding to the wrong account is worse than not
+/// attributing it. But the refusal is invisible: the findings list is simply
+/// empty. Carried as data rather than as prose so the reader is told, in their
+/// own language, which identifier to add.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct UnattributedResults {
+    /// Normalized provider the engine reported under, e.g. `aws`.
+    pub provider: String,
+    /// The identifier itself. Reproduced verbatim for the reader to copy: it
+    /// is the engine's own string and the whole point is to paste it onto the
+    /// asset.
+    pub identifier: String,
+    /// How many results were discarded for this identifier.
+    pub discarded_results: usize,
+}
+
 /// being non-questionnaire, so answering a questionnaire alone cannot conjure
 /// one. See `prioritization::apply_case_context`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]

@@ -17,6 +17,7 @@ import {
   engineNameFrom,
   findingActionSentence,
   findingPriorityReason,
+  findingUnattributedGap,
   findingRollbackSentence,
   findingVerificationSentence,
   findingImpactSentence,
@@ -400,6 +401,7 @@ const copy = {
   excludedCount: { en: "Excluded", zhTW: "排除" },
   truncatedCount: { en: "Reduced by limits", zhTW: "受限制而縮減" },
   unavailableCount: { en: "Detail unavailable", zhTW: "資料不足" },
+  unattributedCount: { en: "Not linked to your asset", zhTW: "未連結到你的資產" },
   coverageGaps: { en: "Coverage gaps", zhTW: "未涵蓋項目" },
   reportFindings: { en: "Problems found", zhTW: "發現的問題" },
   askedTitle: { en: "What you asked to scan", zhTW: "你要求掃描的內容" },
@@ -478,6 +480,19 @@ const copy = {
   actionWait: { en: "Let it finish, or cancel and keep the partial report.", zhTW: "等待完成，或取消並保留部分報告。" },
   actionStartService: { en: "Start the expected local service, then retry.", zhTW: "先啟動預期的本機服務，再重試。" },
   actionReviewCoverage: { en: "Review the coverage gap before relying on the result.", zhTW: "採用結果前，先檢視涵蓋缺口。" },
+  // The check ran and produced results and none could be tied to anything the
+  // reader authorized. The sentences naming the identifier live in
+  // findingNarrative.ts beside every other pair this product writes; these two
+  // are the placeholder-free fallback for a report stored before the
+  // structured payload existed.
+  gapUnattributedGeneric: {
+    en: "Results were reported for an identifier no authorized asset carries, so none of them are in this report.",
+    zhTW: "有結果是針對某個識別碼回報的，但你已授權的資產都沒有登記它，因此這份報告不會包含它們。",
+  },
+  actionAddAssetIdentifierGeneric: {
+    en: "Add the identifier the check reported on to the asset you authorized, then scan again.",
+    zhTW: "請將這項檢查所回報的識別碼，新增到你已授權的資產上，然後重新掃描。",
+  },
   actionPreserve: { en: "Keep this limitation visible when sharing the report.", zhTW: "分享報告時，請保留這項限制。" },
   actionNoChange: { en: "No action is needed unless you change the scope.", zhTW: "除非要更改範圍，否則不需處理。" },
   frameworkNotice: {
@@ -551,6 +566,10 @@ const gapReasonCopy = (kind: BeginnerCoverageGapKind) => {
     case "excluded": return copy.gapExcluded;
     case "truncated": return copy.gapTruncated;
     case "unavailable": return copy.gapUnavailable;
+    // The placeholder-free form. The caller interpolates the identifier when
+    // the structured payload is present; this is what a report written before
+    // it existed falls back to.
+    case "unattributed": return copy.gapUnattributedGeneric;
   }
 };
 
@@ -564,6 +583,9 @@ const nextActionCopy = (code: BeginnerNextActionCode) => {
     case "start_expected_service_and_retry": return copy.actionStartService;
     case "review_coverage": return copy.actionReviewCoverage;
     case "preserve_visible_limitation": return copy.actionPreserve;
+    // Interpolated by the caller, which has the identifier. The generic form
+    // is the fallback when a report predates the structured payload.
+    case "add_asset_identifier": return copy.actionAddAssetIdentifierGeneric;
     case "no_action_unless_scope_changes": return copy.actionNoChange;
   }
 };
@@ -731,6 +753,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
     [copy.notTestedCount, report.coverageCounts.notTested],
     [copy.excludedCount, report.coverageCounts.excluded],
     [copy.truncatedCount, report.coverageCounts.truncated],
+    [copy.unattributedCount, report.coverageCounts.unattributed],
     [copy.unavailableCount, report.coverageCounts.unavailable],
   ] as const;
 
@@ -890,11 +913,27 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
                 const targets = gap.targetAssetIds
                   .map((assetId) => targetLabelById.get(assetId) ?? assetId)
                   .join(locale === "en" ? ", " : "、");
+                // The dimension is "{engine}: results for {provider} {id}", so
+                // the engine name is what precedes the first colon.
+                const unattributedText = gap.unattributed
+                  ? findingUnattributedGap(
+                      locale,
+                      gap.dimension.split(":")[0] ?? gap.dimension,
+                      gap.unattributed,
+                      { dimension: gap.dimension, reason: gap.reason, nextAction: gap.nextAction },
+                    )
+                  : undefined;
                 return (
                   <li key={`${gap.taskId ?? "request"}-${gap.dimension}-${index}`}>
                     <strong>{targets || text(copy.requestedScope)}</strong>
-                    <span>{localizedCoverageDimension(gap.dimension, locale)} · {text(gapReasonCopy(gap.kind))}</span>
-                    <span>{text(nextActionCopy(gap.nextActionCode))}</span>
+                    <span>{unattributedText
+                      ? unattributedText.dimension
+                      : localizedCoverageDimension(gap.dimension, locale)} · {unattributedText
+                      ? unattributedText.reason
+                      : text(gapReasonCopy(gap.kind))}</span>
+                    <span>{unattributedText
+                      ? unattributedText.nextAction
+                      : text(nextActionCopy(gap.nextActionCode))}</span>
                   </li>
                 );
               })}

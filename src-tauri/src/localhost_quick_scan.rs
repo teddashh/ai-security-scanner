@@ -186,6 +186,7 @@ pub fn prepare_localhost_quick_scan(
         cleanup_removed: None,
         cleanup_detail: None,
         warnings: Vec::new(),
+        unattributed: Vec::new(),
         raw_artifact_ids: Vec::new(),
         error_code: None,
         error_message: None,

@@ -721,6 +721,7 @@ mod tests {
     ) -> EngineRun {
         let observed_at = Utc::now();
         EngineRun {
+            unattributed: Vec::new(),
             id: "localhost-run".into(),
             scan_run_id: "scan-run".into(),
             engine_id: "built-in-localhost-tcp".into(),

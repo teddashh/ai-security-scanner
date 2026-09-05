@@ -1,4 +1,9 @@
-import type { ContextFactor, FindingFamily, SeverityBasisCode } from "./types";
+import type {
+  ContextFactor,
+  FindingFamily,
+  SeverityBasisCode,
+  UnattributedResults,
+} from "./types";
 
 /**
  * Writes the sentences this product says about a finding, in the reader's
@@ -294,6 +299,30 @@ export const findingPriorityReason = (locale: "en" | "zh-TW", english: string): 
   );
   if (!code || !engine) return english;
   return `嚴重程度是由${BASIS[code]}推導而來；${engine} 本身不提供嚴重程度。`;
+};
+
+/**
+ * The three strings of an unattributed-results coverage gap.
+ *
+ * Composed from the structured payload rather than translated from the
+ * English, for the same reason every other pair in this file is: the provider
+ * and the identifier are the engine's own strings, have to read identically in
+ * both languages, and the identifier is the thing the reader copies onto their
+ * asset. English returns the backend's stored prose untouched.
+ */
+export const findingUnattributedGap = (
+  locale: "en" | "zh-TW",
+  engineId: string,
+  unattributed: UnattributedResults,
+  english: { dimension: string; reason: string; nextAction: string },
+): { dimension: string; reason: string; nextAction: string } => {
+  if (locale === "en") return english;
+  const { provider, identifier, discardedResults } = unattributed;
+  return {
+    dimension: `${engineId}：針對 ${provider} ${identifier} 的結果`,
+    reason: `${engineId} 回報了 ${discardedResults} 筆針對 ${provider} 識別碼 ${identifier} 的結果。你已授權的資產都沒有登記這個識別碼，因此這些結果都沒有被歸屬，也不會出現在這份報告中。`,
+    nextAction: `請在你已授權的資產上，新增 ${provider} 識別碼 ${identifier}，然後重新掃描。`,
+  };
 };
 
 /** "Have the recommended specialist ({expert}) review ... then plan and approve {remedy}." */

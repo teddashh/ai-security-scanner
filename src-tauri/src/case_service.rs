@@ -506,6 +506,8 @@ pub struct DurableExecutionReport {
     pub findings: Vec<Finding>,
     #[serde(default)]
     pub warnings: Vec<String>,
+    #[serde(default)]
+    pub unattributed: Vec<crate::domain::UnattributedResults>,
 }
 
 impl From<&ExecutionReport> for DurableExecutionReport {
@@ -518,6 +520,7 @@ impl From<&ExecutionReport> for DurableExecutionReport {
             raw_artifacts: report.raw_artifacts.clone(),
             findings: report.findings.clone(),
             warnings: report.warnings.clone(),
+            unattributed: report.unattributed.clone(),
         }
     }
 }
@@ -3970,6 +3973,7 @@ impl<'a> CaseService<'a> {
                         .into_iter()
                         .chain(mapping_warning.clone())
                         .collect(),
+                    unattributed: Vec::new(),
                     raw_artifact_ids: Vec::new(),
                     error_code: None,
                     error_message: None,
@@ -4465,6 +4469,7 @@ impl<'a> CaseService<'a> {
                 raw_artifacts,
                 findings: Vec::new(),
                 warnings: Vec::new(),
+                unattributed: Vec::new(),
             };
             let derived = derive_naabu_attempt_result_from_captured_report(
                 &self.artifact_root,
@@ -6191,6 +6196,12 @@ impl<'a> CaseService<'a> {
             if !engine_run.warnings.contains(warning) {
                 engine_run.warnings.push(warning.clone());
             }
+        }
+        // Replaced rather than merged. This is the adapter's verdict about the
+        // artifacts it just read, so a re-adapt that now attributes everything
+        // has to be able to clear a gap the previous attempt recorded.
+        if !matches!(report.checkpoint.stage, ExecutionStage::Planned) {
+            engine_run.unattributed = report.unattributed.clone();
         }
         if engine_run.started_at.is_none()
             && !matches!(report.checkpoint.stage, ExecutionStage::Planned)
@@ -8311,6 +8322,7 @@ fn not_executed_run(
             .into_iter()
             .chain(mapping_warning)
             .collect(),
+        unattributed: Vec::new(),
         raw_artifact_ids: Vec::new(),
         error_code: Some(reason_code.into()),
         error_message: Some(explanation.into()),
@@ -12203,6 +12215,9 @@ impl HtmlReportCatalog {
                 self.text("Reduced by a saved limit", "受已保存的限制而縮減")
             }
             CoverageGapKind::Unavailable => self.text("Details unavailable", "詳細資料無法取得"),
+            CoverageGapKind::Unattributed => {
+                self.text("Not linked to your asset", "未連結到你的資產")
+            }
         }
     }
 
@@ -12625,16 +12640,35 @@ fn html_report_bytes(
         .coverage_gaps
         .iter()
         .map(|gap| {
+            // An unattributed gap is composed from its payload rather than
+            // printed as stored English, so the reader is told which
+            // identifier to add in the language they are reading.
+            let (dimension, reason, next_action) = match (catalog.locale, gap.unattributed.as_ref())
+            {
+                (crate::export::ReportLocale::ZhHant, Some(unattributed)) => {
+                    let engine_id = gap
+                        .dimension
+                        .split_once(':')
+                        .map(|(engine, _)| engine)
+                        .unwrap_or(gap.dimension.as_str());
+                    crate::finding_narrative::unattributed_gap_zh_hant(engine_id, unattributed)
+                }
+                _ => (
+                    gap.dimension.clone(),
+                    gap.reason.clone(),
+                    gap.next_action.clone(),
+                ),
+            };
             format!(
                 "<li><strong>{} — {}</strong><br>{}<br><em>{}:</em> {}</li>",
                 html_escape(catalog.gap_kind(&gap.kind)),
                 html_escape(&readable_identifier(&replace_target_ids(
-                    &gap.dimension,
+                    &dimension,
                     &target_labels,
                 ))),
-                html_escape(&replace_target_ids(&gap.reason, &target_labels)),
+                html_escape(&replace_target_ids(&reason, &target_labels)),
                 catalog.text("Next", "下一步"),
-                html_escape(&replace_target_ids(&gap.next_action, &target_labels)),
+                html_escape(&replace_target_ids(&next_action, &target_labels)),
             )
         })
         .collect::<String>();
@@ -14385,6 +14419,7 @@ mod tests {
             .unwrap();
 
         DurableExecutionReport {
+            unattributed: Vec::new(),
             checkpoint,
             runtime_preflight: Some(RuntimePreflight {
                 provider: crate::container_runtime::RuntimeProvider::Podman,
@@ -15486,6 +15521,7 @@ mod tests {
             .save_case(&mut case, "test.naabu_fatal_prefix_report_not_yet_applied")
             .unwrap();
         let report = DurableExecutionReport {
+            unattributed: Vec::new(),
             checkpoint,
             runtime_preflight: Some(RuntimePreflight {
                 provider: crate::container_runtime::RuntimeProvider::Podman,
@@ -16689,6 +16725,7 @@ mod tests {
             ) -> AppResult<crate::adapter::AdapterOutput> {
                 let call = self.calls.fetch_add(1, Ordering::SeqCst);
                 Ok(crate::adapter::AdapterOutput {
+                    unattributed: Vec::new(),
                     findings: Vec::new(),
                     warnings: vec!["Stable bounded adapter output".into()],
                     complete: call > 0,
@@ -17888,6 +17925,7 @@ mod tests {
             .apply_execution_report(
                 &prepared.case_id,
                 &DurableExecutionReport {
+                    unattributed: Vec::new(),
                     checkpoint: cancelled_checkpoint,
                     runtime_preflight: None,
                     cleanup: None,
@@ -17980,6 +18018,7 @@ mod tests {
             ) -> AppResult<crate::adapter::AdapterOutput> {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 Ok(crate::adapter::AdapterOutput {
+                    unattributed: Vec::new(),
                     findings: Vec::new(),
                     warnings: vec!["empty input reached the adapter".into()],
                     complete: false,
@@ -18143,6 +18182,7 @@ mod tests {
             ) -> AppResult<crate::adapter::AdapterOutput> {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 Ok(crate::adapter::AdapterOutput {
+                    unattributed: Vec::new(),
                     findings: Vec::new(),
                     warnings: vec!["tampered empty input reached the adapter".into()],
                     complete: true,
@@ -18369,6 +18409,7 @@ mod tests {
         adapters
             .register(std::sync::Arc::new(ChangedNaabuAdapter {
                 output: crate::adapter::AdapterOutput {
+                    unattributed: Vec::new(),
                     findings: vec![retained_finding, added_finding],
                     warnings: adapted.scan_runs[0].engine_runs[0].warnings.clone(),
                     complete: true,
@@ -19490,6 +19531,7 @@ mod tests {
         launcher_plan_sha256: Option<String>,
     ) -> DurableExecutionReport {
         DurableExecutionReport {
+            unattributed: Vec::new(),
             checkpoint: ExecutionCheckpoint {
                 case_id: case_id.into(),
                 scan_run_id: execution.scan_run_id.clone(),
@@ -21106,6 +21148,7 @@ mod tests {
                 .unwrap();
 
             let report = DurableExecutionReport {
+                unattributed: Vec::new(),
                 checkpoint: ExecutionCheckpoint {
                     case_id: case_id.clone(),
                     scan_run_id: execution.scan_run_id.clone(),
@@ -21215,6 +21258,7 @@ mod tests {
             .unwrap();
 
         let regressive = DurableExecutionReport {
+            unattributed: Vec::new(),
             checkpoint: ExecutionCheckpoint {
                 case_id: case_id.clone(),
                 scan_run_id: execution.scan_run_id.clone(),
@@ -21328,6 +21372,7 @@ mod tests {
             claimed.runtime_command_provenance =
                 Some(crate::container_runtime::RuntimeCommandProvenance::Compatibility);
             let report = DurableExecutionReport {
+                unattributed: Vec::new(),
                 checkpoint: claimed,
                 runtime_preflight: Some(RuntimePreflight {
                     provider: crate::container_runtime::RuntimeProvider::Podman,
@@ -21421,6 +21466,7 @@ mod tests {
         completed.stage = ExecutionStage::Completed;
         completed.last_error = None;
         let report = DurableExecutionReport {
+            unattributed: Vec::new(),
             checkpoint: completed,
             runtime_preflight: None,
             cleanup: None,
@@ -23771,6 +23817,7 @@ mod tests {
         stale_checkpoint.stage = ExecutionStage::Preflight;
         stale_checkpoint.attempt = stale_checkpoint.attempt.saturating_add(1);
         let stale_report = DurableExecutionReport {
+            unattributed: Vec::new(),
             checkpoint: stale_checkpoint,
             runtime_preflight: None,
             cleanup: None,
@@ -28267,6 +28314,7 @@ mod tests {
             scope_grant_snapshots: case.scope_grants.clone(),
             engine_admission_issues: Vec::new(),
             engine_runs: vec![EngineRun {
+                unattributed: Vec::new(),
                 id: "engine-run-1".into(),
                 scan_run_id: "scan-1".into(),
                 engine_id: "cloudquery".into(),
@@ -28377,6 +28425,7 @@ mod tests {
             tags: vec![],
         };
         let report = DurableExecutionReport {
+            unattributed: Vec::new(),
             checkpoint: ExecutionCheckpoint {
                 case_id: case.id.clone(),
                 scan_run_id: "scan-1".into(),
@@ -28509,6 +28558,7 @@ mod tests {
             external_scope: None,
         });
         let completed_engine = |run_id: &str| EngineRun {
+            unattributed: Vec::new(),
             id: format!("engine-{run_id}"),
             scan_run_id: run_id.into(),
             engine_id: "cloudquery".into(),

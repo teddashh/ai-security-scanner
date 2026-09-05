@@ -33,6 +33,7 @@ const counts = (
   excluded: 0,
   truncated: 0,
   unavailable: 0,
+  unattributed: 0,
   ...overrides,
 });
 
@@ -470,4 +471,53 @@ test("a report with no saved-data limitation shows no such notice", () => {
   const notice = Array.from(container.querySelectorAll<HTMLElement>(".inline-notice"))
     .find((candidate) => candidate.textContent?.includes("Saved-data limitations"));
   expect(notice).toBeUndefined();
+});
+
+// The check ran, produced results, and none of them could be tied to anything
+// the reader authorized. The findings list is empty and nothing about that is
+// the reader's fault -- but only they can fix it, and only if they are told
+// which identifier is missing. Before this the sentence naming it existed
+// solely as English prose in a collapsed technical block on another page.
+const unattributedGap = {
+  kind: "unattributed" as const,
+  taskId: "task-1",
+  targetAssetIds: [],
+  dimension: "prowler: results for aws 123456789012",
+  reason:
+    "prowler reported 42 result(s) for aws identifier 123456789012. No authorized asset carries that identifier, so none of them were attributed and none appear in this report.",
+  nextActionCode: "add_asset_identifier" as const,
+  nextAction:
+    "Add 123456789012 as an aws identifier on the asset you authorized, then scan again.",
+  unattributed: { provider: "aws", identifier: "123456789012", discardedResults: 42 },
+};
+
+test("an empty findings list caused by a missing identifier names that identifier", () => {
+  const { container } = renderReport(
+    report("partial", { coverageGaps: [unattributedGap], coverageCounts: counts({ unattributed: 1 }) }),
+  );
+  const rendered = container.textContent ?? "";
+
+  // The identifier is the fix, so it has to be on screen, not just in the
+  // payload. Both the explanation and the instruction carry it.
+  expect(rendered).toContain("123456789012");
+  expect(rendered).toContain("42");
+  expect(rendered).toContain("aws");
+});
+
+test("the identifier a zh-TW reader must copy is not stranded in English", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderReport(
+    report("partial", { coverageGaps: [unattributedGap], coverageCounts: counts({ unattributed: 1 }) }),
+  );
+  const rendered = container.textContent ?? "";
+
+  expect(rendered).not.toContain(unattributedGap.reason);
+  expect(rendered).not.toContain(unattributedGap.nextAction);
+  expect(rendered).toContain("你已授權的資產都沒有登記這個識別碼");
+  expect(rendered).toContain("然後重新掃描");
+  // The identifier and the provider are the engine's own strings. Restating
+  // them in Chinese would send the reader hunting for something that does not
+  // exist in the console they have to open.
+  expect(rendered).toContain("123456789012");
+  expect(rendered).toContain("aws");
 });

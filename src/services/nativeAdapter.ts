@@ -55,6 +55,7 @@ import type {
   TransportProtocol,
   VerificationSummary,
   SeverityBasisCode,
+  UnattributedResults,
 } from "../types";
 import { getActiveLocale } from "../i18n/core";
 import { explicitTargetRequiresSensitiveNetworkAllowance } from "../caseForm";
@@ -336,6 +337,11 @@ export interface NativeBeginnerMasterReport {
     reason: string;
     next_action_code: BeginnerMasterReport["coverageGaps"][number]["nextActionCode"];
     next_action: string;
+    unattributed?: {
+      provider?: unknown;
+      identifier?: unknown;
+      discarded_results?: unknown;
+    } | null;
   }>;
   coverage_counts: {
     tested_complete: number;
@@ -347,6 +353,7 @@ export interface NativeBeginnerMasterReport {
     excluded: number;
     truncated: number;
     unavailable: number;
+    unattributed?: number;
   };
   findings: Array<{
     finding_id: string;
@@ -1191,6 +1198,27 @@ const mapSeverityBasisCode = (value: string | null | undefined): SeverityBasisCo
   SEVERITY_BASIS_CODES.find((code) => code === value);
 
 const CONTEXT_FACTORS: readonly ContextFactor[] = ["internet_exposed_asset", "sensitive_data_asset"];
+
+/**
+ * The identifier an engine reported on that no authorized asset claims.
+ *
+ * Both strings come from the scanned artifact, so they are checked rather than
+ * asserted. A malformed payload yields undefined and the surface falls back to
+ * the backend's English prose, which is worse to read and still true.
+ */
+const mapUnattributed = (
+  value: { provider?: unknown; identifier?: unknown; discarded_results?: unknown } | null | undefined,
+): UnattributedResults | undefined => {
+  if (!value || typeof value !== "object") return undefined;
+  const { provider, identifier, discarded_results: discarded } = value;
+  if (typeof provider !== "string" || typeof identifier !== "string") return undefined;
+  if (!provider || !identifier) return undefined;
+  return {
+    provider,
+    identifier,
+    discardedResults: typeof discarded === "number" && Number.isFinite(discarded) ? discarded : 0,
+  };
+};
 
 const mapContextFactors = (values: string[] | null | undefined): ContextFactor[] =>
   (values ?? []).flatMap((value) => CONTEXT_FACTORS.filter((factor) => factor === value));
@@ -2238,6 +2266,7 @@ export const adaptBeginnerMasterReport = (
     reason: gap.reason,
     nextActionCode: gap.next_action_code,
     nextAction: gap.next_action,
+    unattributed: mapUnattributed(gap.unattributed),
   })),
   coverageCounts: {
     testedComplete: report.coverage_counts.tested_complete,
@@ -2249,6 +2278,10 @@ export const adaptBeginnerMasterReport = (
     excluded: report.coverage_counts.excluded,
     truncated: report.coverage_counts.truncated,
     unavailable: report.coverage_counts.unavailable,
+    // Absent from a report written before this count existed. Zero is the
+    // honest reading: that build could not have discarded anything for a
+    // reason it did not know about.
+    unattributed: report.coverage_counts.unattributed ?? 0,
   },
   findings: report.findings.map((finding) => ({
     findingId: finding.finding_id,

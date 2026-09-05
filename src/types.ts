@@ -757,7 +757,8 @@ export type BeginnerCoverageGapKind =
   | "cancelled"
   | "excluded"
   | "truncated"
-  | "unavailable";
+  | "unavailable"
+  | "unattributed";
 export type BeginnerNextActionCode =
   | "review_finding"
   | "retry_check"
@@ -767,7 +768,8 @@ export type BeginnerNextActionCode =
   | "start_expected_service_and_retry"
   | "review_coverage"
   | "preserve_visible_limitation"
-  | "no_action_unless_scope_changes";
+  | "no_action_unless_scope_changes"
+  | "add_asset_identifier";
 
 export interface BeginnerRequestedTarget {
   assetId: string;
@@ -853,6 +855,18 @@ export interface BeginnerCoverageGap {
   reason: string;
   nextActionCode: BeginnerNextActionCode;
   nextAction: string;
+  /**
+   * Present only on an "unattributed" gap. The prose above is English composed
+   * by the backend; this is what the reader's own sentence is rebuilt from, and
+   * the identifier is what they have to copy onto the asset.
+   */
+  unattributed?: UnattributedResults;
+}
+
+export interface UnattributedResults {
+  provider: string;
+  identifier: string;
+  discardedResults: number;
 }
 
 export interface BeginnerReportFinding {
@@ -930,7 +944,16 @@ export interface BeginnerMasterReport {
   actual: BeginnerActualCoverage;
   coverageGaps: BeginnerCoverageGap[];
   coverageCounts: Record<
-    "testedComplete" | "testedPartial" | "failed" | "timedOut" | "cancelled" | "notTested" | "excluded" | "truncated" | "unavailable",
+    | "testedComplete"
+    | "testedPartial"
+    | "failed"
+    | "timedOut"
+    | "cancelled"
+    | "notTested"
+    | "excluded"
+    | "truncated"
+    | "unavailable"
+    | "unattributed",
     number
   >;
   findings: BeginnerReportFinding[];

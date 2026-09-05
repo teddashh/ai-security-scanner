@@ -231,6 +231,11 @@ pub struct CoverageGap {
     pub reason: String,
     pub next_action_code: NextActionCode,
     pub next_action: String,
+    /// Set only on `Unattributed`. The prose above is English composed here;
+    /// this is what a surface reading in another language rebuilds it from,
+    /// and it is the identifier the reader has to copy onto the asset.
+    #[serde(default)]
+    pub unattributed: Option<crate::domain::UnattributedResults>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -243,6 +248,8 @@ pub enum CoverageGapKind {
     Excluded,
     Truncated,
     Unavailable,
+    /// Results were produced but could not be tied to an authorized asset.
+    Unattributed,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -256,6 +263,8 @@ pub struct CoverageCounts {
     pub excluded: usize,
     pub truncated: usize,
     pub unavailable: usize,
+    /// Results produced but tied to no authorized asset.
+    pub unattributed: usize,
 }
 
 /// Stable UI/export semantic. English prose beside this value is display
@@ -272,6 +281,7 @@ pub enum NextActionCode {
     ReviewCoverage,
     PreserveVisibleLimitation,
     NoActionUnlessScopeChanges,
+    AddAssetIdentifier,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -489,6 +499,7 @@ pub fn build_beginner_master_report(
     data_quality_warnings.extend(actual_projection.data_quality_warnings);
     append_request_outcome_gaps(run, !contradictory_request_outcome, &mut coverage_gaps);
     append_engine_admission_gaps(run, &mut coverage_gaps);
+    append_unattributed_gaps(run, &mut coverage_gaps);
     append_case_exclusions(case, run, &mut coverage_gaps);
 
     for unavailable in requested
@@ -497,6 +508,7 @@ pub fn build_beginner_master_report(
         .chain(actual.unavailable_dimensions.iter())
     {
         coverage_gaps.push(CoverageGap {
+            unattributed: None,
             kind: CoverageGapKind::Unavailable,
             task_id: None,
             target_asset_ids: requested
@@ -513,6 +525,7 @@ pub fn build_beginner_master_report(
     }
     if contradictory_request_outcome {
         coverage_gaps.push(CoverageGap {
+            unattributed: None,
             kind: CoverageGapKind::Unavailable,
             task_id: None,
             target_asset_ids: requested
@@ -537,6 +550,7 @@ pub fn build_beginner_master_report(
         .any(|finding| finding.snapshot_source != FindingSnapshotSource::FrozenSelectedRun)
     {
         coverage_gaps.push(CoverageGap {
+            unattributed: None,
             kind: CoverageGapKind::Unavailable,
             task_id: None,
             target_asset_ids: Vec::new(),
@@ -994,6 +1008,7 @@ fn project_actual_coverage(run: &ScanRun) -> ActualCoverageProjection {
                         status = untrusted_naabu_history_status(task);
                         let explanation = "The saved work-unit coverage for this check is internally inconsistent. The report did not guess which planned units were tested.";
                         gaps.push(CoverageGap {
+                            unattributed: None,
                             kind: CoverageGapKind::Unavailable,
                             task_id: Some(task.id.clone()),
                             target_asset_ids: task.asset_ids.clone(),
@@ -1295,6 +1310,7 @@ fn append_naabu_coverage_gaps(
                     next_action_code: NextActionCode,
                     next_action: &str| {
         gaps.push(CoverageGap {
+            unattributed: None,
             kind,
             task_id: task_id.clone(),
             target_asset_ids: targets.clone(),
@@ -1522,6 +1538,7 @@ fn append_task_gap(task: &EngineRun, status: CoverageDimensionStatus, gaps: &mut
         ),
     };
     gaps.push(CoverageGap {
+        unattributed: None,
         kind,
         task_id: Some(task.id.clone()),
         target_asset_ids: task.asset_ids.clone(),
@@ -1565,6 +1582,7 @@ fn append_request_outcome_gaps(
     };
     if requested_engine_ids.is_empty() {
         gaps.push(CoverageGap {
+            unattributed: None,
             kind: CoverageGapKind::NotTested,
             task_id: None,
             target_asset_ids: requested_asset_ids.clone(),
@@ -1576,6 +1594,7 @@ fn append_request_outcome_gaps(
     } else {
         for engine_id in requested_engine_ids {
             gaps.push(CoverageGap {
+                unattributed: None,
                 kind: CoverageGapKind::NotTested,
                 task_id: None,
                 target_asset_ids: requested_asset_ids.clone(),
@@ -1598,6 +1617,7 @@ fn append_engine_admission_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
         .any(|issue| issue.code == "catalog_container_invalid");
     let count = run.engine_admission_issues.len();
     gaps.push(CoverageGap {
+        unattributed: None,
         kind: CoverageGapKind::NotTested,
         task_id: None,
         // Catalog admission failed before applicability could be trusted, so
@@ -1621,12 +1641,48 @@ fn append_engine_admission_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
     });
 }
 
+/// One gap per identifier an engine reported on that nothing authorized claims.
+///
+/// Without this the run is honest but useless: it shows "Partly completed" and
+/// an empty findings list, and the sentence naming the account lives only in a
+/// collapsed technical block on another page. A person cannot act on a report
+/// that does not tell them which identifier is missing.
+fn append_unattributed_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
+    for task in &run.engine_runs {
+        for unattributed in &task.unattributed {
+            let count = unattributed.discarded_results;
+            let identifier = &unattributed.identifier;
+            let provider = &unattributed.provider;
+            gaps.push(CoverageGap {
+                kind: CoverageGapKind::Unattributed,
+                task_id: Some(task.id.clone()),
+                // The results belong to an identifier none of these assets
+                // claims, so naming them as the target would assert the
+                // attribution the adapter just refused to make.
+                target_asset_ids: Vec::new(),
+                dimension: format!("{}: results for {provider} {identifier}", task.engine_id),
+                reason: format!(
+                    "{} reported {count} result(s) for {provider} identifier {identifier}. No authorized asset carries that identifier, so none of them were attributed and none appear in this report."
+                ,
+                    task.engine_id
+                ),
+                next_action_code: NextActionCode::AddAssetIdentifier,
+                next_action: format!(
+                    "Add {identifier} as a {provider} identifier on the asset you authorized, then scan again."
+                ),
+                unattributed: Some(unattributed.clone()),
+            });
+        }
+    }
+}
+
 fn append_case_exclusions(case: &AssessmentCase, run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
     for entry in case.coverage.iter().filter(|entry| {
         entry.last_run_id.as_deref() == Some(run.id.as_str())
             && matches!(entry.status, crate::domain::CoverageStatus::NotApplicable)
     }) {
         gaps.push(CoverageGap {
+            unattributed: None,
             kind: CoverageGapKind::Excluded,
             task_id: None,
             target_asset_ids: entry.asset_id.iter().cloned().collect(),
@@ -2046,6 +2102,11 @@ fn coverage_counts(actual: &ActualCoverage, gaps: &[CoverageGap]) -> CoverageCou
             CoverageGapKind::Excluded => counts.excluded += 1,
             CoverageGapKind::Truncated => counts.truncated += 1,
             CoverageGapKind::Unavailable => counts.unavailable += 1,
+            // Deliberately its own count. The check ran and produced results,
+            // so calling it "not tested" understates what happened and calling
+            // it "unavailable" describes the wrong thing; the results exist and
+            // nothing here claims them.
+            CoverageGapKind::Unattributed => counts.unattributed += 1,
         }
     }
     counts
@@ -2223,6 +2284,9 @@ fn gap_rank(kind: CoverageGapKind) -> u8 {
         CoverageGapKind::Truncated => 4,
         CoverageGapKind::Unavailable => 5,
         CoverageGapKind::Excluded => 6,
+        // Above Excluded: this one is actionable and the reader is the only
+        // person who can resolve it.
+        CoverageGapKind::Unattributed => 3,
     }
 }
 
@@ -2349,6 +2413,7 @@ mod tests {
             }],
             engine_admission_issues: Vec::new(),
             engine_runs: vec![EngineRun {
+                unattributed: Vec::new(),
                 id: "task-1".into(),
                 scan_run_id: run_id,
                 engine_id: BUILT_IN_LOCALHOST_TCP_ENGINE_ID.into(),
@@ -2401,6 +2466,7 @@ mod tests {
 
     fn catalog_task(id: &str, status: EngineRunStatus) -> EngineRun {
         EngineRun {
+            unattributed: Vec::new(),
             id: id.into(),
             scan_run_id: "run-1".into(),
             engine_id: format!("engine-{id}"),
@@ -3318,5 +3384,80 @@ mod tests {
             report.technical_details.tasks[0].evidence_sha256,
             vec!["hash"]
         );
+    }
+
+    /// The whole point of carrying the identifier as data.
+    ///
+    /// The check ran, produced results, and none of them reached the report.
+    /// Before this the run showed "Partly completed" with an empty findings
+    /// list and nothing anywhere a beginner looks said which identifier was
+    /// missing -- the only sentence that did was English prose inside a
+    /// collapsed technical block on a different page.
+    #[test]
+    fn results_tied_to_no_authorized_asset_become_a_gap_naming_the_identifier() {
+        let mut case = localhost_case(
+            LocalhostTcpOutcome::Reachable,
+            EngineRunStatus::PartiallyCompleted,
+            true,
+        );
+        // The same case without the attribution gap. Compared against rather
+        // than asserted absolutely, so the fixture's own unrelated gaps cannot
+        // be mistaken for this one.
+        let baseline = build_beginner_master_report(&case, "run-1").unwrap();
+        assert!(
+            !baseline
+                .coverage_gaps
+                .iter()
+                .any(|gap| gap.kind == CoverageGapKind::Unattributed)
+        );
+
+        case.scan_runs[0].engine_runs[0].unattributed = vec![crate::domain::UnattributedResults {
+            provider: "aws".into(),
+            identifier: "123456789012".into(),
+            discarded_results: 42,
+        }];
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        let gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.kind == CoverageGapKind::Unattributed)
+            .expect("no gap explained the empty findings list");
+        let payload = gap
+            .unattributed
+            .as_ref()
+            .expect("the gap carries prose but not the data a reader composes from");
+        assert_eq!(payload.identifier, "123456789012");
+        assert_eq!(payload.provider, "aws");
+        assert_eq!(payload.discarded_results, 42);
+        assert_eq!(gap.next_action_code, NextActionCode::AddAssetIdentifier);
+        // Both sentences have to name the identifier: it is the fix, and the
+        // English is what an unlocalized surface falls back to.
+        assert!(gap.reason.contains("123456789012"), "{}", gap.reason);
+        assert!(
+            gap.next_action.contains("123456789012"),
+            "{}",
+            gap.next_action
+        );
+        assert!(gap.reason.contains("42"), "{}", gap.reason);
+
+        // Counted as its own state. The check ran, so "not tested" understates
+        // it, and the results exist, so "unavailable" describes the wrong thing.
+        assert_eq!(report.coverage_counts.unattributed, 1);
+        assert_eq!(baseline.coverage_counts.unattributed, 0);
+        // It landed in its own bucket rather than inflating an existing one.
+        assert_eq!(
+            report.coverage_counts.not_tested,
+            baseline.coverage_counts.not_tested
+        );
+        assert_eq!(
+            report.coverage_counts.unavailable,
+            baseline.coverage_counts.unavailable
+        );
+        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+
+        // Naming the authorized assets as targets would assert the very
+        // attribution the adapter refused to make.
+        assert!(gap.target_asset_ids.is_empty());
     }
 }

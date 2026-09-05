@@ -1149,6 +1149,10 @@ pub(crate) fn case_for_export(
                     .iter()
                     .map(|_| "[redacted engine warning]".into())
                     .collect();
+                // Same reason the warnings above are blanked wholesale: this
+                // carries an identifier read straight out of the scanned
+                // artifact, and nothing has vetted it.
+                engine_run.unattributed.clear();
             }
         }
         for finding in &mut exported.findings {
@@ -1259,11 +1263,27 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
         if gap.kind == crate::beginner_report::CoverageGapKind::Excluded {
             gap.dimension = "Excluded coverage area".into();
             gap.reason = "[redacted coverage detail]".into();
+        } else if let Some(unattributed) = &mut gap.unattributed {
+            // The identifier names the reader's cloud tenancy and appears in
+            // all three prose fields. `redact_known_literals` cannot reach it:
+            // that pass replaces identifiers registered on an asset, and this
+            // gap exists precisely because this one is registered nowhere. A
+            // standard export therefore carried a live account id in a bundle
+            // that promises none. The unredacted export still has it.
+            let count = unattributed.discarded_results;
+            unattributed.identifier = "[redacted identifier]".into();
+            gap.dimension = "Results not linked to an authorized asset".into();
+            gap.reason = format!(
+                "{count} result(s) were reported for an identifier no authorized asset carries, so none of them are in this report. The identifier is withheld from this redacted export."
+            );
+            gap.next_action =
+                "Open the unredacted export to see which identifier to add to the authorized asset."
+                    .into();
         } else {
             redact_known_literals(&mut gap.dimension, &replacements);
             redact_known_literals(&mut gap.reason, &replacements);
+            redact_known_literals(&mut gap.next_action, &replacements);
         }
-        redact_known_literals(&mut gap.next_action, &replacements);
     }
 
     for finding in &mut report.findings {
@@ -2432,6 +2452,7 @@ mod tests {
             scope_grant_snapshots: vec![],
             engine_admission_issues: Vec::new(),
             engine_runs: vec![EngineRun {
+                unattributed: Vec::new(),
                 id: "engine-run-1".into(),
                 scan_run_id: "run-1".into(),
                 engine_id: "engine-1".into(),
@@ -3529,6 +3550,15 @@ mod tests {
         case.scan_runs[0].engine_runs[0].error_message = Some(SENTINEL.into());
         case.scan_runs[0].engine_runs[0].cleanup_detail = Some(SENTINEL.into());
         case.scan_runs[0].engine_runs[0].warnings = vec![SENTINEL.into()];
+        // Read straight out of the scanned artifact and, by definition, not
+        // registered on any asset -- so the replacement pass that rewrites
+        // known asset identifiers cannot reach it. It reaches the beginner
+        // report's coverage gap prose as well as the engine run itself.
+        case.scan_runs[0].engine_runs[0].unattributed = vec![crate::domain::UnattributedResults {
+            provider: "aws".into(),
+            identifier: SENTINEL.into(),
+            discarded_results: 7,
+        }];
         case.scan_runs[0].engine_runs[0].engine_id = NAABU_ENGINE_ID.into();
         let private_naabu_plan = build_naabu_work_plan(
             NaabuWorkPlanIdentity::new("case-1", "run-1", "engine-run-1", time),

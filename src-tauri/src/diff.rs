@@ -936,6 +936,7 @@ mod tests {
 
     fn engine_run(run_id: &str, status: EngineRunStatus) -> EngineRun {
         EngineRun {
+            unattributed: Vec::new(),
             id: format!("engine-run-{run_id}"),
             scan_run_id: run_id.into(),
             engine_id: "engine-a".into(),

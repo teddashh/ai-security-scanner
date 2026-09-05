@@ -623,6 +623,16 @@ fn normalize_artifacts(
         })
         .collect::<Vec<_>>();
     output.warnings.splice(0..0, attribution_warnings);
+    output.unattributed = unmatched_identifiers
+        .into_iter()
+        .map(
+            |((provider, identifier), discarded_results)| crate::domain::UnattributedResults {
+                provider,
+                identifier,
+                discarded_results,
+            },
+        )
+        .collect();
 
     if relevant_count > MAX_ARTIFACTS {
         output.complete = false;
