@@ -2,7 +2,7 @@ use ai_security_scanner_lib::adapter::{AdapterAssetIdentifierMap, AdapterInput, 
 use ai_security_scanner_lib::adapters::{BUILTIN_ENGINE_IDS, builtin_adapter_registry};
 use ai_security_scanner_lib::correlation::correlation_report;
 use ai_security_scanner_lib::domain::{
-    AssessmentCase, Asset, AssetIdentifier, AssetKind, DataClass, FindingStatus,
+    AssessmentCase, Asset, AssetIdentifier, AssetKind, Confidence, DataClass, FindingStatus,
     OrganizationProfile, RawArtifact, Severity,
 };
 use ai_security_scanner_lib::registry::EngineRegistry;
@@ -328,6 +328,166 @@ fn registry_covers_exactly_the_twenty_one_catalog_engines() {
         assert_eq!(adapter.adapter_version(), manifest.adapter_version);
     }
     assert!(adapters.get("not-in-catalog").is_none());
+}
+
+/// Engines that emit no severity anywhere in their output, with the rating this
+/// product derives and the basis it has to disclose.
+///
+/// Each of these was previously handed a hard-coded severity string, which
+/// reached the user as `source-severity:high` or `source-severity:informational`
+/// — a rating the engine never gave. Verified against the pinned checkouts: the
+/// word "severity" does not appear in gitleaks' or naabu's Go sources at all;
+/// TruffleHog's JSON printer marshals a fixed struct with no such field; httpx's
+/// result struct has none; and kube-bench's `Check` struct has none.
+const DERIVED_SEVERITY_ENGINES: &[(&str, Severity, &str)] = &[
+    (
+        "kube-bench",
+        Severity::High,
+        "a failed CIS Kubernetes Benchmark check",
+    ),
+    (
+        "gitleaks",
+        Severity::High,
+        "a secret pattern match in scanned source",
+    ),
+    (
+        "trufflehog",
+        Severity::High,
+        "a credential detector match that this product does not verify",
+    ),
+    (
+        "naabu",
+        Severity::Informational,
+        "an open port observation rather than a defect",
+    ),
+    (
+        "httpx",
+        Severity::Informational,
+        "a reachable HTTP service observation rather than a defect",
+    ),
+];
+
+#[test]
+fn engines_that_emit_no_severity_disclose_that_the_rating_is_this_products_own() {
+    for (engine_id, expected_severity, expected_basis) in DERIVED_SEVERITY_ENGINES {
+        let output = normalize_fixture(engine_id);
+        assert!(
+            !output.findings.is_empty(),
+            "{engine_id} fixture produced nothing to check"
+        );
+        for finding in &output.findings {
+            assert_eq!(
+                finding.severity, *expected_severity,
+                "{engine_id} finding {} was rated {:?}",
+                finding.id, finding.severity
+            );
+            assert!(
+                finding
+                    .tags
+                    .iter()
+                    .any(|tag| tag == "severity-basis:derived"),
+                "{engine_id} finding {} hides that its rating is derived: {:?}",
+                finding.id,
+                finding.tags
+            );
+            assert!(
+                !finding
+                    .tags
+                    .iter()
+                    .any(|tag| tag.starts_with("source-severity:")),
+                "{engine_id} finding {} claims a source severity the engine never emits: {:?}",
+                finding.id,
+                finding.tags
+            );
+            assert!(
+                finding
+                    .priority_reasons
+                    .iter()
+                    .any(|reason| reason.contains(expected_basis)),
+                "{engine_id} finding {} does not name its basis {expected_basis:?}: {:?}",
+                finding.id,
+                finding.priority_reasons
+            );
+            assert!(
+                finding.plain_language_summary.contains("without rating it"),
+                "{engine_id} finding {} reads as though the engine rated it: {}",
+                finding.id,
+                finding.plain_language_summary
+            );
+        }
+    }
+}
+
+/// The other side of the same contract. Deriving a severity is only defensible
+/// where the engine truly reports none, so an engine that does report one must
+/// keep showing what it said.
+#[test]
+fn engines_that_report_a_severity_still_present_the_engines_own_rating() {
+    let derived = DERIVED_SEVERITY_ENGINES
+        .iter()
+        .map(|(engine_id, _, _)| *engine_id)
+        .collect::<BTreeSet<_>>();
+    let mut checked = 0;
+    for engine_id in BUILTIN_ENGINE_IDS {
+        if derived.contains(engine_id) {
+            continue;
+        }
+        for finding in normalize_fixture(engine_id).findings {
+            assert!(
+                !finding
+                    .tags
+                    .iter()
+                    .any(|tag| tag == "severity-basis:derived"),
+                "{engine_id} finding {} replaced a reported severity with a derived one: {:?}",
+                finding.id,
+                finding.tags
+            );
+            assert!(
+                finding.tags.iter().any(|tag| {
+                    tag.strip_prefix("source-severity:")
+                        .is_some_and(|value| !value.is_empty())
+                }),
+                "{engine_id} finding {} reports no severity and no basis: {:?}",
+                finding.id,
+                finding.tags
+            );
+            checked += 1;
+        }
+    }
+    assert!(
+        checked >= 15,
+        "expected the reporting engines' findings to be checked, saw {checked}"
+    );
+}
+
+/// TruffleHog runs with `--no-verification`, and the engine short-circuits
+/// before any detector performs its check, so `Verified` is always false. A
+/// `verified:false` tag reads as "checked and rejected"; the finding says
+/// verification was never attempted instead.
+#[test]
+fn trufflehog_findings_say_verification_was_not_attempted_rather_than_failed() {
+    let output = normalize_fixture("trufflehog");
+    assert!(!output.findings.is_empty());
+    for finding in &output.findings {
+        assert!(
+            finding
+                .tags
+                .iter()
+                .any(|tag| tag == "verification:not-attempted"),
+            "{:?}",
+            finding.tags
+        );
+        assert!(
+            !finding.tags.iter().any(|tag| tag.starts_with("verified:")),
+            "a never-performed check is reported as a failed one: {:?}",
+            finding.tags
+        );
+        assert_ne!(
+            finding.confidence,
+            Confidence::Confirmed,
+            "nothing was confirmed; verification did not run"
+        );
+    }
 }
 
 #[test]

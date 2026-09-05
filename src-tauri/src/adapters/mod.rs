@@ -1813,11 +1813,18 @@ fn extract_naabu(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                 return None;
             };
             let protocol = string_any(object, &["protocol"]).unwrap_or_else(|| "tcp".into());
-            Some(record!(
+            Some(record_with_derived_severity!(
                 pointer,
                 format!("open-{protocol}-port"),
                 "Externally reachable network service".into(),
-                "informational".into(),
+                // Naabu is a port scanner and emits no severity; the only
+                // `confidence` in its output grades service fingerprinting, not
+                // risk. An open port is an exposure fact, so it is recorded
+                // rather than rated, and the record says which of the two it is.
+                DerivedSeverity {
+                    severity: Severity::Informational,
+                    basis: "an open port observation rather than a defect",
+                },
                 format!("{}:{port}", redact_location(&host)),
                 string_any(object, &["asset_id"]),
                 Confidence::High,
@@ -1843,11 +1850,17 @@ fn extract_httpx(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                     .get("status_code")
                     .or_else(|| object.get("status-code"))?,
             )?;
-            Some(record!(
+            Some(record_with_derived_severity!(
                 pointer,
                 "http-service-observed".into(),
                 "Externally reachable HTTP service".into(),
-                "informational".into(),
+                // httpx probes reachability and emits no severity on a result.
+                // Reaching a service is an exposure fact, so it is recorded
+                // rather than rated, and the record says which of the two it is.
+                DerivedSeverity {
+                    severity: Severity::Informational,
+                    basis: "a reachable HTTP service observation rather than a defect",
+                },
                 redact_location(&target),
                 string_any(object, &["asset_id"]),
                 Confidence::High,
@@ -2043,12 +2056,19 @@ fn extract_gitleaks(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<
             let object = value.as_object()?;
             let rule_id = exact_rule_string_any(object, &["RuleID", "rule_id"])?;
             let location = gitleaks_location(object);
-            Some(record!(
+            Some(record_with_derived_severity!(
                 pointer,
                 rule_id.clone(),
                 string_any(object, &["Description", "description"])
                     .unwrap_or_else(|| format!("Potential secret detected by {rule_id}")),
-                "high".into(),
+                // The word "severity" does not occur anywhere in gitleaks'
+                // source. Neither `report.Finding` nor the rule config has such
+                // a field, and its SARIF writer emits no `level` either. The
+                // rating is this product's, from what a match means.
+                DerivedSeverity {
+                    severity: Severity::High,
+                    basis: "a secret pattern match in scanned source",
+                },
                 location,
                 string_any(object, &["asset_id"]),
                 Confidence::High,
@@ -2114,33 +2134,30 @@ fn extract_trufflehog(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
         .filter_map(|(pointer, value)| {
             let object = value.as_object()?;
             let detector = exact_rule_string_any(object, &["DetectorName", "DetectorType"])?;
-            let verified = object
-                .get("Verified")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
             let source = nested_string(value, &["SourceMetadata", "Data", "Filesystem", "file"])
                 .or_else(|| nested_string(value, &["SourceMetadata", "Data", "Git", "file"]))
                 .unwrap_or_else(|| "repository".into());
-            Some(record!(
+            Some(record_with_derived_severity!(
                 pointer,
                 format!("trufflehog:{detector}"),
                 format!("Potential {detector} secret detected"),
-                if verified {
-                    "critical".into()
-                } else {
-                    "high".into()
+                // TruffleHog emits no severity; its JSON printer marshals a
+                // fixed struct with no such field. It emits `Verified`, which
+                // this product's launcher forces to false by passing
+                // `--no-verification`: the engine short-circuits before any
+                // detector runs its check. Reading that field would grade every
+                // secret on a test that was never performed.
+                DerivedSeverity {
+                    severity: Severity::High,
+                    basis: "a credential detector match that this product does not verify",
                 },
                 source,
                 string_any(object, &["asset_id"]),
-                if verified {
-                    Confidence::Confirmed
-                } else {
-                    Confidence::High
-                },
+                Confidence::High,
                 EvidenceKind::SourceCode,
                 vec![],
                 vec![
-                    format!("verified:{verified}"),
+                    "verification:not-attempted".into(),
                     "secret-value:redacted".into(),
                 ],
             ))
