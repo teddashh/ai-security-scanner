@@ -33,12 +33,78 @@ const staticDimensions = [
   ...new Set(Array.from(production.matchAll(/\bdimension: "([^"]+)"/gu), (match) => match[1])),
 ].sort();
 
+/**
+ * The names the backend composes at runtime, with a plausible identifier
+ * substituted for each hole.
+ *
+ * These matter more than the fixed ones and were the whole blind spot in this
+ * file's first version: it censused only `dimension: "..."`, which no composed
+ * name matches, so sixteen shapes reached a Chinese reader as raw English while
+ * the coverage assertion below passed. Every ordinary run emits at least one --
+ * `{engine} granular executed scope` is written for every completed catalog
+ * check.
+ *
+ * Three producers, because the backend writes a dimension three ways:
+ *
+ *  - `dimension: format!("…")` in a struct literal;
+ *  - the second argument of `append_naabu_coverage_gaps`' local `push` closure,
+ *    which is where ten of these live and where a `dimension:` search finds
+ *    nothing at all;
+ *  - `append_task_gap`, which composes `"{check}: {fragment}"` around six
+ *    fragments chosen by a match arm, so the fragments come from the arm.
+ */
+const FORMAT_HOLE = /\{[^{}]*\}/gu;
+/** A trailing "(…)" hole is a count everywhere the backend writes one. */
+const fillHoles = (frame: string): string =>
+  frame.replace(/\((\{[^{}]*\})\)$/u, "(3)").replaceAll(FORMAT_HOLE, "cloudquery");
+const composedDimensions = [
+  ...new Set([
+    ...Array.from(
+      production.matchAll(/\bdimension: format!\(\s*"([^"]+)"/gu),
+      (match) => match[1] ?? "",
+    ),
+    ...Array.from(
+      production.matchAll(
+        /push\(\s*(?:CoverageGapKind::\w+|kind),\s*format!\(\s*"([^"]+)"/gu,
+      ),
+      (match) => match[1] ?? "",
+    ),
+  ])]
+  // `"{}: {dimension}"` is `append_task_gap`'s frame, not a name; its six
+  // fragments are enumerated below. `"{}: results for {provider} {identifier}"`
+  // is the unattributed row, which `findingUnattributedGap` composes from the
+  // structured payload rather than from this table.
+  .filter((frame) => !/\{dimension\}|\{identifier\}/u.test(frame))
+  .map(fillHoles)
+  .concat(
+    Array.from(
+      production.matchAll(/CoverageGapKind::\w+,\s*\n\s*"([a-z][^"]*(?:dimension|dimensions))",/gu),
+      (match) => `cloudquery: ${match[1]}`,
+    ),
+  )
+  .filter((name, index, all) => all.indexOf(name) === index)
+  .sort();
+
 test("the backend's dimension vocabulary was found", () => {
   // Guards the extraction itself: a regex that silently matched nothing would
   // make every assertion below vacuously true.
   assert.ok(staticDimensions.length >= 13, `found only ${staticDimensions.length} dimensions`);
   assert.ok(staticDimensions.includes("requested scan stage"));
   assert.ok(staticDimensions.includes("partly completed planned work units"));
+
+  assert.ok(
+    composedDimensions.length >= 18,
+    `found only ${composedDimensions.length} composed dimensions: ${composedDimensions.join(", ")}`,
+  );
+  for (const expected of [
+    "cloudquery granular executed scope",
+    "cloudquery failed work units (3)",
+    "cloudquery final-state reconciliation",
+    "cloudquery: not-tested check dimension",
+    "requested check cloudquery",
+  ]) {
+    assert.ok(composedDimensions.includes(expected), `${expected} was not extracted`);
+  }
 });
 
 test("the not-tested row explains no more than its kind can establish", () => {
@@ -80,7 +146,7 @@ test("the not-tested row explains no more than its kind can establish", () => {
 test("every dimension the backend names has a Traditional Chinese label", () => {
   // Matched without the separator so this still fires if the fallback is ever
   // reshaped back into a label that simply replaces the name.
-  const untranslated = staticDimensions.filter((dimension) =>
+  const untranslated = [...staticDimensions, ...composedDimensions].filter((dimension) =>
     localizedCoverageDimension(dimension, "zh-TW").startsWith("涵蓋範圍細節"),
   );
   assert.deepEqual(
@@ -88,6 +154,33 @@ test("every dimension the backend names has a Traditional Chinese label", () => 
     [],
     `these dimensions reach a Traditional Chinese reader untranslated: ${untranslated.join(", ")}`,
   );
+});
+
+test("a composed name is translated without losing the identifier it carries", () => {
+  // Both halves matter and each fails differently. Dropping the identifier
+  // leaves several rows on one run reading identically; leaving the phrase in
+  // English leaves the row unreadable. The first version of this file tested
+  // only the second half, and passed while every composed name was English.
+  for (const dimension of composedDimensions) {
+    const label = localizedCoverageDimension(dimension, "zh-TW");
+    const identifier = dimension.includes("requested check ") ? "cloudquery" : "cloudquery";
+    assert.ok(label.includes(identifier), `${dimension} lost its identifier: ${label}`);
+    assert.ok(/\p{Script=Han}/u.test(label), `${dimension} was not translated: ${label}`);
+    // The English kind is what a fallback would have left behind.
+    const kind = dimension.replaceAll("cloudquery", "").replaceAll(/[:()\d]/gu, "").trim();
+    assert.ok(kind.length > 0, `the extraction produced no kind for ${dimension}`);
+    assert.ok(!label.includes(kind), `${dimension} kept its English wording: ${label}`);
+  }
+});
+
+test("two checks reporting the same kind of gap stay apart", () => {
+  // A run with three engines produces three "failed work units" rows. Replacing
+  // the composed name with a fixed label would make them one row repeated.
+  const labels = ["trivy", "prowler", "gitleaks"].map((engine) =>
+    localizedCoverageDimension(`${engine} failed work units (2)`, "zh-TW"),
+  );
+  assert.equal(new Set(labels).size, 3, `rows collapsed: ${labels.join(" / ")}`);
+  assert.ok(labels.every((label) => label.includes("（2）")), labels.join(" / "));
 });
 
 test("no two dimensions collapse into the same Traditional Chinese label", () => {
@@ -114,19 +207,20 @@ test("English readers see the dimension the backend wrote, unaltered", () => {
   }
 });
 
-test("a dimension carrying an identifier keeps it rather than being replaced", () => {
-  // Several names are composed at runtime around a check id, an engine id, or a
-  // user-authored exclusion label. A fixed Chinese label substituted for one of
-  // these discards the only part that identified the row, which is a worse
-  // outcome than leaving the phrase untranslated.
-  for (const composed of [
-    "cloudquery granular executed scope",
-    "naabu-tcp saved work-unit coverage",
-    "requested check prowler",
+test("a name this product did not author keeps its own text", () => {
+  // A case exclusion's dimension is the label a person typed. There is nothing
+  // to translate and no shape to match, so it has to survive whole: a fixed
+  // Chinese label substituted for it discards the only part that identified the
+  // row. Untranslated detail beats fluent erasure.
+  for (const authored of [
     "Excluded by the project owner: legacy VPN appliance",
+    "S3 buckets in the archive account",
   ]) {
-    assert.match(localizedCoverageDimension(composed, "zh-TW"), new RegExp(composed.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
-    assert.equal(localizedCoverageDimension(composed, "en"), composed);
+    assert.match(
+      localizedCoverageDimension(authored, "zh-TW"),
+      new RegExp(authored.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
+    );
+    assert.equal(localizedCoverageDimension(authored, "en"), authored);
   }
 });
 

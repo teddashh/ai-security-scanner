@@ -112,3 +112,36 @@ test("the English keys the screen matches on are the ones the report writes", ()
     `English the findings pane matches on that the report no longer writes:\n${missing.join("\n")}`,
   );
 });
+
+/**
+ * Coverage names are matched on a fragment, not on the whole sentence, so the
+ * Chinese comparison above cannot see a missing rule.
+ *
+ * Both sides can hold the label "失敗的工作單元" and still disagree about which
+ * English names reach it: one side matching on " failed work units" and the
+ * other on " failed work unit" produces identical literals and different
+ * output. The needle is the part that has to be the same.
+ */
+test("both sides recognise a coverage name by the same English fragment", () => {
+  const pairs = [
+    ...typescript.matchAll(/^\s*\["( ?[a-z][^"]*)", "([^"]*)"\],$/gmu),
+  ].map((match) => ({ needle: match[1] ?? "", label: match[2] ?? "" }));
+
+  assert.ok(pairs.length >= 30, `extractor found only ${pairs.length} rules`);
+  assert.ok(pairs.some((pair) => pair.needle === " granular executed scope"));
+
+  // rustfmt breaks a long pair across three lines, so runs of whitespace are
+  // flattened before the two sides are compared. The brackets are left out for
+  // the same reason: one side ends the pair with a trailing comma.
+  const flattened = rust.replaceAll(/\s+/gu, " ");
+  const unmatched = pairs.filter(
+    (pair) => !flattened.includes(`"${pair.needle}", "${pair.label}"`),
+  );
+  assert.deepEqual(
+    unmatched,
+    [],
+    `rules the screen has that the report does not, needle and label together:\n${unmatched
+      .map((pair) => `${pair.needle} -> ${pair.label}`)
+      .join("\n")}`,
+  );
+});

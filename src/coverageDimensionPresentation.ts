@@ -5,43 +5,12 @@
  * from the gap's `kind` and `nextActionCode`, so two gaps sharing a kind are
  * told apart by this string alone.
  *
- * English passes through verbatim. Traditional Chinese is matched on substrings
- * because some names are composed at runtime and carry an identifier — a check
- * id, an engine id, or a user-authored exclusion label.
- *
- * Two rules follow from that:
- *
- *  - every name the backend can emit needs a mapping. A run reports "completed
- *    planned work units" and "partly completed planned work units" as adjacent
- *    rows on the same check, so a shared fallback leaves a reader two identical
- *    labels and no way to tell finished work from work that stopped early.
- *  - an unmapped name must keep its original text rather than being replaced.
- *    A fixed label substituted for "cloudquery granular executed scope" or for
- *    a case exclusion's own label discards the identifier that made the row
- *    meaningful. Untranslated detail is worth more than fluent erasure.
+ * The implementation lives in `findingNarrative.ts` because the shared HTML
+ * report names the same rows and Rust composes the identical sentence there —
+ * that file is where the two languages are held to each other. Re-exported here
+ * so the pages that show coverage keep importing it from one obvious place.
  */
-export const localizedCoverageDimension = (
-  dimension: string,
-  locale: "en" | "zh-TW",
-): string => {
-  if (locale === "en") return dimension;
-  const normalized = dimension.toLocaleLowerCase("en");
-  if (normalized.includes("tcp reachability")) return "TCP 連線狀態";
-  if (normalized.includes("bounded connection contract")) return "受限的連線檢查";
-  if (normalized.includes("completed check-to-target coordinate")) return "完成的目標檢查";
-  if (normalized.includes("requested scan stage")) return "要求的掃描深度";
-  if (normalized.includes("requested limits")) return "要求的掃描限制";
-  if (normalized.includes("scope reduction") || normalized.includes("truncation")) return "自動縮減的範圍";
-  if (normalized.includes("target label") || normalized.includes("target type")) return "目標的歷史顯示資料";
-  if (normalized.includes("finding presentation")) return "本輪問題顯示資料";
-  if (normalized.includes("request outcome")) return "掃描結果資料一致性";
-  // Ordered before the completed-work rule, which is a substring of this one.
-  if (normalized.includes("partly completed planned work units")) return "部分完成的計畫工作單元";
-  if (normalized.includes("completed planned work units")) return "已完成的計畫工作單元";
-  if (normalized.includes("additional packaged checks")) return "額外的內建檢查項目";
-  if (normalized.includes("requested checks")) return "要求的檢查項目";
-  return `涵蓋範圍細節：${dimension}`;
-};
+export { localizedCoverageDimension } from "./findingNarrative.ts";
 
 /** Appends the identifier a composed name carries, when it has one. */
 const withIdentifier = (label: string, identifier: string): string =>

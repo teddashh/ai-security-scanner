@@ -12642,7 +12642,11 @@ fn html_report_bytes(
         .map(|gap| {
             // An unattributed gap is composed from its payload rather than
             // printed as stored English, so the reader is told which
-            // identifier to add in the language they are reading.
+            // identifier to add in the language they are reading. The name of
+            // the coverage is composed too, even where the prose beside it is
+            // not: it is built around a check or engine id, and leaving it in
+            // English opened every row of a Chinese report with a phrase the
+            // reader has no way to place.
             let (dimension, reason, next_action) = match (catalog.locale, gap.unattributed.as_ref())
             {
                 (crate::export::ReportLocale::ZhHant, Some(unattributed)) => {
@@ -12653,19 +12657,32 @@ fn html_report_bytes(
                         .unwrap_or(gap.dimension.as_str());
                     crate::finding_narrative::unattributed_gap_zh_hant(engine_id, unattributed)
                 }
+                (crate::export::ReportLocale::ZhHant, None) => (
+                    crate::finding_narrative::coverage_dimension_zh_hant(&gap.dimension),
+                    gap.reason.clone(),
+                    gap.next_action.clone(),
+                ),
                 _ => (
                     gap.dimension.clone(),
                     gap.reason.clone(),
                     gap.next_action.clone(),
                 ),
             };
+            // Only the stored English is a machine identifier worth prettifying.
+            // Running it over a composed name capitalizes the engine's own id
+            // and splits it on its hyphens -- "naabu-tcp 的..." becomes
+            // "Naabu TCP 的...", so the id no longer matches what the reader
+            // sees in the scanner's own output, which is what it is there for.
+            let dimension = match catalog.locale {
+                crate::export::ReportLocale::ZhHant => {
+                    replace_target_ids(&dimension, &target_labels)
+                }
+                _ => readable_identifier(&replace_target_ids(&dimension, &target_labels)),
+            };
             format!(
                 "<li><strong>{} — {}</strong><br>{}<br><em>{}:</em> {}</li>",
                 html_escape(catalog.gap_kind(&gap.kind)),
-                html_escape(&readable_identifier(&replace_target_ids(
-                    &dimension,
-                    &target_labels,
-                ))),
+                html_escape(&dimension),
                 html_escape(&replace_target_ids(&reason, &target_labels)),
                 catalog.text("Next", "下一步"),
                 html_escape(&replace_target_ids(&next_action, &target_labels)),
@@ -24583,6 +24600,14 @@ mod tests {
             "未連結到你的資產",
             "你已授權的資產都沒有登記這個識別碼",
             "然後重新掃描",
+            // Which coverage each gap row is about. Composed around the engine
+            // id, which is the only part telling one row from the next, so the
+            // id survives and the kind is what gets translated.
+            "gitleaks 的細部執行範圍",
+            "要求的掃描深度",
+            "自動縮減的範圍",
+            "目標的歷史顯示資料",
+            "本輪問題顯示資料",
         ] {
             assert!(
                 zh_html.contains(composed),
@@ -24598,6 +24623,11 @@ mod tests {
             "Severity derived from",
             "Direct scanner evidence is attached",
             "No authorized asset carries that identifier",
+            // Every gap row began with one of these, so a Chinese report
+            // opened each line with a phrase the reader could not place.
+            "granular executed scope",
+            "requested scan stage",
+            "run-frozen target label or type",
         ] {
             assert!(
                 !zh_html.contains(english_prose),

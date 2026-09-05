@@ -325,6 +325,123 @@ export const findingUnattributedGap = (
   };
 };
 
+/**
+ * The name a coverage row is speaking about, in the reader's language.
+ *
+ * This lives here rather than beside the page that shows it because the shared
+ * HTML report names the same rows, and Rust has to compose the identical
+ * sentence there. `coverage_dimension_zh_hant` is its twin.
+ *
+ * Most of these names are composed at runtime around an identifier -- a check
+ * id, an engine id, or the label a person wrote on an exclusion -- and the
+ * identifier is the only thing telling one row from the next. So the kind is
+ * translated and the identifier carried through untouched, rather than the
+ * whole phrase being replaced by a fixed label.
+ *
+ * An unrecognized name keeps its original text behind a marker. Untranslated
+ * detail is worth more than fluent erasure: a person can search their scanner's
+ * own output for "cloudquery", and cannot search it for a label this product
+ * invented.
+ */
+export const localizedCoverageDimension = (
+  dimension: string,
+  locale: "en" | "zh-TW",
+): string => {
+  if (locale === "en") return dimension;
+  const lower = dimension.toLocaleLowerCase("en");
+
+  // Fixed names, in the order the more specific one has to be tried first:
+  // "completed planned work units" is a substring of the partly-completed one.
+  for (const [needle, label] of [
+    ["tcp reachability", "TCP 連線狀態"],
+    ["bounded connection contract", "受限的連線檢查"],
+    ["completed check-to-target coordinate", "完成的目標檢查"],
+    ["requested scan stage", "要求的掃描深度"],
+    ["requested limits", "要求的掃描限制"],
+    ["scope reduction", "自動縮減的範圍"],
+    ["truncation", "自動縮減的範圍"],
+    ["target label", "目標的歷史顯示資料"],
+    ["target type", "目標的歷史顯示資料"],
+    ["finding presentation", "本輪問題顯示資料"],
+    ["request outcome", "掃描結果資料一致性"],
+    ["partly completed planned work units", "部分完成的計畫工作單元"],
+    ["completed planned work units", "已完成的計畫工作單元"],
+    ["additional packaged checks", "額外的內建檢查項目"],
+    ["requested checks", "要求的檢查項目"],
+  ] as const) {
+    if (lower.includes(needle)) return label;
+  }
+
+  // "{check id} {kind} work units ({count})". The count is what makes the row
+  // worth reading, so it survives beside the id.
+  const counted = /^(.*) \((\d+)\)$/u.exec(dimension);
+  if (counted) {
+    for (const [suffix, label] of [
+      [" partly completed work units", "部分完成的工作單元"],
+      [" failed work units", "失敗的工作單元"],
+      [" timed-out work units", "逾時的工作單元"],
+      [" cancelled work units", "已取消的工作單元"],
+      [" not-tested work units", "未檢測的工作單元"],
+    ] as const) {
+      const head = counted[1] ?? "";
+      if (head.endsWith(suffix)) {
+        return withCheck(head.slice(0, head.length - suffix.length), `${label}（${counted[2]}）`);
+      }
+    }
+  }
+
+  // "{check id} {kind}".
+  for (const [suffix, label] of [
+    [" granular executed scope", "細部執行範圍"],
+    [" completed-check time", "檢查完成時間"],
+    [" saved work-unit coverage", "已儲存的工作單元涵蓋記錄"],
+    [" saved result processing", "已儲存結果的處理"],
+    [" final-state reconciliation", "最終狀態核對"],
+    [" ended after its time limit", "因逾時而結束"],
+    [" stopped before finishing", "未完成就停止"],
+    [" was cancelled before finishing", "未完成就被取消"],
+  ] as const) {
+    if (dimension.endsWith(suffix)) {
+      return withCheck(dimension.slice(0, dimension.length - suffix.length), label);
+    }
+  }
+
+  // "{check id}: {kind}".
+  const separator = dimension.indexOf(": ");
+  if (separator >= 0) {
+    const rest = dimension.slice(separator + 2);
+    for (const [fragment, label] of [
+      ["remaining requested dimensions", "尚未完成的要求項目"],
+      ["timed-out check dimension", "逾時的檢查項目"],
+      ["failed check dimension", "失敗的檢查項目"],
+      ["cancelled check dimension", "已取消的檢查項目"],
+      ["not-tested check dimension", "未檢測的檢查項目"],
+      ["unfinished check dimension", "未完成的檢查項目"],
+    ] as const) {
+      if (rest === fragment) return withCheck(dimension.slice(0, separator), label);
+    }
+  }
+
+  // "requested check {engine id}", singular: the plural rule above is a
+  // different row, about the whole requested list rather than one scanner.
+  if (dimension.startsWith("requested check ")) {
+    const engine = dimension.slice("requested check ".length);
+    if (engine) return `要求的檢查項目：${engine}`;
+  }
+
+  return `涵蓋範圍細節：${dimension}`;
+};
+
+/**
+ * Names the check a composed dimension belongs to, or just the kind when the
+ * producer had no id to interpolate.
+ */
+const withCheck = (check: string, label: string): string => {
+  const trimmed = check.trim();
+  if (!trimmed) return label;
+  return `${trimmed} 的${label}`;
+};
+
 /** "Have the recommended specialist ({expert}) review ... then plan and approve {remedy}." */
 export const findingActionSentence = (
   locale: "en" | "zh-TW",

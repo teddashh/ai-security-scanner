@@ -285,6 +285,122 @@ pub fn unattributed_gap_zh_hant(
     )
 }
 
+/// The names a coverage row is speaking about, in Traditional Chinese.
+///
+/// Most of these are composed at runtime around an identifier -- a check id, an
+/// engine id, or the label a person wrote on an exclusion -- and the identifier
+/// is the only part telling one row from the next. So the kind is translated
+/// and the identifier is carried through untouched, rather than the whole
+/// phrase being replaced by a fixed label.
+///
+/// An unrecognized name keeps its original text behind a marker. Untranslated
+/// detail is worth more than fluent erasure: a person can search for
+/// "cloudquery" in their scanner's own output, and cannot search for a label
+/// this product invented.
+pub fn coverage_dimension_zh_hant(dimension: &str) -> String {
+    let lower = dimension.to_lowercase();
+
+    // Fixed names, in the order the more specific one has to be tried first:
+    // "completed planned work units" is a substring of the partly-completed one.
+    for (needle, label) in [
+        ("tcp reachability", "TCP 連線狀態"),
+        ("bounded connection contract", "受限的連線檢查"),
+        ("completed check-to-target coordinate", "完成的目標檢查"),
+        ("requested scan stage", "要求的掃描深度"),
+        ("requested limits", "要求的掃描限制"),
+        ("scope reduction", "自動縮減的範圍"),
+        ("truncation", "自動縮減的範圍"),
+        ("target label", "目標的歷史顯示資料"),
+        ("target type", "目標的歷史顯示資料"),
+        ("finding presentation", "本輪問題顯示資料"),
+        ("request outcome", "掃描結果資料一致性"),
+        (
+            "partly completed planned work units",
+            "部分完成的計畫工作單元",
+        ),
+        ("completed planned work units", "已完成的計畫工作單元"),
+        ("additional packaged checks", "額外的內建檢查項目"),
+        ("requested checks", "要求的檢查項目"),
+    ] {
+        if lower.contains(needle) {
+            return label.to_owned();
+        }
+    }
+
+    // "{check id} {kind} work units ({count})". The count is what makes the row
+    // worth reading, so it survives beside the id.
+    if let Some((head, count)) = dimension
+        .strip_suffix(')')
+        .and_then(|rest| rest.rsplit_once(" ("))
+        .filter(|(_, count)| !count.is_empty() && count.chars().all(|c| c.is_ascii_digit()))
+    {
+        for (suffix, label) in [
+            (" partly completed work units", "部分完成的工作單元"),
+            (" failed work units", "失敗的工作單元"),
+            (" timed-out work units", "逾時的工作單元"),
+            (" cancelled work units", "已取消的工作單元"),
+            (" not-tested work units", "未檢測的工作單元"),
+        ] {
+            if let Some(check) = head.strip_suffix(suffix) {
+                return with_check(check, &format!("{label}（{count}）"));
+            }
+        }
+    }
+
+    // "{check id} {kind}".
+    for (suffix, label) in [
+        (" granular executed scope", "細部執行範圍"),
+        (" completed-check time", "檢查完成時間"),
+        (" saved work-unit coverage", "已儲存的工作單元涵蓋記錄"),
+        (" saved result processing", "已儲存結果的處理"),
+        (" final-state reconciliation", "最終狀態核對"),
+        (" ended after its time limit", "因逾時而結束"),
+        (" stopped before finishing", "未完成就停止"),
+        (" was cancelled before finishing", "未完成就被取消"),
+    ] {
+        if let Some(check) = dimension.strip_suffix(suffix) {
+            return with_check(check, label);
+        }
+    }
+
+    // "{check id}: {kind}".
+    if let Some((check, rest)) = dimension.split_once(": ") {
+        for (fragment, label) in [
+            ("remaining requested dimensions", "尚未完成的要求項目"),
+            ("timed-out check dimension", "逾時的檢查項目"),
+            ("failed check dimension", "失敗的檢查項目"),
+            ("cancelled check dimension", "已取消的檢查項目"),
+            ("not-tested check dimension", "未檢測的檢查項目"),
+            ("unfinished check dimension", "未完成的檢查項目"),
+        ] {
+            if rest == fragment {
+                return with_check(check, label);
+            }
+        }
+    }
+
+    // "requested check {engine id}", singular: the plural rule above is a
+    // different row, about the whole requested list rather than one scanner.
+    if let Some(engine) = dimension
+        .strip_prefix("requested check ")
+        .filter(|engine| !engine.is_empty())
+    {
+        return format!("要求的檢查項目：{engine}");
+    }
+
+    format!("涵蓋範圍細節：{dimension}")
+}
+
+/// Names the check a composed dimension belongs to, or just the kind when the
+/// producer had no id to interpolate.
+fn with_check(check: &str, label: &str) -> String {
+    let check = check.trim();
+    if check.is_empty() {
+        return label.to_owned();
+    }
+    format!("{check} 的{label}")
+}
+
 pub fn priority_reason_zh_hant(english: &str) -> String {
     let trimmed = english.trim();
     if trimmed == ENGLISH_EVIDENCE_REASON {
@@ -369,6 +485,73 @@ mod tests {
     use super::*;
 
     const ENGLISH_SUMMARY: &str = "Trivy reported a medium-severity condition on the assessed asset. The attached raw record is evidence, not an instruction.";
+
+    /// One assertion per shape the beginner report composes.
+    ///
+    /// The TypeScript twin is held to the same outputs by
+    /// `tests/frontend/coverageDimensionPresentation.test.ts`, which censuses
+    /// the producer rather than this list. This one exists so that a rule
+    /// reordered here -- the fixed-name loop runs first and matches on
+    /// substrings, so it can swallow a composed name -- fails in Rust too.
+    #[test]
+    fn a_coverage_name_is_translated_around_the_identifier_it_carries() {
+        for (dimension, expected) in [
+            // Fixed names.
+            ("requested scan stage", "要求的掃描深度"),
+            ("requested checks", "要求的檢查項目"),
+            (
+                "partly completed planned work units",
+                "部分完成的計畫工作單元",
+            ),
+            ("completed planned work units", "已完成的計畫工作單元"),
+            // Composed around a check or engine id.
+            (
+                "cloudquery granular executed scope",
+                "cloudquery 的細部執行範圍",
+            ),
+            (
+                "naabu-tcp saved work-unit coverage",
+                "naabu-tcp 的已儲存的工作單元涵蓋記錄",
+            ),
+            (
+                "naabu-tcp failed work units (3)",
+                "naabu-tcp 的失敗的工作單元（3）",
+            ),
+            (
+                "naabu-tcp partly completed work units (12)",
+                "naabu-tcp 的部分完成的工作單元（12）",
+            ),
+            ("trivy: failed check dimension", "trivy 的失敗的檢查項目"),
+            (
+                "trivy: remaining requested dimensions",
+                "trivy 的尚未完成的要求項目",
+            ),
+            ("requested check prowler", "要求的檢查項目：prowler"),
+        ] {
+            assert_eq!(
+                coverage_dimension_zh_hant(dimension),
+                expected,
+                "{dimension}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_this_product_did_not_author_keeps_its_own_text() {
+        // A case exclusion's dimension is the label a person typed. There is
+        // nothing to translate and no shape to match, so it survives whole
+        // rather than being replaced by a label this product invented.
+        assert_eq!(
+            coverage_dimension_zh_hant("S3 buckets in the archive account"),
+            "涵蓋範圍細節：S3 buckets in the archive account"
+        );
+        // The singular row names one scanner; the plural row is the whole
+        // requested list. Collapsing them would lose which is which.
+        assert_ne!(
+            coverage_dimension_zh_hant("requested check prowler"),
+            coverage_dimension_zh_hant("requested checks")
+        );
+    }
 
     #[test]
     fn a_finding_with_no_code_keeps_the_english_rather_than_losing_the_sentence() {
