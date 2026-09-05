@@ -18,6 +18,7 @@ use crate::connectors::{
     SNAPSHOT_ARTIFACT_METADATA_KEY, SnapshotArtifactReference, SnapshotConnectorRegistry,
     preflight_snapshot_artifact,
 };
+use crate::correlation::{CorrelationReport, correlation_report};
 use crate::demo::build_demo_case;
 use crate::discovery::run_connector;
 use crate::domain::*;
@@ -2782,6 +2783,20 @@ pub fn update_finding_workflow(
         .update_finding_workflow(&case_id, request)?;
     emit(&app, COVERAGE_CHANGED_EVENT, &case)?;
     Ok(case)
+}
+
+/// Proposes which findings from different engines describe one issue.
+///
+/// Read-only by construction: it takes no request body, saves nothing, and
+/// emits no event. Acting on a suggestion is a separate, explicit
+/// `group_findings` call the user makes.
+#[tauri::command]
+pub fn suggest_finding_correlations(
+    case_id: String,
+    state: State<'_, AppState>,
+) -> AppResult<CorrelationReport> {
+    let case = state.case_service().show_case(&case_id)?;
+    Ok(correlation_report(&case))
 }
 
 #[tauri::command]

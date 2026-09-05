@@ -1,7 +1,9 @@
 use ai_security_scanner_lib::adapter::{AdapterAssetIdentifierMap, AdapterInput, AdapterOutput};
 use ai_security_scanner_lib::adapters::{BUILTIN_ENGINE_IDS, builtin_adapter_registry};
+use ai_security_scanner_lib::correlation::correlation_report;
 use ai_security_scanner_lib::domain::{
-    Asset, AssetIdentifier, AssetKind, FindingStatus, RawArtifact, Severity,
+    AssessmentCase, Asset, AssetIdentifier, AssetKind, DataClass, FindingStatus,
+    OrganizationProfile, RawArtifact, Severity,
 };
 use ai_security_scanner_lib::registry::EngineRegistry;
 use chrono::{TimeZone, Utc};
@@ -1407,6 +1409,100 @@ fn a_document_the_adapter_cannot_fully_account_for_does_not_read_as_a_clean_run(
 ///
 /// The rule identity is asserted through the tag rather than a struct field
 /// because that tag is what reaches an export and a mapping lookup.
+/// Trivy and Grype scanning one image is the ordinary case, and their results
+/// overlap heavily. This drives both real adapters and then asks the
+/// correlation rule which of the resulting rows describe one issue — the whole
+/// chain from engine output to the single list the user reads.
+#[test]
+fn one_vulnerability_seen_by_trivy_and_grype_is_offered_as_a_single_row() {
+    let mut case = AssessmentCase::new(
+        "Correlation".into(),
+        OrganizationProfile {
+            organization_name: "Example".into(),
+            employee_range: "2-49".into(),
+            data_classes: vec![DataClass::PersonallyIdentifiableInformation],
+            notes: None,
+        },
+    );
+    for engine_id in ["trivy", "grype"] {
+        let output = normalize_fixture(engine_id);
+        assert_eq!(
+            output.findings.len(),
+            2,
+            "{engine_id} fixture carries one shared and one exclusive vulnerability"
+        );
+        for mut finding in output.findings {
+            finding.case_id = case.id.clone();
+            case.findings.push(finding);
+        }
+    }
+
+    let report = correlation_report(&case);
+
+    assert_eq!(
+        case.findings.len(),
+        4,
+        "correlation is a suggestion; it never removes a row"
+    );
+    assert_eq!(report.suggestions.len(), 1, "{report:?}");
+    let suggestion = &report.suggestions[0];
+    assert_eq!(suggestion.engine_ids, ["grype", "trivy"]);
+    assert!(
+        suggestion.comparison_key.contains("CVE-2024-2511")
+            && suggestion.comparison_key.contains("openssl"),
+        "the shared vulnerability is the one that correlates: {}",
+        suggestion.comparison_key
+    );
+
+    let members = suggestion
+        .finding_ids
+        .iter()
+        .map(|finding_id| {
+            case.findings
+                .iter()
+                .find(|finding| &finding.id == finding_id)
+                .expect("suggested member is a real finding in the case")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(members.len(), 2);
+    // Trivy says MEDIUM, Grype says Medium. Aligning them onto one row is only
+    // meaningful if the normalized severity already agrees.
+    assert!(
+        members
+            .iter()
+            .all(|finding| finding.severity == Severity::Medium),
+        "both engines' severities normalize to the same level: {:?}",
+        members
+            .iter()
+            .map(|finding| finding.severity.clone())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        members.iter().all(|finding| !finding.evidence.is_empty()),
+        "each member keeps its own evidence rather than borrowing the other's"
+    );
+
+    // The vulnerabilities only one engine saw must stay as their own rows.
+    let suggested = suggestion.finding_ids.iter().collect::<BTreeSet<_>>();
+    let unsuggested = case
+        .findings
+        .iter()
+        .filter(|finding| !suggested.contains(&finding.id))
+        .filter_map(|finding| {
+            finding
+                .tags
+                .iter()
+                .find_map(|tag| tag.strip_prefix("source-rule:"))
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        unsuggested,
+        ["cve-2025-0001", "cve-2025-0002"].into_iter().collect(),
+        "an issue only one engine reported is never folded into another row"
+    );
+    assert!(report.unverifiable.is_empty(), "{report:?}");
+}
+
 fn rules_and_severities(output: &AdapterOutput) -> BTreeMap<String, Severity> {
     output
         .findings

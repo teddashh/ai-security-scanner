@@ -15,6 +15,7 @@ use ai_security_scanner_lib::container_runtime::{
     RuntimeCommandProvenance, RuntimePreflight, RuntimeProvider, ScannerCredentialSet,
     cleanup_orphaned_credentials,
 };
+use ai_security_scanner_lib::correlation::correlation_report;
 use ai_security_scanner_lib::demo::build_demo_case;
 use ai_security_scanner_lib::discovery::run_connector;
 #[cfg(test)]
@@ -417,8 +418,17 @@ enum ScopeCommand {
 
 #[derive(Debug, Subcommand)]
 enum FindingCommand {
-    History { case_id: String },
-    Groups { case_id: String },
+    History {
+        case_id: String,
+    },
+    Groups {
+        case_id: String,
+    },
+    /// Show which findings from different engines may describe one issue.
+    /// Read-only: it proposes groups, it never creates one.
+    Correlations {
+        case_id: String,
+    },
     Group(FindingGroupArgs),
     Ungroup(FindingUngroupArgs),
     Update(FindingUpdateArgs),
@@ -1651,6 +1661,20 @@ fn execute_finding(
                     "active": case.finding_groups,
                     "history": case.finding_group_events,
                     "notice": "Groups are presentation metadata; every canonical finding and evidence record remains independent.",
+                }),
+                json_output,
+            )?;
+        }
+        FindingCommand::Correlations { case_id } => {
+            let case = service.show_case(&case_id)?;
+            let report = correlation_report(&case);
+            print_value(
+                &json!({
+                    "keyVersion": report.key_version,
+                    "suggestions": report.suggestions,
+                    "unverifiable": report.unverifiable,
+                    "truncatedSuggestions": report.truncated_suggestions,
+                    "notice": "Suggestions only. Nothing is grouped until you run `finding group`, and grouping never merges or deletes a finding.",
                 }),
                 json_output,
             )?;

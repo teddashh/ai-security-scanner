@@ -67,12 +67,15 @@ fn baseline_output(engine_id: &str) -> &'static [u8] {
 }
 
 /// Findings each lifecycle fixture is expected to yield. Syft emits an
-/// inventory rather than findings, and the Kubescape fixture carries the
-/// authentic v2 shape: three failing controls spread across two resources.
+/// inventory rather than findings; the Kubescape fixture carries the authentic
+/// v2 shape with three failing controls across two resources; and the Trivy and
+/// Grype fixtures each carry one exclusive vulnerability plus the one both
+/// engines report, which is the ordinary result of scanning one image twice.
 fn expected_finding_count(engine_id: &str) -> usize {
     match engine_id {
         "syft" => 0,
         "kubescape" => 3,
+        "trivy" | "grype" => 2,
         _ => 1,
     }
 }

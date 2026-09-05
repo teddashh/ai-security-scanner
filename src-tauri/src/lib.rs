@@ -8,6 +8,7 @@ pub mod case_service;
 mod commands;
 pub mod connectors;
 pub mod container_runtime;
+pub mod correlation;
 pub mod coverage;
 pub mod credential_vault;
 pub mod demo;
@@ -250,6 +251,7 @@ pub fn run() {
             commands::cancel_discovery,
             commands::approve_scope,
             commands::update_finding_workflow,
+            commands::suggest_finding_correlations,
             commands::group_findings,
             commands::ungroup_findings,
             commands::start_scan,
