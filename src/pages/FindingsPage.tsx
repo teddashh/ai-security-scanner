@@ -14,6 +14,7 @@ import {
 } from "../coverageDimensionPresentation";
 import { projectVisibleFindingGroups } from "../findingGroupPresentation";
 import {
+  engineNameFrom,
   findingActionSentence,
   findingImpactSentence,
   findingSummarySentence,
@@ -293,6 +294,16 @@ const copy = {
   rankAria: { en: "Handoff priority {rank}", zhTW: "交接優先順序第 {rank} 位" },
   rank: { en: "#{rank}", zhTW: "第 {rank}" },
   evidenceCount: { en: "Evidence records: {count}", zhTW: "{count} 份證據" },
+  // Two rows can otherwise be identical: the row shows no engine, and no
+  // sign that a rating is this product's own rather than the scanner's.
+  // Every "high" ties at the same priority, so the order inside a band is
+  // alphabetical by title -- an unverified pattern match sits beside a
+  // scored vulnerability with nothing on the row telling them apart.
+  ratedByProduct: { en: "rated here", zhTW: "本產品評定" },
+  ratedByProductAria: {
+    en: "This severity was assigned by this product, not by the scanner.",
+    zhTW: "這個嚴重程度由本產品評定，並非來自掃描工具。",
+  },
   asset: { en: "Asset", zhTW: "資產" },
   reviewStatus: { en: "Review status", zhTW: "處理狀態" },
   recommendedExpert: { en: "Specialist to consult", zhTW: "建議專家類型" },
@@ -1680,10 +1691,26 @@ export function FindingsPage({
                 <span className="finding-row__main">
                   <span className="finding-row__top">
                     <StatusPill label={severityMeta[finding.severity].label} tone={severityMeta[finding.severity].tone} />
+                    {finding.severityBasisCode && (
+                      <span className="finding-row__basis" title={text(copy.ratedByProductAria)}>
+                        {text(copy.ratedByProduct)}
+                      </span>
+                    )}
                     <StatusPill label={workflowMeta[finding.workflowState]} tone={workflowTone(finding.workflowState)} />
                   </span>
                   <strong>{finding.title}</strong>
-                  <span>{finding.assetName} · {text(copy.evidenceCount, { count: formatNumber(finding.evidence.length) })} · {confidenceMeta[finding.confidence]}</span>
+                  <span>
+                    {[
+                      finding.assetName,
+                      // The engine's own display name, read off the sentence it
+                      // wrote. Without it every finding on one repository reads
+                      // as the repository name: engine runs are single-asset,
+                      // so `assetName` is the same target label on every row.
+                      engineNameFrom(finding.summary),
+                      text(copy.evidenceCount, { count: formatNumber(finding.evidence.length) }),
+                      confidenceMeta[finding.confidence],
+                    ].filter(Boolean).join(" · ")}
+                  </span>
                 </span>
                 <Icon name="chevron" size={18} />
               </button>

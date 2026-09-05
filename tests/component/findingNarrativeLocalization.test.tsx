@@ -115,3 +115,61 @@ test("a finding stored before the codes existed keeps its English rather than lo
   expect(rendered).toContain(ENGLISH_IMPACT);
   expect(rendered).toContain(ENGLISH_ACTION);
 });
+
+// The list is the surface a beginner reads first, and two rows on it could be
+// identical. `priority_for` is a pure function of severity, so every "high"
+// ties at 80 and the order inside a band falls through to comparing titles --
+// an unverified pattern match sits beside a scored vulnerability, sorted
+// alphabetically, with nothing on either row telling them apart. The row
+// carried no engine name (engine runs are single-asset, so `assetName` is the
+// same target label on every row) and no sign that a rating was this product's
+// own, even though the detail pane below discloses exactly that.
+const scoredVulnerability = (): Finding => ({
+  ...leakedCredential(),
+  id: "finding-nuclei",
+  fingerprint: "fingerprint-nuclei",
+  title: "Exposed administration panel",
+  summary: "Nuclei reported a high-severity condition on the assessed asset.",
+  // The engine rated this one itself, so there is no basis code.
+  severityBasisCode: undefined,
+  family: "network_exposure",
+});
+
+test("a row names the engine that found it and says when the rating is this product's", () => {
+  window.localStorage.setItem(localeStorageKey, "en");
+  const { container } = renderPage([leakedCredential(), scoredVulnerability()]);
+
+  const rows = [...container.querySelectorAll(".finding-row")];
+  expect(rows).toHaveLength(2);
+
+  const rowFor = (title: string) => {
+    const row = rows.find((candidate) => candidate.textContent?.includes(title));
+    if (!row) throw new Error(`no row for ${title}`);
+    return row.textContent ?? "";
+  };
+
+  const derived = rowFor("Potential AWS secret detected");
+  const scored = rowFor("Exposed administration panel");
+
+  // Each row names its own engine, and not the other's.
+  expect(derived).toContain("TruffleHog");
+  expect(derived).not.toContain("Nuclei");
+  expect(scored).toContain("Nuclei");
+  expect(scored).not.toContain("TruffleHog");
+
+  // Only the product-derived rating is marked as such. Marking both, or
+  // neither, would leave the two claims indistinguishable again.
+  expect(derived).toContain("rated here");
+  expect(scored).not.toContain("rated here");
+});
+
+test("the row's rating caveat is not left in English for a zh-TW reader", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderPage([leakedCredential()]);
+  const row = container.querySelector(".finding-row")?.textContent ?? "";
+
+  expect(row).toContain("本產品評定");
+  expect(row).not.toContain("rated here");
+  // The engine's own name is its wording, and survives in either language.
+  expect(row).toContain("TruffleHog");
+});

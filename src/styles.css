@@ -2583,6 +2583,15 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
   font-size: 0.63rem;
 }
 
+/* Qualifies the severity pill it sits beside: this rating is the product's
+   own, not the scanner's. Deliberately quieter than a StatusPill -- it is a
+   caveat on a claim, not a second claim. */
+.finding-row__basis {
+  color: var(--muted);
+  font-size: 0.6rem;
+  white-space: nowrap;
+}
+
 .finding-row__main > strong {
   overflow: hidden;
   color: var(--ink-strong);

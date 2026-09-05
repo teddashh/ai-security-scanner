@@ -118,7 +118,7 @@ export const localizedExpertType = (expert: string, locale: "en" | "zh-TW"): str
  * undefined on any sentence that is not the shape this product writes, which
  * sends the caller back to the English.
  */
-const engineNameFrom = (englishSummary: string): string | undefined => {
+export const engineNameFrom = (englishSummary: string): string | undefined => {
   const [name, ...rest] = englishSummary.split(" reported ");
   if (rest.length === 0 || !name || name.includes(".")) return undefined;
   return name;
