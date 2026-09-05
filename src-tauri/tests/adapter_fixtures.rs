@@ -536,6 +536,17 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
             assert_eq!(finding.last_seen_run_id, "run-1");
             assert_eq!(finding.asset_ids, ["asset-1"]);
             assert!(!finding.plain_language_summary.is_empty());
+            // The summary interpolates the severity, so the article in front of
+            // it has to be chosen with it. "Nuclei reported a informational-
+            // severity condition" was the first sentence a beginner read about
+            // every unrated Nuclei result.
+            for ungrammatical in [" a informational", " a unknown"] {
+                assert!(
+                    !finding.plain_language_summary.contains(ungrammatical),
+                    "{engine_id} summary is not English: {}",
+                    finding.plain_language_summary
+                );
+            }
             assert!(!finding.possible_impact.is_empty());
             assert!(!finding.recommendation.is_empty());
             assert!(

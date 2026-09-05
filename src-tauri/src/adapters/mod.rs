@@ -2832,8 +2832,9 @@ fn merge_finding(
                     basis
                 ),
                 None => format!(
-                    "{} reported a {}-severity condition on the assessed asset. The attached raw record is evidence, not an instruction.",
+                    "{} reported {} {}-severity condition on the assessed asset. The attached raw record is evidence, not an instruction.",
                     input.manifest.display_name,
+                    severity_article(&severity),
                     severity_label(&severity)
                 ),
             },
@@ -3103,6 +3104,20 @@ fn severity_label(severity: &Severity) -> &'static str {
         Severity::Low => "low",
         Severity::Unknown => "unknown",
         Severity::Informational => "informational",
+    }
+}
+
+/// The English article that precedes a severity label.
+///
+/// `informational` and `unknown` both open with a vowel sound, so the fixed
+/// "a" this sentence used to carry produced "reported a informational-severity
+/// condition" — on the first line of the first thing a beginner reads about a
+/// finding. Matched on the variant rather than sniffed from the first letter so
+/// that adding a severity forces the choice instead of inheriting a wrong one.
+fn severity_article(severity: &Severity) -> &'static str {
+    match severity {
+        Severity::Critical | Severity::High | Severity::Medium | Severity::Low => "a",
+        Severity::Informational | Severity::Unknown => "an",
     }
 }
 
@@ -3702,6 +3717,37 @@ mod tests {
                 .expect("an errored test is a shortfall")
                 .withholds_completion
         );
+    }
+
+    #[test]
+    fn every_severity_label_is_introduced_by_a_grammatical_article() {
+        // Cross-checks two hand-written functions that have to agree. The
+        // article match is exhaustive, so a new severity cannot compile without
+        // being assigned one -- but nothing stops it being assigned the wrong
+        // one, which is exactly how "a informational-severity condition"
+        // shipped. Deriving the expectation from the label instead makes the
+        // two disagree loudly.
+        for severity in [
+            Severity::Critical,
+            Severity::High,
+            Severity::Medium,
+            Severity::Low,
+            Severity::Informational,
+            Severity::Unknown,
+        ] {
+            let label = severity_label(&severity);
+            let expected = if label.starts_with(['a', 'e', 'i', 'o', 'u']) {
+                "an"
+            } else {
+                "a"
+            };
+            assert_eq!(
+                severity_article(&severity),
+                expected,
+                "\"reported {} {label}-severity condition\" is not English",
+                severity_article(&severity)
+            );
+        }
     }
 
     #[test]
