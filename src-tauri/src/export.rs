@@ -1328,6 +1328,21 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
         group.actor = "[redacted]".into();
     }
     for step in &mut report.next_steps {
+        // Same unreachable-by-replacement problem as the coverage gap this
+        // step is derived from: the identifier is registered on no asset, so
+        // the pass below cannot rewrite it. Both of this step's sentences name
+        // it, so both are replaced rather than scrubbed.
+        if let Some(unattributed) = &mut step.unattributed {
+            let count = unattributed.discarded_results;
+            unattributed.identifier = "[redacted identifier]".into();
+            step.action =
+                "Open the unredacted export to see which identifier to add to the authorized asset."
+                    .into();
+            step.reason = format!(
+                "{count} result(s) were reported for an identifier no authorized asset carries, so none of them are in this report. The identifier is withheld from this redacted export."
+            );
+            continue;
+        }
         redact_known_literals(&mut step.action, &replacements);
         redact_known_literals(&mut step.reason, &replacements);
         if let Some(expert) = &mut step.recommended_expert_type {
@@ -3550,10 +3565,12 @@ mod tests {
         case.scan_runs[0].engine_runs[0].error_message = Some(SENTINEL.into());
         case.scan_runs[0].engine_runs[0].cleanup_detail = Some(SENTINEL.into());
         case.scan_runs[0].engine_runs[0].warnings = vec![SENTINEL.into()];
-        // Read straight out of the scanned artifact and, by definition, not
-        // registered on any asset -- so the replacement pass that rewrites
-        // known asset identifiers cannot reach it. It reaches the beginner
-        // report's coverage gap prose as well as the engine run itself.
+        // Read straight out of the scanned artifact. Note that SENTINEL is a
+        // registered asset identifier in this fixture (see `identifiers[0]`
+        // above), so the replacement pass could reach it here even if the
+        // explicit handling were missing. The unregistered case -- the one
+        // this field actually exists for -- is covered by
+        // `a_standard_export_withholds_an_identifier_no_asset_registered`.
         case.scan_runs[0].engine_runs[0].unattributed = vec![crate::domain::UnattributedResults {
             provider: "aws".into(),
             identifier: SENTINEL.into(),
@@ -4052,5 +4069,67 @@ mod tests {
         fs::write(&destination, bytes).unwrap();
 
         assert!(verify_case_bundle(&destination).is_err());
+    }
+
+    /// The identifier is unreachable by the replacement pass, on purpose.
+    ///
+    /// `redact_known_literals` rewrites values it knows: case title, asset
+    /// names, registered asset identifiers. This gap exists precisely because
+    /// the identifier is registered on nothing, so that pass is blind to it and
+    /// the three prose fields it appears in would have gone out verbatim.
+    ///
+    /// The sentinel test above cannot show this, because there the sentinel is
+    /// also a registered asset identifier and so is reachable after all. This
+    /// one uses a value that appears nowhere else in the case.
+    #[test]
+    fn a_standard_export_withholds_an_identifier_no_asset_registered() {
+        const UNREGISTERED: &str = "999888777666";
+        let temp = tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let mut case = fixture(&artifact_root, true);
+        case.scan_runs[0].engine_runs[0].unattributed = vec![crate::domain::UnattributedResults {
+            provider: "aws".into(),
+            identifier: UNREGISTERED.into(),
+            discarded_results: 42,
+        }];
+
+        // It really is unknown to the redaction pass: nothing else in the case
+        // mentions it, so nothing can rewrite it by coincidence.
+        let case_json = serde_json::to_string(&case).unwrap();
+        assert_eq!(
+            case_json.matches(UNREGISTERED).count(),
+            1,
+            "the fixture mentions the identifier elsewhere, so this proves nothing"
+        );
+
+        let unredacted =
+            beginner_report_for_export(&case, "run-1", RedactionProfile::None).unwrap();
+        let unredacted_json = serde_json::to_string(&unredacted).unwrap();
+        assert!(
+            unredacted_json.contains(UNREGISTERED),
+            "the unredacted export must keep it; it is the whole fix"
+        );
+
+        let standard =
+            beginner_report_for_export(&case, "run-1", RedactionProfile::Standard).unwrap();
+        let standard_json = serde_json::to_string(&standard).unwrap();
+        assert!(
+            !standard_json.contains(UNREGISTERED),
+            "standard-redacted beginner report leaked an unregistered cloud identifier"
+        );
+        // Withheld, not erased. The reader still learns that results exist and
+        // where to look for the identifier.
+        assert!(standard_json.contains("42"));
+        assert!(standard_json.contains("unredacted export"));
+
+        // The bundle carries the same identifier in its own payload, on a
+        // separate code path from the beginner report.
+        let bundle = case_for_export(&case, RedactionProfile::Standard);
+        assert!(
+            !serde_json::to_string(&bundle)
+                .unwrap()
+                .contains(UNREGISTERED),
+            "standard-redacted case bundle leaked an unregistered cloud identifier"
+        );
     }
 }

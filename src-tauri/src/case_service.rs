@@ -12701,10 +12701,27 @@ fn html_report_bytes(
                     }),
                 ),
             };
+            // A gap-derived step carries no family, so the branch above leaves
+            // its action alone. The unattributed one is composed from its
+            // payload instead: it is the first thing a beginner reads and the
+            // only place the identifier they must add is spelled out.
+            let (action, reason) = match (catalog.locale, step.unattributed.as_ref()) {
+                (crate::export::ReportLocale::ZhHant, Some(unattributed)) => {
+                    let engine_id = step
+                        .reason
+                        .split_once(' ')
+                        .map(|(engine, _)| engine)
+                        .unwrap_or(step.reason.as_str());
+                    let (_, reason, next_action) =
+                        crate::finding_narrative::unattributed_gap_zh_hant(engine_id, unattributed);
+                    (next_action, reason)
+                }
+                _ => (action, step.reason.clone()),
+            };
             format!(
                 "<li><strong>{}</strong> — {}{}</li>",
                 html_escape(&action),
-                html_escape(&step.reason),
+                html_escape(&reason),
                 expert
                     .as_ref()
                     .map(|expert| format!(
@@ -24329,6 +24346,14 @@ mod tests {
             task.raw_artifact_ids = vec!["artifact-html".into()];
             task.error_message = Some(RAW_SCANNER_SENTINEL.into());
             task.warnings = vec![format!("warning: {RAW_SCANNER_SENTINEL}")];
+            // Results the engine produced that no authorized asset claims. The
+            // report an expert is handed is the one place a reader can learn
+            // which identifier to add, so it has to say so in their language.
+            task.unattributed = vec![crate::domain::UnattributedResults {
+                provider: "aws".into(),
+                identifier: "123456789012".into(),
+                discarded_results: 42,
+            }];
         }
         case.status = CaseStatus::ReadyForHandoff;
 
@@ -24510,6 +24535,7 @@ mod tests {
             "Why this priority",
             "Severity derived from a secret pattern match in scanned source",
             "Direct scanner evidence is attached",
+            "No authorized asset carries that identifier",
         ] {
             assert!(
                 html.contains(english_block),
@@ -24553,6 +24579,10 @@ mod tests {
             "嚴重程度是由掃描到的原始碼中符合機密資料的樣式推導而來",
             "Gitleaks 本身不提供嚴重程度",
             "已附上掃描工具的直接證據，仍需人工檢視。",
+            // Why the findings list is short, and the one thing that fixes it.
+            "未連結到你的資產",
+            "你已授權的資產都沒有登記這個識別碼",
+            "然後重新掃描",
         ] {
             assert!(
                 zh_html.contains(composed),
@@ -24567,6 +24597,7 @@ mod tests {
             "After an approved manual change, rerun",
             "Severity derived from",
             "Direct scanner evidence is attached",
+            "No authorized asset carries that identifier",
         ] {
             assert!(
                 !zh_html.contains(english_prose),
@@ -24579,8 +24610,10 @@ mod tests {
             "Gitleaks",
             "Frozen selected-run secret exposure",
             // The engine name and the source rule id are the engine's own
-            // strings and read identically in either language.
+            // strings and read identically in either language. So is the
+            // identifier the reader has to copy onto their asset.
             "generic-api-key",
+            "123456789012",
         ] {
             assert!(zh_html.contains(verbatim), "zh-Hant report lost {verbatim}");
             assert!(html.contains(verbatim), "English report lost {verbatim}");

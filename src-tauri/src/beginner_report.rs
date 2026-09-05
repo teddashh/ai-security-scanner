@@ -374,6 +374,10 @@ pub struct BeginnerNextStep {
     /// composed from `code` rather than from a finding.
     #[serde(default)]
     pub family: Option<FindingFamily>,
+    /// Set on a step derived from an unattributed-results gap, so the reader's
+    /// own sentence names the identifier they have to add.
+    #[serde(default)]
+    pub unattributed: Option<crate::domain::UnattributedResults>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1667,8 +1671,10 @@ fn append_unattributed_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
                     task.engine_id
                 ),
                 next_action_code: NextActionCode::AddAssetIdentifier,
+                // No article before {provider}: "a aws identifier" is wrong and
+                // the right one depends on a value read from the artifact.
                 next_action: format!(
-                    "Add {identifier} as a {provider} identifier on the asset you authorized, then scan again."
+                    "Add {identifier} to the asset you authorized as its {provider} identifier, then scan again."
                 ),
                 unattributed: Some(unattributed.clone()),
             });
@@ -1893,6 +1899,7 @@ fn project_next_steps(
         .iter()
         .enumerate()
         .map(|(index, finding)| BeginnerNextStep {
+            unattributed: None,
             priority: index as u16,
             code: NextActionCode::ReviewFinding,
             action: finding.next_step.clone(),
@@ -1923,6 +1930,7 @@ fn project_next_steps(
                 } else {
                     None
                 },
+                unattributed: gap.unattributed.clone(),
             });
         }
     }
@@ -1948,6 +1956,7 @@ fn project_next_steps(
             )
         };
         steps.push(BeginnerNextStep {
+            unattributed: None,
             family: None,
             priority: 0,
             code,
