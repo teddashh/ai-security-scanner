@@ -1,1 +1,1 @@
-{"SourceMetadata":{"Data":{"Filesystem":{"file":"config/credentials.txt","line":2}}},"SourceID":1,"SourceType":15,"DetectorType":8,"DetectorName":"ExampleCredential","Verified":true,"Raw":"SECRET_SENTINEL_MUST_NEVER_LEAK","RawV2":"SECRET_SENTINEL_MUST_NEVER_LEAK","asset_id":"asset-1"}
+{"SourceMetadata":{"Data":{"Filesystem":{"file":"config/credentials.txt","line":2}}},"SourceID":1,"SourceType":15,"DetectorType":8,"DetectorName":"Github","Verified":true,"Raw":"SECRET_SENTINEL_MUST_NEVER_LEAK","RawV2":"SECRET_SENTINEL_MUST_NEVER_LEAK","asset_id":"asset-1"}

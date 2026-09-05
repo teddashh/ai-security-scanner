@@ -3,24 +3,27 @@
     "category_name": "Findings",
     "class_name": "Detection Finding",
     "metadata": {
-      "event_code": "s3_bucket_level_public_access_block",
+      "event_code": "iam_customer_attached_policy_no_administrative_privileges",
       "product": {
         "name": "Prowler",
         "uid": "prowler",
         "vendor_name": "Prowler",
         "version": "5.39.1"
       },
-      "profiles": ["cloud", "datetime"],
+      "profiles": [
+        "cloud",
+        "datetime"
+      ],
       "version": "1.5.0"
     },
     "finding_info": {
       "analytic": {
-        "name": "s3_bucket_level_public_access_block",
-        "uid": "s3_bucket_level_public_access_block",
+        "name": "iam_customer_attached_policy_no_administrative_privileges",
+        "uid": "iam_customer_attached_policy_no_administrative_privileges",
         "type": "Rule",
         "type_id": 1
       },
-      "title": "S3 bucket public access is not blocked",
+      "title": "Attached IAM customer-managed policy allows '*:*' administrative privileges",
       "uid": "provider-finding-instance-1"
     },
     "status": "New",
@@ -38,15 +41,15 @@
     },
     "resources": [
       {
-        "name": "example-bucket",
-        "type": "AWS::S3::Bucket",
-        "uid": "arn:aws:s3:::example-bucket"
+        "name": "example-admin",
+        "type": "AWS::IAM::Policy",
+        "uid": "arn:aws:iam::123456789012:policy/example-admin"
       }
     ],
     "remediation": {
-      "desc": "Enable the account and bucket public-access blocks.",
+      "desc": "Replace the wildcard action and resource with the specific permissions the role needs.",
       "references": [
-        "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html"
+        "https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html"
       ]
     },
     "unmapped": {
@@ -55,35 +58,73 @@
     }
   },
   {
-    "metadata": {"event_code": "s3_bucket_policy_public_access_prohibited"},
+    "metadata": {
+      "event_code": "iam_user_mfa_enabled_console_access"
+    },
     "finding_info": {
-      "analytic": {"uid": "s3_bucket_policy_public_access_prohibited"},
-      "title": "Passing check",
+      "analytic": {
+        "uid": "iam_user_mfa_enabled_console_access",
+        "name": "iam_user_mfa_enabled_console_access"
+      },
+      "title": "IAM user has MFA enabled for console access",
       "uid": "provider-finding-instance-2"
     },
     "status": "New",
     "status_code": "PASS",
     "severity": "High",
     "cloud": {
-      "account": {"uid": "123456789012"},
+      "account": {
+        "uid": "123456789012"
+      },
       "provider": "aws"
     },
-    "resources": [{"uid": "arn:aws:s3:::passing-bucket"}]
+    "resources": [
+      {
+        "name": "alice",
+        "type": "AWS::IAM::User",
+        "uid": "arn:aws:iam::123456789012:user/alice"
+      }
+    ],
+    "remediation": {
+      "desc": "Register an MFA device for every user with console access.",
+      "references": [
+        "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_mfa.html"
+      ]
+    }
   },
   {
-    "metadata": {"event_code": "account_maintain_current_contact_details"},
+    "metadata": {
+      "event_code": "iam_administrator_access_with_mfa"
+    },
     "finding_info": {
-      "analytic": {"uid": "account_maintain_current_contact_details"},
-      "title": "Manual check",
+      "analytic": {
+        "uid": "iam_administrator_access_with_mfa",
+        "name": "iam_administrator_access_with_mfa"
+      },
+      "title": "IAM group members granted AdministratorAccess have MFA enabled",
       "uid": "provider-finding-instance-3"
     },
     "status": "New",
     "status_code": "MANUAL",
     "severity": "Medium",
     "cloud": {
-      "account": {"uid": "123456789012"},
+      "account": {
+        "uid": "123456789012"
+      },
       "provider": "aws"
     },
-    "resources": [{"uid": "123456789012"}]
+    "resources": [
+      {
+        "name": "admins",
+        "type": "AWS::IAM::Group",
+        "uid": "arn:aws:iam::123456789012:group/admins"
+      }
+    ],
+    "remediation": {
+      "desc": "Require MFA for every member of a group carrying AdministratorAccess.",
+      "references": [
+        "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_mfa.html"
+      ]
+    }
   }
 ]

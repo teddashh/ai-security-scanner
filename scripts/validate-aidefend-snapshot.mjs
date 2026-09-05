@@ -89,14 +89,19 @@ const EXPECTED_MAPPING_PROJECTION = Object.freeze([
   { engine_id: "checkov", match_kind: "exact", source_rule: "CKV_AWS_18", controls: ["AID-H-003.005"] },
   { engine_id: "gitleaks", match_kind: "exact", source_rule: "generic-api-key", controls: ["AID-H-031.002"] },
   { engine_id: "grype", match_kind: "prefix", source_rule: "CVE-", controls: ["AID-H-003.001", "AID-H-003.010"] },
-  { engine_id: "kics", match_kind: "exact", source_rule: "e24efb0e", controls: ["AID-H-003.005"] },
+  {
+    engine_id: "kics",
+    match_kind: "exact",
+    source_rule: "5fb49a69-8d46-4495-a2f8-9c8c622b2b6e",
+    controls: ["AID-H-003.005"],
+  },
   { engine_id: "kubescape", match_kind: "exact", source_rule: "C-0002", controls: ["AID-I-001.001"] },
   { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.generic.private-key", controls: ["AID-H-031.002"] },
   { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.javascript.child-process-exec", controls: ["AID-H-025.001", "AID-H-031.002"] },
   { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.python.dynamic-code-execution", controls: ["AID-H-025.001", "AID-H-031.002"] },
   { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.python.shell-true", controls: ["AID-H-025.001", "AID-H-031.002"] },
   { engine_id: "trivy", match_kind: "prefix", source_rule: "CVE-", controls: ["AID-H-003.001", "AID-H-003.010"] },
-  { engine_id: "trufflehog", match_kind: "exact", source_rule: "trufflehog:ExampleCredential", controls: ["AID-H-031.002"] },
+  { engine_id: "trufflehog", match_kind: "prefix", source_rule: "trufflehog:", controls: ["AID-H-031.002"] },
 ]);
 
 const EXPECTED_CONTROL_APPLICABILITY = Object.freeze([

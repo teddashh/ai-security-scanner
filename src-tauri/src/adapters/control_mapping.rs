@@ -656,27 +656,135 @@ mod tests {
     fn embedded_catalog_is_bounded_and_only_uses_known_engines() {
         validate_catalog(ENGINES).expect("valid embedded mappings");
         let provenance = catalog_provenance().expect("embedded provenance");
-        assert_eq!(provenance.mapping_version, "2026-09-05.2");
+        assert_eq!(provenance.mapping_version, "2026-09-05.3");
         assert_eq!(provenance.reviewed_at, "2026-09-05");
         assert_eq!(provenance.review_process, REVIEW_PROCESS_V1);
         assert_eq!(provenance.catalog_sha256.len(), 64);
     }
 
+    /// Guards the failure that broke five entries at once: a `source_rule`
+    /// invented to match a hand-written fixture instead of taken from real
+    /// engine output. Mapping and fixture agreed, the coverage assertion in
+    /// `adapter_fixtures` passed, and the engine resolved no control reference
+    /// in production.
+    ///
+    /// A coverage test cannot catch this, because it reads the same fixture the
+    /// mapping was written against. What can be checked without running the
+    /// engine is the *shape* upstream guarantees for an identifier, and the
+    /// prefix the launcher itself puts there. Each assertion below names the
+    /// upstream fact it encodes.
+    ///
+    /// This does not cover every engine, and the gaps are real rather than
+    /// oversights. Nuclei was the fifth broken entry, and no shape check would
+    /// have found it: `exposed-panel` is indistinguishable from the 13,613 real
+    /// template ids, which are ordinary lowercase-hyphenated words. Checkov,
+    /// KICS by name, Semgrep, and Gitleaks are likewise unconstrained. Catching
+    /// those needs the pinned rule pack, which is not available here — the
+    /// upstream checkouts are 9.7 GB and untracked. Reviewing a new entry
+    /// against real engine output remains the only defence for them.
+    #[test]
+    fn engine_rule_identifiers_have_the_shape_their_engine_actually_emits() {
+        let catalog = catalog_fixture();
+        let entries = catalog["entries"]
+            .as_array()
+            .expect("catalog entries")
+            .iter()
+            .map(|entry| {
+                (
+                    entry["engine_id"].as_str().expect("engine id").to_owned(),
+                    entry["match_kind"].as_str().expect("match kind").to_owned(),
+                    entry["source_rule"]
+                        .as_str()
+                        .expect("source rule")
+                        .to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let mut checked = 0;
+        for (engine_id, match_kind, source_rule) in &entries {
+            match engine_id.as_str() {
+                // Every KICS query id is a UUID: at the pinned revision all
+                // 1885 assets/queries/**/metadata.json `id` values are 36
+                // characters. The previous value here, `e24efb0e`, has the
+                // shape of KICS's `description_id`, which nothing reads.
+                "kics" => {
+                    let groups = source_rule.split('-').map(str::len).collect::<Vec<_>>();
+                    assert_eq!(
+                        groups,
+                        [8, 4, 4, 4, 12],
+                        "KICS query ids are UUIDs; {source_rule:?} cannot match real output"
+                    );
+                    assert!(
+                        source_rule
+                            .bytes()
+                            .all(|byte| byte == b'-' || byte.is_ascii_hexdigit()),
+                        "KICS query ids are hexadecimal; {source_rule:?} cannot match real output"
+                    );
+                    checked += 1;
+                }
+                // The adapter builds `trufflehog:{DetectorName}`, and
+                // DetectorName is `DetectorType.String()` — a name from the
+                // generated enum, never free text.
+                "trufflehog" => {
+                    assert!(
+                        source_rule.starts_with("trufflehog:"),
+                        "the TruffleHog adapter emits trufflehog:{{DetectorName}}; \
+                         {source_rule:?} cannot match"
+                    );
+                    checked += 1;
+                }
+                // The Steampipe launcher's SQL selects a literal
+                // `'steampipe:<name>' as control_id`, so every Steampipe
+                // finding carries that prefix. The previous value here had no
+                // prefix and matched nothing.
+                "steampipe" => {
+                    assert!(
+                        source_rule.starts_with("steampipe:"),
+                        "the Steampipe launcher SQL prefixes every control id; \
+                         {source_rule:?} cannot match"
+                    );
+                    checked += 1;
+                }
+                // The managed AWS profile runs `--service iam`, and Prowler
+                // names every check after the service directory it lives in.
+                // The previous value was an `s3` check, unreachable here.
+                "prowler" => {
+                    assert!(
+                        source_rule.starts_with("iam_"),
+                        "the managed Prowler profile scans only the iam service; \
+                         {source_rule:?} cannot be emitted"
+                    );
+                    checked += 1;
+                }
+                "trivy" | "grype" if match_kind == "prefix" => {
+                    assert_eq!(source_rule, "CVE-");
+                    checked += 1;
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            checked >= 6,
+            "expected the engines whose identifier shape upstream fixes to be checked, saw {checked}"
+        );
+    }
+
     #[test]
     fn exact_and_standardized_prefix_rules_map_deterministically() {
-        let public_bucket = lookup(
+        let overprivileged_policy = lookup(
             "prowler",
-            "s3_bucket_level_public_access_block",
+            "iam_customer_attached_policy_no_administrative_privileges",
             false,
             false,
         );
-        assert_eq!(public_bucket.len(), 3);
-        assert!(public_bucket.iter().all(|item| {
+        assert_eq!(overprivileged_policy.len(), 3);
+        assert!(overprivileged_policy.iter().all(|item| {
             item.relationship == "related"
-                && item.mapping_version == "2026-09-05.2"
+                && item.mapping_version == "2026-09-05.3"
                 && item.mapping_provenance.as_ref().is_some_and(|provenance| {
                     provenance.catalog_sha256
-                        == "c18c0bb9ac574e11c2890ec7a37a8abb40631c96e6e9deff1743dd8947c9ca03"
+                        == "f36648a607048adbf8776c2b2542f6af2cd43df4f6cbd36ce293c3202b18551b"
                 })
                 && !item.rationale.to_ascii_lowercase().contains("compliant")
         }));

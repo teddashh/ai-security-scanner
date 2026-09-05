@@ -966,7 +966,7 @@ fn versioned_control_references_are_allowlisted_relationships_not_assurance_clai
         );
         assert!(references.iter().all(|reference| {
             reference.relationship == "related"
-                && reference.mapping_version == "2026-09-05.2"
+                && reference.mapping_version == "2026-09-05.3"
                 && matches!(reference.framework.as_str(), "NIST CSF" | "ISO/IEC 27001")
         }));
         assert!(
