@@ -14,6 +14,12 @@ import {
 } from "../coverageDimensionPresentation";
 import { projectVisibleFindingGroups } from "../findingGroupPresentation";
 import {
+  findingActionSentence,
+  findingImpactSentence,
+  findingSummarySentence,
+  localizedExpertType,
+} from "../findingNarrative";
+import {
   localhostTcpBeginnerSummary,
   localhostTestedDimensionValue,
 } from "../localhostTcpPresentation";
@@ -573,17 +579,6 @@ const localizedAssetKind = (kind: string, locale: "en" | "zh-TW"): string => {
   } as Record<string, string>)[kind] ?? "掃描目標";
 };
 
-const localizedExpert = (expert: string, locale: "en" | "zh-TW"): string => {
-  if (locale === "en") return expert;
-  const normalized = expert.toLocaleLowerCase("en");
-  if (normalized.includes("network")) return "網路管理人員";
-  if (normalized.includes("developer") || normalized.includes("application")) return "軟體開發或應用安全人員";
-  if (normalized.includes("cloud")) return "雲端管理人員";
-  if (normalized.includes("it") || normalized.includes("system")) return "IT 或系統管理人員";
-  if (normalized.includes("security")) return "資安專業人員";
-  return "資安或 IT 專業人員";
-};
-
 // A first/last-seen timestamp exists to answer one question: how long has this
 // been here? The shared `formatDateTime` default omits the year, which is right
 // for a task that ran minutes ago and wrong here -- it renders a finding carried
@@ -638,7 +633,7 @@ const projectReportFindings = (
       summary: frozen.plainLanguageRisk,
       impact: frozen.possibleImpact,
       recommendation: frozen.nextStep,
-      expertType: localizedExpert(frozen.recommendedExpertType, locale),
+      expertType: localizedExpertType(frozen.recommendedExpertType, locale),
       severity: frozen.severity,
       confidence: frozen.confidence,
       priority: frozen.priority ?? report.findings.length - index,
@@ -911,7 +906,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
             .map((step, index) => (
               <li key={`${step.code}-${step.findingId ?? step.taskId ?? index}`}>
                 <strong>{text(nextActionCopy(step.code))}</strong>
-                {step.recommendedExpertType && <span>{localizedExpert(step.recommendedExpertType, locale)}</span>}
+                {step.recommendedExpertType && <span>{localizedExpertType(step.recommendedExpertType, locale)}</span>}
               </li>
             ))}
         </ol>
@@ -1347,7 +1342,11 @@ export function FindingsPage({
                 <span className="priority-card__number">{String(index + 1).padStart(2, "0")}</span>
                 <StatusPill label={severityMeta[finding.severity].label} tone={severityMeta[finding.severity].tone} />
                 <h3>{finding.title}</h3>
-                <p>{finding.impact}</p>
+                <p>{findingImpactSentence(locale, {
+                  englishFallback: finding.impact,
+                  severityLabel: severityMeta[finding.severity].label,
+                  family: finding.family,
+                })}</p>
                 <span className="priority-card__asset">{finding.assetName}</span>
                 <span className="priority-card__action">{text(copy.reviewEvidence)} <Icon name="arrow" size={15} /></span>
               </button>
@@ -1641,7 +1640,7 @@ export function FindingsPage({
                 <Icon name="filter" size={17} /><span className="sr-only">{text(copy.expertFilter)}</span>
                 <select value={expertType} onChange={(event) => setExpertType(event.target.value)}>
                   <option value="all">{text(copy.allExperts)}</option>
-                  {expertTypes.map((item) => <option key={item} value={item}>{item}</option>)}
+                  {expertTypes.map((item) => <option key={item} value={item}>{localizedExpertType(item, locale)}</option>)}
                 </select>
               </label>
               <label className="select-filter">
@@ -1693,13 +1692,17 @@ export function FindingsPage({
                   <StatusPill label={workflowMeta[selected.workflowState]} tone={workflowTone(selected.workflowState)} />
                 </div>
                 <h2>{selected.title}</h2>
-                <p>{selected.summary}</p>
+                <p>{findingSummarySentence(locale, {
+                  englishFallback: selected.summary,
+                  severityLabel: severityMeta[selected.severity].label,
+                  severityBasisCode: selected.severityBasisCode,
+                })}</p>
               </div>
 
               <dl className="detail-facts">
                 <div><dt>{text(copy.asset)}</dt><dd>{selected.assetName}</dd></div>
                 <div><dt>{text(copy.reviewStatus)}</dt><dd>{workflowMeta[selected.workflowState]}</dd></div>
-                <div><dt>{text(copy.recommendedExpert)}</dt><dd>{selected.expertType}</dd></div>
+                <div><dt>{text(copy.recommendedExpert)}</dt><dd>{localizedExpertType(selected.expertType, locale)}</dd></div>
                 <div><dt>{text(copy.lastObserved)}</dt><dd>{formatDateTime(selected.lastSeenAt, historyDateTime)}</dd></div>
                 <div><dt>{text(copy.evidenceConfidence)}</dt><dd>{confidenceMeta[selected.confidence]}</dd></div>
                 <div><dt>{text(copy.relatedAssets)}</dt><dd>{text(copy.assetCount, { count: formatNumber(selected.assetIds?.length ?? 1) })}</dd></div>
@@ -1752,7 +1755,11 @@ export function FindingsPage({
 
               <section className="detail-section">
                 <h3>{text(copy.possibleImpact)}</h3>
-                <p>{selected.impact}</p>
+                <p>{findingImpactSentence(locale, {
+                  englishFallback: selected.impact,
+                  severityLabel: severityMeta[selected.severity].label,
+                  family: selected.family,
+                })}</p>
               </section>
 
               {(selected.priorityReasons?.length ?? 0) > 0 && (
@@ -1764,7 +1771,11 @@ export function FindingsPage({
 
               <section className="detail-section detail-section--advice">
                 <h3>{text(copy.recommendation)}</h3>
-                <p>{selected.recommendation}</p>
+                <p>{findingActionSentence(locale, {
+                  englishFallback: selected.recommendation,
+                  expertType: selected.expertType,
+                  family: selected.family,
+                })}</p>
                 {selected.rollbackConsiderations && <p><strong>{text(copy.beforeChanging)}</strong> {selected.rollbackConsiderations}</p>}
                 <small>{text(copy.recommendationBoundary)}</small>
               </section>

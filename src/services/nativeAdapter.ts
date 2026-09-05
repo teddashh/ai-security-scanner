@@ -30,6 +30,7 @@ import type {
   FrozenExternalScope,
   ExportFormat,
   Finding,
+  FindingFamily,
   FindingGroup,
   FindingGroupEvent,
   FindingWorkflowState,
@@ -52,6 +53,7 @@ import type {
   SourceCapabilityProvider,
   TransportProtocol,
   VerificationSummary,
+  SeverityBasisCode,
 } from "../types";
 import { getActiveLocale } from "../i18n/core";
 import { explicitTargetRequiresSensitiveNetworkAllowance } from "../caseForm";
@@ -462,6 +464,8 @@ interface NativeFinding {
   recommended_expert_type: string;
   status: string;
   tags?: string[];
+  family?: string | null;
+  severity_basis_code?: string | null;
 }
 
 interface NativeFindingWorkflowEvent {
@@ -1142,6 +1146,38 @@ const mapSeverity = (severity: string): Severity => {
     : "unknown") as Severity;
 };
 
+const FINDING_FAMILIES: readonly FindingFamily[] = [
+  "cloud_posture",
+  "cloud_identity",
+  "microsoft365",
+  "network_exposure",
+  "source_code",
+  "secret",
+  "infrastructure_as_code",
+  "vulnerable_component",
+  "kubernetes",
+];
+
+const SEVERITY_BASIS_CODES: readonly SeverityBasisCode[] = [
+  "open_port",
+  "reachable_http_service",
+  "secret_pattern_match",
+  "unverified_credential_detector",
+  "iac_policy_check",
+  "cis_kubernetes_benchmark",
+  "cloud_control_query",
+];
+
+// A code this build does not know is dropped rather than passed through. The
+// only thing downstream does with it is pick a sentence, and there is no
+// sentence for a value that was added after this build; the English prose beside
+// it is still correct, so falling back to that beats rendering a raw enum name.
+const mapFindingFamily = (value: string | null | undefined): FindingFamily | undefined =>
+  FINDING_FAMILIES.find((family) => family === value);
+
+const mapSeverityBasisCode = (value: string | null | undefined): SeverityBasisCode | undefined =>
+  SEVERITY_BASIS_CODES.find((code) => code === value);
+
 const mapConfidence = (confidence: string): Confidence => {
   if (confidence === "confirmed") return "high";
   return (["high", "medium", "low"].includes(confidence) ? confidence : "low") as Confidence;
@@ -1676,6 +1712,8 @@ export const adaptNativeCase = (
       summary: finding.plain_language_summary,
       impact: finding.possible_impact,
       recommendation: finding.recommendation,
+      family: mapFindingFamily(finding.family),
+      severityBasisCode: mapSeverityBasisCode(finding.severity_basis_code),
       expertType: finding.recommended_expert_type,
       severity: mapSeverity(finding.severity),
       confidence: mapConfidence(finding.confidence),

@@ -1044,6 +1044,32 @@ export interface ControlMappingProvenance {
   catalogSha256: string;
 }
 
+/// The kind of problem a finding reports. The backend composes its English
+/// `summary`, `impact` and `recommendation` from this plus `severity`; carrying
+/// the code lets this side write the same sentences in the reader's language
+/// instead of showing a translated heading over an English paragraph.
+export type FindingFamily =
+  | "cloud_posture"
+  | "cloud_identity"
+  | "microsoft365"
+  | "network_exposure"
+  | "source_code"
+  | "secret"
+  | "infrastructure_as_code"
+  | "vulnerable_component"
+  | "kubernetes";
+
+/// Why this product rated a finding the engine left unrated. Absent when the
+/// rating is the engine's own.
+export type SeverityBasisCode =
+  | "open_port"
+  | "reachable_http_service"
+  | "secret_pattern_match"
+  | "unverified_credential_detector"
+  | "iac_policy_check"
+  | "cis_kubernetes_benchmark"
+  | "cloud_control_query";
+
 export interface Finding {
   id: string;
   caseId?: string;
@@ -1051,10 +1077,19 @@ export interface Finding {
   assetId: string;
   assetIds?: string[];
   assetName: string;
+  /** The engine's own wording, never restated in another language. */
   title: string;
+  /**
+   * Backend-composed English. Prefer the sentence built from `family` and
+   * `severityBasisCode`; these remain the fallback for findings stored before
+   * those codes existed.
+   */
   summary: string;
   impact: string;
   recommendation: string;
+  /** Absent on findings stored before the codes were carried. */
+  family?: FindingFamily;
+  severityBasisCode?: SeverityBasisCode;
   expertType: string;
   severity: Severity;
   confidence: Confidence;
