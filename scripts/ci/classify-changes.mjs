@@ -20,6 +20,12 @@ const FRONTEND_PATHS = [
   /^src-tauri\/src\/beginner_report\.rs$/,
   /^src-tauri\/src\/prioritization\.rs$/,
   /^src-tauri\/src\/commands\.rs$/,
+  // `findingNarrativeParity.test.ts` reads this against its TypeScript twin.
+  // The two files write the same sentences about a finding for two surfaces --
+  // the findings pane and the shared HTML report -- so editing the Chinese on
+  // this side alone is exactly the drift the test exists to catch, and exactly
+  // the commit that would otherwise skip it.
+  /^src-tauri\/src\/finding_narrative\.rs$/,
   // `runtimeSetupAssistant.test.ts` reads the Tauri command registry to assert
   // the prerequisite-repair command stays unregistered. Re-registering it in
   // lib.rs alone would otherwise never run that test.

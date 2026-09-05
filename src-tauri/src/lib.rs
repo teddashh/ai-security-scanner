@@ -21,6 +21,7 @@ pub mod export;
 pub mod export_identity;
 pub mod exporters;
 pub mod external_scope;
+pub mod finding_narrative;
 #[cfg(any(feature = "desktop", feature = "cli"))]
 pub mod gateway_release;
 pub mod job_manager;

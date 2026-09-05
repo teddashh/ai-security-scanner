@@ -12648,11 +12648,30 @@ fn html_report_bytes(
         .next_steps
         .iter()
         .map(|step| {
+            // A finding-derived step's action is that finding's own
+            // recommendation, so it needs the same composition the finding
+            // itself gets; a gap-derived step carries no family and keeps its
+            // stored text.
+            let (action, expert) = match catalog.locale {
+                crate::export::ReportLocale::En => {
+                    (step.action.clone(), step.recommended_expert_type.clone())
+                }
+                crate::export::ReportLocale::ZhHant => (
+                    crate::finding_narrative::action_zh_hant(
+                        &step.action,
+                        step.recommended_expert_type.as_deref().unwrap_or_default(),
+                        step.family,
+                    ),
+                    step.recommended_expert_type.as_ref().map(|expert| {
+                        crate::finding_narrative::expert_type_zh_hant(expert).to_owned()
+                    }),
+                ),
+            };
             format!(
                 "<li><strong>{}</strong> — {}{}</li>",
-                html_escape(&step.action),
+                html_escape(&action),
                 html_escape(&step.reason),
-                step.recommended_expert_type
+                expert
                     .as_ref()
                     .map(|expert| format!(
                         " <em>{}: {}</em>",
@@ -12682,6 +12701,37 @@ fn html_report_bytes(
             .priority
             .map(|priority| catalog.format_number(priority as usize))
             .unwrap_or_else(|| catalog.text("not retained", "未保留").into());
+        // The three sentences this product wrote about the finding. Composed
+        // for the reader's language rather than printed as stored English under
+        // a translated heading; English returns the stored prose untouched.
+        let severity_label = catalog.identifier(&enum_key(&finding.severity));
+        let (plain_language_risk, possible_impact, next_step, expert_type) = match catalog.locale {
+            crate::export::ReportLocale::En => (
+                finding.plain_language_risk.clone(),
+                finding.possible_impact.clone(),
+                finding.next_step.clone(),
+                finding.recommended_expert_type.clone(),
+            ),
+            crate::export::ReportLocale::ZhHant => (
+                crate::finding_narrative::summary_zh_hant(
+                    &finding.plain_language_risk,
+                    &severity_label,
+                    finding.severity_basis_code,
+                ),
+                crate::finding_narrative::impact_zh_hant(
+                    &finding.possible_impact,
+                    &severity_label,
+                    finding.family,
+                ),
+                crate::finding_narrative::action_zh_hant(
+                    &finding.next_step,
+                    &finding.recommended_expert_type,
+                    finding.family,
+                ),
+                crate::finding_narrative::expert_type_zh_hant(&finding.recommended_expert_type)
+                    .to_owned(),
+            ),
+        };
         let mut priority_reasons = finding
             .priority_reasons
             .iter()
@@ -12795,15 +12845,15 @@ fn html_report_bytes(
             html_escape(&finding.finding_id),
             catalog.text("Targets", "目標"),
             targets,
-            html_escape(&finding.plain_language_risk),
+            html_escape(&plain_language_risk),
             catalog.text("Possible impact", "可能影響"),
-            html_escape(&finding.possible_impact),
+            html_escape(&possible_impact),
             catalog.text("Why this priority", "此優先順序的原因"),
             priority_reasons,
             catalog.text("What to do next", "下一步怎麼做"),
-            html_escape(&finding.next_step),
+            html_escape(&next_step),
             catalog.text("Suggested expert", "建議諮詢的專家"),
-            html_escape(&finding.recommended_expert_type),
+            html_escape(&expert_type),
             catalog.text("Evidence SHA-256", "證據 SHA-256"),
             evidence,
             catalog.text("Related framework coordinates", "相關框架座標"),
@@ -24195,8 +24245,10 @@ mod tests {
         });
 
         let frozen_finding = Finding {
-            family: None,
-            severity_basis_code: None,
+            // What the Gitleaks adapter really carries, so the report is
+            // rendered from the same codes a real run would supply.
+            family: Some(crate::domain::FindingFamily::Secret),
+            severity_basis_code: Some(crate::domain::SeverityBasisCode::SecretPatternMatch),
             id: "finding-html".into(),
             case_id: case.id.clone(),
             first_seen_run_id: run_id.clone(),
@@ -24204,8 +24256,11 @@ mod tests {
             fingerprint: "gitleaks:html-fixture".into(),
             title: "Frozen selected-run secret exposure".into(),
             plain_language_summary:
-                "A secret-like value was retained in the selected-run snapshot.".into(),
-            possible_impact: "Someone with repository access may be able to reuse it.".into(),
+                "Gitleaks reported this condition on the assessed asset without rating it. This product rated it high from a secret pattern match in scanned source."
+                    .into(),
+            possible_impact:
+                "If the scanner result is confirmed, source code or credentials may permit unauthorized access or unsafe application behavior."
+                    .into(),
             severity: Severity::High,
             confidence: Confidence::Confirmed,
             priority: 73,
@@ -24245,12 +24300,13 @@ mod tests {
                     catalog_sha256: "e".repeat(64),
                 }),
             }],
-            recommendation: "Revoke the exposed value, replace it, and remove it from history."
+            recommendation:
+                "Have the recommended specialist (Secrets-response specialist) review the affected asset and the source rule's official guidance, then plan and approve revocation and rotation of the exposed credential first."
                 .into(),
             verification_guidance: "Run the same check after replacement.".into(),
             rollback_considerations: None,
             official_references: vec![],
-            recommended_expert_type: "Application security reviewer".into(),
+            recommended_expert_type: "Secrets-response specialist".into(),
             status: FindingStatus::Unreviewed,
             tags: vec![],
         };
@@ -24314,7 +24370,7 @@ mod tests {
             "Priority: 73".into(),
             "Confirmed evidence and a reusable credential pattern raise the handoff priority."
                 .into(),
-            "Revoke the exposed value, replace it, and remove it from history.".into(),
+            "then plan and approve revocation and rotation of the exposed credential first.".into(),
             evidence_sha256.clone(),
             "AIDEFEND 2026.1 / ADF-APP-01".into(),
             "map-2026-08".into(),
@@ -24332,6 +24388,51 @@ mod tests {
         assert!(html.contains(&format!("Observed: {}", readable_report_time(&finished))));
         assert!(!html.contains(RAW_SCANNER_SENTINEL));
         assert!(!html.contains(MUTABLE_CANONICAL_SENTINEL));
+
+        // The zh-Hant report translated its headings and printed the finding's
+        // own three sentences as stored English underneath them: 可能影響 over
+        // "If the scanner result is confirmed, ...". They are composed from the
+        // codes the finding carries.
+        let zh_html = String::from_utf8(
+            html_report_bytes(
+                &case,
+                &run_id,
+                &ExportOptions {
+                    redaction: RedactionProfile::None,
+                    include_raw_artifacts: false,
+                    locale: crate::export::ReportLocale::ZhHant,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for composed in [
+            "本產品依據掃描到的原始碼中符合機密資料的樣式",
+            "原始碼或憑證可能導致未授權存取或不安全的程式行為",
+            "先撤銷並輪替這組已外洩的憑證",
+            "機密外洩應變專家",
+        ] {
+            assert!(
+                zh_html.contains(composed),
+                "zh-Hant report omitted {composed}"
+            );
+        }
+        for english_prose in [
+            "If the scanner result is confirmed,",
+            "Have the recommended specialist",
+            "Secrets-response specialist",
+        ] {
+            assert!(
+                !zh_html.contains(english_prose),
+                "zh-Hant report kept the English finding prose {english_prose}"
+            );
+        }
+        // The engine named itself and the engine titled the finding. Both are
+        // the engine's own words, and survive untouched in either language.
+        for verbatim in ["Gitleaks", "Frozen selected-run secret exposure"] {
+            assert!(zh_html.contains(verbatim), "zh-Hant report lost {verbatim}");
+            assert!(html.contains(verbatim), "English report lost {verbatim}");
+        }
     }
 
     #[test]

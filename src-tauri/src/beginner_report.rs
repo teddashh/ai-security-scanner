@@ -7,8 +7,9 @@
 
 use crate::domain::{
     AssessmentCase, AssetKind, Confidence, ControlMappingProvenance, DistributionMode, EngineRun,
-    EngineRunStatus, EngineTaskKind, Finding, FindingObservation, Id, LocalhostTcpObservation,
-    LocalhostTcpOutcome, ScanRequestOutcome, ScanRequestOutcomeCode, ScanRun, Severity,
+    EngineRunStatus, EngineTaskKind, Finding, FindingFamily, FindingObservation, Id,
+    LocalhostTcpObservation, LocalhostTcpOutcome, ScanRequestOutcome, ScanRequestOutcomeCode,
+    ScanRun, Severity, SeverityBasisCode,
 };
 use crate::execution_coverage::{
     CumulativeNaabuCoverage, WorkUnitOutcome, reduce_naabu_attempt_coverage,
@@ -290,6 +291,15 @@ pub struct BeginnerFinding {
     pub recommended_expert_type: String,
     pub evidence_references: Vec<FindingEvidenceReference>,
     pub framework_references: Vec<FrameworkReference>,
+    /// The codes `plain_language_risk`, `possible_impact` and `next_step` were
+    /// composed from, carried so a report rendered in another language can
+    /// write those sentences instead of printing the English ones under
+    /// translated headings. Absent for a legacy run, whose stored prose is all
+    /// there is.
+    #[serde(default)]
+    pub family: Option<FindingFamily>,
+    #[serde(default)]
+    pub severity_basis_code: Option<SeverityBasisCode>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -335,6 +345,12 @@ pub struct BeginnerNextStep {
     pub finding_id: Option<Id>,
     pub task_id: Option<Id>,
     pub recommended_expert_type: Option<String>,
+    /// Set on the steps whose `action` is a finding's own recommendation, so a
+    /// report rendered in another language can compose that sentence instead of
+    /// printing the English one. Absent on gap-derived steps, whose action is
+    /// composed from `code` rather than from a finding.
+    #[serde(default)]
+    pub family: Option<FindingFamily>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1786,6 +1802,8 @@ fn project_finding(
             .unwrap_or_else(|| "Security professional".into()),
         evidence_references,
         framework_references,
+        family: details.and_then(|finding| finding.family),
+        severity_basis_code: details.and_then(|finding| finding.severity_basis_code),
     }
 }
 
@@ -1809,6 +1827,7 @@ fn project_next_steps(
             finding_id: Some(finding.finding_id.clone()),
             task_id: None,
             recommended_expert_type: Some(finding.recommended_expert_type.clone()),
+            family: finding.family,
         })
         .collect::<Vec<_>>();
 
@@ -1816,6 +1835,7 @@ fn project_next_steps(
     for gap in gaps {
         if seen_gap_actions.insert(gap.next_action.clone()) {
             steps.push(BeginnerNextStep {
+                family: None,
                 priority: 100 + gap_rank(gap.kind) as u16,
                 code: gap.next_action_code,
                 action: gap.next_action.clone(),
@@ -1852,6 +1872,7 @@ fn project_next_steps(
             )
         };
         steps.push(BeginnerNextStep {
+            family: None,
             priority: 0,
             code,
             action: action.into(),

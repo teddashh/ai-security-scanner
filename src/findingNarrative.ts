@@ -94,15 +94,11 @@ const EXPERT: Record<string, string> = {
 
 export const localizedExpertType = (expert: string, locale: "en" | "zh-TW"): string => {
   if (locale === "en") return expert;
-  const exact = EXPERT[expert.trim()];
-  if (exact) return exact;
-  // An unknown name still has to say something. Kept coarse on purpose: a wrong
-  // specific title reads as authoritative, a general one reads as general.
-  const normalized = expert.toLocaleLowerCase("en");
-  if (normalized.includes("network")) return "網路安全人員";
-  if (normalized.includes("cloud")) return "雲端安全人員";
-  if (normalized.includes("kubernetes") || normalized.includes("container")) return "容器平台安全人員";
-  return "資安或 IT 專業人員";
+  // A name from a build this one has never seen still has to say something, and
+  // a general answer beats a confidently wrong one. Kept identical to the Rust
+  // fallback rather than sniffed here: two surfaces guessing differently about
+  // the same unknown title is the drift this pair exists to avoid.
+  return EXPERT[expert.trim()] ?? "資安或 IT 專業人員";
 };
 
 /**
