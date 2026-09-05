@@ -98,6 +98,8 @@ mod tests {
 
     fn finding(case: &AssessmentCase) -> Finding {
         Finding {
+            family: None,
+            severity_basis_code: None,
             id: "finding".into(),
             case_id: case.id.clone(),
             first_seen_run_id: "run".into(),

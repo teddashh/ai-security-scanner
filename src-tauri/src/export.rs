@@ -2488,6 +2488,8 @@ mod tests {
         let artifact = case.raw_artifacts[0].clone();
         let finding_id = "finding-run-1-legacy".to_owned();
         let mut finding = Finding {
+            family: None,
+            severity_basis_code: None,
             id: finding_id.clone(),
             case_id: case.id.clone(),
             first_seen_run_id: "run-1".into(),
@@ -2579,6 +2581,8 @@ mod tests {
             contains_sensitive_data: false,
         });
         let second_finding = Finding {
+            family: None,
+            severity_basis_code: None,
             id: "finding-run-2".into(),
             case_id: case.id.clone(),
             first_seen_run_id: "run-2".into(),
@@ -2718,6 +2722,8 @@ mod tests {
             ("finding-b", "Independent finding B"),
         ] {
             case.findings.push(Finding {
+                family: None,
+                severity_basis_code: None,
                 id: id.into(),
                 case_id: case.id.clone(),
                 first_seen_run_id: "run-1".into(),
@@ -3072,6 +3078,8 @@ mod tests {
         let artifact = case.raw_artifacts[0].clone();
         let finding_id = "finding-1".to_owned();
         case.findings.push(Finding {
+            family: None,
+            severity_basis_code: None,
             id: finding_id.clone(),
             case_id: case.id.clone(),
             first_seen_run_id: "run-1".into(),
@@ -3282,6 +3290,8 @@ mod tests {
             metadata: BTreeMap::new(),
         });
         case.findings.push(Finding {
+            family: None,
+            severity_basis_code: None,
             id: "finding-1".into(),
             case_id: case.id.clone(),
             first_seen_run_id: "run-1".into(),
@@ -3599,7 +3609,7 @@ mod tests {
             last_run_id: Some("run-1".into()),
             observed_at: Some(time),
         });
-        case.findings.push(Finding {
+        case.findings.push(Finding { family: None, severity_basis_code: None,
             id: "finding-1".into(),
             case_id: case.id.clone(),
             first_seen_run_id: "run-1".into(),

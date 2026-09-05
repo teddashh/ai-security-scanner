@@ -371,6 +371,8 @@ mod tests {
             engine_runs: vec![],
         });
         case.findings.push(Finding {
+            family: None,
+            severity_basis_code: None,
             id: "finding-1".into(),
             case_id: case.id.clone(),
             first_seen_run_id: "run-1".into(),

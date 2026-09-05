@@ -370,6 +370,8 @@ mod tests {
     /// rule and the package all reach the record as lowercased tags.
     fn finding(case: &AssessmentCase, id: &str, engine: &str, rule: &str, asset: &str) -> Finding {
         Finding {
+            family: None,
+            severity_basis_code: None,
             id: id.into(),
             case_id: case.id.clone(),
             first_seen_run_id: "run".into(),

@@ -366,6 +366,8 @@ mod tests {
 
     fn finding(artifact: &RawArtifact) -> Finding {
         Finding {
+            family: None,
+            severity_basis_code: None,
             id: "finding-1".into(),
             case_id: "case-1".into(),
             first_seen_run_id: "run-1".into(),

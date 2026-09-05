@@ -24195,6 +24195,8 @@ mod tests {
         });
 
         let frozen_finding = Finding {
+            family: None,
+            severity_basis_code: None,
             id: "finding-html".into(),
             case_id: case.id.clone(),
             first_seen_run_id: run_id.clone(),
@@ -24532,6 +24534,8 @@ mod tests {
             ("finding-b", "engine-b:rule", 80),
         ] {
             case.findings.push(Finding {
+                family: None,
+                severity_basis_code: None,
                 id: id.into(),
                 case_id: case.id.clone(),
                 first_seen_run_id: "run-1".into(),
@@ -28124,6 +28128,8 @@ mod tests {
         };
         let finding_id = "finding-1".to_owned();
         let finding = Finding {
+            family: None,
+            severity_basis_code: None,
             id: finding_id.clone(),
             case_id: case.id.clone(),
             first_seen_run_id: "scan-1".into(),
@@ -28399,6 +28405,8 @@ mod tests {
             });
         }
         case.findings.push(Finding {
+            family: None,
+            severity_basis_code: None,
             id: "finding-1".into(),
             case_id: case.id.clone(),
             first_seen_run_id: "baseline".into(),
@@ -28593,6 +28601,8 @@ mod tests {
         let mut case = fixture.create();
         let case_id = case.id.clone();
         let observed = |run_id: &str, title: &str, evidence_id: &str, hash: &str| Finding {
+            family: None,
+            severity_basis_code: None,
             id: format!("finding-{run_id}"),
             case_id: case_id.clone(),
             first_seen_run_id: run_id.into(),
@@ -28691,6 +28701,8 @@ mod tests {
         case.scan_runs = vec![run("run-old", 1), run("run-new", 2)];
 
         let finding = |run_id: &str, title: &str, evidence_id: &str, hash_byte: char| Finding {
+            family: None,
+            severity_basis_code: None,
             id: format!("finding-{run_id}"),
             case_id: case_id.clone(),
             first_seen_run_id: run_id.into(),

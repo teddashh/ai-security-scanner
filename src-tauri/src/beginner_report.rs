@@ -3117,6 +3117,8 @@ mod tests {
         severity: Severity,
     ) -> Finding {
         Finding {
+            family: None,
+            severity_basis_code: None,
             id: id.into(),
             case_id: case.id.clone(),
             first_seen_run_id: "run-1".into(),

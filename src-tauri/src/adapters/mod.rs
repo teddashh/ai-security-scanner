@@ -8,7 +8,8 @@ mod control_mapping;
 
 use crate::adapter::{AdapterInput, AdapterOutput, AdapterRegistry, EngineAdapter};
 use crate::domain::{
-    Confidence, Evidence, EvidenceKind, Finding, FindingStatus, RawArtifact, Severity,
+    Confidence, Evidence, EvidenceKind, Finding, FindingFamily, FindingStatus, RawArtifact,
+    Severity, SeverityBasisCode,
 };
 use crate::error::{AppError, AppResult};
 use quick_xml::events::{BytesRef, BytesStart, Event};
@@ -116,7 +117,7 @@ struct SourceRecord {
     /// Present only when the engine reports no severity and this product
     /// derived one. It names what the derivation used, so the user is never
     /// shown a rating the engine did not give.
-    severity_basis: Option<String>,
+    severity_basis: Option<SeverityBasisCode>,
     location: String,
     asset_hint: Option<String>,
     asset_provider: Option<String>,
@@ -135,8 +136,32 @@ struct SourceRecord {
 /// prioritized honestly and the derivation stays visible.
 struct DerivedSeverity {
     severity: Severity,
-    /// Completes the sentence "severity derived from ...".
-    basis: &'static str,
+    /// Which basis. The sentence is derived from this by [`basis_text`] rather
+    /// than written beside it, so the code a localized client reads and the
+    /// prose an English one reads cannot come to disagree.
+    code: SeverityBasisCode,
+}
+
+/// Completes the sentence "severity derived from ...".
+fn basis_text(code: SeverityBasisCode) -> &'static str {
+    match code {
+        SeverityBasisCode::OpenPort => "an open port observation rather than a defect",
+        SeverityBasisCode::ReachableHttpService => {
+            "a reachable HTTP service observation rather than a defect"
+        }
+        SeverityBasisCode::SecretPatternMatch => "a secret pattern match in scanned source",
+        SeverityBasisCode::UnverifiedCredentialDetector => {
+            "a credential detector match that this product does not verify"
+        }
+        SeverityBasisCode::IacPolicyCheck => {
+            "a failed infrastructure-as-code policy check, rated flat because \
+             Checkov publishes no per-check severity offline"
+        }
+        SeverityBasisCode::CisKubernetesBenchmark => "a failed CIS Kubernetes Benchmark check",
+        SeverityBasisCode::CloudControlQuery => {
+            "a failed IAM control from this product's own fixed query"
+        }
+    }
 }
 
 struct RecordDraft {
@@ -1905,7 +1930,7 @@ fn extract_naabu(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                 // rather than rated, and the record says which of the two it is.
                 DerivedSeverity {
                     severity: Severity::Informational,
-                    basis: "an open port observation rather than a defect",
+                    code: SeverityBasisCode::OpenPort,
                 },
                 format!("{}:{port}", redact_location(&host)),
                 string_any(object, &["asset_id"]),
@@ -1941,7 +1966,7 @@ fn extract_httpx(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                 // rather than rated, and the record says which of the two it is.
                 DerivedSeverity {
                     severity: Severity::Informational,
-                    basis: "a reachable HTTP service observation rather than a defect",
+                    code: SeverityBasisCode::ReachableHttpService,
                 },
                 redact_location(&target),
                 string_any(object, &["asset_id"]),
@@ -2153,7 +2178,7 @@ fn extract_gitleaks(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<
                 // rating is this product's, from what a match means.
                 DerivedSeverity {
                     severity: Severity::High,
-                    basis: "a secret pattern match in scanned source",
+                    code: SeverityBasisCode::SecretPatternMatch,
                 },
                 location,
                 string_any(object, &["asset_id"]),
@@ -2235,7 +2260,7 @@ fn extract_trufflehog(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                 // secret on a test that was never performed.
                 DerivedSeverity {
                     severity: Severity::High,
-                    basis: "a credential detector match that this product does not verify",
+                    code: SeverityBasisCode::UnverifiedCredentialDetector,
                 },
                 source,
                 string_any(object, &["asset_id"]),
@@ -2286,8 +2311,7 @@ fn extract_checkov(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
                 // sinks a whole engine's output below Low as unknown.
                 DerivedSeverity {
                     severity: Severity::Medium,
-                    basis: "a failed infrastructure-as-code policy check, rated flat because \
-                            Checkov publishes no per-check severity offline",
+                    code: SeverityBasisCode::IacPolicyCheck,
                 },
                 string_any(object, &["file_path", "repo_file_path"])
                     .unwrap_or_else(|| "iac-resource".into()),
@@ -2646,7 +2670,7 @@ fn extract_kube_bench(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                     // failed check High for exactly this reason.
                     DerivedSeverity {
                         severity: Severity::High,
-                        basis: "a failed CIS Kubernetes Benchmark check",
+                        code: SeverityBasisCode::CisKubernetesBenchmark,
                     },
                     string_any(object, &["resource", "node_type"])
                         .unwrap_or_else(|| "kubernetes-cluster".into()),
@@ -2705,7 +2729,7 @@ fn extract_steampipe(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
                 // needs an engine-image rebuild and is not done here.
                 DerivedSeverity {
                     severity: Severity::High,
-                    basis: "a failed IAM control from this product's own fixed query",
+                    code: SeverityBasisCode::CloudControlQuery,
                 },
                 string_any(object, &["resource", "resource_id", "title"])
                     .unwrap_or_else(|| "cloud-resource".into()),
@@ -2789,7 +2813,7 @@ fn merge_finding(
 
     let severity = record.severity;
     let priority = priority_for(&severity);
-    let severity_basis = record.severity_basis.clone();
+    let severity_basis = record.severity_basis;
     let mut tags = vec![
         format!("engine:{}", adapter.id),
         format!("source-rule:{}", safe_tag(&rule_id)),
@@ -2825,11 +2849,11 @@ fn merge_finding(
             fingerprint,
             title,
             plain_language_summary: match &severity_basis {
-                Some(basis) => format!(
+                Some(code) => format!(
                     "{} reported this condition on the assessed asset without rating it. This product rated it {} from {}. The attached raw record is evidence, not an instruction.",
                     input.manifest.display_name,
                     severity_label(&severity),
-                    basis
+                    basis_text(*code)
                 ),
                 None => format!(
                     "{} reported {} {}-severity condition on the assessed asset. The attached raw record is evidence, not an instruction.",
@@ -2844,8 +2868,9 @@ fn merge_finding(
             priority,
             priority_reasons: vec![
                 match &severity_basis {
-                    Some(basis) => format!(
-                        "Severity derived from {basis}; {} reports no severity of its own.",
+                    Some(code) => format!(
+                        "Severity derived from {}; {} reports no severity of its own.",
+                        basis_text(*code),
                         input.manifest.display_name
                     ),
                     None => format!("Source severity: {}", safe_text(&record.source_severity, 80)),
@@ -2877,6 +2902,11 @@ fn merge_finding(
             recommended_expert_type: adapter.expert_type.into(),
             status: FindingStatus::Unreviewed,
             tags,
+            // The codes the prose above was composed from, so a client that
+            // renders in another language composes its own sentence rather
+            // than showing a translated heading over an English paragraph.
+            family: Some(family_for(adapter.profile)),
+            severity_basis_code: severity_basis,
         },
     );
 }
@@ -2895,11 +2925,9 @@ fn record_from_draft(draft: RecordDraft) -> SourceRecord {
         // The engine reported nothing, so the source severity stays empty rather
         // than borrowing the derived level. Nothing downstream may present the
         // derived rating as the engine's own.
-        Some(derived) if reported_severity.is_empty() => (
-            derived.severity,
-            String::new(),
-            Some(derived.basis.to_owned()),
-        ),
+        Some(derived) if reported_severity.is_empty() => {
+            (derived.severity, String::new(), Some(derived.code))
+        }
         // A rating the engine did give always wins, including one this product
         // does not recognize: that has to surface as unknown and needing review,
         // not be replaced by a derivation.
@@ -3153,6 +3181,29 @@ fn impact_for(profile: Profile, severity: &Severity) -> String {
         "If the scanner result is confirmed, {consequence}. The {} source severity is not a product-wide compliance score.",
         severity_label(severity)
     )
+}
+
+/// The family whose sentences this profile's findings are composed from.
+///
+/// The single grouping [`impact_for`] and [`remedy_for`] both switch on, named
+/// once so a localized client can reach the same nine cases without matching on
+/// twenty-one engine profiles it has no other reason to know about.
+fn family_for(profile: Profile) -> FindingFamily {
+    match profile {
+        Profile::CloudQuery | Profile::Steampipe | Profile::Prowler | Profile::ScoutSuite => {
+            FindingFamily::CloudPosture
+        }
+        Profile::Cloudsplaining => FindingFamily::CloudIdentity,
+        Profile::ScubaGear | Profile::Maester => FindingFamily::Microsoft365,
+        Profile::Naabu | Profile::Httpx | Profile::Nuclei | Profile::Greenbone => {
+            FindingFamily::NetworkExposure
+        }
+        Profile::Semgrep => FindingFamily::SourceCode,
+        Profile::Gitleaks | Profile::Trufflehog => FindingFamily::Secret,
+        Profile::Checkov | Profile::Kics => FindingFamily::InfrastructureAsCode,
+        Profile::Trivy | Profile::Grype | Profile::Syft => FindingFamily::VulnerableComponent,
+        Profile::Kubescape | Profile::KubeBench => FindingFamily::Kubernetes,
+    }
 }
 
 /// The kind of change that actually resolves this family of finding.

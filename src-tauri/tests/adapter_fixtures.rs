@@ -2,8 +2,8 @@ use ai_security_scanner_lib::adapter::{AdapterAssetIdentifierMap, AdapterInput, 
 use ai_security_scanner_lib::adapters::{BUILTIN_ENGINE_IDS, builtin_adapter_registry};
 use ai_security_scanner_lib::correlation::correlation_report;
 use ai_security_scanner_lib::domain::{
-    AssessmentCase, Asset, AssetIdentifier, AssetKind, Confidence, DataClass, FindingStatus,
-    OrganizationProfile, RawArtifact, Severity,
+    AssessmentCase, Asset, AssetIdentifier, AssetKind, Confidence, DataClass, FindingFamily,
+    FindingStatus, OrganizationProfile, RawArtifact, Severity, SeverityBasisCode,
 };
 use ai_security_scanner_lib::registry::EngineRegistry;
 use chrono::{TimeZone, Utc};
@@ -2318,5 +2318,83 @@ fn the_action_a_finding_asks_for_matches_the_kind_of_problem_it_reports() {
         9,
         "one action clause per family, not {}: {distinct:#?}",
         distinct.len()
+    );
+}
+
+/// The codes exist so a localized client can compose the sentence itself. That
+/// only works if the code says the same thing the English sentence says, and
+/// nothing about `family: Some(...)` compiling makes it the right family: a
+/// copy-paste that files Gitleaks under `VulnerableComponent` still builds,
+/// still serializes, and tells a Chinese reader to upgrade a package when a
+/// credential is exposed.
+#[test]
+fn the_codes_a_localized_client_reads_agree_with_the_english_they_replace() {
+    let mut action_by_family: BTreeMap<FindingFamily, BTreeSet<String>> = BTreeMap::new();
+    let mut seen_basis: BTreeSet<SeverityBasisCode> = BTreeSet::new();
+
+    for engine_id in BUILTIN_ENGINE_IDS {
+        for finding in normalize_fixture(engine_id).findings {
+            let family = finding
+                .family
+                .unwrap_or_else(|| panic!("{engine_id} finding carries no family code"));
+
+            // The action clause is composed from the family, so two findings
+            // sharing a family must share it and two families must not.
+            let action = finding
+                .recommendation
+                .rsplit_once("then plan and approve ")
+                .unwrap_or_else(|| panic!("{engine_id}: {}", finding.recommendation))
+                .1
+                .to_owned();
+            action_by_family.entry(family).or_default().insert(action);
+
+            // Exactly the findings tagged as derived carry a basis code, so a
+            // client can trust one to explain the other.
+            let tagged_derived = finding
+                .tags
+                .iter()
+                .any(|tag| tag == "severity-basis:derived");
+            assert_eq!(
+                finding.severity_basis_code.is_some(),
+                tagged_derived,
+                "{engine_id} finding {} disagrees with its own severity-basis tag",
+                finding.id
+            );
+            if let Some(code) = finding.severity_basis_code {
+                seen_basis.insert(code);
+                assert!(
+                    finding.plain_language_summary.contains("without rating it"),
+                    "{engine_id} carries a basis code for a rating the engine gave: {}",
+                    finding.plain_language_summary
+                );
+            }
+        }
+    }
+
+    for (family, actions) in &action_by_family {
+        assert_eq!(
+            actions.len(),
+            1,
+            "{family:?} composed more than one action clause: {actions:#?}"
+        );
+    }
+    let distinct_actions = action_by_family
+        .values()
+        .filter_map(|actions| actions.iter().next().cloned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        distinct_actions.len(),
+        action_by_family.len(),
+        "two families share an action clause, so the code cannot be recovered \
+         from the sentence: {action_by_family:#?}"
+    );
+
+    // Every basis this product can derive is reachable from a shipped fixture.
+    // A code no fixture produces is a translation nobody has ever seen render.
+    assert_eq!(
+        seen_basis.len(),
+        7,
+        "only {} of the seven severity bases are exercised: {seen_basis:?}",
+        seen_basis.len()
     );
 }

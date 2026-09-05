@@ -1256,6 +1256,51 @@ pub struct FindingWorkflowEvent {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+/// The kind of problem a finding reports, carried as a code rather than only as
+/// the English sentence composed from it.
+///
+/// Every sentence this product writes about a finding — what it could mean,
+/// what to do about it — is composed from this and the severity. Storing only
+/// the composed prose is what produced Chinese headings over English paragraphs
+/// in the zh-Hant report and the zh-TW findings pane: by the time a locale is
+/// known, the sentence is already written and frozen into the case. The engine's
+/// own `title` is deliberately not covered — that is the engine's wording, and
+/// restating it in another language would be this product speaking for it.
+///
+/// Finer-grained than the impact text needs: `SourceCode` and `Secret` share a
+/// consequence but not a remedy, and the remedy is the half that is urgent.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingFamily {
+    CloudPosture,
+    CloudIdentity,
+    Microsoft365,
+    NetworkExposure,
+    SourceCode,
+    Secret,
+    InfrastructureAsCode,
+    VulnerableComponent,
+    Kubernetes,
+}
+
+/// Why this product rated a finding the engine left unrated.
+///
+/// Present only when the engine reported no severity of its own; its absence
+/// means the rating is the engine's. Companion to the `severity-basis:derived`
+/// tag, carrying which basis rather than only that there was one, so the
+/// disclosure survives translation instead of falling back to English.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum SeverityBasisCode {
+    OpenPort,
+    ReachableHttpService,
+    SecretPatternMatch,
+    UnverifiedCredentialDetector,
+    IacPolicyCheck,
+    CisKubernetesBenchmark,
+    CloudControlQuery,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
     pub id: Id,
@@ -1280,6 +1325,14 @@ pub struct Finding {
     pub recommended_expert_type: String,
     pub status: FindingStatus,
     pub tags: Vec<String>,
+    /// Defaulted so cases written before this field existed still load. A
+    /// legacy finding has no code, and a client that cannot compose its own
+    /// sentence falls back to the English prose beside it rather than showing
+    /// nothing.
+    #[serde(default)]
+    pub family: Option<FindingFamily>,
+    #[serde(default)]
+    pub severity_basis_code: Option<SeverityBasisCode>,
 }
 
 /// A reversible, user-facing collection of related canonical findings. The
