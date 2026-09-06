@@ -16,6 +16,7 @@ import { projectVisibleFindingGroups } from "../findingGroupPresentation";
 import {
   engineNameFrom,
   findingActionSentence,
+  findingConfidencePresentation,
   findingPriorityReason,
   findingUnattributedGap,
   coverageGapProse,
@@ -300,11 +301,9 @@ const copy = {
   rankAria: { en: "Handoff priority {rank}", zhTW: "交接優先順序第 {rank} 位" },
   rank: { en: "#{rank}", zhTW: "第 {rank}" },
   evidenceCount: { en: "Evidence records: {count}", zhTW: "{count} 份證據" },
-  // Two rows can otherwise be identical: the row shows no engine, and no
-  // sign that a rating is this product's own rather than the scanner's.
-  // Every "high" ties at the same priority, so the order inside a band is
-  // alphabetical by title -- an unverified pattern match sits beside a
-  // scored vulnerability with nothing on the row telling them apart.
+  // Ordering by confidence cannot explain who made a rating. Keep the engine
+  // and product-derived marker visible on the row where a beginner first sees
+  // the finding.
   ratedByProduct: { en: "rated here", zhTW: "本產品評定" },
   ratedByProductAria: {
     en: "This severity was assigned by this product, not by the scanner.",
@@ -1720,7 +1719,12 @@ export function FindingsPage({
                       // so `assetName` is the same target label on every row.
                       engineNameFrom(finding.summary),
                       text(copy.evidenceCount, { count: formatNumber(finding.evidence.length) }),
-                      confidenceMeta[finding.confidence],
+                      findingConfidencePresentation(
+                        locale,
+                        confidenceMeta[finding.confidence],
+                        finding.confidenceBasisCode,
+                        finding.priorityReasons ?? [],
+                      ),
                     ].filter(Boolean).join(" · ")}
                   </span>
                 </span>
@@ -1736,7 +1740,12 @@ export function FindingsPage({
               <div className="finding-detail__header">
                 <div className="tag-row">
                   <StatusPill label={severityMeta[selected.severity].label} tone={severityMeta[selected.severity].tone} />
-                  <StatusPill label={confidenceMeta[selected.confidence]} tone="neutral" />
+                  <StatusPill label={findingConfidencePresentation(
+                    locale,
+                    confidenceMeta[selected.confidence],
+                    selected.confidenceBasisCode,
+                    selected.priorityReasons ?? [],
+                  )} tone="neutral" />
                   <StatusPill label={workflowMeta[selected.workflowState]} tone={workflowTone(selected.workflowState)} />
                 </div>
                 <h2>{selected.title}</h2>
@@ -1744,6 +1753,9 @@ export function FindingsPage({
                   englishFallback: selected.summary,
                   severityLabel: severityMeta[selected.severity].label,
                   severityBasisCode: selected.severityBasisCode,
+                  confidenceLabel: confidenceMeta[selected.confidence],
+                  confidenceBasisCode: selected.confidenceBasisCode,
+                  priorityReasons: selected.priorityReasons ?? [],
                 })}</p>
               </div>
 
@@ -1752,7 +1764,12 @@ export function FindingsPage({
                 <div><dt>{text(copy.reviewStatus)}</dt><dd>{workflowMeta[selected.workflowState]}</dd></div>
                 <div><dt>{text(copy.recommendedExpert)}</dt><dd>{localizedExpertType(selected.expertType, locale)}</dd></div>
                 <div><dt>{text(copy.lastObserved)}</dt><dd>{formatDateTime(selected.lastSeenAt, historyDateTime)}</dd></div>
-                <div><dt>{text(copy.evidenceConfidence)}</dt><dd>{confidenceMeta[selected.confidence]}</dd></div>
+                <div><dt>{text(copy.evidenceConfidence)}</dt><dd>{findingConfidencePresentation(
+                  locale,
+                  confidenceMeta[selected.confidence],
+                  selected.confidenceBasisCode,
+                  selected.priorityReasons ?? [],
+                )}</dd></div>
                 <div><dt>{text(copy.relatedAssets)}</dt><dd>{text(copy.assetCount, { count: formatNumber(selected.assetIds?.length ?? 1) })}</dd></div>
               </dl>
 

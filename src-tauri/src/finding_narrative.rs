@@ -16,7 +16,7 @@
 //!  - A finding with no code keeps that prose. Untranslated beats blank.
 //!  - The engine's own title is never restated in another language.
 
-use crate::domain::{ContextFactor, FindingFamily, SeverityBasisCode};
+use crate::domain::{ConfidenceBasisCode, ContextFactor, FindingFamily, SeverityBasisCode};
 
 /// The clause completing "If the scanner result is confirmed, ...".
 fn consequence(family: FindingFamily) -> &'static str {
@@ -101,6 +101,91 @@ pub const ALL_SEVERITY_BASIS_CODES: [SeverityBasisCode; 7] = [
     SeverityBasisCode::CloudControlQuery,
 ];
 
+/// The canonical English clause explaining why this product assigned a
+/// confidence when the engine did not provide one.
+pub fn confidence_basis_english(code: ConfidenceBasisCode) -> &'static str {
+    match code {
+        ConfidenceBasisCode::DeterministicPolicyEvaluation => {
+            "a deterministic policy or configuration evaluation"
+        }
+        ConfidenceBasisCode::AdvisoryVersionMatch => {
+            "an installed-version match against a published advisory range"
+        }
+        ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch => {
+            "an unverified pattern or detector match"
+        }
+        ConfidenceBasisCode::ObservedResponse => "a response this product observed directly",
+        ConfidenceBasisCode::TemplateMatcher => "a template matcher firing on the assessed target",
+        ConfidenceBasisCode::MissingDetectionQualityScore => {
+            "the absence of a detection-quality score in the engine result"
+        }
+    }
+}
+
+/// The Traditional Chinese form of [`confidence_basis_english`].
+pub fn confidence_basis_zh_hant(code: ConfidenceBasisCode) -> &'static str {
+    match code {
+        ConfidenceBasisCode::DeterministicPolicyEvaluation => "確定性的政策或設定評估結果",
+        ConfidenceBasisCode::AdvisoryVersionMatch => "已安裝版本符合已發布公告的受影響範圍",
+        ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch => "尚未驗證的樣式或偵測器比對結果",
+        ConfidenceBasisCode::ObservedResponse => "本產品直接觀察到的回應",
+        ConfidenceBasisCode::TemplateMatcher => "範本比對器在受評估目標上觸發",
+        ConfidenceBasisCode::MissingDetectionQualityScore => "引擎結果中未提供偵測品質分數",
+    }
+}
+
+/// Every confidence basis code, so a new one cannot be added without both
+/// reader-facing forms.
+pub const ALL_CONFIDENCE_BASIS_CODES: [ConfidenceBasisCode; 6] = [
+    ConfidenceBasisCode::DeterministicPolicyEvaluation,
+    ConfidenceBasisCode::AdvisoryVersionMatch,
+    ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch,
+    ConfidenceBasisCode::ObservedResponse,
+    ConfidenceBasisCode::TemplateMatcher,
+    ConfidenceBasisCode::MissingDetectionQualityScore,
+];
+
+fn source_confidence(priority_reasons: &[String]) -> Option<&str> {
+    priority_reasons
+        .iter()
+        .find_map(|reason| reason.trim().strip_prefix("Source confidence: "))
+        .filter(|source| !source.is_empty())
+}
+
+pub fn confidence_presentation_english(
+    confidence_label: &str,
+    confidence_basis_code: Option<ConfidenceBasisCode>,
+    priority_reasons: &[String],
+) -> String {
+    if let Some(code) = confidence_basis_code {
+        return format!(
+            "{confidence_label} — this product's rating from {}",
+            confidence_basis_english(code)
+        );
+    }
+    source_confidence(priority_reasons).map_or_else(
+        || confidence_label.to_owned(),
+        |source| format!("{confidence_label} — engine rating: {source}"),
+    )
+}
+
+pub fn confidence_presentation_zh_hant(
+    confidence_label: &str,
+    confidence_basis_code: Option<ConfidenceBasisCode>,
+    priority_reasons: &[String],
+) -> String {
+    if let Some(code) = confidence_basis_code {
+        return format!(
+            "{confidence_label} — 本產品依據{}評定",
+            confidence_basis_zh_hant(code)
+        );
+    }
+    source_confidence(priority_reasons).map_or_else(
+        || confidence_label.to_owned(),
+        |source| format!("{confidence_label} — 來源工具評定：{source}"),
+    )
+}
+
 fn basis(code: SeverityBasisCode) -> &'static str {
     match code {
         SeverityBasisCode::OpenPort => "開放連接埠的觀察結果，而非缺陷",
@@ -164,20 +249,33 @@ pub fn summary_zh_hant(
     english: &str,
     severity_label: &str,
     severity_basis_code: Option<SeverityBasisCode>,
+    confidence_label: &str,
+    confidence_basis_code: Option<ConfidenceBasisCode>,
+    priority_reasons: &[String],
 ) -> String {
     let Some(engine) = engine_name_from(english) else {
         return english.to_owned();
     };
     const EVIDENCE: &str = "附帶的原始記錄是證據，不是指示。";
-    match severity_basis_code {
-        None => {
-            format!("{engine} 在受評估的資產上回報了一項{severity_label}等級的狀況。{EVIDENCE}")
-        }
+    let mut summary = match severity_basis_code {
+        None => format!("{engine} 在受評估的資產上回報了一項{severity_label}等級的狀況。"),
         Some(code) => format!(
-            "{engine} 在受評估的資產上回報了這項狀況，但未評定嚴重程度。本產品依據{}，將它評為{severity_label}。{EVIDENCE}",
+            "{engine} 在受評估的資產上回報了這項狀況，但未評定嚴重程度。本產品依據{}，將它評為{severity_label}。",
             basis(code)
         ),
+    };
+    if let Some(code) = confidence_basis_code {
+        summary.push_str(&format!(
+            "{engine} 本身不提供信心評定。本產品依據{}，將信心評為{confidence_label}。",
+            confidence_basis_zh_hant(code)
+        ));
+    } else if let Some(source) = source_confidence(priority_reasons) {
+        summary.push_str(&format!(
+            "{engine} 對這項問題的信心評定為 {source}；本產品將它對應為{confidence_label}信心。"
+        ));
     }
+    summary.push_str(EVIDENCE);
+    summary
 }
 
 /// The case-specific clauses `apply_case_context` appends to `possible_impact`.
@@ -1082,6 +1180,35 @@ pub fn priority_reason_zh_hant(english: &str) -> String {
     {
         return format!("來源工具評定的嚴重程度：{value}");
     }
+    if let Some(value) = trimmed
+        .strip_prefix("Source confidence: ")
+        .filter(|value| !value.is_empty())
+    {
+        return format!("來源工具評定的信心：{value}");
+    }
+    const CONFIDENCE_DERIVED: &str = "Confidence derived from ";
+    const CONFIDENCE_TAIL: &str = " reports no confidence of its own.";
+    if let Some(rest) = trimmed
+        .strip_prefix(CONFIDENCE_DERIVED)
+        .and_then(|rest| rest.strip_suffix(CONFIDENCE_TAIL))
+    {
+        let Some((basis_text, engine)) = rest.rsplit_once("; ") else {
+            return english.to_owned();
+        };
+        let Some(code) = ALL_CONFIDENCE_BASIS_CODES
+            .into_iter()
+            .find(|code| confidence_basis_english(*code) == basis_text)
+        else {
+            return english.to_owned();
+        };
+        if engine.is_empty() {
+            return english.to_owned();
+        }
+        return format!(
+            "信心是由{}推導而來；{engine} 本身不提供信心評定。",
+            confidence_basis_zh_hant(code)
+        );
+    }
     const DERIVED: &str = "Severity derived from ";
     const TAIL: &str = " reports no severity of its own.";
     let Some(rest) = trimmed.strip_prefix(DERIVED) else {
@@ -1382,7 +1509,7 @@ mod tests {
         );
         // A sentence this product did not write is not taken apart for a name.
         assert_eq!(
-            summary_zh_hant("Some other text.", "高", None),
+            summary_zh_hant("Some other text.", "高", None, "高", None, &[]),
             "Some other text."
         );
     }
@@ -1439,7 +1566,8 @@ mod tests {
                 "{engine} reported a high-severity condition on the assessed asset. The attached raw record is evidence, not an instruction."
             );
             assert!(
-                summary_zh_hant(&english, "高", None).starts_with(&format!("{engine} ")),
+                summary_zh_hant(&english, "高", None, "高", None, &[])
+                    .starts_with(&format!("{engine} ")),
                 "{engine} lost its name"
             );
         }
@@ -1477,12 +1605,30 @@ mod tests {
         ];
         let summaries = bases
             .iter()
-            .map(|code| summary_zh_hant(ENGLISH_SUMMARY, "高", Some(*code)))
+            .map(|code| summary_zh_hant(ENGLISH_SUMMARY, "高", Some(*code), "高", None, &[]))
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(summaries.len(), bases.len());
         for summary in &summaries {
             assert!(summary.contains("未評定嚴重程度"), "{summary}");
         }
+    }
+
+    #[test]
+    fn every_confidence_basis_composes_chinese_and_names_this_product() {
+        let summaries = ALL_CONFIDENCE_BASIS_CODES
+            .into_iter()
+            .map(|code| summary_zh_hant(ENGLISH_SUMMARY, "高", None, "高", Some(code), &[]))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(summaries.len(), ALL_CONFIDENCE_BASIS_CODES.len());
+        for summary in summaries {
+            assert!(summary.contains("本產品依據"), "{summary}");
+            assert!(summary.contains("信心評為高"), "{summary}");
+        }
+        assert_eq!(
+            confidence_presentation_zh_hant("高", None, &["Source confidence: HIGH".into()]),
+            "高 — 來源工具評定：HIGH"
+        );
+        assert_eq!(confidence_presentation_zh_hant("高", None, &[]), "高");
     }
 
     #[test]

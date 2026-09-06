@@ -1307,6 +1307,23 @@ pub enum SeverityBasisCode {
     CloudControlQuery,
 }
 
+/// Why this product assigned confidence when the engine supplied no confidence
+/// rating of its own.
+///
+/// Present only for a derived confidence. Its absence is deliberately not, by
+/// itself, proof that an old persisted finding carried an engine rating: cases
+/// written before this field existed keep their stored presentation unchanged.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfidenceBasisCode {
+    DeterministicPolicyEvaluation,
+    AdvisoryVersionMatch,
+    UnverifiedPatternOrDetectorMatch,
+    ObservedResponse,
+    TemplateMatcher,
+    MissingDetectionQualityScore,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
     pub id: Id,
@@ -1339,6 +1356,11 @@ pub struct Finding {
     pub family: Option<FindingFamily>,
     #[serde(default)]
     pub severity_basis_code: Option<SeverityBasisCode>,
+    /// Present only when this product, rather than the source engine, assigned
+    /// the confidence. Defaulted so older case files continue to load and keep
+    /// the presentation they already stored.
+    #[serde(default)]
+    pub confidence_basis_code: Option<ConfidenceBasisCode>,
     /// Why this case raised the finding's priority above what the scanner's own
     /// rating would give it. `apply_case_context` appends a sentence to
     /// `possible_impact` and a reason to `priority_reasons` for each of these.

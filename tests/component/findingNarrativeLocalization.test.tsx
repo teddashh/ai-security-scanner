@@ -14,7 +14,7 @@ import type { Finding } from "../../src/types";
 
 // The English the backend composes and freezes into the case.
 const ENGLISH_SUMMARY =
-  "TruffleHog reported this condition on the assessed asset without rating it. This product rated it high from a credential detector match that this product does not verify. The attached raw record is evidence, not an instruction.";
+  "TruffleHog reported this condition on the assessed asset without rating it. This product rated it high from a credential detector match that this product does not verify. TruffleHog reported no confidence rating for it. This product rated its confidence low from an unverified pattern or detector match. The attached raw record is evidence, not an instruction.";
 const ENGLISH_IMPACT =
   "If the scanner result is confirmed, source code or credentials may permit unauthorized access or unsafe application behavior. The high source severity is not a product-wide compliance score.";
 const ENGLISH_ACTION =
@@ -33,9 +33,13 @@ const leakedCredential = (overrides: Partial<Finding> = {}): Finding => ({
   expertType: "Secrets-response specialist",
   family: "secret",
   severityBasisCode: "unverified_credential_detector",
+  confidenceBasisCode: "unverified_pattern_or_detector_match",
   severity: "high",
-  confidence: "high",
+  confidence: "low",
   priority: 80,
+  priorityReasons: [
+    "Confidence derived from an unverified pattern or detector match; TruffleHog reports no confidence of its own.",
+  ],
   workflowState: "unreviewed",
   evidence: [],
   controls: [],
@@ -82,6 +86,7 @@ test("a zh-TW reader is not handed English paragraphs under Chinese headings", (
 
   // The same three things the English said, said in Chinese.
   expect(rendered).toContain("本產品依據憑證偵測器的比對結果");
+  expect(rendered).toContain("本產品依據尚未驗證的樣式或偵測器比對結果，將信心評為低");
   expect(rendered).toContain("原始碼或憑證可能導致未授權存取");
   // A leaked credential is told to revoke and rotate before anything else.
   expect(rendered).toContain("先撤銷並輪替這組已外洩的憑證");
@@ -104,26 +109,48 @@ test("an English reader still gets the backend's own wording, unchanged", () => 
   }
 });
 
+test("a zh-TW reader sees the engine's own confidence word as the source", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderPage([
+    leakedCredential({
+      id: "finding-semgrep",
+      title: "A subprocess launched through a shell can allow command injection.",
+      summary:
+        "Semgrep reported a high-severity condition on the assessed asset. Semgrep reported confidence HIGH for it; this product maps that to high confidence. The attached raw record is evidence, not an instruction.",
+      severityBasisCode: undefined,
+      confidenceBasisCode: undefined,
+      priorityReasons: ["Source confidence: HIGH"],
+    }),
+  ]);
+  const rendered = container.textContent ?? "";
+
+  expect(rendered).toContain("Semgrep 對這項問題的信心評定為 HIGH");
+  expect(rendered).toContain("來源工具評定：HIGH");
+  expect(rendered).not.toContain("本產品依據尚未驗證的樣式或偵測器比對結果評定");
+});
+
 test("a finding stored before the codes existed keeps its English rather than losing it", () => {
   window.localStorage.setItem(localeStorageKey, "zh-TW");
   const { container } = renderPage([
-    leakedCredential({ family: undefined, severityBasisCode: undefined }),
+    leakedCredential({
+      family: undefined,
+      severityBasisCode: undefined,
+      confidenceBasisCode: undefined,
+      priorityReasons: [],
+    }),
   ]);
   const rendered = container.textContent ?? "";
 
   // Untranslated beats blank, and beats a guess about which family it was.
   expect(rendered).toContain(ENGLISH_IMPACT);
   expect(rendered).toContain(ENGLISH_ACTION);
+  expect(rendered).not.toContain("本產品依據尚未驗證的樣式或偵測器比對結果");
 });
 
-// The list is the surface a beginner reads first, and two rows on it could be
-// identical. `priority_for` is a pure function of severity, so every "high"
-// ties at 80 and the order inside a band falls through to comparing titles --
-// an unverified pattern match sits beside a scored vulnerability, sorted
-// alphabetically, with nothing on either row telling them apart. The row
-// carried no engine name (engine runs are single-asset, so `assetName` is the
-// same target label on every row) and no sign that a rating was this product's
-// own, even though the detail pane below discloses exactly that.
+// The list is the surface a beginner reads first. Priority is a pure function
+// of severity here, so confidence now breaks ties before finding id. The row
+// still needs to name its engine and disclose product-derived ratings because
+// ordering alone does not explain who made either judgment.
 const scoredVulnerability = (): Finding => ({
   ...leakedCredential(),
   id: "finding-nuclei",

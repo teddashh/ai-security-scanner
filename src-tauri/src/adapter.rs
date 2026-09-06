@@ -373,6 +373,7 @@ mod tests {
         Finding {
             family: None,
             severity_basis_code: None,
+            confidence_basis_code: None,
             context_factors: Vec::new(),
             id: "finding-1".into(),
             case_id: "case-1".into(),

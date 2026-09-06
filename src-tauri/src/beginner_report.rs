@@ -310,6 +310,8 @@ pub struct BeginnerFinding {
     pub family: Option<FindingFamily>,
     #[serde(default)]
     pub severity_basis_code: Option<SeverityBasisCode>,
+    #[serde(default)]
+    pub confidence_basis_code: Option<crate::domain::ConfidenceBasisCode>,
     /// The case-specific reasons this finding's priority was raised. Carried
     /// for the same reason as the two codes above: the surfaces that compose
     /// their own impact sentence replace the prose these were appended to.
@@ -1974,6 +1976,7 @@ fn project_finding(
         framework_references,
         family: details.and_then(|finding| finding.family),
         severity_basis_code: details.and_then(|finding| finding.severity_basis_code),
+        confidence_basis_code: details.and_then(|finding| finding.confidence_basis_code),
         context_factors: details
             .map(|finding| finding.context_factors.clone())
             .unwrap_or_default(),
@@ -1997,11 +2000,17 @@ pub(crate) fn finding_step_reason(
     title: &str,
     severity: &Severity,
     confidence: &Confidence,
+    confidence_basis_code: Option<crate::domain::ConfidenceBasisCode>,
+    priority_reasons: &[String],
 ) -> String {
+    let confidence = crate::finding_narrative::confidence_presentation_english(
+        &format!("{} confidence", confidence_word(confidence)),
+        confidence_basis_code,
+        priority_reasons,
+    );
     format!(
-        "{title} — {} severity, {} confidence",
+        "{title} — {} severity, {confidence}",
         severity_word(severity),
-        confidence_word(confidence)
     )
 }
 
@@ -2041,7 +2050,13 @@ fn project_next_steps(
             priority: index as u16,
             code: NextActionCode::ReviewFinding,
             action: finding.next_step.clone(),
-            reason: finding_step_reason(&finding.title, &finding.severity, &finding.confidence),
+            reason: finding_step_reason(
+                &finding.title,
+                &finding.severity,
+                &finding.confidence,
+                finding.confidence_basis_code,
+                &finding.priority_reasons,
+            ),
             finding_id: Some(finding.finding_id.clone()),
             task_id: None,
             recommended_expert_type: Some(finding.recommended_expert_type.clone()),
@@ -2462,7 +2477,9 @@ mod tests {
             super::finding_step_reason(
                 "Exposed key",
                 &super::Severity::Unknown,
-                &super::Confidence::Confirmed
+                &super::Confidence::Confirmed,
+                None,
+                &[],
             ),
             "Exposed key — Unknown severity, Confirmed confidence"
         );
@@ -2470,9 +2487,21 @@ mod tests {
             super::finding_step_reason(
                 "Exposed key",
                 &super::Severity::Informational,
-                &super::Confidence::Low
+                &super::Confidence::Low,
+                None,
+                &[],
             ),
             "Exposed key — Informational severity, Low confidence"
+        );
+        assert_eq!(
+            super::finding_step_reason(
+                "Policy failure",
+                &super::Severity::High,
+                &super::Confidence::High,
+                Some(crate::domain::ConfidenceBasisCode::DeterministicPolicyEvaluation),
+                &[],
+            ),
+            "Policy failure — High severity, High confidence — this product's rating from a deterministic policy or configuration evaluation"
         );
     }
 
@@ -3278,7 +3307,9 @@ mod tests {
             true,
         );
         let low = frozen_finding(&case, "finding-low", 10, Severity::Low);
-        let high = frozen_finding(&case, "finding-high", 90, Severity::High);
+        let mut high = frozen_finding(&case, "finding-high", 90, Severity::High);
+        high.confidence_basis_code =
+            Some(crate::domain::ConfidenceBasisCode::DeterministicPolicyEvaluation);
         case.findings = vec![low.clone(), high.clone()];
         case.finding_observations = vec![
             observation(&low, "run-1", instant(17)),
@@ -3297,9 +3328,46 @@ mod tests {
         );
         assert_eq!(report.findings[0].framework_references.len(), 1);
         assert_eq!(
+            report.findings[0].confidence_basis_code,
+            Some(crate::domain::ConfidenceBasisCode::DeterministicPolicyEvaluation)
+        );
+        assert_eq!(
             report.framework_notice.non_certification,
             FRAMEWORK_NON_CERTIFICATION_NOTICE
         );
+    }
+
+    #[test]
+    fn derived_confidence_orders_tied_findings_by_evidence_strength() {
+        let mut case = localhost_case(
+            LocalhostTcpOutcome::Reachable,
+            EngineRunStatus::Completed,
+            true,
+        );
+        let mut low = frozen_finding(&case, "finding-a-low", 80, Severity::High);
+        low.confidence = Confidence::Low;
+        low.confidence_basis_code =
+            Some(crate::domain::ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch);
+        let mut medium = frozen_finding(&case, "finding-m-medium", 80, Severity::High);
+        medium.confidence = Confidence::Medium;
+        medium.confidence_basis_code = Some(crate::domain::ConfidenceBasisCode::TemplateMatcher);
+        let mut high = frozen_finding(&case, "finding-z-high", 80, Severity::High);
+        high.confidence_basis_code =
+            Some(crate::domain::ConfidenceBasisCode::DeterministicPolicyEvaluation);
+        case.findings = vec![low.clone(), medium.clone(), high.clone()];
+        case.finding_observations = vec![
+            observation(&low, "run-1", instant(17)),
+            observation(&medium, "run-1", instant(18)),
+            observation(&high, "run-1", instant(18)),
+        ];
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(report.findings[0].finding_id, "finding-z-high");
+        assert_eq!(report.findings[0].confidence, Confidence::High);
+        assert_eq!(report.findings[1].finding_id, "finding-m-medium");
+        assert_eq!(report.findings[1].confidence, Confidence::Medium);
+        assert_eq!(report.findings[2].finding_id, "finding-a-low");
+        assert_eq!(report.findings[2].confidence, Confidence::Low);
     }
 
     #[test]
@@ -3409,6 +3477,7 @@ mod tests {
         Finding {
             family: None,
             severity_basis_code: None,
+            confidence_basis_code: None,
             context_factors: Vec::new(),
             id: id.into(),
             case_id: case.id.clone(),

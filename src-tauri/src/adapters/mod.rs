@@ -8,8 +8,8 @@ mod control_mapping;
 
 use crate::adapter::{AdapterInput, AdapterOutput, AdapterRegistry, EngineAdapter};
 use crate::domain::{
-    Confidence, Evidence, EvidenceKind, Finding, FindingFamily, FindingStatus, RawArtifact,
-    Severity, SeverityBasisCode,
+    Confidence, ConfidenceBasisCode, Evidence, EvidenceKind, Finding, FindingFamily, FindingStatus,
+    RawArtifact, Severity, SeverityBasisCode,
 };
 use crate::error::{AppError, AppResult};
 use quick_xml::events::{BytesRef, BytesStart, Event};
@@ -124,6 +124,10 @@ struct SourceRecord {
     asset_hint: Option<String>,
     asset_provider: Option<String>,
     confidence: Confidence,
+    source_confidence: String,
+    /// Present only when the engine supplied no confidence and this product
+    /// assigned one from the behavior that produced the finding.
+    confidence_basis: Option<ConfidenceBasisCode>,
     evidence_kind: EvidenceKind,
     references: Vec<String>,
     tags: Vec<String>,
@@ -144,9 +148,51 @@ struct DerivedSeverity {
     code: SeverityBasisCode,
 }
 
+/// A confidence this product assigned because the engine supplied none.
+///
+/// A source value always wins. This pair exists so downstream readers can
+/// distinguish an engine rating from this product's bounded derivation.
+struct DerivedConfidence {
+    confidence: Confidence,
+    code: ConfidenceBasisCode,
+}
+
 /// Completes the sentence "severity derived from ...".
 fn basis_text(code: SeverityBasisCode) -> &'static str {
     crate::finding_narrative::basis_english(code)
+}
+
+fn confidence_basis_text(code: ConfidenceBasisCode) -> &'static str {
+    crate::finding_narrative::confidence_basis_english(code)
+}
+
+/// Rates only the evidence described by a derived basis; it does not promote
+/// the finding because the engine omitted its own confidence field.
+fn derived_confidence(code: ConfidenceBasisCode) -> DerivedConfidence {
+    let confidence = match code {
+        // These extractors admit a record only after the engine returned an
+        // explicit failed policy/configuration verdict. The value either met
+        // the rule or it did not, so the retained failure is strong evidence.
+        ConfidenceBasisCode::DeterministicPolicyEvaluation => Confidence::High,
+        // Naabu and httpx records exist because this run received the network
+        // response represented by the finding. High describes that observed
+        // exposure fact, not whether the exposed service is vulnerable.
+        ConfidenceBasisCode::ObservedResponse => Confidence::High,
+        // Inventory-to-advisory matching is useful evidence, but version
+        // reporting, distribution backports, and advisory applicability still
+        // need confirmation on the installed component.
+        ConfidenceBasisCode::AdvisoryVersionMatch => Confidence::Medium,
+        // A pattern/detector hit was not validated as a live credential or a
+        // true defect. Treat it as a lead, not strong evidence of the claim.
+        ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch => Confidence::Low,
+        // Nuclei templates range from exact banners to heuristic matchers, and
+        // this result shape does not say which kind supplied the evidence.
+        ConfidenceBasisCode::TemplateMatcher => Confidence::Medium,
+        // With no Greenbone QoD value, the NVT result remains useful but cannot
+        // inherit the confidence of one of the engine's scored QoD bands.
+        ConfidenceBasisCode::MissingDetectionQualityScore => Confidence::Medium,
+    };
+    DerivedConfidence { confidence, code }
 }
 
 struct RecordDraft {
@@ -157,7 +203,8 @@ struct RecordDraft {
     derived_severity: Option<DerivedSeverity>,
     location: String,
     asset_hint: Option<String>,
-    confidence: Confidence,
+    source_confidence: String,
+    derived_confidence: Option<DerivedConfidence>,
     evidence_kind: EvidenceKind,
     references: Vec<String>,
     tags: Vec<String>,
@@ -171,7 +218,8 @@ macro_rules! record {
         $source_severity:expr,
         $location:expr,
         $asset_hint:expr,
-        $confidence:expr,
+        $source_confidence:expr,
+        $derived_confidence:expr,
         $evidence_kind:expr,
         $references:expr,
         $tags:expr $(,)?
@@ -184,7 +232,8 @@ macro_rules! record {
             derived_severity: None,
             location: $location,
             asset_hint: $asset_hint,
-            confidence: $confidence,
+            source_confidence: $source_confidence,
+            derived_confidence: $derived_confidence,
             evidence_kind: $evidence_kind,
             references: $references,
             tags: $tags,
@@ -202,7 +251,8 @@ macro_rules! record_with_derived_severity {
         $derived:expr,
         $location:expr,
         $asset_hint:expr,
-        $confidence:expr,
+        $source_confidence:expr,
+        $derived_confidence:expr,
         $evidence_kind:expr,
         $references:expr,
         $tags:expr $(,)?
@@ -215,7 +265,8 @@ macro_rules! record_with_derived_severity {
             derived_severity: Some($derived),
             location: $location,
             asset_hint: $asset_hint,
-            confidence: $confidence,
+            source_confidence: $source_confidence,
+            derived_confidence: $derived_confidence,
             evidence_kind: $evidence_kind,
             references: $references,
             tags: $tags,
@@ -236,7 +287,8 @@ macro_rules! record_with_severity_fallback {
         $derived:expr,
         $location:expr,
         $asset_hint:expr,
-        $confidence:expr,
+        $source_confidence:expr,
+        $derived_confidence:expr,
         $evidence_kind:expr,
         $references:expr,
         $tags:expr $(,)?
@@ -249,11 +301,109 @@ macro_rules! record_with_severity_fallback {
             derived_severity: Some($derived),
             location: $location,
             asset_hint: $asset_hint,
-            confidence: $confidence,
+            source_confidence: $source_confidence,
+            derived_confidence: $derived_confidence,
             evidence_kind: $evidence_kind,
             references: $references,
             tags: $tags,
         })
+    };
+}
+
+/// Like [`record!`], for an engine that supplies no confidence of its own.
+macro_rules! record_with_derived_confidence {
+    (
+        $pointer:expr, $rule_id:expr, $title:expr, $source_severity:expr,
+        $location:expr, $asset_hint:expr, $derived_confidence:expr,
+        $evidence_kind:expr, $references:expr, $tags:expr $(,)?
+    ) => {
+        record!(
+            $pointer,
+            $rule_id,
+            $title,
+            $source_severity,
+            $location,
+            $asset_hint,
+            String::new(),
+            Some($derived_confidence),
+            $evidence_kind,
+            $references,
+            $tags,
+        )
+    };
+}
+
+/// Like [`record!`], when a source confidence may be absent and a derivation
+/// is permitted to fill only that gap.
+macro_rules! record_with_confidence_fallback {
+    (
+        $pointer:expr, $rule_id:expr, $title:expr, $source_severity:expr,
+        $location:expr, $asset_hint:expr, $source_confidence:expr,
+        $derived_confidence:expr, $evidence_kind:expr, $references:expr,
+        $tags:expr $(,)?
+    ) => {
+        record!(
+            $pointer,
+            $rule_id,
+            $title,
+            $source_severity,
+            $location,
+            $asset_hint,
+            $source_confidence,
+            Some($derived_confidence),
+            $evidence_kind,
+            $references,
+            $tags,
+        )
+    };
+}
+
+/// Both ratings are derived because the engine supplied neither one.
+macro_rules! record_with_derived_severity_and_confidence {
+    (
+        $pointer:expr, $rule_id:expr, $title:expr, $derived_severity:expr,
+        $location:expr, $asset_hint:expr, $derived_confidence:expr,
+        $evidence_kind:expr, $references:expr, $tags:expr $(,)?
+    ) => {
+        record_with_derived_severity!(
+            $pointer,
+            $rule_id,
+            $title,
+            $derived_severity,
+            $location,
+            $asset_hint,
+            String::new(),
+            Some($derived_confidence),
+            $evidence_kind,
+            $references,
+            $tags,
+        )
+    };
+}
+
+/// Severity and confidence each have an independent fallback; the source
+/// severity can win while confidence remains explicitly product-derived.
+macro_rules! record_with_severity_fallback_and_derived_confidence {
+    (
+        $pointer:expr, $rule_id:expr, $title:expr, $source_severity:expr,
+        $derived_severity:expr, $location:expr, $asset_hint:expr,
+        $derived_confidence:expr, $evidence_kind:expr, $references:expr,
+        $tags:expr $(,)?
+    ) => {
+        record_with_severity_fallback!(
+            $pointer,
+            $rule_id,
+            $title,
+            $source_severity,
+            $derived_severity,
+            $location,
+            $asset_hint,
+            String::new(),
+            Some($derived_confidence),
+            $evidence_kind,
+            $references,
+            $tags,
+        )
     };
 }
 
@@ -1406,7 +1556,7 @@ fn extract_prowler(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
         let location = first_resource_location(value)
             .or_else(|| nested_string(value, &["unmapped", "ResourceId"]))
             .unwrap_or_else(|| "cloud-resource".into());
-        let mut record = record!(
+        let mut record = record_with_derived_confidence!(
             pointer,
             rule_id,
             title,
@@ -1415,7 +1565,7 @@ fn extract_prowler(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
             nested_string(value, &["cloud", "account", "uid"])
                 .or_else(|| nested_string(value, &["unmapped", "provider_uid"]))
                 .or_else(|| nested_string(value, &["unmapped", "AccountId"])),
-            Confidence::High,
+            derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
             EvidenceKind::Configuration,
             references_from(value),
             vec!["format:ocsf".into()],
@@ -1459,7 +1609,7 @@ fn extract_scoutsuite(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                 .or_else(|| scoutsuite_rule_key(&pointer))?;
             let title = string_any(object, &["description", "title", "name"])
                 .unwrap_or_else(|| format!("ScoutSuite rule {rule_id}"));
-            Some(record!(
+            Some(record_with_derived_confidence!(
                 pointer,
                 rule_id,
                 title,
@@ -1467,7 +1617,7 @@ fn extract_scoutsuite(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                 string_any(object, &["resource", "path", "service"])
                     .unwrap_or_else(|| "cloud-resource".into()),
                 string_any(object, &["account_id", "subscription_id", "project_id"]),
-                Confidence::High,
+                derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
                 EvidenceKind::Configuration,
                 references_from(value),
                 vec![],
@@ -1561,7 +1711,7 @@ fn extract_cloudsplaining(
                     continue;
                 }
                 let escaped = policy_key.replace('~', "~0").replace('/', "~1");
-                records.push(record!(
+                records.push(record_with_derived_confidence!(
                     format!("/{section}/{escaped}/{risk}"),
                     risk.to_owned(),
                     format!("{label} in policy {policy_name}"),
@@ -1572,7 +1722,7 @@ fn extract_cloudsplaining(
                     // offering one as a hint would strand these records in a
                     // multi-asset scope instead of resolving them.
                     None,
-                    Confidence::High,
+                    derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
                     EvidenceKind::Configuration,
                     vec![],
                     vec![
@@ -1902,7 +2052,7 @@ fn extract_m365(
         {
             tags.push("tenant-disputed".into());
         }
-        records.push(record!(
+        records.push(record_with_derived_confidence!(
             pointer,
             rule_id.clone(),
             string_any(object, &["Name", "Title", "Requirement", "Description"])
@@ -1911,7 +2061,7 @@ fn extract_m365(
             string_any(object, &["Service", "Product", "Resource", "TenantId"])
                 .unwrap_or_else(|| "microsoft-365-tenant".into()),
             string_any(object, &["asset_id", "AssetId"]),
-            Confidence::High,
+            derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
             EvidenceKind::Configuration,
             references_from(value),
             tags,
@@ -1949,7 +2099,7 @@ fn extract_naabu(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                 return None;
             };
             let protocol = string_any(object, &["protocol"]).unwrap_or_else(|| "tcp".into());
-            Some(record_with_derived_severity!(
+            Some(record_with_derived_severity_and_confidence!(
                 pointer,
                 format!("open-{protocol}-port"),
                 "Externally reachable network service".into(),
@@ -1963,7 +2113,7 @@ fn extract_naabu(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                 },
                 format!("{}:{port}", redact_location(&host)),
                 string_any(object, &["asset_id"]),
-                Confidence::High,
+                derived_confidence(ConfidenceBasisCode::ObservedResponse),
                 EvidenceKind::ExternalValidation,
                 vec![],
                 vec![
@@ -1986,7 +2136,7 @@ fn extract_httpx(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                     .get("status_code")
                     .or_else(|| object.get("status-code"))?,
             )?;
-            Some(record_with_derived_severity!(
+            Some(record_with_derived_severity_and_confidence!(
                 pointer,
                 "http-service-observed".into(),
                 "Externally reachable HTTP service".into(),
@@ -1999,7 +2149,7 @@ fn extract_httpx(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                 },
                 redact_location(&target),
                 string_any(object, &["asset_id"]),
-                Confidence::High,
+                derived_confidence(ConfidenceBasisCode::ObservedResponse),
                 EvidenceKind::ExternalValidation,
                 vec![],
                 vec![format!("http-status:{}", safe_tag(&status))],
@@ -2029,14 +2179,14 @@ fn extract_nuclei(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<So
             if let Some(matcher) = string_any(object, &["matcher-name", "matcher_name"]) {
                 tags.push(format!("matcher:{}", safe_tag(&matcher)));
             }
-            Some(record!(
+            Some(record_with_derived_confidence!(
                 pointer,
                 rule_id,
                 title,
                 severity,
                 redact_location(&target),
                 string_any(object, &["asset_id"]),
-                Confidence::High,
+                derived_confidence(ConfidenceBasisCode::TemplateMatcher),
                 EvidenceKind::ExternalValidation,
                 references_from(value),
                 tags,
@@ -2100,12 +2250,7 @@ fn extract_greenbone(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
             .as_deref()
             .and_then(|value| value.parse::<u8>().ok())
             .filter(|value| *value <= 100);
-        let confidence = match qod {
-            Some(80..=100) => Confidence::High,
-            Some(50..=79) => Confidence::Medium,
-            Some(_) => Confidence::Low,
-            None => Confidence::Medium,
-        };
+        let source_confidence = result.qod.clone().unwrap_or_default();
         let mut references = result
             .cves
             .iter()
@@ -2127,7 +2272,7 @@ fn extract_greenbone(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
             tags.push(format!("quality-of-detection:{qod}"));
         }
 
-        records.push(record!(
+        records.push(record_with_confidence_fallback!(
             result.pointer.clone(),
             rule_id.clone(),
             result
@@ -2138,7 +2283,8 @@ fn extract_greenbone(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
             source_severity,
             location,
             result.asset_id.clone(),
-            confidence,
+            source_confidence,
+            derived_confidence(ConfidenceBasisCode::MissingDetectionQualityScore),
             EvidenceKind::ExternalValidation,
             references,
             tags,
@@ -2166,7 +2312,7 @@ fn extract_semgrep(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
             let path = string_any(object, &["path"]).unwrap_or_else(|| "source-file".into());
             let line = nested_string(value, &["start", "line"]);
             let pointer = format!("/results/{index}");
-            Some(record!(
+            Some(record_with_confidence_fallback!(
                 pointer,
                 rule_id.clone(),
                 // Semgrep writes the human-readable explanation here and it is
@@ -2179,7 +2325,8 @@ fn extract_semgrep(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
                 nested_string(value, &["extra", "severity"]).unwrap_or_else(|| "unknown".into()),
                 path,
                 string_any(object, &["asset_id"]),
-                Confidence::High,
+                nested_string(value, &["extra", "metadata", "confidence"]).unwrap_or_default(),
+                derived_confidence(ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch),
                 EvidenceKind::SourceCode,
                 references_from(value),
                 line.map(|line| vec![format!("source-line:{}", safe_tag(&line))])
@@ -2196,7 +2343,7 @@ fn extract_gitleaks(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<
             let object = value.as_object()?;
             let rule_id = exact_rule_string_any(object, &["RuleID", "rule_id"])?;
             let location = gitleaks_location(object);
-            Some(record_with_derived_severity!(
+            Some(record_with_derived_severity_and_confidence!(
                 pointer,
                 rule_id.clone(),
                 string_any(object, &["Description", "description"])
@@ -2211,7 +2358,7 @@ fn extract_gitleaks(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<
                 },
                 location,
                 string_any(object, &["asset_id"]),
-                Confidence::High,
+                derived_confidence(ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch),
                 EvidenceKind::SourceCode,
                 vec![],
                 vec!["secret-value:redacted".into()],
@@ -2277,7 +2424,7 @@ fn extract_trufflehog(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
             let source = nested_string(value, &["SourceMetadata", "Data", "Filesystem", "file"])
                 .or_else(|| nested_string(value, &["SourceMetadata", "Data", "Git", "file"]))
                 .unwrap_or_else(|| "repository".into());
-            Some(record_with_derived_severity!(
+            Some(record_with_derived_severity_and_confidence!(
                 pointer,
                 format!("trufflehog:{detector}"),
                 format!("Potential {detector} secret detected"),
@@ -2293,7 +2440,7 @@ fn extract_trufflehog(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                 },
                 source,
                 string_any(object, &["asset_id"]),
-                Confidence::High,
+                derived_confidence(ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch),
                 EvidenceKind::SourceCode,
                 vec![],
                 vec![
@@ -2323,7 +2470,7 @@ fn extract_checkov(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
         .filter_map(|(index, value)| {
             let object = value.as_object()?;
             let rule_id = exact_rule_string_any(object, &["check_id"])?;
-            Some(record_with_severity_fallback!(
+            Some(record_with_severity_fallback_and_derived_confidence!(
                 format!("/results/failed_checks/{index}"),
                 rule_id.clone(),
                 string_any(object, &["check_name"])
@@ -2345,7 +2492,7 @@ fn extract_checkov(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
                 string_any(object, &["file_path", "repo_file_path"])
                     .unwrap_or_else(|| "iac-resource".into()),
                 string_any(object, &["asset_id"]),
-                Confidence::High,
+                derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
                 EvidenceKind::Configuration,
                 references_from(value),
                 vec![],
@@ -2380,14 +2527,14 @@ fn extract_kics(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sour
             let Some(file_object) = file.as_object() else {
                 continue;
             };
-            records.push(record!(
+            records.push(record_with_derived_confidence!(
                 format!("/queries/{query_index}/files/{file_index}"),
                 rule_id.clone(),
                 title.clone(),
                 severity.clone(),
                 string_any(file_object, &["file_name"]).unwrap_or_else(|| "iac-resource".into()),
                 string_any(file_object, &["asset_id"]),
-                Confidence::High,
+                derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
                 EvidenceKind::Configuration,
                 references_from(query),
                 vec![],
@@ -2432,6 +2579,12 @@ fn extract_trivy(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
             ),
             ("Secrets", "secret", EvidenceKind::SourceCode),
         ] {
+            let confidence_basis = match field {
+                "Vulnerabilities" => ConfidenceBasisCode::AdvisoryVersionMatch,
+                "Misconfigurations" => ConfidenceBasisCode::DeterministicPolicyEvaluation,
+                "Secrets" => ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch,
+                _ => unreachable!("closed Trivy result kinds"),
+            };
             let Some(items) = result_object.get(field).and_then(Value::as_array) else {
                 continue;
             };
@@ -2453,14 +2606,14 @@ fn extract_trivy(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                 if field == "Secrets" {
                     tags.push("secret-value:redacted".into());
                 }
-                records.push(record!(
+                records.push(record_with_derived_confidence!(
                     format!("/Results/{result_index}/{field}/{item_index}"),
                     rule_id,
                     title,
                     string_any(object, &["Severity"]).unwrap_or_else(|| "unknown".into()),
                     target.clone(),
                     string_any(object, &["asset_id"]),
-                    Confidence::High,
+                    derived_confidence(confidence_basis),
                     kind.clone(),
                     references_from(item),
                     tags,
@@ -2492,7 +2645,7 @@ fn extract_grype(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                 nested_string(value, &["artifact", "name"]).unwrap_or_else(|| "package".into());
             let location = nested_string(value, &["artifact", "locations", "0", "path"])
                 .unwrap_or_else(|| package.clone());
-            Some(record!(
+            Some(record_with_derived_confidence!(
                 format!("/matches/{index}"),
                 rule_id.clone(),
                 format!("Vulnerable package {package} ({rule_id})"),
@@ -2502,7 +2655,7 @@ fn extract_grype(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                 value
                     .as_object()
                     .and_then(|object| string_any(object, &["asset_id"])),
-                Confidence::High,
+                derived_confidence(ConfidenceBasisCode::AdvisoryVersionMatch),
                 EvidenceKind::PackageInventory,
                 references_from(value),
                 vec![format!("package:{}", safe_tag(&package))],
@@ -2594,7 +2747,7 @@ fn extract_kubescape(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
                 continue;
             };
             let summary = summaries.get(&rule_id);
-            records.push(record!(
+            records.push(record_with_derived_confidence!(
                 format!("/results/{index}/controls/{control_index}"),
                 rule_id.clone(),
                 string_any(control, &["name"])
@@ -2605,7 +2758,7 @@ fn extract_kubescape(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
                     .unwrap_or_else(|| "unknown".into()),
                 location.clone(),
                 None,
-                Confidence::High,
+                derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
                 EvidenceKind::Configuration,
                 references_from(control.get("rules").unwrap_or(&Value::Null)),
                 vec![],
@@ -2630,7 +2783,7 @@ fn extract_kubescape(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
                 continue;
             }
             let summary = summaries.get(rule_id);
-            records.push(record!(
+            records.push(record_with_derived_confidence!(
                 format!("/summaryDetails/controls/{rule_id}"),
                 rule_id.clone(),
                 summary
@@ -2641,7 +2794,7 @@ fn extract_kubescape(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
                     .unwrap_or_else(|| "unknown".into()),
                 "kubernetes-cluster".to_owned(),
                 None,
-                Confidence::High,
+                derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
                 EvidenceKind::Configuration,
                 vec![],
                 vec![],
@@ -2687,7 +2840,7 @@ fn extract_kube_bench(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                 let Some(rule_id) = exact_rule_string_any(object, &["test_number", "id"]) else {
                     continue;
                 };
-                records.push(record_with_derived_severity!(
+                records.push(record_with_derived_severity_and_confidence!(
                     format!("/Controls/{control_index}/tests/{test_index}/results/{result_index}"),
                     rule_id.clone(),
                     string_any(object, &["test_desc", "desc"])
@@ -2704,7 +2857,7 @@ fn extract_kube_bench(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                     string_any(object, &["resource", "node_type"])
                         .unwrap_or_else(|| "kubernetes-cluster".into()),
                     string_any(object, &["asset_id"]),
-                    Confidence::High,
+                    derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
                     EvidenceKind::Configuration,
                     references_from(value),
                     vec![],
@@ -2743,7 +2896,7 @@ fn extract_steampipe(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
             else {
                 continue;
             };
-            records.push(record_with_derived_severity!(
+            records.push(record_with_derived_severity_and_confidence!(
                 format!("{pointer}rows/{index}"),
                 rule_id.clone(),
                 string_any(object, &["title", "reason"])
@@ -2763,7 +2916,7 @@ fn extract_steampipe(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
                 string_any(object, &["resource", "resource_id", "title"])
                     .unwrap_or_else(|| "cloud-resource".into()),
                 string_any(object, &["asset_id"]),
-                Confidence::High,
+                derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
                 EvidenceKind::Configuration,
                 references_from(row),
                 vec![],
@@ -2841,8 +2994,10 @@ fn merge_finding(
     official_references.truncate(12);
 
     let severity = record.severity;
+    let confidence = record.confidence;
     let priority = priority_for(&severity);
     let severity_basis = record.severity_basis;
+    let confidence_basis = record.confidence_basis;
     let mut tags = vec![
         format!("engine:{}", adapter.id),
         format!("source-rule:{}", safe_tag(&rule_id)),
@@ -2854,6 +3009,13 @@ fn merge_finding(
         None => tags.push(format!(
             "source-severity:{}",
             safe_tag(&record.source_severity)
+        )),
+    }
+    match &confidence_basis {
+        Some(_) => tags.push("confidence-basis:derived".into()),
+        None => tags.push(format!(
+            "source-confidence:{}",
+            safe_tag(&record.source_confidence)
         )),
     }
     tags.extend(
@@ -2877,23 +3039,40 @@ fn merge_finding(
             last_seen_run_id: input.scan_run_id.to_owned(),
             fingerprint,
             title,
-            plain_language_summary: match &severity_basis {
+            plain_language_summary: format!(
+                "{} {} The attached raw record is evidence, not an instruction.",
+                match &severity_basis {
                 Some(code) => format!(
-                    "{} reported this condition on the assessed asset without rating it. This product rated it {} from {}. The attached raw record is evidence, not an instruction.",
+                    "{} reported this condition on the assessed asset without rating it. This product rated it {} from {}.",
                     input.manifest.display_name,
                     severity_label(&severity),
                     basis_text(*code)
                 ),
                 None => format!(
-                    "{} reported {} {}-severity condition on the assessed asset. The attached raw record is evidence, not an instruction.",
+                    "{} reported {} {}-severity condition on the assessed asset.",
                     input.manifest.display_name,
                     severity_article(&severity),
                     severity_label(&severity)
                 ),
-            },
+                },
+                match &confidence_basis {
+                    Some(code) => format!(
+                        "{} reported no confidence rating for it. This product rated its confidence {} from {}.",
+                        input.manifest.display_name,
+                        confidence_label(&confidence),
+                        confidence_basis_text(*code)
+                    ),
+                    None => format!(
+                        "{} reported confidence {} for it; this product maps that to {} confidence.",
+                        input.manifest.display_name,
+                        safe_text(&record.source_confidence, 80),
+                        confidence_label(&confidence)
+                    ),
+                }
+            ),
             possible_impact: impact,
             severity,
-            confidence: record.confidence,
+            confidence,
             priority,
             priority_reasons: vec![
                 match &severity_basis {
@@ -2903,6 +3082,17 @@ fn merge_finding(
                         input.manifest.display_name
                     ),
                     None => format!("Source severity: {}", safe_text(&record.source_severity, 80)),
+                },
+                match &confidence_basis {
+                    Some(code) => format!(
+                        "Confidence derived from {}; {} reports no confidence of its own.",
+                        confidence_basis_text(*code),
+                        input.manifest.display_name
+                    ),
+                    None => format!(
+                        "Source confidence: {}",
+                        safe_text(&record.source_confidence, 80)
+                    ),
                 },
                 crate::finding_narrative::ENGLISH_EVIDENCE_REASON.into(),
             ],
@@ -2933,6 +3123,7 @@ fn merge_finding(
             // than showing a translated heading over an English paragraph.
             family: Some(family_for(adapter.profile)),
             severity_basis_code: severity_basis,
+            confidence_basis_code: confidence_basis,
             context_factors: Vec::new(),
         },
     );
@@ -2964,6 +3155,36 @@ fn record_from_draft(draft: RecordDraft) -> SourceRecord {
             None,
         ),
     };
+    let reported_confidence = safe_text(&draft.source_confidence, 80);
+    let (confidence, source_confidence, confidence_basis) = match draft.derived_confidence {
+        // The engine reported nothing, so the source confidence stays empty
+        // rather than borrowing the derived level. Nothing downstream may
+        // present the derived rating as the engine's own.
+        Some(derived) if reported_confidence.is_empty() => {
+            (derived.confidence, String::new(), Some(derived.code))
+        }
+        // A value the engine gave always wins. A derivation only fills a gap;
+        // even an unfamiliar source value must not be replaced and presented
+        // as though it came from this product.
+        _ => (
+            parse_confidence(&draft.source_confidence),
+            reported_confidence,
+            None,
+        ),
+    };
+    debug_assert!(
+        confidence_basis.is_some() ^ !source_confidence.is_empty(),
+        "every confidence must be either a non-empty engine value or a disclosed derivation"
+    );
+    if let Some(code) = confidence_basis {
+        debug_assert!(!confidence_basis_text(code).is_empty());
+        debug_assert!(
+            crate::finding_narrative::confidence_basis_zh_hant(code)
+                .chars()
+                .any(|character| ('\u{3400}'..='\u{9fff}').contains(&character)),
+            "every derived confidence basis must have a Chinese form"
+        );
+    }
     SourceRecord {
         pointer: safe_text(&draft.pointer, MAX_SHORT_TEXT),
         rule_id: safe_text(&draft.rule_id, MAX_SHORT_TEXT),
@@ -2978,7 +3199,9 @@ fn record_from_draft(draft: RecordDraft) -> SourceRecord {
             .asset_hint
             .map(|value| safe_text(&value, MAX_SHORT_TEXT)),
         asset_provider: None,
-        confidence: draft.confidence,
+        confidence,
+        source_confidence,
+        confidence_basis,
         evidence_kind: draft.evidence_kind,
         references: draft.references,
         tags: draft.tags,
@@ -3152,6 +3375,26 @@ fn parse_severity(value: &str) -> Severity {
     }
 }
 
+fn parse_confidence(value: &str) -> Confidence {
+    let normalized = value.trim().to_ascii_lowercase();
+    if let Ok(score) = normalized.parse::<u8>() {
+        return match score {
+            80..=100 => Confidence::High,
+            50..=79 => Confidence::Medium,
+            _ => Confidence::Low,
+        };
+    }
+    match normalized.as_str() {
+        "confirmed" => Confidence::Confirmed,
+        "high" => Confidence::High,
+        "medium" | "moderate" => Confidence::Medium,
+        "low" => Confidence::Low,
+        // Confidence has no Unknown variant. Preserve the engine's raw word in
+        // source_confidence and fail closed at the lowest canonical band.
+        _ => Confidence::Low,
+    }
+}
+
 fn priority_for(severity: &Severity) -> u8 {
     match severity {
         Severity::Critical => 95,
@@ -3173,6 +3416,15 @@ fn severity_label(severity: &Severity) -> &'static str {
         Severity::Low => "low",
         Severity::Unknown => "unknown",
         Severity::Informational => "informational",
+    }
+}
+
+fn confidence_label(confidence: &Confidence) -> &'static str {
+    match confidence {
+        Confidence::Low => "low",
+        Confidence::Medium => "medium",
+        Confidence::High => "high",
+        Confidence::Confirmed => "confirmed",
     }
 }
 
@@ -3573,7 +3825,8 @@ mod tests {
             derived_severity: None,
             location: "src/example.py".into(),
             asset_hint: Some("asset-1".into()),
-            confidence: Confidence::High,
+            source_confidence: "HIGH".into(),
+            derived_confidence: None,
             evidence_kind: EvidenceKind::SourceCode,
             references: vec![],
             tags: vec![],
@@ -3593,6 +3846,44 @@ mod tests {
             priority_for(&Severity::Unknown) > priority_for(&Severity::Informational),
             "unknown impact must not be buried as a known informational observation"
         );
+    }
+
+    #[test]
+    fn source_confidence_values_map_to_the_canonical_bands() {
+        for (source, expected) in [
+            ("HIGH", Confidence::High),
+            ("MEDIUM", Confidence::Medium),
+            ("LOW", Confidence::Low),
+            ("95", Confidence::High),
+            ("65", Confidence::Medium),
+            ("25", Confidence::Low),
+        ] {
+            assert_eq!(parse_confidence(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn production_extractors_never_pass_a_bare_confidence_constant() {
+        let production = include_str!("mod.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production module");
+        // Any bare band, not just the High this change removed: a later
+        // extractor that hardcodes Medium is the same defect wearing a
+        // different number.
+        for (index, line) in production.lines().enumerate() {
+            // A whole line that is only a band and a comma is an argument
+            // being passed; a `=>` on the line is a mapping arm, which is
+            // where a deliberate band belongs.
+            let trimmed = line.trim();
+            assert!(
+                !(trimmed.starts_with("Confidence::")
+                    && trimmed.ends_with(',')
+                    && !trimmed.contains("=>")),
+                "bare extractor confidence `{trimmed}` at source line {}",
+                index + 1
+            );
+        }
     }
 
     #[test]

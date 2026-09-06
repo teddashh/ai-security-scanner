@@ -377,6 +377,7 @@ pub fn build_demo_case() -> AssessmentCase {
         // compose the generic sentence for the family instead.
         family: None,
         severity_basis_code: None,
+        confidence_basis_code: None,
         context_factors: Vec::new(),
         fingerprint: "demo:aws:s3:public-customer-export".into(),
         title: "客戶匯出資料儲存空間可能允許公開存取".into(),
@@ -464,6 +465,7 @@ pub fn build_demo_case() -> AssessmentCase {
         last_seen_run_id: run_id.clone(),
         family: None,
         severity_basis_code: None,
+        confidence_basis_code: None,
         context_factors: Vec::new(),
         fingerprint: "demo:web:missing-hsts".into(),
         title: "公開網站的 HSTS 狀態尚未完成確認".into(),

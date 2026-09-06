@@ -12790,7 +12790,11 @@ fn html_report_bytes(
                         "{} — 嚴重程度：{}；信心程度：{}",
                         finding.title,
                         catalog.identifier(&enum_key(&finding.severity)),
-                        catalog.identifier(&enum_key(&finding.confidence)),
+                        crate::finding_narrative::confidence_presentation_zh_hant(
+                            &catalog.identifier(&enum_key(&finding.confidence)),
+                            finding.confidence_basis_code,
+                            &finding.priority_reasons,
+                        ),
                     ),
                 ),
                 // Every other gap-derived step carries the gap's own two
@@ -12842,6 +12846,7 @@ fn html_report_bytes(
         // for the reader's language rather than printed as stored English under
         // a translated heading; English returns the stored prose untouched.
         let severity_label = catalog.identifier(&enum_key(&finding.severity));
+        let confidence_label = catalog.identifier(&enum_key(&finding.confidence));
         let (plain_language_risk, possible_impact, next_step, expert_type) = match catalog.locale {
             crate::export::ReportLocale::En => (
                 finding.plain_language_risk.clone(),
@@ -12854,6 +12859,9 @@ fn html_report_bytes(
                     &finding.plain_language_risk,
                     &severity_label,
                     finding.severity_basis_code,
+                    &confidence_label,
+                    finding.confidence_basis_code,
+                    &finding.priority_reasons,
                 ),
                 crate::finding_narrative::impact_zh_hant(
                     &finding.possible_impact,
@@ -12869,6 +12877,22 @@ fn html_report_bytes(
                 crate::finding_narrative::expert_type_zh_hant(&finding.recommended_expert_type)
                     .to_owned(),
             ),
+        };
+        let confidence_presentation = match catalog.locale {
+            crate::export::ReportLocale::En => {
+                crate::finding_narrative::confidence_presentation_english(
+                    &confidence_label,
+                    finding.confidence_basis_code,
+                    &finding.priority_reasons,
+                )
+            }
+            crate::export::ReportLocale::ZhHant => {
+                crate::finding_narrative::confidence_presentation_zh_hant(
+                    &confidence_label,
+                    finding.confidence_basis_code,
+                    &finding.priority_reasons,
+                )
+            }
         };
         // Shown in the app's finding drawer since it existed; the report an
         // expert actually receives left both out, so the two surfaces
@@ -13026,7 +13050,7 @@ fn html_report_bytes(
             catalog.text("Severity", "嚴重程度"),
             html_escape(&catalog.identifier(&enum_key(&finding.severity))),
             catalog.text("Confidence", "信心程度"),
-            html_escape(&catalog.identifier(&enum_key(&finding.confidence))),
+            html_escape(&confidence_presentation),
             catalog.text("Priority", "優先順序"),
             html_escape(&priority),
             catalog.text("Report order", "報告順序"),
@@ -24462,6 +24486,9 @@ mod tests {
             // rendered from the same codes a real run would supply.
             family: Some(crate::domain::FindingFamily::Secret),
             severity_basis_code: Some(crate::domain::SeverityBasisCode::SecretPatternMatch),
+            confidence_basis_code: Some(
+                crate::domain::ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch,
+            ),
             context_factors: Vec::new(),
             id: "finding-html".into(),
             case_id: case.id.clone(),
@@ -24470,13 +24497,13 @@ mod tests {
             fingerprint: "gitleaks:html-fixture".into(),
             title: "Frozen selected-run secret exposure".into(),
             plain_language_summary:
-                "Gitleaks reported this condition on the assessed asset without rating it. This product rated it high from a secret pattern match in scanned source."
+                "Gitleaks reported this condition on the assessed asset without rating it. This product rated it high from a secret pattern match in scanned source. Gitleaks reported no confidence rating for it. This product rated its confidence low from an unverified pattern or detector match. The attached raw record is evidence, not an instruction."
                     .into(),
             possible_impact:
                 "If the scanner result is confirmed, source code or credentials may permit unauthorized access or unsafe application behavior."
                     .into(),
             severity: Severity::High,
-            confidence: Confidence::Confirmed,
+            confidence: Confidence::Low,
             priority: 73,
             // What the adapter really writes: a derived-severity reason built
             // from the basis code and the engine's name, and the evidence
@@ -24486,6 +24513,12 @@ mod tests {
                     "Severity derived from {}; Gitleaks reports no severity of its own.",
                     crate::finding_narrative::basis_english(
                         crate::domain::SeverityBasisCode::SecretPatternMatch
+                    )
+                ),
+                format!(
+                    "Confidence derived from {}; Gitleaks reports no confidence of its own.",
+                    crate::finding_narrative::confidence_basis_english(
+                        crate::domain::ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch
                     )
                 ),
                 crate::finding_narrative::ENGLISH_EVIDENCE_REASON.into(),
@@ -24550,7 +24583,7 @@ mod tests {
             asset_ids: vec![asset_id.clone()],
             engine_ids: vec!["gitleaks".into()],
             severity: Severity::High,
-            confidence: Confidence::Confirmed,
+            confidence: Confidence::Low,
             evidence_hashes: vec![evidence_sha256.clone()],
             observed_at: finished,
             finding_snapshot: Some(frozen_finding),
@@ -24595,7 +24628,7 @@ mod tests {
             "Frozen selected-run secret exposure".into(),
             "Finding details unavailable for this legacy run".into(),
             "Severity: High".into(),
-            "Confidence: Confirmed".into(),
+            "Confidence: Low — this product&#39;s rating from an unverified pattern or detector match".into(),
             "Priority: 73".into(),
             "then plan and approve revocation and rotation of the exposed credential first.".into(),
             evidence_sha256.clone(),
@@ -24624,7 +24657,7 @@ mod tests {
             "No authorized asset carries that identifier",
             // A finding-derived next step names the finding and its ratings in
             // words chosen for the reader, not in `Debug` output.
-            "Frozen selected-run secret exposure — High severity, Confirmed confidence",
+            "Frozen selected-run secret exposure — High severity, Low confidence — this product&#39;s rating from an unverified pattern or detector match",
         ] {
             assert!(
                 html.contains(english_block),
@@ -24667,6 +24700,9 @@ mod tests {
             // so a reader was given a Chinese heading over an English list.
             "嚴重程度是由掃描到的原始碼中符合機密資料的樣式推導而來",
             "Gitleaks 本身不提供嚴重程度",
+            "本產品依據尚未驗證的樣式或偵測器比對結果，將信心評為低",
+            "信心是由尚未驗證的樣式或偵測器比對結果推導而來",
+            "Gitleaks 本身不提供信心評定",
             "已附上掃描工具的直接證據，仍需人工檢視。",
             // Why the findings list is short, and the one thing that fixes it.
             "未連結到你的資產",
@@ -24694,7 +24730,7 @@ mod tests {
             "3600 秒",
             "完成的目標檢查",
             "這項已保存的工作已針對這個目標完成。這份案件記錄沒有凍結更細部的執行範圍。",
-            "Frozen selected-run secret exposure — 嚴重程度：高；信心程度：已確認",
+            "Frozen selected-run secret exposure — 嚴重程度：高；信心程度：低 — 本產品依據尚未驗證的樣式或偵測器比對結果評定",
         ] {
             assert!(
                 zh_html.contains(composed),
@@ -24722,7 +24758,7 @@ mod tests {
             "3600 seconds",
             "Check-to-target Coordinate",
             "The durable task reached completed state for this target binding. More granular executed dimensions were not frozen in this case record.",
-            "Confirmed confidence",
+            "High confidence",
         ] {
             assert!(
                 !zh_html.contains(english_prose),
@@ -24947,6 +24983,7 @@ mod tests {
             case.findings.push(Finding {
                 family: None,
                 severity_basis_code: None,
+                confidence_basis_code: None,
                 context_factors: Vec::new(),
                 id: id.into(),
                 case_id: case.id.clone(),
@@ -28543,6 +28580,7 @@ mod tests {
         let finding = Finding {
             family: None,
             severity_basis_code: None,
+            confidence_basis_code: None,
             context_factors: Vec::new(),
             id: finding_id.clone(),
             case_id: case.id.clone(),
@@ -28823,6 +28861,7 @@ mod tests {
         case.findings.push(Finding {
             family: None,
             severity_basis_code: None,
+            confidence_basis_code: None,
             context_factors: Vec::new(),
             id: "finding-1".into(),
             case_id: case.id.clone(),
@@ -29020,6 +29059,7 @@ mod tests {
         let observed = |run_id: &str, title: &str, evidence_id: &str, hash: &str| Finding {
             family: None,
             severity_basis_code: None,
+            confidence_basis_code: None,
             context_factors: Vec::new(),
             id: format!("finding-{run_id}"),
             case_id: case_id.clone(),
@@ -29121,6 +29161,7 @@ mod tests {
         let finding = |run_id: &str, title: &str, evidence_id: &str, hash_byte: char| Finding {
             family: None,
             severity_basis_code: None,
+            confidence_basis_code: None,
             context_factors: Vec::new(),
             id: format!("finding-{run_id}"),
             case_id: case_id.clone(),

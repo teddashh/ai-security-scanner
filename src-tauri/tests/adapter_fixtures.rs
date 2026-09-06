@@ -2,8 +2,9 @@ use ai_security_scanner_lib::adapter::{AdapterAssetIdentifierMap, AdapterInput, 
 use ai_security_scanner_lib::adapters::{BUILTIN_ENGINE_IDS, builtin_adapter_registry};
 use ai_security_scanner_lib::correlation::correlation_report;
 use ai_security_scanner_lib::domain::{
-    AssessmentCase, Asset, AssetIdentifier, AssetKind, Confidence, DataClass, FindingFamily,
-    FindingStatus, OrganizationProfile, RawArtifact, Severity, SeverityBasisCode,
+    AssessmentCase, Asset, AssetIdentifier, AssetKind, Confidence, ConfidenceBasisCode, DataClass,
+    Finding, FindingFamily, FindingStatus, OrganizationProfile, RawArtifact, Severity,
+    SeverityBasisCode,
 };
 use ai_security_scanner_lib::finding_narrative::{
     ENGLISH_ROLLBACK, expert_type_zh_hant, priority_reason_zh_hant, rollback_zh_hant,
@@ -436,6 +437,347 @@ fn engines_that_emit_no_severity_disclose_that_the_rating_is_this_products_own()
 /// them out of the two that assert one behaviour for every finding.
 const MIXED_SEVERITY_ENGINES: &[&str] = &["checkov"];
 
+/// Every finding-producing fixture whose engine supplies no confidence rating.
+/// The code is grounded in the result shape the corresponding extractor reads,
+/// not in an inferred upstream field that is absent from the fixture.
+const DERIVED_CONFIDENCE_ENGINES: &[(&str, Confidence, ConfidenceBasisCode)] = &[
+    (
+        "prowler",
+        Confidence::High,
+        ConfidenceBasisCode::DeterministicPolicyEvaluation,
+    ),
+    (
+        "scoutsuite",
+        Confidence::High,
+        ConfidenceBasisCode::DeterministicPolicyEvaluation,
+    ),
+    (
+        "cloudsplaining",
+        Confidence::High,
+        ConfidenceBasisCode::DeterministicPolicyEvaluation,
+    ),
+    (
+        "scubagear",
+        Confidence::High,
+        ConfidenceBasisCode::DeterministicPolicyEvaluation,
+    ),
+    (
+        "maester",
+        Confidence::High,
+        ConfidenceBasisCode::DeterministicPolicyEvaluation,
+    ),
+    (
+        "naabu",
+        Confidence::High,
+        ConfidenceBasisCode::ObservedResponse,
+    ),
+    (
+        "httpx",
+        Confidence::High,
+        ConfidenceBasisCode::ObservedResponse,
+    ),
+    (
+        "nuclei",
+        Confidence::Medium,
+        ConfidenceBasisCode::TemplateMatcher,
+    ),
+    (
+        "gitleaks",
+        Confidence::Low,
+        ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch,
+    ),
+    (
+        "trufflehog",
+        Confidence::Low,
+        ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch,
+    ),
+    (
+        "checkov",
+        Confidence::High,
+        ConfidenceBasisCode::DeterministicPolicyEvaluation,
+    ),
+    (
+        "kics",
+        Confidence::High,
+        ConfidenceBasisCode::DeterministicPolicyEvaluation,
+    ),
+    (
+        "trivy",
+        Confidence::Medium,
+        ConfidenceBasisCode::AdvisoryVersionMatch,
+    ),
+    (
+        "grype",
+        Confidence::Medium,
+        ConfidenceBasisCode::AdvisoryVersionMatch,
+    ),
+    (
+        "kubescape",
+        Confidence::High,
+        ConfidenceBasisCode::DeterministicPolicyEvaluation,
+    ),
+    (
+        "kube-bench",
+        Confidence::High,
+        ConfidenceBasisCode::DeterministicPolicyEvaluation,
+    ),
+    (
+        "steampipe",
+        Confidence::High,
+        ConfidenceBasisCode::DeterministicPolicyEvaluation,
+    ),
+];
+
+#[test]
+fn engines_without_confidence_disclose_this_products_basis() {
+    for (engine_id, expected_confidence, expected_code) in DERIVED_CONFIDENCE_ENGINES {
+        let output = normalize_fixture(engine_id);
+        assert!(
+            !output.findings.is_empty(),
+            "{engine_id} fixture produced nothing to check"
+        );
+        for finding in &output.findings {
+            assert_eq!(&finding.confidence, expected_confidence, "{engine_id}");
+            assert_eq!(
+                finding.confidence_basis_code,
+                Some(*expected_code),
+                "{engine_id} finding {}",
+                finding.id
+            );
+            assert!(
+                finding
+                    .tags
+                    .iter()
+                    .any(|tag| tag == "confidence-basis:derived"),
+                "{engine_id}: {:?}",
+                finding.tags
+            );
+            assert!(
+                !finding
+                    .tags
+                    .iter()
+                    .any(|tag| tag.starts_with("source-confidence:")),
+                "{engine_id} claims an engine confidence: {:?}",
+                finding.tags
+            );
+            let basis = ai_security_scanner_lib::finding_narrative::confidence_basis_english(
+                *expected_code,
+            );
+            assert!(finding.priority_reasons.iter().any(|reason| {
+                reason
+                    == &format!(
+                        "Confidence derived from {basis}; {} reports no confidence of its own.",
+                        normalize_engine_display_name(engine_id)
+                    )
+            }));
+            assert!(
+                finding
+                    .plain_language_summary
+                    .contains("reported no confidence rating for it"),
+                "{engine_id}: {}",
+                finding.plain_language_summary
+            );
+            assert!(
+                finding.plain_language_summary.contains(basis),
+                "{engine_id}: {}",
+                finding.plain_language_summary
+            );
+        }
+    }
+}
+
+fn normalize_engine_display_name(engine_id: &str) -> String {
+    let registry = EngineRegistry::load_builtin().expect("valid engine catalog");
+    registry
+        .get(engine_id)
+        .expect("fixture engine")
+        .display_name
+        .clone()
+}
+
+#[test]
+fn semgrep_reads_the_fixture_confidence_verbatim() {
+    let output = normalize_fixture("semgrep");
+    assert_eq!(output.findings.len(), 1);
+    let finding = &output.findings[0];
+    assert_eq!(finding.confidence, Confidence::High);
+    assert_eq!(finding.confidence_basis_code, None);
+    assert!(
+        finding
+            .tags
+            .iter()
+            .any(|tag| tag == "source-confidence:high"),
+        "{:?}",
+        finding.tags
+    );
+    assert!(
+        finding
+            .priority_reasons
+            .iter()
+            .any(|reason| reason == "Source confidence: HIGH")
+    );
+    assert!(finding.plain_language_summary.contains("confidence HIGH"));
+}
+
+#[test]
+fn semgrep_without_a_source_confidence_is_an_unverified_low_confidence_match() {
+    let bytes = br#"{
+      "results": [{
+        "check_id": "example.rule",
+        "path": "src/example.py",
+        "extra": {"message": "Pattern matched", "severity": "ERROR"},
+        "asset_id": "asset-1"
+      }]
+    }"#;
+    let output = normalize_bytes(
+        "semgrep",
+        bytes,
+        "semgrep-no-confidence.json",
+        "application/json",
+        "run-semgrep-no-confidence",
+    );
+    assert_eq!(output.findings.len(), 1);
+    let finding = &output.findings[0];
+    assert_eq!(finding.confidence, Confidence::Low);
+    assert_eq!(
+        finding.confidence_basis_code,
+        Some(ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch)
+    );
+    assert!(
+        !finding
+            .tags
+            .iter()
+            .any(|tag| tag.starts_with("source-confidence:"))
+    );
+}
+
+#[test]
+fn trivy_confidence_follows_each_result_kind_instead_of_one_engine_default() {
+    let bytes = br#"{
+      "Results": [{
+        "Target": "example:latest",
+        "Vulnerabilities": [{
+          "VulnerabilityID": "CVE-2026-0001",
+          "PkgName": "libexample",
+          "Severity": "HIGH",
+          "Title": "Advisory match"
+        }],
+        "Misconfigurations": [{
+          "ID": "CFG-1",
+          "Severity": "HIGH",
+          "Title": "Configuration failure"
+        }],
+        "Secrets": [{
+          "RuleID": "SECRET-1",
+          "Severity": "HIGH",
+          "Title": "Secret pattern"
+        }],
+        "asset_id": "asset-1"
+      }]
+    }"#;
+    let output = normalize_bytes(
+        "trivy",
+        bytes,
+        "trivy-confidence-kinds.json",
+        "application/json",
+        "run-trivy-confidence-kinds",
+    );
+    assert_eq!(output.findings.len(), 3);
+    let by_title = output
+        .findings
+        .iter()
+        .map(|finding| (finding.title.as_str(), finding))
+        .collect::<BTreeMap<_, _>>();
+    for (title, confidence, basis) in [
+        (
+            "Advisory match",
+            Confidence::Medium,
+            ConfidenceBasisCode::AdvisoryVersionMatch,
+        ),
+        (
+            "Configuration failure",
+            Confidence::High,
+            ConfidenceBasisCode::DeterministicPolicyEvaluation,
+        ),
+        (
+            "Secret pattern",
+            Confidence::Low,
+            ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch,
+        ),
+    ] {
+        let finding = by_title[title];
+        assert_eq!(finding.confidence, confidence, "{title}");
+        assert_eq!(finding.confidence_basis_code, Some(basis), "{title}");
+    }
+}
+
+#[test]
+fn finding_written_before_confidence_basis_codes_still_loads_without_one() {
+    let finding = normalize_fixture("gitleaks")
+        .findings
+        .into_iter()
+        .next()
+        .expect("fixture finding");
+    let mut encoded = serde_json::to_value(finding).expect("serialize finding");
+    encoded
+        .as_object_mut()
+        .expect("finding object")
+        .remove("confidence_basis_code");
+    let decoded: Finding = serde_json::from_value(encoded).expect("load legacy finding");
+    assert_eq!(decoded.confidence_basis_code, None);
+}
+
+#[test]
+fn greenbone_qod_bands_are_source_confidence_and_absence_is_derived() {
+    let bytes = br#"<?xml version="1.0"?>
+<get_reports_response><report><results>
+  <result id="high"><name>High QoD</name><host>192.0.2.1</host><severity>5.0</severity><qod><value>95</value></qod><nvt oid="1.3.6.1.4.1.1"><name>High QoD</name></nvt></result>
+  <result id="medium"><name>Medium QoD</name><host>192.0.2.2</host><severity>5.0</severity><qod><value>65</value></qod><nvt oid="1.3.6.1.4.1.2"><name>Medium QoD</name></nvt></result>
+  <result id="low"><name>Low QoD</name><host>192.0.2.3</host><severity>5.0</severity><qod><value>25</value></qod><nvt oid="1.3.6.1.4.1.3"><name>Low QoD</name></nvt></result>
+  <result id="absent"><name>Absent QoD</name><host>192.0.2.4</host><severity>5.0</severity><nvt oid="1.3.6.1.4.1.4"><name>Absent QoD</name></nvt></result>
+</results></report></get_reports_response>"#;
+    let output = normalize_bytes(
+        "greenbone",
+        bytes,
+        "greenbone-qod.xml",
+        "application/xml",
+        "run-greenbone-qod",
+    );
+    assert!(output.complete, "{:?}", output.warnings);
+    let by_title = output
+        .findings
+        .iter()
+        .map(|finding| (finding.title.as_str(), finding))
+        .collect::<BTreeMap<_, _>>();
+    for (title, source, expected) in [
+        ("High QoD", "95", Confidence::High),
+        ("Medium QoD", "65", Confidence::Medium),
+        ("Low QoD", "25", Confidence::Low),
+    ] {
+        let finding = by_title[title];
+        assert_eq!(finding.confidence, expected, "{title}");
+        assert_eq!(finding.confidence_basis_code, None, "{title}");
+        assert!(
+            finding
+                .priority_reasons
+                .iter()
+                .any(|reason| reason == &format!("Source confidence: {source}"))
+        );
+    }
+    let absent = by_title["Absent QoD"];
+    assert_eq!(absent.confidence, Confidence::Medium);
+    assert_eq!(
+        absent.confidence_basis_code,
+        Some(ConfidenceBasisCode::MissingDetectionQualityScore)
+    );
+    assert!(
+        absent
+            .priority_reasons
+            .iter()
+            .any(|reason| reason.contains("absence of a detection-quality score"))
+    );
+}
+
 /// The other side of the same contract. Deriving a severity is only defensible
 /// where the engine truly reports none, so an engine that does report one must
 /// keep showing what it said.
@@ -610,6 +952,22 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
                 reported + derived,
                 1,
                 "{engine_id} finding {} has {reported} source-severity and {derived} derived tags",
+                finding.id
+            );
+            let reported_confidence = finding
+                .tags
+                .iter()
+                .filter(|tag| tag.starts_with("source-confidence:"))
+                .count();
+            let derived_confidence = finding
+                .tags
+                .iter()
+                .filter(|tag| tag.as_str() == "confidence-basis:derived")
+                .count();
+            assert_eq!(
+                reported_confidence + derived_confidence,
+                1,
+                "{engine_id} finding {} has {reported_confidence} source-confidence and {derived_confidence} derived tags",
                 finding.id
             );
             assert!(!finding.evidence.is_empty());

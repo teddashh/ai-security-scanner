@@ -149,3 +149,35 @@ test("both sides recognise the same English before writing the same Chinese", ()
       .join("\n")}`,
   );
 });
+
+const confidenceTable = (source: string, marker: string): Map<string, string> => {
+  const start = source.indexOf(marker);
+  assert.ok(start >= 0, `missing ${marker}`);
+  const end = [source.indexOf("\n};", start), source.indexOf("\n}\n", start)]
+    .filter((candidate) => candidate >= 0)
+    .sort((left, right) => left - right)[0];
+  assert.ok(end !== undefined, `unterminated ${marker}`);
+  const tail = source.slice(start, end + 2).replaceAll(/\s+/gu, " ");
+  const entries = new Map<string, string>();
+  for (const match of tail.matchAll(
+    /(?:ConfidenceBasisCode::)?([A-Za-z][A-Za-z0-9_]*)\s*(?:=>|:)\s*(?:\{\s*)?"([^"]*)"/gu,
+  )) {
+    const raw = match[1] ?? "";
+    const key = raw.includes("_")
+      ? raw
+      : raw.replaceAll(/([a-z0-9])([A-Z])/gu, "$1_$2").toLowerCase();
+    entries.set(key, match[2] ?? "");
+  }
+  return entries;
+};
+
+test("the confidence basis tables have identical code-to-prose pairs", () => {
+  const tsChinese = confidenceTable(typescript, "const CONFIDENCE_BASIS:");
+  const tsEnglish = confidenceTable(typescript, "const CONFIDENCE_BASIS_ENGLISH:");
+  const rustEnglish = confidenceTable(rustSource, "pub fn confidence_basis_english");
+  const rustChinese = confidenceTable(rustSource, "pub fn confidence_basis_zh_hant");
+
+  assert.equal(tsChinese.size, 6);
+  assert.deepEqual(tsChinese, rustChinese);
+  assert.deepEqual(tsEnglish, rustEnglish);
+});

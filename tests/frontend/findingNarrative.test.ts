@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  ALL_CONFIDENCE_BASIS_CODES,
   ENGLISH_ROLLBACK,
   findingActionSentence,
+  findingConfidencePresentation,
   findingPriorityReason,
   findingRollbackSentence,
   findingVerificationSentence,
@@ -11,7 +13,7 @@ import {
   findingSummarySentence,
   localizedExpertType,
 } from "../../src/findingNarrative.ts";
-import type { FindingFamily, SeverityBasisCode } from "../../src/types.ts";
+import type { ConfidenceBasisCode, FindingFamily, SeverityBasisCode } from "../../src/types.ts";
 
 const HAN = /\p{Script=Han}/u;
 const LATIN_SENTENCE = /[A-Za-z]{4,}\s+[A-Za-z]{4,}/u;
@@ -123,6 +125,40 @@ test("every severity basis this product can derive has Chinese", () => {
     seen.add(summary);
   }
   assert.equal(seen.size, BASES.length);
+});
+
+test("every confidence basis has distinct Chinese prose and a visible product attribution", () => {
+  const seen = new Set<string>();
+  for (const confidenceBasisCode of ALL_CONFIDENCE_BASIS_CODES) {
+    const summary = findingSummarySentence("zh-TW", {
+      englishFallback: ENGLISH_SUMMARY,
+      severityLabel: "中",
+      confidenceLabel: "高",
+      confidenceBasisCode,
+    });
+    assert.ok(HAN.test(summary), `${confidenceBasisCode}: ${summary}`);
+    assert.ok(summary.includes("本產品依據"), summary);
+    assert.ok(summary.includes("信心評為高"), summary);
+    const presentation = findingConfidencePresentation(
+      "zh-TW",
+      "高",
+      confidenceBasisCode,
+      [],
+    );
+    assert.ok(presentation.includes("本產品依據"), presentation);
+    seen.add(summary);
+  }
+  assert.equal(seen.size, ALL_CONFIDENCE_BASIS_CODES.length);
+  assert.equal(ALL_CONFIDENCE_BASIS_CODES.length, 6);
+});
+
+test("engine confidence keeps its source word and legacy confidence stays unchanged", () => {
+  const code: ConfidenceBasisCode | undefined = undefined;
+  assert.equal(
+    findingConfidencePresentation("zh-TW", "高", code, ["Source confidence: HIGH"]),
+    "高 — 來源工具評定：HIGH",
+  );
+  assert.equal(findingConfidencePresentation("zh-TW", "高", code, []), "高");
 });
 
 test("the engine's own display name survives verbatim", () => {

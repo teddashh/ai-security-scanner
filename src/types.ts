@@ -892,6 +892,7 @@ export interface BeginnerReportFinding {
    */
   family?: FindingFamily;
   severityBasisCode?: SeverityBasisCode;
+  confidenceBasisCode?: ConfidenceBasisCode;
   /** Empty unless this case raised the finding's priority. */
   contextFactors?: ContextFactor[];
   /** What to preserve before changing anything, and how to confirm the fix. */
@@ -1116,6 +1117,15 @@ export type SeverityBasisCode =
   | "cis_kubernetes_benchmark"
   | "cloud_control_query";
 
+/** Why this product assigned confidence when the engine supplied none. */
+export type ConfidenceBasisCode =
+  | "deterministic_policy_evaluation"
+  | "advisory_version_match"
+  | "unverified_pattern_or_detector_match"
+  | "observed_response"
+  | "template_matcher"
+  | "missing_detection_quality_score";
+
 export interface Finding {
   id: string;
   caseId?: string;
@@ -1136,6 +1146,7 @@ export interface Finding {
   /** Absent on findings stored before the codes were carried. */
   family?: FindingFamily;
   severityBasisCode?: SeverityBasisCode;
+  confidenceBasisCode?: ConfidenceBasisCode;
   /**
    * Why this case raised the priority. The backend appends a sentence to
    * `impact` for each; a composed impact sentence replaces that string, so

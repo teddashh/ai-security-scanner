@@ -316,12 +316,16 @@ test("the report the findings list is built from carries severity and codes the 
       severity: "informational",
       confidence: "high",
       priority: 15,
-      priority_reasons: ["Direct scanner evidence is attached and still requires human review."],
+      priority_reasons: [
+        "Confidence derived from a response this product observed directly; naabu reports no confidence of its own.",
+        "Direct scanner evidence is attached and still requires human review.",
+      ],
       target_asset_ids: ["asset-1"],
       next_step: "Have the recommended specialist (Network security engineer) review it.",
       recommended_expert_type: "Network security engineer",
       family: "network_exposure",
       severity_basis_code: "open_port",
+      confidence_basis_code: "observed_response",
       evidence_references: [{
         evidence_id: "evidence-1",
         engine_id: "naabu",
@@ -354,6 +358,7 @@ test("the report the findings list is built from carries severity and codes the 
   // replaces says the engine did not rate it and this product did.
   assert.equal(finding.family, "network_exposure");
   assert.equal(finding.severityBasisCode, "open_port");
+  assert.equal(finding.confidenceBasisCode, "observed_response");
 });
 
 test("beginner report adapter preserves exact tested and untested network scope slices", () => {

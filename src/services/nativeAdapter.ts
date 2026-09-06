@@ -15,6 +15,7 @@ import type {
   CloudPlatform,
   CompanySize,
   Confidence,
+  ConfidenceBasisCode,
   ConnectedSource,
   CoverageRecord,
   CoverageState,
@@ -376,6 +377,7 @@ export interface NativeBeginnerMasterReport {
     recommended_expert_type: string;
     family?: string | null;
     severity_basis_code?: string | null;
+    confidence_basis_code?: string | null;
     context_factors?: string[] | null;
     rollback_considerations?: string | null;
     verification_guidance?: string | null;
@@ -484,6 +486,7 @@ interface NativeFinding {
   tags?: string[];
   family?: string | null;
   severity_basis_code?: string | null;
+  confidence_basis_code?: string | null;
   context_factors?: string[] | null;
 }
 
@@ -1187,6 +1190,15 @@ const SEVERITY_BASIS_CODES: readonly SeverityBasisCode[] = [
   "cloud_control_query",
 ];
 
+const CONFIDENCE_BASIS_CODES: readonly ConfidenceBasisCode[] = [
+  "deterministic_policy_evaluation",
+  "advisory_version_match",
+  "unverified_pattern_or_detector_match",
+  "observed_response",
+  "template_matcher",
+  "missing_detection_quality_score",
+];
+
 // A code this build does not know is dropped rather than passed through. The
 // only thing downstream does with it is pick a sentence, and there is no
 // sentence for a value that was added after this build; the English prose beside
@@ -1196,6 +1208,10 @@ const mapFindingFamily = (value: string | null | undefined): FindingFamily | und
 
 const mapSeverityBasisCode = (value: string | null | undefined): SeverityBasisCode | undefined =>
   SEVERITY_BASIS_CODES.find((code) => code === value);
+
+const mapConfidenceBasisCode = (
+  value: string | null | undefined,
+): ConfidenceBasisCode | undefined => CONFIDENCE_BASIS_CODES.find((code) => code === value);
 
 const CONTEXT_FACTORS: readonly ContextFactor[] = ["internet_exposed_asset", "sensitive_data_asset"];
 
@@ -1759,6 +1775,7 @@ export const adaptNativeCase = (
       recommendation: finding.recommendation,
       family: mapFindingFamily(finding.family),
       severityBasisCode: mapSeverityBasisCode(finding.severity_basis_code),
+      confidenceBasisCode: mapConfidenceBasisCode(finding.confidence_basis_code),
       contextFactors: mapContextFactors(finding.context_factors),
       expertType: finding.recommended_expert_type,
       severity: mapSeverity(finding.severity),
@@ -2302,6 +2319,7 @@ export const adaptBeginnerMasterReport = (
     // the engine did not give.
     family: mapFindingFamily(finding.family),
     severityBasisCode: mapSeverityBasisCode(finding.severity_basis_code),
+    confidenceBasisCode: mapConfidenceBasisCode(finding.confidence_basis_code),
     contextFactors: mapContextFactors(finding.context_factors),
     rollbackConsiderations: finding.rollback_considerations ?? undefined,
     verificationGuidance: finding.verification_guidance ?? undefined,

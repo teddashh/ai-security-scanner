@@ -1,4 +1,5 @@
 import type {
+  ConfidenceBasisCode,
   ContextFactor,
   FindingFamily,
   SeverityBasisCode,
@@ -74,6 +75,50 @@ const BASIS: Record<SeverityBasisCode, string> = {
   cloud_control_query: "本產品自有固定查詢中一項未通過的 IAM 控制項",
 };
 
+const CONFIDENCE_BASIS: Record<ConfidenceBasisCode, string> = {
+  deterministic_policy_evaluation: "確定性的政策或設定評估結果",
+  advisory_version_match: "已安裝版本符合已發布公告的受影響範圍",
+  unverified_pattern_or_detector_match: "尚未驗證的樣式或偵測器比對結果",
+  observed_response: "本產品直接觀察到的回應",
+  template_matcher: "範本比對器在受評估目標上觸發",
+  missing_detection_quality_score: "引擎結果中未提供偵測品質分數",
+};
+
+export const ALL_CONFIDENCE_BASIS_CODES: readonly ConfidenceBasisCode[] = [
+  "deterministic_policy_evaluation",
+  "advisory_version_match",
+  "unverified_pattern_or_detector_match",
+  "observed_response",
+  "template_matcher",
+  "missing_detection_quality_score",
+];
+
+const sourceConfidence = (priorityReasons: readonly string[]): string | undefined =>
+  priorityReasons
+    .map((reason) => reason.trim())
+    .find((reason) => reason.startsWith("Source confidence: "))
+    ?.slice("Source confidence: ".length) || undefined;
+
+export const findingConfidencePresentation = (
+  locale: "en" | "zh-TW",
+  confidenceLabel: string,
+  confidenceBasisCode: ConfidenceBasisCode | undefined,
+  priorityReasons: readonly string[],
+): string => {
+  if (confidenceBasisCode) {
+    const basis = CONFIDENCE_BASIS[confidenceBasisCode];
+    if (!basis) return confidenceLabel;
+    return locale === "en"
+      ? `${confidenceLabel} — this product's rating from ${CONFIDENCE_BASIS_ENGLISH[confidenceBasisCode]}`
+      : `${confidenceLabel} — 本產品依據${basis}評定`;
+  }
+  const source = sourceConfidence(priorityReasons);
+  if (!source) return confidenceLabel;
+  return locale === "en"
+    ? `${confidenceLabel} — engine rating: ${source}`
+    : `${confidenceLabel} — 來源工具評定：${source}`;
+};
+
 /**
  * The nine specialists the backend recommends, mapped exactly.
  *
@@ -136,6 +181,9 @@ export const findingSummarySentence = (
     englishFallback: string;
     severityLabel: string;
     severityBasisCode?: SeverityBasisCode;
+    confidenceLabel?: string;
+    confidenceBasisCode?: ConfidenceBasisCode;
+    priorityReasons?: readonly string[];
   },
 ): string => {
   if (locale === "en") return options.englishFallback;
@@ -143,12 +191,32 @@ export const findingSummarySentence = (
   const engineName = engineNameFrom(englishFallback);
   if (!engineName) return englishFallback;
   const evidence = "附帶的原始記錄是證據，不是指示。";
+  let summary: string;
   if (!severityBasisCode) {
-    return `${engineName} 在受評估的資產上回報了一項${severityLabel}等級的狀況。${evidence}`;
+    summary = `${engineName} 在受評估的資產上回報了一項${severityLabel}等級的狀況。`;
+  } else {
+    const basis = BASIS[severityBasisCode];
+    if (!basis) return englishFallback;
+    summary = `${engineName} 在受評估的資產上回報了這項狀況，但未評定嚴重程度。本產品依據${basis}，將它評為${severityLabel}。`;
   }
-  const basis = BASIS[severityBasisCode];
-  if (!basis) return englishFallback;
-  return `${engineName} 在受評估的資產上回報了這項狀況，但未評定嚴重程度。本產品依據${basis}，將它評為${severityLabel}。${evidence}`;
+  const confidenceLabel = options.confidenceLabel;
+  if (!confidenceLabel) return summary + evidence;
+  if (options.confidenceBasisCode) {
+    const basis = CONFIDENCE_BASIS[options.confidenceBasisCode];
+    if (!basis) return englishFallback;
+    return (
+      summary +
+      `${engineName} 本身不提供信心評定。本產品依據${basis}，將信心評為${confidenceLabel}。` +
+      evidence
+    );
+  }
+  const source = sourceConfidence(options.priorityReasons ?? []);
+  if (!source) return summary + evidence;
+  return (
+    summary +
+    `${engineName} 對這項問題的信心評定為 ${source}；本產品將它對應為${confidenceLabel}信心。` +
+    evidence
+  );
 };
 
 /**
@@ -251,6 +319,16 @@ const BASIS_ENGLISH: Record<SeverityBasisCode, string> = {
   cloud_control_query: "a failed IAM control from this product's own fixed query",
 };
 
+const CONFIDENCE_BASIS_ENGLISH: Record<ConfidenceBasisCode, string> = {
+  deterministic_policy_evaluation: "a deterministic policy or configuration evaluation",
+  advisory_version_match: "an installed-version match against a published advisory range",
+  unverified_pattern_or_detector_match: "an unverified pattern or detector match",
+  observed_response: "a response this product observed directly",
+  template_matcher: "a template matcher firing on the assessed target",
+  missing_detection_quality_score:
+    "the absence of a detection-quality score in the engine result",
+};
+
 /** The one priority reason every adapter finding carries. */
 export const ENGLISH_EVIDENCE_REASON =
   "Direct scanner evidence is attached and still requires human review.";
@@ -284,6 +362,28 @@ export const findingPriorityReason = (locale: "en" | "zh-TW", english: string): 
   if (trimmed.startsWith(SOURCE)) {
     const value = trimmed.slice(SOURCE.length);
     if (value) return `來源工具評定的嚴重程度：${value}`;
+  }
+  const SOURCE_CONFIDENCE = "Source confidence: ";
+  if (trimmed.startsWith(SOURCE_CONFIDENCE)) {
+    const value = trimmed.slice(SOURCE_CONFIDENCE.length);
+    if (value) return `來源工具評定的信心：${value}`;
+  }
+  const CONFIDENCE_DERIVED = "Confidence derived from ";
+  const CONFIDENCE_TAIL = " reports no confidence of its own.";
+  if (trimmed.startsWith(CONFIDENCE_DERIVED) && trimmed.endsWith(CONFIDENCE_TAIL)) {
+    const middle = trimmed.slice(
+      CONFIDENCE_DERIVED.length,
+      trimmed.length - CONFIDENCE_TAIL.length,
+    );
+    const at = middle.lastIndexOf("; ");
+    if (at < 0) return english;
+    const basisText = middle.slice(0, at);
+    const engine = middle.slice(at + 2);
+    const code = (Object.keys(CONFIDENCE_BASIS_ENGLISH) as ConfidenceBasisCode[]).find(
+      (key) => CONFIDENCE_BASIS_ENGLISH[key] === basisText,
+    );
+    if (!code || !engine) return english;
+    return `信心是由${CONFIDENCE_BASIS[code]}推導而來；${engine} 本身不提供信心評定。`;
   }
   const DERIVED = "Severity derived from ";
   const TAIL = " reports no severity of its own.";
