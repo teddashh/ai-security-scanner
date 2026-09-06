@@ -331,36 +331,43 @@ GHCR 發布是對外行為，**每一次都需要明確授權；上一個版本�
 同一份報告、同一個類別，後續又修掉的（詳見文末「交接後續」）：已檢測維度的
 `observation` 句（`6ba6909`）、`limit.value` 的單位字與 CoveragePage 的 record
 detail（`0d8f447`）、VerificationPage 的 diff 說明與 AppShell 的佔位標題
-（`e15f2ff`）。這一類別在報告與畫面上已經沒有已知的剩餘位置。
+（`e15f2ff`）、ProgressPage 的引擎警告與 beginner report 的 data-quality 警告
+（`15e7fa0`）、框架對照的 `rationale` 與 `relationship`（`5e468a9`）、
+demo 案件的全部儲存字串（`9e9d863`）。
+
+**這一類別目前沒有已知的剩餘位置。**下一個人要找新的，最快的方法是照
+`15e7fa0` 的做法：找出寫出那些句子的生產者，在那裡做普查，而不是對原始碼
+掃正則——後者只會找到其中一部分。
 
 ### 其他仍是英文／無代碼的使用者可見文字
 
-已修：CoveragePage 的 record `detail`（`0d8f447`）、AppShell 的 `"Saved project"`
-與 VerificationPage 的 `diff.rs` 說明（`e15f2ff`）。
+**這一節列的四項已全部做完**（`6f9d778`、`15e7fa0`、`5e468a9`、`9e9d863`，詳見
+文末「交接後續」）。原本判定它們「需要 schema 或資料決定」是對的——但決定的
+內容不是「改 schema」，而是**不改 schema**：三項都改用呈現層翻譯加生產者普查，
+儲存的英文維持正典，簽章過的 case bundle 與釘住的目錄一個位元組都沒動。
 
-剩下的每一項都不是程式修正，而是 schema 或資料的決定，所以沒有排進任務：
+留下原本的判讀，因為推翻它的理由本身值得記住：
 
-- **ProgressPage 上的引擎警告**：`EngineRun.warnings` 是 `Vec<String>`，
-  `case_service.rs` 有 33 處 push，混了產品自己寫的句子（normalization、
-  cleanup、stale、mapping、legacy migration 的說明）與 launcher 回傳的引擎原話。
-  要在地化得先分開「本產品說的」與「引擎說的」，並給前者代碼——改的是
-  `EngineRun` 的序列化欄位。
-- **`data_quality_warnings`** 仍是裸的 `Vec<String>`（`beginner_report.rs:45`），
-  `20409d6` 正是因此拒絕使用它。同樣需要代碼，改的是 beginner report 的 schema。
-- **框架對照的 `rationale`**：來自 `mappings/control-mappings.json` 的 19 條人工
-  審閱條目，catalog 有 canonical SHA-256 與 provenance pin
-  （`control_mapping.rs:285` 起）。翻譯它等於改 catalog 資料、重算 pin、更新
-  provenance 的審閱記錄——這是資料與審閱流程的決定。畫面上的關聯群組
-  （`correlation.rs` 的 `basis`／`uncertainty`）已由前端自行組句，不需要動。
-- **`src-tauri/src/demo.rs` 的 30 處硬寫中文**：`seedDemoCase` 在 UI 沒有任何
-  呼叫點（`src/services/scanner.ts:88` 只有命令名稱），demo 案件只能從 CLI 的
-  `case seed-demo` 或測試建出來。它是 3.3／3.5 那組死接線的一部分；決定 demo
-  要不要留，比決定它的語言優先。
+- **引擎警告**（原判：得先分開「本產品說的」與「引擎說的」）。實際查核後，
+  **沒有任何引擎的 stderr 會變成警告**——72 種句型全部是本產品自己寫的，
+  所以根本不需要分。
+- **`data_quality_warnings`**（原判：需要代碼、要改 beginner report schema）。
+  它被序列化進簽章的 case bundle（`export.rs:1029`、`1060`），為了措辭問題改
+  形狀會弄壞既有的每一個 case 檔。改用整句查表＋`build_beginner_master_report`
+  裡的 debug 普查。
+- **框架 `rationale`**（原判：等於改 catalog、重算 pin、更新審閱記錄）。這點
+  完全正確，所以 catalog **沒有動**：19 條經審閱的英文仍是正典，中文只是呈現，
+  兩邊的普查都直接讀目錄本身。
+- **`demo.rs` 的硬寫中文**（原判：先決定 demo 去留，再決定語言）。這個排序不
+  成立——不論 demo 最後去留，它今天存的就是錯的語言，而且它的 coverage
+  explanation 繞過 ledger 普查，兩種語言的讀者都會看到中文。語言先修，去留
+  仍是未決的問題（見下方 3.3／3.5）。
 
 ### 對齊清單本身還有的缺口
 
-- **2.1 — `Confidence::High` 對 21 個引擎中的 20 個是常數欄。**
-  要嘛它有意義、應該會變動，要嘛它是裝飾。（前一份交接也列了這一項。）
+- ~~**2.1 — `Confidence::High` 對 21 個引擎中的 20 個是常數欄。**~~
+  已修（`6f9d778`）。它有意義：每個 extractor 的等級都從引擎實際做了什麼重新
+  論證，引擎自己報的值一律優先，本產品推導的一律帶 basis code。
 - **2.2 — control filter 只觸及約 19 條對照規則，5 個引擎一條都沒有。**
 - **2.4 — 列上沒有 location。**
 - **1.4 — 對照表飄移時，control reference 是整批清空的。**
@@ -459,3 +466,48 @@ Rust 全套會撞到兩個 managed-runtime 清理測試的 `Operation not permit
 
 實跑數字（`e15f2ff`）：Rust 1,396、前端 457、元件 122、CI lane 29，
 fmt／clippy／typecheck 全綠。
+
+### `6f9d778`、`15e7fa0`、`5e468a9`、`9e9d863` — 同樣由 Codex 撰寫、本文作者審查
+
+這四項就是上面「其他仍是英文／無代碼」那一節列的全部內容。流程與前一輪相同：
+我寫簡報、審 diff、自己重跑全部 gate 後才提交。
+
+- **`6f9d778` 信心度。** `Confidence` 原本 19 個 extractor 都寫死 `High`，而
+  Semgrep 的 `extra.metadata.confidence`、Greenbone 缺 QoD 的那條分支都被丟掉。
+  照嚴重程度那套鏡像：`ConfidenceBasisCode` 六個代碼、`SourceRecord` 存引擎
+  原話、`record_from_draft` 用同一條規則解析（引擎給的一律勝出，推導只補洞），
+  並在該處放 debug 斷言讓整套 Rust 測試變成普查。每個等級都重新論證：確定性
+  政策失敗與本產品直接觀察到的回應維持 High；公告版本比對與 Nuclei 範本比對
+  降為 Medium；未驗證的樣式比對（Gitleaks、TruffleHog、Trivy secrets、缺
+  confidence 的 Semgrep）降為 Low。**沒有任何 basis 配得上 Confirmed。**
+  優先權重完全沒動——`prioritization.rs` 從來沒讀過 confidence，它只影響同等
+  嚴重程度之間的排序，那本來就該是它的作用。
+- **`15e7fa0` 警告。** ProgressPage 的技術警告（72 種句型）與 beginner report
+  的 data-quality 警告（6 種）。兩者都不改形狀。`data_quality_warnings` 兩個
+  介面都會顯示，所以表放在受 parity 保護的雙生檔；引擎警告只有 ProgressPage
+  會顯示，所以放在畫面專用模組。**審查時抓到三個 Codex 漏掉的真缺陷**：
+  M365「未評估所有控制措施」句子括號裡的清單被當成引擎的值原樣保留，但那是
+  本產品自己寫的英文片語；兩種認證封套警告（當機遺留 vs 單純殘留）被併成同
+  一句中文；普查的解析器碰到讀不出字面值的呼叫點會靜默跳過——現在那份清單
+  被釘住，新的間接產生點會讓測試失敗。
+- **`5e468a9` 框架對照 rationale。** catalog 逐位元組不變，pin 未動。19 條
+  rationale 整句查表，兩邊普查都直接讀目錄（Rust 讀內嵌 JSON、前端讀磁碟上的
+  檔案），都不釘筆數——筆數本來就由 hash pin 守著。`relationship` 只出現在
+  報告裡，所以留在 `case_service.rs`，不放進雙生檔（放進去會逼出一個前端沒有
+  呼叫者的匯出）。框架名稱、control id、官方控制措施名稱兩種語言都原樣。
+- **`9e9d863` demo 案件。** 32 處硬寫中文改成英文，並改走真實路徑：coverage
+  explanation 重用 ledger 的真句子、phase 用結構化 key、finding 用有翻譯的
+  family。回歸測試序列化整個 case，任何儲存字串出現漢字就失敗。**合成的 HSTS
+  finding 拿掉了框架關聯**——釘住的目錄沒有 httpx 條目，真實的 HSTS 觀察不會
+  帶任何關聯，硬留一條就得為那張「其餘每句都是經審閱目錄條目」的表憑空造一句。
+  `src/data/demo.ts` 沒動：它是有測試保護的語系切換 fixture，不是同一個缺陷。
+
+**與 Codex 合作的補充觀察**：這一輪四項它都交出可用的實作，但**四項裡有三項
+我在審查時改了它的東西**，而且改的都是同一類問題——它會把「本產品寫的句子」
+誤當成「要原樣保留的值」，也會寫出看起來像普查、實際上是白名單的測試。它的
+gate 數字仍然每次都與我實跑一致。另外：`codex exec` 沒有 `--approve-for-me`
+（那是互動版的旗標），要寫 `-s workspace-write`，而且**一定要把 stdin 導掉**
+（`< /dev/null`），否則它會停在 "Reading additional input from stdin..." 不動。
+
+實跑數字（`9e9d863`）：Rust 1,412、前端 467、元件 126、CI lane 29，
+fmt／clippy／typecheck／validate:engines 全綠。
