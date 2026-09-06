@@ -303,7 +303,11 @@ GHCR 發布是對外行為，**每一次都需要明確授權；上一個版本�
 - ~~**Maester `run-maester.ps1` 的 `dropped` 計數器**~~ —— **這一項不需要授權，
   原本的分類是錯的**，已在 Rust 側修掉（見文末 `dropped` 那段）。wrapper 早就
   寫出 `Diagnostics.total`（`run-maester.ps1:175`），只是 Rust 從來沒讀。
-  剩下**該映像內的一份 Pester spec** 仍需重建並發布 M365 引擎映像。
+  ~~剩下該映像內的一份 Pester spec 仍需重建並發布 M365 引擎映像。~~ Ted 於
+  2026-09-06 授權，已完成：spec 寫好、映像重建、以 `1.8.0-6`／`2.0.0-6` 發布，
+  見文末「Maester wrapper 的 Pester spec」一節。
+- **ScubaGear wrapper 還沒有同樣的 spec。** 它的映像沒有 Pester（`dependencies.lock.json`
+  裡沒有），加進去是一個新的釘住依賴加一次發布，超出這次授權的範圍。
 - **#10 的補充判讀**：讀取側（`adapters/mod.rs:2905` 起）已經刻意不讀那個
   欄位並以 `CloudControlQuery` 揭露評分是本產品的，**使用者看到的已經誠實**；
   產生側剩一行沒人讀的 SQL 死碼。不值得為它觸發五個引擎的發布——等下次有
@@ -560,3 +564,81 @@ spec §11.3 明文允許「an explicit demo action」；§3.1 要求首頁只有
 Rust 側零變更。
 
 由 Codex 撰寫；這次它的實作我沒有改動。
+
+### Maester wrapper 的 Pester spec：測的是引擎→wrapper 邊界，跟著映像一起發布
+
+**它是什麼。** 不是映像裡的缺陷，是缺一份測試。2026-09-04 盤點的結論：整個 repo
+沒有任何語言的測試餵 wrapper 一份原生引擎輸出、再檢查它寫出什麼——`.upstreams`
+之外零個 `*.Tests.ps1`，`src-tauri/tests/fixtures/adapters/maester.json` 是 wrapper
+的**輸出**而不是輸入。映像裡早已裝了 Pester 5.7.1（`Dockerfile:82` 只拿它做
+import 煙霧測試），CI 也早已在映像內跑任意 pwsh；框架已經付過錢，只差沒用。它被
+歸到「需要授權」，是因為 spec 要放進映像、由建置執行，而 `engines/images/maester/`
+底下任何變更都是一次 GHCR 發布。
+
+**spec 本身**（`engines/images/maester/run-maester.Tests.ps1`，48 條）。fixture 照
+上游釘住 revision 的 `ConvertTo-MtMaesterResult` 造：每個 `*Count` 是對 `Tests`
+的重算、`TotalCount` 是 `Tests` 的長度、`Severity` 存在但空字串、`EndOfJson`
+放最後——這個形狀是拿 `.upstreams` 裡一份真實輸出（`AD-TestResults-*.json`，180
+條測試、Severity 全是 `''`）驗過的，不是憑印象。涵蓋：七種判定（Passed／Failed／
+Investigate 進 `Results`，Skipped／NotRun／Error／Inconclusive 不進）；六個計數
+**逐字複製**而非重算；`total` 逐字帶過——Inconclusive 只算在 `TotalCount`，所以
+六類加總 6 而 `total` 7，正是 `6ba55ba` 在 Rust 側讀出來揭露的那個差；沒有任何
+可審閱判定時 `Results` 是 `[]` 不是缺欄位；判定改名（`Passed`→`Pass`）不猜、
+計數器仍在（PowerShell 的 `switch` 不分大小寫，小寫不算改名，測試裡有註明）；
+十一種嚴重度拼法，只有 `info` 映到 `informational`、`Informational` 是 `unknown`
+且原文保留、沒有 Severity 屬性也是 `unknown`；文字清洗（標籤、實體、控制字元、
+空白）與三個長度上限；信封四層鍵的**順序**；`EndOfJson` 截斷／缺失、symlink、
+16 MiB 上限、檔案不存在；scope 綁定九條（兩個 namespace、同租戶去重、兩個租戶、
+非 GUID、無關 namespace、別的引擎、兩個資產、非 M365 資產）；原子寫入無 BOM、
+單一換行、不留暫存檔、不覆寫。
+
+**wrapper 重構**（`run-maester.ps1`）。要讓 spec 摸到函式而不啟動 managed run：
+讀報告抽成 `Read-MaesterReport`、正規化抽成 `ConvertTo-ManagedMaesterDocument`、
+流程整段搬進 `Invoke-ManagedMaesterRun`，檔尾一個 dot-source guard
+（`$MyInvocation.InvocationName -ne '.'`）。三種呼叫方式都在真映像裡驗過：
+`-File`（launcher 用的）看到的是路徑、`&` 是 `&`、`.` 是 `.`。流程是逐字搬進
+函式——`git diff -w` 剩下的語意差只有 `$binding.AssetId`→`$AssetId` 和
+`$report`→`$Report`。`validate-engine-catalog.mjs` 對 wrapper 的字串合約（switch
+表達式、`PSObject.Properties['Severity']`、六個 counter 的正則、`normalized_results`）
+全部維持，validator 綠。**沒有**加 `dropped` 計數器：Rust 已經從 `total` 算出來，
+wrapper 再自報一個同樣的數字是第二個真相來源。
+
+**Dockerfile**。多一行 `COPY` 放 spec，多一個 `RUN pwsh` 以 65532 跑
+`Invoke-Pester`：Failed／Skipped／NotRun 必須為 0，且 PassedCount ≥ 40（非空
+下界，避免「跑了零條也算過」）。`Dockerfile.dockerignore` 是**白名單**，加了一行；
+少這行 CI 會在 COPY 失敗。註解裡寫了對任何已發布 digest 重播 spec 的指令。
+
+**發布機制。** 矩陣是靜態的，兩個引擎一起 bump：ScubaGear 只改版本 label、
+`run-scubagear.ps1` 的 pin 刻意不重 pin；兩個 Dockerfile 的 pin 都重 pin（label
+在裡面）。用 `grep` 普查舊 tag 找到 11 個要改的位置（workflow 矩陣、兩個
+Dockerfile、兩個 plan.json、catalog.json、`validate-engine-catalog.mjs`、
+`verify-publication-artifact.mjs`、它的測試、兩份 docs），不是憑記憶。push 到
+main 本身就是 dispatch（`on.push.paths`），之後的記錄 commit 只碰 plan.json／
+catalog／docs，不會再觸發。
+
+**本機證據（發布前）。** spec 掛進**已發布的 2.0.0-5 映像**跑：48／48。本機
+amd64 `docker buildx build` 通過，建置期 48／48。建好的映像：`-File` 會啟動 run
+（停在 scope 檔不存在，退出 1）、dot-source 安靜退出 0；映像內兩個檔案的 sha256
+與 repo 相同；Dockerfile 註解裡的重播指令逐字可用。閘門：Rust 1,417／fmt／clippy 0
+／typecheck 0／前端 467／元件 131／CI lane 29／catalog validator／release
+evidence 57／release self-test／validate:engines 全綠。
+
+**發布結果。** run [34051072485](https://github.com/teddashh/ai-security-scanner/actions/runs/34051072485)，
+從 `f28df23` 的 push 直接觸發，第一次嘗試就成功（watch log 裡那個 exit 1 是
+`continue-on-error` 的「Publish anonymous pull access」步驟，跟前幾輪一樣）。
+兩個 digest 都用匿名 token 從 registry 讀回並與 manifest 位元組核對，不是抄 job log：
+
+| 引擎 | tag | index digest |
+| --- | --- | --- |
+| ScubaGear | `1.8.0-6` | `sha256:5fcb37f89efe4b190f8c8aaa7a034735fcdd724a7855c98e3a262072da1d4159` |
+| Maester | `2.0.0-6` | `sha256:60913086a28a5eebaa07af1259b691b5970fb44564f8095c76b87f287f3e3c0b` |
+
+`gh attestation verify` 兩個都通過：SLSA v1、`gitCommit f28df23…`、workflow
+`engine-images-m365.yml@refs/heads/main`、invocation 是這個 run 的 attempt 1。兩個
+evidence artifact 用 `verify-publication-artifact.mjs` 驗過（各 4 份 SBOM、5 份
+attestation）。**spec 對已發布的 Maester amd64 digest 重播：48／48**，映像內
+wrapper 與 spec 的 sha256 與 repo 相同。記錄 commit 把兩個 plan.json 寫回
+`published_managed_artifact`、catalog 恢復 `integrated`／`runnable`（兩個引擎維持
+`default_enabled: false`），docs 補上 digest 表。這一節之後不再有「需要授權」的
+未完成項——剩下的只有 #10（不值得觸發五引擎發布）和 ScubaGear 的 spec（需要新增
+Pester 依賴）。

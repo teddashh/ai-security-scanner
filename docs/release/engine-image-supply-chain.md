@@ -289,7 +289,24 @@ re-pinned, but the publication guard binds each version tag to one source commit
 matrix publishes both engines together, so ScubaGear moves to `1.8.0-6` alongside it. Both Dockerfile
 digests were re-pinned because each embeds its version label.
 
-`1.8.0-6` and `2.0.0-6` are awaiting publication and independent verification.
+The replacements were published in run
+[34051072485](https://github.com/teddashh/ai-security-scanner/actions/runs/34051072485) from
+`f28df23cf8c430466363ea0d78f09b23e84e3df3`, on the push of that commit itself, and are what the
+catalog now offers:
+
+| Engine | Tag | Immutable index digest |
+| --- | --- | --- |
+| ScubaGear | `1.8.0-6` | `sha256:5fcb37f89efe4b190f8c8aaa7a034735fcdd724a7855c98e3a262072da1d4159` |
+| Maester | `2.0.0-6` | `sha256:60913086a28a5eebaa07af1259b691b5970fb44564f8095c76b87f287f3e3c0b` |
+
+Both digests were read back from the registry with an anonymous pull token and checked against the
+manifest bytes rather than copied from the job log; `gh attestation verify` confirms each index
+digest carries a SLSA v1 provenance statement binding it to
+`gitCommit f28df23cf8c430466363ea0d78f09b23e84e3df3` and to attempt 1 of that run, and
+`scripts/release/verify-publication-artifact.mjs` accepted both evidence artifacts. The Maester
+wrapper specification was then replayed inside the published `linux/amd64` image with the command
+recorded in its Dockerfile, passing 48 of 48, and the wrapper and specification bytes inside the
+image match the source tree.
 
 After the workflow completes on the exact `main` source commit, download and verify each artifact
 independently in a fresh directory:
