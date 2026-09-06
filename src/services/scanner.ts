@@ -486,6 +486,17 @@ export const scannerService = {
     return nativeResult(adaptNativeCase(nativeCase).case);
   },
 
+  async seedDemoCase(): Promise<ServiceResult<AssessmentCase>> {
+    if (!isNativeSurface()) {
+      const snapshot = getDemoSnapshot();
+      const demoCase = snapshot.cases.find(({ isDemo }) => isDemo) ?? snapshot.cases[0];
+      if (!demoCase) throw new Error("The browser demonstration project is unavailable.");
+      return demoResult(demoCase);
+    }
+    const nativeCase = await invoke<NativeAssessmentCase>(COMMANDS.seedDemoCase);
+    return nativeResult(adaptNativeCase(nativeCase).case);
+  },
+
   async selectCase(caseId: string): Promise<ServiceResult<CaseWorkspace>> {
     if (!isNativeSurface()) return demoResult(getDemoWorkspace(caseId));
     const nativeCase = await invoke<NativeAssessmentCase>(COMMANDS.selectCase, { caseId });

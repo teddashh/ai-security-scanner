@@ -1162,6 +1162,19 @@ button.update-control:hover:not(:disabled) {
   line-height: 1.6;
 }
 
+.empty-state__actions,
+.empty-state__secondary-action {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.empty-state__secondary-action small {
+  max-width: 510px;
+  line-height: 1.5;
+}
+
 /* Cases */
 .create-case-panel {
   border-color: #bfd6c5;

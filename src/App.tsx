@@ -1163,6 +1163,33 @@ export default function App() {
     }
   };
 
+  const seedDemoCase = async (): Promise<void> => {
+    setBusyAction("seed-demo");
+    try {
+      const result = await scannerService.seedDemoCase();
+      applyServiceMeta(result);
+      await loadSnapshot(result.data.id, true);
+      setSelectedUseCase(undefined);
+      pushToast({
+        tone: "info",
+        title: text({ en: "Example project opened", zhTW: "已開啟範例專案" }),
+        detail: text({
+          en: "This is synthetic demonstration data. No target was contacted and no scan was started.",
+          zhTW: "這是合成的展示資料；沒有連線到任何目標，也沒有開始掃描。",
+        }),
+      });
+    } catch (error) {
+      recordTechnicalError("seed demo case", error);
+      pushToast({
+        tone: "danger",
+        title: text({ en: "The example project could not be opened", zhTW: "目前無法開啟範例專案" }),
+        detail: text({ en: "Your saved projects were not changed. Try again.", zhTW: "已保存的專案沒有變更；請再試一次。" }),
+      });
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
   const startLocalhostQuickScan = async (port: number): Promise<void> => {
     setBusyAction("localhost-quick-scan");
     const workspaceEventGenerationAtRequest = scanWorkspaceEventGeneration.current;
@@ -1869,7 +1896,8 @@ export default function App() {
           latestRun={workspace?.runs[0]}
           runs={workspace?.runs ?? []}
           verificationBaselineRunId={verificationBaselineRunId}
-          busy={["create", "archive-case", "delete-case", "delete-artifacts", "rescan"].includes(busyAction ?? "")}
+          busy={["create", "seed-demo", "archive-case", "delete-case", "delete-artifacts", "rescan"].includes(busyAction ?? "")}
+          nativeMode={scannerService.isNative()}
           artifactCleanupPlan={artifactCleanupPlan}
           artifactCleanupResult={artifactCleanupResult}
           onClearPreset={() => {
@@ -1877,6 +1905,7 @@ export default function App() {
             navigate("start");
           }}
           onCreate={createCase}
+          onSeedDemo={seedDemoCase}
           onArchive={(caseId) => runAction("archive-case", () => scannerService.archiveCase(caseId))}
           onDelete={deleteCase}
           onDeleteArtifacts={deleteCaseArtifacts}

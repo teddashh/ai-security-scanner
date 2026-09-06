@@ -116,6 +116,12 @@ test("a build that cannot run the quick scan does not offer it", () => {
   expect(container.querySelector(".start-page__localhost-boundary")).toBeNull();
 });
 
+test("the first screen does not offer the example project action", () => {
+  const { queryByRole } = renderStart();
+  expect(queryByRole("button", { name: "See an example project" })).toBeNull();
+  expect(queryByRole("button", { name: "查看範例專案" })).toBeNull();
+});
+
 test("every scan the page offers also says what it will not do", () => {
   const { container } = renderStart();
 

@@ -38,6 +38,8 @@ export const zhTW = {
   "nav.start.hint": "選擇你想保護的項目",
   "nav.cases.label": "我的掃描",
   "nav.cases.hint": "建立或繼續掃描專案",
+  "cases.demoAction": "查看範例專案",
+  "cases.demoActionHelp": "開啟一個合成的展示專案；不會連線到任何目標，也不能掃描或編輯。",
   "nav.coverage.label": "掃描設定",
   "nav.coverage.hint": "加入你想掃描的項目",
   "nav.progress.label": "掃描進度",

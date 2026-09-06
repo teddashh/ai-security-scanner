@@ -377,7 +377,7 @@ demo 案件的全部儲存字串（`9e9d863`）。
 - **2.2 — control filter 只觸及約 19 條對照規則，5 個引擎一條都沒有。**
 - **2.4 — 列上沒有 location。**
 - **1.4 — 對照表飄移時，control reference 是整批清空的。**
-- 3.3 / 3.5 及 `seedDemoCase` 的死接線。
+- 3.3 / 3.5 的死接線。~~`seedDemoCase`~~ 已接上（見文末「demo 入口」那段）。
 
 ### 誠實的限制（延續自前一份交接，仍然成立）
 
@@ -540,3 +540,23 @@ fixture 裡也有（`"total": 342`）。現在 `total` 減掉六類已交代的�
 `.bin` symlink（lockfile 沒動，`npm ci` 即還原）。我補了兩處：前端普查對
 `normalization_shortfall` 的擷取原本綁死 `{lost}` 這個洞名，新句子的洞叫
 `{uncategorized}` 就漏了，改成任意洞名；以及一個 clippy `collapsible_if`。
+
+### demo 入口：一個只差一顆按鈕的完成品，接在專案頁的空狀態
+
+先前寫「先決定 demo 去留、再決定語言」，那個框架是錯的。原生 demo 不是鷹架：
+`is_demo` 是持久化的 DB 欄位（`storage.rs:144`，遷移在 `:1029`）、五個變更類命令
+拒絕對 demo 案件動作（`commands.rs:1770/1798/1982/2378/2466`）、匯出標記
+`demo_data: true` 並附說明（`export.rs:614/629/753/950`）、還有測試守著「啟動絕不
+替換成 demo」（`commands.rs:8892`）。它唯一缺的是 UI 入口——`scanner.ts:88` 登記了
+`seedDemoCase`，沒有任何呼叫者。移除它才是昂貴選項（改 schema、刪掉正在執行
+spec 規則的守衛）；讓它永遠觸達不到是最差的。
+
+spec §11.3 明文允許「an explicit demo action」；§3.1 要求首頁只有一個主要動作，
+§3.2 把主動互動壓在三個決定內。所以入口放在 `CasesPage` 空狀態，當「建立」旁
+的**次要**動作：只在零專案時顯示、絕不上 StartPage（有反向測試，兩種語言）、
+絕不自動觸發。瀏覽器預覽介面隱藏它——那個介面已經是 §11.3 允許的另一種
+「clearly labeled browser development preview」，再露出原生 demo 入口是重複。
+開啟後的 demo 案件本來就有「Demo／展示」徽章，補了雙語元件測試釘住。
+Rust 側零變更。
+
+由 Codex 撰寫；這次它的實作我沒有改動。

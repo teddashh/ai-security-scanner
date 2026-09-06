@@ -52,8 +52,10 @@ export interface CasesPageProps {
   artifactCleanupPlan?: CaseArtifactDeletionPlan;
   artifactCleanupResult?: CaseArtifactCleanupResult;
   busy?: boolean;
+  nativeMode: boolean;
   onClearPreset?: () => void;
   onCreate: (input: CreateCaseInput) => Promise<boolean>;
+  onSeedDemo: () => Promise<void>;
   onArchive: (caseId: string) => Promise<void>;
   onDelete: (caseId: string, confirmation: string) => Promise<boolean>;
   onDeleteArtifacts: (confirmation: string) => Promise<boolean>;
@@ -486,8 +488,10 @@ export function CasesPage({
   artifactCleanupPlan,
   artifactCleanupResult,
   busy,
+  nativeMode,
   onClearPreset,
   onCreate,
+  onSeedDemo,
   onArchive,
   onDelete,
   onDeleteArtifacts,
@@ -1292,7 +1296,18 @@ export function CasesPage({
             icon="cases"
             title={text(pageCopy.noCases)}
             description={text(pageCopy.noCasesHelp)}
-            action={<button className="button button--primary" type="button" onClick={openBlankForm}>{text(pageCopy.create)}</button>}
+            action={(
+              <div className="empty-state__actions">
+                <button className="button button--primary" type="button" disabled={busy} onClick={openBlankForm}>{text(pageCopy.create)}</button>
+                {/* The browser surface already opens its labeled preview fixture; this action is only the explicit entry to the persisted native demo. */}
+                {nativeMode && (
+                  <div className="empty-state__secondary-action">
+                    <button className="button button--secondary" type="button" disabled={busy} onClick={() => void onSeedDemo()}>{t("cases.demoAction")}</button>
+                    <small>{t("cases.demoActionHelp")}</small>
+                  </div>
+                )}
+              </div>
+            )}
           />
         ) : (
           <div className="case-list">

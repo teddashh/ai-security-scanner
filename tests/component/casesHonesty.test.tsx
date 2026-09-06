@@ -1,5 +1,6 @@
-import { cleanup, fireEvent, render } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { useState } from "react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { CasesPage } from "../../src/pages/CasesPage";
 import type { CasesPageProps } from "../../src/pages/CasesPage";
@@ -62,7 +63,9 @@ const renderCases = (overrides: Partial<CasesPageProps> = {}) =>
         unknownSourceCount={0}
         connectedNoAssetSourceCount={0}
         runs={[]}
+        nativeMode
         onCreate={() => Promise.resolve(true)}
+        onSeedDemo={() => Promise.resolve()}
         onArchive={() => Promise.resolve()}
         onDelete={() => Promise.resolve(true)}
         onDeleteArtifacts={() => Promise.resolve(true)}
@@ -370,4 +373,66 @@ test("the optional organization field does not promise an edit the app cannot ma
   expect(organization).toBeTruthy();
   expect(organization!.placeholder).not.toContain("later");
   expect(organization!.placeholder).toBe("Optional, and fixed once the project is created");
+});
+
+test("the empty native project list offers and opens the synthetic example", async () => {
+  const demo = assessmentCase({ id: "demo-case", name: "Example project", isDemo: true });
+  const onSeedDemo = vi.fn(() => Promise.resolve());
+  const Harness = () => {
+    const [opened, setOpened] = useState(false);
+    return (
+      <I18nProvider>
+        <CasesPage
+          cases={opened ? [demo] : []}
+          selectedCase={opened ? demo : undefined}
+          assetCount={0}
+          findingCount={0}
+          unknownSourceCount={0}
+          connectedNoAssetSourceCount={0}
+          runs={[]}
+          nativeMode
+          onCreate={() => Promise.resolve(true)}
+          onSeedDemo={async () => { await onSeedDemo(); setOpened(true); }}
+          onArchive={() => Promise.resolve()}
+          onDelete={() => Promise.resolve(true)}
+          onDeleteArtifacts={() => Promise.resolve(true)}
+          onDismissArtifactCleanup={() => {}}
+          onStartNewScan={() => {}}
+          onSelect={() => {}}
+          onContinue={() => {}}
+          onOpenProgress={() => {}}
+          onSelectVerificationBaseline={() => {}}
+          onStartRescan={() => Promise.resolve()}
+          onOpenVerification={() => {}}
+        />
+      </I18nProvider>
+    );
+  };
+  const { container, getByRole } = render(<Harness />);
+
+  const action = getByRole("button", { name: "See an example project" });
+  expect(container.textContent).toContain("synthetic demonstration project");
+  fireEvent.click(action);
+
+  await waitFor(() => expect(onSeedDemo).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(container.querySelector("#current-case-title")?.textContent).toBe("Example project"));
+});
+
+test("the example action is absent once a project exists and in the browser preview", () => {
+  const populated = renderCases();
+  expect(populated.queryByRole("button", { name: "See an example project" })).toBeNull();
+  cleanup();
+  const browserEmpty = renderCases({ cases: [], selectedCase: undefined, nativeMode: false });
+  expect(browserEmpty.queryByRole("button", { name: "See an example project" })).toBeNull();
+});
+
+test.each([
+  ["en", "Demo"],
+  ["zh-TW", "展示"],
+] as const)("a selected demo project is visibly marked in %s", (locale, label) => {
+  window.localStorage.setItem(localeStorageKey, locale);
+  const demo = assessmentCase({ isDemo: true });
+  const { container } = renderCases({ cases: [demo], selectedCase: demo });
+  const hero = container.querySelector(".current-case-hero");
+  expect(hero?.querySelector(".status-pill--demo")?.textContent).toBe(label);
 });

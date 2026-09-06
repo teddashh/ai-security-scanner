@@ -36,6 +36,8 @@ export const en = {
   "nav.start.hint": "Choose what you want to protect",
   "nav.cases.label": "My scans",
   "nav.cases.hint": "Create or continue a scan project",
+  "cases.demoAction": "See an example project",
+  "cases.demoActionHelp": "Opens a synthetic demonstration project. It never contacts a target, and it cannot be scanned or edited.",
   "nav.coverage.label": "Scan setup",
   "nav.coverage.hint": "Add what you want to scan",
   "nav.progress.label": "Scan progress",
