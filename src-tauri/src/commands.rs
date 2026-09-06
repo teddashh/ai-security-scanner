@@ -5592,6 +5592,7 @@ fn resume_captured_execution(
             "Normalization resumed from previously hashed local artifacts; the scanner container was not re-run."
                 .into(),
         ],
+        unattributed: Vec::new(),
         artifact_root: artifacts.root().to_path_buf(),
         output_directory: directories.output,
     };
@@ -6799,6 +6800,7 @@ fn terminal_report(
         raw_artifacts: vec![],
         findings: vec![],
         warnings: vec![],
+        unattributed: vec![],
     }
 }
 
@@ -7164,6 +7166,7 @@ fn persist_terminal_job_state_reconciliation(
             raw_artifacts,
             findings: vec![],
             warnings: vec![],
+            unattributed: vec![],
         };
         service.apply_execution_report(&key.case_id, &report)?;
     }
