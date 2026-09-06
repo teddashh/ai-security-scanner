@@ -2067,6 +2067,7 @@ export const adaptNativeCase = (
               .filter((name): name is string => Boolean(name)) ?? [],
           ) || adapterText("Unknown asset", "未知資產"),
           state: statusMap[diff.status] ?? "unverifiable",
+          comparisonStatus: diff.status,
           beforeSeverity: diff.baseline_severity ? mapSeverity(diff.baseline_severity) : undefined,
           afterSeverity: diff.current_severity ? mapSeverity(diff.current_severity) : undefined,
           explanation: diff.explanation,

@@ -1279,6 +1279,8 @@ export interface VerificationDiff {
   title: string;
   assetName: string;
   state: DiffState;
+  /** Native five-way status retained so presentation can distinguish changed from unchanged. */
+  comparisonStatus?: string;
   beforeSeverity?: Severity;
   afterSeverity?: Severity;
   explanation: string;

@@ -118,6 +118,32 @@ test("a comparison with both runs completed and no recorded limitation does not 
   expect(container.querySelector(".inline-notice--warning")).toBeNull();
 });
 
+test("a Traditional Chinese reader sees a changed finding's structured explanation", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const englishFrame = "The finding remains observable, but severity changed from high to critical.";
+  const { container } = renderVerification(
+    summary({
+      diffs: [diff({
+        id: "localized-change",
+        state: "persistent",
+        comparisonStatus: "changed",
+        beforeSeverity: "high",
+        afterSeverity: "critical",
+        explanation: englishFrame,
+        changeReasons: [{
+          code: "severity_changed",
+          detail: "severity changed from high to critical",
+        }],
+      })],
+    }),
+    bothRunsCompleted,
+  );
+
+  const row = diffRow(container, "Finding localized-change");
+  expect(row.textContent).toContain("仍可觀察到這個問題，但嚴重程度從 high 變更為 critical。");
+  expect(row.textContent).not.toContain(englishFrame);
+});
+
 test("an item that was not seen again is never worded as fixed and keeps its caution", () => {
   const { container } = renderVerification(
     summary({ diffs: [diff({ id: "a", state: "resolved", beforeSeverity: "critical" })] }),

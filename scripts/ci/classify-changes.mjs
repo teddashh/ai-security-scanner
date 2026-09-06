@@ -14,11 +14,14 @@ const FRONTEND_PATHS = [
   /^vite(?:st)?\.config\.[cm]?[jt]s$/,
   // Frontend tests read these Rust files directly to check contracts that span
   // the boundary: the beginner-report vocabulary, the coverage-ledger detail
-  // vocabulary, and the export run coordinate the native command consumes.
+  // vocabulary, the verification-diff reason vocabulary, its reason-code
+  // enum, and the export run coordinate the native command consumes.
   // Without these entries a backend-only commit can skip the lane holding the
   // test that would catch its change.
   /^src-tauri\/src\/beginner_report\.rs$/,
   /^src-tauri\/src\/coverage\.rs$/,
+  /^src-tauri\/src\/diff\.rs$/,
+  /^src-tauri\/src\/domain\.rs$/,
   /^src-tauri\/src\/prioritization\.rs$/,
   /^src-tauri\/src\/commands\.rs$/,
   // `findingNarrativeParity.test.ts` reads this against its TypeScript twin.

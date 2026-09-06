@@ -7,7 +7,11 @@ import { useI18n } from "../i18n";
 import { diffMeta, runStatusMeta, severityMeta } from "../lib";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import type { DiffState, Finding, ScanRun, VerificationSummary } from "../types";
-import { affectedEngineCount, isOnlyMappingVersionDrift } from "../verificationPresentation";
+import {
+  affectedEngineCount,
+  isOnlyMappingVersionDrift,
+  verificationDiffExplanation,
+} from "../verificationPresentation.ts";
 import "./page-technical-details.css";
 import { displayTechnicalDetail } from "./pageTechnicalDetails";
 
@@ -415,7 +419,7 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
                     {item.explanation && (
                       <details className="page-technical-details">
                         <summary>{text(copy.technicalExplanation)}</summary>
-                        <p>{displayTechnicalDetail(item.explanation) ?? text(copy.notSpecified)}</p>
+                        <p>{displayTechnicalDetail(verificationDiffExplanation(locale, item)) ?? text(copy.notSpecified)}</p>
                       </details>
                     )}
                   </div>

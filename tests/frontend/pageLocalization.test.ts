@@ -460,7 +460,7 @@ test("export preview, export, and both verification paths remain wired", async (
     assert.match(verification, new RegExp(`${callback}\\(`, "u"));
   }
   assertInsideDisclosure(verification, "page-technical-details", "displayTechnicalDetail(issue.detail)");
-  assertInsideDisclosure(verification, "page-technical-details", "displayTechnicalDetail(item.explanation)");
+  assertInsideDisclosure(verification, "page-technical-details", "verificationDiffExplanation(locale, item)");
   assert.doesNotMatch(verification, /<p>\{item\.explanation\}<\/p>/u);
   assert.match(verification, /Affected findings stay under Could not verify and are not counted as fixed/u);
   assert.match(verification, /受影響的問題會保留在「無法確認」，不會算成已修復/u);

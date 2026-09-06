@@ -925,6 +925,44 @@ const platformCaseFixture = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+test("native verification diffs retain their five-way status and structured reasons", () => {
+  const workspace = adaptNativeCase(platformCaseFixture({
+    comparisons: [{
+      id: "comparison-1",
+      case_id: "case-platforms-1",
+      baseline_run_id: "run-before",
+      current_run_id: "run-after",
+      created_at: "2026-08-26T01:00:00Z",
+      complete: true,
+      completeness_issues: [],
+      diffs: [{
+        fingerprint: "fingerprint-verbatim",
+        baseline_finding_id: null,
+        current_finding_id: null,
+        status: "changed",
+        explanation: "The finding remains observable, but severity changed from high to critical.",
+        baseline_severity: "high",
+        current_severity: "critical",
+        evidence_changed: false,
+        reasons: [{
+          code: "severity_changed",
+          engine_id: null,
+          asset_id: null,
+          detail: "severity changed from high to critical",
+        }],
+      }],
+    }],
+  }));
+
+  assert.equal(workspace.verification?.diffs[0]?.comparisonStatus, "changed");
+  assert.deepEqual(workspace.verification?.diffs[0]?.changeReasons, [{
+    code: "severity_changed",
+    engineId: undefined,
+    assetId: undefined,
+    detail: "severity changed from high to critical",
+  }]);
+});
+
 test("native sources expose only an exact non-secret provider binding", () => {
   const workspace = adaptNativeCase(platformCaseFixture({
     data_sources: [{

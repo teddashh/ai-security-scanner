@@ -30,6 +30,7 @@ export const zhTW = {
   "shell.caseRecovery.title": "一個或多個已保存的掃描專案需要復原",
   "shell.caseRecovery.detail": "程式保留了原始本機資料，並照常開啟所有正常專案。你可以繼續使用；程式沒有替換成範例資料。",
   "shell.caseRecovery.technical": "技術復原細節",
+  "shell.caseRecovery.missingTitle": "名稱不明的已保存專案",
   "shell.caseRecovery.preserved": "原始專案資料已保留",
   "shell.caseRecovery.missing": "先前保存的選擇已不存在",
 

@@ -168,6 +168,34 @@ test("recovery reports each project's outcome rather than one reassuring summary
   expect(entries[1]).not.toContain("Original project data preserved");
 });
 
+test("recovery uses a localized unknown title but preserves a real project title", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderShell({
+    caseRecoveryDiagnostics: [
+      {
+        caseId: "missing-case",
+        title: "Saved project",
+        code: "selected_case_missing",
+        preserved: false,
+        documentBytes: 0,
+      },
+      {
+        caseId: "unreadable-case",
+        title: "Project Name Typed By Its Owner",
+        code: "stored_case_unreadable",
+        preserved: true,
+        documentBytes: 2048,
+      },
+    ],
+  });
+
+  const entries = Array.from(container.querySelectorAll(".data-status-banner li"))
+    .map((item) => item.textContent ?? "");
+  expect(entries[0]).toContain("名稱不明的已保存專案");
+  expect(entries[0]).not.toContain("Saved project");
+  expect(entries[1]).toContain("Project Name Typed By Its Owner");
+});
+
 test("a shell with nothing wrong raises no banner at all", () => {
   const { container } = renderShell({ caseRecoveryDiagnostics: [] });
 

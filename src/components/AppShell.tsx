@@ -527,7 +527,9 @@ export function AppShell({
                 <ul>
                   {caseRecoveryDiagnostics.map((diagnostic) => (
                     <li key={`${diagnostic.caseId}:${diagnostic.code}`}>
-                      <strong>{diagnostic.title}</strong>{" — "}
+                      <strong>{diagnostic.code === "selected_case_missing"
+                        ? t("shell.caseRecovery.missingTitle")
+                        : diagnostic.title}</strong>{" — "}
                       {t(diagnostic.preserved
                         ? "shell.caseRecovery.preserved"
                         : "shell.caseRecovery.missing")}{" · "}

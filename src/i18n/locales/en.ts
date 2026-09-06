@@ -28,6 +28,7 @@ export const en = {
   "shell.caseRecovery.title": "One or more saved scan projects need recovery",
   "shell.caseRecovery.detail": "The app left their original local data unchanged and opened every healthy project. You can keep working; no sample data was substituted.",
   "shell.caseRecovery.technical": "Technical recovery details",
+  "shell.caseRecovery.missingTitle": "Saved project (name unavailable)",
   "shell.caseRecovery.preserved": "Original project data preserved",
   "shell.caseRecovery.missing": "Saved selection is no longer present",
 
