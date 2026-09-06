@@ -1,5 +1,12 @@
 # User-facing honesty audit — handover
 
+> **Historical handover snapshot (2026-09-05; status annotations added
+> 2026-09-06).** The audit claims below remain pinned to `c5c9a41`. Later work
+> changed several decisions and publication states; read the dated annotations
+> in place and the newer
+> [engine-alignment handover](engine-alignment-handover.zh-TW.md) rather than
+> treating this file as current `main` status.
+
 Date: 2026-09-05
 
 Canonical branch: `main`
@@ -155,6 +162,9 @@ the distance. The first measurement of this was wrong for that reason.
   reaches a user only in the exported HTML. Surface it in the app, or drop it.
 - **`Confidence::High` is hard-coded across all adapters.** Either it means
   something and should vary, or the field is decoration.
+  **Post-handover status (2026-09-06): completed in `6f9d778`.** Confidence now
+  prefers an engine-supplied judgement and otherwise records an explicit
+  product-derived basis, with evidence-dependent High/Medium/Low values.
 
 ### Blocked on fresh authorization
 
@@ -164,6 +174,16 @@ authorization; approval for one version does not extend to the next.
 - Maester `Investigate` collapses into `Failed` without surfacing `SourceResult`.
 - ScubaGear `Details` and Maester `ResultDetail` are not carried into findings.
   Both need a wrapper change and a `-6` republish.
+
+**Post-handover status (2026-09-06):** Maester still normalizes `Investigate`
+to the product's failure bucket, but the managed wrapper artifact already
+preserves the upstream label in `SourceResult`; `f28df23` added an in-image
+Pester specification that pins that behavior. ScubaGear `Details` and Maester
+`ResultDetail` are still not carried into findings. They were not part of the
+`-6` work: `f28df23` published the Maester wrapper specification at `2.0.0-6`,
+and `c7ded22` recorded and restored ScubaGear `1.8.0-6` and Maester `2.0.0-6`.
+Any future wrapper/spec content publication therefore starts at immutable
+index `-7`, not `-6`, and requires fresh explicit authorization.
 
 ### Open, reported, not acted on
 
@@ -192,3 +212,7 @@ authorization; approval for one version does not extend to the next.
 The next concrete step is the `VerificationPage` data-handling audit, because it
 is the largest unaudited surface making the same class of claim that produced
 the most serious finding in this range.
+
+**Historical-next-step note (2026-09-06):** later work overtook this checkpoint;
+the current continuation and remaining decisions are recorded in the
+[engine-alignment handover](engine-alignment-handover.zh-TW.md).

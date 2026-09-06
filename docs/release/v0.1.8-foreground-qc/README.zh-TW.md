@@ -1,8 +1,16 @@
 # v0.1.8 Foreground QC 跨機器交接索引
 
-這個目錄是 GitHub `main` 的跨機器交接入口。原本的
+> **歷史快照（2026-09-02；2026-09-06 補註）。** 本目錄所有測試、產物與 source
+> 敘述都固定在各自標明的 commit，不能當成目前 `main` 現況。舊
+> `codex/v0.1.8-foreground-qc` 分支在整合後已刪除；後續引擎／結果狀態見
+> [引擎接線與結果對齊交接](../../engine-alignment-handover.zh-TW.md)。`545f9f6`
+> 後來完成 digest-anchored private-cache slice，只部分 supersede A19；獨立驗證的
+> same-version repair source 與 installed-Windows qualification 仍未完成。
+
+這個目錄保存當時 GitHub `main` 的跨機器交接紀錄。原本的
 `codex/v0.1.8-foreground-qc` 已在 `1d4054e18b5b8a4014ffd2634ac507fa569e72a7`
-完整 fast-forward 進 `main`；分支仍保留作歷史稽核，不再是接手入口。
+完整 fast-forward 進 `main`；分支後來已刪除，commit 歷史仍保留作稽核，該分支
+不再是接手入口。
 
 - `v0.1.8` release-line 基底：`fa1fa9d401995de45080fbfaffc6b39d99955387`
 - 原始功能整合：`503542271ff8b2178ed2d334fd47d76c494d1c75`
@@ -10,7 +18,7 @@
 - Foreground QC 文件 checkpoint／fast-forward point：`1d4054e18b5b8a4014ffd2634ac507fa569e72a7`
 - 歷史完整 GitHub affected-lane baseline：`31f137d03997c221e7c81ba8fc5ae579348b0c14`
 - CodeQL source remediation：`8ba72315b6d136bdaf89617d95aa06aea0c72e8c`
-- Linux Clippy follow-up／目前 source checkpoint：`09ff38e2d7ba8d9b3ca1fcc63faa73d41092dcef`
+- Linux Clippy follow-up／當時最後 source checkpoint：`09ff38e2d7ba8d9b3ca1fcc63faa73d41092dcef`
 - Canonical source：<https://github.com/teddashh/ai-security-scanner/tree/main>
 
 ## 文件

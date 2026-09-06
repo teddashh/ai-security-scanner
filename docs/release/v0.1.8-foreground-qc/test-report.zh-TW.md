@@ -1,5 +1,12 @@
 # AI Security Scanner v0.1.8 Foreground QC 測試報告
 
+> **歷史快照（2026-09-02；2026-09-06 補註）。** 本報告所有 PASS／NOT RUN 與
+> source 結論都固定在各自標明的 checkpoint，不是目前 `main` 狀態。舊
+> `codex/v0.1.8-foreground-qc` 分支在整合後已刪除；後續引擎／結果狀態見
+> [引擎接線與結果對齊交接](../../engine-alignment-handover.zh-TW.md)。`545f9f6`
+> 後來完成 digest-anchored private-cache slice，只部分 supersede A19；獨立驗證的
+> same-version repair source 與 installed-Windows qualification 仍未完成。
+
 日期：2026-09-02
 原始功能整合 commit：`503542271ff8b2178ed2d334fd47d76c494d1c75`
 本輪主要強化 commit：`a538778a34cd7db72b28256591575aee77937ab8`
@@ -7,7 +14,7 @@
 Foreground QC fast-forward point：`1d4054e18b5b8a4014ffd2634ac507fa569e72a7`
 歷史完整 GitHub affected-lane baseline：`31f137d03997c221e7c81ba8fc5ae579348b0c14`
 CodeQL source remediation：`8ba72315b6d136bdaf89617d95aa06aea0c72e8c`
-Linux Clippy follow-up／目前 source checkpoint：`09ff38e2d7ba8d9b3ca1fcc63faa73d41092dcef`
+Linux Clippy follow-up／當時最後 source checkpoint：`09ff38e2d7ba8d9b3ca1fcc63faa73d41092dcef`
 平台：Windows 11 Professional／Castle Linux
 Rust：兩端 rustc/cargo 1.98.0
 Windows Node／npm：v24.16.0／11.13.0

@@ -1,5 +1,13 @@
 # AI Security Scanner v0.1.8 Foreground QC Handover Note
 
+> **歷史快照（2026-09-02；2026-09-06 補註）。** 本文證據固定在下列 commit，
+> 不是目前 `main` 狀態。舊 `codex/v0.1.8-foreground-qc` 分支在整合後已刪除；
+> 後續引擎／結果狀態見
+> [引擎接線與結果對齊交接](../../engine-alignment-handover.zh-TW.md)。`545f9f6`
+> 後來完成 digest-anchored private-cache slice，只部分 supersede A19；獨立驗證的
+> same-version repair source、完整 repair/relaunch 與 installed-Windows qualification
+> 仍未完成。
+
 日期：2026-09-02
 
 ## 接手位置
@@ -12,7 +20,7 @@
 - Foreground QC fast-forward point：`1d4054e18b5b8a4014ffd2634ac507fa569e72a7`
 - 歷史完整 GitHub affected-lane baseline：`31f137d03997c221e7c81ba8fc5ae579348b0c14`
 - CodeQL source remediation：`8ba72315b6d136bdaf89617d95aa06aea0c72e8c`
-- Linux Clippy follow-up／目前 source checkpoint：`09ff38e2d7ba8d9b3ca1fcc63faa73d41092dcef`
+- Linux Clippy follow-up／當時最後 source checkpoint：`09ff38e2d7ba8d9b3ca1fcc63faa73d41092dcef`
 - Upstream：`origin/main`
 - 狀態：Windows HEAD、GitHub `origin/main` 與 Castle clean checkout 已在 `09ff38e` 對齊；該 checkpoint 的 GitHub affected-lane CI 與 CodeQL 已 terminal SUCCESS，文件 commit 之後仍請以 GitHub `main` HEAD 為準。
 
@@ -96,6 +104,8 @@ Castle checkout：`/home/ted-h/projects/ai-security-scanner`，branch `main`、u
 ### P0：A19 same-version component repair
 
 目前 running app 沒有獨立 authenticated 同版本來源。Private installed copy 可以從 verified packaged tree 修復，但 packaged tree 自身若損壞，就沒有可信來源。不要做以下假修復：
+
+> **2026-09-06 補註：** `545f9f6` 後來加入以 compiled manifest digest 錨定、完整重新驗證的 private-cache recovery slice，因此上段「沒有可信來源」已部分過時；它仍不是獨立 authenticated same-version repair source，也沒有完成 out-of-process repair/relaunch 或 installed-Windows qualification。
 
 - 不要降低 hash／manifest 驗證。
 - 不要把同一個可能損壞的 resource tree 當 recovery source。

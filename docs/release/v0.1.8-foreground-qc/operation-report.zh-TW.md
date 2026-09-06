@@ -1,5 +1,12 @@
 # AI Security Scanner v0.1.8 前景 QC 作業報告
 
+> **歷史快照（2026-09-02；2026-09-06 補註）。** 本報告的操作、測試與產物證據
+> 固定在各自標明的 checkpoint，不是目前 `main` 狀態。舊
+> `codex/v0.1.8-foreground-qc` 分支在整合後已刪除；後續引擎／結果狀態見
+> [引擎接線與結果對齊交接](../../engine-alignment-handover.zh-TW.md)。`545f9f6`
+> 後來完成 digest-anchored private-cache slice，只部分 supersede A19；獨立驗證的
+> same-version repair source 與 installed-Windows qualification 仍未完成。
+
 日期：2026-09-02
 Repository：`teddashh/ai-security-scanner`
 Canonical 分支：`main`
@@ -9,7 +16,7 @@ Provider／case bundle／Settings 強化提交：`a538778a34cd7db72b28256591575a
 Foreground QC fast-forward point：`1d4054e18b5b8a4014ffd2634ac507fa569e72a7`
 歷史完整 GitHub affected-lane baseline：`31f137d03997c221e7c81ba8fc5ae579348b0c14`
 CodeQL source remediation：`8ba72315b6d136bdaf89617d95aa06aea0c72e8c`
-Linux Clippy follow-up／目前 source checkpoint：`09ff38e2d7ba8d9b3ca1fcc63faa73d41092dcef`
+Linux Clippy follow-up／當時最後 source checkpoint：`09ff38e2d7ba8d9b3ca1fcc63faa73d41092dcef`
 
 - Canonical source：https://github.com/teddashh/ai-security-scanner/tree/main
 - 原始功能整合：https://github.com/teddashh/ai-security-scanner/commit/503542271ff8b2178ed2d334fd47d76c494d1c75
@@ -108,10 +115,10 @@ Linux Clippy follow-up／目前 source checkpoint：`09ff38e2d7ba8d9b3ca1fcc63fa
 - CodeQL source remediation：`8ba72315b6d136bdaf89617d95aa06aea0c72e8c`
 - Linux dead-code scope follow-up：`09ff38e2d7ba8d9b3ca1fcc63faa73d41092dcef`
 - 遠端／upstream：`origin/main`
-- 目前 source checkpoint `09ff38e` 已確認 Windows HEAD、GitHub `origin/main` 與 Castle HEAD一致；本次文件提交後請以新的 GitHub `main` HEAD 為準，這不是永久同步保證。
+- 當時 source checkpoint `09ff38e` 已確認 Windows HEAD、GitHub `origin/main` 與 Castle HEAD一致；後續狀態應以新的 GitHub `main` HEAD 為準，這不是永久同步保證。
 - Castle checkout：`/home/ted-h/projects/ai-security-scanner`，branch `main`；`09ff38e` 驗證後 clean。
 - 依使用者授權採 fast-forward direct push，沒有建立 PR；沒有建立新 tag 或 Release。
-- 以 `main@31f137d` 做的 remote ancestry audit顯示，所有 `codex/*` 工作線（包括 foreground、ghost/VHD/WSL lines）與 `release/gateway-v0.1.6-candidate` 都已是 `main` ancestor，沒有遺漏的 branch-only commit。原 branch保留作稽核。
+- 以 `main@31f137d` 做的 remote ancestry audit顯示，所有 `codex/*` 工作線（包括 foreground、ghost/VHD/WSL lines）與 `release/gateway-v0.1.6-candidate` 都已是 `main` ancestor，沒有遺漏的 branch-only commit。原 foreground branch 後來已刪除；commit ancestry 與 Git 歷史保留稽核證據。
 - `31f137d` 當時的歷史 inventory 中，尚非 `main` ancestor 的是 7 個舊-base Dependabot branches與 2 個 engine-publication branches；每個只有 1 個 branch-only commit，且都從明顯較舊的 base分岔。之後 GitHub 又建立 PR #24（`dependabot/cargo/rust-81a2f3bcd0`、`67f80fb`），從 `8ba7231` 分岔並一次更新5項Rust dependencies，包括把本輪新增的`nix 0.30.1`升到`0.31.3`。它們都不是本 foreground產品工作線，且涉及dependency或image publication，因此不因「全部 merge」而盲合併；應在最新`main`上重建／更新後跑對應qualification。
 - GitHub Dependabot alert #1 已查明為 Linux desktop graph 的 `glib 0.18.5`：`GHSA-wrw7-89jp-8q8g`／`RUSTSEC-2024-0429`，Moderate 6.9。Windows 與 Linux CLI-only graph 不受此依賴影響；因 GTK3 graph 限制，不能用 lockfile 單獨升到 patched `0.20.0`。`8ba7231` 的 lockfile變更只加入Linux-only `nix 0.30.1`；本輪未做未稽核 fork/vendor，也不宣稱 `glib` 警報已修復。
 
@@ -195,6 +202,7 @@ Packaged managed-runtime evidence：
 ## 仍未完成與已知風險
 
 1. **P0 A19 同版本 packaged-component 自動修復仍開放。** Running app 沒有獨立、authenticated 的同版本 installer／payload cache；不能從可能已損壞的 resource tree 自我修復。現況是安全降級與誠實 recovery 指引，不能把局部保護描述成完整 A19。
+   **2026-09-06 補註：** `545f9f6` 後來完成 digest-anchored、完整重新驗證的 private-cache slice，所以上述「沒有 payload cache」只保留為當時紀錄。獨立 authenticated same-version repair source、out-of-process repair/relaunch 與 installed-Windows qualification 仍未完成。
 2. **Signed case bundle scope 契約已定義，但尚未做人機／installed qualification。** Bundle 是 case-wide records + run-bound reports；reports 的 observations/evidence 綁 selected run，但 legacy presentation、workflow status與 asset display 有已揭露的 current case projection caveat。signed manifest、`case.json`、README 與 UI 已同步，但仍沒有真實簽章 bundle 的端到端 human path。
 3. Provider recovery 已限制為 4 格且安全失敗 fail closed；4 格皆被不同內容占用時會回傳錯誤。後續若要 GC，仍需不破壞 chain-of-custody 的 retention 規則。
 4. Nuclei 真實 pinned-template-tree test 已在 Castle PASS，但 production `3.11.1-5` 仍是舊 immutable recipe。下一版需新 tag、新 attestation／digest 與單 engine publication 路徑後才能把 gate 納入；不可覆寫或冒用 `-5` evidence。

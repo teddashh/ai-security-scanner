@@ -1,5 +1,13 @@
 # ai-security-scanner whole-repository product audit
 
+> **Historical audit snapshot (2026-08-29; status annotations added 2026-09-06).**
+> The findings and unqualified source references below remain pinned to
+> `7e0f0de`; they are not a statement about the current `main` tree. The named
+> `codex/v0.1.8-integration` branch was deleted after consolidation. For the
+> later engine/result work, see the
+> [engine-alignment handover](engine-alignment-handover.zh-TW.md). Post-audit
+> completion notes below do not rewrite the original evidence.
+
 Status: completed static product-design, UX, architecture, and specification audit
 
 Documentation follow-up: the tracked current product-behavior documents have been reconciled to the canonical specification on this integration workline. Historical release-line notes are explicitly non-normative, and a low-cost CI contract check now verifies document authority, the highest-risk outcome-first decisions, and local links. A future contradiction remains a defect to remove, not an alternative requirement. Evidence that describes the pre-rewrite documents is explicitly pinned to the audit baseline below.
@@ -283,6 +291,12 @@ This compact inventory records the current semantics for paths not all represent
 ### A17 — Runtime recovery code is larger and more dangerous than side-by-side isolation
 
 - **Priority / disposition:** Remove.
+- **Post-audit status (2026-09-06):** The executable legacy
+  export/import/quarantine/unregister migration transaction was removed at
+  `3b5376c`; the replacement source path retains an unhealthy generation and
+  creates a fresh isolated one. This closes the source-removal item only.
+  Exact installed-Windows lifecycle and human-path qualification remain a
+  separate, unexecuted acceptance obligation.
 - **Problem:** A large legacy transaction still exports, hashes, imports, quarantines, terminates, unregisters, and deletes WSL/provider state even though current startup already treats legacy observation as nonblocking. Commands and baseline documentation preserved two competing recovery models; the subordinate documentation is now aligned, but the executable recovery surface remains.
 - **Evidence:** nonblocking legacy observation at `src-tauri/src/managed_runtime.rs:2523-2530,4963-4979`; destructive transaction `src-tauri/src/managed_runtime.rs:3726-4179` including unregister at `4026-4034,4111-4119`; command surface `1131-1163`; baseline conflicts at `7e0f0de:docs/managed-runtime.md:109-125` and `7e0f0de:README.md:236-242`.
 - **Real user impact:** More data-sensitive paths, states, receipts, and tests remain available even though retaining the old object and creating a new one is safer and simpler.
@@ -303,6 +317,12 @@ This compact inventory records the current semantics for paths not all represent
 ### A19 — One packaged-component verification defect disables managed scanning for the process
 
 - **Priority / disposition:** P0 — Automatic repair; operation-scoped hard block only.
+- **Post-audit status (2026-09-06):** `545f9f6` implemented the
+  digest-anchored, fully verified private-cache recovery slice described below,
+  so that bounded part of A19 is partially superseded. It is not full closure:
+  an independently authenticated same-version repair source, out-of-process
+  repair/relaunch, and exact installed-Windows artifact qualification remain
+  open.
 - **Integration status:** When the packaged component is missing or rejected, the current source first tries only the exact private installed copy selected by the current desktop build's independently embedded manifest SHA-256. That copy must pass the current management-contract, private-namespace, canonical-path, manifest, size, and per-file digest checks before it can reinitialize the manager; rejected packaged bytes are never used as the recovery source. On Windows, admission additionally requires exact protected current-user DACLs on `versions`, the manifest-derived install directories, manifest, and payload and rejects reparse points and hard links. Immediately before each private installed-bundle driver launch, the Windows guard rejects entries absent from the launch-time inventory, re-hashes every listed file through its retained handle, pins the checked canonical ancestor directory objects and stable listed-file identities, and holds those handles through process exit/output drain. Listed-file handles deny write/delete sharing; directory handles deny rename/delete of the checked directory objects but do not prevent same-user creation of a new child after the pre-launch inventory. A fresh NSIS install now also invokes one feature-gated, zero-input coordinator after installing binaries and registration but before first desktop launch. It ignores environment path overrides, rejects command-line path overrides, resolves only the real direct `managed-runtime` sibling of the installed CLI, requires that manifest to equal the digest embedded when the Windows CLI was built, acquires the fixed private-data lease, and uses the ordinary verify/copy/atomic-commit installation path without downloading an image or executing Podman, WSL, or a scan. Every helper absence, rejection, timeout, or malformed result is non-fatal; stale-registration, same-version Repair, and upgrade overlays skip seeding so existing private runtime bytes remain unchanged. Exact abandoned UUID staging directories do not consume the installed-version bound and are removed on the next locked install attempt, while similar unknown siblings are retained. The recovery warning contains only a fixed boundary/source, the admitted digest, and the original typed package-failure reason. If the exact copy is absent or fails verification, the product keeps the existing redacted, terminal, non-retryable admission outcome and leaves compatibility providers, independent checks, projects, reports, and exports available. This remains a bounded verified-cache slice, not complete A19: successful fresh NSIS seeding can provide the copy before first launch, but MSI, an unsuccessful/interrupted seed, registration overlays, installed-resource replacement, an authenticated same-version repair source, out-of-process repair/relaunch, same-user directory-write isolation, and installed-Windows artifact qualification remain open.
 - **Problem:** If the packaged managed-runtime manifest/bundle fails startup verification and the exact private copy is unavailable or ineligible, the manager remains unavailable for the process. Execution falls back to user-installed compatibility providers, while scanner-issue UI directs a beginner to fetch/reinstall the latest release; the current cache slice does not repair the damaged application resource.
 - **Evidence:** Admission and receipt at `admit_packaged_managed_runtime_with_recovery_digest` / `PackagedManagedRuntimeAdmission::recovery_receipt` in `src-tauri/src/managed_runtime.rs`; startup diagnostic in `src-tauri/src/lib.rs`; manager installation/fallback in `src-tauri/src/state.rs`; hidden coordinator and build-anchor tests in `src-tauri/src/bin/cli.rs`; fresh-only dispatch in `src-tauri/windows/nsis/installer.nsi`; staged-manifest-before-sidecar ordering in CI/release; source/provenance and mutation checks in `scripts/release/validate-windows-nsis-template.mjs`; recovery, abandoned-staging, and Windows pre-spawn guard tests in `managed_runtime::tests`; reinstall guidance at `src/components/RuntimeSetupAssistant.tsx:108-126,224-242`. These are source checks; the updated Windows NSIS initial-status qualification contract has not yet produced exact-candidate evidence.

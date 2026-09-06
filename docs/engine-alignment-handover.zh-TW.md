@@ -1,5 +1,10 @@
 # 引擎接線與結果對齊 — 交接文件
 
+> **歷史交接快照（2026-09-05；2026-09-06 補註）。** 本文主體與「目前位置」
+> 原表固定在 `0392aea`；文末後續紀錄則延伸到 `c7ded22`。較早段落中的
+> 「目前」、「下一步」與「等待決定」應連同下方 2026-09-06 現況校正閱讀，
+> 不可當成目前 `main` 或正式發行資格聲明。
+
 日期：2026-09-05
 
 主線分支：`main`（無其他分支或 worktree）
@@ -410,6 +415,26 @@ Ted 先拍板：（a）引擎警告與 `data_quality_warnings` 要不要改成�
 `Confidence::High` 是常數欄，那個欄位到底代表什麼；（c）control-mapping catalog
 的 rationale 要不要有第二語言版本以及 provenance 怎麼記；（d）demo 案件去留。
 其中（a）與（b）是清單品質上最大的兩塊。
+
+### 2026-09-06 現況校正
+
+上表與「建議的下一步」保留的是 `0392aea` 當下判讀；其列出的主要決定後來已有
+不改動歷史 case bytes 或釘住 catalog 的實作答案：
+
+- `15e7fa0` 已在呈現層完成 run warnings 與 `data_quality_warnings` 的雙語顯示，
+  沒有把已簽章欄位改成 `{code, text}`。
+- `6f9d778` 已完成 `Confidence::High` 清查：優先採引擎原值，產品推導值帶
+  basis code，並依實際證據分成 High／Medium／Low。
+- `5e468a9` 已在呈現層完成 control-mapping `rationale`／`relationship` 的雙語
+  說明；經審閱 catalog 與其 hash pin 保持逐位元組不變。
+- `d6da4b4` 已替原生 demo 案件接上明確、次要且不會自動觸發的 UI 入口。
+- `f28df23` 加入 Maester Pester wrapper spec，並成為後續 `2.0.0-6` 映像發布的
+  source revision；`c7ded22` 記錄該次驗證證據並恢復 ScubaGear `1.8.0-6`／
+  Maester `2.0.0-6` 的 catalog 狀態。
+  因 `-6` 已是公開 immutable 版本，下一個有新 wrapper/spec 內容的版本索引必須是
+  `-7`，且仍需一次新的明確對外發布授權。
+- #10 的讀取側已不採用那個捏造欄位；剩餘產生側 SQL 死碼刻意延後到下一次有
+  實質理由重建 cloud-launcher 時再移除。它不是目前等待授權的阻擋項。
 
 ---
 
