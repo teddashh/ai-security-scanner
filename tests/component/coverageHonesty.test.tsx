@@ -1,9 +1,9 @@
 import { cleanup, render, within } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { CoveragePage } from "../../src/pages/CoveragePage";
-import { I18nProvider } from "../../src/i18n";
-import type { Asset } from "../../src/types";
+import { I18nProvider, localeStorageKey } from "../../src/i18n";
+import type { Asset, CoverageRecord } from "../../src/types";
 
 // The backend refuses to call a run complete when controls could not be
 // evaluated: such a run resolves to `authorized_incomplete` rather than
@@ -40,13 +40,13 @@ const FINISHED = asset("asset-finished", "finished.example", "discovered_authori
 const UNFINISHED = asset("asset-unfinished", "unfinished.example", "authorized_incomplete", true);
 const UNTOUCHED = asset("asset-untouched", "untouched.example", "authorized_incomplete", false);
 
-const renderCoverage = (assets: Asset[]) =>
+const renderCoverage = (assets: Asset[], coverage: CoverageRecord[] = []) =>
   render(
     <I18nProvider>
       <CoveragePage
         caseId="case-1"
         requestedActivities={[]}
-        coverage={[]}
+        coverage={coverage}
         sources={[]}
         engineManifests={[]}
         assets={assets}
@@ -74,7 +74,14 @@ const pillFor = (container: HTMLElement, name: string): HTMLElement => {
   return pill;
 };
 
-afterEach(cleanup);
+beforeEach(() => {
+  window.localStorage.setItem(localeStorageKey, "en");
+});
+
+afterEach(() => {
+  cleanup();
+  window.localStorage.clear();
+});
 
 test("a scan that did not finish is never shown as finished", () => {
   const { container } = renderCoverage([FINISHED, UNFINISHED, UNTOUCHED]);
@@ -103,4 +110,24 @@ test("an unfinished scan is not presented as one that has not started", () => {
   expect(unfinished.textContent).not.toContain("Ready to scan");
   expect(untouched.textContent).toContain("Ready to scan");
   expect(unfinished.textContent).not.toEqual(untouched.textContent);
+});
+
+test("a Traditional Chinese reader sees the stored coverage detail in their language", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const english =
+    "The asset is authorized, but no scan plan is tied to its current effective grants.";
+  const coverage: CoverageRecord = {
+    id: "coverage-1",
+    label: "saved.example",
+    platform: "external",
+    sourceKind: "user_declared",
+    state: "authorized_incomplete",
+    assetCount: 1,
+    detail: english,
+    scanAttempted: false,
+  };
+
+  const { container } = renderCoverage([], [coverage]);
+  expect(container.textContent).toContain("此資產已獲授權，但沒有任何掃描計畫連結到目前有效的授權。");
+  expect(container.textContent).not.toContain(english);
 });

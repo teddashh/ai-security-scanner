@@ -128,7 +128,24 @@ pub fn compute_coverage_ledger(
     }
 
     entries.sort_by(|left, right| left.scope_key.cmp(&right.scope_key));
+    debug_assert_coverage_details_are_translatable(&entries);
     entries
+}
+
+/// Every explanation composed above has a Traditional Chinese presentation.
+/// The signed case bundle also serializes this stored field, so the vocabulary
+/// is kept in the Rust/TypeScript twin rather than a screen-only module.
+fn debug_assert_coverage_details_are_translatable(entries: &[CoverageEntry]) {
+    if cfg!(debug_assertions) {
+        for entry in entries {
+            debug_assert!(
+                crate::finding_narrative::coverage_record_detail_zh_hant(&entry.explanation)
+                    .is_some(),
+                "no Traditional Chinese for the coverage record detail: {}",
+                entry.explanation
+            );
+        }
+    }
 }
 
 fn append_live_discovery_detail(source: &DataSource, explanation: &mut String) {

@@ -24,6 +24,7 @@ import {
   findingImpactSentence,
   findingSummarySentence,
   localizedExpertType,
+  localizedRequestedLimitValue,
   testedObservationProse,
 } from "../findingNarrative.ts";
 import {
@@ -787,7 +788,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
               <summary>{text(copy.requestedLimits)}</summary>
               <ul className="detail-list">
                 {report.requested.limits.map((limit, index) => (
-                  <li key={`${limit.name}-${limit.value}-${index}`}><strong>{localizedRequestedLimitName(limit.name, locale)}</strong><span>{limit.value}</span></li>
+                  <li key={`${limit.name}-${limit.value}-${index}`}><strong>{localizedRequestedLimitName(limit.name, locale)}</strong><span>{localizedRequestedLimitValue(limit.name, limit.value, locale)}</span></li>
                 ))}
               </ul>
             </details>

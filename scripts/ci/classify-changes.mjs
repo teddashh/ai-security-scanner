@@ -12,12 +12,13 @@ const FRONTEND_PATHS = [
   /^tsconfig(?:\.[^/]+)?\.json$/,
   // Matches both the Vite build config and the Vitest component-test config.
   /^vite(?:st)?\.config\.[cm]?[jt]s$/,
-  // Frontend tests read these two Rust files directly to check contracts that
-  // span the boundary: the coverage-dimension vocabulary the beginner report
-  // emits, and the export run coordinate the native command consumes. Without
-  // these entries a backend-only commit that breaks either contract runs the
-  // Rust lane and skips the lane holding the test that would catch it.
+  // Frontend tests read these Rust files directly to check contracts that span
+  // the boundary: the beginner-report vocabulary, the coverage-ledger detail
+  // vocabulary, and the export run coordinate the native command consumes.
+  // Without these entries a backend-only commit can skip the lane holding the
+  // test that would catch its change.
   /^src-tauri\/src\/beginner_report\.rs$/,
+  /^src-tauri\/src\/coverage\.rs$/,
   /^src-tauri\/src\/prioritization\.rs$/,
   /^src-tauri\/src\/commands\.rs$/,
   // `findingNarrativeParity.test.ts` reads this against its TypeScript twin.

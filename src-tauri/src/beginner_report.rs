@@ -815,7 +815,7 @@ fn project_requested_coverage(
             .then_with(|| left.value.cmp(&right.value))
     });
     limits.dedup();
-    debug_assert_limit_names_are_translatable(&limits);
+    debug_assert_limits_are_translatable(&limits);
 
     let mut unavailable_dimensions = Vec::new();
     if stage.availability == DataAvailability::Unavailable {
@@ -1729,7 +1729,7 @@ fn debug_assert_coverage_prose_is_translatable(gaps: &[CoverageGap]) {
 /// whole Rust suite is the census, so a limit added to a producer here fails
 /// the test that exercises its own path rather than reaching a Chinese reader
 /// of the shared report as English.
-fn debug_assert_limit_names_are_translatable(limits: &[RequestedLimit]) {
+fn debug_assert_limits_are_translatable(limits: &[RequestedLimit]) {
     if cfg!(debug_assertions) {
         for limit in limits {
             debug_assert!(
@@ -1738,6 +1738,18 @@ fn debug_assert_limit_names_are_translatable(limits: &[RequestedLimit]) {
                 "no Traditional Chinese for the requested limit name: {}",
                 limit.name
             );
+            if limit.value.bytes().any(|byte| byte.is_ascii_alphabetic()) {
+                debug_assert!(
+                    crate::finding_narrative::recognized_requested_limit_value_zh_hant(
+                        &limit.name,
+                        &limit.value
+                    )
+                    .is_some(),
+                    "no Traditional Chinese for the requested limit value: {} = {}",
+                    limit.name,
+                    limit.value
+                );
+            }
         }
     }
 }

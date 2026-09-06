@@ -6,7 +6,10 @@ import {
   localizedCoverageDimension,
   localizedRequestedLimitName,
 } from "../../src/coverageDimensionPresentation.ts";
-import { testedObservationProse } from "../../src/findingNarrative.ts";
+import {
+  localizedRequestedLimitValue,
+  testedObservationProse,
+} from "../../src/findingNarrative.ts";
 
 // A beginner-report coverage row is generated almost entirely from enumerations:
 // its explanation comes from the gap's `kind` and its advice from the
@@ -336,6 +339,37 @@ const limitNames = [
   ]),
 ].sort();
 
+const fillLimitFrame = (frame: string): string => {
+  if (frame.includes("per second")) {
+    let positional = 0;
+    return frame.replaceAll(FORMAT_HOLE, () => positional++ === 0 ? "5" : "2");
+  }
+  return frame
+    .replaceAll("{port}", "443")
+    .replaceAll("{timeout_ms}", "250")
+    .replaceAll("{payload_bytes}", "64")
+    .replaceAll("{seconds}", "600")
+    .replaceAll(FORMAT_HOLE, "600");
+};
+
+/** Every formatted limit value, kept beside the name that determines its role. */
+const formattedLimitValues = Array.from(
+  production.matchAll(/RequestedLimit\s*\{([\s\S]*?)source:\s*RequestedLimitSource::/gu),
+  (match) => match[1] ?? "",
+).flatMap((body) => {
+  const fixedName = body.match(/\bname:\s*"([^"]+)"\.into\(\)/u)?.[1];
+  const composedName = body.match(/\bname:\s*format!\(\s*"([^"]+)"/u)?.[1];
+  const valueFrame = body.match(/\bvalue:\s*format!\(\s*"([^"]+)"/u)?.[1];
+  if (!valueFrame || (!fixedName && !composedName)) return [];
+  return [{
+    name: fixedName ?? (composedName ?? "").replaceAll(FORMAT_HOLE, "asset-primary"),
+    frame: valueFrame,
+    value: fillLimitFrame(valueFrame),
+  }];
+});
+
+const unitBearingLimitValues = formattedLimitValues.filter(({ value }) => /[A-Za-z]/u.test(value));
+
 test("every limit name the backend writes is translated around its identifier", () => {
   assert.ok(limitNames.length >= 8, `found only ${limitNames.length} limit names: ${limitNames.join(", ")}`);
   assert.ok(limitNames.includes("endpoint"));
@@ -348,6 +382,42 @@ test("every limit name the backend writes is translated around its identifier", 
       assert.ok(label.includes("asset-primary"), `${name} lost its identifier: ${label}`);
     }
     assert.equal(localizedRequestedLimitName(name, "en"), name);
+  }
+});
+
+test("known requested-limit units are translated without changing their numbers", () => {
+  for (const [name, value, expected] of [
+    ["connection timeout", "250 ms", "250 毫秒"],
+    ["application payload", "64 bytes", "64 位元組"],
+    ["gitleaks execution timeout", "600 seconds", "600 秒"],
+    ["asset-primary request rate", "5 per second, concurrency 2", "每秒 5 次，並行 2"],
+  ] as const) {
+    assert.equal(localizedRequestedLimitValue(name, value, "zh-TW"), expected);
+    assert.equal(localizedRequestedLimitValue(name, value, "en"), value);
+  }
+  for (const [name, value] of [
+    ["endpoint", "127.0.0.1:443"],
+    ["asset-primary approved ports", "80,443"],
+    ["asset-primary authorized network target", "example.test"],
+    ["future limit", "value from another build"],
+  ] as const) {
+    assert.equal(localizedRequestedLimitValue(name, value, "zh-TW"), value);
+  }
+});
+
+test("every unit-bearing limit value frame in the backend is translated", () => {
+  // Five producer slots currently use four unit shapes. Keep both numbers as
+  // lower bounds so adding a translated producer or reusing a shape is valid.
+  assert.ok(
+    unitBearingLimitValues.length >= 5,
+    `found only ${unitBearingLimitValues.length} unit-bearing frames: ${unitBearingLimitValues.map(({ frame }) => frame).join(" / ")}`,
+  );
+  assert.ok(new Set(unitBearingLimitValues.map(({ value }) => value)).size >= 4);
+  for (const { name, value } of unitBearingLimitValues) {
+    const translated = localizedRequestedLimitValue(name, value, "zh-TW");
+    assert.notEqual(translated, value, `${name} kept its English unit: ${value}`);
+    assert.match(translated, /\p{Script=Han}/u, translated);
+    assert.equal(localizedRequestedLimitValue(name, value, "en"), value);
   }
 });
 

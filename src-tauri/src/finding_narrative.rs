@@ -449,6 +449,54 @@ pub(crate) fn recognized_requested_limit_name_zh_hant(name: &str) -> Option<Stri
     None
 }
 
+const REQUESTED_LIMIT_VALUE_UNITS: &[(&str, &str)] =
+    &[(" ms", " 毫秒"), (" bytes", " 位元組"), (" seconds", " 秒")];
+
+const REQUEST_RATE_MIDDLE: (&str, &str) = (" per second, concurrency ", " 次，並行 ");
+
+/// One stored requested-limit value in Traditional Chinese.
+///
+/// Only unit shapes this build authors are changed. Endpoints, targets, port
+/// lists, and values written by another build remain byte-for-byte searchable.
+pub fn requested_limit_value_zh_hant(name: &str, value: &str) -> String {
+    recognized_requested_limit_value_zh_hant(name, value).unwrap_or_else(|| value.to_owned())
+}
+
+/// `None` means neither a known unit shape nor a known identifier-bearing
+/// limit. The producer assertion uses this distinction to catch a new English
+/// unit while the public presentation function safely preserves unknown data.
+pub(crate) fn recognized_requested_limit_value_zh_hant(name: &str, value: &str) -> Option<String> {
+    for (english_unit, chinese_unit) in REQUESTED_LIMIT_VALUE_UNITS {
+        if let Some(number) = value.strip_suffix(english_unit)
+            && is_ascii_number(number)
+        {
+            return Some(format!("{number}{chinese_unit}"));
+        }
+    }
+
+    if let Some((requests, concurrency)) = value.split_once(REQUEST_RATE_MIDDLE.0)
+        && is_ascii_number(requests)
+        && is_ascii_number(concurrency)
+    {
+        return Some(format!(
+            "每秒 {requests}{}{concurrency}",
+            REQUEST_RATE_MIDDLE.1
+        ));
+    }
+
+    if name == "endpoint"
+        || name.ends_with(" authorized network target")
+        || name.ends_with(" approved ports")
+    {
+        return Some(value.to_owned());
+    }
+    None
+}
+
+fn is_ascii_number(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 /// Appends the identifier a composed name carries, when it has one.
 ///
 /// `format!("{} approved ports", grant.asset_id)` degrades to a bare suffix if
@@ -508,6 +556,189 @@ pub fn tested_observation_zh_hant(english: &str) -> Option<String> {
         .iter()
         .find(|(candidate, _)| *candidate == trimmed)
         .map(|(_, chinese)| (*chinese).to_owned())
+}
+
+/// Fixed coverage-ledger explanations shared by the screen and the exported
+/// case record. Explanations with retained values are matched by shape below.
+const COVERAGE_RECORD_DETAIL_PROSE: &[(&str, &str)] = &[
+    (
+        "The source is connected, but no attributable discovery has completed and no assets are known. Coverage is not established.",
+        "來源已連線，但尚未完成可歸屬的探索，也沒有已知資產。尚未建立涵蓋。",
+    ),
+    (
+        "The discovered candidate has not had ownership and scope explicitly confirmed. Discovery never authorizes a target automatically.",
+        "探索到的候選資產尚未明確確認所有權與範圍。探索本身絕不會自動授權目標。",
+    ),
+    (
+        "The asset has no unexpired, valid scope grant. Discovery never authorizes a target automatically.",
+        "此資產沒有尚未到期的有效範圍授權。探索本身絕不會自動授權目標。",
+    ),
+    (
+        "The asset is authorized, but no scan plan is tied to its current effective grants.",
+        "此資產已獲授權，但沒有任何掃描計畫連結到目前有效的授權。",
+    ),
+    (
+        "The scan predates frozen scope-grant snapshots, so its historical authorization and permission coverage are unknown. Live grants are never substituted for missing run evidence.",
+        "這次掃描早於凍結範圍授權快照的機制，因此無法得知當時的授權與權限涵蓋。絕不會用現行授權補上缺少的執行記錄。",
+    ),
+    (
+        "The asset is authorized, but the latest applicable scan plan contains no engine run for it.",
+        "此資產已獲授權，但最近適用的掃描計畫沒有包含它的掃描工具工作。",
+    ),
+];
+
+const COVERAGE_STATE_APPEND: (&str, &str) = (
+    " This state is independent of how many findings were reported.",
+    " 此狀態與回報了多少個問題無關。",
+);
+const PROVIDER_DISCOVERY_APPEND: (&str, &str) =
+    (" Latest provider discovery: ", " 最近一次供應商探索：");
+const STALE_KNOWLEDGE_APPEND: (&str, &str) = (
+    " Explicit stale-knowledge warning: ",
+    " 明確的過時知識警告：",
+);
+const STALE_KNOWLEDGE_SUFFIX: (&str, &str) = (
+    ". Completion proves execution, not current knowledge.",
+    "。完成只證明已執行，不代表知識仍為最新。",
+);
+const LOCALHOST_ATTEMPT_APPEND: (&str, &str) = (
+    " Exact built-in localhost TCP attempt(s): ",
+    " 精確的內建 localhost TCP 嘗試：",
+);
+const LOCALHOST_ATTEMPT_SUFFIX: (&str, &str) = (
+    ". This records only those connection attempts; it does not establish that the service or computer is secure, and it does not cover other ports or hosts.",
+    "。這只記錄這些連線嘗試；無法證明服務或電腦安全，也不涵蓋其他連接埠或主機。",
+);
+
+/// A coverage-ledger explanation in Traditional Chinese, or `None` when this
+/// build did not author the stored sentence. Values retained inside a known
+/// frame -- including a person's applicability reason -- remain verbatim.
+pub fn coverage_record_detail_zh_hant(english: &str) -> Option<String> {
+    if let Some((_, chinese)) = COVERAGE_RECORD_DETAIL_PROSE
+        .iter()
+        .find(|(candidate, _)| *candidate == english)
+    {
+        return Some((*chinese).to_owned());
+    }
+
+    if let Some(translated) =
+        translate_trailing_coverage_frame(english, STALE_KNOWLEDGE_APPEND, STALE_KNOWLEDGE_SUFFIX)
+    {
+        return Some(translated);
+    }
+    if let Some(translated) = translate_trailing_coverage_frame(
+        english,
+        LOCALHOST_ATTEMPT_APPEND,
+        LOCALHOST_ATTEMPT_SUFFIX,
+    ) {
+        return Some(translated);
+    }
+    if let Some(translated) =
+        translate_trailing_coverage_frame(english, PROVIDER_DISCOVERY_APPEND, ("", ""))
+    {
+        return Some(translated);
+    }
+    if let Some(summary) = english.strip_suffix(COVERAGE_STATE_APPEND.0)
+        && let Some(summary) = coverage_record_detail_zh_hant(summary)
+    {
+        return Some(format!("{summary}{}", COVERAGE_STATE_APPEND.1));
+    }
+
+    if let Some(reason) = strip_frame(
+        english,
+        "The source area is explicitly outside this case: ",
+        " This is a scoped applicability statement, not a successful scan result.",
+    ) {
+        return Some(format!(
+            "此來源範圍明確不在本案件內：{reason} 這是範圍適用性的說明，不是掃描成功的結果。"
+        ));
+    }
+    if let Some(count) = strip_frame(
+        english,
+        "The source is connected and the latest attributable discovery returned no assets. This is not a successful scan result; ",
+        " prior asset observation(s) remain retained.",
+    ) && is_ascii_number(count)
+    {
+        return Some(format!(
+            "來源已連線，且最近一次可歸屬的探索未傳回任何資產。這不是掃描成功的結果；仍保留 {count} 筆先前的資產觀察結果。"
+        ));
+    }
+    if let Some(rest) = english.strip_prefix("The source is not currently connected (status: ")
+        && let Some((status, rest)) = rest.split_once("). Its present coverage is unknown; ")
+        && let Some(count) = rest.strip_suffix(
+            " previously attributed asset(s) are retained but do not make the source green.",
+        )
+        && !status.is_empty()
+        && is_ascii_number(count)
+    {
+        return Some(format!(
+            "來源目前未連線（狀態：{status}）。目前的涵蓋未知；仍保留 {count} 筆先前歸屬的資產，但這不會讓來源顯示為綠色。"
+        ));
+    }
+    if let Some(detail) = strip_frame(
+        english,
+        "The scan's frozen authorization evidence is incomplete: ",
+        ". Live grants are never used to reconstruct historical scan permission.",
+    ) {
+        return Some(format!(
+            "掃描中凍結的授權證據不完整：{detail}。絕不會用現行授權重建過去的掃描權限。"
+        ));
+    }
+    if let Some(count) = strip_frame(
+        english,
+        "All ",
+        " compatible engine run(s) planned for this asset completed.",
+    ) && is_ascii_number(count)
+    {
+        return Some(format!(
+            "為此資產規劃的 {count} 項相容掃描工具工作皆已完成。"
+        ));
+    }
+    if let Some(count) = strip_frame(
+        english,
+        "All ",
+        " planned task(s) for this asset completed their exact declared dimensions.",
+    ) && is_ascii_number(count)
+    {
+        return Some(format!(
+            "為此資產規劃的 {count} 項工作，皆已完成各自明確宣告的檢查範圍。"
+        ));
+    }
+    if let Some(reasons) = strip_frame(
+        english,
+        "The authorized scan is incomplete: ",
+        ". Only completed compatible catalog-engine runs or exact completed built-in tasks can produce scanned coverage.",
+    ) {
+        return Some(format!(
+            "已授權的掃描未完成：{reasons}。只有已完成且相容的目錄掃描工具工作，或精確完成的內建工作，才能產生已掃描涵蓋。"
+        ));
+    }
+    None
+}
+
+fn translate_trailing_coverage_frame(
+    english: &str,
+    middle: (&str, &str),
+    suffix: (&str, &str),
+) -> Option<String> {
+    let (base, retained_with_suffix) = english.rsplit_once(middle.0)?;
+    let retained = retained_with_suffix.strip_suffix(suffix.0)?;
+    if retained.is_empty() {
+        return None;
+    }
+    let translated_base = if base.is_empty() {
+        String::new()
+    } else {
+        coverage_record_detail_zh_hant(base)?
+    };
+    Some(format!(
+        "{translated_base}{}{retained}{}",
+        middle.1, suffix.1
+    ))
+}
+
+fn strip_frame<'a>(value: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
+    value.strip_prefix(prefix)?.strip_suffix(suffix)
 }
 
 /// The sentences a coverage row says, paired with their Traditional Chinese.
@@ -914,6 +1145,72 @@ pub fn action_zh_hant(english: &str, expert_type: &str, family: Option<FindingFa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requested_limit_values_translate_known_units_and_preserve_identifiers() {
+        for (name, value, expected) in [
+            ("connection timeout", "250 ms", "250 毫秒"),
+            ("application payload", "64 bytes", "64 位元組"),
+            ("gitleaks execution timeout", "600 seconds", "600 秒"),
+            (
+                "asset-primary request rate",
+                "5 per second, concurrency 2",
+                "每秒 5 次，並行 2",
+            ),
+            ("endpoint", "127.0.0.1:443", "127.0.0.1:443"),
+        ] {
+            assert_eq!(requested_limit_value_zh_hant(name, value), expected);
+        }
+        assert_eq!(
+            requested_limit_value_zh_hant("future limit", "value from another build"),
+            "value from another build"
+        );
+    }
+
+    #[test]
+    fn coverage_record_detail_shapes_translate_without_changing_retained_values() {
+        for (english, expected) in [
+            (
+                "The source area is explicitly outside this case: Legacy lab stays excluded. This is a scoped applicability statement, not a successful scan result.",
+                "此來源範圍明確不在本案件內：Legacy lab stays excluded. 這是範圍適用性的說明，不是掃描成功的結果。",
+            ),
+            (
+                "The source is connected and the latest attributable discovery returned no assets. This is not a successful scan result; 17 prior asset observation(s) remain retained. Latest provider discovery: provider_timeout: Provider response was late.",
+                "來源已連線，且最近一次可歸屬的探索未傳回任何資產。這不是掃描成功的結果；仍保留 17 筆先前的資產觀察結果。 最近一次供應商探索：provider_timeout: Provider response was late.",
+            ),
+            (
+                "The source is not currently connected (status: credentials_expired). Its present coverage is unknown; 17 previously attributed asset(s) are retained but do not make the source green.",
+                "來源目前未連線（狀態：credentials_expired）。目前的涵蓋未知；仍保留 17 筆先前歸屬的資產，但這不會讓來源顯示為綠色。",
+            ),
+            (
+                "The scan's frozen authorization evidence is incomplete: grant-1=historical_scope_snapshot_missing. Live grants are never used to reconstruct historical scan permission.",
+                "掃描中凍結的授權證據不完整：grant-1=historical_scope_snapshot_missing。絕不會用現行授權重建過去的掃描權限。",
+            ),
+            (
+                "All 2 compatible engine run(s) planned for this asset completed. This state is independent of how many findings were reported. Explicit stale-knowledge warning: scanner knowledge 2026-01-01 (support ended 2026-06-01). Completion proves execution, not current knowledge.",
+                "為此資產規劃的 2 項相容掃描工具工作皆已完成。 此狀態與回報了多少個問題無關。 明確的過時知識警告：scanner knowledge 2026-01-01 (support ended 2026-06-01)。完成只證明已執行，不代表知識仍為最新。",
+            ),
+            (
+                "All 1 planned task(s) for this asset completed their exact declared dimensions. This state is independent of how many findings were reported. Exact built-in localhost TCP attempt(s): 127.0.0.1:443=reachable. This records only those connection attempts; it does not establish that the service or computer is secure, and it does not cover other ports or hosts.",
+                "為此資產規劃的 1 項工作，皆已完成各自明確宣告的檢查範圍。 此狀態與回報了多少個問題無關。 精確的內建 localhost TCP 嘗試：127.0.0.1:443=reachable。這只記錄這些連線嘗試；無法證明服務或電腦安全，也不涵蓋其他連接埠或主機。",
+            ),
+            (
+                "The authorized scan is incomplete: scanner=failed. Only completed compatible catalog-engine runs or exact completed built-in tasks can produce scanned coverage.",
+                "已授權的掃描未完成：scanner=failed。只有已完成且相容的目錄掃描工具工作，或精確完成的內建工作，才能產生已掃描涵蓋。",
+            ),
+        ] {
+            assert_eq!(
+                coverage_record_detail_zh_hant(english),
+                Some(expected.to_owned())
+            );
+        }
+        assert!(
+            coverage_record_detail_zh_hant(
+                "A later build records a different coverage explanation."
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn tested_observation_lookup_translates_only_prose_this_build_authored() {

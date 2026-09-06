@@ -797,6 +797,167 @@ export const testedObservationProse = (locale: "en" | "zh-TW", english: string):
   return TESTED_OBSERVATION_PROSE.find(([candidate]) => candidate === trimmed)?.[1] ?? english;
 };
 
+/** Fixed coverage-ledger explanations shared by the screen and case export. */
+const COVERAGE_RECORD_DETAIL_PROSE: ReadonlyArray<readonly [string, string]> = [
+  [
+    "The source is connected, but no attributable discovery has completed and no assets are known. Coverage is not established.",
+    "來源已連線，但尚未完成可歸屬的探索，也沒有已知資產。尚未建立涵蓋。",
+  ],
+  [
+    "The discovered candidate has not had ownership and scope explicitly confirmed. Discovery never authorizes a target automatically.",
+    "探索到的候選資產尚未明確確認所有權與範圍。探索本身絕不會自動授權目標。",
+  ],
+  [
+    "The asset has no unexpired, valid scope grant. Discovery never authorizes a target automatically.",
+    "此資產沒有尚未到期的有效範圍授權。探索本身絕不會自動授權目標。",
+  ],
+  [
+    "The asset is authorized, but no scan plan is tied to its current effective grants.",
+    "此資產已獲授權，但沒有任何掃描計畫連結到目前有效的授權。",
+  ],
+  [
+    "The scan predates frozen scope-grant snapshots, so its historical authorization and permission coverage are unknown. Live grants are never substituted for missing run evidence.",
+    "這次掃描早於凍結範圍授權快照的機制，因此無法得知當時的授權與權限涵蓋。絕不會用現行授權補上缺少的執行記錄。",
+  ],
+  [
+    "The asset is authorized, but the latest applicable scan plan contains no engine run for it.",
+    "此資產已獲授權，但最近適用的掃描計畫沒有包含它的掃描工具工作。",
+  ],
+];
+
+const COVERAGE_STATE_APPEND = [
+  " This state is independent of how many findings were reported.",
+  " 此狀態與回報了多少個問題無關。",
+] as const;
+const PROVIDER_DISCOVERY_APPEND = [
+  " Latest provider discovery: ",
+  " 最近一次供應商探索：",
+] as const;
+const STALE_KNOWLEDGE_APPEND = [
+  " Explicit stale-knowledge warning: ",
+  " 明確的過時知識警告：",
+] as const;
+const STALE_KNOWLEDGE_SUFFIX = [
+  ". Completion proves execution, not current knowledge.",
+  "。完成只證明已執行，不代表知識仍為最新。",
+] as const;
+const LOCALHOST_ATTEMPT_APPEND = [
+  " Exact built-in localhost TCP attempt(s): ",
+  " 精確的內建 localhost TCP 嘗試：",
+] as const;
+const LOCALHOST_ATTEMPT_SUFFIX = [
+  ". This records only those connection attempts; it does not establish that the service or computer is secure, and it does not cover other ports or hosts.",
+  "。這只記錄這些連線嘗試；無法證明服務或電腦安全，也不涵蓋其他連接埠或主機。",
+] as const;
+
+const stripFrame = (value: string, prefix: string, suffix: string): string | undefined => {
+  if (!value.startsWith(prefix) || !value.endsWith(suffix)) return undefined;
+  const end = suffix ? value.length - suffix.length : value.length;
+  return value.slice(prefix.length, end);
+};
+
+const translateTrailingCoverageFrame = (
+  english: string,
+  middle: readonly [string, string],
+  suffix: readonly [string, string],
+): string | undefined => {
+  const index = english.lastIndexOf(middle[0]);
+  if (index < 0 || !english.endsWith(suffix[0])) return undefined;
+  const base = english.slice(0, index);
+  const end = suffix[0] ? english.length - suffix[0].length : english.length;
+  const retained = english.slice(index + middle[0].length, end);
+  if (!retained) return undefined;
+  const translatedBase = base ? translateCoverageRecordDetail(base) : "";
+  if (base && translatedBase === undefined) return undefined;
+  return `${translatedBase ?? ""}${middle[1]}${retained}${suffix[1]}`;
+};
+
+const translateCoverageRecordDetail = (english: string): string | undefined => {
+  const fixed = COVERAGE_RECORD_DETAIL_PROSE.find(([candidate]) => candidate === english)?.[1];
+  if (fixed) return fixed;
+
+  const stale = translateTrailingCoverageFrame(english, STALE_KNOWLEDGE_APPEND, STALE_KNOWLEDGE_SUFFIX);
+  if (stale) return stale;
+  const localhost = translateTrailingCoverageFrame(english, LOCALHOST_ATTEMPT_APPEND, LOCALHOST_ATTEMPT_SUFFIX);
+  if (localhost) return localhost;
+  const provider = translateTrailingCoverageFrame(english, PROVIDER_DISCOVERY_APPEND, ["", ""]);
+  if (provider) return provider;
+
+  const summary = english.endsWith(COVERAGE_STATE_APPEND[0])
+    ? english.slice(0, -COVERAGE_STATE_APPEND[0].length)
+    : undefined;
+  if (summary !== undefined) {
+    const translated = translateCoverageRecordDetail(summary);
+    if (translated) return `${translated}${COVERAGE_STATE_APPEND[1]}`;
+  }
+
+  const applicabilityReason = stripFrame(
+    english,
+    "The source area is explicitly outside this case: ",
+    " This is a scoped applicability statement, not a successful scan result.",
+  );
+  if (applicabilityReason) {
+    return `此來源範圍明確不在本案件內：${applicabilityReason} 這是範圍適用性的說明，不是掃描成功的結果。`;
+  }
+
+  const retainedCount = stripFrame(
+    english,
+    "The source is connected and the latest attributable discovery returned no assets. This is not a successful scan result; ",
+    " prior asset observation(s) remain retained.",
+  );
+  if (retainedCount && /^\d+$/u.test(retainedCount)) {
+    return `來源已連線，且最近一次可歸屬的探索未傳回任何資產。這不是掃描成功的結果；仍保留 ${retainedCount} 筆先前的資產觀察結果。`;
+  }
+
+  const disconnected = english.match(/^The source is not currently connected \(status: (.+)\)\. Its present coverage is unknown; (\d+) previously attributed asset\(s\) are retained but do not make the source green\.$/u);
+  if (disconnected?.[1] && disconnected[2]) {
+    return `來源目前未連線（狀態：${disconnected[1]}）。目前的涵蓋未知；仍保留 ${disconnected[2]} 筆先前歸屬的資產，但這不會讓來源顯示為綠色。`;
+  }
+
+  const authorizationDetail = stripFrame(
+    english,
+    "The scan's frozen authorization evidence is incomplete: ",
+    ". Live grants are never used to reconstruct historical scan permission.",
+  );
+  if (authorizationDetail) {
+    return `掃描中凍結的授權證據不完整：${authorizationDetail}。絕不會用現行授權重建過去的掃描權限。`;
+  }
+
+  const compatibleCount = stripFrame(
+    english,
+    "All ",
+    " compatible engine run(s) planned for this asset completed.",
+  );
+  if (compatibleCount && /^\d+$/u.test(compatibleCount)) {
+    return `為此資產規劃的 ${compatibleCount} 項相容掃描工具工作皆已完成。`;
+  }
+
+  const exactTaskCount = stripFrame(
+    english,
+    "All ",
+    " planned task(s) for this asset completed their exact declared dimensions.",
+  );
+  if (exactTaskCount && /^\d+$/u.test(exactTaskCount)) {
+    return `為此資產規劃的 ${exactTaskCount} 項工作，皆已完成各自明確宣告的檢查範圍。`;
+  }
+
+  const incompleteReasons = stripFrame(
+    english,
+    "The authorized scan is incomplete: ",
+    ". Only completed compatible catalog-engine runs or exact completed built-in tasks can produce scanned coverage.",
+  );
+  if (incompleteReasons) {
+    return `已授權的掃描未完成：${incompleteReasons}。只有已完成且相容的目錄掃描工具工作，或精確完成的內建工作，才能產生已掃描涵蓋。`;
+  }
+  return undefined;
+};
+
+/** A stored coverage-record explanation in the reader's language. */
+export const localizedCoverageRecordDetail = (
+  detail: string,
+  locale: "en" | "zh-TW",
+): string => locale === "en" ? detail : translateCoverageRecordDetail(detail) ?? detail;
+
 /** "Have the recommended specialist ({expert}) review ... then plan and approve {remedy}." */
 export const findingActionSentence = (
   locale: "en" | "zh-TW",
@@ -844,4 +1005,40 @@ export const localizedRequestedLimitName = (
     }
   }
   return `本輪使用的限制：${name}`;
+};
+
+const REQUESTED_LIMIT_VALUE_UNITS: ReadonlyArray<readonly [string, string]> = [
+  [" ms", " 毫秒"],
+  [" bytes", " 位元組"],
+  [" seconds", " 秒"],
+];
+
+const REQUEST_RATE_MIDDLE = [" per second, concurrency ", " 次，並行 "] as const;
+
+/** One stored requested-limit value in the reader's language. */
+export const localizedRequestedLimitValue = (
+  name: string,
+  value: string,
+  locale: "en" | "zh-TW",
+): string => {
+  if (locale === "en") return value;
+  for (const [englishUnit, chineseUnit] of REQUESTED_LIMIT_VALUE_UNITS) {
+    const match = value.match(new RegExp(`^(\\d+)${englishUnit}$`, "u"));
+    if (match?.[1]) return `${match[1]}${chineseUnit}`;
+  }
+
+  const [requests, concurrency, extra] = value.split(REQUEST_RATE_MIDDLE[0]);
+  if (!extra && /^\d+$/u.test(requests ?? "") && /^\d+$/u.test(concurrency ?? "")) {
+    return `每秒 ${requests}${REQUEST_RATE_MIDDLE[1]}${concurrency}`;
+  }
+
+  // Identifier-shaped values are intentionally returned unchanged. Keeping
+  // these names here mirrors the backend's producer census distinction between
+  // a recognized identifier and an unknown unit-bearing value.
+  if (
+    name === "endpoint"
+    || name.endsWith(" authorized network target")
+    || name.endsWith(" approved ports")
+  ) return value;
+  return value;
 };

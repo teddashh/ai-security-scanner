@@ -38,6 +38,7 @@ import {
   type GuidedCoverageRoute,
 } from "../coverageGuidance";
 import { durationParts, estimateNetworkScanMinimum } from "../networkScanEstimate";
+import { localizedCoverageRecordDetail } from "../findingNarrative.ts";
 
 import "../coverage-page.css";
 
@@ -832,7 +833,7 @@ export function CoveragePage({
   onAuthorizationChanged,
   onStartScan,
 }: CoveragePageProps) {
-  const { text, formatDateTime, formatNumber } = useI18n();
+  const { locale, text, formatDateTime, formatNumber } = useI18n();
   const guidedLocalProfile = assessmentIntent ? localProfileByAssessmentIntent[assessmentIntent] : undefined;
   const guidedNetworkRoute = Boolean(assessmentIntent && networkAssessmentIntents.includes(assessmentIntent));
   const guidedCloudRoute = assessmentIntent === "cloud_account";
@@ -1685,7 +1686,7 @@ export function CoveragePage({
                     <div><dt>{text(pageCopy.coverageStateTechnical)}</dt><dd><code>{record.state}</code></dd></div>
                     <div><dt>{text(pageCopy.acceptedProfiles)}</dt><dd>{sourceDefinitions[record.sourceKind].profiles.map((item) => parserProfileLabels[item]).join(", ")}</dd></div>
                     {connectedSource && <div><dt>{text(pageCopy.sourceStatusTechnical)}</dt><dd><code>{connectedSource.status}</code></dd></div>}
-                    <div><dt>{text(pageCopy.rawSourceDetail)}</dt><dd>{record.detail}</dd></div>
+                    <div><dt>{text(pageCopy.rawSourceDetail)}</dt><dd>{localizedCoverageRecordDetail(record.detail, locale)}</dd></div>
                   </dl>
                 </details>
               </article>

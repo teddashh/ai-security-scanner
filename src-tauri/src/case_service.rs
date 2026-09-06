@@ -12502,7 +12502,14 @@ fn html_report_bytes(
             // composed around is the only part telling one grant's limits from
             // another's, so it is carried through rather than prettified away.
             let name = replace_target_ids(&limit.name, &target_labels);
-            let name = match catalog.locale {
+            let value = replace_target_ids(&limit.value, &target_labels);
+            let display_value = match catalog.locale {
+                crate::export::ReportLocale::ZhHant => {
+                    crate::finding_narrative::requested_limit_value_zh_hant(&name, &value)
+                }
+                _ => value,
+            };
+            let display_name = match catalog.locale {
                 crate::export::ReportLocale::ZhHant => {
                     crate::finding_narrative::requested_limit_name_zh_hant(&name)
                 }
@@ -12510,10 +12517,10 @@ fn html_report_bytes(
             };
             format!(
                 "<li><strong>{}:</strong> {}</li>",
-                html_escape(&name),
+                html_escape(&display_name),
                 html_escape(&format!(
                     "{} ({})",
-                    replace_target_ids(&limit.value, &target_labels),
+                    display_value,
                     catalog.limit_source(&limit.source)
                 )),
             )
@@ -24684,6 +24691,7 @@ mod tests {
             // All three were printed as stored English under translated
             // headings, the last one as Rust variant names.
             "檢查逾時限制（gitleaks）",
+            "3600 秒",
             "完成的目標檢查",
             "這項已保存的工作已針對這個目標完成。這份案件記錄沒有凍結更細部的執行範圍。",
             "Frozen selected-run secret exposure — 嚴重程度：高；信心程度：已確認",
@@ -24711,6 +24719,7 @@ mod tests {
             "This run did not retain an exact reduction record",
             "Keep this limitation visible",
             "Execution Timeout",
+            "3600 seconds",
             "Check-to-target Coordinate",
             "The durable task reached completed state for this target binding. More granular executed dimensions were not frozen in this case record.",
             "Confirmed confidence",

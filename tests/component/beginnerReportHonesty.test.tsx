@@ -306,6 +306,28 @@ test("a Traditional Chinese reader is told the same two reasons", () => {
   window.localStorage.setItem(localeStorageKey, "en");
 });
 
+test("a Traditional Chinese reader sees requested-limit units in their language", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderReport(
+    report("complete", {
+      requested: {
+        ...report("complete").requested,
+        limits: [{
+          name: "gitleaks execution timeout",
+          value: "600 seconds",
+          source: "frozen_task_contract",
+        }],
+      },
+    }),
+  );
+
+  const section = container.querySelector<HTMLElement>(
+    "section[aria-labelledby='beginner-master-report-title']",
+  );
+  expect(section!.textContent).toContain("600 秒");
+  expect(section!.textContent).not.toContain("600 seconds");
+});
+
 test("a Traditional Chinese reader hears why completed network coverage is not a security pass", () => {
   window.localStorage.setItem(localeStorageKey, "zh-TW");
   const englishObservation =
