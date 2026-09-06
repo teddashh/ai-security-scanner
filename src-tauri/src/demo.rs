@@ -11,7 +11,7 @@ fn artifact_hash(content: &str) -> String {
 pub fn build_demo_case() -> AssessmentCase {
     let now = Utc::now();
     let mut case = AssessmentCase::new(
-        "展示案件：Northstar 線上服務".into(),
+        "Demo case: Northstar online services".into(),
         OrganizationProfile {
             organization_name: "Northstar Demo Co.".into(),
             employee_range: "11-50".into(),
@@ -19,7 +19,7 @@ pub fn build_demo_case() -> AssessmentCase {
                 DataClass::PersonallyIdentifiableInformation,
                 DataClass::CredentialsAndSecrets,
             ],
-            notes: Some("這是合成展示資料，不代表真實掃描結果。".into()),
+            notes: Some("This is synthetic demo data, not a real scan result.".into()),
         },
     );
     case.is_demo = true;
@@ -39,7 +39,7 @@ pub fn build_demo_case() -> AssessmentCase {
         DataSource {
             id: aws_source_id.clone(),
             kind: SourceKind::AwsOrganization,
-            label: "AWS Organization（唯讀展示）".into(),
+            label: "AWS Organization (read-only demo)".into(),
             status: SourceConnectionStatus::Connected,
             connected_at: Some(now - Duration::days(3)),
             last_discovered_at: Some(now - Duration::days(2)),
@@ -143,7 +143,7 @@ pub fn build_demo_case() -> AssessmentCase {
         Asset {
             id: unknown_host_id.clone(),
             kind: AssetKind::IpAddress,
-            name: "198.51.100.24（候選）".into(),
+            name: "198.51.100.24 (synthetic candidate)".into(),
             provider: None,
             region: None,
             identifiers: vec![AssetIdentifier {
@@ -208,7 +208,7 @@ pub fn build_demo_case() -> AssessmentCase {
                 asset_ids: vec![account_id.clone(), bucket_id.clone()],
                 status: EngineRunStatus::Completed,
                 progress_percent: 100,
-                phase: "完成正規化".into(),
+                phase: "completed".into(),
                 started_at: Some(now - Duration::days(2)),
                 finished_at: Some(now - Duration::days(2) + Duration::minutes(14)),
                 resume_token: None,
@@ -253,7 +253,7 @@ pub fn build_demo_case() -> AssessmentCase {
                 asset_ids: vec![domain_id.clone()],
                 status: EngineRunStatus::PartiallyCompleted,
                 progress_percent: 72,
-                phase: "部分目標逾時".into(),
+                phase: "failed".into(),
                 started_at: Some(now - Duration::days(2) + Duration::minutes(3)),
                 finished_at: Some(now - Duration::days(2) + Duration::minutes(18)),
                 resume_token: Some("synthetic-resume-token".into()),
@@ -300,29 +300,29 @@ pub fn build_demo_case() -> AssessmentCase {
             source_kind: SourceKind::AwsOrganization,
             asset_id: Some(account_id.clone()),
             status: CoverageStatus::DiscoveredAuthorizedScanned,
-            explanation: "已由合成 Prowler 展示資料完成設定檢查。".into(),
+            explanation: "All 1 compatible engine run(s) planned for this asset completed. This state is independent of how many findings were reported.".into(),
             last_run_id: Some(run_id.clone()),
             observed_at: Some(now - Duration::days(2)),
         },
         CoverageEntry {
             id: new_id(),
             scope_key: "ip:198.51.100.24".into(),
-            label: "候選外部 IP".into(),
+            label: "Synthetic candidate external IP".into(),
             source_kind: SourceKind::AwsOrganization,
             asset_id: Some(unknown_host_id),
             status: CoverageStatus::DiscoveredNotAuthorized,
-            explanation: "已發現，但尚未確認資產所有權，未啟動外部掃描。".into(),
+            explanation: "The discovered candidate has not had ownership and scope explicitly confirmed. Discovery never authorizes a target automatically.".into(),
             last_run_id: None,
             observed_at: Some(now - Duration::days(2)),
         },
         CoverageEntry {
             id: new_id(),
             scope_key: "dns:portal.northstar.example".into(),
-            label: "公開入口網站".into(),
+            label: "Public demo portal".into(),
             source_kind: SourceKind::Dns,
             asset_id: Some(domain_id.clone()),
             status: CoverageStatus::AuthorizedScanIncomplete,
-            explanation: "已授權低干擾連線，但部分探測逾時。".into(),
+            explanation: "The authorized scan is incomplete: httpx=partially_completed. Only completed compatible catalog-engine runs or exact completed built-in tasks can produce scanned coverage.".into(),
             last_run_id: Some(run_id.clone()),
             observed_at: Some(now - Duration::days(2)),
         },
@@ -333,8 +333,7 @@ pub fn build_demo_case() -> AssessmentCase {
             source_kind: SourceKind::AzureTenant,
             asset_id: None,
             status: CoverageStatus::NotApplicable,
-            explanation: "合成問卷明確記錄此案件不使用 Azure；這是適用性聲明，不是掃描成功。"
-                .into(),
+            explanation: "The source area is explicitly outside this case: The synthetic questionnaire states that Azure is not used in this case. This is a scoped applicability statement, not a successful scan result.".into(),
             last_run_id: None,
             observed_at: None,
         },
@@ -345,7 +344,7 @@ pub fn build_demo_case() -> AssessmentCase {
             source_kind: SourceKind::GcpOrganization,
             asset_id: None,
             status: CoverageStatus::SourceNotConnectedUnknown,
-            explanation: "未連接任何 GCP 盤點來源；不能推論不存在 GCP 資產。".into(),
+            explanation: "The source is not currently connected (status: not_connected). Its present coverage is unknown; 0 previously attributed asset(s) are retained but do not make the source green.".into(),
             last_run_id: None,
             observed_at: None,
         },
@@ -371,22 +370,23 @@ pub fn build_demo_case() -> AssessmentCase {
         case_id: case.id.clone(),
         first_seen_run_id: run_id.clone(),
         last_seen_run_id: run_id.clone(),
-        // No family. The field means "the prose above was composed from this
-        // code", and this finding's wording is written by hand for the demo. A
-        // family here would have a localized client discard that wording and
-        // compose the generic sentence for the family instead.
-        family: None,
+        family: Some(FindingFamily::CloudPosture),
         severity_basis_code: None,
         confidence_basis_code: None,
         context_factors: Vec::new(),
         fingerprint: "demo:aws:s3:public-customer-export".into(),
-        title: "客戶匯出資料儲存空間可能允許公開存取".into(),
-        plain_language_summary: "合成展示證據指出，一個可能存放客戶匯出資料的儲存空間未完整阻擋公開存取。".into(),
-        possible_impact: "若經人工確認，未授權者可能讀取或列舉敏感資料。".into(),
+        title: "Synthetic customer-export storage may allow public access".into(),
+        plain_language_summary:
+            "Prowler reported a critical-severity condition on the assessed asset.".into(),
+        possible_impact:
+            "If the scanner result is confirmed, cloud resources or data may be accessed, changed, or used unexpectedly.".into(),
         severity: Severity::Critical,
         confidence: Confidence::High,
         priority: 96,
-        priority_reasons: vec!["資產可能對外".into(), "標記為包含個人資料".into()],
+        priority_reasons: vec![
+            "An affected asset is marked internet-exposed, and all retained source attribution for that asset is non-questionnaire.".into(),
+            "An affected asset is marked sensitive, all retained source attribution for that asset is non-questionnaire, and the case questionnaire separately records sensitive-data context.".into(),
+        ],
         asset_ids: vec![bucket_id.clone()],
         evidence: vec![Evidence {
             id: new_id(),
@@ -411,7 +411,7 @@ pub fn build_demo_case() -> AssessmentCase {
                 control_id: "PR.DS-01".into(),
                 title: "Data-at-rest protection".into(),
                 relationship: "related".into(),
-                rationale: "This finding may relate to protection of stored data; it is not an audit conclusion.".into(),
+                rationale: "Evidence that an object-storage resource permits public access is related to access policy, authorization review, and cloud service protection.".into(),
                 mapping_version: "demo-0.1".into(),
                 mapping_provenance: None,
             },
@@ -421,16 +421,16 @@ pub fn build_demo_case() -> AssessmentCase {
                 control_id: "A.8.3".into(),
                 title: "Information access restriction".into(),
                 relationship: "related".into(),
-                rationale: "Coordinate only; no compliance determination is made.".into(),
+                rationale: "Evidence that an object-storage resource permits public access is related to access policy, authorization review, and cloud service protection.".into(),
                 mapping_version: "demo-0.1".into(),
                 mapping_provenance: None,
             },
         ],
-        recommendation: "請由 AWS 雲端安全專家確認 bucket policy、Block Public Access 與實際業務依賴。不要直接套用自動修復。".into(),
-        verification_guidance: "專家調整後，使用同一案件與範圍重新執行設定檢查。".into(),
-        rollback_considerations: Some("變更公開存取可能中斷既有資料交換；先確認使用者與服務。".into()),
+        recommendation: "Have a cloud security engineer review the synthetic bucket policy, Block Public Access settings, and demo dependencies. Do not apply an automatic fix.".into(),
+        verification_guidance: "After an approved manual change, rerun Prowler with the same authorized scope and confirm that source rule s3_public_access is no longer reported.".into(),
+        rollback_considerations: Some("Before any manual change, preserve the current approved configuration and document a tested restoration path; this product does not execute remediation.".into()),
         official_references: vec!["https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html".into()],
-        recommended_expert_type: "AWS 雲端安全／IAM 專家".into(),
+        recommended_expert_type: "Cloud security engineer".into(),
         status: FindingStatus::ExpertReviewRequested,
         tags: vec!["synthetic-demo".into(), "data-exposure".into()],
     });
@@ -463,18 +463,22 @@ pub fn build_demo_case() -> AssessmentCase {
         case_id: case.id.clone(),
         first_seen_run_id: run_id.clone(),
         last_seen_run_id: run_id.clone(),
-        family: None,
+        family: Some(FindingFamily::NetworkExposure),
         severity_basis_code: None,
         confidence_basis_code: None,
         context_factors: Vec::new(),
         fingerprint: "demo:web:missing-hsts".into(),
-        title: "公開網站的 HSTS 狀態尚未完成確認".into(),
-        plain_language_summary: "合成展示掃描因部分目標逾時，尚無法確認瀏覽器強制使用 HTTPS 的 HSTS 狀態。".into(),
-        possible_impact: "目前證據不足以判定風險；若後續確認未啟用 HSTS，首次連線在特定情境下可能被降級或攔截。".into(),
+        title: "The synthetic public site's HSTS status remains unconfirmed".into(),
+        plain_language_summary:
+            "httpx reported an informational-severity condition on the assessed asset.".into(),
+        possible_impact: "If the scanner result is confirmed, an internet-reachable service may expose unexpected functionality or a known weakness.".into(),
         severity: Severity::Informational,
         confidence: Confidence::Medium,
         priority: 58,
-        priority_reasons: vec!["公開服務".into(), "掃描僅部分完成".into()],
+        priority_reasons: vec![
+            "An affected asset is marked internet-exposed, and all retained source attribution for that asset is non-questionnaire.".into(),
+            "Direct scanner evidence is attached and still requires human review.".into(),
+        ],
         asset_ids: vec![domain_id],
         evidence: vec![Evidence {
             id: new_id(),
@@ -492,30 +496,24 @@ pub fn build_demo_case() -> AssessmentCase {
             pointer: Some("/status".into()),
             redacted: false,
         }],
-        control_references: vec![ControlReference {
-            framework: "NIST CSF".into(),
-            framework_version: "2.0".into(),
-            control_id: "PR.DS-02".into(),
-            title: "Data-in-transit protection".into(),
-            relationship: "related".into(),
-            rationale: "Coordinate only; no compliance determination is made.".into(),
-            mapping_version: "demo-0.1".into(),
-            mapping_provenance: None,
-        }],
-        recommendation: "請網站或平台工程師確認反向代理與 CDN 的 TLS/HSTS 設定。".into(),
-        verification_guidance: "調整後重新執行低干擾 HTTP 標頭檢查。".into(),
+        // No framework reference, and that is the faithful demonstration: the
+        // pinned mapping catalog has no httpx entry, so a real HSTS observation
+        // carries no control relationship either.
+        control_references: Vec::new(),
+        recommendation: "Have a network or system administrator review the synthetic reverse-proxy and CDN TLS/HSTS settings.".into(),
+        verification_guidance: "After an approved manual change, rerun httpx with the same authorized scope and confirm that source rule hsts is no longer reported.".into(),
         rollback_considerations: None,
         official_references: vec![
             "https://developer.mozilla.org/docs/Web/HTTP/Headers/Strict-Transport-Security".into(),
         ],
-        recommended_expert_type: "Web 平台／TLS 專家".into(),
+        recommended_expert_type: "Network or system administrator".into(),
         status: FindingStatus::Unreviewed,
         tags: vec!["synthetic-demo".into(), "tls".into()],
     });
 
     let group_id = new_id();
-    let group_title = "對外資料傳輸面向需要一起檢視".to_owned();
-    let group_rationale = "兩項合成觀察都涉及公開服務與資料保護；群組只供人工交接，不會合併 finding、fingerprint 或證據。".to_owned();
+    let group_title = "Synthetic external data-transfer observations for joint review".to_owned();
+    let group_rationale = "Both synthetic observations concern public services and data protection. This demo-only group supports human handoff and does not merge findings, fingerprints, or evidence.".to_owned();
     let group_actor = "Synthetic demo builder".to_owned();
     let group_created_at = now - Duration::days(1);
     let grouped_finding_ids = vec![finding_id.clone(), second_finding_id.clone()];
@@ -568,4 +566,97 @@ pub fn build_demo_case() -> AssessmentCase {
 
     case.touch();
     case
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn is_han(character: char) -> bool {
+        matches!(
+            character,
+            '\u{3400}'..='\u{4dbf}'
+                | '\u{4e00}'..='\u{9fff}'
+                | '\u{f900}'..='\u{faff}'
+                | '\u{20000}'..='\u{2ffff}'
+                | '\u{30000}'..='\u{323af}'
+        )
+    }
+
+    fn string_values_with_han(value: &serde_json::Value) -> Vec<&str> {
+        match value {
+            serde_json::Value::String(value) if value.chars().any(is_han) => vec![value],
+            serde_json::Value::Array(values) => {
+                values.iter().flat_map(string_values_with_han).collect()
+            }
+            serde_json::Value::Object(values) => {
+                values.values().flat_map(string_values_with_han).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn demo_case_stores_no_han_characters() {
+        let demo = serde_json::to_value(build_demo_case()).expect("demo case should serialize");
+        let offenders = string_values_with_han(&demo);
+
+        assert!(
+            offenders.is_empty(),
+            "demo case contains Han characters in stored strings: {offenders:#?}"
+        );
+    }
+
+    #[test]
+    fn demo_coverage_explanations_use_the_shared_translation_path() {
+        let demo = build_demo_case();
+        let translations = demo
+            .coverage
+            .iter()
+            .map(|entry| {
+                crate::finding_narrative::coverage_record_detail_zh_hant(&entry.explanation)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "demo coverage explanation is not recognized: {}",
+                            entry.explanation
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(translations.len(), demo.coverage.len());
+        assert!(
+            translations
+                .iter()
+                .all(|translation| translation.chars().any(is_han)),
+            "Traditional Chinese coverage translations were not rendered: {translations:#?}"
+        );
+    }
+
+    #[test]
+    fn demo_control_rationales_use_the_shared_translation_path() {
+        let demo = build_demo_case();
+        // Without this the loop below passes on a demo that stopped carrying
+        // any control reference at all.
+        assert!(
+            demo.findings
+                .iter()
+                .flat_map(|finding| &finding.control_references)
+                .count()
+                >= 2
+        );
+        for rationale in demo
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.control_references)
+            .map(|reference| &reference.rationale)
+        {
+            let translation =
+                crate::finding_narrative::control_mapping_rationale_zh_hant(rationale)
+                    .unwrap_or_else(|| {
+                        panic!("demo control rationale is not recognized: {rationale}")
+                    });
+            assert!(translation.chars().any(is_han));
+        }
+    }
 }

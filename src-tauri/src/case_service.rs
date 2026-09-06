@@ -25786,6 +25786,17 @@ mod tests {
         let mut demo = crate::demo::build_demo_case();
         fixture.storage.save_case(&mut demo, "demo.seeded").unwrap();
         let service = fixture.service();
+        let stored_demo = service.show_case(&demo.id).unwrap();
+        assert_eq!(stored_demo.title, "Demo case: Northstar online services");
+        assert_eq!(stored_demo.scan_runs[0].engine_runs[0].phase, "completed");
+        assert_eq!(stored_demo.scan_runs[0].engine_runs[1].phase, "failed");
+        assert!(
+            stored_demo.coverage.iter().all(|entry| {
+                crate::finding_narrative::coverage_record_detail_zh_hant(&entry.explanation)
+                    .is_some()
+            }),
+            "the persisted demo must use the shared coverage translation path"
+        );
         let error = service
             .plan_scan(&demo.id, ScanPlanRequest::default())
             .unwrap_err();
