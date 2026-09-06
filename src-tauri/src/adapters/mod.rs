@@ -1823,7 +1823,7 @@ fn unevaluated_controls(profile: Profile, parsed: &ParsedArtifact) -> Option<Une
     let passed_over = count_of(by_design);
     let could_not_evaluate = count_of(unevaluable);
     let lost = normalization_shortfall(profile, diagnostics);
-    if passed_over.is_empty() && could_not_evaluate.is_empty() && lost.is_none() {
+    if passed_over.is_empty() && could_not_evaluate.is_empty() && lost.is_empty() {
         return None;
     }
     let all = passed_over
@@ -1839,7 +1839,7 @@ fn unevaluated_controls(profile: Profile, parsed: &ParsedArtifact) -> Option<Une
         ),
         // Losing verdicts is not a smaller problem than failing to produce
         // them: either way the run does not establish those controls' state.
-        withholds_completion: !could_not_evaluate.is_empty() || lost.is_some(),
+        withholds_completion: !could_not_evaluate.is_empty() || !lost.is_empty(),
     })
 }
 
@@ -1854,7 +1854,7 @@ fn unevaluated_controls(profile: Profile, parsed: &ParsedArtifact) -> Option<Une
 fn normalization_shortfall(
     profile: Profile,
     diagnostics: &serde_json::Map<String, Value>,
-) -> Option<String> {
+) -> Vec<String> {
     let count = |key: &str| {
         diagnostics
             .get(key)
@@ -1873,18 +1873,48 @@ fn normalization_shortfall(
         Profile::Maester => count("passes") + count("failures") + count("investigate"),
         // `Pass`, `Fail`, and `Warning` become rows.
         Profile::ScubaGear => count("passes") + count("failures") + count("warnings"),
-        _ => return None,
+        _ => return Vec::new(),
     };
+    let mut shortfalls = Vec::new();
+    if matches!(profile, Profile::Maester) {
+        // Inferred from `run-maester.ps1`: `total` is the upstream test count,
+        // while these are every category the wrapper reports. A positive
+        // remainder therefore names controls the wrapper accounted for under
+        // no category at all. Those controls were in scope but their state is
+        // unknown, so, like a verdict lost during normalization, they withhold
+        // completion. Saturation matters because upstream counters may overlap;
+        // a counter surplus is not evidence that the wrapper dropped controls.
+        if let Some(total) = diagnostics.get("total").and_then(Value::as_u64) {
+            let accounted = [
+                "passes",
+                "failures",
+                "investigate",
+                "errors",
+                "skipped",
+                "not_run",
+            ]
+            .into_iter()
+            .fold(0_u64, |sum, key| sum.saturating_add(count(key)));
+            let uncategorized = total.saturating_sub(accounted);
+            if uncategorized > 0 {
+                shortfalls.push(format!(
+                    "{uncategorized} not accounted for by any reported category"
+                ));
+            }
+        }
+    }
     let normalized = diagnostics
         .get("normalized_results")
-        .and_then(Value::as_u64)?;
-    if normalized >= carried {
-        return None;
+        .and_then(Value::as_u64);
+    if let Some(normalized) = normalized
+        && normalized < carried
+    {
+        let lost = carried - normalized;
+        shortfalls.push(format!(
+            "{lost} reported by the engine but not carried into results"
+        ));
     }
-    let lost = carried - normalized;
-    Some(format!(
-        "{lost} reported by the engine but not carried into results"
-    ))
+    shortfalls
 }
 
 /// Controls whose result the audited tenant's own configuration declares wrong.
@@ -4227,6 +4257,81 @@ mod tests {
         assert!(
             unevaluated_controls(Profile::ScubaGear, &disputed_surplus).is_none(),
             "a disputed control resolving to a verdict is not a lost one"
+        );
+    }
+
+    #[test]
+    fn maester_total_discloses_controls_missing_from_every_reported_category() {
+        let uncategorized = ParsedArtifact::Json(serde_json::json!({
+            "Diagnostics": { "passes": 7, "failures": 1, "investigate": 1, "errors": 1,
+                             "skipped": 1, "not_run": 1, "total": 15, "normalized_results": 9 }
+        }));
+        let unevaluated = unevaluated_controls(Profile::Maester, &uncategorized)
+            .expect("three controls outside every reported category must be disclosed");
+        assert!(
+            unevaluated
+                .disclosure
+                .contains("3 not accounted for by any reported category"),
+            "{}",
+            unevaluated.disclosure
+        );
+    }
+
+    #[test]
+    fn maester_total_equal_to_all_reported_counters_adds_no_disclosure() {
+        let fully_accounted = ParsedArtifact::Json(serde_json::json!({
+            "Diagnostics": { "passes": 7, "failures": 1, "investigate": 1, "errors": 1,
+                             "skipped": 1, "not_run": 1, "total": 12, "normalized_results": 9 }
+        }));
+        let unevaluated = unevaluated_controls(Profile::Maester, &fully_accounted)
+            .expect("existing error, skipped, and not-run disclosures remain");
+        assert!(
+            !unevaluated
+                .disclosure
+                .contains("not accounted for by any reported category"),
+            "{}",
+            unevaluated.disclosure
+        );
+    }
+
+    #[test]
+    fn maester_without_total_preserves_older_document_behavior_exactly() {
+        let older_document = ParsedArtifact::Json(serde_json::json!({
+            "Diagnostics": { "passes": 8, "failures": 1, "investigate": 0, "errors": 0,
+                             "skipped": 0, "not_run": 0, "normalized_results": 8 }
+        }));
+        let unevaluated = unevaluated_controls(Profile::Maester, &older_document)
+            .expect("the pre-existing normalization shortfall still applies");
+        assert_eq!(
+            unevaluated.disclosure,
+            "Maester did not evaluate every control in scope (1 reported by the engine but not carried into results); those controls are absent from findings and this run does not establish their state"
+        );
+        assert!(unevaluated.withholds_completion);
+    }
+
+    #[test]
+    fn maester_counters_exceeding_total_saturate_without_a_false_shortfall() {
+        let overlapping_counters = ParsedArtifact::Json(serde_json::json!({
+            "Diagnostics": { "passes": 8, "failures": 2, "investigate": 1, "errors": 0,
+                             "skipped": 0, "not_run": 0, "total": 10, "normalized_results": 11 }
+        }));
+        assert!(
+            unevaluated_controls(Profile::Maester, &overlapping_counters).is_none(),
+            "a counter surplus is not evidence of an uncategorized control"
+        );
+    }
+
+    #[test]
+    fn maester_uncategorized_controls_withhold_completion_because_their_state_is_unknown() {
+        let uncategorized = ParsedArtifact::Json(serde_json::json!({
+            "Diagnostics": { "passes": 8, "failures": 1, "investigate": 0, "errors": 0,
+                             "skipped": 0, "not_run": 0, "total": 10, "normalized_results": 9 }
+        }));
+        assert!(
+            unevaluated_controls(Profile::Maester, &uncategorized)
+                .expect("the unaccounted control is a coverage gap")
+                .withholds_completion,
+            "an in-scope control with no reported category has no established state"
         );
     }
 

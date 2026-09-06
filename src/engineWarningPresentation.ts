@@ -76,6 +76,7 @@ const SHORTFALL_DESCRIPTIONS: ReadonlyArray<readonly [string, string]> = [
   ["skipped", "已略過"],
   ["not run", "未執行"],
   ["reported by the engine but not carried into results", "掃描工具已回報，但未帶入結果"],
+  ["not accounted for by any reported category", "未計入任何已回報類別"],
 ];
 
 /** Translates each `<count> <description>` item, leaving an unknown one as-is. */

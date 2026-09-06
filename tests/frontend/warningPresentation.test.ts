@@ -125,7 +125,9 @@ test("every counted control shortfall the disclosure joins has a Chinese form", 
   // second half reaches a reader.
   const described = [...body("unevaluated_controls").matchAll(/\("[a-z_]+",\s*"([^"]+)"\)/gu)]
     .map((match) => match[1] ?? "");
-  const shortfall = [...body("normalization_shortfall").matchAll(/"\{lost\} ([^"]+)"/gu)]
+  // Any counted description, whatever its count is called: the hole's name
+  // is not the census key.
+  const shortfall = [...body("normalization_shortfall").matchAll(/"\{[a-z_]+\} ([^"]+)"/gu)]
     .map((match) => match[1] ?? "");
   const descriptions = [...new Set([...described, ...shortfall])];
   assert.ok(descriptions.length >= 6, `found only ${descriptions.length} shortfall descriptions`);
@@ -140,6 +142,12 @@ test("a translated disclosure keeps the engine's counts and translates its prose
   assert.equal(
     translated,
     "ScubaGear 未評估範圍內的所有控制措施（20 保留供人工審查、5 無法評估）；這些控制措施未列於問題中，本輪也無法確認其狀態",
+  );
+  assert.equal(
+    recognizedEngineWarningZhTW(
+      "Maester did not evaluate every control in scope (4 not accounted for by any reported category); those controls are absent from findings and this run does not establish their state",
+    ),
+    "Maester 未評估範圍內的所有控制措施（4 未計入任何已回報類別）；這些控制措施未列於問題中，本輪也無法確認其狀態",
   );
   // A description this build did not author survives rather than being dropped.
   assert.match(

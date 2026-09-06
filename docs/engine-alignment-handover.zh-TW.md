@@ -300,8 +300,14 @@ GHCR 發布是對外行為，**每一次都需要明確授權；上一個版本�
   修的是讀取側；產生側還在）。卡住的原因：`scripts/engine-image-evidence.mjs:366`
   會把 `engines/images/cloud-launcher/` 底下的任何變更擴張成**五個引擎的
   GHCR 發布**。
-- **Maester `run-maester.ps1` 的 `dropped` 計數器**，以及該映像內的一份 Pester
-  spec。兩者都需要重建並發布 M365 引擎映像。
+- ~~**Maester `run-maester.ps1` 的 `dropped` 計數器**~~ —— **這一項不需要授權，
+  原本的分類是錯的**，已在 Rust 側修掉（見文末 `dropped` 那段）。wrapper 早就
+  寫出 `Diagnostics.total`（`run-maester.ps1:175`），只是 Rust 從來沒讀。
+  剩下**該映像內的一份 Pester spec** 仍需重建並發布 M365 引擎映像。
+- **#10 的補充判讀**：讀取側（`adapters/mod.rs:2905` 起）已經刻意不讀那個
+  欄位並以 `CloudControlQuery` 揭露評分是本產品的，**使用者看到的已經誠實**；
+  產生側剩一行沒人讀的 SQL 死碼。不值得為它觸發五個引擎的發布——等下次有
+  實質理由重建 cloud-launcher 時順手清掉。
 
 > 供應鏈 digest pin **不得**為了讓 CI 變綠而重新 pin。只有在被審查的內容
 > 真的改變時，重新 pin 才是正當的。另見記憶 `pinned-digests-need-eol-lf`
@@ -511,3 +517,26 @@ gate 數字仍然每次都與我實跑一致。另外：`codex exec` 沒有 `--a
 
 實跑數字（`9e9d863`）：Rust 1,412、前端 467、元件 126、CI lane 29，
 fmt／clippy／typecheck／validate:engines 全綠。
+
+### Maester 被吞掉的控制措施：用 wrapper 已經給的 `total` 在 Rust 側算出來
+
+`run-maester.ps1:126-130` 的 `switch` 只認 Passed／Failed／Investigate，其餘
+`default { $null }` 直接 `continue`——控制措施從 `Results` 消失且沒有任何計數器
+記得它。`normalization_shortfall` 本來就是為了抓這種事寫的，但它的 Maester 底線
+是 `passes + failures + investigate`，上游用別的類別回報的判定對它是隱形的：
+租戶看到一份乾淨的稽核。
+
+wrapper 早就寫出關掉這個洞的數字：`total = $report.TotalCount`（`:175`），
+fixture 裡也有（`"total": 342`）。現在 `total` 減掉六類已交代的計數
+（passes／failures／investigate／errors／skipped／not_run），正餘數以
+「N not accounted for by any reported category」揭露，並**扣住完成**——在範圍內
+但狀態未知的控制措施，跟正規化時遺失的判定一樣，都不能讓這輪算完整。飽和在零：
+上游計數器可能重疊，計數超過 total 不是被吞的證據。沒有 `total` 的文件（ScubaGear、
+舊版 wrapper、舊 case 檔）行為與之前逐字相同。`engines/` 底下一個檔案都沒動，
+不需要重建映像、不需要發布。
+
+由 Codex 撰寫；它的 session 在跑 gate 時被切斷，且它在 sandbox 裡跑了
+`npm install`、esbuild 的 postinstall 撞 EPERM，把 `node_modules` 掏空只剩懸空的
+`.bin` symlink（lockfile 沒動，`npm ci` 即還原）。我補了兩處：前端普查對
+`normalization_shortfall` 的擷取原本綁死 `{lost}` 這個洞名，新句子的洞叫
+`{uncategorized}` 就漏了，改成任意洞名；以及一個 clippy `collapsible_if`。
