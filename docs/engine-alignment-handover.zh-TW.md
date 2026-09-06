@@ -328,26 +328,34 @@ GHCR 發布是對外行為，**每一次都需要明確授權；上一個版本�
 已檢測維度的 `dimension.dimension`、以及由 finding 推導出來的下一步 reason
 （原本用 `Debug` 印列舉）。
 
-同一份報告、同一個類別，**還在**的：
-
-- 已檢測維度的 `value` 與 `observation`（`beginner_report.rs` 的
-  `TestedDimension`）——名稱已在地化，但旁邊那句觀察說明（例如「The native
-  task only observed whether the endpoint accepted, refused, or timed out…」）
-  仍是儲存的英文散文。五個產生處，全是固定句子，可以走 `COVERAGE_GAP_PROSE`
-  同樣的整句查表路徑。
-- `limit.value` 內的單位字（`"{seconds} seconds"`、`"{n} per second,
-  concurrency {c}"`、`"{bytes} bytes"`）。
+同一份報告、同一個類別，後續又修掉的（詳見文末「交接後續」）：已檢測維度的
+`observation` 句（`6ba6909`）、`limit.value` 的單位字與 CoveragePage 的 record
+detail（`0d8f447`）、VerificationPage 的 diff 說明與 AppShell 的佔位標題
+（`e15f2ff`）。這一類別在報告與畫面上已經沒有已知的剩餘位置。
 
 ### 其他仍是英文／無代碼的使用者可見文字
 
-- ProgressPage 上的 orchestrator／adapter 警告：約 70 條字面，**沒有代碼**。
-- CoveragePage 的 record `detail`。
-- AppShell 的 `"Saved project"`。
-- VerificationPage 中 `diff.rs` 的說明文字。
-- 框架對照的 `rationale`。
-- `data_quality_warnings` 仍是裸的 `Vec<String>`（`beginner_report.rs:45`）——
-  這正是 `20409d6` 拒絕使用它的原因。要在地化它，得先給它代碼。
-- `src-tauri/src/demo.rs` 內有寫死的繁體中文（與上述方向相反的問題）。
+已修：CoveragePage 的 record `detail`（`0d8f447`）、AppShell 的 `"Saved project"`
+與 VerificationPage 的 `diff.rs` 說明（`e15f2ff`）。
+
+剩下的每一項都不是程式修正，而是 schema 或資料的決定，所以沒有排進任務：
+
+- **ProgressPage 上的引擎警告**：`EngineRun.warnings` 是 `Vec<String>`，
+  `case_service.rs` 有 33 處 push，混了產品自己寫的句子（normalization、
+  cleanup、stale、mapping、legacy migration 的說明）與 launcher 回傳的引擎原話。
+  要在地化得先分開「本產品說的」與「引擎說的」，並給前者代碼——改的是
+  `EngineRun` 的序列化欄位。
+- **`data_quality_warnings`** 仍是裸的 `Vec<String>`（`beginner_report.rs:45`），
+  `20409d6` 正是因此拒絕使用它。同樣需要代碼，改的是 beginner report 的 schema。
+- **框架對照的 `rationale`**：來自 `mappings/control-mappings.json` 的 19 條人工
+  審閱條目，catalog 有 canonical SHA-256 與 provenance pin
+  （`control_mapping.rs:285` 起）。翻譯它等於改 catalog 資料、重算 pin、更新
+  provenance 的審閱記錄——這是資料與審閱流程的決定。畫面上的關聯群組
+  （`correlation.rs` 的 `basis`／`uncertainty`）已由前端自行組句，不需要動。
+- **`src-tauri/src/demo.rs` 的 30 處硬寫中文**：`seedDemoCase` 在 UI 沒有任何
+  呼叫點（`src/services/scanner.ts:88` 只有命令名稱），demo 案件只能從 CLI 的
+  `case seed-demo` 或測試建出來。它是 3.3／3.5 那組死接線的一部分；決定 demo
+  要不要留，比決定它的語言優先。
 
 ### 對齊清單本身還有的缺口
 
@@ -375,16 +383,16 @@ GHCR 發布是對外行為，**每一次都需要明確授權；上一個版本�
 | 1. 每個引擎餵真實輸出都出得來 finding | 21 個 adapter fixture 全部對照上游稽核完畢；產生側還剩 #10（卡授權） |
 | 2. 嚴重度可跨引擎比較 | 完成——不是引擎說的就標成本產品推導的，沒有第三種 |
 | 3. 同一個問題只出現一次 | 後端關聯 + 前端呈現 + spec 9.3 但書，完成 |
-| 4. 新手可讀的雙語散文 | finding 三欄、優先度理由、安全性／驗證句、coverage gap 的 dimension 與 reason、要求限制的名稱、已檢測維度的名稱、finding 推導的下一步 reason 完成；上面「仍是英文」那份清單與已檢測維度的 `observation` 未完成 |
+| 4. 新手可讀的雙語散文 | 報告與畫面上所有由本產品撰寫、有固定句型的文字都已在地化（見「交接後續」六個 commit）；剩下的四項各自卡在 schema 或資料決定 |
 | 5. 對齊清單的欄位品質 | 未開始（2.1 / 2.2 / 2.4 / 1.4） |
 | 6. 授權與 schema 決定 | 等 Ted |
 
-**建議的下一步**：原本列在「同一個缺陷類別、還沒修的位置」的三處已在
-`9b57e39` 完成。接下來最順手的是已檢測維度的 `observation` 句（五個固定句子，
-可直接沿用 `COVERAGE_GAP_PROSE` 的整句查表＋producer 端 debug 普查），之後是
-「仍是英文」清單裡 ProgressPage 那約 70 條無代碼的警告。第 5 項
-（`Confidence::High` 是常數欄）仍是清單品質上最大的一塊，但它需要先決定那個
-欄位到底代表什麼。
+**建議的下一步**：第 4 項能不經決定就做的部分已經做完。接下來每一條都要
+Ted 先拍板：（a）引擎警告與 `data_quality_warnings` 要不要改成帶代碼的結構
+（schema 變更，兩者可以共用同一個 `{code, text}` 形狀）；（b）第 5 項
+`Confidence::High` 是常數欄，那個欄位到底代表什麼；（c）control-mapping catalog
+的 rationale 要不要有第二語言版本以及 provenance 怎麼記；（d）demo 案件去留。
+其中（a）與（b）是清單品質上最大的兩塊。
 
 ---
 
@@ -423,3 +431,31 @@ limit 名稱，普查即攔下。
 `cargo fmt --check`、clippy `-D warnings`、typecheck、release-evidence、
 validate:engines、release:self-test、validate:usability-evidence、NSIS 範本
 驗證全部通過。
+
+### `6ba6909`、`0d8f447`、`e15f2ff` — 由 Codex 撰寫、本文作者指揮與審查
+
+Ted 指定寫程式的部分交給 Codex CLI（`gpt-5.6-sol`），我當 orchestrator：寫簡報、
+審 diff、自己重跑全部 gate 後才提交。三個 commit 的簡報都放在 `/tmp/codex-brief-N.md`
+（未入庫；簡報的要點都在各 commit message 裡）。
+
+- **`6ba6909`** 已檢測維度的 `observation` 句：7 句固定句子，雙生檔案整句查表；
+  畫面原本完全不印這句，現在也印，所以「完成的網路檢查不代表安全性檢查通過」
+  這句誠實話第一次到達畫面。
+- **`0d8f447`** `limit.value` 的單位字（4 個句型，數字原樣）＋ CoveragePage 的
+  record detail（`coverage.rs` 6 句固定＋12 個帶洞句型；狀態字、計數、grant id、
+  使用者自己打的排除理由全部原樣）。表放在雙生檔案是因為 case bundle 也序列化
+  這個欄位，且只有放在 Rust 端才能做 producer 的 debug 普查。`coverage.rs` 加進
+  CI classifier 的跨邊界清單。
+- **`e15f2ff`** VerificationPage 的 diff 說明：不解析英文成品，改從結構組句——
+  五向 status 決定框架（adapter 原本把它壓成四種畫面狀態，現在保留原值）、
+  20 個 reason code 各有標籤、27 個 detail 句型、engine／asset／指紋／版本值
+  全部原樣。AppShell 的「Saved project」只在 `selected_case_missing` 時換成
+  i18n 佔位，真實案件名稱原樣。`diff.rs`、`domain.rs` 加進 classifier。
+
+**與 Codex 合作的觀察**：它的報告與我實跑的數字每次都一致；它在 sandbox 內跑
+Rust 全套會撞到兩個 managed-runtime 清理測試的 `Operation not permitted`，
+它會自己在 sandbox 外重跑，我的重跑沒有這個問題。它兩次主動發現 CI classifier
+少了跨邊界檔案而補上。我改過它的一處：普查用精確計數 `=== 7`，改成下限。
+
+實跑數字（`e15f2ff`）：Rust 1,396、前端 457、元件 122、CI lane 29，
+fmt／clippy／typecheck 全綠。
