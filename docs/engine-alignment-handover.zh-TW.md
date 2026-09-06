@@ -1,0 +1,380 @@
+# 引擎接線與結果對齊 — 交接文件
+
+日期：2026-09-05
+
+主線分支：`main`（無其他分支或 worktree）
+
+涵蓋範圍：`f21e6fc..0392aea`（29 個 commit）
+
+最後驗證檢查點：`0392aea`，12 道本機閘門全綠，工作目錄乾淨。
+
+前一份交接是 `docs/honesty-audit-handover.md`（範圍 `122a5fd..c5c9a41`，使用者面向誠實性稽核）。
+那是另一條工作線，本文件接在它後面，不取代它。
+
+## 這條工作線要解決什麼
+
+指令是三件事，而且有順序：
+
+1. **把每一個套件都趕快接起來**
+2. **讓它們的掃描結果全部對齊到同一張清單**
+3. **讓新手好用**
+
+這三件事其實是同一個失敗模式的三個切面。一個引擎跑完、輸出被讀進來、
+但欄位對不上，結果就是「掃描成功、零個問題」——這比掃描失敗更糟，因為
+使用者沒有任何線索知道自己被騙了。同理，二十一個引擎各自用自己的字彙講
+嚴重度，那張清單就不是一張清單，是二十一張疊在一起的清單。而只要有一句
+話是英文，中文使用者讀到的就是一個他無法處理的洞。
+
+本區間找到的主要缺陷類別是：**產品自己編造了引擎沒有說過的話**——編造嚴重度、
+把自己的字面值當成引擎的評分讀回來、用一個籠統的原因取代後端實際記錄的原因。
+
+## 完成了什麼
+
+| | |
+|---|---|
+| Commit 數 | 29（18 `fix`、9 `feat`、1 `test`、1 `security`） |
+| Diff | 62 個檔案，+8,917 / −451 |
+| Rust 測試（`cargo test`） | 1,391 通過（本區間 `#[test]` 宣告數 1,158 → 1,202，靜態計數） |
+| 前端測試（`node --test`） | 404 → 438 |
+| 元件測試（vitest + jsdom） | 95 → 117 |
+| CI lane 測試 | 29（本區間未新增） |
+| 新增測試檔 | 7 |
+
+新增的測試檔：
+
+- `tests/frontend/findingNarrative.test.ts`
+- `tests/frontend/findingNarrativeParity.test.ts`
+- `tests/frontend/correlationService.test.ts`
+- `tests/frontend/correlationWireContract.test.ts`
+- `tests/frontend/nativeCommandRegistry.test.ts`
+- `tests/component/findingCorrelations.test.tsx`
+- `tests/component/findingNarrativeLocalization.test.tsx`
+
+---
+
+## 第一條：把套件真的接起來
+
+「接起來」的判準不是「adapter 存在」，而是「餵真實輸出進去會出來正確的
+finding」。二十一個 adapter fixture 全部重新對照上游 pin 住的原始碼稽核過一遍。
+
+1. **ScoutSuite 與 Cloudsplaining 讀不到任何東西** — `da6729a`
+   兩個 adapter 都在解析上游根本不會產生的形狀。真實輸出進去是零筆。
+2. **Kubescape 只讀 roll-up，不讀 per-resource** — `696183c`
+   每個 control 只拿到一個彙總判定，個別資源的失敗全部消失。
+3. **control mapping 掛在引擎不可能發出的 rule id 上** — `a5e76de`
+   對照表的 key 是人寫出來的規則名，不是引擎實際輸出的識別碼，所以整段
+   mapping 從來沒有命中過。
+4. **kube-bench 的 finding 全部埋在 unknown** — `1da78c3`
+5. **四個引擎被安上它們沒有發出的嚴重度** — `b8b989a`
+   gitleaks、TruffleHog、naabu、httpx 各被寫死一個 severity 字串，然後以
+   `source-severity:high` 的形式送到使用者面前——那個 tag 的全部意義就是
+   「這是引擎說的」，而它們四個都沒說。逐一對照 pin 住的上游原始碼確認：
+   gitleaks 的 Go 原始碼裡根本沒有 `severity` 這個字；TruffleHog 的 `--json`
+   序列化的結構沒有這個欄位；naabu 發出的 `confidence` 是在評服務指紋的把握度，
+   不是風險；httpx 的 result struct 上沒有。四者改走
+   `record_with_derived_severity!`，帶 `severity-basis:derived`、不帶
+   `source-severity:`，並在摘要裡明說引擎沒有評分。**等級沒有改，改的是歸屬。**
+   另外 TruffleHog 有一條建立在從未執行過的檢查上的評分：launcher 傳
+   `--no-verification`，`Engine.shouldVerifyChunk` 在任何 detector 的 verify
+   路徑之前就回 false，所以 `Verified` 恆為 false，`critical` 那條分支不可能
+   到達，已移除；`verified:false`（讀起來像「驗過了、是假的」）改成
+   `verification:not-attempted`。
+6. **Checkov 沒帶嚴重度的 finding 被丟掉** — `b42ad87`
+   改成替沒有嚴重度的評分、保留有嚴重度的原值。
+7. **把產品自己的字面值當成 Steampipe 的評分讀回來** — `df632f3`
+8. **四個引擎實際說了什麼在中途被丟掉** — `a60d38a`
+9. **M365 wrapper 丟掉的判定被讀成「租戶很乾淨」** — `ac892da`
+   wrapper 沒有回報的判定，adapter 讀起來跟「檢查通過」無法區分。
+
+> 相關的既有記憶：`one-asset-per-engine-run`（規劃永遠不會把多個資產放進
+> 同一次引擎執行，所以多資產的 adapter 測試會「找到」七個假 bug）。
+
+## 第二條：讓結果對齊到同一張清單
+
+對齊有兩個層次：**同一個尺規**，以及**同一個問題只出現一次**。
+
+**尺規**由上面第 5–8 項處理：嚴重度現在要嘛是引擎自己說的（原字保留，
+連 `High` 這個字都不翻譯，否則使用者拿去跟引擎自己的輸出對照時會對不起來），
+要嘛明確標成本產品自行推導的（`severity-basis:derived`），沒有第三種。
+
+**去重**是新的跨引擎關聯功能：
+
+- `e1aebdc` — 後端 `src-tauri/src/correlation.rs`，建議哪些不同引擎的
+  finding 其實是同一件事。
+- `98bf44a` — 前端終於把它畫出來。後端從模組落地起就一直在算，但**沒有任何
+  地方在讀**：兩個引擎報同一個套件的同一個 CVE，使用者看到的是兩列不相干的
+  資料。同時：
+  - 依 spec 9.3，兩個引擎有共識**不得**呈現成獨立佐證，所以每一條建議都帶著
+    這個但書，而不是暗示已經雙重確認。
+  - 共用識別碼但缺少可比較座標的 finding 會被列成「無法驗證」，而不是消失。
+  - 建議清單有上限，被丟掉幾筆會明說。
+  - `FindingCorrelationSuggestion` 新增 `vulnerability_id` 與 `package`：
+    原本只能靠解析英文 `title` 取得，等於強迫中文讀者收到英文散文。
+- `d86bef5` — 把工作計畫 port 的測試從「檢查有沒有出現」改成「檢查有沒有洩漏」。
+
+這個功能跨越前後端邊界，所以順手補了三道合約防護（見下方「結構性防護」）。
+
+## 第三條：讓新手好用
+
+新手介面的核心問題是：**產品自己寫的句子只有英文版**。中文使用者看到的是
+中文標題底下一串英文。本區間把三大塊使用者可讀的散文改成雙語，方式一致：
+
+> **後端發出結構化的代碼／標準英文散文；每一個閱讀面自己組句子。英文一律
+> 原封不動回傳後端的標準散文。引擎自己的字串（引擎名、rule id、原始嚴重度
+> 用字、雲端識別碼）一律逐字保留。**
+
+- `3498393` — finding 的散文改帶組成它的代碼，中文才有東西可組。
+- `799ba1d` — finding 的摘要、影響、下一步以讀者的語言書寫。
+- `2724d38` — 分享報告（HTML）的 finding 散文同樣依讀者語言組成。
+- `2a60b13` — demo 的散文若不是從 family 組出來的，就不要宣稱它有 family。
+- `38077c8` — 補上只有英文側知道的兩個專有名詞。
+- `a480bbc` — 修正組合後的中文句子漏掉英文原句資訊的問題。
+- `75af582` — findings 列上標明是哪個引擎找到的，以及哪些評分是本產品自己的。
+- `de5663b` — 安全性與驗證這兩句一併帶過去並在地化。
+- `6132ee2` — 「為什麼是這個優先度」原本是中文標題配英文清單，兩處（findings
+  抽屜與 HTML 報告）皆是。`priority_reasons` 是沒有 per-entry code 的
+  `Vec<String>`，所以改用形狀辨識；四個生產者全部封閉，其他一律原樣回傳——
+  對這個 build 認不出來的文字印出一句自信的中文，那不是翻譯，是捏造。
+- `5465394` — 依讀者實際看到的嚴重度選對冠詞。
+- `7e257a2` — 告訴讀者能解決他這個 finding 的動作，而不是一句通用的。
+
+### Prowler 歸屬缺口（一條線，四個 commit）
+
+這條值得單獨看，因為它示範了「adapter 層測試通過」與「使用者看得到」之間的距離。
+
+- `165ef62` — 用一般人實際的方式加入一個雲端帳號（取名字、授權、但從未
+  填入指紋），Prowler 會回傳空的 finding 清單。`resolve_asset` 把
+  provider-qualified 的 OCSF 帳號視為權威、不會回退到唯一選取的資產——這是
+  對的，把 AWS finding 歸給錯的帳號比不歸屬更糟。但識別碼對照表完全來自
+  `asset.identifiers`，而沒有任何地方要求必須填。於是引擎找到了一切、解析出
+  零筆，整次執行讀起來像一次乾淨的掃描。改成**每個識別碼講一次**：講 provider、
+  講識別碼、講丟掉幾筆、講怎麼修。per-record 的警告留著當稽核軌跡。
+- `200c81a` — 那句話**從來沒有到達過真實執行**。它是在 record 迴圈之後透過
+  `push_warning` 附加的，而 `push_warning` 在警告數達到 `MAX_WARNINGS`（256）
+  後會靜默 no-op，一次預設 AWS 掃描的 record 數遠超過這個值。256 個名額被
+  per-record 雜訊填滿，唯一值得讀的那句被丟掉。fixture 只有三筆，所以測試通過。
+  現在它排在 per-record 警告之前，並且豁免上限。測試用 400 筆的 artifact，
+  不是重用三筆的 fixture——**三筆會過、三百筆會爆，正好是 fixture 尺寸的測試
+  看不見的東西**；而且斷言它排第一，不只是存在，因為「有但被埋掉」對讀者是
+  同一個結果。
+- `20409d6` — 讓識別碼以**資料**的形式旅行：`UnattributedResults`
+  （provider、identifier、丟棄筆數）從 adapter → execution report → engine run
+  → 一個同時帶著英文散文與 payload 的 coverage gap。把它加進
+  `data_quality_warnings` 當一個裸字串會複製剛修掉的缺陷：那個欄位沒有代碼，
+  只能是英文。它被算成獨立的 coverage 狀態，而不是折進既有的：檢查有跑，
+  所以「未檢測」低估了發生的事；結果存在，所以「無法使用」描述的是別的東西。
+- `d377f2d` — **安全性**：那個識別碼直接讀自被掃描的 artifact，且未登記在任何
+  資產上，所以會改寫已知識別碼的 `redact_known_literals` 碰不到它。一份宣稱
+  不含此類資料的標準遮蔽匯出，實際上夾帶了一個真實的雲端帳號 id。三個散文
+  欄位與兩個 payload（`beginner_report_for_export` 與 `case_for_export`）都
+  已處理：gap 保留計數、失去識別碼，`engine_run.unattributed` 跟著旁邊的
+  warnings 一起清掉。未遮蔽的匯出仍然有它，遮蔽後的 gap 會告訴讀者去哪裡找。
+
+### 涵蓋清單的在地化（本區間最後兩個 commit）
+
+- `1c05a3f` — **dimension（這個缺口是關於什麼）**。
+  `localizedCoverageDimension` 對照了 13 個固定名稱，其餘全部落到
+  `涵蓋範圍細節：<英文原文>`。它的測試普查的是 `dimension: "..."` 這個形狀，
+  而所有約 16 個組合而成的名稱都不是這個形狀——於是測試回報「完整覆蓋」，
+  而每一個組合名稱送到中文讀者面前都是英文。其中
+  `{engine} granular executed scope` 對每一個完成的目錄檢查都會觸發，
+  **所以每一次正常執行都踩到**。HTML 報告則根本沒有在地化 dimension。
+  另外 `readable_identifier` 會把組合出來的中文名稱弄壞（會把
+  `naabu-tcp 的…` 改成 `Naabu TCP 的…`，破壞讀者要拿去跟自己掃描器輸出
+  對照的引擎 id），現在只在非中文路徑套用。
+- `0392aea` — **reason（為什麼缺）**。findings 面板**在兩個語言下**都是從
+  `gap.kind` 組句子、丟掉 `gap.reason`。`not_tested` 一個 kind 涵蓋三種狀況，
+  所以「每個 kind 一句話」對三列中的兩列是假的，而且會跟旁邊的 dimension
+  互相矛盾。HTML 報告則逐字印出儲存的英文。現在兩者都讀後端實際記錄的句子。
+  `COVERAGE_GAP_PROSE` 有 69 組對照，TypeScript 側由 Rust 表生成。
+
+---
+
+## 建立的結構性防護
+
+這些比任何單一修正重要，因為它們改變了「下一次退化」的代價。
+
+### 1. 生產者處普查，而不是對生產者做正則普查
+
+`beginner_report.rs` 用四種不同方式寫出使用者可見的句子：struct 欄位、
+傳給本地 `push` closure 的位置參數、`append_task_gap` 的 match arm tuple、
+以及從上游 struct 複製過來的文字。**一個 grep `reason: "..."` 的普查只找到
+約 45 句中的 7 句，然後回報成功。**
+
+可靠的做法是在生產者處斷言：
+
+```rust
+coverage_gaps.dedup();
+debug_assert_coverage_prose_is_translatable(&coverage_gaps);
+```
+
+放在集合定案的地方。這樣**整個 Rust 測試套件就是普查**——每一個建報告的
+既有測試都會跑到它，而一句新的散文會讓走它自己那條路徑的測試失敗。
+
+例外：本產品沒有寫的文字要豁免。`ScanRequestOutcome.explanation` 是只驗長度
+與控制字元的持久性自由文字，對它斷言會在合法紀錄上 panic，所以
+`requested check*` 開頭的 dimension 被豁免。
+
+### 2. 雙生檔不變式
+
+`src-tauri/src/finding_narrative.rs` 與 `src/findingNarrative.ts` 持有同一批
+句子。`tests/frontend/findingNarrativeParity.test.ts` 讀兩個檔案，比對
+中文字面（插值塌縮成 `⟦⟧`）、英文 match key，**以及英文 key 與中文句子的
+配對**。最後這項是必要的：因為英文現在是比對用的 key，一旦飄移，翻譯會
+**靜默失效**——不會 crash、不會有斷言失敗，只會出現一個中文項目配兩個英文項目。
+它已經抓到一次真實的不一致（Rust 側 `" failed work units "` vs TS 側
+`" failed work units"`）。
+
+注意 rustfmt 會把長的配對折成三行，所以比對前兩側都要把空白壓平。
+
+### 3. 跨邊界合約防護（隨關聯功能一起加）
+
+- `correlationWireContract` — 兩側的 JSON 欄位名必須相同。改一個 Rust 欄位名
+  在各處都能編譯，然後靜靜地送 `undefined` 給頁面。
+- `nativeCommandRegistry` — 前端能呼叫的每一個 command 字串都必須真的註冊在
+  Tauri 上。這裡打錯字會出貨，然後只在使用者打開那一頁時才失敗。
+- `correlationService` — **執行**服務而不是讀它的原始碼，證明 demo 路徑帶著
+  notice、原生失敗會 reject 而不是解析成一份空報告。
+
+`src-tauri/src/correlation.rs` 已加入 `FRONTEND_PATHS`，讓純後端 commit 也會
+跑到這些測試所在的 lane（見記憶 `render-test-hazards`：跨邊界測試需要
+classifier 條目，否則它在最可能弄壞它的那個 commit 上不會執行）。
+
+---
+
+## 驗證方法
+
+每一項修正都經過：找到矛盾的程式碼 → 修 → 寫測試 → **對測試做突變驗證**。
+
+1. 還原修正（或關掉渲染）。
+2. 重跑，**以子行程 exit code 確認失敗**（Rust 101 / vitest、node --test 1）。
+   管線化的 exit code 會說謊。
+3. 區分斷言失敗與編譯錯誤（`^error\[E|could not compile`）——編譯不過不算殺死。
+4. **從 `/tmp` 備份 `cp` 回去還原，絕不用 `git checkout --`**（先前有一次
+   session 因此弄丟未提交的工作），然後以 sha256 確認位元組相同。
+5. **突變存活 = 測試有缺陷。修測試，不要修量測。**
+
+本區間有兩次存活，每一次都揭露真實的缺口：
+
+- **遮蔽測試存活**：第一版只驗了 `beginner_report_for_export`，`case_for_export`
+  那條路徑沒碰到。補上後才殺死。
+- **報告接線的突變存活**：把整個 `(ZhHant, None)` match arm 拿掉，**整個 Rust
+  套件依然全綠**。用暫時的 `panic!("GAPDIMS>>>{:?}<<<")` 探針找出 fixture 實際
+  的 gap dimension，補上中文正／負面斷言後才殺死。
+
+## 本機閘門（12 道）
+
+見記憶 `local-verification-recipe`。`cargo` 不在 PATH 上：
+
+```
+PATH="$HOME/.cargo/bin:$PATH"
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --no-default-features --features cli --all-targets -- -D warnings
+cargo test  --locked --workspace --no-default-features --features cli
+npm run typecheck
+npm run test:frontend
+npm run test:component
+npm run test:release-evidence
+node --test tests/ci/*.test.mjs
+npm run validate:engines
+npm run release:self-test
+npm run validate:usability-evidence
+node scripts/release/validate-windows-nsis-template.mjs
+```
+
+注意 `node --test tests/ci/`（目錄形式）會噴一個看起來像測試壞掉的模組錯誤，
+要用 glob。`src/` 中前端測試會走到的檔案，**value import 必須寫出 `.ts` 副檔名**
+（`import type` 會被抹除，不需要）。
+
+---
+
+## 還沒做的
+
+### 需要 Ted 授權（對外操作）
+
+GHCR 發布是對外行為，**每一次都需要明確授權；上一個版本的同意不延伸到下一個**。
+
+- **#10 — 移除 Steampipe 查詢中捏造的嚴重度欄位。**
+  `engines/images/cloud-launcher/main.go:1222` 有一行 `'high' as severity`，
+  是產品自己寫進 SQL 的常數，然後被當成 Steampipe 的評分讀回來（`df632f3`
+  修的是讀取側；產生側還在）。卡住的原因：`scripts/engine-image-evidence.mjs:366`
+  會把 `engines/images/cloud-launcher/` 底下的任何變更擴張成**五個引擎的
+  GHCR 發布**。
+- **Maester `run-maester.ps1` 的 `dropped` 計數器**，以及該映像內的一份 Pester
+  spec。兩者都需要重建並發布 M365 引擎映像。
+
+> 供應鏈 digest pin **不得**為了讓 CI 變綠而重新 pin。只有在被審查的內容
+> 真的改變時，重新 pin 才是正當的。另見記憶 `pinned-digests-need-eol-lf`
+> （Windows CRLF checkout 會破壞位元組精確的 SHA-256 pin，該修 `.gitattributes`）
+> 與 `m365-publication-mechanics`（失敗的發布不會燒掉版本 tag，任何步驟都能
+> 在本機重播，不必重新 dispatch）。
+
+### 需要 schema／spec 決定，不是清理
+
+- **`CoverageGapKind::Truncated` 與 `CoverageReduction`。**
+  `Truncated` 被宣告、序列化、由 `coverage_counts` 計數、由 `gap_rank` 排序、
+  由 `case_service.rs` 渲染——但**沒有任何地方建構它**，所以
+  `CoverageCounts.truncated` 恆為 0。它讀起來完全像可以刪的死碼。**它不是。**
+  這是刻意保留的合約欄位，預期的建構者是「要求涵蓋範圍投影」（一旦凍結的
+  計畫能夠陳述要求範圍 X 對執行子集 Y 以及原因），也就是 `CoverageReduction`。
+  taxonomy 在 `docs/product-spec.md` 有承諾。刪掉對目前的執行是安全的，但**不是
+  合約中性的**：它會改變序列化 schema 並牴觸已發布的承諾。詳見記憶
+  `truncated-is-a-spec-promise`。
+
+### 同一個缺陷類別、還沒修的位置
+
+`1c05a3f` / `0392aea` 修的是 coverage gap 那幾列。同一份 HTML 報告裡還有：
+
+- `src-tauri/src/case_service.rs:12500` — `limit.name` 原樣輸出。
+- `src-tauri/src/case_service.rs:12543` — 已檢測維度的 `dimension.dimension`
+  只過 `readable_identifier`，沒有在地化。
+- `src-tauri/src/beginner_report.rs:1947` — 由 finding 推導出來的下一步，其
+  reason 是 `"{title} — {severity:?} severity, {confidence:?} confidence"`，
+  用 `Debug` 印列舉，兩個問題：英文，而且是 Rust 識別字而非人話。
+
+### 其他仍是英文／無代碼的使用者可見文字
+
+- ProgressPage 上的 orchestrator／adapter 警告：約 70 條字面，**沒有代碼**。
+- CoveragePage 的 record `detail`。
+- AppShell 的 `"Saved project"`。
+- VerificationPage 中 `diff.rs` 的說明文字。
+- 框架對照的 `rationale`。
+- `data_quality_warnings` 仍是裸的 `Vec<String>`（`beginner_report.rs:45`）——
+  這正是 `20409d6` 拒絕使用它的原因。要在地化它，得先給它代碼。
+- `src-tauri/src/demo.rs` 內有寫死的繁體中文（與上述方向相反的問題）。
+
+### 對齊清單本身還有的缺口
+
+- **2.1 — `Confidence::High` 對 21 個引擎中的 20 個是常數欄。**
+  要嘛它有意義、應該會變動，要嘛它是裝飾。（前一份交接也列了這一項。）
+- **2.2 — control filter 只觸及約 19 條對照規則，5 個引擎一條都沒有。**
+- **2.4 — 列上沒有 location。**
+- **1.4 — 對照表飄移時，control reference 是整批清空的。**
+- 3.3 / 3.5 及 `seedDemoCase` 的死接線。
+
+### 誠實的限制（延續自前一份交接，仍然成立）
+
+- **兩個 M365 引擎從未對真實租戶執行過。** 只做過發布與 launcher 驗證。
+- **Windows 安裝後的生命週期從未執行過**（NSIS 快取植入、損毀套件復原、
+  複製舊 uninstaller 的路徑）。只有靜態驗證。
+- Dependabot moderate：`rust/glib 0.18.5` `VariantStrIter` unsoundness，
+  0.20.0 已修，經由 Tauri 的 Linux GTK 堆疊間接引入。Linux 是發行目標。
+
+---
+
+## 目前位置
+
+| 階段 | 狀態 |
+|---|---|
+| 1. 每個引擎餵真實輸出都出得來 finding | 21 個 adapter fixture 全部對照上游稽核完畢；產生側還剩 #10（卡授權） |
+| 2. 嚴重度可跨引擎比較 | 完成——不是引擎說的就標成本產品推導的，沒有第三種 |
+| 3. 同一個問題只出現一次 | 後端關聯 + 前端呈現 + spec 9.3 但書，完成 |
+| 4. 新手可讀的雙語散文 | finding 三欄、優先度理由、安全性／驗證句、coverage gap 的 dimension 與 reason 完成；上面「仍是英文」那份清單未完成 |
+| 5. 對齊清單的欄位品質 | 未開始（2.1 / 2.2 / 2.4 / 1.4） |
+| 6. 授權與 schema 決定 | 等 Ted |
+
+**建議的下一步**是上面「同一個缺陷類別、還沒修的位置」那三處：它們與剛完成的
+兩個 commit 是同一個 bug class、同一份 HTML 報告、同一套已經建好的翻譯基礎
+設施，`beginner_report.rs:1947` 那個 `Debug` 印列舉尤其明顯——中文與英文
+讀者看到的都是 Rust 識別字。做完之後，第 5 項（`Confidence::High` 是常數欄）
+是清單品質上最大的一塊，但它需要先決定那個欄位到底代表什麼。
