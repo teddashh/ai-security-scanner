@@ -267,6 +267,40 @@ test("a composed limit whose identifier is empty gains no empty decoration", () 
   }
 });
 
+/**
+ * Every limit name the backend writes, with an identifier substituted for the
+ * hole a composed one carries. Eight producers, three of them fixed strings.
+ *
+ * Read from the producer for the same reason the dimensions are: the fixed
+ * list above was written by hand, and a limit added to the backend with no
+ * Chinese mapping would pass it while reaching a reader as "本輪使用的限制：
+ * <English>". The Rust side asserts the same thing in debug builds.
+ */
+const limitNames = [
+  ...new Set([
+    ...Array.from(production.matchAll(/\bname: "([^"]+)"\.into\(\)/gu), (match) => match[1] ?? ""),
+    ...Array.from(
+      production.matchAll(/\bname: format!\(\s*"([^"]+)"/gu),
+      (match) => (match[1] ?? "").replaceAll(FORMAT_HOLE, "asset-primary"),
+    ),
+  ]),
+].sort();
+
+test("every limit name the backend writes is translated around its identifier", () => {
+  assert.ok(limitNames.length >= 8, `found only ${limitNames.length} limit names: ${limitNames.join(", ")}`);
+  assert.ok(limitNames.includes("endpoint"));
+  assert.ok(limitNames.includes("asset-primary approved ports"));
+  for (const name of limitNames) {
+    const label = localizedRequestedLimitName(name, "zh-TW");
+    assert.ok(!label.startsWith("本輪使用的限制："), `${name} reached a Chinese reader as English: ${label}`);
+    assert.match(label, /\p{Script=Han}/u, label);
+    if (name.startsWith("asset-primary")) {
+      assert.ok(label.includes("asset-primary"), `${name} lost its identifier: ${label}`);
+    }
+    assert.equal(localizedRequestedLimitName(name, "en"), name);
+  }
+});
+
 test("an unrecognized limit name keeps its text instead of being replaced", () => {
   assert.match(localizedRequestedLimitName("prowler concurrency ceiling", "zh-TW"), /prowler concurrency ceiling/u);
 });

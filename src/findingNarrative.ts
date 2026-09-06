@@ -771,3 +771,40 @@ export const findingActionSentence = (
   const expert = localizedExpertType(options.expertType, locale);
   return `請由建議的專業人員（${expert}）檢視受影響的資產與來源規則的官方說明，再規劃並核准${remedy}。`;
 };
+
+/** Appends the identifier a composed name carries, when it has one. */
+const withIdentifier = (label: string, identifier: string): string =>
+  identifier ? `${label}（${identifier}）` : label;
+
+/**
+ * Names one limit the run was executed under. The backend composes most of
+ * these as "<engine or asset id> <limit kind>", so translating the kind alone
+ * erases the only part saying which scanner or which authorized target the
+ * limit applied to. A case with three scope grants would otherwise show three
+ * rows all reading "approved ports" with no way to attribute them.
+ *
+ * Lives here rather than in `coverageDimensionPresentation.ts` because the
+ * shared HTML report names the same limits and Rust composes the identical
+ * label there; this file is where the two languages are held to each other.
+ */
+export const localizedRequestedLimitName = (
+  name: string,
+  locale: "en" | "zh-TW",
+): string => {
+  if (locale === "en") return name;
+  if (name === "endpoint") return "連線端點";
+  if (name === "connection timeout") return "連線逾時限制";
+  if (name === "application payload") return "應用資料量";
+  for (const [suffix, label] of [
+    ["approved ports", "允許檢查的連接埠"],
+    ["request rate", "請求速率"],
+    ["network timeout", "網路逾時限制"],
+    ["authorized network target", "已確認的網路目標"],
+    ["execution timeout", "檢查逾時限制"],
+  ] as const) {
+    if (name.endsWith(suffix)) {
+      return withIdentifier(label, name.slice(0, name.length - suffix.length).trim());
+    }
+  }
+  return `本輪使用的限制：${name}`;
+};

@@ -298,6 +298,14 @@ pub fn unattributed_gap_zh_hant(
 /// "cloudquery" in their scanner's own output, and cannot search for a label
 /// this product invented.
 pub fn coverage_dimension_zh_hant(dimension: &str) -> String {
+    recognized_coverage_dimension_zh_hant(dimension)
+        .unwrap_or_else(|| format!("涵蓋範圍細節：{dimension}"))
+}
+
+/// `None` for a name this build does not author. `beginner_report.rs` asserts
+/// on it in debug builds for every tested dimension it writes, so the whole
+/// Rust suite is the census of that vocabulary.
+pub(crate) fn recognized_coverage_dimension_zh_hant(dimension: &str) -> Option<String> {
     let lower = dimension.to_lowercase();
 
     // Fixed names, in the order the more specific one has to be tried first:
@@ -323,7 +331,7 @@ pub fn coverage_dimension_zh_hant(dimension: &str) -> String {
         ("requested checks", "要求的檢查項目"),
     ] {
         if lower.contains(needle) {
-            return label.to_owned();
+            return Some(label.to_owned());
         }
     }
 
@@ -342,7 +350,7 @@ pub fn coverage_dimension_zh_hant(dimension: &str) -> String {
             (" not-tested work units", "未檢測的工作單元"),
         ] {
             if let Some(check) = head.strip_suffix(suffix) {
-                return with_check(check, &format!("{label}（{count}）"));
+                return Some(with_check(check, &format!("{label}（{count}）")));
             }
         }
     }
@@ -359,7 +367,7 @@ pub fn coverage_dimension_zh_hant(dimension: &str) -> String {
         (" was cancelled before finishing", "未完成就被取消"),
     ] {
         if let Some(check) = dimension.strip_suffix(suffix) {
-            return with_check(check, label);
+            return Some(with_check(check, label));
         }
     }
 
@@ -374,7 +382,7 @@ pub fn coverage_dimension_zh_hant(dimension: &str) -> String {
             ("unfinished check dimension", "未完成的檢查項目"),
         ] {
             if rest == fragment {
-                return with_check(check, label);
+                return Some(with_check(check, label));
             }
         }
     }
@@ -385,10 +393,10 @@ pub fn coverage_dimension_zh_hant(dimension: &str) -> String {
         .strip_prefix("requested check ")
         .filter(|engine| !engine.is_empty())
     {
-        return format!("要求的檢查項目：{engine}");
+        return Some(format!("要求的檢查項目：{engine}"));
     }
 
-    format!("涵蓋範圍細節：{dimension}")
+    None
 }
 
 /// Names the check a composed dimension belongs to, or just the kind when the
@@ -399,6 +407,59 @@ fn with_check(check: &str, label: &str) -> String {
         return label.to_owned();
     }
     format!("{check} 的{label}")
+}
+
+/// Names one limit the run was executed under, in Traditional Chinese.
+///
+/// The backend composes most of these as "<engine or asset id> <limit kind>",
+/// so translating the kind alone erases the only part saying which scanner or
+/// which authorized target the limit applied to. A case with three scope
+/// grants would otherwise show three rows all reading "approved ports" with no
+/// way to attribute them, so the identifier survives in parentheses.
+///
+/// An unrecognized name keeps its text behind a marker, for the same reason a
+/// coverage name does: a limit written by another build still says something.
+pub fn requested_limit_name_zh_hant(name: &str) -> String {
+    recognized_requested_limit_name_zh_hant(name)
+        .unwrap_or_else(|| format!("本輪使用的限制：{name}"))
+}
+
+/// `None` for a limit name this build does not author. `beginner_report.rs`
+/// asserts on it in debug builds for every limit it writes.
+pub(crate) fn recognized_requested_limit_name_zh_hant(name: &str) -> Option<String> {
+    // Three names are fixed strings rather than composed ones, so they reach
+    // neither the suffix rules nor the fallback.
+    match name {
+        "endpoint" => return Some("連線端點".to_owned()),
+        "connection timeout" => return Some("連線逾時限制".to_owned()),
+        "application payload" => return Some("應用資料量".to_owned()),
+        _ => {}
+    }
+    for (suffix, label) in [
+        ("approved ports", "允許檢查的連接埠"),
+        ("request rate", "請求速率"),
+        ("network timeout", "網路逾時限制"),
+        ("authorized network target", "已確認的網路目標"),
+        ("execution timeout", "檢查逾時限制"),
+    ] {
+        if let Some(identifier) = name.strip_suffix(suffix) {
+            return Some(with_identifier(label, identifier));
+        }
+    }
+    None
+}
+
+/// Appends the identifier a composed name carries, when it has one.
+///
+/// `format!("{} approved ports", grant.asset_id)` degrades to a bare suffix if
+/// the grant carries no asset id; without this guard the label would end in a
+/// pair of empty parentheses.
+fn with_identifier(label: &str, identifier: &str) -> String {
+    let identifier = identifier.trim();
+    if identifier.is_empty() {
+        return label.to_owned();
+    }
+    format!("{label}（{identifier}）")
 }
 
 /// The sentences a coverage row says, paired with their Traditional Chinese.
@@ -805,6 +866,53 @@ pub fn action_zh_hant(english: &str, expert_type: &str, family: Option<FindingFa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The TypeScript twin is held to the same outputs by
+    /// `tests/frontend/coverageDimensionPresentation.test.ts`, which also
+    /// censuses the producer. This one exists so the Rust side fails on its own.
+    #[test]
+    fn a_limit_name_is_translated_around_the_identifier_it_carries() {
+        // Fixed names.
+        assert_eq!(requested_limit_name_zh_hant("endpoint"), "連線端點");
+        assert_eq!(
+            requested_limit_name_zh_hant("connection timeout"),
+            "連線逾時限制"
+        );
+        assert_eq!(
+            requested_limit_name_zh_hant("application payload"),
+            "應用資料量"
+        );
+        // Composed around an engine or asset id, which is what tells three
+        // grants' rows apart.
+        let labels = [
+            "asset-primary approved ports",
+            "asset-secondary approved ports",
+            "asset-lab approved ports",
+        ]
+        .map(requested_limit_name_zh_hant);
+        assert_eq!(labels[0], "允許檢查的連接埠（asset-primary）");
+        assert_eq!(labels[1], "允許檢查的連接埠（asset-secondary）");
+        assert_eq!(labels[2], "允許檢查的連接埠（asset-lab）");
+        assert_eq!(
+            requested_limit_name_zh_hant("gitleaks execution timeout"),
+            "檢查逾時限制（gitleaks）"
+        );
+        // An empty identifier gains no empty parentheses.
+        assert_eq!(
+            requested_limit_name_zh_hant("approved ports"),
+            "允許檢查的連接埠"
+        );
+        assert_eq!(
+            requested_limit_name_zh_hant(" execution timeout"),
+            "檢查逾時限制"
+        );
+        // An unrecognized name keeps its text.
+        assert_eq!(
+            requested_limit_name_zh_hant("prowler concurrency ceiling"),
+            "本輪使用的限制：prowler concurrency ceiling"
+        );
+        assert!(recognized_requested_limit_name_zh_hant("prowler concurrency ceiling").is_none());
+    }
 
     const ENGLISH_SUMMARY: &str = "Trivy reported a medium-severity condition on the assessed asset. The attached raw record is evidence, not an instruction.";
 

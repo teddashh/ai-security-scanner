@@ -815,6 +815,7 @@ fn project_requested_coverage(
             .then_with(|| left.value.cmp(&right.value))
     });
     limits.dedup();
+    debug_assert_limit_names_are_translatable(&limits);
 
     let mut unavailable_dimensions = Vec::new();
     if stage.availability == DataAvailability::Unavailable {
@@ -1081,6 +1082,7 @@ fn project_actual_coverage(run: &ScanRun) -> ActualCoverageProjection {
         if exact_complete {
             exact_complete_task_ids.insert(task.id.clone());
         }
+        debug_assert_tested_dimensions_are_translatable(&tested_dimensions);
         checks.push(ActualCheck {
             task_id: task.id.clone(),
             check_id: check_id(task),
@@ -1722,6 +1724,41 @@ fn debug_assert_coverage_prose_is_translatable(gaps: &[CoverageGap]) {
     }
 }
 
+/// Every limit name this build writes has a Traditional Chinese form in
+/// `finding_narrative.rs`. Same discipline as the coverage prose above: the
+/// whole Rust suite is the census, so a limit added to a producer here fails
+/// the test that exercises its own path rather than reaching a Chinese reader
+/// of the shared report as English.
+fn debug_assert_limit_names_are_translatable(limits: &[RequestedLimit]) {
+    if cfg!(debug_assertions) {
+        for limit in limits {
+            debug_assert!(
+                crate::finding_narrative::recognized_requested_limit_name_zh_hant(&limit.name)
+                    .is_some(),
+                "no Traditional Chinese for the requested limit name: {}",
+                limit.name
+            );
+        }
+    }
+}
+
+/// The tested dimensions share the coverage-name vocabulary, and the report
+/// prints them under the same heading as the gaps.
+fn debug_assert_tested_dimensions_are_translatable(dimensions: &[TestedDimension]) {
+    if cfg!(debug_assertions) {
+        for dimension in dimensions {
+            debug_assert!(
+                crate::finding_narrative::recognized_coverage_dimension_zh_hant(
+                    &dimension.dimension
+                )
+                .is_some(),
+                "no Traditional Chinese for the tested dimension: {}",
+                dimension.dimension
+            );
+        }
+    }
+}
+
 fn append_case_exclusions(case: &AssessmentCase, run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
     for entry in case.coverage.iter().filter(|entry| {
         entry.last_run_id.as_deref() == Some(run.id.as_str())
@@ -1929,6 +1966,49 @@ fn project_finding(
     }
 }
 
+/// Why a finding-derived step is on the list: the finding's own title, then
+/// the two ratings the reader is asked to weigh.
+///
+/// The words are chosen here rather than taken from `{:?}`. A `Debug` rendering
+/// is the Rust variant name, which happens to read as English today and stops
+/// doing so the day a variant is renamed. The shared report composes the
+/// Chinese form of this sentence from the finding the step points at, not by
+/// parsing this one back, so the two never have to agree on a shape -- but the
+/// English still has to be a deliberate one.
+pub(crate) fn finding_step_reason(
+    title: &str,
+    severity: &Severity,
+    confidence: &Confidence,
+) -> String {
+    format!(
+        "{title} — {} severity, {} confidence",
+        severity_word(severity),
+        confidence_word(confidence)
+    )
+}
+
+fn severity_word(severity: &Severity) -> &'static str {
+    match severity {
+        // Not "informational" and not "low": the source gave no recognized
+        // rating, and the report says so.
+        Severity::Unknown => "Unknown",
+        Severity::Informational => "Informational",
+        Severity::Low => "Low",
+        Severity::Medium => "Medium",
+        Severity::High => "High",
+        Severity::Critical => "Critical",
+    }
+}
+
+fn confidence_word(confidence: &Confidence) -> &'static str {
+    match confidence {
+        Confidence::Low => "Low",
+        Confidence::Medium => "Medium",
+        Confidence::High => "High",
+        Confidence::Confirmed => "Confirmed",
+    }
+}
+
 fn project_next_steps(
     state: &BeginnerReportState,
     findings: &[BeginnerFinding],
@@ -1943,10 +2023,7 @@ fn project_next_steps(
             priority: index as u16,
             code: NextActionCode::ReviewFinding,
             action: finding.next_step.clone(),
-            reason: format!(
-                "{} — {:?} severity, {:?} confidence",
-                finding.title, finding.severity, finding.confidence
-            ),
+            reason: finding_step_reason(&finding.title, &finding.severity, &finding.confidence),
             finding_id: Some(finding.finding_id.clone()),
             task_id: None,
             recommended_expert_type: Some(finding.recommended_expert_type.clone()),
@@ -2361,6 +2438,26 @@ fn confidence_rank(confidence: &Confidence) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_finding_step_names_its_ratings_in_words() {
+        assert_eq!(
+            super::finding_step_reason(
+                "Exposed key",
+                &super::Severity::Unknown,
+                &super::Confidence::Confirmed
+            ),
+            "Exposed key — Unknown severity, Confirmed confidence"
+        );
+        assert_eq!(
+            super::finding_step_reason(
+                "Exposed key",
+                &super::Severity::Informational,
+                &super::Confidence::Low
+            ),
+            "Exposed key — Informational severity, Low confidence"
+        );
+    }
+
     use super::*;
     use crate::domain::{
         Asset, AssetIdentifier, BUILT_IN_LOCALHOST_TCP_ASSET_IDENTIFIER_NAMESPACE,

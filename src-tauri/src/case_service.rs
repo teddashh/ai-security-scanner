@@ -12257,6 +12257,10 @@ impl HtmlReportCatalog {
             "medium" => "中".into(),
             "low" => "低".into(),
             "informational" | "info" => "資訊".into(),
+            // The source gave no recognized rating. Fell through to
+            // `readable_identifier` before, so a Chinese report labelled such a
+            // finding "Unknown" beside otherwise translated ratings.
+            "unknown" => "未知".into(),
             "confirmed" => "已確認".into(),
             "high_confidence" => "高信心".into(),
             "moderate" => "中等".into(),
@@ -12494,12 +12498,19 @@ fn html_report_bytes(
         .limits
         .iter()
         .map(|limit| {
+            // Same rule as the coverage rows below: the identifier the name is
+            // composed around is the only part telling one grant's limits from
+            // another's, so it is carried through rather than prettified away.
+            let name = replace_target_ids(&limit.name, &target_labels);
+            let name = match catalog.locale {
+                crate::export::ReportLocale::ZhHant => {
+                    crate::finding_narrative::requested_limit_name_zh_hant(&name)
+                }
+                _ => readable_identifier(&name),
+            };
             format!(
                 "<li><strong>{}:</strong> {}</li>",
-                html_escape(&readable_identifier(&replace_target_ids(
-                    &limit.name,
-                    &target_labels,
-                ))),
+                html_escape(&name),
                 html_escape(&format!(
                     "{} ({})",
                     replace_target_ids(&limit.value, &target_labels),
@@ -12540,7 +12551,14 @@ fn html_report_bytes(
                             "<li><strong>{}:</strong> {} — {}",
                             "<br><small>{}: {}</small></li>"
                         ),
-                        html_escape(&readable_identifier(&dimension.dimension)),
+                        html_escape(&match catalog.locale {
+                            crate::export::ReportLocale::ZhHant => {
+                                crate::finding_narrative::coverage_dimension_zh_hant(
+                                    &dimension.dimension,
+                                )
+                            }
+                            _ => readable_identifier(&dimension.dimension),
+                        }),
                         html_escape(&dimension.value),
                         html_escape(&dimension.observation),
                         catalog.text("Observed", "觀察時間"),
@@ -12728,8 +12746,15 @@ fn html_report_bytes(
             // its action alone. The unattributed one is composed from its
             // payload instead: it is the first thing a beginner reads and the
             // only place the identifier they must add is spelled out.
-            let (action, reason) = match (catalog.locale, step.unattributed.as_ref()) {
-                (crate::export::ReportLocale::ZhHant, Some(unattributed)) => {
+            let derived_from = step.finding_id.as_deref().and_then(|finding_id| {
+                report
+                    .findings
+                    .iter()
+                    .find(|finding| finding.finding_id == finding_id)
+            });
+            let (action, reason) = match (catalog.locale, step.unattributed.as_ref(), derived_from)
+            {
+                (crate::export::ReportLocale::ZhHant, Some(unattributed), _) => {
                     let engine_id = step
                         .reason
                         .split_once(' ')
@@ -12739,11 +12764,25 @@ fn html_report_bytes(
                         crate::finding_narrative::unattributed_gap_zh_hant(engine_id, unattributed);
                     (next_action, reason)
                 }
+                // A finding-derived step's reason is the finding's title and its
+                // two ratings. The title is the engine's own words and stays;
+                // the ratings are labelled from the finding the step points at,
+                // the same way the finding's own section labels them, rather
+                // than parsed back out of the stored English.
+                (crate::export::ReportLocale::ZhHant, None, Some(finding)) => (
+                    action,
+                    format!(
+                        "{} — 嚴重程度：{}；信心程度：{}",
+                        finding.title,
+                        catalog.identifier(&enum_key(&finding.severity)),
+                        catalog.identifier(&enum_key(&finding.confidence)),
+                    ),
+                ),
                 // Every other gap-derived step carries the gap's own two
                 // sentences verbatim, so they are looked up the same way the
                 // coverage row above looks them up. An unrecognized one keeps
                 // its stored English.
-                (crate::export::ReportLocale::ZhHant, None) => (
+                (crate::export::ReportLocale::ZhHant, None, None) => (
                     crate::finding_narrative::coverage_gap_prose_zh_hant(&action).unwrap_or(action),
                     crate::finding_narrative::coverage_gap_prose_zh_hant(&step.reason)
                         .unwrap_or_else(|| step.reason.clone()),
@@ -24568,6 +24607,9 @@ mod tests {
             "Severity derived from a secret pattern match in scanned source",
             "Direct scanner evidence is attached",
             "No authorized asset carries that identifier",
+            // A finding-derived next step names the finding and its ratings in
+            // words chosen for the reader, not in `Debug` output.
+            "Frozen selected-run secret exposure — High severity, Confirmed confidence",
         ] {
             assert!(
                 html.contains(english_block),
@@ -24629,6 +24671,13 @@ mod tests {
             "本輪沒有保留精確的縮減記錄",
             "至少有一筆舊版的問題觀察結果",
             "請保留這項限制的說明；不要把缺少的歷史細節解讀為已完成的涵蓋。",
+            // The limits the run was executed under, the dimension each check
+            // actually tested, and why a finding-derived next step is listed.
+            // All three were printed as stored English under translated
+            // headings, the last one as Rust variant names.
+            "檢查逾時限制（gitleaks）",
+            "完成的目標檢查",
+            "Frozen selected-run secret exposure — 嚴重程度：高；信心程度：已確認",
         ] {
             assert!(
                 zh_html.contains(composed),
@@ -24652,6 +24701,9 @@ mod tests {
             "The run records the completed engine/asset coordinate",
             "This run did not retain an exact reduction record",
             "Keep this limitation visible",
+            "Execution Timeout",
+            "Check-to-target Coordinate",
+            "Confirmed confidence",
         ] {
             assert!(
                 !zh_html.contains(english_prose),
