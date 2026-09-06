@@ -154,8 +154,11 @@ test("backend files a frontend test reads schedule the frontend lane too", () =>
   // report's JSON field names identical on both sides. Renaming a Rust field
   // compiles everywhere and silently delivers `undefined` to the page.
   assert.equal(classifyChangedPaths(["src-tauri/src/correlation.rs"]).frontend, true);
+  // The warning census also reads the orchestrator and adapter producer files.
+  assert.equal(classifyChangedPaths(["src-tauri/src/orchestrator.rs"]).frontend, true);
+  assert.equal(classifyChangedPaths(["src-tauri/src/adapters/mod.rs"]).frontend, true);
   // Unrelated backend files must not drag the frontend suite in with them.
-  assert.equal(classifyChangedPaths(["src-tauri/src/orchestrator.rs"]).frontend, false);
+  assert.equal(classifyChangedPaths(["src-tauri/src/bootstrap.rs"]).frontend, false);
 });
 
 test("the frontend lane actually runs the component render suite", () => {

@@ -51,6 +51,7 @@ import type {
 } from "../types";
 import "./page-technical-details.css";
 import { displayTechnicalDetail } from "./pageTechnicalDetails";
+import { localizedEngineWarning } from "../engineWarningPresentation.ts";
 
 interface ProgressPageProps {
   caseId?: string;
@@ -1572,7 +1573,7 @@ export function ProgressPage({
                     {engine.warnings.length > 0 && (
                       <div className="engine-not-executed">
                         <Icon name="info" size={16} />
-                        <span><strong>{text(copy.warnings)}</strong><small>{displayTechnicalDetail(engine.warnings.join(locale === "zh-TW" ? "；" : "; "))}</small></span>
+                        <span><strong>{text(copy.warnings)}</strong><small>{displayTechnicalDetail(engine.warnings.map((warning) => localizedEngineWarning(warning, locale)).join(locale === "zh-TW" ? "；" : "; "))}</small></span>
                       </div>
                     )}
                   </details>

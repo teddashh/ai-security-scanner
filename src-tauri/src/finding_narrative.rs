@@ -814,6 +814,54 @@ pub fn coverage_record_detail_zh_hant(english: &str) -> Option<String> {
     None
 }
 
+/// A data-quality warning written into the beginner report, in Traditional
+/// Chinese. Unknown text is deliberately not translated: case bundles can
+/// outlive the build that authored them.
+pub fn data_quality_warning_zh_hant(english: &str) -> Option<String> {
+    let fixed = [
+        (
+            "This run contains a request-level outcome beside non-terminal or planned check data. The report ignored that outcome and did not treat it as ‘no checks completed’.",
+            "本輪在尚未結束或仍有已規劃檢查資料的同時，含有請求層級的結果。報告已忽略該結果，且未將其視為「未完成任何檢查」。",
+        ),
+        (
+            "The selected run's stored project identifier does not match this project. The report remains limited to the selected in-project record.",
+            "所選掃描輪次儲存的專案識別碼與此專案不符。報告仍只限於專案內所選的記錄。",
+        ),
+        (
+            "This run has a saved completion time while at least one check is still active. The report follows the check state and remains live instead of presenting a final result.",
+            "本輪已儲存完成時間，但至少一項檢查仍在進行。報告依循檢查狀態，維持進行中，而不會呈現為最終結果。",
+        ),
+        (
+            "One check's saved coverage history could not be reconciled. Retained findings and evidence remain available, but that check is not counted complete.",
+            "有一項檢查已儲存的涵蓋歷程無法核對。保留的問題與證據仍可使用，但該檢查不會計為完成。",
+        ),
+    ];
+    if let Some((_, chinese)) = fixed.iter().find(|(candidate, _)| *candidate == english) {
+        return Some((*chinese).to_owned());
+    }
+    if let Some(finding_id) = strip_frame(
+        english,
+        "Finding ",
+        " has no selected-run presentation snapshot; current canonical wording is labeled as a legacy fallback.",
+    ) && !finding_id.is_empty()
+    {
+        return Some(format!(
+            "問題 {finding_id} 沒有所選輪次的呈現快照；目前的正式措辭已標示為舊版備援。"
+        ));
+    }
+    if let Some(finding_id) = strip_frame(
+        english,
+        "Finding ",
+        " has only its retained run observation; presentation detail is unavailable.",
+    ) && !finding_id.is_empty()
+    {
+        return Some(format!(
+            "問題 {finding_id} 只有保留的輪次觀察記錄；無法取得呈現細節。"
+        ));
+    }
+    None
+}
+
 fn translate_trailing_coverage_frame(
     english: &str,
     middle: (&str, &str),
@@ -1272,6 +1320,30 @@ pub fn action_zh_hant(english: &str, expert_type: &str, family: Option<FindingFa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_quality_warning_lookup_translates_fixed_and_framed_prose_only() {
+        assert_eq!(
+            data_quality_warning_zh_hant(
+                "The selected run's stored project identifier does not match this project. The report remains limited to the selected in-project record."
+            ),
+            Some("所選掃描輪次儲存的專案識別碼與此專案不符。報告仍只限於專案內所選的記錄。".into())
+        );
+        assert_eq!(
+            data_quality_warning_zh_hant(
+                "Finding finding-user-value has only its retained run observation; presentation detail is unavailable."
+            ),
+            Some("問題 finding-user-value 只有保留的輪次觀察記錄；無法取得呈現細節。".into())
+        );
+        assert_eq!(
+            data_quality_warning_zh_hant("[redacted data-quality warning]"),
+            None
+        );
+        assert_eq!(
+            data_quality_warning_zh_hant("A warning from a later build."),
+            None
+        );
+    }
 
     #[test]
     fn requested_limit_values_translate_known_units_and_preserve_identifiers() {

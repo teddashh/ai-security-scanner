@@ -588,6 +588,14 @@ test("each saved-data limitation is shown, not replaced by a coverage sentence",
   expect(notice!.textContent).not.toContain("did not retain enough detail");
 });
 
+test("a Traditional Chinese reader sees translated report data-quality prose", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const english = "The selected run's stored project identifier does not match this project. The report remains limited to the selected in-project record.";
+  const { container } = renderReport(report("partial", { dataQualityWarnings: [english] }));
+  expect(container.textContent).toContain("所選掃描輪次儲存的專案識別碼與此專案不符。報告仍只限於專案內所選的記錄。");
+  expect(container.textContent).not.toContain(english);
+});
+
 test("a report with no saved-data limitation shows no such notice", () => {
   // The mirror: without it the list above could render unconditionally and the
   // count would be the only thing distinguishing a clean report.

@@ -13295,7 +13295,15 @@ fn html_report_bytes(
     let mut data_quality_warnings = report
         .data_quality_warnings
         .iter()
-        .map(|warning| format!("<li>{}</li>", html_escape(warning)))
+        .map(|warning| {
+            let presented = if catalog.locale == crate::export::ReportLocale::ZhHant {
+                crate::finding_narrative::data_quality_warning_zh_hant(warning)
+                    .unwrap_or_else(|| warning.clone())
+            } else {
+                warning.clone()
+            };
+            format!("<li>{}</li>", html_escape(&presented))
+        })
         .collect::<String>();
     if data_quality_warnings.is_empty() {
         data_quality_warnings.push_str(catalog.text(
@@ -24891,6 +24899,12 @@ mod tests {
         assert!(html.contains("What was actually tested"));
         assert!(html.contains("Framework references are informational mappings"));
 
+        case.scan_runs
+            .iter_mut()
+            .find(|run| run.id == prepared.prepared.scan_run_id)
+            .unwrap()
+            .case_id = "mismatched-project-id".into();
+
         let zh_options = ExportOptions {
             redaction: RedactionProfile::None,
             include_raw_artifacts: false,
@@ -24912,6 +24926,16 @@ mod tests {
 
         assert_eq!(zh_preview.locale, crate::export::ReportLocale::ZhHant);
         assert!(!zh_preview.include_raw_evidence);
+        assert!(
+            zh_html.contains(
+                "所選掃描輪次儲存的專案識別碼與此專案不符。報告仍只限於專案內所選的記錄。"
+            )
+        );
+        assert!(
+            !zh_html.contains(
+                "The selected run's stored project identifier does not match this project."
+            )
+        );
         for expected in [
             "<html lang=\"zh-Hant\">",
             "實際測試的內容",

@@ -109,6 +109,15 @@ test("a check that never ran is still accounted for on screen", () => {
   expect(container.querySelector(".engine-not-executed")).not.toBeNull();
 });
 
+test("a Traditional Chinese reader sees a translated technical warning", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const english = "Semgrep output had no results array";
+  const { container } = renderProgress(run([engine("semgrep", "partial", { warnings: [english] })]));
+  const row = engineRow(container, "semgrep");
+  expect(row.textContent).toContain("Semgrep 輸出沒有 results 陣列");
+  expect(row.textContent).not.toContain(english);
+});
+
 test("a check that ran without finishing does not read as completed", () => {
   const { container } = renderProgress(
     run([engine("finished-check", "completed", { progress: 100 }), engine("unfinished-check", "partial")]),

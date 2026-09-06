@@ -1058,6 +1058,48 @@ export const localizedCoverageRecordDetail = (
   locale: "en" | "zh-TW",
 ): string => locale === "en" ? detail : translateCoverageRecordDetail(detail) ?? detail;
 
+const DATA_QUALITY_WARNING_PROSE: ReadonlyArray<readonly [string, string]> = [
+  [
+    "This run contains a request-level outcome beside non-terminal or planned check data. The report ignored that outcome and did not treat it as ‘no checks completed’.",
+    "本輪在尚未結束或仍有已規劃檢查資料的同時，含有請求層級的結果。報告已忽略該結果，且未將其視為「未完成任何檢查」。",
+  ],
+  [
+    "The selected run's stored project identifier does not match this project. The report remains limited to the selected in-project record.",
+    "所選掃描輪次儲存的專案識別碼與此專案不符。報告仍只限於專案內所選的記錄。",
+  ],
+  [
+    "This run has a saved completion time while at least one check is still active. The report follows the check state and remains live instead of presenting a final result.",
+    "本輪已儲存完成時間，但至少一項檢查仍在進行。報告依循檢查狀態，維持進行中，而不會呈現為最終結果。",
+  ],
+  [
+    "One check's saved coverage history could not be reconciled. Retained findings and evidence remain available, but that check is not counted complete.",
+    "有一項檢查已儲存的涵蓋歷程無法核對。保留的問題與證據仍可使用，但該檢查不會計為完成。",
+  ],
+];
+
+const translateDataQualityWarning = (english: string): string | undefined => {
+  const fixed = DATA_QUALITY_WARNING_PROSE.find(([candidate]) => candidate === english)?.[1];
+  if (fixed) return fixed;
+  const missingSnapshot = stripFrame(
+    english,
+    "Finding ",
+    " has no selected-run presentation snapshot; current canonical wording is labeled as a legacy fallback.",
+  );
+  if (missingSnapshot) return `問題 ${missingSnapshot} 沒有所選輪次的呈現快照；目前的正式措辭已標示為舊版備援。`;
+  const observationOnly = stripFrame(
+    english,
+    "Finding ",
+    " has only its retained run observation; presentation detail is unavailable.",
+  );
+  if (observationOnly) return `問題 ${observationOnly} 只有保留的輪次觀察記錄；無法取得呈現細節。`;
+  return undefined;
+};
+
+export const localizedDataQualityWarning = (
+  warning: string,
+  locale: "en" | "zh-TW",
+): string => locale === "en" ? warning : translateDataQualityWarning(warning) ?? warning;
+
 /** "Have the recommended specialist ({expert}) review ... then plan and approve {remedy}." */
 export const findingActionSentence = (
   locale: "en" | "zh-TW",

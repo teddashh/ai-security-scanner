@@ -19,6 +19,9 @@ const FRONTEND_PATHS = [
   // Without these entries a backend-only commit can skip the lane holding the
   // test that would catch its change.
   /^src-tauri\/src\/beginner_report\.rs$/,
+  /^src-tauri\/src\/adapter\.rs$/,
+  /^src-tauri\/src\/adapters\/mod\.rs$/,
+  /^src-tauri\/src\/orchestrator\.rs$/,
   /^src-tauri\/src\/coverage\.rs$/,
   /^src-tauri\/src\/diff\.rs$/,
   /^src-tauri\/src\/domain\.rs$/,

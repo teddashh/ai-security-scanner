@@ -25,6 +25,7 @@ import {
   findingImpactSentence,
   findingSummarySentence,
   localizedExpertType,
+  localizedDataQualityWarning,
   localizedRequestedLimitValue,
   testedObservationProse,
 } from "../findingNarrative.ts";
@@ -958,7 +959,9 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
               * way every other raw backend string on this surface is.
               */}
             <ul className="data-quality-warnings">
-              {report.dataQualityWarnings.map((warning) => <li key={warning}>{warning}</li>)}
+              {report.dataQualityWarnings.map((warning) => (
+                <li key={warning}>{localizedDataQualityWarning(warning, locale)}</li>
+              ))}
             </ul>
           </InlineNotice>
         )}

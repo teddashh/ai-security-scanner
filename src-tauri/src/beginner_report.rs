@@ -551,6 +551,9 @@ pub fn build_beginner_master_report(
     let (findings, finding_warnings) = project_findings(case, run);
     let finding_groups = project_finding_groups(case, &findings);
     data_quality_warnings.extend(finding_warnings);
+    debug_assert!(data_quality_warnings.iter().all(|warning| {
+        crate::finding_narrative::data_quality_warning_zh_hant(warning).is_some()
+    }));
     if findings
         .iter()
         .any(|finding| finding.snapshot_source != FindingSnapshotSource::FrozenSelectedRun)
