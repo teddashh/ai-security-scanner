@@ -24,6 +24,7 @@ import {
   findingVerificationSentence,
   findingImpactSentence,
   findingSummarySentence,
+  localizedControlMappingRationale,
   localizedExpertType,
   localizedDataQualityWarning,
   localizedRequestedLimitValue,
@@ -1898,7 +1899,8 @@ export function FindingsPage({
                       return (
                         <button key={key} type="button" className={control === key ? "control-item control-item--active" : "control-item"} onClick={() => applyControlFilter(key)}>
                           <span><b>{item.framework}</b><small>{item.version}</small></span>
-                          <span><strong>{item.controlId}{item.title ? ` · ${item.title}` : ""}</strong><small>{item.rationale ?? item.note ?? text(copy.relatedOnly)}</small></span>
+                          {/* Framework control titles are official names and stay verbatim in every locale. */}
+                          <span><strong>{item.controlId}{item.title ? ` · ${item.title}` : ""}</strong><small>{item.rationale ? localizedControlMappingRationale(item.rationale, locale) : item.note ?? text(copy.relatedOnly)}</small></span>
                           <span className="control-item__action">{text(copy.viewSameControl)} <Icon name="arrow" size={13} /></span>
                           {item.mappingVersion && <code>mapping {item.mappingVersion}</code>}
                         </button>

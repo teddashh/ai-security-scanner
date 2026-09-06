@@ -44,6 +44,8 @@ const FRONTEND_PATHS = [
   // frontend lane often -- that is the price of the copy and the backend not
   // being able to drift apart silently again.
   /^src-tauri\/src\/case_service\.rs$/,
+  // The frontend rationale census reads the reviewed catalog as data.
+  /^mappings\/control-mappings\.json$/,
   // `correlationWireContract.test.ts` reads this one to hold the correlation
   // report's JSON field names identical on both sides of the boundary. Renaming
   // a Rust field compiles on both sides and silently delivers `undefined`, so a

@@ -256,3 +256,27 @@ test("why this priority is not a Chinese heading over an English list", () => {
   expect(rendered).toContain("已附上掃描工具的直接證據");
   expect(rendered).toContain("TruffleHog");
 });
+
+test("a zh-TW reader sees a control-mapping rationale in their language", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const english =
+    "Evidence that an identity has no registered multi-factor device is related to authenticating users and safeguarding authentication information.";
+  const { container } = renderPage([
+    leakedCredential({
+      controls: [{
+        framework: "NIST CSF",
+        version: "2.0",
+        controlId: "PR.AA-03",
+        relationship: "related",
+        title: "Authentication of users, services, and hardware",
+        rationale: english,
+      }],
+    }),
+  ]);
+  const rendered = container.textContent ?? "";
+
+  expect(rendered).toContain("某個身分未登記多重要素驗證裝置的證據，與驗證使用者及保護驗證資訊有關。");
+  expect(rendered).not.toContain(english);
+  // The framework's official control name stays searchable verbatim.
+  expect(rendered).toContain("Authentication of users, services, and hardware");
+});

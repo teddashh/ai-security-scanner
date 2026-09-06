@@ -12983,6 +12983,21 @@ fn html_report_bytes(
             .framework_references
             .iter()
             .map(|reference| {
+                // Report-only wording, so it stays out of the parity-guarded
+                // twins: no screen renders a control reference's relationship.
+                let relationship = match (catalog.locale, reference.relationship.as_str()) {
+                    (crate::export::ReportLocale::ZhHant, "related") => "相關",
+                    _ => &reference.relationship,
+                };
+                let rationale = match catalog.locale {
+                    crate::export::ReportLocale::ZhHant => {
+                        crate::finding_narrative::control_mapping_rationale_zh_hant(
+                            &reference.rationale,
+                        )
+                        .unwrap_or_else(|| reference.rationale.clone())
+                    }
+                    _ => reference.rationale.clone(),
+                };
                 let provenance = reference
                     .mapping_provenance
                     .as_ref()
@@ -13008,11 +13023,13 @@ fn html_report_bytes(
                     html_escape(&reference.framework),
                     html_escape(&reference.framework_version),
                     html_escape(&reference.control_id),
+                    // Framework control titles are official names and stay
+                    // verbatim in every report locale.
                     html_escape(&reference.title),
                     catalog.text("Relationship", "關係"),
-                    html_escape(&reference.relationship),
+                    html_escape(relationship),
                     catalog.text("Why related", "關聯原因"),
-                    html_escape(&reference.rationale),
+                    html_escape(&rationale),
                     catalog.text("Mapping version", "對照版本"),
                     html_escape(&reference.mapping_version),
                     html_escape(&provenance),
@@ -24554,7 +24571,7 @@ mod tests {
                 control_id: "ADF-APP-01".into(),
                 title: "Application secret handling".into(),
                 relationship: "related".into(),
-                rationale: "The finding supplies evidence relevant to this coordinate.".into(),
+                rationale: "Evidence that an identity has no registered multi-factor device is related to authenticating users and safeguarding authentication information.".into(),
                 mapping_version: "map-2026-08".into(),
                 mapping_provenance: Some(crate::domain::ControlMappingProvenance {
                     mapping_version: "map-2026-08".into(),
@@ -24739,6 +24756,8 @@ mod tests {
             "完成的目標檢查",
             "這項已保存的工作已針對這個目標完成。這份案件記錄沒有凍結更細部的執行範圍。",
             "Frozen selected-run secret exposure — 嚴重程度：高；信心程度：低 — 本產品依據尚未驗證的樣式或偵測器比對結果評定",
+            "某個身分未登記多重要素驗證裝置的證據，與驗證使用者及保護驗證資訊有關。",
+            "<br>關係: 相關",
         ] {
             assert!(
                 zh_html.contains(composed),
@@ -24767,6 +24786,7 @@ mod tests {
             "Check-to-target Coordinate",
             "The durable task reached completed state for this target binding. More granular executed dimensions were not frozen in this case record.",
             "High confidence",
+            "Evidence that an identity has no registered multi-factor device is related to authenticating users and safeguarding authentication information.",
         ] {
             assert!(
                 !zh_html.contains(english_prose),

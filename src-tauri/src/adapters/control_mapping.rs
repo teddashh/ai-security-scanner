@@ -934,6 +934,23 @@ mod tests {
     }
 
     #[test]
+    fn every_catalog_rationale_has_a_traditional_chinese_presentation() {
+        let parsed: MappingCatalog =
+            serde_json::from_str(CATALOG_JSON).expect("embedded control mapping catalog");
+        // A lower bound, not the catalog's size: the pinned hash guards the
+        // entry list, and this test should fail only for a missing translation.
+        assert!(parsed.entries.len() >= 19, "{}", parsed.entries.len());
+        for entry in parsed.entries {
+            assert!(
+                crate::finding_narrative::control_mapping_rationale_zh_hant(&entry.rationale)
+                    .is_some(),
+                "no Traditional Chinese for catalog rationale: {}",
+                entry.rationale
+            );
+        }
+    }
+
+    #[test]
     fn unknown_or_observation_rules_are_not_guessed() {
         assert!(lookup("prowler", "new-unknown-check", false, false).is_empty());
         assert!(lookup("httpx", "http-service-observed", false, false).is_empty());

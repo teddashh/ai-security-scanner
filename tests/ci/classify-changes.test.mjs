@@ -234,6 +234,7 @@ test("AIDEFEND machine inputs use the focused framework lane without full releas
   });
 
   const embeddedMapping = classifyChangedPaths(["mappings/control-mappings.json"]);
+  assert.equal(embeddedMapping.frontend, true);
   assert.equal(embeddedMapping.framework, true);
   assert.equal(embeddedMapping.rust_core, true);
   assert.equal(embeddedMapping.desktop, true);

@@ -656,6 +656,91 @@ pub fn tested_observation_zh_hant(english: &str) -> Option<String> {
         .map(|(_, chinese)| (*chinese).to_owned())
 }
 
+/// Reviewed catalog rationales presented in Traditional Chinese. The English
+/// catalog remains the canonical source, and an unknown sentence from another
+/// build deliberately has no translation here.
+const CONTROL_MAPPING_RATIONALE_PROSE: &[(&str, &str)] = &[
+    (
+        "Evidence that an identity has no registered multi-factor device is related to authenticating users and safeguarding authentication information.",
+        "某個身分未登記多重要素驗證裝置的證據，與驗證使用者及保護驗證資訊有關。",
+    ),
+    (
+        "Evidence that an attached identity policy grants unrestricted administrative permissions is related to least privilege, entitlement review, and privileged access safeguards.",
+        "附加的身分政策授予不受限制之管理權限的證據，與最小權限、權限審查及特權存取保護有關。",
+    ),
+    (
+        "Evidence that an object-storage resource permits public access is related to access policy, authorization review, and cloud service protection.",
+        "物件儲存資源允許公開存取的證據，與存取政策、授權審查及雲端服務保護有關。",
+    ),
+    (
+        "Evidence of an identity privilege-escalation path is related to least privilege, entitlement review, and privileged access safeguards.",
+        "身分權限提升路徑的證據，與最小權限、權限審查及特權存取保護有關。",
+    ),
+    (
+        "Evidence that legacy authentication is not blocked is related to enforcing appropriate authentication and protecting authentication information.",
+        "未封鎖舊式驗證的證據，與強制使用適當的驗證方式及保護驗證資訊有關。",
+    ),
+    (
+        "Evidence that privileged identities lack phishing-resistant authentication is related to authentication enforcement and authentication information safeguards.",
+        "特權身分缺少抗網路釣魚驗證的證據，與強制驗證及驗證資訊保護有關。",
+    ),
+    (
+        "Evidence of an exposed database administration interface is related to identifying, validating, recording, and handling technical vulnerabilities.",
+        "資料庫管理介面對外暴露的證據，與識別、確認、記錄及處理技術弱點有關。",
+    ),
+    (
+        "Static-analysis evidence of dynamic code execution is related to secure development and pre-execution dangerous-construct checks. AIDEFEND's AI-generated-artifact coordinate applies when the selected code was generated or materially changed by AI.",
+        "動態程式碼執行的靜態分析證據，與安全開發及執行前的危險程式結構檢查有關。當所選程式碼由 AI 產生或經 AI 實質修改時，AIDEFEND 的 AI 產生構件座標才適用。",
+    ),
+    (
+        "Static-analysis evidence that Python code invokes an operating-system shell is related to secure development and pre-execution dangerous-construct checks. AIDEFEND's AI-generated-artifact coordinate applies when the selected code was generated or materially changed by AI.",
+        "Python 程式碼呼叫作業系統 shell 的靜態分析證據，與安全開發及執行前的危險程式結構檢查有關。當所選程式碼由 AI 產生或經 AI 實質修改時，AIDEFEND 的 AI 產生構件座標才適用。",
+    ),
+    (
+        "Static-analysis evidence that JavaScript or TypeScript code invokes a command through a shell is related to secure development and pre-execution dangerous-construct checks. AIDEFEND's AI-generated-artifact coordinate applies when the selected code was generated or materially changed by AI.",
+        "JavaScript 或 TypeScript 程式碼透過 shell 呼叫命令的靜態分析證據，與安全開發及執行前的危險程式結構檢查有關。當所選程式碼由 AI 產生或經 AI 實質修改時，AIDEFEND 的 AI 產生構件座標才適用。",
+    ),
+    (
+        "Static-analysis evidence of private-key material in current project files is related to managing credentials and protecting authentication information. AIDEFEND's static-admission coordinate applies when the selected artifact was generated or materially changed by AI.",
+        "目前專案檔案含有私密金鑰資料的靜態分析證據，與管理憑證及保護驗證資訊有關。當所選構件由 AI 產生或經 AI 實質修改時，AIDEFEND 的靜態准入座標才適用。",
+    ),
+    (
+        "Evidence of a credential embedded in current project files is related to managing credentials and protecting authentication information. AIDEFEND's static-admission coordinate applies when the selected artifact was generated or materially changed by AI.",
+        "目前專案檔案內嵌憑證的證據，與管理憑證及保護驗證資訊有關。當所選構件由 AI 產生或經 AI 實質修改時，AIDEFEND 的靜態准入座標才適用。",
+    ),
+    (
+        "Every TruffleHog result is a detected credential, so this reference covers the engine's whole detector surface rather than one detector. Evidence of a credential in source material is related to managing credentials and protecting authentication information. AIDEFEND's static-admission coordinate applies when the selected artifact was generated or materially changed by AI.",
+        "每一筆 TruffleHog 結果都是偵測到的憑證，因此這項參照涵蓋該掃描工具的完整偵測範圍，而不是單一偵測器。原始資料中含有憑證的證據，與管理憑證及保護驗證資訊有關。當所選構件由 AI 產生或經 AI 實質修改時，AIDEFEND 的靜態准入座標才適用。",
+    ),
+    (
+        "Infrastructure-as-code evidence that access logging is disabled is related to security-relevant audit records. AIDEFEND's IaC-scanning coordinate applies when the selected configuration provisions an AI system.",
+        "基礎架構即程式碼顯示存取記錄已停用的證據，與安全性相關的稽核記錄有關。當所選設定用來佈建 AI 系統時，AIDEFEND 的 IaC 掃描座標才適用。",
+    ),
+    (
+        "Infrastructure-as-code evidence that server-side encryption is absent is related to protecting data at rest and using cryptographic safeguards. AIDEFEND's IaC-scanning coordinate applies when the selected configuration provisions an AI system.",
+        "基礎架構即程式碼顯示未使用伺服器端加密的證據，與保護靜態資料及使用密碼學保護措施有關。當所選設定用來佈建 AI 系統時，AIDEFEND 的 IaC 掃描座標才適用。",
+    ),
+    (
+        "Evidence that an installed component is affected by a CVE is related to vulnerability handling. For an AI system, AIDEFEND separates build or deployment admission from the deployed-software remediation lifecycle; this reference does not decide which lifecycle state applies.",
+        "已安裝元件受某項 CVE 影響的證據，與弱點處理有關。對 AI 系統而言，AIDEFEND 將建置或部署准入與已部署軟體的修復生命週期分開；這項參照不會判定適用哪一個生命週期階段。",
+    ),
+    (
+        "Evidence that subjects can run commands inside running containers is related to least-privilege authorization, privileged access safeguards, and container isolation. AIDEFEND's container-isolation coordinate applies when the workload is part of an AI system.",
+        "主體可以在執行中的容器內執行命令的證據，與最小權限授權、特權存取保護及容器隔離有關。當工作負載屬於 AI 系統的一部分時，AIDEFEND 的容器隔離座標才適用。",
+    ),
+    (
+        "Evidence that the kubelet accepts anonymous authentication is related to authentication enforcement and authentication information safeguards. This is the node check the shipped snapshot benchmark runs; the control-plane equivalent is not in scope for this product.",
+        "kubelet 接受匿名驗證的證據，與強制驗證及驗證資訊保護有關。這是隨附的快照基準所執行的節點檢查；對應的控制平面檢查不在本產品範圍內。",
+    ),
+];
+
+pub fn control_mapping_rationale_zh_hant(english: &str) -> Option<String> {
+    CONTROL_MAPPING_RATIONALE_PROSE
+        .iter()
+        .find(|(candidate, _)| *candidate == english)
+        .map(|(_, chinese)| (*chinese).to_owned())
+}
+
 /// Fixed coverage-ledger explanations shared by the screen and the exported
 /// case record. Explanations with retained values are matched by shape below.
 const COVERAGE_RECORD_DETAIL_PROSE: &[(&str, &str)] = &[
@@ -1320,6 +1405,19 @@ pub fn action_zh_hant(english: &str, expert_type: &str, family: Option<FindingFa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_mapping_rationale_lookup_translates_only_reviewed_catalog_prose() {
+        let known = "Evidence that an identity has no registered multi-factor device is related to authenticating users and safeguarding authentication information.";
+        assert_eq!(
+            control_mapping_rationale_zh_hant(known),
+            Some("某個身分未登記多重要素驗證裝置的證據，與驗證使用者及保護驗證資訊有關。".into())
+        );
+        assert_eq!(
+            control_mapping_rationale_zh_hant("A rationale from another build."),
+            None
+        );
+    }
 
     #[test]
     fn data_quality_warning_lookup_translates_fixed_and_framed_prose_only() {
