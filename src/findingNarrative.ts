@@ -760,6 +760,43 @@ export const coverageGapProse = (locale: "en" | "zh-TW", english: string): strin
 const lookupProse = (english: string): string | undefined =>
   COVERAGE_GAP_PROSE.find(([candidate]) => candidate === english)?.[1];
 
+/**
+ * The fixed observations attached to tested dimensions, paired with their
+ * Traditional Chinese. The whole stored observation is the lookup key because
+ * the backend writes it before any locale is known and freezes it in the case.
+ */
+const TESTED_OBSERVATION_PROSE: ReadonlyArray<readonly [string, string]> = [
+  ["The port accepted the bounded TCP connection.", "這個連接埠接受了受限的 TCP 連線。"],
+  ["The port refused the bounded TCP connection.", "這個連接埠拒絕了受限的 TCP 連線。"],
+  [
+    "The bounded TCP connection attempt timed out; reachability was not established.",
+    "受限的 TCP 連線嘗試逾時；無法確認連線可達。",
+  ],
+  [
+    "The native task only observed whether the endpoint accepted, refused, or timed out during the bounded connection attempt. It did not perform a vulnerability test.",
+    "這項內建工作只觀察端點在受限的連線嘗試期間，是接受連線、拒絕連線，還是逾時。它沒有執行弱點檢測。",
+  ],
+  [
+    "The durable task reached completed state for this target binding. More granular executed dimensions were not frozen in this case record.",
+    "這項已保存的工作已針對這個目標完成。這份案件記錄沒有凍結更細部的執行範圍。",
+  ],
+  [
+    "These exact frozen work units have validated completed outcomes across all saved attempts. A completed network check reports reachability; it is not a security pass.",
+    "這些已凍結的特定工作單元，在所有已儲存的嘗試中都有通過驗證的完成結果。完成的網路檢查只回報連線是否可達；不代表安全性檢查通過。",
+  ],
+  [
+    "These work units produced usable saved results but did not finish every planned operation.",
+    "這些工作單元產生了已儲存的可用結果，但沒有完成每一項計畫中的操作。",
+  ],
+];
+
+/** A tested-dimension observation in the reader's language. */
+export const testedObservationProse = (locale: "en" | "zh-TW", english: string): string => {
+  if (locale === "en") return english;
+  const trimmed = english.trim();
+  return TESTED_OBSERVATION_PROSE.find(([candidate]) => candidate === trimmed)?.[1] ?? english;
+};
+
 /** "Have the recommended specialist ({expert}) review ... then plan and approve {remedy}." */
 export const findingActionSentence = (
   locale: "en" | "zh-TW",

@@ -24,7 +24,8 @@ import {
   findingImpactSentence,
   findingSummarySentence,
   localizedExpertType,
-} from "../findingNarrative";
+  testedObservationProse,
+} from "../findingNarrative.ts";
 import {
   localhostTcpBeginnerSummary,
   localhostTestedDimensionValue,
@@ -827,13 +828,16 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
                   <span>{text(testedStatusCopy(check.status))}</span>
                   {check.testedDimensions.map((dimension, index) => (
                     <span key={`${dimension.dimension}-${dimension.value}-${index}`}>
-                      {localizedCoverageDimension(dimension.dimension, locale)}: {localhostTestedDimensionValue(
-                        engine,
-                        dimension.dimension,
-                        dimension.value,
-                        locale,
-                      )}
-                      {dimension.observedAt && ` · ${text(copy.savedAt, { time: formatDateTime(dimension.observedAt) })}`}
+                      <span>
+                        {localizedCoverageDimension(dimension.dimension, locale)}: {localhostTestedDimensionValue(
+                          engine,
+                          dimension.dimension,
+                          dimension.value,
+                          locale,
+                        )}
+                        {dimension.observedAt && ` · ${text(copy.savedAt, { time: formatDateTime(dimension.observedAt) })}`}
+                      </span>
+                      <small>{testedObservationProse(locale, dimension.observation)}</small>
                     </span>
                   ))}
                 </li>

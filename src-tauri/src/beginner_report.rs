@@ -1742,8 +1742,8 @@ fn debug_assert_limit_names_are_translatable(limits: &[RequestedLimit]) {
     }
 }
 
-/// The tested dimensions share the coverage-name vocabulary, and the report
-/// prints them under the same heading as the gaps.
+/// The tested dimensions share the coverage-name vocabulary, and every fixed
+/// observation this build writes has a Traditional Chinese form.
 fn debug_assert_tested_dimensions_are_translatable(dimensions: &[TestedDimension]) {
     if cfg!(debug_assertions) {
         for dimension in dimensions {
@@ -1754,6 +1754,12 @@ fn debug_assert_tested_dimensions_are_translatable(dimensions: &[TestedDimension
                 .is_some(),
                 "no Traditional Chinese for the tested dimension: {}",
                 dimension.dimension
+            );
+            debug_assert!(
+                crate::finding_narrative::tested_observation_zh_hant(&dimension.observation)
+                    .is_some(),
+                "no Traditional Chinese for the tested dimension observation: {}",
+                dimension.observation
             );
         }
     }

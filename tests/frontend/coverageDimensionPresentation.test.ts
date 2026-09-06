@@ -6,6 +6,7 @@ import {
   localizedCoverageDimension,
   localizedRequestedLimitName,
 } from "../../src/coverageDimensionPresentation.ts";
+import { testedObservationProse } from "../../src/findingNarrative.ts";
 
 // A beginner-report coverage row is generated almost entirely from enumerations:
 // its explanation comes from the gap's `kind` and its advice from the
@@ -31,6 +32,29 @@ const production = source.slice(0, source.indexOf("#[cfg(test)]"));
 /** Every coverage dimension the backend names with a fixed string. */
 const staticDimensions = [
   ...new Set(Array.from(production.matchAll(/\bdimension: "([^"]+)"/gu), (match) => match[1])),
+].sort();
+
+/** Every fixed tested-dimension observation the backend writes. */
+const localhostObservationStart = production.indexOf("fn localhost_observation_text");
+const localhostObservationEnd = production.indexOf(
+  "fn selected_run_last_durable_update",
+  localhostObservationStart,
+);
+const localhostObservationSource = production.slice(
+  localhostObservationStart,
+  localhostObservationEnd,
+);
+const testedObservations = [
+  ...new Set([
+    ...Array.from(
+      production.matchAll(/\bobservation:\s*"([^"]+)"/gu),
+      (match) => match[1] ?? "",
+    ),
+    ...Array.from(
+      localhostObservationSource.matchAll(/"([^"]+)"/gu),
+      (match) => match[1] ?? "",
+    ),
+  ]),
 ].sort();
 
 /**
@@ -104,6 +128,32 @@ test("the backend's dimension vocabulary was found", () => {
     "requested check cloudquery",
   ]) {
     assert.ok(composedDimensions.includes(expected), `${expected} was not extracted`);
+  }
+});
+
+test("every tested-dimension observation has a Traditional Chinese sentence", () => {
+  // A lower bound, not an exact count: an eighth producer with a translation
+  // is not a failure, and an eighth without one is caught below.
+  assert.ok(
+    testedObservations.length >= 7,
+    `found only ${testedObservations.length} observations: ${testedObservations.join(" / ")}`,
+  );
+  assert.ok(testedObservations.includes("The port accepted the bounded TCP connection."));
+  assert.ok(
+    testedObservations.some((observation) => observation.includes("it is not a security pass")),
+  );
+
+  const untranslated = testedObservations.filter((observation) => {
+    const translated = testedObservationProse("zh-TW", observation);
+    return translated === observation || !/\p{Script=Han}/u.test(translated);
+  });
+  assert.deepEqual(
+    untranslated,
+    [],
+    `these observations reach a Traditional Chinese reader untranslated: ${untranslated.join(" / ")}`,
+  );
+  for (const observation of testedObservations) {
+    assert.equal(testedObservationProse("en", observation), observation);
   }
 });
 

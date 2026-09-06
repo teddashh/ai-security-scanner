@@ -12560,7 +12560,15 @@ fn html_report_bytes(
                             _ => readable_identifier(&dimension.dimension),
                         }),
                         html_escape(&dimension.value),
-                        html_escape(&dimension.observation),
+                        html_escape(&match catalog.locale {
+                            crate::export::ReportLocale::ZhHant => {
+                                crate::finding_narrative::tested_observation_zh_hant(
+                                    &dimension.observation,
+                                )
+                                .unwrap_or_else(|| dimension.observation.clone())
+                            }
+                            _ => dimension.observation.clone(),
+                        }),
                         catalog.text("Observed", "觀察時間"),
                         html_escape(&display_time(dimension.observed_at.as_ref())),
                     )
@@ -24677,6 +24685,7 @@ mod tests {
             // headings, the last one as Rust variant names.
             "檢查逾時限制（gitleaks）",
             "完成的目標檢查",
+            "這項已保存的工作已針對這個目標完成。這份案件記錄沒有凍結更細部的執行範圍。",
             "Frozen selected-run secret exposure — 嚴重程度：高；信心程度：已確認",
         ] {
             assert!(
@@ -24703,6 +24712,7 @@ mod tests {
             "Keep this limitation visible",
             "Execution Timeout",
             "Check-to-target Coordinate",
+            "The durable task reached completed state for this target binding. More granular executed dimensions were not frozen in this case record.",
             "Confirmed confidence",
         ] {
             assert!(

@@ -306,6 +306,41 @@ test("a Traditional Chinese reader is told the same two reasons", () => {
   window.localStorage.setItem(localeStorageKey, "en");
 });
 
+test("a Traditional Chinese reader hears why completed network coverage is not a security pass", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const englishObservation =
+    "These exact frozen work units have validated completed outcomes across all saved attempts. A completed network check reports reachability; it is not a security pass.";
+  const { container } = renderReport(
+    report("complete", {
+      actual: {
+        checks: [{
+          taskId: "task-naabu",
+          checkId: "naabu-tcp",
+          targetAssetIds: ["asset-1"],
+          status: "tested_complete",
+          startedAt: "2026-09-04T12:00:00Z",
+          finishedAt: "2026-09-04T12:01:00Z",
+          testedDimensions: [{
+            dimension: "completed planned work units",
+            value: "1 of 1",
+            observation: englishObservation,
+            observedAt: "2026-09-04T12:01:00Z",
+          }],
+        }],
+        networkScopes: [],
+        unavailableDimensions: [],
+      },
+    }),
+  );
+
+  const section = container.querySelector<HTMLElement>(
+    "section[aria-labelledby='beginner-master-report-title']",
+  );
+  expect(section!.textContent).toContain("完成的網路檢查只回報連線是否可達；不代表安全性檢查通過。");
+  expect(section!.textContent).not.toContain(englishObservation);
+  window.localStorage.setItem(localeStorageKey, "en");
+});
+
 test("what the run could not establish is shown with its own dimension", () => {
   // Every dimension the backend could not speak to arrives as a gap. Two gaps
   // sharing a kind are told apart by their dimension alone, so both must reach
