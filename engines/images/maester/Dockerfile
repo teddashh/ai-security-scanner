@@ -44,7 +44,7 @@ LABEL org.opencontainers.image.title="ai-security-scanner Maester engine" \
       org.opencontainers.image.description="Pinned-source Microsoft Entra ID test suite through one protected Graph token" \
       org.opencontainers.image.source="https://github.com/teddashh/ai-security-scanner" \
       org.opencontainers.image.revision="6bf1d98f094fc7a68e449d2f40f73ef820b72ee3" \
-      org.opencontainers.image.version="2.0.0-5" \
+      org.opencontainers.image.version="2.0.0-6" \
       org.opencontainers.image.licenses="MIT AND Apache-2.0" \
       io.ai-security-scanner.source-archive-sha256="e634e9bc5521e27adf2fd766ddf34f993a492e5ab8a5c49499c76d7bac69e43f" \
       io.ai-security-scanner.profile="entra-graph-token"
@@ -55,6 +55,7 @@ COPY --from=prepare /prepared/modules /opt/ai-security-scanner/modules
 COPY --from=prepare --chmod=0444 /prepared/dependencies.lock.json /opt/ai-security-scanner/dependencies.lock.json
 COPY --from=launcher --chmod=0555 /out/ai-security-scanner-m365-launcher /usr/local/bin/ai-security-scanner-m365-launcher
 COPY --chmod=0444 engines/images/maester/run-maester.ps1 /opt/ai-security-scanner/run-maester.ps1
+COPY --chmod=0444 engines/images/maester/run-maester.Tests.ps1 /opt/ai-security-scanner/run-maester.Tests.ps1
 
 COPY --from=prepare --chmod=0444 /prepared/licenses/Maester-LICENSE /usr/share/licenses/maester/LICENSE
 COPY --from=prepare --chmod=0444 /prepared/modules/Microsoft.Graph.Authentication/2.27.0/Microsoft.Graph.Authentication.nuspec /usr/share/licenses/maester/Microsoft.Graph.Authentication.nuspec
@@ -80,5 +81,13 @@ RUN chmod 0555 /usr/share/licenses/maester
 USER 65532:65532
 RUN pwsh -NoLogo -NoProfile -NonInteractive -Command \
       '$ErrorActionPreference="Stop"; Import-Module Microsoft.Graph.Authentication -RequiredVersion 2.27.0; Import-Module Pester -RequiredVersion 5.7.1; Import-Module /opt/ai-security-scanner/Maester/Maester.psd1; if ((Get-Module Maester).Version -ne [version]"2.0.0") { throw "Maester version mismatch" }; if (-not (Test-Path -LiteralPath /opt/ai-security-scanner/maester-tests/Maester/Entra/Test-MtDomainsDmarcRecordMaturity.Tests.ps1 -PathType Leaf)) { throw "Pinned Entra test tree is incomplete" }; $tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile("/opt/ai-security-scanner/run-maester.ps1",[ref]$tokens,[ref]$errors); if ($errors.Count) { throw ($errors | Out-String) }'
+
+# The wrapper specification runs against the wrapper this image ships, as the
+# user it will run as. A build whose wrapper misreads a Maester report cannot
+# become an image. The lower bound on passed tests keeps an accidentally empty
+# run from counting as a pass. Replay against any published digest with:
+#   docker run --rm --entrypoint pwsh <image>@<digest> -NoLogo -NoProfile -NonInteractive -Command <the command below>
+RUN pwsh -NoLogo -NoProfile -NonInteractive -Command \
+      '$ErrorActionPreference="Stop"; Import-Module Pester -RequiredVersion 5.7.1; $configuration=New-PesterConfiguration; $configuration.Run.Path="/opt/ai-security-scanner/run-maester.Tests.ps1"; $configuration.Run.PassThru=$true; $configuration.Output.Verbosity="Detailed"; $result=Invoke-Pester -Configuration $configuration; if ($result.FailedCount -ne 0 -or $result.SkippedCount -ne 0 -or $result.NotRunCount -ne 0 -or $result.PassedCount -lt 40) { throw "wrapper specification did not pass: $($result.PassedCount) passed, $($result.FailedCount) failed, $($result.SkippedCount) skipped, $($result.NotRunCount) not run" }; Write-Output "wrapper specification passed $($result.PassedCount) of $($result.TotalCount) tests"'
 
 ENTRYPOINT ["/usr/local/bin/ai-security-scanner-m365-launcher"]

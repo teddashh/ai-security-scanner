@@ -66,62 +66,28 @@ function Write-AtomicJson {
     }
 }
 
-$scope = Read-BoundedJson -LiteralPath '/run/ai-security-scanner/scope.json' -MaximumBytes 4194304
-$binding = Get-BoundTenant -Scope $scope
-$scope = $null
+function Read-MaesterReport {
+    param([Parameter(Mandatory = $true)][string]$LiteralPath)
 
-$credentialDocument = Read-BoundedJson -LiteralPath '/run/ai-security-scanner/credentials.json' -MaximumBytes 262144
-if ($credentialDocument.schema_version -ne '1.0.0' -or @($credentialDocument.credentials).Count -ne 1) {
-    throw 'Protected credential channel does not contain one credential.'
-}
-$credential = @($credentialDocument.credentials)[0]
-if ($credential.key -ne 'MSGRAPH_ACCESS_TOKEN' -or [string]::IsNullOrWhiteSpace([string]$credential.value)) {
-    throw 'Protected credential channel does not contain the Microsoft Graph token.'
-}
-$tokenText = [string]$credential.value
-$secureToken = ConvertTo-SecureString -String $tokenText -AsPlainText -Force
-$credential.value = $null
-$credential = $null
-$credentialDocument = $null
-$tokenText = $null
-
-$outputRoot = Get-Item -LiteralPath '/output' -Force -ErrorAction Stop
-if (-not $outputRoot.PSIsContainer -or $outputRoot.LinkType) { throw 'Managed output is not a directory.' }
-$upstreamPath = Join-Path $outputRoot.FullName 'upstream'
-if (Test-Path -LiteralPath $upstreamPath) { throw 'Managed upstream output path already exists.' }
-$null = New-Item -ItemType Directory -Path $upstreamPath -ErrorAction Stop
-$rawResultPath = Join-Path $upstreamPath 'maester-raw.json'
-
-$connected = $false
-try {
-    Import-Module Microsoft.Graph.Authentication -RequiredVersion '2.27.0' -Force -ErrorAction Stop
-    Connect-MgGraph -AccessToken $secureToken -ContextScope Process -NoWelcome -ErrorAction Stop | Out-Null
-    $secureToken = $null
-    $connected = $true
-    $context = Get-MgContext -ErrorAction Stop
-    if ($null -eq $context -or [string]$context.TenantId -ne $binding.TenantId) {
-        throw 'Microsoft Graph token tenant does not match the immutable scope.'
-    }
-
-    Import-Module '/opt/ai-security-scanner/Maester/Maester.psd1' -Force -ErrorAction Stop
-    Invoke-Maester `
-        -Path '/opt/ai-security-scanner/maester-tests/Maester/Entra' `
-        -ExcludeTag @('MT.1025', 'MT.1026', 'MT.1027', 'MT.1028', 'MT.1030', 'MT.1031', 'MT.1182') `
-        -OutputJsonFile $rawResultPath `
-        -NonInteractive `
-        -NoLogo `
-        -DisableTelemetry `
-        -SkipVersionCheck `
-        -Verbosity 'None' `
-        -ErrorAction Stop
-
-    $rawItem = Get-Item -LiteralPath $rawResultPath -Force -ErrorAction Stop
+    $rawItem = Get-Item -LiteralPath $LiteralPath -Force -ErrorAction Stop
     if ($rawItem.LinkType -or $rawItem.Length -gt 16777216) { throw 'Maester JSON result exceeds the managed artifact limit.' }
     $report = Get-Content -LiteralPath $rawItem.FullName -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -Depth 32 -ErrorAction Stop
     if ([string]$report.EndOfJson -ne 'EndOfJson') { throw 'Maester JSON result is incomplete.' }
+    return $report
+}
+
+# Turns one complete Maester JSON report into the managed result document the
+# host adapter reads. Only the verdicts named in the switch become results;
+# every counter Maester reported, including `TotalCount`, is carried verbatim
+# so the host can see how many tests the switch did not carry.
+function ConvertTo-ManagedMaesterDocument {
+    param(
+        [Parameter(Mandatory = $true)][object]$Report,
+        [Parameter(Mandatory = $true)][string]$AssetId
+    )
 
     $normalized = [System.Collections.Generic.List[object]]::new()
-    foreach ($test in @($report.Tests)) {
+    foreach ($test in @($Report.Tests)) {
         $sourceResult = ConvertTo-SafeText -Value $test.Result -MaximumLength 64
         $result = switch ($sourceResult) {
             'Passed' { 'Pass'; break }
@@ -149,16 +115,16 @@ try {
             SourceSeverity = $sourceSeverity
             Severity = $severity
             Service = 'Microsoft Entra ID'
-            asset_id = $binding.AssetId
+            asset_id = $AssetId
             HelpUrl = ConvertTo-SafeText -Value $test.HelpUrl -MaximumLength 2048
         })
     }
 
-    $resultDocument = [ordered]@{
+    return [ordered]@{
         schema_version = '1.0.0'
         Engine = 'Maester'
         Product = 'Microsoft Entra ID'
-        asset_id = $binding.AssetId
+        asset_id = $AssetId
         Provenance = [ordered]@{
             engine_version = '2.0.0'
             source_revision = '6bf1d98f094fc7a68e449d2f40f73ef820b72ee3'
@@ -172,26 +138,89 @@ try {
             raw_report = 'upstream/maester-raw.json'
         }
         Diagnostics = [ordered]@{
-            passes = [int]$report.PassedCount
-            failures = [int]$report.FailedCount
-            investigate = [int]$report.InvestigateCount
-            errors = [int]$report.ErrorCount
-            skipped = [int]$report.SkippedCount
-            not_run = [int]$report.NotRunCount
-            total = [int]$report.TotalCount
+            passes = [int]$Report.PassedCount
+            failures = [int]$Report.FailedCount
+            investigate = [int]$Report.InvestigateCount
+            errors = [int]$Report.ErrorCount
+            skipped = [int]$Report.SkippedCount
+            not_run = [int]$Report.NotRunCount
+            total = [int]$Report.TotalCount
             normalized_results = $normalized.Count
         }
         Results = @($normalized)
     }
-    # Tests that could not be evaluated are reported in Diagnostics.errors, not
-    # by the exit status. A nonzero exit is the platform's signal that this run
-    # cannot be trusted at all: the host discards captured evidence without
-    # adapting it and the stage is terminal, so throwing here would delete every
-    # real finding in the document just written. The conditions above still
-    # throw, because each of them means there is no trustworthy document.
-    Write-AtomicJson -Value $resultDocument -LiteralPath (Join-Path $outputRoot.FullName 'maester.json')
 }
-finally {
-    $secureToken = $null
-    if ($connected) { Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null }
+
+function Invoke-ManagedMaesterRun {
+    $scope = Read-BoundedJson -LiteralPath '/run/ai-security-scanner/scope.json' -MaximumBytes 4194304
+    $binding = Get-BoundTenant -Scope $scope
+    $scope = $null
+
+    $credentialDocument = Read-BoundedJson -LiteralPath '/run/ai-security-scanner/credentials.json' -MaximumBytes 262144
+    if ($credentialDocument.schema_version -ne '1.0.0' -or @($credentialDocument.credentials).Count -ne 1) {
+        throw 'Protected credential channel does not contain one credential.'
+    }
+    $credential = @($credentialDocument.credentials)[0]
+    if ($credential.key -ne 'MSGRAPH_ACCESS_TOKEN' -or [string]::IsNullOrWhiteSpace([string]$credential.value)) {
+        throw 'Protected credential channel does not contain the Microsoft Graph token.'
+    }
+    $tokenText = [string]$credential.value
+    $secureToken = ConvertTo-SecureString -String $tokenText -AsPlainText -Force
+    $credential.value = $null
+    $credential = $null
+    $credentialDocument = $null
+    $tokenText = $null
+
+    $outputRoot = Get-Item -LiteralPath '/output' -Force -ErrorAction Stop
+    if (-not $outputRoot.PSIsContainer -or $outputRoot.LinkType) { throw 'Managed output is not a directory.' }
+    $upstreamPath = Join-Path $outputRoot.FullName 'upstream'
+    if (Test-Path -LiteralPath $upstreamPath) { throw 'Managed upstream output path already exists.' }
+    $null = New-Item -ItemType Directory -Path $upstreamPath -ErrorAction Stop
+    $rawResultPath = Join-Path $upstreamPath 'maester-raw.json'
+
+    $connected = $false
+    try {
+        Import-Module Microsoft.Graph.Authentication -RequiredVersion '2.27.0' -Force -ErrorAction Stop
+        Connect-MgGraph -AccessToken $secureToken -ContextScope Process -NoWelcome -ErrorAction Stop | Out-Null
+        $secureToken = $null
+        $connected = $true
+        $context = Get-MgContext -ErrorAction Stop
+        if ($null -eq $context -or [string]$context.TenantId -ne $binding.TenantId) {
+            throw 'Microsoft Graph token tenant does not match the immutable scope.'
+        }
+
+        Import-Module '/opt/ai-security-scanner/Maester/Maester.psd1' -Force -ErrorAction Stop
+        Invoke-Maester `
+            -Path '/opt/ai-security-scanner/maester-tests/Maester/Entra' `
+            -ExcludeTag @('MT.1025', 'MT.1026', 'MT.1027', 'MT.1028', 'MT.1030', 'MT.1031', 'MT.1182') `
+            -OutputJsonFile $rawResultPath `
+            -NonInteractive `
+            -NoLogo `
+            -DisableTelemetry `
+            -SkipVersionCheck `
+            -Verbosity 'None' `
+            -ErrorAction Stop
+
+        $report = Read-MaesterReport -LiteralPath $rawResultPath
+        $resultDocument = ConvertTo-ManagedMaesterDocument -Report $report -AssetId $binding.AssetId
+        # Tests that could not be evaluated are reported in Diagnostics.errors, not
+        # by the exit status. A nonzero exit is the platform's signal that this run
+        # cannot be trusted at all: the host discards captured evidence without
+        # adapting it and the stage is terminal, so throwing here would delete every
+        # real finding in the document just written. The conditions above still
+        # throw, because each of them means there is no trustworthy document.
+        Write-AtomicJson -Value $resultDocument -LiteralPath (Join-Path $outputRoot.FullName 'maester.json')
+    }
+    finally {
+        $secureToken = $null
+        if ($connected) { Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null }
+    }
+}
+
+# The launcher runs this file with `pwsh -File`, and that is the only way the
+# managed run starts. `run-maester.Tests.ps1` dot-sources the file instead so
+# it can feed the functions above fixture reports; a dot-sourced script sees
+# `.` as its invocation name. Nothing below this line may do work of its own.
+if ($MyInvocation.InvocationName -ne '.') {
+    Invoke-ManagedMaesterRun
 }

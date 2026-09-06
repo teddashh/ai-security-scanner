@@ -37,7 +37,7 @@ const naabuLauncherJournalV2Command = [
 ];
 const managedM365Contracts = new Map([
   ["scubagear", {
-    tag: "1.8.0-5",
+    tag: "1.8.0-6",
     sourceRatingField: "SourceCriticality",
     sourceRatingVariable: "$criticality",
     optionalPropertySnippet: "$control.PSObject.Properties['Criticality']",
@@ -62,7 +62,7 @@ const managedM365Contracts = new Map([
     carriedVerdictCounters: ["passes", "failures", "warnings"],
   }],
   ["maester", {
-    tag: "2.0.0-5",
+    tag: "2.0.0-6",
     sourceRatingField: "SourceSeverity",
     sourceRatingVariable: "$sourceSeverity",
     optionalPropertySnippet: "$test.PSObject.Properties['Severity']",

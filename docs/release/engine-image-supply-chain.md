@@ -277,6 +277,20 @@ step's `EXIT` trap could not remove the control directories it had deliberately 
 created, since the workflow promotes to a version tag only after the contracts pass, so the retry
 reused the same coordinates rather than consuming new ones.
 
+Those images are withdrawn from the catalog in turn. Maester's wrapper now ships with a Pester
+specification, `engines/images/maester/run-maester.Tests.ps1`, which the image build executes against
+the wrapper it has just copied in, as the user the launcher will run it as; a build whose wrapper
+misreads a Maester report can no longer become an image. To make the wrapper reachable from that
+specification, its report reading and normalization moved into `Read-MaesterReport` and
+`ConvertTo-ManagedMaesterDocument`, and the managed run into `Invoke-ManagedMaesterRun` behind a
+dot-source guard, so `run-maester.ps1` no longer corresponds to the reviewed source and its digest was
+re-pinned. ScubaGear's wrapper is unchanged and its `run-scubagear.ps1` digest was deliberately not
+re-pinned, but the publication guard binds each version tag to one source commit and the workflow
+matrix publishes both engines together, so ScubaGear moves to `1.8.0-6` alongside it. Both Dockerfile
+digests were re-pinned because each embeds its version label.
+
+`1.8.0-6` and `2.0.0-6` are awaiting publication and independent verification.
+
 After the workflow completes on the exact `main` source commit, download and verify each artifact
 independently in a fresh directory:
 

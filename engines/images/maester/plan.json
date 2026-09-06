@@ -6,7 +6,7 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "published_managed_artifact",
+  "publish_state": "publication_in_progress",
   "source": {
     "repository": "https://github.com/maester365/maester",
     "revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
@@ -16,23 +16,10 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-maester",
-    "tag": "2.0.0-5",
-    "digest": "sha256:84a947e9f02056393c2a131adcab48a6de18efc322e939b846c51a38b6e4b128"
+    "tag": "2.0.0-6",
+    "digest": null
   },
-  "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33885514754",
-    "source_revision": "cc3b455f380b467eed3835e674313fde380f3f46",
-    "platforms": [
-      "linux/amd64",
-      "linux/arm64"
-    ],
-    "platform_digests": {
-      "linux/amd64": "sha256:d5779a7ab23762d598d4470ec5470196c36e5748249cd26b687911ec5c21780b",
-      "linux/arm64": "sha256:f2993f2037bab9803dc46ace227a55fa0bc6087ddaa80e31e7f149041db186e9"
-    },
-    "anonymous_pull_verified": true,
-    "evidence_artifact": "maester-image-evidence-33885514754-1"
-  },
+  "publication": null,
   "build_recipe": {
     "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
     "source_archive": {
@@ -101,7 +88,7 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/maester/Dockerfile",
-    "sha256": "sha256:969c8fd9562cef9bfa7f3df42ba767277fcfb0ff71256bdbcd6e6e0b2053eff6",
+    "sha256": "sha256:61e778e3fb1d7dce2274ccca863d1aacbed49318118784af41e8c58af6ea3fd5",
     "reason": null
   },
   "wrapper": {
@@ -111,7 +98,7 @@
     "launcher_sha256": "sha256:9db814b18999c58a9ebe2c62aa5e7fc33606e2f96547cb2141b4d1cbb76b9222",
     "script": {
       "path": "engines/images/maester/run-maester.ps1",
-      "sha256": "sha256:689b8133a7ac896295233460480ad57aa8cf4d0945975fc6fa182e41ceb7d177"
+      "sha256": "sha256:7c4d42f9af833c738d6ca221c38b1ecc3d24d3de887609035e39d6b5c6512626"
     }
   },
   "managed_runtime": {
@@ -148,5 +135,7 @@
     "rationale": "MIT engine and Graph authentication source plus Apache-2.0 Pester notices are embedded in the managed image.",
     "source_offer_path": null
   },
-  "blockers": []
+  "blockers": [
+    "Publish and independently verify the specification-checked Maester 2.0.0-6 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence."
+  ]
 }

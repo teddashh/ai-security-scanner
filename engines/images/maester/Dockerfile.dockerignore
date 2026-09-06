@@ -9,3 +9,4 @@
 !engines/images/maester/dependencies.lock.json
 !engines/images/maester/run-maester.ps1
 !engines/images/maester/THIRD-PARTY-NOTICES.md
+!engines/images/maester/run-maester.Tests.ps1
