@@ -323,14 +323,20 @@ GHCR 發布是對外行為，**每一次都需要明確授權；上一個版本�
 
 ### 同一個缺陷類別、還沒修的位置
 
-`1c05a3f` / `0392aea` 修的是 coverage gap 那幾列。同一份 HTML 報告裡還有：
+`1c05a3f` / `0392aea` 修的是 coverage gap 那幾列。本文件寫成後，同一份 HTML
+報告裡的另外三處已在 `9b57e39` 修掉（詳見文末「交接後續」）：`limit.name`、
+已檢測維度的 `dimension.dimension`、以及由 finding 推導出來的下一步 reason
+（原本用 `Debug` 印列舉）。
 
-- `src-tauri/src/case_service.rs:12500` — `limit.name` 原樣輸出。
-- `src-tauri/src/case_service.rs:12543` — 已檢測維度的 `dimension.dimension`
-  只過 `readable_identifier`，沒有在地化。
-- `src-tauri/src/beginner_report.rs:1947` — 由 finding 推導出來的下一步，其
-  reason 是 `"{title} — {severity:?} severity, {confidence:?} confidence"`，
-  用 `Debug` 印列舉，兩個問題：英文，而且是 Rust 識別字而非人話。
+同一份報告、同一個類別，**還在**的：
+
+- 已檢測維度的 `value` 與 `observation`（`beginner_report.rs` 的
+  `TestedDimension`）——名稱已在地化，但旁邊那句觀察說明（例如「The native
+  task only observed whether the endpoint accepted, refused, or timed out…」）
+  仍是儲存的英文散文。五個產生處，全是固定句子，可以走 `COVERAGE_GAP_PROSE`
+  同樣的整句查表路徑。
+- `limit.value` 內的單位字（`"{seconds} seconds"`、`"{n} per second,
+  concurrency {c}"`、`"{bytes} bytes"`）。
 
 ### 其他仍是英文／無代碼的使用者可見文字
 
@@ -369,12 +375,51 @@ GHCR 發布是對外行為，**每一次都需要明確授權；上一個版本�
 | 1. 每個引擎餵真實輸出都出得來 finding | 21 個 adapter fixture 全部對照上游稽核完畢；產生側還剩 #10（卡授權） |
 | 2. 嚴重度可跨引擎比較 | 完成——不是引擎說的就標成本產品推導的，沒有第三種 |
 | 3. 同一個問題只出現一次 | 後端關聯 + 前端呈現 + spec 9.3 但書，完成 |
-| 4. 新手可讀的雙語散文 | finding 三欄、優先度理由、安全性／驗證句、coverage gap 的 dimension 與 reason 完成；上面「仍是英文」那份清單未完成 |
+| 4. 新手可讀的雙語散文 | finding 三欄、優先度理由、安全性／驗證句、coverage gap 的 dimension 與 reason、要求限制的名稱、已檢測維度的名稱、finding 推導的下一步 reason 完成；上面「仍是英文」那份清單與已檢測維度的 `observation` 未完成 |
 | 5. 對齊清單的欄位品質 | 未開始（2.1 / 2.2 / 2.4 / 1.4） |
 | 6. 授權與 schema 決定 | 等 Ted |
 
-**建議的下一步**是上面「同一個缺陷類別、還沒修的位置」那三處：它們與剛完成的
-兩個 commit 是同一個 bug class、同一份 HTML 報告、同一套已經建好的翻譯基礎
-設施，`beginner_report.rs:1947` 那個 `Debug` 印列舉尤其明顯——中文與英文
-讀者看到的都是 Rust 識別字。做完之後，第 5 項（`Confidence::High` 是常數欄）
-是清單品質上最大的一塊，但它需要先決定那個欄位到底代表什麼。
+**建議的下一步**：原本列在「同一個缺陷類別、還沒修的位置」的三處已在
+`9b57e39` 完成。接下來最順手的是已檢測維度的 `observation` 句（五個固定句子，
+可直接沿用 `COVERAGE_GAP_PROSE` 的整句查表＋producer 端 debug 普查），之後是
+「仍是英文」清單裡 ProgressPage 那約 70 條無代碼的警告。第 5 項
+（`Confidence::High` 是常數欄）仍是清單品質上最大的一塊，但它需要先決定那個
+欄位到底代表什麼。
+
+---
+
+## 交接後續（06b7035 之後）
+
+### `9b57e39` — 要求限制、已檢測維度、finding 推導的下一步，改用讀者的語言
+
+同一份 HTML 報告、同一個 bug class 的三處，依本文件建議的順序做完：
+
+- **`limit.name`**：報告端只跑 `readable_identifier`，中文報告印出
+  「Gitleaks Execution Timeout」。前端早有 `localizedRequestedLimitName`，
+  報告從未呼叫。現在 Rust 也寫同一組標籤，識別碼保留在括號內：
+  `檢查逾時限制（gitleaks）`。在地化函式從 `coverageDimensionPresentation.ts`
+  搬進 `findingNarrative.ts`（原處 re-export），因為那是 parity 測試對照
+  `finding_narrative.rs` 的檔案。
+- **`dimension.dimension`**：名稱全在既有的 coverage 詞彙表裡，報告端只是沒接。
+- **finding 推導的 next step reason**：英文改為明確的窮舉 `match`，不再
+  `{:?}`；中文不是從儲存的英文句子反解析，而是從 step 指向的 finding 重新組句
+  （`{title} — 嚴重程度：高；信心程度：已確認`），標籤與 finding 本身那一節相同。
+  順手補了 `identifier` 表缺的 `"unknown" => "未知"`，之前中文報告會在一排中文
+  評等旁邊印 "Unknown"。
+
+**普查在 producer 端**：`coverage_dimension_zh_hant` 拆成回傳 `Option` 的核心
+＋帶 fallback 的外殼，`beginner_report.rs` 對每個 limit 名稱與每個已檢測維度
+做 `debug_assert`。把某個 producer 的 `"endpoint"` 改成別的字，第一個建報告的
+Rust 測試就會炸。前端的 census 也改成從 Rust 原始碼讀出八個 limit producer。
+
+**突變驗證**：三處報告接線各自拔掉，zh 報告測試都在自己那一行失敗；改掉一個
+limit 名稱，普查即攔下。
+
+**一個要記得的坑**：parity 測試的字面值擷取器會掃 `///` 文件註解裡帶引號的中文。
+我在 `with_identifier` 的說明裡寫了 `"允許檢查的連接埠（）"` 當例子，parity 就
+判定「報告有、畫面沒有」。文件註解裡不要用引號包中文例句。
+
+實跑數字（`9b57e39`）：Rust 1,393（＋2）、前端 439（＋1）、元件 117、CI lane 29；
+`cargo fmt --check`、clippy `-D warnings`、typecheck、release-evidence、
+validate:engines、release:self-test、validate:usability-evidence、NSIS 範本
+驗證全部通過。
