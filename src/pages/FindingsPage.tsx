@@ -1607,12 +1607,12 @@ export function FindingsPage({
           </details>
         )}
 
-        <form className="source-connect-panel" onSubmit={(event) => void submitGroup(event)}>
-          <label>
+        <form className="source-connect-panel source-connect-panel--stacked" onSubmit={(event) => void submitGroup(event)}>
+          <label className="field">
             <span>{text(copy.groupTitle)}</span>
             <input maxLength={200} required value={groupTitle} onChange={(event) => setGroupTitle(event.target.value)} placeholder={text(copy.groupTitlePlaceholder)} />
           </label>
-          <label>
+          <label className="field">
             <span>{text(copy.groupReason)}</span>
             <textarea maxLength={2000} required value={groupRationale} onChange={(event) => setGroupRationale(event.target.value)} placeholder={text(copy.groupReasonPlaceholder)} />
           </label>
@@ -1689,56 +1689,58 @@ export function FindingsPage({
             {activeFilterCount > 0 && <button className="clear-filters" type="button" onClick={clearFilters}><Icon name="close" size={14} />{text(copy.clearFilterCount, { count: formatNumber(activeFilterCount) })}</button>}
           </div>
 
-          <div className="finding-list" role="list">
+          <ul className="finding-list">
             {filtered.length === 0 ? (
-              <EmptyState icon="search" title={text(copy.noMatches)} description={text(copy.noMatchesDescription)} action={<button className="button button--ghost button--small" type="button" onClick={clearFilters}>{text(copy.clearFilters)}</button>} />
+              <li className="finding-list__empty">
+                <EmptyState icon="search" title={text(copy.noMatches)} description={text(copy.noMatchesDescription)} action={<button className="button button--ghost button--small" type="button" onClick={clearFilters}>{text(copy.clearFilters)}</button>} />
+              </li>
             ) : filtered.map((finding) => (
-              <button
-                key={finding.id}
-                type="button"
-                role="listitem"
-                className={selectedId === finding.id ? "finding-row finding-row--active" : "finding-row"}
-                onClick={() => setSelectedId(finding.id)}
-              >
-                <span className="finding-row__priority" aria-label={text(copy.rankAria, { rank: displayRankByFindingId.get(finding.id) ?? "—" })}>
-                  {text(copy.rank, { rank: displayRankByFindingId.get(finding.id) ?? "—" })}
-                </span>
-                <span className="finding-row__main">
-                  <span className="finding-row__top">
-                    <StatusPill label={severityMeta[finding.severity].label} tone={severityMeta[finding.severity].tone} />
-                    {finding.severityBasisCode && (
-                      <span className="finding-row__basis" title={text(copy.ratedByProductAria)}>
-                        {text(copy.ratedByProduct)}
-                      </span>
-                    )}
-                    <StatusPill label={workflowMeta[finding.workflowState]} tone={workflowTone(finding.workflowState)} />
+              <li key={finding.id}>
+                <button
+                  type="button"
+                  className={selectedId === finding.id ? "finding-row finding-row--active" : "finding-row"}
+                  onClick={() => setSelectedId(finding.id)}
+                >
+                  <span className="finding-row__priority" aria-label={text(copy.rankAria, { rank: displayRankByFindingId.get(finding.id) ?? "—" })}>
+                    {text(copy.rank, { rank: displayRankByFindingId.get(finding.id) ?? "—" })}
                   </span>
-                  <strong>{finding.title}</strong>
-                  <span>
-                    {[
-                      finding.assetName,
-                      // The engine's own display name, read off the sentence it
-                      // wrote. Without it every finding on one repository reads
-                      // as the repository name: engine runs are single-asset,
-                      // so `assetName` is the same target label on every row.
-                      engineNameFrom(finding.summary),
-                      text(copy.evidenceCount, { count: formatNumber(finding.evidence.length) }),
-                      findingConfidencePresentation(
-                        locale,
-                        confidenceMeta[finding.confidence],
-                        finding.confidenceBasisCode,
-                        finding.priorityReasons ?? [],
-                      ),
-                    ].filter(Boolean).join(" · ")}
+                  <span className="finding-row__main">
+                    <span className="finding-row__top">
+                      <StatusPill label={severityMeta[finding.severity].label} tone={severityMeta[finding.severity].tone} />
+                      {finding.severityBasisCode && (
+                        <span className="finding-row__basis" title={text(copy.ratedByProductAria)}>
+                          {text(copy.ratedByProduct)}
+                        </span>
+                      )}
+                      <StatusPill label={workflowMeta[finding.workflowState]} tone={workflowTone(finding.workflowState)} />
+                    </span>
+                    <strong>{finding.title}</strong>
+                    <span>
+                      {[
+                        finding.assetName,
+                        // The engine's own display name, read off the sentence it
+                        // wrote. Without it every finding on one repository reads
+                        // as the repository name: engine runs are single-asset,
+                        // so `assetName` is the same target label on every row.
+                        engineNameFrom(finding.summary),
+                        text(copy.evidenceCount, { count: formatNumber(finding.evidence.length) }),
+                        findingConfidencePresentation(
+                          locale,
+                          confidenceMeta[finding.confidence],
+                          finding.confidenceBasisCode,
+                          finding.priorityReasons ?? [],
+                        ),
+                      ].filter(Boolean).join(" · ")}
+                    </span>
                   </span>
-                </span>
-                <Icon name="chevron" size={18} />
-              </button>
+                  <Icon name="chevron" size={18} />
+                </button>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
 
-        <aside className="finding-detail" aria-live="polite">
+        <section className="finding-detail" aria-live="polite">
           {selected ? (
             <>
               <div className="finding-detail__header">
@@ -1779,24 +1781,24 @@ export function FindingsPage({
 
               <section className="detail-section">
                 <div className="detail-section__heading"><h3>{text(copy.decisionHistory)}</h3><span>{text(copy.decisionCount, { count: formatNumber(selectedEvents.length) })}</span></div>
-                <form className="source-connect-panel" onSubmit={(event) => void submitDecision(event)}>
+                <form className="source-connect-panel source-connect-panel--stacked" onSubmit={(event) => void submitDecision(event)}>
                   <p>{text(copy.decisionBoundary)}</p>
-                  <label>
+                  <label className="field">
                     <span>{text(copy.newStatus)}</span>
                     <select value={decisionStatus} onChange={(event) => setDecisionStatus(event.target.value as (typeof decisionStates)[number])}>
                       {decisionStates.map((state) => <option key={state} value={state}>{workflowMeta[state]}</option>)}
                     </select>
                   </label>
-                  <label>
+                  <label className="field">
                     <span>{text(copy.decidedBy)}</span>
                     <input required maxLength={120} value={decidedBy} onChange={(event) => setDecidedBy(event.target.value)} placeholder={text(copy.decidedByPlaceholder)} />
                   </label>
-                  <label>
+                  <label className="field">
                     <span>{text(copy.reason)}</span>
                     <textarea required maxLength={2000} value={decisionReason} onChange={(event) => setDecisionReason(event.target.value)} placeholder={text(copy.reasonPlaceholder)} />
                   </label>
                   {decisionStatus === "false_positive" && (
-                    <label>
+                    <label className="field">
                       <span>{text(copy.falsePositiveExpiry)}</span>
                       <input type="date" value={decisionExpiry} onChange={(event) => setDecisionExpiry(event.target.value)} />
                     </label>
@@ -1935,7 +1937,7 @@ export function FindingsPage({
           ) : (
             <EmptyState icon="findings" title={text(copy.chooseProblem)} description={text(copy.chooseProblemDescription)} />
           )}
-        </aside>
+        </section>
       </section>
     </div>
   );

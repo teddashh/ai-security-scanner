@@ -2,7 +2,7 @@ import type { en } from "./en";
 
 export const zhTW = {
   "language.label": "語言",
-  "language.english": "英文",
+  "language.english": "English",
   "language.traditionalChinese": "繁體中文",
 
   "shell.skipToContent": "跳到主要內容",

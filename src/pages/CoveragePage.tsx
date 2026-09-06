@@ -1631,7 +1631,7 @@ export function CoveragePage({
       </section>
 
       {(unknownSourceCount > 0 || connectedNoAssetCount > 0) && (
-        <section className="coverage-truth-grid" aria-label={text(pageCopy.metricsLabel)}>
+        <div className="coverage-truth-grid">
           {unknownSourceCount > 0 && (
             <div className="coverage-truth-card coverage-truth-card--unknown">
               <Icon name="warning" size={20} />
@@ -1644,7 +1644,7 @@ export function CoveragePage({
               <div><strong>{text(pageCopy.noneTitle, { count: formatNumber(connectedNoAssetCount) })}</strong><p>{text(pageCopy.noneBody)}</p></div>
             </div>
           )}
-        </section>
+        </div>
       )}
 
       <section className="coverage-source-ledger">

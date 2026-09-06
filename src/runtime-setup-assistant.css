@@ -92,7 +92,7 @@
 
 .runtime-assistant__status span {
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: 0.78rem;
 }
 
 .runtime-assistant__status progress {
@@ -140,7 +140,7 @@
   border-top: 1px solid rgba(126, 143, 137, 0.25);
   padding-top: 12px;
   color: var(--muted);
-  font-size: 0.76rem;
+  font-size: 0.78rem;
 }
 
 .runtime-assistant__manual summary {
@@ -169,7 +169,7 @@
 .runtime-assistant__technical code {
   overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 0.75rem;
+  font-size: 0.78rem;
 }
 
 .runtime-assistant__recovery > a,
@@ -178,14 +178,14 @@
   align-items: center;
   gap: 5px;
   width: fit-content;
-  font-size: 0.76rem;
+  font-size: 0.78rem;
   font-weight: 750;
 }
 
 .runtime-assistant__copy-error {
   margin: -6px 0 0;
   color: var(--danger);
-  font-size: 0.74rem;
+  font-size: 0.78rem;
 }
 
 .runtime-assistant__actions {
@@ -199,7 +199,7 @@
   border-top: 1px solid rgba(126, 143, 137, 0.25);
   padding-top: 12px;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.78rem;
 }
 
 .runtime-assistant__technical summary {

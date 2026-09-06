@@ -2043,7 +2043,8 @@ export default function App() {
           <FindingsPage
             report={currentBeginnerReport}
             selectedRunId={selectedReportRunId}
-            reportUnavailable={Boolean((currentRun || selectedReportRunId) && !currentBeginnerReport)}
+            reportUnavailable={!(mode === "demo" || Boolean(workspace.case.isDemo))
+              && Boolean((currentRun || selectedReportRunId) && !currentBeginnerReport)}
             findings={workspace.findings}
             findingGroups={workspace.findingGroups}
             findingGroupEvents={workspace.findingGroupEvents}
@@ -2152,6 +2153,7 @@ export default function App() {
 
       <div
         className="toast-region"
+        role="region"
         aria-live="polite"
         aria-label={text({ en: "Application notifications", zhTW: "應用程式通知" })}
       >

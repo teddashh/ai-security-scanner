@@ -1,7 +1,7 @@
 export const en = {
   "language.label": "Language",
   "language.english": "English",
-  "language.traditionalChinese": "Traditional Chinese",
+  "language.traditionalChinese": "繁體中文",
 
   "shell.skipToContent": "Skip to main content",
   "shell.primaryNavigation": "Primary navigation",

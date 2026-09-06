@@ -201,3 +201,16 @@ test("a shell with nothing wrong raises no banner at all", () => {
 
   expect(banners(container)).toEqual([]);
 });
+
+test("language choices keep each language's own name in either interface language", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const chineseShell = renderShell();
+  const englishButton = chineseShell.container.querySelector<HTMLButtonElement>('button[lang="en"]');
+  expect(englishButton?.textContent).toBe("English");
+  chineseShell.unmount();
+
+  window.localStorage.setItem(localeStorageKey, "en");
+  const englishShell = renderShell();
+  const chineseButton = englishShell.container.querySelector<HTMLButtonElement>('button[lang="zh-Hant"]');
+  expect(chineseButton?.textContent).toBe("繁體中文");
+});

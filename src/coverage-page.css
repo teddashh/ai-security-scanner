@@ -42,7 +42,7 @@
   border-radius: 9px;
   color: #17473e;
   background: var(--accent-bright);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 850;
 }
 
@@ -55,7 +55,7 @@
 
 .page--coverage .coverage-journey small {
   color: var(--teal);
-  font-size: 0.56rem;
+  font-size: 0.72rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -63,14 +63,14 @@
 
 .page--coverage .coverage-journey strong {
   color: var(--ink-strong);
-  font-size: 0.76rem;
+  font-size: 0.78rem;
   line-height: 1.35;
 }
 
 .page--coverage .coverage-journey p {
   margin: 1px 0 0;
   color: var(--muted);
-  font-size: 0.63rem;
+  font-size: 0.78rem;
   line-height: 1.5;
 }
 
@@ -127,13 +127,13 @@
 
 .page--coverage .coverage-input-card strong {
   color: var(--ink-strong);
-  font-size: 0.77rem;
+  font-size: 0.78rem;
 }
 
 .page--coverage .coverage-input-card p {
   margin: 5px 0 0;
   color: var(--muted);
-  font-size: 0.65rem;
+  font-size: 0.78rem;
   line-height: 1.5;
 }
 
@@ -156,7 +156,7 @@
   padding: 14px 16px;
   color: var(--ink-strong);
   cursor: pointer;
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   font-weight: 780;
 }
 
@@ -164,7 +164,7 @@
 .page--coverage .coverage-technical-details > p {
   margin: -2px 16px 14px;
   color: var(--muted);
-  font-size: 0.66rem;
+  font-size: 0.78rem;
   line-height: 1.5;
 }
 
@@ -190,13 +190,13 @@
 
 .page--coverage .coverage-situation-grid strong {
   color: var(--ink);
-  font-size: 0.68rem;
+  font-size: 0.78rem;
 }
 
 .page--coverage .coverage-situation-grid p {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 0.61rem;
+  font-size: 0.78rem;
   line-height: 1.48;
 }
 
@@ -216,7 +216,7 @@
 .page--coverage .coverage-form-technical summary {
   color: var(--teal);
   cursor: pointer;
-  font-size: 0.67rem;
+  font-size: 0.78rem;
   font-weight: 760;
 }
 
@@ -233,7 +233,7 @@
 
 .page--coverage .coverage-scan-advanced > summary small {
   color: var(--muted);
-  font-size: 0.61rem;
+  font-size: 0.78rem;
   font-weight: 520;
 }
 
@@ -268,13 +268,13 @@
 
 .page--coverage .coverage-recommended-callout strong {
   color: var(--ink-strong);
-  font-size: 0.72rem;
+  font-size: 0.78rem;
 }
 
 .page--coverage .coverage-recommended-callout p {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 0.64rem;
+  font-size: 0.78rem;
   line-height: 1.5;
 }
 
@@ -285,11 +285,11 @@
 
 .page--coverage .coverage-form-technical p {
   color: var(--muted);
-  font-size: 0.64rem;
+  font-size: 0.78rem;
 }
 
 .page--coverage .coverage-form-technical code {
-  font-size: 0.61rem;
+  font-size: 0.78rem;
 }
 
 .page--coverage .coverage-provider-slot > .provider-auth-panel {
@@ -319,7 +319,7 @@
 .page--coverage .asset-review-card__technical summary {
   color: var(--teal);
   cursor: pointer;
-  font-size: 0.61rem;
+  font-size: 0.78rem;
   font-weight: 750;
 }
 
@@ -338,7 +338,7 @@
 .page--coverage .source-card__technical dt,
 .page--coverage .asset-review-card__technical dt {
   color: var(--subtle);
-  font-size: 0.54rem;
+  font-size: 0.72rem;
   font-weight: 750;
   text-transform: uppercase;
 }
@@ -348,7 +348,7 @@
   margin: 3px 0 0;
   overflow-wrap: anywhere;
   color: var(--ink);
-  font-size: 0.61rem;
+  font-size: 0.78rem;
   line-height: 1.45;
 }
 
@@ -411,7 +411,7 @@
 .page--coverage .asset-review-card__choice strong {
   overflow: hidden;
   color: var(--ink-strong);
-  font-size: 0.74rem;
+  font-size: 0.78rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -419,7 +419,7 @@
 .page--coverage .asset-review-card__choice small,
 .page--coverage .asset-review-card__status small {
   color: var(--muted);
-  font-size: 0.59rem;
+  font-size: 0.78rem;
   line-height: 1.4;
 }
 
@@ -432,14 +432,14 @@
 
 .page--coverage .asset-review-card__next strong {
   color: var(--teal);
-  font-size: 0.61rem;
+  font-size: 0.72rem;
   text-transform: uppercase;
 }
 
 .page--coverage .asset-review-card__next p {
   margin: 4px 0 0;
   color: var(--ink);
-  font-size: 0.66rem;
+  font-size: 0.78rem;
   line-height: 1.5;
 }
 

@@ -97,7 +97,10 @@ test("a missing run-bound report never borrows the project's findings from anoth
     readSource("pages/FindingsPage.tsx"),
   ]);
 
-  assert.match(app, /reportUnavailable=\{Boolean\(\(currentRun \|\| selectedReportRunId\) && !currentBeginnerReport\)\}/u);
+  assert.match(
+    app,
+    /reportUnavailable=\{!\(mode === "demo" \|\| Boolean\(workspace\.case\.isDemo\)\)[\s\S]*Boolean\(\(currentRun \|\| selectedReportRunId\) && !currentBeginnerReport\)\}/u,
+  );
   assert.match(
     source,
     /report\s*\?[\s\S]*projectReportFindings\(report, canonicalFindings, locale\)[\s\S]*:\s*reportUnavailable\s*\? \[\][\s\S]*:\s*canonicalFindings/u,

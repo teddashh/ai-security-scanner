@@ -357,6 +357,7 @@ export function AppShell({
         <div className="language-switcher" role="group" aria-label={t("language.label")}>
           <button
             type="button"
+            lang="en"
             className={cx(locale === "en" && "language-switcher__active")}
             aria-pressed={locale === "en"}
             onClick={() => setLocale("en")}
@@ -365,6 +366,7 @@ export function AppShell({
           </button>
           <button
             type="button"
+            lang="zh-Hant"
             className={cx(locale === "zh-TW" && "language-switcher__active")}
             aria-pressed={locale === "zh-TW"}
             onClick={() => setLocale("zh-TW")}

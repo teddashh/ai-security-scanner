@@ -66,7 +66,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     eyebrow: "Security checks, made usable",
     title: "Find the risks that matter—without juggling security tools.",
     description:
-      "Choose what you want to protect. AI Security Scanner brings the right checks together and turns the results into one clear, prioritized action list.",
+      "Choose what you want to protect. ai-security-scanner brings the right checks together and turns the results into one clear, prioritized action list.",
     primaryAction: "Start a security check",
     localhostQuickScanAction: "Scan this computer at 127.0.0.1:9001",
     localhostQuickScanBusy: "Starting this check…",
@@ -161,7 +161,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     eyebrow: "資安檢查，終於可以很簡單",
     title: "找出真正重要的風險，不必自己拼湊一堆工具。",
     description:
-      "選擇你想保護的地方。AI Security Scanner 會整合適合的檢查，把結果變成一份清楚、有優先順序的改善清單。",
+      "選擇你想保護的地方。ai-security-scanner 會整合適合的檢查，把結果變成一份清楚、有優先順序的改善清單。",
     primaryAction: "開始資安檢查",
     localhostQuickScanAction: "掃描這台電腦的 127.0.0.1:9001",
     localhostQuickScanBusy: "正在開始檢查…",
@@ -306,7 +306,7 @@ export function StartPage({
         </header>
 
         <button
-          className="button button--primary use-case-card__action"
+          className="button button--secondary use-case-card__action"
           type="button"
           onClick={() => onChoose(useCase)}
         >
@@ -409,8 +409,8 @@ export function StartPage({
           </div>
         </div>
 
-        <aside className="start-page__benefits" aria-label={marketing.benefitsTitle}>
-          <p className="eyebrow">{marketing.benefitsTitle}</p>
+        <section className="start-page__benefits" aria-labelledby="start-page-benefits-title">
+          <p className="eyebrow" id="start-page-benefits-title">{marketing.benefitsTitle}</p>
           <ul>
             {marketing.benefits.map((benefit) => (
               <li key={benefit.title}>
@@ -422,7 +422,7 @@ export function StartPage({
               </li>
             ))}
           </ul>
-        </aside>
+        </section>
       </section>
 
       <section className="start-page__journey" aria-labelledby="start-page-journey-title">

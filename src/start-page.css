@@ -71,14 +71,14 @@
   max-width: 660px;
   margin: 0;
   color: var(--muted);
-  font-size: 0.73rem;
+  font-size: 0.78rem;
   line-height: 1.55;
 }
 
 .start-page__localhost-options {
   width: min(100%, 420px);
   color: var(--teal);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 750;
 }
 
@@ -95,7 +95,7 @@
 
 .start-page__localhost-options label {
   margin-top: 11px;
-  font-size: 0.72rem;
+  font-size: 0.78rem;
 }
 
 .start-page__localhost-options input {
@@ -111,7 +111,7 @@
 
 .start-page__localhost-options small {
   margin-top: 5px;
-  font-size: 0.68rem;
+  font-size: 0.78rem;
   font-weight: 500;
   line-height: 1.45;
 }
@@ -178,7 +178,7 @@
 .start-page__benefits li p {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   line-height: 1.5;
 }
 
@@ -237,7 +237,7 @@
   border-radius: 10px;
   color: var(--accent-ink);
   background: var(--accent-soft);
-  font-size: 0.77rem;
+  font-size: 0.78rem;
   font-weight: 850;
 }
 
@@ -250,7 +250,7 @@
 .start-page__journey li p {
   margin: 6px 0 0;
   color: var(--muted);
-  font-size: 0.73rem;
+  font-size: 0.78rem;
   line-height: 1.5;
 }
 
@@ -302,7 +302,7 @@
 
 .start-page__more-use-cases > summary small {
   color: var(--muted);
-  font-size: 0.73rem;
+  font-size: 0.78rem;
   line-height: 1.45;
 }
 
@@ -365,7 +365,7 @@
 .use-case-card__header p {
   margin: 7px 0 0;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   line-height: 1.52;
 }
 
@@ -382,7 +382,7 @@
 .use-case-card__more > summary {
   padding: 13px 2px 2px;
   color: var(--teal);
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   font-weight: 750;
   cursor: pointer;
 }
@@ -404,14 +404,14 @@
   align-items: center;
   gap: 5px;
   color: var(--ink-strong);
-  font-size: 0.68rem;
+  font-size: 0.78rem;
   font-weight: 800;
 }
 
 .use-case-card__details dd {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 0.71rem;
+  font-size: 0.78rem;
   line-height: 1.55;
 }
 
@@ -454,7 +454,7 @@
   gap: 9px;
   padding: 14px 16px;
   color: #416067;
-  font-size: 0.76rem;
+  font-size: 0.78rem;
   font-weight: 750;
   cursor: pointer;
   list-style: none;
@@ -477,7 +477,7 @@
 .start-page__scope-note p {
   max-width: 900px;
   margin: 5px 0 0;
-  font-size: 0.74rem;
+  font-size: 0.78rem;
   line-height: 1.55;
 }
 

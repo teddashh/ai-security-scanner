@@ -1174,7 +1174,7 @@ export function CasesPage({
               <h2 id="verification-baseline-title">{text(pageCopy.verificationTitle)}</h2>
               <p>{text(pageCopy.verificationDescription)}</p>
             </div>
-            <button className="button button--light" type="button" onClick={onOpenVerification}>{text(pageCopy.viewDifference)}</button>
+            <button className="button button--secondary" type="button" onClick={onOpenVerification}>{text(pageCopy.viewDifference)}</button>
           </div>
           <label className="field">
             <span>{text(pageCopy.baseline)}</span>

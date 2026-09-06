@@ -5,7 +5,7 @@
   border-radius: 8px;
   color: var(--muted);
   background: rgba(255, 255, 255, 0.58);
-  font-size: 0.62rem;
+  font-size: 0.78rem;
 }
 
 .page-technical-details summary {
@@ -28,7 +28,7 @@
 
 .page-technical-details dt {
   color: var(--subtle);
-  font-size: 0.56rem;
+  font-size: 0.78rem;
 }
 
 .page-technical-details dd {
@@ -45,7 +45,7 @@
 
 .page-technical-details--guide {
   padding: 13px 15px;
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   line-height: 1.55;
 }
 
@@ -96,7 +96,7 @@
   margin: 0;
   padding: 14px 20px;
   color: #bbcbce;
-  font-size: 0.66rem;
+  font-size: 0.78rem;
   line-height: 1.5;
 }
 
@@ -132,7 +132,7 @@
 .page-secondary-feature__intro {
   margin: 10px 0 18px;
   color: var(--muted);
-  font-size: 0.76rem;
+  font-size: 0.78rem;
   line-height: 1.55;
 }
 
