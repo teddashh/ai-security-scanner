@@ -2,13 +2,13 @@
 
 Status: v0.2.0 catalog companion and research inventory; 21 artifacts are currently runnable. The ScubaGear and Maester wrapper-hardened images are published at immutable digests and independently verified at `1.8.0-6` and `2.0.0-6`.
 
-Last updated: 2026-09-04
+Last updated: 2026-09-06
 
 Normative status: this catalog is subordinate to the [canonical product specification](product-spec.md). Engine admission may block execution of that engine artifact only; it does not define whole-product scan readiness, reporting, or release acceptance.
 
 This document explains the v0.2.0 planned engine set and records supporting repositories named in the product design. The machine-readable [`engines/catalog.json`](../engines/catalog.json) is authoritative for an engine's exact source revision, image digest, integration status, runnable state, blockers, provider applicability, knowledge window, and license disposition. It is not authoritative for product-wide readiness: this prose never upgrades a non-runnable entry, proves publication, or turns that entry into a gate for sibling engines and the beginner master report.
 
-Cataloged-engine license identifiers and dispositions summarize the exact pinned artifacts recorded by the catalog and engine plans. Research-only identifiers were observed from upstream repository metadata on 2026-08-24 and still require evaluation before use. Every different source revision, dependency set, plugin, rule, template, feed, database, or image requires a new disposition rather than inheriting an earlier release decision.
+Cataloged-engine license identifiers and dispositions summarize the exact pinned artifacts recorded by the catalog and engine plans. Research-only identifiers were observed from upstream repository metadata on 2026-08-24 unless a row cites a separately pinned evaluation; all remain non-release material and require evaluation before use. Every different source revision, dependency set, plugin, rule, template, feed, database, or image requires a new disposition rather than inheriting an earlier release decision.
 
 ## 1. Catalog states
 
@@ -132,6 +132,7 @@ Research entries should be cloned or tracked for evaluation as requested, but mu
 | Web application testing | [OWASP ZAP](https://github.com/zaproxy/zaproxy) | Apache-2.0 | Authorized web and API testing | Research; active/crawling policy and resource requirements |
 | Dependency vulnerabilities | [OSV-Scanner](https://github.com/google/osv-scanner) | Apache-2.0 | Local dependency and lockfile analysis | Research; overlap with Trivy/Grype needs evaluation |
 | Web server testing | [Nikto](https://github.com/sullo/nikto) | NOASSERTION in repository metadata | Authorized web server configuration checks | Research; manual license and active-test policy review |
+| Source-scan UX/report envelope | [VibeScan](https://github.com/Armur-Ai/vibescan/tree/52efb12fdcd8118c6f0f2b642558b2f335e7bf66) | MIT at audited revision `52efb12fdcd8118c6f0f2b642558b2f335e7bf66` | Guided vibe-coding journey and normalized multi-tool-report research | Research only; `NOT_DISTRIBUTED` and not an engine |
 
 ## 4. Supporting standards and runtime repositories
 
@@ -149,7 +150,7 @@ These are not scanning engines but are part of the design or implementation rese
 | Moby | [moby/moby](https://github.com/moby/moby) | Apache-2.0 | Research only; not used by the packaged runtime and does not grant Docker Desktop redistribution rights |
 | Docker CLI and Compose | [docker/cli](https://github.com/docker/cli), [docker/compose](https://github.com/docker/compose) | Apache-2.0 | Optional user-installed compatibility path; neither is bundled nor required |
 
-Docker Desktop is a separately licensed product, is not bundled, and is not required. The target packaged path uses a versioned private Podman machine: QEMU on Linux, Apple Virtualization.framework through vfkit on macOS, and the WSL 2 capability detected/prepared by the signed installer on Windows. Exact per-platform files, first-setup downloads, source revisions, license expressions, sizes, and hashes belong in the managed-runtime manifest and generated release evidence. Those details remain Technical details; the intended Windows preparation is automatic and never asks a beginner to administer WSL. The current Windows installer/runtime path has not yet reached that behavior; [audit finding A01](product-audit.md#a01--windows-preparation-is-a-second-product-after-installation) tracks the implementation gap.
+Docker Desktop is a separately licensed product, is not bundled, and is not required. The target packaged path uses a versioned private Podman machine: QEMU on Linux, Apple Virtualization.framework through vfkit on macOS, and the WSL 2 capability detected/prepared by the signed installer on Windows. Exact per-platform files, first-setup downloads, source revisions, license expressions, sizes, and hashes belong in the managed-runtime manifest and generated release evidence. Those details remain Technical details; the intended Windows preparation is automatic and never asks a beginner to administer WSL. The Windows NSIS source now invokes the fixed zero-input prerequisite coordinator to detect or service the WSL 2 prerequisite and retain restart/resume state. This is source implementation only; exact-candidate installed-Windows and independent-beginner qualification remain unobserved. [Audit finding A01](product-audit.md#a01--windows-preparation-is-a-second-product-after-installation) records the baseline gap and acceptance boundary.
 
 ## 5. Integration modes
 
@@ -175,22 +176,20 @@ An offline bundle may include only engines, rules, feeds, and databases with an 
 
 A host binary is acceptable only when it can be installed, isolated, upgraded, and removed through the managed product path. Requiring a newcomer to independently configure Python or PowerShell is not a completed desktop experience.
 
-## 6. Authorization profiles
+## 6. Manifest permissions and provider profiles
 
-Manifests select from explicit profiles rather than arbitrary credentials:
+Engine manifests use only these `required_permissions` literals:
 
-- `cloud_inventory_readonly`;
-- `cloud_security_audit_readonly`;
-- `m365_configuration_readonly`;
-- `repository_readonly`;
-- `artifact_readonly`;
-- `kubernetes_manifest_readonly`;
-- `kubernetes_cluster_readonly`;
-- `passive_public_discovery`;
-- `low_impact_external`;
-- `active_external`.
+- `inventory_read`;
+- `configuration_read`;
+- `local_artifact_read`;
+- `passive_external_discovery`;
+- `low_impact_external_connection`;
+- `active_external_testing`.
 
-No scanner profile accepts `admin`, `owner`, `global_administrator`, unrestricted Docker socket access, or a general shell capability. Administrative authority exists only in the bootstrap broker's fixed role-creation protocol.
+Provider credentials use the separate profiles `aws_organization_read_only_session`, `azure_tenant_read_only_access_token`, `gcp_organization_read_only_access_token`, and `microsoft365_tenant_read_only_access_token`. External activity values such as `passive_public_discovery`, `low_impact_external`, and `active_external` are scope modes, not manifest permissions.
+
+No manifest permission or provider profile accepts `admin`, `owner`, `global_administrator`, unrestricted Docker socket access, or a general shell capability. Administrative authority exists only in the bootstrap broker's fixed role-creation protocol.
 
 ## 7. Engine admission checklist
 

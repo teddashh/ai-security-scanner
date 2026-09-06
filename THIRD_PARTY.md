@@ -2,7 +2,7 @@
 
 Status: current source and artifact inventory; generated release evidence is artifact-specific
 
-Last updated: 2026-08-30
+Last updated: 2026-09-06
 
 Normative status: this is an artifact/license inventory, not a product specification. The [canonical product specification](docs/product-spec.md) controls user-visible behavior and release acceptance. A license, provenance, or admission problem may withhold the affected artifact or engine; it does not block the installed application, unaffected engines, saved reports, or an independently qualified platform.
 
@@ -35,8 +35,8 @@ The `ai-security-scanner` repository currently carries the Apache License 2.0 in
 | Prowler | [prowler-cloud/prowler](https://github.com/prowler-cloud/prowler) | Apache-2.0 | Project-managed image with exact AWS-account, Azure-subscription, and GCP-project IAM profiles and required notices | ALLOW |
 | ScoutSuite | [nccgroup/ScoutSuite](https://github.com/nccgroup/ScoutSuite) | GPL-2.0-only | Project-managed image carrying exact source, patch, build recipe, and notices | SOURCE_OFFER |
 | Cloudsplaining | [salesforce/cloudsplaining](https://github.com/salesforce/cloudsplaining) | BSD-3-Clause | Project-managed image with the upstream notice | ALLOW |
-| ScubaGear | [cisagov/ScubaGear](https://github.com/cisagov/ScubaGear) | CC0-1.0 plus pinned module terms | Wrapper-hardened project-managed image candidate with module source and notices; no immutable current image is offered until independent publication evidence is recorded | ALLOW for the candidate's recorded license closure; currently not runnable |
-| Maester | [maester365/maester](https://github.com/maester365/maester) | MIT plus pinned module terms | Wrapper-hardened project-managed image candidate with module source and notices; no immutable current image is offered until independent publication evidence is recorded | ALLOW for the candidate's recorded license closure; currently not runnable |
+| ScubaGear | [cisagov/ScubaGear](https://github.com/cisagov/ScubaGear) | CC0-1.0 plus pinned module terms | Wrapper-hardened project-managed image published at immutable `1.8.0-6` digest; anonymous pull verified; module source and notices retained | ALLOW |
+| Maester | [maester365/maester](https://github.com/maester365/maester) | MIT plus pinned module terms | Wrapper-hardened project-managed image published at immutable `2.0.0-6` digest; anonymous pull verified; module source and notices retained | ALLOW |
 | Naabu | [projectdiscovery/naabu](https://github.com/projectdiscovery/naabu) | MIT upstream; Apache-2.0 launcher | Project-managed image with fixed bounded launcher | ALLOW |
 | httpx | [projectdiscovery/httpx](https://github.com/projectdiscovery/httpx) | MIT upstream; Apache-2.0 launcher | Project-managed image with fixed bounded launcher | ALLOW |
 | Nuclei and selected templates | [projectdiscovery/nuclei](https://github.com/projectdiscovery/nuclei), [nuclei-templates](https://github.com/projectdiscovery/nuclei-templates) | MIT upstream; Apache-2.0 launcher | Project-managed image with one exact allowlisted template snapshot | ALLOW |

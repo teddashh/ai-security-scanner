@@ -22,9 +22,9 @@
 - **網站或 API**：檢查指定的線上網址是否有常見曝露與已知弱點。
 - **外部 IP 或網域**：了解你指定的服務有哪些可以從網際網路連到。
 - **家裡或辦公室的網路**：檢查你獲准管理的內部主機或 `/24` 網段。
-- **程式碼或 GitHub 程式庫**：在不修改專案的前提下，找出危險程式碼、外洩秘密、有弱點的相依套件與設定錯誤。
-- **AI 應用程式**：檢查選定的程式碼、相依套件、秘密、提示詞與部署檔案，同時清楚說明哪些模型行為沒有測試。
-- **進階來源**：需要時再連接雲端帳號，或檢查基礎設施程式碼、匯出的容器映像與 Kubernetes 設定。
+- **程式碼或程式庫的本機唯讀副本**：在不修改專案的前提下，找出危險程式碼、外洩秘密、有弱點的相依套件與設定錯誤。
+- **AI 應用程式**：檢查選定的程式碼、相依套件、秘密與相關部署檔案，並清楚說明未測試模型行為。
+- **進階來源**：需要時再連接 AWS、Azure、Google Cloud 或 Microsoft 365 帳號，或檢查基礎設施程式碼、匯出的容器映像與 Kubernetes 設定。
 
 ## 一條簡單的流程
 
@@ -42,37 +42,17 @@ NIST CSF、ISO/IEC 27001 與 AIDEFEND 關聯只是幫助你理解發現項目與
 
 ## 目前可以怎麼試？
 
-想直接試真正的 Windows App？請到 [GitHub Releases 頁面](https://github.com/teddashh/ai-security-scanner/releases)下載 **v0.1.8 公開測試預發布版**。這是讓大家實機測試的版本，目前還不是穩定版或新手正式推薦版。
+目前可以安裝的最新版本是 [GitHub Releases 頁面](https://github.com/teddashh/ai-security-scanner/releases)上的 **v0.1.8 公開測試預發布版**。它的目的是讓大家實機測試真正的安裝程式；它還不是穩定版，也不是新手正式推薦版。
 
-目前 `main` 原始碼已領先這批預發布 binary。開發接手請看
-[v0.1.8 foreground QC 交接索引](docs/release/v0.1.8-foreground-qc/README.zh-TW.md)，
-其中有精確 source、驗證與未完成項目；不要把舊的可下載 installer 當成目前
-`main` 的 build。
-
-目前安全後續 checkpoint 是 `main@09ff38e`。`8ba7231` 以 Linux-only
-`nix 0.30.1` 的安全 API 取代 Linux raw `getifaddrs` pointer traversal，並移除三條
-CodeQL 回報的動態測試 panic／log 路徑。Windows CLI 1,340/1,340 PASS；Castle 在
-`09ff38e` 又完成 target-candidate 10/10、完整 Linux CLI 1,307/1,307、Clippy、
-Rustfmt、locked Cargo metadata/tree，checkout clean 且 SHA 對齊。GitHub CI 在
-`8ba7231` 仍抓到一個真實 Linux `-D warnings` failure：舊 network-byte-order helper
-已成 Linux dead code；`09ff38e` 已把它精確限於 macOS。後續
-[CI run 33701122412](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122412)
-已 terminal SUCCESS：受影響的 Rust core/CLI 與 Tauri Linux compile jobs 均 PASS，
-不相關 lanes 依 classifier 預期 skipped，aggregate job 也 PASS。
-[CodeQL run 33701122410](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122410)
-也已對 Rust 與 JavaScript/TypeScript terminal SUCCESS。獨立來看，`8ba7231` 的
-[CodeQL run 33700815840](https://github.com/teddashh/ai-security-scanner/actions/runs/33700815840)
-已完成 Rust 與 JavaScript/TypeScript analysis並 SUCCESS；GitHub API目前回報
-0 個 open code-scanning alerts，#2／#4／#5／#7 都由新分析在
-`2026-09-03T00:54:32Z` 判定 fixed，沒有人工 dismissal；API 維持 0 個 open alerts。
-`31f137d` 仍是完整 GitHub affected-lane 歷史基線；`09ff38e` 是範圍較窄的安全修正
-affected-lane follow-up。
+它仍是預發布版的原因：依照[發行政策](docs/release/README.md)與產品規格，只有在一位符合條件的 Windows 新手於同一個建置上完整走完「安裝到第一份報告」的流程，而且 Windows Authenticode 簽章驗證完成之後，才能稱為穩定版。這兩項紀錄目前都還沒有。Release 頁面與安裝程式旁的 `release-metadata.json` 會逐一列出每個檔案已觀察與未觀察的流程。
 
 安裝前先知道三件事：
 
 - Authenticode 簽章尚未完成驗證，因此 Windows 可能顯示「未知的發行者」；
-- 這個精確版本的完整首次設定到 localhost 報告流程仍在實機測試；
+- 這個精確版本的完整首次設定到 localhost 報告流程，還沒有由獨立的新手實機驗證；
 - Release 頁面會清楚列出已測與未測內容。卡住時請回報畫面與步驟。
+
+每個安裝程式都由發行流程從標記的原始碼建置，並附上 SHA-256 檢查碼、SBOM，以及可用 `gh attestation verify` 驗證的 GitHub 建置證明。
 
 如果只想先看介面，可以使用下方瀏覽器展示版；它不會執行真正的安全掃描。
 
@@ -92,6 +72,8 @@ npm run dev
 ## 你的資料與掃描範圍
 
 專案、發現項目與證據會留在你的裝置上，除非你主動連接資料來源或匯出。產品不會修改掃描的原始程式碼，也不會自動套用修復。
+
+案件資料與證據目前依賴作業系統帳號與磁碟保護；應用程式本身沒有額外提供靜態資料加密。能存取你的帳號、管理員帳號或未受保護磁碟的人，可能讀取這些資料。
 
 只能掃描你擁有或確定獲准評估的系統。應用程式會記錄明確選定的範圍、使用保守預設值，並且必須揭露沒有涵蓋的主機、連接埠、路徑、檔案、帳號、階段或檢查。
 
@@ -113,6 +95,7 @@ npm run dev
 npm ci
 npm run typecheck
 npm run test:frontend
+npm run test:component
 npm run build
 ```
 
@@ -140,10 +123,17 @@ npm run tauri dev
 - [資料來源授權實作參考](docs/provider-authorization.md)
 - [掃描引擎目錄](docs/engine-catalog.md)
 - [發行、驗證與發布政策](docs/release/README.md)
-- [目前 v0.1.8 foreground QC 交接與測試證據](docs/release/v0.1.8-foreground-qc/README.zh-TW.md)
+- [掃描引擎映像供應鏈](docs/release/engine-image-supply-chain.md)
+- [掃描引擎維護](docs/engine-maintenance.md)
 - [安全政策](SECURITY.md)
 - [第三方元件清單](THIRD_PARTY.md)
 - [貢獻指南](CONTRIBUTING.md)
+
+以下是有日期的工程紀錄，描述的是撰寫當時的 commit，不代表目前狀態：
+
+- [v0.1.8 foreground QC 交接與測試證據](docs/release/v0.1.8-foreground-qc/README.zh-TW.md)
+- [使用者可見誠實性審計交接](docs/honesty-audit-handover.md)
+- [掃描引擎對齊交接](docs/engine-alignment-handover.zh-TW.md)
 
 ### 程式庫結構
 
@@ -151,7 +141,11 @@ npm run tauri dev
 src/                         React 桌面介面
 src-tauri/                   Rust/Tauri 本機案件服務與命令列介面
 engines/catalog.json         有版本的掃描引擎登錄表
+engines/images/              受管理掃描引擎映像的來源與發布紀錄
 mappings/                    有版本的框架對照資料
+runtime/                     受管理執行環境與閘道器的清單
+scripts/release/             發行、驗證與發布工具
+tests/                       前端、元件、引擎與發行契約測試
 docs/product-spec.md         正式產品行為規格
 docs/product-audit.md        基準審計與實作順序
 ```

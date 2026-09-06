@@ -2,7 +2,7 @@
 
 Status: implementation architecture
 
-Last updated: 2026-08-30
+Last updated: 2026-09-06
 
 Normative status: this is a subordinate implementation reference. The [canonical product specification](product-spec.md) controls user-visible behavior and acceptance. Any conflict in views, gates, runtime readiness, recovery, or delivery order is a current implementation/design gap, not an additional product requirement.
 

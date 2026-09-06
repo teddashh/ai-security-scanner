@@ -25,6 +25,7 @@ The project is currently pre-release. Security fixes are applied to the active d
 - Administrative bootstrap material must never enter a third-party engine, adapter, log, crash report, command line, environment variable, or Docker metadata.
 - External active contact must not start without a matching, unexpired asset scope grant. For the ordinary exact low-impact path, the combined **Start** action records that grant inline; it is not a second consent page. The operation-scoped refusal must leave unrelated targets, local checks, saved reports, and exports available.
 - Raw evidence must be treated as sensitive even when scanning is read-only.
+- Local case data and evidence rely on protected per-user filesystem permissions; the application does not add encryption at rest. Access to the user account, an administrator account, or an unprotected disk may expose them.
 - Export signatures attest only to package integrity after export, not scan correctness, completeness, identity, compliance, or forensic chain of custody.
 - “Unknown” and “not connected” must never be converted into “passed.”
 - No remediation command may be executed by the product or an included AI skill.

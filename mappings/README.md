@@ -8,8 +8,10 @@ specific source rule is topically related to the named control. It is not a
 compliance result, certification statement, control-effectiveness test, or
 substitute for expert assessment.
 
-Mappings are deliberately allowlisted by engine and exact source rule. A
-bounded prefix is used only for the standardized `CVE-` identifier family.
+Mappings are deliberately allowlisted by engine and exact source rule.
+Bounded prefixes are used only for the standardized `CVE-` identifier family
+and the reviewed `trufflehog:` adapter namespace, whose emitted results are
+credential findings.
 Unknown rules remain unmapped; the product never guesses a control from a
 finding title, severity, or target-controlled text. Inventory and discovery
 observations such as Syft, CloudQuery, Naabu, and httpx output are not mapped

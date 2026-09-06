@@ -22,9 +22,9 @@ If one check cannot run, the other checks keep going. The report stays honest ab
 - **A website or API** — check an exact live URL for common exposure and known weaknesses.
 - **Public IP addresses or domains** — see which selected services are reachable from the internet.
 - **A home or office network** — check an approved internal host or range such as a `/24`.
-- **Source code or a GitHub repository** — find risky code, exposed secrets, vulnerable dependencies, and configuration mistakes without changing the project.
-- **An AI application** — check the selected code, dependencies, secrets, prompts, and deployment files, while clearly stating what model behavior was not tested.
-- **Advanced sources** — connect a cloud account, or inspect infrastructure as code, an exported container image, or Kubernetes configuration when you need those paths.
+- **Source code or a local read-only copy of a repository** — find risky code, exposed secrets, vulnerable dependencies, and configuration mistakes without changing the project.
+- **An AI application** — check the selected code, dependencies, secrets, and related deployment files, while clearly stating that model behavior was not tested.
+- **Advanced sources** — connect an AWS, Azure, Google Cloud, or Microsoft 365 account, or inspect infrastructure as code, an exported container image, or Kubernetes configuration when you need those paths.
 
 ## One simple flow
 
@@ -42,39 +42,17 @@ NIST CSF, ISO/IEC 27001, and AIDEFEND references help you understand how a findi
 
 ## Current availability
 
-Want to try the real Windows app? Use the **v0.1.8 public testing prerelease** on the [GitHub Releases page](https://github.com/teddashh/ai-security-scanner/releases). It is a test build, not a stable or beginner-ready release yet.
+The newest build you can install is the **v0.1.8 public testing prerelease** on the [GitHub Releases page](https://github.com/teddashh/ai-security-scanner/releases). It is offered so the real installer can be tested. It is not a stable or beginner-ready release.
 
-The `main` source is ahead of those prerelease binaries. Developers should use
-the [v0.1.8 foreground QC handover](docs/release/v0.1.8-foreground-qc-handover.md)
-for the exact source, validation, and remaining-gap record; do not treat the
-older downloadable installer as a build of current `main`.
-
-The current security follow-up is `main@09ff38e`. Commit `8ba7231` replaced the
-Linux raw `getifaddrs` pointer traversal with the Linux-only `nix 0.30.1` safe
-API and removed three CodeQL-reported dynamic test panic/log paths. Windows CLI
-tests passed 1,340/1,340; Castle then passed the target-candidate regression
-10/10, the complete Linux CLI workspace 1,307/1,307, Clippy, Rustfmt, and locked
-Cargo metadata/tree checks at `09ff38e`, with a clean aligned checkout. GitHub
-CI at `8ba7231` nevertheless found a real Linux `-D warnings` failure: the old
-network-byte-order helper had become Linux dead code. `09ff38e` scopes that
-helper to macOS. The follow-up [CI run 33701122412](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122412)
-completed successfully: the affected Rust core/CLI and Tauri Linux compile jobs
-passed, the classifier skipped unrelated lanes as expected, and the aggregate
-job passed. The follow-up [CodeQL run 33701122410](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122410)
-also completed successfully for Rust and JavaScript/TypeScript. Independently,
-the completed `8ba7231`
-[CodeQL run 33700815840](https://github.com/teddashh/ai-security-scanner/actions/runs/33700815840)
-succeeded for Rust and JavaScript/TypeScript, and GitHub now reports zero open
-code-scanning alerts: #2, #4, #5, and #7 were fixed by the new analysis at
-`2026-09-03T00:54:32Z`, with no dismissal. The API remains at zero open alerts.
-The `31f137d` run remains the historical full GitHub affected-lane baseline;
-the `09ff38e` run was the narrower security-fix affected-lane follow-up.
+It stays a prerelease because the [release policy](docs/release/README.md) and the product specification let a build be called stable only after a qualifying Windows beginner has completed the installed first-scan journey on that exact build, and after Windows Authenticode signing is verified. Neither record exists yet. The release page and the `release-metadata.json` file published next to the installers list every observed and unobserved path for each artifact.
 
 Before installing:
 
 - Windows may show an **Unknown publisher** warning because Authenticode signing has not been verified;
-- the complete first-time setup and localhost-report journey is still being tested on this exact build; and
+- the complete first-time setup and localhost-report journey has not been observed on this exact build by an independent beginner; and
 - the release page says exactly what was and was not tested. Please report the screen or step where you get stuck.
+
+Every installer is built from the tagged source by the release workflow and published with SHA-256 checksums, SBOMs, and a GitHub build attestation that `gh attestation verify` can check.
 
 If you only want to explore the interface, use the browser demo below. It does not perform a real security assessment.
 
@@ -94,6 +72,8 @@ Open the local address printed by Vite.
 ## Your data and your scope
 
 Projects, findings, and evidence stay on your device unless you deliberately connect a source or export them. The product does not change scanned source files or automatically apply fixes.
+
+Case data and evidence rely on your operating-system account and disk protections; the app does not add encryption at rest. Anyone with access to your account, an administrator account, or an unprotected disk may be able to read them.
 
 Only scan systems you own or are authorized to assess. The app records the exact selected scope, uses conservative defaults, and must disclose any host, port, path, file, account, stage, or check it did not cover.
 
@@ -115,6 +95,7 @@ Run the low-cost web checks:
 npm ci
 npm run typecheck
 npm run test:frontend
+npm run test:component
 npm run build
 ```
 
@@ -142,10 +123,17 @@ These source-development commands do not prove that the installed Windows beginn
 - [Provider authorization implementation reference](docs/provider-authorization.md)
 - [Engine catalog](docs/engine-catalog.md)
 - [Release, qualification, and publication policy](docs/release/README.md)
-- [Current v0.1.8 foreground QC handover](docs/release/v0.1.8-foreground-qc-handover.md)
+- [Engine image supply chain](docs/release/engine-image-supply-chain.md)
+- [Engine maintenance](docs/engine-maintenance.md)
 - [Security policy](SECURITY.md)
 - [Third-party inventory](THIRD_PARTY.md)
 - [Contributing](CONTRIBUTING.md)
+
+Dated engineering records describe the commit they were written at, not current status:
+
+- [v0.1.8 foreground QC handover](docs/release/v0.1.8-foreground-qc-handover.md)
+- [User-facing honesty audit handover](docs/honesty-audit-handover.md)
+- [Engine alignment handover (Traditional Chinese)](docs/engine-alignment-handover.zh-TW.md)
 
 ### Repository layout
 
@@ -153,7 +141,11 @@ These source-development commands do not prove that the installed Windows beginn
 src/                         React desktop interface
 src-tauri/                   Rust/Tauri local case service and CLI
 engines/catalog.json         Versioned engine registry
+engines/images/              Managed engine image sources and publication records
 mappings/                    Versioned framework mappings
+runtime/                     Managed runtime and gateway manifests
+scripts/release/             Release, qualification, and publication tooling
+tests/                       Frontend, component, engine, and release contract tests
 docs/product-spec.md         Canonical product behavior
 docs/product-audit.md        Baseline audit and implementation sequence
 ```

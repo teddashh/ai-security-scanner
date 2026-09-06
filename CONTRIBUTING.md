@@ -41,10 +41,13 @@ For a source change that affects the corresponding full frontend/backend boundar
 
 ```bash
 npm ci
+npm run test:frontend
+npm run test:component
 npm run typecheck
 npm run build
 cargo fmt --all -- --check
-cargo test --workspace --no-default-features --features cli
+cargo clippy --locked --workspace --no-default-features --features cli --all-targets -- -D warnings
+cargo test --locked --workspace --no-default-features --features cli
 ```
 
 Desktop builds additionally require Tauri's platform dependencies.
