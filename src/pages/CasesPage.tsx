@@ -473,6 +473,8 @@ const websiteErrorCopy: Record<WebsiteInputError, BilingualText> = {
   userinfo_not_allowed: { en: "Remove the username or password from the URL. The case never needs it.", zhTW: "請移除網址中的帳號或密碼；案件不需要這些資料。" },
   hostname_missing: { en: "The URL does not contain a website hostname.", zhTW: "這個網址沒有可辨識的網站主機名稱。" },
   hostname_invalid: { en: "The URL hostname must be a fully qualified hostname or IP address.", zhTW: "網址主機名稱必須是完整網域名稱或 IP 位址。" },
+  port_invalid: { en: "Use a website port from 1 through 65,535.", zhTW: "網站連接埠必須介於 1 到 65,535。" },
+  path_too_long: { en: "The encoded website path must be at most 2,048 characters.", zhTW: "編碼後的網站路徑不得超過 2,048 個字元。" },
 };
 
 const targetInputErrorCopy = {

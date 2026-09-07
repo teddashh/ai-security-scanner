@@ -266,4 +266,12 @@ test("deployed website parsing rejects credentials, non-web protocols, and ambig
       error: "hostname_invalid",
     }, websiteUrl);
   }
+  assert.deepEqual(prepareDeployedWebsiteTarget("https://example.test:0/"), {
+    ok: false,
+    error: "port_invalid",
+  });
+  assert.deepEqual(prepareDeployedWebsiteTarget(`https://example.test/${"界".repeat(300)}`), {
+    ok: false,
+    error: "path_too_long",
+  });
 });

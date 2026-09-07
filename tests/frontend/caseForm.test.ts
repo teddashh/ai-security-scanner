@@ -173,6 +173,22 @@ test("website preset rejects hostnames outside the native target boundary", () =
       error: { kind: "website", error: "hostname_invalid" },
     }, websiteUrl);
   }
+  assert.deepEqual(buildKnownAssets({
+    ...emptyDraft,
+    selectedUseCase: "deployed_website",
+    websiteUrl: "https://example.test:0/",
+  }), {
+    ok: false,
+    error: { kind: "website", error: "port_invalid" },
+  });
+  assert.deepEqual(buildKnownAssets({
+    ...emptyDraft,
+    selectedUseCase: "deployed_website",
+    websiteUrl: `https://example.test/${"界".repeat(300)}`,
+  }), {
+    ok: false,
+    error: { kind: "website", error: "path_too_long" },
+  });
 });
 
 test("invalid public and internal target lines are rejected before case creation", () => {

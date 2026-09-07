@@ -117,7 +117,9 @@ export type WebsiteInputError =
   | "unsupported_protocol"
   | "userinfo_not_allowed"
   | "hostname_missing"
-  | "hostname_invalid";
+  | "hostname_invalid"
+  | "port_invalid"
+  | "path_too_long";
 
 export interface PreparedWebsiteTarget {
   /** Canonical hostname/IP coordinate accepted by DeclaredAssetKind::ExternalTarget. */
@@ -164,6 +166,13 @@ export const prepareDeployedWebsiteTarget = (input: string): PrepareWebsiteTarge
 
   const protocol = url.protocol.slice(0, -1) as "http" | "https";
   const defaultPort = protocol === "https" ? 443 : 80;
+  const port = url.port ? Number(url.port) : defaultPort;
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    return { ok: false, error: "port_invalid" };
+  }
+  if (url.pathname.length > 2_048) {
+    return { ok: false, error: "path_too_long" };
+  }
   const target = url.hostname.startsWith("[") && url.hostname.endsWith("]")
     ? url.hostname.slice(1, -1)
     : url.hostname;
@@ -177,7 +186,7 @@ export const prepareDeployedWebsiteTarget = (input: string): PrepareWebsiteTarge
       target: externalComparisonKey(target),
       service: {
         protocol,
-        port: url.port ? Number(url.port) : defaultPort,
+        port,
         path: url.pathname,
         queryWasRemoved: Boolean(url.search || url.hash),
       },
