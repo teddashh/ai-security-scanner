@@ -677,7 +677,10 @@ mod tests {
         }
         for target in corpus["rejected"].as_array().expect("rejected targets") {
             let target = target.as_str().expect("rejected target string");
-            assert!(CanonicalTarget::parse(target).is_err(), "rejected: {target}");
+            assert!(
+                CanonicalTarget::parse(target).is_err(),
+                "rejected: {target}"
+            );
         }
     }
 
