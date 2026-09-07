@@ -282,6 +282,24 @@ function validateOperatingSystemSigningDetails(details, label, expected) {
   }
 }
 
+function validateUnsignedOperatingSystemSigningObservation(details, label, expected) {
+  exactKeys(
+    details,
+    ["signatureScheme", "signatureStatus", "artifactSha256", "verificationTool"],
+    `${label} unsigned operating-system signing observation`,
+  );
+  assert(details.signatureScheme === "authenticode", `${label} signature scheme is not Authenticode`);
+  assert(details.signatureStatus === "NotSigned", `${label} does not record an unsigned installer`);
+  assert(
+    details.artifactSha256 === expected.artifact.sha256,
+    `${label} unsigned observation is not bound to the installer digest`,
+  );
+  assert(
+    details.verificationTool === "Get-AuthenticodeSignature",
+    `${label} Authenticode verification tool is not the fixed Windows verifier`,
+  );
+}
+
 export function validateBoundArtifactEvidence(evidence, expected) {
   const label = expected.label ?? expected.evidenceType;
   exactKeys(
@@ -321,7 +339,14 @@ export function validateBoundArtifactEvidence(evidence, expected) {
       evidence.artifact.sha256 === expected.artifact.sha256,
     `${label} artifact identity mismatch`,
   );
-  assert(evidence.outcome === "passed", `${label} outcome did not pass`);
+  const unsignedObservation =
+    expected.evidenceType === "operating-system-code-signing-observation";
+  assert(
+    evidence.outcome === (unsignedObservation ? "not-configured" : "passed"),
+    unsignedObservation
+      ? `${label} must record the not-configured outcome without claiming verified signing`
+      : `${label} outcome did not pass`,
+  );
   assert(
     typeof evidence.observedAt === "string" && !Number.isNaN(Date.parse(evidence.observedAt)),
     `${label} observedAt is invalid`,
@@ -330,6 +355,8 @@ export function validateBoundArtifactEvidence(evidence, expected) {
     validateHumanDetails(evidence.details, label);
   } else if (expected.evidenceType === "operating-system-code-signing") {
     validateOperatingSystemSigningDetails(evidence.details, label, expected);
+  } else if (unsignedObservation) {
+    validateUnsignedOperatingSystemSigningObservation(evidence.details, label, expected);
   } else if (expected.evidenceType === "apple-notarization") {
     validateVerificationDetails(evidence.details, label);
   } else {

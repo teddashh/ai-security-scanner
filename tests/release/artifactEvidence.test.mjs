@@ -311,3 +311,40 @@ test("Authenticode evidence cannot promote fixture strings without protected pro
     /not bound to the installer digest/u,
   );
 });
+
+test("an exact NotSigned observation is retained without becoming Authenticode evidence", () => {
+  const observation = {
+    schemaVersion: 1,
+    evidenceType: "operating-system-code-signing-observation",
+    product: "ai-security-scanner",
+    platform: "windows-x86_64",
+    installerType: "nsis",
+    releaseIdentity: { version: "0.1.8", tag: "v0.1.8", sourceCommit: "01".repeat(20) },
+    artifact: { ...artifact },
+    outcome: "not-configured",
+    observedAt: "2026-08-30T12:00:00Z",
+    details: {
+      signatureScheme: "authenticode",
+      signatureStatus: "NotSigned",
+      artifactSha256: artifact.sha256,
+      verificationTool: "Get-AuthenticodeSignature",
+    },
+  };
+  const observationExpected = {
+    ...expected,
+    evidenceType: "operating-system-code-signing-observation",
+  };
+  assert.doesNotThrow(() => validateBoundArtifactEvidence(observation, observationExpected));
+
+  observation.outcome = "passed";
+  assert.throws(
+    () => validateBoundArtifactEvidence(observation, observationExpected),
+    /without claiming verified signing/u,
+  );
+  observation.outcome = "not-configured";
+  observation.details.signatureStatus = "Valid";
+  assert.throws(
+    () => validateBoundArtifactEvidence(observation, observationExpected),
+    /does not record an unsigned installer/u,
+  );
+});

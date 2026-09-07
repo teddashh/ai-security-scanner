@@ -42,9 +42,9 @@ NIST CSF, ISO/IEC 27001, and AIDEFEND references help you understand how a findi
 
 ## Current availability
 
-The newest build you can install is the **v0.1.8 public testing prerelease** on the [GitHub Releases page](https://github.com/teddashh/ai-security-scanner/releases). It is offered so the real installer can be tested. It is not a stable or beginner-ready release.
+Installable builds are listed on the [GitHub Releases page](https://github.com/teddashh/ai-security-scanner/releases). A build labeled as a public testing prerelease is offered so its real installer can be tested; it is not a stable or beginner-ready release.
 
-It stays a prerelease because the [release policy](docs/release/README.md) and the product specification let a build be called stable only after a qualifying Windows beginner has completed the installed first-scan journey on that exact build, and after Windows Authenticode signing is verified. Neither record exists yet. The release page and the `release-metadata.json` file published next to the installers list every observed and unobserved path for each artifact.
+Under the [release policy](docs/release/README.md) and the product specification, a Windows build remains a prerelease until a qualifying beginner has completed the installed first-scan journey on those exact bytes and Windows Authenticode signing is verified. The release page and the `release-metadata.json` file published next to the installers list every observed and unobserved path for each artifact.
 
 Before installing:
 
@@ -123,6 +123,7 @@ These source-development commands do not prove that the installed Windows beginn
 - [Provider authorization implementation reference](docs/provider-authorization.md)
 - [Engine catalog](docs/engine-catalog.md)
 - [Release, qualification, and publication policy](docs/release/README.md)
+- [v0.1.9 public testing prerelease notes](docs/release/v0.1.9.md)
 - [Windows external qualification plan](docs/release/windows-external-qualification-plan.md) ([Traditional Chinese](docs/release/windows-external-qualification-plan.zh-TW.md))
 - [Engine image supply chain](docs/release/engine-image-supply-chain.md)
 - [Engine maintenance](docs/engine-maintenance.md)

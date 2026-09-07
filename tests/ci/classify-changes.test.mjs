@@ -271,6 +271,27 @@ test("shared Node dependency changes exercise every Node and desktop packaging c
   assert.equal(result.rust_core, false);
 });
 
+test("every frozen-release workflow and release schema schedules release-contract tests", () => {
+  for (const path of [
+    ".github/workflows/release.yml",
+    ".github/workflows/promote-release.yml",
+    ".github/workflows/windows-external-evidence.yml",
+    "docs/release/release-metadata.schema.json",
+    "docs/release/engine-image-supply-chain.schema.json",
+    "docs/release/windows-installed-lifecycle-evidence.schema.json",
+    "docs/release/windows-external-evidence-receipt.schema.json",
+  ]) {
+    const result = classifyChangedPaths([path]);
+    assert.equal(result.release_contract, true, `${path} skipped release-contract tests`);
+    assert.equal(result.docs_only, false, `${path} was misclassified as documentation-only`);
+  }
+  assert.equal(
+    classifyChangedPaths(["docs/release/windows-external-qualification-plan.md"]).release_contract,
+    false,
+    "release prose alone should not schedule the heavyweight release-contract lane",
+  );
+});
+
 test("CI classifier changes rely on the always-run classifier test, not heavyweight lanes", () => {
   assert.deepEqual(classifyChangedPaths([
     ".github/workflows/ci.yml",

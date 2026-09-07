@@ -16,11 +16,59 @@ import { verifyBoundArtifactEvidenceFile } from "./artifact-evidence.mjs";
 import { verifyPlatformQualificationFile } from "./platform-qualification.mjs";
 import { verifyUpdaterSignatures } from "./verify-updater-signatures.mjs";
 import { verifyWindowsNsisSupportingDataPreservationEvidence } from "./windows-data-preservation-evidence.mjs";
+import {
+  WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE,
+  verifyFinalizedWindowsExternalEvidenceOutcomes,
+  verifyFinalizedWindowsExternalEvidence,
+  windowsExternalEvidenceImporterIdentity,
+} from "./windows-external-evidence.mjs";
 
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function expectedExternalEvidenceImporter(args) {
+  const workflowRef = requireString(args, "external-evidence-workflow-ref");
+  const separator = workflowRef.lastIndexOf("@");
+  assert(separator > 0, "external-evidence workflow ref must end in its full workflow SHA");
+  const importer = windowsExternalEvidenceImporterIdentity({
+    repository: requireString(args, "external-evidence-repository"),
+    workflow: requireString(args, "external-evidence-workflow"),
+    workflowSha: workflowRef.slice(separator + 1),
+    runId: requireString(args, "external-evidence-run-id"),
+    runAttempt: requireString(args, "external-evidence-run-attempt"),
+    job: requireString(args, "external-evidence-job"),
+    environment: requireString(args, "external-evidence-environment"),
+  });
+  assert(importer.workflowRef === workflowRef, "external-evidence workflow ref is inconsistent");
+  return importer;
+}
+
+const EXTERNAL_EVIDENCE_IMPORTER_ARGUMENTS = Object.freeze([
+  "external-evidence-repository",
+  "external-evidence-workflow",
+  "external-evidence-workflow-ref",
+  "external-evidence-run-id",
+  "external-evidence-run-attempt",
+  "external-evidence-job",
+  "external-evidence-environment",
+]);
+
+function externalEvidenceImporterForRelease(args, hasReceipt) {
+  const supplied = EXTERNAL_EVIDENCE_IMPORTER_ARGUMENTS.filter((key) => args.has(key));
+  assert(
+    supplied.length === 0 || supplied.length === EXTERNAL_EVIDENCE_IMPORTER_ARGUMENTS.length,
+    "external-evidence importer arguments must be supplied as one complete set",
+  );
+  assert(
+    hasReceipt === (supplied.length === EXTERNAL_EVIDENCE_IMPORTER_ARGUMENTS.length),
+    hasReceipt
+      ? "protected external-evidence receipt requires its exact importer arguments"
+      : "external-evidence importer arguments were supplied without a protected receipt",
+  );
+  return hasReceipt ? expectedExternalEvidenceImporter(args) : null;
 }
 
 const PUBLICATION_MODES = new Set(["commit-bound-qc", "public-github-release"]);
@@ -171,6 +219,9 @@ async function main() {
   const updaterPublicKey = tauriConfig.plugins?.updater?.pubkey;
   const updaterTargets = new Set();
   const updaterTargetRecords = new Map();
+  const hasExternalEvidenceReceipt = actualByPath.has(WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE);
+  const externalEvidenceImporter = externalEvidenceImporterForRelease(args, hasExternalEvidenceReceipt);
+  let verifiedExternalEvidence = null;
   let offeredArtifacts = 0;
   for (const platform of releaseMetadata.distribution.platforms) {
     for (const installer of platform.installers) {
@@ -181,6 +232,32 @@ async function main() {
       assert(actual, `offered artifact is missing: ${artifact.file}`);
       assert(actual.bytes === artifact.bytes, `offered artifact byte count mismatch: ${artifact.file}`);
       assert(checksums.get(artifact.file) === artifact.sha256, `offered artifact digest mismatch: ${artifact.file}`);
+      if (
+        hasExternalEvidenceReceipt &&
+        platform.platform === "windows-x86_64" &&
+        installer.installerType === "nsis"
+      ) {
+        verifiedExternalEvidence = await verifyFinalizedWindowsExternalEvidence({
+          directory,
+          expectedImporter: externalEvidenceImporter,
+          artifact: { file: artifact.file, bytes: artifact.bytes, sha256: artifact.sha256 },
+          version,
+          tag,
+          commit,
+          releaseChannel: releaseMetadata.releaseChannel,
+          publicationMode,
+        });
+        verifyFinalizedWindowsExternalEvidenceOutcomes({
+          receipt: verifiedExternalEvidence.receipt,
+          receiptFile: {
+            path: WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE,
+            bytes: actualByPath.get(WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE).bytes,
+            sha256: checksums.get(WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE),
+          },
+          humanPath: artifact.humanPath,
+          windowsLifecycle: artifact.windowsLifecycle,
+        });
+      }
       const technicalEvidence = artifact.technicalQualification.evidenceFile;
       assert(actualByPath.has(technicalEvidence), `artifact-scoped evidence is missing: ${technicalEvidence}`);
       await verifyPlatformQualificationFile(path.join(directory, technicalEvidence), {
@@ -209,6 +286,21 @@ async function main() {
           evidenceType,
           label: outcome.evidenceFile,
         });
+      }
+      if (artifact.humanPath.state === "verified") {
+        assert(
+          verifiedExternalEvidence && platform.platform === "windows-x86_64" && installer.installerType === "nsis",
+          "verified Windows beginner evidence has no protected external-evidence receipt",
+        );
+      }
+      if (["verified", "partial", "failed"].includes(artifact.windowsLifecycle.state)) {
+        assert(verifiedExternalEvidence, "observed Windows lifecycle has no protected external-evidence receipt");
+        for (const record of artifact.windowsLifecycle.evidenceFiles) {
+          const actualEvidence = actualByPath.get(record.path);
+          assert(actualEvidence, `Windows lifecycle evidence is missing: ${record.path}`);
+          assert(actualEvidence.bytes === record.bytes, `Windows lifecycle evidence bytes changed: ${record.path}`);
+          assert(checksums.get(record.path) === record.sha256, `Windows lifecycle evidence digest changed: ${record.path}`);
+        }
       }
       if (artifact.windowsDataPreservation.state === "supporting-data-preservation-only") {
         for (const dataPreservationFile of artifact.windowsDataPreservation.evidenceFiles) {
@@ -293,6 +385,10 @@ async function main() {
     }
   }
   assert(offeredArtifacts > 0, "finalized release metadata has no offered artifact");
+  assert(
+    !hasExternalEvidenceReceipt || verifiedExternalEvidence,
+    "protected external-evidence receipt is not bound to an offered Windows NSIS artifact",
+  );
   assert(
     JSON.stringify(sorted(Object.keys(latest.platforms))) === JSON.stringify(sorted(updaterTargets)),
     "finalized updater manifest does not exactly match offered artifact updater targets",

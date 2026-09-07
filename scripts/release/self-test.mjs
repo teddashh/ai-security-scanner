@@ -15,8 +15,17 @@ import {
 import path from "node:path";
 import { PROJECT_ROOT, isSemver, readJson, runMain, sha256File, toPosix } from "./lib.mjs";
 import { createPlatformQualification } from "./platform-qualification.mjs";
+import { createReleaseCandidateLock } from "./release-candidate-lock.mjs";
 import { createPreparedReleaseMetadata } from "./release-metadata.mjs";
 import { verifyUpdaterSignatures } from "./verify-updater-signatures.mjs";
+import {
+  WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE,
+  WINDOWS_HUMAN_PATH_FILE,
+  WINDOWS_UNSIGNED_SIGNING_OBSERVATION_FILE,
+  importWindowsExternalEvidence,
+  materializeWindowsExternalEvidence,
+  windowsExternalEvidenceImporterIdentity,
+} from "./windows-external-evidence.mjs";
 
 const VERSION = JSON.parse(
   readFileSync(path.join(PROJECT_ROOT, "package.json"), "utf8"),
@@ -309,6 +318,7 @@ async function recursiveRegularFiles(root, directory = root) {
 }
 
 async function resealFinalizedFixture(directory) {
+  const releaseMetadata = await readJson(path.join(directory, "release-metadata.json"));
   const platformManifests = (await readdir(directory))
     .filter((name) => /^installers-(?:linux-x86_64|macos-universal|windows-x86_64)\.json$/u.test(name));
   for (const manifestName of platformManifests) {
@@ -337,7 +347,7 @@ async function resealFinalizedFixture(directory) {
       version: VERSION,
       tag: TAG,
       sourceCommit: COMMIT,
-      publicationMode: "commit-bound-qc",
+      publicationMode: releaseMetadata.publicationMode,
       indexSelfExcluded: true,
       files: await Promise.all(beforeIndex.map(async (file) => ({
         path: file.relative,
@@ -568,6 +578,86 @@ async function createQualificationFixture(output, platform, installerType) {
     },
   });
   await rm(qualificationRoot, { recursive: true, force: true });
+}
+
+async function createWindowsExternalObservationFixture(directory, artifact) {
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    path.join(directory, WINDOWS_HUMAN_PATH_FILE),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      evidenceType: "beginner-human-path",
+      product: "ai-security-scanner",
+      platform: "windows-x86_64",
+      installerType: "nsis",
+      releaseIdentity: { version: VERSION, tag: TAG, sourceCommit: COMMIT },
+      artifact,
+      outcome: "passed",
+      observedAt: "2026-09-07T12:00:00Z",
+      details: {
+        participantProfile: "windows-beginner-no-security-or-linux-experience",
+        participantBuiltProduct: false,
+        participantContributedToProduct: false,
+        participantRehearsedSetup: false,
+        facilitatorTookControl: false,
+        facilitatorDictatedOperationalSteps: false,
+        facilitatorAdministeredWsl: false,
+        terminalOpened: false,
+        typedCommandCount: 0,
+        windowsVersion: "Windows 11 Pro 24H2 build 26100",
+        firstReportTimingBasis:
+          "installer-launch-to-first-durable-report-excluding-os-shutdown-to-desktop",
+        firstReportElapsedSeconds: 420,
+        firstReportWallClockElapsedSeconds: 420,
+        excludedOperatingSystemRestartSeconds: 0,
+        totalJourneyElapsedSeconds: 900,
+        userDecisions: ["install", "start-localhost-scan"],
+        visibleErrors: [],
+        installed: true,
+        launched: true,
+        minimumLocalhostScanStarted: true,
+        beginnerReportViewed: true,
+        projectReopened: true,
+        readableReportExported: true,
+        readableExport: { format: "html", outcome: "exported-and-opened-readable" },
+        finalCoverage: {
+          state: "complete",
+          testedCount: 1,
+          notTestedCount: 0,
+          failedCount: 0,
+          coverageGapCount: 0,
+        },
+        localhostReport: {
+          target: "127.0.0.1:9001",
+          taskExecutionState: "executed",
+          outcome: "reachable",
+          findingCount: 0,
+          durableReportId: "11111111-2222-4333-8444-555555555555",
+          durableReportState: "saved",
+        },
+      },
+    }, null, 2)}\n`,
+  );
+  await writeFile(
+    path.join(directory, WINDOWS_UNSIGNED_SIGNING_OBSERVATION_FILE),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      evidenceType: "operating-system-code-signing-observation",
+      product: "ai-security-scanner",
+      platform: "windows-x86_64",
+      installerType: "nsis",
+      releaseIdentity: { version: VERSION, tag: TAG, sourceCommit: COMMIT },
+      artifact,
+      outcome: "not-configured",
+      observedAt: "2026-09-07T12:01:00Z",
+      details: {
+        signatureScheme: "authenticode",
+        signatureStatus: "NotSigned",
+        artifactSha256: artifact.sha256,
+        verificationTool: "Get-AuthenticodeSignature",
+      },
+    }, null, 2)}\n`,
+  );
 }
 
 async function main() {
@@ -1258,8 +1348,152 @@ async function main() {
     ) {
       throw new Error("technically qualified Windows prerelease installers were not offered");
     }
+
+    const protectedCandidateInput = path.join(temporary, "windows-protected-candidate-input");
+    await copyTree(scopedPublicInput, protectedCandidateInput);
+    const candidateProducer = {
+      version: VERSION,
+      tag: TAG,
+      commit: COMMIT,
+      releaseChannel: "prerelease",
+      publicationMode: "public-github-release",
+      repository: "teddashh/ai-security-scanner",
+      workflow: ".github/workflows/release.yml",
+      workflowSha: COMMIT,
+      runId: "123456789",
+      runAttempt: "1",
+      job: "finalize-supported-artifacts",
+    };
+    await createReleaseCandidateLock({ directory: protectedCandidateInput, ...candidateProducer });
+    const protectedCandidateManifest = await readJson(
+      path.join(protectedCandidateInput, "installers-windows-x86_64.json"),
+    );
+    const candidateNsis = protectedCandidateManifest.installers.find(({ bundleType }) => bundleType === "nsis");
+    const candidateNsisArtifact = {
+      file: candidateNsis.file,
+      bytes: candidateNsis.bytes,
+      sha256: candidateNsis.sha256,
+    };
+    const externalObservationInput = path.join(temporary, "windows-external-observations");
+    await createWindowsExternalObservationFixture(externalObservationInput, candidateNsisArtifact);
+    const protectedImporter = windowsExternalEvidenceImporterIdentity({
+      repository: "teddashh/ai-security-scanner",
+      workflow: ".github/workflows/windows-external-evidence.yml",
+      workflowSha: "23".repeat(20),
+      runId: "987654321",
+      runAttempt: "2",
+      job: "import",
+      environment: "windows-external-evidence",
+    });
+    const acceptedExternalEvidence = path.join(temporary, "accepted-windows-external-evidence");
+    await importWindowsExternalEvidence({
+      candidateDirectory: protectedCandidateInput,
+      evidenceDirectory: externalObservationInput,
+      output: acceptedExternalEvidence,
+      candidate: candidateProducer,
+      candidateArtifactId: "11223344",
+      candidateArtifactDigest: `sha256:${"ab".repeat(32)}`,
+      evidenceSource: {
+        repository: "teddashh/ai-security-scanner",
+        commit: "34".repeat(20),
+        path: `evidence/${TAG}/windows-x86_64`,
+      },
+      importer: protectedImporter,
+      importedAt: "2026-09-07T12:05:00Z",
+    });
+    const materializedExternalCandidate = path.join(temporary, "windows-candidate-with-external-evidence");
+    await materializeWindowsExternalEvidence({
+      directory: acceptedExternalEvidence,
+      candidateDirectory: protectedCandidateInput,
+      output: materializedExternalCandidate,
+      expectedImporter: protectedImporter,
+    });
+    const externalEvidenceArgs = [
+      "--external-evidence-repository", protectedImporter.repository,
+      "--external-evidence-workflow", protectedImporter.workflow,
+      "--external-evidence-workflow-ref", protectedImporter.workflowRef,
+      "--external-evidence-run-id", protectedImporter.runId,
+      "--external-evidence-run-attempt", String(protectedImporter.runAttempt),
+      "--external-evidence-job", protectedImporter.job,
+      "--external-evidence-environment", protectedImporter.environment,
+    ];
+    const finalizedWithExternalEvidence = path.join(temporary, "windows-finalized-with-external-evidence");
+    run("finalize-release.mjs", [
+      "--input", materializedExternalCandidate,
+      "--out", finalizedWithExternalEvidence,
+      "--version", VERSION,
+      "--tag", TAG,
+      "--commit", COMMIT,
+      "--publication-mode", "public-github-release",
+      "--tauri-config", tauriConfig,
+      ...externalEvidenceArgs,
+    ]);
+    const verifyExternalFinalizationArguments = [
+      "--dir", finalizedWithExternalEvidence,
+      "--version", VERSION,
+      "--tag", TAG,
+      "--commit", COMMIT,
+      "--publication-mode", "public-github-release",
+      "--tauri-config", tauriConfig,
+      ...externalEvidenceArgs,
+    ];
+    run("verify-finalized-release.mjs", verifyExternalFinalizationArguments);
+    expectFailure(
+      () => run("verify-finalized-release.mjs", [
+        "--dir", scopedPublicOutput,
+        "--version", VERSION,
+        "--tag", TAG,
+        "--commit", COMMIT,
+        "--publication-mode", "public-github-release",
+        "--tauri-config", tauriConfig,
+        ...externalEvidenceArgs,
+      ]),
+      "external-evidence importer selector without a protected receipt",
+    );
+    const protectedFinalMetadata = await readJson(
+      path.join(finalizedWithExternalEvidence, "release-metadata.json"),
+    );
+    const protectedFinalNsis = protectedFinalMetadata.distribution.platforms
+      .find(({ platform }) => platform === "windows-x86_64")
+      .installers.find(({ installerType }) => installerType === "nsis");
+    if (
+      protectedFinalNsis.artifact.humanPath.state !== "verified" ||
+      protectedFinalNsis.artifact.operatingSystemSigning.state !== "not-configured" ||
+      protectedFinalNsis.artifact.windowsLifecycle.state !== "not-observed"
+    ) {
+      throw new Error("protected external evidence was not represented with exact non-promotional outcomes");
+    }
+    await readFile(path.join(finalizedWithExternalEvidence, WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE));
+    await readFile(path.join(finalizedWithExternalEvidence, WINDOWS_UNSIGNED_SIGNING_OBSERVATION_FILE));
+
+    const resealedExternalOutcomeTamper = path.join(temporary, "resealed-external-outcome-tamper");
+    await copyTree(finalizedWithExternalEvidence, resealedExternalOutcomeTamper);
+    const tamperedExternalMetadata = await readJson(
+      path.join(resealedExternalOutcomeTamper, "release-metadata.json"),
+    );
+    tamperedExternalMetadata.distribution.platforms
+      .find(({ platform }) => platform === "windows-x86_64")
+      .installers.find(({ installerType }) => installerType === "nsis")
+      .artifact.windowsLifecycle.reason = "receipt-details-were-rewritten";
+    await writeFile(
+      path.join(resealedExternalOutcomeTamper, "release-metadata.json"),
+      `${JSON.stringify(tamperedExternalMetadata, null, 2)}\n`,
+    );
+    await resealFinalizedFixture(resealedExternalOutcomeTamper);
+    expectFailure(
+      () => run("verify-finalized-release.mjs", [
+        "--dir", resealedExternalOutcomeTamper,
+        "--version", VERSION,
+        "--tag", TAG,
+        "--commit", COMMIT,
+        "--publication-mode", "public-github-release",
+        "--tauri-config", tauriConfig,
+        ...externalEvidenceArgs,
+      ]),
+      "resealed protected external-evidence metadata rewrite",
+    );
     process.stdout.write(
-      "Release tooling self-test passed artifact-scoped v3, optional-updater, sibling-failure, and disclosed public-Windows-prerelease fixtures.\n",
+      "Release tooling self-test passed artifact-scoped v3, optional-updater, sibling-failure, protected external-evidence, and disclosed public-Windows-prerelease fixtures.\n",
     );
     return;
   } finally {

@@ -103,56 +103,55 @@ function validateActionReferences(value, workflowName) {
   }
 }
 
-async function readReleaseWorkflow() {
-  const file = path.join(PROJECT_ROOT, ".github/workflows/release.yml");
+async function readWorkflow(relative, label) {
+  const file = path.join(PROJECT_ROOT, relative);
   const source = await readFile(file, "utf8");
   const document = parseDocument(source, { prettyErrors: true, strict: true });
   if (document.errors.length > 0) {
-    throw new Error(`release.yml is invalid YAML: ${document.errors[0].message}`);
+    throw new Error(`${label} is invalid YAML: ${document.errors[0].message}`);
   }
   const workflow = document.toJS();
-  assert(workflow && typeof workflow === "object", "release.yml must contain a mapping");
-  assert(workflow.jobs && typeof workflow.jobs === "object", "release.yml has no jobs");
-  validateActionReferences(workflow, "release.yml");
+  assert(workflow && typeof workflow === "object", `${label} must contain a mapping`);
+  assert(workflow.jobs && typeof workflow.jobs === "object", `${label} has no jobs`);
+  validateActionReferences(workflow, label);
   return workflow;
 }
 
-export function validateReleaseWorkflow(workflow) {
+async function readReleaseWorkflow() {
+  return readWorkflow(".github/workflows/release.yml", "release.yml");
+}
+
+async function readPromotionWorkflow() {
+  return readWorkflow(".github/workflows/promote-release.yml", "promote-release.yml");
+}
+
+export function validateReleaseWorkflow(workflow, promotionWorkflow) {
   assert(workflow, ".github/workflows/release.yml is missing");
+  assert(promotionWorkflow, ".github/workflows/promote-release.yml is missing");
+  validateActionReferences(workflow, "release.yml");
   const trigger = workflow.on;
   assert(trigger && typeof trigger === "object", "release workflow has no structured trigger");
   assert(
-    JSON.stringify(Object.keys(trigger).sort()) === JSON.stringify(["push", "workflow_dispatch"]),
-    "release workflow must use only tag push and manual preflight triggers",
+    JSON.stringify(Object.keys(trigger)) === JSON.stringify(["workflow_dispatch"]),
+    "release candidate workflow must be manually dispatched and must not rebuild from a tag push",
   );
-  assert(Object.hasOwn(trigger, "workflow_dispatch"), "release preflight must remain manually runnable");
   const dispatch = trigger.workflow_dispatch;
-  const dispatchIsEmpty = dispatch === null ||
-    (typeof dispatch === "object" && Object.keys(dispatch).length === 0);
-  let supportsOptionalWindowsDataPreservation = false;
-  if (!dispatchIsEmpty) {
-    const input = dispatch?.inputs?.windows_data_preservation;
-    assert(
-      typeof dispatch === "object" &&
-        JSON.stringify(Object.keys(dispatch)) === JSON.stringify(["inputs"]) &&
-        dispatch.inputs && typeof dispatch.inputs === "object" &&
-        JSON.stringify(Object.keys(dispatch.inputs)) === JSON.stringify(["windows_data_preservation"]) &&
-        input && typeof input === "object" &&
-        JSON.stringify(Object.keys(input).sort()) ===
-          JSON.stringify(["default", "description", "required", "type"]) &&
-        typeof input.description === "string" && input.description.length > 0 &&
-        input.required === false && input.type === "boolean" && input.default === false,
-      "release preflight may accept only the false-by-default Windows data-preservation fixture switch",
-    );
-    supportsOptionalWindowsDataPreservation = true;
-  }
+  const publicCandidateInput = dispatch?.inputs?.public_release_candidate;
+  const dataPreservationInput = dispatch?.inputs?.windows_data_preservation;
   assert(
-    Array.isArray(trigger.push.tags) &&
-      trigger.push.tags.length === 1 &&
-      trigger.push.tags[0] === "v[0-9]*.[0-9]*.[0-9]*",
-    "release workflow tag prefilter is incorrect",
+    dispatch && typeof dispatch === "object" &&
+      JSON.stringify(Object.keys(dispatch)) === JSON.stringify(["inputs"]) &&
+      JSON.stringify(Object.keys(dispatch.inputs ?? {})) ===
+        JSON.stringify(["public_release_candidate", "windows_data_preservation"]) &&
+      [publicCandidateInput, dataPreservationInput].every((input) =>
+        input && typeof input === "object" &&
+          JSON.stringify(Object.keys(input).sort()) ===
+            JSON.stringify(["default", "description", "required", "type"]) &&
+          typeof input.description === "string" && input.description.length > 0 &&
+          input.required === false && input.type === "boolean" && input.default === false),
+    "release candidate workflow may accept only false-by-default public-candidate and Windows-fixture switches",
   );
-  assert(!trigger.push.branches, "release workflow must not publish from branch pushes");
+  const supportsOptionalWindowsDataPreservation = true;
   assert(workflow.permissions?.contents === "read", "release workflow default contents permission must be read");
   assert(
     !Object.values(workflow.permissions ?? {}).includes("write"),
@@ -180,7 +179,6 @@ export function validateReleaseWorkflow(workflow) {
   assert(identity && typeof identity.run === "string", "release workflow has no identity resolver");
   for (const required of [
     'candidate_tag="v${version}"',
-    '"refs/tags/${candidate_tag}"',
     '"refs/heads/main"',
     'event_commit="$(git rev-parse "${EVENT_SHA}^{commit}")"',
     '"${commit}" != "${event_commit}"',
@@ -191,6 +189,10 @@ export function validateReleaseWorkflow(workflow) {
     "publication_mode=%s",
     'publication_mode="commit-bound-qc"',
     'publication_mode="public-github-release"',
+    'case "${PUBLIC_RELEASE_CANDIDATE}" in',
+    'true) publication_mode="public-github-release" ;;',
+    'false) publication_mode="commit-bound-qc" ;;',
+    '"${EVENT_NAME}" != "workflow_dispatch" || "${EVENT_REF}" != "refs/heads/main"',
     "prerelease=%s",
     "make_latest=%s",
   ]) {
@@ -324,113 +326,63 @@ export function validateReleaseWorkflow(workflow) {
     }
   }
 
-  const publicationEntries = Object.entries(workflow.jobs ?? {}).filter(([, job]) =>
+  validateReleaseCandidateFreeze({
+    workflow,
+    identityJobName,
+    buildJobName,
+    windowsDataPreservationJobName,
+  });
+  validatePromotionWorkflow(promotionWorkflow);
+}
+
+function validateReleaseCandidateFreeze({
+  workflow,
+  identityJobName,
+  buildJobName,
+  windowsDataPreservationJobName,
+}) {
+  const allReleaseSteps = Object.values(workflow.jobs ?? {}).flatMap((job) => job.steps ?? []);
+  const unsupportedPromotionDownloads = allReleaseSteps.filter((step) =>
+    typeof step.uses === "string" &&
+      step.uses.includes("actions/download-artifact@") &&
+      ["artifact-qc-observations-*", "artifact-promotion-evidence-*"].includes(step.with?.pattern),
+  );
+  assert(
+    unsupportedPromotionDownloads.length === 0,
+    "release candidate workflow must not ingest an unprotected observation or promotion namespace",
+  );
+  for (const [jobName, job] of Object.entries(workflow.jobs)) {
+    assert(
+      !Object.values(job.permissions ?? {}).includes("write"),
+      `${jobName} job must not receive write permissions`,
+    );
+    const source = JSON.stringify(job);
+    assert(!source.includes("action-gh-release"), "release candidate workflow must not publish a GitHub Release");
+    assert(!source.includes("attest-build-provenance"), "release candidate workflow must not create attestations");
+  }
+
+  const finalizerEntries = Object.entries(workflow.jobs ?? {}).filter(([, job]) =>
     job.steps?.some((step) =>
-      typeof step.uses === "string" && step.uses.includes("softprops/action-gh-release@"),
+      typeof step.run === "string" && step.run.includes("scripts/release/finalize-release.mjs"),
     ),
   );
-  assert(publicationEntries.length === 1, "release workflow must have one GitHub Release publication job");
-  const [publishJobName, publish] = publicationEntries[0];
-  const publishNeeds = Array.isArray(publish.needs) ? publish.needs : [publish.needs].filter(Boolean);
-  const finalizerNeedNames = publishNeeds.filter((jobName) => jobName !== identityJobName);
-  assert(
-    publishNeeds.includes(identityJobName) && finalizerNeedNames.length === 1,
-    "publish job must consume the version-derived identity and exactly one finalizer",
-  );
-  const publicationFinalizerJobName = finalizerNeedNames[0];
-  const publishCondition = String(publish.if ?? "").replaceAll(/\s+/gu, " ").trim();
-  const expectedPublishCondition =
-    `always() && needs.${identityJobName}.result == 'success' && ` +
-    `needs['${publicationFinalizerJobName}'].result == 'success' && ` +
-    `github.event_name == 'push' && ` +
-    `github.ref == format('refs/tags/{0}', needs.${identityJobName}.outputs.tag)`;
-  assert(
-    publishCondition === expectedPublishCondition,
-    "publish job must survive optional skipped ancestors while requiring successful identity/finalization and an exact version-derived tag push",
-  );
-  assert(publish.permissions?.contents === "write", "publish job needs contents: write");
-  assert(publish.permissions?.["id-token"] === "write", "publish job needs id-token: write");
-  assert(publish.permissions?.attestations === "write", "publish job needs attestations: write");
-  for (const [permission, value] of Object.entries(publish.permissions ?? {})) {
-    assert(
-      value !== "write" || ["contents", "id-token", "attestations"].includes(permission),
-      `publish job has unrelated write authority: ${permission}`,
-    );
-  }
-  assert(publish["continue-on-error"] === undefined, "publish job cannot continue after a publication error");
-  const assertRequiredStep = (step, label) => {
-    assert(step && step.if === undefined, `${label} cannot be conditionally skipped`);
-    assert(step["continue-on-error"] === undefined, `${label} cannot continue after failure`);
-  };
-  const publishSteps = publish.steps ?? [];
-  const downloadIndex = publishSteps.findIndex(
-    (step) => typeof step.uses === "string" && step.uses.includes("actions/download-artifact@"),
-  );
-  assert(downloadIndex >= 0, "publish job must download one finalized artifact");
-  const download = publishSteps[downloadIndex];
-  const finalizedArtifactName = download.with?.name;
-  const finalizedArtifactPath = download.with?.path;
-  assert(
-    typeof finalizedArtifactName === "string" && finalizedArtifactName.length > 0 &&
-      typeof finalizedArtifactPath === "string" && finalizedArtifactPath.length > 0,
-    "publish job finalized-artifact download must bind an exact name and path",
-  );
-  assert(
-    /^[A-Za-z0-9._-]+$/u.test(finalizedArtifactName) &&
-      /^(?!\.\.?$)[A-Za-z0-9._-]+(?:\/(?!\.\.?$)[A-Za-z0-9._-]+)*$/u.test(finalizedArtifactPath),
-    "publish job finalized-artifact name and path must be safe fixed relative values",
-  );
-  assertRequiredStep(download, "finalized-artifact download");
-  const finalizerEntries = Object.entries(workflow.jobs ?? {}).filter(([jobName, job]) =>
-    publishNeeds.includes(jobName) &&
-      job.steps?.some((step) =>
-        typeof step.uses === "string" &&
-          step.uses.includes("actions/upload-artifact@") &&
-          step.with?.name === finalizedArtifactName &&
-          step.with?.path === finalizedArtifactPath,
-      ),
-  );
-  assert(
-    finalizerEntries.length === 1,
-    "publish job must depend on exactly one job that produced its finalized artifact",
-  );
+  assert(finalizerEntries.length === 1, "release candidate workflow must have exactly one finalizer");
   const [finalizerJobName, finalizer] = finalizerEntries[0];
-  assert(
-    finalizerJobName === publicationFinalizerJobName,
-    "publish condition result guard must name the exact finalized-artifact producer",
-  );
-  assert(finalizer["continue-on-error"] === undefined, "finalizer job cannot continue after failure");
+  assert(finalizer["continue-on-error"] === undefined, "candidate finalizer cannot continue after failure");
   const finalizerNeeds = Array.isArray(finalizer.needs)
     ? finalizer.needs
     : [finalizer.needs].filter(Boolean);
   assert(
-    finalizerNeeds.includes(identityJobName),
-    "finalizer job must consume the version-derived identity",
-  );
-  assert(
-    finalizerNeeds.includes(buildJobName),
-    "finalizer job must consume independently collected installer siblings",
+    finalizerNeeds.includes(identityJobName) && finalizerNeeds.includes(buildJobName),
+    "candidate finalizer must consume the version-derived identity and collected installer siblings",
   );
   if (windowsDataPreservationJobName) {
     assert(
       finalizerNeeds.includes(windowsDataPreservationJobName),
-      "finalizer must wait for explicitly requested same-run Windows supporting fixtures",
+      "candidate finalizer must wait for explicitly requested same-run Windows supporting fixtures",
     );
   }
   const finalizerSteps = finalizer.steps ?? [];
-  const unsupportedPromotionDownloads = Object.values(workflow.jobs ?? {})
-    .flatMap((job) => job.steps ?? [])
-    .filter((step) =>
-      typeof step.uses === "string" &&
-        step.uses.includes("actions/download-artifact@") &&
-        ["artifact-qc-observations-*", "artifact-promotion-evidence-*"].includes(
-          step.with?.pattern,
-        ),
-    );
-  assert(
-    unsupportedPromotionDownloads.length === 0,
-    "release workflow must not ingest an unimplemented artifact observation or promotion namespace",
-  );
   if (windowsDataPreservationJobName) {
     const preservationDownloads = finalizerSteps.filter((step) =>
       typeof step.uses === "string" &&
@@ -442,35 +394,120 @@ export function validateReleaseWorkflow(workflow) {
         preservationDownloads[0]["continue-on-error"] === true &&
         preservationDownloads[0].with?.path === "assembled-input" &&
         preservationDownloads[0].with?.["merge-multiple"] === true &&
-        preservationDownloads[0].with?.["run-id"] === undefined,
-      "finalizer must optionally ingest only exact-current-run Windows supporting evidence",
+        preservationDownloads[0].with?.["run-id"] === undefined &&
+        preservationDownloads[0].with?.["github-token"] === undefined,
+      "candidate finalizer must optionally ingest only exact-current-run Windows supporting evidence",
     );
   }
-  const finalizeIndex = finalizerSteps.findIndex(
-    (step) => typeof step.run === "string" && step.run.includes("scripts/release/finalize-release.mjs"),
+
+  const candidateCreateIndex = finalizerSteps.findIndex((step) =>
+    typeof step.run === "string" &&
+      step.run.includes("scripts/release/release-candidate-lock.mjs create"),
   );
-  const finalizerVerifyIndex = finalizerSteps.findIndex(
-    (step) => typeof step.run === "string" && step.run.includes("scripts/release/verify-finalized-release.mjs"),
+  const candidateVerifyIndex = finalizerSteps.findIndex((step) =>
+    typeof step.run === "string" &&
+      step.run.includes("scripts/release/release-candidate-lock.mjs verify"),
   );
-  const uploadIndex = finalizerSteps.findIndex(
-    (step) => typeof step.uses === "string" &&
+  const candidateUploadIndex = finalizerSteps.findIndex((step) =>
+    typeof step.uses === "string" &&
       step.uses.includes("actions/upload-artifact@") &&
-      step.with?.name === finalizedArtifactName &&
-      step.with?.path === finalizedArtifactPath,
+      step.with?.name === "release-candidate-input-${{ github.run_id }}-${{ github.run_attempt }}",
+  );
+  const finalizeIndex = finalizerSteps.findIndex((step) =>
+    typeof step.run === "string" && step.run.includes("scripts/release/finalize-release.mjs"),
   );
   assert(
-    finalizeIndex >= 0 &&
-      finalizerVerifyIndex === finalizeIndex + 1 &&
-      uploadIndex === finalizerVerifyIndex + 1,
-    "finalizer must consecutively finalize, verify, then upload the exact artifact consumed by publication",
+    candidateCreateIndex >= 0 &&
+      candidateVerifyIndex === candidateCreateIndex + 1 &&
+      candidateUploadIndex === candidateVerifyIndex + 1 &&
+      finalizeIndex === candidateUploadIndex + 1,
+    "public candidate preparation must consecutively lock, verify, freeze, then preview-finalize one assembled input",
   );
-  assertRequiredStep(finalizerSteps[finalizeIndex], "release finalization");
-  assertRequiredStep(finalizerSteps[finalizerVerifyIndex], "finalizer verification");
-  assertRequiredStep(finalizerSteps[uploadIndex], "finalized-artifact upload");
+  const candidateCondition = "inputs.public_release_candidate == true";
+  for (const [index, label] of [
+    [candidateCreateIndex, "candidate lock creation"],
+    [candidateVerifyIndex, "candidate lock verification"],
+    [candidateUploadIndex, "candidate freeze upload"],
+  ]) {
+    const step = finalizerSteps[index];
+    assert(step.if === candidateCondition, `${label} must require explicit public candidate intent`);
+    assert(step["continue-on-error"] === undefined, `${label} cannot continue after failure`);
+  }
+  for (const [index, command] of [
+    [candidateCreateIndex, "create"],
+    [candidateVerifyIndex, "verify"],
+  ]) {
+    const source = finalizerSteps[index].run;
+    for (const required of [
+      `release-candidate-lock.mjs ${command}`,
+      "--dir assembled-input",
+      "--workflow .github/workflows/release.yml",
+      '--workflow-sha "${GITHUB_WORKFLOW_SHA}"',
+      '--run-id "${GITHUB_RUN_ID}"',
+      '--run-attempt "${GITHUB_RUN_ATTEMPT}"',
+      "--job finalize-supported-artifacts",
+      '--publication-mode "${PUBLICATION_MODE}"',
+    ]) {
+      assert(source.includes(required), `${command} candidate lock is missing protected binding: ${required}`);
+    }
+  }
+  const candidateUpload = finalizerSteps[candidateUploadIndex];
   assert(
-    finalizerSteps[uploadIndex].with?.["if-no-files-found"] === "error",
-    "finalized-artifact upload must fail when its exact output is absent",
+    candidateUpload.id === "upload_candidate" &&
+      candidateUpload.with?.path === "assembled-input" &&
+      candidateUpload.with?.["if-no-files-found"] === "error" &&
+      candidateUpload.with?.["compression-level"] === 0 &&
+      candidateUpload.with?.["retention-days"] === 90 &&
+      candidateUpload.with?.["include-hidden-files"] === true &&
+      candidateUpload.with?.overwrite === false,
+    "public candidate upload must preserve the exact locked input as a non-overwriting immutable artifact",
   );
+
+  const finalizerVerifyIndex = finalizerSteps.findIndex((step) =>
+    typeof step.run === "string" && step.run.includes("scripts/release/verify-finalized-release.mjs"),
+  );
+  const uploadIndex = finalizerSteps.findIndex((step) =>
+    typeof step.uses === "string" &&
+      step.uses.includes("actions/upload-artifact@") &&
+      step.with?.name === "release-finalized" &&
+      step.with?.path === "release-assets",
+  );
+  assert(
+    finalizerVerifyIndex === finalizeIndex + 1 && uploadIndex === finalizerVerifyIndex + 1,
+    "candidate preview must consecutively finalize, verify, then upload its exact result",
+  );
+  for (const [index, label] of [
+    [finalizeIndex, "candidate preview finalization"],
+    [finalizerVerifyIndex, "candidate preview verification"],
+    [uploadIndex, "candidate preview upload"],
+  ]) {
+    const step = finalizerSteps[index];
+    assert(step && step.if === undefined, `${label} cannot be conditionally skipped`);
+    assert(step["continue-on-error"] === undefined, `${label} cannot continue after failure`);
+  }
+  assert(
+    finalizerSteps[finalizeIndex].run.includes("--input assembled-input") &&
+      finalizerSteps[finalizeIndex].run.includes("--out release-assets") &&
+      finalizerSteps[finalizerVerifyIndex].run.includes("--dir release-assets") &&
+      finalizerSteps[uploadIndex].with?.["if-no-files-found"] === "error" &&
+      finalizerSteps[uploadIndex].with?.["include-hidden-files"] === true &&
+      finalizerSteps[uploadIndex].with?.overwrite === undefined,
+    "candidate preview must bind its assembled input and clean finalized output without overwrite authority",
+  );
+  const summaryStep = finalizerSteps[uploadIndex + 1];
+  assert(
+    summaryStep?.if === candidateCondition &&
+      summaryStep?.env?.CANDIDATE_ARTIFACT_ID ===
+        "${{ steps.upload_candidate.outputs.artifact-id }}" &&
+      summaryStep?.env?.CANDIDATE_ARTIFACT_DIGEST ===
+        "${{ steps.upload_candidate.outputs.artifact-digest }}" &&
+      summaryStep?.run?.includes("${GITHUB_RUN_ID}") &&
+      summaryStep?.run?.includes("${GITHUB_RUN_ATTEMPT}") &&
+      summaryStep?.run?.includes("${CANDIDATE_ARTIFACT_ID}") &&
+      summaryStep?.run?.includes("${CANDIDATE_ARTIFACT_DIGEST}"),
+    "candidate workflow must report the exact run, attempt, artifact ID, and upload digest needed for promotion",
+  );
+
   const identityBindings = [
     ["version", "--version"],
     ["tag", "--tag"],
@@ -491,74 +528,496 @@ export function validateReleaseWorkflow(workflow) {
       );
     }
   };
+  assertIdentityBindings(finalizerSteps[finalizeIndex], "candidate preview finalizer");
+  assertIdentityBindings(finalizerSteps[finalizerVerifyIndex], "candidate preview verification");
+}
+
+export function validatePromotionWorkflow(workflow) {
+  assert(workflow && typeof workflow === "object", ".github/workflows/promote-release.yml is missing");
+  validateActionReferences(workflow, "promote-release.yml");
+  const trigger = workflow.on;
   assert(
-    finalizerSteps[finalizeIndex].run.includes(`--out ${finalizedArtifactPath}`) &&
-      finalizerSteps[finalizeIndex].run.includes("--input "),
-    "finalizer must read assembled candidates and bind the clean finalized artifact output",
+    trigger && typeof trigger === "object" &&
+      JSON.stringify(Object.keys(trigger)) === JSON.stringify(["workflow_dispatch"]),
+    "promotion workflow must be manually dispatched only",
   );
-  assertIdentityBindings(finalizerSteps[finalizeIndex], "finalizer");
+  const inputs = trigger.workflow_dispatch?.inputs;
+  const requiredInputs = [
+    "candidate_run_id",
+    "candidate_run_attempt",
+    "candidate_artifact_id",
+    "candidate_artifact_digest",
+    "expected_commit",
+  ];
+  const optionalInputs = [
+    "evidence_run_id",
+    "evidence_run_attempt",
+    "evidence_artifact_id",
+    "evidence_artifact_digest",
+  ];
   assert(
-    finalizerSteps[finalizerVerifyIndex].run.includes(`--dir ${finalizedArtifactPath}`),
-    "finalizer verification must bind the finalized artifact path",
-  );
-  assertIdentityBindings(finalizerSteps[finalizerVerifyIndex], "finalizer verification");
-  const publishVerifyIndex = publishSteps.findIndex(
-    (step) => typeof step.run === "string" && step.run.includes("scripts/release/verify-finalized-release.mjs"),
-  );
-  assert(
-    publishVerifyIndex > downloadIndex,
-    "publish job must reverify the downloaded finalized artifact before publication",
-  );
-  const publishVerification = publishSteps[publishVerifyIndex];
-  assertRequiredStep(publishVerification, "publisher verification");
-  assert(
-    publishVerification.run.includes(`--dir ${finalizedArtifactPath}`),
-    "publish verification must bind the downloaded finalized artifact path",
-  );
-  assertIdentityBindings(publishVerification, "publish verification");
-  const attestationIndex = publishSteps.findIndex(
-    (step) => typeof step.uses === "string" && step.uses.includes("attest-build-provenance@"),
-  );
-  const attestation = publishSteps[attestationIndex];
-  const publishedFiles = `${finalizedArtifactPath}/**/*`;
-  assert(
-    attestationIndex === publishVerifyIndex + 1 &&
-      attestation?.with?.["subject-path"] === publishedFiles,
-    "publication attestation must immediately follow verification and cover every finalized file",
-  );
-  assertRequiredStep(attestation, "publication attestation");
-  const publicationIndex = publishSteps.findIndex(
-    (step) => typeof step.uses === "string" && step.uses.includes("softprops/action-gh-release@"),
-  );
-  const publication = publishSteps[publicationIndex];
-  assertRequiredStep(publication, "GitHub Release publication");
-  assert(
-    publication?.with?.prerelease === `\${{ needs.${identityJobName}.outputs.prerelease }}` &&
-      publication?.with?.make_latest === `\${{ needs.${identityJobName}.outputs.make_latest }}`,
-    "GitHub Release publication must preserve the source-declared pre-release/latest channel",
+    inputs &&
+      JSON.stringify(Object.keys(inputs)) === JSON.stringify([...requiredInputs, ...optionalInputs]) &&
+      requiredInputs.every((name) =>
+        inputs[name]?.required === true &&
+          inputs[name]?.type === "string" &&
+          typeof inputs[name]?.description === "string" &&
+          !Object.hasOwn(inputs[name], "default")) &&
+      optionalInputs.every((name) =>
+        inputs[name]?.required === false &&
+          inputs[name]?.type === "string" &&
+          inputs[name]?.default === "" &&
+          typeof inputs[name]?.description === "string"),
+    "promotion workflow must accept only exact candidate and all-or-none protected-evidence selectors",
   );
   assert(
-    publicationIndex === attestationIndex + 1 &&
-      publication?.with?.tag_name === `\${{ needs.${identityJobName}.outputs.tag }}` &&
-      publication?.with?.target_commitish === `\${{ needs.${identityJobName}.outputs.commit }}` &&
-      publication?.with?.draft === false &&
-      publication?.with?.fail_on_unmatched_files === true &&
-      publication?.with?.files === publishedFiles,
-    "GitHub Release publication must publish the exact verified and attested artifact path",
+    JSON.stringify(workflow.permissions) === JSON.stringify({ contents: "read", actions: "read" }),
+    "promotion workflow defaults must grant only contents/actions read",
   );
-  for (const [jobName, job] of Object.entries(workflow.jobs)) {
-    if (jobName === publishJobName) {
-      continue;
-    }
+  assert(
+    workflow.concurrency?.group === "release-publication" &&
+      workflow.concurrency?.["cancel-in-progress"] === false,
+    "promotion workflow must serialize release publication without cancelling an in-flight release",
+  );
+  assert(
+    JSON.stringify(Object.keys(workflow.jobs ?? {})) === JSON.stringify(["assemble", "publish"]),
+    "promotion workflow must separate one read-only assembler from one protected publisher",
+  );
+  const assemble = workflow.jobs.assemble;
+  const publish = workflow.jobs.publish;
+  assert(
+    assemble.if === undefined &&
+      assemble["continue-on-error"] === undefined &&
+      JSON.stringify(assemble.permissions) === JSON.stringify({ contents: "read", actions: "read" }),
+    "promotion assembler must fail closed with read-only repository and artifact authority",
+  );
+  const workflowSource = JSON.stringify(workflow);
+  for (const forbidden of [
+    "tauri build",
+    "bundle-with-optional-updater.mjs",
+    "collect-bundles.mjs",
+    "vendor-managed-runtime",
+    "base64",
+  ]) {
     assert(
-      !Object.values(job.permissions ?? {}).includes("write"),
-      `${jobName} job must not receive write permissions`,
+      !workflowSource.includes(forbidden),
+      `promotion workflow must not rebuild or inline external evidence: ${forbidden}`,
     );
-    const source = JSON.stringify(job);
-    assert(!source.includes("action-gh-release"), `${jobName} job must not create a GitHub Release`);
-    assert(!source.includes("attest-build-provenance"), `${jobName} job must not create attestations`);
   }
-  assert(finalizerJobName !== publishJobName, "publisher cannot finalize its own release artifact");
+  assert(
+    assemble.outputs?.version === "${{ steps.candidate_lock.outputs.version }}" &&
+      assemble.outputs?.tag === "${{ steps.candidate_lock.outputs.tag }}" &&
+      assemble.outputs?.commit === "${{ steps.candidate_lock.outputs.commit }}" &&
+      assemble.outputs?.release_channel === "${{ steps.candidate_lock.outputs.release_channel }}" &&
+      assemble.outputs?.finalized_artifact_id === "${{ steps.upload_finalized.outputs.artifact-id }}" &&
+      assemble.outputs?.finalized_artifact_digest === "${{ steps.upload_finalized.outputs.artifact-digest }}" &&
+      assemble.outputs?.has_evidence === "${{ steps.selectors.outputs.has_evidence }}" &&
+      assemble.outputs?.evidence_workflow_ref === "${{ steps.evidence_producer.outputs.workflow_ref }}" &&
+      assemble.outputs?.evidence_run_id === "${{ steps.selectors.outputs.evidence_run_id }}" &&
+      assemble.outputs?.evidence_run_attempt === "${{ steps.selectors.outputs.evidence_run_attempt }}",
+    "promotion assembler must export lock-derived identity and exact finalized/evidence identities",
+  );
+
+  const steps = assemble.steps ?? [];
+  const selectors = steps.find((step) => step.id === "selectors");
+  const selectorsSource = JSON.stringify(selectors ?? {});
+  for (const required of [
+    "CANDIDATE_RUN_ID",
+    "CANDIDATE_RUN_ATTEMPT",
+    "CANDIDATE_ARTIFACT_ID",
+    "CANDIDATE_ARTIFACT_DIGEST",
+    "EXPECTED_COMMIT",
+    "EVIDENCE_RUN_ID",
+    "EVIDENCE_RUN_ATTEMPT",
+    "EVIDENCE_ARTIFACT_ID",
+    "EVIDENCE_ARTIFACT_DIGEST",
+    "PROMOTION_EVENT_NAME",
+    "PROMOTION_REF",
+    "PROMOTION_SHA",
+    "PROMOTION_WORKFLOW_REF",
+    "PROMOTION_WORKFLOW_SHA",
+    "has_evidence",
+  ]) {
+    assert(selectorsSource.includes(required), `promotion selector validation is missing: ${required}`);
+  }
+  assert(
+    selectors?.["continue-on-error"] === undefined &&
+      selectors?.if === undefined &&
+      selectorsSource.includes("complete tuple") &&
+      selectorsSource.includes("lowercase SHA-256") &&
+      selectorsSource.includes("full lowercase Git object ID") &&
+      selectors.run.includes("Number.isSafeInteger") &&
+      selectors.run.includes('requiredPositiveInteger("CANDIDATE_RUN_ATTEMPT", 100)') &&
+      selectors.run.includes('requiredPositiveInteger("EVIDENCE_RUN_ATTEMPT", 100)') &&
+      selectorsSource.includes("^(?:sha256:)?([0-9a-f]{64})$") &&
+      selectorsSource.includes("candidate_artifact_digest=${candidateDigest}") &&
+      selectorsSource.includes("evidence_artifact_digest=${hasEvidence ? canonicalDigest") &&
+      selectorsSource.includes("evidence_run_id=${hasEvidence ? process.env.EVIDENCE_RUN_ID") &&
+      selectorsSource.includes("evidence_run_attempt=${hasEvidence ? process.env.EVIDENCE_RUN_ATTEMPT") &&
+      selectorsSource.includes("promotion must be manually dispatched from refs/heads/main") &&
+      selectorsSource.includes("promotion workflow and event SHA must be the same full lowercase Git object ID") &&
+      selectorsSource.includes(".github/workflows/promote-release.yml@refs/heads/main") &&
+      selectorsSource.includes("promotion workflow ref is not the protected main-branch workflow"),
+    "promotion selectors must fail closed on canonical candidate and all-or-none evidence identities",
+  );
+
+  const candidateProducerIndex = steps.findIndex((step) =>
+    typeof step.run === "string" && step.run.includes("candidate workflow run ID mismatch"),
+  );
+  assert(candidateProducerIndex >= 0, "promotion must verify the protected candidate workflow run and artifact");
+  assert(
+    steps[candidateProducerIndex].env?.CANDIDATE_ARTIFACT_DIGEST ===
+      "${{ steps.selectors.outputs.candidate_artifact_digest }}",
+    "candidate producer verification must use the selector's canonical artifact digest",
+  );
+  const candidateProducerSource = JSON.stringify(steps[candidateProducerIndex]);
+  for (const required of [
+    "/actions/runs/${CANDIDATE_RUN_ID}/attempts/${CANDIDATE_RUN_ATTEMPT}",
+    "/actions/artifacts/${CANDIDATE_ARTIFACT_ID}",
+    ".github/workflows/release.yml",
+    "workflow_dispatch",
+    "main",
+    "completed",
+    "success",
+    "run_attempt",
+    "run.head_repository?.full_name",
+    "EXPECTED_COMMIT",
+    "release-candidate-input-${process.env.CANDIDATE_RUN_ID}-${process.env.CANDIDATE_RUN_ATTEMPT}",
+    "artifact.workflow_run?.id",
+    "artifact.workflow_run?.head_sha",
+    "artifact.digest",
+    "artifact.expired === false",
+  ]) {
+    assert(candidateProducerSource.includes(required), `candidate producer verification is missing: ${required}`);
+  }
+
+  const checkout = steps.find((step) =>
+    typeof step.uses === "string" && step.uses.includes("actions/checkout@"),
+  );
+  assert(
+    checkout?.with?.ref === "${{ inputs.expected_commit }}" &&
+      checkout.with?.["persist-credentials"] === false,
+    "promotion assembler must check out the exact frozen candidate commit without credentials",
+  );
+  const candidateDownloadIndex = steps.findIndex((step) =>
+    typeof step.uses === "string" &&
+      step.uses.includes("actions/download-artifact@") &&
+      step.with?.path === "candidate-input",
+  );
+  const candidateDownload = steps[candidateDownloadIndex];
+  assert(
+    candidateDownloadIndex > candidateProducerIndex &&
+      candidateDownload?.with?.["artifact-ids"] === "${{ inputs.candidate_artifact_id }}" &&
+      candidateDownload.with?.["run-id"] === "${{ inputs.candidate_run_id }}" &&
+      candidateDownload.with?.["github-token"] === "${{ github.token }}" &&
+      candidateDownload.with?.repository === "${{ github.repository }}" &&
+      candidateDownload.with?.["digest-mismatch"] === "error" &&
+      candidateDownload.with?.name === undefined &&
+      candidateDownload.with?.pattern === undefined,
+    "promotion must download the exact verified candidate artifact ID from its exact run",
+  );
+  const candidateLockIndex = steps.findIndex((step) => step.id === "candidate_lock");
+  const candidateLockSource = JSON.stringify(steps[candidateLockIndex] ?? {});
+  assert(
+    candidateLockIndex === candidateDownloadIndex + 1 &&
+      candidateLockSource.includes("release-candidate-lock.mjs verify") &&
+      candidateLockSource.includes("--dir candidate-input") &&
+      candidateLockSource.includes("--publication-mode public-github-release") &&
+      candidateLockSource.includes("--workflow .github/workflows/release.yml") &&
+      candidateLockSource.includes('--workflow-sha \\"${EXPECTED_COMMIT}\\"') &&
+      candidateLockSource.includes('--run-id \\"${CANDIDATE_RUN_ID}\\"') &&
+      candidateLockSource.includes('--run-attempt \\"${CANDIDATE_RUN_ATTEMPT}\\"') &&
+      candidateLockSource.includes("--job finalize-supported-artifacts") &&
+      candidateLockSource.includes('--github-output \\"${GITHUB_OUTPUT}\\"'),
+    "promotion must reverify the candidate lock against every protected producer identity",
+  );
+
+  validatePromotionEvidenceFlow(steps, candidateLockIndex);
+  validatePromotionPublication(publish);
+}
+
+function validatePromotionEvidenceFlow(steps, candidateLockIndex) {
+  const evidenceCondition = "steps.selectors.outputs.has_evidence == 'true'";
+  const evidenceProducerIndex = steps.findIndex((step) => step.id === "evidence_producer");
+  const evidenceProducer = steps[evidenceProducerIndex];
+  const evidenceProducerSource = JSON.stringify(evidenceProducer ?? {});
+  assert(
+    evidenceProducerIndex === candidateLockIndex + 1 &&
+      evidenceProducer?.if === evidenceCondition &&
+      evidenceProducer?.["continue-on-error"] === undefined &&
+      evidenceProducer?.env?.EVIDENCE_ARTIFACT_DIGEST ===
+        "${{ steps.selectors.outputs.evidence_artifact_digest }}",
+    "optional evidence must first pass protected producer verification",
+  );
+  for (const required of [
+    "/actions/runs/${EVIDENCE_RUN_ID}/attempts/${EVIDENCE_RUN_ATTEMPT}",
+    "/actions/artifacts/${EVIDENCE_ARTIFACT_ID}",
+    ".github/workflows/windows-external-evidence.yml",
+    "workflow_dispatch",
+    "main",
+    "completed",
+    "success",
+    "run_attempt",
+    "run.head_repository?.full_name",
+    "windows-external-evidence-${process.env.EVIDENCE_RUN_ID}-${process.env.EVIDENCE_RUN_ATTEMPT}",
+    "artifact.workflow_run?.id",
+    "artifact.workflow_run?.head_sha",
+    "artifact.digest",
+    "artifact.expired === false",
+    "workflow_ref",
+  ]) {
+    assert(evidenceProducerSource.includes(required), `evidence producer verification is missing: ${required}`);
+  }
+
+  const evidenceDownloadIndex = steps.findIndex((step) =>
+    typeof step.uses === "string" &&
+      step.uses.includes("actions/download-artifact@") &&
+      step.with?.path === "accepted-evidence",
+  );
+  const evidenceDownload = steps[evidenceDownloadIndex];
+  assert(
+    evidenceDownloadIndex === evidenceProducerIndex + 1 &&
+      evidenceDownload?.if === evidenceCondition &&
+      evidenceDownload?.["continue-on-error"] === undefined &&
+      evidenceDownload.with?.["artifact-ids"] === "${{ inputs.evidence_artifact_id }}" &&
+      evidenceDownload.with?.["run-id"] === "${{ inputs.evidence_run_id }}" &&
+      evidenceDownload.with?.["github-token"] === "${{ github.token }}" &&
+      evidenceDownload.with?.repository === "${{ github.repository }}" &&
+      evidenceDownload.with?.["digest-mismatch"] === "error" &&
+      evidenceDownload.with?.name === undefined &&
+      evidenceDownload.with?.pattern === undefined,
+    "promotion must download only the exact accepted-evidence artifact ID from its verified run",
+  );
+  const receiptIndex = steps.findIndex((step) =>
+    typeof step.run === "string" && step.run.includes("windows-external-evidence.mjs verify-receipt"),
+  );
+  const materializeIndex = steps.findIndex((step) =>
+    typeof step.run === "string" && step.run.includes("windows-external-evidence.mjs materialize"),
+  );
+  assert(
+    receiptIndex === evidenceDownloadIndex + 1 &&
+      materializeIndex === receiptIndex + 1 &&
+      steps[receiptIndex]?.if === evidenceCondition &&
+      steps[materializeIndex]?.if === evidenceCondition &&
+      steps[receiptIndex]?.["continue-on-error"] === undefined &&
+      steps[materializeIndex]?.["continue-on-error"] === undefined,
+    "accepted evidence must be receipt-verified then materialized without an intervening step",
+  );
+  for (const [index, command] of [[receiptIndex, "verify-receipt"], [materializeIndex, "materialize"]]) {
+    const source = steps[index].run;
+    assert(
+      steps[index].env?.EXPECTED_EVIDENCE_WORKFLOW_REF ===
+        "${{ steps.evidence_producer.outputs.workflow_ref }}" &&
+        steps[index].env?.EVIDENCE_RUN_ID === "${{ inputs.evidence_run_id }}" &&
+        steps[index].env?.EVIDENCE_RUN_ATTEMPT === "${{ inputs.evidence_run_attempt }}",
+      `${command} must consume only verified evidence producer outputs`,
+    );
+    for (const required of [
+      `windows-external-evidence.mjs ${command}`,
+      "--dir accepted-evidence",
+      "--candidate-dir candidate-input",
+      '--repository "${GITHUB_REPOSITORY}"',
+      "--workflow .github/workflows/windows-external-evidence.yml",
+      '--workflow-ref "${EXPECTED_EVIDENCE_WORKFLOW_REF}"',
+      '--run-id "${EVIDENCE_RUN_ID}"',
+      '--run-attempt "${EVIDENCE_RUN_ATTEMPT}"',
+      "--job import",
+      "--environment windows-external-evidence",
+    ]) {
+      assert(source.includes(required), `${command} external-evidence contract is missing: ${required}`);
+    }
+  }
+  assert(
+    steps[materializeIndex].run.includes("--out candidate-with-evidence"),
+    "verified external evidence must materialize into a separate candidate directory",
+  );
+
+  const finalizeIndex = steps.findIndex((step) =>
+    typeof step.run === "string" && step.run.includes("scripts/release/finalize-release.mjs"),
+  );
+  const verifyIndex = steps.findIndex((step) =>
+    typeof step.run === "string" && step.run.includes("scripts/release/verify-finalized-release.mjs"),
+  );
+  const uploadIndex = steps.findIndex((step) => step.id === "upload_finalized");
+  assert(
+    finalizeIndex === materializeIndex + 1 &&
+      verifyIndex === finalizeIndex + 1 &&
+      uploadIndex === verifyIndex + 1,
+    "promotion must consecutively materialize, finalize, verify, and freeze its public release",
+  );
+  const externalEvidenceFlags = [
+    '--external-evidence-repository "${GITHUB_REPOSITORY}"',
+    "--external-evidence-workflow .github/workflows/windows-external-evidence.yml",
+    '--external-evidence-workflow-ref "${EXPECTED_EVIDENCE_WORKFLOW_REF}"',
+    '--external-evidence-run-id "${EVIDENCE_RUN_ID}"',
+    '--external-evidence-run-attempt "${EVIDENCE_RUN_ATTEMPT}"',
+    "--external-evidence-job import",
+    "--external-evidence-environment windows-external-evidence",
+  ];
+  for (const [index, label] of [[finalizeIndex, "public finalizer"], [verifyIndex, "public verification"]]) {
+    const step = steps[index];
+    assert(
+      step.if === undefined && step["continue-on-error"] === undefined &&
+        step.env?.HAS_EVIDENCE === "${{ steps.selectors.outputs.has_evidence }}" &&
+        step.env?.EXPECTED_EVIDENCE_WORKFLOW_REF ===
+          "${{ steps.evidence_producer.outputs.workflow_ref }}" &&
+        step.env?.EVIDENCE_RUN_ID === "${{ inputs.evidence_run_id }}" &&
+        step.env?.EVIDENCE_RUN_ATTEMPT === "${{ inputs.evidence_run_attempt }}" &&
+        step.run.includes('external_evidence_args=()') &&
+        step.run.includes('if [[ "${HAS_EVIDENCE}" == "true" ]]') &&
+        externalEvidenceFlags.every((flag) => step.run.includes(flag)) &&
+        step.run.includes('"${external_evidence_args[@]}"'),
+      `${label} must pass the exact protected evidence identity only when evidence is present`,
+    );
+  }
+  assert(
+    steps[finalizeIndex].run.includes('candidate_input="candidate-input"') &&
+      steps[finalizeIndex].run.includes('candidate_input="candidate-with-evidence"') &&
+      steps[finalizeIndex].run.includes("--publication-mode public-github-release") &&
+      steps[finalizeIndex].run.includes("--out release-assets") &&
+      steps[verifyIndex].run.includes("--dir release-assets") &&
+      steps[verifyIndex].run.includes("--publication-mode public-github-release"),
+    "promotion finalization and verification must bind the locked candidate and public mode",
+  );
+  const finalizedUpload = steps[uploadIndex];
+  assert(
+    finalizedUpload?.uses?.includes("actions/upload-artifact@") &&
+      finalizedUpload?.if === undefined &&
+      finalizedUpload?.["continue-on-error"] === undefined &&
+      finalizedUpload.with?.name === "release-finalized-${{ github.run_id }}-${{ github.run_attempt }}" &&
+      finalizedUpload.with?.path === "release-assets" &&
+      finalizedUpload.with?.["if-no-files-found"] === "error" &&
+      finalizedUpload.with?.["compression-level"] === 0 &&
+      finalizedUpload.with?.["retention-days"] === 14 &&
+      finalizedUpload.with?.["include-hidden-files"] === true &&
+      finalizedUpload.with?.overwrite === false,
+    "promotion must freeze the exact finalized public release without overwrite authority",
+  );
+}
+
+function validatePromotionPublication(publish) {
+  assert(
+    publish.needs === "assemble" &&
+      publish.environment === "release-publication" &&
+      publish["continue-on-error"] === undefined,
+    "publisher must consume only the assembler and cross the protected release-publication environment",
+  );
+  const expectedPermissions = {
+    contents: "write",
+    "id-token": "write",
+    attestations: "write",
+    actions: "read",
+  };
+  assert(
+    JSON.stringify(publish.permissions) === JSON.stringify(expectedPermissions),
+    "publisher must receive only release, attestation, and finalized-artifact permissions",
+  );
+  const steps = publish.steps ?? [];
+  const checkout = steps.find((step) =>
+    typeof step.uses === "string" && step.uses.includes("actions/checkout@"),
+  );
+  assert(
+    checkout?.with?.ref === "${{ needs.assemble.outputs.commit }}" &&
+      checkout.with?.["persist-credentials"] === false,
+    "publisher must check out the exact lock-derived source commit without credentials",
+  );
+  const downloadIndex = steps.findIndex((step) =>
+    typeof step.uses === "string" && step.uses.includes("actions/download-artifact@"),
+  );
+  const download = steps[downloadIndex];
+  assert(
+    download?.with?.["artifact-ids"] === "${{ needs.assemble.outputs.finalized_artifact_id }}" &&
+      download.with?.path === "release-assets" &&
+      download.with?.["digest-mismatch"] === "error" &&
+      download.with?.name === undefined &&
+      download.with?.pattern === undefined &&
+      download.with?.["run-id"] === undefined &&
+      download.with?.["github-token"] === undefined,
+    "publisher must download only the exact same-run finalized artifact ID",
+  );
+  const verifyIndex = steps.findIndex((step) =>
+    typeof step.run === "string" && step.run.includes("scripts/release/verify-finalized-release.mjs"),
+  );
+  const attestationIndex = steps.findIndex((step) =>
+    typeof step.uses === "string" && step.uses.includes("attest-build-provenance@"),
+  );
+  const tagGuardIndex = steps.findIndex((step) =>
+    typeof step.run === "string" && step.run.includes("existing release tag does not bind"),
+  );
+  const publicationIndex = steps.findIndex((step) =>
+    typeof step.uses === "string" && step.uses.includes("softprops/action-gh-release@"),
+  );
+  assert(
+    verifyIndex === downloadIndex + 1 &&
+      attestationIndex === verifyIndex + 1 &&
+      tagGuardIndex === attestationIndex + 1 &&
+      publicationIndex === tagGuardIndex + 1,
+    "publisher must consecutively download, reverify, attest, guard the tag, then publish exact bytes",
+  );
+  for (const [index, label] of [
+    [downloadIndex, "publisher artifact download"],
+    [verifyIndex, "publisher verification"],
+    [attestationIndex, "publisher attestation"],
+    [tagGuardIndex, "publisher tag guard"],
+    [publicationIndex, "GitHub Release publication"],
+  ]) {
+    const step = steps[index];
+    assert(step && step.if === undefined, `${label} cannot be conditionally skipped`);
+    assert(step["continue-on-error"] === undefined, `${label} cannot continue after failure`);
+  }
+  const verify = steps[verifyIndex];
+  const externalEvidenceFlags = [
+    '--external-evidence-repository "${GITHUB_REPOSITORY}"',
+    "--external-evidence-workflow .github/workflows/windows-external-evidence.yml",
+    '--external-evidence-workflow-ref "${EXPECTED_EVIDENCE_WORKFLOW_REF}"',
+    '--external-evidence-run-id "${EVIDENCE_RUN_ID}"',
+    '--external-evidence-run-attempt "${EVIDENCE_RUN_ATTEMPT}"',
+    "--external-evidence-job import",
+    "--external-evidence-environment windows-external-evidence",
+  ];
+  assert(
+    verify.env?.HAS_EVIDENCE === "${{ needs.assemble.outputs.has_evidence }}" &&
+      verify.env?.EXPECTED_EVIDENCE_WORKFLOW_REF ===
+        "${{ needs.assemble.outputs.evidence_workflow_ref }}" &&
+      verify.env?.EVIDENCE_RUN_ID === "${{ needs.assemble.outputs.evidence_run_id }}" &&
+      verify.env?.EVIDENCE_RUN_ATTEMPT === "${{ needs.assemble.outputs.evidence_run_attempt }}" &&
+      verify.run.includes("--dir release-assets") &&
+      verify.run.includes("--publication-mode public-github-release") &&
+      verify.run.includes('if [[ "${HAS_EVIDENCE}" == "true" ]]') &&
+      externalEvidenceFlags.every((flag) => verify.run.includes(flag)) &&
+      verify.run.includes('"${external_evidence_args[@]}"'),
+    "publisher must reverify finalized metadata against the exact optional protected evidence identity",
+  );
+  const publishedFiles = "release-assets/**/*";
+  assert(
+    steps[attestationIndex].with?.["subject-path"] === publishedFiles,
+    "publisher attestation must cover every exact finalized file",
+  );
+  const tagGuardSource = steps[tagGuardIndex].run;
+  for (const required of [
+    "/git/ref/tags/${encodeURIComponent(releaseTag)}",
+    "body: JSON.stringify({ ref: `refs/tags/${releaseTag}`, sha: sourceCommit })",
+    "/releases/tags/${encodeURIComponent(releaseTag)}",
+    "tagResponse.status === 404",
+    "createResponse.status !== 201",
+    "releaseResponse.status !== 404",
+    "failed closed with HTTP",
+    "refusing to update or overwrite",
+  ]) {
+    assert(tagGuardSource.includes(required), `publisher tag/release guard is missing: ${required}`);
+  }
+  const publication = steps[publicationIndex];
+  assert(
+    publication.with?.tag_name === "${{ needs.assemble.outputs.tag }}" &&
+      publication.with?.target_commitish === "${{ needs.assemble.outputs.commit }}" &&
+      publication.with?.draft === false &&
+      publication.with?.prerelease === "${{ needs.assemble.outputs.prerelease }}" &&
+      publication.with?.make_latest === "${{ needs.assemble.outputs.make_latest }}" &&
+      publication.with?.fail_on_unmatched_files === true &&
+      publication.with?.overwrite_files === false &&
+      publication.with?.files === publishedFiles,
+    "GitHub Release publication must create a non-overwriting release from exact verified and attested files",
+  );
 }
 
 export function validateProductEngineRegistry(catalog) {
@@ -909,7 +1368,8 @@ async function main() {
   );
 
   const releaseWorkflow = await readReleaseWorkflow();
-  validateReleaseWorkflow(releaseWorkflow);
+  const promotionWorkflow = await readPromotionWorkflow();
+  validateReleaseWorkflow(releaseWorkflow, promotionWorkflow);
   const windowsQualification = await readFile(
     path.join(PROJECT_ROOT, "scripts/release/qualify-windows.ps1"),
     "utf8",
@@ -927,7 +1387,7 @@ async function main() {
   }
 
   process.stdout.write(
-    `Common release identity and publication policy are consistent for ${tag}; release.yml is valid YAML with SHA-pinned actions.\n`,
+    `Common release identity and publication policy are consistent for ${tag}; candidate and promotion workflows are valid YAML with SHA-pinned actions.\n`,
   );
 }
 

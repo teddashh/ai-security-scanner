@@ -158,9 +158,9 @@ The intended sequence is:
 
 An artifact is never described as qualified merely because another artifact, a source build, or a synthetic CLI fixture passed. A failed artifact remains absent or clearly unavailable; it does not force qualified siblings to fail.
 
-Numeric release tags and package versions must agree. Manual `main` dispatches may create commit-bound QC artifacts but do not themselves create a public release. Publication privileges belong only to the narrowly scoped publication step after the exact artifact has been reverified.
+Numeric release tags and package versions must agree. A manual `main` dispatch of `.github/workflows/release.yml` may create ordinary commit-bound QC, or—with `public_release_candidate: true`—freeze a public candidate without publishing it. Publication privileges belong only to `.github/workflows/promote-release.yml` after it has reverified the exact frozen candidate; that workflow never rebuilds installer bytes.
 
-### Current automation gap
+### Current automation and external gates
 
 The checked-in workflow now compiles once per platform, bundles each installer sibling independently,
 collects only bundle steps that actually succeeded, and finalizes each qualified installer separately.
@@ -186,17 +186,33 @@ and are skipped by default and for tag publication. If both exact records are pr
 retained only as supporting preservation evidence; missing or one-sided records remain
 `not-observed` and never delay ordinary development or qualify public Windows lifecycle behavior.
 
-There is not yet a protected same-run producer for the exact-candidate Windows beginner record,
-real installed-app lifecycle record, or Authenticode verification record with an approved publisher
-identity and protected run/job identity. `v0.1.8` therefore accepts no generic observation or
-promotion artifact namespace and makes no claim that those paths passed. A technically qualified
-Windows installer may still be offered as a public testing prerelease when the finalizer records
-`not-observed`/`not-configured`, the release page lists the affected installer and gaps, and public
-provenance is created for the exact bytes. Those gaps continue to block beginner-ready and stable
-promotion, not testing, another platform, source work, or an installed product.
+The freeze/import/promote path is now explicit. `.github/workflows/release.yml` builds, technically
+qualifies, locks, and uploads `release-candidate-input-<run-id>-<run-attempt>` once. The optional
+`.github/workflows/windows-external-evidence.yml` importer binds one exact candidate run/attempt and
+artifact ID/digest to one evidence commit/path, validates only the supported redacted Windows
+records, emits `windows-external-evidence-import.json`, attests the accepted files, and preserves an
+immutable `windows-external-evidence-<run-id>-<run-attempt>` artifact. `.github/workflows/promote-release.yml`
+then accepts the exact candidate selector plus either all or none of the evidence run/attempt and
+artifact ID/digest selector, re-verifies everything, and publishes unchanged bytes. Existing tags or
+releases are never overwritten.
 
-The `v0.1.8` source line is not currently a recommended beginner installer. This status is an honest
-artifact/channel gap, not a product-wide gate.
+The importer job declares the `windows-external-evidence` GitHub Environment and the publisher job
+declares `release-publication`. Those checked-in declarations do not prove that repository-side
+required reviewers, branch rules, or deployment protection are configured; operators must verify
+the external settings before relying on reviewer protection. The accepted import root is also
+narrow: the strict Windows beginner record, canonical `windows-installed-lifecycle/` records, and
+the exact `unsigned-os-signing-observation-windows-x86_64-nsis.json` record. Private diagnostics and
+unreceipted files are excluded. The generic importer deliberately rejects passing Authenticode
+evidence because no approved-publisher producer/policy is configured in this path.
+
+`v0.1.9` is intentionally a publish-first, unsigned public testing prerelease. It may be promoted
+without an evidence selector so the Windows lab can download the exact public NSIS bytes. Later
+human, lifecycle, and `NotSigned` observations for those exact bytes may be protected, attested, and
+retained as a supplement; they never rewrite the `v0.1.9` release, make it retroactively stable, or
+carry forward to `v0.2.0`. Missing Authenticode does not stop the program from executing or block
+this testing channel, but it still blocks a Windows stable/recommended claim under current policy.
+The same human/lifecycle gaps remain artifact-scoped stable blockers until real exact-candidate
+records pass; they do not block another platform, source work, or an already installed product.
 
 ## 7. Release artifacts and verification
 
@@ -238,6 +254,7 @@ Release-line files preserve what a candidate/release claimed or planned at that 
 - [v0.1.6](v0.1.6.md)
 - [v0.1.7](v0.1.7.md)
 - [v0.1.8](v0.1.8.md)
+- [v0.1.9](v0.1.9.md)
 - [v0.2.0](v0.2.0.md)
 
 Where a historical note conflicts with the canonical product specification, the conflicting behavior is identified in that note as superseded rather than left as an apparently reusable requirement. Current implementation gaps remain in the product audit until code and real-boundary evidence close them.

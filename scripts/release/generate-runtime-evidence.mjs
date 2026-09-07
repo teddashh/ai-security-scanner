@@ -83,7 +83,7 @@ async function main() {
   if (platform === "windows-x86_64" && expectedManifestSha256 !== undefined) {
     assert(
       expectedManifestSha256 === WINDOWS_X86_64_MANIFEST_SHA256,
-      "Windows managed runtime evidence was not pinned to the reviewed v0.1.8 identity",
+      "Windows managed runtime evidence was not pinned to the reviewed Windows identity",
     );
   }
   const deterministicUuid = `${manifestSha256.slice(0, 8)}-${manifestSha256.slice(8, 12)}-${manifestSha256.slice(12, 16)}-${manifestSha256.slice(16, 20)}-${manifestSha256.slice(20, 32)}`;

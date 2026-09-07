@@ -1,0 +1,362 @@
+name: Import protected Windows external evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Successful release-candidate workflow run ID
+        required: true
+        type: string
+      candidate_run_attempt:
+        description: Exact release-candidate workflow run attempt
+        required: true
+        type: string
+      candidate_artifact_id:
+        description: Exact immutable release-candidate artifact ID
+        required: true
+        type: string
+      candidate_artifact_digest:
+        description: Exact lowercase SHA-256 digest reported by upload-artifact
+        required: true
+        type: string
+      evidence_commit:
+        description: Full commit SHA containing only the redacted evidence bundle
+        required: true
+        type: string
+      evidence_path:
+        description: Safe repository-relative directory containing the redacted evidence bundle
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: windows-external-evidence-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  import:
+    name: Validate and attest redacted Windows evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: windows-external-evidence
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    outputs:
+      accepted_artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      accepted_artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+    steps:
+      - name: Bind protected importer inputs to exact GitHub objects
+        id: bind
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          CANDIDATE_ARTIFACT_ID: ${{ inputs.candidate_artifact_id }}
+          CANDIDATE_ARTIFACT_DIGEST: ${{ inputs.candidate_artifact_digest }}
+          EVIDENCE_COMMIT: ${{ inputs.evidence_commit }}
+          EVIDENCE_PATH: ${{ inputs.evidence_path }}
+          IMPORTER_SHA: ${{ github.sha }}
+          IMPORTER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          IMPORTER_WORKFLOW_REF: ${{ github.workflow_ref }}
+        with:
+          script: |
+            const assert = (condition, message) => {
+              if (!condition) throw new Error(message);
+            };
+            const exactPositiveInteger = (value, label, maximum = Number.MAX_SAFE_INTEGER) => {
+              assert(/^[1-9][0-9]*$/.test(value ?? ""), `${label} must be a positive integer`);
+              const parsed = Number(value);
+              assert(Number.isSafeInteger(parsed) && parsed <= maximum, `${label} is outside the supported range`);
+              return parsed;
+            };
+            const normalizeSha256 = (value, label) => {
+              const match = /^(?:sha256:)?([0-9a-f]{64})$/.exec(value ?? "");
+              assert(match, `${label} must be a lowercase SHA-256 digest`);
+              return match[1];
+            };
+
+            const runId = exactPositiveInteger(process.env.CANDIDATE_RUN_ID, "candidate run ID");
+            const runAttempt = exactPositiveInteger(process.env.CANDIDATE_RUN_ATTEMPT, "candidate run attempt", 100);
+            const artifactId = exactPositiveInteger(process.env.CANDIDATE_ARTIFACT_ID, "candidate artifact ID");
+            const artifactDigest = normalizeSha256(process.env.CANDIDATE_ARTIFACT_DIGEST, "candidate artifact digest");
+            const evidenceCommit = process.env.EVIDENCE_COMMIT ?? "";
+            assert(/^[0-9a-f]{40}$/.test(evidenceCommit), "evidence commit must be a full lowercase Git object ID");
+            const evidencePath = process.env.EVIDENCE_PATH ?? "";
+            assert(evidencePath.length > 0 && evidencePath.length <= 240, "evidence path length is invalid");
+            assert(!evidencePath.startsWith("/") && !evidencePath.endsWith("/"), "evidence path must be relative and canonical");
+            assert(!evidencePath.includes("\\") && !/[\0\r\n]/.test(evidencePath), "evidence path contains an unsafe character");
+            const evidenceComponents = evidencePath.split("/");
+            assert(
+              evidenceComponents.every((part) =>
+                part !== "." && part !== ".." && part !== ".git" && /^[A-Za-z0-9._-]+$/.test(part)
+              ),
+              "evidence path contains an unsafe component",
+            );
+
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            const importerWorkflowSha = process.env.IMPORTER_WORKFLOW_SHA ?? "";
+            assert(context.eventName === "workflow_dispatch", "importer must be manually dispatched");
+            assert(context.ref === "refs/heads/main", "importer must be dispatched from refs/heads/main");
+            assert(/^[0-9a-f]{40}$/.test(importerWorkflowSha), "importer workflow SHA is invalid");
+            assert(importerWorkflowSha === process.env.IMPORTER_SHA, "importer workflow and event SHA differ");
+            assert(
+              process.env.IMPORTER_WORKFLOW_REF ===
+                `${repository}/.github/workflows/windows-external-evidence.yml@refs/heads/main`,
+              "importer workflow ref is not the protected main-branch workflow",
+            );
+
+            const runResponse = await github.request(
+              "GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}",
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId,
+                attempt_number: runAttempt,
+              },
+            );
+            const run = runResponse.data;
+            assert(Number(run.id) === runId, "candidate run ID differs from the requested run");
+            assert(Number(run.run_attempt) === runAttempt, "candidate run attempt differs from the requested attempt");
+            assert(run.event === "workflow_dispatch", "candidate was not produced by workflow_dispatch");
+            assert(run.status === "completed" && run.conclusion === "success", "candidate run did not complete successfully");
+            assert(run.head_branch === "main", "candidate run was not dispatched from main");
+            assert(run.repository?.full_name === repository, "candidate run repository differs from the importer repository");
+            assert(run.head_repository?.full_name === repository, "candidate head repository differs from the importer repository");
+            assert(/^[0-9a-f]{40}$/.test(run.head_sha ?? ""), "candidate head SHA is invalid");
+            assert(run.path === ".github/workflows/release.yml", "candidate was not produced by the release workflow");
+
+            const workflowResponse = await github.request(
+              "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}",
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: run.workflow_id,
+              },
+            );
+            assert(
+              workflowResponse.data.path === ".github/workflows/release.yml",
+              "candidate workflow ID does not resolve to the release workflow",
+            );
+
+            const evidenceCommitResponse = await github.request(
+              "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: evidenceCommit,
+              },
+            );
+            assert(evidenceCommitResponse.data.sha === evidenceCommit, "evidence commit is not an exact repository commit");
+
+            const artifactResponse = await github.request(
+              "GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}",
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                artifact_id: artifactId,
+              },
+            );
+            const artifact = artifactResponse.data;
+            assert(Number(artifact.id) === artifactId, "candidate artifact ID differs from the requested artifact");
+            assert(
+              artifact.name === `release-candidate-input-${runId}-${runAttempt}`,
+              "candidate artifact name is not bound to the exact run and attempt",
+            );
+            assert(artifact.expired === false, "candidate artifact has expired");
+            assert(Date.parse(artifact.expires_at ?? "") > Date.now(), "candidate artifact expiry is invalid or elapsed");
+            assert(Number(artifact.size_in_bytes) > 0, "candidate artifact is empty");
+            assert(artifact.workflow_run?.id === runId, "candidate artifact belongs to a different workflow run");
+            assert(artifact.workflow_run?.head_sha === run.head_sha, "candidate artifact head SHA differs from its workflow run");
+            assert(
+              normalizeSha256(artifact.digest, "GitHub candidate artifact digest") === artifactDigest,
+              "candidate artifact digest differs from the requested digest",
+            );
+
+            core.setOutput("candidate_run_id", String(runId));
+            core.setOutput("candidate_run_attempt", String(runAttempt));
+            core.setOutput("candidate_artifact_id", String(artifactId));
+            core.setOutput("candidate_artifact_digest", `sha256:${artifactDigest}`);
+            core.setOutput("candidate_commit", run.head_sha);
+            core.setOutput("evidence_commit", evidenceCommit);
+            core.setOutput("evidence_path", evidencePath);
+
+      - name: Check out trusted importer tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Set up trusted Node.js runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.15.0
+
+      - name: Download the exact immutable candidate artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.bind.outputs.candidate_artifact_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.bind.outputs.candidate_run_id }}
+          path: candidate-input
+
+      - name: Read bounded candidate identity from its lock
+        id: candidate_identity
+        env:
+          EXPECTED_CANDIDATE_COMMIT: ${{ steps.bind.outputs.candidate_commit }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFile, lstat, readFile } from "node:fs/promises";
+
+          const file = "candidate-input/release-candidate-lock.json";
+          const metadata = await lstat(file);
+          if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size < 2 || metadata.size > 1024 * 1024) {
+            throw new Error("candidate lock must be a bounded regular non-symlink file");
+          }
+          const lock = JSON.parse(await readFile(file, "utf8"));
+          if (!lock || typeof lock !== "object" || Array.isArray(lock)) throw new Error("candidate lock must be an object");
+          if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(lock.version ?? "")) {
+            throw new Error("candidate lock version is invalid");
+          }
+          if (lock.tag !== `v${lock.version}`) throw new Error("candidate lock tag does not match its version");
+          if (!/^[0-9a-f]{40}$/.test(lock.sourceCommit ?? "")) throw new Error("candidate lock commit is invalid");
+          if (lock.sourceCommit !== process.env.EXPECTED_CANDIDATE_COMMIT) {
+            throw new Error("candidate lock commit differs from the GitHub workflow run");
+          }
+          if (!new Set(["prerelease", "stable"]).has(lock.releaseChannel)) {
+            throw new Error("candidate lock release channel is invalid");
+          }
+          if (lock.publicationMode !== "public-github-release") {
+            throw new Error("candidate lock is not eligible for public promotion");
+          }
+          await appendFile(process.env.GITHUB_OUTPUT, [
+            `version=${lock.version}`,
+            `tag=${lock.tag}`,
+            `commit=${lock.sourceCommit}`,
+            `release_channel=${lock.releaseChannel}`,
+            `publication_mode=${lock.publicationMode}`,
+            "",
+          ].join("\n"));
+          NODE
+
+      - name: Verify the complete immutable candidate lock
+        env:
+          CANDIDATE_VERSION: ${{ steps.candidate_identity.outputs.version }}
+          CANDIDATE_TAG: ${{ steps.candidate_identity.outputs.tag }}
+          CANDIDATE_COMMIT: ${{ steps.candidate_identity.outputs.commit }}
+          CANDIDATE_RELEASE_CHANNEL: ${{ steps.candidate_identity.outputs.release_channel }}
+          CANDIDATE_PUBLICATION_MODE: ${{ steps.candidate_identity.outputs.publication_mode }}
+          CANDIDATE_RUN_ID: ${{ steps.bind.outputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ steps.bind.outputs.candidate_run_attempt }}
+        run: >-
+          node scripts/release/release-candidate-lock.mjs verify
+          --dir candidate-input
+          --version "${CANDIDATE_VERSION}"
+          --tag "${CANDIDATE_TAG}"
+          --commit "${CANDIDATE_COMMIT}"
+          --release-channel "${CANDIDATE_RELEASE_CHANNEL}"
+          --publication-mode "${CANDIDATE_PUBLICATION_MODE}"
+          --repository "${GITHUB_REPOSITORY}"
+          --workflow .github/workflows/release.yml
+          --workflow-sha "${CANDIDATE_COMMIT}"
+          --run-id "${CANDIDATE_RUN_ID}"
+          --run-attempt "${CANDIDATE_RUN_ATTEMPT}"
+          --job finalize-supported-artifacts
+
+      - name: Check out the exact evidence source as inert data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.bind.outputs.evidence_commit }}
+          path: evidence-source
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate and import redacted external evidence
+        env:
+          CANDIDATE_VERSION: ${{ steps.candidate_identity.outputs.version }}
+          CANDIDATE_TAG: ${{ steps.candidate_identity.outputs.tag }}
+          CANDIDATE_COMMIT: ${{ steps.candidate_identity.outputs.commit }}
+          CANDIDATE_RELEASE_CHANNEL: ${{ steps.candidate_identity.outputs.release_channel }}
+          CANDIDATE_PUBLICATION_MODE: ${{ steps.candidate_identity.outputs.publication_mode }}
+          CANDIDATE_RUN_ID: ${{ steps.bind.outputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ steps.bind.outputs.candidate_run_attempt }}
+          CANDIDATE_ARTIFACT_ID: ${{ steps.bind.outputs.candidate_artifact_id }}
+          CANDIDATE_ARTIFACT_DIGEST: ${{ steps.bind.outputs.candidate_artifact_digest }}
+          EVIDENCE_COMMIT: ${{ steps.bind.outputs.evidence_commit }}
+          EVIDENCE_PATH: ${{ steps.bind.outputs.evidence_path }}
+        run: |
+          set -euo pipefail
+          actual_evidence_commit="$(git -c core.hooksPath=/dev/null -C evidence-source rev-parse 'HEAD^{commit}')"
+          if [[ "${actual_evidence_commit}" != "${EVIDENCE_COMMIT}" ]]; then
+            printf 'Evidence checkout %s differs from requested commit %s.\n' \
+              "${actual_evidence_commit}" "${EVIDENCE_COMMIT}" >&2
+            exit 1
+          fi
+          evidence_dir="evidence-source/${EVIDENCE_PATH}"
+          imported_at="$(node --input-type=module -e 'process.stdout.write(new Date().toISOString())')"
+          node scripts/release/windows-external-evidence.mjs import \
+            --candidate-dir candidate-input \
+            --evidence-dir "${evidence_dir}" \
+            --out accepted-evidence \
+            --candidate-version "${CANDIDATE_VERSION}" \
+            --candidate-tag "${CANDIDATE_TAG}" \
+            --candidate-commit "${CANDIDATE_COMMIT}" \
+            --candidate-release-channel "${CANDIDATE_RELEASE_CHANNEL}" \
+            --candidate-publication-mode "${CANDIDATE_PUBLICATION_MODE}" \
+            --candidate-repository "${GITHUB_REPOSITORY}" \
+            --candidate-workflow .github/workflows/release.yml \
+            --candidate-workflow-sha "${CANDIDATE_COMMIT}" \
+            --candidate-run-id "${CANDIDATE_RUN_ID}" \
+            --candidate-run-attempt "${CANDIDATE_RUN_ATTEMPT}" \
+            --candidate-job finalize-supported-artifacts \
+            --candidate-artifact-id "${CANDIDATE_ARTIFACT_ID}" \
+            --candidate-artifact-digest "${CANDIDATE_ARTIFACT_DIGEST}" \
+            --evidence-source-repository "${GITHUB_REPOSITORY}" \
+            --evidence-source-commit "${EVIDENCE_COMMIT}" \
+            --evidence-source-path "${EVIDENCE_PATH}" \
+            --importer-repository "${GITHUB_REPOSITORY}" \
+            --importer-workflow .github/workflows/windows-external-evidence.yml \
+            --importer-workflow-sha "${GITHUB_WORKFLOW_SHA}" \
+            --importer-run-id "${GITHUB_RUN_ID}" \
+            --importer-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --importer-job import \
+            --importer-environment windows-external-evidence \
+            --imported-at "${imported_at}"
+
+      - name: Attest every accepted evidence record
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: accepted-evidence/**/*
+
+      - name: Preserve immutable accepted evidence
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-external-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: accepted-evidence/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+          overwrite: false
+
+      - name: Record immutable accepted-evidence identity
+        env:
+          ACCEPTED_ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ACCEPTED_ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          CANDIDATE_TAG: ${{ steps.candidate_identity.outputs.tag }}
+          CANDIDATE_RUN_ID: ${{ steps.bind.outputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ steps.bind.outputs.candidate_run_attempt }}
+        run: |
+          {
+            printf '### Accepted Windows external evidence\n\n'
+            printf -- '- Candidate: `%s` from run `%s`, attempt `%s`\n' \
+              "${CANDIDATE_TAG}" "${CANDIDATE_RUN_ID}" "${CANDIDATE_RUN_ATTEMPT}"
+            printf -- '- Accepted artifact ID: `%s`\n' "${ACCEPTED_ARTIFACT_ID}"
+            printf -- '- Accepted artifact SHA-256: `%s`\n' "${ACCEPTED_ARTIFACT_DIGEST}"
+          } >> "${GITHUB_STEP_SUMMARY}"

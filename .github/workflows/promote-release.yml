@@ -1,0 +1,544 @@
+name: Promote frozen desktop release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Successful release-candidate preparation workflow run ID
+        required: true
+        type: string
+      candidate_run_attempt:
+        description: Exact release-candidate preparation run attempt
+        required: true
+        type: string
+      candidate_artifact_id:
+        description: Immutable release-candidate-input artifact ID
+        required: true
+        type: string
+      candidate_artifact_digest:
+        description: Lowercase SHA-256 reported by the candidate artifact upload
+        required: true
+        type: string
+      expected_commit:
+        description: Exact lowercase source commit frozen by the candidate
+        required: true
+        type: string
+      evidence_run_id:
+        description: Optional successful protected external-evidence importer run ID
+        required: false
+        type: string
+        default: ""
+      evidence_run_attempt:
+        description: Exact protected external-evidence importer run attempt when evidence is supplied
+        required: false
+        type: string
+        default: ""
+      evidence_artifact_id:
+        description: Immutable accepted external-evidence artifact ID when evidence is supplied
+        required: false
+        type: string
+        default: ""
+      evidence_artifact_digest:
+        description: Lowercase SHA-256 reported by the accepted evidence upload
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
+jobs:
+  assemble:
+    name: Verify frozen inputs and assemble public release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.candidate_lock.outputs.version }}
+      tag: ${{ steps.candidate_lock.outputs.tag }}
+      commit: ${{ steps.candidate_lock.outputs.commit }}
+      release_channel: ${{ steps.candidate_lock.outputs.release_channel }}
+      prerelease: ${{ steps.candidate_lock.outputs.release_channel == 'prerelease' }}
+      make_latest: ${{ steps.candidate_lock.outputs.release_channel == 'stable' }}
+      finalized_artifact_id: ${{ steps.upload_finalized.outputs.artifact-id }}
+      finalized_artifact_digest: ${{ steps.upload_finalized.outputs.artifact-digest }}
+      has_evidence: ${{ steps.selectors.outputs.has_evidence }}
+      evidence_workflow_ref: ${{ steps.evidence_producer.outputs.workflow_ref }}
+      evidence_run_id: ${{ steps.selectors.outputs.evidence_run_id }}
+      evidence_run_attempt: ${{ steps.selectors.outputs.evidence_run_attempt }}
+    steps:
+      - name: Validate immutable artifact selector inputs
+        id: selectors
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          CANDIDATE_ARTIFACT_ID: ${{ inputs.candidate_artifact_id }}
+          CANDIDATE_ARTIFACT_DIGEST: ${{ inputs.candidate_artifact_digest }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          EVIDENCE_RUN_ATTEMPT: ${{ inputs.evidence_run_attempt }}
+          EVIDENCE_ARTIFACT_ID: ${{ inputs.evidence_artifact_id }}
+          EVIDENCE_ARTIFACT_DIGEST: ${{ inputs.evidence_artifact_digest }}
+          PROMOTION_EVENT_NAME: ${{ github.event_name }}
+          PROMOTION_REF: ${{ github.ref }}
+          PROMOTION_SHA: ${{ github.sha }}
+          PROMOTION_WORKFLOW_REF: ${{ github.workflow_ref }}
+          PROMOTION_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from "node:fs";
+
+          if (process.env.PROMOTION_EVENT_NAME !== "workflow_dispatch" || process.env.PROMOTION_REF !== "refs/heads/main") {
+            throw new Error("promotion must be manually dispatched from refs/heads/main");
+          }
+          if (!/^[0-9a-f]{40}$/u.test(process.env.PROMOTION_SHA ?? "") || process.env.PROMOTION_WORKFLOW_SHA !== process.env.PROMOTION_SHA) {
+            throw new Error("promotion workflow and event SHA must be the same full lowercase Git object ID");
+          }
+          const expectedWorkflowRef = `${process.env.GITHUB_REPOSITORY}/.github/workflows/promote-release.yml@refs/heads/main`;
+          if (process.env.PROMOTION_WORKFLOW_REF !== expectedWorkflowRef) {
+            throw new Error("promotion workflow ref is not the protected main-branch workflow");
+          }
+
+          const requiredPositiveInteger = (name, maximum = Number.MAX_SAFE_INTEGER) => {
+            const value = process.env[name] ?? "";
+            if (!/^[1-9][0-9]*$/u.test(value)) throw new Error(`${name} must be a positive integer`);
+            const parsed = Number(value);
+            if (!Number.isSafeInteger(parsed) || parsed > maximum) {
+              throw new Error(`${name} is outside the supported range`);
+            }
+          };
+          requiredPositiveInteger("CANDIDATE_RUN_ID");
+          requiredPositiveInteger("CANDIDATE_RUN_ATTEMPT", 100);
+          requiredPositiveInteger("CANDIDATE_ARTIFACT_ID");
+          const canonicalDigest = (name) => {
+            const match = (process.env[name] ?? "").match(/^(?:sha256:)?([0-9a-f]{64})$/u);
+            if (!match) throw new Error(`${name} must be a lowercase SHA-256 with an optional sha256: prefix`);
+            return match[1];
+          };
+          const candidateDigest = canonicalDigest("CANDIDATE_ARTIFACT_DIGEST");
+          if (!/^[0-9a-f]{40}$/u.test(process.env.EXPECTED_COMMIT ?? "")) {
+            throw new Error("EXPECTED_COMMIT must be a full lowercase Git object ID");
+          }
+          const evidenceNames = [
+            "EVIDENCE_RUN_ID",
+            "EVIDENCE_RUN_ATTEMPT",
+            "EVIDENCE_ARTIFACT_ID",
+            "EVIDENCE_ARTIFACT_DIGEST",
+          ];
+          const evidenceValues = evidenceNames.map((name) => process.env[name] ?? "");
+          const hasEvidence = evidenceValues.some((value) => value.length > 0);
+          if (hasEvidence && evidenceValues.some((value) => value.length === 0)) {
+            throw new Error("the optional evidence run/attempt/artifact/digest selector must be supplied as one complete tuple");
+          }
+          if (hasEvidence) {
+            requiredPositiveInteger("EVIDENCE_RUN_ID");
+            requiredPositiveInteger("EVIDENCE_RUN_ATTEMPT", 100);
+            requiredPositiveInteger("EVIDENCE_ARTIFACT_ID");
+            canonicalDigest("EVIDENCE_ARTIFACT_DIGEST");
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, [
+            `has_evidence=${hasEvidence}`,
+            `candidate_artifact_digest=${candidateDigest}`,
+            `evidence_artifact_digest=${hasEvidence ? canonicalDigest("EVIDENCE_ARTIFACT_DIGEST") : ""}`,
+            `evidence_run_id=${hasEvidence ? process.env.EVIDENCE_RUN_ID : ""}`,
+            `evidence_run_attempt=${hasEvidence ? process.env.EVIDENCE_RUN_ATTEMPT : ""}`,
+            "",
+          ].join("\n"));
+          NODE
+
+      - name: Resolve and verify protected candidate producer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          CANDIDATE_ARTIFACT_ID: ${{ inputs.candidate_artifact_id }}
+          CANDIDATE_ARTIFACT_DIGEST: ${{ steps.selectors.outputs.candidate_artifact_digest }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}/attempts/${CANDIDATE_RUN_ATTEMPT}" > "${RUNNER_TEMP}/candidate-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${CANDIDATE_ARTIFACT_ID}" > "${RUNNER_TEMP}/candidate-artifact.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const run = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/candidate-run.json`, "utf8"));
+          const artifact = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/candidate-artifact.json`, "utf8"));
+          const assert = (condition, message) => { if (!condition) throw new Error(message); };
+          assert(String(run.id) === process.env.CANDIDATE_RUN_ID, "candidate workflow run ID mismatch");
+          assert(run.run_attempt === Number(process.env.CANDIDATE_RUN_ATTEMPT), "candidate workflow run attempt mismatch");
+          assert(run.repository?.full_name === process.env.GITHUB_REPOSITORY, "candidate workflow repository mismatch");
+          assert(run.head_repository?.full_name === process.env.GITHUB_REPOSITORY, "candidate workflow head repository mismatch");
+          assert(run.path === ".github/workflows/release.yml", "candidate workflow path mismatch");
+          assert(run.event === "workflow_dispatch" && run.head_branch === "main", "candidate workflow was not dispatched from main");
+          assert(run.status === "completed" && run.conclusion === "success", "candidate workflow did not complete successfully");
+          assert(run.head_sha === process.env.EXPECTED_COMMIT, "candidate workflow source commit mismatch");
+          assert(String(artifact.id) === process.env.CANDIDATE_ARTIFACT_ID, "candidate artifact ID mismatch");
+          assert(artifact.name === `release-candidate-input-${process.env.CANDIDATE_RUN_ID}-${process.env.CANDIDATE_RUN_ATTEMPT}`, "candidate artifact name mismatch");
+          assert(artifact.expired === false, "candidate artifact has expired");
+          assert(artifact.workflow_run?.id === Number(process.env.CANDIDATE_RUN_ID), "candidate artifact belongs to a different run");
+          assert(artifact.workflow_run?.head_sha === process.env.EXPECTED_COMMIT, "candidate artifact source commit mismatch");
+          assert(artifact.digest === `sha256:${process.env.CANDIDATE_ARTIFACT_DIGEST}`, "candidate artifact digest mismatch");
+          NODE
+
+      - name: Check out exact frozen candidate source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.expected_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.15.0
+          cache: npm
+
+      - name: Set up Rust for exact updater signature verification
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # action commit, 2026-08-21
+        with:
+          toolchain: 1.98.0
+
+      - name: Install locked release tooling
+        run: npm ci --ignore-scripts
+
+      - name: Download exact immutable candidate input by artifact ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ inputs.candidate_artifact_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.candidate_run_id }}
+          path: candidate-input
+          digest-mismatch: error
+
+      - name: Reverify candidate lock and export trusted identity
+        id: candidate_lock
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+        run: |
+          set -euo pipefail
+          release_version="$(node -p "require('./candidate-input/release-candidate-lock.json').version")"
+          release_tag="$(node -p "require('./candidate-input/release-candidate-lock.json').tag")"
+          release_channel="$(node -p "require('./candidate-input/release-candidate-lock.json').releaseChannel")"
+          node scripts/release/release-candidate-lock.mjs verify \
+            --dir candidate-input \
+            --version "${release_version}" \
+            --tag "${release_tag}" \
+            --commit "${EXPECTED_COMMIT}" \
+            --release-channel "${release_channel}" \
+            --publication-mode public-github-release \
+            --repository "${GITHUB_REPOSITORY}" \
+            --workflow .github/workflows/release.yml \
+            --workflow-sha "${EXPECTED_COMMIT}" \
+            --run-id "${CANDIDATE_RUN_ID}" \
+            --run-attempt "${CANDIDATE_RUN_ATTEMPT}" \
+            --job finalize-supported-artifacts \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Resolve and verify protected external-evidence producer
+        id: evidence_producer
+        if: steps.selectors.outputs.has_evidence == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          EVIDENCE_RUN_ATTEMPT: ${{ inputs.evidence_run_attempt }}
+          EVIDENCE_ARTIFACT_ID: ${{ inputs.evidence_artifact_id }}
+          EVIDENCE_ARTIFACT_DIGEST: ${{ steps.selectors.outputs.evidence_artifact_digest }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${EVIDENCE_RUN_ID}/attempts/${EVIDENCE_RUN_ATTEMPT}" > "${RUNNER_TEMP}/evidence-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${EVIDENCE_ARTIFACT_ID}" > "${RUNNER_TEMP}/evidence-artifact.json"
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from "node:fs";
+
+          const run = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/evidence-run.json`, "utf8"));
+          const artifact = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/evidence-artifact.json`, "utf8"));
+          const assert = (condition, message) => { if (!condition) throw new Error(message); };
+          assert(String(run.id) === process.env.EVIDENCE_RUN_ID, "external-evidence workflow run ID mismatch");
+          assert(run.run_attempt === Number(process.env.EVIDENCE_RUN_ATTEMPT), "external-evidence workflow run attempt mismatch");
+          assert(run.repository?.full_name === process.env.GITHUB_REPOSITORY, "external-evidence workflow repository mismatch");
+          assert(run.head_repository?.full_name === process.env.GITHUB_REPOSITORY, "external-evidence workflow head repository mismatch");
+          assert(run.path === ".github/workflows/windows-external-evidence.yml", "external-evidence workflow path mismatch");
+          assert(run.event === "workflow_dispatch" && run.head_branch === "main", "external-evidence workflow was not dispatched from main");
+          assert(run.status === "completed" && run.conclusion === "success", "external-evidence workflow did not complete successfully");
+          assert(/^[0-9a-f]{40}$/u.test(run.head_sha), "external-evidence workflow SHA is invalid");
+          assert(String(artifact.id) === process.env.EVIDENCE_ARTIFACT_ID, "external-evidence artifact ID mismatch");
+          assert(artifact.name === `windows-external-evidence-${process.env.EVIDENCE_RUN_ID}-${process.env.EVIDENCE_RUN_ATTEMPT}`, "external-evidence artifact name mismatch");
+          assert(artifact.expired === false, "external-evidence artifact has expired");
+          assert(artifact.workflow_run?.id === Number(process.env.EVIDENCE_RUN_ID), "external-evidence artifact belongs to a different run");
+          assert(artifact.workflow_run?.head_sha === run.head_sha, "external-evidence artifact source commit mismatch");
+          assert(artifact.digest === `sha256:${process.env.EVIDENCE_ARTIFACT_DIGEST}`, "external-evidence artifact digest mismatch");
+          const workflowRef = `${process.env.GITHUB_REPOSITORY}/.github/workflows/windows-external-evidence.yml@${run.head_sha}`;
+          appendFileSync(process.env.GITHUB_OUTPUT, `workflow_ref=${workflowRef}\n`);
+          NODE
+
+      - name: Download exact accepted external evidence by artifact ID
+        if: steps.selectors.outputs.has_evidence == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ inputs.evidence_artifact_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.evidence_run_id }}
+          path: accepted-evidence
+          digest-mismatch: error
+
+      - name: Verify protected external-evidence receipt
+        if: steps.selectors.outputs.has_evidence == 'true'
+        env:
+          EXPECTED_EVIDENCE_WORKFLOW_REF: ${{ steps.evidence_producer.outputs.workflow_ref }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          EVIDENCE_RUN_ATTEMPT: ${{ inputs.evidence_run_attempt }}
+        run: >-
+          node scripts/release/windows-external-evidence.mjs verify-receipt
+          --dir accepted-evidence
+          --candidate-dir candidate-input
+          --repository "${GITHUB_REPOSITORY}"
+          --workflow .github/workflows/windows-external-evidence.yml
+          --workflow-ref "${EXPECTED_EVIDENCE_WORKFLOW_REF}"
+          --run-id "${EVIDENCE_RUN_ID}"
+          --run-attempt "${EVIDENCE_RUN_ATTEMPT}"
+          --job import
+          --environment windows-external-evidence
+
+      - name: Materialize only verified external evidence
+        if: steps.selectors.outputs.has_evidence == 'true'
+        env:
+          EXPECTED_EVIDENCE_WORKFLOW_REF: ${{ steps.evidence_producer.outputs.workflow_ref }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          EVIDENCE_RUN_ATTEMPT: ${{ inputs.evidence_run_attempt }}
+        run: >-
+          node scripts/release/windows-external-evidence.mjs materialize
+          --dir accepted-evidence
+          --candidate-dir candidate-input
+          --out candidate-with-evidence
+          --repository "${GITHUB_REPOSITORY}"
+          --workflow .github/workflows/windows-external-evidence.yml
+          --workflow-ref "${EXPECTED_EVIDENCE_WORKFLOW_REF}"
+          --run-id "${EVIDENCE_RUN_ID}"
+          --run-attempt "${EVIDENCE_RUN_ATTEMPT}"
+          --job import
+          --environment windows-external-evidence
+
+      - name: Finalize immutable installer bytes for public release
+        env:
+          HAS_EVIDENCE: ${{ steps.selectors.outputs.has_evidence }}
+          RELEASE_VERSION: ${{ steps.candidate_lock.outputs.version }}
+          RELEASE_TAG: ${{ steps.candidate_lock.outputs.tag }}
+          SOURCE_COMMIT: ${{ steps.candidate_lock.outputs.commit }}
+          EXPECTED_EVIDENCE_WORKFLOW_REF: ${{ steps.evidence_producer.outputs.workflow_ref }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          EVIDENCE_RUN_ATTEMPT: ${{ inputs.evidence_run_attempt }}
+        run: |
+          set -euo pipefail
+          candidate_input="candidate-input"
+          external_evidence_args=()
+          if [[ "${HAS_EVIDENCE}" == "true" ]]; then
+            candidate_input="candidate-with-evidence"
+            external_evidence_args=(
+              --external-evidence-repository "${GITHUB_REPOSITORY}"
+              --external-evidence-workflow .github/workflows/windows-external-evidence.yml
+              --external-evidence-workflow-ref "${EXPECTED_EVIDENCE_WORKFLOW_REF}"
+              --external-evidence-run-id "${EVIDENCE_RUN_ID}"
+              --external-evidence-run-attempt "${EVIDENCE_RUN_ATTEMPT}"
+              --external-evidence-job import
+              --external-evidence-environment windows-external-evidence
+            )
+          fi
+          node scripts/release/finalize-release.mjs \
+            --input "${candidate_input}" \
+            --out release-assets \
+            --version "${RELEASE_VERSION}" \
+            --tag "${RELEASE_TAG}" \
+            --commit "${SOURCE_COMMIT}" \
+            --publication-mode public-github-release \
+            "${external_evidence_args[@]}"
+
+      - name: Verify finalized checksums and release index
+        env:
+          HAS_EVIDENCE: ${{ steps.selectors.outputs.has_evidence }}
+          RELEASE_VERSION: ${{ steps.candidate_lock.outputs.version }}
+          RELEASE_TAG: ${{ steps.candidate_lock.outputs.tag }}
+          SOURCE_COMMIT: ${{ steps.candidate_lock.outputs.commit }}
+          EXPECTED_EVIDENCE_WORKFLOW_REF: ${{ steps.evidence_producer.outputs.workflow_ref }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          EVIDENCE_RUN_ATTEMPT: ${{ inputs.evidence_run_attempt }}
+        run: |
+          set -euo pipefail
+          external_evidence_args=()
+          if [[ "${HAS_EVIDENCE}" == "true" ]]; then
+            external_evidence_args=(
+              --external-evidence-repository "${GITHUB_REPOSITORY}"
+              --external-evidence-workflow .github/workflows/windows-external-evidence.yml
+              --external-evidence-workflow-ref "${EXPECTED_EVIDENCE_WORKFLOW_REF}"
+              --external-evidence-run-id "${EVIDENCE_RUN_ID}"
+              --external-evidence-run-attempt "${EVIDENCE_RUN_ATTEMPT}"
+              --external-evidence-job import
+              --external-evidence-environment windows-external-evidence
+            )
+          fi
+          node scripts/release/verify-finalized-release.mjs \
+            --dir release-assets \
+            --version "${RELEASE_VERSION}" \
+            --tag "${RELEASE_TAG}" \
+            --commit "${SOURCE_COMMIT}" \
+            --publication-mode public-github-release \
+            "${external_evidence_args[@]}"
+
+      - name: Preserve exact finalized public release
+        id: upload_finalized
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-finalized-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-assets
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+          include-hidden-files: true
+          overwrite: false
+
+  publish:
+    name: Attest and publish exact finalized release
+    needs: assemble
+    runs-on: ubuntu-24.04
+    environment: release-publication
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      actions: read
+    steps:
+      - name: Check out exact frozen candidate source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.assemble.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.15.0
+
+      - name: Set up Rust for exact updater signature verification
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # action commit, 2026-08-21
+        with:
+          toolchain: 1.98.0
+
+      - name: Install locked release tooling
+        run: npm ci --ignore-scripts
+
+      - name: Download exact same-run finalized release by artifact ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.assemble.outputs.finalized_artifact_id }}
+          path: release-assets
+          digest-mismatch: error
+
+      - name: Reverify finalized checksums and release index
+        env:
+          HAS_EVIDENCE: ${{ needs.assemble.outputs.has_evidence }}
+          RELEASE_VERSION: ${{ needs.assemble.outputs.version }}
+          RELEASE_TAG: ${{ needs.assemble.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.assemble.outputs.commit }}
+          EXPECTED_EVIDENCE_WORKFLOW_REF: ${{ needs.assemble.outputs.evidence_workflow_ref }}
+          EVIDENCE_RUN_ID: ${{ needs.assemble.outputs.evidence_run_id }}
+          EVIDENCE_RUN_ATTEMPT: ${{ needs.assemble.outputs.evidence_run_attempt }}
+        run: |
+          set -euo pipefail
+          external_evidence_args=()
+          if [[ "${HAS_EVIDENCE}" == "true" ]]; then
+            external_evidence_args=(
+              --external-evidence-repository "${GITHUB_REPOSITORY}"
+              --external-evidence-workflow .github/workflows/windows-external-evidence.yml
+              --external-evidence-workflow-ref "${EXPECTED_EVIDENCE_WORKFLOW_REF}"
+              --external-evidence-run-id "${EVIDENCE_RUN_ID}"
+              --external-evidence-run-attempt "${EVIDENCE_RUN_ATTEMPT}"
+              --external-evidence-job import
+              --external-evidence-environment windows-external-evidence
+            )
+          fi
+          node scripts/release/verify-finalized-release.mjs \
+            --dir release-assets \
+            --version "${RELEASE_VERSION}" \
+            --tag "${RELEASE_TAG}" \
+            --commit "${SOURCE_COMMIT}" \
+            --publication-mode public-github-release \
+            "${external_evidence_args[@]}"
+
+      - name: Attest every exact published file
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-assets/**/*
+
+      - name: Refuse a conflicting tag or existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.assemble.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.assemble.outputs.commit }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const apiRoot = process.env.GITHUB_API_URL ?? "https://api.github.com";
+          const repository = process.env.GITHUB_REPOSITORY;
+          const releaseTag = process.env.RELEASE_TAG;
+          const sourceCommit = process.env.SOURCE_COMMIT;
+          const headers = {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${process.env.GH_TOKEN}`,
+            "X-GitHub-Api-Version": "2022-11-28",
+          };
+          const request = (path, init = {}) => fetch(`${apiRoot}/repos/${repository}${path}`, {
+            ...init,
+            headers: { ...headers, ...(init.headers ?? {}) },
+          });
+
+          const tagResponse = await request(`/git/ref/tags/${encodeURIComponent(releaseTag)}`);
+          if (tagResponse.status === 200) {
+            const tag = await tagResponse.json();
+            if (tag.object?.type !== "commit" || tag.object?.sha !== sourceCommit) {
+              throw new Error("existing release tag does not bind the frozen source commit");
+            }
+          } else if (tagResponse.status === 404) {
+            const createResponse = await request("/git/refs", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ref: `refs/tags/${releaseTag}`, sha: sourceCommit }),
+            });
+            if (createResponse.status !== 201) {
+              throw new Error(`release tag creation failed closed with HTTP ${createResponse.status}`);
+            }
+          } else {
+            throw new Error(`release tag lookup failed closed with HTTP ${tagResponse.status}`);
+          }
+
+          const releaseResponse = await request(`/releases/tags/${encodeURIComponent(releaseTag)}`);
+          if (releaseResponse.status === 200) {
+            throw new Error(`a GitHub Release already exists for ${releaseTag}; refusing to update or overwrite it`);
+          }
+          if (releaseResponse.status !== 404) {
+            throw new Error(`GitHub Release lookup failed closed with HTTP ${releaseResponse.status}`);
+          }
+          NODE
+
+      - name: Publish the non-draft public release with the declared channel
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ needs.assemble.outputs.tag }}
+          target_commitish: ${{ needs.assemble.outputs.commit }}
+          name: ai-security-scanner ${{ needs.assemble.outputs.version }}
+          body_path: release-assets/RELEASE_NOTES.md
+          draft: false
+          prerelease: ${{ needs.assemble.outputs.prerelease }}
+          make_latest: ${{ needs.assemble.outputs.make_latest }}
+          fail_on_unmatched_files: true
+          overwrite_files: false
+          files: release-assets/**/*

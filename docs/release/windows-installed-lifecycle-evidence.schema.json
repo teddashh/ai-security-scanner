@@ -1,0 +1,436 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/teddashh/ai-security-scanner/blob/main/docs/release/windows-installed-lifecycle-evidence.schema.json",
+  "title": "ai-security-scanner Windows installed-app lifecycle evidence",
+  "description": "One strict, redacted record for one canonical Windows lifecycle row and boundary. The checked-in JavaScript validator additionally enforces the exact ordered case/check registry and exact-candidate bindings.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "evidenceType",
+    "product",
+    "rowId",
+    "boundary",
+    "platform",
+    "architecture",
+    "installerType",
+    "releaseIdentity",
+    "artifact",
+    "runtimeManifest",
+    "relatedArtifact",
+    "environment",
+    "harness",
+    "execution",
+    "outcome",
+    "reasonCode",
+    "reason",
+    "checks",
+    "installedAppJourney",
+    "cleanup",
+    "observedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "evidenceType": { "const": "windows-installed-app-lifecycle" },
+    "product": { "const": "ai-security-scanner" },
+    "rowId": {
+      "enum": [
+        "WL-01", "WL-02", "WL-03", "WL-04", "WL-05", "WL-06", "WL-07", "WL-08",
+        "WL-09", "WL-10", "WL-11", "WL-12a", "WL-12b", "WL-12c", "WL-13"
+      ]
+    },
+    "boundary": {
+      "enum": [
+        "installer_runtime_cache_seed",
+        "runtime_reconciliation",
+        "packaged_component_auto_recovery",
+        "installer_same_version_repair"
+      ]
+    },
+    "platform": { "const": "windows-x86_64" },
+    "architecture": { "const": "x86_64" },
+    "installerType": { "const": "nsis" },
+    "releaseIdentity": { "$ref": "#/$defs/releaseIdentity" },
+    "artifact": { "$ref": "#/$defs/artifact" },
+    "runtimeManifest": { "$ref": "#/$defs/runtimeManifest" },
+    "relatedArtifact": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/relatedArtifact" }
+      ]
+    },
+    "environment": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/environment" }
+      ]
+    },
+    "harness": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/harness" }
+      ]
+    },
+    "execution": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/execution" }
+      ]
+    },
+    "outcome": { "enum": ["passed", "failed", "inconclusive", "not-observed"] },
+    "reasonCode": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "enum": [
+            "product-behavior-failed",
+            "data-preservation-failed",
+            "integrity-failed",
+            "unsafe-target-contact-observed",
+            "cleanup-failed",
+            "environment-failure",
+            "evidence-chain-incomplete",
+            "lab-reset-failed",
+            "required-observation-unavailable",
+            "not-scheduled",
+            "reviewed-harness-missing",
+            "reference-environment-unavailable"
+          ]
+        }
+      ]
+    },
+    "reason": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/text" }
+      ]
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 13,
+      "items": { "$ref": "#/$defs/check" }
+    },
+    "installedAppJourney": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/journey" }
+      ]
+    },
+    "cleanup": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/cleanup" }
+      ]
+    },
+    "observedAt": { "$ref": "#/$defs/dateTime" }
+  },
+  "allOf": [
+    {
+      "oneOf": [
+        { "properties": { "rowId": { "const": "WL-01" }, "boundary": { "const": "installer_runtime_cache_seed" } }, "required": ["rowId", "boundary"] },
+        { "properties": { "rowId": { "const": "WL-02" }, "boundary": { "const": "runtime_reconciliation" } }, "required": ["rowId", "boundary"] },
+        { "properties": { "rowId": { "const": "WL-03" }, "boundary": { "const": "runtime_reconciliation" } }, "required": ["rowId", "boundary"] },
+        { "properties": { "rowId": { "const": "WL-04" }, "boundary": { "const": "runtime_reconciliation" } }, "required": ["rowId", "boundary"] },
+        { "properties": { "rowId": { "const": "WL-05" }, "boundary": { "const": "runtime_reconciliation" } }, "required": ["rowId", "boundary"] },
+        { "properties": { "rowId": { "const": "WL-06" }, "boundary": { "const": "packaged_component_auto_recovery" } }, "required": ["rowId", "boundary"] },
+        { "properties": { "rowId": { "const": "WL-07" }, "boundary": { "const": "runtime_reconciliation" } }, "required": ["rowId", "boundary"] },
+        { "properties": { "rowId": { "const": "WL-08" }, "boundary": { "const": "runtime_reconciliation" } }, "required": ["rowId", "boundary"] },
+        { "properties": { "rowId": { "const": "WL-09" }, "boundary": { "const": "installer_same_version_repair" } }, "required": ["rowId", "boundary"] },
+        { "properties": { "rowId": { "const": "WL-10" }, "boundary": { "const": "runtime_reconciliation" } }, "required": ["rowId", "boundary"] },
+        { "properties": { "rowId": { "const": "WL-11" }, "boundary": { "const": "runtime_reconciliation" } }, "required": ["rowId", "boundary"] },
+        { "properties": { "rowId": { "const": "WL-12a" }, "boundary": { "const": "runtime_reconciliation" } }, "required": ["rowId", "boundary"] },
+        { "properties": { "rowId": { "const": "WL-12b" }, "boundary": { "const": "runtime_reconciliation" } }, "required": ["rowId", "boundary"] },
+        { "properties": { "rowId": { "const": "WL-12c" }, "boundary": { "const": "runtime_reconciliation" } }, "required": ["rowId", "boundary"] },
+        { "properties": { "rowId": { "const": "WL-13" }, "boundary": { "const": "runtime_reconciliation" } }, "required": ["rowId", "boundary"] }
+      ]
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "passed" } }, "required": ["outcome"] },
+      "then": {
+        "properties": {
+          "reasonCode": { "const": null },
+          "reason": { "const": null },
+          "environment": { "$ref": "#/$defs/environment" },
+          "harness": { "$ref": "#/$defs/harness" },
+          "execution": { "$ref": "#/$defs/execution" },
+          "installedAppJourney": { "$ref": "#/$defs/journey" },
+          "cleanup": { "$ref": "#/$defs/cleanup" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "failed" } }, "required": ["outcome"] },
+      "then": {
+        "properties": {
+          "reasonCode": { "enum": ["product-behavior-failed", "data-preservation-failed", "integrity-failed", "unsafe-target-contact-observed", "cleanup-failed"] },
+          "reason": { "$ref": "#/$defs/text" },
+          "environment": { "$ref": "#/$defs/environment" },
+          "harness": { "$ref": "#/$defs/harness" },
+          "execution": { "$ref": "#/$defs/execution" },
+          "installedAppJourney": { "const": null },
+          "cleanup": { "$ref": "#/$defs/cleanup" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "inconclusive" } }, "required": ["outcome"] },
+      "then": {
+        "properties": {
+          "reasonCode": { "enum": ["environment-failure", "evidence-chain-incomplete", "lab-reset-failed", "required-observation-unavailable"] },
+          "reason": { "$ref": "#/$defs/text" },
+          "environment": { "$ref": "#/$defs/environment" },
+          "harness": { "$ref": "#/$defs/harness" },
+          "execution": { "$ref": "#/$defs/execution" },
+          "installedAppJourney": { "const": null },
+          "cleanup": { "$ref": "#/$defs/cleanup" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "not-observed" } }, "required": ["outcome"] },
+      "then": {
+        "properties": {
+          "reasonCode": { "enum": ["not-scheduled", "reviewed-harness-missing", "reference-environment-unavailable"] },
+          "reason": { "$ref": "#/$defs/text" },
+          "relatedArtifact": { "const": null },
+          "environment": { "const": null },
+          "harness": { "const": null },
+          "execution": { "const": null },
+          "installedAppJourney": { "const": null },
+          "cleanup": { "const": null }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "rowId": { "const": "WL-12c" }, "outcome": { "const": "passed" } },
+        "required": ["rowId", "outcome"]
+      },
+      "then": { "properties": { "installedAppJourney": { "$ref": "#/$defs/allDataJourney" } } }
+    },
+    {
+      "if": {
+        "allOf": [
+          { "properties": { "outcome": { "const": "passed" } }, "required": ["outcome"] },
+          { "not": { "properties": { "rowId": { "const": "WL-12c" } }, "required": ["rowId"] } }
+        ]
+      },
+      "then": { "properties": { "installedAppJourney": { "$ref": "#/$defs/completedJourney" } } }
+    }
+  ],
+  "$defs": {
+    "text": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\u0000\\r\\n]+$" },
+    "id": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\u0000\\r\\n]+$" },
+    "dateTime": { "type": "string", "format": "date-time", "maxLength": 64 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "flatFile": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^/\\\\\\u0000\\r\\n]+$" },
+    "releaseIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "tag", "sourceCommit", "releaseChannel"],
+      "properties": {
+        "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$", "maxLength": 64 },
+        "tag": { "type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$", "maxLength": 65 },
+        "sourceCommit": { "$ref": "#/$defs/gitSha" },
+        "releaseChannel": { "enum": ["prerelease", "stable"] }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "bytes", "sha256"],
+      "properties": {
+        "file": { "$ref": "#/$defs/flatFile" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "runtimeManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "bytes", "sha256", "managementContractRevision"],
+      "properties": {
+        "file": { "const": "managed-runtime-windows-x86_64.manifest.json" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 16777216 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "managementContractRevision": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^\\u0000\\r\\n]+$" }
+      }
+    },
+    "relatedArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "version", "tag", "file", "bytes", "sha256"],
+      "properties": {
+        "role": { "enum": ["n-minus-one-upgrade-source", "downgrade-target"] },
+        "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$", "maxLength": 64 },
+        "tag": { "type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$", "maxLength": 65 },
+        "file": { "$ref": "#/$defs/flatFile" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "environmentCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caseId", "snapshotId", "initialState"],
+      "properties": {
+        "caseId": { "$ref": "#/$defs/id" },
+        "snapshotId": { "$ref": "#/$defs/id" },
+        "initialState": { "$ref": "#/$defs/text" }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profileId", "windowsEdition", "windowsVersion", "windowsBuild", "architecture", "accountPrivilege", "uacState", "virtualizationCapability", "cases"],
+      "properties": {
+        "profileId": { "$ref": "#/$defs/id" },
+        "windowsEdition": { "$ref": "#/$defs/text" },
+        "windowsVersion": { "$ref": "#/$defs/text" },
+        "windowsBuild": { "$ref": "#/$defs/text" },
+        "architecture": { "const": "x86_64" },
+        "accountPrivilege": { "enum": ["standard-user", "administrator"] },
+        "uacState": { "enum": ["enabled", "disabled"] },
+        "virtualizationCapability": { "enum": ["available", "unavailable"] },
+        "cases": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "$ref": "#/$defs/environmentCase" } }
+      }
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "repository", "sourceCommit", "path", "sha256", "contractVersion"],
+      "properties": {
+        "kind": { "const": "checked-in-version-pinned" },
+        "repository": { "const": "teddashh/ai-security-scanner" },
+        "sourceCommit": { "$ref": "#/$defs/gitSha" },
+        "path": { "type": "string", "pattern": "^scripts/release/(?!.*(?:^|/)\\.\\.?/)[^\\\\\\u0000\\r\\n]+$", "maxLength": 512 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "contractVersion": { "const": 1 }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startedAt", "endedAt", "excludedOperatingSystemRestartSeconds", "secureDesktopControl", "localhostStartControl", "administratorCredentialSharedWithAgent", "visibleDecisions", "visibleWarnings", "visibleErrors", "retryCount", "interruptions"],
+      "properties": {
+        "startedAt": { "$ref": "#/$defs/dateTime" },
+        "endedAt": { "$ref": "#/$defs/dateTime" },
+        "excludedOperatingSystemRestartSeconds": { "type": "integer", "minimum": 0, "maximum": 86400 },
+        "secureDesktopControl": { "enum": ["human", "not-present", "not-observed"] },
+        "localhostStartControl": { "enum": ["human", "not-applicable", "not-observed"] },
+        "administratorCredentialSharedWithAgent": { "const": false },
+        "visibleDecisions": { "$ref": "#/$defs/textList" },
+        "visibleWarnings": { "$ref": "#/$defs/textList" },
+        "visibleErrors": { "$ref": "#/$defs/textList" },
+        "retryCount": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "interruptions": { "$ref": "#/$defs/textList" }
+      }
+    },
+    "textList": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/text" } },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caseId", "id", "state", "observedAt", "detail"],
+      "properties": {
+        "caseId": { "$ref": "#/$defs/id" },
+        "id": { "$ref": "#/$defs/id" },
+        "state": { "enum": ["passed", "failed", "not-observed"] },
+        "observedAt": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/dateTime" }] },
+        "detail": { "$ref": "#/$defs/text" }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "testedCount", "notTestedCount", "failedCount", "coverageGapCount"],
+      "properties": {
+        "state": { "enum": ["complete", "partial"] },
+        "testedCount": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "notTestedCount": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "failedCount": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "coverageGapCount": { "type": "integer", "minimum": 0, "maximum": 1000000 }
+      }
+    },
+    "export": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "file", "bytes", "sha256", "outcome"],
+      "properties": {
+        "format": { "const": "html" },
+        "file": { "$ref": "#/$defs/flatFile" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 16777216 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "outcome": { "const": "exported-and-opened-readable" }
+      }
+    },
+    "journey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disposition", "installedDesktopUsed", "target", "taskExecutionState", "targetOutcome", "durableReportId", "durableReportState", "projectReopened", "export", "finalCoverage"],
+      "properties": {
+        "disposition": { "enum": ["completed", "all-data-removal"] },
+        "installedDesktopUsed": { "type": "boolean" },
+        "target": { "oneOf": [{ "const": "127.0.0.1:9001" }, { "type": "null" }] },
+        "taskExecutionState": { "enum": ["executed", "not-applicable"] },
+        "targetOutcome": { "oneOf": [{ "enum": ["reachable", "closed", "timed_out", "unreachable"] }, { "type": "null" }] },
+        "durableReportId": { "oneOf": [{ "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" }, { "type": "null" }] },
+        "durableReportState": { "oneOf": [{ "const": "saved" }, { "type": "null" }] },
+        "projectReopened": { "type": "boolean" },
+        "export": { "oneOf": [{ "$ref": "#/$defs/export" }, { "type": "null" }] },
+        "finalCoverage": { "oneOf": [{ "$ref": "#/$defs/coverage" }, { "type": "null" }] }
+      }
+    },
+    "completedJourney": {
+      "allOf": [
+        { "$ref": "#/$defs/journey" },
+        {
+          "properties": {
+            "disposition": { "const": "completed" },
+            "installedDesktopUsed": { "const": true },
+            "target": { "const": "127.0.0.1:9001" },
+            "taskExecutionState": { "const": "executed" },
+            "targetOutcome": { "enum": ["reachable", "closed", "timed_out", "unreachable"] },
+            "durableReportId": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+            "durableReportState": { "const": "saved" },
+            "projectReopened": { "const": true },
+            "export": { "$ref": "#/$defs/export" },
+            "finalCoverage": { "$ref": "#/$defs/coverage" }
+          }
+        }
+      ]
+    },
+    "allDataJourney": {
+      "allOf": [
+        { "$ref": "#/$defs/journey" },
+        {
+          "properties": {
+            "disposition": { "const": "all-data-removal" },
+            "installedDesktopUsed": { "const": false },
+            "target": { "const": null },
+            "taskExecutionState": { "const": "not-applicable" },
+            "targetOutcome": { "const": null },
+            "durableReportId": { "const": null },
+            "durableReportState": { "const": null },
+            "projectReopened": { "const": false },
+            "export": { "const": null },
+            "finalCoverage": { "const": null }
+          }
+        }
+      ]
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["planInspected", "allDataRemovalConfirmedByOwner", "outcome", "ambiguousOrUnrelatedStatePreserved", "unresolvedObligations"],
+      "properties": {
+        "planInspected": { "type": "boolean" },
+        "allDataRemovalConfirmedByOwner": { "type": "boolean" },
+        "outcome": { "enum": ["completed", "not-required", "retained-with-obligations", "not-observed"] },
+        "ambiguousOrUnrelatedStatePreserved": { "type": "boolean" },
+        "unresolvedObligations": { "$ref": "#/$defs/textList" }
+      }
+    }
+  }
+}

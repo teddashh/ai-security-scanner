@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
@@ -13,374 +14,317 @@ import {
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
-function minimalSecurePublicationWorkflow() {
-  const identityJobName = "source_identity";
+const secureCandidateWorkflow = parse(
+  readFileSync(path.join(projectRoot, ".github/workflows/release.yml"), "utf8"),
+);
+const securePromotionWorkflow = parse(
+  readFileSync(path.join(projectRoot, ".github/workflows/promote-release.yml"), "utf8"),
+);
+
+function secureWorkflowPair() {
   return {
-    on: {
-      push: { tags: ["v[0-9]*.[0-9]*.[0-9]*"] },
-      workflow_dispatch: null,
-    },
-    permissions: { contents: "read" },
-    jobs: {
-      [identityJobName]: {
-        outputs: {
-          version: "${{ steps.identity.outputs.version }}",
-          tag: "${{ steps.identity.outputs.tag }}",
-          commit: "${{ steps.identity.outputs.commit }}",
-          release_channel: "${{ steps.identity.outputs.release_channel }}",
-          publication_mode: "${{ steps.identity.outputs.publication_mode }}",
-          prerelease: "${{ steps.identity.outputs.prerelease }}",
-          make_latest: "${{ steps.identity.outputs.make_latest }}",
-        },
-        steps: [{
-          id: "identity",
-          run: [
-            'candidate_tag="v${version}"',
-            '"refs/tags/${candidate_tag}"',
-            '"refs/heads/main"',
-            'event_commit="$(git rev-parse "${EVENT_SHA}^{commit}")"',
-            '"${commit}" != "${event_commit}"',
-            'release_channel="$(node -p "require(\'./package.json\').release.channel")"',
-            'case "${release_channel}" in',
-            "isSemver(process.argv[1])",
-            "release_channel=%s",
-            "publication_mode=%s",
-            'publication_mode="commit-bound-qc"',
-            'publication_mode="public-github-release"',
-            "prerelease=%s",
-            "make_latest=%s",
-          ].join("\n"),
-        }],
-      },
-      build_installers: {
-        needs: [identityJobName],
-        "continue-on-error": true,
-        steps: [
-          {
-            id: "build_unbundled",
-            run: "npm run tauri build -- --ci --no-bundle -- --locked",
-          },
-          ...[
-            ["bundle_deb", "deb"],
-            ["bundle_rpm", "rpm"],
-            ["bundle_appimage", "appimage"],
-            ["bundle_macos", "app,dmg"],
-            ["bundle_nsis", "nsis"],
-            ["bundle_msi", "msi"],
-          ].map(([id, bundles]) => ({
-            id,
-            "continue-on-error": true,
-            run: `node scripts/release/bundle-with-optional-updater.mjs --bundles ${bundles} --bundle-root target/release/bundle --version 0.1.8`,
-          })),
-          {
-            id: "available_bundles",
-            env: {
-              DEB_OUTCOME: "${{ steps.bundle_deb.outcome }}",
-              RPM_OUTCOME: "${{ steps.bundle_rpm.outcome }}",
-              APPIMAGE_OUTCOME: "${{ steps.bundle_appimage.outcome }}",
-              MACOS_OUTCOME: "${{ steps.bundle_macos.outcome }}",
-              NSIS_OUTCOME: "${{ steps.bundle_nsis.outcome }}",
-              MSI_OUTCOME: "${{ steps.bundle_msi.outcome }}",
-            },
-            run: "printf 'available=%s\\n' deb >> $GITHUB_OUTPUT",
-          },
-          {
-            if: "always() && steps.available_bundles.outcome == 'success'",
-            run: "node scripts/release/collect-bundles.mjs --expect deb,rpm,appimage --available deb",
-          },
-        ],
-      },
-      finalize_supported_artifacts: {
-        needs: [identityJobName, "build_installers"],
-        steps: [
-          {
-            env: {
-              RELEASE_VERSION: `\${{ needs.${identityJobName}.outputs.version }}`,
-              RELEASE_TAG: `\${{ needs.${identityJobName}.outputs.tag }}`,
-              SOURCE_COMMIT: `\${{ needs.${identityJobName}.outputs.commit }}`,
-              PUBLICATION_MODE: `\${{ needs.${identityJobName}.outputs.publication_mode }}`,
-            },
-            run: [
-              "node scripts/release/finalize-release.mjs",
-              "--input assembled-input",
-              "--out release-assets",
-              '--version "${RELEASE_VERSION}"',
-              '--tag "${RELEASE_TAG}"',
-              '--commit "${SOURCE_COMMIT}"',
-              '--publication-mode "${PUBLICATION_MODE}"',
-            ].join(" "),
-          },
-          {
-            env: {
-              RELEASE_VERSION: `\${{ needs.${identityJobName}.outputs.version }}`,
-              RELEASE_TAG: `\${{ needs.${identityJobName}.outputs.tag }}`,
-              SOURCE_COMMIT: `\${{ needs.${identityJobName}.outputs.commit }}`,
-              PUBLICATION_MODE: `\${{ needs.${identityJobName}.outputs.publication_mode }}`,
-            },
-            run: [
-              "node scripts/release/verify-finalized-release.mjs",
-              "--dir release-assets",
-              '--version "${RELEASE_VERSION}"',
-              '--tag "${RELEASE_TAG}"',
-              '--commit "${SOURCE_COMMIT}"',
-              '--publication-mode "${PUBLICATION_MODE}"',
-            ].join(" "),
-          },
-          {
-            uses: `actions/upload-artifact@${"c".repeat(40)}`,
-            with: {
-              name: "release-finalized",
-              path: "release-assets",
-              "if-no-files-found": "error",
-            },
-          },
-        ],
-      },
-      publish_supported_artifacts: {
-        needs: [identityJobName, "finalize_supported_artifacts"],
-        if: [
-          "always()",
-          `needs.${identityJobName}.result == 'success'`,
-          "needs['finalize_supported_artifacts'].result == 'success'",
-          "github.event_name == 'push'",
-          `github.ref == format('refs/tags/{0}', needs.${identityJobName}.outputs.tag)`,
-        ].join(" && "),
-        permissions: {
-          contents: "write",
-          "id-token": "write",
-          attestations: "write",
-        },
-        steps: [
-          {
-            uses: `actions/download-artifact@${"d".repeat(40)}`,
-            with: { name: "release-finalized", path: "release-assets" },
-          },
-          {
-            env: {
-              RELEASE_VERSION: `\${{ needs.${identityJobName}.outputs.version }}`,
-              RELEASE_TAG: `\${{ needs.${identityJobName}.outputs.tag }}`,
-              SOURCE_COMMIT: `\${{ needs.${identityJobName}.outputs.commit }}`,
-              PUBLICATION_MODE: `\${{ needs.${identityJobName}.outputs.publication_mode }}`,
-            },
-            run: [
-              "node scripts/release/verify-finalized-release.mjs",
-              "--dir release-assets",
-              '--version "${RELEASE_VERSION}"',
-              '--tag "${RELEASE_TAG}"',
-              '--commit "${SOURCE_COMMIT}"',
-              '--publication-mode "${PUBLICATION_MODE}"',
-            ].join(" "),
-          },
-          {
-            uses: `actions/attest-build-provenance@${"a".repeat(40)}`,
-            with: { "subject-path": "release-assets/**/*" },
-          },
-          {
-            uses: `softprops/action-gh-release@${"b".repeat(40)}`,
-            with: {
-              tag_name: `\${{ needs.${identityJobName}.outputs.tag }}`,
-              target_commitish: `\${{ needs.${identityJobName}.outputs.commit }}`,
-              draft: false,
-              prerelease: `\${{ needs.${identityJobName}.outputs.prerelease }}`,
-              make_latest: `\${{ needs.${identityJobName}.outputs.make_latest }}`,
-              fail_on_unmatched_files: true,
-              files: "release-assets/**/*",
-            },
-          },
-        ],
-      },
-    },
+    candidate: structuredClone(secureCandidateWorkflow),
+    promotion: structuredClone(securePromotionWorkflow),
   };
 }
 
-test("release workflow validation accepts a safe platform-scoped topology", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  assert.doesNotThrow(() => validateReleaseWorkflow(workflow));
-  assert.equal(workflow.jobs.build_installers["continue-on-error"], true);
-  assert.equal(workflow.jobs.qualification, undefined);
-  assert.equal(workflow.jobs.assemble, undefined);
+function validatePair({ candidate, promotion }) {
+  return validateReleaseWorkflow(candidate, promotion);
+}
+
+test("release policy accepts manual candidate freeze and protected exact-byte promotion", () => {
+  const pair = secureWorkflowPair();
+  assert.doesNotThrow(() => validatePair(pair));
+  assert.deepEqual(Object.keys(pair.candidate.on), ["workflow_dispatch"]);
+  assert.equal(pair.candidate.jobs.publish, undefined);
+  assert.equal(pair.promotion.jobs.publish.environment, "release-publication");
 });
 
-test("manual release inputs are limited to the false-by-default supporting fixture switch", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  workflow.on.workflow_dispatch = {
-    inputs: {
-      publish_anyway: {
-        description: "unsafe",
-        required: false,
-        type: "boolean",
-        default: false,
-      },
-    },
+test("candidate dispatch accepts only false-by-default public intent and fixture switches", () => {
+  const pair = secureWorkflowPair();
+  pair.candidate.on.workflow_dispatch.inputs.unsafe_publish_anyway = {
+    description: "unsafe",
+    required: false,
+    type: "boolean",
+    default: false,
   };
   assert.throws(
-    () => validateReleaseWorkflow(workflow),
-    /may accept only the false-by-default Windows data-preservation fixture switch/u,
+    () => validatePair(pair),
+    /may accept only false-by-default public-candidate and Windows-fixture switches/u,
   );
 });
 
-test("the optional Windows fixture input cannot exist without one bounded supporting job", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  workflow.on.workflow_dispatch = {
-    inputs: {
-      windows_data_preservation: {
-        description: "Run supporting fixtures",
-        required: false,
-        type: "boolean",
-        default: false,
-      },
-    },
-  };
+test("public candidate intent must seal, verify, and freeze one exact assembled input", () => {
+  const pair = secureWorkflowPair();
+  const steps = pair.candidate.jobs["finalize-supported-artifacts"].steps;
+  steps.splice(steps.findIndex((step) => step.run?.includes("release-candidate-lock.mjs verify")), 1);
   assert.throws(
-    () => validateReleaseWorkflow(workflow),
-    /must control exactly one supporting job/u,
+    () => validatePair(pair),
+    /consecutively lock, verify, freeze, then preview-finalize/u,
   );
 });
 
-test("release workflow validation rejects coupled installer sibling failures", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  workflow.jobs.build_installers.steps.find(({ id }) => id === "bundle_msi")["continue-on-error"] = false;
+test("candidate artifact name is attempt-scoped and non-overwriting", () => {
+  const pair = secureWorkflowPair();
+  const upload = pair.candidate.jobs["finalize-supported-artifacts"].steps.find(
+    (step) => step.id === "upload_candidate",
+  );
+  upload.with.name = "release-candidate-input";
   assert.throws(
-    () => validateReleaseWorkflow(workflow),
+    () => validatePair(pair),
+    /consecutively lock, verify, freeze, then preview-finalize/u,
+  );
+});
+
+test("candidate workflow has no publication or attestation authority", () => {
+  const pair = secureWorkflowPair();
+  pair.candidate.jobs["finalize-supported-artifacts"].steps.push({
+    uses: "softprops/action-gh-release@" + "a".repeat(40),
+  });
+  assert.throws(
+    () => validatePair(pair),
+    /must not publish a GitHub Release/u,
+  );
+});
+
+test("candidate jobs cannot receive write authority", () => {
+  const pair = secureWorkflowPair();
+  pair.candidate.jobs["finalize-supported-artifacts"].permissions.packages = "write";
+  assert.throws(
+    () => validatePair(pair),
+    /finalize-supported-artifacts job must not receive write permissions/u,
+  );
+});
+
+test("release workflow rejects coupled installer sibling failures", () => {
+  const pair = secureWorkflowPair();
+  pair.candidate.jobs.build.steps.find(({ id }) => id === "bundle_msi")["continue-on-error"] = false;
+  assert.throws(
+    () => validatePair(pair),
     /bundle_msi must independently bundle its installer and continue after sibling failure/u,
   );
 });
 
 test("installer-only bundle formats cannot depend on updater private keys", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  workflow.jobs.build_installers.steps.find(({ id }) => id === "bundle_msi").env = {
-    TAURI_SIGNING_PRIVATE_KEY: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
+  const pair = secureWorkflowPair();
+  pair.candidate.jobs.build.steps.find(({ id }) => id === "bundle_msi").env = {
+    TAURI_SIGNING_PRIVATE_KEY: "$" + "{{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
   };
   assert.throws(
-    () => validateReleaseWorkflow(workflow),
+    () => validatePair(pair),
     /bundle_msi must not depend on updater signing material/u,
   );
 });
 
-test("eligible installers must use the installer-first optional-updater wrapper", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  workflow.jobs.build_installers.steps.find(({ id }) => id === "bundle_appimage").run =
-    "npm run tauri bundle -- --ci --bundles appimage";
-  assert.throws(
-    () => validateReleaseWorkflow(workflow),
-    /bundle_appimage must independently bundle its installer/u,
-  );
-});
-
-test("release workflow validation requires explicit successful-bundle collection", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  const collect = workflow.jobs.build_installers.steps.find(({ run }) => run?.includes("collect-bundles.mjs"));
-  collect.run = collect.run.replace("--available deb", "");
-  assert.throws(
-    () => validateReleaseWorkflow(workflow),
-    /requested and successful bundle sets explicitly/u,
-  );
-});
-
-test("release workflow validation rejects an unimplemented artifact observation namespace", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  workflow.jobs.finalize_supported_artifacts.steps.unshift({
-    uses: `actions/download-artifact@${"d".repeat(40)}`,
+test("candidate assembly rejects an unprotected cross-run observation namespace", () => {
+  const pair = secureWorkflowPair();
+  pair.candidate.jobs["finalize-supported-artifacts"].steps.unshift({
+    uses: "actions/download-artifact@" + "d".repeat(40),
     "continue-on-error": true,
     with: {
-      pattern: "artifact-qc-observations-*",
+      pattern: "artifact-promotion-evidence-*",
       path: "assembled-input",
       "merge-multiple": true,
     },
   });
   assert.throws(
-    () => validateReleaseWorkflow(workflow),
-    /must not ingest an unimplemented artifact observation or promotion namespace/u,
+    () => validatePair(pair),
+    /must not ingest an unprotected observation or promotion namespace/u,
   );
 });
 
-test("release workflow validation still rejects unrelated write authority", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  workflow.jobs.finalize_supported_artifacts.permissions = { packages: "write" };
+test("promotion inputs are limited to exact candidate and complete evidence selectors", () => {
+  const pair = secureWorkflowPair();
+  delete pair.promotion.on.workflow_dispatch.inputs.evidence_artifact_digest;
   assert.throws(
-    () => validateReleaseWorkflow(workflow),
-    /finalize_supported_artifacts job must not receive write permissions/u,
+    () => validatePair(pair),
+    /only exact candidate and all-or-none protected-evidence selectors/u,
   );
 });
 
-test("release workflow validation limits publisher write authority to publication needs", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  workflow.jobs.publish_supported_artifacts.permissions.packages = "write";
+test("promotion is restricted to the workflow definition on main", () => {
+  const pair = secureWorkflowPair();
+  const selectors = pair.promotion.jobs.assemble.steps.find((step) => step.id === "selectors");
+  selectors.run = selectors.run.replace(
+    "promotion workflow ref is not the protected main-branch workflow",
+    "unchecked workflow ref",
+  );
   assert.throws(
-    () => validateReleaseWorkflow(workflow),
-    /publish job has unrelated write authority: packages/u,
+    () => validatePair(pair),
+    /fail closed on canonical candidate and all-or-none evidence identities/u,
   );
 });
 
-test("release workflow validation rejects a decoy verifier outside the publication dependency path", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  workflow.jobs.decoy_verifier = workflow.jobs.finalize_supported_artifacts;
-  delete workflow.jobs.finalize_supported_artifacts;
-  workflow.jobs.publish_supported_artifacts.needs = ["source_identity"];
+test("candidate artifact selection uses exact run, attempt, ID, and canonical digest", () => {
+  const pair = secureWorkflowPair();
+  const candidateProducer = pair.promotion.jobs.assemble.steps.find(
+    (step) => step.run?.includes("candidate workflow run ID mismatch"),
+  );
+  candidateProducer.env.CANDIDATE_ARTIFACT_DIGEST =
+    "$" + "{{ inputs.candidate_artifact_digest }}";
   assert.throws(
-    () => validateReleaseWorkflow(workflow),
-    /consume the version-derived identity and exactly one finalizer/u,
+    () => validatePair(pair),
+    /must use the selector's canonical artifact digest/u,
   );
 });
 
-test("release workflow validation binds verification, attestation, and publication to one path", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  const publication = workflow.jobs.publish_supported_artifacts.steps.at(-1);
-  publication.with.files = "different-assets/**/*";
+test("promotion accepts upload-artifact SHA-256 prefixes only through canonical normalization", () => {
+  const pair = secureWorkflowPair();
+  const selectors = pair.promotion.jobs.assemble.steps.find((step) => step.id === "selectors");
+  selectors.run = selectors.run.replace("(?:sha256:)?", "");
   assert.throws(
-    () => validateReleaseWorkflow(workflow),
-    /publish the exact verified and attested artifact path/u,
+    () => validatePair(pair),
+    /fail closed on canonical candidate and all-or-none evidence identities/u,
   );
 });
 
-test("release workflow validation requires publisher-side reverification", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  workflow.jobs.publish_supported_artifacts.steps.splice(1, 1);
+test("candidate producer verification resolves the exact workflow attempt", () => {
+  const pair = secureWorkflowPair();
+  const candidateProducer = pair.promotion.jobs.assemble.steps.find(
+    (step) => step.run?.includes("candidate workflow run ID mismatch"),
+  );
+  candidateProducer.run = candidateProducer.run.replace(
+    "/attempts/" + "$" + "{CANDIDATE_RUN_ATTEMPT}",
+    "",
+  );
   assert.throws(
-    () => validateReleaseWorkflow(workflow),
-    /reverify the downloaded finalized artifact/u,
+    () => validatePair(pair),
+    /candidate producer verification is missing/u,
   );
 });
 
-test("release workflow validation cannot ignore a failed required publication step", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  workflow.jobs.publish_supported_artifacts.steps[1]["continue-on-error"] = true;
+test("promotion downloads candidate bytes only by exact artifact ID", () => {
+  const pair = secureWorkflowPair();
+  const download = pair.promotion.jobs.assemble.steps.find(
+    (step) => step.with?.path === "candidate-input",
+  );
+  delete download.with["artifact-ids"];
+  download.with.name = "release-candidate-input-*";
   assert.throws(
-    () => validateReleaseWorkflow(workflow),
-    /publisher verification cannot continue after failure/u,
+    () => validatePair(pair),
+    /download the exact verified candidate artifact ID/u,
   );
 });
 
-test("release workflow validation rejects artifact mutation after verification", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  workflow.jobs.publish_supported_artifacts.steps.splice(2, 0, {
-    run: "cp unverified-file release-assets/unverified-file",
-  });
+test("promotion reverifies the candidate lock in public mode", () => {
+  const pair = secureWorkflowPair();
+  const lock = pair.promotion.jobs.assemble.steps.find((step) => step.id === "candidate_lock");
+  lock.run = lock.run.replace("public-github-release", "commit-bound-qc");
   assert.throws(
-    () => validateReleaseWorkflow(workflow),
-    /attestation must immediately follow verification/u,
+    () => validatePair(pair),
+    /reverify the candidate lock against every protected producer identity/u,
   );
 });
 
-test("release workflow validation rejects a tag condition with an unsafe escape", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  workflow.jobs.publish_supported_artifacts.if += " || true";
+test("accepted evidence is exact-ID selected after protected producer verification", () => {
+  const pair = secureWorkflowPair();
+  const download = pair.promotion.jobs.assemble.steps.find(
+    (step) => step.with?.path === "accepted-evidence",
+  );
+  download.with["artifact-ids"] = "$" + "{{ inputs.candidate_artifact_id }}";
   assert.throws(
-    () => validateReleaseWorkflow(workflow),
-    /publish job must survive optional skipped ancestors while requiring successful identity\/finalization and an exact version-derived tag push/u,
+    () => validatePair(pair),
+    /only the exact accepted-evidence artifact ID/u,
   );
 });
 
-test("release workflow publication survives optional skipped ancestors without ignoring required failures", () => {
-  const workflow = minimalSecurePublicationWorkflow();
-  workflow.jobs.publish_supported_artifacts.if =
-    `github.event_name == 'push' && github.ref == format('refs/tags/{0}', needs.source_identity.outputs.tag)`;
+test("accepted evidence is verified then materialized through the trusted CLI", () => {
+  const pair = secureWorkflowPair();
+  const steps = pair.promotion.jobs.assemble.steps;
+  const receiptIndex = steps.findIndex((step) =>
+    step.run?.includes("windows-external-evidence.mjs verify-receipt"),
+  );
+  [steps[receiptIndex], steps[receiptIndex + 1]] = [steps[receiptIndex + 1], steps[receiptIndex]];
   assert.throws(
-    () => validateReleaseWorkflow(workflow),
-    /publish job must survive optional skipped ancestors while requiring successful identity\/finalization/u,
+    () => validatePair(pair),
+    /receipt-verified then materialized without an intervening step/u,
   );
 });
 
+test("promotion forbids inline base64 evidence and release rebuilds", () => {
+  for (const forbidden of ["base64 evidence.txt", "npm run tauri build"]) {
+    const pair = secureWorkflowPair();
+    pair.promotion.jobs.assemble.steps.unshift({ run: forbidden });
+    assert.throws(
+      () => validatePair(pair),
+      /must not rebuild or inline external evidence/u,
+    );
+  }
+});
+
+test("finalization passes protected evidence provenance only through an optional argument array", () => {
+  const pair = secureWorkflowPair();
+  const finalize = pair.promotion.jobs.assemble.steps.find(
+    (step) => step.run?.includes("scripts/release/finalize-release.mjs"),
+  );
+  finalize.run = finalize.run.replace("--external-evidence-job import", "");
+  assert.throws(
+    () => validatePair(pair),
+    /public finalizer must pass the exact protected evidence identity/u,
+  );
+});
+
+test("publisher crosses the release environment with only scoped write authority", () => {
+  const pair = secureWorkflowPair();
+  pair.promotion.jobs.publish.permissions.packages = "write";
+  assert.throws(
+    () => validatePair(pair),
+    /must receive only release, attestation, and finalized-artifact permissions/u,
+  );
+  const secondPair = secureWorkflowPair();
+  secondPair.promotion.jobs.publish.environment = "unprotected";
+  assert.throws(
+    () => validatePair(secondPair),
+    /cross the protected release-publication environment/u,
+  );
+});
+
+test("publisher downloads only the same-run finalized artifact ID", () => {
+  const pair = secureWorkflowPair();
+  const download = pair.promotion.jobs.publish.steps.find(
+    (step) => step.uses?.includes("actions/download-artifact@"),
+  );
+  download.with.name = "release-finalized";
+  assert.throws(
+    () => validatePair(pair),
+    /only the exact same-run finalized artifact ID/u,
+  );
+});
+
+test("publisher revalidates optional evidence provenance before attestation", () => {
+  const pair = secureWorkflowPair();
+  const verify = pair.promotion.jobs.publish.steps.find(
+    (step) => step.run?.includes("verify-finalized-release.mjs"),
+  );
+  delete verify.env.EXPECTED_EVIDENCE_WORKFLOW_REF;
+  assert.throws(
+    () => validatePair(pair),
+    /reverify finalized metadata against the exact optional protected evidence identity/u,
+  );
+});
+
+test("publisher rejects artifact mutation after final verification", () => {
+  const pair = secureWorkflowPair();
+  const steps = pair.promotion.jobs.publish.steps;
+  const attestIndex = steps.findIndex((step) => step.uses?.includes("attest-build-provenance@"));
+  steps.splice(attestIndex, 0, { run: "cp unverified release-assets/unverified" });
+  assert.throws(
+    () => validatePair(pair),
+    /consecutively download, reverify, attest, guard the tag, then publish/u,
+  );
+});
+
+test("GitHub Release publication cannot overwrite an existing release asset", () => {
+  const pair = secureWorkflowPair();
+  const publication = pair.promotion.jobs.publish.steps.find(
+    (step) => step.uses?.includes("softprops/action-gh-release@"),
+  );
+  publication.with.overwrite_files = true;
+  assert.throws(
+    () => validatePair(pair),
+    /non-overwriting release from exact verified and attested files/u,
+  );
+});
 test("optional unavailable engines do not become a global product release gate", () => {
   const result = validateProductEngineRegistry([
     { id: "ready-engine", status: "integrated", compatibility: { runnable: true } },

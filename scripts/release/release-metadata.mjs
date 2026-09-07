@@ -1,3 +1,5 @@
+import { WINDOWS_INSTALLED_LIFECYCLE_RECORDS } from "./windows-installed-lifecycle-evidence.mjs";
+
 export const RELEASE_PLATFORM_CATALOG = Object.freeze([
   Object.freeze({ platform: "linux-x86_64", installerTypes: Object.freeze(["appimage", "deb", "rpm"]) }),
   Object.freeze({ platform: "macos-universal", installerTypes: Object.freeze(["dmg"]) }),
@@ -144,9 +146,47 @@ function validateWindowsLifecycle(outcome, platform, installerType, label) {
     );
     return;
   }
-  assert(outcome.state === "not-observed", `${label} has no verified real installed-app Windows lifecycle producer`);
-  assert(outcome.evidenceFiles.length === 0, `${label} unobserved Windows lifecycle claims evidence`);
-  assert(typeof outcome.reason === "string" && outcome.reason.length > 0, `${label} unobserved Windows lifecycle needs a reason`);
+  if (outcome.state === "not-observed") {
+    assert(outcome.evidenceFiles.length === 0, `${label} unobserved Windows lifecycle claims evidence`);
+    assert(typeof outcome.reason === "string" && outcome.reason.length > 0, `${label} unobserved Windows lifecycle needs a reason`);
+    return;
+  }
+  assert(installerType === "nsis", `${label} has no reviewed installed-lifecycle contract for ${installerType}`);
+  assert(["verified", "partial", "failed"].includes(outcome.state), `${label} Windows lifecycle state is invalid`);
+  assert(outcome.evidenceFiles.length >= 2, `${label} observed Windows lifecycle has no protected receipt and row evidence`);
+  const expectedPaths = new Set(
+    WINDOWS_INSTALLED_LIFECYCLE_RECORDS.map(({ path: evidencePath }) =>
+      `windows-installed-lifecycle/${evidencePath}`),
+  );
+  assert(
+    outcome.evidenceFiles[0]?.path === "windows-external-evidence-import.json",
+    `${label} Windows lifecycle does not begin with its protected import receipt`,
+  );
+  const seen = new Set();
+  for (const [index, record] of outcome.evidenceFiles.entries()) {
+    exactKeys(record, ["path", "bytes", "sha256"], `${label} Windows lifecycle evidence record`);
+    assert(
+      typeof record.path === "string" && record.path.length > 0 && !record.path.startsWith("/") &&
+        !record.path.includes("\\") && !record.path.split("/").includes(".."),
+      `${label} Windows lifecycle evidence path is unsafe`,
+    );
+    assert(!seen.has(record.path), `${label} Windows lifecycle evidence path is duplicated`);
+    seen.add(record.path);
+    assert(Number.isSafeInteger(record.bytes) && record.bytes > 0, `${label} Windows lifecycle evidence bytes are invalid`);
+    assert(/^[0-9a-f]{64}$/u.test(record.sha256), `${label} Windows lifecycle evidence digest is invalid`);
+    if (index > 0) assert(expectedPaths.has(record.path), `${label} Windows lifecycle evidence path is unsupported`);
+  }
+  if (outcome.state === "verified") {
+    assert(
+      outcome.evidenceFiles.length === WINDOWS_INSTALLED_LIFECYCLE_RECORDS.length + 1 &&
+        WINDOWS_INSTALLED_LIFECYCLE_RECORDS.every(({ path: evidencePath }) =>
+          seen.has(`windows-installed-lifecycle/${evidencePath}`)),
+      `${label} verified Windows lifecycle is missing a required row`,
+    );
+    assert(outcome.reason === null, `${label} verified Windows lifecycle has an unavailable reason`);
+  } else {
+    assert(typeof outcome.reason === "string" && outcome.reason.length > 0, `${label} non-verified Windows lifecycle needs a reason`);
+  }
 }
 
 function validateWindowsDataPreservation(outcome, platform, installerType, label) {
@@ -290,6 +330,18 @@ function validateArtifact(artifact, platform, installerType, publicationMode, re
     assert(
       artifact.knownLimitations.includes("windows-lifecycle-not-observed"),
       `${platform}/${artifact.file} does not disclose its unobserved Windows lifecycle`,
+    );
+  }
+  if (platform === "windows-x86_64" && artifact.windowsLifecycle.state === "partial") {
+    assert(
+      artifact.knownLimitations.includes("windows-lifecycle-partial"),
+      `${platform}/${artifact.file} does not disclose its partial Windows lifecycle`,
+    );
+  }
+  if (platform === "windows-x86_64" && artifact.windowsLifecycle.state === "failed") {
+    assert(
+      artifact.knownLimitations.includes("windows-lifecycle-failed"),
+      `${platform}/${artifact.file} does not disclose its failed Windows lifecycle`,
     );
   }
   if (platform === "windows-x86_64" && artifact.windowsDataPreservation.state === "not-observed") {

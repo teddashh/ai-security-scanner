@@ -42,9 +42,9 @@ NIST CSF、ISO/IEC 27001 與 AIDEFEND 關聯只是幫助你理解發現項目與
 
 ## 目前可以怎麼試？
 
-目前可以安裝的最新版本是 [GitHub Releases 頁面](https://github.com/teddashh/ai-security-scanner/releases)上的 **v0.1.8 公開測試預發布版**。它的目的是讓大家實機測試真正的安裝程式；它還不是穩定版，也不是新手正式推薦版。
+可安裝版本列在 [GitHub Releases 頁面](https://github.com/teddashh/ai-security-scanner/releases)。標示為「公開測試預發布版」的建置，是為了讓大家實機測試真正的安裝程式；它不是穩定版，也不是新手正式推薦版。
 
-它仍是預發布版的原因：依照[發行政策](docs/release/README.md)與產品規格，只有在一位符合條件的 Windows 新手於同一個建置上完整走完「安裝到第一份報告」的流程，而且 Windows Authenticode 簽章驗證完成之後，才能稱為穩定版。這兩項紀錄目前都還沒有。Release 頁面與安裝程式旁的 `release-metadata.json` 會逐一列出每個檔案已觀察與未觀察的流程。
+依照[發行政策](docs/release/README.md)與產品規格，Windows 建置在符合條件的新手針對相同 bytes 完整走完「安裝到第一份報告」流程、且 Windows Authenticode 簽章完成驗證之前，仍屬預發布版。Release 頁面與安裝程式旁的 `release-metadata.json` 會逐一列出每個檔案已觀察與未觀察的流程。
 
 安裝前先知道三件事：
 
@@ -123,6 +123,7 @@ npm run tauri dev
 - [資料來源授權實作參考](docs/provider-authorization.md)
 - [掃描引擎目錄](docs/engine-catalog.md)
 - [發行、驗證與發布政策](docs/release/README.md)
+- [v0.1.9 公開測試預發布版說明](docs/release/v0.1.9.md)
 - [Windows 外部資格驗證計畫](docs/release/windows-external-qualification-plan.zh-TW.md)（[English](docs/release/windows-external-qualification-plan.md)）
 - [掃描引擎映像供應鏈](docs/release/engine-image-supply-chain.md)
 - [掃描引擎維護](docs/engine-maintenance.md)

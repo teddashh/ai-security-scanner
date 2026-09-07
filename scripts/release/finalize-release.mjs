@@ -18,6 +18,14 @@ import { updaterLayoutsFor } from "./updater-layout.mjs";
 import { verifyPlatformQualificationFile } from "./platform-qualification.mjs";
 import { verifyBoundArtifactEvidenceFile } from "./artifact-evidence.mjs";
 import { verifyWindowsNsisSupportingDataPreservationEvidence } from "./windows-data-preservation-evidence.mjs";
+import { RELEASE_CANDIDATE_LOCK_FILE } from "./release-candidate-lock.mjs";
+import {
+  WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE,
+  WINDOWS_UNSIGNED_SIGNING_OBSERVATION_FILE,
+  verifyFinalizedWindowsExternalEvidenceOutcomes,
+  verifyMaterializedWindowsExternalEvidence,
+  windowsExternalEvidenceImporterIdentity,
+} from "./windows-external-evidence.mjs";
 import {
   platformContract,
   provenanceForArtifact,
@@ -31,6 +39,49 @@ function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function expectedExternalEvidenceImporter(args) {
+  const workflowRef = requireString(args, "external-evidence-workflow-ref");
+  const separator = workflowRef.lastIndexOf("@");
+  assert(separator > 0, "external-evidence workflow ref must end in its full workflow SHA");
+  const workflowSha = workflowRef.slice(separator + 1);
+  const importer = windowsExternalEvidenceImporterIdentity({
+    repository: requireString(args, "external-evidence-repository"),
+    workflow: requireString(args, "external-evidence-workflow"),
+    workflowSha,
+    runId: requireString(args, "external-evidence-run-id"),
+    runAttempt: requireString(args, "external-evidence-run-attempt"),
+    job: requireString(args, "external-evidence-job"),
+    environment: requireString(args, "external-evidence-environment"),
+  });
+  assert(importer.workflowRef === workflowRef, "external-evidence workflow ref is inconsistent");
+  return importer;
+}
+
+const EXTERNAL_EVIDENCE_IMPORTER_ARGUMENTS = Object.freeze([
+  "external-evidence-repository",
+  "external-evidence-workflow",
+  "external-evidence-workflow-ref",
+  "external-evidence-run-id",
+  "external-evidence-run-attempt",
+  "external-evidence-job",
+  "external-evidence-environment",
+]);
+
+function externalEvidenceImporterForInput(args, hasReceipt) {
+  const supplied = EXTERNAL_EVIDENCE_IMPORTER_ARGUMENTS.filter((key) => args.has(key));
+  assert(
+    supplied.length === 0 || supplied.length === EXTERNAL_EVIDENCE_IMPORTER_ARGUMENTS.length,
+    "external-evidence importer arguments must be supplied as one complete set",
+  );
+  assert(
+    hasReceipt === (supplied.length === EXTERNAL_EVIDENCE_IMPORTER_ARGUMENTS.length),
+    hasReceipt
+      ? "protected external-evidence receipt requires its exact importer arguments"
+      : "external-evidence importer arguments were supplied without a protected receipt",
+  );
+  return hasReceipt ? expectedExternalEvidenceImporter(args) : null;
 }
 
 const RELEASE_COPY = new Map([
@@ -53,6 +104,36 @@ const RELEASE_COPY = new Map([
         "",
         "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
         "The app still waits for an explicit Start action before contacting a scan target.",
+        "",
+      ],
+    },
+  ],
+  [
+    "0.1.9",
+    {
+      updaterNotes:
+        "Public testing update with safer runtime recovery, clearer partial-coverage reporting, bilingual finding guidance, and accessibility improvements. Existing local cases and historical provenance remain intact.",
+      releaseNotes: [
+        "> **A clearer, safer public testing build.** This prerelease improves automatic runtime",
+        "> recovery, evidence-backed finding explanations, and honest incomplete-coverage reporting.",
+        "",
+        "Findings now retain the engine facts used to compose their summary, impact, priority, and",
+        "next step. English and Traditional Chinese reports explain tested dimensions, limitations,",
+        "warnings, control relationships, and verification outcomes without turning unknown or failed",
+        "work into a clean result.",
+        "",
+        "Related observations from different engines are grouped reversibly, source attribution stays",
+        "visible, and identifiers that could not be attributed are withheld from redacted exports.",
+        "The interface also improves responsive layout, keyboard focus, readable text, and motion",
+        "preferences.",
+        "",
+        "Verified product-owned runtime material can recover from its digest-anchored packaged cache.",
+        "Ambiguous or unrelated state remains untouched, and optional engine failures remain scoped to",
+        "their affected tasks. Existing projects, evidence, cleanup obligations, and signer history are",
+        "preserved.",
+        "",
+        "For Windows installed-app testing, use the exact published installer bytes and follow the",
+        "[external qualification plan](https://github.com/teddashh/ai-security-scanner/blob/v0.1.9/docs/release/windows-external-qualification-plan.md).",
         "",
       ],
     },
@@ -402,6 +483,26 @@ async function scopedFinalizeMain() {
   const tauriConfig = await readJson(tauriConfigPath);
   const updaterPublicKey = tauriConfig.plugins?.updater?.pubkey;
 
+  let externalEvidence = null;
+  const hasExternalEvidenceReceipt = Boolean(
+    await regularFileIfPresent(path.join(input, WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE)),
+  );
+  const expectedExternalImporter = externalEvidenceImporterForInput(args, hasExternalEvidenceReceipt);
+  if (hasExternalEvidenceReceipt) {
+    externalEvidence = await verifyMaterializedWindowsExternalEvidence({
+      directory: input,
+      expectedImporter: expectedExternalImporter,
+    });
+    assert(
+      externalEvidence.receipt.releaseIdentity.version === version &&
+        externalEvidence.receipt.releaseIdentity.tag === tag &&
+        externalEvidence.receipt.releaseIdentity.sourceCommit === commit &&
+        externalEvidence.receipt.releaseIdentity.releaseChannel === metadata.releaseChannel &&
+        externalEvidence.receipt.releaseIdentity.publicationMode === publicationMode,
+      "protected external evidence belongs to a different release identity",
+    );
+  }
+
   const finalized = structuredClone(metadata);
   finalized.releaseState = "finalized";
   const selections = [];
@@ -503,10 +604,25 @@ async function scopedFinalizeMain() {
         commit,
       };
       let dataPreservationEvidence = null;
-      // No producer currently exercises the exact installed desktop application
-      // through localhost report, reopen, export, and uninstall/reinstall. The
-      // bounded data-preservation fixtures below deliberately do not fill this.
-      const installedAppLifecycleEvidence = null;
+      const acceptedExternalEvidence =
+        externalEvidence &&
+          platformRecord.platform === "windows-x86_64" &&
+          installerSupport.installerType === "nsis" &&
+          JSON.stringify(externalEvidence.receipt.artifact) === JSON.stringify({
+            file: installer.file,
+            bytes: installer.bytes,
+            sha256: installer.sha256,
+          })
+          ? externalEvidence.receipt
+          : null;
+      const installedAppLifecycleEvidence = acceptedExternalEvidence?.windowsLifecycle ?? null;
+      const acceptedExternalEvidenceReceiptFile = acceptedExternalEvidence
+        ? {
+            path: WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE,
+            bytes: (await regularFileIfPresent(path.join(input, WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE))).size,
+            sha256: await sha256File(path.join(input, WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE)),
+          }
+        : null;
       if (
         platformRecord.platform === "windows-x86_64" &&
         installerSupport.installerType === "nsis"
@@ -528,22 +644,23 @@ async function scopedFinalizeMain() {
       const humanName = `human-path-qualification-${platformRecord.platform}-${installerSupport.installerType}.json`;
       let humanEvidence = null;
       try {
-        if (await regularFileIfPresent(path.join(input, humanName))) {
+        if (acceptedExternalEvidence?.humanPath?.path === humanName) {
           humanEvidence = await verifyBoundArtifactEvidenceFile(path.join(input, humanName), {
             ...identity,
             artifact: installer,
             evidenceType: "beginner-human-path",
             label: humanName,
           });
+        } else if (await regularFileIfPresent(path.join(input, humanName))) {
+          rejectionMessages.push(`${humanName}: ignored because it has no matching protected import receipt`);
         }
       } catch (error) {
         rejectionMessages.push(`${humanName}: ${error instanceof Error ? error.message : String(error)}`);
       }
       const signingName = `os-signing-${platformRecord.platform}-${installerSupport.installerType}.json`;
-      // v0.1.8 has no reviewed protected-producer/publisher allowlist contract.
-      // A same-run file alone must therefore never become OS-signing promotion
-      // evidence. The standalone verifier remains available for future policy
-      // work, while this candidate records the exact claim as not configured.
+      // A generic external import may retain an exact NotSigned observation, but
+      // only a separately reviewed protected signing producer/publisher policy
+      // may create OS-signing promotion evidence. No such policy is configured.
       const signingEvidence = null;
       if (
         requiresStablePublicWindowsEvidence({
@@ -551,14 +668,16 @@ async function scopedFinalizeMain() {
           releaseChannel: metadata.releaseChannel,
           platform: platformRecord.platform,
         }) &&
-        (!humanEvidence || !signingEvidence || !installedAppLifecycleEvidence)
+        (!humanEvidence || !signingEvidence || installedAppLifecycleEvidence?.summary?.state !== "verified")
       ) {
         const missing = [
           !signingEvidence ? "authenticode-not-verified" : null,
           !humanEvidence ? "beginner-human-path-not-observed" : null,
-          installerSupport.installerType === "msi"
-            ? "equivalent-msi-lifecycle-not-observed"
-            : "real-installed-app-localhost-lifecycle-not-observed",
+          installedAppLifecycleEvidence?.summary?.state === "verified"
+            ? null
+            : installerSupport.installerType === "msi"
+              ? "equivalent-msi-lifecycle-not-observed"
+              : "real-installed-app-localhost-lifecycle-not-observed",
         ].filter(Boolean).join(";");
         unavailable(installerSupport, missing);
         continue;
@@ -591,7 +710,13 @@ async function scopedFinalizeMain() {
       if (!humanEvidence) limitations.push("beginner-human-path-not-observed");
       if (!signingEvidence) limitations.push("operating-system-signing-not-configured");
       if (platformRecord.platform === "windows-x86_64") {
-        limitations.push("windows-lifecycle-not-observed");
+        if (installedAppLifecycleEvidence?.summary?.state === "partial") {
+          limitations.push("windows-lifecycle-partial");
+        } else if (installedAppLifecycleEvidence?.summary?.state === "failed") {
+          limitations.push("windows-lifecycle-failed");
+        } else if (installedAppLifecycleEvidence?.summary?.state !== "verified") {
+          limitations.push("windows-lifecycle-not-observed");
+        }
         if (installerSupport.installerType === "nsis" && dataPreservationEvidence) {
           limitations.push("windows-data-preservation-fixtures-only");
         } else {
@@ -631,7 +756,24 @@ async function scopedFinalizeMain() {
           : { state: "not-applicable", evidenceFile: null, reason: "apple-notarization-does-not-apply" },
         windowsLifecycle: platformRecord.platform !== "windows-x86_64"
           ? { state: "not-applicable", evidenceFiles: [], reason: "Windows lifecycle does not apply" }
-          : {
+          : installedAppLifecycleEvidence &&
+              installedAppLifecycleEvidence.summary.state !== "not-observed" &&
+              installedAppLifecycleEvidence.records.length > 0
+            ? {
+                state: installedAppLifecycleEvidence.summary.state,
+                evidenceFiles: [
+                  acceptedExternalEvidenceReceiptFile,
+                  ...installedAppLifecycleEvidence.records.map(({ path: evidencePath, bytes, sha256 }) => ({
+                    path: evidencePath,
+                    bytes,
+                    sha256,
+                  })),
+                ],
+                reason: installedAppLifecycleEvidence.summary.state === "verified"
+                  ? null
+                  : `external-installed-app-lifecycle-${installedAppLifecycleEvidence.summary.state}`,
+              }
+            : {
               state: "not-observed",
               evidenceFiles: [],
               reason: installerSupport.installerType === "msi"
@@ -667,6 +809,14 @@ async function scopedFinalizeMain() {
         provenanceAttestation: provenanceForArtifact(publicationMode),
         knownLimitations: limitations,
       };
+      if (acceptedExternalEvidence) {
+        verifyFinalizedWindowsExternalEvidenceOutcomes({
+          receipt: acceptedExternalEvidence,
+          receiptFile: acceptedExternalEvidenceReceiptFile,
+          humanPath: installerSupport.artifact.humanPath,
+          windowsLifecycle: installerSupport.artifact.windowsLifecycle,
+        });
+      }
       selections.push({
         platform: platformRecord.platform,
         installerType: installerSupport.installerType,
@@ -676,6 +826,16 @@ async function scopedFinalizeMain() {
         signingName: signingEvidence ? signingName : null,
         notarizationName: notarizationEvidence ? notarizationName : null,
         dataPreservationFiles: dataPreservationEvidence?.evidenceFiles ?? [],
+        externalEvidenceFiles: acceptedExternalEvidence
+          ? [
+              RELEASE_CANDIDATE_LOCK_FILE,
+              WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE,
+              ...(acceptedExternalEvidence.unsignedSigningObservation
+                ? [WINDOWS_UNSIGNED_SIGNING_OBSERVATION_FILE]
+                : []),
+              ...acceptedExternalEvidence.windowsLifecycle.records.map(({ path: evidencePath }) => evidencePath),
+            ]
+          : [],
         updater,
         manifest,
         shared,
@@ -686,6 +846,11 @@ async function scopedFinalizeMain() {
     platformRecord.reason = offered.length > 0 ? null : "no-qualified-installer-artifact";
   }
   assert(selections.length > 0, `no releasable installer artifact remains (${rejectionMessages.join(" | ")})`);
+  assert(
+    !externalEvidence || selections.some(({ externalEvidenceFiles }) =>
+      externalEvidenceFiles.includes(WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE)),
+    "protected external evidence was not bound to an offered Windows NSIS artifact",
+  );
   validateReleaseMetadataV3(finalized, { releaseState: "finalized" });
 
   await mkdir(output, { recursive: true });
@@ -732,6 +897,7 @@ async function scopedFinalizeMain() {
     for (const name of [selection.humanName, selection.signingName, selection.notarizationName].filter(Boolean)) {
       await copySelected(name);
     }
+    for (const name of selection.externalEvidenceFiles) await copySelected(name);
     for (const dataPreservationFile of selection.dataPreservationFiles) {
       assert(
         (await sha256File(path.join(input, dataPreservationFile.path))) === dataPreservationFile.sha256,
@@ -833,7 +999,9 @@ async function scopedFinalizeMain() {
           const limitations = [];
           if (artifact.operatingSystemSigning.state !== "verified") limitations.push("Authenticode not verified");
           if (artifact.humanPath.state !== "verified") limitations.push("exact-candidate beginner path not observed");
-          if (artifact.windowsLifecycle.state !== "verified") limitations.push("installed-app lifecycle not observed");
+          if (artifact.windowsLifecycle.state === "partial") limitations.push("installed-app lifecycle partial");
+          else if (artifact.windowsLifecycle.state === "failed") limitations.push("installed-app lifecycle failed");
+          else if (artifact.windowsLifecycle.state !== "verified") limitations.push("installed-app lifecycle not observed");
           if (artifact.windowsDataPreservation.state === "not-observed") {
             limitations.push("data-preservation path not observed");
           } else if (artifact.windowsDataPreservation.state === "supporting-data-preservation-only") {

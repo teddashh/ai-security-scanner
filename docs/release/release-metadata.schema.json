@@ -509,7 +509,7 @@
               "properties": {
                 "updater": { "$ref": "#/$defs/nsisUpdater" },
                 "notarization": { "$ref": "#/$defs/notApplicableNotarization" },
-                "windowsLifecycle": { "$ref": "#/$defs/notObservedWindowsLifecycle" },
+                "windowsLifecycle": { "$ref": "#/$defs/windowsLifecycle" },
                 "windowsDataPreservation": { "$ref": "#/$defs/windowsNsisDataPreservation" }
               }
             }
@@ -702,6 +702,64 @@
         "reason": { "type": "string", "minLength": 1 }
       }
     },
+    "windowsLifecycleEvidenceRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1, "pattern": "^[^/\\\\][^\\\\]*$" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "verifiedWindowsLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "evidenceFiles", "reason"],
+      "properties": {
+        "state": { "const": "verified" },
+        "evidenceFiles": {
+          "type": "array",
+          "minItems": 16,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "allOf": [
+                { "$ref": "#/$defs/windowsLifecycleEvidenceRecord" },
+                { "properties": { "path": { "const": "windows-external-evidence-import.json" } } }
+              ]
+            }
+          ],
+          "items": { "$ref": "#/$defs/windowsLifecycleEvidenceRecord" }
+        },
+        "reason": { "const": null }
+      }
+    },
+    "incompleteWindowsLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "evidenceFiles", "reason"],
+      "properties": {
+        "state": { "enum": ["partial", "failed"] },
+        "evidenceFiles": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "prefixItems": [
+            {
+              "allOf": [
+                { "$ref": "#/$defs/windowsLifecycleEvidenceRecord" },
+                { "properties": { "path": { "const": "windows-external-evidence-import.json" } } }
+              ]
+            }
+          ],
+          "items": { "$ref": "#/$defs/windowsLifecycleEvidenceRecord" }
+        },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
     "notApplicableWindowsDataPreservation": {
       "type": "object",
       "additionalProperties": false,
@@ -766,7 +824,9 @@
     "windowsLifecycle": {
       "oneOf": [
         { "$ref": "#/$defs/notApplicableWindowsLifecycle" },
-        { "$ref": "#/$defs/notObservedWindowsLifecycle" }
+        { "$ref": "#/$defs/notObservedWindowsLifecycle" },
+        { "$ref": "#/$defs/verifiedWindowsLifecycle" },
+        { "$ref": "#/$defs/incompleteWindowsLifecycle" }
       ]
     },
     "windowsDataPreservation": {

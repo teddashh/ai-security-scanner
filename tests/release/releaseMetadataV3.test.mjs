@@ -7,6 +7,7 @@ import {
   requiresStablePublicWindowsEvidence,
   validateReleaseMetadataV3,
 } from "../../scripts/release/release-metadata.mjs";
+import { WINDOWS_INSTALLED_LIFECYCLE_RECORDS } from "../../scripts/release/windows-installed-lifecycle-evidence.mjs";
 
 const releaseSchema = JSON.parse(
   await readFile(new URL("../../docs/release/release-metadata.schema.json", import.meta.url), "utf8"),
@@ -101,6 +102,21 @@ function supportingNsisDataPreservation() {
       ["ghost-repair-uninstall-report", "windows-nsis-data-preservation/ghost-repair-uninstall/beginner-report.html"],
     ].map(([role, file], index) => ({ role, path: file, bytes: 100 + index, sha256: `${index + 1}`.repeat(64) })),
     reason: "real-installed-app-localhost-lifecycle-not-observed",
+  };
+}
+
+function verifiedWindowsLifecycle() {
+  return {
+    state: "verified",
+    evidenceFiles: [
+      { path: "windows-external-evidence-import.json", bytes: 200, sha256: "f".repeat(64) },
+      ...WINDOWS_INSTALLED_LIFECYCLE_RECORDS.map(({ path: recordPath }, index) => ({
+        path: `windows-installed-lifecycle/${recordPath}`,
+        bytes: 300 + index,
+        sha256: String((index % 9) + 1).repeat(64),
+      })),
+    ],
+    reason: null,
   };
 }
 
@@ -279,6 +295,55 @@ test("NSIS fixture evidence is retained only as supporting data preservation and
   );
 });
 
+test("protected lifecycle evidence can qualify NSIS only when every canonical row is retained", () => {
+  const metadata = windowsOnlyPrepared();
+  metadata.releaseState = "finalized";
+  const windows = metadata.distribution.platforms[2];
+  windows.availability = "offered";
+  const nsisArtifact = artifact();
+  nsisArtifact.file = "ai-security-scanner_0.1.8_x64-setup.exe";
+  nsisArtifact.technicalQualification.evidenceFile = "platform-qualification-windows-x86_64-nsis.json";
+  nsisArtifact.windowsLifecycle = verifiedWindowsLifecycle();
+  nsisArtifact.knownLimitations = nsisArtifact.knownLimitations.filter(
+    (limitation) => limitation !== "windows-lifecycle-not-observed",
+  );
+  windows.installers[0] = {
+    installerType: "msi",
+    availability: "not-offered",
+    reason: "not-tested",
+    artifact: null,
+  };
+  windows.installers[1] = {
+    installerType: "nsis",
+    availability: "offered",
+    reason: null,
+    artifact: nsisArtifact,
+  };
+  assert.doesNotThrow(() => validateReleaseMetadataV3(metadata, { releaseState: "finalized" }));
+
+  const missingRow = structuredClone(metadata);
+  missingRow.distribution.platforms[2].installers[1].artifact.windowsLifecycle.evidenceFiles.pop();
+  assert.throws(
+    () => validateReleaseMetadataV3(missingRow, { releaseState: "finalized" }),
+    /missing a required row/u,
+  );
+
+  const partial = structuredClone(metadata);
+  const partialArtifact = partial.distribution.platforms[2].installers[1].artifact;
+  partialArtifact.windowsLifecycle.state = "partial";
+  partialArtifact.windowsLifecycle.reason = "external-installed-app-lifecycle-partial";
+  partialArtifact.windowsLifecycle.evidenceFiles.pop();
+  partialArtifact.knownLimitations.push("windows-lifecycle-partial");
+  assert.doesNotThrow(() => validateReleaseMetadataV3(partial, { releaseState: "finalized" }));
+  partialArtifact.knownLimitations = partialArtifact.knownLimitations.filter(
+    (limitation) => limitation !== "windows-lifecycle-partial",
+  );
+  assert.throws(
+    () => validateReleaseMetadataV3(partial, { releaseState: "finalized" }),
+    /does not disclose its partial Windows lifecycle/u,
+  );
+});
+
 test("JSON schema fixes the same ordered platform/installer tuples and lifecycle states as the JS validator", () => {
   assert.deepEqual(
     releaseSchema.properties.distribution.properties.platforms.prefixItems.map(({ $ref }) => $ref),
@@ -307,7 +372,12 @@ test("JSON schema fixes the same ordered platform/installer tuples and lifecycle
   assert.deepEqual(preparedPlatform.installers.items.properties.availability.enum, ["pending", "not-offered"]);
   assert.deepEqual(finalizedPlatform.availability.enum, ["offered", "not-offered"]);
   assert.deepEqual(finalizedPlatform.installers.items.properties.availability.enum, ["offered", "not-offered"]);
-  assert.equal(releaseSchema.$defs.windowsLifecycle.oneOf.length, 2);
+  assert.equal(releaseSchema.$defs.windowsLifecycle.oneOf.length, 4);
+  assert.equal(releaseSchema.$defs.verifiedWindowsLifecycle.properties.evidenceFiles.minItems, 16);
+  assert.equal(
+    releaseSchema.$defs.nsisArtifactOrNull.oneOf[1].allOf[1].properties.windowsLifecycle.$ref,
+    "#/$defs/windowsLifecycle",
+  );
   assert.equal(
     releaseSchema.$defs.msiArtifactOrNull.oneOf[1].allOf[1].properties.windowsDataPreservation.$ref,
     "#/$defs/notObservedWindowsDataPreservation",

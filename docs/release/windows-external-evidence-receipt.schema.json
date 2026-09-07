@@ -1,0 +1,453 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/teddashh/ai-security-scanner/blob/main/docs/release/windows-external-evidence-receipt.schema.json",
+  "title": "ai-security-scanner protected Windows external-evidence receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "product",
+    "platform",
+    "installerType",
+    "releaseIdentity",
+    "artifact",
+    "runtimeManifest",
+    "candidate",
+    "evidenceSource",
+    "importer",
+    "humanPath",
+    "unsignedSigningObservation",
+    "windowsLifecycle",
+    "importedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "product": { "const": "ai-security-scanner" },
+    "platform": { "const": "windows-x86_64" },
+    "installerType": { "const": "nsis" },
+    "releaseIdentity": { "$ref": "#/$defs/releaseIdentity" },
+    "artifact": { "$ref": "#/$defs/artifact" },
+    "runtimeManifest": { "$ref": "#/$defs/runtimeManifest" },
+    "candidate": { "$ref": "#/$defs/candidate" },
+    "evidenceSource": { "$ref": "#/$defs/evidenceSource" },
+    "importer": { "$ref": "#/$defs/importer" },
+    "humanPath": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/humanPathFile" }
+      ]
+    },
+    "unsignedSigningObservation": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/unsignedSigningFile" }
+      ]
+    },
+    "windowsLifecycle": { "$ref": "#/$defs/windowsLifecycle" },
+    "importedAt": { "$ref": "#/$defs/dateTime" }
+  },
+  "anyOf": [
+    {
+      "properties": { "humanPath": { "$ref": "#/$defs/humanPathFile" } },
+      "required": ["humanPath"]
+    },
+    {
+      "properties": { "unsignedSigningObservation": { "$ref": "#/$defs/unsignedSigningFile" } },
+      "required": ["unsignedSigningObservation"]
+    },
+    {
+      "properties": {
+        "windowsLifecycle": {
+          "type": "object",
+          "properties": { "records": { "type": "array", "minItems": 1 } },
+          "required": ["records"]
+        }
+      },
+      "required": ["windowsLifecycle"]
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "artifactDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "gitSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "positiveIntegerString": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$"
+    },
+    "boundedText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^[^\\u0000\\r\\n]+$"
+    },
+    "dateTime": {
+      "type": "string",
+      "format": "date-time",
+      "maxLength": 64
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "workflowPath": {
+      "type": "string",
+      "pattern": "^\\.github/workflows/[A-Za-z0-9._-]+\\.ya?ml$"
+    },
+    "workflowRef": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\\.github/workflows/[A-Za-z0-9._-]+\\.ya?ml@[0-9a-f]{40}$"
+    },
+    "flatFile": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[^/\\\\\\u0000\\r\\n]+$"
+    },
+    "safePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*\\\\)(?!.*//)[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$"
+    },
+    "releaseIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "tag", "sourceCommit", "releaseChannel", "publicationMode"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        },
+        "tag": {
+          "type": "string",
+          "maxLength": 65,
+          "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        },
+        "sourceCommit": { "$ref": "#/$defs/gitSha" },
+        "releaseChannel": { "enum": ["prerelease", "stable"] },
+        "publicationMode": { "enum": ["commit-bound-qc", "public-github-release"] }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "bytes", "sha256"],
+      "properties": {
+        "file": { "$ref": "#/$defs/flatFile" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "runtimeManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "bytes", "sha256", "managementContractRevision"],
+      "properties": {
+        "file": { "const": "managed-runtime-windows-x86_64.manifest.json" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "managementContractRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\u0000\\r\\n]+$"
+        }
+      }
+    },
+    "candidateProducer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "repository",
+        "workflow",
+        "workflowRef",
+        "workflowSha",
+        "runId",
+        "runAttempt",
+        "job"
+      ],
+      "properties": {
+        "provider": { "const": "github-actions" },
+        "repository": { "$ref": "#/$defs/repository" },
+        "workflow": { "const": ".github/workflows/release.yml" },
+        "workflowRef": { "$ref": "#/$defs/workflowRef" },
+        "workflowSha": { "$ref": "#/$defs/gitSha" },
+        "runId": { "$ref": "#/$defs/positiveIntegerString" },
+        "runAttempt": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "job": { "const": "finalize-supported-artifacts" }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifactId", "artifactDigest", "lockFile", "lockSha256", "producer"],
+      "properties": {
+        "artifactId": { "$ref": "#/$defs/positiveIntegerString" },
+        "artifactDigest": { "$ref": "#/$defs/artifactDigest" },
+        "lockFile": { "const": "release-candidate-lock.json" },
+        "lockSha256": { "$ref": "#/$defs/sha256" },
+        "producer": { "$ref": "#/$defs/candidateProducer" }
+      }
+    },
+    "evidenceSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit", "path"],
+      "properties": {
+        "repository": { "$ref": "#/$defs/repository" },
+        "commit": { "$ref": "#/$defs/gitSha" },
+        "path": { "$ref": "#/$defs/safePath" }
+      }
+    },
+    "importer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "repository",
+        "workflow",
+        "workflowRef",
+        "workflowSha",
+        "runId",
+        "runAttempt",
+        "job",
+        "environment"
+      ],
+      "properties": {
+        "provider": { "const": "github-actions" },
+        "repository": { "$ref": "#/$defs/repository" },
+        "workflow": { "const": ".github/workflows/windows-external-evidence.yml" },
+        "workflowRef": { "$ref": "#/$defs/workflowRef" },
+        "workflowSha": { "$ref": "#/$defs/gitSha" },
+        "runId": { "$ref": "#/$defs/positiveIntegerString" },
+        "runAttempt": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "job": { "const": "import" },
+        "environment": { "const": "windows-external-evidence" }
+      }
+    },
+    "fileRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/safePath" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "humanPathFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "const": "human-path-qualification-windows-x86_64-nsis.json" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "unsignedSigningFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "const": "unsigned-os-signing-observation-windows-x86_64-nsis.json" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "lifecycleKey": {
+      "enum": [
+        "WL-01/installer_runtime_cache_seed",
+        "WL-02/runtime_reconciliation",
+        "WL-03/runtime_reconciliation",
+        "WL-04/runtime_reconciliation",
+        "WL-05/runtime_reconciliation",
+        "WL-06/packaged_component_auto_recovery",
+        "WL-07/runtime_reconciliation",
+        "WL-08/runtime_reconciliation",
+        "WL-09/installer_same_version_repair",
+        "WL-10/runtime_reconciliation",
+        "WL-11/runtime_reconciliation",
+        "WL-12a/runtime_reconciliation",
+        "WL-12b/runtime_reconciliation",
+        "WL-12c/runtime_reconciliation",
+        "WL-13/runtime_reconciliation"
+      ]
+    },
+    "lifecycleSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "requiredCount",
+        "presentCount",
+        "passedCount",
+        "failedCount",
+        "inconclusiveCount",
+        "notObservedCount",
+        "missingKeys"
+      ],
+      "properties": {
+        "state": { "enum": ["verified", "failed", "partial", "not-observed"] },
+        "requiredCount": { "const": 15 },
+        "presentCount": { "type": "integer", "minimum": 0, "maximum": 15 },
+        "passedCount": { "type": "integer", "minimum": 0, "maximum": 15 },
+        "failedCount": { "type": "integer", "minimum": 0, "maximum": 15 },
+        "inconclusiveCount": { "type": "integer", "minimum": 0, "maximum": 15 },
+        "notObservedCount": { "type": "integer", "minimum": 0, "maximum": 15 },
+        "missingKeys": {
+          "type": "array",
+          "maxItems": 15,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/lifecycleKey" }
+        }
+      }
+    },
+    "lifecycleRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rowId", "boundary", "outcome", "path", "bytes", "sha256"],
+      "properties": {
+        "rowId": {
+          "enum": [
+            "WL-01", "WL-02", "WL-03", "WL-04", "WL-05", "WL-06", "WL-07", "WL-08",
+            "WL-09", "WL-10", "WL-11", "WL-12a", "WL-12b", "WL-12c", "WL-13"
+          ]
+        },
+        "boundary": {
+          "enum": [
+            "installer_runtime_cache_seed",
+            "installer_same_version_repair",
+            "packaged_component_auto_recovery",
+            "runtime_reconciliation"
+          ]
+        },
+        "outcome": { "enum": ["passed", "failed", "inconclusive", "not-observed"] },
+        "path": { "$ref": "#/$defs/safePath" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "oneOf": [
+        { "$ref": "#/$defs/wl01Record" },
+        { "$ref": "#/$defs/wl02Record" },
+        { "$ref": "#/$defs/wl03Record" },
+        { "$ref": "#/$defs/wl04Record" },
+        { "$ref": "#/$defs/wl05Record" },
+        { "$ref": "#/$defs/wl06Record" },
+        { "$ref": "#/$defs/wl07Record" },
+        { "$ref": "#/$defs/wl08Record" },
+        { "$ref": "#/$defs/wl09Record" },
+        { "$ref": "#/$defs/wl10Record" },
+        { "$ref": "#/$defs/wl11Record" },
+        { "$ref": "#/$defs/wl12aRecord" },
+        { "$ref": "#/$defs/wl12bRecord" },
+        { "$ref": "#/$defs/wl12cRecord" },
+        { "$ref": "#/$defs/wl13Record" }
+      ]
+    },
+    "wl01Record": { "$ref": "#/$defs/lifecycleRecord-WL-01-installer_runtime_cache_seed" },
+    "wl02Record": { "$ref": "#/$defs/lifecycleRecord-WL-02-runtime_reconciliation" },
+    "wl03Record": { "$ref": "#/$defs/lifecycleRecord-WL-03-runtime_reconciliation" },
+    "wl04Record": { "$ref": "#/$defs/lifecycleRecord-WL-04-runtime_reconciliation" },
+    "wl05Record": { "$ref": "#/$defs/lifecycleRecord-WL-05-runtime_reconciliation" },
+    "wl06Record": { "$ref": "#/$defs/lifecycleRecord-WL-06-packaged_component_auto_recovery" },
+    "wl07Record": { "$ref": "#/$defs/lifecycleRecord-WL-07-runtime_reconciliation" },
+    "wl08Record": { "$ref": "#/$defs/lifecycleRecord-WL-08-runtime_reconciliation" },
+    "wl09Record": { "$ref": "#/$defs/lifecycleRecord-WL-09-installer_same_version_repair" },
+    "wl10Record": { "$ref": "#/$defs/lifecycleRecord-WL-10-runtime_reconciliation" },
+    "wl11Record": { "$ref": "#/$defs/lifecycleRecord-WL-11-runtime_reconciliation" },
+    "wl12aRecord": { "$ref": "#/$defs/lifecycleRecord-WL-12a-runtime_reconciliation" },
+    "wl12bRecord": { "$ref": "#/$defs/lifecycleRecord-WL-12b-runtime_reconciliation" },
+    "wl12cRecord": { "$ref": "#/$defs/lifecycleRecord-WL-12c-runtime_reconciliation" },
+    "wl13Record": { "$ref": "#/$defs/lifecycleRecord-WL-13-runtime_reconciliation" },
+    "lifecycleRecord-WL-01-installer_runtime_cache_seed": {
+      "properties": {
+        "rowId": { "const": "WL-01" },
+        "boundary": { "const": "installer_runtime_cache_seed" },
+        "path": { "const": "windows-installed-lifecycle/wl-01/installer_runtime_cache_seed.json" }
+      },
+      "required": ["rowId", "boundary", "path"]
+    },
+    "lifecycleRecord-WL-02-runtime_reconciliation": {
+      "properties": { "rowId": { "const": "WL-02" }, "boundary": { "const": "runtime_reconciliation" }, "path": { "const": "windows-installed-lifecycle/wl-02/runtime_reconciliation.json" } },
+      "required": ["rowId", "boundary", "path"]
+    },
+    "lifecycleRecord-WL-03-runtime_reconciliation": {
+      "properties": { "rowId": { "const": "WL-03" }, "boundary": { "const": "runtime_reconciliation" }, "path": { "const": "windows-installed-lifecycle/wl-03/runtime_reconciliation.json" } },
+      "required": ["rowId", "boundary", "path"]
+    },
+    "lifecycleRecord-WL-04-runtime_reconciliation": {
+      "properties": { "rowId": { "const": "WL-04" }, "boundary": { "const": "runtime_reconciliation" }, "path": { "const": "windows-installed-lifecycle/wl-04/runtime_reconciliation.json" } },
+      "required": ["rowId", "boundary", "path"]
+    },
+    "lifecycleRecord-WL-05-runtime_reconciliation": {
+      "properties": { "rowId": { "const": "WL-05" }, "boundary": { "const": "runtime_reconciliation" }, "path": { "const": "windows-installed-lifecycle/wl-05/runtime_reconciliation.json" } },
+      "required": ["rowId", "boundary", "path"]
+    },
+    "lifecycleRecord-WL-06-packaged_component_auto_recovery": {
+      "properties": { "rowId": { "const": "WL-06" }, "boundary": { "const": "packaged_component_auto_recovery" }, "path": { "const": "windows-installed-lifecycle/wl-06/packaged_component_auto_recovery.json" } },
+      "required": ["rowId", "boundary", "path"]
+    },
+    "lifecycleRecord-WL-07-runtime_reconciliation": {
+      "properties": { "rowId": { "const": "WL-07" }, "boundary": { "const": "runtime_reconciliation" }, "path": { "const": "windows-installed-lifecycle/wl-07/runtime_reconciliation.json" } },
+      "required": ["rowId", "boundary", "path"]
+    },
+    "lifecycleRecord-WL-08-runtime_reconciliation": {
+      "properties": { "rowId": { "const": "WL-08" }, "boundary": { "const": "runtime_reconciliation" }, "path": { "const": "windows-installed-lifecycle/wl-08/runtime_reconciliation.json" } },
+      "required": ["rowId", "boundary", "path"]
+    },
+    "lifecycleRecord-WL-09-installer_same_version_repair": {
+      "properties": { "rowId": { "const": "WL-09" }, "boundary": { "const": "installer_same_version_repair" }, "path": { "const": "windows-installed-lifecycle/wl-09/installer_same_version_repair.json" } },
+      "required": ["rowId", "boundary", "path"]
+    },
+    "lifecycleRecord-WL-10-runtime_reconciliation": {
+      "properties": { "rowId": { "const": "WL-10" }, "boundary": { "const": "runtime_reconciliation" }, "path": { "const": "windows-installed-lifecycle/wl-10/runtime_reconciliation.json" } },
+      "required": ["rowId", "boundary", "path"]
+    },
+    "lifecycleRecord-WL-11-runtime_reconciliation": {
+      "properties": { "rowId": { "const": "WL-11" }, "boundary": { "const": "runtime_reconciliation" }, "path": { "const": "windows-installed-lifecycle/wl-11/runtime_reconciliation.json" } },
+      "required": ["rowId", "boundary", "path"]
+    },
+    "lifecycleRecord-WL-12a-runtime_reconciliation": {
+      "properties": { "rowId": { "const": "WL-12a" }, "boundary": { "const": "runtime_reconciliation" }, "path": { "const": "windows-installed-lifecycle/wl-12a/runtime_reconciliation.json" } },
+      "required": ["rowId", "boundary", "path"]
+    },
+    "lifecycleRecord-WL-12b-runtime_reconciliation": {
+      "properties": { "rowId": { "const": "WL-12b" }, "boundary": { "const": "runtime_reconciliation" }, "path": { "const": "windows-installed-lifecycle/wl-12b/runtime_reconciliation.json" } },
+      "required": ["rowId", "boundary", "path"]
+    },
+    "lifecycleRecord-WL-12c-runtime_reconciliation": {
+      "properties": { "rowId": { "const": "WL-12c" }, "boundary": { "const": "runtime_reconciliation" }, "path": { "const": "windows-installed-lifecycle/wl-12c/runtime_reconciliation.json" } },
+      "required": ["rowId", "boundary", "path"]
+    },
+    "lifecycleRecord-WL-13-runtime_reconciliation": {
+      "properties": { "rowId": { "const": "WL-13" }, "boundary": { "const": "runtime_reconciliation" }, "path": { "const": "windows-installed-lifecycle/wl-13/runtime_reconciliation.json" } },
+      "required": ["rowId", "boundary", "path"]
+    },
+    "windowsLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "records"],
+      "properties": {
+        "summary": { "$ref": "#/$defs/lifecycleSummary" },
+        "records": {
+          "type": "array",
+          "maxItems": 15,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/lifecycleRecord" }
+        }
+      }
+    }
+  }
+}

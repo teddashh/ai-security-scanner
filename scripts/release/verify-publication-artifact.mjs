@@ -37,7 +37,7 @@ const ENGINE_SPECS = Object.freeze({
   "kube-bench": { tag: "0.16.0-3", group: "local", workflow: ".github/workflows/engine-images-local-k8s.yml", smokeFiles: ["kube-bench.json"] },
   scubagear: { tag: "1.8.0-6", group: "m365", workflow: ".github/workflows/engine-images-m365.yml" },
   maester: { tag: "2.0.0-6", group: "m365", workflow: ".github/workflows/engine-images-m365.yml" },
-  "egress-gateway": { tag: "0.1.8-1", group: "gateway", workflow: ".github/workflows/managed-egress-gateway-image.yml" },
+  "egress-gateway": { tag: "0.1.9-1", group: "gateway", workflow: ".github/workflows/managed-egress-gateway-image.yml" },
 });
 
 const PLATFORMS = ["linux/amd64", "linux/arm64"];
