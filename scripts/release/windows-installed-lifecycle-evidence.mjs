@@ -23,6 +23,18 @@ export const WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY = Object.freeze({
   sha256: "de31dceede3f1aafcdc222d9c91f68913d69e077baa3a663577d62ac0354973a",
 });
 
+export const WINDOWS_APPROVED_LIFECYCLE_HARNESS_POLICIES = Object.freeze({
+  "WL-13": Object.freeze({
+    kind: "checked-in-version-pinned",
+    repository: "teddashh/ai-security-scanner",
+    sourceCommit: "bd47e26b6c8024eb3461176637d7fce3e8370561",
+    path: WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.path,
+    sha256: WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.sha256,
+    contractVersion: 1,
+    fixtureRuntime: WINDOWS_LOCALHOST_FIXTURE_RUNTIME_POLICY,
+  }),
+});
+
 function check(caseId, id) {
   return Object.freeze({ caseId, id });
 }
@@ -364,9 +376,16 @@ function validateRelatedArtifact(value, contract, currentVersion, expected, outc
   assert(value.role === contract.relatedArtifactRole, `${contract.rowId} related artifact role is invalid`);
   assert(isSemver(value.version) && value.tag === `v${value.version}`, `${contract.rowId} related artifact version/tag is invalid`);
   assert(value.version !== currentVersion, `${contract.rowId} related artifact cannot be the candidate version`);
+  if (expected) {
+    for (const field of ["role", "version", "tag"]) {
+      if (expected[field] !== undefined) {
+        assert(value[field] === expected[field], `${contract.rowId} related artifact ${field} differs from policy`);
+      }
+    }
+  }
   validateArtifact(
     { file: value.file, bytes: value.bytes, sha256: value.sha256 },
-    expected,
+    expected?.artifact ?? expected,
     `${contract.rowId} related artifact`,
   );
 }
@@ -660,11 +679,22 @@ export function validateWindowsInstalledLifecycleEvidence(evidence, expected = {
   validateArtifact(evidence.artifact, expected.artifact, `${label} artifact`);
   validateRuntimeManifest(evidence.runtimeManifest, expected.runtimeManifest, `${label} runtime manifest`);
   assert(["passed", "failed", "inconclusive", "not-observed"].includes(evidence.outcome), `${label} outcome is invalid`);
+  const expectedRelatedArtifact = expected.relatedArtifacts?.[contract.rowId];
+  if (
+    evidence.outcome !== "not-observed"
+    && contract.relatedArtifactRole
+    && expected.requireApprovedRelatedArtifact === true
+  ) {
+    assert(
+      expectedRelatedArtifact && typeof expectedRelatedArtifact === "object",
+      `${contract.rowId} has no approved related installer artifact policy`,
+    );
+  }
   validateRelatedArtifact(
     evidence.relatedArtifact,
     contract,
     evidence.releaseIdentity.version,
-    expected.relatedArtifacts?.[contract.rowId],
+    expectedRelatedArtifact,
     evidence.outcome,
   );
   validateReason(evidence.outcome, evidence.reasonCode, evidence.reason, label);
@@ -680,7 +710,14 @@ export function validateWindowsInstalledLifecycleEvidence(evidence, expected = {
     assert(evidence.relatedArtifact === null, `${label} not-observed outcome claims a related artifact execution`);
   } else {
     validateEnvironment(evidence.environment, contract);
-    validateHarness(evidence.harness, expected.harness, contract, `${label} harness`);
+    const expectedHarness = expected.harnesses?.[contract.rowId] ?? expected.harness;
+    if (expected.requireApprovedHarness === true) {
+      assert(
+        expectedHarness && typeof expectedHarness === "object",
+        `${contract.rowId} has no approved checked-in lifecycle harness policy`,
+      );
+    }
+    validateHarness(evidence.harness, expectedHarness, contract, `${label} harness`);
     executionRange = validateExecution(evidence.execution, evidence.outcome, `${label} execution`);
     assert(recordObservedAt >= executionRange.endedAt, `${label} observedAt precedes execution completion`);
     validateCleanup(evidence.cleanup, contract, evidence.outcome);

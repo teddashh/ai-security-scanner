@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  WINDOWS_APPROVED_LIFECYCLE_HARNESS_POLICIES,
   WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS,
   WINDOWS_INSTALLED_LIFECYCLE_RECORDS,
   WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY,
@@ -331,6 +332,103 @@ test("WL-13 is bound to the exact approved Windows fixture runtime", () => {
   assert.doesNotThrow(() => validateWindowsInstalledLifecycleEvidence(reordered, {
     harness: { fixtureRuntime: structuredClone(WINDOWS_LOCALHOST_FIXTURE_RUNTIME_POLICY) },
   }));
+});
+
+test("protected-policy mode rejects observed rows without an approved checked-in harness", () => {
+  const contract = WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS.find(({ rowId }) => rowId === "WL-01");
+  const observed = passingRecord(contract);
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(observed, {
+      requireApprovedHarness: true,
+      harnesses: WINDOWS_APPROVED_LIFECYCLE_HARNESS_POLICIES,
+    }),
+    /WL-01 has no approved checked-in lifecycle harness policy/u,
+  );
+
+  assert.doesNotThrow(() => validateWindowsInstalledLifecycleEvidence(notObservedRecord(contract), {
+    requireApprovedHarness: true,
+    harnesses: WINDOWS_APPROVED_LIFECYCLE_HARNESS_POLICIES,
+  }));
+});
+
+test("protected-policy mode pins the complete approved WL-13 harness identity", () => {
+  const contract = WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS.find(({ rowId }) => rowId === "WL-13");
+  const record = passingRecord(contract);
+  record.harness = structuredClone(WINDOWS_APPROVED_LIFECYCLE_HARNESS_POLICIES["WL-13"]);
+  const expected = {
+    requireApprovedHarness: true,
+    harnesses: WINDOWS_APPROVED_LIFECYCLE_HARNESS_POLICIES,
+  };
+  assert.doesNotThrow(() => validateWindowsInstalledLifecycleEvidence(record, expected));
+
+  const mutations = [
+    ["repository", (value) => { value.harness.repository = "example/other"; }],
+    ["source commit", (value) => { value.harness.sourceCommit = "ff".repeat(20); }],
+    ["path", (value) => { value.harness.path = "scripts/release/other-fixture.mjs"; }],
+    ["script digest", (value) => { value.harness.sha256 = "ff".repeat(32); }],
+    ["contract version", (value) => { value.harness.contractVersion = 2; }],
+    ["Node version", (value) => { value.harness.fixtureRuntime.version = "v24.16.0"; }],
+    ["Node archive filename", (value) => { value.harness.fixtureRuntime.distribution.file = "node-other.zip"; }],
+    ["Node archive bytes", (value) => { value.harness.fixtureRuntime.distribution.bytes += 1; }],
+    ["Node archive digest", (value) => { value.harness.fixtureRuntime.distribution.sha256 = "ff".repeat(32); }],
+    ["Node executable filename", (value) => { value.harness.fixtureRuntime.executable.file = "other.exe"; }],
+    ["Node executable bytes", (value) => { value.harness.fixtureRuntime.executable.bytes += 1; }],
+    ["Node executable digest", (value) => { value.harness.fixtureRuntime.executable.sha256 = "ff".repeat(32); }],
+  ];
+  for (const [label, mutate] of mutations) {
+    const changed = structuredClone(record);
+    mutate(changed);
+    assert.throws(
+      () => validateWindowsInstalledLifecycleEvidence(changed, expected),
+      undefined,
+      label,
+    );
+  }
+});
+
+test("protected-policy mode pins the related installer version, role, and exact bytes", () => {
+  const contract = WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS.find(({ rowId }) => rowId === "WL-10");
+  const record = passingRecord(contract);
+  const policy = {
+    role: "n-minus-one-upgrade-source",
+    version: "0.1.8",
+    tag: "v0.1.8",
+    file: record.relatedArtifact.file,
+    bytes: record.relatedArtifact.bytes,
+    sha256: record.relatedArtifact.sha256,
+  };
+  const expected = {
+    requireApprovedRelatedArtifact: true,
+    relatedArtifacts: { "WL-10": policy },
+  };
+  assert.doesNotThrow(() => validateWindowsInstalledLifecycleEvidence(record, expected));
+
+  const wrongVersion = structuredClone(record);
+  wrongVersion.relatedArtifact.version = "0.1.7";
+  wrongVersion.relatedArtifact.tag = "v0.1.7";
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(wrongVersion, expected),
+    /related artifact version differs from policy/u,
+  );
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(record, {
+      requireApprovedRelatedArtifact: true,
+      relatedArtifacts: {},
+    }),
+    /WL-10 has no approved related installer artifact policy/u,
+  );
+});
+
+test("protected-policy mode keeps truthful not-observed rows policy-free and inert", () => {
+  for (const rowId of ["WL-10", "WL-11", "WL-13"]) {
+    const contract = WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS.find((item) => item.rowId === rowId);
+    assert.doesNotThrow(() => validateWindowsInstalledLifecycleEvidence(notObservedRecord(contract), {
+      requireApprovedHarness: true,
+      harnesses: WINDOWS_APPROVED_LIFECYCLE_HARNESS_POLICIES,
+      requireApprovedRelatedArtifact: true,
+      relatedArtifacts: {},
+    }), rowId);
+  }
 });
 
 test("the WL-13 localhost fixture identity is rejected from every other lifecycle row", () => {

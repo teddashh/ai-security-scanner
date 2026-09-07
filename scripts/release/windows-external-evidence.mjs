@@ -24,6 +24,7 @@ import {
   verifyBoundArtifactEvidenceFile,
 } from "./artifact-evidence.mjs";
 import {
+  WINDOWS_APPROVED_LIFECYCLE_HARNESS_POLICIES,
   WINDOWS_INSTALLED_LIFECYCLE_RECORDS,
   verifyWindowsInstalledLifecycleEvidenceDirectory,
 } from "./windows-installed-lifecycle-evidence.mjs";
@@ -41,6 +42,18 @@ const CANDIDATE_WORKFLOW = ".github/workflows/release.yml";
 const CANDIDATE_JOB = "finalize-supported-artifacts";
 const MAX_RECEIPT_BYTES = 1024 * 1024;
 const MAX_EXTERNAL_FILES = WINDOWS_INSTALLED_LIFECYCLE_RECORDS.length + 3;
+
+const V019_LIFECYCLE_CANDIDATE = Object.freeze({
+  version: "0.1.9",
+  sourceCommit: "5c95572f54220adbd170d9bfb5af3159c56708ef",
+});
+const V019_RELATED_INSTALLER = Object.freeze({
+  version: "0.1.8",
+  tag: "v0.1.8",
+  file: "ai-security-scanner_0.1.8_x64-setup.exe",
+  bytes: 39889971,
+  sha256: "1417ba5d6cffb7fc869583ca951766ae14aa85dc560457e9a6360af1acd23ae6",
+});
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -300,6 +313,9 @@ async function verifyCandidate(directory, expected) {
 }
 
 function expectedEvidence(candidate) {
+  const isExactV019 =
+    candidate.lock.version === V019_LIFECYCLE_CANDIDATE.version
+    && candidate.lock.sourceCommit === V019_LIFECYCLE_CANDIDATE.sourceCommit;
   return {
     platform: PLATFORM,
     architecture: "x86_64",
@@ -310,6 +326,21 @@ function expectedEvidence(candidate) {
     releaseChannel: candidate.lock.releaseChannel,
     artifact: candidate.artifact,
     runtimeManifest: candidate.runtimeManifest,
+    requireApprovedHarness: true,
+    harnesses: WINDOWS_APPROVED_LIFECYCLE_HARNESS_POLICIES,
+    requireApprovedRelatedArtifact: true,
+    relatedArtifacts: isExactV019
+      ? {
+          "WL-10": {
+            role: "n-minus-one-upgrade-source",
+            ...V019_RELATED_INSTALLER,
+          },
+          "WL-11": {
+            role: "downgrade-target",
+            ...V019_RELATED_INSTALLER,
+          },
+        }
+      : {},
   };
 }
 

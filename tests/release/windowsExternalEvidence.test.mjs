@@ -9,6 +9,7 @@ import {
   createReleaseCandidateLock,
 } from "../../scripts/release/release-candidate-lock.mjs";
 import {
+  WINDOWS_APPROVED_LIFECYCLE_HARNESS_POLICIES,
   WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS,
   WINDOWS_INSTALLED_LIFECYCLE_RECORDS,
 } from "../../scripts/release/windows-installed-lifecycle-evidence.mjs";
@@ -28,7 +29,7 @@ import {
 
 const version = "0.1.9";
 const tag = `v${version}`;
-const commit = "01".repeat(20);
+const commit = "5c95572f54220adbd170d9bfb5af3159c56708ef";
 const repository = "teddashh/ai-security-scanner";
 const candidateIdentity = {
   version,
@@ -172,6 +173,78 @@ function notObservedLifecycleRecord(contract, artifact, runtimeManifest) {
     installedAppJourney: null,
     cleanup: null,
     observedAt: "2026-09-06T12:02:00Z",
+  };
+}
+
+function attemptedLifecycleRecord(contract, artifact, runtimeManifest, harness, relatedArtifact = null) {
+  const startedAt = "2026-09-06T12:00:00Z";
+  const endedAt = "2026-09-06T12:10:00Z";
+  return {
+    schemaVersion: 1,
+    evidenceType: "windows-installed-app-lifecycle",
+    product: "ai-security-scanner",
+    rowId: contract.rowId,
+    boundary: contract.boundary,
+    platform: "windows-x86_64",
+    architecture: "x86_64",
+    installerType: "nsis",
+    releaseIdentity: {
+      version,
+      tag,
+      sourceCommit: commit,
+      releaseChannel: "prerelease",
+    },
+    artifact: { ...artifact },
+    runtimeManifest: { ...runtimeManifest },
+    relatedArtifact,
+    environment: {
+      profileId: "resettable-windows-x86-64",
+      windowsEdition: "Windows 11 Pro",
+      windowsVersion: "24H2",
+      windowsBuild: "26100",
+      architecture: "x86_64",
+      accountPrivilege: "standard-user",
+      uacState: "enabled",
+      virtualizationCapability: "available",
+      cases: contract.cases.map((caseId, index) => ({
+        caseId,
+        snapshotId: `${contract.rowId.toLowerCase()}-snapshot-${index + 1}`,
+        initialState: `Frozen initial state for ${caseId}`,
+      })),
+    },
+    harness,
+    execution: {
+      startedAt,
+      endedAt,
+      excludedOperatingSystemRestartSeconds: 0,
+      secureDesktopControl: "not-present",
+      localhostStartControl: "human",
+      administratorCredentialSharedWithAgent: false,
+      visibleDecisions: [],
+      visibleWarnings: [],
+      visibleErrors: ["The observed qualification behavior did not meet its contract."],
+      retryCount: 0,
+      interruptions: [],
+    },
+    outcome: "failed",
+    reasonCode: "product-behavior-failed",
+    reason: "The attempted lifecycle row observed a product behavior failure.",
+    checks: contract.checks.map(({ caseId, id }, index) => ({
+      caseId,
+      id,
+      state: index === 0 ? "failed" : "passed",
+      observedAt: "2026-09-06T12:05:00Z",
+      detail: `Observed ${id}.`,
+    })),
+    installedAppJourney: null,
+    cleanup: {
+      planInspected: true,
+      allDataRemovalConfirmedByOwner: false,
+      outcome: "not-required",
+      ambiguousOrUnrelatedStatePreserved: true,
+      unresolvedObligations: [],
+    },
+    observedAt: "2026-09-06T12:11:00Z",
   };
 }
 
@@ -516,6 +589,203 @@ test("generic importer rejects the reserved Authenticode promotion record", asyn
   await assert.rejects(
     () => importWindowsExternalEvidence(importOptions(f)),
     /unexpected external evidence path|must not accept Authenticode promotion evidence/u,
+  );
+});
+
+test("protected import accepts attempted lifecycle rows only from an approved exact harness", async (t) => {
+  await t.test("unapproved non-WL-13 harness", async (t) => {
+    const f = await fixture(t);
+    const contract = WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS.find(({ rowId }) => rowId === "WL-01");
+    const record = WINDOWS_INSTALLED_LIFECYCLE_RECORDS.find(({ rowId }) => rowId === "WL-01");
+    await writeJson(
+      path.join(f.evidenceDirectory, WINDOWS_LIFECYCLE_DIRECTORY, record.path),
+      attemptedLifecycleRecord(contract, f.artifact, f.runtimeManifest, {
+        kind: "checked-in-version-pinned",
+        repository,
+        sourceCommit: commit,
+        path: "scripts/release/qualify-windows-installed-lifecycle.ps1",
+        sha256: "34".repeat(32),
+        contractVersion: 1,
+        fixtureRuntime: null,
+      }),
+    );
+    await assert.rejects(
+      () => importWindowsExternalEvidence(importOptions(f)),
+      /WL-01 has no approved checked-in lifecycle harness policy/u,
+    );
+  });
+
+  await t.test("approved WL-13 harness", async (t) => {
+    const f = await fixture(t);
+    const contract = WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS.find(({ rowId }) => rowId === "WL-13");
+    const record = WINDOWS_INSTALLED_LIFECYCLE_RECORDS.find(({ rowId }) => rowId === "WL-13");
+    await writeJson(
+      path.join(f.evidenceDirectory, WINDOWS_LIFECYCLE_DIRECTORY, record.path),
+      attemptedLifecycleRecord(
+        contract,
+        f.artifact,
+        f.runtimeManifest,
+        structuredClone(WINDOWS_APPROVED_LIFECYCLE_HARNESS_POLICIES["WL-13"]),
+      ),
+    );
+    await importWindowsExternalEvidence(importOptions(f));
+    const receipt = JSON.parse(await readFile(
+      path.join(f.acceptedDirectory, WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE),
+      "utf8",
+    ));
+    assert.equal(receipt.windowsLifecycle.summary.state, "failed");
+    assert.equal(receipt.windowsLifecycle.records.some(({ rowId }) => rowId === "WL-13"), true);
+  });
+});
+
+test("protected v0.1.9 import pins WL-10 to the exact public v0.1.8 installer", async (t) => {
+  const contract = WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS.find(({ rowId }) => rowId === "WL-10");
+  const record = WINDOWS_INSTALLED_LIFECYCLE_RECORDS.find(({ rowId }) => rowId === "WL-10");
+  const unapprovedHarness = {
+    kind: "checked-in-version-pinned",
+    repository,
+    sourceCommit: commit,
+    path: "scripts/release/qualify-windows-installed-lifecycle.ps1",
+    sha256: "34".repeat(32),
+    contractVersion: 1,
+    fixtureRuntime: null,
+  };
+  const exactRelatedArtifact = {
+    role: "n-minus-one-upgrade-source",
+    version: "0.1.8",
+    tag: "v0.1.8",
+    file: "ai-security-scanner_0.1.8_x64-setup.exe",
+    bytes: 39889971,
+    sha256: "1417ba5d6cffb7fc869583ca951766ae14aa85dc560457e9a6360af1acd23ae6",
+  };
+
+  await t.test("N-2 cannot impersonate N-1", async (t) => {
+    const f = await fixture(t);
+    await writeJson(
+      path.join(f.evidenceDirectory, WINDOWS_LIFECYCLE_DIRECTORY, record.path),
+      attemptedLifecycleRecord(contract, f.artifact, f.runtimeManifest, unapprovedHarness, {
+        role: "n-minus-one-upgrade-source",
+        version: "0.1.7",
+        tag: "v0.1.7",
+        file: "ai-security-scanner_0.1.7_x64-setup.exe",
+        bytes: 38730365,
+        sha256: "4d2057ca4c008b46dc0195a792075e4b4b377c1909a7795b29efc30f9ae48b1a",
+      }),
+    );
+    await assert.rejects(
+      () => importWindowsExternalEvidence(importOptions(f)),
+      /WL-10 related artifact version differs from policy/u,
+    );
+  });
+
+  await t.test("invented v0.1.8 bytes are rejected", async (t) => {
+    const f = await fixture(t);
+    await writeJson(
+      path.join(f.evidenceDirectory, WINDOWS_LIFECYCLE_DIRECTORY, record.path),
+      attemptedLifecycleRecord(contract, f.artifact, f.runtimeManifest, unapprovedHarness, {
+        role: "n-minus-one-upgrade-source",
+        version: "0.1.8",
+        tag: "v0.1.8",
+        file: "ai-security-scanner_0.1.8_x64-setup.exe",
+        bytes: 3072,
+        sha256: "ef".repeat(32),
+      }),
+    );
+    await assert.rejects(
+      () => importWindowsExternalEvidence(importOptions(f)),
+      /WL-10 related artifact differs from the expected exact bytes/u,
+    );
+  });
+
+  for (const [label, mutate] of [
+    ["role", (value) => { value.role = "downgrade-target"; }],
+    ["tag", (value) => { value.tag = "v0.1.7"; }],
+    ["filename", (value) => { value.file = "other.exe"; }],
+    ["byte length", (value) => { value.bytes += 1; }],
+    ["digest", (value) => { value.sha256 = "ff".repeat(32); }],
+  ]) {
+    await t.test(`mutated ${label} is rejected`, async (t) => {
+      const f = await fixture(t);
+      const relatedArtifact = structuredClone(exactRelatedArtifact);
+      mutate(relatedArtifact);
+      await writeJson(
+        path.join(f.evidenceDirectory, WINDOWS_LIFECYCLE_DIRECTORY, record.path),
+        attemptedLifecycleRecord(
+          contract,
+          f.artifact,
+          f.runtimeManifest,
+          unapprovedHarness,
+          relatedArtifact,
+        ),
+      );
+      await assert.rejects(
+        () => importWindowsExternalEvidence(importOptions(f)),
+        /WL-10 related artifact/u,
+      );
+    });
+  }
+
+  await t.test("even exact N-1 bytes cannot bypass the missing row harness", async (t) => {
+    const f = await fixture(t);
+    await writeJson(
+      path.join(f.evidenceDirectory, WINDOWS_LIFECYCLE_DIRECTORY, record.path),
+      attemptedLifecycleRecord(
+        contract,
+        f.artifact,
+        f.runtimeManifest,
+        unapprovedHarness,
+        exactRelatedArtifact,
+      ),
+    );
+    await assert.rejects(
+      () => importWindowsExternalEvidence(importOptions(f)),
+      /WL-10 has no approved checked-in lifecycle harness policy/u,
+    );
+  });
+});
+
+test("protected v0.1.9 import gives WL-11 the exact v0.1.8 downgrade role", async (t) => {
+  const contract = WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS.find(({ rowId }) => rowId === "WL-11");
+  const record = WINDOWS_INSTALLED_LIFECYCLE_RECORDS.find(({ rowId }) => rowId === "WL-11");
+  const harness = {
+    kind: "checked-in-version-pinned",
+    repository,
+    sourceCommit: commit,
+    path: "scripts/release/qualify-windows-installed-lifecycle.ps1",
+    sha256: "34".repeat(32),
+    contractVersion: 1,
+    fixtureRuntime: null,
+  };
+  const relatedArtifact = {
+    role: "downgrade-target",
+    version: "0.1.8",
+    tag: "v0.1.8",
+    file: "ai-security-scanner_0.1.8_x64-setup.exe",
+    bytes: 39889971,
+    sha256: "1417ba5d6cffb7fc869583ca951766ae14aa85dc560457e9a6360af1acd23ae6",
+  };
+
+  const exact = await fixture(t);
+  await writeJson(
+    path.join(exact.evidenceDirectory, WINDOWS_LIFECYCLE_DIRECTORY, record.path),
+    attemptedLifecycleRecord(contract, exact.artifact, exact.runtimeManifest, harness, relatedArtifact),
+  );
+  await assert.rejects(
+    () => importWindowsExternalEvidence(importOptions(exact)),
+    /WL-11 has no approved checked-in lifecycle harness policy/u,
+  );
+
+  const wrongRole = await fixture(t);
+  await writeJson(
+    path.join(wrongRole.evidenceDirectory, WINDOWS_LIFECYCLE_DIRECTORY, record.path),
+    attemptedLifecycleRecord(contract, wrongRole.artifact, wrongRole.runtimeManifest, harness, {
+      ...relatedArtifact,
+      role: "n-minus-one-upgrade-source",
+    }),
+  );
+  await assert.rejects(
+    () => importWindowsExternalEvidence(importOptions(wrongRole)),
+    /WL-11 related artifact role is invalid/u,
   );
 });
 
