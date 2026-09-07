@@ -8,8 +8,12 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 
 import {
+  validateFinalizedPublicationMappingSources,
+  validateGithubReleasePublisherSource,
   validateProductEngineRegistry,
+  validateReleaseAssetNamingSource,
   validateReleaseWorkflow,
+  validateWindowsQualificationLifecycle,
 } from "../../scripts/release/validate-release.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -19,6 +23,26 @@ const secureCandidateWorkflow = parse(
 );
 const securePromotionWorkflow = parse(
   readFileSync(path.join(projectRoot, ".github/workflows/promote-release.yml"), "utf8"),
+);
+const secureWindowsQualification = readFileSync(
+  path.join(projectRoot, "scripts/release/qualify-windows.ps1"),
+  "utf8",
+);
+const secureGithubReleasePublisher = readFileSync(
+  path.join(projectRoot, "scripts/release/publish-github-release.mjs"),
+  "utf8",
+);
+const secureReleaseAssetNaming = readFileSync(
+  path.join(projectRoot, "scripts/release/release-asset-name.mjs"),
+  "utf8",
+);
+const secureReleaseFinalizer = readFileSync(
+  path.join(projectRoot, "scripts/release/finalize-release.mjs"),
+  "utf8",
+);
+const secureFinalizedReleaseVerifier = readFileSync(
+  path.join(projectRoot, "scripts/release/verify-finalized-release.mjs"),
+  "utf8",
 );
 
 function secureWorkflowPair() {
@@ -31,6 +55,121 @@ function secureWorkflowPair() {
 function validatePair({ candidate, promotion }) {
   return validateReleaseWorkflow(candidate, promotion);
 }
+
+test("ordinary Windows qualification resolves one protected isolated generation after start", () => {
+  assert.doesNotThrow(() => validateWindowsQualificationLifecycle(secureWindowsQualification));
+});
+
+test("ordinary Windows qualification validates every exact generation-selection field", () => {
+  for (const field of [
+    "schema_version",
+    "authorizes_cleanup",
+    "manifest_sha256",
+    "machine_image_sha256",
+    "default_machine_name",
+    "selected_machine_name",
+    "generation_index",
+    "preserved_collision_names",
+  ]) {
+    const mutated = secureWindowsQualification.replaceAll(`"${field}"`, `"broken_${field}"`);
+    assert.throws(
+      () => validateWindowsQualificationLifecycle(mutated),
+      new RegExp(`exact generation-selection field twice: ${field}`, "u"),
+    );
+  }
+});
+
+test("ordinary Windows qualification rejects stale or weak generation routing", () => {
+  for (const mutation of [
+    [
+      "$document = [Text.Json.JsonDocument]::Parse($text)",
+      "$document = $text | ConvertFrom-Json",
+    ],
+    [
+      "$cleanupAuthority.ValueKind -ne [Text.Json.JsonValueKind]::False",
+      "$cleanupAuthority.ValueKind -ne [Text.Json.JsonValueKind]::True",
+    ],
+    [
+      '$providerNamespace = "$($runtimeManifestSha256.Substring(0, 8))-iso-$($isolatedSuffix.Substring(0, 12))"',
+      '$providerNamespace = $runtimeManifestSha256.Substring(0, 16)',
+    ],
+    [
+      '"podman-$([string]$_.SelectedMachineName)"',
+      '"podman-$defaultMachineName"',
+    ],
+    [
+      "  $activeGenerationSelection = $orderedGenerationSelections[-1]\n",
+      "  $activeGenerationSelection = $orderedGenerationSelections[0]\n",
+    ],
+  ]) {
+    const mutated = secureWindowsQualification.replace(...mutation);
+    assert.notEqual(mutated, secureWindowsQualification, `mutation source token missing: ${mutation[0]}`);
+    assert.throws(
+      () => validateWindowsQualificationLifecycle(mutated),
+      /isolated generation|isolated-generation invariant|generation zero|unregister authority/u,
+    );
+  }
+});
+
+test("ordinary Windows qualification cannot precreate or override the canonical data root", () => {
+  for (const injected of [
+    secureWindowsQualification.replace(
+      "  function Invoke-Managed(",
+      "  New-Item -ItemType Directory -Path $dataDirectory -Force | Out-Null\n  function Invoke-Managed(",
+    ),
+    secureWindowsQualification.replace(
+      "& $cli --json runtime managed @Arguments",
+      "& $cli --json --data-dir $dataDirectory runtime managed @Arguments",
+    ),
+  ]) {
+    assert.throws(
+      () => validateWindowsQualificationLifecycle(injected),
+      /CLI default data root|isolated-generation invariant/u,
+    );
+  }
+});
+
+test("ordinary Windows qualification refuses ambient path overrides and noncanonical journals", () => {
+  for (const mutation of [
+    ["\"AI_SECURITY_SCANNER_DATA_DIR\"", '"IGNORED_DATA_DIR"'],
+    ["\"AI_SECURITY_SCANNER_MANAGED_RUNTIME_BUNDLE\"", '"IGNORED_RUNTIME_BUNDLE"'],
+    [
+      "$generationEntry.Name -cne $canonicalGenerationName",
+      "$generationEntry.Name -ceq $canonicalGenerationName",
+    ],
+    [
+      "$remainingWslSet.Contains([string]$expectedDistribution)",
+      "$remainingWslSet.Contains([string]$managedWslDistributions[-1])",
+    ],
+    [
+      "(-not $managedRuntimePurgeSucceeded -or -not $exactWslAbsent -or -not $providerRootEmpty)",
+      "(-not $exactWslAbsent)",
+    ],
+    [
+      "$providerRootEmpty = @(Get-ChildItem -LiteralPath $providerRoot -Force).Count -eq 0",
+      "$providerRootEmpty = $true",
+    ],
+  ]) {
+    const mutated = secureWindowsQualification.replace(...mutation);
+    assert.notEqual(mutated, secureWindowsQualification, `mutation source token missing: ${mutation[0]}`);
+    assert.throws(
+      () => validateWindowsQualificationLifecycle(mutated),
+      /isolated-generation invariant/u,
+    );
+  }
+});
+
+test("generation routing cannot authorize a name-only WSL unregister fallback", () => {
+  const mutated = secureWindowsQualification.replace(
+    "  if ($installed -and $null -ne $installerPath) {",
+    '  Invoke-BoundedCleanupProcess $wsl @("--unregister", $managedWslDistributions[-1]) 90000 "unsafe"\n' +
+      "  if ($installed -and $null -ne $installerPath) {",
+  );
+  assert.throws(
+    () => validateWindowsQualificationLifecycle(mutated),
+    /unregister authority/u,
+  );
+});
 
 test("release policy accepts manual candidate freeze and protected exact-byte promotion", () => {
   const pair = secureWorkflowPair();
@@ -139,6 +278,15 @@ test("promotion inputs are limited to exact candidate and complete evidence sele
   assert.throws(
     () => validatePair(pair),
     /only exact candidate and all-or-none protected-evidence selectors/u,
+  );
+});
+
+test("promotion workflow cannot make the publication token ambient", () => {
+  const pair = secureWorkflowPair();
+  pair.promotion.env = { GH_TOKEN: "${{ github.token }}" };
+  assert.throws(
+    () => validatePair(pair),
+    /exact top-level topology without ambient environment or defaults/u,
   );
 });
 
@@ -275,8 +423,42 @@ test("publisher crosses the release environment with only scoped write authority
   secondPair.promotion.jobs.publish.environment = "unprotected";
   assert.throws(
     () => validatePair(secondPair),
-    /cross the protected release-publication environment/u,
+    /exact fail-closed protected job topology/u,
   );
+});
+
+test("publisher job cannot gain a job-level condition or ambient environment", () => {
+  for (const [key, value] of [
+    ["if", "always()"],
+    ["env", { GH_TOKEN: "${{ github.token }}" }],
+  ]) {
+    const pair = secureWorkflowPair();
+    pair.promotion.jobs.publish[key] = value;
+    assert.throws(() => validatePair(pair), /exact fail-closed protected job topology/u);
+  }
+});
+
+test("assembler derives prerelease and latest flags only from the locked release channel", () => {
+  const pair = secureWorkflowPair();
+  const outputs = pair.promotion.jobs.assemble.outputs;
+  [outputs.prerelease, outputs.make_latest] = [outputs.make_latest, outputs.prerelease];
+  assert.throws(
+    () => validatePair(pair),
+    /export lock-derived identity/u,
+  );
+});
+
+test("assembler finalization and verification require exact candidate-lock identity inputs", () => {
+  for (const command of ["finalize-release.mjs", "verify-finalized-release.mjs"]) {
+    const pair = secureWorkflowPair();
+    const step = pair.promotion.jobs.assemble.steps.find((candidate) =>
+      candidate.run?.includes(command));
+    step.env.RELEASE_TAG = "${{ inputs.expected_commit }}";
+    assert.throws(
+      () => validatePair(pair),
+      /exactly bind the locked candidate, evidence, and public mode/u,
+    );
+  }
 });
 
 test("publisher downloads only the same-run finalized artifact ID", () => {
@@ -287,7 +469,7 @@ test("publisher downloads only the same-run finalized artifact ID", () => {
   download.with.name = "release-finalized";
   assert.throws(
     () => validatePair(pair),
-    /only the exact same-run finalized artifact ID/u,
+    /exact credential-free checkout, pinned tools, install, and artifact-ID download/u,
   );
 });
 
@@ -299,7 +481,19 @@ test("publisher revalidates optional evidence provenance before attestation", ()
   delete verify.env.EXPECTED_EVIDENCE_WORKFLOW_REF;
   assert.throws(
     () => validatePair(pair),
-    /reverify finalized metadata against the exact optional protected evidence identity/u,
+    /exact, terminally bounded re-verification command/u,
+  );
+});
+
+test("publisher re-verification cannot mutate an asset later in the same shell step", () => {
+  const pair = secureWorkflowPair();
+  const verify = pair.promotion.jobs.publish.steps.find(
+    (step) => step.run?.includes("verify-finalized-release.mjs"),
+  );
+  verify.run += "printf changed >> release-assets/RELEASE_NOTES.md\n";
+  assert.throws(
+    () => validatePair(pair),
+    /exact, terminally bounded re-verification command/u,
   );
 });
 
@@ -310,19 +504,161 @@ test("publisher rejects artifact mutation after final verification", () => {
   steps.splice(attestIndex, 0, { run: "cp unverified release-assets/unverified" });
   assert.throws(
     () => validatePair(pair),
-    /consecutively download, reverify, attest, guard the tag, then publish/u,
+    /eight allowlisted steps/u,
   );
 });
 
-test("GitHub Release publication cannot overwrite an existing release asset", () => {
+test("publisher cannot regress to a third-party release action", () => {
   const pair = secureWorkflowPair();
-  const publication = pair.promotion.jobs.publish.steps.find(
-    (step) => step.uses?.includes("softprops/action-gh-release@"),
-  );
-  publication.with.overwrite_files = true;
+  pair.promotion.jobs.publish.steps.push({
+    uses: "softprops/action-gh-release@" + "a".repeat(40),
+  });
   assert.throws(
     () => validatePair(pair),
-    /non-overwriting release from exact verified and attested files/u,
+    /eight allowlisted steps/u,
+  );
+});
+
+test("final publisher step cannot hide a third-party release action", () => {
+  const pair = secureWorkflowPair();
+  const publication = pair.promotion.jobs.publish.steps.at(-1);
+  publication.uses = "softprops/action-gh-release@" + "a".repeat(40);
+  assert.throws(
+    () => validatePair(pair),
+    /no third-party GitHub Release action/u,
+  );
+});
+
+test("attestation and ID-addressed publication order cannot be swapped", () => {
+  const pair = secureWorkflowPair();
+  const steps = pair.promotion.jobs.publish.steps;
+  [steps[6], steps[7]] = [steps[7], steps[6]];
+  assert.throws(
+    () => validatePair(pair),
+    /consecutively download, reverify, attest, then finish/u,
+  );
+});
+
+test("publisher must use exact frozen output bindings", () => {
+  const pair = secureWorkflowPair();
+  const publication = pair.promotion.jobs.publish.steps.find(
+    (step) => step.run?.includes("publish-github-release.mjs"),
+  );
+  publication.env.SOURCE_COMMIT = "${{ github.sha }}";
+  assert.throws(
+    () => validatePair(pair),
+    /exact ID-addressed checked-in publisher and frozen output bindings/u,
+  );
+});
+
+test("publisher transaction cannot be conditional or followed by another step", () => {
+  for (const mutation of [
+    (publication) => { publication.if = "always()"; },
+    (_publication, steps) => { steps.push({ run: "true" }); },
+  ]) {
+    const pair = secureWorkflowPair();
+    const steps = pair.promotion.jobs.publish.steps;
+    const publication = steps.find((step) => step.run?.includes("publish-github-release.mjs"));
+    mutation(publication, steps);
+    assert.throws(
+      () => validatePair(pair),
+      /cannot be conditionally skipped|eight allowlisted steps/u,
+    );
+  }
+});
+
+test("checked-in publisher preserves the private-draft publication transaction", () => {
+  assert.doesNotThrow(() => validateGithubReleasePublisherSource(secureGithubReleasePublisher));
+  for (const [token, replacement] of [
+    ['method: "PATCH"', 'method: "POST"'],
+    [
+      "() => verifyDraftState(client, repository, expected, currentInventory)",
+      "await verifyExactTag(client, repository, expected.tag, expected.commit);",
+    ],
+    ["record.digest === `sha256:${expected.sha256}`", "record.size === expected.bytes"],
+    ["const suppliedRootMetadata = await lstat(directory);", "const suppliedRootMetadata = await lstat(root);"],
+  ]) {
+    const mutated = secureGithubReleasePublisher.replace(token, replacement);
+    assert.notEqual(mutated, secureGithubReleasePublisher, `mutation source token missing: ${token}`);
+    assert.throws(
+      () => validateGithubReleasePublisherSource(mutated),
+      /checked-in GitHub Release publisher is missing|must reverify the private draft twice|exactly one public transition/u,
+    );
+  }
+});
+
+test("checked-in publisher has no delete, adoption, or overwrite escape hatch", () => {
+  for (const injected of [
+    `${secureGithubReleasePublisher}\n// method: "DELETE"`,
+    `${secureGithubReleasePublisher}\n// method: 'DELETE'`,
+    `${secureGithubReleasePublisher}\n// softprops/action-gh-release`,
+    `${secureGithubReleasePublisher}\n// overwrite_files`,
+    `${secureGithubReleasePublisher}\n// adoptRelease`,
+  ]) {
+    assert.throws(
+      () => validateGithubReleasePublisherSource(injected),
+      /forbidden mutation authority/u,
+    );
+  }
+});
+
+test("checked-in publisher CLI cannot swap frozen identity, channel, or token mappings", () => {
+  for (const [token, replacement] of [
+    ['version: requireString(args, "version")', 'version: requireString(args, "tag")'],
+    ['commit: requireString(args, "commit")', 'commit: requireString(args, "version")'],
+    [
+      'prerelease: exactBoolean(requireString(args, "prerelease"), "--prerelease")',
+      'prerelease: exactBoolean(requireString(args, "make-latest"), "--make-latest")',
+    ],
+    ["token: process.env.GH_TOKEN", "token: process.env.OTHER_TOKEN"],
+  ]) {
+    const mutated = secureGithubReleasePublisher.replace(token, replacement);
+    assert.notEqual(mutated, secureGithubReleasePublisher, `mutation source token missing: ${token}`);
+    assert.throws(
+      () => validateGithubReleasePublisherSource(mutated),
+      /checked-in GitHub Release publisher is missing/u,
+    );
+  }
+});
+
+test("finalizer, verifier, and publisher share one explicit nested publication-name mapping", () => {
+  assert.doesNotThrow(() => validateReleaseAssetNamingSource(secureReleaseAssetNaming));
+  assert.doesNotThrow(() =>
+    validateFinalizedPublicationMappingSources(
+      secureReleaseFinalizer,
+      secureFinalizedReleaseVerifier,
+    ));
+  assert.throws(
+    () => validateReleaseAssetNamingSource(
+      secureReleaseAssetNaming.replace('"path-v1-"', '"path-v2-"'),
+    ),
+    /release asset naming contract is missing/u,
+  );
+  assert.throws(
+    () => validateFinalizedPublicationMappingSources(
+      secureReleaseFinalizer.replaceAll("schemaVersion: 3", "schemaVersion: 2"),
+      secureFinalizedReleaseVerifier,
+    ),
+    /release finalizer publication mapping is missing/u,
+  );
+  assert.throws(
+    () => validateFinalizedPublicationMappingSources(
+      secureReleaseFinalizer,
+      secureFinalizedReleaseVerifier.replace(
+        '["path", "publishedName", "bytes", "sha256"]',
+        '["path", "bytes", "sha256"]',
+      ),
+    ),
+    /finalized release verifier publication mapping is missing/u,
+  );
+});
+
+test("only the final checked-in publisher may receive the GitHub token", () => {
+  const pair = secureWorkflowPair();
+  pair.promotion.jobs.publish.steps[3].env = { GH_TOKEN: "${{ github.token }}" };
+  assert.throws(
+    () => validatePair(pair),
+    /exact credential-free checkout, pinned tools, install, and artifact-ID download/u,
   );
 });
 test("optional unavailable engines do not become a global product release gate", () => {

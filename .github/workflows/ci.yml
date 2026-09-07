@@ -200,11 +200,12 @@ jobs:
         run: >-
           cargo test --locked --package ai-security-scanner --no-default-features --lib
           export_identity::tests
-      - name: Parse Windows NSIS migration qualification scripts
+      - name: Parse Windows qualification scripts
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           foreach ($script in @(
+            "scripts/release/qualify-windows.ps1",
             "scripts/release/qualify-windows-nsis-upgrade.ps1",
             "scripts/release/qualify-windows-nsis-ghost-recovery.ps1"
           )) {

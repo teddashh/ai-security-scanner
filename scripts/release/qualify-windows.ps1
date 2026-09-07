@@ -94,7 +94,7 @@ function Get-ManagedFileIdentity([string]$Path) {
   try {
     $information = [QualificationByHandleFileInformation]::new()
     if (-not [QualificationNativeMethods]::GetFileInformationByHandle($stream.SafeFileHandle, [ref]$information)) {
-      throw "Windows qualification could not inspect the exact managed SSH identity handle."
+      throw "Windows qualification could not inspect the exact managed file handle."
     }
     return [ordered]@{
       attributes = [uint32]$information.FileAttributes
@@ -120,13 +120,14 @@ function Test-ExactEntryExists([string]$Path) {
   ).Count -ne 0
 }
 
-function Assert-ManagedSshIdentityFile(
+function Read-ManagedPrivateUtf8File(
   [string]$Path,
   [uint64]$MaximumBytes,
   [string]$Label
 ) {
   $before = Get-ManagedFileIdentity $Path
-  if (($before.attributes -band [uint32][IO.FileAttributes]::ReparsePoint) -ne 0 -or
+  if (($before.attributes -band [uint32][IO.FileAttributes]::Directory) -ne 0 -or
+      ($before.attributes -band [uint32][IO.FileAttributes]::ReparsePoint) -ne 0 -or
       $before.links -ne 1 -or $before.size -eq 0 -or $before.size -gt $MaximumBytes) {
     throw "$Label is not an exact bounded single-link regular file."
   }
@@ -154,6 +155,122 @@ function Assert-ManagedSshIdentityFile(
     throw "$Label changed while qualification inspected it."
   }
   return $text
+}
+
+function Assert-ExactJsonProperties(
+  [Text.Json.JsonElement]$Value,
+  [string[]]$ExpectedNames,
+  [string]$Label
+) {
+  if ($Value.ValueKind -ne [Text.Json.JsonValueKind]::Object) {
+    throw "$Label is not a JSON object."
+  }
+  $actualNames = [Collections.Generic.List[string]]::new()
+  $seenNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  foreach ($property in $Value.EnumerateObject()) {
+    if (-not $seenNames.Add($property.Name)) {
+      throw "$Label contains a duplicate JSON property: $($property.Name)"
+    }
+    $actualNames.Add($property.Name)
+  }
+  $actual = @($actualNames | Sort-Object)
+  $expected = @($ExpectedNames | Sort-Object)
+  if (($actual -join "`n") -cne ($expected -join "`n")) {
+    throw "$Label has unexpected or missing JSON properties."
+  }
+}
+
+function Read-ManagedWslGenerationSelection(
+  [string]$Path,
+  [string]$ExpectedRuntimeManifestSha256,
+  [string]$ExpectedMachineImageSha256,
+  [string]$ExpectedDefaultMachineName,
+  [uint32]$ExpectedGenerationIndex
+) {
+  $label = "Managed WSL generation selection"
+  $text = Read-ManagedPrivateUtf8File $Path (64 * 1024) $label
+  $document = $null
+  try {
+    $document = [Text.Json.JsonDocument]::Parse($text)
+  } catch {
+    throw "$label is not one strict JSON document: $($_.Exception.Message)"
+  }
+  try {
+    $root = $document.RootElement
+    Assert-ExactJsonProperties $root @(
+      "schema_version",
+      "authorizes_cleanup",
+      "manifest_sha256",
+      "machine_image_sha256",
+      "default_machine_name",
+      "selected_machine_name",
+      "generation_index",
+      "preserved_collision_names"
+    ) $label
+
+    $schema = $root.GetProperty("schema_version")
+    $cleanupAuthority = $root.GetProperty("authorizes_cleanup")
+    $manifestSha256 = $root.GetProperty("manifest_sha256")
+    $machineImageSha256 = $root.GetProperty("machine_image_sha256")
+    $defaultMachineName = $root.GetProperty("default_machine_name")
+    $selectedMachineName = $root.GetProperty("selected_machine_name")
+    $generationIndex = $root.GetProperty("generation_index")
+    $preservedCollisionNames = $root.GetProperty("preserved_collision_names")
+    if ($schema.ValueKind -ne [Text.Json.JsonValueKind]::String -or
+        $schema.GetString() -cne "ai-security-scanner.managed-wsl-generation-selection/v1" -or
+        $cleanupAuthority.ValueKind -ne [Text.Json.JsonValueKind]::False -or
+        $manifestSha256.ValueKind -ne [Text.Json.JsonValueKind]::String -or
+        $manifestSha256.GetString() -cne $ExpectedRuntimeManifestSha256 -or
+        $machineImageSha256.ValueKind -ne [Text.Json.JsonValueKind]::String -or
+        $machineImageSha256.GetString() -cne $ExpectedMachineImageSha256 -or
+        $defaultMachineName.ValueKind -ne [Text.Json.JsonValueKind]::String -or
+        $defaultMachineName.GetString() -cne $ExpectedDefaultMachineName -or
+        $selectedMachineName.ValueKind -ne [Text.Json.JsonValueKind]::String -or
+        $generationIndex.ValueKind -ne [Text.Json.JsonValueKind]::Number -or
+        $preservedCollisionNames.ValueKind -ne [Text.Json.JsonValueKind]::Array) {
+      throw "$label has an invalid schema, type, release identity, or cleanup authority."
+    }
+    [uint32]$parsedGenerationIndex = 0
+    if (-not $generationIndex.TryGetUInt32([ref]$parsedGenerationIndex) -or
+        $parsedGenerationIndex -ne $ExpectedGenerationIndex -or
+        $parsedGenerationIndex -lt 1 -or $parsedGenerationIndex -gt 32) {
+      throw "$label has an invalid or mismatched generation index."
+    }
+    $selectedMachineNameValue = $selectedMachineName.GetString()
+    if ($selectedMachineNameValue -cnotmatch '^assm2-iso-[0-9a-f]{20}$') {
+      throw "$label does not select one canonical isolated machine identity."
+    }
+
+    $preserved = [Collections.Generic.List[string]]::new()
+    $seenPreserved = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($collisionNameElement in $preservedCollisionNames.EnumerateArray()) {
+      if ($collisionNameElement.ValueKind -ne [Text.Json.JsonValueKind]::String) {
+        throw "$label has a non-string preserved collision name."
+      }
+      $collisionName = $collisionNameElement.GetString()
+      if ([String]::IsNullOrEmpty($collisionName) -or
+          [Text.Encoding]::UTF8.GetByteCount($collisionName) -gt 30 -or
+          (-not [String]::Equals(
+            $collisionName,
+            $ExpectedDefaultMachineName,
+            [StringComparison]::OrdinalIgnoreCase
+          ) -and $collisionName -cnotmatch '^assm2-iso-[0-9a-f]{20}$') -or
+          -not $seenPreserved.Add($collisionName)) {
+        throw "$label has an invalid, unrelated, or duplicate preserved collision name."
+      }
+      $preserved.Add($collisionName)
+    }
+    if ($preserved.Count -gt 32) {
+      throw "$label exceeds the bounded preserved-collision count."
+    }
+    return [PSCustomObject]@{
+      GenerationIndex = $parsedGenerationIndex
+      SelectedMachineName = $selectedMachineNameValue
+      PreservedCollisionNames = @($preserved)
+    }
+  } finally {
+    $document.Dispose()
+  }
 }
 
 function Assert-ManagedPrivateDirectory([string]$Path, [string]$Label) {
@@ -281,8 +398,8 @@ function Assert-ManagedSshIdentity([string]$ProviderReleaseHome) {
   $identityDirectory = Join-Path $ProviderReleaseHome "data\containers\podman\machine"
   $privateKey = Join-Path $identityDirectory "machine"
   $publicKey = Join-Path $identityDirectory "machine.pub"
-  $privateText = Assert-ManagedSshIdentityFile $privateKey (16 * 1024) "Managed SSH private key"
-  $publicText = Assert-ManagedSshIdentityFile $publicKey (4 * 1024) "Managed SSH public key"
+  $privateText = Read-ManagedPrivateUtf8File $privateKey (16 * 1024) "Managed SSH private key"
+  $publicText = Read-ManagedPrivateUtf8File $publicKey (4 * 1024) "Managed SSH public key"
   if (-not $privateText.StartsWith("-----BEGIN OPENSSH PRIVATE KEY-----`n", [StringComparison]::Ordinal) -or
       -not $privateText.TrimEnd().EndsWith("-----END OPENSSH PRIVATE KEY-----", [StringComparison]::Ordinal)) {
     throw "Managed SSH private key is not an OpenSSH private key."
@@ -642,6 +759,18 @@ function Get-BoundedCleanupFailure([Management.Automation.ErrorRecord]$Failure, 
   return "$Label`: $message"
 }
 
+foreach ($overrideEnvironmentName in @(
+    "AI_SECURITY_SCANNER_DATA_DIR",
+    "AI_SECURITY_SCANNER_MANAGED_RUNTIME_BUNDLE"
+  )) {
+  if ($null -ne [Environment]::GetEnvironmentVariable(
+      $overrideEnvironmentName,
+      [EnvironmentVariableTarget]::Process
+    )) {
+    throw "Windows qualification refuses ambient product path override: $overrideEnvironmentName"
+  }
+}
+
 $artifactRoot = (Resolve-Path -LiteralPath $ArtifactDirectory).Path
 $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP)
 $workRoot = [IO.Path]::GetFullPath($WorkDirectory)
@@ -688,7 +817,10 @@ $cli = $null
 $wsl = $null
 $systemRoot = $null
 $system32 = $null
-$managedWslDistribution = $null
+$providerRoot = $null
+$managedWslDistributions = @()
+$managedRuntimePurgeSucceeded = $false
+$providerRootEmpty = $false
 $exactWslAbsent = $false
 $primaryFailure = $null
 $cleanupFailures = [Collections.Generic.List[string]]::new()
@@ -759,7 +891,6 @@ try {
   if ($runtimeManifestSha256 -cnotmatch "^[0-9a-f]{64}$") {
     throw "Windows qualification runtime manifest has an invalid SHA-256."
   }
-  $providerReleaseHome = Join-Path $dataDirectory "managed-runtime\provider-home\$($runtimeManifestSha256.Substring(0, 16))"
   $windowsTargets = @(
     $runtimeContract.targets |
       Where-Object { $_.operating_system -eq "windows" -and $_.architecture -eq "x86_64" -and $_.provider -eq "wsl" }
@@ -771,11 +902,10 @@ try {
   if ($machineImageSha256 -cnotmatch "^[0-9a-f]{64}$") {
     throw "Windows qualification target has an invalid machine-image SHA-256."
   }
-  # v0.1.8 intentionally uses a new Windows compatibility epoch. This keeps an
-  # exact v0.1.7 assm1 workspace attached and untouched while the current
-  # release initializes its own provider-owned WSL distribution.
-  $managedMachineName = "assm2-win-x64-$($machineImageSha256.Substring(0, 12))"
-  $managedWslDistribution = "podman-$managedMachineName"
+  $managedRuntimeStateRoot = Join-Path $dataDirectory "managed-runtime"
+  $providerRoot = Join-Path $managedRuntimeStateRoot "provider-home"
+  $generationRoot = Join-Path $managedRuntimeStateRoot "wsl-generations"
+  $defaultMachineName = "assm2-win-x64-$($machineImageSha256.Substring(0, 12))"
   $reportedSystemRoot = Get-OsWindowsDirectory
   $systemRoot = (Resolve-Path -LiteralPath $reportedSystemRoot).Path
   $system32 = (Resolve-Path -LiteralPath (Join-Path $systemRoot "System32")).Path
@@ -794,11 +924,10 @@ try {
   if ($LASTEXITCODE -ne 0) {
     throw "Installed casework CLI failed its help probe."
   }
-  New-Item -ItemType Directory -Path $dataDirectory -Force | Out-Null
   function Invoke-Managed([string]$OutputName, [string[]]$Arguments) {
     $stdout = Join-Path $workRoot "$OutputName.json"
     $stderr = Join-Path $workRoot "$OutputName.stderr.log"
-    & $cli --json --data-dir $dataDirectory runtime managed @Arguments 1> $stdout 2> $stderr
+    & $cli --json runtime managed @Arguments 1> $stdout 2> $stderr
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
       $boundedStdout = Get-BoundedManagedFailureOutput $stdout "stdout"
@@ -813,15 +942,68 @@ try {
   }
 
   $initialStatus = Invoke-Managed "initial-status" @("status")
+  Assert-ManagedPrivateDirectory $dataDirectory "Canonical product data directory"
   $installStatus = Invoke-Managed "install" @("install")
   $installedStatus = Invoke-Managed "installed-status" @("status")
-  if (Test-ExactEntryExists $providerReleaseHome) {
-    throw "Managed runtime install/status created a provider namespace before start."
+  if ((Test-ExactEntryExists $providerRoot) -or (Test-ExactEntryExists $generationRoot)) {
+    throw "Managed runtime install/status created provider or generation state before start."
   }
   # Install verifies and stages only the immutable runtime payload. The
   # provider-owned namespace is deliberately created by start, so inspect its
   # directories only after that lifecycle transition has completed.
   $startStatus = Invoke-Managed "start" @("start")
+  Assert-ManagedPrivateDirectory $generationRoot "Managed WSL generation routing directory"
+  $generationEntries = @(Get-ChildItem -LiteralPath $generationRoot -Force)
+  if ($generationEntries.Count -lt 1 -or $generationEntries.Count -gt 32) {
+    throw "Managed runtime start did not create a bounded generation selection set."
+  }
+  $generationSelections = [Collections.Generic.List[object]]::new()
+  $seenGenerationIndices = [Collections.Generic.HashSet[uint32]]::new()
+  $escapedManifestSha256 = [Regex]::Escape($runtimeManifestSha256)
+  foreach ($generationEntry in $generationEntries) {
+    if ($generationEntry.PSIsContainer -or
+        ($generationEntry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $generationEntry.Name -cnotmatch "^${escapedManifestSha256}\.([0-9]{1,2})\.json$") {
+      throw "Managed WSL generation routing directory contains an unexpected entry."
+    }
+    [uint32]$generationIndex = [uint32]::Parse(
+      $Matches[1],
+      [Globalization.CultureInfo]::InvariantCulture
+    )
+    $canonicalGenerationName = "$runtimeManifestSha256.$generationIndex.json"
+    if ($generationIndex -lt 1 -or $generationIndex -gt 32 -or
+        $generationEntry.Name -cne $canonicalGenerationName -or
+        -not $seenGenerationIndices.Add($generationIndex)) {
+      throw "Managed WSL generation routing directory contains an invalid generation index."
+    }
+    $generationSelections.Add((Read-ManagedWslGenerationSelection (
+      $generationEntry.FullName
+    ) $runtimeManifestSha256 $machineImageSha256 $defaultMachineName $generationIndex))
+  }
+  $orderedGenerationSelections = @($generationSelections | Sort-Object GenerationIndex)
+  $activeGenerationSelection = $orderedGenerationSelections[-1]
+  foreach ($earlierSelection in @($orderedGenerationSelections | Select-Object -SkipLast 1)) {
+    $preservesEarlierSelection = @(
+      $activeGenerationSelection.PreservedCollisionNames | Where-Object {
+          [String]::Equals(
+            [string]$_,
+            [string]$earlierSelection.SelectedMachineName,
+            [StringComparison]::OrdinalIgnoreCase
+          )
+        }
+    ).Count -ne 0
+    if (-not $preservesEarlierSelection) {
+      throw "Active managed WSL generation does not preserve an earlier selected collision."
+    }
+  }
+  $managedMachineName = [string]$activeGenerationSelection.SelectedMachineName
+  $managedWslDistributions = @($orderedGenerationSelections | ForEach-Object {
+    "podman-$([string]$_.SelectedMachineName)"
+  })
+  $isolatedSuffix = $managedMachineName.Substring("assm2-iso-".Length)
+  $providerNamespace = "$($runtimeManifestSha256.Substring(0, 8))-iso-$($isolatedSuffix.Substring(0, 12))"
+  $providerReleaseHome = Join-Path $providerRoot $providerNamespace
+  Assert-ManagedPrivateDirectory $providerReleaseHome "Managed isolated provider home"
   $podmanNamespaceDirectories = @(
     (Join-Path $providerReleaseHome "run\podman"),
     (Join-Path $providerReleaseHome "config\containers\podman\machine\wsl"),
@@ -853,13 +1035,18 @@ try {
   $stopStatus = Invoke-Managed "stop" @("stop")
   $stoppedStatus = Invoke-Managed "stopped-status" @("status")
   $uninstallStatus = Invoke-Managed "uninstall-purge" @("uninstall", "--force", "--purge-image-cache")
+  $managedRuntimePurgeSucceeded = $true
   if (Test-ExactEntryExists $providerReleaseHome) {
     throw "Managed runtime uninstall left its exact release provider home behind."
   }
   $remainingWslDistributions = @(Invoke-WslInventoryRaw $wsl $systemRoot $system32 $workRoot)
-  foreach ($distribution in $remainingWslDistributions) {
-    if ([String]::Equals([string]$distribution, $managedWslDistribution, [StringComparison]::OrdinalIgnoreCase)) {
-      throw "Managed runtime uninstall left its exact WSL distribution registered: $managedWslDistribution"
+  $remainingWslSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+  foreach ($remainingWslDistribution in $remainingWslDistributions) {
+    $remainingWslSet.Add([string]$remainingWslDistribution) | Out-Null
+  }
+  foreach ($expectedDistribution in $managedWslDistributions) {
+    if ($remainingWslSet.Contains([string]$expectedDistribution)) {
+      throw "Managed runtime uninstall left a selected WSL generation registered: $expectedDistribution"
     }
   }
   $finalStatus = Invoke-Managed "final-status" @("status")
@@ -945,16 +1132,16 @@ try {
         (Test-Path -LiteralPath $dataDirectory -PathType Container)) {
       try {
         Invoke-BoundedCleanupProcess $cli @(
-          "--json", "--data-dir", $dataDirectory, "runtime", "managed", "stop", "--force"
+          "--json", "runtime", "managed", "stop", "--force"
         ) 120000 "Managed runtime forced stop"
       } catch {
         $cleanupFailures.Add((Get-BoundedCleanupFailure $_ "managed runtime forced stop"))
       }
       try {
         Invoke-BoundedCleanupProcess $cli @(
-          "--json", "--data-dir", $dataDirectory,
-          "runtime", "managed", "uninstall", "--force", "--purge-image-cache"
+          "--json", "runtime", "managed", "uninstall", "--force", "--purge-image-cache"
         ) 300000 "Managed runtime uninstall"
+        $managedRuntimePurgeSucceeded = $true
       } catch {
         $cleanupFailures.Add((Get-BoundedCleanupFailure $_ "managed runtime uninstall"))
       }
@@ -964,32 +1151,40 @@ try {
   }
   try {
     if ($null -ne $wsl -and $null -ne $systemRoot -and $null -ne $system32 -and
-        $null -ne $managedWslDistribution -and (Test-Path -LiteralPath $workRoot -PathType Container)) {
+        $managedWslDistributions.Count -ne 0 -and (Test-Path -LiteralPath $workRoot -PathType Container)) {
       $remaining = @(Invoke-WslInventoryRaw $wsl $systemRoot $system32 $workRoot)
-      if (@(
-          $remaining | Where-Object {
-            [String]::Equals([string]$_, $managedWslDistribution, [StringComparison]::OrdinalIgnoreCase)
-          }
-        ).Count -ne 0) {
-        $wslEnvironment = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
-        $wslEnvironment["SystemRoot"] = $systemRoot
-        $wslEnvironment["WINDIR"] = $systemRoot
-        $wslEnvironment["PATH"] = $system32
-        $wslEnvironment["NoDefaultCurrentDirectoryInExePath"] = "1"
-        Invoke-BoundedCleanupProcess $wsl @("--unregister", $managedWslDistribution) 90000 "Exact managed WSL distribution" $wslEnvironment
+      $remainingWslSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+      foreach ($remainingWslDistribution in $remaining) {
+        $remainingWslSet.Add([string]$remainingWslDistribution) | Out-Null
       }
-      $remaining = @(Invoke-WslInventoryRaw $wsl $systemRoot $system32 $workRoot)
-      $exactWslAbsent = @(
-        $remaining | Where-Object {
-          [String]::Equals([string]$_, $managedWslDistribution, [StringComparison]::OrdinalIgnoreCase)
+      $remainingSelectedDistributions = @(
+        $managedWslDistributions | Where-Object {
+          $remainingWslSet.Contains([string]$_)
         }
-      ).Count -eq 0
+      )
+      $exactWslAbsent = $remainingSelectedDistributions.Count -eq 0
       if (-not $exactWslAbsent) {
-        throw "Exact managed WSL distribution remained registered after bounded cleanup."
+        throw "One or more selected WSL generations remained registered after ownership-aware product cleanup."
       }
     }
   } catch {
     $cleanupFailures.Add((Get-BoundedCleanupFailure $_ "exact managed WSL distribution"))
+  }
+  try {
+    if ($null -ne $providerRoot) {
+      if (-not (Test-ExactEntryExists $providerRoot)) {
+        $providerRootEmpty = $true
+      } else {
+        Assert-ManagedPrivateDirectory $providerRoot "Managed provider root after product cleanup"
+        $providerRootEmpty = @(Get-ChildItem -LiteralPath $providerRoot -Force).Count -eq 0
+        if (-not $providerRootEmpty) {
+          throw "Managed provider root retained state after ownership-aware product cleanup."
+        }
+      }
+    }
+  } catch {
+    $providerRootEmpty = $false
+    $cleanupFailures.Add((Get-BoundedCleanupFailure $_ "managed provider root"))
   }
   if ($installed -and $null -ne $installerPath) {
     try {
@@ -1019,8 +1214,8 @@ try {
     try {
       if (Test-Path -LiteralPath $boundedPath) {
         if ([String]::Equals($boundedPath, $dataDirectory, [StringComparison]::OrdinalIgnoreCase) -and
-            -not $exactWslAbsent) {
-          throw "Qualification data was preserved because exact managed WSL absence was not proven."
+            (-not $managedRuntimePurgeSucceeded -or -not $exactWslAbsent -or -not $providerRootEmpty)) {
+          throw "Qualification data was preserved because ownership-aware purge, complete WSL absence, and empty provider state were not all proven."
         }
         Remove-BoundedQualificationTree $boundedPath "Qualification private tree"
       }

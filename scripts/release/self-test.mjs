@@ -16,6 +16,7 @@ import path from "node:path";
 import { PROJECT_ROOT, isSemver, readJson, runMain, sha256File, toPosix } from "./lib.mjs";
 import { createPlatformQualification } from "./platform-qualification.mjs";
 import { createReleaseCandidateLock } from "./release-candidate-lock.mjs";
+import { publishedReleaseAssetName } from "./release-asset-name.mjs";
 import { createPreparedReleaseMetadata } from "./release-metadata.mjs";
 import { verifyUpdaterSignatures } from "./verify-updater-signatures.mjs";
 import {
@@ -342,7 +343,7 @@ async function resealFinalizedFixture(directory) {
   await writeFile(
     path.join(directory, "release-assets.json"),
     `${JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       product: "ai-security-scanner",
       version: VERSION,
       tag: TAG,
@@ -351,6 +352,7 @@ async function resealFinalizedFixture(directory) {
       indexSelfExcluded: true,
       files: await Promise.all(beforeIndex.map(async (file) => ({
         path: file.relative,
+        publishedName: publishedReleaseAssetName(file.relative),
         bytes: file.bytes,
         sha256: await sha256File(file.absolute),
       }))),
@@ -361,7 +363,8 @@ async function resealFinalizedFixture(directory) {
     .sort((left, right) => left.relative.localeCompare(right.relative));
   await writeFile(
     path.join(directory, "SHA256SUMS.txt"),
-    `${(await Promise.all(finalFiles.map(async (file) => `${await sha256File(file.absolute)}  ${file.relative}`))).join("\n")}\n`,
+    `${(await Promise.all(finalFiles.map(async (file) =>
+      `${await sha256File(file.absolute)}  ${publishedReleaseAssetName(file.relative)}`))).join("\n")}\n`,
   );
 }
 

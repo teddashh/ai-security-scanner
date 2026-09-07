@@ -534,6 +534,11 @@ function validateReleaseCandidateFreeze({
 
 export function validatePromotionWorkflow(workflow) {
   assert(workflow && typeof workflow === "object", ".github/workflows/promote-release.yml is missing");
+  assert(
+    JSON.stringify(Object.keys(workflow)) ===
+      JSON.stringify(["name", "on", "permissions", "concurrency", "jobs"]),
+    "promotion workflow must use the exact top-level topology without ambient environment or defaults",
+  );
   validateActionReferences(workflow, "promote-release.yml");
   const trigger = workflow.on;
   assert(
@@ -609,6 +614,10 @@ export function validatePromotionWorkflow(workflow) {
       assemble.outputs?.tag === "${{ steps.candidate_lock.outputs.tag }}" &&
       assemble.outputs?.commit === "${{ steps.candidate_lock.outputs.commit }}" &&
       assemble.outputs?.release_channel === "${{ steps.candidate_lock.outputs.release_channel }}" &&
+      assemble.outputs?.prerelease ===
+        "${{ steps.candidate_lock.outputs.release_channel == 'prerelease' }}" &&
+      assemble.outputs?.make_latest ===
+        "${{ steps.candidate_lock.outputs.release_channel == 'stable' }}" &&
       assemble.outputs?.finalized_artifact_id === "${{ steps.upload_finalized.outputs.artifact-id }}" &&
       assemble.outputs?.finalized_artifact_digest === "${{ steps.upload_finalized.outputs.artifact-digest }}" &&
       assemble.outputs?.has_evidence === "${{ steps.selectors.outputs.has_evidence }}" &&
@@ -870,14 +879,67 @@ function validatePromotionEvidenceFlow(steps, candidateLockIndex) {
       `${label} must pass the exact protected evidence identity only when evidence is present`,
     );
   }
+  const expectedAssemblerReleaseEnvironment = {
+    HAS_EVIDENCE: "${{ steps.selectors.outputs.has_evidence }}",
+    RELEASE_VERSION: "${{ steps.candidate_lock.outputs.version }}",
+    RELEASE_TAG: "${{ steps.candidate_lock.outputs.tag }}",
+    SOURCE_COMMIT: "${{ steps.candidate_lock.outputs.commit }}",
+    EXPECTED_EVIDENCE_WORKFLOW_REF: "${{ steps.evidence_producer.outputs.workflow_ref }}",
+    EVIDENCE_RUN_ID: "${{ inputs.evidence_run_id }}",
+    EVIDENCE_RUN_ATTEMPT: "${{ inputs.evidence_run_attempt }}",
+  };
+  const externalEvidenceArgumentLines = [
+    'external_evidence_args=()',
+    'if [[ "${HAS_EVIDENCE}" == "true" ]]; then',
+    '  external_evidence_args=(',
+    '    --external-evidence-repository "${GITHUB_REPOSITORY}"',
+    '    --external-evidence-workflow .github/workflows/windows-external-evidence.yml',
+    '    --external-evidence-workflow-ref "${EXPECTED_EVIDENCE_WORKFLOW_REF}"',
+    '    --external-evidence-run-id "${EVIDENCE_RUN_ID}"',
+    '    --external-evidence-run-attempt "${EVIDENCE_RUN_ATTEMPT}"',
+    '    --external-evidence-job import',
+    '    --external-evidence-environment windows-external-evidence',
+    '  )',
+    'fi',
+  ];
+  const expectedFinalizeRun = [
+    'set -euo pipefail',
+    'candidate_input="candidate-input"',
+    ...externalEvidenceArgumentLines.slice(0, 2),
+    '  candidate_input="candidate-with-evidence"',
+    ...externalEvidenceArgumentLines.slice(2),
+    'node scripts/release/finalize-release.mjs \\',
+    '  --input "${candidate_input}" \\',
+    '  --out release-assets \\',
+    '  --version "${RELEASE_VERSION}" \\',
+    '  --tag "${RELEASE_TAG}" \\',
+    '  --commit "${SOURCE_COMMIT}" \\',
+    '  --publication-mode public-github-release \\',
+    '  "${external_evidence_args[@]}"',
+    '',
+  ].join("\n");
+  const expectedVerifyRun = [
+    'set -euo pipefail',
+    ...externalEvidenceArgumentLines,
+    'node scripts/release/verify-finalized-release.mjs \\',
+    '  --dir release-assets \\',
+    '  --version "${RELEASE_VERSION}" \\',
+    '  --tag "${RELEASE_TAG}" \\',
+    '  --commit "${SOURCE_COMMIT}" \\',
+    '  --publication-mode public-github-release \\',
+    '  "${external_evidence_args[@]}"',
+    '',
+  ].join("\n");
   assert(
-    steps[finalizeIndex].run.includes('candidate_input="candidate-input"') &&
-      steps[finalizeIndex].run.includes('candidate_input="candidate-with-evidence"') &&
-      steps[finalizeIndex].run.includes("--publication-mode public-github-release") &&
-      steps[finalizeIndex].run.includes("--out release-assets") &&
-      steps[verifyIndex].run.includes("--dir release-assets") &&
-      steps[verifyIndex].run.includes("--publication-mode public-github-release"),
-    "promotion finalization and verification must bind the locked candidate and public mode",
+    steps[finalizeIndex].name === "Finalize immutable installer bytes for public release" &&
+      JSON.stringify(Object.keys(steps[finalizeIndex])) === JSON.stringify(["name", "env", "run"]) &&
+      JSON.stringify(steps[finalizeIndex].env) === JSON.stringify(expectedAssemblerReleaseEnvironment) &&
+      steps[finalizeIndex].run === expectedFinalizeRun &&
+      steps[verifyIndex].name === "Verify finalized checksums and release index" &&
+      JSON.stringify(Object.keys(steps[verifyIndex])) === JSON.stringify(["name", "env", "run"]) &&
+      JSON.stringify(steps[verifyIndex].env) === JSON.stringify(expectedAssemblerReleaseEnvironment) &&
+      steps[verifyIndex].run === expectedVerifyRun,
+    "promotion finalization and verification must exactly bind the locked candidate, evidence, and public mode",
   );
   const finalizedUpload = steps[uploadIndex];
   assert(
@@ -897,10 +959,14 @@ function validatePromotionEvidenceFlow(steps, candidateLockIndex) {
 
 function validatePromotionPublication(publish) {
   assert(
-    publish.needs === "assemble" &&
+    JSON.stringify(Object.keys(publish ?? {})) ===
+        JSON.stringify(["name", "needs", "runs-on", "environment", "permissions", "steps"]) &&
+      publish.name === "Attest and publish exact finalized release" &&
+      publish.needs === "assemble" &&
+      publish["runs-on"] === "ubuntu-24.04" &&
       publish.environment === "release-publication" &&
       publish["continue-on-error"] === undefined,
-    "publisher must consume only the assembler and cross the protected release-publication environment",
+    "publisher must use the exact fail-closed protected job topology and consume only the assembler",
   );
   const expectedPermissions = {
     contents: "write",
@@ -913,6 +979,50 @@ function validatePromotionPublication(publish) {
     "publisher must receive only release, attestation, and finalized-artifact permissions",
   );
   const steps = publish.steps ?? [];
+  assert(
+    steps.length === 8 &&
+      !JSON.stringify(publish).toLowerCase().includes("softprops/action-gh-release"),
+    "publisher must contain only the eight allowlisted steps and no third-party GitHub Release action",
+  );
+  const expectedSetupSteps = [
+    {
+      name: "Check out exact frozen candidate source without credentials",
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: {
+        ref: "${{ needs.assemble.outputs.commit }}",
+        "fetch-depth": 0,
+        "persist-credentials": false,
+      },
+    },
+    {
+      name: "Set up Node.js",
+      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: { "node-version": "24.15.0" },
+    },
+    {
+      name: "Set up Rust for exact updater signature verification",
+      uses: "dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c",
+      with: { toolchain: "1.98.0" },
+    },
+    {
+      name: "Install locked release tooling",
+      run: "npm ci --ignore-scripts",
+    },
+    {
+      name: "Download exact same-run finalized release by artifact ID",
+      uses: "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+      with: {
+        "artifact-ids": "${{ needs.assemble.outputs.finalized_artifact_id }}",
+        path: "release-assets",
+        "digest-mismatch": "error",
+      },
+    },
+  ];
+  assert(
+    expectedSetupSteps.every((expected, index) =>
+      JSON.stringify(steps[index]) === JSON.stringify(expected)),
+    "publisher setup must be the exact credential-free checkout, pinned tools, install, and artifact-ID download",
+  );
   const checkout = steps.find((step) =>
     typeof step.uses === "string" && step.uses.includes("actions/checkout@"),
   );
@@ -941,31 +1051,70 @@ function validatePromotionPublication(publish) {
   const attestationIndex = steps.findIndex((step) =>
     typeof step.uses === "string" && step.uses.includes("attest-build-provenance@"),
   );
-  const tagGuardIndex = steps.findIndex((step) =>
-    typeof step.run === "string" && step.run.includes("existing release tag does not bind"),
+  const publicationIndices = steps.flatMap((step, index) =>
+    typeof step.run === "string" && step.run.includes("scripts/release/publish-github-release.mjs")
+      ? [index]
+      : [],
   );
-  const publicationIndex = steps.findIndex((step) =>
-    typeof step.uses === "string" && step.uses.includes("softprops/action-gh-release@"),
-  );
+  assert(publicationIndices.length === 1, "publisher must invoke exactly one checked-in GitHub Release transaction");
+  const [publicationIndex] = publicationIndices;
   assert(
     verifyIndex === downloadIndex + 1 &&
       attestationIndex === verifyIndex + 1 &&
-      tagGuardIndex === attestationIndex + 1 &&
-      publicationIndex === tagGuardIndex + 1,
-    "publisher must consecutively download, reverify, attest, guard the tag, then publish exact bytes",
+      publicationIndex === attestationIndex + 1 &&
+      publicationIndex === steps.length - 1,
+    "publisher must consecutively download, reverify, attest, then finish with one checked-in exact release transaction",
   );
   for (const [index, label] of [
     [downloadIndex, "publisher artifact download"],
     [verifyIndex, "publisher verification"],
     [attestationIndex, "publisher attestation"],
-    [tagGuardIndex, "publisher tag guard"],
-    [publicationIndex, "GitHub Release publication"],
+    [publicationIndex, "GitHub Release transaction"],
   ]) {
     const step = steps[index];
     assert(step && step.if === undefined, `${label} cannot be conditionally skipped`);
     assert(step["continue-on-error"] === undefined, `${label} cannot continue after failure`);
   }
   const verify = steps[verifyIndex];
+  const expectedVerifyEnvironment = {
+    HAS_EVIDENCE: "${{ needs.assemble.outputs.has_evidence }}",
+    RELEASE_VERSION: "${{ needs.assemble.outputs.version }}",
+    RELEASE_TAG: "${{ needs.assemble.outputs.tag }}",
+    SOURCE_COMMIT: "${{ needs.assemble.outputs.commit }}",
+    EXPECTED_EVIDENCE_WORKFLOW_REF: "${{ needs.assemble.outputs.evidence_workflow_ref }}",
+    EVIDENCE_RUN_ID: "${{ needs.assemble.outputs.evidence_run_id }}",
+    EVIDENCE_RUN_ATTEMPT: "${{ needs.assemble.outputs.evidence_run_attempt }}",
+  };
+  const expectedVerifyRun = [
+    "set -euo pipefail",
+    "external_evidence_args=()",
+    'if [[ "${HAS_EVIDENCE}" == "true" ]]; then',
+    "  external_evidence_args=(",
+    '    --external-evidence-repository "${GITHUB_REPOSITORY}"',
+    "    --external-evidence-workflow .github/workflows/windows-external-evidence.yml",
+    '    --external-evidence-workflow-ref "${EXPECTED_EVIDENCE_WORKFLOW_REF}"',
+    '    --external-evidence-run-id "${EVIDENCE_RUN_ID}"',
+    '    --external-evidence-run-attempt "${EVIDENCE_RUN_ATTEMPT}"',
+    "    --external-evidence-job import",
+    "    --external-evidence-environment windows-external-evidence",
+    "  )",
+    "fi",
+    "node scripts/release/verify-finalized-release.mjs \\",
+    '  --dir release-assets \\',
+    '  --version "${RELEASE_VERSION}" \\',
+    '  --tag "${RELEASE_TAG}" \\',
+    '  --commit "${SOURCE_COMMIT}" \\',
+    "  --publication-mode public-github-release \\",
+    '  "${external_evidence_args[@]}"',
+    "",
+  ].join("\n");
+  assert(
+    verify.name === "Reverify finalized checksums and release index" &&
+      JSON.stringify(Object.keys(verify)) === JSON.stringify(["name", "env", "run"]) &&
+      JSON.stringify(verify.env) === JSON.stringify(expectedVerifyEnvironment) &&
+      verify.run === expectedVerifyRun,
+    "publisher must use one exact, terminally bounded re-verification command with frozen identity inputs",
+  );
   const externalEvidenceFlags = [
     '--external-evidence-repository "${GITHUB_REPOSITORY}"',
     "--external-evidence-workflow .github/workflows/windows-external-evidence.yml",
@@ -990,34 +1139,203 @@ function validatePromotionPublication(publish) {
   );
   const publishedFiles = "release-assets/**/*";
   assert(
-    steps[attestationIndex].with?.["subject-path"] === publishedFiles,
-    "publisher attestation must cover every exact finalized file",
+    JSON.stringify(steps[attestationIndex]) === JSON.stringify({
+      name: "Attest every exact published file",
+      uses: "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
+      with: { "subject-path": publishedFiles },
+    }),
+    "publisher attestation must be the exact pinned step covering every finalized file",
   );
-  const tagGuardSource = steps[tagGuardIndex].run;
-  for (const required of [
-    "/git/ref/tags/${encodeURIComponent(releaseTag)}",
-    "body: JSON.stringify({ ref: `refs/tags/${releaseTag}`, sha: sourceCommit })",
-    "/releases/tags/${encodeURIComponent(releaseTag)}",
-    "tagResponse.status === 404",
-    "createResponse.status !== 201",
-    "releaseResponse.status !== 404",
-    "failed closed with HTTP",
-    "refusing to update or overwrite",
-  ]) {
-    assert(tagGuardSource.includes(required), `publisher tag/release guard is missing: ${required}`);
-  }
   const publication = steps[publicationIndex];
+  const expectedPublisherEnvironment = {
+    GH_TOKEN: "${{ github.token }}",
+    RELEASE_VERSION: "${{ needs.assemble.outputs.version }}",
+    RELEASE_TAG: "${{ needs.assemble.outputs.tag }}",
+    SOURCE_COMMIT: "${{ needs.assemble.outputs.commit }}",
+    RELEASE_PRERELEASE: "${{ needs.assemble.outputs.prerelease }}",
+    RELEASE_MAKE_LATEST: "${{ needs.assemble.outputs.make_latest }}",
+  };
+  const expectedPublisherRun = `set -euo pipefail
+node scripts/release/publish-github-release.mjs \\
+  --dir release-assets \\
+  --version "\${RELEASE_VERSION}" \\
+  --tag "\${RELEASE_TAG}" \\
+  --commit "\${SOURCE_COMMIT}" \\
+  --repository "\${GITHUB_REPOSITORY}" \\
+  --prerelease "\${RELEASE_PRERELEASE}" \\
+  --make-latest "\${RELEASE_MAKE_LATEST}" \\
+  --api-root "\${GITHUB_API_URL}" \\
+  --upload-root https://uploads.github.com
+`;
   assert(
-    publication.with?.tag_name === "${{ needs.assemble.outputs.tag }}" &&
-      publication.with?.target_commitish === "${{ needs.assemble.outputs.commit }}" &&
-      publication.with?.draft === false &&
-      publication.with?.prerelease === "${{ needs.assemble.outputs.prerelease }}" &&
-      publication.with?.make_latest === "${{ needs.assemble.outputs.make_latest }}" &&
-      publication.with?.fail_on_unmatched_files === true &&
-      publication.with?.overwrite_files === false &&
-      publication.with?.files === publishedFiles,
-    "GitHub Release publication must create a non-overwriting release from exact verified and attested files",
+    publication.name === "Create, verify, and publish one ID-addressed exact release" &&
+      JSON.stringify(Object.keys(publication)) === JSON.stringify(["name", "env", "run"]) &&
+      JSON.stringify(publication.env) === JSON.stringify(expectedPublisherEnvironment) &&
+      publication.run === expectedPublisherRun,
+    "GitHub Release publication must use the exact ID-addressed checked-in publisher and frozen output bindings",
   );
+  for (const [index, step] of steps.entries()) {
+    const serialized = JSON.stringify(step);
+    if (index !== publicationIndex) {
+      for (const forbidden of [
+        "softprops/action-gh-release@",
+        "github.com/repos/",
+        "api.github.com",
+        "uploads.github.com",
+        "/releases",
+        "/git/refs",
+        "gh release",
+        "GH_TOKEN",
+        "github.token",
+      ]) {
+        assert(!serialized.includes(forbidden), `only the checked-in final publisher may mutate GitHub releases: ${forbidden}`);
+      }
+    }
+  }
+}
+
+export function validateGithubReleasePublisherSource(source) {
+  assert(typeof source === "string" && source.length > 0, "GitHub Release publisher source is missing");
+  for (const required of [
+    "const suppliedRootMetadata = await lstat(directory);",
+    "release asset root must be one non-symlink directory",
+    "release asset tree contains a symlink",
+    'import { publishedReleaseAssetName } from "./release-asset-name.mjs"',
+    "publishedReleaseAssetName(relative)",
+    "release publication asset name collides",
+    "release asset inventory has no exact RELEASE_NOTES.md",
+    "release asset changed while its exact handle was hashed",
+    "release asset changed during upload",
+    "response.body.getReader()",
+    "total > MAX_RESPONSE_BYTES",
+    "complete GitHub Release listing",
+    "per_page=100&page=${page}",
+    "a draft or published release already occupies the exact tag",
+    "release namespace changed after exact tag reservation",
+    "body: JSON.stringify({ ref: `refs/tags/${tag}`, sha: commit })",
+    "const created = await parseJsonResponse(createResponse, 201, \"draft release creation\")",
+    "draft: true",
+    "created.id",
+    "releases/${releaseId}/assets?name=${encodeURIComponent(expected.name)}",
+    "parseJsonResponse(response, 201, `release asset upload ${expected.name}`)",
+    "record.digest === `sha256:${expected.sha256}`",
+    "() => verifyDraftState(client, repository, expected, currentInventory)",
+    '"published release visibility"',
+    "retryableRead(\"published release lookup still exposes the prior draft state\")",
+    'typeof prerelease === "boolean" && typeof makeLatest === "boolean"',
+    "release asset inventory changed ${label}",
+    "`/repos/${repository}/releases/${expected.id}`",
+    "method: \"PATCH\"",
+    "draft: false",
+    "published release namespace is missing, duplicated, or points at another release ID",
+    "await assertInventoryUnchanged(directory, inventory.fingerprint, \"after public transition\")",
+    'directory: path.resolve(requireString(args, "dir"))',
+    'version: requireString(args, "version")',
+    'tag: requireString(args, "tag")',
+    'commit: requireString(args, "commit")',
+    'repository: requireString(args, "repository")',
+    'prerelease: exactBoolean(requireString(args, "prerelease"), "--prerelease")',
+    'makeLatest: exactBoolean(requireString(args, "make-latest"), "--make-latest")',
+    'apiRoot: requireString(args, "api-root")',
+    'uploadRoot: requireString(args, "upload-root")',
+    "token: process.env.GH_TOKEN",
+  ]) {
+    assert(source.includes(required), `checked-in GitHub Release publisher is missing: ${required}`);
+  }
+  const draftVerificationCount = source.split(
+    "() => verifyDraftState(client, repository, expected, currentInventory)",
+  ).length - 1;
+  const patchCount = source.split('method: "PATCH"').length - 1;
+  const boundedReadRetryCount = source.split("await retryConsistentRead(").length - 1;
+  assert(draftVerificationCount === 2, "GitHub Release publisher must reverify the private draft twice before publication");
+  assert(patchCount === 1, "GitHub Release publisher must contain exactly one public transition");
+  assert(
+    boundedReadRetryCount === 4,
+    "GitHub Release publisher may retry only its four bounded consistency reads",
+  );
+  assert(
+    !/\bmethod\s*:\s*["']DELETE["']/iu.test(source),
+    "GitHub Release publisher has forbidden mutation authority: DELETE",
+  );
+  const foldedSource = source.toLowerCase();
+  for (const forbidden of [
+    "softprops/action-gh-release",
+    "overwrite_files",
+    "overwritefiles",
+    "adoptrelease",
+  ]) {
+    assert(!foldedSource.includes(forbidden), `GitHub Release publisher has forbidden mutation authority: ${forbidden}`);
+  }
+  const createIndex = source.indexOf("const createResponse = await client.api(");
+  const uploadIndex = source.indexOf("for (const entry of inventory.entries)", createIndex);
+  const firstDraftVerificationIndex = source.indexOf(
+    "() => verifyDraftState(client, repository, expected, currentInventory)",
+    uploadIndex,
+  );
+  const secondDraftVerificationIndex = source.indexOf(
+    "() => verifyDraftState(client, repository, expected, currentInventory)",
+    firstDraftVerificationIndex + 1,
+  );
+  const publicTransitionIndex = source.indexOf('method: "PATCH"', secondDraftVerificationIndex);
+  const postPublicationVerificationIndex = source.indexOf(
+    '"published release visibility"',
+    publicTransitionIndex,
+  );
+  assert(
+    createIndex >= 0 &&
+      uploadIndex > createIndex &&
+      firstDraftVerificationIndex > uploadIndex &&
+      secondDraftVerificationIndex > firstDraftVerificationIndex &&
+      publicTransitionIndex > secondDraftVerificationIndex &&
+      postPublicationVerificationIndex > publicTransitionIndex,
+    "GitHub Release publisher must create privately, upload, verify twice, publish by ID last, then reverify",
+  );
+}
+
+export function validateReleaseAssetNamingSource(source) {
+  assert(typeof source === "string" && source.length > 0, "release asset naming source is missing");
+  for (const required of [
+    'export const NESTED_RELEASE_ASSET_PREFIX = "path-v1-"',
+    "nested || !relative.toLowerCase().startsWith(NESTED_RELEASE_ASSET_PREFIX)",
+    'Buffer.from(relative, "utf8").toString("base64url")',
+    'Buffer.from(name.slice(NESTED_RELEASE_ASSET_PREFIX.length), "base64url").toString("utf8") === relative',
+    "name.length <= 255",
+    "SAFE_ASSET_NAME.test(name)",
+  ]) {
+    assert(source.includes(required), `release asset naming contract is missing: ${required}`);
+  }
+}
+
+export function validateFinalizedPublicationMappingSources(finalizer, verifier) {
+  for (const [source, label, required] of [
+    [
+      finalizer,
+      "release finalizer",
+      [
+        'import { publishedReleaseAssetName } from "./release-asset-name.mjs"',
+        "schemaVersion: 3",
+        "publishedName,",
+        "publishedReleaseAssetName(file.relative)",
+        "release checksum publication filename collision",
+      ],
+    ],
+    [
+      verifier,
+      "finalized release verifier",
+      [
+        'import { publishedReleaseAssetName } from "./release-asset-name.mjs"',
+        "index.schemaVersion === 3",
+        '["path", "publishedName", "bytes", "sha256"]',
+        "record.publishedName === publishedReleaseAssetName(record.path)",
+        "actualByPublishedName.get(publishedName)",
+      ],
+    ],
+  ]) {
+    assert(typeof source === "string" && source.length > 0, `${label} source is missing`);
+    for (const token of required) {
+      assert(source.includes(token), `${label} publication mapping is missing: ${token}`);
+    }
+  }
 }
 
 export function validateProductEngineRegistry(catalog) {
@@ -1072,20 +1390,91 @@ export function validateWindowsQualificationLifecycle(source) {
   source = source.replaceAll(/\r\n?/gu, "\n");
   const install = '  $installStatus = Invoke-Managed "install" @("install")\n';
   const preStartAbsence =
-    '    throw "Managed runtime install/status created a provider namespace before start."\n';
+    '    throw "Managed runtime install/status created provider or generation state before start."\n';
   const start = '  $startStatus = Invoke-Managed "start" @("start")\n';
+  const generationResolution =
+    "  $generationEntries = @(Get-ChildItem -LiteralPath $generationRoot -Force)\n";
+  const activeGeneration =
+    "  $activeGenerationSelection = $orderedGenerationSelections[-1]\n";
   const namespaceInspection = "  $podmanNamespaceDirectories = @(\n";
   const installIndex = source.indexOf(install);
   const absenceIndex = source.indexOf(preStartAbsence);
   const startIndex = source.indexOf(start);
+  const generationIndex = source.indexOf(generationResolution);
+  const activeGenerationIndex = source.indexOf(activeGeneration);
   const namespaceIndex = source.indexOf(namespaceInspection);
   assert(
     installIndex !== -1 &&
       absenceIndex > installIndex &&
       startIndex > absenceIndex &&
-      namespaceIndex > startIndex &&
+      generationIndex > startIndex &&
+      activeGenerationIndex > generationIndex &&
+      namespaceIndex > activeGenerationIndex &&
       source.indexOf(start, startIndex + start.length) === -1,
-    "Windows qualification must start the managed provider before inspecting its private namespace",
+    "Windows qualification must start, resolve its protected isolated generation, then inspect that private namespace",
+  );
+
+  for (const required of [
+    "function Read-ManagedPrivateUtf8File(",
+    "function Assert-ExactJsonProperties(",
+    "function Read-ManagedWslGenerationSelection(",
+    "$document = [Text.Json.JsonDocument]::Parse($text)",
+    "$cleanupAuthority.ValueKind -ne [Text.Json.JsonValueKind]::False",
+    "$generationIndex.TryGetUInt32([ref]$parsedGenerationIndex)",
+    "$selectedMachineNameValue -cnotmatch '^assm2-iso-[0-9a-f]{20}$'",
+    "-not $seenPreserved.Add($collisionName)",
+    "$generationIndex -lt 1 -or $generationIndex -gt 32",
+    "$orderedGenerationSelections = @($generationSelections | Sort-Object GenerationIndex)",
+    "$activeGenerationSelection.PreservedCollisionNames",
+    '$managedWslDistributions = @($orderedGenerationSelections | ForEach-Object {',
+    '"podman-$([string]$_.SelectedMachineName)"',
+    "$remainingWslSet.Contains([string]$expectedDistribution)",
+    "$remainingWslSet.Contains([string]$_)",
+    "$managedRuntimePurgeSucceeded = $true",
+    'Assert-ManagedPrivateDirectory $providerRoot "Managed provider root after product cleanup"',
+    "$providerRootEmpty = @(Get-ChildItem -LiteralPath $providerRoot -Force).Count -eq 0",
+    "(-not $managedRuntimePurgeSucceeded -or -not $exactWslAbsent -or -not $providerRootEmpty)",
+    '$canonicalGenerationName = "$runtimeManifestSha256.$generationIndex.json"',
+    "$generationEntry.Name -cne $canonicalGenerationName",
+    '$providerNamespace = "$($runtimeManifestSha256.Substring(0, 8))-iso-$($isolatedSuffix.Substring(0, 12))"',
+    '$providerReleaseHome = Join-Path $providerRoot $providerNamespace',
+    '& $cli --json runtime managed @Arguments 1> $stdout 2> $stderr',
+    'Assert-ManagedPrivateDirectory $dataDirectory "Canonical product data directory"',
+    '"AI_SECURITY_SCANNER_DATA_DIR"',
+    '"AI_SECURITY_SCANNER_MANAGED_RUNTIME_BUNDLE"',
+    "[EnvironmentVariableTarget]::Process",
+    'throw "Windows qualification refuses ambient product path override: $overrideEnvironmentName"',
+  ]) {
+    assert(
+      source.includes(required),
+      `Windows qualification is missing isolated-generation invariant: ${required}`,
+    );
+  }
+  for (const field of [
+    "schema_version",
+    "authorizes_cleanup",
+    "manifest_sha256",
+    "machine_image_sha256",
+    "default_machine_name",
+    "selected_machine_name",
+    "generation_index",
+    "preserved_collision_names",
+  ]) {
+    assert(
+      source.split(`"${field}"`).length === 3,
+      `Windows qualification must validate the exact generation-selection field twice: ${field}`,
+    );
+  }
+  assert(
+    source.includes(
+      '"ai-security-scanner.managed-wsl-generation-selection/v1"',
+    ) &&
+      !source.includes("$runtimeManifestSha256.Substring(0, 16)") &&
+      !source.includes('$managedMachineName = "assm2-win-x64-') &&
+      !source.includes("--data-dir") &&
+      !source.includes('New-Item -ItemType Directory -Path $dataDirectory') &&
+      !source.includes('"--unregister"'),
+    "Windows qualification must use the CLI default data root and must not hard-code generation zero or treat routing state as unregister authority",
   );
 
   const defaultDataRoot =
@@ -1370,6 +1759,16 @@ async function main() {
   const releaseWorkflow = await readReleaseWorkflow();
   const promotionWorkflow = await readPromotionWorkflow();
   validateReleaseWorkflow(releaseWorkflow, promotionWorkflow);
+  const [githubReleasePublisher, releaseAssetNaming, releaseFinalizer, finalizedReleaseVerifier] =
+    await Promise.all([
+      "publish-github-release.mjs",
+      "release-asset-name.mjs",
+      "finalize-release.mjs",
+      "verify-finalized-release.mjs",
+    ].map((name) => readFile(path.join(PROJECT_ROOT, "scripts/release", name), "utf8")));
+  validateGithubReleasePublisherSource(githubReleasePublisher);
+  validateReleaseAssetNamingSource(releaseAssetNaming);
+  validateFinalizedPublicationMappingSources(releaseFinalizer, finalizedReleaseVerifier);
   const windowsQualification = await readFile(
     path.join(PROJECT_ROOT, "scripts/release/qualify-windows.ps1"),
     "utf8",

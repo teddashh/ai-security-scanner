@@ -228,6 +228,13 @@ Publish only evidence that was actually produced. Depending on the artifact/chan
 
 A checksum proves only that downloaded bytes match the listed digest. A build attestation binds bytes to a workflow identity. An updater signature authorizes a payload for an installed app. OS code signing/notarization supplies the applicable publisher/platform trust signal. None proves scan completeness, finding correctness, authorization, compliance, or human usability.
 
+GitHub Release assets are a flat namespace. `release-assets.json` schema v3 therefore records both
+the evidence tree's logical `path` and its exact `publishedName`. Ordinary top-level files keep their
+name; nested evidence uses the reserved, reversible `path-v1-<base64url(logical-path)>` form.
+`SHA256SUMS.txt` lists those published names, so a complete flat `gh release download` can be checked
+directly without renaming files. The finalizer, verifier, and publisher share this mapping and reject
+non-canonical paths, reserved-prefix misuse, or case-folded publication-name collisions.
+
 When `SHA256SUMS.txt` and a GitHub attestation are actually supplied, a user can verify them with the platform's checksum tool and:
 
 ```sh

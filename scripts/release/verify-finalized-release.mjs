@@ -22,6 +22,7 @@ import {
   verifyFinalizedWindowsExternalEvidence,
   windowsExternalEvidenceImporterIdentity,
 } from "./windows-external-evidence.mjs";
+import { publishedReleaseAssetName } from "./release-asset-name.mjs";
 
 function assert(condition, message) {
   if (!condition) {
@@ -117,6 +118,15 @@ async function main() {
 
   const files = await regularFiles(directory);
   const actualByPath = new Map(files.map((file) => [file.relative, file]));
+  const actualByPublishedName = new Map();
+  const foldedPublishedNames = new Set();
+  for (const file of files) {
+    const publishedName = publishedReleaseAssetName(file.relative);
+    const folded = publishedName.toLowerCase();
+    assert(!foldedPublishedNames.has(folded), `finalized publication filename collision: ${publishedName}`);
+    foldedPublishedNames.add(folded);
+    actualByPublishedName.set(publishedName, file);
+  }
   assert(actualByPath.has("SHA256SUMS.txt"), "finalized release has no SHA256SUMS.txt");
   assert(actualByPath.has("release-assets.json"), "finalized release has no release-assets.json");
 
@@ -133,29 +143,37 @@ async function main() {
   for (const line of checksumLines) {
     const match = line.match(/^([0-9a-f]{64})  ([^\0\r\n]+)$/u);
     assert(match, `malformed SHA256SUMS.txt line: ${line}`);
-    const relative = match[2];
-    assertSafeRelativePath(relative);
-    assert(toPosix(relative) === relative, `checksum path is not canonical POSIX form: ${relative}`);
-    assert(relative !== "SHA256SUMS.txt", "SHA256SUMS.txt must not claim to cover itself");
-    assert(!checksums.has(relative), `duplicate checksum entry: ${relative}`);
-    checksums.set(relative, match[1]);
+    const publishedName = match[2];
+    assertSafeRelativePath(publishedName);
+    assert(
+      toPosix(publishedName) === publishedName &&
+        path.posix.basename(publishedName) === publishedName &&
+        path.win32.basename(publishedName) === publishedName,
+      `checksum publication name is not one canonical flat filename: ${publishedName}`,
+    );
+    assert(publishedName !== "SHA256SUMS.txt", "SHA256SUMS.txt must not claim to cover itself");
+    assert(!checksums.has(publishedName), `duplicate checksum entry: ${publishedName}`);
+    checksums.set(publishedName, match[1]);
   }
 
   const checksumCoveredPaths = sorted(
-    [...actualByPath.keys()].filter((relative) => relative !== "SHA256SUMS.txt"),
+    [...actualByPath.keys()]
+      .filter((relative) => relative !== "SHA256SUMS.txt")
+      .map((relative) => publishedReleaseAssetName(relative)),
   );
   assert(
     JSON.stringify(sorted(checksums.keys())) === JSON.stringify(checksumCoveredPaths),
     "SHA256SUMS.txt does not exactly cover every other finalized release file",
   );
-  for (const [relative, expectedDigest] of checksums) {
-    const actual = actualByPath.get(relative);
-    assert(actual, `checksum references a missing file: ${relative}`);
-    assert((await sha256File(actual.absolute)) === expectedDigest, `checksum mismatch: ${relative}`);
+  for (const [publishedName, expectedDigest] of checksums) {
+    const actual = actualByPublishedName.get(publishedName);
+    assert(actual, `checksum references a missing publication file: ${publishedName}`);
+    assert((await sha256File(actual.absolute)) === expectedDigest, `checksum mismatch: ${publishedName}`);
   }
+  const checksumForPath = (relative) => checksums.get(publishedReleaseAssetName(relative));
 
   const index = await readJson(path.join(directory, "release-assets.json"));
-  assert(index.schemaVersion === 2, "release index schemaVersion must be 2");
+  assert(index.schemaVersion === 3, "release index schemaVersion must be 3");
   assert(index.product === "ai-security-scanner", "release index product is incorrect");
   assert(index.version === version && index.tag === tag, "release index version/tag mismatch");
   assert(index.sourceCommit === commit, "release index source commit mismatch");
@@ -164,8 +182,14 @@ async function main() {
   assert(Array.isArray(index.files), "release index has no files array");
 
   const indexEntries = new Map();
+  const indexPublishedNames = new Set();
   for (const record of index.files) {
     assert(record && typeof record === "object", "release index contains an invalid file record");
+    assert(
+      JSON.stringify(Object.keys(record)) ===
+        JSON.stringify(["path", "publishedName", "bytes", "sha256"]),
+      "release index file record fields are not the schema-v3 set",
+    );
     assertSafeRelativePath(record.path);
     assert(toPosix(record.path) === record.path, `index path is not canonical POSIX form: ${record.path}`);
     assert(
@@ -173,6 +197,16 @@ async function main() {
       `release index improperly includes a self-generated file: ${record.path}`,
     );
     assert(!indexEntries.has(record.path), `release index contains a duplicate path: ${record.path}`);
+    assert(
+      record.publishedName === publishedReleaseAssetName(record.path),
+      `release index publication name is not derived from its logical path: ${record.path}`,
+    );
+    const foldedPublishedName = record.publishedName.toLowerCase();
+    assert(
+      !indexPublishedNames.has(foldedPublishedName),
+      `release index contains a colliding publication name: ${record.publishedName}`,
+    );
+    indexPublishedNames.add(foldedPublishedName);
     assert(Number.isSafeInteger(record.bytes) && record.bytes >= 0, `invalid byte count: ${record.path}`);
     assert(/^[0-9a-f]{64}$/u.test(record.sha256), `invalid digest: ${record.path}`);
     indexEntries.set(record.path, record);
@@ -191,7 +225,7 @@ async function main() {
     const actual = actualByPath.get(relative);
     assert(actual, `release index references a missing file: ${relative}`);
     assert(actual.bytes === record.bytes, `release index byte count mismatch: ${relative}`);
-    assert(checksums.get(relative) === record.sha256, `release index digest mismatch: ${relative}`);
+    assert(checksumForPath(relative) === record.sha256, `release index digest mismatch: ${relative}`);
   }
 
   const releaseMetadata = await readJson(path.join(directory, "release-metadata.json"));
@@ -231,7 +265,7 @@ async function main() {
       const actual = actualByPath.get(artifact.file);
       assert(actual, `offered artifact is missing: ${artifact.file}`);
       assert(actual.bytes === artifact.bytes, `offered artifact byte count mismatch: ${artifact.file}`);
-      assert(checksums.get(artifact.file) === artifact.sha256, `offered artifact digest mismatch: ${artifact.file}`);
+      assert(checksumForPath(artifact.file) === artifact.sha256, `offered artifact digest mismatch: ${artifact.file}`);
       if (
         hasExternalEvidenceReceipt &&
         platform.platform === "windows-x86_64" &&
@@ -252,7 +286,7 @@ async function main() {
           receiptFile: {
             path: WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE,
             bytes: actualByPath.get(WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE).bytes,
-            sha256: checksums.get(WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE),
+            sha256: checksumForPath(WINDOWS_EXTERNAL_EVIDENCE_RECEIPT_FILE),
           },
           humanPath: artifact.humanPath,
           windowsLifecycle: artifact.windowsLifecycle,
@@ -299,7 +333,7 @@ async function main() {
           const actualEvidence = actualByPath.get(record.path);
           assert(actualEvidence, `Windows lifecycle evidence is missing: ${record.path}`);
           assert(actualEvidence.bytes === record.bytes, `Windows lifecycle evidence bytes changed: ${record.path}`);
-          assert(checksums.get(record.path) === record.sha256, `Windows lifecycle evidence digest changed: ${record.path}`);
+          assert(checksumForPath(record.path) === record.sha256, `Windows lifecycle evidence digest changed: ${record.path}`);
         }
       }
       if (artifact.windowsDataPreservation.state === "supporting-data-preservation-only") {
@@ -311,7 +345,7 @@ async function main() {
             `Windows data-preservation evidence bytes changed: ${dataPreservationFile.path}`,
           );
           assert(
-            checksums.get(dataPreservationFile.path) === dataPreservationFile.sha256,
+            checksumForPath(dataPreservationFile.path) === dataPreservationFile.sha256,
             `Windows data-preservation evidence digest changed: ${dataPreservationFile.path}`,
           );
         }
@@ -355,12 +389,12 @@ async function main() {
         const signatureActual = actualByPath.get(updaterRecord.signatureFile);
         assert(
           payloadActual.bytes === updaterRecord.payloadBytes &&
-            checksums.get(updaterRecord.payloadFile) === updaterRecord.payloadSha256,
+            checksumForPath(updaterRecord.payloadFile) === updaterRecord.payloadSha256,
           `updater payload identity changed: ${updaterRecord.payloadFile}`,
         );
         assert(
           signatureActual.bytes === updaterRecord.signatureBytes &&
-            checksums.get(updaterRecord.signatureFile) === updaterRecord.signatureSha256,
+            checksumForPath(updaterRecord.signatureFile) === updaterRecord.signatureSha256,
           `updater signature-file identity changed: ${updaterRecord.signatureFile}`,
         );
         const inlineSignature = (await readFile(signatureActual.absolute, "utf8")).trim();

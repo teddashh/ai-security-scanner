@@ -32,6 +32,7 @@ import {
   requiresStablePublicWindowsEvidence,
   validateReleaseMetadataV3,
 } from "./release-metadata.mjs";
+import { publishedReleaseAssetName } from "./release-asset-name.mjs";
 
 const PUBLICATION_MODES = new Set(["commit-bound-qc", "public-github-release"]);
 
@@ -1036,11 +1037,24 @@ async function scopedFinalizeMain() {
     .filter((file) => file.relative !== "SHA256SUMS.txt" && file.relative !== "release-assets.json")
     .sort((left, right) => left.relative.localeCompare(right.relative));
   const fileRecords = [];
+  const indexedPublicationNames = new Set();
   for (const file of beforeIndex) {
-    fileRecords.push({ path: file.relative, bytes: file.bytes, sha256: await sha256File(file.absolute) });
+    const publishedName = publishedReleaseAssetName(file.relative);
+    const foldedPublishedName = publishedName.toLowerCase();
+    assert(
+      !indexedPublicationNames.has(foldedPublishedName),
+      `release index publication filename collision: ${publishedName}`,
+    );
+    indexedPublicationNames.add(foldedPublishedName);
+    fileRecords.push({
+      path: file.relative,
+      publishedName,
+      bytes: file.bytes,
+      sha256: await sha256File(file.absolute),
+    });
   }
   await writeJsonAtomic(path.join(output, "release-assets.json"), {
-    schemaVersion: 2,
+    schemaVersion: 3,
     product: "ai-security-scanner",
     version,
     tag,
@@ -1053,7 +1067,17 @@ async function scopedFinalizeMain() {
     .filter((file) => file.relative !== "SHA256SUMS.txt")
     .sort((left, right) => left.relative.localeCompare(right.relative));
   const checksums = [];
-  for (const file of finalFiles) checksums.push(`${await sha256File(file.absolute)}  ${file.relative}`);
+  const checksumPublicationNames = new Set();
+  for (const file of finalFiles) {
+    const publishedName = publishedReleaseAssetName(file.relative);
+    const foldedPublishedName = publishedName.toLowerCase();
+    assert(
+      !checksumPublicationNames.has(foldedPublishedName),
+      `release checksum publication filename collision: ${publishedName}`,
+    );
+    checksumPublicationNames.add(foldedPublishedName);
+    checksums.push(`${await sha256File(file.absolute)}  ${publishedName}`);
+  }
   await writeTextAtomic(path.join(output, "SHA256SUMS.txt"), `${checksums.join("\n")}\n`);
   for (const message of rejectionMessages) process.stderr.write(`release tooling: excluded candidate: ${message}\n`);
   process.stdout.write(
