@@ -38,8 +38,9 @@ clean-lab evidence。正式操作規則見
 
 ### 發行後 `main` 工作
 
-本輪主要實作 commit 是 `bd47e26b6c8024eb3461176637d7fce3e8370561`；最終 website-service
-邊界修正後的 code checkpoint 是 `d28f287d78a079828af45f1ee3bbca165ae091ea`。兩者都是
+本輪主要實作 commit 是 `bd47e26b6c8024eb3461176637d7fce3e8370561`；website-service
+邊界修正 checkpoint 是 `d28f287d78a079828af45f1ee3bbca165ae091ea`；補齊 shared-corpus
+CI routing 後的 final code checkpoint 是 `f04567cf09635b24062219684dc8325b3e44f61a`。三者都是
 `v0.1.9` 發布後的 source commit，不是已發布 installer 的 source identity。
 
 Browser 預覽與最終 diff audit 共揭露八個具體缺陷，歸在四個 defect families：
@@ -64,6 +65,11 @@ receipt，且 port 被其他 owner 佔用時 fail closed。
 這些是有價值的 defect discovery，但當時不是已發布 candidate 的原生 GUI 重現證據；
 修正也不是 `v0.1.9` 已發布 bytes 的一部分。Release-evidence 與 Windows portability／fixture
 修正最終為 `137/137`，同樣只算 post-release source advancement，直到新 build 才可能成為產品 bytes。
+
+同步到 Castle 後另發現一個 release-engineering 缺口：新增的 shared external-target corpus 同時被
+frontend 與 Rust parity tests 讀取，但 corpus-only change 原本不會排程這兩條 CI lane。Classifier
+現在精確排程 `frontend:true`、`rust_core:true`、`desktop:false`，新增 regression 後 CI boundary
+suite 為 `31/31` PASS。這是第九個具體修正，但不列入上面的八個 UI／UX issue。
 
 ## 操作環境
 
@@ -212,6 +218,7 @@ scan、沒有停止或重新設定 tunnel，也沒有終止 BAT。
 - Rust `1.98` all-targets：`1478/1478`；
 - Clippy all-targets `-D warnings`：PASS；
 - post-release release evidence：`137/137`。
+- CI boundary／drift guards：`31/31`。
 
 第一次執行 release self-test 與 desktop check 時，ambient default Rust `1.97` 不符合專案的
 `1.98` 工具鏈而失敗；明確設定 `RUSTUP_TOOLCHAIN=1.98.0` 後，兩項均完整通過。Self-test
@@ -252,12 +259,13 @@ crate 不會連入本輪 Windows NSIS／MSI binary；Linux target 則可沿
 | Browser review | `7` 類 UX／disclosure path 被人工檢查；browser 加 final audit 找到四個 defect families／八個具體 issue | dev preview 不是 installed-candidate evidence |
 | Native scan | `0` 次；port-owner check 正確阻擋接觸 BAT | 沒有 report、reopen 或 export lifecycle evidence |
 | BEGINNER | `0` qualifying sessions | beginner-ready gate 完全未通過 |
-| Post-release tests | release evidence `137/137`，frontend `485/485`，component `145/145`，Rust `1478/1478`，其餘列明的 final gates 通過 | 在新 installer 前，對 published bytes 的改善為 `0` |
+| Post-release tests | release evidence `137/137`，frontend `485/485`，component `145/145`，Rust `1478/1478`，CI boundary `31/31`，其餘列明的 final gates 通過 | 在新 installer 前，對 published bytes 的改善為 `0` |
 
 **水分判讀：**自動測試數字彼此有覆蓋，不能相加成一個誇張總數；browser preview 也不能
 冒充 installed Windows app。真正可交付的推進是主要 implementation commit 的 `2,400` 行新增／
-`153` 行刪除，加上 website-service follow-up 的 `37` 行新增／`2` 行刪除、八個具體 issue 的
-修正、exact Windows fixture／evidence contract，以及三份可追溯文件。
+`153` 行刪除，加上 website-service follow-up 的 `37` 行新增／`2` 行刪除、CI follow-up 的
+`21` 行新增、八個 UI／UX issue 與一個 CI routing issue 的修正、exact Windows
+fixture／evidence contract，以及三份可追溯文件。
 對已發布 `v0.1.9` installer 的程式碼推進是 **0 bytes**，原生 localhost scan 是 **0 次**，
 Windows qualification 仍是 **未完成**。這兩面都必須同時保留，不能只報漂亮數字。
 
@@ -288,11 +296,12 @@ publicly accessible 資料重新驗證；repository owner 之後也明確授權 
 
 | 欄位 | 最終值 |
 | --- | --- |
-| Post-release final code checkpoint | `d28f287d78a079828af45f1ee3bbca165ae091ea`（主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
+| Post-release final code checkpoint | `f04567cf09635b24062219684dc8325b3e44f61a`（UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
 | Branch／remote alignment | `main`；交付時以 remote ref 與 Castle clean fast-forward 驗證本機／GitHub／Castle exact HEAD 對齊 |
 | Frontend final | `485/485` PASS |
 | Component final | `145/145` PASS |
 | Release evidence final | `137/137` PASS |
+| CI boundary／drift guards | `31/31` PASS |
 | Usability evidence final | `5/5` PASS |
 | Rust 1.98 all-targets final | `1478/1478` PASS |
 | Clippy `-D warnings` final | PASS |

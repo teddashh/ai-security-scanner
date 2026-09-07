@@ -4,8 +4,9 @@
 凍結 source／本輪起始 `main` checkpoint：`5c95572f54220adbd170d9bfb5af3159c56708ef`
 Windows：Windows 11 Pro `10.0.26200.9168`，x64
 Rust：`1.98`
-Post-release final code checkpoint：`d28f287d78a079828af45f1ee3bbca165ae091ea`
-（主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`）
+Post-release final code checkpoint：`f04567cf09635b24062219684dc8325b3e44f61a`
+（UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：
+`bd47e26b6c8024eb3461176637d7fce3e8370561`）
 
 > **總結：automated source suites 通過、unsigned 狀態得到嚴格驗證，但原生 Windows
 > operator journey 被安全地阻擋。** 本報告沒有 passing BEGINNER、lifecycle、
@@ -47,6 +48,7 @@ assets 也仍是 stale；listing 或舊文字都不能覆寫 frozen identity 與
 | Browser dev preview | SUPPORTING MANUAL REGRESSION | `390–433px`；不是 installed candidate |
 | Source automated suites | PASS at recorded checkpoints | 不能替代 human／native／lifecycle evidence |
 | Post-release release evidence | `137/137` PASS | 尚未進入新 installer |
+| CI boundary／drift guards | `31/31` PASS | classifier coverage，不是產品功能測試 |
 
 ## Frozen candidate 與 installed identity
 
@@ -165,6 +167,7 @@ export 正確 exit `1`，既有 HTML SHA-256 保持不變。
 | Rust 1.98 all-targets | `1478/1478` PASS | 該 command 的 suite total |
 | Clippy all-targets | PASS | `-D warnings` |
 | Release evidence | `137/137` PASS | post-release commit/source result |
+| CI boundary／drift guards | `31/31` PASS | shared corpus 同時觸發 frontend 與 rust_core；不觸發 desktop |
 
 上述 suites 可能測到重疊邏輯，所以不相加成單一測試總數。尤其 `5/5` usability evidence
 只表示 evidence contract 測試通過，不能寫成「5 位使用者通過」。
@@ -222,6 +225,11 @@ readability check 記為 `not-observed`，把已嘗試的 lifecycle row 記為 `
 `reasonCode: required-observation-unavailable`，不會停掉其他測試，也不會把 agent output 冒充
 beginner evidence。
 
+同步時另找到一個 CI routing issue：shared external-target corpus 同時被 frontend 與 Rust parity
+tests 讀取，但 corpus-only change 原本不會排程這兩條 lane。Classifier 已修成
+`frontend:true`、`rust_core:true`、`desktop:false`，直接 regression 與整套 CI boundary／drift
+guards `31/31` PASS。這是額外的 release-engineering 修正，不增加上面八個 UI／UX issue 的計數。
+
 ## Native Windows 路徑：阻擋而非失敗後重試
 
 ### 控制面限制
@@ -269,13 +277,14 @@ contact。結果是 **BLOCKED／NOT RUN**：scan 次數 `0`，tunnel stop 次數
 
 | 項目 | Final commit／result |
 | --- | --- |
-| Exact post-release final code checkpoint | `d28f287d78a079828af45f1ee3bbca165ae091ea`（主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
+| Exact post-release final code checkpoint | `f04567cf09635b24062219684dc8325b3e44f61a`（UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
 | Frontend | `485/485` PASS |
 | Component | `145/145` PASS |
 | Usability evidence | `5/5` PASS |
 | Engine／Prowler／AIDEFEND | `168` byte-stable inputs／`21` records／`8/8`／`6` records，PASS |
 | Release validate／self-test | PASS／PASS（Rust 1.98） |
 | Release evidence | `137/137` PASS |
+| CI boundary／drift guards | `31/31` PASS |
 | Typecheck／build／desktop check | PASS／PASS（chunk warning）／PASS |
 | Rust 1.98 all-targets | `1478/1478` PASS |
 | Clippy all-targets `-D warnings` | PASS |
