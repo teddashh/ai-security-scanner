@@ -173,6 +173,8 @@ export function AppShell({
   const mobileCloseButtonRef = useRef<HTMLButtonElement>(null);
   const pageTransitionKey = `${page}:${selectedCase?.id ?? ""}`;
   const previousPageTransitionKey = useRef(pageTransitionKey);
+  const renderedPageTransitionKey = useRef(pageTransitionKey);
+  renderedPageTransitionKey.current = pageTransitionKey;
   const mobileDialogOpen = reconcileMobileNavigationOpen(mobileOpen, narrowViewport);
   const { locale, setLocale, t, formatNumber } = useI18n();
   const displayedCaseLabels = caseDisplayLabels(cases, locale);
@@ -246,13 +248,54 @@ export function AppShell({
     return () => viewport.removeEventListener("change", onViewportChange);
   }, []);
 
+  useLayoutEffect(() => {
+    if (!mobileDialogOpen) return undefined;
+
+    const root = document.documentElement;
+    const body = document.body;
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
+    const lockedPageTransitionKey = pageTransitionKey;
+    const previous = {
+      rootOverflow: root.style.overflow,
+      bodyOverflow: body.style.overflow,
+      bodyPosition: body.style.position,
+      bodyTop: body.style.top,
+      bodyLeft: body.style.left,
+      bodyWidth: body.style.width,
+    };
+
+    // The backdrop blocks pointer input, but wheel and touch scrolling can
+    // otherwise move the aria-hidden workspace behind the modal drawer. A
+    // fixed body works across desktop and mobile engines while retaining the
+    // exact viewport coordinate for close, breakpoint changes, and unmount.
+    root.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.left = `-${scrollX}px`;
+    body.style.width = "100%";
+
+    return () => {
+      root.style.overflow = previous.rootOverflow;
+      body.style.overflow = previous.bodyOverflow;
+      body.style.position = previous.bodyPosition;
+      body.style.top = previous.bodyTop;
+      body.style.left = previous.bodyLeft;
+      body.style.width = previous.bodyWidth;
+      if (renderedPageTransitionKey.current === lockedPageTransitionKey) {
+        window.scrollTo(scrollX, scrollY);
+      }
+    };
+  }, [mobileDialogOpen]);
+
   useEffect(() => {
     if (!mobileDialogOpen) return undefined;
     mobileCloseButtonRef.current?.focus();
     const containMobileNavigationFocus = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setMobileOpen(false);
-        window.setTimeout(() => mobileMenuButtonRef.current?.focus(), 0);
+        window.setTimeout(() => mobileMenuButtonRef.current?.focus({ preventScroll: true }), 0);
         return;
       }
       if (event.key !== "Tab") return;
@@ -284,7 +327,7 @@ export function AppShell({
   const closeMobileNavigation = () => {
     setMobileOpen(false);
     if (narrowViewport) {
-      window.setTimeout(() => mobileMenuButtonRef.current?.focus(), 0);
+      window.setTimeout(() => mobileMenuButtonRef.current?.focus({ preventScroll: true }), 0);
     }
   };
 

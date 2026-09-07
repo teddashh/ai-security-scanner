@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isSemver, runMain } from "./lib.mjs";
+import { WINDOWS_LOCALHOST_FIXTURE_RUNTIME_POLICY } from "./windows-localhost-fixture.mjs";
 
 const MAX_RECORD_BYTES = 256 * 1024;
 const MAX_TEXT = 500;
@@ -16,6 +17,10 @@ const PLATFORM = "windows-x86_64";
 const ARCHITECTURE = "x86_64";
 const INSTALLER_TYPE = "nsis";
 const RUNTIME_MANIFEST_FILE = "managed-runtime-windows-x86_64.manifest.json";
+export const WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY = Object.freeze({
+  path: "scripts/release/windows-localhost-fixture.mjs",
+  sha256: "de31dceede3f1aafcdc222d9c91f68913d69e077baa3a663577d62ac0354973a",
+});
 
 function check(caseId, id) {
   return Object.freeze({ caseId, id });
@@ -399,8 +404,31 @@ function validateEnvironment(environment, contract) {
   }
 }
 
-function validateHarness(harness, expected, label) {
-  exactKeys(harness, ["kind", "repository", "sourceCommit", "path", "sha256", "contractVersion"], label);
+function validateFixtureRuntime(runtime, label) {
+  exactKeys(runtime, ["name", "version", "platform", "architecture", "distribution", "executable"], label);
+  exactKeys(runtime.distribution, ["file", "bytes", "sha256"], `${label} distribution`);
+  exactKeys(runtime.executable, ["file", "bytes", "sha256"], `${label} executable`);
+  assert(
+    fixtureRuntimeEquals(runtime, WINDOWS_LOCALHOST_FIXTURE_RUNTIME_POLICY),
+    `${label} differs from the approved fixed runtime policy`,
+  );
+}
+
+function fixtureRuntimeEquals(left, right) {
+  if (left === null || right === null) return left === right;
+  return (
+    ["name", "version", "platform", "architecture"].every((field) => left?.[field] === right?.[field])
+    && ["file", "bytes", "sha256"].every(
+      (field) => left?.distribution?.[field] === right?.distribution?.[field],
+    )
+    && ["file", "bytes", "sha256"].every(
+      (field) => left?.executable?.[field] === right?.executable?.[field],
+    )
+  );
+}
+
+function validateHarness(harness, expected, contract, label) {
+  exactKeys(harness, ["kind", "repository", "sourceCommit", "path", "sha256", "contractVersion", "fixtureRuntime"], label);
   assert(harness.kind === "checked-in-version-pinned", `${label} kind is invalid`);
   assert(harness.repository === "teddashh/ai-security-scanner", `${label} repository is invalid`);
   assert(/^[0-9a-f]{40}$/u.test(harness.sourceCommit), `${label} sourceCommit is invalid`);
@@ -408,9 +436,22 @@ function validateHarness(harness, expected, label) {
   assert(harness.path.startsWith("scripts/release/"), `${label} must be checked in under scripts/release`);
   digest(harness.sha256, `${label} sha256`);
   assert(harness.contractVersion === 1, `${label} contract version is unsupported`);
+  assert(harness.fixtureRuntime === null || typeof harness.fixtureRuntime === "object", `${label} fixtureRuntime is invalid`);
+  if (harness.fixtureRuntime !== null) validateFixtureRuntime(harness.fixtureRuntime, `${label} fixture runtime`);
+  if (contract.rowId === "WL-13") {
+    assert(harness.fixtureRuntime !== null, "WL-13 has no approved fixed fixture runtime");
+    assert(harness.path === WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.path, "WL-13 did not use the exact reviewed localhost fixture path");
+    assert(harness.sha256 === WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.sha256, "WL-13 localhost fixture digest differs from policy");
+  }
   if (expected) {
     for (const field of ["repository", "sourceCommit", "path", "sha256", "contractVersion"]) {
       if (expected[field] !== undefined) assert(harness[field] === expected[field], `${label} ${field} differs from policy`);
+    }
+    if (expected.fixtureRuntime !== undefined) {
+      assert(
+        fixtureRuntimeEquals(harness.fixtureRuntime, expected.fixtureRuntime),
+        `${label} fixtureRuntime differs from policy`,
+      );
     }
   }
 }
@@ -430,7 +471,11 @@ function validateExecution(execution, outcome, label) {
   assert(endedAt >= startedAt, `${label} ends before it starts`);
   integer(execution.excludedOperatingSystemRestartSeconds, 0, 86_400, `${label} excluded restart seconds`);
   assert(["human", "not-present", "not-observed"].includes(execution.secureDesktopControl), `${label} secure-desktop control is invalid`);
-  assert(["human", "not-applicable", "not-observed"].includes(execution.localhostStartControl), `${label} localhost Start control is invalid`);
+  assert(
+    ["human", "agent-with-explicit-user-authorization", "not-applicable", "not-observed"]
+      .includes(execution.localhostStartControl),
+    `${label} localhost Start control is invalid`,
+  );
   assert(execution.administratorCredentialSharedWithAgent === false, `${label} exposed an administrator credential to the agent`);
   for (const field of ["visibleDecisions", "visibleWarnings", "visibleErrors", "interruptions"]) {
     textList(execution[field], `${label} ${field}`);
@@ -534,6 +579,8 @@ function validateInstalledJourney(journey, contract) {
   }
   if (contract.rowId === "WL-13") {
     assert(journey.targetOutcome === "reachable", "WL-13 must observe the real reachable Windows-host fixture");
+  } else {
+    assert(journey.targetOutcome !== "reachable", `${contract.rowId} cannot claim the fixture-only reachable outcome`);
   }
 }
 
@@ -631,16 +678,30 @@ export function validateWindowsInstalledLifecycleEvidence(evidence, expected = {
     assert(evidence.relatedArtifact === null, `${label} not-observed outcome claims a related artifact execution`);
   } else {
     validateEnvironment(evidence.environment, contract);
-    validateHarness(evidence.harness, expected.harness, `${label} harness`);
+    validateHarness(evidence.harness, expected.harness, contract, `${label} harness`);
     executionRange = validateExecution(evidence.execution, evidence.outcome, `${label} execution`);
     assert(recordObservedAt >= executionRange.endedAt, `${label} observedAt precedes execution completion`);
     validateCleanup(evidence.cleanup, contract, evidence.outcome);
+    if (contract.rowId === "WL-12c") {
+      assert(evidence.execution.localhostStartControl === "not-applicable", "WL-12c incorrectly claims a localhost Start action");
+      assert(evidence.cleanup.allDataRemovalConfirmedByOwner === true, "WL-12c has no explicit owner confirmation");
+    } else {
+      assert(evidence.cleanup.allDataRemovalConfirmedByOwner === false, `${contract.rowId} incorrectly claims all-data removal authority`);
+    }
     if (evidence.outcome === "passed") {
       validateInstalledJourney(evidence.installedAppJourney, contract);
-      if (contract.rowId === "WL-12c") {
-        assert(evidence.execution.localhostStartControl === "not-applicable", "WL-12c incorrectly claims a localhost Start action");
-      } else {
-        assert(evidence.execution.localhostStartControl === "human", `${contract.rowId} Start was not personally controlled by a human`);
+      if (evidence.installedAppJourney.targetOutcome === "reachable") {
+        assert(
+          evidence.harness.fixtureRuntime !== null,
+          `${contract.rowId} reachable journey has no approved fixed fixture runtime`,
+        );
+      }
+      if (contract.rowId !== "WL-12c") {
+        assert(
+          ["human", "agent-with-explicit-user-authorization"]
+            .includes(evidence.execution.localhostStartControl),
+          `${contract.rowId} Start was not controlled by a human or an explicitly authorized agent`,
+        );
       }
     } else {
       assert(evidence.installedAppJourney === null, `${label} non-passing outcome must preserve partial progress in checks, not claim a completed journey`);

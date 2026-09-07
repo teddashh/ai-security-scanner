@@ -4,6 +4,20 @@ import type { UseCaseId } from "./useCases";
 const parseIpv4 = (value: string): [number, number, number, number] | undefined => {
   const parts = value.split(".");
   if (parts.length !== 4) return undefined;
+  if (parts.some((part) => !/^(?:0|[1-9][0-9]{0,2})$/u.test(part))) return undefined;
+  const octets = parts.map(Number);
+  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return undefined;
+  return octets as [number, number, number, number];
+};
+
+// ipnet accepts decimal IPv4 CIDR octets with leading zeroes (for example,
+// 010.0.0.0/08). Keep that compatibility scoped to CIDR parsing: accepting the
+// same spelling as a bare address would change how the native IpAddr/hostname
+// fallback classifies it.
+const parseIpv4CidrAddress = (value: string): [number, number, number, number] | undefined => {
+  const parts = value.split(".");
+  if (parts.length !== 4) return undefined;
+  if (parts.some((part) => !/^[0-9]{1,3}$/u.test(part))) return undefined;
   const octets = parts.map(Number);
   if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return undefined;
   return octets as [number, number, number, number];
@@ -20,14 +34,16 @@ const sensitiveIpv4 = ([first, second]: [number, number, number, number]): boole
   || first === 0
   || first >= 224;
 
-const parseIpv6 = (input: string): number[] | undefined => {
+const parseIpv6 = (input: string, allowIpv4CidrLeadingZeroes = false): number[] | undefined => {
   let value = input.toLocaleLowerCase("en-US");
   if (value.startsWith("[") && value.endsWith("]")) value = value.slice(1, -1);
   if (!value.includes(":") || value.includes("%")) return undefined;
 
   if (value.includes(".")) {
     const separator = value.lastIndexOf(":");
-    const ipv4 = parseIpv4(value.slice(separator + 1));
+    const ipv4 = allowIpv4CidrLeadingZeroes
+      ? parseIpv4CidrAddress(value.slice(separator + 1))
+      : parseIpv4(value.slice(separator + 1));
     if (separator < 0 || !ipv4) return undefined;
     value = `${value.slice(0, separator)}:${((ipv4[0] << 8) | ipv4[1]).toString(16)}:${((ipv4[2] << 8) | ipv4[3]).toString(16)}`;
   }
@@ -78,17 +94,19 @@ const sensitiveIpv6 = (segments: number[]): boolean => {
 export const explicitTargetRequiresSensitiveNetworkAllowance = (target: string): boolean => {
   let value = target.trim().replace(/\.$/u, "").toLocaleLowerCase("en-US");
   const cidrSeparator = value.lastIndexOf("/");
+  let ipv4Cidr: [number, number, number, number] | undefined;
   if (cidrSeparator >= 0) {
     const address = value.slice(0, cidrSeparator);
     const prefix = Number(value.slice(cidrSeparator + 1));
     const maximumPrefix = address.includes(":") ? 128 : 32;
     if (!Number.isInteger(prefix) || prefix < 0 || prefix > maximumPrefix) return false;
+    ipv4Cidr = parseIpv4CidrAddress(address);
     value = address;
   }
   if (value === "localhost" || value.endsWith(".localhost")) return true;
-  const ipv4 = parseIpv4(value);
+  const ipv4 = ipv4Cidr ?? parseIpv4(value);
   if (ipv4) return sensitiveIpv4(ipv4);
-  const ipv6 = parseIpv6(value);
+  const ipv6 = parseIpv6(value, cidrSeparator >= 0);
   return Boolean(ipv6 && sensitiveIpv6(ipv6));
 };
 
@@ -98,7 +116,8 @@ export type WebsiteInputError =
   | "invalid_url"
   | "unsupported_protocol"
   | "userinfo_not_allowed"
-  | "hostname_missing";
+  | "hostname_missing"
+  | "hostname_invalid";
 
 export interface PreparedWebsiteTarget {
   /** Canonical hostname/IP coordinate accepted by DeclaredAssetKind::ExternalTarget. */
@@ -148,11 +167,14 @@ export const prepareDeployedWebsiteTarget = (input: string): PrepareWebsiteTarge
   const target = url.hostname.startsWith("[") && url.hostname.endsWith("]")
     ? url.hostname.slice(1, -1)
     : url.hostname;
+  if (!validateExternalTarget(target).ok) {
+    return { ok: false, error: "hostname_invalid" };
+  }
 
   return {
     ok: true,
     value: {
-      target,
+      target: externalComparisonKey(target),
       service: {
         protocol,
         port: url.port ? Number(url.port) : defaultPort,
@@ -174,9 +196,112 @@ export interface CaseAssetDraft {
   kubernetesClusters: string;
 }
 
+export type ExternalTargetInputError =
+  | "wildcard_not_allowed"
+  | "service_coordinate_not_allowed"
+  | "invalid_cidr"
+  | "invalid_target";
+
+export type ValidateExternalTargetResult =
+  | { ok: true }
+  | { ok: false; error: ExternalTargetInputError };
+
+const canonicalHostname = (input: string): string | undefined => {
+  const withoutTrailingDot = input.replace(/\.+$/u, "");
+  if (withoutTrailingDot.toLocaleLowerCase("en-US") === "localhost") return "localhost";
+
+  let ascii: string;
+  try {
+    // URL's host parser supplies the browser's IDNA conversion. The structural
+    // checks below then mirror external_scope::validate_hostname rather than
+    // treating a URL, port, path, or credentials as a target coordinate.
+    // A fixed alphabetic suffix prevents WHATWG's ends-in-a-number rule from
+    // treating an otherwise valid all-numeric final label as legacy IPv4.
+    const idnaSuffix = ".canonical-target.invalid";
+    const parsed = new URL(`http://${withoutTrailingDot}${idnaSuffix}/`);
+    if (
+      parsed.username
+      || parsed.password
+      || parsed.port
+      || parsed.pathname !== "/"
+      || parsed.search
+      || parsed.hash
+    ) return undefined;
+    const converted = parsed.hostname.replace(/\.$/u, "").toLocaleLowerCase("en-US");
+    if (!converted.endsWith(idnaSuffix)) return undefined;
+    ascii = converted.slice(0, -idnaSuffix.length);
+  } catch {
+    return undefined;
+  }
+
+  if (ascii.length > 253 || !ascii.includes(".")) return undefined;
+  return ascii.split(".").every((label) =>
+    label.length > 0
+    && label.length <= 63
+    && !label.startsWith("-")
+    && !label.endsWith("-")
+    && /^[a-z0-9-]+$/u.test(label))
+    ? ascii
+    : undefined;
+};
+
+const validateHostname = (input: string): boolean => canonicalHostname(input) !== undefined;
+
+/**
+ * Mirrors the accepted shapes of the native `CanonicalTarget::parse` boundary.
+ * This is an early UX check only: the native boundary remains authoritative and
+ * validates the same value again before it can become a scan target.
+ */
+export const validateExternalTarget = (input: string): ValidateExternalTargetResult => {
+  const value = input.trim();
+  if (!value || value.includes("\0") || /[\r\n]/u.test(value)) {
+    return { ok: false, error: "invalid_target" };
+  }
+  if (value.includes("*")) return { ok: false, error: "wildcard_not_allowed" };
+  if (value.includes("%")) return { ok: false, error: "invalid_target" };
+  if (
+    /^[a-z][a-z0-9+.-]*:\/\//iu.test(value)
+    || /[@?#\\\[\]]/u.test(value)
+  ) {
+    return { ok: false, error: "service_coordinate_not_allowed" };
+  }
+
+  const cidrSeparators = value.match(/\//gu)?.length ?? 0;
+  if (cidrSeparators > 0) {
+    if (cidrSeparators !== 1) return { ok: false, error: "invalid_cidr" };
+    const separator = value.indexOf("/");
+    const address = value.slice(0, separator);
+    const prefixText = value.slice(separator + 1);
+    const ipv4 = parseIpv4CidrAddress(address);
+    const ipv6 = parseIpv6(address, true);
+    const maximumPrefix = ipv4 ? 32 : ipv6 ? 128 : undefined;
+    if (
+      maximumPrefix === undefined
+      || !(ipv4 ? /^[0-9]{1,2}$/u : /^[0-9]{1,3}$/u).test(prefixText)
+      || Number(prefixText) > maximumPrefix
+    ) {
+      return { ok: false, error: "invalid_cidr" };
+    }
+    return { ok: true };
+  }
+
+  if (parseIpv4(value) || parseIpv6(value)) return { ok: true };
+  if (value.includes(":")) return { ok: false, error: "service_coordinate_not_allowed" };
+  if (/\s/u.test(value) || !validateHostname(value)) {
+    return { ok: false, error: "invalid_target" };
+  }
+  return { ok: true };
+};
+
 export type CaseAssetDraftError =
   | { kind: "website"; error: WebsiteInputError }
   | { kind: "missing_target"; target: "public" | "internal" }
+  | {
+      kind: "invalid_target";
+      target: "public" | "internal";
+      value: string;
+      error: ExternalTargetInputError;
+    }
   | { kind: "conflicting_exposure"; target: string };
 
 export type BuildKnownAssetsResult =
@@ -194,18 +319,69 @@ const guidedLocalUseCases: readonly UseCaseId[] = [
   "kubernetes",
 ];
 
+const canonicalIpv4Network = (
+  octets: [number, number, number, number],
+  prefix: number,
+): string => {
+  const address = (
+    ((octets[0] << 24) >>> 0)
+    | (octets[1] << 16)
+    | (octets[2] << 8)
+    | octets[3]
+  ) >>> 0;
+  const mask = prefix === 0 ? 0 : (0xffff_ffff << (32 - prefix)) >>> 0;
+  const network = (address & mask) >>> 0;
+  return `${network >>> 24}.${(network >>> 16) & 0xff}.${(network >>> 8) & 0xff}.${network & 0xff}/${prefix}`;
+};
+
+const canonicalIpv6Comparison = (segments: number[], prefix?: number): string => {
+  const normalized = [...segments];
+  if (prefix !== undefined) {
+    for (let index = 0; index < normalized.length; index += 1) {
+      const remaining = prefix - index * 16;
+      if (remaining >= 16) continue;
+      if (remaining <= 0) normalized[index] = 0;
+      else normalized[index] = (normalized[index] ?? 0) & ((0xffff << (16 - remaining)) & 0xffff);
+    }
+  }
+  const hexadecimal = normalized.map((segment) => segment.toString(16));
+  let longestStart = -1;
+  let longestLength = 0;
+  for (let start = 0; start < hexadecimal.length;) {
+    if (normalized[start] !== 0) {
+      start += 1;
+      continue;
+    }
+    let end = start;
+    while (end < hexadecimal.length && normalized[end] === 0) end += 1;
+    if (end - start > longestLength) {
+      longestStart = start;
+      longestLength = end - start;
+    }
+    start = end;
+  }
+  const address = longestLength >= 2
+    ? `${hexadecimal.slice(0, longestStart).join(":")}::${hexadecimal.slice(longestStart + longestLength).join(":")}`
+    : hexadecimal.join(":");
+  return prefix === undefined ? address : `${address}/${prefix}`;
+};
+
 const externalComparisonKey = (value: string): string => {
   const trimmed = value.trim();
-  if (trimmed.includes("/")) return trimmed.toLowerCase();
-  try {
-    const hostname = new URL(`http://${trimmed}`).hostname;
-    const withoutIpv6Brackets = hostname.startsWith("[") && hostname.endsWith("]")
-      ? hostname.slice(1, -1)
-      : hostname;
-    return withoutIpv6Brackets.replace(/\.$/u, "").toLowerCase();
-  } catch {
-    return trimmed.replace(/\.$/u, "").toLowerCase();
+  const separator = trimmed.indexOf("/");
+  if (separator >= 0) {
+    const address = trimmed.slice(0, separator);
+    const prefix = Number(trimmed.slice(separator + 1));
+    const ipv4 = parseIpv4CidrAddress(address);
+    if (ipv4) return canonicalIpv4Network(ipv4, prefix);
+    const ipv6 = parseIpv6(address, true);
+    if (ipv6) return canonicalIpv6Comparison(ipv6, prefix);
   }
+  const ipv4 = parseIpv4(trimmed);
+  if (ipv4) return ipv4.join(".");
+  const ipv6 = parseIpv6(trimmed);
+  if (ipv6) return canonicalIpv6Comparison(ipv6);
+  return canonicalHostname(trimmed) ?? trimmed.replace(/\.+$/u, "").toLocaleLowerCase("en-US");
 };
 
 export const buildKnownAssets = (draft: CaseAssetDraft): BuildKnownAssetsResult => {
@@ -231,22 +407,40 @@ export const buildKnownAssets = (draft: CaseAssetDraft): BuildKnownAssetsResult 
     });
   }
 
-  if (draft.selectedUseCase === "external_ip_or_domain" && lineValues(draft.publicTargets).length === 0) {
+  const publicTargetValues = lineValues(draft.publicTargets);
+  const internalTargetValues = lineValues(draft.internalTargets);
+
+  if (draft.selectedUseCase === "external_ip_or_domain" && publicTargetValues.length === 0) {
     return { ok: false, error: { kind: "missing_target", target: "public" } };
   }
-  if (draft.selectedUseCase === "internal_it_environment" && lineValues(draft.internalTargets).length === 0) {
+  if (draft.selectedUseCase === "internal_it_environment" && internalTargetValues.length === 0) {
     return { ok: false, error: { kind: "missing_target", target: "internal" } };
   }
 
+  for (const [target, values] of [
+    ["public", publicTargetValues],
+    ["internal", internalTargetValues],
+  ] as const) {
+    for (const value of values) {
+      const validated = validateExternalTarget(value);
+      if (!validated.ok) {
+        return {
+          ok: false,
+          error: { kind: "invalid_target", target, value, error: validated.error },
+        };
+      }
+    }
+  }
+
   knownAssets.push(
-    ...lineValues(draft.publicTargets).map((value) => ({
+    ...publicTargetValues.map((value) => ({
       kind: "external_target" as const,
-      value,
+      value: externalComparisonKey(value),
       internetExposure: "public" as const,
     })),
-    ...lineValues(draft.internalTargets).map((value) => ({
+    ...internalTargetValues.map((value) => ({
       kind: "external_target" as const,
-      value,
+      value: externalComparisonKey(value),
       internetExposure: "internal" as const,
     })),
     ...lineValues(waitsForLocalPicker ? "" : draft.repositories).map((value) => ({
@@ -281,7 +475,7 @@ export const buildKnownAssets = (draft: CaseAssetDraft): BuildKnownAssetsResult 
     ) {
       return {
         ok: false,
-        error: { kind: "conflicting_exposure", target: asset.value },
+        error: { kind: "conflicting_exposure", target: comparisonValue },
       };
     }
     if (!previous) unique.set(key, asset);

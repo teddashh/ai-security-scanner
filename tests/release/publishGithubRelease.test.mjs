@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -201,7 +201,7 @@ function publishOptions(directory, fetchImpl) {
   };
 }
 
-test("release inventory maps nested evidence to deterministic flat publication names", async () => {
+test("release inventory maps nested evidence to deterministic flat publication names", async (t) => {
   await withReleaseDirectory(async (directory) => {
     const inventory = await inventoryReleaseDirectory(directory);
     assert.deepEqual(
@@ -221,7 +221,15 @@ test("release inventory maps nested evidence to deterministic flat publication n
 
   await withReleaseDirectory(async (directory) => {
     await writeFile(path.join(directory, "ARTIFACT.bin"), "collision", "utf8");
-    await assert.rejects(inventoryReleaseDirectory(directory), /release publication asset name collides/u);
+    const caseVariants = (await readdir(directory)).filter(
+      (name) => name.toLowerCase() === "artifact.bin",
+    );
+    if (caseVariants.length === 2) {
+      await assert.rejects(inventoryReleaseDirectory(directory), /release publication asset name collides/u);
+    } else {
+      assert.equal(caseVariants.length, 1);
+      t.diagnostic("case-insensitive filesystem cannot represent the case-only collision fixture");
+    }
   });
 
   await withReleaseDirectory(async (directory) => {
@@ -235,13 +243,13 @@ test("release inventory maps nested evidence to deterministic flat publication n
   await withReleaseDirectory(async (directory) => {
     const link = `${directory}-link`;
     try {
-      await symlink(directory, link, "dir");
+      await symlink(directory, link, process.platform === "win32" ? "junction" : "dir");
       await assert.rejects(
         inventoryReleaseDirectory(link),
         /release asset root must be one non-symlink directory/u,
       );
     } finally {
-      await rm(link, { force: true });
+      await rm(link, { recursive: true, force: true });
     }
   });
 });

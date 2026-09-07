@@ -212,6 +212,106 @@
     {
       "if": {
         "allOf": [
+          { "properties": { "rowId": { "const": "WL-12c" } }, "required": ["rowId"] },
+          { "properties": { "outcome": { "enum": ["passed", "failed", "inconclusive"] } }, "required": ["outcome"] }
+        ]
+      },
+      "then": {
+        "properties": {
+          "execution": {
+            "allOf": [
+              { "$ref": "#/$defs/execution" },
+              { "properties": { "localhostStartControl": { "const": "not-applicable" } } }
+            ]
+          },
+          "cleanup": {
+            "allOf": [
+              { "$ref": "#/$defs/cleanup" },
+              { "properties": { "allDataRemovalConfirmedByOwner": { "const": true } } }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "allOf": [
+          { "properties": { "outcome": { "const": "passed" } }, "required": ["outcome"] },
+          {
+            "properties": {
+              "installedAppJourney": {
+                "type": "object",
+                "properties": { "targetOutcome": { "const": "reachable" } },
+                "required": ["targetOutcome"]
+              }
+            },
+            "required": ["installedAppJourney"]
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "rowId": { "const": "WL-13" },
+          "harness": {
+            "allOf": [
+              { "$ref": "#/$defs/harness" },
+              {
+                "properties": {
+                  "path": { "const": "scripts/release/windows-localhost-fixture.mjs" },
+                  "sha256": { "const": "de31dceede3f1aafcdc222d9c91f68913d69e077baa3a663577d62ac0354973a" },
+                  "fixtureRuntime": { "$ref": "#/$defs/fixtureRuntime" }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "allOf": [
+          { "properties": { "rowId": { "const": "WL-13" } }, "required": ["rowId"] },
+          { "properties": { "outcome": { "enum": ["passed", "failed", "inconclusive"] } }, "required": ["outcome"] }
+        ]
+      },
+      "then": {
+        "properties": {
+          "harness": {
+            "allOf": [
+              { "$ref": "#/$defs/harness" },
+              {
+                "properties": {
+                  "path": { "const": "scripts/release/windows-localhost-fixture.mjs" },
+                  "sha256": { "const": "de31dceede3f1aafcdc222d9c91f68913d69e077baa3a663577d62ac0354973a" },
+                  "fixtureRuntime": { "$ref": "#/$defs/fixtureRuntime" }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "allOf": [
+          { "properties": { "rowId": { "const": "WL-13" } }, "required": ["rowId"] },
+          { "properties": { "outcome": { "const": "passed" } }, "required": ["outcome"] }
+        ]
+      },
+      "then": {
+        "properties": {
+          "installedAppJourney": {
+            "allOf": [
+              { "$ref": "#/$defs/completedJourney" },
+              { "properties": { "targetOutcome": { "const": "reachable" } } }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "allOf": [
           { "properties": { "outcome": { "const": "passed" } }, "required": ["outcome"] },
           { "not": { "properties": { "rowId": { "const": "WL-12c" } }, "required": ["rowId"] } }
         ]
@@ -300,14 +400,51 @@
     "harness": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "repository", "sourceCommit", "path", "sha256", "contractVersion"],
+      "required": ["kind", "repository", "sourceCommit", "path", "sha256", "contractVersion", "fixtureRuntime"],
       "properties": {
         "kind": { "const": "checked-in-version-pinned" },
         "repository": { "const": "teddashh/ai-security-scanner" },
         "sourceCommit": { "$ref": "#/$defs/gitSha" },
         "path": { "type": "string", "pattern": "^scripts/release/(?!.*(?:^|/)\\.\\.?/)[^\\\\\\u0000\\r\\n]+$", "maxLength": 512 },
         "sha256": { "$ref": "#/$defs/sha256" },
-        "contractVersion": { "const": 1 }
+        "contractVersion": { "const": 1 },
+        "fixtureRuntime": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/fixtureRuntime" }
+          ]
+        }
+      }
+    },
+    "fixtureRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "platform", "architecture", "distribution", "executable"],
+      "properties": {
+        "name": { "const": "node" },
+        "version": { "const": "v24.15.0" },
+        "platform": { "const": "win32" },
+        "architecture": { "const": "x64" },
+        "distribution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file", "bytes", "sha256"],
+          "properties": {
+            "file": { "const": "node-v24.15.0-win-x64.zip" },
+            "bytes": { "const": 36465163 },
+            "sha256": { "const": "cc5149eabd53779ce1e7bdc5401643622d0c7e6800ade18928a767e940bb0e62" }
+          }
+        },
+        "executable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file", "bytes", "sha256"],
+          "properties": {
+            "file": { "const": "node.exe" },
+            "bytes": { "const": 91694408 },
+            "sha256": { "const": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5" }
+          }
+        }
       }
     },
     "execution": {
@@ -319,7 +456,7 @@
         "endedAt": { "$ref": "#/$defs/dateTime" },
         "excludedOperatingSystemRestartSeconds": { "type": "integer", "minimum": 0, "maximum": 86400 },
         "secureDesktopControl": { "enum": ["human", "not-present", "not-observed"] },
-        "localhostStartControl": { "enum": ["human", "not-applicable", "not-observed"] },
+        "localhostStartControl": { "enum": ["human", "agent-with-explicit-user-authorization", "not-applicable", "not-observed"] },
         "administratorCredentialSharedWithAgent": { "const": false },
         "visibleDecisions": { "$ref": "#/$defs/textList" },
         "visibleWarnings": { "$ref": "#/$defs/textList" },

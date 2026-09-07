@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -12,6 +12,7 @@ import {
   verifyWindowsInstalledLifecycleEvidenceDirectory,
   verifyWindowsInstalledLifecycleEvidenceFile,
 } from "../../scripts/release/windows-installed-lifecycle-evidence.mjs";
+import { WINDOWS_LOCALHOST_FIXTURE_RUNTIME_POLICY } from "../../scripts/release/windows-localhost-fixture.mjs";
 
 const commit = "01".repeat(20);
 const artifact = {
@@ -58,7 +59,7 @@ function completedJourney(contract) {
     installedDesktopUsed: true,
     target: "127.0.0.1:9001",
     taskExecutionState: "executed",
-    targetOutcome: "reachable",
+    targetOutcome: contract.rowId === "WL-13" ? "reachable" : "closed",
     durableReportId: "11111111-2222-4333-8444-555555555555",
     durableReportState: "saved",
     projectReopened: true,
@@ -119,9 +120,16 @@ function passingRecord(contract) {
       kind: "checked-in-version-pinned",
       repository: "teddashh/ai-security-scanner",
       sourceCommit: commit,
-      path: "scripts/release/qualify-windows-installed-lifecycle.ps1",
-      sha256: "34".repeat(32),
+      path: contract.rowId === "WL-13"
+        ? "scripts/release/windows-localhost-fixture.mjs"
+        : "scripts/release/qualify-windows-installed-lifecycle.ps1",
+      sha256: contract.rowId === "WL-13"
+        ? "de31dceede3f1aafcdc222d9c91f68913d69e077baa3a663577d62ac0354973a"
+        : "34".repeat(32),
       contractVersion: 1,
+      fixtureRuntime: contract.rowId === "WL-13"
+        ? structuredClone(WINDOWS_LOCALHOST_FIXTURE_RUNTIME_POLICY)
+        : null,
     },
     execution: {
       startedAt,
@@ -225,6 +233,163 @@ test("one passing row is strict and bound to the exact installer and runtime man
   assert.throws(
     () => validateWindowsInstalledLifecycleEvidence(wrongBoundary),
     /boundary does not match/u,
+  );
+});
+
+test("WL-13 is bound to the exact approved Windows fixture runtime", () => {
+  const contract = WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS.find(({ rowId }) => rowId === "WL-13");
+  const record = passingRecord(contract);
+  assert.doesNotThrow(() => validateWindowsInstalledLifecycleEvidence(record));
+
+  const absent = structuredClone(record);
+  absent.harness.fixtureRuntime = null;
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(absent),
+    /WL-13 has no approved fixed fixture runtime/u,
+  );
+
+  const mismatched = structuredClone(record);
+  mismatched.harness.fixtureRuntime.version = "v24.16.0";
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(mismatched),
+    /differs from the approved fixed runtime policy/u,
+  );
+
+  const wrongPath = structuredClone(record);
+  wrongPath.harness.path = "scripts/release/another-fixture.mjs";
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(wrongPath),
+    /exact reviewed localhost fixture path/u,
+  );
+
+  const wrongDigest = structuredClone(record);
+  wrongDigest.harness.sha256 = "ff".repeat(32);
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(wrongDigest),
+    /localhost fixture digest differs from policy/u,
+  );
+
+  const closed = structuredClone(record);
+  closed.installedAppJourney.targetOutcome = "closed";
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(closed),
+    /WL-13 must observe the real reachable Windows-host fixture/u,
+  );
+
+  const reordered = structuredClone(record);
+  const runtime = reordered.harness.fixtureRuntime;
+  reordered.harness.fixtureRuntime = {
+    executable: {
+      sha256: runtime.executable.sha256,
+      bytes: runtime.executable.bytes,
+      file: runtime.executable.file,
+    },
+    architecture: runtime.architecture,
+    platform: runtime.platform,
+    distribution: {
+      sha256: runtime.distribution.sha256,
+      bytes: runtime.distribution.bytes,
+      file: runtime.distribution.file,
+    },
+    version: runtime.version,
+    name: runtime.name,
+  };
+  assert.doesNotThrow(() => validateWindowsInstalledLifecycleEvidence(reordered, {
+    harness: { fixtureRuntime: structuredClone(WINDOWS_LOCALHOST_FIXTURE_RUNTIME_POLICY) },
+  }));
+});
+
+test("the JSON schema mirrors the inverse WL-13 reachable requirement", async () => {
+  const schema = JSON.parse(await readFile(
+    new URL("../../docs/release/windows-installed-lifecycle-evidence.schema.json", import.meta.url),
+    "utf8",
+  ));
+  const condition = schema.allOf.find((entry) => (
+    entry.if?.allOf?.some((part) => part.properties?.rowId?.const === "WL-13")
+    && entry.if?.allOf?.some((part) => part.properties?.outcome?.const === "passed")
+    && entry.then?.properties?.installedAppJourney?.allOf?.some(
+      (part) => part.properties?.targetOutcome?.const === "reachable",
+    )
+  ));
+  assert.ok(condition, "schema must require passed WL-13 evidence to report reachable");
+});
+
+test("reachable is reserved for the exact WL-13 fixture boundary", () => {
+  const record = passingRecord(WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS[0]);
+  record.installedAppJourney.targetOutcome = "reachable";
+  record.harness.fixtureRuntime = structuredClone(WINDOWS_LOCALHOST_FIXTURE_RUNTIME_POLICY);
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(record),
+    /cannot claim the fixture-only reachable outcome/u,
+  );
+});
+
+test("an explicitly authorized agent may control localhost Start only for an applicable lifecycle row", () => {
+  const agentOperated = passingRecord(WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS[0]);
+  agentOperated.execution.localhostStartControl = "agent-with-explicit-user-authorization";
+  assert.doesNotThrow(() => validateWindowsInstalledLifecycleEvidence(agentOperated));
+
+  const unknownControl = structuredClone(agentOperated);
+  unknownControl.execution.localhostStartControl = "agent-with-implied-authorization";
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(unknownControl),
+    /localhost Start control is invalid/u,
+  );
+
+  const unclaimedStart = structuredClone(agentOperated);
+  unclaimedStart.execution.localhostStartControl = "not-applicable";
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(unclaimedStart),
+    /Start was not controlled by a human or an explicitly authorized agent/u,
+  );
+
+  const destructiveRow = passingRecord(
+    WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS.find(({ rowId }) => rowId === "WL-12c"),
+  );
+  destructiveRow.execution.localhostStartControl = "agent-with-explicit-user-authorization";
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(destructiveRow),
+    /WL-12c incorrectly claims a localhost Start action/u,
+  );
+
+  for (const outcome of ["failed", "inconclusive"]) {
+    const nonPassingDestructiveRow = passingRecord(
+      WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS.find(({ rowId }) => rowId === "WL-12c"),
+    );
+    nonPassingDestructiveRow.outcome = outcome;
+    nonPassingDestructiveRow.reasonCode = outcome === "failed"
+      ? "cleanup-failed"
+      : "required-observation-unavailable";
+    nonPassingDestructiveRow.reason = `WL-12c ${outcome} after execution.`;
+    nonPassingDestructiveRow.installedAppJourney = null;
+    nonPassingDestructiveRow.checks[0].state = outcome === "failed" ? "failed" : "not-observed";
+    if (outcome === "inconclusive") nonPassingDestructiveRow.checks[0].observedAt = null;
+    nonPassingDestructiveRow.execution.localhostStartControl = "agent-with-explicit-user-authorization";
+    assert.throws(
+      () => validateWindowsInstalledLifecycleEvidence(nonPassingDestructiveRow),
+      /WL-12c incorrectly claims a localhost Start action/u,
+    );
+
+    nonPassingDestructiveRow.execution.localhostStartControl = "not-applicable";
+    nonPassingDestructiveRow.cleanup.allDataRemovalConfirmedByOwner = false;
+    assert.throws(
+      () => validateWindowsInstalledLifecycleEvidence(nonPassingDestructiveRow),
+      /WL-12c has no explicit owner confirmation/u,
+    );
+  }
+
+  const agentSecureDesktop = structuredClone(agentOperated);
+  agentSecureDesktop.execution.secureDesktopControl = "agent-with-explicit-user-authorization";
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(agentSecureDesktop),
+    /secure-desktop control is invalid/u,
+  );
+
+  const sharedCredential = structuredClone(agentOperated);
+  sharedCredential.execution.administratorCredentialSharedWithAgent = true;
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(sharedCredential),
+    /exposed an administrator credential to the agent/u,
   );
 });
 
@@ -354,7 +519,11 @@ test("file and directory verifiers accept only bounded canonical record paths", 
     );
     await rm(path.join(temporary, "unexpected.json"));
 
-    await symlink(file, path.join(temporary, "linked.json"));
+    await symlink(
+      directory,
+      path.join(temporary, "linked"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     await assert.rejects(
       () => verifyWindowsInstalledLifecycleEvidenceDirectory(temporary),
       /contains a symlink/u,

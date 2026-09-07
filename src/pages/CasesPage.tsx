@@ -4,12 +4,14 @@ import {
   buildKnownAssets,
   prepareDeployedWebsiteTarget,
   type CaseAssetDraftError,
+  type ExternalTargetInputError,
   type WebsiteInputError,
 } from "../caseForm";
 import { caseDisplayLabels, caseIdentityPresentation } from "../caseIdentityPresentation";
 import { Icon } from "../components/Icon";
 import { EmptyState, InlineNotice, MetricCard, PageHeader } from "../components/Shared";
 import { StatusPill } from "../components/StatusPill";
+import { loadStoredDemoCases } from "../data/demo";
 import { useI18n, type BilingualText, type StaticTranslationKey } from "../i18n";
 import { phaseMeta, runStatusMeta } from "../lib";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
@@ -138,14 +140,14 @@ const pageCopy = {
   publicTargets: { en: "Public domains, IP addresses, or small network ranges", zhTW: "公開網域、IP 或小型網段" },
   publicTargetsPlaceholder: { en: "example.com\n203.0.113.10\n203.0.113.0/28", zhTW: "example.com\n203.0.113.10\n203.0.113.0/28" },
   publicTargetsHelp: {
-    en: "Enter one IP address or domain per line. You can review the list before anything runs.",
-    zhTW: "每行輸入一個 IP 或網域；開始前仍可檢查與調整清單。",
+    en: "Enter one hostname, IP address, or CIDR range per line—without a protocol, path, port, or sign-in details. You can review the list before anything runs.",
+    zhTW: "每行輸入一個主機名稱、IP 或 CIDR 網段；不要加入通訊協定、路徑、連接埠或登入資訊。開始前仍可檢查與調整清單。",
   },
   internalTargets: { en: "Internal IP addresses or small network ranges", zhTW: "內部 IP 或小型網段" },
   internalTargetsPlaceholder: { en: "10.20.0.8\n10.20.1.0/28", zhTW: "10.20.0.8\n10.20.1.0/28" },
   internalTargetsHelp: {
-    en: "Enter one server, device, or small network range per line.",
-    zhTW: "每行輸入一台伺服器、設備或小型網段。",
+    en: "Enter one hostname, IP address, or CIDR range per line—without a protocol, path, port, or sign-in details.",
+    zhTW: "每行輸入一個主機名稱、IP 或 CIDR 網段；不要加入通訊協定、路徑、連接埠或登入資訊。",
   },
   localNetworkDetectingTitle: { en: "Looking for your local network", zhTW: "正在找這台電腦的區域網路" },
   localNetworkDetectingBody: {
@@ -343,6 +345,8 @@ const pageCopy = {
   archiveTitle: { en: "Archive case", zhTW: "封存案件" },
   beginDeleteAria: { en: "Begin deleting {name}", zhTW: "開始刪除 {name}" },
   deleteRecordTitle: { en: "Delete case database record", zhTW: "刪除案件資料庫紀錄" },
+  beginRemovePreviewAria: { en: "Begin removing {name} from this browser", zhTW: "開始從這個瀏覽器移除 {name}" },
+  removePreviewTitle: { en: "Remove browser-saved preview project", zhTW: "移除瀏覽器儲存的預覽專案" },
   selectAria: { en: "Select {name}", zhTW: "選擇 {name}" },
   deleteStep: { en: "Step 2 of 2", zhTW: "第 2 步／2" },
   confirmDeleteTitle: { en: "Confirm deletion of the case record", zhTW: "確認刪除案件資料庫紀錄" },
@@ -350,10 +354,18 @@ const pageCopy = {
     en: "This removes the database record from the case list but does not automatically delete the evidence folder. Evidence cleanup is a separate confirmation that shows the exact path.",
     zhTW: "這會從清單移除案件資料庫紀錄，但不會自動刪除證據目錄。證據清理會另外顯示精確路徑並要求確認。",
   },
+  previewDeleteEyebrow: { en: "Browser preview only", zhTW: "僅限瀏覽器預覽" },
+  confirmRemovePreviewTitle: { en: "Remove this preview project from this browser?", zhTW: "要從這個瀏覽器移除這個預覽專案嗎？" },
+  confirmRemovePreviewHelp: {
+    en: "This removes only the preview project saved in this browser. It does not change projects in the installed desktop app.",
+    zhTW: "這只會移除儲存在這個瀏覽器中的預覽專案，不會變更已安裝桌面應用程式中的專案。",
+  },
   typeCaseName: { en: "Type the full case name: {name}", zhTW: "輸入完整案件名稱「{name}」" },
   cancel: { en: "Cancel", zhTW: "取消" },
   deleting: { en: "Deleting…", zhTW: "刪除中…" },
   deleteRecordOnly: { en: "Delete case record only", zhTW: "只刪除案件紀錄" },
+  removingPreview: { en: "Removing…", zhTW: "移除中…" },
+  removePreview: { en: "Remove browser preview", zhTW: "移除瀏覽器預覽" },
   workflowSummary: { en: "See how your scan stays under your control", zhTW: "了解掃描如何始終由你掌控" },
   workflowIntro: {
     en: "Open this when you need the exact workflow behind discovery, permission, scanning, handoff, and follow-up checks.",
@@ -460,7 +472,27 @@ const websiteErrorCopy: Record<WebsiteInputError, BilingualText> = {
   unsupported_protocol: { en: "Only http:// and https:// website addresses are accepted here.", zhTW: "這裡只接受 http:// 與 https:// 網站位址。" },
   userinfo_not_allowed: { en: "Remove the username or password from the URL. The case never needs it.", zhTW: "請移除網址中的帳號或密碼；案件不需要這些資料。" },
   hostname_missing: { en: "The URL does not contain a website hostname.", zhTW: "這個網址沒有可辨識的網站主機名稱。" },
+  hostname_invalid: { en: "The URL hostname must be a fully qualified hostname or IP address.", zhTW: "網址主機名稱必須是完整網域名稱或 IP 位址。" },
 };
+
+const targetInputErrorCopy = {
+  wildcard_not_allowed: {
+    en: "Remove the wildcard from {target}. Add each exact hostname, IP address, or CIDR range separately.",
+    zhTW: "請移除 {target} 中的萬用字元，並分別加入每個精確主機名稱、IP 或 CIDR 網段。",
+  },
+  service_coordinate_not_allowed: {
+    en: "{target} includes URL or service details. Enter only the hostname, IP address, or CIDR range; remove protocols, paths, ports, brackets, and sign-in details.",
+    zhTW: "{target} 含有網址或服務細節。請只輸入主機名稱、IP 或 CIDR 網段，並移除通訊協定、路徑、連接埠、方括號與登入資訊。",
+  },
+  invalid_cidr: {
+    en: "{target} is not a valid IP CIDR range. Use an address and valid prefix, such as 203.0.113.0/28 or 2001:db8::/64.",
+    zhTW: "{target} 不是有效的 IP CIDR 網段。請使用 IP 位址與有效前綴，例如 203.0.113.0/28 或 2001:db8::/64。",
+  },
+  invalid_target: {
+    en: "{target} is not a valid fully qualified hostname, IP address, or CIDR range.",
+    zhTW: "{target} 不是有效的完整主機名稱、IP 位址或 CIDR 網段。",
+  },
+} as const satisfies Record<ExternalTargetInputError, BilingualText>;
 
 const workflowCopy = [
   { step: "01", title: { en: "Find", zhTW: "盤點" }, detail: { en: "Build a candidate list from real sources", zhTW: "從真實來源建立候選清單" } },
@@ -567,10 +599,21 @@ export function CasesPage({
   const additionalPlatforms = selectedDefinition
     ? platformIds.filter((platform) => !selectedDefinition.suggestedPlatforms.includes(platform))
     : platformIds;
+  const browserDeletableCaseIds = useMemo(
+    () => nativeMode
+      ? new Set<string>()
+      : new Set(loadStoredDemoCases().map((assessmentCase) => assessmentCase.id)),
+    [cases, nativeMode],
+  );
 
   useEffect(() => {
     setArtifactDeleteConfirmation("");
   }, [artifactCleanupPlan?.caseId]);
+
+  useEffect(() => {
+    if (assetDraftError?.kind !== "missing_target" && assetDraftError?.kind !== "invalid_target") return;
+    (assetDraftError.target === "public" ? publicTargetsInputRef : internalTargetsInputRef).current?.focus();
+  }, [advancedOpen, assetDraftError]);
 
   useEffect(() => {
     if (!selectedDefinition) return;
@@ -702,7 +745,11 @@ export function CasesPage({
       setAssetDraftError(assets.error);
       if (assets.error.kind === "website") {
         websiteInputRef.current?.focus();
-      } else if (assets.error.kind === "missing_target") {
+      } else if (assets.error.kind === "missing_target" || assets.error.kind === "invalid_target") {
+        if (
+          (assets.error.target === "public" && !useCaseNeeds(selectedDefinition, "external_ip_or_domain"))
+          || (assets.error.target === "internal" && !useCaseNeeds(selectedDefinition, "internal_it_environment"))
+        ) setAdvancedOpen(true);
         (assets.error.target === "public" ? publicTargetsInputRef : internalTargetsInputRef).current?.focus();
       } else {
         setAdvancedOpen(true);
@@ -827,8 +874,16 @@ export function CasesPage({
             required
             rows={4}
             value={publicTargets}
-            aria-invalid={assetDraftError?.kind === "missing_target" && assetDraftError.target === "public" || undefined}
-            aria-describedby="public-targets-help public-targets-error"
+            aria-invalid={(
+              (assetDraftError?.kind === "missing_target" || assetDraftError?.kind === "invalid_target")
+              && assetDraftError.target === "public"
+            ) || undefined}
+            aria-describedby={
+              (assetDraftError?.kind === "missing_target" || assetDraftError?.kind === "invalid_target")
+              && assetDraftError.target === "public"
+                ? "public-targets-help public-targets-error"
+                : "public-targets-help"
+            }
             onInvalid={() => setAssetDraftError({ kind: "missing_target", target: "public" })}
             onChange={(event) => { setPublicTargets(event.target.value); setAssetDraftError(undefined); }}
             placeholder={text(pageCopy.publicTargetsPlaceholder)}
@@ -836,6 +891,11 @@ export function CasesPage({
           <small id="public-targets-help">{text(pageCopy.publicTargetsHelp)}</small>
           {assetDraftError?.kind === "missing_target" && assetDraftError.target === "public" && (
             <small id="public-targets-error" className="field-error" role="alert">{text(pageCopy.publicTargetRequired)}</small>
+          )}
+          {assetDraftError?.kind === "invalid_target" && assetDraftError.target === "public" && (
+            <small id="public-targets-error" className="field-error" role="alert">
+              {text(targetInputErrorCopy[assetDraftError.error], { target: assetDraftError.value })}
+            </small>
           )}
         </label>
       )}
@@ -895,8 +955,16 @@ export function CasesPage({
               required
               rows={4}
               value={internalTargets}
-              aria-invalid={assetDraftError?.kind === "missing_target" && assetDraftError.target === "internal" || undefined}
-              aria-describedby="internal-targets-help internal-targets-error"
+              aria-invalid={(
+                (assetDraftError?.kind === "missing_target" || assetDraftError?.kind === "invalid_target")
+                && assetDraftError.target === "internal"
+              ) || undefined}
+              aria-describedby={
+                (assetDraftError?.kind === "missing_target" || assetDraftError?.kind === "invalid_target")
+                && assetDraftError.target === "internal"
+                  ? "internal-targets-help internal-targets-error"
+                  : "internal-targets-help"
+              }
               onInvalid={() => setAssetDraftError({ kind: "missing_target", target: "internal" })}
               onChange={(event) => { setInternalTargets(event.target.value); setAssetDraftError(undefined); }}
               placeholder={text(pageCopy.internalTargetsPlaceholder)}
@@ -904,6 +972,11 @@ export function CasesPage({
             <small id="internal-targets-help">{text(pageCopy.internalTargetsHelp)}</small>
             {assetDraftError?.kind === "missing_target" && assetDraftError.target === "internal" && (
               <small id="internal-targets-error" className="field-error" role="alert">{text(pageCopy.internalTargetRequired)}</small>
+            )}
+            {assetDraftError?.kind === "invalid_target" && assetDraftError.target === "internal" && (
+              <small id="internal-targets-error" className="field-error" role="alert">
+                {text(targetInputErrorCopy[assetDraftError.error], { target: assetDraftError.value })}
+              </small>
             )}
           </label>
         </>
@@ -1052,15 +1125,45 @@ export function CasesPage({
                   {platforms.includes("external") && !useCaseNeeds(selectedDefinition, "external_ip_or_domain") && (
                     <label className="field">
                       <span>{text(pageCopy.publicTargets)}</span>
-                      <textarea rows={4} value={publicTargets} onChange={(event) => { setPublicTargets(event.target.value); setAssetDraftError(undefined); }} placeholder={text(pageCopy.publicTargetsPlaceholder)} />
-                      <small>{text(pageCopy.publicTargetsHelp)}</small>
+                      <textarea
+                        ref={publicTargetsInputRef}
+                        rows={4}
+                        value={publicTargets}
+                        aria-invalid={assetDraftError?.kind === "invalid_target" && assetDraftError.target === "public" || undefined}
+                        aria-describedby={assetDraftError?.kind === "invalid_target" && assetDraftError.target === "public"
+                          ? "public-targets-help public-targets-error"
+                          : "public-targets-help"}
+                        onChange={(event) => { setPublicTargets(event.target.value); setAssetDraftError(undefined); }}
+                        placeholder={text(pageCopy.publicTargetsPlaceholder)}
+                      />
+                      <small id="public-targets-help">{text(pageCopy.publicTargetsHelp)}</small>
+                      {assetDraftError?.kind === "invalid_target" && assetDraftError.target === "public" && (
+                        <small id="public-targets-error" className="field-error" role="alert">
+                          {text(targetInputErrorCopy[assetDraftError.error], { target: assetDraftError.value })}
+                        </small>
+                      )}
                     </label>
                   )}
                   {platforms.includes("external") && !useCaseNeeds(selectedDefinition, "internal_it_environment") && (
                     <label className="field">
                       <span>{text(pageCopy.internalTargets)}</span>
-                      <textarea rows={4} value={internalTargets} onChange={(event) => { setInternalTargets(event.target.value); setAssetDraftError(undefined); }} placeholder={text(pageCopy.internalTargetsPlaceholder)} />
-                      <small>{text(pageCopy.internalTargetsHelp)}</small>
+                      <textarea
+                        ref={internalTargetsInputRef}
+                        rows={4}
+                        value={internalTargets}
+                        aria-invalid={assetDraftError?.kind === "invalid_target" && assetDraftError.target === "internal" || undefined}
+                        aria-describedby={assetDraftError?.kind === "invalid_target" && assetDraftError.target === "internal"
+                          ? "internal-targets-help internal-targets-error"
+                          : "internal-targets-help"}
+                        onChange={(event) => { setInternalTargets(event.target.value); setAssetDraftError(undefined); }}
+                        placeholder={text(pageCopy.internalTargetsPlaceholder)}
+                      />
+                      <small id="internal-targets-help">{text(pageCopy.internalTargetsHelp)}</small>
+                      {assetDraftError?.kind === "invalid_target" && assetDraftError.target === "internal" && (
+                        <small id="internal-targets-error" className="field-error" role="alert">
+                          {text(targetInputErrorCopy[assetDraftError.error], { target: assetDraftError.value })}
+                        </small>
+                      )}
                     </label>
                   )}
                   {platforms.includes("code") && !useCaseNeeds(selectedDefinition, "source_code") && (
@@ -1314,6 +1417,7 @@ export function CasesPage({
             {cases.map((assessmentCase) => {
               const active = assessmentCase.id === selectedCase?.id;
               const confirmingDelete = pendingDeleteId === assessmentCase.id;
+              const canDelete = nativeMode || browserDeletableCaseIds.has(assessmentCase.id);
               const listedAssets = assessmentCase.assetCount === undefined ? "—" : formatNumber(assessmentCase.assetCount);
               const listedFindings = assessmentCase.findingCount === undefined ? "—" : formatNumber(assessmentCase.findingCount);
               const displayedIdentity = caseIdentityPresentation(assessmentCase, locale);
@@ -1341,19 +1445,39 @@ export function CasesPage({
                       {assessmentCase.phase !== "archived" && (
                         <button className="icon-button case-row__archive" type="button" disabled={busy} aria-label={text(pageCopy.archiveAria, { name: displayedName })} title={text(pageCopy.archiveTitle)} onClick={() => void onArchive(assessmentCase.id)}><Icon name="archive" size={17} /></button>
                       )}
-                      <button className="icon-button icon-button--danger" type="button" disabled={busy} aria-label={text(pageCopy.beginDeleteAria, { name: displayedName })} title={text(pageCopy.deleteRecordTitle)} aria-expanded={confirmingDelete} aria-controls={`delete-confirm-${assessmentCase.id}`} onClick={() => confirmingDelete ? cancelDelete() : beginDelete(assessmentCase.id)}>
-                        <Icon name={confirmingDelete ? "close" : "trash"} size={17} />
-                      </button>
+                      {canDelete && (
+                        <button
+                          className="icon-button icon-button--danger"
+                          type="button"
+                          disabled={busy}
+                          aria-label={text(nativeMode ? pageCopy.beginDeleteAria : pageCopy.beginRemovePreviewAria, { name: displayedName })}
+                          title={text(nativeMode ? pageCopy.deleteRecordTitle : pageCopy.removePreviewTitle)}
+                          aria-expanded={confirmingDelete}
+                          aria-controls={`delete-confirm-${assessmentCase.id}`}
+                          onClick={() => confirmingDelete ? cancelDelete() : beginDelete(assessmentCase.id)}
+                        >
+                          <Icon name={confirmingDelete ? "close" : "trash"} size={17} />
+                        </button>
+                      )}
                       <button className="icon-button" type="button" aria-label={text(pageCopy.selectAria, { name: displayedName })} onClick={() => onSelect(assessmentCase.id)}><Icon name="chevron" /></button>
                     </div>
                   </article>
-                  {confirmingDelete && (
+                  {canDelete && confirmingDelete && (
                     <form id={`delete-confirm-${assessmentCase.id}`} className="case-delete-confirmation" aria-labelledby={`delete-title-${assessmentCase.id}`} onSubmit={(event) => void submitDelete(event, assessmentCase)}>
-                      <div><p className="eyebrow">{text(pageCopy.deleteStep)}</p><h3 id={`delete-title-${assessmentCase.id}`}>{text(pageCopy.confirmDeleteTitle)}</h3><p>{text(pageCopy.confirmDeleteHelp)}</p></div>
+                      <div>
+                        <p className="eyebrow">{text(nativeMode ? pageCopy.deleteStep : pageCopy.previewDeleteEyebrow)}</p>
+                        <h3 id={`delete-title-${assessmentCase.id}`}>{text(nativeMode ? pageCopy.confirmDeleteTitle : pageCopy.confirmRemovePreviewTitle)}</h3>
+                        <p>{text(nativeMode ? pageCopy.confirmDeleteHelp : pageCopy.confirmRemovePreviewHelp)}</p>
+                      </div>
                       <label className="field"><span>{text(pageCopy.typeCaseName, { name: assessmentCase.name })}</span><input autoFocus autoComplete="off" value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} /></label>
                       <div className="case-delete-confirmation__actions">
                         <button className="button button--ghost button--small" type="button" disabled={busy} onClick={cancelDelete}>{text(pageCopy.cancel)}</button>
-                        <button className="button button--danger button--small" type="submit" disabled={busy || deleteConfirmation !== assessmentCase.name}><Icon name="trash" size={16} />{text(busy ? pageCopy.deleting : pageCopy.deleteRecordOnly)}</button>
+                        <button className="button button--danger button--small" type="submit" disabled={busy || deleteConfirmation !== assessmentCase.name}>
+                          <Icon name="trash" size={16} />
+                          {text(nativeMode
+                            ? busy ? pageCopy.deleting : pageCopy.deleteRecordOnly
+                            : busy ? pageCopy.removingPreview : pageCopy.removePreview)}
+                        </button>
                       </div>
                     </form>
                   )}

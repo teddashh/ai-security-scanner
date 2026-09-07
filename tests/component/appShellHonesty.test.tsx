@@ -1,5 +1,5 @@
-import { cleanup, render } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { AppShell } from "../../src/components/AppShell";
 import { I18nProvider, localeStorageKey } from "../../src/i18n";
@@ -33,29 +33,31 @@ const assessmentCase = (overrides: Partial<AssessmentCase> = {}): AssessmentCase
   ...overrides,
 });
 
+const shellElement = (overrides: Partial<Parameters<typeof AppShell>[0]> = {}) => (
+  <I18nProvider>
+    <AppShell
+      page="cases"
+      mode="native"
+      cases={[assessmentCase()]}
+      selectedCase={assessmentCase()}
+      onRetryData={() => {}}
+      onRetryCaseSelection={() => {}}
+      onNavigate={() => {}}
+      onSelectCase={() => {}}
+      appUpdate={{ phase: "idle" }}
+      onCheckForUpdate={() => {}}
+      onInstallUpdate={() => {}}
+      onSetupRuntime={() => {}}
+      onCancelRuntime={() => {}}
+      {...overrides}
+    >
+      <p>page content</p>
+    </AppShell>
+  </I18nProvider>
+);
+
 const renderShell = (overrides: Partial<Parameters<typeof AppShell>[0]> = {}) =>
-  render(
-    <I18nProvider>
-      <AppShell
-        page="cases"
-        mode="native"
-        cases={[assessmentCase()]}
-        selectedCase={assessmentCase()}
-        onRetryData={() => {}}
-        onRetryCaseSelection={() => {}}
-        onNavigate={() => {}}
-        onSelectCase={() => {}}
-        appUpdate={{ phase: "idle" }}
-        onCheckForUpdate={() => {}}
-        onInstallUpdate={() => {}}
-        onSetupRuntime={() => {}}
-        onCancelRuntime={() => {}}
-        {...overrides}
-      >
-        <p>page content</p>
-      </AppShell>
-    </I18nProvider>,
-  );
+  render(shellElement(overrides));
 
 const banners = (container: HTMLElement): string[] =>
   Array.from(container.querySelectorAll<HTMLElement>(".data-status-banner, .demo-banner")).map(
@@ -85,7 +87,12 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   window.localStorage.clear();
+  document.body.removeAttribute("style");
+  document.documentElement.removeAttribute("style");
+  Object.defineProperty(window, "scrollX", { configurable: true, value: 0 });
+  Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
 });
 
 test("a sample project announces that nothing is being tested", () => {
@@ -213,4 +220,117 @@ test("language choices keep each language's own name in either interface languag
   const englishShell = renderShell();
   const chineseButton = englishShell.container.querySelector<HTMLButtonElement>('button[lang="zh-Hant"]');
   expect(chineseButton?.textContent).toBe("繁體中文");
+});
+
+test("the mobile navigation modal locks page scroll and restores prior inline state on cleanup", async () => {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+  Object.defineProperty(window, "scrollX", { configurable: true, value: 7 });
+  Object.defineProperty(window, "scrollY", { configurable: true, value: 412 });
+  document.documentElement.style.overflow = "auto";
+  document.body.style.overflow = "clip";
+  document.body.style.position = "relative";
+  document.body.style.top = "3px";
+  document.body.style.left = "4px";
+  document.body.style.width = "95%";
+  const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+  const view = renderShell();
+
+  fireEvent.click(view.getByRole("button", { name: "Open navigation" }));
+
+  await waitFor(() => expect(view.getByRole("dialog", { name: "Primary navigation" })).toBeTruthy());
+  expect(document.documentElement.style.overflow).toBe("hidden");
+  expect(document.body.style.overflow).toBe("hidden");
+  expect(document.body.style.position).toBe("fixed");
+  expect(document.body.style.top).toBe("-412px");
+  expect(document.body.style.left).toBe("-7px");
+  expect(document.body.style.width).toBe("100%");
+
+  view.unmount();
+
+  expect(document.documentElement.style.overflow).toBe("auto");
+  expect(document.body.style.overflow).toBe("clip");
+  expect(document.body.style.position).toBe("relative");
+  expect(document.body.style.top).toBe("3px");
+  expect(document.body.style.left).toBe("4px");
+  expect(document.body.style.width).toBe("95%");
+  expect(scrollTo).toHaveBeenCalledWith(7, 412);
+});
+
+test("changing an open mobile drawer to desktop closes it and releases the scroll lock", async () => {
+  let viewportListener: ((event: MediaQueryListEvent) => void) | undefined;
+  const viewport = {
+    matches: true,
+    media: "(max-width: 820px)",
+    onchange: null,
+    addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+      viewportListener = listener;
+    },
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  };
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: () => viewport,
+  });
+  Object.defineProperty(window, "scrollY", { configurable: true, value: 275 });
+  const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+  const view = renderShell();
+  fireEvent.click(view.getByRole("button", { name: "Open navigation" }));
+  await waitFor(() => expect(document.body.style.position).toBe("fixed"));
+
+  await act(async () => {
+    viewport.matches = false;
+    viewportListener?.({ matches: false } as MediaQueryListEvent);
+  });
+
+  await waitFor(() => expect(view.queryByRole("dialog", { name: "Primary navigation" })).toBeNull());
+  expect(document.documentElement.style.overflow).toBe("");
+  expect(document.body.style.overflow).toBe("");
+  expect(document.body.style.position).toBe("");
+  expect(scrollTo).toHaveBeenCalledWith(0, 275);
+});
+
+test("a page transition behind the drawer keeps the new page at the top instead of restoring stale scroll", async () => {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+  Object.defineProperty(window, "scrollY", { configurable: true, value: 525 });
+  const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+  const view = renderShell();
+  fireEvent.click(view.getByRole("button", { name: "Open navigation" }));
+  await waitFor(() => expect(document.body.style.position).toBe("fixed"));
+
+  view.rerender(shellElement({ page: "findings" }));
+
+  await waitFor(() => expect(view.queryByRole("dialog", { name: "Primary navigation" })).toBeNull());
+  expect(document.body.style.position).toBe("");
+  expect(scrollTo).not.toHaveBeenCalledWith(0, 525);
+  expect(scrollTo).toHaveBeenLastCalledWith({ top: 0, left: 0, behavior: "auto" });
 });

@@ -179,12 +179,21 @@ export const reconcileAuthoritativeSnapshot = (
   authoritative: AppSnapshot,
   workspacesObservedAfterRequest: readonly CaseWorkspace[] = [],
 ): AppSnapshot => {
+  // Demo snapshots contain localized copies of product-owned sample data. A
+  // locale change does not alter their persisted revision, so equal-revision
+  // reconciliation must accept the newly rendered copy. User-created demo
+  // cases are read back unchanged from localStorage, while native snapshots
+  // keep the stricter equal-revision rule that protects live event payloads.
+  const refreshDemoPresentation =
+    current?.provenance === "demo" && authoritative.provenance === "demo";
   const currentCases = new Map(current?.cases.map((item) => [item.id, item]) ?? []);
   const cases = authoritative.cases.map((incoming) => {
     const existing = currentCases.get(incoming.id);
     if (!existing) return incoming;
     const order = compareCaseRevisions(existing, incoming);
-    return order !== undefined && order >= 0 ? existing : incoming;
+    return order !== undefined && (order > 0 || (order === 0 && !refreshDemoPresentation))
+      ? existing
+      : incoming;
   });
 
   let workspace = authoritative.workspace;
@@ -195,7 +204,19 @@ export const reconcileAuthoritativeSnapshot = (
       : undefined;
   if (currentWorkspace && workspace?.case.id === currentWorkspace.case.id) {
     const order = compareCaseRevisions(currentWorkspace.case, workspace.case);
-    if (order !== undefined && order >= 0) workspace = currentWorkspace;
+    if (order !== undefined && (order > 0 || (order === 0 && !refreshDemoPresentation))) {
+      workspace = currentWorkspace;
+    } else if (
+      order === 0
+      && refreshDemoPresentation
+      && Array.isArray(currentWorkspace.exports)
+    ) {
+      // The demo export action appends browser-download history only to the
+      // in-memory workspace. Accept localized product-owned presentation from
+      // the refreshed snapshot without silently erasing that user-visible
+      // history when the locale changes.
+      workspace = { ...workspace, exports: currentWorkspace.exports };
+    }
   }
 
   if (workspace) {

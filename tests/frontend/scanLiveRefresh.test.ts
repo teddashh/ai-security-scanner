@@ -103,6 +103,71 @@ test("ordinary stale state cannot resurrect a case omitted by the authoritative 
   assert.equal(reconciled.cases.some((item) => item.id === "case-deleted"), false);
 });
 
+test("an equal-revision demo refresh accepts newly localized built-in presentation", () => {
+  const current = snapshot();
+  current.provenance = "demo";
+  current.cases[0] = assessmentCase("case-a", "Northstar 初步安全健檢");
+  current.workspace = workspace("case-a", "Northstar 初步安全健檢");
+
+  const localized = snapshot();
+  localized.provenance = "demo";
+  localized.cases[0] = assessmentCase("case-a", "Northstar initial security review");
+  localized.workspace = workspace("case-a", "Northstar initial security review");
+
+  const reconciled = reconcileAuthoritativeSnapshot(current, localized);
+
+  assert.equal(reconciled.cases[0]?.name, "Northstar initial security review");
+  assert.equal(reconciled.workspace?.case.name, "Northstar initial security review");
+});
+
+test("an equal-revision demo locale refresh preserves in-memory export history", () => {
+  const current = snapshot();
+  current.provenance = "demo";
+  current.cases[0] = assessmentCase("case-a", "Northstar 初步安全健檢");
+  current.workspace = {
+    ...workspace("case-a", "Northstar 初步安全健檢"),
+    exports: [{
+      id: "export-demo-1",
+      caseId: "case-a",
+      runId: "run-demo-1",
+      createdAt: "2026-08-27T12:00:01Z",
+      fileName: "northstar-demo.html",
+      sha256: "a".repeat(64),
+      signatureState: "unsigned",
+      isDemo: true,
+    }],
+  };
+
+  const localized = snapshot();
+  localized.provenance = "demo";
+  localized.cases[0] = assessmentCase("case-a", "Northstar initial security review");
+  localized.workspace = {
+    ...workspace("case-a", "Northstar initial security review"),
+    exports: [],
+  };
+
+  const reconciled = reconcileAuthoritativeSnapshot(current, localized);
+
+  assert.equal(reconciled.workspace?.case.name, "Northstar initial security review");
+  assert.equal(reconciled.workspace?.exports[0]?.id, "export-demo-1");
+});
+
+test("an equal-revision native refresh still preserves the live payload already in state", () => {
+  const current = snapshot();
+  current.cases[0] = assessmentCase("case-a", "Live event presentation");
+  current.workspace = workspace("case-a", "Live event presentation", initialUpdatedAt, "event-run");
+
+  const fetched = snapshot();
+  fetched.cases[0] = assessmentCase("case-a", "Equal command presentation");
+  fetched.workspace = workspace("case-a", "Equal command presentation", initialUpdatedAt, "command-run");
+
+  const reconciled = reconcileAuthoritativeSnapshot(current, fetched);
+
+  assert.equal(reconciled.cases[0]?.name, "Live event presentation");
+  assert.equal(reconciled.workspace?.case.name, "Live event presentation");
+  assert.equal(reconciled.workspace?.runs[0]?.id, "event-run");
+});
+
 test("a fast scan event cannot be overwritten by an older same-case command result", () => {
   const eventWorkspace = workspace(
     "case-a",

@@ -260,4 +260,10 @@ test("deployed website parsing rejects credentials, non-web protocols, and ambig
     ok: false,
     error: "invalid_url",
   });
+  for (const websiteUrl of ["https://printer/", "https://bad_host.example/"]) {
+    assert.deepEqual(prepareDeployedWebsiteTarget(websiteUrl), {
+      ok: false,
+      error: "hostname_invalid",
+    }, websiteUrl);
+  }
 });

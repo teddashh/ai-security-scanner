@@ -665,6 +665,23 @@ mod tests {
     }
 
     #[test]
+    fn canonical_target_acceptance_matches_the_shared_frontend_corpus() {
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/external-target-corpus.json"
+        ))
+        .expect("shared external-target corpus");
+
+        for target in corpus["accepted"].as_array().expect("accepted targets") {
+            let target = target.as_str().expect("accepted target string");
+            assert!(CanonicalTarget::parse(target).is_ok(), "accepted: {target}");
+        }
+        for target in corpus["rejected"].as_array().expect("rejected targets") {
+            let target = target.as_str().expect("rejected target string");
+            assert!(CanonicalTarget::parse(target).is_err(), "rejected: {target}");
+        }
+    }
+
+    #[test]
     fn explicit_local_targets_require_sensitive_network_authorization() {
         for target in ["127.0.0.1", "10.20.30.40", "::1", "localhost"] {
             let target = CanonicalTarget::parse(target).expect("local target");

@@ -168,6 +168,66 @@ test("the browser preview never runs or claims a localhost quick scan", async ()
   assert.ok(result.notice);
 });
 
+test("the browser preview deletes only its own exact-name stored project and reports no file cleanup", async () => {
+  let storedValue = JSON.stringify([{
+    id: "case-local-delete",
+    name: "Delete this preview",
+    aiGeneratedArtifact: "unknown",
+  }]);
+  setTestWindow({
+    localStorage: {
+      getItem: () => storedValue,
+      setItem: (_key: string, value: string) => {
+        storedValue = value;
+      },
+    },
+  });
+
+  const rejected = await scannerService.deleteCase("case-local-delete", "wrong name");
+  assert.equal(rejected.mode, "demo");
+  assert.equal(rejected.data.accepted, false);
+  assert.notEqual(storedValue, "[]");
+
+  const deleted = await scannerService.deleteCase("case-local-delete", "Delete this preview");
+  assert.equal(deleted.mode, "demo");
+  assert.equal(deleted.data.accepted, true);
+  assert.equal(deleted.data.databaseRecordDeleted, true);
+  assert.deepEqual(deleted.data.artifacts, {
+    caseId: "case-local-delete",
+    exactPath: "",
+    exists: false,
+    requiresExplicitConfirmation: false,
+  });
+  assert.equal(storedValue, "[]");
+
+  const builtIn = await scannerService.deleteCase(
+    "case-demo-northstar",
+    "Northstar initial security review",
+  );
+  assert.equal(builtIn.data.accepted, false);
+});
+
+test("accepted deletion copy distinguishes retained evidence, no folder, and browser-only storage", async () => {
+  const app = await readFile(new URL("../../src/App.tsx", import.meta.url), "utf8");
+  const start = app.indexOf("const deleteCase = async");
+  const end = app.indexOf("const deleteCaseArtifacts = async", start);
+  const deletion = app.slice(start, end);
+
+  assert.ok(start >= 0 && end > start);
+  assert.match(deletion, /result\.data\.artifacts\.exists[\s\S]*Local evidence is still present/u);
+  assert.match(deletion, /result\.mode === "demo"[\s\S]*browser-saved project record[\s\S]*no evidence files/u);
+  assert.match(deletion, /no evidence folder remains/iu);
+  assert.match(
+    deletion,
+    /setArtifactCleanupPlan\(result\.data\.artifacts\.exists \? result\.data\.artifacts : undefined\)/u,
+  );
+  assert.match(deletion, /const selectedCaseIdBeforeDeletion = selectedCaseIdRef\.current/u);
+  assert.match(
+    deletion,
+    /selectedCaseIdBeforeDeletion && selectedCaseIdBeforeDeletion !== caseId[\s\S]*\? selectedCaseIdBeforeDeletion[\s\S]*: undefined/u,
+  );
+});
+
 test("the native localhost quick scan invokes its command once with the default and exact edited ports", async () => {
   const invocations: { command: string; args: unknown }[] = [];
   setTestWindow({

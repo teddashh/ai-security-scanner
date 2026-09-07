@@ -69,12 +69,17 @@ test("candidate lock rejects added, missing, modified, and identity-mismatched c
 test("candidate lock refuses symlinks and cannot be silently replaced", async (t) => {
   const root = await fixture();
   t.after(() => rm(root, { recursive: true, force: true }));
-  await symlink(path.join(root, "installer.exe"), path.join(root, "linked-installer.exe"));
+  const link = path.join(root, "linked-nested");
+  await symlink(
+    path.join(root, "nested"),
+    link,
+    process.platform === "win32" ? "junction" : "dir",
+  );
   await assert.rejects(
     () => createReleaseCandidateLock({ directory: root, ...identity }),
     /contains a symlink/u,
   );
-  await rm(path.join(root, "linked-installer.exe"));
+  await rm(link, { recursive: true });
   await createReleaseCandidateLock({ directory: root, ...identity });
   await assert.rejects(
     () => createReleaseCandidateLock({ directory: root, ...identity }),

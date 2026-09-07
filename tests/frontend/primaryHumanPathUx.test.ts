@@ -122,7 +122,7 @@ test("the shell wires the tested viewport reconciliation into every mobile modal
   assert.match(shell, /aria-expanded=\{mobileDialogOpen\}/u);
   assert.match(shell, /mobileCloseButtonRef\.current\?\.focus\(\)/u);
   assert.match(shell, /event\.key === "Escape"/u);
-  assert.match(shell, /mobileMenuButtonRef\.current\?\.focus\(\)/u);
+  assert.match(shell, /mobileMenuButtonRef\.current\?\.focus\(\{ preventScroll: true \}\)/u);
   assert.match(shell, /event\.key !== "Tab"/u);
   assert.match(shell, /navigation\.querySelectorAll<HTMLElement>/u);
   assert.match(shell, /event\.shiftKey[\s\S]*last\.focus\(\)/u);
@@ -131,7 +131,7 @@ test("the shell wires the tested viewport reconciliation into every mobile modal
   assert.match(shell, /role=\{mobileDialogOpen \? "dialog" : undefined\}/u);
   assert.match(shell, /\{mobileDialogOpen && \([\s\S]*className="sidebar-backdrop"/u);
   assert.match(shell, /className="workspace" aria-hidden=\{mobileDialogOpen \|\| undefined\}/u);
-  assert.match(shell, /if \(narrowViewport\) \{[\s\S]*mobileMenuButtonRef\.current\?\.focus\(\)/u);
+  assert.match(shell, /if \(narrowViewport\) \{[\s\S]*mobileMenuButtonRef\.current\?\.focus\(\{ preventScroll: true \}\)/u);
   assert.match(shell, /setMobileOpen\(false\), \[page, selectedCase\?\.id\]/u);
   assert.match(
     styles,

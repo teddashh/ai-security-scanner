@@ -1137,7 +1137,14 @@ export const getDemoSnapshot = (selectedCaseId = sampleCase.id): AppSnapshot => 
   const selected = cases.find((item) => item.id === selectedCaseId) ?? localizeBuiltInDemo(sampleCase);
   const workspace = selected.id === sampleCase.id
     ? localizeBuiltInDemo(demoWorkspace)
-    : localizeBuiltInDemo(blankWorkspace(clone(selected)));
+    : storedCases.includes(selected)
+      ? {
+        ...localizeBuiltInDemo(blankWorkspace(clone(selected))),
+        // Product-owned blank-state copy is localizable; values the user typed
+        // into the saved project record are not translation keys.
+        case: clone(selected),
+      }
+      : localizeBuiltInDemo(blankWorkspace(clone(selected)));
 
   return {
     cases: clone(cases),
@@ -1184,6 +1191,26 @@ export const createStoredDemoCase = (input: CreateCaseInput): AssessmentCase => 
   const cases = [assessmentCase, ...loadStoredDemoCases()];
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cases));
   return assessmentCase;
+};
+
+/**
+ * Delete only a project that the browser preview itself persisted. Built-in
+ * sample projects never enter this storage collection, and the exact-name
+ * check is repeated here so callers cannot bypass the visible confirmation.
+ */
+export const deleteStoredDemoCase = (caseId: string, confirmation: string): boolean => {
+  try {
+    const cases = loadStoredDemoCases();
+    const selected = cases.find((assessmentCase) => assessmentCase.id === caseId);
+    if (!selected || confirmation !== selected.name) return false;
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(cases.filter((assessmentCase) => assessmentCase.id !== caseId)),
+    );
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 export const getDemoWorkspace = (caseId: string): CaseWorkspace => {

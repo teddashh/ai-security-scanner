@@ -1,0 +1,36 @@
+{
+  "accepted": [
+    "scanner.example.test",
+    "scanner.123",
+    "123.456",
+    "BÜCHER.Example.",
+    "localhost",
+    "203.0.113.10",
+    "10.20.0.0/28",
+    "010.0.0.0/08",
+    "2001:db8::10",
+    "2001:db8::/64",
+    "2001:db8::/064",
+    "::ffff:192.000.002.001/128",
+    "::1"
+  ],
+  "rejected": [
+    " ",
+    "*.example.com",
+    "https://example.com/path",
+    "user@example.com",
+    "example.com:443",
+    "[2001:db8::10]",
+    "not a host",
+    "single-label",
+    "10.20.0.0/33",
+    "10.20.0.0/032",
+    "10.20.0.0/000",
+    "2001:db8::/129",
+    "2001:db8::/0128",
+    "example.com/24",
+    "bad..example.test",
+    "-bad.example.test",
+    "bad_.example.test"
+  ]
+}

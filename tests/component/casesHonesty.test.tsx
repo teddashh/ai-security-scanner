@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { CasesPage } from "../../src/pages/CasesPage";
 import type { CasesPageProps } from "../../src/pages/CasesPage";
+import { createStoredDemoCase } from "../../src/data/demo";
 import { I18nProvider, localeStorageKey } from "../../src/i18n";
 import type { AssessmentCase, ScanRun } from "../../src/types";
 
@@ -254,6 +255,97 @@ test("a completed removal is stated as irreversible rather than as a tidy-up", (
   expect(container.querySelector(".button--danger")).toBeNull();
 });
 
+test("native deletion keeps its database-record and separate-evidence warning", () => {
+  const { container, getByRole } = renderCases();
+  const trigger = getByRole("button", { name: "Begin deleting Acme scan" });
+
+  expect(trigger.getAttribute("title")).toBe("Delete case database record");
+  fireEvent.click(trigger);
+
+  const confirmation = container.querySelector<HTMLElement>(".case-delete-confirmation");
+  expect(confirmation).toBeTruthy();
+  expect(confirmation!.querySelector("h3")?.textContent).toBe("Confirm deletion of the case record");
+  expect(confirmation!.textContent).toContain("does not automatically delete the evidence folder");
+  expect(getByRole("button", { name: "Delete case record only" })).toBeTruthy();
+});
+
+test.each([
+  {
+    locale: "en",
+    triggerName: "Begin removing Browser-only project from this browser",
+    tooltip: "Remove browser-saved preview project",
+    eyebrow: "Browser preview only",
+    title: "Remove this preview project from this browser?",
+    help: "This removes only the preview project saved in this browser. It does not change projects in the installed desktop app.",
+    action: "Remove browser preview",
+    forbidden: /database|evidence|folder|path/iu,
+  },
+  {
+    locale: "zh-TW",
+    triggerName: "開始從這個瀏覽器移除 Browser-only project",
+    tooltip: "移除瀏覽器儲存的預覽專案",
+    eyebrow: "僅限瀏覽器預覽",
+    title: "要從這個瀏覽器移除這個預覽專案嗎？",
+    help: "這只會移除儲存在這個瀏覽器中的預覽專案，不會變更已安裝桌面應用程式中的專案。",
+    action: "移除瀏覽器預覽",
+    forbidden: /資料庫|證據|目錄|路徑/u,
+  },
+] as const)("a stored browser preview gets truthful localized removal copy in $locale", ({
+  locale,
+  triggerName,
+  tooltip,
+  eyebrow,
+  title,
+  help,
+  action,
+  forbidden,
+}) => {
+  window.localStorage.setItem(localeStorageKey, locale);
+  const preview = createStoredDemoCase({
+    name: "Browser-only project",
+    aiGeneratedArtifact: "no",
+    organizationName: "",
+    companySize: "small",
+    dataClasses: ["none"],
+    requestedActivities: ["configuration_assessment"],
+    platforms: ["external"],
+  });
+  const { container, getByRole } = renderCases({
+    cases: [preview],
+    selectedCase: preview,
+    nativeMode: false,
+  });
+  const trigger = getByRole("button", { name: triggerName });
+
+  expect(trigger.getAttribute("title")).toBe(tooltip);
+  fireEvent.click(trigger);
+
+  const confirmation = container.querySelector<HTMLElement>(".case-delete-confirmation");
+  expect(confirmation).toBeTruthy();
+  expect(confirmation!.querySelector(".eyebrow")?.textContent).toBe(eyebrow);
+  expect(confirmation!.querySelector("h3")?.textContent).toBe(title);
+  expect(confirmation!.textContent).toContain(help);
+  expect(confirmation!.textContent).not.toMatch(forbidden);
+  expect(getByRole("button", { name: action })).toBeTruthy();
+});
+
+test("the browser preview does not offer deletion for immutable built-in demo projects", () => {
+  const builtIn = assessmentCase({
+    id: "case-demo-northstar",
+    name: "Built-in example",
+    isDemo: true,
+  });
+  const { container, queryByRole } = renderCases({
+    cases: [builtIn],
+    selectedCase: builtIn,
+    nativeMode: false,
+  });
+
+  expect(queryByRole("button", { name: "Begin removing Built-in example from this browser" })).toBeNull();
+  expect(container.querySelector(".case-row__actions .icon-button--danger")).toBeNull();
+  expect(container.querySelector(".case-delete-confirmation")).toBeNull();
+});
+
 test("work interrupted by a restart is counted and does not claim it will resume itself", () => {
   const latestRun = run({
     id: "run-interrupted",
@@ -373,6 +465,101 @@ test("the optional organization field does not promise an edit the app cannot ma
   expect(organization).toBeTruthy();
   expect(organization!.placeholder).not.toContain("later");
   expect(organization!.placeholder).toBe("Optional, and fixed once the project is created");
+});
+
+test("an invalid public target stays in the form with field-specific accessible feedback", async () => {
+  const onCreate = vi.fn(() => Promise.resolve(true));
+  const { container, getByLabelText } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "external_ip_or_domain",
+    selectionKey: 1,
+    onCreate,
+  });
+
+  const nameInput = getByLabelText("Scan project name");
+  const targetsInput = getByLabelText(/Public domains, IP addresses, or small network ranges/u);
+  fireEvent.change(nameInput, { target: { value: "External perimeter" } });
+  fireEvent.change(targetsInput, {
+    target: { value: "127.0.0.1\nhttps://example.com/path\nnot a host" },
+  });
+  fireEvent.submit(container.querySelector(".create-case-panel")!);
+
+  const error = await waitFor(() => {
+    const alert = container.querySelector<HTMLElement>("#public-targets-error");
+    expect(alert).toBeTruthy();
+    return alert!;
+  });
+  expect(onCreate).not.toHaveBeenCalled();
+  expect(error.getAttribute("role")).toBe("alert");
+  expect(error.textContent).toContain("https://example.com/path includes URL or service details");
+  expect(targetsInput.getAttribute("aria-invalid")).toBe("true");
+  expect(targetsInput.getAttribute("aria-describedby")).toBe("public-targets-help public-targets-error");
+  expect(document.activeElement).toBe(targetsInput);
+
+  fireEvent.change(targetsInput, {
+    target: { value: "scanner.example.test\n203.0.113.10\n2001:db8::10\n2001:db8::/64" },
+  });
+  expect(container.querySelector("#public-targets-error")).toBeNull();
+  fireEvent.submit(container.querySelector(".create-case-panel")!);
+
+  await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+  expect(onCreate.mock.calls[0]?.[0].knownAssets).toEqual([
+    { kind: "external_target", value: "scanner.example.test", internetExposure: "public" },
+    { kind: "external_target", value: "203.0.113.10", internetExposure: "public" },
+    { kind: "external_target", value: "2001:db8::10", internetExposure: "public" },
+    { kind: "external_target", value: "2001:db8::/64", internetExposure: "public" },
+  ]);
+});
+
+test("an invalid internal CIDR is reported by the internal target field", async () => {
+  const onCreate = vi.fn(() => Promise.resolve(true));
+  const { container, getByLabelText } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "internal_it_environment",
+    selectionKey: 1,
+    onCreate,
+  });
+
+  const nameInput = getByLabelText("Scan project name");
+  const targetsInput = getByLabelText(/Internal IP addresses or small network ranges/u);
+  fireEvent.change(nameInput, { target: { value: "Internal network" } });
+  fireEvent.change(targetsInput, { target: { value: "10.20.0.8\n10.20.0.0/99" } });
+  fireEvent.submit(container.querySelector(".create-case-panel")!);
+
+  const error = await waitFor(() => {
+    const alert = container.querySelector<HTMLElement>("#internal-targets-error");
+    expect(alert).toBeTruthy();
+    return alert!;
+  });
+  expect(onCreate).not.toHaveBeenCalled();
+  expect(error.textContent).toContain("10.20.0.0/99 is not a valid IP CIDR range");
+  expect(targetsInput.getAttribute("aria-invalid")).toBe("true");
+  expect(targetsInput.getAttribute("aria-describedby")).toBe("internal-targets-help internal-targets-error");
+  expect(document.activeElement).toBe(targetsInput);
+});
+
+test("an invalid optional target opens its advanced section and receives focus", async () => {
+  const onCreate = vi.fn(() => Promise.resolve(true));
+  const { container, getByLabelText } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "deployed_website",
+    selectionKey: 1,
+    onCreate,
+  });
+
+  fireEvent.change(getByLabelText("Scan project name"), { target: { value: "Website check" } });
+  fireEvent.change(getByLabelText(/Website or API URL/u), { target: { value: "https://app.example.test/" } });
+  const targetsInput = getByLabelText(/Public domains, IP addresses, or small network ranges/u);
+  fireEvent.change(targetsInput, { target: { value: "app.example.test:443" } });
+  fireEvent.submit(container.querySelector(".create-case-panel")!);
+
+  await waitFor(() => expect(container.querySelector(".case-more-details")?.hasAttribute("open")).toBe(true));
+  expect(onCreate).not.toHaveBeenCalled();
+  expect(container.querySelector("#public-targets-error")?.textContent).toContain("includes URL or service details");
+  expect(document.activeElement).toBe(targetsInput);
 });
 
 test("the empty native project list offers and opens the synthetic example", async () => {

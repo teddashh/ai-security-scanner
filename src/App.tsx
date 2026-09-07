@@ -1471,6 +1471,7 @@ export default function App() {
   };
 
   const deleteCase = async (caseId: string, confirmation: string): Promise<boolean> => {
+    const selectedCaseIdBeforeDeletion = selectedCaseIdRef.current;
     setBusyAction("delete-case");
     try {
       const result = await scannerService.deleteCase(caseId, confirmation);
@@ -1478,18 +1479,35 @@ export default function App() {
       pushToast({
         tone: result.data.accepted ? "success" : result.mode === "demo" ? "info" : "warning",
         title: result.data.accepted
-          ? text({ en: "Case record deleted", zhTW: "案件紀錄已刪除" })
+          ? result.mode === "demo"
+            ? text({ en: "Browser preview project deleted", zhTW: "瀏覽器預覽專案已刪除" })
+            : text({ en: "Case record deleted", zhTW: "案件紀錄已刪除" })
           : result.mode === "demo"
             ? text({ en: "Demo mode did not delete the case", zhTW: "展示模式沒有刪除案件" })
             : text({ en: "The case was not deleted", zhTW: "案件沒有被刪除" }),
         detail: result.data.accepted
-          ? text({ en: "Local evidence is still present until you confirm its separate cleanup.", zhTW: "本機證據仍保留，直到你另外確認清理為止。" })
+          ? result.data.artifacts.exists
+            ? text({ en: "Local evidence is still present until you confirm its separate cleanup.", zhTW: "本機證據仍保留，直到你另外確認清理為止。" })
+            : result.mode === "demo"
+              ? text({
+                en: "Only its browser-saved project record was removed; the preview creates no evidence files.",
+                zhTW: "只移除瀏覽器儲存的專案紀錄；預覽模式不會建立證據檔案。",
+              })
+              : text({
+                en: "The case record was removed, and no evidence folder remains.",
+                zhTW: "案件紀錄已移除，而且沒有留下證據資料夾。",
+              })
           : text({ en: "No case data was changed.", zhTW: "案件資料沒有被更動。" }),
       });
       if (result.data.accepted) {
-        setArtifactCleanupPlan(result.data.artifacts);
+        setArtifactCleanupPlan(result.data.artifacts.exists ? result.data.artifacts : undefined);
         setArtifactCleanupResult(undefined);
-        await loadSnapshot(undefined, true);
+        await loadSnapshot(
+          selectedCaseIdBeforeDeletion && selectedCaseIdBeforeDeletion !== caseId
+            ? selectedCaseIdBeforeDeletion
+            : undefined,
+          true,
+        );
       }
       return result.data.accepted;
     } catch (error) {

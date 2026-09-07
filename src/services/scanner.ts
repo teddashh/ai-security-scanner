@@ -4,6 +4,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 
 import {
   createStoredDemoCase,
+  deleteStoredDemoCase,
   getDemoNotice,
   getDemoSnapshot,
   getDemoWorkspace,
@@ -922,18 +923,24 @@ export const scannerService = {
 
   async deleteCase(caseId: string, confirmation: string): Promise<ServiceResult<CaseDeletionResponse>> {
     if (!isNativeSurface()) {
+      const deleted = deleteStoredDemoCase(caseId, confirmation);
       return demoResult({
-        accepted: false,
-        message: serviceText(
-          "Demo mode does not delete a local case or file.",
-          "展示模式不會刪除任何本機案件或檔案。",
-        ),
-        databaseRecordDeleted: false,
+        accepted: deleted,
+        message: deleted
+          ? serviceText(
+            "The browser-saved preview project was removed. The preview creates no evidence files.",
+            "已移除瀏覽器儲存的預覽專案；預覽模式不會建立證據檔案。",
+          )
+          : serviceText(
+            "Only browser-created preview projects can be deleted here, after confirming the exact name.",
+            "這裡只能在確認完整名稱後，刪除由瀏覽器建立的預覽專案。",
+          ),
+        databaseRecordDeleted: deleted,
         artifacts: {
           caseId,
           exactPath: "",
           exists: false,
-          requiresExplicitConfirmation: true,
+          requiresExplicitConfirmation: false,
         },
       });
     }
