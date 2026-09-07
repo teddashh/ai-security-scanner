@@ -3,12 +3,13 @@
 日期：2026-09-07
 Canonical repository：`teddashh/ai-security-scanner`
 凍結 source／本輪起始 `main` checkpoint：`5c95572f54220adbd170d9bfb5af3159c56708ef`
-Post-release implementation commit：`bd47e26b6c8024eb3461176637d7fce3e8370561`
+Post-release final code checkpoint：`d28f287d78a079828af45f1ee3bbca165ae091ea`
+（主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`）
 
 ## 接手結論
 
 目前已完成「精確 identity 核對、installed CLI doctor、隔離 installed-CLI regression、
-一份嚴格 validated unsigned observation、四個 defect families／六個具體 issue 的 source 修正，
+一份嚴格 validated unsigned observation、四個 defect families／八個具體 issue 的 source 修正，
 以及 Windows qualification tooling／AUTO-OPERATOR contract 強化」。Windows 原生
 operator journey 沒有完成：CUA 回報 `apps:[]`，而 `127.0.0.1:9001` 是 BAT 使用中的
 SSH tunnel，禁止接觸。沒有 scan、canonical lifecycle row 或 BEGINNER evidence。
@@ -136,7 +137,7 @@ Browser CUA 在 `433px` 已人工檢查中英文 navigation、use-case disclosur
 reject／accept 行為、AI onboarding、partial-results disclosure、master-report export UX 與
 two-step deletion semantics；沒有 console warning／error。這只是 dev preview。
 
-Browser review 與 final diff audit 共找到六個具體 issue，歸為四個 families，並已在
+Browser review 與 final diff audit 共找到八個具體 issue，歸為四個 families，並已在
 post-release source 修正：
 
 1. runtime language switch 現在同步翻譯內建 demo record，同時保留使用者輸入原文；
@@ -145,7 +146,8 @@ post-release source 修正：
    刪除背景 case 時也保留目前選取的其他 case；
 4. public／internal target line 現在於建立前拒絕 URL／port／wildcard／空白假主機／錯誤 CIDR，
    deployed-website URL 衍生的 host 也走同一驗證與 canonicalization，並保留 native
-   `CanonicalTarget` 作為最終權威。
+   `CanonicalTarget` 作為最終權威；明確 port `0` 與 percent-encoding 後超過 `2,048` 字元的
+   path 也會在表單內得到 field-specific 拒絕。
 
 修正後 automated regression 與最小人工 browser recheck 均已通過；browser-only deletion 的
 實際刪除動作未在收尾時重跑，避免未經 action-time confirmation 改動本機 UI 資料，該行為由
@@ -176,7 +178,7 @@ Node runtime identity、loopback endpoint 與 non-overwriting receipt；只有 W
 
 第一次 release self-test／desktop check 使用 ambient Rust `1.97` 而失敗；明確設定
 `RUSTUP_TOOLCHAIN=1.98.0` 後均 PASS。Self-test 的 tamper／bad-signature／missing-evidence 訊息
-是預期負向 fixtures。Production build PASS，但主 JS chunk `984.26 kB`（gzip `300.13 kB`）
+是預期負向 fixtures。Production build PASS，但主 JS chunk `984.66 kB`（gzip `300.24 kB`）
 超過 Vite `500 kB` warning threshold，留下 code-splitting 技術債。沒有建立新的 installer。
 
 ## Process deviation
@@ -188,8 +190,8 @@ truthful disclosure，不要誇大成 security incident，也不要省略。
 
 ## 建議接手順序
 
-1. 從 GitHub `main` 的 exact implementation commit
-   `bd47e26b6c8024eb3461176637d7fce3e8370561` 或其後續報告 commit 繼續；不要回到本輪起始
+1. 從 GitHub `main` 的 final code checkpoint
+   `d28f287d78a079828af45f1ee3bbca165ae091ea` 或其後續報告 commit 繼續；不要回到本輪起始
    `5c95572f...`。
 2. 若要交付修正，使用新版本與新 immutable identity。不得覆寫 `v0.1.9`。
 3. 在 named、resettable disposable Windows lab 執行新 artifact 的 read-only preflight；先證明
@@ -218,13 +220,13 @@ truthful disclosure，不要誇大成 security incident，也不要省略。
 
 | 欄位 | 最終交接值 |
 | --- | --- |
-| Post-release implementation commit | `bd47e26b6c8024eb3461176637d7fce3e8370561` |
+| Post-release final code checkpoint | `d28f287d78a079828af45f1ee3bbca165ae091ea`（主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
 | Branch／remote／clean status | `main`；報告 commit push 後另以 remote ref 與 Castle clean fast-forward 驗證 |
 | Frontend／component | `485/485`／`145/145` PASS |
 | Release evidence／usability | `137/137`／`5/5` PASS |
 | Engine／Prowler／AIDEFEND | `168` byte-stable inputs、`21` records／`8/8`／`6` records，PASS |
 | Release validate／self-test／build／desktop check | 全部 PASS（Rust 1.98；build 有 chunk-size warning） |
 | Rust 1.98 all-targets／Clippy | `1478/1478` PASS／PASS |
-| 四個 defect families／六個具體 issues | FIXED；targeted tests、完整 frontend/component 與最小 browser recheck 通過 |
+| 四個 defect families／八個具體 issues | FIXED；targeted tests、完整 frontend/component 與最小 browser recheck 通過 |
 | New build identity | **NOT BUILT**；沒有新 installer／release asset |
 | Windows qualification | **預設仍 NOT QUALIFIED，除非另有 exact-artifact clean-lab evidence** |

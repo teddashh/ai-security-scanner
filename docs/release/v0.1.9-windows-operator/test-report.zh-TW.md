@@ -4,7 +4,8 @@
 凍結 source／本輪起始 `main` checkpoint：`5c95572f54220adbd170d9bfb5af3159c56708ef`
 Windows：Windows 11 Pro `10.0.26200.9168`，x64
 Rust：`1.98`
-Post-release implementation commit：`bd47e26b6c8024eb3461176637d7fce3e8370561`
+Post-release final code checkpoint：`d28f287d78a079828af45f1ee3bbca165ae091ea`
+（主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`）
 
 > **總結：automated source suites 通過、unsigned 狀態得到嚴格驗證，但原生 Windows
 > operator journey 被安全地阻擋。** 本報告沒有 passing BEGINNER、lifecycle、
@@ -171,7 +172,7 @@ export 正確 exit `1`，既有 HTML SHA-256 保持不變。
 第一次 release self-test 與 desktop check 使用 ambient default Rust `1.97`，因專案要求的
 工具鏈不符而失敗；設定 `RUSTUP_TOOLCHAIN=1.98.0` 後兩項均完整通過。Self-test 列出的
 tamper、錯誤 signature 與缺少 evidence 是預期被拒絕的負向 fixtures。Production build
-成功，但 Vite 對 `984.26 kB`（gzip `300.13 kB`）的主 JS chunk 發出超過 `500 kB` 的
+成功，但 Vite 對 `984.66 kB`（gzip `300.24 kB`）的主 JS chunk 發出超過 `500 kB` 的
 非阻擋 warning；這是 code-splitting 技術債，不是 installer 或 runtime 測試通過的證據。
 
 ## Browser CUA 手動 regression
@@ -186,7 +187,7 @@ tamper、錯誤 signature 與缺少 evidence 是預期被拒絕的負向 fixture
 - master-report export UX；
 - two-step deletion semantics。
 
-Console 沒有 warning／error。Browser review 與 final diff audit 共揭露六個具體 issue，
+Console 沒有 warning／error。Browser review 與 final diff audit 共揭露八個具體 issue，
 歸為下列四個 defect families：
 
 | Defect | 觀察 | 本報告狀態 |
@@ -194,7 +195,7 @@ Console 沒有 warning／error。Browser review 與 final diff audit 共揭露�
 | Runtime locale | 切換語言後，內建 demo record 仍顯示中文 | FIXED；自動測試加 browser 人工切換通過，使用者文字維持原文 |
 | Mobile modal scroll | 導覽 drawer 開啟時背景仍可捲動 | FIXED；scroll lock／style restoration／page transition 自動測試與 browser 人工檢查通過 |
 | Browser demo deletion | user-created demo case 無法刪除；刪除背景 case 會讓目前選取跳回 built-in demo | FIXED；exact-name／built-in protection／no-artifact／selection preservation 自動測試通過；收尾未實際刪除本機 UI test data |
-| Target validation parity | public／internal line 接受 malformed URL／port／space；deployed URL 衍生 host 可繞過同一驗證 | FIXED；field-specific alert／focus 人工通過，valid FQDN／IP／CIDR 也通過；website-host parity 自動測試通過 |
+| Target validation parity | public／internal line 接受 malformed URL／port／space；deployed URL 衍生 host、明確 port `0`、percent-expanded path 可繞過 native 邊界 | FIXED；field-specific alert／focus 人工通過，valid FQDN／IP／CIDR 也通過；host／port／path parity 自動測試通過 |
 
 這四個 families 只證明 browser preview／source audit 中存在問題；因 native GUI 沒有被控制，本輪不宣稱已在安裝版
 重現，也不宣稱 post-release 修正已進入 `v0.1.9`。
@@ -253,7 +254,7 @@ contact。結果是 **BLOCKED／NOT RUN**：scan 次數 `0`，tunnel stop 次數
 
 | 項目 | Final commit／result |
 | --- | --- |
-| Exact post-release implementation commit | `bd47e26b6c8024eb3461176637d7fce3e8370561` |
+| Exact post-release final code checkpoint | `d28f287d78a079828af45f1ee3bbca165ae091ea`（主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
 | Frontend | `485/485` PASS |
 | Component | `145/145` PASS |
 | Usability evidence | `5/5` PASS |

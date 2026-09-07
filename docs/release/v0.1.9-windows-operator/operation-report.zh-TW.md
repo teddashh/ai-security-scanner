@@ -38,11 +38,11 @@ clean-lab evidence。正式操作規則見
 
 ### 發行後 `main` 工作
 
-本輪實作已固定在 commit
-`bd47e26b6c8024eb3461176637d7fce3e8370561`。這是 `v0.1.9` 發布後的 source commit，
-不是已發布 installer 的 source identity。
+本輪主要實作 commit 是 `bd47e26b6c8024eb3461176637d7fce3e8370561`；最終 website-service
+邊界修正後的 code checkpoint 是 `d28f287d78a079828af45f1ee3bbca165ae091ea`。兩者都是
+`v0.1.9` 發布後的 source commit，不是已發布 installer 的 source identity。
 
-Browser 預覽與最終 diff audit 共揭露六個具體缺陷，歸在四個 defect families：
+Browser 預覽與最終 diff audit 共揭露八個具體缺陷，歸在四個 defect families：
 
 1. runtime 切換語言後，內建 demo record 現在會同步翻譯；使用者輸入仍保留原文；
 2. mobile navigation modal 現在鎖住背景 scroll，並在 close／unmount／breakpoint 後精確還原；
@@ -50,6 +50,7 @@ Browser 預覽與最終 diff audit 共揭露六個具體缺陷，歸在四個 de
    刪除背景 case 時也會保留目前選取的其他 case；
 4. public／internal target 輸入列現在於建立前拒絕 malformed URL、port、wildcard、含空白假主機
    與錯誤 CIDR；deployed-website URL 衍生出的 host 也會經過同一驗證與 canonicalization，
+   明確 port `0` 與 percent-encoding 後超過 `2,048` 字元的 path 也會在表單內被拒絕，
    native path 仍是最終權威。
 
 Qualification tooling 也有實質推進：計畫新增擁有人明確授權的 `AUTO-OPERATOR` track，
@@ -168,7 +169,7 @@ evidence。沒有建立或冒充保留給通過簽章結果的 evidence 檔。
 - two-step deletion semantics。
 
 該路徑沒有觀察到 console warning 或 error，並找到四個初始 issue；final diff audit 再找到
-同屬 deletion 與 target-validation families 的兩個 edge issue。修正後再驗證顯示：
+同屬 deletion 與 target-validation families 的四個 edge issue。修正後再驗證顯示：
 內建案例可隨語系切換、使用者文字維持原文、modal background scroll 被鎖住並還原、無效
 external targets 被 field-specific alert 擋下且 focus 正確，合法 FQDN／IPv4／IPv6／CIDR 通過。
 Browser-only deletion 的實際刪除動作未在收尾時重跑，避免未經 action-time confirmation 改動
@@ -215,7 +216,7 @@ scan、沒有停止或重新設定 tunnel，也沒有終止 BAT。
 第一次執行 release self-test 與 desktop check 時，ambient default Rust `1.97` 不符合專案的
 `1.98` 工具鏈而失敗；明確設定 `RUSTUP_TOOLCHAIN=1.98.0` 後，兩項均完整通過。Self-test
 輸出的 tamper／bad-signature／missing-evidence 錯誤是預期的負向 fixtures。Production frontend
-build 另有一項非阻擋提醒：主 JS chunk `984.26 kB`（gzip `300.13 kB`）高於 Vite 的
+build 另有一項非阻擋提醒：主 JS chunk `984.66 kB`（gzip `300.24 kB`）高於 Vite 的
 `500 kB` warning threshold，應列為後續 code-splitting 技術債。
 
 不同 runner／suite 可能重疊，不把數字相加成虛假的「獨立測試總數」。這些結果支持 source
@@ -230,14 +231,15 @@ build 另有一項非阻擋提醒：主 JS chunk `984.26 kB`（gzip `300.13 kB`�
 | Installed identity | `1` 個 App executable 與 `1` 個 runtime manifest 完成 exact check | 不等於 lifecycle 或 clean-install PASS |
 | CLI health | version `0.1.9`；doctor `21/21`，invalid／cleanup 均 `0` | 不等於桌面 first-value journey |
 | Installed CLI regression | `1` 個隔離、無網路 probe；列明的 HTML／JSON／bundle 有固定 hash；delete／no-overwrite／detached verify 成立 | private、non-importable；不是 GUI／lifecycle／BEGINNER |
-| Browser review | `7` 類 UX／disclosure path 被人工檢查；browser 加 final audit 找到四個 defect families／六個具體 issue | dev preview 不是 installed-candidate evidence |
+| Browser review | `7` 類 UX／disclosure path 被人工檢查；browser 加 final audit 找到四個 defect families／八個具體 issue | dev preview 不是 installed-candidate evidence |
 | Native scan | `0` 次；port-owner check 正確阻擋接觸 BAT | 沒有 report、reopen 或 export lifecycle evidence |
 | BEGINNER | `0` qualifying sessions | beginner-ready gate 完全未通過 |
 | Post-release tests | release evidence `137/137`，frontend `485/485`，component `145/145`，Rust `1478/1478`，其餘列明的 final gates 通過 | 在新 installer 前，對 published bytes 的改善為 `0` |
 
 **水分判讀：**自動測試數字彼此有覆蓋，不能相加成一個誇張總數；browser preview 也不能
-冒充 installed Windows app。真正可交付的推進是 `2,400` 行新增／`153` 行刪除的 implementation
-commit、六個具體 issue 的修正、exact Windows fixture／evidence contract，以及三份可追溯文件。
+冒充 installed Windows app。真正可交付的推進是主要 implementation commit 的 `2,400` 行新增／
+`153` 行刪除，加上 website-service follow-up 的 `37` 行新增／`2` 行刪除、八個具體 issue 的
+修正、exact Windows fixture／evidence contract，以及三份可追溯文件。
 對已發布 `v0.1.9` installer 的程式碼推進是 **0 bytes**，原生 localhost scan 是 **0 次**，
 Windows qualification 仍是 **未完成**。這兩面都必須同時保留，不能只報漂亮數字。
 
@@ -268,7 +270,7 @@ publicly accessible 資料重新驗證；repository owner 之後也明確授權 
 
 | 欄位 | 最終值 |
 | --- | --- |
-| Post-release implementation commit | `bd47e26b6c8024eb3461176637d7fce3e8370561` |
+| Post-release final code checkpoint | `d28f287d78a079828af45f1ee3bbca165ae091ea`（主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
 | Branch／remote alignment | `main`；報告 commit push 後另以 remote ref 與 Castle clean fast-forward 驗證 |
 | Frontend final | `485/485` PASS |
 | Component final | `145/145` PASS |
@@ -278,5 +280,5 @@ publicly accessible 資料重新驗證；repository owner 之後也明確授權 
 | Clippy `-D warnings` final | PASS |
 | Typecheck／build／desktop check | PASS／PASS（chunk-size warning）／PASS |
 | Release validate／self-test | PASS／PASS（Rust 1.98；負向 fixtures 如預期） |
-| 四個 defect families／六個具體 issues | FIXED；targeted tests、全套 frontend／component 與最小 browser recheck 通過 |
+| 四個 defect families／八個具體 issues | FIXED；targeted tests、全套 frontend／component 與最小 browser recheck 通過 |
 | New installer | **NOT BUILT**；只有 production frontend bundle 與 desktop source/sidecar check，不存在可發布的新 installer identity |
