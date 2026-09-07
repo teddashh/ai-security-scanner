@@ -93,6 +93,26 @@ test("first report alone is subject to the ten-minute beginner bound", () => {
   );
 });
 
+test("artifact evidence accepts only real canonical UTC observation times", () => {
+  const valid = humanEvidence();
+  valid.observedAt = "2026-08-30T12:00:00.123456789+00:00";
+  assert.doesNotThrow(() => validateBoundArtifactEvidence(valid, expected));
+
+  for (const observedAt of [
+    "2026-02-30T12:00:00Z",
+    "09/06/2026 12:00:00Z",
+    "2026-09-06T12:00:00",
+    "2026-09-06T12:00:00Z\0",
+  ]) {
+    const invalid = humanEvidence();
+    invalid.observedAt = observedAt;
+    assert.throws(
+      () => validateBoundArtifactEvidence(invalid, expected),
+      /canonical UTC timestamp|real UTC instant/u,
+    );
+  }
+});
+
 test("human evidence binds exact artifact, release, decisions, errors, coverage, and localhost outcome", () => {
   const evidence = humanEvidence();
   evidence.artifact.sha256 = "cd".repeat(32);

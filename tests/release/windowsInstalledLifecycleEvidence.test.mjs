@@ -237,6 +237,39 @@ test("one passing row is strict and bound to the exact installer and runtime man
   );
 });
 
+test("lifecycle evidence accepts only real canonical UTC timestamps at nanosecond order", () => {
+  const valid = passingRecord(WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS[0]);
+  valid.execution.startedAt = "2026-09-06T12:00:00.000000001Z";
+  valid.checks.forEach((check) => {
+    check.observedAt = "2026-09-06T12:00:00.000000002+00:00";
+  });
+  valid.execution.endedAt = "2026-09-06T12:00:00.000000003Z";
+  valid.observedAt = "2026-09-06T12:00:00.000000004Z";
+  assert.doesNotThrow(() => validateWindowsInstalledLifecycleEvidence(valid));
+
+  const reversed = structuredClone(valid);
+  reversed.execution.startedAt = "2026-09-06T12:00:00.000000002Z";
+  reversed.execution.endedAt = "2026-09-06T12:00:00.000000001Z";
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(reversed),
+    /ends before it starts/u,
+  );
+
+  for (const observedAt of [
+    "2026-02-30T12:00:00Z",
+    "09/06/2026 12:00:00Z",
+    "2026-09-06T12:00:00",
+    "2026-09-06T12:00:00Z\0",
+  ]) {
+    const invalid = passingRecord(WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS[0]);
+    invalid.observedAt = observedAt;
+    assert.throws(
+      () => validateWindowsInstalledLifecycleEvidence(invalid),
+      /canonical UTC timestamp|real UTC instant/u,
+    );
+  }
+});
+
 test("WL-13 is bound to the exact approved Windows fixture runtime", () => {
   const contract = WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS.find(({ rowId }) => rowId === "WL-13");
   const record = passingRecord(contract);
@@ -359,6 +392,32 @@ test("the JSON schema reserves every WL-13 fixture coordinate to WL-13", async (
     sha256: { not: { const: WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.sha256 } },
     fixtureRuntime: { const: null },
   });
+});
+
+test("the JSON schema mirrors the canonical UTC timestamp boundary", async () => {
+  const schema = JSON.parse(await readFile(
+    new URL("../../docs/release/windows-installed-lifecycle-evidence.schema.json", import.meta.url),
+    "utf8",
+  ));
+  const dateTime = schema.$defs?.dateTime;
+  const pattern = new RegExp(dateTime?.pattern, "u");
+
+  assert.equal(dateTime?.format, "date-time");
+  assert.equal(pattern.test("2026-09-06T12:00:00.123456789Z"), true);
+  assert.equal(pattern.test("2026-09-06T12:00:00+00:00"), true);
+  assert.equal(pattern.test("2000-02-29T12:00:00Z"), true);
+  assert.equal(pattern.test("2024-02-29T12:00:00Z"), true);
+  assert.equal(pattern.test("2400-02-29T12:00:00Z"), true);
+  for (const invalid of [
+    "2026-02-30T12:00:00Z",
+    "2026-04-31T12:00:00Z",
+    "2023-02-29T12:00:00Z",
+    "2100-02-29T12:00:00Z",
+    "09/06/2026 12:00:00Z",
+    "2026-09-06T12:00:00",
+    "2026-09-06T12:00:00-04:00",
+    "2026-09-06T12:00:00Z\0",
+  ]) assert.equal(pattern.test(invalid), false, invalid);
 });
 
 test("reachable is reserved for the exact WL-13 fixture boundary", () => {

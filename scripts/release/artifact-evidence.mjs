@@ -1,5 +1,7 @@
 import { lstat, readFile } from "node:fs/promises";
 
+import { canonicalUtcTimestampOrderKey } from "./utc-timestamp.mjs";
+
 const MAX_EVIDENCE_BYTES = 1024 * 1024;
 const MAX_OBSERVED_ITEMS = 20;
 const MAX_OBSERVED_TEXT = 500;
@@ -347,10 +349,7 @@ export function validateBoundArtifactEvidence(evidence, expected) {
       ? `${label} must record the not-configured outcome without claiming verified signing`
       : `${label} outcome did not pass`,
   );
-  assert(
-    typeof evidence.observedAt === "string" && !Number.isNaN(Date.parse(evidence.observedAt)),
-    `${label} observedAt is invalid`,
-  );
+  canonicalUtcTimestampOrderKey(evidence.observedAt, `${label} observedAt`);
   if (expected.evidenceType === "beginner-human-path") {
     validateHumanDetails(evidence.details, label);
   } else if (expected.evidenceType === "operating-system-code-signing") {

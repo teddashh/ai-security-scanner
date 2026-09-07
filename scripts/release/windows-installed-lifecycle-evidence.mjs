@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isSemver, runMain } from "./lib.mjs";
+import { canonicalUtcTimestampOrderKey } from "./utc-timestamp.mjs";
 import { WINDOWS_LOCALHOST_FIXTURE_RUNTIME_POLICY } from "./windows-localhost-fixture.mjs";
 
 const MAX_RECORD_BYTES = 256 * 1024;
@@ -291,10 +292,7 @@ function integer(value, minimum, maximum, label) {
 }
 
 function timestamp(value, label) {
-  assert(typeof value === "string" && value.length <= 64, `${label} must be a bounded timestamp`);
-  const parsed = Date.parse(value);
-  assert(Number.isFinite(parsed), `${label} is invalid`);
-  return parsed;
+  return canonicalUtcTimestampOrderKey(value, label);
 }
 
 function flatFile(value, label) {
