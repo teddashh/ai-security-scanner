@@ -7,6 +7,9 @@ const FRONTEND_PATHS = [
   /^src\//,
   /^tests\/frontend\//,
   /^tests\/component\//,
+  // `caseForm.test.ts` reads this shared corpus directly. A corpus-only change
+  // must therefore schedule the frontend lane that enforces target parsing.
+  /^tests\/fixtures\/external-target-corpus\.json$/,
   /^public\//,
   /^index\.html$/,
   /^tsconfig(?:\.[^/]+)?\.json$/,
