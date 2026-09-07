@@ -6,6 +6,10 @@ const source = readFileSync(
   new URL("../../src/pages/CoveragePage.tsx", import.meta.url),
   "utf8",
 );
+const coverageCss = readFileSync(
+  new URL("../../src/coverage-page.css", import.meta.url),
+  "utf8",
+);
 const providerPanelSource = readFileSync(
   new URL("../../src/components/ProviderAuthorizationPanel.tsx", import.meta.url),
   "utf8",
@@ -291,7 +295,7 @@ test("guided cloud discovery is one explicit continuation after sign-in", () => 
   const installedMarkup = providerPanelSource.slice(installedStart, setupStart);
   assert.match(installedMarkup, /copy\.findAssets/u);
   assert.match(installedMarkup, /onClick=\{\(\) => void onFindAssets\(\)\}/u);
-  assert.match(installedMarkup, /copy\.findAssetsHelp/u);
+  assert.doesNotMatch(installedMarkup, /copy\.connectedTitle|copy\.connectedBody|copy\.findAssetsHelp/u);
   assert.doesNotMatch(installedMarkup, /onAuthorizationChanged\(/u);
 
   const pollingStart = providerPanelSource.indexOf("const schedulePoll");
@@ -302,7 +306,8 @@ test("guided cloud discovery is one explicit continuation after sign-in", () => 
 
   for (const [english, traditionalChinese] of [
     ["Continue: find cloud assets", "繼續：尋找雲端資產"],
-    ["It does not approve or start a security scan", "不會授權或開始安全掃描"],
+    ["It does not approve or start a scan", "不會授權或開始掃描"],
+    ["Temporary-access setup may create only the dedicated IAM resources", "暫時存取設定只有在你另行檢視並確認後"],
   ]) {
     assert.ok(providerPanelSource.includes(english), english);
     assert.ok(providerPanelSource.includes(traditionalChinese), traditionalChinese);
@@ -455,16 +460,26 @@ test("saved sensitive-network access is labeled as internal, not external", () =
   );
 });
 
-test("the concise three-step form remains directly reachable without a duplicate journey navigator", () => {
+test("the concise three-step form keeps setup state mounted and lets review flow directly into Start", () => {
   assert.ok(!source.includes("coverage-journey"));
   assert.ok(!source.includes("coverageJourneySteps"));
-  assert.ok(source.includes('href="#coverage-step-3"'));
+  assert.ok(!source.includes('href="#coverage-step-3"'));
   assert.ok(source.includes('scrollToCoverageStep("coverage-step-3")'));
   assert.ok(source.includes('(prefers-reduced-motion: reduce)'));
   assert.ok(source.includes('id="coverage-step-1"'));
   assert.ok(source.includes('id="coverage-step-2"'));
   assert.ok(source.includes('id="coverage-step-3"'));
-  assert.ok(source.includes("text(pageCopy.continueStep3)"));
+  assert.ok(!source.includes("continueStep3"));
+  assert.ok(source.includes('className="coverage-source-setup"'));
+  assert.ok(source.includes("open={sourceSetupOpen}"));
+  assert.match(source, /className="coverage-provider-slot" hidden=\{!showProviderSetup\}[\s\S]*<ProviderAuthorizationPanel/u);
+  assert.doesNotMatch(source, /showProviderSetup && \([\s\S]{0,200}<ProviderAuthorizationPanel/u);
+  assert.ok(source.includes('className="coverage-summary-row"'));
+  assert.ok(source.includes('"asset-review-list asset-review-list--compact"'));
+  assert.match(
+    coverageCss,
+    /@media \(max-width: 600px\)[\s\S]*\.asset-review-list--compact \.asset-review-card--list-row \{[\s\S]*grid-template-columns: 1fr/u,
+  );
 });
 
 test("the rendered Coverage tree has no hard-coded Traditional Chinese UI copy", () => {

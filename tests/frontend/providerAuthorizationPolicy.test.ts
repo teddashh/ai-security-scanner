@@ -101,7 +101,7 @@ test("progressive setup keeps every released provider coordinate without accepti
 });
 
 test("provider sign-in leads with the setup-file journey and keeps manual entry secondary", () => {
-  assert.match(panelSource, /connectionDetailsSummary/u);
+  assert.match(panelSource, /connectCta/u);
   assert.match(panelSource, /provider-preparation-steps/u);
   assert.match(panelSource, /requestTitle/u);
   assert.match(panelSource, /importTitle/u);
@@ -126,13 +126,27 @@ test("provider sign-in leads with the setup-file journey and keeps manual entry 
   assert.notEqual(manualStart, -1);
   assert.ok(guideStart < stepsStart && guideEnd > manualStart, "engineering setup should stay inside the progressive connection guide");
   const firstLayer = normalizedPanelSource.slice(normalizedPanelSource.indexOf('<section className="provider-auth-details"'), guideStart);
-  assert.match(firstLayer, /copy\.connectionDetailsSummary[\s\S]*copy\.connectCtaBody/u);
-  assert.doesNotMatch(firstLayer, /copy\.requestTitle|copy\.fields\.|setupTemplate/u);
+  assert.doesNotMatch(firstLayer, /copy\.connectionDetailsSummary|copy\.connectCtaBody|copy\.requestTitle|copy\.fields\.|setupTemplate/u);
+  assert.match(normalizedPanelSource.slice(guideStart, stepsStart), /<summary>\{text\(copy\.connectCta\)\}<\/summary>/u);
   const primaryJourney = normalizedPanelSource.slice(stepsStart, manualStart);
   assert.match(primaryJourney, /copy\.requestTitle/u);
   assert.match(primaryJourney, /copy\.importTitle/u);
   assert.match(primaryJourney, /copy\.continueTitlePreferred/u);
   assert.doesNotMatch(primaryJourney, /copy\.fields\./u);
+});
+
+test("product capability metadata stays in one default-collapsed details disclosure after the primary connection states", () => {
+  const connectedStart = panelSource.indexOf("{installed && (");
+  const unconnectedStart = panelSource.indexOf("{!installed && !prompt", connectedStart);
+  const capabilityStart = panelSource.indexOf('<details className="provider-capability provider-auth-technical">', unconnectedStart);
+  const capabilityEnd = panelSource.indexOf("</details>", capabilityStart);
+  assert.ok(connectedStart >= 0 && unconnectedStart > connectedStart && capabilityStart > unconnectedStart);
+  assert.doesNotMatch(panelSource.slice(connectedStart, capabilityStart), /copy\.capabilityVersion|copy\.capabilityScope|copy\.capabilityProfiles|copy\.capabilitySupport/u);
+  assert.match(
+    panelSource.slice(capabilityStart, capabilityEnd),
+    /<summary>\{text\(copy\.capabilityDetails\)\}<\/summary>[\s\S]*copy\.capabilityVersion[\s\S]*copy\.capabilityScope[\s\S]*copy\.capabilityProfiles[\s\S]*copy\.capabilitySupport/u,
+  );
+  assert.doesNotMatch(panelSource.slice(capabilityStart, capabilityEnd), /\sopen(?:=|\s|>)/u);
 });
 
 test("the guided cloud confirmation is bound to a verified provider session", () => {

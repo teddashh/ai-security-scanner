@@ -6,6 +6,31 @@
 
 .page--settings .settings-section {
   position: relative;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.page--settings .settings-section > h2,
+.page--settings .settings-status-card__primary h2 {
+  margin: 0;
+}
+
+.page--settings .settings-status-card__primary {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.page--settings .settings-status-card__primary > div {
+  display: grid;
+  gap: 5px;
+}
+
+.page--settings .settings-status-card__primary strong {
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.45;
 }
 
 .page--settings .settings-section__icon {
@@ -13,7 +38,6 @@
   place-items: center;
   width: 38px;
   height: 38px;
-  margin-bottom: 14px;
   border-radius: 12px;
   color: var(--accent-ink);
   background: var(--accent-soft);
@@ -57,6 +81,28 @@
 
 .page--settings .settings-choice--selected > svg {
   color: var(--accent-ink);
+}
+
+.page--settings .settings-section > .button {
+  justify-self: start;
+}
+
+.page--settings .settings-details {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  color: var(--muted);
+}
+
+.page--settings .settings-details summary {
+  width: fit-content;
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.page--settings .settings-details p {
+  margin: 10px 0 0;
+  line-height: 1.55;
 }
 
 @media (max-width: 760px) {

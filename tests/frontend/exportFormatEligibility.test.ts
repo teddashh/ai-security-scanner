@@ -100,13 +100,18 @@ test("the export page defaults to a readable report without raw source files", (
 test("the technical case bundle discloses its case-wide and run-bound scope before export", () => {
   const source = readFileSync(new URL("../../src/pages/ExportPage.tsx", import.meta.url), "utf8");
 
-  assert.match(source, /format === "case_bundle" && !demoMode/u);
+  assert.match(source, /format === "case_bundle"\s*\? copy\.scopeCaseBundle\s*:\s*copy\.scopeSelectedRun/u);
   assert.match(
     source,
-    /<div className="export-bundle-scope">[\s\S]*text\(copy\.caseBundleScopeTitle\)[\s\S]*<details className="page-technical-details">[\s\S]*text\(copy\.caseBundleScopeBody\)/u,
+    /<span className="export-decision-summary">[\s\S]*text\(scopeConsequence\)[\s\S]*text\(integrityConsequence\)/u,
   );
-  assert.match(source, /Includes case-wide records; reports use the selected run\./u);
-  assert.match(source, /包含案件全域紀錄；報告使用所選輪次。/u);
+  assert.match(source, /Case-wide records; reports use the selected run/u);
+  assert.match(source, /案件全域紀錄；報告使用所選輪次/u);
+  assert.doesNotMatch(source, /export-bundle-scope/u);
+  assert.match(
+    source,
+    /<details className="export-summary export-summary--details">[\s\S]*formatIsSigned && <p className="export-summary__note">\{text\(copy\.caseBundleScopeBody\)\}<\/p>/u,
+  );
   assert.match(
     source,
     /case-wide assets, grants, coverage, scan history, findings, workflow history, comparisons/u,
@@ -121,4 +126,15 @@ test("the technical case bundle discloses its case-wide and run-bound scope befo
   assert.doesNotMatch(source, /包內報告仍只涵蓋選定的掃描輪次/u);
   assert.match(source, /Case \/ selected-run findings/u);
   assert.match(source, /All \/ selected-run evidence records/u);
+});
+
+test("the export decision line exposes disclosure, scope, and honest integrity before Save", () => {
+  const source = readFileSync(new URL("../../src/pages/ExportPage.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /<span className="export-sharing-consequence">\{text\(sharingConsequence\)\}<\/span>/u);
+  assert.match(source, /\{" · "\}\{text\(scopeConsequence\)\}\{" · "\}\{text\(integrityConsequence\)\}/u);
+  assert.match(source, /Unsigned: SHA-256 detects changes but does not prove author, completeness, or correctness/u);
+  assert.match(source, /Locally signed for integrity only; not proof of completeness or correctness/u);
+  assert.match(source, /Demo only: no cryptographic signature or verifiable digest/u);
+  assert.match(source, /<div className="export-actions">[\s\S]*aria-describedby="export-preview-status"/u);
 });

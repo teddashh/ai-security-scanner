@@ -165,8 +165,8 @@ const copy = {
   },
   incompleteTitle: { en: "These results are incomplete", zhTW: "這些結果尚不完整" },
   incompleteDescription: {
-    en: "Some checks stopped before reaching a final result. The saved problems still need review, but other problems may be missing. Open Scan progress before treating these counts as final.",
-    zhTW: "有些檢查在產生最終結果前就停止了。已保存的問題仍需檢視，但也可能還有未顯示的問題；請先查看「掃描進度」，不要把目前數量視為最終結果。",
+    en: "Some checks stopped early. Review saved findings, but do not treat these counts as final.",
+    zhTW: "部分檢查提早停止；請檢視已保存問題，但勿將目前數量視為最終結果。",
   },
   emptyIncompleteDescription: {
     en: "Some checks did not finish, so there may be issues we could not see. Open Scan progress to see what needs attention.",
@@ -306,6 +306,7 @@ const copy = {
   allSeverities: { en: "All severities", zhTW: "所有嚴重度" },
   workflowFilter: { en: "Review status", zhTW: "處理狀態" },
   allWorkflows: { en: "All review statuses", zhTW: "所有處理狀態" },
+  advancedFilters: { en: "Advanced filters", zhTW: "進階篩選" },
   expertFilter: { en: "Specialist type", zhTW: "專家類型" },
   allExperts: { en: "All specialist types", zhTW: "所有專家類型" },
   controlFilter: { en: "Framework reference", zhTW: "相關控制項" },
@@ -436,6 +437,46 @@ const copy = {
   noTestedDimension: {
     en: "No completed test dimension was saved for this run.",
     zhTW: "本輪沒有保存已完成的測試範圍。",
+  },
+  checkDimensionsUnavailable: {
+    en: "Exact tested dimensions not saved for this check",
+    zhTW: "這項檢查未保存精確的測試範圍",
+  },
+  completedCheckForTargets: {
+    en: "{check} completed for {targets}",
+    zhTW: "已對 {targets} 完成 {check}",
+  },
+  completedCheckTargetUnavailable: {
+    en: "{check} completed; target label not retained",
+    zhTW: "已完成 {check}；未保存目標名稱",
+  },
+  firstLayerRequested: { en: "Requested", zhTW: "要求" },
+  firstLayerActuallyTested: { en: "Actually tested", zhTW: "實際測試" },
+  firstLayerLimits: { en: "Limits", zhTW: "限制" },
+  firstLayerTime: { en: "Time", zhTW: "時間" },
+  noRequestedLimits: {
+    en: "No requested limit was saved",
+    zhTW: "未保存要求的限制",
+  },
+  currentProjectFallback: {
+    en: "from the current project; not retained by this run",
+    zhTW: "來自目前專案；本輪未保存",
+  },
+  observedAt: { en: "Observed {time}", zhTW: "觀察時間：{time}" },
+  observedFromOnly: { en: "Observed from {time}; end not retained", zhTW: "開始觀察：{time}；未保存結束時間" },
+  observedUntilOnly: { en: "Observed through {time}; start not retained", zhTW: "觀察至：{time}；未保存開始時間" },
+  observedTimeUnavailable: {
+    en: "Observation time not retained",
+    zhTW: "未保存觀察時間",
+  },
+  recordedExclusions: { en: "Recorded exclusions", zhTW: "已記錄的排除項目" },
+  noRecordedExclusions: {
+    en: "No exclusion was recorded within the requested checks.",
+    zhTW: "要求的檢查內沒有記錄排除項目。",
+  },
+  recordedExclusionsUnavailable: {
+    en: "Recorded exclusions: {count}; exact detail unavailable.",
+    zhTW: "已記錄 {count} 項排除；無法取得精確細節。",
   },
   noGap: {
     en: "No gap was recorded within the requested checks. This does not mean broader security testing was performed.",
@@ -577,6 +618,7 @@ const localizedCheckName = (
   if (engine && isExactBuiltInLocalhostQuickScanEngine(engine) && engine.taskKind.kind === "built_in_localhost_tcp") {
     return `${locale === "en" ? "Local connection check" : "本機連線檢查"} · 127.0.0.1:${engine.taskKind.port}`;
   }
+  if (engine?.engineName.trim()) return engine.engineName.trim();
   return checkId;
 };
 
@@ -778,6 +820,120 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         orderedNextSteps.length - 1,
       )
     : text(copy.noNextStep);
+  const inlineSeparator = locale === "en" ? "; " : "；";
+  const requestedTargetsSummary = report.requested.targets.length > 0
+    ? report.requested.targets.map((target) => {
+        const label = target.label ?? target.assetId;
+        if (target.labelAvailability === "current_case_fallback") {
+          return `${label} (${text(copy.currentProjectFallback)})`;
+        }
+        if (target.labelAvailability === "unavailable") {
+          return `${label} (${text(copy.unavailableProvenance)})`;
+        }
+        return label;
+      }).join(inlineSeparator)
+    : text(copy.noRequestedTarget);
+  const requestedStageSummary = `${text(reportStageCopy(report.requested.stage.value))}${
+    report.requested.stage.availability === "current_case_fallback"
+      ? ` (${text(copy.currentProjectFallback)})`
+      : report.requested.stage.availability === "unavailable" && report.requested.stage.value
+        ? ` (${text(copy.unavailableProvenance)})`
+        : ""
+  }`;
+  const requestedLimitsSummary = report.requested.limits.length > 0
+    ? report.requested.limits.map((limit) =>
+        `${localizedRequestedLimitName(limit.name, locale)}: ${localizedRequestedLimitValue(limit.name, limit.value, locale)}`,
+      ).join(inlineSeparator)
+    : text(copy.noRequestedLimits);
+  const testedCheckSummaries = testedChecks.flatMap((check) => {
+    const engine = engineByTaskId.get(check.taskId);
+    const checkLabel = localizedCheckName(check.checkId, locale, engine);
+    const targets = check.targetAssetIds
+      .flatMap((assetId) => {
+        const target = report.requested.targets.find((candidate) => candidate.assetId === assetId);
+        return target?.label ? [target.label] : [];
+      })
+      .join(locale === "en" ? ", " : "、");
+    const checkPrefix = `${targets ? `${targets} · ` : ""}${checkLabel} · ${text(testedStatusCopy(check.status))}`;
+    if (check.testedDimensions.length === 0) {
+      return [`${checkPrefix} · ${text(copy.checkDimensionsUnavailable)}`];
+    }
+    return check.testedDimensions.map((dimension) => {
+      if (dimension.dimension === "completed check-to-target coordinate") {
+        const coordinatePrefix = `${check.checkId} on asset `;
+        const coordinateAssetId = dimension.value.startsWith(coordinatePrefix)
+          ? dimension.value.slice(coordinatePrefix.length)
+          : undefined;
+        const resolvedTarget = coordinateAssetId && check.targetAssetIds.includes(coordinateAssetId)
+          ? report.requested.targets.find((candidate) => candidate.assetId === coordinateAssetId)?.label
+          : undefined;
+        return text(
+          resolvedTarget ? copy.completedCheckForTargets : copy.completedCheckTargetUnavailable,
+          { check: checkLabel, targets: resolvedTarget ?? "" },
+        ) + ` · ${text(testedStatusCopy(check.status))}`;
+      }
+      return `${checkPrefix} · ${localizedCoverageDimension(dimension.dimension, locale)}: ${localhostTestedDimensionValue(
+        engine,
+        dimension.dimension,
+        dimension.value,
+        locale,
+      )}`;
+    });
+  });
+  const testedNetworkScopeSummaries = testedNetworkScopes.map((scope) => {
+    const target = targetLabelById.get(scope.targetAssetId) ?? scope.target;
+    const addresses = scope.addressRanges.join(locale === "en" ? ", " : "、");
+    const ports = scope.portRanges.join(locale === "en" ? ", " : "、");
+    return `${target}: ${addresses} · ${scope.transport.toUpperCase()} ${ports} · ${text(reportStageCopy(scope.stage))} · ${text(testedStatusCopy(scope.outcome))}`;
+  });
+  const coherentLocalhostObservation = localhostSummary
+    && ["reachable", "closed", "timed_out"].includes(localhostSummary.outcome);
+  const coherentLocalhostTestedSummary = coherentLocalhostObservation && localhostSummary
+    ? text(localhostSummary.description)
+    : undefined;
+  const actualTestedSummary = testedCheckSummaries.length + testedNetworkScopeSummaries.length > 0
+    ? [...testedCheckSummaries, ...testedNetworkScopeSummaries].join(inlineSeparator)
+    : coherentLocalhostTestedSummary ?? text(copy.noTestedDimension);
+  // `report.actual.observedFrom` / `observedUntil` span every saved task,
+  // including failed, cancelled, and not-tested siblings. The "Actually
+  // tested" line may only use timestamps attached to work with tested output.
+  const recordedTestedTimes = [
+    ...testedChecks.flatMap((check) => [
+      check.startedAt,
+      ...check.testedDimensions.map((dimension) => dimension.observedAt),
+      check.finishedAt,
+    ]),
+    ...testedNetworkScopes.map((scope) => scope.observedAt),
+    coherentLocalhostObservation ? run?.engineRuns[0]?.localhostTcpObservation?.observedAt : undefined,
+  ].filter((value): value is string => typeof value === "string" && Number.isFinite(Date.parse(value)));
+  recordedTestedTimes.sort((left, right) => Date.parse(left) - Date.parse(right));
+  const observedFrom = recordedTestedTimes[0];
+  const observedUntil = recordedTestedTimes.at(-1);
+  const observedTimeSummary = observedFrom && observedUntil
+    ? observedFrom === observedUntil
+      ? text(copy.observedAt, { time: formatDateTime(observedFrom) })
+      : text(copy.observedWindow, {
+          from: formatDateTime(observedFrom),
+          until: formatDateTime(observedUntil),
+        })
+    : observedFrom
+      ? text(copy.observedFromOnly, { time: formatDateTime(observedFrom) })
+      : observedUntil
+        ? text(copy.observedUntilOnly, { time: formatDateTime(observedUntil) })
+        : text(copy.observedTimeUnavailable);
+  const excludedGaps = report.coverageGaps.filter((gap) => gap.kind === "excluded");
+  const exclusionsSummary = localhostSummary
+    ? text(localhostSummary.exclusions)
+    : excludedGaps.length > 0
+      ? `${text(copy.recordedExclusions)}: ${excludedGaps.map((gap) => {
+          const targets = gap.targetAssetIds
+            .map((assetId) => targetLabelById.get(assetId) ?? assetId)
+            .join(locale === "en" ? ", " : "、");
+          return `${targets ? `${targets} · ` : ""}${localizedCoverageDimension(gap.dimension, locale)} · ${coverageGapProse(locale, gap.reason)}`;
+        }).join(inlineSeparator)}`
+      : report.coverageCounts.excluded > 0
+        ? text(copy.recordedExclusionsUnavailable, { count: formatNumber(report.coverageCounts.excluded) })
+        : text(copy.noRecordedExclusions);
   const countBreakdown = [
     [copy.testedComplete, report.coverageCounts.testedComplete],
     [copy.testedPartialCount, report.coverageCounts.testedPartial],
@@ -824,6 +980,20 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
           <dd>{nextStepSummary}</dd>
         </div>
       </dl>
+
+      <p className="report-first-layer-scope">
+        <strong>{text(copy.firstLayerRequested)}:</strong>{" "}
+        {requestedTargetsSummary} · {text(copy.stage)}: {requestedStageSummary} · {text(copy.firstLayerLimits)}: {requestedLimitsSummary}
+        {" | "}
+        <strong>{text(copy.firstLayerActuallyTested)}:</strong>{" "}
+        {actualTestedSummary} · {text(copy.firstLayerTime)}: {observedTimeSummary} · {exclusionsSummary}
+      </p>
+
+      {report.dataQualityWarnings.length > 0 && (
+        <p className="report-data-warning-count" role="note">
+          <strong>{text(copy.dataWarnings, { count: formatNumber(report.dataQualityWarnings.length) })}</strong>
+        </p>
+      )}
 
       <details className="page-secondary-feature report-scope-disclosure">
         <summary>
@@ -1141,7 +1311,7 @@ export function FindingsPage({
   const [workflow, setWorkflow] = useState<FindingWorkflowState | "all">("all");
   const [expertType, setExpertType] = useState("all");
   const [control, setControl] = useState("all");
-  const [selectedId, setSelectedId] = useState<string | undefined>(focusedFindingId ?? findings[0]?.id);
+  const [selectedId, setSelectedId] = useState<string | undefined>(focusedFindingId);
   const [decisionStatus, setDecisionStatus] = useState<(typeof decisionStates)[number]>("expert_review_requested");
   const [decidedBy, setDecidedBy] = useState("");
   const [decisionReason, setDecisionReason] = useState("");
@@ -1150,6 +1320,7 @@ export function FindingsPage({
   const [groupRationale, setGroupRationale] = useState("");
   const [groupFindingIds, setGroupFindingIds] = useState<string[]>([]);
   const appliedFocusId = useRef<string | undefined>(undefined);
+  const advancedFiltersRef = useRef<HTMLDetailsElement>(null);
 
   useEffect(() => {
     if (focusedFindingId && appliedFocusId.current !== focusedFindingId && findings.some((finding) => finding.id === focusedFindingId)) {
@@ -1160,7 +1331,7 @@ export function FindingsPage({
   }, [findings, focusedFindingId]);
 
   useEffect(() => {
-    setSelectedId((current) => findings.some((finding) => finding.id === current) ? current : findings[0]?.id);
+    setSelectedId((current) => findings.some((finding) => finding.id === current) ? current : undefined);
   }, [findings]);
 
   const ordered = useMemo(
@@ -1365,6 +1536,7 @@ export function FindingsPage({
 
   const applyControlFilter = (key: string) => {
     setControl(key);
+    if (advancedFiltersRef.current) advancedFiltersRef.current.open = true;
     document.getElementById("finding-browser")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
   const clearFilters = () => {
@@ -1417,7 +1589,6 @@ export function FindingsPage({
       <PageHeader
         eyebrow={text(copy.eyebrow)}
         title={text(copy.title)}
-        description={text(copy.description)}
         actions={reportActions}
       />
 
@@ -1450,19 +1621,11 @@ export function FindingsPage({
         </InlineNotice>
       )}
 
-      <section className="metrics-grid metrics-grid--four" aria-label={text(copy.summaryAria)}>
-        <MetricCard label={text(copy.critical)} value={criticalCount} detail={text(copy.criticalDetail)} icon="warning" tone={criticalCount ? "danger" : "default"} />
-        <MetricCard label={text(copy.high)} value={highCount} detail={text(copy.highDetail)} icon="findings" tone={highCount ? "warning" : "default"} />
-        <MetricCard label={text(copy.needsReview)} value={needsReview} detail={text(copy.needsReviewDetail)} icon="search" />
-        <MetricCard label={text(copy.affectedAssets)} value={affectedAssets} detail={text(copy.completeListCount, { count: formatNumber(findings.length) })} icon="database" />
-      </section>
-
       {topFindings.length > 0 && (
         <section className="section-block priority-section">
           <div className="section-heading">
             <p className="eyebrow">{text(copy.doNow)}</p>
             <h2>{text(copy.priorityTitle)}</h2>
-            <p>{text(copy.priorityDescription)}</p>
           </div>
           <div className="priority-grid">
             {topFindings.map((finding, index) => (
@@ -1491,6 +1654,13 @@ export function FindingsPage({
           </div>
         </section>
       )}
+
+      <section className="metrics-grid metrics-grid--four" aria-label={text(copy.summaryAria)}>
+        <MetricCard label={text(copy.critical)} value={criticalCount} icon="warning" tone={criticalCount ? "danger" : "default"} />
+        <MetricCard label={text(copy.high)} value={highCount} icon="findings" tone={highCount ? "warning" : "default"} />
+        <MetricCard label={text(copy.needsReview)} value={needsReview} icon="search" />
+        <MetricCard label={text(copy.affectedAssets)} value={affectedAssets} icon="database" />
+      </section>
 
       {report && <BeginnerReportOverview report={report} run={latestRun} />}
 
@@ -1750,7 +1920,7 @@ export function FindingsPage({
         <p>{text(copy.boundaryBody)}</p>
       </details>
 
-      <section id="finding-browser" className="finding-browser">
+      <section id="finding-browser" className={`finding-browser${selected ? "" : " finding-browser--list-only"}`}>
         <div className="finding-browser__list">
           <div className="section-heading section-heading--row finding-toolbar-heading">
             <div><p className="eyebrow">{text(copy.allProblems)}</p><h2>{text(copy.completeList)}</h2></div>
@@ -1778,21 +1948,26 @@ export function FindingsPage({
                   {workflowOrder.map((item) => <option key={item} value={item}>{workflowMeta[item]}</option>)}
                 </select>
               </label>
-              <label className="select-filter">
-                <Icon name="filter" size={17} /><span className="sr-only">{text(copy.expertFilter)}</span>
-                <select value={expertType} onChange={(event) => setExpertType(event.target.value)}>
-                  <option value="all">{text(copy.allExperts)}</option>
-                  {expertTypes.map((item) => <option key={item} value={item}>{localizedExpertType(item, locale)}</option>)}
-                </select>
-              </label>
-              <label className="select-filter">
-                <Icon name="filter" size={17} /><span className="sr-only">{text(copy.controlFilter)}</span>
-                <select value={control} onChange={(event) => setControl(event.target.value)}>
-                  <option value="all">{text(copy.allControls)}</option>
-                  {controls.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-                </select>
-              </label>
             </div>
+            <details ref={advancedFiltersRef} className="page-secondary-feature finding-advanced-filters">
+              <summary>{text(copy.advancedFilters)}</summary>
+              <div className="finding-filter-grid">
+                <label className="select-filter">
+                  <Icon name="filter" size={17} /><span className="sr-only">{text(copy.expertFilter)}</span>
+                  <select value={expertType} onChange={(event) => setExpertType(event.target.value)}>
+                    <option value="all">{text(copy.allExperts)}</option>
+                    {expertTypes.map((item) => <option key={item} value={item}>{localizedExpertType(item, locale)}</option>)}
+                  </select>
+                </label>
+                <label className="select-filter">
+                  <Icon name="filter" size={17} /><span className="sr-only">{text(copy.controlFilter)}</span>
+                  <select value={control} onChange={(event) => setControl(event.target.value)}>
+                    <option value="all">{text(copy.allControls)}</option>
+                    {controls.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+                  </select>
+                </label>
+              </div>
+            </details>
             {activeFilterCount > 0 && <button className="clear-filters" type="button" onClick={clearFilters}><Icon name="close" size={14} />{text(copy.clearFilterCount, { count: formatNumber(activeFilterCount) })}</button>}
           </div>
 
@@ -1847,7 +2022,7 @@ export function FindingsPage({
           </ul>
         </div>
 
-        <section className="finding-detail" aria-live="polite">
+        <section className={`finding-detail${selected ? "" : " finding-detail--empty"}`} aria-live="polite">
           {selected ? (
             <>
               <div className="finding-detail__header">
@@ -1874,15 +2049,8 @@ export function FindingsPage({
 
               <dl className="detail-facts">
                 <div><dt>{text(copy.asset)}</dt><dd>{selected.assetName}</dd></div>
-                <div><dt>{text(copy.reviewStatus)}</dt><dd>{workflowMeta[selected.workflowState]}</dd></div>
                 <div><dt>{text(copy.recommendedExpert)}</dt><dd>{localizedExpertType(selected.expertType, locale)}</dd></div>
                 <div><dt>{text(copy.lastObserved)}</dt><dd>{formatDateTime(selected.lastSeenAt, historyDateTime)}</dd></div>
-                <div><dt>{text(copy.evidenceConfidence)}</dt><dd>{findingConfidencePresentation(
-                  locale,
-                  confidenceMeta[selected.confidence],
-                  selected.confidenceBasisCode,
-                  selected.priorityReasons ?? [],
-                )}</dd></div>
                 <div><dt>{text(copy.relatedAssets)}</dt><dd>{text(copy.assetCount, { count: formatNumber(selected.assetIds?.length ?? 1) })}</dd></div>
               </dl>
 

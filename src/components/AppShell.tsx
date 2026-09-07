@@ -232,6 +232,22 @@ export function AppShell({
     : runtimeSetup?.phase === "cancelled"
       ? "runtime.setup.continue"
       : "runtime.setup.action";
+  const runtimeBadgeLabel: TranslationKey = mode !== "native"
+    ? "runtime.badge.demo"
+    : runtime?.available
+      ? "runtime.badge.ready"
+      : runtimeSetupNonRetryable
+        ? "runtime.phase.failed.nonRetryable.label"
+        : runtimeSetupWorking
+          ? "runtime.badge.preparing"
+          : runtimeSetup?.phase === "failed"
+            ? "runtime.badge.attention"
+            : runtimeSetup?.phase === "cancelled"
+              ? "runtime.badge.paused"
+              : "runtime.badge.needsSetup";
+  const hasDangerousCaseRecovery = Boolean(caseRecoveryDiagnostics?.length);
+  const hasDataStatus = hasDangerousCaseRecovery || Boolean(dataUnavailable) || Boolean(caseSelectionUnavailable);
+  const dataRetryRelevant = hasDangerousCaseRecovery || Boolean(dataUnavailable);
 
   useEffect(() => setMobileOpen(false), [page, selectedCase?.id]);
 
@@ -417,30 +433,21 @@ export function AppShell({
             <Icon name="lock" size={17} />
             <span>
               <strong>{t("shell.privacy.title")}</strong>
+              <small>{t("shell.privacy.detail")}</small>
             </span>
           </div>
-          <span className={cx("runtime-badge", mode === "native" && runtime?.available ? "runtime-badge--native" : "runtime-badge--demo")}>
+          <span
+            className={cx("runtime-badge", mode === "native" && runtime?.available ? "runtime-badge--native" : "runtime-badge--demo")}
+            role="status"
+          >
             <span aria-hidden="true" />
-            {mode === "native"
-              ? runtime?.available
-                ? t("runtime.badge.ready")
-                : runtimeSetupNonRetryable
-                  ? t("runtime.phase.failed.nonRetryable.label")
-                  : t("runtime.badge.needsSetup")
-              : t("runtime.badge.demo")}
+            {t(runtimeBadgeLabel)}
           </span>
           {mode === "native" && runtime && !runtime.available && (
             <div className="runtime-setup" aria-live="polite">
-              {!runtimeSetupWorking && (
-                <div className="runtime-setup__guidance">
-                  <strong>{t(runtimeGuidanceTitle)}</strong>
-                  <small>{t(runtimeGuidance)}</small>
-                </div>
-              )}
               {!runtimeSetupNonRetryable && displayedRuntimeSetupPhase && displayedRuntimeSetupPhase !== "idle" && (
-                <div className="runtime-setup__progress" role="status">
+                <div className="runtime-setup__progress runtime-setup__progress--visible" role="status">
                   <strong>{t(runtimeSetupLabelKeys[displayedRuntimeSetupPhase])}</strong>
-                  {runtimeSetupDetail && <small>{t(runtimeSetupDetail)}</small>}
                   {!runtimeSetupStarting && runtimeSetup?.totalBytes !== undefined && (
                     <>
                       <progress
@@ -454,9 +461,6 @@ export function AppShell({
                           ? ` · ${formatNumber(runtimeSetup.progressPercent, { maximumFractionDigits: 2 })}%`
                           : ""}
                       </small>
-                      {runtimeSetup.resumedFromBytes > 0 && (
-                        <small>{t("runtime.download.resumed", { bytes: exactBytes(runtimeSetup.resumedFromBytes) })}</small>
-                      )}
                     </>
                   )}
                 </div>
@@ -474,7 +478,7 @@ export function AppShell({
               ) : runtimeSetupWorking ? (
                 <button className="button button--small" type="button" disabled aria-busy="true">
                   <Icon name="progress" size={15} />
-                  {t(runtimeSetupLabelKeys[displayedRuntimeSetupPhase ?? "install"])}
+                  {t("runtime.badge.preparing")}
                 </button>
               ) : !runtimeSetupWorking && !runtimeSetupNonRetryable ? (
                 <button
@@ -487,6 +491,25 @@ export function AppShell({
                   {t(runtimeSetupAction)}
                 </button>
               ) : null}
+              <details className="runtime-setup__details">
+                <summary>{t("runtime.setup.details")}</summary>
+                <div className="runtime-setup__details-body">
+                  {!runtimeSetupWorking && (
+                    <div className="runtime-setup__guidance">
+                      <strong>{t(runtimeGuidanceTitle)}</strong>
+                      <small>{t(runtimeGuidance)}</small>
+                    </div>
+                  )}
+                  {!runtimeSetupNonRetryable && displayedRuntimeSetupPhase && displayedRuntimeSetupPhase !== "idle" && (
+                    <div className="runtime-setup__phase-detail">
+                      {runtimeSetupDetail && <small>{t(runtimeSetupDetail)}</small>}
+                      {!runtimeSetupStarting && runtimeSetup && runtimeSetup.resumedFromBytes > 0 && (
+                        <small>{t("runtime.download.resumed", { bytes: exactBytes(runtimeSetup.resumedFromBytes) })}</small>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </details>
             </div>
           )}
         </div>
@@ -536,79 +559,71 @@ export function AppShell({
           </div>
         )}
 
-        {caseRecoveryDiagnostics && caseRecoveryDiagnostics.length > 0 && (
-          <div className="data-status-banner" role="status">
-            <Icon name="warning" size={19} />
-            <div className="data-status-banner__copy">
-              <strong>{t("shell.caseRecovery.title")}</strong>
-              <span>{t("shell.caseRecovery.detail")}</span>
-              <details>
-                <summary>{t("shell.caseRecovery.technical")}</summary>
-                <ul>
-                  {caseRecoveryDiagnostics.map((diagnostic) => (
-                    <li key={`${diagnostic.caseId}:${diagnostic.code}`}>
-                      <strong>{diagnostic.code === "selected_case_missing"
-                        ? t("shell.caseRecovery.missingTitle")
-                        : diagnostic.title}</strong>{" — "}
-                      {t(diagnostic.preserved
-                        ? "shell.caseRecovery.preserved"
-                        : "shell.caseRecovery.missing")}{" · "}
-                      <code>{diagnostic.code}</code>
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            </div>
-            <button
-              className="button button--small"
-              type="button"
-              disabled={dataRetrying}
-              aria-busy={dataRetrying || undefined}
-              onClick={onRetryData}
-            >
-              <Icon name="refresh" size={15} />
-              {t(dataRetrying ? "shell.data.retrying" : "shell.data.retry")}
-            </button>
-          </div>
-        )}
-
-        {dataUnavailable && (
+        {hasDataStatus && (
           <div className="data-status-banner" role="alert">
             <Icon name="warning" size={19} />
             <div className="data-status-banner__copy">
-              <strong>{t("shell.data.refreshErrorTitle")}</strong>
-              <span>{t("shell.data.refreshErrorDetail")}</span>
+              {hasDangerousCaseRecovery && caseRecoveryDiagnostics && (
+                <section className="data-status-banner__fact">
+                  <strong>{t("shell.caseRecovery.title")}</strong>
+                  <span>{t("shell.caseRecovery.detail")}</span>
+                  <details>
+                    <summary>{t("shell.caseRecovery.technical")}</summary>
+                    <ul>
+                      {caseRecoveryDiagnostics.map((diagnostic) => (
+                        <li key={`${diagnostic.caseId}:${diagnostic.code}`}>
+                          <strong>{diagnostic.code === "selected_case_missing"
+                            ? t("shell.caseRecovery.missingTitle")
+                            : diagnostic.title}</strong>{" — "}
+                          {t(diagnostic.preserved
+                            ? "shell.caseRecovery.preserved"
+                            : "shell.caseRecovery.missing")}{" · "}
+                          <code>{diagnostic.code}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                </section>
+              )}
+              {dataUnavailable && (
+                <section className="data-status-banner__fact">
+                  <strong>{t("shell.data.refreshErrorTitle")}</strong>
+                  <span>{t("shell.data.refreshErrorDetail")}</span>
+                </section>
+              )}
+              {caseSelectionUnavailable && (
+                <section className="data-status-banner__fact">
+                  <strong>{t("shell.data.selectionErrorTitle")}</strong>
+                  <span>{t("shell.data.selectionErrorDetail")}</span>
+                </section>
+              )}
             </div>
-            <button
-              className="button button--small"
-              type="button"
-              disabled={dataRetrying}
-              aria-busy={dataRetrying || undefined}
-              onClick={onRetryData}
-            >
-              <Icon name="refresh" size={15} />
-              {t(dataRetrying ? "shell.data.retrying" : "shell.data.retry")}
-            </button>
-          </div>
-        )}
-
-        {caseSelectionUnavailable && (
-          <div className="data-status-banner" role="alert">
-            <Icon name="warning" size={19} />
-            <div className="data-status-banner__copy">
-              <strong>{t("shell.data.selectionErrorTitle")}</strong>
-              <span>{t("shell.data.selectionErrorDetail")}</span>
+            <div className="data-status-banner__actions">
+              {dataRetryRelevant && (
+                <button
+                  className="button button--small"
+                  type="button"
+                  disabled={dataRetrying}
+                  aria-busy={dataRetrying || undefined}
+                  onClick={onRetryData}
+                >
+                  <Icon name="refresh" size={15} />
+                  {t(dataRetrying ? "shell.data.retrying" : "shell.data.retryRefresh")}
+                </button>
+              )}
+              {caseSelectionUnavailable && (
+                <button
+                  className="button button--small"
+                  type="button"
+                  disabled={caseSelectionRetrying}
+                  aria-busy={caseSelectionRetrying || undefined}
+                  onClick={onRetryCaseSelection}
+                >
+                  <Icon name="refresh" size={15} />
+                  {t(caseSelectionRetrying ? "shell.data.retrying" : "shell.data.retrySelection")}
+                </button>
+              )}
             </div>
-            <button
-              className="button button--small"
-              type="button"
-              disabled={caseSelectionRetrying}
-              aria-busy={caseSelectionRetrying || undefined}
-              onClick={onRetryCaseSelection}
-            >
-              <Icon name="refresh" size={15} />
-              {t(caseSelectionRetrying ? "shell.data.retrying" : "shell.data.retry")}
-            </button>
           </div>
         )}
 

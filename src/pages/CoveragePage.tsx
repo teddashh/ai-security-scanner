@@ -19,7 +19,7 @@ import type {
   TransportProtocol,
 } from "../types";
 import { Icon } from "../components/Icon";
-import { EmptyState, InlineNotice, MetricCard, PageHeader } from "../components/Shared";
+import { EmptyState, InlineNotice, PageHeader } from "../components/Shared";
 import { StatusPill } from "../components/StatusPill";
 import {
   ProviderAuthorizationPanel,
@@ -339,15 +339,19 @@ const NUCLEI_TEMPLATE_REVISION = "nuclei-templates@24858b4bfabfa86f0bcfd36aea24f
 const pageCopy = {
   headerEyebrow: bilingual("Set up your scan", "設定這次掃描"),
   headerTitle: bilingual("Set up scan", "設定掃描"),
-  headerDescription: bilingual(
-    "Add inputs, review items, then choose checks.",
-    "加入內容、確認項目，再選擇檢查。",
-  ),
   refresh: bilingual("Refresh items", "重新整理項目"),
   refreshing: bilingual("Refreshing…", "正在重新確認…"),
   addEyebrow: bilingual("Step 1", "步驟 1"),
   addTitle: bilingual("1. Add inputs", "1. 加入內容"),
   addDescription: bilingual("Choose one source. Add others only when needed.", "先選一個來源，需要時再加入其他來源。"),
+  sourceSetupSummary: bilingual("Add or change source", "新增或變更資料來源"),
+  sourceSetupCleanupSummary: bilingual("Temporary cloud cleanup needs attention", "暫時雲端存取需要清理"),
+  cleanupAttentionTitle: bilingual("Temporary cloud access needs cleanup", "暫時雲端存取需要清理"),
+  cleanupAttentionBody: bilingual(
+    "A prior setup left a cleanup record, or the app could not confirm cleanup. Review the exact record before closing the app.",
+    "先前的設定留下清理紀錄，或程式目前無法確認清理狀態。關閉程式前，請檢視精確紀錄。",
+  ),
+  reviewCleanup: bilingual("Review cleanup", "檢視清理狀態"),
   providerTitle: bilingual("Cloud account", "雲端帳號"),
   providerBody: bilingual("Sign in through AWS, Azure, Google Cloud, or Microsoft and turn cloud settings into a fix list.", "透過 AWS、Azure、Google Cloud 或 Microsoft 登入，把雲端設定整理成改善清單。"),
   providerOpen: bilingual("Connect a cloud account", "連接雲端帳號"),
@@ -430,19 +434,13 @@ const pageCopy = {
 
   seeEyebrow: bilingual("Step 2", "步驟 2"),
   seeTitle: bilingual("2. Review items", "2. 確認項目"),
-  seeDescription: bilingual("Select what belongs in this scan.", "選取這次要納入掃描的項目。"),
-  continueStep3: bilingual("Choose scan settings", "選擇掃描方式"),
   candidateAssets: bilingual("Items found", "找到的項目"),
-  candidateDetail: bilingual("Websites, systems, and projects in this scan", "這次掃描中的網站、系統與專案"),
-  scannedAssets: bilingual("Checks completed", "已完成檢查"),
-  scannedDetail: bilingual("All selected checks for these items finished", "這些項目的所有已選檢查都已完成"),
+  scannedAssets: bilingual("Items fully checked", "已完整檢查的項目"),
   readyToScan: bilingual("Ready to scan", "準備掃描"),
   readyToScanDetail: bilingual("Permission is saved. No scan has started for this item yet.", "掃描許可已儲存，這個項目尚未開始掃描。"),
   readyToScanNext: bilingual("Permission is saved. Start the scan from Scan progress.", "掃描許可已儲存；請到「掃描進度」開始掃描。"),
   incompleteAssets: bilingual("Needs attention", "需要處理"),
-  incompleteDetail: bilingual("Some checks did not finish; you can continue them", "部分檢查尚未完成，可以繼續執行"),
   pendingAssets: bilingual("Not set up yet", "尚未設定"),
-  pendingDetail: bilingual("Choose checks for these items in step 3", "在步驟 3 為這些項目選擇檢查方式"),
   metricsLabel: bilingual("What the product can currently see", "產品目前看得到的摘要"),
   unknownTitle: bilingual("Sources still needing data: {count}", "{count} 個來源還需要資料"),
   unknownBody: bilingual("Connect or import these sources to see what they contain.", "連接或匯入這些來源，就能查看其中內容。"),
@@ -472,8 +470,7 @@ const pageCopy = {
   focusedReviewTitle: bilingual("Review and start", "確認後開始"),
   editInputs: bilingual("Edit inputs", "編輯輸入"),
   backToReview: bilingual("Back to review", "返回確認"),
-  pendingNoticeTitle: bilingual("Choose an item below", "從下方選擇一個項目"),
-  pendingNoticeBody: bilingual("Select an item to see the checks we recommend for it.", "選取項目後，就會看到我們建議的檢查方式。"),
+  pendingNoticeTitle: bilingual("Choose an item to see its checks", "選擇項目以查看檢查方式"),
   selectedCount: bilingual("{count} selected", "已選 {count} 項"),
   chooseAsset: bilingual("Choose {name}", "選取 {name}"),
   incompatibleSelection: bilingual("Set up each website or internal system separately. Finish or clear the current selection first.", "網站或內部系統需要逐一設定；請先完成或清除目前的選取。"),
@@ -787,6 +784,7 @@ export function CoveragePage({
   const [showSourceForm, setShowSourceForm] = useState(false);
   const [showWorkspaceForm, setShowWorkspaceForm] = useState(Boolean(guidedLocalProfile));
   const [showProviderSetup, setShowProviderSetup] = useState(guidedCloudRoute);
+  const [sourceSetupOpen, setSourceSetupOpen] = useState(() => assets.length === 0 && sources.length === 0);
   const [sourceKind, setSourceKind] = useState<SourceKind>("aws_organization");
   const [profile, setProfile] = useState<SnapshotParserProfile>("cloudquery");
   const [sourceLabel, setSourceLabel] = useState<string>(() => text(sourceDefinitions.aws_organization.label));
@@ -817,6 +815,7 @@ export function CoveragePage({
   const [showAdvancedExternalSettings, setShowAdvancedExternalSettings] = useState(false);
   const [showCompletedSetup, setShowCompletedSetup] = useState(false);
   const [providerConnection, setProviderConnection] = useState<ProviderConnectionBoundary>();
+  const [providerCleanupNeedsAttention, setProviderCleanupNeedsAttention] = useState(false);
 
   const counts = useMemo(
     () => Object.fromEntries(coverageStates.map((state) => [state, coverage.filter((item) => item.state === state).length])) as Record<CoverageState, number>,
@@ -840,6 +839,8 @@ export function CoveragePage({
   ).length;
   const unknownSourceCount = coverage.filter((item) => item.state === "source_unavailable_unknown").length;
   const connectedNoAssetCount = coverage.filter((item) => item.state === "source_connected_none").length;
+  const hasExistingInputs = assets.length > 0 || sources.length > 0;
+  const useCompactAssetList = filteredAssets.length > 4;
   const frozenExternalGrants = scopeGrants.filter((grant) => grant.externalScope);
   const selectedSource = sourceDefinitions[sourceKind];
   const selectedLocalInput = localInputDefinitions[workspaceInputProfile];
@@ -1013,7 +1014,9 @@ export function CoveragePage({
     setShowSourceForm(false);
     setShowProviderSetup(guidedCloudRoute);
     setShowWorkspaceForm(Boolean(guidedLocalProfile));
+    setSourceSetupOpen(assets.length === 0 && sources.length === 0);
     setProviderConnection(undefined);
+    setProviderCleanupNeedsAttention(false);
     if (guidedLocalProfile) {
       setWorkspaceInputProfile(guidedLocalProfile);
       setWorkspaceLabel(text(localInputDefinitions[guidedLocalProfile].label));
@@ -1024,6 +1027,7 @@ export function CoveragePage({
 
   useEffect(() => {
     if (!focusSetup) return undefined;
+    setSourceSetupOpen(true);
     setShowProviderSetup(focusSetup === "provider");
     setShowSourceForm(focusSetup === "source");
     setShowWorkspaceForm(focusSetup === "workspace");
@@ -1037,6 +1041,21 @@ export function CoveragePage({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [caseId, focusSetup]);
+
+  useEffect(() => {
+    if (providerCleanupNeedsAttention) setShowProviderSetup(true);
+  }, [providerCleanupNeedsAttention]);
+
+  const reviewProviderCleanup = () => {
+    setShowCompletedSetup(true);
+    setSourceSetupOpen(true);
+    setShowProviderSetup(true);
+    window.requestAnimationFrame(() => {
+      const cleanupTarget = document.getElementById("provider-cleanup-attention");
+      cleanupTarget?.focus();
+      (cleanupTarget ?? document.getElementById("coverage-cloud-connection"))?.scrollIntoView({ block: "start" });
+    });
+  };
 
   useEffect(() => {
     const asset = guidedPendingAsset;
@@ -1202,7 +1221,7 @@ export function CoveragePage({
     <article key="provider" className={showProviderSetup ? "coverage-input-card coverage-input-card--active" : "coverage-input-card"}>
       <span><Icon name="database" size={20} /></span>
       <div><strong>{text(pageCopy.providerTitle)}</strong><p>{text(pageCopy.providerBody)}</p></div>
-      <button className="button button--secondary button--small" type="button" disabled={busy} aria-expanded={showProviderSetup} onClick={() => { setShowProviderSetup((value) => !value); setShowSourceForm(false); setShowWorkspaceForm(false); }}>
+      <button className="button button--secondary button--small" type="button" disabled={busy} aria-expanded={showProviderSetup} aria-controls="coverage-cloud-connection" onClick={() => { setShowProviderSetup((value) => !value); setShowSourceForm(false); setShowWorkspaceForm(false); }}>
         {text(showProviderSetup ? pageCopy.providerClose : pageCopy.providerOpen)}
       </button>
     </article>
@@ -1282,7 +1301,7 @@ export function CoveragePage({
       <PageHeader
         eyebrow={text(pageCopy.headerEyebrow)}
         title={text(compactGuidedReview ? pageCopy.focusedReviewTitle : pageCopy.headerTitle)}
-        description={text(compactGuidedReview ? pageCopy.allowDescription : pageCopy.headerDescription)}
+        description={compactGuidedReview ? text(pageCopy.allowDescription) : undefined}
         actions={focusedGuidedReview ? (
           <button className="button button--secondary" type="button" onClick={() => setShowCompletedSetup((current) => !current)}>
             <Icon name={showCompletedSetup ? "check" : "settings"} size={18} />
@@ -1296,12 +1315,28 @@ export function CoveragePage({
         ) : undefined}
       />
 
-      {!compactGuidedReview && <section id="coverage-step-1" className="section-block coverage-step-section">
+      {providerCleanupNeedsAttention && (
+        <InlineNotice tone="warning" title={text(pageCopy.cleanupAttentionTitle)} announce>
+          <p>{text(pageCopy.cleanupAttentionBody)}</p>
+          <button className="button button--secondary button--small" type="button" onClick={reviewProviderCleanup}>
+            {text(pageCopy.reviewCleanup)}
+          </button>
+        </InlineNotice>
+      )}
+
+      <section id="coverage-step-1" className="section-block coverage-step-section" hidden={compactGuidedReview}>
         <div className="section-heading">
           <h2>{text(pageCopy.addTitle)}</h2>
-          <p>{text(pageCopy.addDescription)}</p>
+          {!hasExistingInputs && <p>{text(pageCopy.addDescription)}</p>}
         </div>
 
+        <details
+          className="coverage-source-setup"
+          open={sourceSetupOpen}
+          onToggle={(event) => setSourceSetupOpen(event.currentTarget.open)}
+        >
+          <summary>{text(providerCleanupNeedsAttention ? pageCopy.sourceSetupCleanupSummary : pageCopy.sourceSetupSummary)}</summary>
+          <div className="coverage-source-setup__body">
         {assessmentIntent ? (
           <>
             <div className="coverage-input-grid coverage-input-grid--guided">
@@ -1336,9 +1371,9 @@ export function CoveragePage({
           <p>{text(pageCopy.selectDoesNotAuthorizeBody)}</p>
         </details>
 
-        {showProviderSetup && (
-          <div id="coverage-cloud-connection" className="coverage-provider-slot">
+        <div id="coverage-cloud-connection" className="coverage-provider-slot" hidden={!showProviderSetup}>
             <ProviderAuthorizationPanel
+              key={caseId}
               caseId={caseId}
               sources={sources}
               engineManifests={engineManifests}
@@ -1348,9 +1383,9 @@ export function CoveragePage({
               onAuthorizationChanged={onAuthorizationChanged}
               onFindAssets={onStartDiscovery}
               onConnectionStateChanged={setProviderConnection}
+              onCleanupAttentionChanged={setProviderCleanupNeedsAttention}
             />
-          </div>
-        )}
+        </div>
 
       {showSourceForm && (
         <form id="source-snapshot-form" className="source-connect-panel" aria-labelledby="source-connect-title" onSubmit={connectSnapshot}>
@@ -1523,32 +1558,33 @@ export function CoveragePage({
         </form>
       )}
 
-      </section>}
+          </div>
+        </details>
+      </section>
 
       {!compactGuidedReview && <section id="coverage-step-2" className="section-block coverage-step-section">
-        <div className="section-heading section-heading--row coverage-step-heading">
-          <div>
-            <h2>{text(pageCopy.seeTitle)}</h2>
-            <p>{text(pageCopy.seeDescription)}</p>
-          </div>
-          <a
-            className="button button--primary"
-            href="#coverage-step-3"
-            onClick={(event) => {
-              if (scrollToCoverageStep("coverage-step-3")) event.preventDefault();
-            }}
-          >
-            {text(pageCopy.continueStep3)}
-            <Icon name="arrow" size={17} />
-          </a>
+        <div className="section-heading coverage-step-heading">
+          <h2>{text(pageCopy.seeTitle)}</h2>
         </div>
 
-        <section className="metrics-grid metrics-grid--four" aria-label={text(pageCopy.metricsLabel)}>
-          <MetricCard label={text(pageCopy.candidateAssets)} value={formatNumber(assets.length)} detail={text(pageCopy.candidateDetail)} icon="database" />
-          {scannedAssets > 0 && <MetricCard label={text(pageCopy.scannedAssets)} value={formatNumber(scannedAssets)} detail={text(pageCopy.scannedDetail)} icon="check" tone="accent" />}
-          {incompleteAssets > 0 && <MetricCard label={text(pageCopy.incompleteAssets)} value={formatNumber(incompleteAssets)} detail={text(pageCopy.incompleteDetail)} icon="warning" tone="warning" />}
-          {pendingAssets.length > 0 && <MetricCard label={text(pageCopy.pendingAssets)} value={formatNumber(pendingAssets.length)} detail={text(pageCopy.pendingDetail)} icon="lock" tone="warning" />}
-        </section>
+        <dl className="coverage-summary-row" aria-label={text(pageCopy.metricsLabel)}>
+          <div className="coverage-summary-chip">
+            <dt>{text(pageCopy.candidateAssets)}</dt>
+            <dd>{formatNumber(assets.length)}</dd>
+          </div>
+          {scannedAssets > 0 && <div className="coverage-summary-chip coverage-summary-chip--positive">
+            <dt>{text(pageCopy.scannedAssets)}</dt>
+            <dd>{formatNumber(scannedAssets)}</dd>
+          </div>}
+          {incompleteAssets > 0 && <div className="coverage-summary-chip coverage-summary-chip--warning">
+            <dt>{text(pageCopy.incompleteAssets)}</dt>
+            <dd>{formatNumber(incompleteAssets)}</dd>
+          </div>}
+          {pendingAssets.length > 0 && <div className="coverage-summary-chip coverage-summary-chip--warning">
+            <dt>{text(pageCopy.pendingAssets)}</dt>
+            <dd>{formatNumber(pendingAssets.length)}</dd>
+          </div>}
+        </dl>
 
       {(unknownSourceCount > 0 || connectedNoAssetCount > 0) && (
         <div className="coverage-truth-grid">
@@ -1640,16 +1676,13 @@ export function CoveragePage({
       </section>}
 
       {shouldPromptForFirstAsset(pendingAssets.length, selectedAssets.length) && (
-        <InlineNotice tone="warning" title={text(pageCopy.pendingNoticeTitle)}>
-          <p>{text(pageCopy.pendingNoticeBody)}</p>
-        </InlineNotice>
+        <InlineNotice tone="warning" title={text(pageCopy.pendingNoticeTitle)} />
       )}
 
       <section id="coverage-step-3" className="section-block coverage-step-section">
         {!compactGuidedReview && <div className="section-heading section-heading--row">
           <div>
             <h2>{text(pageCopy.allowTitle)}</h2>
-            <p>{text(pageCopy.allowDescription)}</p>
           </div>
           {selectedAssets.length > 0 && !conciseGuidedConsent && <span className="count-label">{text(pageCopy.selectedCount, { count: formatNumber(selectedAssets.length) })}</span>}
         </div>}
@@ -1951,7 +1984,10 @@ export function CoveragePage({
               : text(pageCopy.emptyFilterBody)}
           />
         ) : conciseGuidedConsent && filteredAssets.length === 1 ? null : (
-          <div className="asset-review-list">
+          <div
+            className={useCompactAssetList ? "asset-review-list asset-review-list--compact" : "asset-review-list"}
+            role="list"
+          >
             {filteredAssets.map((asset) => {
               const scopeEligible = scopeEligibleAssets.some((item) => item.id === asset.id);
               const meta = coverageMeta[asset.coverageState];
@@ -1967,9 +2003,10 @@ export function CoveragePage({
                 "asset-review-card",
                 selectedAssets.includes(asset.id) ? "asset-review-card--selected" : "",
                 showAssetNext ? "" : "asset-review-card--compact",
+                useCompactAssetList ? "asset-review-card--list-row" : "",
               ].filter(Boolean).join(" ");
               return (
-                <article key={asset.id} className={cardClassName}>
+                <article key={asset.id} className={cardClassName} role="listitem">
                   <label className="asset-review-card__choice">
                     <input
                       type="checkbox"
@@ -1989,6 +2026,9 @@ export function CoveragePage({
                       <small>{asset.platform === "external" && asset.internetExposed === false
                         ? text(pageCopy.internalAssetPlatform)
                         : platformMeta[asset.platform].label} · {text(assetTypeLabels[asset.type])}</small>
+                      {useCompactAssetList && showAssetNext && (
+                        <small className="asset-review-card__next-inline">{text(nextStepForAsset(asset))}</small>
+                      )}
                     </span>
                   </label>
                   <div className="asset-review-card__status">
@@ -1998,7 +2038,7 @@ export function CoveragePage({
                     />
                     <small>{text(authorizationStateLabels[asset.authorizationState])}</small>
                   </div>
-                  {showAssetNext && (
+                  {showAssetNext && !useCompactAssetList && (
                     <div className="asset-review-card__next">
                       <strong>{text(pageCopy.assetNext)}</strong>
                       <p>{text(nextStepForAsset(asset))}</p>

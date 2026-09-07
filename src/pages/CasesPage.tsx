@@ -1012,7 +1012,7 @@ export function CasesPage({
       <PageHeader
         eyebrow={text(showForm ? pageCopy.newCaseEyebrow : pageCopy.headerEyebrow)}
         title={text(showForm ? pageCopy.newCaseTitle : pageCopy.headerTitle)}
-        description={text(showForm ? pageCopy.newCaseDescription : pageCopy.headerDescription)}
+        description={showForm ? text(pageCopy.newCaseDescription) : undefined}
         actions={
           <button className="button button--primary" type="button" onClick={showForm ? closeForm : openBlankForm}>
             <Icon name={showForm ? "close" : "plus"} size={18} />
@@ -1252,13 +1252,9 @@ export function CasesPage({
             </h2>
             <p>{selectedCaseIdentity?.organizationName ? `${selectedCaseIdentity.organizationName} · ` : ""}{text(pageCopy.updated, { date: formatDateTime(selectedCase.updatedAt) })}</p>
             <div className="platform-list" aria-label={text(pageCopy.caseSystems)}>
-              {selectedCase.platforms.map((platform) => <span key={platform}>{platformLabel(platform)}</span>)}
+              {selectedCase.platforms.slice(0, 3).map((platform) => <span key={platform}>{platformLabel(platform)}</span>)}
+              {selectedCase.platforms.length > 3 && <span>+{formatNumber(selectedCase.platforms.length - 3)}</span>}
             </div>
-            {selectedCase.requestedActivities.length > 0 && (
-              <div className="platform-list" aria-label={text(pageCopy.caseIntent)}>
-                {selectedCase.requestedActivities.map((activity) => <span key={activity}>{activityLabel(activity)}</span>)}
-              </div>
-            )}
           </div>
           <button className="button button--light" type="button" onClick={interruptedEngineCount > 0 ? onOpenProgress : onContinue}>
             {text(interruptedEngineCount > 0 ? pageCopy.handleInterrupted : pageCopy.viewCoverage)}
@@ -1268,13 +1264,13 @@ export function CasesPage({
       )}
 
       {selectedCase && terminalRuns.length > 0 && (
-        <section className="section-block" aria-labelledby="verification-baseline-title">
-          <div className="section-heading section-heading--row">
-            <div>
-              <p className="eyebrow">{text(pageCopy.verificationEyebrow)}</p>
-              <h2 id="verification-baseline-title">{text(pageCopy.verificationTitle)}</h2>
-              <p>{text(pageCopy.verificationDescription)}</p>
-            </div>
+        <details className="section-block page-secondary-feature verification-baseline-panel">
+          <summary>
+            <span><strong>{text(pageCopy.verificationEyebrow)}</strong><small>{text(pageCopy.verificationTitle)}</small></span>
+            <Icon name="chevron" size={19} />
+          </summary>
+          <div className="verification-baseline-panel__body">
+            <p>{text(pageCopy.verificationDescription)}</p>
             <button className="button button--secondary" type="button" onClick={onOpenVerification}>{text(pageCopy.viewDifference)}</button>
           </div>
           <label className="field">
@@ -1299,7 +1295,7 @@ export function CasesPage({
               {text(busy ? pageCopy.creating : activeRun ? pageCopy.handleActiveFirst : pageCopy.startVerification)}
             </button>
           </div>
-        </section>
+        </details>
       )}
 
       {assetCount === 0 && unknownSourceCount > 0 && (
@@ -1373,8 +1369,8 @@ export function CasesPage({
         <>
         {runs.length > 0 && (
           <section className="metrics-grid page-outcome-metrics" aria-label={text(pageCopy.summaryAria)}>
-            <MetricCard label={text(pageCopy.assetsMetric)} value={formatNumber(assetCount)} detail={text(pageCopy.assetsMetricHelp)} icon="database" />
-            <MetricCard label={text(pageCopy.findingsMetric)} value={formatNumber(findingCount)} detail={text(pageCopy.findingsMetricHelp)} icon="findings" tone={findingCount ? "danger" : "default"} />
+            <MetricCard label={text(pageCopy.assetsMetric)} value={formatNumber(assetCount)} icon="database" />
+            <MetricCard label={text(pageCopy.findingsMetric)} value={formatNumber(findingCount)} icon="findings" tone={findingCount ? "danger" : "default"} />
           </section>
         )}
 
@@ -1390,7 +1386,7 @@ export function CasesPage({
 
       <section className="section-block">
         <div className="section-heading section-heading--row">
-          <div><p className="eyebrow">{text(pageCopy.allCasesEyebrow)}</p><h2>{text(pageCopy.allCasesTitle)}</h2></div>
+          <div><h2>{text(pageCopy.allCasesTitle)}</h2></div>
           <span className="count-label">{text(pageCopy.caseCount, { count: formatNumber(cases.length) })}</span>
         </div>
 

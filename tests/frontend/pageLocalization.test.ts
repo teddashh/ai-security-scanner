@@ -488,8 +488,8 @@ test("active and incomplete scans never present findings or exports as final", a
     "這只是暫時畫面，不代表沒有問題。",
     "These results are incomplete",
     "這些結果尚不完整",
-    "Some checks stopped before reaching a final result.",
-    "有些檢查在產生最終結果前就停止了。",
+    "Some checks stopped early. Review saved findings, but do not treat these counts as final.",
+    "部分檢查提早停止；請檢視已保存問題，但勿將目前數量視為最終結果。",
   ]) assert.ok(findings.includes(phrase), phrase);
   assert.match(findings, /activeRunStatuses\.has\(latestRun\.status\)/u);
   assert.match(findings, /activeRun[\s\S]*onOpenProgress/u);

@@ -1,4 +1,4 @@
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { FindingsPage } from "../../src/pages/FindingsPage";
@@ -34,8 +34,8 @@ const finding = (id: string, title: string, tags?: string[]): Finding => ({
   tags,
 });
 
-const renderPage = (findings: Finding[]) =>
-  render(
+const renderPage = (findings: Finding[]) => {
+  const result = render(
     <I18nProvider>
       <FindingsPage
         findings={findings}
@@ -54,6 +54,10 @@ const renderPage = (findings: Finding[]) =>
       />
     </I18nProvider>,
   );
+  const firstFinding = result.container.querySelector<HTMLButtonElement>(".finding-row");
+  if (firstFinding) fireEvent.click(firstFinding);
+  return result;
+};
 
 beforeEach(() => {
   window.localStorage.setItem(localeStorageKey, "en");

@@ -126,7 +126,7 @@ test("the first screen leads with one quick action and no duplicate marketing jo
   const onOpenExistingCase = vi.fn();
   const { container, getByRole, queryByRole, queryByText } = renderStart({ onOpenExistingCase });
 
-  expect(getByRole("heading", { level: 1, name: "Start a security check" })).toBeTruthy();
+  expect(getByRole("heading", { level: 1, name: "Security checks" })).toBeTruthy();
   expect(quickScanButton(container).textContent).toContain("127.0.0.1:9001");
   expect(queryByRole("link", { name: "Start a security check" })).toBeNull();
   expect(getByRole("button", { name: "Open my scans" })).toBeTruthy();
@@ -134,18 +134,23 @@ test("the first screen leads with one quick action and no duplicate marketing jo
   expect(queryByText("How it works")).toBeNull();
 });
 
-test("every scan the page offers also says what it will not do", () => {
+test("every offered scan keeps its capability and limit in one collapsed disclosure", () => {
   const { container } = renderStart();
 
   const cards = Array.from(container.querySelectorAll<HTMLElement>(".use-case-card"));
   // Primary and additional cards both render; a page showing only the first
   // four would leave five offers undescribed.
   expect(cards.length).toBe(useCaseDefinitions.length);
+  const disclosure = container.querySelector<HTMLDetailsElement>(".start-page__scan-limits");
+  expect(disclosure).not.toBeNull();
+  expect(disclosure!.open).toBe(false);
+  const limits = Array.from(disclosure!.querySelectorAll<HTMLElement>(".start-page__scan-limit"));
+  expect(limits.length).toBe(useCaseDefinitions.length);
 
-  for (const card of cards) {
-    const heading = card.querySelector("h3")?.textContent ?? "(unnamed)";
-    const does = card.querySelector(".use-case-card__does dd")?.textContent?.trim() ?? "";
-    const doesNot = card.querySelector(".use-case-card__does-not dd")?.textContent?.trim() ?? "";
+  for (const limit of limits) {
+    const heading = limit.querySelector("h3")?.textContent ?? "(unnamed)";
+    const does = limit.querySelector(".use-case-card__does dd")?.textContent?.trim() ?? "";
+    const doesNot = limit.querySelector(".use-case-card__does-not dd")?.textContent?.trim() ?? "";
     expect(does.length, `${heading} states no capability`).toBeGreaterThan(0);
     expect(doesNot.length, `${heading} states no limit`).toBeGreaterThan(0);
     expect(doesNot, `${heading} restates its capability as its limit`).not.toBe(does);

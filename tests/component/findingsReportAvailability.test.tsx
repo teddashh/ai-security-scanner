@@ -1,4 +1,4 @@
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { FindingsPage } from "../../src/pages/FindingsPage";
@@ -99,6 +99,9 @@ test("canonical findings render when no beginner report is required", () => {
 test("the finding browser keeps native list semantics, a non-complementary detail region, and accessible fields", () => {
   const { container } = renderPage(false);
   const findingList = container.querySelector(".finding-list");
+  const firstFinding = findingList?.querySelector<HTMLButtonElement>("button.finding-row");
+  if (!firstFinding) throw new Error("expected a finding row");
+  fireEvent.click(firstFinding);
   const findingDetail = container.querySelector(".finding-detail");
   const sourceForms = container.querySelectorAll("form.source-connect-panel--stacked");
 

@@ -47,7 +47,25 @@ test("SettingsPage renders the pure presentation result", () => {
   assert.match(source, /getSettingsRuntimePresentation\(mode, runtimeAvailable\)/u);
   assert.match(source, /name=\{runtimePresentation\.icon\}/u);
   assert.match(source, /text\(runtimePresentation\.status\)/u);
-  assert.match(source, /Language, safety, and local scan tools\./u);
+  assert.match(source, /data-runtime-state=\{runtimePresentation\.state\}/u);
+  assert.match(source, /onClick=\{onOpenNewScan\}/u);
+  assert.match(source, /onClick=\{onOpenProjects\}/u);
+  assert.match(source, /<PageHeader\s+title=[\s\S]*?\/>/u);
+  assert.doesNotMatch(source, /Language, safety, and local scan tools\./u);
   assert.doesNotMatch(source, /Continue working|繼續工作/u);
   assert.doesNotMatch(source, /English interface|繁體中文介面/u);
+});
+
+test("SettingsPage keeps detail-heavy lifecycle and privacy honesty collapsed", () => {
+  const source = readFileSync(new URL("../../src/pages/SettingsPage.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /<details className="settings-details">[\s\S]*Data boundaries/u);
+  assert.match(source, /connections and exports can send data out/u);
+  assert.match(source, /unless you connect a source or choose an export destination/u);
+  assert.match(source, /Advanced tools unavailable · localhost check still works/u);
+  assert.match(source, /Retry safely continues reusable download progress/u);
+  assert.match(source, /Cancelling keeps downloaded progress; Continue resumes it/u);
+  assert.match(source, /If Windows requires a restart/u);
+  assert.match(source, /stays marked Not tested; it is never shown as passed/u);
+  assert.doesNotMatch(source, /<details[^>]*\sopen(?:=|\s|>)/u);
 });

@@ -80,7 +80,7 @@ const workspace: CaseWorkspace = {
  * selection, so a fixed answer would turn every toggle in these tests into a
  * coordinate mismatch and hide the sentence under test behind an error notice.
  */
-const renderExport = () => {
+const renderExport = ({ demoMode = false }: { demoMode?: boolean } = {}) => {
   const onPreview = vi.fn((request: {
     runId: string;
     locale: "en" | "zh-Hant";
@@ -123,7 +123,7 @@ const renderExport = () => {
         workspace={workspace}
         selectedRunId={CHOSEN}
         exports={[]}
-        demoMode={false}
+        demoMode={demoMode}
         onPreview={onPreview}
         onExport={() => Promise.resolve()}
         onVerify={() => Promise.resolve()}
@@ -139,6 +139,13 @@ const consequence = (container: HTMLElement): string => {
   const paragraph = container.querySelector<HTMLElement>(".export-sharing-consequence");
   if (!paragraph) throw new Error("no sharing-consequence sentence rendered");
   return paragraph.textContent ?? "";
+};
+
+/** The complete disclosure, scope, and integrity decision beside Save. */
+const decisionSummary = (container: HTMLElement): HTMLElement => {
+  const summary = container.querySelector<HTMLElement>(".export-decision-summary");
+  if (!summary) throw new Error("no export decision summary rendered");
+  return summary;
 };
 
 /** A toggle located by the label text next to it, not by DOM position. */
@@ -162,11 +169,11 @@ const chooseCaseBundle = (container: HTMLElement) => {
   fireEvent.click(input);
 };
 
-/** The integrity sentence heading the "what will be included" summary. */
-const integrityNote = (container: HTMLElement): string => {
-  const note = container.querySelector<HTMLElement>(".export-summary__note");
-  if (!note) throw new Error("no integrity note rendered");
-  return note.textContent ?? "";
+/** The mechanics kept in the collapsed package-details disclosure. */
+const detailNotes = (container: HTMLElement): string => {
+  return Array.from(container.querySelectorAll<HTMLElement>(".export-summary__note"))
+    .map((note) => note.textContent ?? "")
+    .join(" ");
 };
 
 /** The asset-relationship line of that summary, located by its own wording. */
@@ -272,9 +279,18 @@ test("the recommended format says plainly that it is not signed", async () => {
   const { container } = renderExport();
   await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
 
-  expect(integrityNote(container)).toContain("This format is not signed");
-  expect(integrityNote(container)).toContain("SHA-256 digest is kept in your project");
-  expect(integrityNote(container)).not.toContain("carries a local integrity signature");
+  const decision = decisionSummary(container);
+  expect(decision.closest("details")).toBeNull();
+  expect(decision.textContent).toContain("Sensitive identifiers hidden. Source files excluded.");
+  expect(decision.textContent).toContain("Selected-run report");
+  expect(decision.textContent).toContain("Unsigned: SHA-256 detects changes");
+  expect(decision.textContent).toContain("does not prove author, completeness, or correctness");
+  expect(decision.textContent).not.toContain("Locally signed");
+
+  const packageDetails = container.querySelector<HTMLDetailsElement>(".export-summary--details");
+  expect(packageDetails?.open).toBe(false);
+  expect(detailNotes(container)).toContain("This format is not signed");
+  expect(detailNotes(container)).toContain("SHA-256 digest is kept in your project");
 });
 
 test("the case bundle is the one format that describes a signature", async () => {
@@ -284,8 +300,28 @@ test("the case bundle is the one format that describes a signature", async () =>
   await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
 
   chooseCaseBundle(container);
-  await waitFor(() => expect(integrityNote(container)).toContain("carries a local integrity signature"));
-  expect(integrityNote(container)).not.toContain("This format is not signed");
+  await waitFor(() => expect(decisionSummary(container).textContent).toContain("Case-wide records; reports use the selected run"));
+
+  const decision = decisionSummary(container);
+  expect(decision.textContent).toContain("Locally signed for integrity only");
+  expect(decision.textContent).toContain("not proof of completeness or correctness");
+  expect(decision.textContent).not.toContain("Unsigned:");
+  expect(container.querySelector(".export-bundle-scope")).toBeNull();
+  expect(detailNotes(container)).toContain("case-wide assets, grants, coverage, scan history");
+  expect(detailNotes(container)).toContain("carries a local integrity signature");
+  expect(detailNotes(container)).not.toContain("This format is not signed");
+});
+
+test("the demo decision does not claim a verifiable digest", async () => {
+  const { container } = renderExport({ demoMode: true });
+
+  await waitFor(() => expect(decisionSummary(container).textContent).toContain("Selected-run demo sample"));
+  const decision = decisionSummary(container);
+  expect(decision.textContent).toContain("Demo only: no cryptographic signature or verifiable digest");
+  expect(decision.textContent).not.toContain("SHA-256 detects changes");
+  expect(detailNotes(container)).toBe("");
+  expect(container.textContent).toContain("This downloads a sample report");
+  expect(container.textContent).toContain("It does not contain results from a real scan");
 });
 
 test("a format that cannot carry asset relationships says so instead of showing a check", async () => {

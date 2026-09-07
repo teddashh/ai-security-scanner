@@ -10,14 +10,14 @@ export function PageHeader({
 }: {
   eyebrow?: string;
   title: string;
-  description: string;
+  description?: string;
   actions?: ReactNode;
 }) {
   return (
     <header className="page-header">
       <div className="page-header__copy">
         <h1 data-page-heading tabIndex={-1}>{title}</h1>
-        <p>{description}</p>
+        {description && <p>{description}</p>}
       </div>
       {actions && <div className="page-header__actions">{actions}</div>}
     </header>
@@ -33,7 +33,7 @@ export function MetricCard({
 }: {
   label: string;
   value: string | number;
-  detail: string;
+  detail?: string;
   icon: IconName;
   tone?: "default" | "accent" | "warning" | "danger";
 }) {
@@ -42,7 +42,7 @@ export function MetricCard({
       <div className="metric-card__icon"><Icon name={icon} size={19} /></div>
       <p className="metric-card__label">{label}</p>
       <p className="metric-card__value">{value}</p>
-      <p className="metric-card__detail">{detail}</p>
+      {detail && <p className="metric-card__detail">{detail}</p>}
     </article>
   );
 }
@@ -94,17 +94,19 @@ export function InlineNotice({
   tone = "info",
   title,
   children,
+  announce = false,
 }: {
   tone?: "info" | "warning" | "danger" | "success";
   title: string;
-  children: ReactNode;
+  children?: ReactNode;
+  announce?: boolean;
 }) {
   return (
-    <div className={cx("inline-notice", `inline-notice--${tone}`)} role={tone === "danger" ? "alert" : "note"}>
+    <div className={cx("inline-notice", `inline-notice--${tone}`)} role={tone === "danger" || announce ? "alert" : "note"}>
       <Icon name={tone === "success" ? "check" : tone === "warning" || tone === "danger" ? "warning" : "info"} size={19} />
       <div>
         <strong>{title}</strong>
-        <div>{children}</div>
+        {children && <div>{children}</div>}
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { AppShell } from "../../src/components/AppShell";
@@ -216,9 +216,84 @@ test("the shell keeps repeated navigation and privacy copy concise", () => {
   expect(container.querySelector(".language-switcher")).toBeNull();
   expect(container.querySelector(".brand__copy small")).toBeNull();
   expect(container.querySelectorAll(".nav-item small")).toHaveLength(0);
-  expect(container.querySelector(".privacy-note")?.textContent).toBe("Your data stays on this device");
+  expect(container.querySelector(".privacy-note strong")?.textContent).toBe("Local by default");
+  expect(container.querySelector(".privacy-note small")?.textContent).toBe(
+    "Data may leave this device when you connect a source or export results.",
+  );
   expect(queryByRole("button", { name: "English" })).toBeNull();
   expect(queryByRole("button", { name: "繁體中文" })).toBeNull();
+});
+
+test("active runtime setup keeps exact stage and progress visible while mechanics stay collapsed", () => {
+  const { container, getByRole } = renderShell({
+    runtime: {
+      provider: "managed_local",
+      available: false,
+      phase: "preparing",
+      detail: "test-only runtime detail",
+    },
+    runtimeSetup: {
+      phase: "download",
+      active: true,
+      prerequisiteRepairActive: false,
+      cancelRequested: false,
+      receivedBytes: 40,
+      totalBytes: 100,
+      progressPercent: 40,
+      resumedFromBytes: 10,
+      canCancel: true,
+      canRetry: false,
+      detail: "test-only setup detail",
+    },
+  });
+
+  expect(container.querySelector(".runtime-badge")?.textContent).toContain("Setting up local tools");
+  const visibleProgress = container.querySelector<HTMLElement>(".runtime-setup > .runtime-setup__progress--visible");
+  expect(visibleProgress).not.toBeNull();
+  expect(visibleProgress?.closest("details")).toBeNull();
+  expect(visibleProgress?.textContent).toContain("Downloading advanced local scan tools");
+  expect(visibleProgress?.textContent).toContain("40 bytes / 100 bytes · 40%");
+  const progress = visibleProgress?.querySelector("progress");
+  expect(progress?.getAttribute("aria-label")).toBe("Scan tool download progress");
+  expect(progress?.getAttribute("value")).toBe("40");
+  expect(progress?.getAttribute("max")).toBe("100");
+
+  const details = container.querySelector<HTMLDetailsElement>(".runtime-setup__details");
+  expect(details).not.toBeNull();
+  expect(details!.open).toBe(false);
+  expect(details!.textContent).toContain("download can be cancelled and resumed without starting over");
+  expect(details!.textContent).toContain("Continuing from 10 bytes already downloaded");
+  expect(details!.textContent).not.toContain("40 bytes / 100 bytes");
+  expect(container.querySelectorAll(".runtime-setup > .button")).toHaveLength(1);
+  expect(getByRole("button", { name: "Pause setup and keep download progress" })).toBeTruthy();
+});
+
+test("one recovery banner composes every concurrent truth and relevant retry action", () => {
+  const onRetryData = vi.fn();
+  const onRetryCaseSelection = vi.fn();
+  const { container } = renderShell({
+    dataUnavailable: true,
+    caseSelectionUnavailable: true,
+    onRetryData,
+    onRetryCaseSelection,
+    caseRecoveryDiagnostics: [
+      { caseId: "case-1", title: "Acme scan", code: "document_unreadable", preserved: true, documentBytes: 2048 },
+    ],
+  });
+
+  expect(container.querySelectorAll(".data-status-banner")).toHaveLength(1);
+  const banner = container.querySelector<HTMLElement>(".data-status-banner")!;
+  expect(banner.getAttribute("role")).toBe("alert");
+  expect(banner.textContent).toContain("need recovery");
+  expect(banner.textContent).toContain("Saved scans couldn't be refreshed");
+  expect(banner.textContent).toContain("That scan project couldn't be opened");
+  expect(banner.querySelectorAll(".data-status-banner__fact")).toHaveLength(3);
+  expect(banner.querySelectorAll(".data-status-banner__actions .button")).toHaveLength(2);
+
+  fireEvent.click(within(banner).getByRole("button", { name: "Refresh saved scans" }));
+  fireEvent.click(within(banner).getByRole("button", { name: "Open selected scan again" }));
+  expect(onRetryData).toHaveBeenCalledOnce();
+  expect(onRetryCaseSelection).toHaveBeenCalledOnce();
 });
 
 test("the mobile navigation modal locks page scroll and restores prior inline state on cleanup", async () => {

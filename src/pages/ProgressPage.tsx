@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Icon } from "../components/Icon";
-import { EmptyState, InlineNotice, MetricCard, PageHeader, ProgressBar } from "../components/Shared";
+import { EmptyState, InlineNotice, PageHeader, ProgressBar } from "../components/Shared";
 import { StatusPill } from "../components/StatusPill";
 import { useI18n, type BilingualText } from "../i18n";
 import { engineStatusMeta, executionStageMeta, runStatusMeta } from "../lib";
@@ -459,6 +459,11 @@ const copy = {
     zhTW: "已完整檢查 {covered}／{total} 個目標 · 開始於 {started}",
   },
   finished: { en: " · Ended {finished}", zhTW: " · 結束於 {finished}" },
+  elapsed: { en: "Elapsed {time}", zhTW: "已執行 {time}" },
+  elapsedUnderMinute: { en: "under 1 min", zhTW: "未滿 1 分鐘" },
+  elapsedMinutes: { en: "{count} min", zhTW: "{count} 分鐘" },
+  estimateUnavailable: { en: "Estimate unavailable", zhTW: "目前無可靠預估" },
+  lastSaved: { en: "Last saved {time}", zhTW: "最後保存 {time}" },
   overallProgress: { en: "Overall scan progress", zhTW: "整體掃描進度" },
   scanTechnicalDetails: { en: "Scan details and versions", zhTW: "掃描細節與版本" },
   knowledgeTitle: { en: "Knowledge dates used for this run", zhTW: "這一輪採用的知識日期" },
@@ -486,7 +491,7 @@ const copy = {
     zhTW: "有些檢查沒有完成。你仍可先查看已收到的結果，再打開下方檢查項目，看看需要處理什麼。",
   },
   workEyebrow: { en: "CHECKS", zhTW: "檢查項目" },
-  workTitle: { en: "See every check", zhTW: "查看每一項檢查" },
+  workTitle: { en: "Checks", zhTW: "檢查項目" },
   workDescription: {
     en: "Each check shows its result, current step, and whether you need to do anything next.",
     zhTW: "每項檢查都會顯示結果、目前進度，以及是否需要你接著處理。",
@@ -809,6 +814,13 @@ export function ProgressPage({
     () => selectedRun ? buildScanActivity(selectedRun, activityClock) : undefined,
     [activityClock, selectedRun],
   );
+  const elapsedMilliseconds = selectedRun
+    ? Math.max(0, Date.parse(selectedRun.finishedAt ?? activityClock.toISOString()) - Date.parse(selectedRun.startedAt))
+    : 0;
+  const elapsedMinutes = Math.floor(elapsedMilliseconds / 60_000);
+  const elapsedLabel = elapsedMinutes < 1
+    ? text(copy.elapsedUnderMinute)
+    : text(copy.elapsedMinutes, { count: formatNumber(elapsedMinutes) });
   const stateCounts = useMemo(
     () => Object.fromEntries(
       engineStates.map((state) => [state, selectedRun?.engineRuns.filter((engine) => engine.status === state).length ?? 0]),
@@ -889,7 +901,7 @@ export function ProgressPage({
   if (!selectedRun) {
     return (
       <div className="page">
-        <PageHeader eyebrow={text(copy.eyebrow)} title={text(copy.title)} description={text(copy.description)} />
+        <PageHeader eyebrow={text(copy.eyebrow)} title={text(copy.title)} />
         <EmptyState
           icon="progress"
           title={text(starting ? copy.startingTitle : emptyTitle)}
@@ -1041,7 +1053,6 @@ export function ProgressPage({
       <PageHeader
         eyebrow={text(copy.eyebrow)}
         title={text(copy.title)}
-        description={text(copy.description)}
         actions={(
           <div className="button-group">
             {canRetryLocalhostQuickScan && terminalLocalhostSummary && (
@@ -1203,6 +1214,11 @@ export function ProgressPage({
                 })}
                 {selectedRun.finishedAt ? text(copy.finished, { finished: showDateTime(selectedRun.finishedAt) }) : ""}
               </p>
+              <p className="run-overview__timing">
+                {text(copy.elapsed, { time: elapsedLabel })}
+                {activity?.active ? ` · ${text(copy.estimateUnavailable)}` : ""}
+                {` · ${text(copy.lastSaved, { time: showDateTime(activity?.lastProgressAt ?? selectedRun.finishedAt ?? selectedRun.startedAt) })}`}
+              </p>
               <ProgressBar value={selectedRun.progress} label={text(copy.overallProgress)} tone={selectedRun.status === "failed" ? "danger" : selectedRun.status === "partial" ? "warning" : "accent"} />
             </>
           )}
@@ -1251,8 +1267,7 @@ export function ProgressPage({
       )}
 
       {activity && (
-        <section className={`scan-activity${activity.stale ? " scan-activity--delayed" : ""}`} aria-labelledby="scan-activity-title">
-          <h2 id="scan-activity-title">{text(copy.activityTitle)}</h2>
+        <section className={`scan-activity scan-activity--compact${activity.stale ? " scan-activity--delayed" : ""}`} aria-label={text(copy.activityTitle)}>
           <div className="scan-activity__current" aria-live="polite">
             <span className="scan-activity__icon"><Icon name={activity.stale
               ? "warning"
@@ -1264,9 +1279,8 @@ export function ProgressPage({
                     ? "check"
                     : "warning"} size={20} /></span>
             <div>
-              <small>{text(copy.currentActivity)}</small>
               <strong>{text(copy.activityStates[activity.state].title)}</strong>
-              <p>{text(copy.activityStates[activity.state].body)}</p>
+              {(!activity.active || activity.stale) && <p>{text(copy.activityStates[activity.state].body)}</p>}
               <span>{text(copy.lastProgress)} · {showDateTime(activity.lastProgressAt)}</span>
               {activity.activeCheckNames.length > 0 && (
                 <span>{text(copy.activeScanTools)} · {activity.activeCheckNames.join(locale === "zh-TW" ? "、" : ", ")}</span>
@@ -1327,12 +1341,13 @@ export function ProgressPage({
         </div>
       </details>
 
-      {!blocked && !sharedInfrastructureFailure && <section className="metrics-grid metrics-grid--four" aria-label={text(copy.metricsAria)}>
-        <MetricCard label={text(copy.completed)} value={formatNumber(stateCounts.completed)} detail={text(copy.completedDetail)} icon="check" tone="accent" />
-        <MetricCard label={text(copy.partial)} value={formatNumber(stateCounts.partial)} detail={text(copy.partialDetail)} icon="warning" tone={stateCounts.partial ? "warning" : "default"} />
-        <MetricCard label={text(copy.failedCancelled)} value={formatNumber(stateCounts.failed + stateCounts.cancelled)} detail={text(copy.failedCancelledDetail)} icon="stop" tone={stateCounts.failed ? "danger" : "default"} />
-        <MetricCard label={text(copy.notRun)} value={formatNumber(stateCounts.not_executed)} detail={text(copy.notRunDetail)} icon="clock" tone={stateCounts.not_executed ? "warning" : "default"} />
-      </section>}
+      {!blocked && !sharedInfrastructureFailure && incompleteCount > 0 && (
+        <div className="scan-attention-summary" role="status" aria-label={text(copy.metricsAria)}>
+          {stateCounts.partial > 0 && <span><StatusPill label={text(copy.partial)} tone="warning" /><strong>{formatNumber(stateCounts.partial)}</strong></span>}
+          {stateCounts.failed + stateCounts.cancelled > 0 && <span><StatusPill label={text(copy.failedCancelled)} tone="danger" /><strong>{formatNumber(stateCounts.failed + stateCounts.cancelled)}</strong></span>}
+          {stateCounts.not_executed > 0 && <span><StatusPill label={text(copy.notRun)} tone="warning" /><strong>{formatNumber(stateCounts.not_executed)}</strong></span>}
+        </div>
+      )}
 
       {!blocked && !sharedInfrastructureFailure && incompleteCount > 0 && (
         <InlineNotice tone="warning" title={text(copy.incompleteTitle)}>
@@ -1343,9 +1358,7 @@ export function ProgressPage({
       <section className="section-block">
         <div className="section-heading section-heading--row">
           <div>
-            <p className="eyebrow">{text(copy.workEyebrow)}</p>
             <h2>{text(copy.workTitle)}</h2>
-            <p>{text(copy.workDescription)}</p>
           </div>
           {!(blocked && blocked.skippedCheckCount === 0) && (
             <span className="count-label">{workCountLabel(blocked ? 1 : visibleWorkCount)}</span>

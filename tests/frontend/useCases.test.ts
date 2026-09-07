@@ -92,7 +92,7 @@ test("AI-application onboarding is explicit, local, and does not ask users to hi
 });
 
 test("the start page leads with outcomes and keeps technical guidance progressive", () => {
-  assert.ok(startPageSource.includes('className="use-case-card__more"'));
+  assert.ok(startPageSource.includes('className="start-page__scan-limits"'));
   assert.ok(startPageSource.includes('className="start-page__more-use-cases"'));
   assert.ok(startPageSource.includes('className="start-page__scope-note"'));
 });

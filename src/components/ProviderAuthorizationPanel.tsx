@@ -47,6 +47,7 @@ interface ProviderAuthorizationPanelProps {
   onAuthorizationChanged: () => Promise<void>;
   onFindAssets: () => Promise<void>;
   onConnectionStateChanged?: (connection: ProviderConnectionBoundary | undefined) => void;
+  onCleanupAttentionChanged?: (needsAttention: boolean) => void;
 }
 
 export interface ProviderConnectionBoundary {
@@ -64,14 +65,22 @@ interface FieldCopy {
 const copy = {
   emptyTitle: { en: "Add a cloud account to this scan", zhTW: "把雲端帳號加入這次掃描" },
   emptyBody: {
-    en: "Choose AWS, Azure, Google Cloud, or Microsoft 365 above. Then prepare its official sign-in here.",
-    zhTW: "請先在上方選擇 AWS、Azure、Google Cloud 或 Microsoft 365，再回到這裡準備官方登入。",
+    en: "Use Add an inventory file above to add an AWS, Azure, Google Cloud, or Microsoft 365 source. Then prepare its official sign-in here.",
+    zhTW: "請先使用上方的「加入盤點檔」新增 AWS、Azure、Google Cloud 或 Microsoft 365 來源，再回到這裡準備官方登入。",
+  },
+  emptyCleanupBody: {
+    en: "Use Add an inventory file above to add the matching cloud account. Then return here to reconnect and remove only its recorded temporary resources.",
+    zhTW: "請先使用上方的「加入盤點檔」新增相符的雲端帳號，再回到這裡重新授權，並只移除已記錄的暫時資源。",
   },
   eyebrow: { en: "CLOUD SCAN", zhTW: "掃描雲端" },
   title: { en: "Prepare {provider} sign-in", zhTW: "準備登入 {provider}" },
   intro: {
-    en: "Use {provider}'s official sign-in to find risky settings, exposed resources, and access problems. The connection is read-only and expires automatically.",
-    zhTW: "透過 {provider} 官方登入，找出危險設定、暴露資源與權限問題。連線只有讀取權限，並會自動到期。",
+    en: "{provider} scanner access is read-only and expires automatically. It does not approve or start a scan or change cloud workloads.",
+    zhTW: "{provider} 掃描存取只有讀取權限，並會自動到期；不會授權或開始掃描，也不會變更雲端工作負載。",
+  },
+  introBootstrap: {
+    en: "{provider} scanner access is read-only and expires automatically; it does not approve or start a scan or change cloud workloads. Temporary-access setup may create only the dedicated IAM resources you review and confirm separately.",
+    zhTW: "{provider} 掃描存取只有讀取權限，並會自動到期；不會授權或開始掃描，也不會變更雲端工作負載。暫時存取設定只有在你另行檢視並確認後，才可能建立專用的 IAM 資源。",
   },
   statusActive: { en: "Connected until {expires}", zhTW: "已連接至 {expires}" },
   statusMissing: { en: "Not connected", zhTW: "尚未連接" },
@@ -81,29 +90,10 @@ const copy = {
     zhTW: "這個預覽只使用範例資料，不會開啟雲端登入頁。",
   },
   sourceLabel: { en: "Account to scan", zhTW: "要掃描的帳號" },
-  sourceHelp: {
-    en: "Choose the cloud account, tenant, or organization you added to this scan project.",
-    zhTW: "選擇你已加入這個掃描專案的雲端帳號、租用戶或組織。",
-  },
-  connectedTitle: { en: "Cloud scan connected", zhTW: "雲端掃描已連接" },
-  connectedBody: {
-    en: "Sign-in is ready. Continue when you want the app to find the resources available to this read-only connection.",
-    zhTW: "登入已準備好。要讓程式找出這個唯讀連線可查看的資源時，再按下繼續。",
-  },
   findAssets: { en: "Continue: find cloud assets", zhTW: "繼續：尋找雲端資產" },
   findingAssets: { en: "Finding cloud assets…", zhTW: "正在尋找雲端資產…" },
-  findAssetsHelp: {
-    en: "This reads the connected account's inventory. It does not approve or start a security scan.",
-    zhTW: "這一步只會讀取已連接帳號的資產清單，不會授權或開始安全掃描。",
-  },
   disconnect: { en: "Disconnect account", zhTW: "中斷帳號連線" },
-  connectCtaTitle: { en: "Prepare {provider} sign-in", zhTW: "準備登入 {provider}" },
-  connectCtaBody: {
-    en: "Cloud scanning needs a one-time setup file from your IT or cloud admin, because ai-security-scanner has no shared sign-in of its own. With that file you sign in on your provider's official page, using an existing read-only connection or temporary read-only access.",
-    zhTW: "掃描雲端需要 IT 或雲端管理員提供一次性的設定檔，因為 ai-security-scanner 沒有自己的共用登入。有了設定檔，你就能在雲端服務商的官方頁面登入，並使用既有的唯讀連線或暫時唯讀權限。",
-  },
   connectCta: { en: "Open the connection guide", zhTW: "開啟連線指南" },
-  connectionDetailsSummary: { en: "Connect {provider} when you are ready", zhTW: "準備好後連接 {provider}" },
   connectionDetailsIntro: {
     en: "Your IT team prepares this once for your organization.",
     zhTW: "這份設定由 IT 為組織準備一次即可。",
@@ -207,6 +197,7 @@ const copy = {
     en: "Complete every required non-secret field from your IT or cloud admin, then continue to {provider}.",
     zhTW: "請填妥 IT 或雲端管理員提供的所有必要非機密資料，再前往 {provider}。",
   },
+  capabilityDetails: { en: "Product capability details", zhTW: "產品能力詳細資料" },
   capabilityTitle: { en: "What this installed product can inspect", zhTW: "目前安裝版本可檢查的項目" },
   capabilityDisclaimerTitle: { en: "Capability is not scan evidence", zhTW: "產品能力不等於掃描證據" },
   capabilityDisclaimer: {
@@ -347,8 +338,10 @@ const copy = {
   ledgerPath: { en: "Private ledger path", zhTW: "私人清理台帳路徑" },
   cleanupAction: { en: "Remove only what this setup created", zhTW: "只移除這次設定建立的內容" },
   cleanupListEyebrow: { en: "Temporary-access cleanup", zhTW: "暫時存取清理" },
+  cleanupRegionLabel: { en: "Temporary-access cleanup", zhTW: "暫時存取清理" },
   cleanupListTitle: { en: "Earlier setup work still has a cleanup record", zhTW: "先前的暫時設定仍有清理紀錄" },
   cleanupListBody: { en: "These records contain no credentials. Reconnecting lets the app remove only the exact resources already recorded.", zhTW: "這些紀錄不含憑證；重新授權後，程式只會移除已精確記錄的資源。" },
+  retryCleanupCheck: { en: "Check cleanup again", zhTW: "重新檢查清理狀態" },
   cleanupProgress: { en: "Cleanup items finished: {completed} of {total}", zhTW: "{total} 個清理項目已完成 {completed} 個" },
   cleanupResume: { en: "Reconnect and continue cleanup", zhTW: "重新授權並繼續清理" },
   cleanupSelectProvider: { en: "Select the {provider} source first", zhTW: "請先選擇 {provider} 來源" },
@@ -805,6 +798,7 @@ export function ProviderAuthorizationPanel({
   onAuthorizationChanged,
   onFindAssets,
   onConnectionStateChanged,
+  onCleanupAttentionChanged,
 }: ProviderAuthorizationPanelProps) {
   const { text, formatDateTime, formatNumber } = useI18n();
   const providerSources = useMemo(
@@ -851,6 +845,20 @@ export function ProviderAuthorizationPanel({
   const bootstrapOperationIdRef = useRef<string | undefined>(undefined);
   const [bootstrapMessages, setBootstrapMessages] = useState<string[]>([]);
   const [cleanupObligations, setCleanupObligations] = useState<BootstrapCleanupObligationSummary[]>([]);
+  const cleanupError = error && (
+    error.kind === "cleanupList"
+    || error.kind === "cleanup"
+    || error.kind === "execute"
+  ) ? error : undefined;
+  const cleanupNeedsAttention = nativeMode && (
+    cleanupObligations.some((obligation) => obligation.status !== "completed")
+    || Boolean(bootstrapOperation && notice !== "cleaned")
+    || Boolean(cleanupError)
+  );
+
+  useEffect(() => {
+    onCleanupAttentionChanged?.(cleanupNeedsAttention);
+  }, [cleanupNeedsAttention, onCleanupAttentionChanged]);
 
   const showError = useCallback((kind: PanelErrorKind, cause?: unknown) => {
     setError({ kind, detail: providerAuthorizationTechnicalDetail(cause) });
@@ -1281,9 +1289,22 @@ export function ProviderAuthorizationPanel({
     try {
       await scannerService.cleanupProviderBootstrap(caseId, requestedOperationId, operatorConfig());
       await refreshCleanupObligations();
+      if (requestedOperationId === bootstrapOperation?.id) setBootstrapOperation(undefined);
       setNotice("cleaned");
     } catch (cleanupError) {
       showError("cleanup", cleanupError);
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const retryCleanupList = async () => {
+    setWorking(true);
+    clearFeedback();
+    try {
+      await refreshCleanupObligations();
+    } catch (listError) {
+      showError("cleanupList", listError);
     } finally {
       setWorking(false);
     }
@@ -1370,11 +1391,86 @@ export function ProviderAuthorizationPanel({
     </small>
   );
 
+  const cleanupAttentionContent = cleanupError || bootstrapOperation || cleanupObligations.length > 0 ? (
+    <div
+      id="provider-cleanup-attention"
+      className="provider-cleanup-attention"
+      role="region"
+      aria-label={text(copy.cleanupRegionLabel)}
+      tabIndex={-1}
+    >
+      {cleanupError && (
+        <div className="provider-auth-error" role="alert">
+          <p><Icon name="warning" size={16} />{text(copy.errors[cleanupError.kind])}</p>
+          {cleanupError.detail && <details><summary>{text(copy.errorTechnical)}</summary><pre>{cleanupError.detail}</pre></details>}
+          {cleanupError.kind === "cleanupList" && (
+            <button className="button button--secondary button--small" type="button" disabled={working} onClick={() => void retryCleanupList()}>
+              {text(copy.retryCleanupCheck)}
+            </button>
+          )}
+        </div>
+      )}
+
+      {bootstrapOperation && (
+        <InlineNotice tone="warning" title={text(copy.cleanupCurrentTitle)}>
+          <p>{text(copy.cleanupCurrentBody)}</p>
+          <details className="provider-auth-technical">
+            <summary>{text(copy.cleanupCurrentTechnical)}</summary>
+            <dl>
+              <div><dt>{text(copy.operationId)}</dt><dd><code>{bootstrapOperation.id}</code></dd></div>
+              {bootstrapOperation.cleanupPath && <div><dt>{text(copy.ledgerPath)}</dt><dd><code>{bootstrapOperation.cleanupPath}</code></dd></div>}
+            </dl>
+          </details>
+          <button className="button button--secondary button--small" type="button" disabled={working || !nativeMode} onClick={() => void cleanupBootstrap()}>{text(copy.cleanupAction)}</button>
+        </InlineNotice>
+      )}
+
+      {cleanupObligations.length > 0 && (
+        <section className="bootstrap-plan provider-cleanup-list" aria-labelledby="bootstrap-cleanup-title">
+          <div className="section-heading">
+            <p className="eyebrow">{text(copy.cleanupListEyebrow)}</p>
+            <h3 id="bootstrap-cleanup-title">{text(copy.cleanupListTitle)}</h3>
+            <p>{text(copy.cleanupListBody)}</p>
+          </div>
+          <ol>
+            {cleanupObligations.map((obligation) => {
+              const canResume = obligation.status !== "completed" && provider === obligation.provider;
+              return (
+                <li key={obligation.operationId}>
+                  <strong>{providerLabels[obligation.provider]} · {text(copy.cleanupStatuses[obligation.status])}</strong>
+                  <span>{text(copy.cleanupProgress, { completed: formatNumber(obligation.completedItems), total: formatNumber(obligation.totalItems) })}</span>
+                  <details className="provider-auth-technical">
+                    <summary>{text(copy.cleanupTechnical)}</summary>
+                    <dl>
+                      <div><dt>{text(copy.operationId)}</dt><dd><code>{obligation.operationId}</code></dd></div>
+                      <div><dt>{text(copy.cleanupSchema)}</dt><dd><code>{obligation.schemaVersion}</code></dd></div>
+                      <div><dt>{text(copy.cleanupStatus)}</dt><dd><code>{obligation.status}</code></dd></div>
+                    </dl>
+                  </details>
+                  {obligation.status !== "completed" && (
+                    <button className="button button--secondary button--small" type="button" disabled={working || !nativeMode || !canResume} onClick={() => void cleanupBootstrap(obligation.operationId)}>
+                      {provider === obligation.provider
+                        ? text(copy.cleanupResume)
+                        : text(copy.cleanupSelectProvider, { provider: providerLabels[obligation.provider] })}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      )}
+    </div>
+  ) : null;
+
   if (providerSources.length === 0) {
     return (
-      <InlineNotice tone="info" title={text(copy.emptyTitle)}>
-        <p>{text(copy.emptyBody)}</p>
-      </InlineNotice>
+      <section className="provider-auth-panel" aria-label={text(copy.emptyTitle)}>
+        <InlineNotice tone="info" title={text(copy.emptyTitle)}>
+          <p>{text(cleanupNeedsAttention ? copy.emptyCleanupBody : copy.emptyBody)}</p>
+        </InlineNotice>
+        {cleanupAttentionContent}
+      </section>
     );
   }
 
@@ -1394,7 +1490,7 @@ export function ProviderAuthorizationPanel({
         <div>
           <p className="eyebrow">{text(copy.eyebrow)}</p>
           <h2 id="provider-auth-title">{text(copy.title, { provider: providerName })}</h2>
-          <p>{text(copy.intro, { provider: providerName })}</p>
+          <p>{text(flowMode === "bootstrap" ? copy.introBootstrap : copy.intro, { provider: providerName })}</p>
         </div>
         {installed
           ? <StatusPill label={text(copy.statusActive, { expires: formatDateTime(installed.expires_at) })} tone="positive" />
@@ -1420,68 +1516,10 @@ export function ProviderAuthorizationPanel({
             </option>
           ))}
         </select>
-        <small>{text(copy.sourceHelp)}</small>
       </label>
-
-      {capabilityView && (
-        <section className="provider-capability" aria-labelledby="provider-capability-title">
-          <div className="provider-capability__heading">
-            <div>
-              <h3 id="provider-capability-title">{text(copy.capabilityTitle)}</h3>
-              <small>{text(copy.capabilityVersion, { version: capabilityView.definitionVersion })}</small>
-            </div>
-          </div>
-          <InlineNotice tone="warning" title={text(copy.capabilityDisclaimerTitle)}>
-            <p>{text(copy.capabilityDisclaimer)}</p>
-          </InlineNotice>
-          <div className="provider-capability__scope">
-            <strong>{text(copy.capabilityScope)}</strong>
-            {capabilityView.resourceScope
-              ? <code>{capabilityView.resourceScope}</code>
-              : <span>{text(copy.capabilityScopeUnknown)}</span>}
-          </div>
-          <div className="provider-capability__grid">
-            {capabilityView.cells.map((cell) => (
-              <article className={`provider-capability-card provider-capability-card--${cell.state}`} key={cell.dimension}>
-                <div className="provider-capability-card__heading">
-                  <h4>{text(copy.capabilityDimensions[cell.dimension])}</h4>
-                  <StatusPill
-                    dot={false}
-                    label={text(copy.capabilityStates[cell.state])}
-                    tone={cell.state === "supported" ? "positive" : cell.state === "partial" ? "warning" : "unknown"}
-                  />
-                </div>
-                <p>{text(cell.limitation)}</p>
-                <div className="provider-capability-card__profiles">
-                  <strong>{text(copy.capabilityProfiles)}</strong>
-                  {cell.engines.length > 0 ? (
-                    <ul>
-                      {cell.engines.map((engine) => (
-                        <li key={`${engine.id}:${engine.profile}`}>
-                          <span>{engine.name}{engine.version ? ` ${engine.version}` : ""}</span>
-                          <code>{engine.profile}</code>
-                          <small>{text(copy.capabilityAvailability[engine.availability])}</small>
-                          {engine.id !== "provider-native-discovery" && (
-                            <small>{text(copy.capabilitySupport[engine.supportStatus], { date: engine.supportUntil ?? "—" })}</small>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : <span>{text(copy.capabilityNoProfile)}</span>}
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
 
       {installed && (
         <div className="provider-current-access">
-          <div>
-            <strong><Icon name="check" size={17} />{text(copy.connectedTitle)}</strong>
-            <p>{text(copy.connectedBody)}</p>
-            <small>{text(copy.findAssetsHelp)}</small>
-          </div>
           <div className="provider-current-access__actions">
             <button className="button button--primary" type="button" disabled={working || disabled} onClick={() => void onFindAssets()}>
               <Icon name="arrow" size={17} />{text(findingAssets ? copy.findingAssets : copy.findAssets)}
@@ -1494,12 +1532,7 @@ export function ProviderAuthorizationPanel({
       )}
 
       {!installed && !prompt && !bootstrapPlan && provider && (
-        <section className="provider-auth-details" aria-labelledby="provider-setup-title">
-          <div className="provider-setup-heading">
-            <h3 id="provider-setup-title">{text(copy.connectionDetailsSummary, { provider: providerName })}</h3>
-            <p>{text(copy.connectCtaBody)}</p>
-          </div>
-
+        <section className="provider-auth-details">
           <details className="provider-connection-guide">
             <summary>{text(copy.connectCta)}</summary>
             <div className="provider-connection-guide__body">
@@ -1706,13 +1739,13 @@ export function ProviderAuthorizationPanel({
             <p>{text(flowMode === "bootstrap" ? copy.noSecretsBootstrap : copy.noSecretsPreferred)}</p>
           </InlineNotice>
 
-          {error && (
+          {error && !cleanupError && connectionDetailsOpen && (
             <div className="provider-auth-error" role="alert">
               <p><Icon name="warning" size={16} />{text(copy.errors[error.kind])}</p>
               {error.detail && <details><summary>{text(copy.errorTechnical)}</summary><pre>{error.detail}</pre></details>}
             </div>
           )}
-          {notice && <p className="provider-auth-success" role="status"><Icon name="check" size={16} />{text(copy.notices[notice])}</p>}
+          {notice && connectionDetailsOpen && <p className="provider-auth-success" role="status"><Icon name="check" size={16} />{text(copy.notices[notice])}</p>}
 
           <details className="provider-auth-technical">
             <summary>{text(copy.technicalSummary)}</summary>
@@ -1739,7 +1772,60 @@ export function ProviderAuthorizationPanel({
         </section>
       )}
 
-      {error && !connectionDetailsOpen && (
+      {capabilityView && (
+        <details className="provider-capability provider-auth-technical">
+          <summary>{text(copy.capabilityDetails)}</summary>
+          <div className="provider-capability__heading">
+            <div>
+              <h3>{text(copy.capabilityTitle)}</h3>
+              <small>{text(copy.capabilityVersion, { version: capabilityView.definitionVersion })}</small>
+            </div>
+          </div>
+          <InlineNotice tone="warning" title={text(copy.capabilityDisclaimerTitle)}>
+            <p>{text(copy.capabilityDisclaimer)}</p>
+          </InlineNotice>
+          <div className="provider-capability__scope">
+            <strong>{text(copy.capabilityScope)}</strong>
+            {capabilityView.resourceScope
+              ? <code>{capabilityView.resourceScope}</code>
+              : <span>{text(copy.capabilityScopeUnknown)}</span>}
+          </div>
+          <div className="provider-capability__grid">
+            {capabilityView.cells.map((cell) => (
+              <article className={`provider-capability-card provider-capability-card--${cell.state}`} key={cell.dimension}>
+                <div className="provider-capability-card__heading">
+                  <h4>{text(copy.capabilityDimensions[cell.dimension])}</h4>
+                  <StatusPill
+                    dot={false}
+                    label={text(copy.capabilityStates[cell.state])}
+                    tone={cell.state === "supported" ? "positive" : cell.state === "partial" ? "warning" : "unknown"}
+                  />
+                </div>
+                <p>{text(cell.limitation)}</p>
+                <div className="provider-capability-card__profiles">
+                  <strong>{text(copy.capabilityProfiles)}</strong>
+                  {cell.engines.length > 0 ? (
+                    <ul>
+                      {cell.engines.map((engine) => (
+                        <li key={`${engine.id}:${engine.profile}`}>
+                          <span>{engine.name}{engine.version ? ` ${engine.version}` : ""}</span>
+                          <code>{engine.profile}</code>
+                          <small>{text(copy.capabilityAvailability[engine.availability])}</small>
+                          {engine.id !== "provider-native-discovery" && (
+                            <small>{text(copy.capabilitySupport[engine.supportStatus], { date: engine.supportUntil ?? "—" })}</small>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : <span>{text(copy.capabilityNoProfile)}</span>}
+                </div>
+              </article>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {error && !cleanupError && !connectionDetailsOpen && (
         <div className="provider-auth-error" role="alert">
           <p><Icon name="warning" size={16} />{text(copy.errors[error.kind])}</p>
           {error.detail && <details><summary>{text(copy.errorTechnical)}</summary><pre>{error.detail}</pre></details>}
@@ -1831,55 +1917,7 @@ export function ProviderAuthorizationPanel({
         </section>
       )}
 
-      {bootstrapOperation && (
-        <InlineNotice tone="warning" title={text(copy.cleanupCurrentTitle)}>
-          <p>{text(copy.cleanupCurrentBody)}</p>
-          <details className="provider-auth-technical">
-            <summary>{text(copy.cleanupCurrentTechnical)}</summary>
-            <dl>
-              <div><dt>{text(copy.operationId)}</dt><dd><code>{bootstrapOperation.id}</code></dd></div>
-              {bootstrapOperation.cleanupPath && <div><dt>{text(copy.ledgerPath)}</dt><dd><code>{bootstrapOperation.cleanupPath}</code></dd></div>}
-            </dl>
-          </details>
-          <button className="button button--secondary button--small" type="button" disabled={working || !nativeMode} onClick={() => void cleanupBootstrap()}>{text(copy.cleanupAction)}</button>
-        </InlineNotice>
-      )}
-
-      {cleanupObligations.length > 0 && (
-        <section className="bootstrap-plan provider-cleanup-list" aria-labelledby="bootstrap-cleanup-title">
-          <div className="section-heading">
-            <p className="eyebrow">{text(copy.cleanupListEyebrow)}</p>
-            <h3 id="bootstrap-cleanup-title">{text(copy.cleanupListTitle)}</h3>
-            <p>{text(copy.cleanupListBody)}</p>
-          </div>
-          <ol>
-            {cleanupObligations.map((obligation) => {
-              const canResume = obligation.status !== "completed" && provider === obligation.provider;
-              return (
-                <li key={obligation.operationId}>
-                  <strong>{providerLabels[obligation.provider]} · {text(copy.cleanupStatuses[obligation.status])}</strong>
-                  <span>{text(copy.cleanupProgress, { completed: formatNumber(obligation.completedItems), total: formatNumber(obligation.totalItems) })}</span>
-                  <details className="provider-auth-technical">
-                    <summary>{text(copy.cleanupTechnical)}</summary>
-                    <dl>
-                      <div><dt>{text(copy.operationId)}</dt><dd><code>{obligation.operationId}</code></dd></div>
-                      <div><dt>{text(copy.cleanupSchema)}</dt><dd><code>{obligation.schemaVersion}</code></dd></div>
-                      <div><dt>{text(copy.cleanupStatus)}</dt><dd><code>{obligation.status}</code></dd></div>
-                    </dl>
-                  </details>
-                  {obligation.status !== "completed" && (
-                    <button className="button button--secondary button--small" type="button" disabled={working || !nativeMode || !canResume} onClick={() => void cleanupBootstrap(obligation.operationId)}>
-                      {provider === obligation.provider
-                        ? text(copy.cleanupResume)
-                        : text(copy.cleanupSelectProvider, { provider: providerLabels[obligation.provider] })}
-                    </button>
-                  )}
-                </li>
-              );
-            })}
-          </ol>
-        </section>
-      )}
+      {cleanupAttentionContent}
     </section>
   );
 }

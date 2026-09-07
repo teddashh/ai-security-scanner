@@ -1,10 +1,11 @@
-import { cleanup, render, within } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { ProviderAuthorizationPanel } from "../../src/components/ProviderAuthorizationPanel";
 import { I18nProvider, localeStorageKey } from "../../src/i18n";
+import { scannerService } from "../../src/services/scanner";
 import { projectSourceCapabilityView } from "../../src/sourceCapabilityPresentation";
-import type { ConnectedSource, EngineManifest } from "../../src/types";
+import type { ConnectedSource, EngineManifest, InstalledProviderAuthorization } from "../../src/types";
 
 // The capability matrix itself is covered by tests/frontend. What was never
 // covered is that the matrix reaches the screen: `node --experimental-strip-types`
@@ -59,16 +60,22 @@ const manifests = [
   manifest("maester", ["m365"], { status: "not_downloaded", runnable: false }),
 ];
 
-const renderPanel = () =>
+const renderPanel = ({
+  nativeMode = false,
+  onFindAssets = () => Promise.resolve(),
+}: {
+  nativeMode?: boolean;
+  onFindAssets?: () => Promise<void>;
+} = {}) =>
   render(
     <I18nProvider>
       <ProviderAuthorizationPanel
         caseId="case-1"
         sources={[microsoft365Source]}
         engineManifests={manifests}
-        nativeMode={false}
+        nativeMode={nativeMode}
         onAuthorizationChanged={() => Promise.resolve()}
-        onFindAssets={() => Promise.resolve()}
+        onFindAssets={onFindAssets}
       />
     </I18nProvider>,
   );
@@ -84,15 +91,13 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-// The section is named by `aria-labelledby`, so it has no stable locale
-// independent accessible name to query on. Its class is the stable hook.
-const capabilitySection = () => {
-  const section = document.querySelector<HTMLElement>("section.provider-capability");
-  expect(section).not.toBeNull();
-  return section!;
+const capabilityDisclosure = () => {
+  const details = document.querySelector<HTMLDetailsElement>("details.provider-capability");
+  expect(details).not.toBeNull();
+  return details!;
 };
 
-test("the capability section renders one card per projected dimension, in order", () => {
+test("the capability disclosure renders one card per projected dimension, in order", () => {
   const projection = projectSourceCapabilityView({
     provider: "microsoft365",
     source: microsoft365Source,
@@ -102,18 +107,19 @@ test("the capability section renders one card per projected dimension, in order"
 
   renderPanel();
 
-  const cards = capabilitySection().querySelectorAll("article.provider-capability-card");
+  const cards = capabilityDisclosure().querySelectorAll("article.provider-capability-card");
   expect(cards).toHaveLength(projection!.cells.length);
   expect(projection!.cells.length).toBe(6);
 });
 
-test("the capability section is a region named by its own heading", () => {
+test("capability information is in one default-collapsed details disclosure", () => {
   renderPanel();
 
-  const section = capabilitySection();
-  const heading = document.getElementById(section.getAttribute("aria-labelledby") ?? "");
-  expect(heading?.tagName).toBe("H3");
-  expect(heading?.textContent?.trim()).toBeTruthy();
+  const disclosures = document.querySelectorAll<HTMLDetailsElement>("details.provider-capability");
+  expect(disclosures).toHaveLength(1);
+  expect(disclosures[0]?.open).toBe(false);
+  expect(disclosures[0]?.querySelector(":scope > summary")?.textContent).toBe("Product capability details");
+  expect(disclosures[0]?.querySelector("h3")?.textContent).toBe("What this installed product can inspect");
 });
 
 test("each card carries the state the projection assigned to that dimension", () => {
@@ -142,7 +148,7 @@ test("each card carries the state the projection assigned to that dimension", ()
 test("the tenant scope is shown verbatim rather than as an unknown-scope fallback", () => {
   renderPanel();
 
-  expect(within(capabilitySection()).getByText(tenantScope).tagName).toBe("CODE");
+  expect(within(capabilityDisclosure()).getByText(tenantScope).tagName).toBe("CODE");
 });
 
 test("every rendered card resolves its copy instead of leaking a translation key", () => {
@@ -180,48 +186,135 @@ const setupSection = (): HTMLElement => {
   return section!;
 };
 
-test("the prerequisite that decides whether cloud scanning is possible is stated before any disclosure", () => {
-  // Connecting a cloud account is impossible until the user's organization
-  // registers its own application: `public_client_id` is a required field with
-  // no default, and the all-zero UUID is explicitly rejected. That was said only
-  // in `registrationNote`, which sits inside a "See the JSON template for IT"
-  // disclosure nested inside the connection-guide disclosure -- two collapsed
-  // layers below a first layer that read "Use your provider's official sign-in".
-  // For an individual, or an organization that will not do the registration,
-  // that first layer described a flow they can never complete.
+const panel = (): HTMLElement => {
+  const root = document.querySelector<HTMLElement>("section.provider-auth-panel");
+  expect(root).not.toBeNull();
+  return root!;
+};
+
+test("the unconnected first layer is limited to account, state, CTA, and one safety boundary", () => {
   renderPanel();
 
-  const firstLayer = textBeforeAnyDisclosureIsOpened(setupSection());
-  expect(firstLayer).toContain("one-time setup file from your IT or cloud admin");
-  expect(firstLayer).toContain("no shared sign-in of its own");
-  // The truthful half of the old sentence survives: it really is the provider's
-  // own page, once the prerequisite is met.
-  expect(firstLayer).toContain("official page");
-});
+  const firstLayer = textBeforeAnyDisclosureIsOpened(panel());
+  expect(firstLayer).toContain("Prepare Microsoft 365 sign-in");
+  expect(firstLayer).toContain("Not connected");
+  expect(firstLayer).toContain("Account to scan");
+  expect(firstLayer).toContain("Microsoft 365 · Microsoft 365");
+  expect(firstLayer).toContain("Microsoft 365 scanner access is read-only and expires automatically");
+  expect(firstLayer).toContain("It does not approve or start a scan or change cloud workloads");
+  expect(firstLayer).toContain("Open the connection guide");
+  expect(firstLayer).toContain("Product capability details");
+  expect(firstLayer.match(/does not approve or start a scan/gu)).toHaveLength(1);
+  expect(firstLayer).not.toContain("may create");
 
-test("stating the prerequisite did not flatten the engineering setup into the first layer", () => {
-  // The mirror. The test above is satisfiable by dumping every disclosure into
-  // the opening paragraph, which would replace one honesty problem with a wall
-  // of JSON no beginner can read. The first layer must gain the constraint and
-  // nothing else.
-  renderPanel();
-
-  const firstLayer = textBeforeAnyDisclosureIsOpened(setupSection());
+  expect(firstLayer).not.toContain("Choose a connection method");
+  expect(firstLayer).not.toContain("Your IT team prepares this once");
+  expect(firstLayer).not.toContain("What this installed product can inspect");
+  expect(firstLayer).not.toContain("Capability definition");
+  expect(firstLayer).not.toContain(tenantScope);
+  expect(firstLayer).not.toContain("Installed profiles");
+  expect(firstLayer).not.toContain("9999-12-31");
   expect(firstLayer).not.toContain("OAuth");
   expect(firstLayer).not.toContain("clientId");
   expect(firstLayer).not.toContain("Ask IT for the setup file");
 
-  // And the precise technical statement is still there to be opened.
+  expect(setupSection().textContent).toContain("Your IT team prepares this once for your organization");
   expect(setupSection().textContent).toContain(
     "ai-security-scanner does not provide a shared OAuth registration",
   );
 });
 
-test("the Traditional Chinese first layer names the same prerequisite", () => {
+test("temporary access distinguishes reviewed IAM setup from read-only scanner activity", () => {
+  renderPanel();
+
+  const guide = panel().querySelector<HTMLDetailsElement>("details.provider-connection-guide");
+  expect(guide).not.toBeNull();
+  guide!.open = true;
+  const temporaryAccess = within(guide!).getByRole("button", { name: /Have IT create temporary scan access/ });
+  fireEvent.click(temporaryAccess);
+
+  const firstLayer = textBeforeAnyDisclosureIsOpened(panel());
+  expect(firstLayer).toContain("scanner access is read-only and expires automatically");
+  expect(firstLayer).toContain("it does not approve or start a scan or change cloud workloads");
+  expect(firstLayer).toContain(
+    "Temporary-access setup may create only the dedicated IAM resources you review and confirm separately",
+  );
+  expect(firstLayer).not.toContain("does not change cloud resources");
+});
+
+test("collapsed capability details preserve exact scope, version, profiles, and support dates", () => {
+  const projection = projectSourceCapabilityView({
+    provider: "microsoft365",
+    source: microsoft365Source,
+    manifests,
+  })!;
+
+  renderPanel();
+
+  const details = capabilityDisclosure();
+  const detailText = details.textContent ?? "";
+  expect(details.open).toBe(false);
+  expect(detailText).toContain(tenantScope);
+  expect(detailText).toContain(`Capability definition ${projection.definitionVersion}`);
+  for (const cell of projection.cells) {
+    for (const engine of cell.engines) {
+      expect(detailText).toContain(engine.profile);
+      if (engine.id !== "provider-native-discovery" && engine.supportUntil) {
+        expect(detailText).toContain(engine.supportUntil);
+      }
+    }
+  }
+});
+
+test("the connected first layer keeps exact account, permission state, expiry, and primary action", async () => {
+  const authorization: InstalledProviderAuthorization = {
+    schema_version: "1.0.0",
+    case_id: "case-1",
+    source_id: microsoft365Source.id,
+    provider: "microsoft365",
+    source_kind: microsoft365Source.kind,
+    profile: "microsoft365_tenant_read_only_access_token",
+    credential_source: "provider_hosted",
+    provider_identity: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    permissions: ["inventory", "configuration"],
+    expires_at: "2099-05-17T15:00:00.000Z",
+    allowed_engine_ids: [],
+    max_checkouts: 1,
+    safety_notice: "Read-only",
+  };
+  vi.spyOn(scannerService, "providerAuthorizationStatus").mockResolvedValue({
+    data: authorization,
+    mode: "native",
+  });
+
+  renderPanel({ nativeMode: true });
+
+  await waitFor(() => {
+    expect(panel().textContent).toContain("Connected until");
+    expect(panel().textContent).toContain("May 17");
+  });
+  const firstLayer = textBeforeAnyDisclosureIsOpened(panel());
+  expect(firstLayer).toContain("Microsoft 365 · Microsoft 365");
+  expect(firstLayer).toContain("Continue: find cloud assets");
+  expect(firstLayer).toContain("Disconnect account");
+  expect(firstLayer).toContain("Microsoft 365 scanner access is read-only and expires automatically");
+  expect(firstLayer.match(/does not approve or start a scan/gu)).toHaveLength(1);
+  expect(firstLayer).not.toContain("Cloud scan connected");
+  expect(firstLayer).not.toContain("Sign-in is ready");
+  expect(firstLayer).not.toContain("What this installed product can inspect");
+  expect(firstLayer).not.toContain(tenantScope);
+});
+
+test("the Traditional Chinese first layer keeps the same concise safety boundary", () => {
   window.localStorage.setItem(localeStorageKey, "zh-TW");
   renderPanel();
 
-  const firstLayer = textBeforeAnyDisclosureIsOpened(setupSection());
-  expect(firstLayer).toContain("需要 IT 或雲端管理員提供一次性的設定檔");
-  expect(firstLayer).toContain("沒有自己的共用登入");
+  const firstLayer = textBeforeAnyDisclosureIsOpened(panel());
+  expect(firstLayer).toContain("尚未連接");
+  expect(firstLayer).toContain("要掃描的帳號");
+  expect(firstLayer).toContain("掃描存取只有讀取權限，並會自動到期");
+  expect(firstLayer).toContain("不會授權或開始掃描，也不會變更雲端工作負載");
+  expect(firstLayer).toContain("開啟連線指南");
+  expect(firstLayer).toContain("產品能力詳細資料");
+  expect(firstLayer).not.toContain("目前安裝版本可檢查的項目");
 });

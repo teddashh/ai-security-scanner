@@ -38,8 +38,7 @@ interface MarketingCopy {
   localhostQuickScanPortHelp: string;
   localhostQuickScanPortError: string;
   choiceTitle: string;
-  choiceDescription: string;
-  cardDetails: string;
+  scopeAndLimits: string;
   moreWaysTitle: string;
   moreWaysDescription: string;
   controlSummary: string;
@@ -48,9 +47,9 @@ interface MarketingCopy {
 
 const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
   en: {
-    title: "Start a security check",
-    description: "Run a quick localhost check, or choose another target below.",
-    previewDescription: "Choose a target below to preview the scan setup.",
+    title: "Security checks",
+    description: "",
+    previewDescription: "Preview mode · choose a target to review its setup.",
     localhostQuickScanAction: "Check this computer · 127.0.0.1:9001",
     localhostQuickScanBusy: "Starting this check…",
     localhostQuickScanBoundary:
@@ -59,9 +58,8 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     localhostQuickScanPortLabel: "Local port",
     localhostQuickScanPortHelp: "Enter a port from 1 to 65535.",
     localhostQuickScanPortError: "Enter a whole-number port from 1 to 65535.",
-    choiceTitle: "What do you want to protect first?",
-    choiceDescription: "Choose the closest match. You can add more checks later.",
-    cardDetails: "See what’s included",
+    choiceTitle: "Choose a target",
+    scopeAndLimits: "Scope and limits",
     moreWaysTitle: "More ways to scan",
     moreWaysDescription: "Source code, cloud accounts, infrastructure code, containers, and Kubernetes",
     controlSummary: "How scanning stays under your control",
@@ -105,9 +103,9 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     },
   },
   "zh-TW": {
-    title: "開始資安檢查",
-    description: "先快速檢查 localhost，或在下方選擇其他目標。",
-    previewDescription: "在下方選擇目標，預覽掃描設定流程。",
+    title: "資安檢查",
+    description: "",
+    previewDescription: "預覽模式 · 選擇目標以查看掃描設定。",
     localhostQuickScanAction: "檢查這台電腦 · 127.0.0.1:9001",
     localhostQuickScanBusy: "正在開始檢查…",
     localhostQuickScanBoundary:
@@ -116,9 +114,8 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     localhostQuickScanPortLabel: "本機連接埠",
     localhostQuickScanPortHelp: "請輸入 1 到 65535 的連接埠。",
     localhostQuickScanPortError: "請輸入 1 到 65535 的整數連接埠。",
-    choiceTitle: "你想先保護哪裡？",
-    choiceDescription: "選一個最接近的項目就好，其他檢查之後都能再加入。",
-    cardDetails: "查看包含哪些檢查",
+    choiceTitle: "選擇目標",
+    scopeAndLimits: "範圍與限制",
     moreWaysTitle: "更多檢查方式",
     moreWaysDescription: "一般程式碼、雲端帳號、基礎設施程式碼、容器映像與 Kubernetes",
     controlSummary: "了解掃描如何由你控制",
@@ -223,27 +220,6 @@ export function StartPage({
           <Icon name="arrow" size={17} />
         </button>
 
-        <details className="use-case-card__more">
-          <summary>{marketing.cardDetails}</summary>
-          <dl className="use-case-card__details">
-            <div>
-              <dt>{copy.wantLabel}</dt>
-              <dd>{card.want}</dd>
-            </div>
-            <div>
-              <dt>{copy.prepareLabel}</dt>
-              <dd>{card.prepare}</dd>
-            </div>
-            <div className="use-case-card__does">
-              <dt><Icon name="check" size={15} /> {copy.productDoesLabel}</dt>
-              <dd>{card.productDoes}</dd>
-            </div>
-            <div className="use-case-card__does-not">
-              <dt><Icon name="close" size={15} /> {copy.productDoesNotLabel}</dt>
-              <dd>{card.productDoesNot}</dd>
-            </div>
-          </dl>
-        </details>
       </article>
     );
   };
@@ -253,7 +229,9 @@ export function StartPage({
       <section className="start-page__hero" aria-labelledby="start-page-title">
         <div className="start-page__hero-copy">
           <h1 id="start-page-title" data-page-heading tabIndex={-1}>{marketing.title}</h1>
-          <p className="start-page__hero-description">{nativeMode ? marketing.description : marketing.previewDescription}</p>
+          {(nativeMode ? marketing.description : marketing.previewDescription) && (
+            <p className="start-page__hero-description">{nativeMode ? marketing.description : marketing.previewDescription}</p>
+          )}
           <div className="start-page__hero-actions">
             {nativeMode && (
               <div className="start-page__localhost-quick-scan">
@@ -314,7 +292,6 @@ export function StartPage({
       <section id="start-a-check" className="start-page__choices" aria-labelledby="use-case-choice-title">
         <div className="start-page__section-heading">
           <h2 id="use-case-choice-title">{marketing.choiceTitle}</h2>
-          <p>{marketing.choiceDescription}</p>
         </div>
 
         <div className="use-case-grid">
@@ -331,6 +308,30 @@ export function StartPage({
           </summary>
           <div className="use-case-grid">
             {additionalUseCases.map(renderUseCaseCard)}
+          </div>
+        </details>
+
+        <details className="start-page__scan-limits">
+          <summary>{marketing.scopeAndLimits}</summary>
+          <div className="start-page__scan-limit-list">
+            {useCaseDefinitions.map((useCase) => {
+              const card = copy.cards[useCase.id];
+              return (
+                <section key={useCase.id} className="start-page__scan-limit">
+                  <h3>{card.title}</h3>
+                  <dl>
+                    <div className="use-case-card__does">
+                      <dt><Icon name="check" size={15} /> {copy.productDoesLabel}</dt>
+                      <dd>{card.productDoes}</dd>
+                    </div>
+                    <div className="use-case-card__does-not">
+                      <dt><Icon name="close" size={15} /> {copy.productDoesNotLabel}</dt>
+                      <dd>{card.productDoesNot}</dd>
+                    </div>
+                  </dl>
+                </section>
+              );
+            })}
           </div>
         </details>
       </section>

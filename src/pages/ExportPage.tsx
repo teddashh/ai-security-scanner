@@ -45,8 +45,8 @@ const copy = {
   eyebrow: { en: "EXPORT", zhTW: "匯出" },
   title: { en: "Export results", zhTW: "匯出結果" },
   description: {
-    en: "Choose a format, review privacy, then save locally.",
-    zhTW: "選擇格式、確認隱私設定，再儲存到本機。",
+    en: "Choose a format and save locally.",
+    zhTW: "選擇格式並儲存到本機。",
   },
   preparing: { en: "Preparing…", zhTW: "準備中…" },
   exportDemo: { en: "Download {format} demo file", zhTW: "下載「{format}」展示檔" },
@@ -106,6 +106,25 @@ const copy = {
     zhTW: "將附上未遮罩的掃描器原始檔，可能含機密；僅交付可信對象。",
   },
   previewPending: { en: "Checking file contents…", zhTW: "正在確認檔案內容…" },
+  scopeSelectedRun: { en: "Selected-run report", zhTW: "所選掃描輪次報告" },
+  scopeCaseBundle: {
+    en: "Case-wide records; reports use the selected run",
+    zhTW: "案件全域紀錄；報告使用所選輪次",
+  },
+  scopeDemo: { en: "Selected-run demo sample", zhTW: "所選掃描輪次展示範例" },
+  scopeUnavailable: { en: "No saved scan selected", zhTW: "尚未選擇已保存的掃描" },
+  integritySignedDecision: {
+    en: "Locally signed for integrity only; not proof of completeness or correctness",
+    zhTW: "本機簽章只驗證檔案完整性；不能證明掃描完整或結果正確",
+  },
+  integrityUnsignedDecision: {
+    en: "Unsigned: SHA-256 detects changes but does not prove author, completeness, or correctness",
+    zhTW: "未簽章：SHA-256 可偵測檔案變更，但不能證明作者、掃描完整或結果正確",
+  },
+  integrityDemoDecision: {
+    en: "Demo only: no cryptographic signature or verifiable digest",
+    zhTW: "僅供展示：沒有密碼學簽章或可驗證摘要",
+  },
   // Only the case bundle is signed: `export.rs` attaches an envelope, while
   // every other format takes the `case_service.rs` path that sets
   // `signature: None` and stores UNSIGNED_SCHEMA_NOTICE. This sentence headed
@@ -120,17 +139,11 @@ const copy = {
     en: "This format is not signed. A SHA-256 digest is kept in your project and can detect later changes to the file, but nothing in the file establishes who produced it, or that the scan was complete or correct.",
     zhTW: "這個格式不會簽章。專案內會保存 SHA-256 摘要，可用來發現檔案之後被修改，但檔案本身無法證明是誰產出的，也不能證明掃描完整或結果正確。",
   },
-  caseBundleScopeTitle: {
-    en: "Includes case-wide records; reports use the selected run.",
-    zhTW: "包含案件全域紀錄；報告使用所選輪次。",
-  },
-  caseBundleScopeDetails: { en: "Technical scope details", zhTW: "技術範圍細節" },
   caseBundleScopeBody: {
     en: "The bundle includes case-wide assets, grants, coverage, scan history, findings, workflow history, comparisons, and raw source files if you choose to include them. Reports select observations and evidence from the chosen scan run. For older observations without a frozen snapshot, wording may use the current finding; workflow status and asset names may also reflect the current case.",
     zhTW: "案件包會包含整個案件的資產、授權、涵蓋、掃描歷史、問題、工作流程歷史、比較，以及你選擇附上的原始來源檔案。包內報告會選取所選掃描輪次的觀察與證據；較舊且沒有凍結快照的觀察，文字可能使用目前問題內容，工作流程狀態與資產名稱也可能反映目前案件。",
   },
   technicalPreview: { en: "Technical preview details", zhTW: "預覽技術細節" },
-  packageDetails: { en: "Coverage, file contents, and integrity details", zhTW: "涵蓋、檔案內容與完整性細節" },
   coverageDetails: { en: "See what was checked and what was not", zhTW: "查看哪些已檢查、哪些未完成" },
   previewFailure: { en: "Preview failure", zhTW: "預覽錯誤" },
   backendWarning: { en: "Recorded export warning", zhTW: "核心記錄的匯出警告" },
@@ -153,9 +166,7 @@ const copy = {
   incompleteWorkDetail: { en: "Includes partly completed, failed, or cancelled scanner jobs.", zhTW: "包含部分完成、失敗或取消的掃描工作。" },
   notRun: { en: "Scanner jobs not run", zhTW: "未執行的掃描工作" },
   notRunDetail: { en: "Their reasons are exported and are never rewritten as passed.", zhTW: "原因會一起匯出，永遠不會被改寫成通過。" },
-  formatEyebrow: { en: "FILE TYPE", zhTW: "檔案類型" },
   formatTitle: { en: "Choose a format", zhTW: "選擇格式" },
-  formatDescription: { en: "HTML for people; JSON for tools.", zhTW: "HTML 給人閱讀；JSON 供工具使用。" },
   advancedFormats: { en: "More formats", zhTW: "更多格式" },
   advancedFormatsHint: {
     en: "For specialist or standards-based workflows.",
@@ -454,13 +465,25 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
   // signs, who serializes `asset_relations`, who carries artifacts -- and
   // collapsing them into one flag is how the summary came to state one format's
   // properties for all six.
-  const formatIsSigned = format === "case_bundle";
+  const formatIsSigned = !demoMode && format === "case_bundle";
   const formatCarriesAssetRelations = format === "case_bundle";
   const sharingConsequence = redactSensitiveValues
     ? copy.sharingRedacted
     : rawSourcesAttached
       ? copy.sharingRawSources
       : copy.sharingIdentifiable;
+  const scopeConsequence = demoMode
+    ? copy.scopeDemo
+    : !selectedRun
+      ? copy.scopeUnavailable
+      : format === "case_bundle"
+        ? copy.scopeCaseBundle
+        : copy.scopeSelectedRun;
+  const integrityConsequence = demoMode
+    ? copy.integrityDemoDecision
+    : formatIsSigned
+      ? copy.integritySignedDecision
+      : copy.integrityUnsignedDecision;
   const privacyTone = rawSourcesAttached ? "danger" : redactSensitiveValues ? "neutral" : "warning";
   const shownCount = (value: number | undefined): string => value === undefined ? "—" : formatNumber(value);
   const renderFormatCard = (id: ExportFormat) => {
@@ -527,9 +550,7 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
       <div className="export-layout">
         <section className="section-block export-builder">
           <div className="section-heading">
-            <p className="eyebrow">{text(copy.formatEyebrow)}</p>
             <h2>{text(copy.formatTitle)}</h2>
-            <p>{text(copy.formatDescription)}</p>
           </div>
 
           <fieldset className="export-format-fieldset">
@@ -577,19 +598,9 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
             )}
           </div>
 
-          {format === "case_bundle" && !demoMode && (
-            <div className="export-bundle-scope">
-              <p>{text(copy.caseBundleScopeTitle)}</p>
-              <details className="page-technical-details">
-                <summary>{text(copy.caseBundleScopeDetails)}</summary>
-                <p>{text(copy.caseBundleScopeBody)}</p>
-              </details>
-            </div>
-          )}
-
           {previewError ? (
             <InlineNotice tone="danger" title={text(selectedRunUnavailable ? copy.runUnavailableTitle : copy.previewErrorTitle)}>
-              <p id="export-preview-status">{text(selectedRunUnavailable ? copy.runUnavailableBody : copy.previewErrorBody)}</p>
+              <p>{text(selectedRunUnavailable ? copy.runUnavailableBody : copy.previewErrorBody)}</p>
               {selectedRunUnavailable ? (
                 <a className="button button--secondary button--small" href="#findings">
                   <Icon name="findings" size={15} /> {text(copy.chooseRun)}
@@ -607,28 +618,27 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
                 </dl>
               </details>
             </InlineNotice>
-          ) : (
-            <>
-              <div
-                className={`export-privacy-status export-privacy-status--${privacyTone}`}
-                id="export-preview-status"
-                role={rawSourcesAttached ? "alert" : "status"}
-                aria-live={rawSourcesAttached ? "assertive" : "polite"}
-                aria-atomic="true"
-              >
-                <Icon name={rawSourcesAttached || !redactSensitiveValues ? "warning" : "lock"} size={17} />
-                <span className="export-sharing-consequence">
-                  {text(sharingConsequence)}{previewPending ? ` ${text(copy.previewPending)}` : ""}
-                </span>
-              </div>
-              {preview?.sensitiveDataWarning && (
-                <details className="page-technical-details export-preview-technical">
-                  <summary>{text(copy.technicalPreview)}</summary>
-                  <dl><div><dt>{text(copy.backendWarning)}</dt><dd>{displayTechnicalDetail(preview.sensitiveDataWarning)}</dd></div></dl>
-                </details>
-              )}
-            </>
-          )}
+          ) : preview?.sensitiveDataWarning ? (
+            <details className="page-technical-details export-preview-technical">
+              <summary>{text(copy.technicalPreview)}</summary>
+              <dl><div><dt>{text(copy.backendWarning)}</dt><dd>{displayTechnicalDetail(preview.sensitiveDataWarning)}</dd></div></dl>
+            </details>
+          ) : null}
+
+          <div
+            className={`export-privacy-status export-privacy-status--${privacyTone}`}
+            id="export-preview-status"
+            role={rawSourcesAttached ? "alert" : "status"}
+            aria-live={rawSourcesAttached ? "assertive" : "polite"}
+            aria-atomic="true"
+          >
+            <Icon name={rawSourcesAttached || !redactSensitiveValues ? "warning" : "lock"} size={17} />
+            <span className="export-decision-summary">
+              <span className="export-sharing-consequence">{text(sharingConsequence)}</span>
+              {" · "}{text(scopeConsequence)}{" · "}{text(integrityConsequence)}
+              {previewPending ? ` · ${text(copy.previewPending)}` : ""}
+            </span>
+          </div>
 
           <div className="export-actions">
             <button
@@ -661,7 +671,8 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
             <Icon name="file" size={22} />
             <span><span className="eyebrow">{text(copy.includesEyebrow)}</span><strong>{text(currentFormat.title)}</strong></span>
           </summary>
-          <p className="export-summary__note">{text(formatIsSigned ? copy.signatureLimit : copy.signatureUnsigned)}</p>
+          {formatIsSigned && <p className="export-summary__note">{text(copy.caseBundleScopeBody)}</p>}
+          {!demoMode && <p className="export-summary__note">{text(formatIsSigned ? copy.signatureLimit : copy.signatureUnsigned)}</p>}
           <dl className="export-facts">
             <div><dt>{text(copy.case)}</dt><dd>{caseIdentityPresentation(workspace.case, locale).name}</dd></div>
             <div><dt>{text(copy.exactType)}</dt><dd>{text(currentFormat.title)} · <code>{currentFormat.extension}</code></dd></div>

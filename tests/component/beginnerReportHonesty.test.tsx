@@ -1,4 +1,4 @@
-import { cleanup, render, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { FindingsPage } from "../../src/pages/FindingsPage";
@@ -211,6 +211,10 @@ const provenanceValue = (container: HTMLElement, label: string): string => {
   return row.querySelector("dd")?.textContent ?? "";
 };
 
+const openFirstFinding = (container: HTMLElement) => {
+  fireEvent.click(container.querySelector<HTMLButtonElement>(".finding-row")!);
+};
+
 beforeEach(() => {
   window.localStorage.setItem(localeStorageKey, "en");
 });
@@ -252,13 +256,26 @@ test("a partial run is distinguished from a complete one", () => {
 });
 
 test("the first layer names the requested target, tested work, top gap, and next action", () => {
+  const base = report("partial");
   const { container } = renderReport(report("partial", {
+    requested: {
+      ...base.requested,
+      limits: [{
+        name: "naabu execution timeout",
+        value: "30 seconds",
+        source: "frozen_task_contract",
+      }],
+    },
     actual: {
+      observedFrom: "2026-09-04T12:00:00Z",
+      observedUntil: "2026-09-04T12:01:00Z",
       checks: [{
         taskId: "task-1",
         checkId: "naabu-tcp",
         targetAssetIds: ["asset-1"],
         status: "tested_complete",
+        startedAt: "2026-09-04T12:00:00Z",
+        finishedAt: "2026-09-04T12:01:00Z",
         testedDimensions: [{
           dimension: "completed planned work units",
           value: "1 of 1",
@@ -275,7 +292,15 @@ test("the first layer names the requested target, tested work, top gap, and next
       reason: "The TLS check did not start.",
       nextActionCode: "review_scope_and_retry",
       nextAction: "Review the target and retry.",
+    }, {
+      kind: "excluded",
+      targetAssetIds: ["asset-1"],
+      dimension: "ports outside the requested port set",
+      reason: "Only the requested ports were in scope.",
+      nextActionCode: "no_action_unless_scope_changes",
+      nextAction: "No action is needed unless you change the scope.",
     }],
+    coverageCounts: counts({ testedComplete: 1, excluded: 1 }),
     nextSteps: [{
       priority: 1,
       code: "review_scope_and_retry",
@@ -293,6 +318,200 @@ test("the first layer names the requested target, tested work, top gap, and next
   expect(strip!.textContent).toContain("TLS configuration");
   expect(strip!.textContent).toContain("The TLS check did not start.");
   expect(strip!.textContent).toContain("Review the requested scope, then retry.");
+
+  const firstLayerScope = container.querySelector<HTMLElement>(".report-first-layer-scope");
+  expect(firstLayerScope).not.toBeNull();
+  expect(firstLayerScope!.closest("details")).toBeNull();
+  expect(firstLayerScope!.textContent).toContain("Requested: contoso.example");
+  expect(firstLayerScope!.textContent).toContain("Scan depth: Full inventory");
+  expect(firstLayerScope!.textContent).toContain("Limits: naabu execution timeout: 30 seconds");
+  expect(firstLayerScope!.textContent).toContain("completed planned work units: 1 of 1");
+  expect(firstLayerScope!.textContent).toMatch(/Time: Observed .+ to .+/u);
+  expect(firstLayerScope!.textContent).toContain("Recorded exclusions: contoso.example · ports outside the requested port set");
+});
+
+test("the tested time window excludes failed sibling task activity", () => {
+  const testedFrom = "2026-09-04T12:00:00Z";
+  const testedUntil = "2026-09-04T12:01:00Z";
+  const allTasksFrom = "2026-08-01T01:00:00Z";
+  const allTasksUntil = "2026-10-20T23:00:00Z";
+  const formatDateTime = (value: string) => new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+  const { container } = renderReport(report("partial", {
+    actual: {
+      // These backend bounds cover both tasks and therefore cannot describe
+      // only what was actually tested.
+      observedFrom: allTasksFrom,
+      observedUntil: allTasksUntil,
+      checks: [{
+        taskId: "task-tested",
+        checkId: "naabu-tcp",
+        targetAssetIds: ["asset-1"],
+        status: "tested_complete",
+        startedAt: testedFrom,
+        finishedAt: testedUntil,
+        testedDimensions: [{
+          dimension: "completed planned work units",
+          value: "1 of 1",
+          observation: "The planned connection check completed.",
+          observedAt: testedUntil,
+        }],
+      }, {
+        taskId: "task-failed",
+        checkId: "tls-configuration",
+        targetAssetIds: ["asset-1"],
+        status: "failed",
+        startedAt: allTasksFrom,
+        finishedAt: allTasksUntil,
+        testedDimensions: [],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    coverageCounts: counts({ testedComplete: 1, failed: 1 }),
+  }));
+
+  const firstLayerScope = container.querySelector<HTMLElement>(".report-first-layer-scope");
+  expect(firstLayerScope).not.toBeNull();
+  expect(firstLayerScope!.textContent).toContain(
+    `Time: Observed ${formatDateTime(testedFrom)} to ${formatDateTime(testedUntil)}`,
+  );
+  expect(firstLayerScope!.textContent).not.toContain(formatDateTime(allTasksFrom));
+  expect(firstLayerScope!.textContent).not.toContain(formatDateTime(allTasksUntil));
+});
+
+test("the tested time is explicitly unavailable when only all-task bounds were retained", () => {
+  const { container } = renderReport(report("partial", {
+    actual: {
+      observedFrom: "2026-08-01T01:00:00Z",
+      observedUntil: "2026-10-20T23:00:00Z",
+      checks: [{
+        taskId: "task-tested-without-time",
+        checkId: "configuration-review",
+        targetAssetIds: ["asset-1"],
+        status: "tested_partial",
+        testedDimensions: [],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    coverageCounts: counts({ testedPartial: 1 }),
+  }));
+
+  const firstLayerScope = container.querySelector<HTMLElement>(".report-first-layer-scope");
+  expect(firstLayerScope?.textContent).toContain("Time: Observation time not retained");
+});
+
+test("the first layer does not drop a completed check whose exact dimensions were not saved", () => {
+  const base = report("partial");
+  const { container } = renderReport(report("partial", {
+    actual: {
+      checks: [{
+        taskId: "task-with-dimension",
+        checkId: "naabu-tcp",
+        targetAssetIds: ["asset-1"],
+        status: "tested_complete",
+        testedDimensions: [{
+          dimension: "completed planned work units",
+          value: "1 of 1",
+          observation: "The planned connection check completed.",
+        }],
+      }, {
+        taskId: "task-without-dimension",
+        checkId: "configuration-review",
+        targetAssetIds: ["asset-1"],
+        status: "tested_partial",
+        testedDimensions: [],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    requested: {
+      ...base.requested,
+      requestedCheckIds: ["naabu-tcp", "configuration-review"],
+    },
+  }));
+
+  const firstLayerScope = container.querySelector<HTMLElement>(".report-first-layer-scope");
+  expect(firstLayerScope?.textContent).toContain("naabu-tcp");
+  expect(firstLayerScope?.textContent).toContain("configuration-review");
+  expect(firstLayerScope?.textContent).toContain("Exact tested dimensions not saved for this check");
+});
+
+test("a generic completed coordinate uses display labels without leaking backend identities", () => {
+  const internalAssetId = "asset-7d0e1278-43de-4cb1-a451-2b7448bd30d6";
+  const rawEngineId = "catalog-secret-check-internal-v17";
+  const rawCoordinate = `${rawEngineId} on asset ${internalAssetId}`;
+  const targetLabel = "Contoso source repository";
+  const checkLabel = "Source code secret check";
+  const base = report("complete");
+  const catalogRun = localhostRun();
+  catalogRun.engineRuns = [{
+    ...catalogRun.engineRuns[0]!,
+    id: "task-catalog",
+    engineId: rawEngineId,
+    engineName: checkLabel,
+    category: "source-code",
+    taskKind: { kind: "catalog_engine" },
+    localhostTcpObservation: undefined,
+  }];
+
+  const { container } = renderReport(report("complete", {
+    requested: {
+      ...base.requested,
+      targets: [{
+        assetId: internalAssetId,
+        label: targetLabel,
+        assetKind: "repository",
+        labelAvailability: "recorded",
+        assetKindAvailability: "recorded",
+      }],
+      requestedCheckIds: [rawEngineId],
+    },
+    actual: {
+      checks: [{
+        taskId: "task-catalog",
+        checkId: rawEngineId,
+        targetAssetIds: [internalAssetId],
+        status: "tested_complete",
+        startedAt: "2026-09-04T12:00:00Z",
+        finishedAt: "2026-09-04T12:01:00Z",
+        testedDimensions: [{
+          dimension: "completed check-to-target coordinate",
+          value: rawCoordinate,
+          observation: "The durable task reached completed state for this target binding.",
+          observedAt: "2026-09-04T12:01:00Z",
+        }, {
+          dimension: "files examined",
+          value: "42 files",
+          observation: "The saved result recorded a human-readable file count.",
+          observedAt: "2026-09-04T12:01:00Z",
+        }],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    coverageCounts: counts({ testedComplete: 1 }),
+  }), [], [catalogRun]);
+
+  const firstLayer = container.querySelector<HTMLElement>(".report-first-layer-scope");
+  expect(firstLayer).not.toBeNull();
+  expect(firstLayer!.textContent).toContain(`${checkLabel} completed for ${targetLabel}`);
+  expect(firstLayer!.textContent).toContain("files examined: 42 files");
+  expect(firstLayer!.textContent).not.toContain(rawEngineId);
+  expect(firstLayer!.textContent).not.toContain(internalAssetId);
+  expect(firstLayer!.textContent).not.toContain(rawCoordinate);
+
+  const testedOutcome = container.querySelector<HTMLElement>(".report-outcome-strip");
+  expect(testedOutcome?.textContent).toContain(checkLabel);
+  expect(testedOutcome?.textContent).not.toContain(rawEngineId);
+
+  const technicalScope = container.querySelector<HTMLElement>(".report-scope-disclosure");
+  expect(technicalScope?.textContent).toContain(rawCoordinate);
 });
 
 test("an absent coverage gap is scoped to the requested checks rather than implying broad security coverage", () => {
@@ -525,13 +744,77 @@ test("what the run could not establish is shown with its own dimension", () => {
 });
 
 test("saved-data limitations are surfaced, not held in the model", () => {
+  const warning = "One task's saved evidence index could not be read.";
   const { container } = renderReport(
     report("partial", {
-      dataQualityWarnings: ["One task's saved evidence index could not be read."],
+      dataQualityWarnings: [warning],
     }),
   );
 
-  expect(container.textContent).toContain("Saved-data limitations: 1");
+  const firstLayerCount = container.querySelector<HTMLElement>(".report-data-warning-count");
+  expect(firstLayerCount).not.toBeNull();
+  expect(firstLayerCount!.closest("details")).toBeNull();
+  expect(firstLayerCount!.textContent).toContain("Saved-data limitations: 1");
+  expect(firstLayerCount!.textContent).not.toContain(warning);
+
+  const technicalDetails = container.querySelector<HTMLElement>(".page-technical-details");
+  expect(technicalDetails).not.toBeNull();
+  expect(within(technicalDetails!).getByText(warning)).toBeTruthy();
+});
+
+test("priority comes before summary metrics", () => {
+  const { container } = renderReport(
+    report("partial", { findings: [frozenFinding()] }),
+    [canonicalFinding()],
+  );
+
+  const page = container.querySelector<HTMLElement>(".page");
+  const priority = container.querySelector<HTMLElement>(".priority-section");
+  const metrics = container.querySelector<HTMLElement>("section[aria-label='Problem summary']");
+  expect(page).not.toBeNull();
+  expect(priority).not.toBeNull();
+  expect(metrics).not.toBeNull();
+  const children = Array.from(page!.children);
+  expect(children.indexOf(priority!)).toBeLessThan(children.indexOf(metrics!));
+});
+
+test("specialist and framework filters are in one closed Advanced disclosure", () => {
+  const { container } = renderReport(
+    report("partial", { findings: [frozenFinding()] }),
+    [canonicalFinding()],
+  );
+
+  const advanced = container.querySelector<HTMLDetailsElement>(".finding-advanced-filters");
+  expect(advanced).not.toBeNull();
+  expect(advanced!.open).toBe(false);
+  expect(advanced!.querySelector("summary")?.textContent).toBe("Advanced filters");
+  expect(within(advanced!).getByRole("combobox", { name: "Specialist type" })).toBeTruthy();
+  expect(within(advanced!).getByRole("combobox", { name: "Framework reference" })).toBeTruthy();
+
+  const severityFilter = within(container).getByRole("combobox", { name: "Severity" });
+  const workflowFilter = within(container).getByRole("combobox", { name: "Review status" });
+  expect(severityFilter.closest("details")).toBeNull();
+  expect(workflowFilter.closest("details")).toBeNull();
+});
+
+test("finding pills carry review and confidence without repeating them in detail facts", () => {
+  const finding = frozenFinding({ confidence: "medium" });
+  const { container } = renderReport(
+    report("partial", { findings: [finding] }),
+    [canonicalFinding({ confidence: "medium" })],
+  );
+
+  fireEvent.click(container.querySelector<HTMLButtonElement>(".finding-row")!);
+
+  const pills = container.querySelector<HTMLElement>(".finding-detail__header .tag-row");
+  expect(pills).not.toBeNull();
+  expect(pills!.textContent).toContain("Medium confidence");
+  expect(pills!.textContent).toContain("Not reviewed");
+
+  const factLabels = Array.from(container.querySelectorAll<HTMLElement>(".detail-facts dt"))
+    .map((label) => label.textContent);
+  expect(factLabels).not.toContain("Review status");
+  expect(factLabels).not.toContain("Evidence confidence");
 });
 
 // Whenever a run exists the page rebuilds every finding through
@@ -554,6 +837,7 @@ test("the published reading behind a finding reaches the pane that offers to ope
       ],
     })],
   );
+  openFirstFinding(container);
 
   const links = Array.from(container.querySelectorAll<HTMLAnchorElement>('a[href^="https://"]'))
     .filter((link) => link.href.includes("example"));
@@ -572,6 +856,7 @@ test("a finding with nothing recorded says so about the record, not about the sc
     report("partial", { findings: [frozenFinding()] }),
     [canonicalFinding({ officialReferences: [] })],
   );
+  openFirstFinding(container);
 
   expect(container.textContent).toContain("No official reference link is recorded for this finding");
   expect(container.textContent).not.toContain("was provided");
@@ -593,6 +878,7 @@ test("a finding carried over from earlier runs is not presented as new", () => {
       lastSeenAt: "2025-11-20T09:00:00Z",
     })],
   );
+  openFirstFinding(container);
 
   // The report under view is `run-1`, so neither id below can have come from it.
   expect(provenanceValue(container, "First-seen run")).toBe("run-0");
@@ -620,6 +906,7 @@ test("a first-seen date carries the year that makes it an age", () => {
       lastSeenAt: "2025-11-20T09:00:00Z",
     })],
   );
+  openFirstFinding(container);
 
   expect(provenanceValue(container, "First observed")).toContain("2024");
   expect(provenanceValue(container, "Last observed")).toContain("2025");
@@ -641,6 +928,7 @@ test("a finding the case no longer holds reports no first-seen run rather than t
     report("partial", { findings: [frozenFinding()] }),
     [],
   );
+  openFirstFinding(container);
 
   expect(provenanceValue(container, "First-seen run")).toBe("Not reported");
   expect(provenanceValue(container, "Last-seen run")).toBe("Not reported");

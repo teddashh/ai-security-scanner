@@ -98,12 +98,9 @@ test("a check that never ran is still accounted for on screen", () => {
     run([engine("ran", "completed", { progress: 100 }), engine("never-ran", "not_executed")]),
   );
 
-  const notRunCard = Array.from(container.querySelectorAll<HTMLElement>(".metric-card")).find(
-    (card) => card.querySelector(".metric-card__label")?.textContent === "Not run",
-  );
-  if (!notRunCard) throw new Error("the not-run metric card did not render");
-  expect(notRunCard.querySelector(".metric-card__value")?.textContent).toBe("1");
-  expect(notRunCard.className).toContain("metric-card--warning");
+  const attention = container.querySelector<HTMLElement>(".scan-attention-summary");
+  expect(attention?.textContent).toContain("Not run");
+  expect(attention?.textContent).toContain("1");
 
   // And it is present as its own row, not only as a number in a tally.
   expect(container.querySelector(".engine-not-executed")).not.toBeNull();
