@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "documentType": "post-release-windows-external-candidate-identity",
+  "notImportableEvidence": true,
+  "product": "ai-security-scanner",
+  "releaseIdentity": {
+    "version": "0.1.9",
+    "tag": "v0.1.9",
+    "sourceCommit": "5c95572f54220adbd170d9bfb5af3159c56708ef",
+    "releaseMetadataChannel": "prerelease"
+  },
+  "candidateProducer": {
+    "provider": "github-actions",
+    "repository": "teddashh/ai-security-scanner",
+    "ref": "refs/heads/main",
+    "workflow": ".github/workflows/release.yml",
+    "runId": "34096606710",
+    "runAttempt": 1,
+    "job": "finalize-supported-artifacts",
+    "artifactId": "10010021177",
+    "artifactName": "release-candidate-input-34096606710-1",
+    "artifactDigest": "sha256:758e86e59ef2f033847f67009173196d320a2e04d5e9c0f1e2369fb3a3b238fb"
+  },
+  "publicRelease": {
+    "releaseId": "383937675",
+    "url": "https://github.com/teddashh/ai-security-scanner/releases/tag/v0.1.9",
+    "publishedAt": "2026-09-07T08:35:04Z",
+    "mutableListingIsNotCandidateIdentity": true
+  },
+  "windowsNsis": {
+    "platform": "windows-x86_64",
+    "architecture": "x86_64",
+    "installerType": "nsis",
+    "file": "ai-security-scanner_0.1.9_x64-setup.exe",
+    "bytes": 40186968,
+    "sha256": "f7b5374fff07fca98af06931b2dc0ebc52abc2b3ac5a70a6602001d03a1a065e",
+    "downloadUrl": "https://github.com/teddashh/ai-security-scanner/releases/download/v0.1.9/ai-security-scanner_0.1.9_x64-setup.exe"
+  },
+  "managedRuntimeManifest": {
+    "file": "managed-runtime-windows-x86_64.manifest.json",
+    "bytes": 3724,
+    "sha256": "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a",
+    "managementContractRevision": "2026-08-29.1",
+    "downloadUrl": "https://github.com/teddashh/ai-security-scanner/releases/download/v0.1.9/managed-runtime-windows-x86_64.manifest.json"
+  },
+  "publicVerification": {
+    "sha256Sums": {
+      "file": "SHA256SUMS.txt",
+      "bytes": 5064,
+      "sha256": "5fa25a188efab79284023c8fdfd8310b03ba3371399242272ecae0564fb60ac3"
+    },
+    "releaseAssets": {
+      "file": "release-assets.json",
+      "bytes": 11593,
+      "sha256": "4d128cded45a10f9de1a225fc93e8eacf3af72540030d5e9dad29402e877a780"
+    }
+  },
+  "authenticode": {
+    "expectedSignatureStatus": "NotSigned",
+    "expectedPublisher": null,
+    "releaseClaim": "not-configured",
+    "functionalExecutionBlocker": false,
+    "trustAndQualificationClaimBlocker": true
+  },
+  "approvedWl13Harness": {
+    "repository": "teddashh/ai-security-scanner",
+    "sourceCommit": "bd47e26b6c8024eb3461176637d7fce3e8370561",
+    "path": "scripts/release/windows-localhost-fixture.mjs",
+    "sha256": "de31dceede3f1aafcdc222d9c91f68913d69e077baa3a663577d62ac0354973a",
+    "contractVersion": 1,
+    "runtime": {
+      "name": "node",
+      "version": "v24.15.0",
+      "archiveFile": "node-v24.15.0-win-x64.zip",
+      "archiveBytes": 36465163,
+      "archiveSha256": "cc5149eabd53779ce1e7bdc5401643622d0c7e6800ade18928a767e940bb0e62",
+      "executableFile": "node.exe",
+      "executableBytes": 91694408,
+      "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5"
+    }
+  },
+  "scope": {
+    "onlyApprovedScanTarget": "127.0.0.1:9001",
+    "mayModifyPublishedRelease": false,
+    "mayClaimStableSignedRecommendedOrBeginnerReady": false
+  }
+}
