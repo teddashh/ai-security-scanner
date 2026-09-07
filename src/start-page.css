@@ -1,15 +1,14 @@
 .start-page {
-  gap: 42px;
+  gap: 30px;
 }
 
 .start-page__hero {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.75fr);
-  gap: clamp(28px, 5vw, 72px);
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   overflow: hidden;
-  padding: clamp(30px, 5vw, 64px);
+  padding: clamp(28px, 4vw, 46px);
   border: 1px solid #cad8d1;
   border-radius: 28px;
   background:
@@ -40,24 +39,24 @@
   max-width: 760px;
   margin: 0;
   color: var(--ink-strong);
-  font-size: clamp(2.45rem, 4.2vw, 4.65rem);
-  line-height: 0.99;
-  letter-spacing: -0.052em;
+  font-size: clamp(2.1rem, 3.2vw, 3.35rem);
+  line-height: 1.04;
+  letter-spacing: -0.045em;
 }
 
 .start-page__hero-description {
   max-width: 690px;
-  margin: 22px 0 0;
+  margin: 14px 0 0;
   color: #4f676d;
   font-size: clamp(1rem, 1.35vw, 1.18rem);
-  line-height: 1.68;
+  line-height: 1.55;
 }
 
 .start-page__hero-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 28px;
+  margin-top: 22px;
 }
 
 .start-page__localhost-quick-scan {
@@ -132,69 +131,6 @@
   font-size: 0.9rem;
 }
 
-.start-page__benefits {
-  position: relative;
-  z-index: 1;
-  padding: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.72);
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.78);
-  box-shadow: 0 16px 42px rgba(16, 44, 55, 0.09);
-  backdrop-filter: blur(10px);
-}
-
-.start-page__benefits ul {
-  display: grid;
-  gap: 19px;
-  margin: 18px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.start-page__benefits li {
-  display: flex;
-  gap: 13px;
-  align-items: flex-start;
-}
-
-.start-page__benefits li > span {
-  display: grid;
-  width: 39px;
-  height: 39px;
-  flex: 0 0 39px;
-  place-items: center;
-  border-radius: 12px;
-  color: var(--teal);
-  background: var(--teal-soft);
-}
-
-.start-page__benefits strong {
-  display: block;
-  color: var(--ink-strong);
-  font-size: 0.88rem;
-  line-height: 1.35;
-}
-
-.start-page__benefits li p {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: 0.78rem;
-  line-height: 1.5;
-}
-
-.start-page__journey {
-  display: grid;
-  grid-template-columns: minmax(250px, 0.72fr) minmax(0, 1.28fr);
-  gap: clamp(28px, 5vw, 72px);
-  align-items: center;
-  padding: 2px clamp(4px, 2vw, 24px);
-}
-
-.start-page__journey header {
-  max-width: 430px;
-}
-
-.start-page__journey h2,
 .start-page__section-heading h2 {
   margin: 0;
   color: var(--ink-strong);
@@ -203,55 +139,11 @@
   letter-spacing: -0.032em;
 }
 
-.start-page__journey header > p:last-child,
 .start-page__section-heading > p:last-child {
   margin: 10px 0 0;
   color: var(--muted);
   font-size: 0.86rem;
   line-height: 1.6;
-}
-
-.start-page__journey ol {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.start-page__journey li {
-  min-width: 0;
-  padding: 18px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.7);
-}
-
-.start-page__step-number {
-  display: grid;
-  width: 31px;
-  height: 31px;
-  margin-bottom: 13px;
-  place-items: center;
-  border-radius: 10px;
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-  font-size: 0.78rem;
-  font-weight: 850;
-}
-
-.start-page__journey li strong {
-  color: var(--ink-strong);
-  font-size: 0.85rem;
-  line-height: 1.4;
-}
-
-.start-page__journey li p {
-  margin: 6px 0 0;
-  color: var(--muted);
-  font-size: 0.78rem;
-  line-height: 1.5;
 }
 
 .start-page__choices {
@@ -482,10 +374,6 @@
 }
 
 @media (max-width: 1240px) {
-  .start-page__hero {
-    grid-template-columns: minmax(0, 1.1fr) minmax(300px, 0.9fr);
-  }
-
   .use-case-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -496,18 +384,10 @@
     gap: 34px;
   }
 
-  .start-page__hero,
-  .start-page__journey {
-    grid-template-columns: 1fr;
-  }
-
   .start-page__hero h1 {
     max-width: 680px;
   }
 
-  .start-page__journey {
-    gap: 20px;
-  }
 }
 
 @media (max-width: 650px) {
@@ -538,27 +418,8 @@
     flex-direction: column;
   }
 
-  .start-page__benefits {
-    padding: 20px;
-  }
-
-  .start-page__journey {
-    padding-inline: 1px;
-  }
-
-  .start-page__journey ol,
   .use-case-grid {
     grid-template-columns: 1fr;
-  }
-
-  .start-page__journey li {
-    display: flex;
-    gap: 12px;
-  }
-
-  .start-page__step-number {
-    flex: 0 0 31px;
-    margin-bottom: 0;
   }
 
   .use-case-card {

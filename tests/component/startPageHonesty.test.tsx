@@ -51,11 +51,11 @@ test("the quick scan states its exact boundary rather than a reassurance", () =>
 
   const boundary = boundaryText(container);
   // Every clause here is a commitment about behaviour, not a mood.
-  expect(boundary).toContain("one TCP connection");
+  expect(boundary).toContain("One TCP connection");
   expect(boundary).toContain(`127.0.0.1:${DEFAULT_LOCALHOST_QUICK_SCAN_PORT}`);
-  expect(boundary).toContain("no more than 3 seconds");
-  expect(boundary).toContain("sends no payload");
-  expect(boundary).toContain("is not a security guarantee");
+  expect(boundary).toContain("up to 3 seconds");
+  expect(boundary).toContain("no payload");
+  expect(boundary).toContain("not a security guarantee");
 });
 
 test("choosing another port changes what the app says it will do, with no stale port left behind", () => {
@@ -71,8 +71,8 @@ test("choosing another port changes what the app says it will do, with no stale 
   expect(quickScanButton(container).textContent).not.toContain(String(DEFAULT_LOCALHOST_QUICK_SCAN_PORT));
   expect(boundaryText(container)).not.toContain(String(DEFAULT_LOCALHOST_QUICK_SCAN_PORT));
   // The rest of the statement survives the substitution intact.
-  expect(boundaryText(container)).toContain("no more than 3 seconds");
-  expect(boundaryText(container)).toContain("is not a security guarantee");
+  expect(boundaryText(container)).toContain("up to 3 seconds");
+  expect(boundaryText(container)).toContain("not a security guarantee");
 });
 
 test("the port the app scans is the port it just named", () => {
@@ -120,6 +120,18 @@ test("the first screen does not offer the example project action", () => {
   const { queryByRole } = renderStart();
   expect(queryByRole("button", { name: "See an example project" })).toBeNull();
   expect(queryByRole("button", { name: "查看範例專案" })).toBeNull();
+});
+
+test("the first screen leads with one quick action and no duplicate marketing journey", () => {
+  const onOpenExistingCase = vi.fn();
+  const { container, getByRole, queryByRole, queryByText } = renderStart({ onOpenExistingCase });
+
+  expect(getByRole("heading", { level: 1, name: "Start a security check" })).toBeTruthy();
+  expect(quickScanButton(container).textContent).toContain("127.0.0.1:9001");
+  expect(queryByRole("link", { name: "Start a security check" })).toBeNull();
+  expect(getByRole("button", { name: "Open my scans" })).toBeTruthy();
+  expect(queryByText("What you get")).toBeNull();
+  expect(queryByText("How it works")).toBeNull();
 });
 
 test("every scan the page offers also says what it will not do", () => {

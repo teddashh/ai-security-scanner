@@ -83,9 +83,12 @@ const copy = {
   eyebrow: { en: "LIVE SCAN", zhTW: "即時掃描" },
   title: { en: "Follow your scan", zhTW: "掌握掃描進度" },
   description: {
-    en: "See what is running, what has finished, and anything that needs your attention—all in one place.",
-    zhTW: "哪些正在檢查、哪些已經完成、哪裡需要你處理，一個畫面就看懂。",
+    en: "See the current status and next action.",
+    zhTW: "查看目前狀態與下一步。",
   },
+  readinessDetails: { en: "Readiness details", zhTW: "準備狀態細節" },
+  activityHistory: { en: "Activity history ({count})", zhTW: "活動記錄（{count}）" },
+  runHistorySummary: { en: "Run history ({count})", zhTW: "掃描歷程（{count}）" },
   emptyTitle: { en: "This case has not been scanned yet", zhTW: "這個案件還沒有開始掃描" },
   emptyDescription: {
     en: "When you are ready, start the scan and follow every check here as results arrive.",
@@ -918,7 +921,8 @@ export function ProgressPage({
             </button>
           )}
         />
-        <section className={`scan-activity${canStart || starting ? "" : " scan-activity--delayed"}`} aria-labelledby="scan-preflight-activity-title">
+        <details className={`page-technical-details scan-activity${canStart || starting ? "" : " scan-activity--delayed"}`}>
+          <summary>{text(copy.readinessDetails)}</summary>
           <div className="section-heading section-heading--row">
             <div>
               <p className="eyebrow">{text(copy.activityEyebrow)}</p>
@@ -971,7 +975,7 @@ export function ProgressPage({
             </dl>
           </details>
           <small className="scan-activity__privacy"><Icon name="lock" size={13} />{text(copy.diagnosticPrivacy)}</small>
-        </section>
+        </details>
       </div>
     );
   }
@@ -1179,114 +1183,37 @@ export function ProgressPage({
         </InlineNotice>
       )}
 
-      <section className="run-overview run-overview--single">
+      <section className={`run-overview run-overview--single${blocked || sharedInfrastructureFailure || requestOutcomeSummary ? " run-overview--compact" : ""}`}>
         <div className="run-overview__copy">
           <div className="run-overview__meta">
             <StatusPill
-              label={requestOutcomeSummary
-                ? text(requestOutcomeSummary.title)
-                : blocked
-                ? text(copy.blockedTitle)
-                : sharedInfrastructureFailure
-                  ? text(copy.sharedFailureTitle)
-                  : runMeta.label}
-              tone={requestOutcomeSummary || blocked ? "warning" : sharedInfrastructureFailure ? "danger" : runMeta.tone}
+              label={runMeta.label}
+              tone={runMeta.tone}
             />
             <span>{scanRunIdentityPresentation(selectedRun, locale)}</span>
           </div>
-          <h2>{requestOutcomeSummary
-            ? text(requestOutcomeSummary.title)
-            : blocked
-            ? text(copy.blockedTitle)
-            : sharedInfrastructureFailure
-              ? text(copy.sharedFailureTitle)
-              : text(copy.processed, { percent: formatNumber(selectedRun.progress) })}</h2>
-          <p>{requestOutcomeSummary
-            ? [text(requestOutcomeSummary.description), text(requestOutcomeSummary.nextStep)].join(" ")
-            : blocked
-            ? text(blocked.kind === "no_targets" ? copy.blockedNoTargets : copy.blockedNoChecks)
-            : sharedInfrastructureFailure
-              ? text(copy.sharedFailureBody, { count: formatNumber(sharedInfrastructureFailure.checkCount) })
-              : (
+          {!blocked && !sharedInfrastructureFailure && !requestOutcomeSummary && (
             <>
-            {text(copy.runSummary, {
-              covered: formatNumber(selectedRun.coveredAssetCount),
-              total: formatNumber(selectedRun.totalAssetCount),
-              started: showDateTime(selectedRun.startedAt),
-            })}
-            {selectedRun.finishedAt ? text(copy.finished, { finished: showDateTime(selectedRun.finishedAt) }) : ""}
+              <h2>{text(copy.processed, { percent: formatNumber(selectedRun.progress) })}</h2>
+              <p>
+                {text(copy.runSummary, {
+                  covered: formatNumber(selectedRun.coveredAssetCount),
+                  total: formatNumber(selectedRun.totalAssetCount),
+                  started: showDateTime(selectedRun.startedAt),
+                })}
+                {selectedRun.finishedAt ? text(copy.finished, { finished: showDateTime(selectedRun.finishedAt) }) : ""}
+              </p>
+              <ProgressBar value={selectedRun.progress} label={text(copy.overallProgress)} tone={selectedRun.status === "failed" ? "danger" : selectedRun.status === "partial" ? "warning" : "accent"} />
             </>
-          )}</p>
-          {!blocked && !sharedInfrastructureFailure && (
-            <ProgressBar value={selectedRun.progress} label={text(copy.overallProgress)} tone={selectedRun.status === "failed" ? "danger" : selectedRun.status === "partial" ? "warning" : "accent"} />
           )}
         </div>
       </section>
 
-      {activity && (
-        <section className={`scan-activity${activity.stale ? " scan-activity--delayed" : ""}`} aria-labelledby="scan-activity-title">
-          <div className="section-heading section-heading--row">
-            <div>
-              <p className="eyebrow">{text(copy.activityEyebrow)}</p>
-              <h2 id="scan-activity-title">{text(copy.activityTitle)}</h2>
-              <p>{text(copy.activityDescription)}</p>
-            </div>
-            <button className="button button--secondary button--small" type="button" onClick={() => downloadDiagnostic(selectedRun)}>
-              <Icon name="download" size={15} />{text(copy.downloadTechnicalLog)}
-            </button>
-          </div>
-          <div className="scan-activity__current" aria-live="polite">
-            <span className="scan-activity__icon"><Icon name={activity.stale
-              ? "warning"
-              : activity.state === "paused"
-                ? "pause"
-                : activity.active
-                  ? "refresh"
-                  : activity.state === "completed"
-                    ? "check"
-                    : "warning"} size={20} /></span>
-            <div>
-              <small>{text(copy.currentActivity)}</small>
-              <strong>{text(copy.activityStates[activity.state].title)}</strong>
-              <p>{text(copy.activityStates[activity.state].body)}</p>
-              <span>{text(copy.lastProgress)} · {showDateTime(activity.lastProgressAt)}</span>
-              {activity.activeCheckNames.length > 0 && (
-                <span>{text(copy.activeScanTools)} · {activity.activeCheckNames.join(locale === "zh-TW" ? "、" : ", ")}</span>
-              )}
-            </div>
-          </div>
-          {activity.stale && (
-            <p className="scan-activity__delay">
-              <Icon name="clock" size={15} />
-              {text(copy.delayedProgress, { count: formatNumber(activity.staleMinutes) })}
-            </p>
-          )}
-          <div className="scan-activity__log">
-            <div>
-              <strong>{text(copy.activityLog)}</strong>
-              <small>{text(copy.activityLogDescription)}</small>
-            </div>
-            <ol>
-              {activity.events.map((event) => (
-                <li key={event.id}>
-                  <span aria-hidden="true" />
-                  <div>
-                    <strong>{activityEventLabel(event)}</strong>
-                    <time dateTime={event.occurredAt}>{showDateTime(event.occurredAt)}</time>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          </div>
-          <small className="scan-activity__privacy"><Icon name="lock" size={13} />{text(copy.diagnosticPrivacy)}</small>
-        </section>
-      )}
-
-      {blocked && (
+      {(blocked || requestOutcomeSummary) && (
         <InlineNotice tone="warning" title={requestOutcomeSummary ? text(requestOutcomeSummary.title) : text(copy.blockedTitle)}>
           <p>{requestOutcomeSummary
             ? [text(requestOutcomeSummary.description), text(requestOutcomeSummary.nextStep)].join(" ")
-            : text(blocked.kind === "no_targets" ? copy.blockedNoTargets : copy.blockedNoChecks)}</p>
+            : text(blocked?.kind === "no_targets" ? copy.blockedNoTargets : copy.blockedNoChecks)}</p>
           <div className="button-group">
             {needsLatestInstaller ? (
               <a className="button button--primary button--small" href={PRODUCT_RELEASES} target="_blank" rel="noreferrer">
@@ -1321,6 +1248,58 @@ export function ProgressPage({
             </button>
           </div>
         </InlineNotice>
+      )}
+
+      {activity && (
+        <section className={`scan-activity${activity.stale ? " scan-activity--delayed" : ""}`} aria-labelledby="scan-activity-title">
+          <h2 id="scan-activity-title">{text(copy.activityTitle)}</h2>
+          <div className="scan-activity__current" aria-live="polite">
+            <span className="scan-activity__icon"><Icon name={activity.stale
+              ? "warning"
+              : activity.state === "paused"
+                ? "pause"
+                : activity.active
+                  ? "refresh"
+                  : activity.state === "completed"
+                    ? "check"
+                    : "warning"} size={20} /></span>
+            <div>
+              <small>{text(copy.currentActivity)}</small>
+              <strong>{text(copy.activityStates[activity.state].title)}</strong>
+              <p>{text(copy.activityStates[activity.state].body)}</p>
+              <span>{text(copy.lastProgress)} · {showDateTime(activity.lastProgressAt)}</span>
+              {activity.activeCheckNames.length > 0 && (
+                <span>{text(copy.activeScanTools)} · {activity.activeCheckNames.join(locale === "zh-TW" ? "、" : ", ")}</span>
+              )}
+            </div>
+          </div>
+          {activity.stale && (
+            <p className="scan-activity__delay">
+              <Icon name="clock" size={15} />
+              {text(copy.delayedProgress, { count: formatNumber(activity.staleMinutes) })}
+            </p>
+          )}
+          <details className="page-technical-details scan-activity__technical">
+            <summary>{text(copy.activityHistory, { count: formatNumber(activity.events.length) })}</summary>
+            <button className="button button--secondary button--small" type="button" onClick={() => downloadDiagnostic(selectedRun)}>
+              <Icon name="download" size={15} />{text(copy.downloadTechnicalLog)}
+            </button>
+            <div className="scan-activity__log">
+              <ol>
+                {activity.events.map((event) => (
+                  <li key={event.id}>
+                    <span aria-hidden="true" />
+                    <div>
+                      <strong>{activityEventLabel(event)}</strong>
+                      <time dateTime={event.occurredAt}>{showDateTime(event.occurredAt)}</time>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </div>
+            <small className="scan-activity__privacy"><Icon name="lock" size={13} />{text(copy.diagnosticPrivacy)}</small>
+          </details>
+        </section>
       )}
 
       <details className="page-technical-details page-technical-details--guide">
@@ -1373,13 +1352,7 @@ export function ProgressPage({
           )}
         </div>
 
-        {requestOutcomeSummary ? (
-          <EmptyState
-            icon="warning"
-            title={text(requestOutcomeSummary.title)}
-            description={[text(requestOutcomeSummary.description), text(requestOutcomeSummary.nextStep)].join(" ")}
-          />
-        ) : blocked && blocked.skippedCheckCount > 0 ? (
+        {blocked && blocked.skippedCheckCount > 0 ? (
           aggregateTechnicalRecords(
             selectedRun.engineRuns,
             text(copy.skippedTechnical, { count: formatNumber(blocked.skippedCheckCount) }),
@@ -1435,16 +1408,17 @@ export function ProgressPage({
                     : localhostSummary.outcome === "in_progress" || localhostSummary.outcome === "cancelling"
                       ? meta.tone
                       : "warning";
+              const showEngineAttention = engine.status !== "completed" || Boolean(localhostSummary);
               return (
-                <article key={engine.id} className={`engine-row engine-row--${localhostTone ?? meta.tone}`}>
+                <article key={engine.id} className={`engine-row engine-row--${localhostTone ?? meta.tone}${showEngineAttention ? "" : " engine-row--compact"}`}>
                   <div className="engine-row__identity">
                     <span className={`engine-icon engine-icon--${meta.tone}`}><Icon name={engineIcon(engine)} size={19} /></span>
                     <span>
                       <strong>{text(engineOutcomeFor(engine))}</strong>
-                      <small>{text(engineNextStepFor(engine))}</small>
+                      {showEngineAttention && <small>{text(engineNextStepFor(engine))}</small>}
                     </span>
                   </div>
-                  <div className="engine-row__progress">
+                  {showEngineAttention && <div className="engine-row__progress">
                     {engine.status === "not_executed" ? (
                       <div className="engine-not-executed">
                         <Icon name="info" size={16} />
@@ -1507,7 +1481,7 @@ export function ProgressPage({
                         {!localhostSummary && <div><dt>{text(copy.checkpointError)}</dt><dd>{displayTechnicalDetail(checkpoint?.lastError) ?? text(copy.noneReported)}</dd></div>}
                       </dl>
                     </details>
-                  </div>
+                  </div>}
                   <div className="engine-row__result">
                     <StatusPill
                       label={localhostSummary ? text(localhostSummary.outcomeLabel) : meta.label}
@@ -1584,10 +1558,8 @@ export function ProgressPage({
         )}
       </section>
 
-      <section className="section-block section-block--muted">
-        <div className="section-heading section-heading--row">
-          <div><p className="eyebrow">{text(copy.historyEyebrow)}</p><h2>{text(copy.historyTitle)}</h2></div>
-        </div>
+      <details className="section-block section-block--muted page-secondary-feature">
+        <summary>{text(copy.runHistorySummary, { count: formatNumber(runs.length) })}</summary>
         <div className="history-list">
           {runs.map((run) => {
             const historyRequestOutcome = scanRequestOutcomeBeginnerSummary(run.requestOutcome);
@@ -1615,7 +1587,7 @@ export function ProgressPage({
             );
           })}
         </div>
-      </section>
+      </details>
     </div>
   );
 }

@@ -4,7 +4,6 @@ import { cx } from "../lib";
 import { Icon, type IconName } from "./Icon";
 
 export function PageHeader({
-  eyebrow,
   title,
   description,
   actions,
@@ -17,7 +16,6 @@ export function PageHeader({
   return (
     <header className="page-header">
       <div className="page-header__copy">
-        {eyebrow && <p className="eyebrow">{eyebrow}</p>}
         <h1 data-page-heading tabIndex={-1}>{title}</h1>
         <p>{description}</p>
       </div>

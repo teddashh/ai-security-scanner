@@ -209,17 +209,15 @@ test("a shell with nothing wrong raises no banner at all", () => {
   expect(banners(container)).toEqual([]);
 });
 
-test("language choices keep each language's own name in either interface language", () => {
-  window.localStorage.setItem(localeStorageKey, "zh-TW");
-  const chineseShell = renderShell();
-  const englishButton = chineseShell.container.querySelector<HTMLButtonElement>('button[lang="en"]');
-  expect(englishButton?.textContent).toBe("English");
-  chineseShell.unmount();
+test("the shell keeps repeated navigation and privacy copy concise", () => {
+  const { container, queryByRole } = renderShell();
 
-  window.localStorage.setItem(localeStorageKey, "en");
-  const englishShell = renderShell();
-  const chineseButton = englishShell.container.querySelector<HTMLButtonElement>('button[lang="zh-Hant"]');
-  expect(chineseButton?.textContent).toBe("繁體中文");
+  expect(container.querySelector(".language-switcher")).toBeNull();
+  expect(container.querySelector(".brand__copy small")).toBeNull();
+  expect(container.querySelectorAll(".nav-item small")).toHaveLength(0);
+  expect(container.querySelector(".privacy-note")?.textContent).toBe("Your data stays on this device");
+  expect(queryByRole("button", { name: "English" })).toBeNull();
+  expect(queryByRole("button", { name: "繁體中文" })).toBeNull();
 });
 
 test("the mobile navigation modal locks page scroll and restores prior inline state on cleanup", async () => {

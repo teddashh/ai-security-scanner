@@ -381,6 +381,10 @@
   background: #fff;
 }
 
+.page--coverage .asset-review-card--compact {
+  grid-template-columns: minmax(260px, 1fr) minmax(155px, auto);
+}
+
 .page--coverage .asset-review-card--selected {
   border-color: #8ebbad;
   background: #f2faf7;

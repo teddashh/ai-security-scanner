@@ -131,6 +131,10 @@ test("a check that ran without finishing does not read as completed", () => {
   expect(unfinishedPill?.textContent).not.toEqual(finishedPill?.textContent);
   expect(unfinishedPill?.className).not.toContain("status-pill--positive");
   expect(finishedPill?.className).toContain("status-pill--positive");
+  expect(finished.className).toContain("engine-row--compact");
+  expect(finished.querySelector(".engine-row__progress")).toBeNull();
+  expect(unfinished.className).not.toContain("engine-row--compact");
+  expect(unfinished.querySelector(".engine-row__progress")).not.toBeNull();
 });
 
 test("a failed check is not presented in the same tone as a stopped one", () => {
@@ -200,4 +204,15 @@ test("collapsing every check into one shared failure still states how many stopp
   expect(container.textContent).toContain("stopped 2 checks before they inspected anything");
   expect(container.textContent).toContain("The private scan engine did not start");
   expect(container.textContent).toContain("Technical records — checks: 2");
+
+  const overview = container.querySelector<HTMLElement>(".run-overview");
+  const recovery = Array.from(container.querySelectorAll<HTMLElement>(".inline-notice"))
+    .find((notice) => notice.textContent?.includes("Try stopped checks again"));
+  const activity = container.querySelector<HTMLElement>(".scan-activity");
+  expect(overview?.textContent).toContain("Scan 1");
+  expect(recovery).not.toBeUndefined();
+  expect(overview!.compareDocumentPosition(recovery!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  if (activity) {
+    expect(recovery!.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  }
 });

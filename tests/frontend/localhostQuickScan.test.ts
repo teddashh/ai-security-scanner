@@ -106,14 +106,16 @@ test("the installed start page leads with the bounded localhost action and keeps
   const startPage = await readFile(new URL("../../src/pages/StartPage.tsx", import.meta.url), "utf8");
 
   for (const copy of [
-    "Scan this computer at 127.0.0.1:9001",
-    "掃描這台電腦的 127.0.0.1:9001",
-    "attempts one TCP connection",
-    "waits no more than 3 seconds",
-    "It sends no payload and is not a security guarantee.",
-    "只會嘗試連線一次",
+    "Check this computer · 127.0.0.1:9001",
+    "檢查這台電腦 · 127.0.0.1:9001",
+    "One TCP connection",
+    "up to 3 seconds",
+    "no payload",
+    "This is not a security guarantee.",
+    "只會嘗試一次",
     "最長等待 3 秒",
-    "不會傳送內容，也不代表這台電腦一定安全",
+    "不會傳送內容",
+    "這不代表這台電腦一定安全",
   ]) assert.ok(startPage.includes(copy), copy);
 
   assert.match(startPage, /nativeMode && \([\s\S]*start-page__localhost-quick-scan/u);
@@ -121,8 +123,8 @@ test("the installed start page leads with the bounded localhost action and keeps
   assert.match(startPage, /aria-busy=\{localhostQuickScanBusy\}/u);
   assert.match(startPage, /onStartLocalhostQuickScan\(localhostPort\)/u);
   assert.match(startPage, /<details className="start-page__localhost-options">[\s\S]*type="number"[\s\S]*min=\{1\}[\s\S]*max=\{65535\}/u);
-  assert.match(startPage, /nativeMode \? "button--secondary" : "button--primary"/u);
-  assert.match(startPage, /href="#start-a-check"/u);
+  assert.match(startPage, /button--primary start-page__primary-action/u);
+  assert.doesNotMatch(startPage, /href="#start-a-check"/u);
 });
 
 test("progress hides pause and resume for the exact task and makes a stop request non-repeatable", async () => {

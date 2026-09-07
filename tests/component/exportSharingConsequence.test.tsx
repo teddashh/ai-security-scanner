@@ -18,9 +18,8 @@ import type { CaseWorkspace, ExportPreview, ScanRun } from "../../src/types";
 // deciding whether to send the file has no reason to look.
 //
 // The mirror is the other half of the same predicate: every artifact the
-// desktop app captures is marked sensitive, so *with* redaction on the "include
-// source files" option attaches nothing at all, while its label promised a
-// larger file a specialist could check.
+// desktop app captures is marked sensitive, so *with* redaction on the raw-file
+// option must stay disabled rather than offering a setting that does nothing.
 //
 // These tests pin the sentence to the settings that produce it. They render the
 // page rather than matching its source because the defect was never a missing
@@ -191,8 +190,11 @@ afterEach(() => {
 test("the default export states that captured source files are left out", async () => {
   const { container } = renderExport();
 
-  await waitFor(() => expect(consequence(container)).toContain("Private details are hidden"));
-  expect(consequence(container)).toContain("every source file a scanner captured is left out");
+  await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
+  expect(consequence(container)).toContain("Source files excluded");
+  expect(container.querySelector(".export-privacy-status--neutral")).not.toBeNull();
+  expect(container.querySelector(".export-privacy-status--warning")).toBeNull();
+  expect(container.querySelector(".export-privacy-status--danger")).toBeNull();
 
   // The promise that was there before, in the form that made it false.
   expect(container.textContent).not.toContain("Passwords and access keys are never included");
@@ -200,20 +202,19 @@ test("the default export states that captured source files are left out", async 
 
 test("attaching source files without redaction says the secrets are in the file", async () => {
   const { container } = renderExport();
-  await waitFor(() => expect(consequence(container)).toContain("Private details are hidden"));
+  await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
 
   chooseCaseBundle(container);
-  fireEvent.click(toggle(container, "Hide sensitive identifiers"));
-  await waitFor(() => expect(toggle(container, "Include source files for specialist review").disabled).toBe(false));
-  fireEvent.click(toggle(container, "Include source files for specialist review"));
+  fireEvent.click(toggle(container, "Hide sensitive identifiers (recommended)"));
+  await waitFor(() => expect(toggle(container, "Include original scanner files").disabled).toBe(false));
+  fireEvent.click(toggle(container, "Include original scanner files"));
 
-  await waitFor(() => expect(consequence(container)).toContain("Any password or access key a scanner found is inside this file"));
-  expect(consequence(container)).toContain("attached exactly as the scanners produced them");
+  await waitFor(() => expect(consequence(container)).toContain("Includes unredacted scanner files that may contain secrets"));
+  expect(consequence(container)).toContain("Share only with trusted recipients");
 
-  // The notice carrying it is raised to the page's strongest tone, so the
-  // sentence is not one grey paragraph among several.
-  const notice = container.querySelector(".inline-notice--danger");
-  expect(notice?.textContent).toContain("Any password or access key");
+  const notice = container.querySelector(".export-privacy-status--danger");
+  expect(notice?.textContent).toContain("may contain secrets");
+  expect(notice?.getAttribute("role")).toBe("alert");
 });
 
 test("turning redaction off without attaching sources claims neither more nor less", async () => {
@@ -221,40 +222,46 @@ test("turning redaction off without attaching sources claims neither more nor le
   // become readable, but no scanner output is copied in. Collapsing this into
   // either neighbour would overstate one way or the other.
   const { container } = renderExport();
-  await waitFor(() => expect(consequence(container)).toContain("Private details are hidden"));
+  await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
 
-  fireEvent.click(toggle(container, "Hide sensitive identifiers"));
+  fireEvent.click(toggle(container, "Hide sensitive identifiers (recommended)"));
 
-  await waitFor(() => expect(consequence(container)).toContain("host names, addresses, and system identifiers stay readable"));
-  expect(consequence(container)).toContain("No source files are attached");
-  expect(consequence(container)).not.toContain("Any password or access key");
+  await waitFor(() => expect(consequence(container)).toContain("Identifiers remain readable"));
+  expect(consequence(container)).toContain("Source files are not attached");
+  expect(container.querySelector(".export-privacy-status--warning")).not.toBeNull();
+  expect(container.querySelector(".export-privacy-status--danger")).toBeNull();
 
   // Again on the one format that *can* carry artifacts, with the option left
   // off. Without this the format clause alone suppresses the secrets sentence
   // and the source-file clause is never exercised -- a mutation dropping it
   // survived until this case existed.
   chooseCaseBundle(container);
-  await waitFor(() => expect(toggle(container, "Include source files for specialist review").disabled).toBe(false));
-  expect(toggle(container, "Include source files for specialist review").checked).toBe(false);
-  expect(consequence(container)).toContain("No source files are attached");
-  expect(consequence(container)).not.toContain("Any password or access key");
+  await waitFor(() => expect(toggle(container, "Include original scanner files").disabled).toBe(false));
+  expect(toggle(container, "Include original scanner files").checked).toBe(false);
+  expect(consequence(container)).toContain("Source files are not attached");
+  expect(consequence(container)).not.toContain("may contain secrets");
 });
 
-test("the source-file option says it does nothing while private details are hidden", async () => {
-  // Every artifact the desktop app captures is marked sensitive and standard
-  // redaction drops all of them, so in the default state ticking this box
-  // changes nothing about the file. The label used to promise the opposite.
+test("the source-file option appears only for a case bundle and cannot create a redacted no-op state", async () => {
   const { container } = renderExport();
-  await waitFor(() => expect(consequence(container)).toContain("Private details are hidden"));
+  await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
+
+  expect(Array.from(container.querySelectorAll("label.toggle-row")).some(
+    (candidate) => candidate.querySelector("strong")?.textContent === "Include original scanner files",
+  )).toBe(false);
 
   chooseCaseBundle(container);
   const row = Array.from(container.querySelectorAll<HTMLElement>("label.toggle-row")).find(
-    (candidate) => candidate.querySelector("strong")?.textContent === "Include source files for specialist review",
+    (candidate) => candidate.querySelector("strong")?.textContent === "Include original scanner files",
   );
+  const input = row?.querySelector<HTMLInputElement>('input[type="checkbox"]');
   const detail = row?.querySelector("small")?.textContent ?? "";
-  expect(detail).toContain("only when private details are not hidden");
-  expect(detail).toContain("this option changes nothing");
-  expect(detail).not.toContain("Passwords and access keys are not included");
+  expect(input?.disabled).toBe(true);
+  expect(input?.checked).toBe(false);
+  expect(detail).toContain("Turn off masking");
+
+  fireEvent.click(toggle(container, "Hide sensitive identifiers (recommended)"));
+  await waitFor(() => expect(toggle(container, "Include original scanner files").disabled).toBe(false));
 });
 
 test("the recommended format says plainly that it is not signed", async () => {
@@ -263,7 +270,7 @@ test("the recommended format says plainly that it is not signed", async () => {
   // writes and no screen has ever shown. HTML is the default and the
   // recommended one, so this is the sentence most readers get.
   const { container } = renderExport();
-  await waitFor(() => expect(consequence(container)).toContain("Private details are hidden"));
+  await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
 
   expect(integrityNote(container)).toContain("This format is not signed");
   expect(integrityNote(container)).toContain("SHA-256 digest is kept in your project");
@@ -274,7 +281,7 @@ test("the case bundle is the one format that describes a signature", async () =>
   // The mirror. Without it the sentence above could be hard-coded and the
   // page would understate the one format that does sign.
   const { container } = renderExport();
-  await waitFor(() => expect(consequence(container)).toContain("Private details are hidden"));
+  await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
 
   chooseCaseBundle(container);
   await waitFor(() => expect(integrityNote(container)).toContain("carries a local integrity signature"));
@@ -286,7 +293,7 @@ test("a format that cannot carry asset relationships says so instead of showing 
   // OCSF names asset relationships in its own omitted list. The line was
   // rendered with a check icon for all six formats.
   const { container } = renderExport();
-  await waitFor(() => expect(consequence(container)).toContain("Private details are hidden"));
+  await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
 
   const line = assetRelationsLine(container);
   expect(line.className).toContain("export-contents__excluded");
@@ -295,7 +302,7 @@ test("a format that cannot carry asset relationships says so instead of showing 
 
 test("the case bundle still lists asset relationships as included", async () => {
   const { container } = renderExport();
-  await waitFor(() => expect(consequence(container)).toContain("Private details are hidden"));
+  await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
 
   chooseCaseBundle(container);
   await waitFor(() => expect(assetRelationsLine(container).className).not.toContain("export-contents__excluded"));
@@ -346,10 +353,10 @@ test("with a run selected the advanced formats are introduced, not explained awa
   // while both cards sit enabled beside it -- a mutation doing exactly that
   // survived until this test existed.
   const { container } = renderExport();
-  await waitFor(() => expect(consequence(container)).toContain("Private details are hidden"));
+  await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
 
   const note = container.querySelector<HTMLElement>(".page-secondary-feature__intro");
-  expect(note?.textContent).toContain("security-specialist handoff");
+  expect(note?.textContent).toContain("specialist or standards-based workflows");
   expect(note?.textContent).not.toContain("unavailable until a saved scan is selected");
 
   const disabled = Array.from(container.querySelectorAll<HTMLInputElement>("input[name=export-format]"))

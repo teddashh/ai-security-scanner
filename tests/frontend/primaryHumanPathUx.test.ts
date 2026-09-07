@@ -31,6 +31,7 @@ test("the two primary report formats form a named radio group and the save actio
   assert.match(source, /Save \{format\}/u);
   assert.match(source, /儲存「\{format\}」/u);
   assert.match(source, /text\(copy\.createExport, \{ format: text\(currentFormat\.title\) \}\)/u);
+  assert.ok(source.indexOf('className="export-actions"') > source.indexOf('className="export-options"'));
 });
 
 test("preview readiness is announced before export becomes actionable", async () => {
@@ -40,9 +41,9 @@ test("preview readiness is announced before export becomes actionable", async ()
   assert.match(source, /aria-busy=\{busy \|\| previewPending\}/u);
   assert.match(
     source,
-    /id="export-preview-status"[\s\S]*role=\{previewError \? undefined : "status"\}[\s\S]*aria-live=\{previewError \? undefined : "polite"\}[\s\S]*aria-atomic=\{previewError \? undefined : "true"\}/u,
+    /id="export-preview-status"[\s\S]*role=\{rawSourcesAttached \? "alert" : "status"\}[\s\S]*aria-live=\{rawSourcesAttached \? "assertive" : "polite"\}[\s\S]*aria-atomic="true"/u,
   );
-  assert.doesNotMatch(source, /id="export-preview-status" role="status"/u);
+  assert.match(source, /aria-describedby="export-preview-status"/u);
 });
 
 test("the export summary follows the current locale for product-owned case and run identities", async () => {
@@ -57,7 +58,7 @@ test("export history presents a localized run name and keeps the immutable ID te
   const source = await readSource("pages/ExportPage.tsx");
   const historyStart = source.indexOf("{exports.map((item) => {");
   const detailsStart = source.indexOf('<details className="page-technical-details export-row__technical">', historyStart);
-  const historyEnd = source.indexOf("</section>", detailsStart);
+  const historyEnd = source.indexOf("onClick={() => item.path", detailsStart);
 
   assert.ok(historyStart >= 0 && detailsStart > historyStart && historyEnd > detailsStart);
   const beginnerLayer = source.slice(historyStart, detailsStart);
@@ -68,6 +69,8 @@ test("export history presents a localized run name and keeps the immutable ID te
   assert.match(beginnerLayer, /\{historyRunName\} · \{formatDateTime\(item\.createdAt\)\}/u);
   assert.doesNotMatch(beginnerLayer, /<code>\{item\.runId\}<\/code>/u);
   assert.match(technicalLayer, /text\(copy\.scanRunId\)[\s\S]*<code>\{item\.runId\}<\/code>/u);
+  assert.match(source, /<details className="section-block page-secondary-feature export-history-section">/u);
+  assert.doesNotMatch(source, /<details className="section-block page-secondary-feature export-history-section" open/u);
 });
 
 test("a stale export run offers a real recovery path instead of an endless preview retry", async () => {
@@ -76,9 +79,9 @@ test("a stale export run offers a real recovery path instead of an endless previ
   assert.match(source, /const selectedRunUnavailable = !selectedRun/u);
   assert.match(
     source,
-    /previewError && selectedRunUnavailable[\s\S]*href="#findings"[\s\S]*copy\.chooseRun/u,
+    /previewError \? \([\s\S]*selectedRunUnavailable \? \([\s\S]*href="#findings"[\s\S]*copy\.chooseRun/u,
   );
-  assert.match(source, /previewError && !selectedRunUnavailable[\s\S]*copy\.retryPreview/u);
+  assert.match(source, /selectedRunUnavailable \? \([\s\S]*:\s*\([\s\S]*copy\.retryPreview/u);
 });
 
 test("a stale results selection is announced instead of visually selecting the first saved run", async () => {

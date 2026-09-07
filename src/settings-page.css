@@ -29,8 +29,8 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 74px;
-  padding: 14px 16px;
+  min-height: 56px;
+  padding: 10px 14px;
   border: 1px solid var(--line);
   border-radius: 14px;
   color: var(--ink);
@@ -59,34 +59,9 @@
   color: var(--accent-ink);
 }
 
-.page--settings .settings-choice span {
-  display: grid;
-  gap: 3px;
-}
-
-.page--settings .settings-choice small {
-  color: var(--muted);
-}
-
-.page--settings .settings-section--actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-}
-
-.page--settings .settings-section--actions .section-heading {
-  margin-bottom: 0;
-}
-
 @media (max-width: 760px) {
   .page--settings .settings-grid,
   .page--settings .settings-language-options {
     grid-template-columns: 1fr;
-  }
-
-  .page--settings .settings-section--actions {
-    align-items: stretch;
-    flex-direction: column;
   }
 }

@@ -32,14 +32,13 @@ import { Icon, type IconName } from "./Icon";
 import { StatusPill } from "./StatusPill";
 
 const navigation = [
-  { id: "start", labelKey: "nav.start.label", hintKey: "nav.start.hint", icon: "spark" },
-  { id: "cases", labelKey: "nav.cases.label", hintKey: "nav.cases.hint", icon: "cases" },
-  { id: "findings", labelKey: "nav.findings.label", hintKey: "nav.findings.hint", icon: "findings" },
-  { id: "settings", labelKey: "nav.settings.label", hintKey: "nav.settings.hint", icon: "settings" },
+  { id: "start", labelKey: "nav.start.label", icon: "spark" },
+  { id: "cases", labelKey: "nav.cases.label", icon: "cases" },
+  { id: "findings", labelKey: "nav.findings.label", icon: "findings" },
+  { id: "settings", labelKey: "nav.settings.label", icon: "settings" },
 ] as const satisfies ReadonlyArray<{
   id: PageId;
   labelKey: TranslationKey;
-  hintKey: TranslationKey;
   icon: IconName;
 }>;
 
@@ -176,7 +175,7 @@ export function AppShell({
   const renderedPageTransitionKey = useRef(pageTransitionKey);
   renderedPageTransitionKey.current = pageTransitionKey;
   const mobileDialogOpen = reconcileMobileNavigationOpen(mobileOpen, narrowViewport);
-  const { locale, setLocale, t, formatNumber } = useI18n();
+  const { locale, t, formatNumber } = useI18n();
   const displayedCaseLabels = caseDisplayLabels(cases, locale);
   const selectedCaseDisplayName = selectedCase
     ? displayedCaseLabels.get(selectedCase.id)
@@ -357,7 +356,6 @@ export function AppShell({
           <span className="brand__mark"><Icon name="shield" size={22} /></span>
           <span className="brand__copy">
             <strong>ai-security-scanner</strong>
-            <small>{t("shell.brandSubtitle")}</small>
           </span>
           <button
             ref={mobileCloseButtonRef}
@@ -397,27 +395,6 @@ export function AppShell({
           )}
         </div>
 
-        <div className="language-switcher" role="group" aria-label={t("language.label")}>
-          <button
-            type="button"
-            lang="en"
-            className={cx(locale === "en" && "language-switcher__active")}
-            aria-pressed={locale === "en"}
-            onClick={() => setLocale("en")}
-          >
-            {t("language.english")}
-          </button>
-          <button
-            type="button"
-            lang="zh-Hant"
-            className={cx(locale === "zh-TW" && "language-switcher__active")}
-            aria-pressed={locale === "zh-TW"}
-            onClick={() => setLocale("zh-TW")}
-          >
-            {t("language.traditionalChinese")}
-          </button>
-        </div>
-
         <nav className="nav-list">
           {navigation.map((item) => (
             <button
@@ -430,7 +407,6 @@ export function AppShell({
               <Icon name={item.icon} size={20} />
               <span>
                 <strong>{t(item.labelKey)}</strong>
-                <small>{t(item.hintKey)}</small>
               </span>
             </button>
           ))}
@@ -441,7 +417,6 @@ export function AppShell({
             <Icon name="lock" size={17} />
             <span>
               <strong>{t("shell.privacy.title")}</strong>
-              <small>{t("shell.privacy.detail")}</small>
             </span>
           </div>
           <span className={cx("runtime-badge", mode === "native" && runtime?.available ? "runtime-badge--native" : "runtime-badge--demo")}>

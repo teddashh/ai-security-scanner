@@ -61,20 +61,17 @@ test("coverage source selection receives and labels installed-product capability
   ]) assert.ok(!providerPanelSource.includes(retiredBroadClaim), retiredBroadClaim);
 });
 
-test("coverage onboarding presents all required use-case next steps in both locales", () => {
-  for (const [english, traditionalChinese] of [
-    ["A website or API that is already online", "已架好的網站或 API"],
-    ["Public IP addresses or domains", "公開 IP 或網域"],
-    ["Internal IT systems", "內部 IT 環境"],
-    ["Code you wrote or generated with AI", "自己寫或 AI 生成的程式碼"],
-    ["Infrastructure code", "基礎設施程式碼"],
-    ["Container image", "容器映像"],
-    ["Kubernetes", "Kubernetes"],
-    ["AWS, Azure, Google Cloud, or Microsoft 365", "AWS、Azure、Google Cloud 或 Microsoft 365"],
-  ]) {
-    assert.ok(source.includes(english), `missing English use-case guidance: ${english}`);
-    assert.ok(source.includes(traditionalChinese), `missing Traditional Chinese guidance: ${traditionalChinese}`);
-  }
+test("coverage onboarding does not repeat the start-page use-case catalog", () => {
+  assert.ok(!source.includes("const useCaseNextSteps"));
+  assert.ok(!source.includes("coverage-situation-help"));
+  assert.ok(!source.includes("pageCopy.situationSummary"));
+  assert.ok(!source.includes("pageCopy.situationIntro"));
+});
+
+test("source details and repeated advice do not bury the item that needs action", () => {
+  assert.match(source, /coverage\.length === 0[\s\S]*coverage-source-ledger page-secondary-feature[\s\S]*<summary>\{text\(pageCopy\.sourcesTitle/u);
+  assert.match(source, /const showAssetNext = asset\.authorizationState !== "authorized"[\s\S]*\|\| readyForFirstScan[\s\S]*\|\| selectedAssets\.includes\(asset\.id\)/u);
+  assert.match(source, /showAssetNext && \([\s\S]*asset-review-card__next/u);
 });
 
 test("technical detail is progressive and a website service remains a preset, not permission", () => {
@@ -123,13 +120,15 @@ test("guided public and internal inventory routes retain the bounded TCP preset"
   assert.match(source, /setRequestsPerSecond\(policy\.requestsPerSecond\)/u);
   assert.match(source, /setExternalConcurrency\(policy\.concurrency\)/u);
   assert.match(source, /setExternalTimeout\(policy\.timeoutSeconds\)/u);
-  assert.ok(source.includes("pageCopy.guidedNetworkPreset"));
-  assert.ok(source.includes("這次只會用保守的連線設定檢查 {target}"));
-  assert.doesNotMatch(
-    source.match(/guidedNetworkPreset: bilingual\(([\s\S]*?)\n\s*\),/u)?.[1] ?? "",
-    /\{protocol\}|\{count\}/u,
-    "protocol and port counts must not appear in the first-layer preset",
-  );
+  assert.ok(source.includes("pageCopy.guidedNetworkBoundary"));
+  assert.ok(source.includes("pageCopy.presetTitle"));
+  assert.match(source, /coverage-guided-boundary[\s\S]*target: externalTarget[\s\S]*protocol: externalProtocol[\s\S]*ports: parsedPorts\.join[\s\S]*rate: formatNumber\(requestsPerSecond\)[\s\S]*concurrency: formatNumber\(externalConcurrency\)[\s\S]*timeout: formatNumber\(externalTimeout\)/u);
+  for (const phrase of [
+    "No exploitation, credentials, destructive actions, or scope expansion.",
+    "不做漏洞利用、憑證測試、破壞性動作或擴大範圍。",
+    "By starting, you confirm you own or are authorized to scan this target.",
+    "按下開始即表示你擁有此目標，或已獲授權掃描此目標。",
+  ]) assert.ok(source.includes(phrase), phrase);
   assert.match(source, /coverage-technical-preset-summary[\s\S]*guidedNetworkTechnicalPreset[\s\S]*protocol: externalProtocol[\s\S]*count: formatNumber\(parsedPorts\.length\)[\s\S]*concurrency: formatNumber\(externalConcurrency\)/u);
   assert.ok(source.includes("up to {concurrency} simultaneous connections"));
   assert.ok(source.includes("最多 {concurrency} 個並行連線"));
@@ -270,12 +269,14 @@ test("cloud sign-in leads to one exact read-only scan confirmation instead of an
   assert.match(source, /!simpleGuidedConsent && \([\s\S]*ownershipConfirmed/u);
   assert.match(source, /guidedLowImpactNetwork \|\| guidedCloudConsent[\s\S]*pageCopy\.changeScanType/u);
   for (const [english, traditionalChinese] of [
-    ["Your provider sign-in already identifies the account", "雲端服務商登入已確認帳號"],
+    ["Signed-in account: {account}", "已登入帳號：{account}"],
+    ["Read-only checks: {checks}. No cloud settings or data will be changed.", "唯讀檢查：{checks}。不會修改雲端設定或資料。"],
     ["Scan this signed-in account", "掃描這個已登入帳號"],
   ]) {
     assert.ok(source.includes(english), english);
     assert.ok(source.includes(traditionalChinese), traditionalChinese);
   }
+  assert.match(source, /guidedCloudConsent && \([\s\S]*pageCopy\.guidedCloudBoundary[\s\S]*account: selectedScopeAssets\.map[\s\S]*checks: scopeModes\.map/u);
 });
 
 test("guided cloud discovery is one explicit continuation after sign-in", () => {
@@ -358,6 +359,11 @@ test("choosing a local folder authorizes its private read-only snapshot without 
   ]) {
     assert.ok(!source.includes(retired), `retired duplicate local consent remains: ${retired}`);
   }
+  for (const phrase of [
+    "Saved copy: {copy} · Read-only checks: {checks}. The original source stays unchanged.",
+    "已保存副本：{copy} · 唯讀檢查：{checks}。原始來源不會被修改。",
+  ]) assert.ok(source.includes(phrase), phrase);
+  assert.match(source, /guidedLocalConsent && \([\s\S]*pageCopy\.guidedLocalBoundary[\s\S]*copy: selectedScopeAssets\.map[\s\S]*checks: scopeModes\.map/u);
 });
 
 test("source-code setup says local, masked, and unchanged instead of asking users to remove secrets", () => {
@@ -448,8 +454,9 @@ test("saved sensitive-network access is labeled as internal, not external", () =
   );
 });
 
-test("every journey step is directly reachable and step 2 points to scan choices", () => {
-  assert.ok(source.includes('href={`#coverage-step-${number}`}'));
+test("the concise three-step form remains directly reachable without a duplicate journey navigator", () => {
+  assert.ok(!source.includes("coverage-journey"));
+  assert.ok(!source.includes("coverageJourneySteps"));
   assert.ok(source.includes('href="#coverage-step-3"'));
   assert.ok(source.includes('scrollToCoverageStep("coverage-step-3")'));
   assert.ok(source.includes('(prefers-reduced-motion: reduce)'));

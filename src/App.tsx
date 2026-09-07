@@ -1864,6 +1864,18 @@ export default function App() {
     // the case id and every finding and group the computation reads.
   }, [correlationInputKey, currentCaseId]);
 
+  const startScannerSetupBlocker = scanReadiness
+    && scanReadiness.caseId === currentCaseId
+    && isScannerSetupBlocker(scanReadiness.blockerCode)
+    ? scanReadiness.blockerCode
+    : undefined;
+  const showStartRuntimeSetup = mode !== "native"
+    || snapshot?.runtime?.available !== true
+    || runtimeSetupRequestPending
+    || runtimeSetup?.active === true
+    || runtimeSetup?.prerequisiteRepairActive === true
+    || startScannerSetupBlocker !== undefined;
+
   const content = (() => {
     if (loading && !snapshot) {
       return (
@@ -1897,7 +1909,7 @@ export default function App() {
           localhostQuickScanBusy={busyAction === "localhost-quick-scan"}
           onStartLocalhostQuickScan={(port) => void startLocalhostQuickScan(port)}
           setupFocusKey={runtimeSetupFocusKey}
-          setup={
+          setup={showStartRuntimeSetup ? (
             <RuntimeSetupAssistant
               locale={locale}
               mode={mode}
@@ -1907,16 +1919,14 @@ export default function App() {
                 || runtimeSetup?.active
                 || runtimeSetup?.prerequisiteRepairActive}
               scannerIssueBusy={busyAction === "scan-readiness"}
-              scannerSetupBlocker={scanReadiness && scanReadiness.caseId === currentCaseId && isScannerSetupBlocker(scanReadiness.blockerCode)
-                ? scanReadiness.blockerCode
-                : undefined}
+              scannerSetupBlocker={startScannerSetupBlocker}
               onSetup={() => void setupManagedRuntime()}
               onCheckScannerAvailability={() => {
                 if (currentCaseId) void retryScanReadiness(currentCaseId);
               }}
               onCancel={() => void cancelManagedRuntimeSetup()}
             />
-          }
+          ) : undefined}
           onChoose={(definition) => {
             setSelectedUseCase((current) => ({
               definition,

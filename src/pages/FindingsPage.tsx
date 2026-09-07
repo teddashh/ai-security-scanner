@@ -114,9 +114,20 @@ const copy = {
     zhTW: "先知道該修什麼",
   },
   description: {
-    en: "See the issues that matter most, what they could affect, and the clearest next step for your team.",
-    zhTW: "先看最重要的問題、可能影響，以及團隊接下來可以怎麼做。",
+    en: "Review the highest-priority problems and next actions.",
+    zhTW: "先看最高優先問題與下一步。",
   },
+  scopeLimitations: { en: "Scope & limitations", zhTW: "掃描範圍與限制" },
+  scopeSummary: {
+    en: "{completed} completed · {gaps} gaps",
+    zhTW: "完成 {completed} 項 · {gaps} 個缺口",
+  },
+  reportBoundary: {
+    en: "NIST and ISO references and AIDEFEND's independent, unofficial mapping are context only—not an audit, certification, compliance decision, or automatic fix.",
+    zhTW: "NIST、ISO 參考與 AIDEFEND 的獨立非官方對照只提供脈絡；不等同稽核、認證、合規判定或自動修復。",
+  },
+  relatedGroups: { en: "Related findings & groups", zhTW: "相關問題與群組" },
+  reviewHistory: { en: "Review status & history", zhTW: "處理狀態與歷程" },
   emptyHeaderTitle: { en: "Problem list", zhTW: "問題清單" },
   emptyHeaderDescription: {
     en: "Your scan results and recommended next steps will appear here.",
@@ -417,6 +428,7 @@ const copy = {
   testedTitle: { en: "What was actually tested", zhTW: "實際完成的測試" },
   gapsTitle: { en: "What was not tested", zhTW: "沒有測到的內容" },
   nextTitle: { en: "What to do next", zhTW: "接下來怎麼做" },
+  moreItems: { en: "+{count} more", zhTW: "另 {count} 項" },
   noRequestedTarget: {
     en: "The older run did not retain an exact target description.",
     zhTW: "這筆舊掃描沒有保留精確的目標說明。",
@@ -715,6 +727,57 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
     report.requested.targets.map((target) => [target.assetId, target.label ?? target.assetId]),
   );
   const engineByTaskId = new Map(run?.engineRuns.map((engine) => [engine.id, engine]) ?? []);
+  const orderedNextSteps = [...report.nextSteps].sort((left, right) => left.priority - right.priority);
+  const firstRequestedTarget = report.requested.targets[0];
+  const firstTestedCheck = testedChecks[0];
+  const firstTestedEngine = firstTestedCheck ? engineByTaskId.get(firstTestedCheck.taskId) : undefined;
+  const firstCoverageGap = report.coverageGaps[0];
+  const firstGapTargets = firstCoverageGap?.targetAssetIds
+    .map((assetId) => targetLabelById.get(assetId) ?? assetId)
+    .join(locale === "en" ? ", " : "、");
+  const firstGapUnattributedText = firstCoverageGap?.unattributed
+    ? findingUnattributedGap(
+        locale,
+        firstCoverageGap.dimension.split(":")[0] ?? firstCoverageGap.dimension,
+        firstCoverageGap.unattributed,
+        {
+          dimension: firstCoverageGap.dimension,
+          reason: firstCoverageGap.reason,
+          nextAction: firstCoverageGap.nextAction,
+        },
+      )
+    : undefined;
+  const appendRemainingCount = (value: string, count: number): string => count > 0
+    ? `${value} · ${text(copy.moreItems, { count: formatNumber(count) })}`
+    : value;
+  const requestedSummary = firstRequestedTarget
+    ? appendRemainingCount(
+        firstRequestedTarget.label ?? firstRequestedTarget.assetId,
+        report.requested.targets.length - 1,
+      )
+    : text(copy.noRequestedTarget);
+  const testedSummary = firstTestedCheck
+    ? appendRemainingCount(
+        `${localizedCheckName(firstTestedCheck.checkId, locale, firstTestedEngine)} · ${text(testedStatusCopy(firstTestedCheck.status))}`,
+        testedChecks.length - 1,
+      )
+    : text(copy.noTestedDimension);
+  const gapSummary = firstCoverageGap
+    ? appendRemainingCount(
+        `${firstGapTargets || text(copy.requestedScope)} · ${firstGapUnattributedText
+          ? firstGapUnattributedText.dimension
+          : localizedCoverageDimension(firstCoverageGap.dimension, locale)} · ${firstGapUnattributedText
+          ? firstGapUnattributedText.reason
+          : coverageGapProse(locale, firstCoverageGap.reason)}`,
+        report.coverageGaps.length - 1,
+      )
+    : text(noRecordedGapDetail);
+  const nextStepSummary = orderedNextSteps[0]
+    ? appendRemainingCount(
+        text(nextActionCopy(orderedNextSteps[0].code)),
+        orderedNextSteps.length - 1,
+      )
+    : text(copy.noNextStep);
   const countBreakdown = [
     [copy.testedComplete, report.coverageCounts.testedComplete],
     [copy.testedPartialCount, report.coverageCounts.testedPartial],
@@ -743,6 +806,32 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         <StatusPill label={text(summary.label)} tone={summary.tone} />
       </div>
 
+      <dl className="report-outcome-strip" aria-label={text(copy.masterTitle)}>
+        <div>
+          <dt>{text(copy.askedTitle)} <span>{formatNumber(report.requested.targets.length)}</span></dt>
+          <dd>{requestedSummary}</dd>
+        </div>
+        <div>
+          <dt>{text(copy.testedTitle)} <span>{formatNumber(testedChecks.length)}</span></dt>
+          <dd>{testedSummary}</dd>
+        </div>
+        <div className={report.coverageGaps.length > 0 ? "report-outcome-strip__warning" : undefined}>
+          <dt>{text(copy.gapsTitle)} <span>{formatNumber(report.coverageGaps.length)}</span></dt>
+          <dd>{gapSummary}</dd>
+        </div>
+        <div>
+          <dt>{text(copy.nextTitle)} <span>{formatNumber(orderedNextSteps.length)}</span></dt>
+          <dd>{nextStepSummary}</dd>
+        </div>
+      </dl>
+
+      <details className="page-secondary-feature report-scope-disclosure">
+        <summary>
+          {text(copy.scopeLimitations)} · {text(copy.scopeSummary, {
+            completed: formatNumber(report.coverageCounts.testedComplete),
+            gaps: formatNumber(report.coverageGaps.length),
+          })}
+        </summary>
       <div className="metrics-grid metrics-grid--four" aria-label={text(copy.masterTitle)}>
         <MetricCard
           label={text(copy.requestedTargets)}
@@ -861,7 +950,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
             </ul>
           ) : <p>{text(copy.noTestedDimension)}</p>}
           {testedNetworkScopes.length > 0 && (
-            <details open={testedNetworkScopes.length <= 8}>
+            <details>
               <summary>{text(copy.networkScopeCount, { count: formatNumber(testedNetworkScopes.length) })} · {text(copy.exactNetworkScope)}</summary>
               <ul className="detail-list">
                 {testedNetworkScopes.map((scope) => (
@@ -922,7 +1011,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
             </ul>
           ) : <p>{text(noRecordedGapDetail)}</p>}
           {untestedNetworkScopes.length > 0 && (
-            <details open={untestedNetworkScopes.length <= 8}>
+            <details>
               <summary>{text(copy.networkScopeCount, { count: formatNumber(untestedNetworkScopes.length) })} · {text(copy.exactNetworkScope)}</summary>
               <ul className="detail-list">
                 {untestedNetworkScopes.map((scope) => (
@@ -946,9 +1035,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
       </div>
       {report.nextSteps.length > 0 ? (
         <ol className="detail-list">
-          {[...report.nextSteps]
-            .sort((left, right) => left.priority - right.priority)
-            .map((step, index) => (
+          {orderedNextSteps.map((step, index) => (
               <li key={`${step.code}-${step.findingId ?? step.taskId ?? index}`}>
                 <strong>{text(nextActionCopy(step.code))}</strong>
                 {step.recommendedExpertType && <span>{localizedExpertType(step.recommendedExpertType, locale)}</span>}
@@ -1002,10 +1089,10 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
           })}
         </div>
       </details>
+      </details>
 
       <InlineNotice tone="info" title={text(copy.notCompliance)}>
-        <p>{text(copy.frameworkNotice)}</p>
-        <p>{text(copy.aidefendMappingNotice)}</p>
+        <p>{text(copy.reportBoundary)}</p>
       </InlineNotice>
     </section>
   );
@@ -1334,7 +1421,6 @@ export function FindingsPage({
         actions={reportActions}
       />
 
-      {report && <BeginnerReportOverview report={report} run={latestRun} />}
       {reportUnavailable && <InlineNotice tone="warning" title={text(unavailableReportNotice.title)}><p>{text(unavailableReportNotice.body)}</p></InlineNotice>}
 
       {activeRun && (
@@ -1406,6 +1492,10 @@ export function FindingsPage({
         </section>
       )}
 
+      {report && <BeginnerReportOverview report={report} run={latestRun} />}
+
+      <details className="section-block page-secondary-feature findings-related-work">
+        <summary>{text(copy.relatedGroups)}</summary>
       {hasCorrelationContent && (
         <section className="section-block" aria-labelledby="finding-correlations-title">
           <div className="section-heading">
@@ -1652,6 +1742,7 @@ export function FindingsPage({
           </button>
         </form>
       </details>
+      </details>
 
       <details className="page-technical-details page-technical-details--guide">
         <summary>{text(copy.howToRead)}</summary>
@@ -1795,8 +1886,8 @@ export function FindingsPage({
                 <div><dt>{text(copy.relatedAssets)}</dt><dd>{text(copy.assetCount, { count: formatNumber(selected.assetIds?.length ?? 1) })}</dd></div>
               </dl>
 
-              <section className="detail-section">
-                <div className="detail-section__heading"><h3>{text(copy.decisionHistory)}</h3><span>{text(copy.decisionCount, { count: formatNumber(selectedEvents.length) })}</span></div>
+              <details className="detail-section page-secondary-feature">
+                <summary>{text(copy.reviewHistory)} · {text(copy.decisionCount, { count: formatNumber(selectedEvents.length) })}</summary>
                 <form className="source-connect-panel source-connect-panel--stacked" onSubmit={(event) => void submitDecision(event)}>
                   <p>{text(copy.decisionBoundary)}</p>
                   <label className="field">
@@ -1838,7 +1929,7 @@ export function FindingsPage({
                     ))}
                   </div>
                 )}
-              </section>
+              </details>
 
               <section className="detail-section">
                 <h3>{text(copy.possibleImpact)}</h3>

@@ -42,26 +42,26 @@ interface ExportPageProps {
 }
 
 const copy = {
-  eyebrow: { en: "SHARE RESULTS", zhTW: "分享結果" },
-  title: { en: "Share results your team can act on", zhTW: "把結果變成團隊看得懂、接得下去的報告" },
+  eyebrow: { en: "EXPORT", zhTW: "匯出" },
+  title: { en: "Export results", zhTW: "匯出結果" },
   description: {
-    en: "Start with a readable report for people or a master-report JSON for another tool. Advanced technical formats are available when you need them. Your file stays on this device until you share it.",
-    zhTW: "一般分享可選人看得懂的報告，或讓其他工具讀取的主要報告 JSON；需要時再打開進階技術格式。檔案在你主動分享前只會留在這台電腦上。",
+    en: "Choose a format, review privacy, then save locally.",
+    zhTW: "選擇格式、確認隱私設定，再儲存到本機。",
   },
   preparing: { en: "Preparing…", zhTW: "準備中…" },
   exportDemo: { en: "Download {format} demo file", zhTW: "下載「{format}」展示檔" },
   createExport: { en: "Save {format}", zhTW: "儲存「{format}」" },
   createInterimExport: { en: "Save interim {format}", zhTW: "儲存暫時的「{format}」" },
   createIncompleteExport: { en: "Save incomplete {format}", zhTW: "儲存不完整的「{format}」" },
-  activeTitle: { en: "This would be an interim report", zhTW: "這會是一份暫時報告" },
+  activeTitle: { en: "Interim export", zhTW: "暫時報告" },
   activeBody: {
-    en: "A scan is still running. A file saved now may omit later findings and will record unfinished checks. Wait for every check to finish unless you specifically need a progress snapshot.",
-    zhTW: "掃描仍在執行。現在儲存的檔案可能缺少之後才出現的問題，並會記錄尚未完成的檢查。除非你確實需要進度快照，否則請等每項檢查結束後再儲存。",
+    en: "The scan is still running. This file may omit findings reported later.",
+    zhTW: "掃描仍在進行；此檔案可能缺少之後才回報的問題。",
   },
-  incompleteTitle: { en: "This report is incomplete", zhTW: "這份報告尚不完整" },
+  incompleteTitle: { en: "Incomplete export", zhTW: "不完整報告" },
   incompleteBody: {
-    en: "Some checks stopped without a final result. The saved file will record those unfinished checks, but it may omit problems they did not get to report.",
-    zhTW: "有些檢查尚未產生最終結果就停止了。儲存的檔案會記錄這些未完成檢查，但可能缺少它們尚未回報的問題。",
+    en: "Some checks did not finish. The file records those gaps but may omit unreported problems.",
+    zhTW: "有些檢查未完成；檔案會記錄缺口，但可能缺少尚未回報的問題。",
   },
   demoTitle: { en: "This downloads a sample report", zhTW: "這次會下載一份範例報告" },
   demoBody: {
@@ -85,11 +85,6 @@ const copy = {
   },
   chooseRun: { en: "Choose a scan in Results", zhTW: "前往「結果」選擇掃描" },
   retryPreview: { en: "Try preview again", zhTW: "重新取得預覽" },
-  sensitiveTitle: { en: "This scan contains sensitive asset and security information", zhTW: "這次掃描包含敏感的資產與資安資訊" },
-  sensitiveBody: {
-    en: "Choose whether to hide private details and include source files before sharing. What those two choices leave in the file is described below.",
-    zhTW: "分享前，請選擇是否遮罩私人資訊、是否附上來源檔案。下面會說明這兩個選擇會在檔案裡留下什麼。",
-  },
   // One of these three replaces the single unconditional sentence that used to
   // sit here. That sentence promised "Passwords and access keys are never
   // included", which holds only under standard redaction: with redaction off,
@@ -99,18 +94,18 @@ const copy = {
   // computes the contradicting sentence -- it was rendered one disclosure down
   // from the promise.
   sharingRedacted: {
-    en: "Private details are hidden, so every source file a scanner captured is left out and passwords or access keys a scanner found stay out of this file. Findings, hashes, and coverage records remain.",
-    zhTW: "你已遮罩私人資訊，因此掃描器擷取的來源檔案全部不會附上，掃描器找到的密碼或存取金鑰也不會進入這個檔案。問題、雜湊值與涵蓋範圍紀錄仍會保留。",
+    en: "Sensitive identifiers hidden. Source files excluded.",
+    zhTW: "已遮罩敏感識別資訊；不附來源檔案。",
   },
   sharingIdentifiable: {
-    en: "Private details are not hidden, so host names, addresses, and system identifiers stay readable in this file. No source files are attached with these settings, so scanner output is not copied in.",
-    zhTW: "你沒有遮罩私人資訊，因此主機名稱、位址與系統識別碼在這個檔案裡都可以直接讀取。目前設定不會附上來源檔案，掃描器的輸出不會被複製進去。",
+    en: "Identifiers remain readable. Source files are not attached.",
+    zhTW: "識別資訊仍可讀；不附來源檔案。",
   },
   sharingRawSources: {
-    en: "Private details are not hidden and source files are attached exactly as the scanners produced them. Any password or access key a scanner found is inside this file. Share it only with someone you would trust with those secrets.",
-    zhTW: "你沒有遮罩私人資訊，而且來源檔案會照掃描器產出的原樣附上。掃描器找到的任何密碼或存取金鑰都會在這個檔案裡。只有在你願意把這些機密交給對方時，才分享這個檔案。",
+    en: "Includes unredacted scanner files that may contain secrets. Share only with trusted recipients.",
+    zhTW: "將附上未遮罩的掃描器原始檔，可能含機密；僅交付可信對象。",
   },
-  previewPending: { en: "Calculating the exact contents on this device…", zhTW: "正在這台電腦上計算精確匯出內容…" },
+  previewPending: { en: "Checking file contents…", zhTW: "正在確認檔案內容…" },
   // Only the case bundle is signed: `export.rs` attaches an envelope, while
   // every other format takes the `case_service.rs` path that sets
   // `signature: None` and stores UNSIGNED_SCHEMA_NOTICE. This sentence headed
@@ -125,7 +120,11 @@ const copy = {
     en: "This format is not signed. A SHA-256 digest is kept in your project and can detect later changes to the file, but nothing in the file establishes who produced it, or that the scan was complete or correct.",
     zhTW: "這個格式不會簽章。專案內會保存 SHA-256 摘要，可用來發現檔案之後被修改，但檔案本身無法證明是誰產出的，也不能證明掃描完整或結果正確。",
   },
-  caseBundleScopeTitle: { en: "Case-wide records with run-bound reports", zhTW: "案件全域紀錄與輪次綁定報告" },
+  caseBundleScopeTitle: {
+    en: "Includes case-wide records; reports use the selected run.",
+    zhTW: "包含案件全域紀錄；報告使用所選輪次。",
+  },
+  caseBundleScopeDetails: { en: "Technical scope details", zhTW: "技術範圍細節" },
   caseBundleScopeBody: {
     en: "The bundle includes case-wide assets, grants, coverage, scan history, findings, workflow history, comparisons, and raw source files if you choose to include them. Reports select observations and evidence from the chosen scan run. For older observations without a frozen snapshot, wording may use the current finding; workflow status and asset names may also reflect the current case.",
     zhTW: "案件包會包含整個案件的資產、授權、涵蓋、掃描歷史、問題、工作流程歷史、比較，以及你選擇附上的原始來源檔案。包內報告會選取所選掃描輪次的觀察與證據；較舊且沒有凍結快照的觀察，文字可能使用目前問題內容，工作流程狀態與資產名稱也可能反映目前案件。",
@@ -155,12 +154,12 @@ const copy = {
   notRun: { en: "Scanner jobs not run", zhTW: "未執行的掃描工作" },
   notRunDetail: { en: "Their reasons are exported and are never rewritten as passed.", zhTW: "原因會一起匯出，永遠不會被改寫成通過。" },
   formatEyebrow: { en: "FILE TYPE", zhTW: "檔案類型" },
-  formatTitle: { en: "How do you want to share the results?", zhTW: "你想怎麼分享這份結果？" },
-  formatDescription: { en: "Pick the option that best fits the person or tool receiving it.", zhTW: "依照接手的人或工具，選擇最適合的格式。" },
-  advancedFormats: { en: "Advanced and technical formats", zhTW: "進階與技術格式" },
+  formatTitle: { en: "Choose a format", zhTW: "選擇格式" },
+  formatDescription: { en: "HTML for people; JSON for tools.", zhTW: "HTML 給人閱讀；JSON 供工具使用。" },
+  advancedFormats: { en: "More formats", zhTW: "更多格式" },
   advancedFormatsHint: {
-    en: "Use these for a security-specialist handoff, framework review, or a tool that requires a specific industry format.",
-    zhTW: "需要交給資安專家、檢視框架對照，或接收工具指定產業格式時再使用。",
+    en: "For specialist or standards-based workflows.",
+    zhTW: "供專家交接或標準格式工作流程使用。",
   },
   // Shown exactly when `runSupportsFindingOnlyExport` is false, and that
   // predicate is `Boolean(run)` -- so the only state that reaches this sentence
@@ -171,7 +170,7 @@ const copy = {
     en: "OCSF and OSCAL are unavailable until a saved scan is selected, because the backend pairs both with a coverage manifest built from that run. The other formats are not affected.",
     zhTW: "在選擇已保存的掃描之前，OCSF 與 OSCAL 無法使用，因為後端會為這兩種格式附上依該輪次產生的涵蓋說明檔。其他格式不受影響。",
   },
-  includeRaw: { en: "Include source files for specialist review", zhTW: "附上來源檔案，供專家核對" },
+  includeRaw: { en: "Include original scanner files", zhTW: "附上掃描器原始檔" },
   // Every artifact the desktop app captures is marked sensitive
   // (artifact_store.rs sets it unconditionally), and standard redaction drops
   // every sensitive artifact. So with private details hidden this option
@@ -179,17 +178,17 @@ const copy = {
   // and no credentials, described as the opposite of what happens in both
   // states.
   includeRawBundle: {
-    en: "Source files are attached only when private details are not hidden. With them hidden every captured file is left out and this option changes nothing; with them shown the file is larger and carries the scanner output as captured.",
-    zhTW: "只有在未遮罩私人資訊時，才會附上來源檔案。若已遮罩，所有擷取的檔案都會被排除，這個選項不會有任何作用；若未遮罩，檔案會比較大，並且會照原樣附上掃描器的輸出。",
+    en: "May contain secrets. Share only with trusted recipients.",
+    zhTW: "可能含機密；僅交付可信對象。",
   },
-  includeRawUnavailable: {
-    en: "Source files are available only in the specialist handoff option.",
-    zhTW: "只有「交給資安專家」的選項能附上來源檔案。",
+  includeRawNeedsUnredacted: {
+    en: "Turn off masking to attach these files.",
+    zhTW: "關閉遮罩後才能附上這些檔案。",
   },
-  redact: { en: "Hide sensitive identifiers", zhTW: "遮罩敏感識別資訊" },
+  redact: { en: "Hide sensitive identifiers (recommended)", zhTW: "遮罩敏感識別資訊（建議）" },
   redactDetail: {
-    en: "Hides access tokens, email addresses, internal IP addresses, and identifiable system IDs.",
-    zhTW: "遮罩存取權杖、電子郵件、內部 IP 與可辨識的系統 ID。",
+    en: "Masks tokens, email addresses, internal IPs, and system IDs.",
+    zhTW: "遮罩權杖、電子郵件、內部 IP 與系統 ID。",
   },
   includesEyebrow: { en: "WHAT WILL BE INCLUDED", zhTW: "即將包含" },
   case: { en: "Case", zhTW: "案件" },
@@ -258,48 +257,48 @@ const formatCopy = {
   case_bundle: {
     title: { en: "Technical case bundle", zhTW: "技術案件包" },
     detail: {
-      en: "Give a security specialist case-wide records plus reports bound to the selected run's observations and evidence.",
-      zhTW: "交付案件全域紀錄，以及依所選輪次觀察與證據綁定的報告，供資安專家接手。",
+      en: "Full case records for specialist handoff.",
+      zhTW: "完整案件紀錄，供資安專家接手。",
     },
     extension: ".case.tar.gz",
   },
   html: {
-    title: { en: "Readable report (recommended)", zhTW: "好讀的報告（建議）" },
+    title: { en: "HTML report (recommended)", zhTW: "HTML 報告（建議）" },
     detail: {
-      en: "Open it in a browser, send it to a teammate, or save it as a PDF.",
-      zhTW: "可用瀏覽器打開、傳給同事，或另存成 PDF。",
+      en: "For teammates; opens in a browser.",
+      zhTW: "給同事閱讀；可用瀏覽器開啟。",
     },
     extension: ".html",
   },
   json: {
-    title: { en: "Master-report JSON", zhTW: "主要報告 JSON" },
+    title: { en: "JSON report", zhTW: "JSON 報告" },
     detail: {
-      en: "Send the same coverage, findings, and next steps to another tool in a structured file.",
-      zhTW: "用結構化檔案，把相同的涵蓋範圍、問題與下一步交給其他工具。",
+      en: "Structured data for other tools.",
+      zhTW: "供其他工具使用的結構化資料。",
     },
     extension: ".json",
   },
   framework_report: {
-    title: { en: "See every framework reference in one report", zhTW: "一份報告看完所有框架對照" },
+    title: { en: "Framework mappings", zhTW: "框架對照" },
     detail: {
-      en: "Groups NIST CSF, ISO 27001, and AIDEFEND references, while keeping missing and unfinished coverage visible.",
-      zhTW: "集中整理 NIST CSF、ISO 27001 與 AIDEFEND 對照，也清楚保留沒看到與沒掃完的地方。",
+      en: "NIST, ISO 27001, and AIDEFEND references.",
+      zhTW: "NIST、ISO 27001 與 AIDEFEND 對照。",
     },
     extension: ".frameworks.json",
   },
   ocsf: {
-    title: { en: "Send findings to a security platform", zhTW: "把問題送到資安平台" },
+    title: { en: "OCSF findings", zhTW: "OCSF 問題資料" },
     detail: {
-      en: "OCSF-formatted findings for compatible security systems.",
-      zhTW: "以 OCSF 格式輸出，供相容的資安系統接收。",
+      en: "For OCSF-compatible security tools.",
+      zhTW: "供支援 OCSF 的資安工具使用。",
     },
     extension: ".ocsf.json",
   },
   oscal: {
-    title: { en: "Share controls with governance tools", zhTW: "把控制項交給治理工具" },
+    title: { en: "OSCAL assessment", zhTW: "OSCAL 評估資料" },
     detail: {
-      en: "OSCAL-formatted controls and assessment evidence for compatible tools.",
-      zhTW: "以 OSCAL 格式輸出控制項與評估證據，供相容工具使用。",
+      en: "For OSCAL-compatible governance tools.",
+      zhTW: "供支援 OSCAL 的治理工具使用。",
     },
     extension: ".oscal.json",
   },
@@ -318,12 +317,12 @@ const advancedFormats = [
 ] as const satisfies readonly ExportFormat[];
 const findingOnlyCoverageCopy = {
   ocsf: {
-    en: "Includes OCSF findings plus a required coverage manifest showing missing or unfinished checks.",
-    zhTW: "包含 OCSF 問題資料，並附上必要的涵蓋說明檔，列出未測或未完成項目。",
+    en: "OCSF findings plus a coverage manifest for missing or unfinished checks.",
+    zhTW: "OCSF 問題資料，另附涵蓋說明檔記錄未測或未完成項目。",
   },
   oscal: {
-    en: "Includes OSCAL observations plus a required coverage manifest showing missing or unfinished checks.",
-    zhTW: "包含 OSCAL 觀察資料，並附上必要的涵蓋說明檔，列出未測或未完成項目。",
+    en: "OSCAL observations plus a coverage manifest for missing or unfinished checks.",
+    zhTW: "OSCAL 觀察資料，另附涵蓋說明檔記錄未測或未完成項目。",
   },
 } as const;
 
@@ -462,6 +461,7 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
     : rawSourcesAttached
       ? copy.sharingRawSources
       : copy.sharingIdentifiable;
+  const privacyTone = rawSourcesAttached ? "danger" : redactSensitiveValues ? "neutral" : "warning";
   const shownCount = (value: number | undefined): string => value === undefined ? "—" : formatNumber(value);
   const renderFormatCard = (id: ExportFormat) => {
     const item = formatCopy[id];
@@ -500,29 +500,6 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
         eyebrow={text(copy.eyebrow)}
         title={text(copy.title)}
         description={text(copy.description)}
-        actions={(
-          <button
-            className="button button--primary"
-            type="button"
-            disabled={busy || previewPending || !previewMatchesSelection}
-            aria-busy={busy || previewPending}
-            onClick={() => {
-              if (!selectedRun || !previewMatchesSelection) return;
-              void onExport({ runId: selectedRun.id, locale: reportLocale, format, includeRawEvidence, redactSensitiveValues });
-            }}
-          >
-            <Icon name="download" size={18} />
-            {busy || previewPending
-              ? text(copy.preparing)
-              : demoMode
-                ? text(copy.exportDemo, { format: text(currentFormat.title) })
-                : activeRun
-                  ? text(copy.createInterimExport, { format: text(currentFormat.title) })
-                  : incompleteTerminalRun
-                    ? text(copy.createIncompleteExport, { format: text(currentFormat.title) })
-                    : text(copy.createExport, { format: text(currentFormat.title) })}
-          </button>
-        )}
       />
 
       {activeRun && !demoMode && (
@@ -537,12 +514,6 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
         </InlineNotice>
       )}
 
-      {format === "case_bundle" && !demoMode && (
-        <InlineNotice tone="warning" title={text(copy.caseBundleScopeTitle)}>
-          <p>{text(copy.caseBundleScopeBody)}</p>
-        </InlineNotice>
-      )}
-
       {demoMode && (
         <InlineNotice tone="warning" title={text(copy.demoTitle)}>
           <p>{text(copy.demoBody)}</p>
@@ -552,46 +523,6 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
           </details>
         </InlineNotice>
       )}
-
-      <InlineNotice
-        tone={previewError || rawSourcesAttached ? "danger" : "warning"}
-        title={previewError
-          ? text(selectedRunUnavailable ? copy.runUnavailableTitle : copy.previewErrorTitle)
-          : text(copy.sensitiveTitle)}
-      >
-        <p
-          id="export-preview-status"
-          role={previewError ? undefined : "status"}
-          aria-live={previewError ? undefined : "polite"}
-          aria-atomic={previewError ? undefined : "true"}
-        >
-          {previewError
-            ? text(selectedRunUnavailable ? copy.runUnavailableBody : copy.previewErrorBody)
-            : previewPending
-              ? text(copy.previewPending)
-              : text(copy.sensitiveBody)}
-        </p>
-        {!previewError && <p className="export-sharing-consequence">{text(sharingConsequence)}</p>}
-        {previewError && selectedRunUnavailable && (
-          <a className="button button--secondary button--small" href="#findings">
-            <Icon name="findings" size={15} /> {text(copy.chooseRun)}
-          </a>
-        )}
-        {previewError && !selectedRunUnavailable && (
-          <button className="button button--secondary button--small" type="button" disabled={busy || previewPending} onClick={() => setPreviewRequest((request) => request + 1)}>
-            <Icon name="refresh" size={15} /> {text(copy.retryPreview)}
-          </button>
-        )}
-        {(previewError || preview?.sensitiveDataWarning) && (
-          <details className="page-technical-details">
-            <summary>{text(copy.technicalPreview)}</summary>
-            <dl>
-              {previewError && <div><dt>{text(copy.previewFailure)}</dt><dd>{previewError}</dd></div>}
-              {preview?.sensitiveDataWarning && <div><dt>{text(copy.backendWarning)}</dt><dd>{displayTechnicalDetail(preview.sensitiveDataWarning)}</dd></div>}
-            </dl>
-          </details>
-        )}
-      </InlineNotice>
 
       <div className="export-layout">
         <section className="section-block export-builder">
@@ -620,19 +551,108 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
             <label className="toggle-row">
               <input
                 type="checkbox"
-                checked={includeRawEvidence}
-                disabled={demoMode || format !== "case_bundle"}
-                onChange={(event) => setIncludeRawEvidence(event.target.checked)}
+                checked={redactSensitiveValues}
+                disabled={demoMode}
+                onChange={(event) => {
+                  const nextRedaction = event.target.checked;
+                  setRedactSensitiveValues(nextRedaction);
+                  if (nextRedaction) setIncludeRawEvidence(false);
+                }}
               />
-              <span>
-                <strong>{text(copy.includeRaw)}</strong>
-                <small>{format === "case_bundle" ? text(copy.includeRawBundle) : text(copy.includeRawUnavailable)}</small>
-              </span>
-            </label>
-            <label className="toggle-row">
-              <input type="checkbox" checked={redactSensitiveValues} disabled={demoMode} onChange={(event) => setRedactSensitiveValues(event.target.checked)} />
               <span><strong>{text(copy.redact)}</strong><small>{text(copy.redactDetail)}</small></span>
             </label>
+            {format === "case_bundle" && (
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={includeRawEvidence}
+                  disabled={demoMode || redactSensitiveValues}
+                  onChange={(event) => setIncludeRawEvidence(event.target.checked)}
+                />
+                <span>
+                  <strong>{text(copy.includeRaw)}</strong>
+                  <small>{text(redactSensitiveValues ? copy.includeRawNeedsUnredacted : copy.includeRawBundle)}</small>
+                </span>
+              </label>
+            )}
+          </div>
+
+          {format === "case_bundle" && !demoMode && (
+            <div className="export-bundle-scope">
+              <p>{text(copy.caseBundleScopeTitle)}</p>
+              <details className="page-technical-details">
+                <summary>{text(copy.caseBundleScopeDetails)}</summary>
+                <p>{text(copy.caseBundleScopeBody)}</p>
+              </details>
+            </div>
+          )}
+
+          {previewError ? (
+            <InlineNotice tone="danger" title={text(selectedRunUnavailable ? copy.runUnavailableTitle : copy.previewErrorTitle)}>
+              <p id="export-preview-status">{text(selectedRunUnavailable ? copy.runUnavailableBody : copy.previewErrorBody)}</p>
+              {selectedRunUnavailable ? (
+                <a className="button button--secondary button--small" href="#findings">
+                  <Icon name="findings" size={15} /> {text(copy.chooseRun)}
+                </a>
+              ) : (
+                <button className="button button--secondary button--small" type="button" disabled={busy || previewPending} onClick={() => setPreviewRequest((request) => request + 1)}>
+                  <Icon name="refresh" size={15} /> {text(copy.retryPreview)}
+                </button>
+              )}
+              <details className="page-technical-details">
+                <summary>{text(copy.technicalPreview)}</summary>
+                <dl>
+                  <div><dt>{text(copy.previewFailure)}</dt><dd>{previewError}</dd></div>
+                  {preview?.sensitiveDataWarning && <div><dt>{text(copy.backendWarning)}</dt><dd>{displayTechnicalDetail(preview.sensitiveDataWarning)}</dd></div>}
+                </dl>
+              </details>
+            </InlineNotice>
+          ) : (
+            <>
+              <div
+                className={`export-privacy-status export-privacy-status--${privacyTone}`}
+                id="export-preview-status"
+                role={rawSourcesAttached ? "alert" : "status"}
+                aria-live={rawSourcesAttached ? "assertive" : "polite"}
+                aria-atomic="true"
+              >
+                <Icon name={rawSourcesAttached || !redactSensitiveValues ? "warning" : "lock"} size={17} />
+                <span className="export-sharing-consequence">
+                  {text(sharingConsequence)}{previewPending ? ` ${text(copy.previewPending)}` : ""}
+                </span>
+              </div>
+              {preview?.sensitiveDataWarning && (
+                <details className="page-technical-details export-preview-technical">
+                  <summary>{text(copy.technicalPreview)}</summary>
+                  <dl><div><dt>{text(copy.backendWarning)}</dt><dd>{displayTechnicalDetail(preview.sensitiveDataWarning)}</dd></div></dl>
+                </details>
+              )}
+            </>
+          )}
+
+          <div className="export-actions">
+            <button
+              className="button button--primary"
+              type="button"
+              disabled={busy || previewPending || !previewMatchesSelection}
+              aria-busy={busy || previewPending}
+              aria-describedby="export-preview-status"
+              onClick={() => {
+                if (!selectedRun || !previewMatchesSelection) return;
+                void onExport({ runId: selectedRun.id, locale: reportLocale, format, includeRawEvidence, redactSensitiveValues });
+              }}
+            >
+              <Icon name="download" size={18} />
+              {busy || previewPending
+                ? text(copy.preparing)
+                : demoMode
+                  ? text(copy.exportDemo, { format: text(currentFormat.title) })
+                  : activeRun
+                    ? text(copy.createInterimExport, { format: text(currentFormat.title) })
+                    : incompleteTerminalRun
+                      ? text(copy.createIncompleteExport, { format: text(currentFormat.title) })
+                      : text(copy.createExport, { format: text(currentFormat.title) })}
+            </button>
           </div>
         </section>
 
@@ -699,19 +719,19 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
         </section>
       </details>
 
-      <section className="section-block">
-        <div className="section-heading section-heading--row">
-          <div>
-            <p className="eyebrow">{text(copy.historyEyebrow)}</p>
-            <h2>{text(copy.historyTitle)}</h2>
-            <p>{text(copy.historyDescription)}</p>
-          </div>
-          <div className="button-row">
-            <span className="count-label">{text(copy.fileCount, { count: formatNumber(exports.length) })}</span>
-            <button className="button button--ghost button--small" type="button" disabled={busy || demoMode} onClick={() => void onVerifyReceived()}>
-              <Icon name="shield" size={16} /> {text(copy.verifyReceived)}
-            </button>
-          </div>
+      <details className="section-block page-secondary-feature export-history-section">
+        <summary className="export-history-summary">
+          <span>
+            <span className="eyebrow">{text(copy.historyEyebrow)}</span>
+            <strong>{text(copy.historyTitle)}</strong>
+          </span>
+          <span className="count-label">{text(copy.fileCount, { count: formatNumber(exports.length) })}</span>
+        </summary>
+        <div className="export-history-intro">
+          <p>{text(copy.historyDescription)}</p>
+          <button className="button button--ghost button--small" type="button" disabled={busy || demoMode} onClick={() => void onVerifyReceived()}>
+            <Icon name="shield" size={16} /> {text(copy.verifyReceived)}
+          </button>
         </div>
 
         {exports.length === 0 ? (
@@ -778,7 +798,7 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
             })}
           </div>
         )}
-      </section>
+      </details>
     </div>
   );
 }

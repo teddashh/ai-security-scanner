@@ -338,26 +338,16 @@ const NUCLEI_TEMPLATE_REVISION = "nuclei-templates@24858b4bfabfa86f0bcfd36aea24f
 
 const pageCopy = {
   headerEyebrow: bilingual("Set up your scan", "設定這次掃描"),
-  headerTitle: bilingual("Bring everything you want to check into one place", "把想檢查的網站、系統與程式碼集中到一起"),
+  headerTitle: bilingual("Set up scan", "設定掃描"),
   headerDescription: bilingual(
-    "Add a website, cloud account, internal system, or local project. We'll organize everything into a clear list and suggest the right checks.",
-    "加入網站、雲端帳號、內部系統或本機專案；我們會整理成清楚清單，並建議適合的檢查。",
+    "Add inputs, review items, then choose checks.",
+    "加入內容、確認項目，再選擇檢查。",
   ),
-  refresh: bilingual("Find what I can scan", "整理可掃描項目"),
+  refresh: bilingual("Refresh items", "重新整理項目"),
   refreshing: bilingual("Refreshing…", "正在重新確認…"),
-  journeyLabel: bilingual("Three steps to set up a scan", "設定掃描的三個步驟"),
-  step1Short: bilingual("Connect", "加入"),
-  step1Title: bilingual("Add what you want to protect", "加入想保護的內容"),
-  step1Detail: bilingual("Choose the easiest input: cloud, local files, an inventory, or targets already entered.", "選擇最方便的方式：雲端、本機檔案、盤點檔，或已輸入的目標。"),
-  step2Short: bilingual("Review", "查看"),
-  step2Title: bilingual("See everything in one list", "在同一份清單查看全部內容"),
-  step2Detail: bilingual("Check the names and sources, then move on when the list looks right.", "確認名稱與來源，清單看起來沒問題就繼續。"),
-  step3Short: bilingual("Choose", "選擇"),
-  step3Title: bilingual("Pick the checks you want to run", "選擇想執行的檢查"),
-  step3Detail: bilingual("Start with recommended settings and customize only when you need to.", "先用建議設定，需要時再打開進階選項。"),
   addEyebrow: bilingual("Step 1", "步驟 1"),
-  addTitle: bilingual("Add something to scan", "加入要掃描的內容"),
-  addDescription: bilingual("Choose the option that matches what you have now. You can always add another source later.", "選擇最符合你目前資料的方式；之後隨時都能再加入其他來源。"),
+  addTitle: bilingual("1. Add inputs", "1. 加入內容"),
+  addDescription: bilingual("Choose one source. Add others only when needed.", "先選一個來源，需要時再加入其他來源。"),
   providerTitle: bilingual("Cloud account", "雲端帳號"),
   providerBody: bilingual("Sign in through AWS, Azure, Google Cloud, or Microsoft and turn cloud settings into a fix list.", "透過 AWS、Azure、Google Cloud 或 Microsoft 登入，把雲端設定整理成改善清單。"),
   providerOpen: bilingual("Connect a cloud account", "連接雲端帳號"),
@@ -381,8 +371,6 @@ const pageCopy = {
   otherInputsBody: bilingual("Open these technical options only when the suggested path does not match what you have.", "只有建議路徑不符合現況時，才需要打開這些技術選項。"),
   selectDoesNotAuthorizeTitle: bilingual("How scan approval works", "掃描確認方式"),
   selectDoesNotAuthorizeBody: bilingual("Adding something here only prepares the scan. Before a network check runs, you'll review the exact target, scan type, and limits in step 3.", "在這裡加入內容只會準備掃描；執行網路檢查前，你會在步驟 3 確認目標、檢查方式與限制。"),
-  situationSummary: bilingual("Not sure which option to choose?", "不確定該選哪一種？"),
-  situationIntro: bilingual("Find your situation below and follow the suggested path.", "在下方找到最接近的情況，照著建議方式開始。"),
 
   sourceEyebrow: bilingual("Saved inventory", "已保存的盤點檔"),
   sourceTitle: bilingual("Attach one saved JSON inventory", "附加一份已保存的 JSON 盤點檔"),
@@ -441,8 +429,8 @@ const pageCopy = {
   ),
 
   seeEyebrow: bilingual("Step 2", "步驟 2"),
-  seeTitle: bilingual("Review what we found", "查看整理結果"),
-  seeDescription: bilingual("Check the list below. If something is missing, add another source above; if it looks right, continue to choose the checks.", "確認下方清單；若少了什麼，就回上方再加來源。清單沒問題，就繼續選擇檢查方式。"),
+  seeTitle: bilingual("2. Review items", "2. 確認項目"),
+  seeDescription: bilingual("Select what belongs in this scan.", "選取這次要納入掃描的項目。"),
   continueStep3: bilingual("Choose scan settings", "選擇掃描方式"),
   candidateAssets: bilingual("Items found", "找到的項目"),
   candidateDetail: bilingual("Websites, systems, and projects in this scan", "這次掃描中的網站、系統與專案"),
@@ -461,7 +449,7 @@ const pageCopy = {
   noneTitle: bilingual("Connected sources finding no items: {count}", "{count} 個已連接來源沒有找到項目"),
   noneBody: bilingual("The source connected successfully but had nothing to add to this list right now.", "來源已成功連接，只是目前沒有內容可加入這份清單。"),
   sourcesEyebrow: bilingual("Your sources", "你的資料來源"),
-  sourcesTitle: bilingual("Everything connected to this scan", "這次掃描已連接的內容"),
+  sourcesTitle: bilingual("Sources ({count})", "來源（{count}）"),
   noSourcesTitle: bilingual("No input has been attached yet", "尚未附加任何輸入"),
   noSourcesBody: bilingual("Add an inventory file or local project in step 1, then refresh this list.", "請先在步驟 1 加入盤點檔或本機專案，再重新整理這份清單。"),
   assetsCount: bilingual("Items: {count}", "{count} 個項目"),
@@ -479,8 +467,8 @@ const pageCopy = {
   showAll: bilingual("Show all items", "顯示所有項目"),
 
   allowEyebrow: bilingual("Step 3", "步驟 3"),
-  allowTitle: bilingual("Choose what to scan", "選擇要掃描的內容"),
-  allowDescription: bilingual("Select one or more items, review the recommended checks, and start. Advanced controls are still available.", "選擇一個或多個項目、確認建議的檢查，然後直接開始。進階控制仍完整保留。"),
+  allowTitle: bilingual("3. Review and start", "3. 確認後開始"),
+  allowDescription: bilingual("Confirm the target and recommended checks.", "確認目標與建議檢查。"),
   pendingNoticeTitle: bilingual("Choose an item below", "從下方選擇一個項目"),
   pendingNoticeBody: bilingual("Select an item to see the checks we recommend for it.", "選取項目後，就會看到我們建議的檢查方式。"),
   selectedCount: bilingual("{count} selected", "已選 {count} 項"),
@@ -508,13 +496,19 @@ const pageCopy = {
   grantTitle: bilingual("Set up checks for selected items: {count}", "設定 {count} 個已選項目的檢查"),
   grantDescription: bilingual("Review our suggestions, confirm you are allowed to run the checks, then start.", "確認建議內容與你有權執行這些檢查，然後直接開始。"),
   guidedNetworkGrantDescription: bilingual("The exact target and recommended low-impact check are shown below.", "下方會顯示精確目標與建議的低影響檢查。"),
-  guidedLocalGrantDescription: bilingual("Review the saved local copy and the recommended checks, then start.", "確認已保存的本機副本與建議檢查，然後直接開始。"),
-  guidedCloudGrantDescription: bilingual("Your provider sign-in already identifies the account. Review the exact account and read-only checks below, then start.", "雲端服務商登入已確認帳號；請查看下方的精確帳號與唯讀檢查，然後直接開始。"),
+  guidedLocalBoundary: bilingual(
+    "Saved copy: {copy} · Read-only checks: {checks}. The original source stays unchanged.",
+    "已保存副本：{copy} · 唯讀檢查：{checks}。原始來源不會被修改。",
+  ),
+  guidedCloudBoundary: bilingual(
+    "Signed-in account: {account} · Read-only checks: {checks}. No cloud settings or data will be changed.",
+    "已登入帳號：{account} · 唯讀檢查：{checks}。不會修改雲端設定或資料。",
+  ),
   presetTitle: bilingual("Recommended settings are ready", "建議設定已準備好"),
   presetBody: bilingual("We picked a safe, useful starting point for the selected items. You can still change anything before starting.", "我們已依所選項目準備安全又實用的起始設定；開始前仍可調整。"),
-  guidedNetworkPreset: bilingual(
-    "We'll check only {target} with conservative connection settings. You can change the technical details if needed.",
-    "這次只會用保守的連線設定檢查 {target}；需要時可修改技術細節。",
+  guidedNetworkBoundary: bilingual(
+    "This scan contacts only {target}: low-impact {protocol} on ports {ports}, up to {rate}/s, {concurrency} concurrent, {timeout}s timeout. No exploitation, credentials, destructive actions, or scope expansion. By starting, you confirm you own or are authorized to scan this target.",
+    "這次掃描只會連線 {target}：低影響 {protocol}、連接埠 {ports}、每秒最多 {rate} 次、{concurrency} 個並行、{timeout} 秒逾時；不做漏洞利用、憑證測試、破壞性動作或擴大範圍。按下開始即表示你擁有此目標，或已獲授權掃描此目標。",
   ),
   guidedNetworkTechnicalPreset: bilingual(
     "Current preset: {protocol}; exact service ports: {count}; up to {concurrency} simultaneous connections.",
@@ -645,6 +639,7 @@ const pageCopy = {
   grantsTitle: bilingual("Network checks already approved", "已確認的網路檢查"),
   grantsDescription: bilingual("These saved choices keep future runs consistent. Open a record when you need the exact technical limits.", "這些選擇會讓後續掃描維持一致；需要時可打開紀錄查看精確技術限制。"),
   grantsCount: bilingual("Saved setups: {count}", "{count} 份已儲存設定"),
+  savedApprovals: bilingual("Saved network approvals ({count})", "已儲存的網路許可（{count}）"),
   grantTechnical: bilingual("View saved scan settings", "查看已儲存的掃描設定"),
   expires: bilingual("Expires {date}", "到期 {date}"),
   lowImpactInternalActivity: bilingual("Low-impact internal checks", "低影響內部連線"),
@@ -662,63 +657,6 @@ const pageCopy = {
   finalNoticeTitle: bilingual("How local inventory and network scans differ", "本機盤點與網路掃描有什麼不同"),
   finalNoticeBody: bilingual("Inventory files can be reviewed locally. Checks that connect to a website or network target use the exact settings and approval saved in step 3.", "盤點檔可以直接在本機整理；會連線到網站或網路目標的檢查，則使用步驟 3 儲存的明確設定與核准紀錄。"),
 } as const;
-
-const coverageJourneySteps = [
-  { number: "1", short: pageCopy.step1Short, title: pageCopy.step1Title, detail: pageCopy.step1Detail },
-  { number: "2", short: pageCopy.step2Short, title: pageCopy.step2Title, detail: pageCopy.step2Detail },
-  { number: "3", short: pageCopy.step3Short, title: pageCopy.step3Title, detail: pageCopy.step3Detail },
-] as const;
-
-const useCaseNextSteps = [
-  {
-    id: "website",
-    icon: "external" as const,
-    title: bilingual("A website or API that is already online", "已架好的網站或 API"),
-    detail: bilingual("Use the website already added to this project, then choose it in step 3. Recommended web settings are filled in for you.", "使用專案中已加入的網站，再到步驟 3 選取；系統會幫你填好建議的網站掃描設定。"),
-  },
-  {
-    id: "public-target",
-    icon: "coverage" as const,
-    title: bilingual("Public IP addresses or domains", "公開 IP 或網域"),
-    detail: bilingual("Use the targets already added to this project, then choose whether to review public records or run a light connection check.", "使用專案中已加入的目標，再選擇查看公開資料或執行低影響連線檢查。"),
-  },
-  {
-    id: "internal-it",
-    icon: "lock" as const,
-    title: bilingual("Internal IT systems", "內部 IT 環境"),
-    detail: bilingual("Choose the approved internal systems, confirm this computer can reach them, and use the suggested low-impact settings.", "選擇已核准的內部系統、確認這台電腦能連線，再使用建議的低影響設定。"),
-  },
-  {
-    id: "source-code",
-    icon: "file" as const,
-    title: bilingual("Code you wrote or generated with AI", "自己寫或 AI 生成的程式碼"),
-    detail: bilingual("Choose one project folder, then check it locally without changing its files.", "選擇一個專案資料夾，在本機檢查，而且不會修改任何檔案。"),
-  },
-  {
-    id: "infrastructure-code",
-    icon: "file" as const,
-    title: bilingual("Infrastructure code", "基礎設施程式碼"),
-    detail: bilingual("Choose the Terraform, JSON, or YAML project and run the recommended configuration checks locally.", "選擇 Terraform、JSON 或 YAML 專案，在本機執行建議的設定檢查。"),
-  },
-  {
-    id: "container",
-    icon: "database" as const,
-    title: bilingual("Container image", "容器映像"),
-    detail: bilingual("Choose an exported container image and review its packages, vulnerabilities, and software list locally.", "選擇匯出的容器映像，在本機查看套件、弱點與軟體清單。"),
-  },
-  {
-    id: "kubernetes",
-    icon: "shield" as const,
-    title: bilingual("Kubernetes", "Kubernetes"),
-    detail: bilingual("Choose exported cluster or node settings, then run the recommended Kubernetes checks.", "選擇匯出的叢集或節點設定，再執行建議的 Kubernetes 檢查。"),
-  },
-  {
-    id: "cloud",
-    icon: "database" as const,
-    title: bilingual("AWS, Azure, Google Cloud, or Microsoft 365", "AWS、Azure、Google Cloud 或 Microsoft 365"),
-    detail: bilingual("Sign in through the provider, import the cloud inventory, then choose the accounts and settings you want reviewed.", "透過服務商登入、匯入雲端盤點，再選擇想檢查的帳號與設定。"),
-  },
-];
 
 const assetTypeLabels: Record<Asset["type"], BilingualText> = {
   cloud_account: bilingual("Cloud account", "雲端帳號"),
@@ -1341,29 +1279,8 @@ export function CoveragePage({
         ) : undefined}
       />
 
-      <ol className="coverage-journey" aria-label={text(pageCopy.journeyLabel)}>
-        {coverageJourneySteps.map(({ number, short, title, detail }) => (
-          <li key={number}>
-            <a
-              href={`#coverage-step-${number}`}
-              onClick={(event) => {
-                if (scrollToCoverageStep(`coverage-step-${number}`)) event.preventDefault();
-              }}
-            >
-              <span className="coverage-journey__number">{number}</span>
-              <div>
-                <small>{text(short)}</small>
-                <strong>{text(title)}</strong>
-                <p>{text(detail)}</p>
-              </div>
-            </a>
-          </li>
-        ))}
-      </ol>
-
       <section id="coverage-step-1" className="section-block coverage-step-section">
         <div className="section-heading">
-          <p className="eyebrow">{text(pageCopy.addEyebrow)}</p>
           <h2>{text(pageCopy.addTitle)}</h2>
           <p>{text(pageCopy.addDescription)}</p>
         </div>
@@ -1400,19 +1317,6 @@ export function CoveragePage({
         <details className="coverage-situation-details">
           <summary>{text(pageCopy.selectDoesNotAuthorizeTitle)}</summary>
           <p>{text(pageCopy.selectDoesNotAuthorizeBody)}</p>
-        </details>
-
-        <details className="coverage-situation-details">
-          <summary>{text(pageCopy.situationSummary)}</summary>
-          <p>{text(pageCopy.situationIntro)}</p>
-          <div className="coverage-situation-grid">
-            {useCaseNextSteps.map((item) => (
-              <article key={item.id}>
-                <span><Icon name={item.icon} size={18} /></span>
-                <div><strong>{text(item.title)}</strong><p>{text(item.detail)}</p></div>
-              </article>
-            ))}
-          </div>
         </details>
 
         {showProviderSetup && (
@@ -1607,7 +1511,6 @@ export function CoveragePage({
       <section id="coverage-step-2" className="section-block coverage-step-section">
         <div className="section-heading section-heading--row coverage-step-heading">
           <div>
-            <p className="eyebrow">{text(pageCopy.seeEyebrow)}</p>
             <h2>{text(pageCopy.seeTitle)}</h2>
             <p>{text(pageCopy.seeDescription)}</p>
           </div>
@@ -1623,12 +1526,12 @@ export function CoveragePage({
           </a>
         </div>
 
-      <section className="metrics-grid metrics-grid--four" aria-label={text(pageCopy.metricsLabel)}>
-        <MetricCard label={text(pageCopy.candidateAssets)} value={formatNumber(assets.length)} detail={text(pageCopy.candidateDetail)} icon="database" />
-        <MetricCard label={text(pageCopy.scannedAssets)} value={formatNumber(scannedAssets)} detail={text(pageCopy.scannedDetail)} icon="check" tone="accent" />
-        <MetricCard label={text(pageCopy.incompleteAssets)} value={formatNumber(incompleteAssets)} detail={text(pageCopy.incompleteDetail)} icon="warning" tone={incompleteAssets ? "warning" : "default"} />
-        <MetricCard label={text(pageCopy.pendingAssets)} value={formatNumber(pendingAssets.length)} detail={text(pageCopy.pendingDetail)} icon="lock" tone={pendingAssets.length ? "warning" : "default"} />
-      </section>
+        <section className="metrics-grid metrics-grid--four" aria-label={text(pageCopy.metricsLabel)}>
+          <MetricCard label={text(pageCopy.candidateAssets)} value={formatNumber(assets.length)} detail={text(pageCopy.candidateDetail)} icon="database" />
+          <MetricCard label={text(pageCopy.scannedAssets)} value={formatNumber(scannedAssets)} detail={text(pageCopy.scannedDetail)} icon="check" tone="accent" />
+          <MetricCard label={text(pageCopy.incompleteAssets)} value={formatNumber(incompleteAssets)} detail={text(pageCopy.incompleteDetail)} icon="warning" tone={incompleteAssets ? "warning" : "default"} />
+          <MetricCard label={text(pageCopy.pendingAssets)} value={formatNumber(pendingAssets.length)} detail={text(pageCopy.pendingDetail)} icon="lock" tone={pendingAssets.length ? "warning" : "default"} />
+        </section>
 
       {(unknownSourceCount > 0 || connectedNoAssetCount > 0) && (
         <div className="coverage-truth-grid">
@@ -1647,53 +1550,50 @@ export function CoveragePage({
         </div>
       )}
 
-      <section className="coverage-source-ledger">
-        <div className="section-heading section-heading--row">
-          <div>
-            <p className="eyebrow">{text(pageCopy.sourcesEyebrow)}</p>
-            <h2>{text(pageCopy.sourcesTitle)}</h2>
+      {coverage.length === 0 ? (
+        <EmptyState icon="coverage" title={text(pageCopy.noSourcesTitle)} description={text(pageCopy.noSourcesBody)} />
+      ) : (
+        <details className="coverage-source-ledger page-secondary-feature">
+          <summary>{text(pageCopy.sourcesTitle, { count: formatNumber(coverage.length) })}</summary>
+          <div className="source-grid">
+            {coverage.map((record) => {
+              const meta = coverageMeta[record.state];
+              const readyForFirstScan = isAwaitingFirstScan(record.state, record.scanAttempted);
+              const presentationTone = readyForFirstScan ? "positive" : meta.tone;
+              const connectedSource = sources.find((source) => source.kind === record.sourceKind && source.label === record.label)
+                ?? sources.find((source) => source.kind === record.sourceKind);
+              return (
+                <article key={record.id} className={`source-card source-card--${presentationTone}`}>
+                  <div className="source-card__top">
+                    <span className="platform-avatar">{platformMeta[record.platform].abbreviation}</span>
+                    <StatusPill label={readyForFirstScan ? text(pageCopy.readyToScan) : meta.shortLabel} tone={presentationTone} />
+                  </div>
+                  <h3>{record.label}</h3>
+                  <p>{readyForFirstScan ? text(pageCopy.readyToScanDetail) : meta.description}</p>
+                  <div className="source-card__footer">
+                    <span>{text(pageCopy.assetsCount, { count: formatNumber(record.assetCount) })}</span>
+                    <span>{readyForFirstScan
+                      ? text(pageCopy.notScannedYet)
+                      : record.lastCheckedAt
+                        ? text(pageCopy.lastChecked, { date: formatDateTime(record.lastCheckedAt) })
+                        : text(pageCopy.notConnected)}</span>
+                  </div>
+                  <details className="source-card__technical">
+                    <summary>{text(pageCopy.sourceTechnical)}</summary>
+                    <dl>
+                      <div><dt>{text(pageCopy.sourceKindTechnical)}</dt><dd><code>{record.sourceKind}</code></dd></div>
+                      <div><dt>{text(pageCopy.coverageStateTechnical)}</dt><dd><code>{record.state}</code></dd></div>
+                      <div><dt>{text(pageCopy.acceptedProfiles)}</dt><dd>{sourceDefinitions[record.sourceKind].profiles.map((item) => parserProfileLabels[item]).join(", ")}</dd></div>
+                      {connectedSource && <div><dt>{text(pageCopy.sourceStatusTechnical)}</dt><dd><code>{connectedSource.status}</code></dd></div>}
+                      <div><dt>{text(pageCopy.rawSourceDetail)}</dt><dd>{localizedCoverageRecordDetail(record.detail, locale)}</dd></div>
+                    </dl>
+                  </details>
+                </article>
+              );
+            })}
           </div>
-        </div>
-        {coverage.length === 0 ? (
-          <EmptyState icon="coverage" title={text(pageCopy.noSourcesTitle)} description={text(pageCopy.noSourcesBody)} />
-        ) : <div className="source-grid">
-          {coverage.map((record) => {
-            const meta = coverageMeta[record.state];
-            const readyForFirstScan = isAwaitingFirstScan(record.state, record.scanAttempted);
-            const presentationTone = readyForFirstScan ? "positive" : meta.tone;
-            const connectedSource = sources.find((source) => source.kind === record.sourceKind && source.label === record.label)
-              ?? sources.find((source) => source.kind === record.sourceKind);
-            return (
-              <article key={record.id} className={`source-card source-card--${presentationTone}`}>
-                <div className="source-card__top">
-                  <span className="platform-avatar">{platformMeta[record.platform].abbreviation}</span>
-                  <StatusPill label={readyForFirstScan ? text(pageCopy.readyToScan) : meta.shortLabel} tone={presentationTone} />
-                </div>
-                <h3>{record.label}</h3>
-                <p>{readyForFirstScan ? text(pageCopy.readyToScanDetail) : meta.description}</p>
-                <div className="source-card__footer">
-                  <span>{text(pageCopy.assetsCount, { count: formatNumber(record.assetCount) })}</span>
-                  <span>{readyForFirstScan
-                    ? text(pageCopy.notScannedYet)
-                    : record.lastCheckedAt
-                      ? text(pageCopy.lastChecked, { date: formatDateTime(record.lastCheckedAt) })
-                    : text(pageCopy.notConnected)}</span>
-                </div>
-                <details className="source-card__technical">
-                  <summary>{text(pageCopy.sourceTechnical)}</summary>
-                  <dl>
-                    <div><dt>{text(pageCopy.sourceKindTechnical)}</dt><dd><code>{record.sourceKind}</code></dd></div>
-                    <div><dt>{text(pageCopy.coverageStateTechnical)}</dt><dd><code>{record.state}</code></dd></div>
-                    <div><dt>{text(pageCopy.acceptedProfiles)}</dt><dd>{sourceDefinitions[record.sourceKind].profiles.map((item) => parserProfileLabels[item]).join(", ")}</dd></div>
-                    {connectedSource && <div><dt>{text(pageCopy.sourceStatusTechnical)}</dt><dd><code>{connectedSource.status}</code></dd></div>}
-                    <div><dt>{text(pageCopy.rawSourceDetail)}</dt><dd>{localizedCoverageRecordDetail(record.detail, locale)}</dd></div>
-                  </dl>
-                </details>
-              </article>
-            );
-          })}
-        </div>}
-      </section>
+        </details>
+      )}
 
       <details className="coverage-technical-details">
         <summary>{text(pageCopy.coverageDetailsSummary)}</summary>
@@ -1731,7 +1631,6 @@ export function CoveragePage({
       <section id="coverage-step-3" className="section-block coverage-step-section">
         <div className="section-heading section-heading--row">
           <div>
-            <p className="eyebrow">{text(pageCopy.allowEyebrow)}</p>
             <h2>{text(pageCopy.allowTitle)}</h2>
             <p>{text(pageCopy.allowDescription)}</p>
           </div>
@@ -1742,31 +1641,9 @@ export function CoveragePage({
           <form className="scope-confirmation-panel" onSubmit={(event) => { event.preventDefault(); void startScan(); }}>
             <div className="scope-confirmation-panel__heading">
               <div>
-                <p className="eyebrow">{text(pageCopy.grantEyebrow)}</p>
-                <h3>{text(pageCopy.grantTitle, { count: formatNumber(selectedAssets.length) })}</h3>
-                <p>{text(guidedLowImpactNetwork
-                  ? pageCopy.guidedNetworkGrantDescription
-                  : passivePublicConsent
-                    ? pageCopy.publicRecordsGrantDescription
-                  : guidedLocalConsent
-                    ? pageCopy.guidedLocalGrantDescription
-                    : guidedCloudConsent
-                      ? pageCopy.guidedCloudGrantDescription
-                      : pageCopy.grantDescription)}</p>
+                <h3>{text(pageCopy.selectedCount, { count: formatNumber(selectedAssets.length) })} · {text(pageCopy.presetTitle)}</h3>
               </div>
               <button className="icon-button" type="button" aria-label={text(pageCopy.clearSelection)} onClick={resetScopeForm}><Icon name="close" size={17} /></button>
-            </div>
-
-            <div className="coverage-recommended-callout">
-              <span><Icon name="check" size={18} /></span>
-              <div>
-                <strong>{text(pageCopy.presetTitle)}</strong>
-                <p>{guidedLowImpactNetwork && selectedExternalAsset && parsedPorts
-                  ? text(pageCopy.guidedNetworkPreset, {
-                    target: externalTarget || selectedExternalAsset.name,
-                  })
-                  : text(pageCopy.presetBody)}</p>
-              </div>
             </div>
 
             {availableScopeModes.length === 0 ? (
@@ -1820,6 +1697,19 @@ export function CoveragePage({
                   <InlineNotice tone="info" title={text(pageCopy.activeSetupTitle)}>
                     <p>{text(pageCopy.activeSetupBody)}</p>
                   </InlineNotice>
+                )}
+
+                {guidedLowImpactNetwork && parsedPorts && (
+                  <p className="coverage-guided-boundary">
+                    {text(pageCopy.guidedNetworkBoundary, {
+                      target: externalTarget,
+                      protocol: externalProtocol.toUpperCase(),
+                      ports: parsedPorts.join(", "),
+                      rate: formatNumber(requestsPerSecond),
+                      concurrency: formatNumber(externalConcurrency),
+                      timeout: formatNumber(externalTimeout),
+                    })}
+                  </p>
                 )}
 
                 <details
@@ -1959,6 +1849,24 @@ export function CoveragePage({
               </section>
             )}
 
+            {guidedCloudConsent && (
+              <p className="coverage-guided-boundary">
+                {text(pageCopy.guidedCloudBoundary, {
+                  account: selectedScopeAssets.map((asset) => asset.name).join(", "),
+                  checks: scopeModes.map((mode) => text(scopeModeLabels[mode].label)).join(", "),
+                })}
+              </p>
+            )}
+
+            {guidedLocalConsent && (
+              <p className="coverage-guided-boundary">
+                {text(pageCopy.guidedLocalBoundary, {
+                  copy: selectedScopeAssets.map((asset) => asset.name).join(", "),
+                  checks: scopeModes.map((mode) => text(scopeModeLabels[mode].label)).join(", "),
+                })}
+              </p>
+            )}
+
             <div className="scope-confirmation-panel__assets">
               {selectedScopeAssets.map((asset) => <span key={asset.id}><b>{asset.name}</b><small>{asset.platform === "external" && asset.internetExposed === false
                 ? text(pageCopy.internalAssetPlatform)
@@ -2030,8 +1938,16 @@ export function CoveragePage({
               const selectedIncludesExternal = selectedScopeAssets.some((item) => item.platform === "external");
               const incompatibleWithSelection = anotherAssetSelected
                 && (asset.platform === "external" || selectedIncludesExternal || guidedCloudRoute);
+              const showAssetNext = asset.authorizationState !== "authorized"
+                || readyForFirstScan
+                || selectedAssets.includes(asset.id);
+              const cardClassName = [
+                "asset-review-card",
+                selectedAssets.includes(asset.id) ? "asset-review-card--selected" : "",
+                showAssetNext ? "" : "asset-review-card--compact",
+              ].filter(Boolean).join(" ");
               return (
-                <article key={asset.id} className={selectedAssets.includes(asset.id) ? "asset-review-card asset-review-card--selected" : "asset-review-card"}>
+                <article key={asset.id} className={cardClassName}>
                   <label className="asset-review-card__choice">
                     <input
                       type="checkbox"
@@ -2060,10 +1976,12 @@ export function CoveragePage({
                     />
                     <small>{text(authorizationStateLabels[asset.authorizationState])}</small>
                   </div>
-                  <div className="asset-review-card__next">
-                    <strong>{text(pageCopy.assetNext)}</strong>
-                    <p>{text(nextStepForAsset(asset))}</p>
-                  </div>
+                  {showAssetNext && (
+                    <div className="asset-review-card__next">
+                      <strong>{text(pageCopy.assetNext)}</strong>
+                      <p>{text(nextStepForAsset(asset))}</p>
+                    </div>
+                  )}
                   <details className="asset-review-card__technical">
                     <summary>{text(pageCopy.assetTechnical)}</summary>
                     <dl>
@@ -2089,15 +2007,8 @@ export function CoveragePage({
       </section>
 
       {frozenExternalGrants.length > 0 && (
-        <section className="section-block">
-          <div className="section-heading section-heading--row">
-            <div>
-              <p className="eyebrow">{text(pageCopy.grantsEyebrow)}</p>
-              <h2>{text(pageCopy.grantsTitle)}</h2>
-              <p>{text(pageCopy.grantsDescription)}</p>
-            </div>
-            <span className="count-label">{text(pageCopy.grantsCount, { count: formatNumber(frozenExternalGrants.length) })}</span>
-          </div>
+        <details className="section-block page-secondary-feature">
+          <summary>{text(pageCopy.savedApprovals, { count: formatNumber(frozenExternalGrants.length) })}</summary>
           <div className="external-grant-list">
             {frozenExternalGrants.map((grant) => {
               const scope = grant.externalScope!;
@@ -2127,7 +2038,7 @@ export function CoveragePage({
               );
             })}
           </div>
-        </section>
+        </details>
       )}
 
       <details className="coverage-situation-details">

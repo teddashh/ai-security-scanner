@@ -229,7 +229,8 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
     app,
     /as const satisfies Partial<Record<ScanReadinessBlocker \| "resume_release_incompatible" \| "resume_work_plan_invalid", BilingualText>>/u,
   );
-  assert.match(app, /scannerSetupBlocker=\{scanReadiness && scanReadiness\.caseId === currentCaseId && isScannerSetupBlocker/u);
+  assert.match(app, /const startScannerSetupBlocker = scanReadiness[\s\S]*scanReadiness\.caseId === currentCaseId[\s\S]*isScannerSetupBlocker/u);
+  assert.match(app, /scannerSetupBlocker=\{startScannerSetupBlocker\}/u);
   assert.match(progress, /satisfies Record<ScanReadinessBlocker, BilingualText>/u);
   assert.match(progress, /copy\.readiness\[readiness\.blockerCode\] \?\? copy\.readinessUnavailableDescription/u);
   assert.equal(
@@ -304,11 +305,12 @@ test("progress keeps scanner implementation data below the first layer", async (
   assert.ok(runDetails >= 0 && ledger > runDetails && runDetailsEnd > ledger, "the scanner-state ledger should be inside scan details");
 
   const visibleMap = source.indexOf("{visibleEngineRuns.map((engine) => {");
+  const attention = source.indexOf("const showEngineAttention", visibleMap);
   const identity = source.indexOf('<div className="engine-row__identity">', visibleMap);
   const progress = source.indexOf('<div className="engine-row__progress">', identity);
-  assert.ok(visibleMap >= 0 && identity > visibleMap && progress > identity);
+  assert.ok(visibleMap >= 0 && attention > visibleMap && identity > attention && progress > identity);
   assert.doesNotMatch(source.slice(identity, progress), /engine\.engineName|rawArtifactCount|assetIds\.length/u);
-  assert.match(source.slice(identity, progress), /engineOutcomeFor\(engine\)[\s\S]*engineNextStepFor\(engine\)/u);
+  assert.match(source.slice(attention, progress), /engine\.status !== "completed"[\s\S]*showEngineAttention && <small>\{text\(engineNextStepFor\(engine\)\)\}/u);
   assert.doesNotMatch(source, /copy\.checkLabel/u);
 
   const engineDetails = source.indexOf('<details className="page-technical-details">', progress);
@@ -454,6 +456,11 @@ test("export preview, export, and both verification paths remain wired", async (
   assert.doesNotMatch(source, /\{previewError\s*\?\?/u);
   assertInsideDisclosure(source, "page-technical-details", "{previewError}");
   assert.match(source, /setPreviewRequest\(\(request\) => request \+ 1\)/u);
+  assert.match(
+    source,
+    /id="export-preview-status"[\s\S]*role=\{rawSourcesAttached \? "alert" : "status"\}[\s\S]*aria-live=\{rawSourcesAttached \? "assertive" : "polite"\}[\s\S]*aria-atomic="true"/u,
+  );
+  assert.match(source, /aria-describedby="export-preview-status"/u);
 
   const verification = await readPage("VerificationPage.tsx");
   for (const callback of ["onSelectBaseline", "onStartRescan", "onOpenFinding"]) {
@@ -490,12 +497,12 @@ test("active and incomplete scans never present findings or exports as final", a
 
   const exportPage = await readPage("ExportPage.tsx");
   for (const phrase of [
-    "This would be an interim report",
-    "這會是一份暫時報告",
+    "Interim export",
+    "暫時報告",
     "Save interim {format}",
     "儲存暫時的「{format}」",
-    "This report is incomplete",
-    "這份報告尚不完整",
+    "Incomplete export",
+    "不完整報告",
     "Save incomplete {format}",
     "儲存不完整的「{format}」",
   ]) assert.ok(exportPage.includes(phrase), phrase);

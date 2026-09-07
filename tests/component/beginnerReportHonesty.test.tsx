@@ -251,6 +251,50 @@ test("a partial run is distinguished from a complete one", () => {
   expect(partialPill.textContent).not.toEqual(completePill.textContent);
 });
 
+test("the first layer names the requested target, tested work, top gap, and next action", () => {
+  const { container } = renderReport(report("partial", {
+    actual: {
+      checks: [{
+        taskId: "task-1",
+        checkId: "naabu-tcp",
+        targetAssetIds: ["asset-1"],
+        status: "tested_complete",
+        testedDimensions: [{
+          dimension: "completed planned work units",
+          value: "1 of 1",
+          observation: "The planned connection check completed.",
+        }],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    coverageGaps: [{
+      kind: "not_tested",
+      targetAssetIds: ["asset-1"],
+      dimension: "TLS configuration",
+      reason: "The TLS check did not start.",
+      nextActionCode: "review_scope_and_retry",
+      nextAction: "Review the target and retry.",
+    }],
+    nextSteps: [{
+      priority: 1,
+      code: "review_scope_and_retry",
+      action: "Review the target and retry.",
+      reason: "The TLS check did not start.",
+      taskId: "task-2",
+    }],
+  }));
+
+  const strip = container.querySelector<HTMLElement>(".report-outcome-strip");
+  expect(strip).not.toBeNull();
+  expect(strip!.closest("details")).toBeNull();
+  expect(strip!.textContent).toContain("contoso.example");
+  expect(strip!.textContent).toContain("naabu-tcp");
+  expect(strip!.textContent).toContain("TLS configuration");
+  expect(strip!.textContent).toContain("The TLS check did not start.");
+  expect(strip!.textContent).toContain("Review the requested scope, then retry.");
+});
+
 test("an absent coverage gap is scoped to the requested checks rather than implying broad security coverage", () => {
   const { container } = renderReport(report("complete"));
 
@@ -352,11 +396,12 @@ test("two gaps of the same kind give the reader two different reasons", () => {
   const section = container.querySelector<HTMLElement>(
     "section[aria-labelledby='beginner-master-report-title']",
   );
-  expect(within(section!).getByText(/This check did not start, so it is not a pass\./u)).toBeTruthy();
+  const disclosure = section!.querySelector<HTMLElement>(".report-scope-disclosure");
+  expect(within(disclosure!).getByText(/This check did not start, so it is not a pass\./u)).toBeTruthy();
   expect(
-    within(section!).getByText(/This check is still changing and has not recorded a complete result\./u),
+    within(disclosure!).getByText(/This check is still changing and has not recorded a complete result\./u),
   ).toBeTruthy();
-  expect(within(section!).getByText(/Review the target and try this check again\./u)).toBeTruthy();
+  expect(within(disclosure!).getByText(/Review the target and try this check again\./u)).toBeTruthy();
 });
 
 test("a Traditional Chinese reader is told the same two reasons", () => {
@@ -379,8 +424,9 @@ test("a Traditional Chinese reader is told the same two reasons", () => {
   const section = container.querySelector<HTMLElement>(
     "section[aria-labelledby='beginner-master-report-title']",
   );
-  expect(within(section!).getByText(/這項檢查沒有啟動，因此不代表通過。/u)).toBeTruthy();
-  expect(within(section!).getByText(/trivy 的未檢測的檢查項目/u)).toBeTruthy();
+  const disclosure = section!.querySelector<HTMLElement>(".report-scope-disclosure");
+  expect(within(disclosure!).getByText(/這項檢查沒有啟動，因此不代表通過。/u)).toBeTruthy();
+  expect(within(disclosure!).getByText(/trivy 的未檢測的檢查項目/u)).toBeTruthy();
   expect(section!.textContent).not.toContain("This check did not start");
   window.localStorage.setItem(localeStorageKey, "en");
 });
@@ -472,8 +518,9 @@ test("what the run could not establish is shown with its own dimension", () => {
   const section = container.querySelector<HTMLElement>(
     "section[aria-labelledby='beginner-master-report-title']",
   );
-  expect(within(section!).getByText(/automatic scope reductions or truncations/u)).toBeTruthy();
-  expect(within(section!).getByText(/requested scan stage/u)).toBeTruthy();
+  const disclosure = section!.querySelector<HTMLElement>(".report-scope-disclosure");
+  expect(within(disclosure!).getByText(/automatic scope reductions or truncations/u)).toBeTruthy();
+  expect(within(disclosure!).getByText(/requested scan stage/u)).toBeTruthy();
   expect(container.textContent).not.toContain("No gap was recorded within the requested checks.");
 });
 
@@ -622,7 +669,8 @@ test("a coverage gap names the cause the backend actually recorded", () => {
   const section = container.querySelector<HTMLElement>(
     "section[aria-labelledby='beginner-master-report-title']",
   );
-  const row = within(section!).getByText(/remaining requested dimensions/u).textContent ?? "";
+  const disclosure = section!.querySelector<HTMLElement>(".report-scope-disclosure");
+  const row = within(disclosure!).getByText(/remaining requested dimensions/u).textContent ?? "";
   expect(row).toContain("did not complete every planned dimension");
   // The causes this kind covers but this gap is not. Naming one of them here
   // would contradict the dimension in the same row.
@@ -640,7 +688,7 @@ test("AIDEFEND is not presented as carrying the same standing as NIST and ISO", 
   const notice = Array.from(container.querySelectorAll<HTMLElement>(".inline-notice"))
     .find((candidate) => candidate.textContent?.includes("AIDEFEND"));
   expect(notice).toBeTruthy();
-  expect(notice!.textContent).toContain("not certification, compliance, endorsement, or a pass/fail result");
+  expect(notice!.textContent).toContain("not an audit, certification, compliance decision, or automatic fix");
   expect(notice!.textContent).toContain("independent, unofficial mapping");
 });
 

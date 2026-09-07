@@ -73,15 +73,15 @@ export interface CasesPageProps {
 
 const pageCopy = {
   headerEyebrow: { en: "My security scans", zhTW: "我的資安檢查" },
-  headerTitle: { en: "Start a new scan or pick up where you left off", zhTW: "開始新的檢查，或接著上次進度" },
+  headerTitle: { en: "Scan projects", zhTW: "掃描專案" },
   headerDescription: {
-    en: "Keep your targets, results, reports, and follow-up scans together in one project.",
-    zhTW: "把檢查目標、結果、報告與修復後複查集中放在同一個專案。",
+    en: "Create a scan or continue one.",
+    zhTW: "建立新掃描，或繼續現有專案。",
   },
   create: { en: "Start a new scan", zhTW: "開始新的檢查" },
   closeForm: { en: "Close setup", zhTW: "關閉設定" },
   newCaseEyebrow: { en: "New scan", zhTW: "新的檢查" },
-  newCaseTitle: { en: "Let's set up your scan", zhTW: "一起設定這次檢查" },
+  newCaseTitle: { en: "New scan", zhTW: "新掃描" },
   newCaseDescription: {
     en: "Give it a name and add the first thing you want checked. You can add a company or team and more targets later.",
     zhTW: "取一個好認的名稱，再加入第一個想檢查的目標；公司、團隊與更多目標之後再補也可以。",
@@ -210,7 +210,7 @@ const pageCopy = {
     en: "Pick one now. We'll open its official sign-in next, and you can add another source later.",
     zhTW: "先選一個；下一步會開啟官方登入，之後仍可再加入其他來源。",
   },
-  moreSummary: { en: "Customize this scan", zhTW: "自訂這次檢查" },
+  moreSummary: { en: "Optional project details", zhTW: "選填專案資訊" },
   moreSummaryHint: {
     en: "Add other systems, priorities, and optional details",
     zhTW: "加入其他系統、優先方向與選填資料",
@@ -1028,9 +1028,7 @@ export function CasesPage({
         <form className="create-case-panel" onSubmit={submit}>
           <div className="section-heading section-heading--row">
             <div>
-              <p className="eyebrow">{text(pageCopy.newCaseEyebrow)}</p>
               <h2>{text(pageCopy.newCaseTitle)}</h2>
-              <p>{text(pageCopy.newCaseDescription)}</p>
             </div>
             {selectedDefinition && onClearPreset && (
               <button className="button button--ghost button--small" type="button" onClick={changeUseCase}>
@@ -1040,38 +1038,14 @@ export function CasesPage({
             )}
           </div>
 
-          <div className="form-grid form-grid--two">
+          <div className="form-grid">
             <label className="field">
               <span>{text(pageCopy.caseName)}</span>
               <input required value={name} onChange={(event) => setName(event.target.value)} placeholder={text(pageCopy.caseNamePlaceholder)} />
             </label>
-            <label className="field">
-              <span>{text(pageCopy.organizationName)}</span>
-              <input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} placeholder={text(pageCopy.organizationPlaceholder)} />
-            </label>
           </div>
 
           {primaryTarget}
-
-          {platforms.includes("code") && (
-            <fieldset className="choice-fieldset">
-              <legend>{text(pageCopy.aiGeneratedQuestion)}</legend>
-              <p>{text(pageCopy.aiGeneratedHelp)}</p>
-              <div className="choice-grid choice-grid--compact">
-                {(["yes", "no", "unknown"] as const).map((answer) => (
-                  <label className="check-card check-card--compact" key={answer}>
-                    <input
-                      type="radio"
-                      name="ai-generated-artifact"
-                      checked={aiGeneratedArtifact === answer}
-                      onChange={() => setAiGeneratedArtifact(answer)}
-                    />
-                    <span>{text(aiGeneratedAnswerCopy[answer])}</span>
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          )}
 
           {assetDraftError?.kind === "conflicting_exposure" && (
             <InlineNotice tone="danger" title={text(pageCopy.formConflictTitle)}>
@@ -1088,6 +1062,33 @@ export function CasesPage({
               <Icon name="chevron" size={18} />
             </summary>
             <div className="case-more-details__body">
+              <div className="form-grid form-grid--two">
+                <label className="field">
+                  <span>{text(pageCopy.organizationName)}</span>
+                  <input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} placeholder={text(pageCopy.organizationPlaceholder)} />
+                </label>
+              </div>
+
+              {platforms.includes("code") && (
+                <fieldset className="choice-fieldset">
+                  <legend>{text(pageCopy.aiGeneratedQuestion)}</legend>
+                  <p>{text(pageCopy.aiGeneratedHelp)}</p>
+                  <div className="choice-grid choice-grid--compact">
+                    {(["yes", "no", "unknown"] as const).map((answer) => (
+                      <label className="check-card check-card--compact" key={answer}>
+                        <input
+                          type="radio"
+                          name="ai-generated-artifact"
+                          checked={aiGeneratedArtifact === answer}
+                          onChange={() => setAiGeneratedArtifact(answer)}
+                        />
+                        <span>{text(aiGeneratedAnswerCopy[answer])}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              )}
+
               <div className="form-grid form-grid--two">
                 <label className="field">
                   <span>{text(pageCopy.organizationSize)}</span>

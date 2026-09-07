@@ -47,4 +47,7 @@ test("SettingsPage renders the pure presentation result", () => {
   assert.match(source, /getSettingsRuntimePresentation\(mode, runtimeAvailable\)/u);
   assert.match(source, /name=\{runtimePresentation\.icon\}/u);
   assert.match(source, /text\(runtimePresentation\.status\)/u);
+  assert.match(source, /Language, safety, and local scan tools\./u);
+  assert.doesNotMatch(source, /Continue working|繼續工作/u);
+  assert.doesNotMatch(source, /English interface|繁體中文介面/u);
 });

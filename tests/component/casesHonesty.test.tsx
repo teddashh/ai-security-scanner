@@ -459,8 +459,7 @@ test("the optional organization field does not promise an edit the app cannot ma
   expect(container.querySelector(".create-case-panel")).not.toBeNull();
 
   const organization = Array.from(container.querySelectorAll<HTMLInputElement>("input")).find(
-    (input) => input.placeholder.length > 0
-      && input.placeholder !== "Example: 2026 first security check",
+    (input) => input.placeholder === "Optional, and fixed once the project is created",
   );
   expect(organization).toBeTruthy();
   expect(organization!.placeholder).not.toContain("later");

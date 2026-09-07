@@ -76,10 +76,10 @@ test("the export page explains mandatory coverage companions", () => {
   assert.match(source, /if \(selectedFormatUnavailable\) \{[\s\S]*setPreviewPending\(false\);[\s\S]*return;/u);
   assert.match(source, /disabled=\{unavailable\}/u);
   assert.match(source, /const unavailableInDemo = demoMode && id !== "json"/u);
-  assert.match(source, /OCSF findings plus a required coverage manifest/u);
-  assert.match(source, /OCSF 問題資料，並附上必要的涵蓋說明檔/u);
-  assert.match(source, /OSCAL observations plus a required coverage manifest/u);
-  assert.match(source, /OSCAL 觀察資料，並附上必要的涵蓋說明檔/u);
+  assert.match(source, /OCSF findings plus a coverage manifest for missing or unfinished checks/u);
+  assert.match(source, /OCSF 問題資料，另附涵蓋說明檔記錄未測或未完成項目/u);
+  assert.match(source, /OSCAL observations plus a coverage manifest for missing or unfinished checks/u);
+  assert.match(source, /OSCAL 觀察資料，另附涵蓋說明檔記錄未測或未完成項目/u);
 });
 
 test("the export page defaults to a readable report without raw source files", () => {
@@ -89,12 +89,12 @@ test("the export page defaults to a readable report without raw source files", (
   assert.match(source, /useState\(false\)/u);
   assert.match(source, /const primaryFormats = \["html", "json"\]/u);
   assert.match(source, /const advancedFormats = \[\s*"case_bundle",\s*"framework_report",\s*"ocsf",\s*"oscal",/u);
-  assert.match(source, /Readable report \(recommended\)/u);
-  assert.match(source, /好讀的報告（建議）/u);
-  assert.match(source, /Master-report JSON/u);
-  assert.match(source, /主要報告 JSON/u);
-  assert.match(source, /Advanced and technical formats/u);
-  assert.match(source, /進階與技術格式/u);
+  assert.match(source, /HTML report \(recommended\)/u);
+  assert.match(source, /HTML 報告（建議）/u);
+  assert.match(source, /JSON report/u);
+  assert.match(source, /JSON 報告/u);
+  assert.match(source, /More formats/u);
+  assert.match(source, /更多格式/u);
 });
 
 test("the technical case bundle discloses its case-wide and run-bound scope before export", () => {
@@ -103,10 +103,10 @@ test("the technical case bundle discloses its case-wide and run-bound scope befo
   assert.match(source, /format === "case_bundle" && !demoMode/u);
   assert.match(
     source,
-    /<InlineNotice tone="warning" title=\{text\(copy\.caseBundleScopeTitle\)\}>\s*<p>\{text\(copy\.caseBundleScopeBody\)\}<\/p>\s*<\/InlineNotice>/u,
+    /<div className="export-bundle-scope">[\s\S]*text\(copy\.caseBundleScopeTitle\)[\s\S]*<details className="page-technical-details">[\s\S]*text\(copy\.caseBundleScopeBody\)/u,
   );
-  assert.match(source, /Case-wide records with run-bound reports/u);
-  assert.match(source, /案件全域紀錄與輪次綁定報告/u);
+  assert.match(source, /Includes case-wide records; reports use the selected run\./u);
+  assert.match(source, /包含案件全域紀錄；報告使用所選輪次。/u);
   assert.match(
     source,
     /case-wide assets, grants, coverage, scan history, findings, workflow history, comparisons/u,

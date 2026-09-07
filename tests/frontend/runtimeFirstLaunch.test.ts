@@ -48,7 +48,8 @@ test("the native workspace stays available while product-owned scan tools prepar
   const app = readFileSync(new URL("../../src/App.tsx", import.meta.url), "utf8");
   const shell = readFileSync(new URL("../../src/components/AppShell.tsx", import.meta.url), "utf8");
   assert.match(app, /return \([\s\S]*?<AppShell[\s\S]*?>[\s\S]*?\{content\}[\s\S]*?<\/AppShell>/u);
-  assert.match(app, /<StartPage[\s\S]*?setup=\{[\s\S]*?<RuntimeSetupAssistant/u);
+  assert.match(app, /const showStartRuntimeSetup =[\s\S]*snapshot\?\.runtime\?\.available !== true/u);
+  assert.match(app, /<StartPage[\s\S]*?setup=\{showStartRuntimeSetup \? \([\s\S]*?<RuntimeSetupAssistant/u);
   assert.match(shell, /mode === "native" && runtime && !runtime\.available/u);
   assert.doesNotMatch(app, /RuntimeFirstLaunch|shouldShowRuntimeFirstLaunch|showRuntimeFirstLaunch/u);
   assert.equal(

@@ -27,10 +27,9 @@ interface StartPageProps {
 }
 
 interface MarketingCopy {
-  eyebrow: string;
   title: string;
   description: string;
-  primaryAction: string;
+  previewDescription: string;
   localhostQuickScanAction: string;
   localhostQuickScanBusy: string;
   localhostQuickScanBoundary: string;
@@ -38,20 +37,6 @@ interface MarketingCopy {
   localhostQuickScanPortLabel: string;
   localhostQuickScanPortHelp: string;
   localhostQuickScanPortError: string;
-  benefitsTitle: string;
-  benefits: readonly {
-    icon: "spark" | "check" | "lock";
-    title: string;
-    description: string;
-  }[];
-  journeyEyebrow: string;
-  journeyTitle: string;
-  journeyDescription: string;
-  journeySteps: readonly {
-    title: string;
-    description: string;
-  }[];
-  choiceEyebrow: string;
   choiceTitle: string;
   choiceDescription: string;
   cardDetails: string;
@@ -63,55 +48,17 @@ interface MarketingCopy {
 
 const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
   en: {
-    eyebrow: "Security checks, made usable",
-    title: "Find the risks that matter—without juggling security tools.",
-    description:
-      "Choose what you want to protect. ai-security-scanner brings the right checks together and turns the results into one clear, prioritized action list.",
-    primaryAction: "Start a security check",
-    localhostQuickScanAction: "Scan this computer at 127.0.0.1:9001",
+    title: "Start a security check",
+    description: "Run a quick localhost check, or choose another target below.",
+    previewDescription: "Choose a target below to preview the scan setup.",
+    localhostQuickScanAction: "Check this computer · 127.0.0.1:9001",
     localhostQuickScanBusy: "Starting this check…",
     localhostQuickScanBoundary:
-      "This quick check attempts one TCP connection to 127.0.0.1:9001 and waits no more than 3 seconds. It sends no payload and is not a security guarantee.",
+      "One TCP connection to 127.0.0.1:9001; no payload; up to 3 seconds. This is not a security guarantee.",
     localhostQuickScanOptions: "Use a different local port",
     localhostQuickScanPortLabel: "Local port",
     localhostQuickScanPortHelp: "Enter a port from 1 to 65535.",
     localhostQuickScanPortError: "Enter a whole-number port from 1 to 65535.",
-    benefitsTitle: "What you get",
-    benefits: [
-      {
-        icon: "spark",
-        title: "One place for every check",
-        description: "Web, infrastructure, cloud, code, containers, and Kubernetes work together.",
-      },
-      {
-        icon: "check",
-        title: "Answers you can act on",
-        description: "See what matters first, why it matters, and where to fix it.",
-      },
-      {
-        icon: "lock",
-        title: "Your data stays with you",
-        description: "Keep your scan projects and sensitive evidence on your computer.",
-      },
-    ],
-    journeyEyebrow: "How it works",
-    journeyTitle: "From “what should I check?” to a focused fix list.",
-    journeyDescription: "You choose the goal. The app guides the setup and organizes the results.",
-    journeySteps: [
-      {
-        title: "Pick what to protect",
-        description: "Start with the website, system, code, or account you care about.",
-      },
-      {
-        title: "Follow the guided check",
-        description: "Provide only the few details needed for that check.",
-      },
-      {
-        title: "Fix what matters first",
-        description: "Review one prioritized list with clear next steps.",
-      },
-    ],
-    choiceEyebrow: "Start here",
     choiceTitle: "What do you want to protect first?",
     choiceDescription: "Choose the closest match. You can add more checks later.",
     cardDetails: "See what’s included",
@@ -158,55 +105,17 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     },
   },
   "zh-TW": {
-    eyebrow: "資安檢查，終於可以很簡單",
-    title: "找出真正重要的風險，不必自己拼湊一堆工具。",
-    description:
-      "選擇你想保護的地方。ai-security-scanner 會整合適合的檢查，把結果變成一份清楚、有優先順序的改善清單。",
-    primaryAction: "開始資安檢查",
-    localhostQuickScanAction: "掃描這台電腦的 127.0.0.1:9001",
+    title: "開始資安檢查",
+    description: "先快速檢查 localhost，或在下方選擇其他目標。",
+    previewDescription: "在下方選擇目標，預覽掃描設定流程。",
+    localhostQuickScanAction: "檢查這台電腦 · 127.0.0.1:9001",
     localhostQuickScanBusy: "正在開始檢查…",
     localhostQuickScanBoundary:
-      "這項快速檢查只會嘗試連線一次到 127.0.0.1:9001 的 TCP 連接埠，最長等待 3 秒。它不會傳送內容，也不代表這台電腦一定安全。",
+      "只會嘗試一次到 127.0.0.1:9001 的 TCP 連線；不會傳送內容；最長等待 3 秒。這不代表這台電腦一定安全。",
     localhostQuickScanOptions: "改用其他本機連接埠",
     localhostQuickScanPortLabel: "本機連接埠",
     localhostQuickScanPortHelp: "請輸入 1 到 65535 的連接埠。",
     localhostQuickScanPortError: "請輸入 1 到 65535 的整數連接埠。",
-    benefitsTitle: "你會得到",
-    benefits: [
-      {
-        icon: "spark",
-        title: "所有檢查集中在一起",
-        description: "網站、IT、雲端、程式碼、容器與 Kubernetes 都能在同一處完成。",
-      },
-      {
-        icon: "check",
-        title: "一看就知道先修哪裡",
-        description: "看懂問題、優先順序，以及下一步該怎麼做。",
-      },
-      {
-        icon: "lock",
-        title: "資料留在自己的電腦",
-        description: "掃描專案與敏感證據都由你保管，不必交給另一個雲端平台。",
-      },
-    ],
-    journeyEyebrow: "怎麼使用",
-    journeyTitle: "從「該檢查什麼？」到一份能直接處理的清單。",
-    journeyDescription: "你只要選擇目標，設定與結果整理交給產品引導。",
-    journeySteps: [
-      {
-        title: "選擇要保護的地方",
-        description: "從你最在意的網站、系統、程式碼或帳號開始。",
-      },
-      {
-        title: "跟著畫面完成檢查",
-        description: "只提供這次檢查真正需要的少量資料。",
-      },
-      {
-        title: "先處理最重要的問題",
-        description: "從一份有優先順序的清單開始改善。",
-      },
-    ],
-    choiceEyebrow: "從這裡開始",
     choiceTitle: "你想先保護哪裡？",
     choiceDescription: "選一個最接近的項目就好，其他檢查之後都能再加入。",
     cardDetails: "查看包含哪些檢查",
@@ -343,9 +252,8 @@ export function StartPage({
     <div className="page start-page">
       <section className="start-page__hero" aria-labelledby="start-page-title">
         <div className="start-page__hero-copy">
-          <p className="eyebrow">{marketing.eyebrow}</p>
           <h1 id="start-page-title" data-page-heading tabIndex={-1}>{marketing.title}</h1>
-          <p className="start-page__hero-description">{marketing.description}</p>
+          <p className="start-page__hero-description">{nativeMode ? marketing.description : marketing.previewDescription}</p>
           <div className="start-page__hero-actions">
             {nativeMode && (
               <div className="start-page__localhost-quick-scan">
@@ -391,62 +299,20 @@ export function StartPage({
                 </details>
               </div>
             )}
-            <div className="start-page__hero-secondary-actions">
-              <a
-                className={`button ${nativeMode ? "button--secondary" : "button--primary"} ${nativeMode ? "" : "start-page__primary-action"}`.trim()}
-                href="#start-a-check"
-              >
-                {marketing.primaryAction}
-                <Icon name="arrow" size={18} />
-              </a>
-              {onOpenExistingCase && (
+            {onOpenExistingCase && (
+              <div className="start-page__hero-secondary-actions">
                 <button className="button button--secondary" type="button" onClick={onOpenExistingCase}>
                   <Icon name="cases" size={18} />
                   {copy.existingCaseAction}
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
-
-        <section className="start-page__benefits" aria-labelledby="start-page-benefits-title">
-          <p className="eyebrow" id="start-page-benefits-title">{marketing.benefitsTitle}</p>
-          <ul>
-            {marketing.benefits.map((benefit) => (
-              <li key={benefit.title}>
-                <span><Icon name={benefit.icon} size={20} /></span>
-                <div>
-                  <strong>{benefit.title}</strong>
-                  <p>{benefit.description}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
-      </section>
-
-      <section className="start-page__journey" aria-labelledby="start-page-journey-title">
-        <header>
-          <p className="eyebrow">{marketing.journeyEyebrow}</p>
-          <h2 id="start-page-journey-title">{marketing.journeyTitle}</h2>
-          <p>{marketing.journeyDescription}</p>
-        </header>
-        <ol>
-          {marketing.journeySteps.map((step, index) => (
-            <li key={step.title}>
-              <span className="start-page__step-number">{index + 1}</span>
-              <div>
-                <strong>{step.title}</strong>
-                <p>{step.description}</p>
-              </div>
-            </li>
-          ))}
-        </ol>
       </section>
 
       <section id="start-a-check" className="start-page__choices" aria-labelledby="use-case-choice-title">
         <div className="start-page__section-heading">
-          <p className="eyebrow">{marketing.choiceEyebrow}</p>
           <h2 id="use-case-choice-title">{marketing.choiceTitle}</h2>
           <p>{marketing.choiceDescription}</p>
         </div>
