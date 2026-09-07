@@ -207,7 +207,7 @@ test("the browser preview deletes only its own exact-name stored project and rep
   assert.equal(builtIn.data.accepted, false);
 });
 
-test("accepted deletion copy distinguishes retained evidence, no folder, and browser-only storage", async () => {
+test("accepted deletion preserves the latest selection and distinguishes its cleanup outcomes", async () => {
   const app = await readFile(new URL("../../src/App.tsx", import.meta.url), "utf8");
   const start = app.indexOf("const deleteCase = async");
   const end = app.indexOf("const deleteCaseArtifacts = async", start);
@@ -221,10 +221,18 @@ test("accepted deletion copy distinguishes retained evidence, no folder, and bro
     deletion,
     /setArtifactCleanupPlan\(result\.data\.artifacts\.exists \? result\.data\.artifacts : undefined\)/u,
   );
-  assert.match(deletion, /const selectedCaseIdBeforeDeletion = selectedCaseIdRef\.current/u);
+  const deletionRequest = deletion.indexOf("await scannerService.deleteCase(caseId, confirmation)");
+  const latestSelectionRead = deletion.indexOf("const selectedCaseIdAfterDeletion = selectedCaseIdRef.current");
+  assert.ok(deletionRequest >= 0);
+  assert.ok(latestSelectionRead > deletionRequest, "selection must be read after the deletion request settles");
+  assert.doesNotMatch(deletion, /selectedCaseIdBeforeDeletion/u);
   assert.match(
     deletion,
-    /selectedCaseIdBeforeDeletion && selectedCaseIdBeforeDeletion !== caseId[\s\S]*\? selectedCaseIdBeforeDeletion[\s\S]*: undefined/u,
+    /await afterLatestCaseSelection\([\s\S]*caseSelectionBarrierRef\.current[\s\S]*const selectedCaseIdAfterDeletion/u,
+  );
+  assert.match(
+    deletion,
+    /selectedCaseIdAfterDeletion && selectedCaseIdAfterDeletion !== caseId[\s\S]*\? selectedCaseIdAfterDeletion[\s\S]*: undefined/u,
   );
 });
 
@@ -591,6 +599,13 @@ test("snapshot errors keep real state visible with persistent bilingual retry UI
   const selectEnd = app.indexOf("const retryScanReadiness", selectStart);
   const selectCase = app.slice(selectStart, selectEnd);
   assert.ok(selectStart >= 0 && selectEnd > selectStart);
+  assert.match(selectCase, /supersedeCaseSelectionRef\.current\(\)/u);
+  assert.match(selectCase, /caseSelectionBarrierRef\.current = \{[\s\S]*settled,[\s\S]*superseded,/u);
+  assert.match(selectCase, /supersedeCaseSelectionRef\.current = supersedeSelection/u);
+  assert.match(
+    selectCase,
+    /finally[\s\S]*caseSelectionBarrierRef\.current\.generation === selectionGeneration[\s\S]*setLoading\(false\)[\s\S]*settleSelection\(\)/u,
+  );
   assert.match(selectCase, /setCaseSelectionUnavailableId\(undefined\)/u);
   assert.match(selectCase, /catch \(error\)[\s\S]*setCaseSelectionUnavailableId\(caseId\)/u);
   assert.doesNotMatch(selectCase, /setSnapshot\((?:undefined|null)\)/u);

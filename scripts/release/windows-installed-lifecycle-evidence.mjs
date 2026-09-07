@@ -442,6 +442,10 @@ function validateHarness(harness, expected, contract, label) {
     assert(harness.fixtureRuntime !== null, "WL-13 has no approved fixed fixture runtime");
     assert(harness.path === WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.path, "WL-13 did not use the exact reviewed localhost fixture path");
     assert(harness.sha256 === WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.sha256, "WL-13 localhost fixture digest differs from policy");
+  } else {
+    assert(harness.fixtureRuntime === null, `${contract.rowId} must not claim the WL-13-only fixture runtime`);
+    assert(harness.path !== WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.path, `${contract.rowId} must not claim the WL-13-only localhost fixture path`);
+    assert(harness.sha256 !== WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.sha256, `${contract.rowId} must not claim the WL-13-only localhost fixture digest`);
   }
   if (expected) {
     for (const field of ["repository", "sourceCommit", "path", "sha256", "contractVersion"]) {

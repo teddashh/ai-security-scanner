@@ -30,6 +30,7 @@ import {
 import { findRunCreatedAfterStart, hasActiveScanWork } from "./freshScanSelection";
 import { reconcileReportRunId } from "./exportRunSelection";
 import {
+  afterLatestCaseSelection,
   appendExportToMatchingSnapshot,
   selectVerificationBaselineRunId,
 } from "./caseScopedUiState";
@@ -345,6 +346,12 @@ export default function App() {
   const scanReadinessRequestGeneration = useRef(0);
   const scanReadinessResponseGeneration = useRef(0);
   const selectedCaseIdRef = useRef<string | undefined>(undefined);
+  const caseSelectionBarrierRef = useRef({
+    generation: 0,
+    settled: Promise.resolve(),
+    superseded: new Promise<void>(() => undefined),
+  });
+  const supersedeCaseSelectionRef = useRef<() => void>(() => undefined);
   const reportSelectionCaseIdRef = useRef<string | undefined>(undefined);
   const verificationBaselineCaseIdRef = useRef<string | undefined>(undefined);
   const scanWorkspaceEventGeneration = useRef(0);
@@ -1028,6 +1035,22 @@ export default function App() {
   };
 
   const selectCase = async (caseId: string) => {
+    supersedeCaseSelectionRef.current();
+    let settleSelection: () => void = () => undefined;
+    let supersedeSelection: () => void = () => undefined;
+    const settled = new Promise<void>((resolve) => {
+      settleSelection = resolve;
+    });
+    const superseded = new Promise<void>((resolve) => {
+      supersedeSelection = resolve;
+    });
+    const selectionGeneration = caseSelectionBarrierRef.current.generation + 1;
+    caseSelectionBarrierRef.current = {
+      generation: selectionGeneration,
+      settled,
+      superseded,
+    };
+    supersedeCaseSelectionRef.current = supersedeSelection;
     const readinessRequestGeneration = ++scanReadinessRequestGeneration.current;
     setLoading(true);
     try {
@@ -1083,7 +1106,8 @@ export default function App() {
         }),
       });
     } finally {
-      setLoading(false);
+      if (caseSelectionBarrierRef.current.generation === selectionGeneration) setLoading(false);
+      settleSelection();
     }
   };
 
@@ -1471,7 +1495,6 @@ export default function App() {
   };
 
   const deleteCase = async (caseId: string, confirmation: string): Promise<boolean> => {
-    const selectedCaseIdBeforeDeletion = selectedCaseIdRef.current;
     setBusyAction("delete-case");
     try {
       const result = await scannerService.deleteCase(caseId, confirmation);
@@ -1502,11 +1525,17 @@ export default function App() {
       if (result.data.accepted) {
         setArtifactCleanupPlan(result.data.artifacts.exists ? result.data.artifacts : undefined);
         setArtifactCleanupResult(undefined);
-        await loadSnapshot(
-          selectedCaseIdBeforeDeletion && selectedCaseIdBeforeDeletion !== caseId
-            ? selectedCaseIdBeforeDeletion
-            : undefined,
-          true,
+        await afterLatestCaseSelection(
+          () => caseSelectionBarrierRef.current,
+          () => {
+            const selectedCaseIdAfterDeletion = selectedCaseIdRef.current;
+            return loadSnapshot(
+              selectedCaseIdAfterDeletion && selectedCaseIdAfterDeletion !== caseId
+                ? selectedCaseIdAfterDeletion
+                : undefined,
+              true,
+            );
+          },
         );
       }
       return result.data.accepted;

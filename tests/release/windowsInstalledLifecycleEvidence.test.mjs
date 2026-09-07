@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS,
   WINDOWS_INSTALLED_LIFECYCLE_RECORDS,
+  WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY,
   summarizeWindowsInstalledLifecycleEvidence,
   validateWindowsInstalledLifecycleEvidence,
   verifyWindowsInstalledLifecycleEvidenceDirectory,
@@ -121,10 +122,10 @@ function passingRecord(contract) {
       repository: "teddashh/ai-security-scanner",
       sourceCommit: commit,
       path: contract.rowId === "WL-13"
-        ? "scripts/release/windows-localhost-fixture.mjs"
+        ? WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.path
         : "scripts/release/qualify-windows-installed-lifecycle.ps1",
       sha256: contract.rowId === "WL-13"
-        ? "de31dceede3f1aafcdc222d9c91f68913d69e077baa3a663577d62ac0354973a"
+        ? WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.sha256
         : "34".repeat(32),
       contractVersion: 1,
       fixtureRuntime: contract.rowId === "WL-13"
@@ -299,6 +300,32 @@ test("WL-13 is bound to the exact approved Windows fixture runtime", () => {
   }));
 });
 
+test("the WL-13 localhost fixture identity is rejected from every other lifecycle row", () => {
+  const record = passingRecord(WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS[0]);
+  assert.doesNotThrow(() => validateWindowsInstalledLifecycleEvidence(record));
+
+  const fixtureRuntime = structuredClone(record);
+  fixtureRuntime.harness.fixtureRuntime = structuredClone(WINDOWS_LOCALHOST_FIXTURE_RUNTIME_POLICY);
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(fixtureRuntime),
+    /must not claim the WL-13-only fixture runtime/u,
+  );
+
+  const fixturePath = structuredClone(record);
+  fixturePath.harness.path = WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.path;
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(fixturePath),
+    /must not claim the WL-13-only localhost fixture path/u,
+  );
+
+  const fixtureDigest = structuredClone(record);
+  fixtureDigest.harness.sha256 = WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.sha256;
+  assert.throws(
+    () => validateWindowsInstalledLifecycleEvidence(fixtureDigest),
+    /must not claim the WL-13-only localhost fixture digest/u,
+  );
+});
+
 test("the JSON schema mirrors the inverse WL-13 reachable requirement", async () => {
   const schema = JSON.parse(await readFile(
     new URL("../../docs/release/windows-installed-lifecycle-evidence.schema.json", import.meta.url),
@@ -314,10 +341,29 @@ test("the JSON schema mirrors the inverse WL-13 reachable requirement", async ()
   assert.ok(condition, "schema must require passed WL-13 evidence to report reachable");
 });
 
+test("the JSON schema reserves every WL-13 fixture coordinate to WL-13", async () => {
+  const schema = JSON.parse(await readFile(
+    new URL("../../docs/release/windows-installed-lifecycle-evidence.schema.json", import.meta.url),
+    "utf8",
+  ));
+  const condition = schema.allOf.find((entry) => (
+    entry.if?.properties?.rowId?.not?.const === "WL-13"
+  ));
+  const objectHarness = condition?.then?.properties?.harness?.oneOf?.find((entry) => (
+    Array.isArray(entry.allOf)
+  ));
+  const inverse = objectHarness?.allOf?.find((entry) => entry.properties?.fixtureRuntime);
+
+  assert.deepEqual(inverse?.properties, {
+    path: { not: { const: WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.path } },
+    sha256: { not: { const: WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.sha256 } },
+    fixtureRuntime: { const: null },
+  });
+});
+
 test("reachable is reserved for the exact WL-13 fixture boundary", () => {
   const record = passingRecord(WINDOWS_INSTALLED_LIFECYCLE_CONTRACTS[0]);
   record.installedAppJourney.targetOutcome = "reachable";
-  record.harness.fixtureRuntime = structuredClone(WINDOWS_LOCALHOST_FIXTURE_RUNTIME_POLICY);
   assert.throws(
     () => validateWindowsInstalledLifecycleEvidence(record),
     /cannot claim the fixture-only reachable outcome/u,

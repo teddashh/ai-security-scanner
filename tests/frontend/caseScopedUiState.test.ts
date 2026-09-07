@@ -2,10 +2,53 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  afterLatestCaseSelection,
   appendExportToMatchingSnapshot,
   selectVerificationBaselineRunId,
 } from "../../src/caseScopedUiState.ts";
 import type { AppSnapshot, CaseExport } from "../../src/types.ts";
+
+const deferred = () => {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((fulfill) => {
+    resolve = fulfill;
+  });
+  return { promise, resolve };
+};
+
+test("post-delete work follows a newer completed selection without waiting for the obsolete request", async () => {
+  const firstSettled = deferred();
+  const firstSuperseded = deferred();
+  const secondSettled = deferred();
+  const secondSuperseded = deferred();
+  let selectedCaseId = "case-a";
+  let barrier = {
+    generation: 1,
+    settled: firstSettled.promise,
+    superseded: firstSuperseded.promise,
+  };
+  const observedByAction: string[] = [];
+
+  const postDelete = afterLatestCaseSelection(
+    () => barrier,
+    () => observedByAction.push(selectedCaseId),
+  );
+
+  barrier = {
+    generation: 2,
+    settled: secondSettled.promise,
+    superseded: secondSuperseded.promise,
+  };
+  firstSuperseded.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(observedByAction, []);
+
+  selectedCaseId = "case-c";
+  secondSettled.resolve();
+  await postDelete;
+  assert.deepEqual(observedByAction, ["case-c"]);
+});
 
 test("verification baseline does not survive a case change merely because run IDs collide", () => {
   assert.equal(selectVerificationBaselineRunId({

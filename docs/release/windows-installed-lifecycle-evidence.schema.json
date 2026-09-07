@@ -293,6 +293,33 @@
     },
     {
       "if": {
+        "properties": { "rowId": { "not": { "const": "WL-13" } } },
+        "required": ["rowId"]
+      },
+      "then": {
+        "properties": {
+          "harness": {
+            "oneOf": [
+              { "type": "null" },
+              {
+                "allOf": [
+                  { "$ref": "#/$defs/harness" },
+                  {
+                    "properties": {
+                      "path": { "not": { "const": "scripts/release/windows-localhost-fixture.mjs" } },
+                      "sha256": { "not": { "const": "de31dceede3f1aafcdc222d9c91f68913d69e077baa3a663577d62ac0354973a" } },
+                      "fixtureRuntime": { "const": null }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
         "allOf": [
           { "properties": { "rowId": { "const": "WL-13" } }, "required": ["rowId"] },
           { "properties": { "outcome": { "const": "passed" } }, "required": ["outcome"] }

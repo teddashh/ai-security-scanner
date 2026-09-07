@@ -1,5 +1,22 @@
 import type { AppSnapshot, CaseExport } from "./types";
 
+interface CaseSelectionBarrier {
+  generation: number;
+  settled: Promise<void>;
+  superseded: Promise<void>;
+}
+
+export const afterLatestCaseSelection = async <Result>(
+  observe: () => CaseSelectionBarrier,
+  action: () => Result | Promise<Result>,
+): Promise<Result> => {
+  while (true) {
+    const observed = observe();
+    await Promise.race([observed.settled, observed.superseded]);
+    if (observe().generation === observed.generation) return action();
+  }
+};
+
 interface VerificationBaselineSelection {
   previousCaseId?: string;
   nextCaseId?: string;
