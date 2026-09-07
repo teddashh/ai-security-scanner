@@ -175,6 +175,21 @@ tamper、錯誤 signature 與缺少 evidence 是預期被拒絕的負向 fixture
 成功，但 Vite 對 `984.66 kB`（gzip `300.24 kB`）的主 JS chunk 發出超過 `500 kB` 的
 非阻擋 warning；這是 code-splitting 技術債，不是 installer 或 runtime 測試通過的證據。
 
+### Dependency reachability observation
+
+GitHub push 回報 medium open alert
+[`GHSA-wrw7-89jp-8q8g`](https://github.com/advisories/GHSA-wrw7-89jp-8q8g)／
+`RUSTSEC-2024-0429`：鎖定的
+`glib 0.18.5` 位於 `>=0.15,<0.20`，首個修正版為 `0.20.0`。Target-specific inverse trees 顯示：
+
+- `x86_64-pc-windows-msvc`：`glib` 無輸出，不會連入 Windows installer binary；
+- `x86_64-unknown-linux-gnu`：`tauri 2.11.5 -> gtk 0.18.2 / webkit2gtk 2.0.2 -> glib 0.18.5`。
+
+Repository／GUI-stack source search 沒找到受影響 `VariantStrIter` API 的直接使用，但不能因此
+把依賴告警視為不存在。精確 `glib 0.20.0` dry-run 因 `gtk` 的 `^0.18` constraint 失敗，
+Tauri dry-run 也沒有可用的 Rust `1.98` 相容更新；因此狀態是 **Windows not reachable／Linux
+residual risk open**，不是 FIXED，也沒有 dismiss。
+
 ## Browser CUA 手動 regression
 
 以 `390–433px` viewport 在 browser 開發預覽手動檢查：
@@ -264,5 +279,6 @@ contact。結果是 **BLOCKED／NOT RUN**：scan 次數 `0`，tunnel stop 次數
 | Typecheck／build／desktop check | PASS／PASS（chunk warning）／PASS |
 | Rust 1.98 all-targets | `1478/1478` PASS |
 | Clippy all-targets `-D warnings` | PASS |
+| Dependency reachability | Windows target 無 `glib`；Linux target 可達 `glib 0.18.5`，medium `GHSA-wrw7-89jp-8q8g` 仍 open |
 | Locale／modal／delete／target-validation families | FIXED；targeted tests、完整 frontend/component 與最小 browser recheck 通過 |
 | Published `v0.1.9` installer | **UNCHANGED；new installer NOT BUILT** |

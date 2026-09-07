@@ -219,6 +219,24 @@ scan、沒有停止或重新設定 tunnel，也沒有終止 BAT。
 build 另有一項非阻擋提醒：主 JS chunk `984.66 kB`（gzip `300.24 kB`）高於 Vite 的
 `500 kB` warning threshold，應列為後續 code-splitting 技術債。
 
+### GitHub dependency residual risk
+
+Push 後 GitHub 回報一項仍開啟的 medium Dependabot alert：
+[`GHSA-wrw7-89jp-8q8g`](https://github.com/advisories/GHSA-wrw7-89jp-8q8g)／
+`RUSTSEC-2024-0429`，
+`Cargo.lock` 中 `glib 0.18.5` 落在 `>=0.15,<0.20`，首個修正版為 `0.20.0`。
+`cargo tree --locked --offline --target x86_64-pc-windows-msvc -i glib` 沒有輸出，表示這個
+crate 不會連入本輪 Windows NSIS／MSI binary；Linux target 則可沿
+`tauri 2.11.5 -> gtk 0.18.2 / webkit2gtk 2.0.2 -> glib 0.18.5` 到達。Source audit
+沒有找到產品或這條 GUI stack 使用受影響 `VariantStrIter` API，但這只降低實際可達性，不能
+消除依賴風險。
+
+`cargo update -p glib --precise 0.20.0 --dry-run` 被 `gtk` 的 `glib = ^0.18` 約束拒絕；
+`cargo update -p tauri --dry-run` 在 Rust `1.98` 下沒有可更新套件。因此本輪沒有用不受控 fork、
+雙版本或大型 Tauri／GTK migration 冒充小修，也沒有 dismiss alert。它不阻擋本輪 Windows
+結果，但仍是 Linux desktop 發行前必須明示接受、暫緩該 artifact，或另案升級並重新 qualification
+的 residual risk。
+
 不同 runner／suite 可能重疊，不把數字相加成虛假的「獨立測試總數」。這些結果支持 source
 品質；它們不能替代 exact installed candidate 的真人、原生 GUI、lifecycle 或 signing gate。
 
@@ -271,7 +289,7 @@ publicly accessible 資料重新驗證；repository owner 之後也明確授權 
 | 欄位 | 最終值 |
 | --- | --- |
 | Post-release final code checkpoint | `d28f287d78a079828af45f1ee3bbca165ae091ea`（主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
-| Branch／remote alignment | `main`；報告 commit push 後另以 remote ref 與 Castle clean fast-forward 驗證 |
+| Branch／remote alignment | `main`；交付時以 remote ref 與 Castle clean fast-forward 驗證本機／GitHub／Castle exact HEAD 對齊 |
 | Frontend final | `485/485` PASS |
 | Component final | `145/145` PASS |
 | Release evidence final | `137/137` PASS |
@@ -280,5 +298,6 @@ publicly accessible 資料重新驗證；repository owner 之後也明確授權 
 | Clippy `-D warnings` final | PASS |
 | Typecheck／build／desktop check | PASS／PASS（chunk-size warning）／PASS |
 | Release validate／self-test | PASS／PASS（Rust 1.98；負向 fixtures 如預期） |
+| Dependabot | `1` medium open：`GHSA-wrw7-89jp-8q8g`；Windows target 不可達，Linux desktop residual risk 未 dismiss |
 | 四個 defect families／八個具體 issues | FIXED；targeted tests、全套 frontend／component 與最小 browser recheck 通過 |
 | New installer | **NOT BUILT**；只有 production frontend bundle 與 desktop source/sidecar check，不存在可發布的新 installer identity |

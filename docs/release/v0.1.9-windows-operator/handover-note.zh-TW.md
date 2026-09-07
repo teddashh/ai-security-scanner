@@ -181,6 +181,16 @@ Node runtime identity、loopback endpoint 與 non-overwriting receipt；只有 W
 是預期負向 fixtures。Production build PASS，但主 JS chunk `984.66 kB`（gzip `300.24 kB`）
 超過 Vite `500 kB` warning threshold，留下 code-splitting 技術債。沒有建立新的 installer。
 
+GitHub push 後另揭露一項仍開啟的 medium Dependabot alert：
+[`GHSA-wrw7-89jp-8q8g`](https://github.com/advisories/GHSA-wrw7-89jp-8q8g)／
+`RUSTSEC-2024-0429`，鎖定的
+`glib 0.18.5` 受 `>=0.15,<0.20` 影響。Windows target 的 inverse tree 沒有 `glib`；Linux
+desktop 則經 `tauri 2.11.5 -> gtk/webkit2gtk -> glib` 到達。沒有找到受影響 API 的直接使用，
+但 alert 仍是合法的 Linux residual risk。`gtk 0.18` 的 semver 約束使 `glib 0.20` 不能做
+bounded registry update，現有 Tauri 約束也沒有可用的小型更新；本輪沒有 dismiss 或用 fork
+繞過。接手者應在下一次 Linux 發行前明確接受風險、暫緩 Linux artifact，或另案完成
+Tauri／GTK migration 與 qualification。
+
 ## Process deviation
 
 Delegated read-only audit 在 reminder 前透過 authenticated `gh api` 執行 `18` 次 GET；沒有
@@ -221,12 +231,13 @@ truthful disclosure，不要誇大成 security incident，也不要省略。
 | 欄位 | 最終交接值 |
 | --- | --- |
 | Post-release final code checkpoint | `d28f287d78a079828af45f1ee3bbca165ae091ea`（主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
-| Branch／remote／clean status | `main`；報告 commit push 後另以 remote ref 與 Castle clean fast-forward 驗證 |
+| Branch／remote／clean status | `main`；交付時以 remote ref 與 Castle clean fast-forward 驗證本機／GitHub／Castle exact HEAD 對齊 |
 | Frontend／component | `485/485`／`145/145` PASS |
 | Release evidence／usability | `137/137`／`5/5` PASS |
 | Engine／Prowler／AIDEFEND | `168` byte-stable inputs、`21` records／`8/8`／`6` records，PASS |
 | Release validate／self-test／build／desktop check | 全部 PASS（Rust 1.98；build 有 chunk-size warning） |
 | Rust 1.98 all-targets／Clippy | `1478/1478` PASS／PASS |
+| Dependabot | `1` medium open：`GHSA-wrw7-89jp-8q8g`；Windows target 不可達，Linux desktop residual risk 未 dismiss |
 | 四個 defect families／八個具體 issues | FIXED；targeted tests、完整 frontend/component 與最小 browser recheck 通過 |
 | New build identity | **NOT BUILT**；沒有新 installer／release asset |
 | Windows qualification | **預設仍 NOT QUALIFIED，除非另有 exact-artifact clean-lab evidence** |
