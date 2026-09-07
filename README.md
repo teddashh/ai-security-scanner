@@ -123,6 +123,7 @@ These source-development commands do not prove that the installed Windows beginn
 - [Provider authorization implementation reference](docs/provider-authorization.md)
 - [Engine catalog](docs/engine-catalog.md)
 - [Release, qualification, and publication policy](docs/release/README.md)
+- [Windows external qualification plan](docs/release/windows-external-qualification-plan.md) ([Traditional Chinese](docs/release/windows-external-qualification-plan.zh-TW.md))
 - [Engine image supply chain](docs/release/engine-image-supply-chain.md)
 - [Engine maintenance](docs/engine-maintenance.md)
 - [Security policy](SECURITY.md)

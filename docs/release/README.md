@@ -220,6 +220,12 @@ gh attestation verify ./downloaded-installer --repo teddashh/ai-security-scanner
 
 The release page must say when an attestation or OS signature is absent rather than presenting the command as universally available.
 
+The current operator companion for collecting exact-candidate Windows evidence is the
+[Windows external qualification plan](windows-external-qualification-plan.md), also available in
+[Traditional Chinese](windows-external-qualification-plan.zh-TW.md). It keeps computer-use rehearsal,
+real installed-app lifecycle evidence, a qualifying beginner observation, and Authenticode evidence
+separate so that none can impersonate another.
+
 ## 8. Historical release notes
 
 Release-line files preserve what a candidate/release claimed or planned at that time. They are historical, non-normative records and cannot reintroduce current runtime, consent, recovery, or global-release requirements. A section labeled **superseded** records a design that must not be copied into current code, tests, workflows, or user guidance; use the canonical specification and current implementation references instead:

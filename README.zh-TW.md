@@ -123,6 +123,7 @@ npm run tauri dev
 - [資料來源授權實作參考](docs/provider-authorization.md)
 - [掃描引擎目錄](docs/engine-catalog.md)
 - [發行、驗證與發布政策](docs/release/README.md)
+- [Windows 外部資格驗證計畫](docs/release/windows-external-qualification-plan.zh-TW.md)（[English](docs/release/windows-external-qualification-plan.md)）
 - [掃描引擎映像供應鏈](docs/release/engine-image-supply-chain.md)
 - [掃描引擎維護](docs/engine-maintenance.md)
 - [安全政策](SECURITY.md)
