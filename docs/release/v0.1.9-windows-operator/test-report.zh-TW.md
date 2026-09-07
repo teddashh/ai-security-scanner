@@ -4,8 +4,9 @@
 凍結 source／本輪起始 `main` checkpoint：`5c95572f54220adbd170d9bfb5af3159c56708ef`
 Windows：Windows 11 Pro `10.0.26200.9168`，x64
 Rust：`1.98`
-Post-release final code checkpoint：`31e4506b464716798f6134476c64353a02c674ff`
-（CI behavior：`f04567cf09635b24062219684dc8325b3e44f61a`；UI／service：
+Post-release final code checkpoint：`3b3591ad72e35735b71e17a3d30c1bb8546e0d5c`
+（canonical timestamps；WL-13／case race：`8d138a13d736259d2626eed0ef12324cb327fdc4`；CI behavior：
+`f04567cf09635b24062219684dc8325b3e44f61a`；UI／service：
 `d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：
 `bd47e26b6c8024eb3461176637d7fce3e8370561`）
 
@@ -48,7 +49,7 @@ assets 也仍是 stale；listing 或舊文字都不能覆寫 frozen identity 與
 | BEGINNER | NOT OBSERVED | 沒有 qualifying beginner session |
 | Browser dev preview | SUPPORTING MANUAL REGRESSION | `390–433px`；不是 installed candidate |
 | Source automated suites | PASS at recorded checkpoints | 不能替代 human／native／lifecycle evidence |
-| Post-release release evidence | `137/137` PASS | 尚未進入新 installer |
+| Post-release release evidence | `142/142` PASS | 尚未進入新 installer |
 | CI boundary／drift guards | `31/31` PASS | classifier coverage，不是產品功能測試 |
 
 ## Frozen candidate 與 installed identity
@@ -155,7 +156,7 @@ export 正確 exit `1`，既有 HTML SHA-256 保持不變。
 
 | Suite | 結果 | 限制 |
 | --- | ---: | --- |
-| Frontend | `485/485` PASS | source-level |
+| Frontend | `486/486` PASS | source-level |
 | Component | `145/145` PASS | component runner；不是真人 UI |
 | Usability evidence | `5/5` PASS | schema／fixture，不是 BEGINNER observation |
 | Engine validation | PASS | `168` byte-stable inputs、`21` records、Prowler `8/8` |
@@ -168,7 +169,7 @@ export 正確 exit `1`，既有 HTML SHA-256 保持不變。
 | Rust 1.98 all-targets | `1478/1478` PASS | 該 command 的 suite total |
 | Clippy all-targets | PASS | `-D warnings` |
 | Rustfmt all | PASS | `--check`；同步後的 exact source tree |
-| Release evidence | `137/137` PASS | post-release commit/source result |
+| Release evidence | `142/142` PASS | post-release commit/source result |
 | CI boundary／drift guards | `31/31` PASS | shared corpus 同時觸發 frontend 與 rust_core；不觸發 desktop |
 
 上述 suites 可能測到重疊邏輯，所以不相加成單一測試總數。尤其 `5/5` usability evidence
@@ -177,7 +178,7 @@ export 正確 exit `1`，既有 HTML SHA-256 保持不變。
 第一次 release self-test 與 desktop check 使用 ambient default Rust `1.97`，因專案要求的
 工具鏈不符而失敗；設定 `RUSTUP_TOOLCHAIN=1.98.0` 後兩項均完整通過。Self-test 列出的
 tamper、錯誤 signature 與缺少 evidence 是預期被拒絕的負向 fixtures。Production build
-成功，但 Vite 對 `984.66 kB`（gzip `300.24 kB`）的主 JS chunk 發出超過 `500 kB` 的
+成功，但 Vite 對 `985.21 kB`（gzip `300.50 kB`）的主 JS chunk 發出超過 `500 kB` 的
 非阻擋 warning；這是 code-splitting 技術債，不是 installer 或 runtime 測試通過的證據。
 
 ### Dependency reachability observation
@@ -214,18 +215,24 @@ Console 沒有 warning／error。Browser review 與 final diff audit 共揭露�
 | --- | --- | --- |
 | Runtime locale | 切換語言後，內建 demo record 仍顯示中文 | FIXED；自動測試加 browser 人工切換通過，使用者文字維持原文 |
 | Mobile modal scroll | 導覽 drawer 開啟時背景仍可捲動 | FIXED；scroll lock／style restoration／page transition 自動測試與 browser 人工檢查通過 |
-| Browser demo deletion | user-created demo case 無法刪除；刪除背景 case 會讓目前選取跳回 built-in demo | FIXED；exact-name／built-in protection／no-artifact／selection preservation 自動測試通過；收尾未實際刪除本機 UI test data |
+| Browser demo deletion | user-created demo case 無法刪除；刪除背景 case 會讓目前選取跳回 built-in demo；刪除期間連續切換 case 有 stale-selection／loading race | FIXED；exact-name／built-in protection／no-artifact／latest-selection supersession／stale-loading guard 自動測試通過；收尾未實際刪除本機 UI test data |
 | Target validation parity | public／internal line 接受 malformed URL／port／space；deployed URL 衍生 host、明確 port `0`、percent-expanded path 可繞過 native 邊界 | FIXED；field-specific alert／focus 人工通過，valid FQDN／IP／CIDR 也通過；host／port／path parity 自動測試通過 |
 
 這四個 families 只證明 browser preview／source audit 中存在問題；因 native GUI 沒有被控制，本輪不宣稱已在安裝版
 重現，也不宣稱 post-release 修正已進入 `v0.1.9`。
 
 Qualification plan／tooling 另完成 `AUTO-OPERATOR` track、exact loopback fixture、固定 Windows
-Node runtime、fixture digest 與 WL-13 `reachable` 雙向 schema／validator binding。這使 Codex 在
+Node runtime、fixture digest 與 WL-13 `reachable` 雙向 schema／validator binding；fixture
+runtime、path、digest 三個座標也只允許 WL-13 使用。這使 Codex 在
 擁有人明確授權後可自行按固定 localhost Start 並連續跑安全 rows；沒有 raw HTML reader 時只把
 readability check 記為 `not-observed`，把已嘗試的 lifecycle row 記為 `inconclusive`、
 `reasonCode: required-observation-unavailable`，不會停掉其他測試，也不會把 agent output 冒充
 beginner evidence。
+
+Evidence timestamp validation 另由寬鬆的 `Date.parse` 收斂成 shared canonical UTC parser：只接受
+真實 calendar date、`Z`／`+00:00` UTC offset 與最多九位 fractional seconds；排序保留
+nanosecond 精度。Schema 同步約束 UTC、月份邊界與閏年，focused artifact／lifecycle suite
+`27/27`、完整 release-evidence suite `142/142` PASS。
 
 同步時另找到一個 CI routing issue：shared external-target corpus 同時被 frontend 與 Rust parity
 tests 讀取，但 corpus-only change 原本不會排程這兩條 lane。Classifier 已修成
@@ -279,13 +286,14 @@ contact。結果是 **BLOCKED／NOT RUN**：scan 次數 `0`，tunnel stop 次數
 
 | 項目 | Final commit／result |
 | --- | --- |
-| Exact post-release final code checkpoint | `31e4506b464716798f6134476c64353a02c674ff`（CI behavior：`f04567cf09635b24062219684dc8325b3e44f61a`；UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
-| Frontend | `485/485` PASS |
+| Exact post-release final code checkpoint | `3b3591ad72e35735b71e17a3d30c1bb8546e0d5c`（canonical timestamps；WL-13／case race：`8d138a13d736259d2626eed0ef12324cb327fdc4`；CI behavior：`f04567cf09635b24062219684dc8325b3e44f61a`；UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
+| GitHub checks for code checkpoint | [CI `34128123284`](https://github.com/teddashh/ai-security-scanner/actions/runs/34128123284) 9/9 jobs PASS；[CodeQL `34128074242`](https://github.com/teddashh/ai-security-scanner/actions/runs/34128074242) Rust／JavaScript-TypeScript 均 PASS |
+| Frontend | `486/486` PASS |
 | Component | `145/145` PASS |
 | Usability evidence | `5/5` PASS |
 | Engine／Prowler／AIDEFEND | `168` byte-stable inputs／`21` records／`8/8`／`6` records，PASS |
 | Release validate／self-test | PASS／PASS（Rust 1.98） |
-| Release evidence | `137/137` PASS |
+| Release evidence | `142/142` PASS |
 | CI boundary／drift guards | `31/31` PASS |
 | Typecheck／build／desktop check | PASS／PASS（chunk warning）／PASS |
 | Rust 1.98 all-targets | `1478/1478` PASS |

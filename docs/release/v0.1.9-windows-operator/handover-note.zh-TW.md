@@ -3,8 +3,9 @@
 日期：2026-09-07
 Canonical repository：`teddashh/ai-security-scanner`
 凍結 source／本輪起始 `main` checkpoint：`5c95572f54220adbd170d9bfb5af3159c56708ef`
-Post-release final code checkpoint：`31e4506b464716798f6134476c64353a02c674ff`
-（CI behavior：`f04567cf09635b24062219684dc8325b3e44f61a`；UI／service：
+Post-release final code checkpoint：`3b3591ad72e35735b71e17a3d30c1bb8546e0d5c`
+（canonical timestamps；WL-13／case race：`8d138a13d736259d2626eed0ef12324cb327fdc4`；CI behavior：
+`f04567cf09635b24062219684dc8325b3e44f61a`；UI／service：
 `d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：
 `bd47e26b6c8024eb3461176637d7fce3e8370561`）
 
@@ -146,7 +147,8 @@ post-release source 修正：
 1. runtime language switch 現在同步翻譯內建 demo record，同時保留使用者輸入原文；
 2. mobile navigation modal 現在鎖住背景 scroll，並在 close／unmount／breakpoint 後精確還原；
 3. user-created browser demo case 現在支援 exact-name two-step deletion，且不虛構 evidence folder；
-   刪除背景 case 時也保留目前選取的其他 case；
+   刪除背景 case 時也保留目前選取的其他 case；刪除期間連續切換 case 時會跟隨最新已完成
+   selection，過時 request 不會卡住 post-delete reload 或清掉較新的 loading state；
 4. public／internal target line 現在於建立前拒絕 URL／port／wildcard／空白假主機／錯誤 CIDR，
    deployed-website URL 衍生的 host 也走同一驗證與 canonicalization，並保留 native
    `CanonicalTarget` 作為最終權威；明確 port `0` 與 percent-encoding 後超過 `2,048` 字元的
@@ -165,24 +167,30 @@ credentials 與 WL-12c 即時 all-data cleanup confirmation 仍不在此授權�
 
 新 localhost fixture 與 lifecycle validator／schema 綁定 exact script path／digest、固定 Windows
 Node runtime identity、loopback endpoint 與 non-overwriting receipt；只有 WL-13 可回報
-`reachable`，其他 row 反向禁止。Port owner 不符時 fixture 會 fail closed。
+`reachable`，且 fixture runtime、path、digest 三個座標都只允許 WL-13 使用，其他 row 反向
+禁止。Port owner 不符時 fixture 會 fail closed。
+
+Evidence timestamp validator 也已收斂成 shared canonical UTC parser：真實 calendar date、
+`Z`／`+00:00` UTC offset、最多九位 fractional seconds，排序使用 nanosecond order key；schema
+同步約束 UTC、月份邊界與閏年。這項 hardening 是 post-release source behavior，不屬於凍結的
+`v0.1.9` installer。
 
 ## 已有 automated baseline
 
-- frontend `485/485`；component `145/145`；usability `5/5`；
+- frontend `486/486`；component `145/145`；usability `5/5`；
 - engine：`168` byte-stable inputs、`21` records、Prowler `8/8`；
 - AIDEFEND `6` records；
 - release validate、release self-test、build、desktop check PASS；
 - TypeScript typecheck PASS；Rust 1.98 all-targets `1478/1478`；Clippy all-targets `-D warnings` PASS；
   Rustfmt all `--check` PASS；
-- post-release release-evidence `137/137` PASS；CI boundary／drift guards `31/31` PASS。
+- post-release release-evidence `142/142` PASS；CI boundary／drift guards `31/31` PASS。
 
-數字不可相加成虛假的獨立測試總數。`137/137` 與四個 defect families 的 fixes 屬 post-release source；
+數字不可相加成虛假的獨立測試總數。`142/142` 與四個 defect families 的 fixes 屬 post-release source；
 已發布 `v0.1.9` bytes 的改進仍是 `0`，直到新版本 build 並重新 qualification。
 
 第一次 release self-test／desktop check 使用 ambient Rust `1.97` 而失敗；明確設定
 `RUSTUP_TOOLCHAIN=1.98.0` 後均 PASS。Self-test 的 tamper／bad-signature／missing-evidence 訊息
-是預期負向 fixtures。Production build PASS，但主 JS chunk `984.66 kB`（gzip `300.24 kB`）
+是預期負向 fixtures。Production build PASS，但主 JS chunk `985.21 kB`（gzip `300.50 kB`）
 超過 Vite `500 kB` warning threshold，留下 code-splitting 技術債。沒有建立新的 installer。
 
 GitHub push 後另揭露一項仍開啟的 medium Dependabot alert：
@@ -210,7 +218,7 @@ truthful disclosure，不要誇大成 security incident，也不要省略。
 ## 建議接手順序
 
 1. 從 GitHub `main` 的 final code checkpoint
-   `31e4506b464716798f6134476c64353a02c674ff` 或其後續報告 commit 繼續；不要回到本輪起始
+   `3b3591ad72e35735b71e17a3d30c1bb8546e0d5c` 或其後續報告 commit 繼續；不要回到本輪起始
    `5c95572f...`。
 2. 若要交付修正，使用新版本與新 immutable identity。不得覆寫 `v0.1.9`。
 3. 在 named、resettable disposable Windows lab 執行新 artifact 的 read-only preflight；先證明
@@ -232,17 +240,18 @@ truthful disclosure，不要誇大成 security incident，也不要省略。
 - 不可上傳 `private-diagnostic` 下的 CLI probe 或 port-owner note。
 - 不可把 unsigned `not-configured` observation 改稱 signing PASS。
 - 不可把 owner 的 Latest listing 當成 immutable candidate 已變 stable。
-- 不可把 source fix 或 `137/137` release-evidence result 歸入未變更的 `v0.1.9` installer。
+- 不可把 source fix 或 `142/142` release-evidence result 歸入未變更的 `v0.1.9` installer。
 - 不可建立 BEGINNER passing record；本輪根本沒有 beginner session。
 
 ## 最終驗證
 
 | 欄位 | 最終交接值 |
 | --- | --- |
-| Post-release final code checkpoint | `31e4506b464716798f6134476c64353a02c674ff`（CI behavior：`f04567cf09635b24062219684dc8325b3e44f61a`；UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
+| Post-release final code checkpoint | `3b3591ad72e35735b71e17a3d30c1bb8546e0d5c`（canonical timestamps；WL-13／case race：`8d138a13d736259d2626eed0ef12324cb327fdc4`；CI behavior：`f04567cf09635b24062219684dc8325b3e44f61a`；UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
 | Branch／remote／clean status | `main`；交付時以 remote ref 與 Castle clean fast-forward 驗證本機／GitHub／Castle exact HEAD 對齊 |
-| Frontend／component | `485/485`／`145/145` PASS |
-| Release evidence／usability | `137/137`／`5/5` PASS |
+| GitHub checks for code checkpoint | [CI `34128123284`](https://github.com/teddashh/ai-security-scanner/actions/runs/34128123284) 9/9 jobs PASS；[CodeQL `34128074242`](https://github.com/teddashh/ai-security-scanner/actions/runs/34128074242) Rust／JavaScript-TypeScript 均 PASS |
+| Frontend／component | `486/486`／`145/145` PASS |
+| Release evidence／usability | `142/142`／`5/5` PASS |
 | CI boundary／drift guards | `31/31` PASS |
 | Engine／Prowler／AIDEFEND | `168` byte-stable inputs、`21` records／`8/8`／`6` records，PASS |
 | Release validate／self-test／build／desktop check | 全部 PASS（Rust 1.98；build 有 chunk-size warning） |

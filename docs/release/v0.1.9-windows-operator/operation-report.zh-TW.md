@@ -41,7 +41,10 @@ clean-lab evidence。正式操作規則見
 本輪主要實作 commit 是 `bd47e26b6c8024eb3461176637d7fce3e8370561`；website-service
 邊界修正 checkpoint 是 `d28f287d78a079828af45f1ee3bbca165ae091ea`；補齊 shared-corpus
 CI routing 的 behavior checkpoint 是 `f04567cf09635b24062219684dc8325b3e44f61a`；同步 rustfmt
-後的 final code checkpoint 是 `31e4506b464716798f6134476c64353a02c674ff`。它們都是
+checkpoint 是 `31e4506b464716798f6134476c64353a02c674ff`；WL-13 identity exclusivity
+與 case-selection race checkpoint 是 `8d138a13d736259d2626eed0ef12324cb327fdc4`；canonical UTC
+evidence timestamp 收尾後的 final code checkpoint 是
+`3b3591ad72e35735b71e17a3d30c1bb8546e0d5c`。它們都是
 `v0.1.9` 發布後的 source commit，不是已發布 installer 的 source identity。
 
 Browser 預覽與最終 diff audit 共揭露八個具體缺陷，歸在四個 defect families：
@@ -49,7 +52,8 @@ Browser 預覽與最終 diff audit 共揭露八個具體缺陷，歸在四個 de
 1. runtime 切換語言後，內建 demo record 現在會同步翻譯；使用者輸入仍保留原文；
 2. mobile navigation modal 現在鎖住背景 scroll，並在 close／unmount／breakpoint 後精確還原；
 3. browser demo 建立的 case 現在可經 exact-name two-step flow 刪除，且不暗示有 evidence files；
-   刪除背景 case 時也會保留目前選取的其他 case；
+   刪除背景 case 時也會保留目前選取的其他 case；若刪除期間連續切換 case，post-delete reload
+   會跟隨最新已完成的選取，過時 selection 不會卡住流程或清掉較新 selection 的 loading state；
 4. public／internal target 輸入列現在於建立前拒絕 malformed URL、port、wildcard、含空白假主機
    與錯誤 CIDR；deployed-website URL 衍生出的 host 也會經過同一驗證與 canonicalization，
    明確 port `0` 與 percent-encoding 後超過 `2,048` 字元的 path 也會在表單內被拒絕，
@@ -60,12 +64,18 @@ Codex 可自行對唯一固定的 `127.0.0.1:9001` 執行 safe Start，不需另
 raw HTML readability observation 時，readability check 誠實留為 `not-observed`，已嘗試的
 lifecycle row 記為 `inconclusive`、`reasonCode: required-observation-unavailable`，其他安全 rows 繼續。
 Lifecycle validator／schema 綁定 exact fixture path、script digest、Windows Node runtime identity，
-並雙向限制只有 WL-13 可以回報 `reachable`。新 fixture 固定綁在 loopback、拒絕 override／覆寫
-receipt，且 port 被其他 owner 佔用時 fail closed。
+並雙向限制只有 WL-13 可以回報 `reachable`；WL-13 的 fixture runtime、path 與 digest 三個座標
+也全部保留給 WL-13，其他 row 不得借用其中任何一項。新 fixture 固定綁在 loopback、拒絕
+override／覆寫 receipt，且 port 被其他 owner 佔用時 fail closed。
+
+Evidence timestamp validator 也由寬鬆的 `Date.parse` 改為共用 canonical UTC parser：只接受真實
+calendar date、`Z`／`+00:00` UTC offset 與最多九位 fractional seconds，並用 nanosecond
+order key 比較先後；JSON schema 同步約束 UTC、月份邊界與閏年。這是 fail-closed evidence
+hardening，不會改變 candidate bytes。
 
 這些是有價值的 defect discovery，但當時不是已發布 candidate 的原生 GUI 重現證據；
 修正也不是 `v0.1.9` 已發布 bytes 的一部分。Release-evidence 與 Windows portability／fixture
-修正最終為 `137/137`，同樣只算 post-release source advancement，直到新 build 才可能成為產品 bytes。
+修正最終為 `142/142`，同樣只算 post-release source advancement，直到新 build 才可能成為產品 bytes。
 
 同步到 Castle 後另發現一個 release-engineering 缺口：新增的 shared external-target corpus 同時被
 frontend 與 Rust parity tests 讀取，但 corpus-only change 原本不會排程這兩條 CI lane。Classifier
@@ -180,8 +190,8 @@ evidence。沒有建立或冒充保留給通過簽章結果的 evidence 檔。
 內建案例可隨語系切換、使用者文字維持原文、modal background scroll 被鎖住並還原、無效
 external targets 被 field-specific alert 擋下且 focus 正確，合法 FQDN／IPv4／IPv6／CIDR 通過。
 Browser-only deletion 的實際刪除動作未在收尾時重跑，避免未經 action-time confirmation 改動
-本機 UI 資料；其 exact-name／built-in 保護／no-artifact／background-selection 行為由 frontend
-與 component tests 覆蓋。
+本機 UI 資料；其 exact-name／built-in 保護／no-artifact／background-selection 行為，以及刪除
+期間連續 selection 的 supersession／loading-state race，均由 frontend 與 component tests 覆蓋。
 這是 current source 的
 browser preview，不是 installed candidate、Tauri webview、clean Windows、BEGINNER 或
 lifecycle evidence；「沒有 console error」也不代表沒有產品缺陷。
@@ -209,7 +219,7 @@ scan、沒有停止或重新設定 tunnel，也沒有終止 BAT。
 
 在本輪紀錄的 source checkpoints，已觀察到下列 automated 結果：
 
-- frontend：`485/485`；
+- frontend：`486/486`；
 - component：`145/145`；
 - usability evidence：`5/5`；
 - engine validation：`168` 個 byte-stable inputs、`21` records、Prowler `8/8`；
@@ -219,13 +229,13 @@ scan、沒有停止或重新設定 tunnel，也沒有終止 BAT。
 - Rust `1.98` all-targets：`1478/1478`；
 - Clippy all-targets `-D warnings`：PASS；
 - Rustfmt all `--check`：PASS；
-- post-release release evidence：`137/137`。
+- post-release release evidence：`142/142`。
 - CI boundary／drift guards：`31/31`。
 
 第一次執行 release self-test 與 desktop check 時，ambient default Rust `1.97` 不符合專案的
 `1.98` 工具鏈而失敗；明確設定 `RUSTUP_TOOLCHAIN=1.98.0` 後，兩項均完整通過。Self-test
 輸出的 tamper／bad-signature／missing-evidence 錯誤是預期的負向 fixtures。Production frontend
-build 另有一項非阻擋提醒：主 JS chunk `984.66 kB`（gzip `300.24 kB`）高於 Vite 的
+build 另有一項非阻擋提醒：主 JS chunk `985.21 kB`（gzip `300.50 kB`）高於 Vite 的
 `500 kB` warning threshold，應列為後續 code-splitting 技術債。
 
 ### GitHub dependency residual risk
@@ -261,13 +271,16 @@ crate 不會連入本輪 Windows NSIS／MSI binary；Linux target 則可沿
 | Browser review | `7` 類 UX／disclosure path 被人工檢查；browser 加 final audit 找到四個 defect families／八個具體 issue | dev preview 不是 installed-candidate evidence |
 | Native scan | `0` 次；port-owner check 正確阻擋接觸 BAT | 沒有 report、reopen 或 export lifecycle evidence |
 | BEGINNER | `0` qualifying sessions | beginner-ready gate 完全未通過 |
-| Post-release tests | release evidence `137/137`，frontend `485/485`，component `145/145`，Rust `1478/1478`，CI boundary `31/31`，其餘列明的 final gates 通過 | 在新 installer 前，對 published bytes 的改善為 `0` |
+| Post-release tests | release evidence `142/142`，frontend `486/486`，component `145/145`，Rust `1478/1478`，CI boundary `31/31`，其餘列明的 final gates 通過 | 在新 installer 前，對 published bytes 的改善為 `0` |
 
 **水分判讀：**自動測試數字彼此有覆蓋，不能相加成一個誇張總數；browser preview 也不能
 冒充 installed Windows app。真正可交付的推進是主要 implementation commit 的 `2,400` 行新增／
 `153` 行刪除，加上 website-service follow-up 的 `37` 行新增／`2` 行刪除、CI follow-up 的
-`21` 行新增、rustfmt convergence 的 `4` 行新增／`1` 行刪除、八個 UI／UX issue 與一個
-CI routing issue 的修正、exact Windows fixture／evidence contract，以及三份可追溯文件。
+`21` 行新增、rustfmt convergence 的 `4` 行新增／`1` 行刪除，以及 final WL-13／case-selection
+race follow-up 的 `194` 行新增／`13` 行刪除，再加 canonical timestamp hardening 的 `125` 行
+新增／`9` 行刪除；交付涵蓋八個 UI／UX issue（含 deletion family 的並行 race 收尾）、一個 CI
+routing issue、exact Windows fixture／evidence contract、canonical UTC evidence timestamps，
+以及三份可追溯文件。
 對已發布 `v0.1.9` installer 的程式碼推進是 **0 bytes**，原生 localhost scan 是 **0 次**，
 Windows qualification 仍是 **未完成**。這兩面都必須同時保留，不能只報漂亮數字。
 
@@ -298,11 +311,12 @@ publicly accessible 資料重新驗證；repository owner 之後也明確授權 
 
 | 欄位 | 最終值 |
 | --- | --- |
-| Post-release final code checkpoint | `31e4506b464716798f6134476c64353a02c674ff`（CI behavior：`f04567cf09635b24062219684dc8325b3e44f61a`；UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
+| Post-release final code checkpoint | `3b3591ad72e35735b71e17a3d30c1bb8546e0d5c`（canonical timestamps；WL-13／case race：`8d138a13d736259d2626eed0ef12324cb327fdc4`；CI behavior：`f04567cf09635b24062219684dc8325b3e44f61a`；UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
 | Branch／remote alignment | `main`；交付時以 remote ref 與 Castle clean fast-forward 驗證本機／GitHub／Castle exact HEAD 對齊 |
-| Frontend final | `485/485` PASS |
+| GitHub checks for code checkpoint | [CI `34128123284`](https://github.com/teddashh/ai-security-scanner/actions/runs/34128123284) 9/9 jobs PASS；[CodeQL `34128074242`](https://github.com/teddashh/ai-security-scanner/actions/runs/34128074242) Rust／JavaScript-TypeScript 均 PASS |
+| Frontend final | `486/486` PASS |
 | Component final | `145/145` PASS |
-| Release evidence final | `137/137` PASS |
+| Release evidence final | `142/142` PASS |
 | CI boundary／drift guards | `31/31` PASS |
 | Usability evidence final | `5/5` PASS |
 | Rust 1.98 all-targets final | `1478/1478` PASS |
