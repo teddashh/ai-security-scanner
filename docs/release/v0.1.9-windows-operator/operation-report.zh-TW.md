@@ -40,7 +40,8 @@ clean-lab evidence。正式操作規則見
 
 本輪主要實作 commit 是 `bd47e26b6c8024eb3461176637d7fce3e8370561`；website-service
 邊界修正 checkpoint 是 `d28f287d78a079828af45f1ee3bbca165ae091ea`；補齊 shared-corpus
-CI routing 後的 final code checkpoint 是 `f04567cf09635b24062219684dc8325b3e44f61a`。三者都是
+CI routing 的 behavior checkpoint 是 `f04567cf09635b24062219684dc8325b3e44f61a`；同步 rustfmt
+後的 final code checkpoint 是 `31e4506b464716798f6134476c64353a02c674ff`。它們都是
 `v0.1.9` 發布後的 source commit，不是已發布 installer 的 source identity。
 
 Browser 預覽與最終 diff audit 共揭露八個具體缺陷，歸在四個 defect families：
@@ -217,6 +218,7 @@ scan、沒有停止或重新設定 tunnel，也沒有終止 BAT。
 - TypeScript typecheck：PASS；
 - Rust `1.98` all-targets：`1478/1478`；
 - Clippy all-targets `-D warnings`：PASS；
+- Rustfmt all `--check`：PASS；
 - post-release release evidence：`137/137`。
 - CI boundary／drift guards：`31/31`。
 
@@ -264,8 +266,8 @@ crate 不會連入本輪 Windows NSIS／MSI binary；Linux target 則可沿
 **水分判讀：**自動測試數字彼此有覆蓋，不能相加成一個誇張總數；browser preview 也不能
 冒充 installed Windows app。真正可交付的推進是主要 implementation commit 的 `2,400` 行新增／
 `153` 行刪除，加上 website-service follow-up 的 `37` 行新增／`2` 行刪除、CI follow-up 的
-`21` 行新增、八個 UI／UX issue 與一個 CI routing issue 的修正、exact Windows
-fixture／evidence contract，以及三份可追溯文件。
+`21` 行新增、rustfmt convergence 的 `4` 行新增／`1` 行刪除、八個 UI／UX issue 與一個
+CI routing issue 的修正、exact Windows fixture／evidence contract，以及三份可追溯文件。
 對已發布 `v0.1.9` installer 的程式碼推進是 **0 bytes**，原生 localhost scan 是 **0 次**，
 Windows qualification 仍是 **未完成**。這兩面都必須同時保留，不能只報漂亮數字。
 
@@ -296,7 +298,7 @@ publicly accessible 資料重新驗證；repository owner 之後也明確授權 
 
 | 欄位 | 最終值 |
 | --- | --- |
-| Post-release final code checkpoint | `f04567cf09635b24062219684dc8325b3e44f61a`（UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
+| Post-release final code checkpoint | `31e4506b464716798f6134476c64353a02c674ff`（CI behavior：`f04567cf09635b24062219684dc8325b3e44f61a`；UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
 | Branch／remote alignment | `main`；交付時以 remote ref 與 Castle clean fast-forward 驗證本機／GitHub／Castle exact HEAD 對齊 |
 | Frontend final | `485/485` PASS |
 | Component final | `145/145` PASS |
@@ -304,7 +306,7 @@ publicly accessible 資料重新驗證；repository owner 之後也明確授權 
 | CI boundary／drift guards | `31/31` PASS |
 | Usability evidence final | `5/5` PASS |
 | Rust 1.98 all-targets final | `1478/1478` PASS |
-| Clippy `-D warnings` final | PASS |
+| Clippy／Rustfmt final | `-D warnings` PASS／all `--check` PASS |
 | Typecheck／build／desktop check | PASS／PASS（chunk-size warning）／PASS |
 | Release validate／self-test | PASS／PASS（Rust 1.98；負向 fixtures 如預期） |
 | Dependabot | `1` medium open：`GHSA-wrw7-89jp-8q8g`；Windows target 不可達，Linux desktop residual risk 未 dismiss |

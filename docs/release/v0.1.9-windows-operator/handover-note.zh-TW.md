@@ -3,8 +3,9 @@
 日期：2026-09-07
 Canonical repository：`teddashh/ai-security-scanner`
 凍結 source／本輪起始 `main` checkpoint：`5c95572f54220adbd170d9bfb5af3159c56708ef`
-Post-release final code checkpoint：`f04567cf09635b24062219684dc8325b3e44f61a`
-（UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：
+Post-release final code checkpoint：`31e4506b464716798f6134476c64353a02c674ff`
+（CI behavior：`f04567cf09635b24062219684dc8325b3e44f61a`；UI／service：
+`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：
 `bd47e26b6c8024eb3461176637d7fce3e8370561`）
 
 ## 接手結論
@@ -173,6 +174,7 @@ Node runtime identity、loopback endpoint 與 non-overwriting receipt；只有 W
 - AIDEFEND `6` records；
 - release validate、release self-test、build、desktop check PASS；
 - TypeScript typecheck PASS；Rust 1.98 all-targets `1478/1478`；Clippy all-targets `-D warnings` PASS；
+  Rustfmt all `--check` PASS；
 - post-release release-evidence `137/137` PASS；CI boundary／drift guards `31/31` PASS。
 
 數字不可相加成虛假的獨立測試總數。`137/137` 與四個 defect families 的 fixes 屬 post-release source；
@@ -208,7 +210,7 @@ truthful disclosure，不要誇大成 security incident，也不要省略。
 ## 建議接手順序
 
 1. 從 GitHub `main` 的 final code checkpoint
-   `f04567cf09635b24062219684dc8325b3e44f61a` 或其後續報告 commit 繼續；不要回到本輪起始
+   `31e4506b464716798f6134476c64353a02c674ff` 或其後續報告 commit 繼續；不要回到本輪起始
    `5c95572f...`。
 2. 若要交付修正，使用新版本與新 immutable identity。不得覆寫 `v0.1.9`。
 3. 在 named、resettable disposable Windows lab 執行新 artifact 的 read-only preflight；先證明
@@ -237,14 +239,14 @@ truthful disclosure，不要誇大成 security incident，也不要省略。
 
 | 欄位 | 最終交接值 |
 | --- | --- |
-| Post-release final code checkpoint | `f04567cf09635b24062219684dc8325b3e44f61a`（UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
+| Post-release final code checkpoint | `31e4506b464716798f6134476c64353a02c674ff`（CI behavior：`f04567cf09635b24062219684dc8325b3e44f61a`；UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
 | Branch／remote／clean status | `main`；交付時以 remote ref 與 Castle clean fast-forward 驗證本機／GitHub／Castle exact HEAD 對齊 |
 | Frontend／component | `485/485`／`145/145` PASS |
 | Release evidence／usability | `137/137`／`5/5` PASS |
 | CI boundary／drift guards | `31/31` PASS |
 | Engine／Prowler／AIDEFEND | `168` byte-stable inputs、`21` records／`8/8`／`6` records，PASS |
 | Release validate／self-test／build／desktop check | 全部 PASS（Rust 1.98；build 有 chunk-size warning） |
-| Rust 1.98 all-targets／Clippy | `1478/1478` PASS／PASS |
+| Rust 1.98 all-targets／Clippy／Rustfmt | `1478/1478` PASS／PASS／all `--check` PASS |
 | Dependabot | `1` medium open：`GHSA-wrw7-89jp-8q8g`；Windows target 不可達，Linux desktop residual risk 未 dismiss |
 | 四個 defect families／八個具體 issues | FIXED；targeted tests、完整 frontend/component 與最小 browser recheck 通過 |
 | New build identity | **NOT BUILT**；沒有新 installer／release asset |

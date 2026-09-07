@@ -4,8 +4,9 @@
 凍結 source／本輪起始 `main` checkpoint：`5c95572f54220adbd170d9bfb5af3159c56708ef`
 Windows：Windows 11 Pro `10.0.26200.9168`，x64
 Rust：`1.98`
-Post-release final code checkpoint：`f04567cf09635b24062219684dc8325b3e44f61a`
-（UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：
+Post-release final code checkpoint：`31e4506b464716798f6134476c64353a02c674ff`
+（CI behavior：`f04567cf09635b24062219684dc8325b3e44f61a`；UI／service：
+`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：
 `bd47e26b6c8024eb3461176637d7fce3e8370561`）
 
 > **總結：automated source suites 通過、unsigned 狀態得到嚴格驗證，但原生 Windows
@@ -166,6 +167,7 @@ export 正確 exit `1`，既有 HTML SHA-256 保持不變。
 | TypeScript typecheck | PASS | source-level |
 | Rust 1.98 all-targets | `1478/1478` PASS | 該 command 的 suite total |
 | Clippy all-targets | PASS | `-D warnings` |
+| Rustfmt all | PASS | `--check`；同步後的 exact source tree |
 | Release evidence | `137/137` PASS | post-release commit/source result |
 | CI boundary／drift guards | `31/31` PASS | shared corpus 同時觸發 frontend 與 rust_core；不觸發 desktop |
 
@@ -277,7 +279,7 @@ contact。結果是 **BLOCKED／NOT RUN**：scan 次數 `0`，tunnel stop 次數
 
 | 項目 | Final commit／result |
 | --- | --- |
-| Exact post-release final code checkpoint | `f04567cf09635b24062219684dc8325b3e44f61a`（UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
+| Exact post-release final code checkpoint | `31e4506b464716798f6134476c64353a02c674ff`（CI behavior：`f04567cf09635b24062219684dc8325b3e44f61a`；UI／service：`d28f287d78a079828af45f1ee3bbca165ae091ea`；主要實作：`bd47e26b6c8024eb3461176637d7fce3e8370561`） |
 | Frontend | `485/485` PASS |
 | Component | `145/145` PASS |
 | Usability evidence | `5/5` PASS |
@@ -288,6 +290,7 @@ contact。結果是 **BLOCKED／NOT RUN**：scan 次數 `0`，tunnel stop 次數
 | Typecheck／build／desktop check | PASS／PASS（chunk warning）／PASS |
 | Rust 1.98 all-targets | `1478/1478` PASS |
 | Clippy all-targets `-D warnings` | PASS |
+| Rustfmt all `--check` | PASS |
 | Dependency reachability | Windows target 無 `glib`；Linux target 可達 `glib 0.18.5`，medium `GHSA-wrw7-89jp-8q8g` 仍 open |
 | Locale／modal／delete／target-validation families | FIXED；targeted tests、完整 frontend/component 與最小 browser recheck 通過 |
 | Published `v0.1.9` installer | **UNCHANGED；new installer NOT BUILT** |
