@@ -1,13 +1,21 @@
 import type {
   AiGeneratedArtifactAnswer,
   AppSnapshot,
+  Asset,
   AssessmentCase,
   CaseWorkspace,
   CloudPlatform,
+  ConnectedSource,
+  CoverageRecord,
   CreateCaseInput,
   EngineManifest,
+  KnownAssetInput,
 } from "../types";
 import { getActiveLocale } from "../i18n/core";
+import {
+  explicitTargetRequiresSensitiveNetworkAllowance,
+  validateExternalTarget,
+} from "../caseForm";
 
 const DEMO_NOTICE =
   "目前顯示的是內建展示資料，尚未連接本機掃描核心；任何結果都不是實際掃描或安全判定。";
@@ -1129,21 +1137,246 @@ const blankWorkspace = (assessmentCase: AssessmentCase): CaseWorkspace => ({
   exports: [],
 });
 
+type StoredDemoCase = AssessmentCase & {
+  /** Browser-preview persistence only. Native cases keep this data in the backend. */
+  knownAssets?: KnownAssetInput[];
+  demoStorageSchemaVersion?: 2;
+};
+
+const knownAssetKinds = new Set<KnownAssetInput["kind"]>([
+  "external_target",
+  "repository",
+  "iac_project",
+  "container_image",
+  "kubernetes_cluster",
+]);
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const safeDeclaredWebService = (value: unknown): KnownAssetInput["webService"] | undefined => {
+  if (!isPlainRecord(value)) return undefined;
+  const { protocol, port, path } = value;
+  return (protocol === "http" || protocol === "https")
+    && Number.isInteger(port)
+    && Number(port) >= 1
+    && Number(port) <= 65_535
+    && typeof path === "string"
+    && path.length > 0
+    && path.length <= 2_048
+    && path.startsWith("/")
+    && !path.includes("?")
+    && !path.includes("#")
+    && !/[\u0000-\u001f\u007f]/u.test(path)
+    ? { protocol, port: Number(port), path }
+    : undefined;
+};
+
+const safeKnownAsset = (value: unknown): KnownAssetInput | undefined => {
+  if (!isPlainRecord(value) || !knownAssetKinds.has(value.kind as KnownAssetInput["kind"])) return undefined;
+  if (typeof value.value !== "string") return undefined;
+  const coordinate = value.value.trim();
+  const maximumLength = value.kind === "kubernetes_cluster" ? 512 : 2_048;
+  if (
+    !coordinate
+    || coordinate.length > maximumLength
+    || /[\u0000-\u001f\u007f]/u.test(coordinate)
+  ) return undefined;
+
+  const kind = value.kind as KnownAssetInput["kind"];
+  if (kind === "external_target" && !validateExternalTarget(coordinate).ok) return undefined;
+  if (
+    value.internetExposure !== undefined
+    && value.internetExposure !== "public"
+    && value.internetExposure !== "internal"
+  ) return undefined;
+  if (kind !== "external_target" && value.internetExposure !== undefined) return undefined;
+
+  const webService = value.webService === undefined
+    ? undefined
+    : safeDeclaredWebService(value.webService);
+  if (value.webService !== undefined && !webService) return undefined;
+  if (kind !== "external_target" && webService) return undefined;
+  if (webService && coordinate.includes("/")) return undefined;
+
+  return {
+    kind,
+    value: coordinate,
+    ...(value.internetExposure === "public" || value.internetExposure === "internal"
+      ? { internetExposure: value.internetExposure }
+      : {}),
+    ...(webService ? { webService } : {}),
+  };
+};
+
+const safeKnownAssets = (value: unknown): KnownAssetInput[] => {
+  if (!Array.isArray(value) || value.length > 200) return [];
+  const assets: KnownAssetInput[] = [];
+  const identities = new Map<string, string>();
+  for (const candidate of value) {
+    const asset = safeKnownAsset(candidate);
+    if (!asset) return [];
+    const identity = `${asset.kind}\u0000${asset.value}`;
+    const serialized = JSON.stringify(asset);
+    const existing = identities.get(identity);
+    if (existing && existing !== serialized) return [];
+    if (!existing) {
+      identities.set(identity, serialized);
+      assets.push(asset);
+    }
+  }
+  return assets;
+};
+
+const externalIdentity = (value: string): { type: Asset["type"]; namespace: string } => {
+  if (value.includes("/")) return { type: "ip", namespace: "ip_network" };
+  if (value.includes(":")) return { type: "ip", namespace: "ip_address" };
+  if (/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/u.test(value)) {
+    return { type: "ip", namespace: "ip_address" };
+  }
+  return { type: "domain", namespace: "dns_name" };
+};
+
+const declaredAssetShape = (
+  input: KnownAssetInput,
+): Pick<Asset, "type" | "platform" | "identifiers" | "questionnairePlaceholder"> => {
+  if (input.kind === "external_target") {
+    const identity = externalIdentity(input.value);
+    return {
+      type: identity.type,
+      platform: "external",
+      identifiers: [{ namespace: identity.namespace, value: input.value }],
+    };
+  }
+  if (input.kind === "container_image") {
+    return {
+      type: "image",
+      platform: "container",
+      identifiers: [{ namespace: "oci_image_digest", value: input.value }],
+      questionnairePlaceholder: true,
+    };
+  }
+  if (input.kind === "kubernetes_cluster") {
+    return {
+      type: "cluster",
+      platform: "kubernetes",
+      identifiers: [{ namespace: "kubernetes_context", value: input.value }],
+      questionnairePlaceholder: true,
+    };
+  }
+  return {
+    type: "repository",
+    platform: "code",
+    identifiers: [{
+      namespace: input.kind === "iac_project" ? "iac_locator" : "repository_locator",
+      value: input.value,
+    }],
+    questionnairePlaceholder: true,
+  };
+};
+
+const storedWorkspace = (storedCase: StoredDemoCase): CaseWorkspace => {
+  const locale = getActiveLocale();
+  const knownAssets = safeKnownAssets(storedCase.knownAssets);
+  const sourceId = `${storedCase.id}-source-user-declared`;
+  const sourceLabel = locale === "en"
+    ? "Known assets entered in the scan project"
+    : "掃描專案中輸入的已知項目";
+  const coverageDetail = locale === "en"
+    ? "Saved from project setup. Permission is not confirmed and no scan has run."
+    : "由專案設定保存。尚未確認掃描權限，也尚未執行掃描。";
+  const sources: ConnectedSource[] = knownAssets.length > 0
+    ? [{
+        id: sourceId,
+        kind: "user_declared",
+        label: sourceLabel,
+        status: "connected",
+        readOnly: true,
+        connectedAt: storedCase.createdAt,
+      }]
+    : [];
+  const assets: Asset[] = knownAssets.map((input, index) => {
+    const shape = declaredAssetShape(input);
+    const sensitiveExternalTarget = input.kind === "external_target"
+      && explicitTargetRequiresSensitiveNetworkAllowance(input.value);
+    const internetExposed = input.kind !== "external_target"
+      ? undefined
+      : sensitiveExternalTarget
+        ? false
+        : input.internetExposure === "public"
+          ? true
+          : input.internetExposure === "internal"
+            ? false
+            : undefined;
+    return {
+      id: `${storedCase.id}-asset-${index + 1}`,
+      name: input.value,
+      locator: input.value,
+      ...shape,
+      discoveredFromSourceIds: [sourceId],
+      ...(internetExposed === undefined ? {} : { internetExposed }),
+      coverageState: "discovered_not_authorized",
+      authorizationState: "pending",
+      allowedModes: [],
+      findingCount: 0,
+      scanAttempted: false,
+      ...(input.webService ? { declaredWebService: input.webService } : {}),
+    };
+  });
+  const coverage: CoverageRecord[] = assets.map((asset) => ({
+    id: `${storedCase.id}-coverage-${asset.id}`,
+    label: asset.name,
+    platform: asset.platform,
+    sourceKind: "user_declared",
+    state: "discovered_not_authorized",
+    assetId: asset.id,
+    assetCount: 1,
+    detail: coverageDetail,
+    scanAttempted: false,
+  }));
+
+  if (knownAssets.length === 0) {
+    return {
+      ...localizeBuiltInDemo(blankWorkspace(stripStoredFields(storedCase))),
+      case: stripStoredFields(storedCase),
+    };
+  }
+  return {
+    case: stripStoredFields(storedCase),
+    sources,
+    coverage,
+    assets,
+    scopeGrants: [],
+    runs: [],
+    findings: [],
+    findingGroups: [],
+    findingGroupEvents: [],
+    workflowEvents: [],
+    exports: [],
+  };
+};
+
+const stripStoredFields = (storedCase: StoredDemoCase): AssessmentCase => {
+  const {
+    knownAssets: _knownAssets,
+    demoStorageSchemaVersion: _demoStorageSchemaVersion,
+    ...assessmentCase
+  } = storedCase;
+  return assessmentCase;
+};
+
 const clone = <T,>(value: T): T => structuredClone(value);
 
 export const getDemoSnapshot = (selectedCaseId = sampleCase.id): AppSnapshot => {
-  const storedCases = loadStoredDemoCases();
+  const storedRecords = loadStoredDemoCaseRecords();
+  const storedCases = storedRecords.map(stripStoredFields);
   const cases = [...localizeBuiltInDemo([sampleCase, draftCase]), ...storedCases];
   const selected = cases.find((item) => item.id === selectedCaseId) ?? localizeBuiltInDemo(sampleCase);
+  const storedRecord = storedRecords.find((item) => item.id === selected.id);
   const workspace = selected.id === sampleCase.id
     ? localizeBuiltInDemo(demoWorkspace)
-    : storedCases.includes(selected)
-      ? {
-        ...localizeBuiltInDemo(blankWorkspace(clone(selected))),
-        // Product-owned blank-state copy is localizable; values the user typed
-        // into the saved project record are not translation keys.
-        case: clone(selected),
-      }
+    : storedRecord
+      ? storedWorkspace(clone(storedRecord))
       : localizeBuiltInDemo(blankWorkspace(clone(selected)));
 
   return {
@@ -1161,36 +1394,49 @@ const STORAGE_KEY = "ai-security-scanner.demo-cases.v1";
 const safeAiGeneratedArtifactAnswer = (value: unknown): AiGeneratedArtifactAnswer =>
   value === "yes" || value === "no" || value === "unknown" ? value : "unknown";
 
-export const loadStoredDemoCases = (): AssessmentCase[] => {
+const loadStoredDemoCaseRecords = (): StoredDemoCase[] => {
   try {
     const value = window.localStorage.getItem(STORAGE_KEY);
     if (!value) return [];
     const parsed: unknown = JSON.parse(value);
     return Array.isArray(parsed)
-      ? (parsed as AssessmentCase[]).map((assessmentCase) => ({
-          ...assessmentCase,
-          aiGeneratedArtifact: safeAiGeneratedArtifactAnswer(assessmentCase.aiGeneratedArtifact),
-          requestedActivities: assessmentCase.requestedActivities ?? [],
-        }))
+      ? (parsed as StoredDemoCase[]).map((assessmentCase) => {
+          const knownAssets = safeKnownAssets(assessmentCase.knownAssets);
+          return {
+            ...assessmentCase,
+            aiGeneratedArtifact: safeAiGeneratedArtifactAnswer(assessmentCase.aiGeneratedArtifact),
+            requestedActivities: assessmentCase.requestedActivities ?? [],
+            phase: assessmentCase.phase === "draft" && knownAssets.length > 0
+              ? "scope_review"
+              : assessmentCase.phase,
+            knownAssets,
+          };
+        })
       : [];
   } catch {
     return [];
   }
 };
 
+export const loadStoredDemoCases = (): AssessmentCase[] =>
+  loadStoredDemoCaseRecords().map(stripStoredFields);
+
 export const createStoredDemoCase = (input: CreateCaseInput): AssessmentCase => {
   const now = new Date().toISOString();
-  const assessmentCase: AssessmentCase = {
+  const knownAssets = safeKnownAssets(input.knownAssets);
+  const assessmentCase: StoredDemoCase = {
     ...input,
+    knownAssets,
+    demoStorageSchemaVersion: 2,
     id: `case-local-${crypto.randomUUID()}`,
     createdAt: now,
     updatedAt: now,
-    phase: "draft",
+    phase: knownAssets.length > 0 ? "scope_review" : "draft",
     isDemo: true,
   };
-  const cases = [assessmentCase, ...loadStoredDemoCases()];
+  const cases = [assessmentCase, ...loadStoredDemoCaseRecords()];
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cases));
-  return assessmentCase;
+  return stripStoredFields(assessmentCase);
 };
 
 /**
@@ -1200,7 +1446,7 @@ export const createStoredDemoCase = (input: CreateCaseInput): AssessmentCase => 
  */
 export const deleteStoredDemoCase = (caseId: string, confirmation: string): boolean => {
   try {
-    const cases = loadStoredDemoCases();
+    const cases = loadStoredDemoCaseRecords();
     const selected = cases.find((assessmentCase) => assessmentCase.id === caseId);
     if (!selected || confirmation !== selected.name) return false;
     window.localStorage.setItem(

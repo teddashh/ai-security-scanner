@@ -7,6 +7,11 @@
   background: rgba(255, 255, 255, 0.72);
 }
 
+.create-case-panel__top-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .case-primary-target > legend {
   padding: 0 6px;
 }

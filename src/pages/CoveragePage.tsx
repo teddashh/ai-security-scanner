@@ -468,7 +468,10 @@ const pageCopy = {
 
   allowEyebrow: bilingual("Step 3", "步驟 3"),
   allowTitle: bilingual("3. Review and start", "3. 確認後開始"),
-  allowDescription: bilingual("Confirm the target and recommended checks.", "確認目標與建議檢查。"),
+  allowDescription: bilingual("Confirm the target and limits.", "確認目標與限制。"),
+  focusedReviewTitle: bilingual("Review and start", "確認後開始"),
+  editInputs: bilingual("Edit inputs", "編輯輸入"),
+  backToReview: bilingual("Back to review", "返回確認"),
   pendingNoticeTitle: bilingual("Choose an item below", "從下方選擇一個項目"),
   pendingNoticeBody: bilingual("Select an item to see the checks we recommend for it.", "選取項目後，就會看到我們建議的檢查方式。"),
   selectedCount: bilingual("{count} selected", "已選 {count} 項"),
@@ -507,8 +510,8 @@ const pageCopy = {
   presetTitle: bilingual("Recommended settings are ready", "建議設定已準備好"),
   presetBody: bilingual("We picked a safe, useful starting point for the selected items. You can still change anything before starting.", "我們已依所選項目準備安全又實用的起始設定；開始前仍可調整。"),
   guidedNetworkBoundary: bilingual(
-    "This scan contacts only {target}: low-impact {protocol} on ports {ports}, up to {rate}/s, {concurrency} concurrent, {timeout}s timeout. No exploitation, credentials, destructive actions, or scope expansion. By starting, you confirm you own or are authorized to scan this target.",
-    "這次掃描只會連線 {target}：低影響 {protocol}、連接埠 {ports}、每秒最多 {rate} 次、{concurrency} 個並行、{timeout} 秒逾時；不做漏洞利用、憑證測試、破壞性動作或擴大範圍。按下開始即表示你擁有此目標，或已獲授權掃描此目標。",
+    "{target} · {protocol} {ports} · max {rate}/s · {concurrency} concurrent · {timeout}s timeout. No exploitation, credentials, destructive actions, or added targets. Start confirms authorization.",
+    "{target} · {protocol} {ports} · 每秒最多 {rate} 次 · 同時 {concurrency} 個 · {timeout} 秒逾時。不會利用弱點、使用憑證、執行破壞性操作或加入其他目標；開始即確認已獲授權。",
   ),
   guidedNetworkTechnicalPreset: bilingual(
     "Current preset: {protocol}; exact service ports: {count}; up to {concurrency} simultaneous connections.",
@@ -654,8 +657,6 @@ const pageCopy = {
   authorityTerm: bilingual("Permission reference", "授權參考"),
   approvalTerm: bilingual("Recorded by", "記錄者"),
   prohibitedAll: bilingual("Headless browser, out-of-band callback, fuzzing, file upload, denial of service, and credential attacks are all blocked.", "無頭瀏覽器、站外回呼、模糊測試、檔案上傳、阻斷服務與密碼攻擊全部禁止。"),
-  finalNoticeTitle: bilingual("How local inventory and network scans differ", "本機盤點與網路掃描有什麼不同"),
-  finalNoticeBody: bilingual("Inventory files can be reviewed locally. Checks that connect to a website or network target use the exact settings and approval saved in step 3.", "盤點檔可以直接在本機整理；會連線到網站或網路目標的檢查，則使用步驟 3 儲存的明確設定與核准紀錄。"),
 } as const;
 
 const assetTypeLabels: Record<Asset["type"], BilingualText> = {
@@ -814,6 +815,7 @@ export function CoveragePage({
   const [allowedTemplateIds, setAllowedTemplateIds] = useState("");
   const [allowSensitiveNetworks, setAllowSensitiveNetworks] = useState(false);
   const [showAdvancedExternalSettings, setShowAdvancedExternalSettings] = useState(false);
+  const [showCompletedSetup, setShowCompletedSetup] = useState(false);
   const [providerConnection, setProviderConnection] = useState<ProviderConnectionBoundary>();
 
   const counts = useMemo(
@@ -862,7 +864,14 @@ export function CoveragePage({
   const guidedCloudConsent = guidedCloudRoute
     && hasExactGuidedCloudConsent(selectedScopeAssets, providerConnection);
   const passivePublicConsent = externalActivity === "passive_public_discovery";
-  const simpleGuidedConsent = passivePublicConsent || guidedLowImpactNetwork || guidedLocalConsent || guidedCloudConsent;
+  const conciseGuidedConsent = guidedLowImpactNetwork || guidedLocalConsent || guidedCloudConsent;
+  const simpleGuidedConsent = passivePublicConsent || conciseGuidedConsent;
+  // The cloud consent boundary is owned by the mounted provider panel. Keep
+  // that panel visible instead of creating an unmount/reconnect loop.
+  const focusedGuidedReview = (guidedLowImpactNetwork || guidedLocalConsent)
+    && assets.length === 1
+    && selectedScopeAssets.length === 1;
+  const compactGuidedReview = focusedGuidedReview && !showCompletedSetup;
   const requiresAuthorizationReference = externalActivity === "active_external";
   const effectiveScopeConfirmation = scopeConfirmation.trim()
     || (passivePublicConsent
@@ -1000,6 +1009,7 @@ export function CoveragePage({
 
   useEffect(() => {
     resetScopeForm();
+    setShowCompletedSetup(false);
     setShowSourceForm(false);
     setShowProviderSetup(guidedCloudRoute);
     setShowWorkspaceForm(Boolean(guidedLocalProfile));
@@ -1224,9 +1234,11 @@ export function CoveragePage({
     <article key="known-targets" className="coverage-input-card">
       <span><Icon name="coverage" size={20} /></span>
       <div><strong>{text(pageCopy.knownTargetsTitle)}</strong><p>{text(pageCopy.knownTargetsBody)}</p></div>
-      <button className="button button--secondary button--small" type="button" disabled={busy} onClick={() => void onStartDiscovery()}>
-        {busy ? text(pageCopy.refreshing) : text(pageCopy.refresh)}
-      </button>
+      {nativeMode && (
+        <button className="button button--secondary button--small" type="button" disabled={busy} onClick={() => void onStartDiscovery()}>
+          {busy ? text(pageCopy.refreshing) : text(pageCopy.refresh)}
+        </button>
+      )}
     </article>
   );
   const guidedNetworkInputCard = (
@@ -1269,9 +1281,14 @@ export function CoveragePage({
     <div className="page page--coverage">
       <PageHeader
         eyebrow={text(pageCopy.headerEyebrow)}
-        title={text(pageCopy.headerTitle)}
-        description={text(pageCopy.headerDescription)}
-        actions={!guidedCloudRoute ? (
+        title={text(compactGuidedReview ? pageCopy.focusedReviewTitle : pageCopy.headerTitle)}
+        description={text(compactGuidedReview ? pageCopy.allowDescription : pageCopy.headerDescription)}
+        actions={focusedGuidedReview ? (
+          <button className="button button--secondary" type="button" onClick={() => setShowCompletedSetup((current) => !current)}>
+            <Icon name={showCompletedSetup ? "check" : "settings"} size={18} />
+            {text(showCompletedSetup ? pageCopy.backToReview : pageCopy.editInputs)}
+          </button>
+        ) : nativeMode && guidedCoverageRoute.kind === "none" ? (
           <button className="button button--primary" type="button" disabled={busy} onClick={() => void onStartDiscovery()}>
             <Icon name="refresh" size={18} />
             {busy ? text(pageCopy.refreshing) : text(pageCopy.refresh)}
@@ -1279,7 +1296,7 @@ export function CoveragePage({
         ) : undefined}
       />
 
-      <section id="coverage-step-1" className="section-block coverage-step-section">
+      {!compactGuidedReview && <section id="coverage-step-1" className="section-block coverage-step-section">
         <div className="section-heading">
           <h2>{text(pageCopy.addTitle)}</h2>
           <p>{text(pageCopy.addDescription)}</p>
@@ -1506,9 +1523,9 @@ export function CoveragePage({
         </form>
       )}
 
-      </section>
+      </section>}
 
-      <section id="coverage-step-2" className="section-block coverage-step-section">
+      {!compactGuidedReview && <section id="coverage-step-2" className="section-block coverage-step-section">
         <div className="section-heading section-heading--row coverage-step-heading">
           <div>
             <h2>{text(pageCopy.seeTitle)}</h2>
@@ -1528,9 +1545,9 @@ export function CoveragePage({
 
         <section className="metrics-grid metrics-grid--four" aria-label={text(pageCopy.metricsLabel)}>
           <MetricCard label={text(pageCopy.candidateAssets)} value={formatNumber(assets.length)} detail={text(pageCopy.candidateDetail)} icon="database" />
-          <MetricCard label={text(pageCopy.scannedAssets)} value={formatNumber(scannedAssets)} detail={text(pageCopy.scannedDetail)} icon="check" tone="accent" />
-          <MetricCard label={text(pageCopy.incompleteAssets)} value={formatNumber(incompleteAssets)} detail={text(pageCopy.incompleteDetail)} icon="warning" tone={incompleteAssets ? "warning" : "default"} />
-          <MetricCard label={text(pageCopy.pendingAssets)} value={formatNumber(pendingAssets.length)} detail={text(pageCopy.pendingDetail)} icon="lock" tone={pendingAssets.length ? "warning" : "default"} />
+          {scannedAssets > 0 && <MetricCard label={text(pageCopy.scannedAssets)} value={formatNumber(scannedAssets)} detail={text(pageCopy.scannedDetail)} icon="check" tone="accent" />}
+          {incompleteAssets > 0 && <MetricCard label={text(pageCopy.incompleteAssets)} value={formatNumber(incompleteAssets)} detail={text(pageCopy.incompleteDetail)} icon="warning" tone="warning" />}
+          {pendingAssets.length > 0 && <MetricCard label={text(pageCopy.pendingAssets)} value={formatNumber(pendingAssets.length)} detail={text(pageCopy.pendingDetail)} icon="lock" tone="warning" />}
         </section>
 
       {(unknownSourceCount > 0 || connectedNoAssetCount > 0) && (
@@ -1620,7 +1637,7 @@ export function CoveragePage({
           })}
         </div>
       </details>
-      </section>
+      </section>}
 
       {shouldPromptForFirstAsset(pendingAssets.length, selectedAssets.length) && (
         <InlineNotice tone="warning" title={text(pageCopy.pendingNoticeTitle)}>
@@ -1629,41 +1646,43 @@ export function CoveragePage({
       )}
 
       <section id="coverage-step-3" className="section-block coverage-step-section">
-        <div className="section-heading section-heading--row">
+        {!compactGuidedReview && <div className="section-heading section-heading--row">
           <div>
             <h2>{text(pageCopy.allowTitle)}</h2>
             <p>{text(pageCopy.allowDescription)}</p>
           </div>
-          {selectedAssets.length > 0 && <span className="count-label">{text(pageCopy.selectedCount, { count: formatNumber(selectedAssets.length) })}</span>}
-        </div>
+          {selectedAssets.length > 0 && !conciseGuidedConsent && <span className="count-label">{text(pageCopy.selectedCount, { count: formatNumber(selectedAssets.length) })}</span>}
+        </div>}
 
         {selectedAssets.length > 0 && (
           <form className="scope-confirmation-panel" onSubmit={(event) => { event.preventDefault(); void startScan(); }}>
-            <div className="scope-confirmation-panel__heading">
-              <div>
-                <h3>{text(pageCopy.selectedCount, { count: formatNumber(selectedAssets.length) })} · {text(pageCopy.presetTitle)}</h3>
+            {!conciseGuidedConsent && (
+              <div className="scope-confirmation-panel__heading">
+                <div>
+                  <h3>{text(pageCopy.selectedCount, { count: formatNumber(selectedAssets.length) })} · {text(pageCopy.presetTitle)}</h3>
+                </div>
+                <button className="icon-button" type="button" aria-label={text(pageCopy.clearSelection)} onClick={resetScopeForm}><Icon name="close" size={17} /></button>
               </div>
-              <button className="icon-button" type="button" aria-label={text(pageCopy.clearSelection)} onClick={resetScopeForm}><Icon name="close" size={17} /></button>
-            </div>
+            )}
 
             {availableScopeModes.length === 0 ? (
               <InlineNotice tone="warning" title={text(pageCopy.noCommonTitle)}>
                 <p>{text(pageCopy.noCommonBody)}</p>
               </InlineNotice>
-            ) : guidedLowImpactNetwork || guidedCloudConsent ? (
+            ) : guidedCloudConsent ? (
               <details className="coverage-situation-details coverage-scan-type-advanced">
                 <summary>{text(pageCopy.changeScanType)}</summary>
                 {scopeModeChooser}
               </details>
-            ) : !guidedLocalConsent ? scopeModeChooser : null}
+            ) : !conciseGuidedConsent ? scopeModeChooser : null}
 
             {isDirectExternal && selectedExternalAsset && limits && (
               <section className="external-scope-builder" aria-labelledby="external-scope-title">
                 <div className="external-scope-builder__heading">
                   <div>
-                    <p className="eyebrow">{text(pageCopy.externalEyebrow)}</p>
+                    {!guidedLowImpactNetwork && <p className="eyebrow">{text(pageCopy.externalEyebrow)}</p>}
                     <h4 id="external-scope-title">{text(pageCopy.externalTitle, { name: selectedExternalAsset.name })}</h4>
-                    <p>{text(guidedLowImpactNetwork ? pageCopy.guidedExternalDescription : pageCopy.externalDescription)}</p>
+                    {!guidedLowImpactNetwork && <p>{text(pageCopy.externalDescription)}</p>}
                   </div>
                   <StatusPill
                     label={text(selectedExternalAsset.internetExposed === true
@@ -1728,6 +1747,7 @@ export function CoveragePage({
                       concurrency: formatNumber(externalConcurrency),
                     })}</p>
                   )}
+                  {guidedLowImpactNetwork && scopeModeChooser}
                   {selectedExternalAsset.declaredWebService && (
                     <InlineNotice tone="info" title={text(pageCopy.declaredServiceTitle)}>
                       <p>{text(pageCopy.declaredServiceBody, {
@@ -1867,11 +1887,13 @@ export function CoveragePage({
               </p>
             )}
 
-            <div className="scope-confirmation-panel__assets">
-              {selectedScopeAssets.map((asset) => <span key={asset.id}><b>{asset.name}</b><small>{asset.platform === "external" && asset.internetExposed === false
-                ? text(pageCopy.internalAssetPlatform)
-                : platformMeta[asset.platform].label} · {text(assetTypeLabels[asset.type])}</small></span>)}
-            </div>
+            {!conciseGuidedConsent && (
+              <div className="scope-confirmation-panel__assets">
+                {selectedScopeAssets.map((asset) => <span key={asset.id}><b>{asset.name}</b><small>{asset.platform === "external" && asset.internetExposed === false
+                  ? text(pageCopy.internalAssetPlatform)
+                  : platformMeta[asset.platform].label} · {text(assetTypeLabels[asset.type])}</small></span>)}
+              </div>
+            )}
 
             {!simpleGuidedConsent && (
               <>
@@ -1894,7 +1916,7 @@ export function CoveragePage({
             )}
 
             <div className="form-actions">
-              <p><Icon name={passivePublicConsent ? "search" : "lock"} size={16} /> {text(passivePublicConsent ? pageCopy.publicRecordsBoundaryHelp : pageCopy.grantBoundaryHelp)}</p>
+              {!conciseGuidedConsent && <p><Icon name={passivePublicConsent ? "search" : "lock"} size={16} /> {text(passivePublicConsent ? pageCopy.publicRecordsBoundaryHelp : pageCopy.grantBoundaryHelp)}</p>}
               <button className="button button--primary" type="submit" disabled={busy || availableScopeModes.length === 0 || scopeModes.length === 0 || (!simpleGuidedConsent && !ownershipConfirmed) || (requiresAuthorizationReference && !scopeConfirmation.trim()) || !externalScopeReady}>
                 <Icon name={passivePublicConsent ? "search" : "lock"} size={16} />{busy
                   ? text(pageCopy.startingScan)
@@ -1928,7 +1950,7 @@ export function CoveragePage({
                   : text(pageCopy.emptyNeverBody)
               : text(pageCopy.emptyFilterBody)}
           />
-        ) : (
+        ) : conciseGuidedConsent && filteredAssets.length === 1 ? null : (
           <div className="asset-review-list">
             {filteredAssets.map((asset) => {
               const scopeEligible = scopeEligibleAssets.some((item) => item.id === asset.id);
@@ -2041,10 +2063,6 @@ export function CoveragePage({
         </details>
       )}
 
-      <details className="coverage-situation-details">
-        <summary>{text(pageCopy.finalNoticeTitle)}</summary>
-        <p>{text(pageCopy.finalNoticeBody)}</p>
-      </details>
     </div>
   );
 }

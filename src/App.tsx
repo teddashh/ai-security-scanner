@@ -1399,7 +1399,7 @@ export default function App() {
           : nonExecutionCopy
             ? text(nonExecutionCopy.failedTitle)
           : result.mode === "demo"
-            ? text({ en: "Demo mode did not run a scan", zhTW: "展示模式沒有執行掃描" })
+            ? text({ en: "Preview only — no scan ran", zhTW: "僅供預覽，未執行掃描" })
             : text({ en: "The work did not start", zhTW: "工作尚未開始" }),
         detail: lifecycleToast
           ? text(lifecycleToast.detail)
@@ -1407,6 +1407,8 @@ export default function App() {
           ? text(nonExecutionCopy?.acceptedDetail ?? { en: "Open Scan progress to follow each scanner.", zhTW: "可到「掃描進度」查看每個工具的狀態。" })
           : nonExecutionCopy
             ? text(nonExecutionCopy.failedDetail)
+          : result.mode === "demo"
+            ? text({ en: "No target was contacted. Open the desktop app to run this scan.", zhTW: "沒有接觸任何目標；請使用桌面程式執行這次掃描。" })
           : preflightCode
             ? text(scanStartIssueCopy[preflightCode])
           : text({ en: "No target was contacted. Check the current step and try again.", zhTW: "沒有接觸任何目標；請確認目前步驟後再試一次。" }),

@@ -83,8 +83,8 @@ const pageCopy = {
   newCaseEyebrow: { en: "New scan", zhTW: "新的檢查" },
   newCaseTitle: { en: "New scan", zhTW: "新掃描" },
   newCaseDescription: {
-    en: "Give it a name and add the first thing you want checked. You can add a company or team and more targets later.",
-    zhTW: "取一個好認的名稱，再加入第一個想檢查的目標；公司、團隊與更多目標之後再補也可以。",
+    en: "Name the scan and add its first target.",
+    zhTW: "命名掃描，並加入第一個目標。",
   },
   changeUseCase: { en: "Choose a different scan", zhTW: "改選其他檢查方式" },
   caseName: { en: "Scan project name", zhTW: "掃描專案名稱" },
@@ -110,8 +110,8 @@ const pageCopy = {
   },
   aiGeneratedUnknown: { en: "I'm not sure", zhTW: "我不確定" },
   targetCandidateHelp: {
-    en: "We'll add this to your scan project. You can review everything before the scan starts.",
-    zhTW: "我們會先把它加入掃描專案；開始掃描前，你仍可檢查與調整所有內容。",
+    en: "Nothing runs until you press Start.",
+    zhTW: "按下「開始」前不會執行掃描。",
   },
   localPickerNextTitle: { en: "Next, choose your project", zhTW: "下一步，選擇你的專案" },
   localPickerNextBody: {
@@ -128,10 +128,10 @@ const pageCopy = {
     en: "Enter one complete http:// or https:// URL. Do not include a username or password.",
     zhTW: "請輸入一個完整的 http:// 或 https:// 網址；不要放入帳號或密碼。",
   },
-  websitePreparedTitle: { en: "Website ready to add", zhTW: "網站已準備好加入" },
+  websitePreparedTitle: { en: "Ready: {target}", zhTW: "已準備：{target}" },
   websitePrepared: {
-    en: "Great — {target} will be the first website in this scan project. We'll suggest sensible scan settings on the next screen.",
-    zhTW: "很好，{target} 會成為這個掃描專案的第一個網站；下一頁會幫你準備合適的掃描設定。",
+    en: "Review the exact target and limits on the next screen.",
+    zhTW: "下一頁會確認精確目標與限制。",
   },
   websiteQueryRemoved: {
     en: "Query parameters and page fragments are not saved because they can contain private tokens or personal data.",
@@ -239,7 +239,6 @@ const pageCopy = {
     en: "This helps the app explain impact, but only where a scan independently finds a matching asset. Your answer on its own never raises a result's priority.",
     zhTW: "這會幫助產品說明影響，但只有在掃描獨立發現對應資產時才會生效；僅憑你的回答不會提高任何結果的優先順序。",
   },
-  createSafety: { en: "You can add or change targets before you run the scan.", zhTW: "正式掃描前，仍可隨時加入或修改目標。" },
   creating: { en: "Creating…", zhTW: "建立中…" },
   createLocal: { en: "Create scan project", zhTW: "建立掃描專案" },
   formConflictTitle: { en: "The same target has two different descriptions", zhTW: "同一目標被標成兩種不同環境" },
@@ -860,10 +859,8 @@ export function CasesPage({
       )}
 
       {useCaseNeeds(selectedDefinition, "deployed_website") && preparedWebsite?.ok && (
-        <InlineNotice tone="info" title={text(pageCopy.websitePreparedTitle)}>
-          <p>{text(pageCopy.websitePrepared, {
-            target: preparedWebsite.value.target,
-          })}</p>
+        <InlineNotice tone="info" title={text(pageCopy.websitePreparedTitle, { target: preparedWebsite.value.target })}>
+          <p>{text(pageCopy.websitePrepared)}</p>
           {preparedWebsite.value.service.queryWasRemoved && <p>{text(pageCopy.websiteQueryRemoved)}</p>}
         </InlineNotice>
       )}
@@ -1013,9 +1010,9 @@ export function CasesPage({
   return (
     <div className="page page--cases">
       <PageHeader
-        eyebrow={text(pageCopy.headerEyebrow)}
-        title={text(pageCopy.headerTitle)}
-        description={text(pageCopy.headerDescription)}
+        eyebrow={text(showForm ? pageCopy.newCaseEyebrow : pageCopy.headerEyebrow)}
+        title={text(showForm ? pageCopy.newCaseTitle : pageCopy.headerTitle)}
+        description={text(showForm ? pageCopy.newCaseDescription : pageCopy.headerDescription)}
         actions={
           <button className="button button--primary" type="button" onClick={showForm ? closeForm : openBlankForm}>
             <Icon name={showForm ? "close" : "plus"} size={18} />
@@ -1026,17 +1023,14 @@ export function CasesPage({
 
       {showForm && (
         <form className="create-case-panel" onSubmit={submit}>
-          <div className="section-heading section-heading--row">
-            <div>
-              <h2>{text(pageCopy.newCaseTitle)}</h2>
-            </div>
-            {selectedDefinition && onClearPreset && (
+          {selectedDefinition && onClearPreset && (
+            <div className="create-case-panel__top-actions">
               <button className="button button--ghost button--small" type="button" onClick={changeUseCase}>
                 <Icon name="refresh" size={15} />
                 {text(pageCopy.changeUseCase)}
               </button>
-            )}
-          </div>
+            </div>
+          )}
 
           <div className="form-grid">
             <label className="field">
@@ -1235,7 +1229,6 @@ export function CasesPage({
           </details>
 
           <div className="form-actions">
-            <p><Icon name="lock" size={16} /> {text(pageCopy.createSafety)}</p>
             <button className="button button--primary" type="submit" disabled={busy || !name.trim() || platforms.length === 0 || requestedActivities.length === 0}>
               {text(busy ? pageCopy.creating : pageCopy.createLocal)}
               <Icon name="arrow" size={17} />
@@ -1244,6 +1237,8 @@ export function CasesPage({
         </form>
       )}
 
+      {!showForm && (
+        <>
       {selectedCase && (
         <section className="current-case-hero" aria-labelledby="current-case-title">
           <div>
@@ -1376,10 +1371,12 @@ export function CasesPage({
 
       {selectedCase && (
         <>
-        <section className="metrics-grid page-outcome-metrics" aria-label={text(pageCopy.summaryAria)}>
-          <MetricCard label={text(pageCopy.assetsMetric)} value={formatNumber(assetCount)} detail={text(pageCopy.assetsMetricHelp)} icon="database" />
-          <MetricCard label={text(pageCopy.findingsMetric)} value={formatNumber(findingCount)} detail={text(pageCopy.findingsMetricHelp)} icon="findings" tone={findingCount ? "danger" : "default"} />
-        </section>
+        {runs.length > 0 && (
+          <section className="metrics-grid page-outcome-metrics" aria-label={text(pageCopy.summaryAria)}>
+            <MetricCard label={text(pageCopy.assetsMetric)} value={formatNumber(assetCount)} detail={text(pageCopy.assetsMetricHelp)} icon="database" />
+            <MetricCard label={text(pageCopy.findingsMetric)} value={formatNumber(findingCount)} detail={text(pageCopy.findingsMetricHelp)} icon="findings" tone={findingCount ? "danger" : "default"} />
+          </section>
+        )}
 
         <details className="page-technical-details page-technical-details--guide">
           <summary>{text(pageCopy.scanDiagnostics)}</summary>
@@ -1500,6 +1497,8 @@ export function CasesPage({
           ))}
         </section>
       </details>
+        </>
+      )}
     </div>
   );
 }

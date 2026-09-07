@@ -95,15 +95,16 @@ afterEach(() => {
   Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
 });
 
-test("a sample project announces that nothing is being tested", () => {
+test("a preview project announces that no target is contacted", () => {
   const { container } = renderShell({ selectedCase: assessmentCase({ isDemo: true }) });
 
   const demo = container.querySelector(".demo-banner");
   expect(demo).not.toBeNull();
-  expect(demo!.textContent).toContain("Sample scan — nothing is being tested");
+  expect(demo!.textContent).toContain("Preview only");
+  expect(demo!.textContent).toContain("No target is contacted.");
 });
 
-test("demo mode announces itself even when the open project is not itself a sample", () => {
+test("preview mode announces itself even when the open project is not itself a sample", () => {
   // The two conditions are independent: the app can be running against sample
   // data wholesale, or have one sample project open. Losing either check hides
   // the marker in a case where the findings on screen are still not real.
@@ -111,8 +112,8 @@ test("demo mode announces itself even when the open project is not itself a samp
 
   const demo = container.querySelector(".demo-banner");
   expect(demo).not.toBeNull();
-  expect(demo!.textContent).toContain("Explore with sample results");
-  expect(demo!.textContent).toContain("without scanning a real target");
+  expect(demo!.textContent).toContain("Preview only");
+  expect(demo!.textContent).toContain("No target is contacted.");
 });
 
 test("a real project in native mode carries no sample marker", () => {

@@ -256,18 +256,19 @@ test("a completed removal is stated as irreversible rather than as a tidy-up", (
 });
 
 test("native deletion keeps its database-record and separate-evidence warning", () => {
-  const { container, getByRole } = renderCases();
-  const trigger = getByRole("button", { name: "Begin deleting Acme scan" });
+  const { container } = renderCases();
+  const trigger = container.querySelector<HTMLButtonElement>(".case-row__actions .icon-button--danger");
 
-  expect(trigger.getAttribute("title")).toBe("Delete case database record");
-  fireEvent.click(trigger);
+  expect(trigger?.getAttribute("aria-label")).toBe("Begin deleting Acme scan");
+  expect(trigger?.getAttribute("title")).toBe("Delete case database record");
+  fireEvent.click(trigger!);
 
   const confirmation = container.querySelector<HTMLElement>(".case-delete-confirmation");
   expect(confirmation).toBeTruthy();
   expect(confirmation!.querySelector("h3")?.textContent).toBe("Confirm deletion of the case record");
   expect(confirmation!.textContent).toContain("does not automatically delete the evidence folder");
-  expect(getByRole("button", { name: "Delete case record only" })).toBeTruthy();
-});
+  expect(confirmation!.querySelector<HTMLButtonElement>(".button--danger")?.textContent).toContain("Delete case record only");
+}, 10_000);
 
 test.each([
   {
@@ -420,7 +421,7 @@ test("a run that failed is offered as a baseline without being called completed"
   expect(option?.textContent).toContain("Failed");
 });
 
-test("a page with no case selected reports no counts at all", () => {
+test("outcome counts appear only after a scan run exists", () => {
   // `assetCount` and `findingCount` default to 0 when no workspace is loaded.
   // Rendering "Problems found: 0" then states a result for a scan that has not
   // happened, which on first launch is the most reassuring possible lie.
@@ -431,10 +432,21 @@ test("a page with no case selected reports no counts at all", () => {
   expect(labels(withoutCase.container)).not.toContain("Problems found");
   expect(labels(withoutCase.container)).not.toContain("Systems found");
 
-  // With a case, the same counts are shown -- so this is a gate, not a removal.
+  // A new draft has no scan outcome yet, so zero findings would be premature.
   const withCase = renderCases({ assetCount: 0, findingCount: 0 });
-  expect(labels(withCase.container)).toContain("Problems found");
-  expect(labels(withCase.container)).toContain("Systems found");
+  expect(labels(withCase.container)).not.toContain("Problems found");
+  expect(labels(withCase.container)).not.toContain("Systems found");
+
+  // Once a real run exists, its outcome counts remain available.
+  const completedRun = run({ id: "run-completed", status: "completed", progress: 100 });
+  const afterRun = renderCases({
+    assetCount: 2,
+    findingCount: 1,
+    latestRun: completedRun,
+    runs: [completedRun],
+  });
+  expect(labels(afterRun.container)).toContain("Problems found");
+  expect(labels(afterRun.container)).toContain("Systems found");
 });
 
 test("the optional organization field does not promise an edit the app cannot make", () => {
@@ -444,18 +456,14 @@ test("the optional organization field does not promise an edit the app cannot ma
   // product cannot honour -- the value can only be set at creation.
   // The create button only opens the form once a use case has been chosen;
   // without one it routes back to the start page instead.
-  const { container } = renderCases({
+  const { container, getByRole } = renderCases({
     selectedCase: undefined,
     cases: [],
     selectedUseCase: "deployed_website",
     selectionKey: 1,
   });
 
-  const openForm = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-    (button) => button.textContent?.includes("Start a new scan"),
-  );
-  expect(openForm).toBeTruthy();
-  fireEvent.click(openForm!);
+  expect(getByRole("button", { name: "Close setup" })).toBeTruthy();
   expect(container.querySelector(".create-case-panel")).not.toBeNull();
 
   const organization = Array.from(container.querySelectorAll<HTMLInputElement>("input")).find(

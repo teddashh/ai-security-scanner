@@ -124,10 +124,10 @@ test("guided public and internal inventory routes retain the bounded TCP preset"
   assert.ok(source.includes("pageCopy.presetTitle"));
   assert.match(source, /coverage-guided-boundary[\s\S]*target: externalTarget[\s\S]*protocol: externalProtocol[\s\S]*ports: parsedPorts\.join[\s\S]*rate: formatNumber\(requestsPerSecond\)[\s\S]*concurrency: formatNumber\(externalConcurrency\)[\s\S]*timeout: formatNumber\(externalTimeout\)/u);
   for (const phrase of [
-    "No exploitation, credentials, destructive actions, or scope expansion.",
-    "不做漏洞利用、憑證測試、破壞性動作或擴大範圍。",
-    "By starting, you confirm you own or are authorized to scan this target.",
-    "按下開始即表示你擁有此目標，或已獲授權掃描此目標。",
+    "No exploitation, credentials, destructive actions, or added targets.",
+    "不會利用弱點、使用憑證、執行破壞性操作或加入其他目標",
+    "Start confirms authorization.",
+    "開始即確認已獲授權。",
   ]) assert.ok(source.includes(phrase), phrase);
   assert.match(source, /coverage-technical-preset-summary[\s\S]*guidedNetworkTechnicalPreset[\s\S]*protocol: externalProtocol[\s\S]*count: formatNumber\(parsedPorts\.length\)[\s\S]*concurrency: formatNumber\(externalConcurrency\)/u);
   assert.ok(source.includes("up to {concurrency} simultaneous connections"));
@@ -202,7 +202,8 @@ test("a readiness fix opens the exact cloud, workspace, or read-only source step
 });
 
 test("guided network, local, and signed-in cloud setup combine confirmation and Start", () => {
-  assert.ok(source.includes("simpleGuidedConsent = passivePublicConsent || guidedLowImpactNetwork || guidedLocalConsent || guidedCloudConsent"));
+  assert.ok(source.includes("conciseGuidedConsent = guidedLowImpactNetwork || guidedLocalConsent || guidedCloudConsent"));
+  assert.ok(source.includes("simpleGuidedConsent = passivePublicConsent || conciseGuidedConsent"));
   assert.ok(source.includes("pageCopy.confirmAndStart"));
   assert.ok(source.includes("pageCopy.scanSignedInCloud"));
   assert.ok(source.includes("pageCopy.guidedCloudConfirmation"));
@@ -267,7 +268,7 @@ test("cloud sign-in leads to one exact read-only scan confirmation instead of an
   assert.match(source, /guidedCloudRoute[\s\S]*hasExactGuidedCloudConsent\(selectedScopeAssets, providerConnection\)/u);
   assert.match(source, /asset\.platform === "external" \|\| selectedIncludesExternal \|\| guidedCloudRoute/u);
   assert.match(source, /!simpleGuidedConsent && \([\s\S]*ownershipConfirmed/u);
-  assert.match(source, /guidedLowImpactNetwork \|\| guidedCloudConsent[\s\S]*pageCopy\.changeScanType/u);
+  assert.match(source, /guidedCloudConsent \? \([\s\S]*pageCopy\.changeScanType/u);
   for (const [english, traditionalChinese] of [
     ["Signed-in account: {account}", "已登入帳號：{account}"],
     ["Read-only checks: {checks}. No cloud settings or data will be changed.", "唯讀檢查：{checks}。不會修改雲端設定或資料。"],
@@ -280,7 +281,7 @@ test("cloud sign-in leads to one exact read-only scan confirmation instead of an
 });
 
 test("guided cloud discovery is one explicit continuation after sign-in", () => {
-  assert.match(source, /actions=\{!guidedCloudRoute \? \(/u);
+  assert.match(source, /actions=\{focusedGuidedReview \? \([\s\S]*nativeMode && guidedCoverageRoute\.kind === "none" \? \(/u);
   assert.match(source, /!guidedNetworkRoute && !guidedCloudRoute && knownTargetsInputCard/u);
   assert.match(source, /findingAssets=\{discoveryBusy\}/u);
   assert.match(source, /onFindAssets=\{onStartDiscovery\}/u);
@@ -471,5 +472,5 @@ test("the rendered Coverage tree has no hard-coded Traditional Chinese UI copy",
   assert.notEqual(renderStart, -1);
   const renderedTree = source.slice(renderStart);
   assert.doesNotMatch(renderedTree, /[\u3400-\u9fff]/u);
-  assert.ok(renderedTree.includes("text(pageCopy.headerTitle)"));
+  assert.ok(renderedTree.includes("text(compactGuidedReview ? pageCopy.focusedReviewTitle : pageCopy.headerTitle)"));
 });
