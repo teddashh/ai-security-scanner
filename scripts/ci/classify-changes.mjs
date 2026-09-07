@@ -64,6 +64,8 @@ const FRONTEND_PATHS = [
 const RUST_PATHS = [
   /^Cargo\.(?:toml|lock)$/,
   /^src-tauri\/(?:Cargo\.toml|build\.rs|src\/|tests\/|examples\/)/,
+  // `external_scope.rs` includes the shared target corpus in its parity test.
+  /^tests\/fixtures\/external-target-corpus\.json$/,
   /^bootstrap\//,
   /^engines\/catalog\.json$/,
   /^mappings\/control-mappings\.json$/,

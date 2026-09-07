@@ -129,6 +129,22 @@ test("component render tests and their runner config reach the frontend lane", (
   });
 });
 
+test("the shared external-target corpus schedules both parity-test lanes", () => {
+  assert.deepEqual(classifyChangedPaths([
+    "tests/fixtures/external-target-corpus.json",
+  ]), {
+    changed_path_count: 1,
+    docs_only: false,
+    frontend: true,
+    rust_core: true,
+    desktop: false,
+    engine: false,
+    framework: false,
+    release_contract: false,
+    windows_runtime: false,
+  });
+});
+
 test("backend files a frontend test reads schedule the frontend lane too", () => {
   // `coverageDimensionPresentation.test.ts` reads the beginner report's Rust
   // source to enumerate every coverage dimension the backend can name, and
