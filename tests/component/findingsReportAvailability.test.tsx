@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { FindingsPage } from "../../src/pages/FindingsPage";
 import { I18nProvider, localeStorageKey } from "../../src/i18n";
-import type { Finding } from "../../src/types";
+import type { Finding, ScanRun } from "../../src/types";
 
 const canonicalFinding: Finding = {
   id: "canonical-finding",
@@ -26,16 +26,51 @@ const canonicalFinding: Finding = {
   lastSeenAt: "2026-09-04T12:00:00Z",
 };
 
-const renderPage = (reportUnavailable: boolean) => render(
+const savedRun: ScanRun = {
+  id: "saved-run",
+  caseId: "case-1",
+  label: "Saved scan",
+  status: "completed",
+  progress: 100,
+  startedAt: "2026-09-04T12:00:00Z",
+  finishedAt: "2026-09-04T12:00:03Z",
+  knowledgeDate: "2026-09-04",
+  coveredAssetCount: 1,
+  totalAssetCount: 1,
+  engineRuns: [{
+    id: "engine-run",
+    engineId: "saved-check",
+    engineName: "Saved check",
+    category: "security",
+    taskKind: { kind: "catalog_engine" },
+    warnings: [],
+    status: "completed",
+    progress: 100,
+    phase: "completed",
+    startedAt: "2026-09-04T12:00:00Z",
+    finishedAt: "2026-09-04T12:00:03Z",
+    assetIds: ["asset-1"],
+    rawArtifactCount: 0,
+    findingCount: 0,
+    resumable: false,
+  }],
+};
+
+const renderPage = (
+  reportUnavailable: boolean,
+  runs: ScanRun[] = [],
+  selectedRunId?: string,
+) => render(
   <I18nProvider>
     <FindingsPage
       report={undefined}
+      selectedRunId={selectedRunId}
       reportUnavailable={reportUnavailable}
       findings={[canonicalFinding]}
       findingGroups={[]}
       findingGroupEvents={[]}
       coverage={[]}
-      runs={[]}
+      runs={runs}
       workflowEvents={[]}
       busy={false}
       onUpdateWorkflow={() => Promise.resolve(true)}
@@ -82,9 +117,25 @@ test("the finding browser keeps native list semantics, a non-complementary detai
   }
 });
 
-test("an unavailable run-bound report suppresses findings and keeps its notice", () => {
-  const { container } = renderPage(true);
+test("a missing durable run-bound report suppresses cross-run findings and keeps its scoped notice", () => {
+  const { container } = renderPage(true, [savedRun]);
   expect(container.querySelectorAll(".finding-row")).toHaveLength(0);
-  expect(container.textContent).toContain("This saved report is unavailable");
+  expect(container.textContent).toContain("This scan has no durable master report");
+  expect(container.textContent).toContain("exact saved run remains available from the Review scanner status view and can still be exported");
+  expect(container.textContent).toContain("Review scanner status");
+  expect(container.textContent).toContain("Save or share report");
+  expect(container.textContent).not.toContain("available below");
+  expect(container.textContent).not.toContain("Canonical sample finding");
+});
+
+test("a stale selected run fails closed without offering Progress or Export for another run", () => {
+  const { container } = renderPage(true, [savedRun], "missing-run");
+
+  expect(container.querySelectorAll(".finding-row")).toHaveLength(0);
+  expect(container.textContent).toContain("This selected scan is no longer available");
+  expect(container.textContent).toContain("will not substitute a different scan run");
+  expect(container.textContent).not.toContain("exact saved run remains available");
+  expect(container.textContent).not.toContain("Review scanner status");
+  expect(container.textContent).not.toContain("Save or share report");
   expect(container.textContent).not.toContain("Canonical sample finding");
 });

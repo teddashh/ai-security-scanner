@@ -818,41 +818,41 @@ export default function App() {
         tone: completedAndReady ? "success" : "warning",
         title: completed
           ? completedAndReady
-            ? text({ en: "The private scan engine is ready", zhTW: "私有掃描引擎已就緒" })
-            : text({ en: "Setup finished; checking availability", zhTW: "設定已完成，正在確認可用狀態" })
+            ? text({ en: "Advanced local scan tools are ready", zhTW: "進階本機掃描工具已就緒" })
+            : text({ en: "Advanced local scan setup finished; checking availability", zhTW: "進階本機掃描設定已完成，正在確認可用狀態" })
           : nonRetryable
-            ? text({ en: "One local check cannot run in this app version", zhTW: "這個程式版本有一項本機檢查無法執行" })
+            ? text({ en: "An advanced local scan tool is unavailable in this app version", zhTW: "這個程式版本無法使用一項進階本機掃描工具" })
             : cancelled
-            ? text({ en: "Scan-tool setup paused", zhTW: "掃描工具設定已暫停" })
-            : text({ en: "Scan-tool setup stopped", zhTW: "掃描工具設定已停止" }),
+            ? text({ en: "Advanced local scan-tool setup paused", zhTW: "進階本機掃描工具設定已暫停" })
+            : text({ en: "Advanced local scan-tool setup stopped", zhTW: "進階本機掃描工具設定已停止" }),
         detail: completed
           ? completedAndReady
             ? automatic
               ? text({
-                en: "Setup is complete. You can start using ai-security-scanner.",
-                zhTW: "安裝已完成，現在可以直接使用 ai-security-scanner。",
+                en: "Advanced local scan setup is complete. You can start using those scans now.",
+                zhTW: "進階本機掃描設定已完成，現在可以使用這些掃描。",
               })
               : text({
-                en: "You can continue with your chosen check.",
-                zhTW: "現在可以繼續設定你選擇的檢查。",
+                en: "You can continue with your chosen advanced local scan.",
+                zhTW: "現在可以繼續你選擇的進階本機掃描。",
               })
             : text({
-              en: "The setup operation finished, but the app has not confirmed that the scan engine is available. Your projects are unchanged; use Retry if this does not update.",
-              zhTW: "設定操作已完成，但程式尚未確認掃描引擎可用。你的專案沒有變更；若狀態沒有更新，請按「再試一次」。",
+              en: "Advanced local scan setup finished, but the app has not confirmed that the advanced tools are available. The localhost quick check that attempts one TCP connection and your saved results remain available; use Retry if this does not update.",
+              zhTW: "進階本機掃描設定已完成，但程式尚未確認進階工具可用。只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用；若狀態沒有更新，請按「再試一次」。",
             })
           : nonRetryable
             ? text({
-              en: "Other checks, saved projects, reports, and exports remain available. Results will mark this check as not tested.",
-              zhTW: "其他檢查、已保存的專案、報告與匯出仍可使用；結果會把這項檢查標示為「未測試」。",
+              en: "The localhost quick check that attempts one TCP connection and your saved results remain available. Results will mark the affected advanced check as not tested.",
+              zhTW: "只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用；結果會把受影響的進階檢查標示為「未測試」。",
             })
           : cancelled
             ? text({
-              en: "The completed part of the download was kept. Continue setup whenever you are ready.",
-              zhTW: "已完成的下載進度已保留；準備好時可繼續設定。",
+              en: "The completed part of the advanced-tool download was kept. The localhost quick check and your saved results remain available; continue setup whenever you are ready.",
+              zhTW: "進階工具已完成的下載進度已保留；localhost 快速檢查與已保存的結果仍可使用，準備好時可繼續設定。",
             })
             : text({
-              en: "The scan tools could not finish setup. Your scan projects are unchanged. Try setup again; open Technical details if it keeps happening.",
-              zhTW: "掃描工具未能完成設定。你的掃描專案沒有變更；請再試一次。如果問題持續發生，可查看「技術細節」。",
+              en: "Advanced local scan-tool setup did not finish. The localhost quick check that attempts one TCP connection and your saved results remain available. Try setup again; open Technical details if it keeps happening.",
+              zhTW: "進階本機掃描工具設定未能完成。只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用；請再試一次。如果問題持續發生，可查看「技術細節」。",
             }),
       });
     } catch (error) {
@@ -865,10 +865,10 @@ export default function App() {
       }
       pushToast({
         tone: "danger",
-        title: text({ en: "One local check is unavailable", zhTW: "一項本機檢查目前無法使用" }),
+        title: text({ en: "Advanced local scan-tool setup did not finish", zhTW: "進階本機掃描工具設定未能完成" }),
         detail: text({
-          en: "Your projects and reports are unchanged. Other checks remain available; retry automatic preparation when ready.",
-          zhTW: "你的專案與報告沒有變更，其他檢查仍可使用；準備好時可再試一次自動準備。",
+          en: "The localhost quick check that attempts one TCP connection and your saved results remain available; retry advanced local scan preparation when ready.",
+          zhTW: "只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用；準備好時可再試一次進階本機掃描準備。",
         }),
       });
     } finally {

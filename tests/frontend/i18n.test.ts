@@ -47,11 +47,11 @@ test("English and Traditional Chinese locales cover the exact same message contr
 test("typed translators interpolate central and page-local bilingual copy", () => {
   assert.equal(
     i18n.translate("en", "runtime.badge.ready"),
-    "Local tools ready at last check",
+    "Advanced local tools ready at last check",
   );
   assert.equal(
     i18n.translate("zh-TW", "runtime.badge.ready"),
-    "本機工具上次檢查時可用",
+    "進階本機掃描工具上次檢查時可用",
   );
 
   const localCopy = {
@@ -140,7 +140,61 @@ test("runtime failures become plain-language guidance without echoing backend ou
   assert.equal(issue, "wsl");
 
   const guidance = i18n.translate("en", "runtime.prerequisite.localSupport");
-  assert.match(guidance, /one local scan tool/u);
+  assert.match(guidance, /advanced local scan tool has not finished setup/u);
+  assert.match(guidance, /localhost quick check that attempts one TCP connection/u);
+  assert.match(guidance, /saved results remain available/u);
   assert.doesNotMatch(guidance, /exit status|System32|runtime error/u);
   assert.doesNotMatch(guidance, /WSL|Terminal|PowerShell/u);
+
+  assert.equal(
+    i18n.translate("en", "runtime.badge.needsSetup"),
+    "Advanced local scans need setup",
+  );
+  assert.equal(
+    i18n.translate("zh-TW", "runtime.badge.needsSetup"),
+    "進階本機掃描需要設定",
+  );
+  assert.equal(
+    i18n.translate("en", "runtime.nextStep"),
+    "Advanced local scan tool status",
+  );
+  assert.equal(
+    i18n.translate("zh-TW", "runtime.nextStep"),
+    "進階本機掃描工具狀態",
+  );
+
+  const chineseGuidance = i18n.translate("zh-TW", "runtime.prerequisite.localSupport");
+  assert.match(chineseGuidance, /進階本機掃描工具尚未完成設定/u);
+  assert.match(chineseGuidance, /只嘗試一次 TCP 連線的 localhost 快速檢查/u);
+  assert.match(chineseGuidance, /已保存的結果仍可使用/u);
+});
+
+test("every managed-runtime warning distinguishes advanced tools from the localhost quick check", () => {
+  const warningKeys = [
+    "runtime.prerequisite.localSupport",
+    "runtime.prerequisite.virtualization",
+    "runtime.prerequisite.permission",
+    "runtime.prerequisite.network",
+    "runtime.prerequisite.storage",
+    "runtime.prerequisite.generic",
+    "runtime.recovery.retryAutomatic",
+    "runtime.recovery.windowsPending",
+    "runtime.phase.idle.detail",
+    "runtime.phase.failed.detail",
+    "runtime.phase.failed.generic.detail",
+    "runtime.phase.failed.nonRetryable.detail",
+    "runtime.phase.cancelled.detail",
+  ];
+
+  for (const key of warningKeys) {
+    const english = i18n.translate("en", key);
+    assert.match(english, /advanced|advanced-tool/iu, `${key} should name advanced-tool scope in English`);
+    assert.match(english, /localhost quick check/u, `${key} should preserve the quick-check path in English`);
+    assert.match(english, /saved results/u, `${key} should preserve saved results in English`);
+
+    const chinese = i18n.translate("zh-TW", key);
+    assert.match(chinese, /進階/u, `${key} should name advanced-tool scope in Traditional Chinese`);
+    assert.match(chinese, /localhost 快速檢查/u, `${key} should preserve the quick-check path in Traditional Chinese`);
+    assert.match(chinese, /已保存的結果/u, `${key} should preserve saved results in Traditional Chinese`);
+  }
 });

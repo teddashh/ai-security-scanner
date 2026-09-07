@@ -145,6 +145,11 @@ const copy = {
   },
   connectedNone: { en: "Connected sources that found nothing", zhTW: "已連接但沒有找到資產的來源" },
   connectedNoneDetail: { en: "This means only that the saved source snapshot returned zero items.", zhTW: "這只表示保存的來源快照回傳零項。" },
+  completedWork: { en: "Completed scanner jobs", zhTW: "已完成的掃描工作" },
+  completedWorkDetail: {
+    en: "These selected-run jobs reached a completed state. This does not mean broader security coverage was performed.",
+    zhTW: "這些本輪工作已到達完成狀態；這不代表已執行更廣泛的資安涵蓋。",
+  },
   incompleteWork: { en: "Scanner work not fully completed", zhTW: "沒有完整完成的掃描工作" },
   incompleteWorkDetail: { en: "Includes partly completed, failed, or cancelled scanner jobs.", zhTW: "包含部分完成、失敗或取消的掃描工作。" },
   notRun: { en: "Scanner jobs not run", zhTW: "未執行的掃描工作" },
@@ -436,6 +441,9 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
   const connectedNoAssetCount = preview?.connectedNoAssetCount;
   const incompleteEngineCount = preview?.incompleteEngineRunCount;
   const notExecutedCount = preview?.notExecutedEngineRunCount;
+  const completedEngineCount = preview
+    ? Math.max(0, preview.selectedEngineRunCount - preview.incompleteEngineRunCount - preview.notExecutedEngineRunCount)
+    : undefined;
   const currentFormat = formatCopy[format];
   // Read from the controls rather than from `preview`, which lags a toggle by a
   // debounce -- the sentence below must never describe settings the user has
@@ -672,6 +680,9 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
       <details className="page-technical-details page-technical-details--guide">
         <summary>{text(copy.coverageDetails)}</summary>
         <section className="export-disclosure-grid" aria-label={text(copy.disclosureAria)}>
+          <article className={completedEngineCount === undefined ? "export-disclosure export-disclosure--unknown" : "export-disclosure"}>
+            <span>{text(copy.completedWork)}</span><strong>{shownCount(completedEngineCount)}</strong><p>{completedEngineCount === undefined ? text(copy.countUnavailable) : text(copy.completedWorkDetail)}</p>
+          </article>
           <article className={unknownSourceCount === undefined || unknownSourceCount > 0 ? "export-disclosure export-disclosure--unknown" : "export-disclosure"}>
             <span>{text(copy.unknownSources)}</span><strong>{shownCount(unknownSourceCount)}</strong>
             <p>{unknownSourceCount === undefined ? text(copy.countUnavailable) : unknownSourceCount > 0 ? text(copy.unknownSourcesSome) : text(copy.unknownSourcesNone)}</p>

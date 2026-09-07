@@ -7,7 +7,10 @@ import {
   workflowMeta,
 } from "../lib";
 import { useI18n } from "../i18n";
-import { unavailableRunBoundReportCopy } from "../findingsReportAvailability";
+import {
+  unavailableRunBoundReportCopy,
+  unavailableSelectedRunCopy,
+} from "../findingsReportAvailability";
 import {
   localizedCoverageDimension,
   localizedRequestedLimitName,
@@ -34,7 +37,10 @@ import {
   localhostTcpBeginnerSummary,
   localhostTestedDimensionValue,
 } from "../localhostTcpPresentation";
-import { isExactBuiltInLocalhostQuickScanEngine } from "../localhostQuickScan";
+import {
+  isExactBuiltInLocalhostQuickScanEngine,
+  isExactBuiltInLocalhostQuickScanRun,
+} from "../localhostQuickScan";
 import { scanRequestOutcomeBeginnerSummary } from "../scanRequestOutcomePresentation";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import type {
@@ -386,7 +392,7 @@ const copy = {
   },
   masterEyebrow: { en: "YOUR SCAN REPORT", zhTW: "你的掃描報告" },
   masterTitle: { en: "What was checked—and what was not", zhTW: "這次檢查了什麼，也漏了什麼" },
-  reportComplete: { en: "Complete", zhTW: "完整" },
+  reportComplete: { en: "Requested checks complete", zhTW: "要求的檢查已完成" },
   reportPartial: { en: "Partial results", zhTW: "部分結果" },
   reportNoChecks: { en: "No checks completed", zhTW: "沒有完成任何檢查" },
   reportLive: { en: "Still updating", zhTW: "仍在更新" },
@@ -405,7 +411,7 @@ const copy = {
   truncatedCount: { en: "Reduced by limits", zhTW: "受限制而縮減" },
   unavailableCount: { en: "Detail unavailable", zhTW: "資料不足" },
   unattributedCount: { en: "Not linked to your asset", zhTW: "未連結到你的資產" },
-  coverageGaps: { en: "Coverage gaps", zhTW: "未涵蓋項目" },
+  coverageGaps: { en: "Recorded coverage gaps", zhTW: "已記錄的涵蓋缺口" },
   reportFindings: { en: "Problems found", zhTW: "發現的問題" },
   askedTitle: { en: "What you asked to scan", zhTW: "你要求掃描的內容" },
   testedTitle: { en: "What was actually tested", zhTW: "實際完成的測試" },
@@ -419,10 +425,13 @@ const copy = {
     en: "No completed test dimension was saved for this run.",
     zhTW: "本輪沒有保存已完成的測試範圍。",
   },
-  noGap: { en: "No known coverage gap was recorded.", zhTW: "沒有記錄到已知的涵蓋缺口。" },
+  noGap: {
+    en: "No gap was recorded within the requested checks. This does not mean broader security testing was performed.",
+    zhTW: "要求的檢查內沒有記錄到缺口；這不代表已完成更廣泛的資安測試。",
+  },
   noNextStep: {
-    en: "Review the saved results; no extra action is required unless you want broader coverage.",
-    zhTW: "先檢視已保存的結果；除非想擴大涵蓋範圍，否則不需要額外動作。",
+    en: "Review the saved results and stated limits. Run broader checks if you need broader assurance.",
+    zhTW: "請檢視已保存的結果與明列限制；若需要更廣泛的確認，請執行更深入的檢查。",
   },
   stage: { en: "Scan depth", zhTW: "掃描深度" },
   stageQuick: { en: "Quick discovery", zhTW: "快速探索" },
@@ -687,6 +696,10 @@ const projectReportFindings = (
 function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport; run?: ScanRun }) {
   const { locale, text, formatDateTime, formatNumber } = useI18n();
   const summary = reportSummaryPresentation(report.state.summary);
+  const localhostSummary = run && isExactBuiltInLocalhostQuickScanRun(run)
+    ? localhostTcpBeginnerSummary(run.engineRuns[0]!)
+    : undefined;
+  const noRecordedGapDetail = localhostSummary?.exclusions ?? copy.noGap;
   const testedChecks = report.actual.checks.filter((check) =>
     check.status === "tested_complete"
     || check.status === "tested_partial"
@@ -749,7 +762,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         <MetricCard
           label={text(copy.coverageGaps)}
           value={formatNumber(report.coverageGaps.length)}
-          detail={report.coverageGaps.length > 0 ? text(copy.gapsTitle) : text(copy.noGap)}
+          detail={report.coverageGaps.length > 0 ? text(copy.gapsTitle) : text(noRecordedGapDetail)}
           icon="warning"
           tone={report.coverageGaps.length > 0 ? "warning" : "default"}
         />
@@ -907,7 +920,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
                 );
               })}
             </ul>
-          ) : <p>{text(copy.noGap)}</p>}
+          ) : <p>{text(noRecordedGapDetail)}</p>}
           {untestedNetworkScopes.length > 0 && (
             <details open={untestedNetworkScopes.length <= 8}>
               <summary>{text(copy.networkScopeCount, { count: formatNumber(untestedNetworkScopes.length) })} · {text(copy.exactNetworkScope)}</summary>
@@ -1193,6 +1206,9 @@ export function FindingsPage({
       )}
     </div>
   );
+  const unavailableReportNotice = latestRun
+    ? unavailableRunBoundReportCopy
+    : unavailableSelectedRunCopy;
 
   if (findings.length === 0) {
     const unknownSources = coverage.filter((item) => item.state === "source_unavailable_unknown").length;
@@ -1237,7 +1253,7 @@ export function FindingsPage({
       <div className="page">
         <PageHeader eyebrow={text(copy.eyebrow)} title={text(copy.emptyHeaderTitle)} description={text(copy.emptyHeaderDescription)} actions={reportActions} />
         {report && <BeginnerReportOverview report={report} run={latestRun} />}
-        {reportUnavailable && <InlineNotice tone="warning" title={text(unavailableRunBoundReportCopy.title)}><p>{text(unavailableRunBoundReportCopy.body)}</p></InlineNotice>}
+        {reportUnavailable && <InlineNotice tone="warning" title={text(unavailableReportNotice.title)}><p>{text(unavailableReportNotice.body)}</p></InlineNotice>}
         <EmptyState
           icon={latestRunIsActive
             || incompleteRun
@@ -1319,7 +1335,7 @@ export function FindingsPage({
       />
 
       {report && <BeginnerReportOverview report={report} run={latestRun} />}
-      {reportUnavailable && <InlineNotice tone="warning" title={text(unavailableRunBoundReportCopy.title)}><p>{text(unavailableRunBoundReportCopy.body)}</p></InlineNotice>}
+      {reportUnavailable && <InlineNotice tone="warning" title={text(unavailableReportNotice.title)}><p>{text(unavailableReportNotice.body)}</p></InlineNotice>}
 
       {activeRun && (
         <InlineNotice tone="warning" title={text(copy.activeTitle)}>

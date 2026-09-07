@@ -8,6 +8,7 @@ import type {
   BeginnerReportFinding,
   BeginnerReportSummary,
   Finding,
+  ScanRun,
 } from "../../src/types";
 
 // The beginner report is the surface a non-expert reads to learn what the scan
@@ -120,7 +121,11 @@ const canonicalFinding = (overrides: Partial<Finding> = {}): Finding => ({
   ...overrides,
 });
 
-const renderReport = (value: BeginnerMasterReport, canonical: Finding[] = []) =>
+const renderReport = (
+  value: BeginnerMasterReport,
+  canonical: Finding[] = [],
+  runs: ScanRun[] = [],
+) =>
   render(
     <I18nProvider>
       <FindingsPage
@@ -130,7 +135,7 @@ const renderReport = (value: BeginnerMasterReport, canonical: Finding[] = []) =>
         findingGroups={[]}
         findingGroupEvents={[]}
         coverage={[]}
-        runs={[]}
+        runs={runs}
         workflowEvents={[]}
         busy={false}
         onUpdateWorkflow={() => Promise.resolve(true)}
@@ -142,6 +147,37 @@ const renderReport = (value: BeginnerMasterReport, canonical: Finding[] = []) =>
       />
     </I18nProvider>,
   );
+
+const localhostRun = (): ScanRun => ({
+  id: "run-1",
+  caseId: "case-1",
+  label: "Scan 1",
+  status: "completed",
+  progress: 100,
+  startedAt: "2026-09-04T12:00:00Z",
+  finishedAt: "2026-09-04T12:00:03Z",
+  knowledgeDate: "2026-09-04",
+  coveredAssetCount: 1,
+  totalAssetCount: 1,
+  engineRuns: [{
+    id: "localhost-check-1",
+    engineId: "built-in-localhost-tcp",
+    engineName: "Localhost TCP reachability",
+    category: "built_in_localhost_tcp",
+    taskKind: { kind: "built_in_localhost_tcp", port: 9001, timeoutMs: 3_000, payloadBytes: 0 },
+    localhostTcpObservation: { outcome: "reachable", observedAt: "2026-09-04T12:00:03Z" },
+    warnings: [],
+    status: "completed",
+    progress: 100,
+    phase: "completed",
+    startedAt: "2026-09-04T12:00:00Z",
+    finishedAt: "2026-09-04T12:00:03Z",
+    assetIds: ["asset-1"],
+    rawArtifactCount: 0,
+    findingCount: 0,
+    resumable: false,
+  }],
+});
 
 /** The report's own state pill, not a per-finding one. */
 const statePill = (container: HTMLElement): HTMLElement => {
@@ -211,33 +247,76 @@ test("a partial run is distinguished from a complete one", () => {
 
   expect(partialPill.textContent).toContain("Partial results");
   expect(partialPill.className).not.toContain("status-pill--positive");
-  expect(completePill.textContent).toContain("Complete");
+  expect(completePill.textContent).toContain("Requested checks complete");
   expect(partialPill.textContent).not.toEqual(completePill.textContent);
 });
 
-test("an absent coverage gap is reported as unrecorded rather than as none existing", () => {
+test("an absent coverage gap is scoped to the requested checks rather than implying broad security coverage", () => {
   const { container } = renderReport(report("complete"));
 
-  // "No known coverage gap was recorded" is a claim about the record. Wording
-  // it as an absence of gaps would assert something the run cannot support.
+  // Zero is a claim about this run's requested checks, never about broader
+  // security coverage. Both the label and detail keep that boundary visible.
   //
   // The claim is made in two places and each is asserted separately: a
   // page-wide text match passes while either one still says it, which would
   // let the other be replaced by a stronger claim unnoticed.
   const metric = Array.from(container.querySelectorAll<HTMLElement>(".metric-card")).find(
-    (card) => card.querySelector(".metric-card__label")?.textContent === "Coverage gaps",
+    (card) => card.querySelector(".metric-card__label")?.textContent === "Recorded coverage gaps",
   );
   if (!metric) throw new Error("the coverage-gap metric card did not render");
   expect(metric.querySelector(".metric-card__value")?.textContent).toBe("0");
   expect(metric.querySelector(".metric-card__detail")?.textContent).toBe(
-    "No known coverage gap was recorded.",
+    "No gap was recorded within the requested checks. This does not mean broader security testing was performed.",
   );
 
   const gapsCard = Array.from(container.querySelectorAll<HTMLElement>(".coverage-card")).find(
     (card) => card.querySelector("h3")?.textContent === "What was not tested",
   );
   if (!gapsCard) throw new Error("the coverage-gap card did not render");
-  expect(gapsCard.textContent).toContain("No known coverage gap was recorded.");
+  expect(gapsCard.textContent).toContain(
+    "No gap was recorded within the requested checks. This does not mean broader security testing was performed.",
+  );
+});
+
+test("a completed localhost connection check puts its exact exclusions in the master report", () => {
+  const { container } = renderReport(report("complete"), [], [localhostRun()]);
+  const section = container.querySelector<HTMLElement>(
+    "section[aria-labelledby='beginner-master-report-title']",
+  );
+  if (!section) throw new Error("the beginner report section did not render");
+
+  expect(statePill(container).textContent).toContain("Requested checks complete");
+  expect(section.textContent).toContain(
+    "Not checked: vulnerabilities, protocol behavior, website or API content, other ports, or other hosts.",
+  );
+  expect(section.textContent).not.toContain(
+    "No gap was recorded within the requested checks. This does not mean broader security testing was performed.",
+  );
+});
+
+test("a mixed run does not apply localhost-only exclusions to the whole report", () => {
+  const mixedRun = localhostRun();
+  mixedRun.engineRuns.push({
+    ...mixedRun.engineRuns[0]!,
+    id: "other-check-1",
+    engineId: "other-security-check",
+    engineName: "Other security check",
+    category: "other",
+    taskKind: { kind: "catalog_engine" },
+  });
+
+  const { container } = renderReport(report("complete"), [], [mixedRun]);
+  const section = container.querySelector<HTMLElement>(
+    "section[aria-labelledby='beginner-master-report-title']",
+  );
+  if (!section) throw new Error("the beginner report section did not render");
+
+  expect(section.textContent).toContain(
+    "No gap was recorded within the requested checks. This does not mean broader security testing was performed.",
+  );
+  expect(section.textContent).not.toContain(
+    "Not checked: vulnerabilities, protocol behavior, website or API content, other ports, or other hosts.",
+  );
 });
 
 test("two gaps of the same kind give the reader two different reasons", () => {
@@ -395,7 +474,7 @@ test("what the run could not establish is shown with its own dimension", () => {
   );
   expect(within(section!).getByText(/automatic scope reductions or truncations/u)).toBeTruthy();
   expect(within(section!).getByText(/requested scan stage/u)).toBeTruthy();
-  expect(container.textContent).not.toContain("No known coverage gap was recorded.");
+  expect(container.textContent).not.toContain("No gap was recorded within the requested checks.");
 });
 
 test("saved-data limitations are surfaced, not held in the model", () => {
