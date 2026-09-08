@@ -207,6 +207,148 @@ test("the browser preview deletes only its own exact-name stored project and rep
   assert.equal(builtIn.data.accepted, false);
 });
 
+test("native case creation sends the closed internal-device profile in snake case", async () => {
+  const invocations: { command: string; args: unknown }[] = [];
+  setTestWindow({
+    __TAURI_INTERNALS__: {
+      invoke: async (command: string, args: unknown) => {
+        invocations.push({ command, args });
+        throw new Error("test-only stop after capturing case creation");
+      },
+    },
+  });
+
+  await assert.rejects(() => scannerService.createCase({
+    name: "Internal device review",
+    assessmentIntent: "internal_it_environment",
+    aiGeneratedArtifact: "no",
+    organizationName: "Example",
+    companySize: "small",
+    dataClasses: ["none"],
+    requestedActivities: ["active_external_vulnerability_tests"],
+    platforms: ["external"],
+    knownAssets: [{
+      kind: "external_target",
+      value: "10.20.30.40",
+      internetExposure: "internal",
+      webService: {
+        protocol: "https",
+        port: 8080,
+        path: "/",
+        scanProfile: "internal_device_https",
+      },
+    }],
+  }), /test-only stop/u);
+
+  assert.equal(invocations[0]?.command, COMMANDS.createCase);
+  assert.deepEqual(
+    (invocations[0]?.args as {
+      request: { declared_assets: Array<{ web_service: unknown }> };
+    }).request.declared_assets[0]?.web_service,
+    {
+      protocol: "https",
+      port: 8080,
+      path: "/",
+      scan_profile: "internal_device_https",
+    },
+  );
+});
+
+test("native case creation sends one exact generic host profile and selected ports", async () => {
+  const invocations: { command: string; args: unknown }[] = [];
+  setTestWindow({
+    __TAURI_INTERNALS__: {
+      invoke: async (command: string, args: unknown) => {
+        invocations.push({ command, args });
+        throw new Error("test-only stop after capturing generic host case creation");
+      },
+    },
+  });
+
+  await assert.rejects(() => scannerService.createCase({
+    name: "Internal host review",
+    assessmentIntent: "internal_it_environment",
+    aiGeneratedArtifact: "no",
+    organizationName: "Example",
+    companySize: "small",
+    dataClasses: ["none"],
+    requestedActivities: ["active_external_vulnerability_tests"],
+    platforms: ["external"],
+    knownAssets: [{
+      kind: "external_target",
+      value: "host.example.test",
+      internetExposure: "internal",
+      hostScan: {
+        protocol: "tcp",
+        ports: [22, 25, 443, 445, 3389],
+        scanProfile: "internal_host_greenbone_remote_safe",
+      },
+    }],
+  }), /test-only stop/u);
+
+  const declaredAsset = (invocations[0]?.args as {
+    request: { declared_assets: Array<{ web_service: unknown; network_service: unknown; host_scan: unknown }> };
+  }).request.declared_assets[0];
+  assert.equal(declaredAsset?.web_service, null);
+  assert.equal(declaredAsset?.network_service, null);
+  assert.deepEqual(declaredAsset?.host_scan, {
+    protocol: "tcp",
+    ports: [22, 25, 443, 445, 3389],
+    profile: "greenbone_remote_safe_v1",
+  });
+});
+
+test("native case creation preserves each typed endpoint profile without a web-service fallback", async () => {
+  for (const endpoint of [
+    { name: "SSH endpoint review", target: "server.example.test", port: 2222, scanProfile: "internal_endpoint_ssh" },
+    { name: "RDP transport review", target: "desktop.example.test", port: 3389, scanProfile: "internal_endpoint_rdp_tls" },
+    { name: "VNC transport review", target: "workstation.example.test", port: 5900, scanProfile: "internal_endpoint_vnc" },
+    { name: "SMTP transport review", target: "mail.example.test", port: 587, scanProfile: "internal_endpoint_smtp" },
+    { name: "Telnet cleartext review", target: "switch.example.test", port: 23, scanProfile: "internal_endpoint_telnet" },
+  ] as const) {
+    const invocations: { command: string; args: unknown }[] = [];
+    setTestWindow({
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: unknown) => {
+          invocations.push({ command, args });
+          throw new Error("test-only stop after capturing endpoint case creation");
+        },
+      },
+    });
+
+    await assert.rejects(() => scannerService.createCase({
+      name: endpoint.name,
+      assessmentIntent: "internal_it_environment",
+      aiGeneratedArtifact: "no",
+      organizationName: "Example",
+      companySize: "small",
+      dataClasses: ["none"],
+      requestedActivities: ["active_external_vulnerability_tests"],
+      platforms: ["external"],
+      knownAssets: [{
+        kind: "external_target",
+        value: endpoint.target,
+        internetExposure: "internal",
+        networkService: {
+          protocol: "tcp",
+          port: endpoint.port,
+          scanProfile: endpoint.scanProfile,
+        },
+      }],
+    }), /test-only stop/u);
+
+    const declaredAsset = (invocations[0]?.args as {
+      request: { declared_assets: Array<{ web_service: unknown; network_service: unknown }> };
+    }).request.declared_assets[0];
+    assert.equal(declaredAsset?.web_service, null);
+    assert.deepEqual(declaredAsset?.network_service, {
+      protocol: "tcp",
+      port: endpoint.port,
+      scan_profile: endpoint.scanProfile,
+    });
+  }
+});
+
 test("accepted deletion preserves the latest selection and distinguishes its cleanup outcomes", async () => {
   const app = await readFile(new URL("../../src/App.tsx", import.meta.url), "utf8");
   const start = app.indexOf("const deleteCase = async");
@@ -392,8 +534,122 @@ test("guided internal Start submits the exact private target and full preset onc
         },
       }],
       engineIds: [],
+      engineAssetRoutes: [],
     },
   });
+});
+
+test("one Start submits independent target boundaries and exact engine-to-asset routes", async () => {
+  const invocations: { command: string; args: unknown }[] = [];
+  setTestWindow({
+    __TAURI_INTERNALS__: {
+      invoke: async (command: string, args: unknown) => {
+        invocations.push({ command, args });
+        throw new Error("test-only stop after capturing combined Start");
+      },
+    },
+  });
+
+  const result = await scannerService.startScan({
+    caseId: "company-environment",
+    authorizations: [
+      {
+        assetIds: ["repo-a", "repo-b"],
+        modes: ["local_artifact"],
+        confirmation: "Review the two selected read-only project snapshots.",
+      },
+      {
+        assetIds: ["website-a"],
+        modes: ["active_external"],
+        confirmation: "Authorized exact website A origin",
+        externalScope: {
+          target: "a.example.test",
+          ports: [443],
+          protocol: "https",
+          activity: "active_external",
+          ratePolicy: { requestsPerSecond: 3, concurrency: 2, timeoutSeconds: 10 },
+          templatePolicy: {
+            revision: "nuclei-templates@test",
+            allowedTemplateIds: ["safe-template"],
+            allowHeadless: false,
+            allowOutOfBand: false,
+            allowFuzzing: false,
+            allowFileUpload: false,
+            allowDenialOfService: false,
+            allowCredentialAttacks: false,
+          },
+          assertedAuthority: "Authorized exact website A origin",
+          allowSensitiveNetworks: false,
+        },
+      },
+      {
+        assetIds: ["endpoint-a"],
+        modes: ["active_external"],
+        confirmation: "Authorized exact internal endpoint A",
+        externalScope: {
+          target: "192.168.50.10",
+          ports: [443],
+          protocol: "https",
+          activity: "active_external",
+          ratePolicy: { requestsPerSecond: 3, concurrency: 1, timeoutSeconds: 10 },
+          templatePolicy: {
+            revision: "greenbone-community-feed@test",
+            profileId: "greenbone_remote_safe_v1",
+            allowedTemplateIds: [],
+            allowHeadless: false,
+            allowOutOfBand: false,
+            allowFuzzing: false,
+            allowFileUpload: false,
+            allowDenialOfService: false,
+            allowCredentialAttacks: false,
+          },
+          assertedAuthority: "Authorized exact internal endpoint A",
+          allowSensitiveNetworks: true,
+        },
+      },
+    ],
+    engineAssetRoutes: [
+      { engineId: "semgrep", assetIds: ["repo-a", "repo-b"] },
+      { engineId: "gitleaks", assetIds: ["repo-a", "repo-b"] },
+      { engineId: "nuclei", assetIds: ["website-a"] },
+      { engineId: "greenbone", assetIds: ["endpoint-a"] },
+    ],
+  });
+
+  assert.equal(result.mode, "native");
+  assert.equal(result.data.accepted, false);
+  assert.equal(invocations.length, 1);
+  const submitted = invocations[0] as {
+    command: string;
+    args: {
+      decisions: Array<{
+        asset_id: string;
+        external_scope?: { target: string; template_policy: { profile_id?: string } } | null;
+      }>;
+      engineIds: string[];
+      engineAssetRoutes: Array<{ engine_id: string; asset_ids: string[] }>;
+    };
+  };
+  assert.equal(submitted.command, COMMANDS.startScan);
+  assert.deepEqual(submitted.args.decisions.map((decision) => decision.asset_id), [
+    "repo-a",
+    "repo-b",
+    "website-a",
+    "endpoint-a",
+  ]);
+  assert.equal(submitted.args.decisions[2]?.external_scope?.target, "a.example.test");
+  assert.equal(submitted.args.decisions[3]?.external_scope?.target, "192.168.50.10");
+  assert.equal(
+    submitted.args.decisions[3]?.external_scope?.template_policy.profile_id,
+    "greenbone_remote_safe_v1",
+  );
+  assert.deepEqual(submitted.args.engineIds, []);
+  assert.deepEqual(submitted.args.engineAssetRoutes, [
+    { engine_id: "semgrep", asset_ids: ["repo-a", "repo-b"] },
+    { engine_id: "gitleaks", asset_ids: ["repo-a", "repo-b"] },
+    { engine_id: "nuclei", asset_ids: ["website-a"] },
+    { engine_id: "greenbone", asset_ids: ["endpoint-a"] },
+  ]);
 });
 
 test("scan lifecycle mutation acknowledgements never read optional manifests", async () => {

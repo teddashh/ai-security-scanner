@@ -5,11 +5,15 @@
 //! refs, hooks, credentials, and worktree pointers are never copied. Repository
 //! inputs also honor repository-local root and nested `.gitignore` files, but a
 //! Git-backed tree never excludes a path that its bounded tracked-file inventory
-//! identifies as tracked. If that inventory cannot be proved, ignore filtering
-//! fails open for that repository boundary. Every actual exclusion and every
-//! ignore-rule source is recorded in the immutable manifest. External/global
-//! ignore configuration is deliberately not consulted. Explicit non-repository
-//! profiles retain their original unfiltered content semantics.
+//! identifies as tracked. An ignored regular file in a traversed source directory
+//! is also retained when its name identifies a likely secret or private runtime
+//! configuration; ignored directories remain pruned, so dependency, build, and
+//! cache trees are not searched for exceptions. If the tracked-file inventory
+//! cannot be proved, ignore filtering fails open for that repository boundary.
+//! Every actual exclusion and every ignore-rule source is recorded in the
+//! immutable manifest. External/global ignore configuration is deliberately not
+//! consulted. Explicit non-repository profiles retain their original unfiltered
+//! content semantics.
 //! The caller must obtain `selected_source_directory` through a trusted backend
 //! selection flow; no destination path is accepted from the frontend.
 
@@ -50,7 +54,11 @@ const TREE_DIRECTORY: &str = "tree";
 const MANIFEST_FILENAME: &str = "manifest.json";
 const STORAGE_ID_PREFIX: &str = "workspace-artifact-";
 const SNAPSHOT_ID_PREFIX: &str = "workspace-snapshot-sha256-";
-const ASSET_ID_PREFIX: &str = "asset-workspace-sha256-";
+// A repository is a user-selected target, while the snapshot hash identifies
+// one immutable revision of its contents. Two different repositories can be
+// byte-identical, so their asset identity must follow the backend-created
+// source rather than collapsing them by content digest.
+const ASSET_ID_PREFIX: &str = "asset-workspace-source-";
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
 const MAX_COMPONENT_BYTES: usize = 255;
 const MAX_RELATIVE_PATH_BYTES: usize = 4_096;
@@ -745,6 +753,112 @@ fn relative_path_is_within(path: &str, prefix: &str) -> bool {
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
+/// Keeps high-signal secret/configuration inputs available to repository secret
+/// scanners even when a conventional `.gitignore` rule hides them from Git.
+///
+/// This exception is deliberately filename based and applies only to regular
+/// files in directories the bounded snapshot walk already visits. It does not
+/// reopen an ignored directory, and it never applies below a dependency, build,
+/// cache, or VCS metadata component. The ordinary snapshot file-count,
+/// per-file-byte, and aggregate-byte limits still govern every retained file.
+fn preserve_ignored_secret_candidate(
+    relative_components: &[String],
+    file_type: &fs::FileType,
+) -> bool {
+    if !file_type.is_file() {
+        return false;
+    }
+
+    let Some((file_name, ancestors)) = relative_components.split_last() else {
+        return false;
+    };
+    if ancestors
+        .iter()
+        .any(|component| excluded_secret_candidate_ancestor(component))
+    {
+        return false;
+    }
+
+    likely_secret_config_file_name(file_name)
+}
+
+fn excluded_secret_candidate_ancestor(component: &str) -> bool {
+    matches!(
+        component.to_ascii_lowercase().as_str(),
+        ".git"
+            | ".hg"
+            | ".svn"
+            | "node_modules"
+            | "bower_components"
+            | "vendor"
+            | ".venv"
+            | "venv"
+            | "target"
+            | "build"
+            | "dist"
+            | "out"
+            | "bin"
+            | "obj"
+            | ".next"
+            | ".nuxt"
+            | ".cache"
+            | "cache"
+            | "coverage"
+            | ".gradle"
+            | ".terraform"
+            | ".serverless"
+            | ".turbo"
+            | ".parcel-cache"
+            | ".pytest_cache"
+            | ".mypy_cache"
+            | ".ruff_cache"
+            | "__pycache__"
+            | "pods"
+            | "deriveddata"
+    )
+}
+
+fn likely_secret_config_file_name(file_name: &str) -> bool {
+    let name = file_name.to_ascii_lowercase();
+    if name == ".env" || name == ".envrc" || name.starts_with(".env.") {
+        return true;
+    }
+    if matches!(
+        name.as_str(),
+        ".npmrc"
+            | ".yarnrc"
+            | ".pypirc"
+            | ".netrc"
+            | ".pgpass"
+            | ".my.cnf"
+            | ".git-credentials"
+            | ".htpasswd"
+            | "id_rsa"
+            | "id_dsa"
+            | "id_ecdsa"
+            | "id_ed25519"
+            | "terraform.tfstate"
+            | "terraform.tfstate.backup"
+            | "application_default_credentials.json"
+    ) {
+        return true;
+    }
+    if name.ends_with(".tfvars")
+        || name.ends_with(".tfvars.json")
+        || name.ends_with(".pem")
+        || name.ends_with(".key")
+    {
+        return true;
+    }
+
+    ["secret", "secrets", "credential", "credentials"]
+        .iter()
+        .any(|stem| {
+            name.strip_prefix(stem)
+                .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('.'))
+        })
+}
+
 fn strip_relative_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
     if prefix.is_empty() {
         return Some(path);
@@ -1007,13 +1121,13 @@ fn copy_directory(
         if file_type.is_dir() {
             exclusion_state.register_nested_repository_if_present(&source_path, &components);
         }
-        if name != ".gitignore"
+        let ignored_untracked = name != ".gitignore"
             && exclusion_state.repository_path_is_ignored(
                 &source_path,
                 &relative_path,
                 file_type.is_dir(),
-            )
-        {
+            );
+        if ignored_untracked && !preserve_ignored_secret_candidate(&components, &file_type) {
             record_snapshot_exclusion(
                 state,
                 limits,
@@ -2138,7 +2252,7 @@ fn snapshot_asset(
         );
     }
     Asset {
-        id: format!("{ASSET_ID_PREFIX}{sha256}"),
+        id: format!("{ASSET_ID_PREFIX}{source_id}"),
         kind: input_profile.asset_kind(),
         name: format!(
             "Local {} snapshot {}",

@@ -62,9 +62,9 @@
   },
   "wrapper": {
     "required": true,
-    "strategy": "Invoke the pinned source build against the read-only workspace and its embedded checksum-verified vulnerability database.",
+    "strategy": "Invoke the pinned source build against a typed read-only repository or OCI workspace and its embedded checksum-verified vulnerability database; Grype receives dir:/workspace or oci-dir:/workspace without product-owned package filtering.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:8ae5ab14f6c147f166017e0826014c01323217adc278b0358305b880c9d43df6"
+    "launcher_sha256": "sha256:07e94433dd47cd9bc910bdba8fe331757623599e0390b4e76d4efae1010a647a"
   },
   "command": [
     "--engine",

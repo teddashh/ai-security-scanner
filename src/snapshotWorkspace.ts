@@ -204,8 +204,18 @@ export const reconcileAuthoritativeSnapshot = (
       : undefined;
   if (currentWorkspace && workspace?.case.id === currentWorkspace.case.id) {
     const order = compareCaseRevisions(currentWorkspace.case, workspace.case);
-    if (order !== undefined && (order > 0 || (order === 0 && !refreshDemoPresentation))) {
+    if (order !== undefined && order > 0) {
       workspace = currentWorkspace;
+    } else if (order === 0 && !refreshDemoPresentation) {
+      // Native scan events deliberately carry the case/workspace payload that
+      // changed, but the report projection is returned only by the
+      // authoritative snapshot command. Keep every event-owned field while
+      // enriching it with the report derived from that exact same persisted
+      // revision. Treating the whole equal-revision snapshot as stale leaves
+      // live Results without a report until the app is reopened.
+      workspace = workspace.beginnerReports === undefined
+        ? currentWorkspace
+        : { ...currentWorkspace, beginnerReports: workspace.beginnerReports };
     } else if (
       order === 0
       && refreshDemoPresentation

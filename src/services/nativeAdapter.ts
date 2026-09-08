@@ -143,6 +143,7 @@ interface NativeExternalScope {
   };
   template_policy: {
     revision: string;
+    profile_id?: string | null;
     allowed_template_ids: string[];
     allow_headless: boolean;
     allow_out_of_band: boolean;
@@ -369,7 +370,7 @@ export interface NativeBeginnerMasterReport {
     // an assertion about the wire, not a fact, and it hid that this mapper
     // never normalized the value the way the canonical one does.
     severity: string;
-    confidence: Confidence;
+    confidence: string;
     priority: number | null;
     priority_reasons: string[];
     target_asset_ids: string[];
@@ -387,6 +388,7 @@ export interface NativeBeginnerMasterReport {
       engine_id: string;
       artifact_sha256: string;
       observed_at: string;
+      location?: string | null;
     }>;
     framework_references: Array<{
       framework: string;
@@ -440,6 +442,7 @@ interface NativeEvidence {
   engine_id: string;
   observed_at: string;
   summary: string;
+  location?: string | null;
   artifact_sha256: string;
   artifact_id?: string;
   pointer: string | null;
@@ -977,7 +980,7 @@ const platformFromAsset = (asset: NativeAsset): CloudPlatform => {
   if (asset.kind === "subscription") return "azure";
   if (asset.kind === "project") return "gcp";
   if (asset.kind === "tenant") return "m365";
-  if (["repository", "file_system", "iac_project", "host"].includes(asset.kind)) return "code";
+  if (["repository", "file_system", "iac_project"].includes(asset.kind)) return "code";
   if (["container_image", "container_registry"].includes(asset.kind)) return "container";
   if (asset.kind === "kubernetes_cluster") return "kubernetes";
   return "external";
@@ -1035,6 +1038,7 @@ export const adaptDeclaredWebServiceMetadata = (
   const protocol = candidate.protocol;
   const port = candidate.port;
   const path = candidate.path;
+  const scanProfile = candidate.scan_profile;
   if (
     (protocol !== "http" && protocol !== "https")
     || !Number.isInteger(port)
@@ -1044,8 +1048,67 @@ export const adaptDeclaredWebServiceMetadata = (
     || path.length > 2_048
     || !path.startsWith("/")
     || /[?#\u0000-\u001f\u007f]/u.test(path)
+    || (
+      scanProfile !== undefined
+      && scanProfile !== "internal_device_https"
+    )
   ) return undefined;
-  return { protocol, port: port as number, path };
+  return {
+    protocol,
+    port: port as number,
+    path,
+    ...(scanProfile === undefined ? {} : { scanProfile }),
+  };
+};
+
+export const adaptDeclaredNetworkServiceMetadata = (
+  metadata: Record<string, unknown> | undefined,
+): Asset["declaredNetworkService"] | undefined => {
+  const raw = metadata?.declared_network_service;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const candidate = raw as Record<string, unknown>;
+  const { protocol, port } = candidate;
+  const scanProfile = candidate.scan_profile;
+  const acceptedScanProfile = scanProfile === "internal_endpoint_ssh"
+    || scanProfile === "internal_endpoint_rdp_tls"
+    || scanProfile === "internal_endpoint_vnc"
+    || scanProfile === "internal_endpoint_smtp"
+    || scanProfile === "internal_endpoint_telnet"
+    ? scanProfile
+    : undefined;
+  if (
+    protocol !== "tcp"
+    || !Number.isInteger(port)
+    || (port as number) < 1
+    || (port as number) > 65_535
+    || acceptedScanProfile === undefined
+  ) return undefined;
+  return {
+    protocol,
+    port: port as number,
+    scanProfile: acceptedScanProfile,
+  };
+};
+
+export const adaptDeclaredHostScanMetadata = (
+  metadata: Record<string, unknown> | undefined,
+): Asset["declaredHostScan"] | undefined => {
+  const raw = metadata?.declared_host_scan;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const candidate = raw as Record<string, unknown>;
+  const { protocol, ports } = candidate;
+  const profile = candidate.profile;
+  if (
+    protocol !== "tcp"
+    || profile !== "greenbone_remote_safe_v1"
+    || !Array.isArray(ports)
+    || ports.length === 0
+    || ports.length > 64
+    || ports.some((port) => !Number.isInteger(port) || Number(port) < 1 || Number(port) > 65_535)
+  ) return undefined;
+  const normalizedPorts = [...new Set(ports.map(Number))].sort((left, right) => left - right);
+  if (normalizedPorts.length !== ports.length) return undefined;
+  return { protocol, ports: normalizedPorts, scanProfile: "internal_host_greenbone_remote_safe" };
 };
 
 const mapCoverageState = (status: string): CoverageState => {
@@ -1146,6 +1209,9 @@ const adaptExternalScope = (scope: NativeExternalScope): FrozenExternalScope => 
   },
   templatePolicy: {
     revision: scope.template_policy.revision,
+    ...(typeof scope.template_policy.profile_id === "string"
+      ? { profileId: scope.template_policy.profile_id }
+      : {}),
     allowedTemplateIds: scope.template_policy.allowed_template_ids,
     allowHeadless: scope.template_policy.allow_headless,
     allowOutOfBand: scope.template_policy.allow_out_of_band,
@@ -1756,6 +1822,8 @@ export const adaptNativeCase = (
       questionnairePlaceholder: localQuestionnaireKinds.has(String(asset.metadata?.questionnaire_kind)) && !localInputProfile,
       localInputProfile,
       declaredWebService: adaptDeclaredWebServiceMetadata(asset.metadata),
+      declaredNetworkService: adaptDeclaredNetworkServiceMetadata(asset.metadata),
+      declaredHostScan: adaptDeclaredHostScanMetadata(asset.metadata),
     };
   });
   const assetById = new Map(assets.map((asset) => [asset.id, asset]));
@@ -1796,6 +1864,7 @@ export const adaptNativeCase = (
         sourceEngine: evidence.engine_id,
         observedAt: evidence.observed_at,
         summary: evidence.summary,
+        location: evidence.location ?? undefined,
         rawArtifactHash: evidence.artifact_sha256,
         rawArtifactPath: evidence.pointer ?? undefined,
         kind: evidence.kind,
@@ -2320,7 +2389,7 @@ export const adaptBeginnerMasterReport = (
     // findings list renders from, so an un-normalized value here reaches every
     // `severityMeta[...]` lookup on that page.
     severity: mapSeverity(finding.severity),
-    confidence: finding.confidence,
+    confidence: mapConfidence(finding.confidence),
     // The codes the localized surfaces compose their sentences from. Dropping
     // them left the zh-TW page on the English fallback, and left the summary
     // composer on its no-basis branch, which credits the engine with a rating
@@ -2342,6 +2411,7 @@ export const adaptBeginnerMasterReport = (
       engineId: evidence.engine_id,
       artifactSha256: evidence.artifact_sha256,
       observedAt: evidence.observed_at,
+      location: evidence.location ?? undefined,
     })),
     frameworkReferences: finding.framework_references.map((reference) => ({
       framework: reference.framework,

@@ -37,7 +37,9 @@ const demo = await import(moduleUrl) as {
       kind: string;
       value: string;
       internetExposure?: string;
-      webService?: { protocol: string; port: number; path: string };
+      webService?: { protocol: string; port: number; path: string; scanProfile?: string };
+      networkService?: { protocol: string; port: number; scanProfile: string };
+      hostScan?: { protocol: string; ports: number[]; scanProfile: string };
     }>;
   }) => { id: string; phase: string };
   deleteStoredDemoCase: (caseId: string, confirmation: string) => boolean;
@@ -69,7 +71,9 @@ const demo = await import(moduleUrl) as {
       allowedModes: string[];
       findingCount: number;
       scanAttempted?: boolean;
-      declaredWebService?: { protocol: string; port: number; path: string };
+      declaredWebService?: { protocol: string; port: number; path: string; scanProfile?: string };
+      declaredNetworkService?: { protocol: string; port: number; scanProfile: string };
+      declaredHostScan?: { protocol: string; ports: number[]; scanProfile: string };
     }>;
     scopeGrants: unknown[];
     runs: unknown[];
@@ -116,6 +120,87 @@ const websiteCaseInput = {
       protocol: "https",
       port: 443,
       path: "/",
+    },
+  }],
+};
+
+const internalDeviceCaseInput = {
+  ...websiteCaseInput,
+  name: "Branch gateway review",
+  assessmentIntent: "internal_it_environment",
+  knownAssets: [{
+    kind: "external_target",
+    value: "10.20.30.40",
+    internetExposure: "internal",
+    webService: {
+      protocol: "https",
+      port: 8080,
+      path: "/",
+      scanProfile: "internal_device_https",
+    },
+  }],
+};
+
+const internalEndpointCaseInput = {
+  ...websiteCaseInput,
+  name: "SSH endpoint review",
+  assessmentIntent: "internal_it_environment",
+  knownAssets: [{
+    kind: "external_target",
+    value: "server.example.test",
+    internetExposure: "internal",
+    networkService: {
+      protocol: "tcp",
+      port: 2222,
+      scanProfile: "internal_endpoint_ssh",
+    },
+  }],
+};
+
+const internalHostCaseInput = {
+  ...websiteCaseInput,
+  name: "Internal host review",
+  assessmentIntent: "internal_it_environment",
+  knownAssets: [{
+    kind: "external_target",
+    value: "host.example.test",
+    internetExposure: "internal",
+    hostScan: {
+      protocol: "tcp",
+      ports: [22, 25, 443, 445, 3389],
+      scanProfile: "internal_host_greenbone_remote_safe",
+    },
+  }],
+};
+
+const rdpTlsEndpointCaseInput = {
+  ...websiteCaseInput,
+  name: "RDP transport review",
+  assessmentIntent: "internal_it_environment",
+  knownAssets: [{
+    kind: "external_target",
+    value: "desktop.example.test",
+    internetExposure: "internal",
+    networkService: {
+      protocol: "tcp",
+      port: 3389,
+      scanProfile: "internal_endpoint_rdp_tls",
+    },
+  }],
+};
+
+const vncEndpointCaseInput = {
+  ...websiteCaseInput,
+  name: "VNC transport review",
+  assessmentIntent: "internal_it_environment",
+  knownAssets: [{
+    kind: "external_target",
+    value: "workstation.example.test",
+    internetExposure: "internal",
+    networkService: {
+      protocol: "tcp",
+      port: 5900,
+      scanProfile: "internal_endpoint_vnc",
     },
   }],
 };
@@ -175,6 +260,107 @@ test("browser-persisted website targets project into an honest pending workspace
   assert.equal(reloaded.assets[0]?.id, asset?.id, "browser reloads must preserve candidate identity");
 });
 
+test("browser persistence retains the generic internal-device HTTPS profile", () => {
+  storedValue = "[]";
+  const assessmentCase = demo.createStoredDemoCase(internalDeviceCaseInput);
+  const workspace = demo.getDemoWorkspace(assessmentCase.id);
+
+  assert.deepEqual(workspace.assets[0]?.declaredWebService, {
+    protocol: "https",
+    port: 8080,
+    path: "/",
+    scanProfile: "internal_device_https",
+  });
+  assert.deepEqual(demo.getDemoWorkspace(assessmentCase.id).assets[0]?.declaredWebService, {
+    protocol: "https",
+    port: 8080,
+    path: "/",
+    scanProfile: "internal_device_https",
+  });
+});
+
+test("browser persistence retains one generic exact-host Greenbone profile", () => {
+  storedValue = "[]";
+  const assessmentCase = demo.createStoredDemoCase(internalHostCaseInput);
+  const workspace = demo.getDemoWorkspace(assessmentCase.id);
+
+  assert.equal(workspace.assets[0]?.type, "domain");
+  assert.equal(workspace.assets[0]?.internetExposed, false);
+  assert.deepEqual(workspace.assets[0]?.declaredHostScan, {
+    protocol: "tcp",
+    ports: [22, 25, 443, 445, 3389],
+    scanProfile: "internal_host_greenbone_remote_safe",
+  });
+  assert.deepEqual(demo.getDemoWorkspace(assessmentCase.id).assets[0]?.declaredHostScan,
+    workspace.assets[0]?.declaredHostScan);
+});
+
+test("browser persistence retains an exact SSH endpoint as an external service", () => {
+  storedValue = "[]";
+  const assessmentCase = demo.createStoredDemoCase(internalEndpointCaseInput);
+  const workspace = demo.getDemoWorkspace(assessmentCase.id);
+  const asset = workspace.assets[0];
+
+  assert.equal(asset?.type, "service");
+  assert.equal(asset?.platform, "external");
+  assert.equal(asset?.internetExposed, false);
+  assert.deepEqual(asset?.identifiers, [{ namespace: "dns_name", value: "server.example.test" }]);
+  assert.deepEqual(asset?.declaredNetworkService, {
+    protocol: "tcp",
+    port: 2222,
+    scanProfile: "internal_endpoint_ssh",
+  });
+  assert.deepEqual(demo.getDemoWorkspace(assessmentCase.id).assets[0]?.declaredNetworkService, {
+    protocol: "tcp",
+    port: 2222,
+    scanProfile: "internal_endpoint_ssh",
+  });
+});
+
+test("browser persistence retains the serialized RDP transport endpoint profile", () => {
+  storedValue = "[]";
+  const assessmentCase = demo.createStoredDemoCase(rdpTlsEndpointCaseInput);
+  const workspace = demo.getDemoWorkspace(assessmentCase.id);
+  const asset = workspace.assets[0];
+
+  assert.equal(asset?.type, "service");
+  assert.equal(asset?.platform, "external");
+  assert.equal(asset?.internetExposed, false);
+  assert.deepEqual(asset?.identifiers, [{ namespace: "dns_name", value: "desktop.example.test" }]);
+  assert.deepEqual(asset?.declaredNetworkService, {
+    protocol: "tcp",
+    port: 3389,
+    scanProfile: "internal_endpoint_rdp_tls",
+  });
+  assert.deepEqual(demo.getDemoWorkspace(assessmentCase.id).assets[0]?.declaredNetworkService, {
+    protocol: "tcp",
+    port: 3389,
+    scanProfile: "internal_endpoint_rdp_tls",
+  });
+});
+
+test("browser persistence retains an exact VNC transport endpoint profile", () => {
+  storedValue = "[]";
+  const assessmentCase = demo.createStoredDemoCase(vncEndpointCaseInput);
+  const workspace = demo.getDemoWorkspace(assessmentCase.id);
+  const asset = workspace.assets[0];
+
+  assert.equal(asset?.type, "service");
+  assert.equal(asset?.platform, "external");
+  assert.equal(asset?.internetExposed, false);
+  assert.deepEqual(asset?.identifiers, [{ namespace: "dns_name", value: "workstation.example.test" }]);
+  assert.deepEqual(asset?.declaredNetworkService, {
+    protocol: "tcp",
+    port: 5900,
+    scanProfile: "internal_endpoint_vnc",
+  });
+  assert.deepEqual(demo.getDemoWorkspace(assessmentCase.id).assets[0]?.declaredNetworkService, {
+    protocol: "tcp",
+    port: 5900,
+    scanProfile: "internal_endpoint_vnc",
+  });
+});
+
 test("browser projection preserves exact target classes and fails sensitive targets to internal", () => {
   storedValue = "[]";
   const input = {
@@ -225,6 +411,17 @@ test("malformed browser-persisted known assets fail closed", () => {
       value: "example.com",
       internetExposure: "public",
       webService: { protocol: "ftp", port: 443, path: "/" },
+    }],
+    [{
+      kind: "external_target",
+      value: "example.com",
+      internetExposure: "public",
+      webService: {
+        protocol: "https",
+        port: 443,
+        path: "/",
+        scanProfile: "website_quick",
+      },
     }],
   ];
 

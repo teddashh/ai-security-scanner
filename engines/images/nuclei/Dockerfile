@@ -48,7 +48,7 @@ RUN mkdir -p /src/nuclei /src/nuclei-templates \
 FROM scratch
 
 LABEL org.opencontainers.image.title="ai-security-scanner Nuclei engine" \
-      org.opencontainers.image.description="Exact-allowlist, read-only HTTP template execution for ai-security-scanner" \
+      org.opencontainers.image.description="Pinned upstream automatic read-only HTTP template execution for ai-security-scanner" \
       org.opencontainers.image.source="https://github.com/projectdiscovery/nuclei" \
       org.opencontainers.image.revision="a8c88feb4a1c8e961b7902534ce3af97e9d524a4" \
       org.opencontainers.image.version="3.11.1-5" \

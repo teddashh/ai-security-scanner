@@ -83,8 +83,8 @@ export const useCaseDefinitions = [
     id: "internal_it_environment",
     icon: "database",
     inputKind: "internal_ip_or_snapshot",
-    suggestedActivities: ["low_impact_external_checks"],
-    suggestedPlatforms: ["external"],
+    suggestedActivities: ["local_artifact_analysis", "active_external_vulnerability_tests"],
+    suggestedPlatforms: ["code", "external"],
     knownAssetKind: "external_target",
     internetExposure: "internal",
   },
@@ -165,13 +165,13 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
     cards: {
       deployed_website: {
         title: "A website or API that is already online",
-        summary: "Check a public website for common exposed files and debug or status endpoints with a fixed Nuclei profile.",
+        summary: "Let Nuclei identify a public website's technology and run the matching upstream vulnerability and exposure checks.",
         want:
           "An exact website or API URL, including the hostname and the service you want reviewed.",
         prepare:
           "The URL and permission to test its entire scheme://host:port origin. Do not use this quick profile for path-only permission.",
         productDoes:
-          "Runs 13 pinned Nuclei checks with at most 19 GET requests, limited to 3 requests per second and 2 concurrent requests.",
+          "Runs Nuclei's pinned upstream automatic web profile against the exact approved origin, limited to 10 requests per second and 5 concurrent requests.",
         productDoesNot:
           "It does not sign in, submit forms, follow redirects, exploit findings, or replace a human penetration test.",
       },
@@ -188,16 +188,16 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
           "It does not expand the target list on its own, contact neighboring addresses, or treat an unreachable target as secure.",
       },
       internal_it_environment: {
-        title: "An internal IT environment",
-        summary: "Map reachable services on selected internal systems and analyze attached configuration evidence.",
+        title: "Your repositories, internal systems, and websites",
+        summary: "Check selected code, websites, and exact internal hosts together, with inventory-only ranges kept visible as not tested.",
         want:
-          "Specific internal servers, workstations, or network devices—not an undefined entire company network.",
+          "The exact repository folders, website or API URLs, and hostname or IP for each internal system you want checked.",
         prepare:
-          "A computer that can reach the approved targets, an exact IP list or configuration snapshots, scan limits, and IT-owner approval.",
+          "Local project folders, complete website or API URLs, exact internal hostnames or IPs, and permission to assess every network target. Common ports are selected automatically and can be changed under Advanced.",
         productDoes:
-          "Uses the same exact-target and rate-limit controls for authorized internal checks, and can analyze attached configuration evidence locally.",
+          "Runs applicable upstream code and vulnerability checks against each scan-ready selected asset, keeps target-specific limits, and combines completed results with explicit not-tested inventory in one prioritized report.",
         productDoesNot:
-          "It does not discover and scan every private address automatically, install agents, change devices, or bypass network access controls.",
+          "It does not scan unlisted addresses, install agents, change code or devices, bypass access controls, or call an inventory-only observation a vulnerability scan.",
       },
       ai_application: {
         title: "An AI app or agent you are building",
@@ -292,10 +292,10 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
     cards: {
       deployed_website: {
         title: "已經架好的網站或 API",
-        summary: "使用固定 Nuclei 設定，檢查公開網站常見的暴露檔案，以及除錯或狀態端點。",
+        summary: "讓 Nuclei 辨識公開網站的技術，並執行適用的上游弱點與暴露檢查。",
         want: "一個精確的網站或 API 網址，包含要檢查的主機名稱與服務。",
         prepare: "網址，以及可測試整個 scheme://host:port 網站來源範圍的許可；如果只獲准特定路徑，請勿使用此快速設定。",
-        productDoes: "執行 13 項固定版本的 Nuclei 檢查，最多送出 19 次 GET 請求，每秒最多 3 次且同時最多 2 次。",
+        productDoes: "對精確獲准的網站來源範圍執行固定版本的 Nuclei 上游自動網站設定，每秒最多 10 次且同時最多 5 次。",
         productDoesNot: "不登入、不送出表單、不跟隨重新導向、不利用發現的弱點，也不能取代人工滲透測試。",
       },
       external_ip_or_domain: {
@@ -307,12 +307,12 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
         productDoesNot: "不自行擴大目標、不掃相鄰 IP，也不會把無法連線說成安全。",
       },
       internal_it_environment: {
-        title: "公司內部 IT 環境",
-        summary: "盤點所選內部系統可連線的服務，並分析附加的設定證據。",
-        want: "明確的內部伺服器、工作站或網路設備，不是一句模糊的「整間公司」。",
-        prepare: "一台能連到核准目標的電腦、精確 IP 清單或設定快照、掃描限制，以及 IT 負責人的同意。",
-        productDoes: "用相同的精確目標與限速保護執行內部檢查，也能在本機分析你附上的設定證據。",
-        productDoesNot: "不自動掃完整個私有網段、不安裝代理程式、不修改設備，也不繞過現有網路存取控制。",
+        title: "公司的 repo、內部系統與網站",
+        summary: "把指定的程式碼、網站與精確內部主機放進同一次掃描；僅供盤點的網段會在同一份報告明列為未測試。",
+        want: "精確的 repo 資料夾、網站或 API 網址，以及每個要檢查之內部系統的主機名稱或 IP。",
+        prepare: "本機專案資料夾、完整網站或 API 網址、精確內部主機名稱或 IP，以及每個網路目標的檢查許可。系統會自動選用常用連接埠，也可在「進階」中修改。",
+        productDoes: "對每項已可掃描的資產執行適用的上游程式碼與弱點檢查，保留各目標限制，再把完成結果與明確的未測試盤點整合成一份有優先順序的報告。",
+        productDoesNot: "不掃未列出的位址、不安裝代理程式、不修改程式碼或設備、不繞過存取控制，也不把只有盤點的觀察稱為漏洞掃描。",
       },
       ai_application: {
         title: "正在開發的 AI 應用或 Agent",

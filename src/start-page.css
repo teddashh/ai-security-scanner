@@ -145,7 +145,7 @@
 
 .use-case-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 9px;
 }
 
@@ -493,7 +493,7 @@
   }
 
   .use-case-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
   }
 
   .use-case-card {
@@ -505,10 +505,6 @@
   .use-case-card__header h3 { font-size: 0.84rem; }
   .use-case-card__action { min-height: 36px; padding-inline: 9px; font-size: 0.75rem; }
   .start-page__scan-limit-list { grid-template-columns: 1fr; }
-}
-
-@media (max-width: 380px) {
-  .use-case-grid { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

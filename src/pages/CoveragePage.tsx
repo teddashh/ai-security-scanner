@@ -41,8 +41,21 @@ import { durationParts, estimateNetworkScanMinimum } from "../networkScanEstimat
 import { localizedCoverageRecordDetail } from "../findingNarrative.ts";
 import { websiteQuickOrigin, websiteQuickProfile } from "../websiteQuickProfile";
 import {
+  internalDeviceProfileFromScanProfile,
+  internalDeviceTlsVulnerabilityOids,
+} from "../internalDeviceProfile";
+import {
+  internalEndpointCoordinate,
+  internalEndpointProfiles,
+  internalEndpointServiceFromScanProfile,
+} from "../internalEndpointProfile";
+import { internalHostGreenboneProfile } from "../internalHostProfile";
+import { validateExternalTarget } from "../caseForm";
+import type { EngineAssetRoute, ScopeApprovalInput } from "../services/scanner";
+import {
   localInputDefinitions,
   localInputDefinitionForAssessmentIntent,
+  localInputEngineIds,
   localInputEngines,
   localPathDisplayName,
   localProfileByAssessmentIntent,
@@ -77,6 +90,10 @@ export interface CoveragePageProps {
     confirmation: string,
     externalScope?: ExternalScopeRequest,
     engineIds?: string[],
+  ) => Promise<boolean>;
+  onStartEnvironmentScan: (
+    authorizations: Array<Omit<ScopeApprovalInput, "caseId">>,
+    engineAssetRoutes: EngineAssetRoute[],
   ) => Promise<boolean>;
 }
 
@@ -390,6 +407,94 @@ const pageCopy = {
   allowTitle: bilingual("3. Review and start", "3. 確認後開始"),
   allowDescription: bilingual("Confirm the target and limits.", "確認目標與限制。"),
   focusedReviewTitle: bilingual("Review and start", "確認後開始"),
+  environmentPlanTitle: bilingual("One scan for this IT environment", "一次掃描這個 IT 環境"),
+  environmentPlanBody: bilingual(
+    "Choose the scan-ready items below. Each scanner receives only the assets it can check, and all completed results go into one report. Inventory-only ranges are not contacted or scanned.",
+    "選擇下方已可掃描的項目。每個掃描器只會收到它能檢查的資產，所有完成結果會整合成一份報告。僅供盤點的網段不會被連線或掃描。",
+  ),
+  environmentRepositoriesTitle: bilingual("Project folders", "開發案資料夾"),
+  environmentRepositoriesBody: bilingual(
+    "Read-only checks for risky code, exposed secrets, vulnerable dependencies, and unsafe configuration when applicable.",
+    "依專案內容執行危險程式碼、暴露秘密、有弱點相依套件與不安全設定的唯讀檢查。",
+  ),
+  environmentWebsitesTitle: bilingual("Websites and APIs", "網站與 API"),
+  environmentWebsitesBody: bilingual(
+    "Nuclei identifies the website technology and applies matching upstream vulnerability and exposure checks to each exact origin below. It does not sign in, exploit findings, crawl other hosts, or add targets.",
+    "Nuclei 會辨識網站技術，並對下方每個精確來源範圍執行適用的上游弱點與暴露檢查；不會登入、利用弱點、爬取其他主機或加入目標。",
+  ),
+  environmentWebsiteCheck: bilingual(
+    "Nuclei upstream automatic web scan",
+    "Nuclei 上游自動網站掃描",
+  ),
+  environmentHostsTitle: bilingual("Internal systems", "內部系統"),
+  environmentHostsBody: bilingual(
+    "Greenbone discovers supported services on the selected common ports and applies its pinned remote-safe profile to each exact host. It does not sign in, use credentials, expand a range, or add another host.",
+    "Greenbone 會在所選常用連接埠探索支援的服務，並對每個精確主機套用固定的 remote-safe 設定；不會登入、使用帳密、擴大網段或加入其他主機。",
+  ),
+  environmentHostCheck: bilingual(
+    "Greenbone remote-safe profile · TCP {ports}",
+    "Greenbone remote-safe 設定 · TCP {ports}",
+  ),
+  environmentEndpointsTitle: bilingual("Servers and workstations — SSH, RDP, VNC, SMTP, or Telnet", "伺服器與工作站（SSH、RDP、VNC、SMTP 或 Telnet）"),
+  environmentEndpointsBody: bilingual(
+    "Greenbone runs only the displayed SSH, RDP, VNC, SMTP, or Telnet security profile against each exact host and port below. It does not sign in, send mail, start a remote desktop, scan the whole server or workstation, expand a range, or add other hosts.",
+    "Greenbone 只會對下方每個精確主機與連接埠執行畫面所列的 SSH、RDP、VNC、SMTP 或 Telnet 資安檢查；不會登入、寄信、啟動遠端桌面、掃描整台伺服器或工作站、擴大網段或加入其他主機。",
+  ),
+  environmentEndpointCheck: bilingual(
+    "{service} · Greenbone · {checks} security checks",
+    "{service} · Greenbone · {checks} 項資安檢查",
+  ),
+  environmentEndpointCheckOne: bilingual(
+    "{service} · Greenbone · 1 security check",
+    "{service} · Greenbone · 1 項資安檢查",
+  ),
+  environmentDevicesTitle: bilingual("Network devices with HTTPS management", "使用 HTTPS 管理的網路設備"),
+  environmentDevicesBody: bilingual(
+    "Greenbone checks only each exact HTTPS management service below for TLS protocol, cipher, and certificate weaknesses. It does not sign in, inspect the whole device, expand the network range, or add other hosts.",
+    "Greenbone 只會檢查下方每個精確 HTTPS 管理服務的 TLS 協定、cipher 與憑證弱點；不會登入、檢查整台設備、擴大網段或加入其他主機。",
+  ),
+  environmentDeviceCheck: bilingual(
+    "Greenbone · {checks} TLS vulnerability checks",
+    "Greenbone · {checks} 項 TLS 弱點檢查",
+  ),
+  environmentNotReadyTitle: bilingual(
+    "{count} bare host(s) or range(s) are inventory only — not scanned",
+    "{count} 個裸主機或網段僅供盤點，不會掃描",
+  ),
+  environmentNotReadyBody: bilingual(
+    "These legacy bare hosts or ranges will not be contacted or vulnerability-scanned in this run; the report lists them as not tested. Edit inputs to add each exact host under Internal systems.",
+    "這些舊版裸主機或網段在本次執行中不會被連線或掃描弱點；報告會將它們列為未測試。請編輯輸入，並在「內部系統」逐一加入精確主機。",
+  ),
+  environmentNoReadyTitle: bilingual("Add one scan-ready item", "請加入至少一個可掃描項目"),
+  environmentNoReadyBody: bilingual(
+    "Add a project folder, a complete HTTP(S) website or API URL, or one exact internal-system hostname or IP. Inventory-only ranges remain visible as not tested and are not contacted or scanned.",
+    "請加入開發案資料夾、完整 HTTP(S) 網站或 API 網址，或一個精確的內部系統主機名稱或 IP。僅供盤點的網段仍會顯示為未測試，而且不會被連線或掃描。",
+  ),
+  environmentNetworkConfirmationTitle: bilingual(
+    "I confirm I am allowed to scan every selected website, API, and exact internal system",
+    "我確認自己有權掃描每個已選網站、API 與精確內部系統",
+  ),
+  environmentNetworkConfirmationBody: bilingual(
+    "Start will contact only these exact network targets: {origins}",
+    "開始後只會連線到這些精確網路目標：{origins}",
+  ),
+  environmentEndpointConfirmation: bilingual(
+    "The user explicitly confirmed authorization to run the displayed fixed Greenbone {service} profile against the exact {origin} service.",
+    "使用者已明確確認獲准對精確的 {origin} 服務執行畫面所列的固定 Greenbone {service} 檢查。",
+  ),
+  environmentHostConfirmation: bilingual(
+    "The user explicitly confirmed authorization to run the pinned Greenbone remote-safe profile against the exact {origin} boundary.",
+    "使用者已明確確認獲准對精確的 {origin} 範圍執行固定的 Greenbone remote-safe 設定。",
+  ),
+  environmentDeviceConfirmation: bilingual(
+    "The user explicitly confirmed authorization to run the displayed fixed Greenbone HTTPS management-service profile against the exact {origin} origin.",
+    "使用者已明確確認獲准對精確的 {origin} 來源範圍執行畫面所列的固定 Greenbone HTTPS 管理服務檢查。",
+  ),
+  environmentReportBoundary: bilingual(
+    "One Start creates one run and one combined report. Items that still need a real vulnerability profile stay listed as not tested.",
+    "按一次開始會建立一次執行與一份整合報告；仍缺少實際弱點檢查設定的項目會明列為未測試。",
+  ),
+  environmentStart: bilingual("Start one combined scan", "開始一次整合掃描"),
   editInputs: bilingual("Edit inputs", "編輯輸入"),
   backToReview: bilingual("Back to review", "返回確認"),
   pendingNoticeTitle: bilingual("Choose an item to see its checks", "選擇項目以查看檢查方式"),
@@ -433,8 +538,8 @@ const pageCopy = {
     "{target} · {protocol} {ports} · 每秒最多 {rate} 次 · 同時 {concurrency} 個 · {timeout} 秒逾時。不會利用弱點、使用憑證、執行破壞性操作或加入其他目標；開始即確認已獲授權。",
   ),
   websiteQuickBoundary: bilingual(
-    "Website to check: {origin}, not only the entered page path {path}. The fixed scan sends at most {requests} GET requests to a small fixed set of common exposure and diagnostic locations, at max {rate}/s, {concurrency} concurrent, and {timeout}s timeout. It does not sign in, submit forms, follow redirects, or exploit findings. If you are allowed to test only a specific path, do not use this quick scan.",
-    "要檢查的網站來源範圍：{origin}，不只輸入的頁面路徑 {path}。固定掃描最多會對一小組常見的暴露與診斷位置送出 {requests} 次 GET 請求，速率最多每秒 {rate} 次、同時 {concurrency} 個、逾時 {timeout} 秒；不會登入、送出表單、跟隨重新導向或利用發現的弱點。如果只獲准測試特定路徑，請勿使用此快速掃描。",
+    "Website to check: {origin}, not only the entered page path {path}. Nuclei identifies the technology and applies matching read-only checks from the pinned upstream template set, at max {rate}/s, {concurrency} concurrent, and {timeout}s per-request timeout. It does not sign in, submit forms, follow redirects, or exploit findings. If you are allowed to test only a specific path, do not use this quick scan.",
+    "要檢查的網站來源範圍：{origin}，不只輸入的頁面路徑 {path}。Nuclei 會辨識網站技術，並從固定版本的上游模板集中執行適用的唯讀檢查；速率最多每秒 {rate} 次、同時 {concurrency} 個、每次請求逾時 {timeout} 秒。不會登入、送出表單、跟隨重新導向或利用發現的弱點。如果只獲准測試特定路徑，請勿使用此快速掃描。",
   ),
   guidedNetworkTechnicalPreset: bilingual(
     "Current preset: {protocol}; exact service ports: {count}; up to {concurrency} simultaneous connections.",
@@ -619,6 +724,37 @@ const nextStepForAsset = (asset: Asset): BilingualText => {
   if (isAwaitingFirstScan(asset.coverageState, asset.scanAttempted)) {
     return pageCopy.readyToScanNext;
   }
+  if (asset.localInputProfile) {
+    if (asset.localInputProfile === "repository_working_tree") {
+      return bilingual(
+        "Allow read-only review of this saved source-code copy.",
+        "允許唯讀檢查這份已保存的程式碼副本。",
+      );
+    }
+    if (asset.localInputProfile === "iac_working_tree") {
+      return bilingual(
+        "Allow read-only review of this saved infrastructure-code copy.",
+        "允許唯讀檢查這份已保存的基礎設施程式碼副本。",
+      );
+    }
+    if (asset.localInputProfile === "kubernetes_manifests"
+      || asset.localInputProfile === "kubernetes_node_snapshot") {
+      return bilingual(
+        "Allow offline review of this saved Kubernetes input only.",
+        "只允許離線檢查這份已保存的 Kubernetes 輸入。",
+      );
+    }
+    if (asset.localInputProfile === "container_image_oci_layout") {
+      return bilingual(
+        "Allow offline review of this saved container image only.",
+        "只允許離線檢查這份已保存的容器映像。",
+      );
+    }
+    return bilingual(
+      "Allow read-only review of this saved local input.",
+      "允許唯讀檢查這份已保存的本機輸入。",
+    );
+  }
   if (asset.platform === "external" && asset.internetExposed === false) {
     return bilingual(
       "Confirm this is your internal system, then use the recommended low-impact settings.",
@@ -638,17 +774,19 @@ const nextStepForAsset = (asset: Asset): BilingualText => {
     );
   }
   if (asset.platform === "code") {
-    return asset.localInputProfile === "iac_working_tree"
-      ? bilingual("Allow read-only review of this saved infrastructure-code copy.", "允許唯讀檢查這份已保存的基礎設施程式碼副本。")
-      : bilingual("Allow read-only review of this saved source-code copy.", "允許唯讀檢查這份已保存的程式碼副本。");
+    return bilingual(
+      "Confirm this is the code project you want checked.",
+      "確認這是你想檢查的程式碼專案。",
+    );
   }
   if (asset.platform === "container") {
     return bilingual("Confirm this is the container image you want checked.", "確認這是你想檢查的容器映像。");
   }
   if (asset.platform === "kubernetes") {
-    return asset.localInputProfile
-      ? bilingual("Allow offline review of this saved Kubernetes input only.", "只允許離線檢查這份已保存的 Kubernetes 輸入。")
-      : bilingual("Confirm that this is the Kubernetes cluster you want checked.", "確認這是你想檢查的 Kubernetes 叢集。");
+    return bilingual(
+      "Confirm that this is the Kubernetes cluster you want checked.",
+      "確認這是你想檢查的 Kubernetes 叢集。",
+    );
   }
   return bilingual(
     "Confirm this is the cloud account you want checked, then choose the recommended read-only checks.",
@@ -674,6 +812,16 @@ const parsePorts = (value: string): number[] | undefined => {
 const parseTemplateIds = (value: string): string[] =>
   [...new Set(value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))];
 
+const directExternalTargetsForAsset = (asset: Asset): string[] => {
+  const acceptedNamespaces = asset.declaredWebService || asset.declaredNetworkService || asset.declaredHostScan
+    ? new Set(["dns_name", "ip_address"])
+    : new Set(["dns_name", "ip_address", "ip_network"]);
+  return [...new Set((asset.identifiers ?? [])
+    .filter((identifier) => acceptedNamespaces.has(identifier.namespace))
+    .map((identifier) => identifier.value.trim())
+    .filter((value) => validateExternalTarget(value).ok))];
+};
+
 export function CoveragePage({
   caseId,
   assessmentIntent,
@@ -695,13 +843,16 @@ export function CoveragePage({
   onStartDiscovery,
   onAuthorizationChanged,
   onStartScan,
+  onStartEnvironmentScan,
 }: CoveragePageProps) {
   const { locale, text, formatDateTime, formatNumber } = useI18n();
   const guidedLocalProfile = assessmentIntent ? localProfileByAssessmentIntent[assessmentIntent] : undefined;
   const guidedLocalInput = guidedLocalProfile
     ? localInputDefinitionForAssessmentIntent(guidedLocalProfile, assessmentIntent)
     : undefined;
-  const guidedNetworkRoute = Boolean(assessmentIntent && networkAssessmentIntents.includes(assessmentIntent));
+  const environmentRoute = assessmentIntent === "internal_it_environment";
+  const guidedNetworkRoute = !environmentRoute
+    && Boolean(assessmentIntent && networkAssessmentIntents.includes(assessmentIntent));
   const guidedCloudRoute = assessmentIntent === "cloud_account";
   const guidedCoverageRoute = useMemo<GuidedCoverageRoute>(() => {
     if (guidedNetworkRoute) return { kind: "network" };
@@ -746,6 +897,7 @@ export function CoveragePage({
   const [showCompletedSetup, setShowCompletedSetup] = useState(false);
   const [providerConnection, setProviderConnection] = useState<ProviderConnectionBoundary>();
   const [providerCleanupNeedsAttention, setProviderCleanupNeedsAttention] = useState(false);
+  const [environmentNetworkConfirmed, setEnvironmentNetworkConfirmed] = useState(false);
 
   const counts = useMemo(
     () => Object.fromEntries(coverageStates.map((state) => [state, coverage.filter((item) => item.state === state).length])) as Record<CoverageState, number>,
@@ -759,6 +911,109 @@ export function CoveragePage({
 
   const pendingAssets = assets.filter((asset) => asset.authorizationState === "pending");
   const scopeEligibleAssets = useMemo(() => assets.filter(isScopeEligible), [assets]);
+  const environmentLocalAssets = useMemo(
+    () => scopeEligibleAssets.filter((asset) => Boolean(asset.localInputProfile)),
+    [scopeEligibleAssets],
+  );
+  const environmentHostAssets = useMemo(() => scopeEligibleAssets.flatMap((asset) => {
+    const hostScan = asset.declaredHostScan;
+    const target = directExternalTargetsForAsset(asset)[0];
+    if (
+      asset.platform !== "external"
+      || !hostScan
+      || hostScan.protocol !== "tcp"
+      || hostScan.scanProfile !== internalHostGreenboneProfile.scanProfile
+      || !target
+      || typeof asset.internetExposed !== "boolean"
+    ) return [];
+    return [{
+      asset,
+      target,
+      origin: `${target} · TCP ${hostScan.ports.join(", ")}`,
+      ports: hostScan.ports,
+      profile: internalHostGreenboneProfile,
+    }];
+  }), [scopeEligibleAssets]);
+  const environmentDeviceAssets = useMemo(() => scopeEligibleAssets.flatMap((asset) => {
+    const service = asset.declaredWebService;
+    const profile = internalDeviceProfileFromScanProfile(service?.scanProfile);
+    const target = directExternalTargetsForAsset(asset)[0];
+    if (
+      asset.platform !== "external"
+      || !service
+      || service.protocol !== "https"
+      || !profile
+      || !target
+      || typeof asset.internetExposed !== "boolean"
+    ) return [];
+    return [{
+      asset,
+      target,
+      origin: websiteQuickOrigin(target, service.protocol, service.port),
+      profile,
+    }];
+  }), [scopeEligibleAssets]);
+  const environmentEndpointAssets = useMemo(() => scopeEligibleAssets.flatMap((asset) => {
+    const service = asset.declaredNetworkService;
+    const serviceType = internalEndpointServiceFromScanProfile(service?.scanProfile);
+    const target = directExternalTargetsForAsset(asset)[0];
+    if (
+      asset.platform !== "external"
+      || !service
+      || service.protocol !== "tcp"
+      || !serviceType
+      || !target
+      || typeof asset.internetExposed !== "boolean"
+    ) return [];
+    return [{
+      asset,
+      target,
+      origin: internalEndpointCoordinate(target, service.port),
+      serviceType,
+      profile: internalEndpointProfiles[serviceType],
+    }];
+  }), [scopeEligibleAssets]);
+  const environmentWebsiteAssets = useMemo(() => scopeEligibleAssets.flatMap((asset) => {
+    const service = asset.declaredWebService;
+    const target = directExternalTargetsForAsset(asset)[0];
+    if (
+      asset.platform !== "external"
+      || !service
+      || internalDeviceProfileFromScanProfile(service.scanProfile)
+      || !target
+      || typeof asset.internetExposed !== "boolean"
+    ) return [];
+    return [{
+      asset,
+      target,
+      origin: websiteQuickOrigin(target, service.protocol, service.port),
+    }];
+  }), [scopeEligibleAssets]);
+  const environmentReadyAssetIds = useMemo(
+    () => new Set([
+      ...environmentLocalAssets.map((asset) => asset.id),
+      ...environmentHostAssets.map(({ asset }) => asset.id),
+      ...environmentWebsiteAssets.map(({ asset }) => asset.id),
+      ...environmentEndpointAssets.map(({ asset }) => asset.id),
+      ...environmentDeviceAssets.map(({ asset }) => asset.id),
+    ]),
+    [environmentDeviceAssets, environmentEndpointAssets, environmentHostAssets, environmentLocalAssets, environmentWebsiteAssets],
+  );
+  const environmentNetworkAssetIds = useMemo(
+    () => new Set([
+      ...environmentWebsiteAssets.map(({ asset }) => asset.id),
+      ...environmentHostAssets.map(({ asset }) => asset.id),
+      ...environmentEndpointAssets.map(({ asset }) => asset.id),
+      ...environmentDeviceAssets.map(({ asset }) => asset.id),
+    ]),
+    [environmentDeviceAssets, environmentEndpointAssets, environmentHostAssets, environmentWebsiteAssets],
+  );
+  const environmentUnreadyExternalAssets = useMemo(
+    () => scopeEligibleAssets.filter((asset) => (
+      asset.platform === "external" && !environmentReadyAssetIds.has(asset.id)
+    )),
+    [environmentReadyAssetIds, scopeEligibleAssets],
+  );
   const guidedSelectableAsset = useMemo(
     () => singleGuidedSelectableAsset(scopeEligibleAssets, guidedCoverageRoute),
     [guidedCoverageRoute, scopeEligibleAssets],
@@ -777,6 +1032,22 @@ export function CoveragePage({
     ? guidedLocalInput
     : localInputDefinitions[workspaceInputProfile];
   const selectedScopeAssets = assets.filter((asset) => selectedAssets.includes(asset.id));
+  const selectedEnvironmentLocalAssets = environmentLocalAssets.filter((asset) => selectedAssets.includes(asset.id));
+  const selectedEnvironmentHostAssets = environmentHostAssets.filter(({ asset }) => selectedAssets.includes(asset.id));
+  const selectedEnvironmentWebsiteAssets = environmentWebsiteAssets.filter(({ asset }) => selectedAssets.includes(asset.id));
+  const selectedEnvironmentEndpointAssets = environmentEndpointAssets.filter(({ asset }) => selectedAssets.includes(asset.id));
+  const selectedEnvironmentDeviceAssets = environmentDeviceAssets.filter(({ asset }) => selectedAssets.includes(asset.id));
+  const selectedEnvironmentNetworkAssets = [
+    ...selectedEnvironmentHostAssets,
+    ...selectedEnvironmentWebsiteAssets,
+    ...selectedEnvironmentEndpointAssets,
+    ...selectedEnvironmentDeviceAssets,
+  ];
+  const selectedEnvironmentAssetCount = selectedEnvironmentLocalAssets.length
+    + selectedEnvironmentHostAssets.length
+    + selectedEnvironmentWebsiteAssets.length
+    + selectedEnvironmentEndpointAssets.length
+    + selectedEnvironmentDeviceAssets.length;
   const firstSelectedScopeAsset = selectedScopeAssets[0];
   const availableScopeModes = !firstSelectedScopeAsset
     ? []
@@ -833,10 +1104,7 @@ export function CoveragePage({
   const limits = externalActivity ? rateLimits[externalActivity] : undefined;
   const externalTargetOptions = useMemo(() => {
     if (!selectedExternalAsset) return [];
-    return [...new Set([
-      ...(selectedExternalAsset.identifiers ?? []).map((identifier) => identifier.value),
-      selectedExternalAsset.name,
-    ].map((value) => value.trim()).filter((value) => Boolean(value) && !value.includes("*") && !/[\n\r\0]/.test(value)))];
+    return directExternalTargetsForAsset(selectedExternalAsset);
   }, [selectedExternalAsset]);
   const parsedPorts = parsePorts(externalPorts);
   const networkScanEstimate = externalActivity === "low_impact_external" && parsedPorts
@@ -860,6 +1128,9 @@ export function CoveragePage({
   const parsedTemplateIds = parseTemplateIds(allowedTemplateIds);
   const templateIdsValid = parsedTemplateIds.every((id) => id !== "*" && !/[\n\r\0]/.test(id));
   const templateRevisionPinned = /(?:^|@)(?:sha256:)?(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(templateRevision.trim());
+  const activeTemplateSelectionReady = guidedWebsiteQuickProfile
+    ? websiteQuickProfile.profileId.length > 0
+    : parsedTemplateIds.length > 0;
   const isDirectExternal = externalActivity === "low_impact_external" || externalActivity === "active_external";
   const directNetworkBoundaryConfirmed = selectedExternalAsset?.internetExposed === true
     || (selectedExternalAsset?.internetExposed === false && effectiveAllowSensitiveNetworks);
@@ -873,7 +1144,7 @@ export function CoveragePage({
     && parsedPorts
     && (!isDirectExternal || (parsedPorts.length > 0 && directNetworkBoundaryConfirmed))
     && templateIdsValid
-    && (externalActivity !== "active_external" || parsedTemplateIds.length > 0)
+    && (externalActivity !== "active_external" || activeTemplateSelectionReady)
     && requestsPerSecond >= 1
     && limits
     && requestsPerSecond <= limits.rate
@@ -957,6 +1228,7 @@ export function CoveragePage({
     setTemplateRevision(websiteQuickProfile.templateRevision);
     setAllowedTemplateIds("");
     setAllowSensitiveNetworks(false);
+    setEnvironmentNetworkConfirmed(false);
     setShowAdvancedExternalSettings(false);
   };
 
@@ -1026,6 +1298,24 @@ export function CoveragePage({
     });
   }, [caseId, assessmentIntent, guidedCloudRoute, guidedLocalProfile, guidedSelectableAsset, requestedActivities]);
 
+  const environmentReadyAssetKey = [...environmentReadyAssetIds].join("\0");
+  useEffect(() => {
+    if (!environmentRoute) return;
+    setSelectedAssets([...environmentReadyAssetIds]);
+    setScopeModes([]);
+    setScopeConfirmation("");
+    setOwnershipConfirmed(false);
+    setEnvironmentNetworkConfirmed(false);
+  }, [caseId, environmentReadyAssetKey, environmentRoute]);
+
+  const toggleEnvironmentAsset = (assetId: string) => {
+    if (!environmentReadyAssetIds.has(assetId)) return;
+    if (environmentNetworkAssetIds.has(assetId)) setEnvironmentNetworkConfirmed(false);
+    setSelectedAssets((current) => current.includes(assetId)
+      ? current.filter((id) => id !== assetId)
+      : [...current, assetId]);
+  };
+
   const toggleAsset = (assetId: string) => {
     setSelectedAssets((current) => {
       const removing = current.includes(assetId);
@@ -1073,7 +1363,12 @@ export function CoveragePage({
       },
       templatePolicy: {
         revision: externalActivity === "active_external" ? templateRevision.trim() : "not_applicable",
-        allowedTemplateIds: externalActivity === "active_external" ? parsedTemplateIds : [],
+        ...(externalActivity === "active_external" && guidedWebsiteQuickProfile
+          ? { profileId: websiteQuickProfile.profileId }
+          : {}),
+        allowedTemplateIds: externalActivity === "active_external" && !guidedWebsiteQuickProfile
+          ? parsedTemplateIds
+          : [],
         allowHeadless: false,
         allowOutOfBand: false,
         allowFuzzing: false,
@@ -1084,12 +1379,176 @@ export function CoveragePage({
       assertedAuthority: effectiveScopeConfirmation,
       allowSensitiveNetworks: effectiveAllowSensitiveNetworks,
     } : undefined;
+    const guidedLocalEngineIds = guidedLocalConsent
+      ? [...new Set(selectedScopeAssets.flatMap((asset) => (
+        asset.localInputProfile ? localInputEngineIds[asset.localInputProfile] : []
+      )))]
+      : undefined;
     const started = await onStartScan(
       selectedAssets,
       scopeModes,
       effectiveScopeConfirmation,
       externalScope,
-      guidedWebsiteQuickProfile ? [...websiteQuickProfile.engineIds] : undefined,
+      guidedWebsiteQuickProfile
+        ? [...websiteQuickProfile.engineIds]
+        : guidedLocalEngineIds,
+    );
+    if (started) resetScopeForm();
+  };
+
+  const startEnvironmentScan = async () => {
+    if (!environmentRoute || selectedEnvironmentAssetCount === 0) return;
+    if (selectedEnvironmentNetworkAssets.length > 0 && !environmentNetworkConfirmed) return;
+
+    const authorizations: Array<Omit<ScopeApprovalInput, "caseId">> = [];
+    const routes = new Map<string, string[]>();
+    const addEngineRoute = (engineId: string, assetId: string) => {
+      const routedAssetIds = routes.get(engineId) ?? [];
+      if (!routedAssetIds.includes(assetId)) routedAssetIds.push(assetId);
+      routes.set(engineId, routedAssetIds);
+    };
+
+    for (const asset of selectedEnvironmentLocalAssets) {
+      const profile = asset.localInputProfile;
+      if (!profile) continue;
+      authorizations.push({
+        assetIds: [asset.id],
+        modes: ["local_artifact"],
+        confirmation: text(pageCopy.guidedLocalConfirmation),
+      });
+      for (const engineId of localInputEngineIds[profile]) addEngineRoute(engineId, asset.id);
+    }
+
+    for (const { asset, target, origin, ports, profile } of selectedEnvironmentHostAssets) {
+      const confirmation = text(pageCopy.environmentHostConfirmation, { origin });
+      authorizations.push({
+        assetIds: [asset.id],
+        modes: ["active_external"],
+        confirmation,
+        externalScope: {
+          target,
+          ports: [...ports],
+          protocol: "tcp",
+          activity: "active_external",
+          ratePolicy: { ...profile.ratePolicy },
+          templatePolicy: {
+            revision: profile.templateRevision,
+            profileId: profile.profileId,
+            allowedTemplateIds: [],
+            allowHeadless: false,
+            allowOutOfBand: false,
+            allowFuzzing: false,
+            allowFileUpload: false,
+            allowDenialOfService: false,
+            allowCredentialAttacks: false,
+          },
+          assertedAuthority: confirmation,
+          allowSensitiveNetworks: asset.internetExposed === false,
+        },
+      });
+      for (const engineId of profile.engineIds) addEngineRoute(engineId, asset.id);
+    }
+
+    for (const { asset, target, origin } of selectedEnvironmentWebsiteAssets) {
+      const service = asset.declaredWebService;
+      if (!service) continue;
+      const confirmation = text(pageCopy.websiteQuickConfirmation, { origin });
+      authorizations.push({
+        assetIds: [asset.id],
+        modes: ["active_external"],
+        confirmation,
+        externalScope: {
+          target,
+          ports: [service.port],
+          protocol: service.protocol,
+          activity: "active_external",
+          ratePolicy: { ...websiteQuickProfile.ratePolicy },
+          templatePolicy: {
+            revision: websiteQuickProfile.templateRevision,
+            profileId: websiteQuickProfile.profileId,
+            allowedTemplateIds: [...websiteQuickProfile.allowedTemplateIds],
+            allowHeadless: false,
+            allowOutOfBand: false,
+            allowFuzzing: false,
+            allowFileUpload: false,
+            allowDenialOfService: false,
+            allowCredentialAttacks: false,
+          },
+          assertedAuthority: confirmation,
+          allowSensitiveNetworks: asset.internetExposed === false,
+        },
+      });
+      for (const engineId of websiteQuickProfile.engineIds) addEngineRoute(engineId, asset.id);
+    }
+
+    for (const { asset, target, origin, profile } of selectedEnvironmentEndpointAssets) {
+      const service = asset.declaredNetworkService;
+      if (!service || service.protocol !== "tcp") continue;
+      const confirmation = text(pageCopy.environmentEndpointConfirmation, {
+        origin,
+        service: text(profile.label),
+      });
+      authorizations.push({
+        assetIds: [asset.id],
+        modes: ["active_external"],
+        confirmation,
+        externalScope: {
+          target,
+          ports: [service.port],
+          protocol: "tcp",
+          activity: "active_external",
+          ratePolicy: { ...profile.ratePolicy },
+          templatePolicy: {
+            revision: profile.templateRevision,
+            allowedTemplateIds: [...profile.allowedTemplateIds],
+            allowHeadless: false,
+            allowOutOfBand: false,
+            allowFuzzing: false,
+            allowFileUpload: false,
+            allowDenialOfService: false,
+            allowCredentialAttacks: false,
+          },
+          assertedAuthority: confirmation,
+          allowSensitiveNetworks: asset.internetExposed === false,
+        },
+      });
+      for (const engineId of profile.engineIds) addEngineRoute(engineId, asset.id);
+    }
+
+    for (const { asset, target, origin, profile } of selectedEnvironmentDeviceAssets) {
+      const service = asset.declaredWebService;
+      if (!service || service.protocol !== "https") continue;
+      const confirmation = text(pageCopy.environmentDeviceConfirmation, { origin });
+      authorizations.push({
+        assetIds: [asset.id],
+        modes: ["active_external"],
+        confirmation,
+        externalScope: {
+          target,
+          ports: [service.port],
+          protocol: "https",
+          activity: "active_external",
+          ratePolicy: { ...profile.ratePolicy },
+          templatePolicy: {
+            revision: profile.templateRevision,
+            allowedTemplateIds: [...profile.allowedTemplateIds],
+            allowHeadless: false,
+            allowOutOfBand: false,
+            allowFuzzing: false,
+            allowFileUpload: false,
+            allowDenialOfService: false,
+            allowCredentialAttacks: false,
+          },
+          assertedAuthority: confirmation,
+          allowSensitiveNetworks: asset.internetExposed === false,
+        },
+      });
+      for (const engineId of profile.engineIds) addEngineRoute(engineId, asset.id);
+    }
+
+    const started = await onStartEnvironmentScan(
+      authorizations,
+      [...routes].map(([engineId, assetIds]) => ({ engineId, assetIds })),
     );
     if (started) resetScopeForm();
   };
@@ -1642,7 +2101,7 @@ export function CoveragePage({
       </details>
       </section>}
 
-      {shouldPromptForFirstAsset(pendingAssets.length, selectedAssets.length) && (
+      {!environmentRoute && shouldPromptForFirstAsset(pendingAssets.length, selectedAssets.length) && (
         <InlineNotice tone="warning" title={text(pageCopy.pendingNoticeTitle)} />
       )}
 
@@ -1654,7 +2113,206 @@ export function CoveragePage({
           {selectedAssets.length > 0 && !conciseGuidedConsent && <span className="count-label">{text(pageCopy.selectedCount, { count: formatNumber(selectedAssets.length) })}</span>}
         </div>}
 
-        {selectedAssets.length > 0 && (
+        {environmentRoute && (
+          <form className="scope-confirmation-panel" onSubmit={(event) => { event.preventDefault(); void startEnvironmentScan(); }}>
+            <div className="scope-confirmation-panel__heading">
+              <div>
+                <h3>{text(pageCopy.environmentPlanTitle)}</h3>
+                <p>{text(pageCopy.environmentPlanBody)}</p>
+              </div>
+            </div>
+
+            {environmentLocalAssets.length > 0 && (
+              <fieldset className="scope-mode-fieldset">
+                <legend>{text(pageCopy.environmentRepositoriesTitle)}</legend>
+                <p>{text(pageCopy.environmentRepositoriesBody)}</p>
+                <div className="scope-mode-grid">
+                  {environmentLocalAssets.map((asset) => (
+                    <label key={asset.id} className={selectedAssets.includes(asset.id) ? "scope-mode-card scope-mode-card--active" : "scope-mode-card"}>
+                      <input
+                        type="checkbox"
+                        disabled={busy}
+                        checked={selectedAssets.includes(asset.id)}
+                        aria-label={text(pageCopy.chooseAsset, { name: asset.name })}
+                        onChange={() => toggleEnvironmentAsset(asset.id)}
+                      />
+                      <span>
+                        <strong>{asset.name}</strong>
+                        <small>{asset.localInputProfile ? localInputEngines[asset.localInputProfile] : ""}</small>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
+
+            {environmentHostAssets.length > 0 && (
+              <fieldset className="scope-mode-fieldset">
+                <legend>{text(pageCopy.environmentHostsTitle)}</legend>
+                <p>{text(pageCopy.environmentHostsBody)}</p>
+                <div className="scope-mode-grid">
+                  {environmentHostAssets.map(({ asset, origin, ports, profile }) => (
+                    <label key={asset.id} className={selectedAssets.includes(asset.id) ? "scope-mode-card scope-mode-card--active" : "scope-mode-card"}>
+                      <input
+                        type="checkbox"
+                        disabled={busy}
+                        checked={selectedAssets.includes(asset.id)}
+                        aria-label={text(pageCopy.chooseAsset, { name: asset.name })}
+                        onChange={() => toggleEnvironmentAsset(asset.id)}
+                      />
+                      <span>
+                        <strong>{asset.name}</strong>
+                        <small>{text(pageCopy.environmentHostCheck, { ports: ports.join(", ") })}</small>
+                        <small>{text(profile.coverageNote)}</small>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
+
+            {environmentWebsiteAssets.length > 0 && (
+              <fieldset className="scope-mode-fieldset">
+                <legend>{text(pageCopy.environmentWebsitesTitle)}</legend>
+                <p>{text(pageCopy.environmentWebsitesBody)}</p>
+                <div className="scope-mode-grid">
+                  {environmentWebsiteAssets.map(({ asset, origin }) => (
+                    <label key={asset.id} className={selectedAssets.includes(asset.id) ? "scope-mode-card scope-mode-card--active" : "scope-mode-card"}>
+                      <input
+                        type="checkbox"
+                        disabled={busy}
+                        checked={selectedAssets.includes(asset.id)}
+                        aria-label={text(pageCopy.chooseAsset, { name: origin })}
+                        onChange={() => toggleEnvironmentAsset(asset.id)}
+                      />
+                      <span>
+                        <strong>{origin}</strong>
+                        <small>{text(pageCopy.environmentWebsiteCheck)}</small>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
+
+            {environmentEndpointAssets.length > 0 && (
+              <fieldset className="scope-mode-fieldset">
+                <legend>{text(pageCopy.environmentEndpointsTitle)}</legend>
+                <p>{text(pageCopy.environmentEndpointsBody)}</p>
+                <div className="scope-mode-grid">
+                  {environmentEndpointAssets.map(({ asset, origin, profile }) => (
+                    <label key={asset.id} className={selectedAssets.includes(asset.id) ? "scope-mode-card scope-mode-card--active" : "scope-mode-card"}>
+                      <input
+                        type="checkbox"
+                        disabled={busy}
+                        checked={selectedAssets.includes(asset.id)}
+                        aria-label={text(pageCopy.chooseAsset, { name: origin })}
+                        onChange={() => toggleEnvironmentAsset(asset.id)}
+                      />
+                      <span>
+                        <strong>{origin}</strong>
+                        <small>{text(profile.allowedTemplateIds.length === 1
+                          ? pageCopy.environmentEndpointCheckOne
+                          : pageCopy.environmentEndpointCheck, {
+                          service: text(profile.label),
+                          checks: formatNumber(profile.allowedTemplateIds.length),
+                        })}</small>
+                        <small>{text(profile.coverageNote)}</small>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
+
+            {environmentDeviceAssets.length > 0 && (
+              <fieldset className="scope-mode-fieldset">
+                <legend>{text(pageCopy.environmentDevicesTitle)}</legend>
+                <p>{text(pageCopy.environmentDevicesBody)}</p>
+                <div className="scope-mode-grid">
+                  {environmentDeviceAssets.map(({ asset, origin, profile }) => (
+                    <label key={asset.id} className={selectedAssets.includes(asset.id) ? "scope-mode-card scope-mode-card--active" : "scope-mode-card"}>
+                      <input
+                        type="checkbox"
+                        disabled={busy}
+                        checked={selectedAssets.includes(asset.id)}
+                        aria-label={text(pageCopy.chooseAsset, { name: origin })}
+                        onChange={() => toggleEnvironmentAsset(asset.id)}
+                      />
+                      <span>
+                        <strong>{origin}</strong>
+                        <small>{text(profile.label)} · {text(pageCopy.environmentDeviceCheck, {
+                          checks: formatNumber(internalDeviceTlsVulnerabilityOids.length),
+                        })}</small>
+                        <small>{text(profile.coverageNote)}</small>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
+
+            {environmentUnreadyExternalAssets.length > 0 && (
+              <InlineNotice
+                tone="warning"
+                title={text(pageCopy.environmentNotReadyTitle, {
+                  count: formatNumber(environmentUnreadyExternalAssets.length),
+                })}
+              >
+                <p>{text(pageCopy.environmentNotReadyBody)}</p>
+                <ul>
+                  {environmentUnreadyExternalAssets.map((asset) => <li key={asset.id}>{asset.name}</li>)}
+                </ul>
+              </InlineNotice>
+            )}
+
+            {environmentLocalAssets.length === 0
+              && environmentHostAssets.length === 0
+              && environmentWebsiteAssets.length === 0
+              && environmentEndpointAssets.length === 0
+              && environmentDeviceAssets.length === 0 && (
+              <InlineNotice tone="warning" title={text(pageCopy.environmentNoReadyTitle)}>
+                <p>{text(pageCopy.environmentNoReadyBody)}</p>
+              </InlineNotice>
+            )}
+
+            {selectedEnvironmentNetworkAssets.length > 0 && (
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  disabled={busy}
+                  checked={environmentNetworkConfirmed}
+                  onChange={(event) => setEnvironmentNetworkConfirmed(event.target.checked)}
+                />
+                <span>
+                  <strong>{text(pageCopy.environmentNetworkConfirmationTitle)}</strong>
+                  <small>{text(pageCopy.environmentNetworkConfirmationBody, {
+                    origins: selectedEnvironmentNetworkAssets.map(({ origin }) => origin).join(", "),
+                  })}</small>
+                </span>
+              </label>
+            )}
+
+            <p className="coverage-guided-boundary">{text(pageCopy.environmentReportBoundary)}</p>
+            <div className="form-actions">
+              <button
+                className="button button--primary"
+                type="submit"
+                disabled={busy
+                  || selectedEnvironmentAssetCount === 0
+                  || (selectedEnvironmentNetworkAssets.length > 0 && !environmentNetworkConfirmed)}
+              >
+                <Icon name="lock" size={16} />{runtimeSetupNotice
+                  ? text(pageCopy.preparingScanTools)
+                  : busy
+                    ? text(pageCopy.startingScan)
+                    : text(pageCopy.environmentStart)}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {!environmentRoute && selectedAssets.length > 0 && (
           <form className="scope-confirmation-panel" onSubmit={(event) => { event.preventDefault(); void startScan(); }}>
             {!conciseGuidedConsent && (
               <div className="scope-confirmation-panel__heading">
@@ -1740,7 +2398,6 @@ export function CoveragePage({
                     {text(pageCopy.websiteQuickBoundary, {
                       origin: quickProfileOrigin,
                       path: selectedExternalAsset.declaredWebService.path,
-                      requests: formatNumber(websiteQuickProfile.maximumGetRequests),
                       rate: formatNumber(websiteQuickProfile.ratePolicy.requestsPerSecond),
                       concurrency: formatNumber(websiteQuickProfile.ratePolicy.concurrency),
                       timeout: formatNumber(websiteQuickProfile.ratePolicy.timeoutSeconds),
@@ -1951,7 +2608,7 @@ export function CoveragePage({
           </form>
         )}
 
-        {filteredAssets.length === 0 ? (
+        {!environmentRoute && (filteredAssets.length === 0 ? (
           <EmptyState
             icon={assets.length === 0 && unknownSourceCount > 0 ? "warning" : "database"}
             title={assets.length === 0
@@ -2051,7 +2708,7 @@ export function CoveragePage({
               );
             })}
           </div>
-        )}
+        ))}
       </section>
 
       {frozenExternalGrants.length > 0 && (
@@ -2076,7 +2733,9 @@ export function CoveragePage({
                       <div><dt>{text(pageCopy.targetTerm)}</dt><dd><code>{scope.targetKind}:{scope.target}</code></dd></div>
                       <div><dt>{text(pageCopy.protocolPortsTerm)}</dt><dd>{scope.protocol.toUpperCase()} · {scope.ports.length ? scope.ports.join(", ") : text(pageCopy.noDirectPort)}</dd></div>
                       <div><dt>{text(pageCopy.rateTerm)}</dt><dd>{formatNumber(scope.ratePolicy.requestsPerSecond)} req/s · {formatNumber(scope.ratePolicy.concurrency)} concurrent · {formatNumber(scope.ratePolicy.timeoutSeconds)}s</dd></div>
-                      <div><dt>{text(pageCopy.templatesTerm)}</dt><dd><code>{scope.templatePolicy.revision}</code> · {text(pageCopy.allowedIdsCount, { count: formatNumber(scope.templatePolicy.allowedTemplateIds.length) })}</dd></div>
+                      <div><dt>{text(pageCopy.templatesTerm)}</dt><dd><code>{scope.templatePolicy.revision}</code> · {scope.templatePolicy.profileId
+                        ? <code>{scope.templatePolicy.profileId}</code>
+                        : text(pageCopy.allowedIdsCount, { count: formatNumber(scope.templatePolicy.allowedTemplateIds.length) })}</dd></div>
                       <div><dt>{text(pageCopy.authorityTerm)}</dt><dd>{scope.assertedAuthority}</dd></div>
                       <div><dt>{text(pageCopy.approvalTerm)}</dt><dd>{scope.approvedBy} · {formatDateTime(scope.approvedAt)}</dd></div>
                     </dl>

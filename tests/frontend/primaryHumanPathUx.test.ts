@@ -20,7 +20,7 @@ test("the edited localhost port path keeps its action and validation feedback ac
   );
 });
 
-test("guided local creation attaches the chosen snapshot and preserves a created case if attachment fails", async () => {
+test("guided local and environment creation attach chosen snapshots and preserve every successful copy", async () => {
   const app = await readSource("App.tsx");
   const start = app.indexOf("const createCaseWithWorkspace");
   const end = app.indexOf("const seedDemoCase", start);
@@ -31,9 +31,9 @@ test("guided local creation attaches the chosen snapshot and preserves a created
   assert.match(action, /const shouldReturnToReview = \(\)[\s\S]*pageTransitionGeneration\.current === pageGenerationAtStart[\s\S]*caseSelectionBarrierRef\.current\.generation === caseSelectionGenerationAtStart/u);
   assert.match(action, /if \(!attached\.data\.accepted\)[\s\S]*loadSnapshot\(returnToReview \? caseId : undefined, true\)[\s\S]*if \(returnToReview\)[\s\S]*navigate\("coverage"\)/u);
   assert.doesNotMatch(action, /await loadSnapshot\(caseId, true\);\s*setSelectedUseCase\(undefined\);\s*navigate\("coverage"\)/u);
-  assert.match(action, /Scan project created; folder not added/u);
-  assert.match(action, /The project was kept\. Choose the folder again in Scan setup; no scan started\./u);
-  assert.match(action, /The private snapshot is attached\. Review the exact checks, then press Start; no scan has started yet\./u);
+  assert.match(action, /Scan project created; some folders were not added/u);
+  assert.match(action, /The project and every successful snapshot were kept; add the missing folder again in Scan setup\./u);
+  assert.match(action, /The private snapshots are attached\. Review the exact checks, then press Start; no scan has started yet\./u);
   assert.doesNotMatch(action, /startScan|onStartScan/u);
 });
 

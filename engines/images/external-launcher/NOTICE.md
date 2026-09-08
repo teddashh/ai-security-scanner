@@ -7,5 +7,6 @@ JSONL evidence attributed to the exact asset and grant.
 
 The launcher intentionally denies ambient scanner arguments, direct network
 access, unapproved targets and ports, expired grants, updates, stdin, redirects,
-Nuclei OAST, and Nuclei templates outside the exact embedded allowlist. All
-scanner traffic must use the runtime-provided literal-IP SOCKS5h bridge.
+Nuclei OAST, and templates outside the pinned read-only profile or a saved legacy
+selection. All scanner traffic must use the runtime-provided literal-IP SOCKS5h
+bridge.

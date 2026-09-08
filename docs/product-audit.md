@@ -1,177 +1,137 @@
-# ai-security-scanner beginner-first product audit
+# Beginner product review
 
-Reviewed state: current working tree on 2026-09-08
+Reviewed: current source on 2026-09-08
+Product behavior: [product-spec.md](product-spec.md)
 
-Product source of truth: [Product specification](product-spec.md)
+This review asks whether a beginner can run useful upstream security checks and
+understand one combined result. It does not decide versions, packaging,
+publication, signing, certification, or compliance.
 
-This is a product audit, not a delivery-policy review. It evaluates whether a
-beginner can reach a real security result quickly and understand it. No target
-was contacted and no scan was executed for this audit.
+## Product outcome
 
-## 1. Current verdict
+One IT scan project accepts three common asset groups:
 
-The product direction is now materially closer to its real job:
+- repository folders;
+- complete website or API URLs;
+- approved internal systems identified by one exact hostname or IP address.
 
-- Home leads with only the two shortest meaningful paths: checking a website or
-  a project folder. Other sources and the localhost utility are secondary.
-- Website setup takes one URL; a fixed Nuclei profile is ready for review.
-- Local setup opens the folder picker immediately. One action creates the scan
-  project and attaches its private snapshot; the displayed name is optional and
-  can be derived from the folder.
-- Tool preparation starts only after the user presses **Start scan** and the
-  backend says the required runtime is unavailable. Its progress and cancel
-  action stay in the main content on narrow screens; the expected transition no
-  longer appears as a scan failure first.
-- **My scans** opens active work at Progress, finished work at Results, and only
-  an unstarted project at Review.
-- A running scan can expose **View results** as soon as it has a saved security
-  result; independent checks do not have to finish first.
-- A TCP connection, open port, or responding HTTP service is no longer presented
-  as a vulnerability or remediation priority.
-- Live Results, saved reports, reopen, preview, and export share the product's
-  report concepts instead of exposing disconnected scanner dashboards.
+The user reviews the selected assets once and presses **Start scan** once. Each
+scanner receives only the assets assigned to it. Completed sibling results stay
+available when another check is unavailable or fails. Results and readable HTML
+use the same unified report instead of sending the user to separate scanner
+dashboards.
 
-The remaining evidence gap is practical rather than documentary: this review did
-not run an installed desktop build against a controlled website or project and
-carry its real result through reopen and HTML export.
+## Beginner path
 
-## 2. Decision criteria
+| Step | Primary behavior |
+| --- | --- |
+| Choose | **Scan my IT environment** is the combined path. Website-only and project-folder choices remain shortcuts into the same project model. |
+| Add targets | Add repeatable folders, URLs, and exact internal hosts. Internal hosts start with common TCP ports; Advanced may replace them with up to 64 exact ports. No vendor, model, scanner, or rule selection is required. |
+| Review | Show every target, the applicable security-check category, exact network boundary, important limits, and one Start action. |
+| Run | Repository tools receive private read-only snapshots, Nuclei receives only selected website origins, and Greenbone receives only selected internal hosts and ports. |
+| Read | Every selected asset is shown as problems found, no problems in completed checks, incomplete or failed, or not tested. Findings lead with impact and next action; upstream evidence remains available. |
+| Continue | Saved projects, results, comparisons, and exports retain asset identity and incomplete coverage. |
 
-Only four product decisions govern this audit:
+Inventory and connectivity remain supporting facts. An open port, responding
+HTTP service, successful process, or prepared runtime is not presented as a
+vulnerability scan.
 
-1. A beginner quickly completes a meaningful security scan and understands the
-   result.
-2. Scanner integrations stay close to documented upstream behavior.
-3. Scanner output becomes one professional report using product-owned
-   prioritization, explanation, correlation, and presentation.
-4. Product-owner delivery decisions remain outside this audit.
+## What the common paths actually run
 
-A meaningful scan requires a security, vulnerability, secret, dependency,
-configuration, or exposure check. Form validation, tool setup, process success,
-DNS, reachability, and one TCP connection do not qualify by themselves.
+### Repositories
 
-## 3. Current beginner journey
+Selected folders are copied to bounded private read-only snapshots. Applicable
+upstream tools inspect them for secret patterns, risky code, vulnerable
+dependencies, infrastructure configuration, and component inventory. The app
+does not modify, build, execute, upload, commit, or push the project.
 
-| Step | Implemented behavior | Remaining friction or limit |
-| --- | --- | --- |
-| Home | Website and **Code or AI project** scans are the two primary choices. Public or internal systems and other sources are under **More ways to scan**. The localhost tool is under **Connection utility (not a security scan)**. | A beginner chooses between two familiar starting points without hiding AI-project support. |
-| Target | A website needs one complete URL. A local route opens the matching folder picker on the same page. Project naming is optional and safely derived when omitted. | Browser preview cannot read a real local folder; the desktop app is required. |
-| Review | The exact target, important limits, included checks, and one Start action appear before technical controls. | A website quick scan is origin-wide; it is unsuitable when permission covers only one path. |
-| Start | The app first attempts the requested scan. Runtime preparation begins only when that exact attempt returns `runtime_unavailable`, then resumes the same reviewed request after matching setup in the same UI context. If Windows restarts, the one eligible saved target is restored for review and the user presses Start again. | The real first-use preparation delay was not measured here. |
-| Progress | Useful saved security results can be opened while other work continues. Runtime and scanner details stay secondary. | No real native run was observed here, so time to the first result is not established. |
-| Results | Security problems lead with impact and next action. Reachability inventory has a separate neutral summary, three representative items, and a collapsed complete list. | Report usefulness still depends on a real applicable scanner completing against the selected target. |
-| Reopen/export | My scans routes active work to Progress, terminal work to Results, and unstarted work to Review. Cases, reports, and export history are durable; readable HTML is the primary share format. | The revised full path was not exercised in an installed desktop app during this audit. |
+The main repository route now uses Gitleaks and TruffleHog for secrets, 1,620
+pinned upstream Semgrep security rules for risky code, Trivy and Grype for
+recognized vulnerable dependencies, Checkov's upstream all-framework detection,
+KICS for infrastructure configuration, and the shared report layer. Scanner
+adapters preserve upstream identifiers and evidence instead of reimplementing
+detectors.
 
-## 4. Website quick scan
+Repository ignore rules continue to prune ordinary ignored files and generated
+directories, while common secret-bearing files such as `.env` variants, private
+keys, registry/auth configuration, and `*.tfvars` remain available to the
+upstream secret scanners. Ignored dependency, build, cache, and VCS trees are
+not reopened.
 
-The guided public-website route now selects a fixed upstream Nuclei profile
-instead of treating reachability metadata as the scan result. The user enters a
-URL, reviews one explicit boundary, and uses one **Confirm and start** action.
-They do not need to choose an engine, paste template IDs, provide a written
-ticket, or complete a second ownership form.
+### Websites
 
-The profile is intentionally concrete:
+The beginner website path runs an exact pinned Nuclei automatic profile against
+the displayed URL origin. The launcher mechanically admits 4,674 bounded
+read-only templates from the pinned upstream snapshot; Nuclei performs its own
+technology detection and selects matching checks. The pool includes 1,266 CVE
+templates and 1,233 High or Critical templates.
 
-- engine: Nuclei;
-- templates revision:
-  `nuclei-templates@24858b4bfabfa86f0bcfd36aea24fb535152b012`;
-- 13 fixed templates for exposed credentials, published configuration, debug
-  endpoints, source maps, status pages, metrics, and container build files;
-- 3 requests per second, concurrency 2, and a 10-second request timeout;
-- a displayed maximum of 19 GET requests for the fixed set;
-- no redirects, login, form submission, file upload, fuzzing, callback,
-  credential attack, denial of service, or exploit flow.
+It does not authenticate, submit forms or request bodies, follow redirects,
+use out-of-band callbacks, run exploit-oriented checks, or expand to another
+host. A completed scan does not imply that all 4,674 eligible templates ran;
+upstream applicability determines the executed subset.
 
-The target is the exact `scheme://host:port` origin. The entered path is retained
-as context, while the reviewed templates request their own fixed paths on that
-origin. Review states this before Start and tells a path-only-authorized user not
-to use this profile. A zero-match result means only that these displayed checks
-did not match; it is not a statement that the whole website is safe.
+### Internal systems
 
-Private/internal website routes and general IP/domain routes keep their separate
-bounded choices. The public-website shortcut does not silently broaden those
-other paths.
+The user enters one exact hostname or IP address. The default ports are 22, 23,
+25, 80, 443, 445, 3389, 5900, 8080, and 8443; Advanced may replace them with up
+to 64 exact TCP ports for that same host.
 
-## 5. Local-project scan
+The product passes that scope to a pinned Greenbone Community Feed profile.
+The launcher derives the profile from current, non-deprecated remote
+`gather_info` VTs. Greenbone's upstream service detection, dependencies,
+required keys, and required ports decide which checks apply. Product or vendor
+names come from upstream evidence; they never choose a product-owned branch.
 
-The product has a meaningful model for local work: create a bounded read-only
-snapshot and run applicable upstream secret, code, dependency, and configuration
-checks without modifying, building, executing, uploading, committing, or pushing
-the project.
+This profile supplies no credentials and excludes local security checks,
+brute-force and default-account checks, policy/compliance families, Nmap NSE,
+alternative port scanners, and active/destructive/denial categories. It never
+adds a neighboring host or an undisclosed port.
 
-The current setup implements the short path directly: **choose what to check →
-choose its folder → review and start**. The folder picker appears on the setup
-page for source, AI, infrastructure-code, exported container-image, and
-Kubernetes routes. In the desktop app, the same submit action creates the scan
-project and attaches the exact snapshot. If snapshot creation fails, the product
-keeps the created project and says the folder was not attached. During a large
-copy, the form is locked against request changes, its purpose is stated plainly,
-and the user may leave without being pulled back when copying finishes. If the
-user remains on setup, Review opens so the folder can be retried without losing
-the project.
+Greenbone's result API does not provide a complete list of every scheduled VT
+that actually executed. Positive findings retain their upstream OID, family,
+severity, evidence, and solution. A zero-finding completion therefore means
+only that the applicability-driven scan returned no findings for the displayed
+ports; it does not mean that every VT ran or that the device is secure.
 
-No local project was scanned in this audit. Source wiring and automated fixtures
-therefore do not establish that a beginner receives a useful first finding,
-accurate unsupported-language or missing-manifest limits, and a readable export
-from a real folder.
+Previously saved single-service HTTPS, SSH, RDP, VNC, SMTP, and Telnet records
+remain runnable with their original boundaries. They are compatibility data,
+not the new setup model, and are not silently widened.
 
-## 6. Results and report quality
+## Report behavior
 
-The report layer now makes the important semantic distinction:
+The first layer answers:
 
-- Nuclei and other applicable detector matches can become security findings.
-- Naabu `open_port` and httpx `reachable_http_service` records remain observed
-  service evidence.
-- Observed services are not included in problem counts, top priorities,
-  remediation steps, or finding workflows.
-- Their neutral next step is to confirm whether the service is expected and
-  choose an applicable security check.
-- Results summarizes their count and affected assets, shows at most three
-  representative rows, and keeps the full evidence-bearing inventory collapsed.
+1. What was selected?
+2. Which assets have security problems?
+3. What matters first and why?
+4. What should be done next and how can the fix be checked?
+5. Which requested work did not complete or was not applicable?
 
-For actual findings, the first layer presents what needs attention, affected
-target, severity and confidence basis, impact, next action, verification, and
-important untested scope. Original engine identity, rule ID, evidence, location,
-and provenance remain available beneath that explanation.
+The report preserves upstream engine, rule or OID, original severity, location,
+evidence, and remediation underneath the shared explanation. Product-owned
+prioritization, deduplication, correlation, localization, and presentation stay
+in this report layer rather than scanner wrappers.
 
-Completed findings are preserved when sibling checks fail or continue. “No
-problems observed” is limited to checks and scope that completed. A connection
-test, setup success, cancellation, missing input, or scanner failure cannot turn
-into a green security conclusion.
+Observed services are listed separately from security problems. They do not
+increase problem counts or receive remediation merely because a port answered.
+"No problems" applies only to completed security checks and always keeps the
+stated scope visible.
 
-The built-in localhost utility follows the same rule in Results and HTML export:
-Results says **Connection test only — no vulnerability scan ran**, while HTML
-keeps **Connection test only** and **No vulnerability scan ran** visible before
-technical detail. Both direct the user to a real website, project, or
-protocol-aware check.
+## Remaining product work
 
-## 7. Upstream alignment
+The high-value remaining gaps are:
 
-The useful product boundary is now explicit:
+1. Continue removing product-owned subsets from advanced cloud and Kubernetes
+   paths where the current scanner invocation is narrower than upstream.
+2. Add the pinned Java vulnerability database needed before Trivy can safely
+   enable JAR scanning without turning an otherwise useful repository run into
+   a fatal error. Grype already covers recognized repository language packages.
+3. Exercise a controlled installed-desktop mixed scan with repositories,
+   internal hosts, and websites through progress, reopen, and readable export.
+4. Measure time to first useful finding and remove any remaining beginner input
+   that does not change target scope or result quality.
 
-- upstream scanners own detection behavior, identifiers, versions, severity,
-  evidence, and detector-specific remediation;
-- adapters translate typed scope, invoke the documented interface, enforce
-  bounded execution, and normalize results;
-- the shared report owns cross-engine ordering, deduplication, correlation,
-  beginner explanation, and presentation;
-- safety and resource controls surround a scanner without becoming a replacement
-  detection engine.
-
-The fixed website profile follows this model: it selects reviewed upstream
-templates and parameters; it does not reimplement their detectors.
-
-## 8. Honest current limits
-
-- First-use runtime preparation is correctly demand-triggered, but its real wait
-  and time to first security result were not measured here.
-- The curated website profile is origin-wide and cannot honor path-only permission.
-- This audit did not execute a controlled target, observe a real scanner result,
-  restart the installed app, or verify the resulting HTML export.
-- Browser, component, adapter, and report tests can protect the interaction and
-  data contracts; they cannot substitute for that observed native journey.
-
-The current source is substantially more beginner-directed and more accurate
-about what constitutes a finding. The exact installed-app experience against a
-controlled website and a real local folder remains unobserved in this review;
-that is an evidence statement, not a version or publication decision.
+Tests protect interaction, routing, parsing, and report contracts. They support
+these product outcomes; passing a test suite does not make a narrow scanner
+integration complete.

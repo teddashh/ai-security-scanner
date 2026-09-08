@@ -2615,6 +2615,57 @@ mod tests {
     }
 
     #[test]
+    fn website_origin_identity_never_reaches_direct_external_launcher_identifiers() {
+        let mut selected = asset("one", true);
+        selected.kind = AssetKind::WebService;
+        selected.name = "https://one.example:443".into();
+        selected.identifiers.insert(
+            0,
+            AssetIdentifier {
+                namespace: "web_origin".into(),
+                value: "https://one.example:443".into(),
+            },
+        );
+        let assets = vec![selected];
+        let grants = vec![grant("one", ScanPermission::ActiveExternalTesting, true)];
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-web-origin",
+            vec!["one.example:443".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("policy");
+        let destinations = vec![GatewayDestination {
+            hostname: Some("one.example".into()),
+            addresses: ["192.0.2.10".parse().unwrap()].into_iter().collect(),
+            ports: [443].into_iter().collect(),
+            allow_sensitive_networks: false,
+        }];
+
+        for engine_id in ["nuclei", "greenbone"] {
+            let mut manifest = manifest(true);
+            manifest.id = engine_id.into();
+            manifest.supported_asset_kinds = vec![AssetKind::WebService];
+            let scope = validate_execution_scope(&manifest, &assets, &grants, &policy)
+                .expect("authorized website scope");
+            let frozen_destinations = (engine_id == "nuclei").then_some(destinations.as_slice());
+            let document = ScopeDocument::new(&manifest, &scope, frozen_destinations)
+                .expect("direct external scope document");
+            let json = serde_json::to_value(document).expect("scope json");
+            let identifiers = json["assets"][0]["identifiers"].as_array().unwrap();
+
+            assert_eq!(identifiers.len(), 1, "{engine_id}");
+            assert_eq!(identifiers[0]["namespace"], "dns_name", "{engine_id}");
+            assert_eq!(identifiers[0]["value"], "one.example", "{engine_id}");
+            assert!(
+                !identifiers
+                    .iter()
+                    .any(|identifier| identifier.to_string().contains("https://one.example:443"))
+            );
+        }
+    }
+
+    #[test]
     fn replaying_the_same_attempt_reuses_identical_scope_and_reaches_the_observer() {
         let temp = tempfile::tempdir().expect("temporary run root");
         let workspace = temp.path().join("workspace");

@@ -15,8 +15,8 @@ use crate::artifact_store::{
 };
 use crate::beginner_report::{
     BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerMasterReport, BeginnerReportSummary,
-    CoverageDimensionStatus, CoverageGapKind, FindingSnapshotSource, ReportLifecycle,
-    ReportScanStage, RequestedLimitSource, run_is_service_inventory_only,
+    CoverageDimensionStatus, CoverageGap, CoverageGapKind, FindingSnapshotSource, NextActionCode,
+    ReportLifecycle, ReportScanStage, RequestedLimitSource, run_is_service_inventory_only,
 };
 use crate::bootstrap::executor::list_bootstrap_cleanup_obligations;
 use crate::connectors::{
@@ -33,15 +33,19 @@ use crate::domain::{
     AiGeneratedArtifactAnswer, AiSystemApplicabilityAnswer, ArtifactCleanupObligation,
     AssessmentCase, AssessmentIntent, Asset, AssetIdentifier, AssetKind, CaseExport, CaseStatus,
     CaseSummary, ControlMappingProvenance, CoverageStatus, CreateCaseRequest, DataSource,
-    DeclaredAssetInput, DeclaredAssetKind, DeclaredWebProtocol, DeclaredWebServiceInput,
-    DistributionMode, EngineKnowledgeInput, EngineManifest, EngineRun, EngineRunStatus,
-    EngineTaskKind, Finding, FindingDiffStatus, FindingGroup, FindingGroupAction,
-    FindingGroupEvent, FindingObservation, FindingStatus, FindingWorkflowEvent, Id,
-    LEGACY_NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION, MAX_NAABU_ATTEMPT_REQUESTS,
-    MAX_NAABU_ATTEMPT_RESULTS, ManifestStatus, NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
-    NAABU_ATTEMPT_RESULT_SCHEMA_VERSION, NaabuAttemptRequest, NaabuAttemptResult,
-    OrganizationProfile, RawArtifact, ScanPermission, ScanRequestOutcome, ScanRequestOutcomeCode,
-    ScanRun, ScopeGrant, SourceConnectionStatus, SourceKind, VerificationComparison, new_id,
+    DeclaredAssetInput, DeclaredAssetKind, DeclaredHostScanInput, DeclaredHostScanMetadata,
+    DeclaredHostScanProfile, DeclaredNetworkProtocol, DeclaredNetworkServiceInput,
+    DeclaredNetworkServiceMetadata, DeclaredNetworkServiceScanProfile, DeclaredWebProtocol,
+    DeclaredWebServiceInput, DeclaredWebServiceScanProfile, DistributionMode, EngineKnowledgeInput,
+    EngineManifest, EngineRun, EngineRunStatus, EngineTaskKind, Finding, FindingDiffStatus,
+    FindingGroup, FindingGroupAction, FindingGroupEvent, FindingObservation, FindingStatus,
+    FindingWorkflowEvent, Id, LEGACY_NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
+    MAX_NAABU_ATTEMPT_REQUESTS, MAX_NAABU_ATTEMPT_RESULTS, MAX_SCAN_REQUEST_ASSET_IDS,
+    MAX_SCAN_REQUEST_ENGINE_IDS, MAX_SCAN_RUN_REPORT_ASSET_SNAPSHOTS, ManifestStatus,
+    NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION, NAABU_ATTEMPT_RESULT_SCHEMA_VERSION, NaabuAttemptRequest,
+    NaabuAttemptResult, OrganizationProfile, RawArtifact, ReportAssetDisposition,
+    ReportAssetSnapshot, ScanPermission, ScanRequestOutcome, ScanRequestOutcomeCode, ScanRun,
+    ScopeGrant, SourceConnectionStatus, SourceKind, VerificationComparison, new_id,
     valid_azure_subscription_id, valid_gcp_project_id,
 };
 use crate::error::{AppError, AppResult};
@@ -89,6 +93,73 @@ use std::path::{Component, Path, PathBuf};
 
 const MAX_METADATA_BYTES: usize = 64 * 1024;
 const MAX_DECLARED_ASSETS: usize = 200;
+const DECLARED_WEB_ORIGIN_IDENTIFIER_NAMESPACE: &str = "web_origin";
+const DECLARED_WEB_ORIGIN_METADATA_KEY: &str = "canonical_web_origin";
+const DECLARED_WEB_SERVICE_METADATA_KEY: &str = "declared_web_service";
+const DECLARED_NETWORK_SERVICE_IDENTIFIER_NAMESPACE: &str = "network_service_endpoint";
+const DECLARED_NETWORK_SERVICE_METADATA_KEY: &str = "declared_network_service";
+const DECLARED_HOST_SCAN_METADATA_KEY: &str = "declared_host_scan";
+const MAX_DECLARED_HOST_SCAN_PORTS: usize = 64;
+const DECLARED_WEBSITE_ENGINE_ID: &str = "nuclei";
+const DECLARED_WEBSITE_TEMPLATE_REVISION: &str =
+    "nuclei-templates@24858b4bfabfa86f0bcfd36aea24fb535152b012";
+const NUCLEI_WEB_SAFE_PROFILE_ID: &str = "nuclei_web_safe_v1";
+const INTERNAL_DEVICE_ENGINE_ID: &str = "greenbone";
+const INTERNAL_DEVICE_TEMPLATE_REVISION: &str =
+    "greenbone-community-feed@b26d7237d56b7cf85e6ace2b9351e7851461b3a8";
+const INTERNAL_ENDPOINT_TEMPLATE_REVISION: &str =
+    "greenbone-community-feed@b26d7237d56b7cf85e6ace2b9351e7851461b3a8";
+const GREENBONE_REMOTE_SAFE_PROFILE_ID: &str = "greenbone_remote_safe_v1";
+const INTERNAL_DEVICE_TLS_VULNERABILITY_OIDS: [&str; 11] = [
+    "1.3.6.1.4.1.25623.1.0.111012",
+    "1.3.6.1.4.1.25623.1.0.117274",
+    "1.3.6.1.4.1.25623.1.0.802087",
+    "1.3.6.1.4.1.25623.1.0.108094",
+    "1.3.6.1.4.1.25623.1.0.108147",
+    "1.3.6.1.4.1.25623.1.0.108022",
+    "1.3.6.1.4.1.25623.1.0.103440",
+    "1.3.6.1.4.1.25623.1.0.103955",
+    "1.3.6.1.4.1.25623.1.0.105880",
+    "1.3.6.1.4.1.25623.1.0.150710",
+    "1.3.6.1.4.1.25623.1.0.150749",
+];
+const INTERNAL_ENDPOINT_SSH_VULNERABILITY_OIDS: [&str; 7] = [
+    "1.3.6.1.4.1.25623.1.0.801993",
+    "1.3.6.1.4.1.25623.1.0.105497",
+    "1.3.6.1.4.1.25623.1.0.105610",
+    "1.3.6.1.4.1.25623.1.0.105611",
+    "1.3.6.1.4.1.25623.1.0.117687",
+    "1.3.6.1.4.1.25623.1.0.150712",
+    "1.3.6.1.4.1.25623.1.0.150713",
+];
+const INTERNAL_ENDPOINT_RDP_TLS_VULNERABILITY_OIDS: [&str; 11] = [
+    "1.3.6.1.4.1.25623.1.0.902658",
+    "1.3.6.1.4.1.25623.1.0.111012",
+    "1.3.6.1.4.1.25623.1.0.117274",
+    "1.3.6.1.4.1.25623.1.0.802087",
+    "1.3.6.1.4.1.25623.1.0.108147",
+    "1.3.6.1.4.1.25623.1.0.108022",
+    "1.3.6.1.4.1.25623.1.0.103440",
+    "1.3.6.1.4.1.25623.1.0.103955",
+    "1.3.6.1.4.1.25623.1.0.105880",
+    "1.3.6.1.4.1.25623.1.0.150710",
+    "1.3.6.1.4.1.25623.1.0.150749",
+];
+const INTERNAL_ENDPOINT_VNC_VULNERABILITY_OIDS: [&str; 1] = ["1.3.6.1.4.1.25623.1.0.108529"];
+const INTERNAL_ENDPOINT_SMTP_VULNERABILITY_OIDS: [&str; 11] = [
+    "1.3.6.1.4.1.25623.1.0.108530",
+    "1.3.6.1.4.1.25623.1.0.111012",
+    "1.3.6.1.4.1.25623.1.0.117274",
+    "1.3.6.1.4.1.25623.1.0.802087",
+    "1.3.6.1.4.1.25623.1.0.108147",
+    "1.3.6.1.4.1.25623.1.0.108022",
+    "1.3.6.1.4.1.25623.1.0.103440",
+    "1.3.6.1.4.1.25623.1.0.103955",
+    "1.3.6.1.4.1.25623.1.0.105880",
+    "1.3.6.1.4.1.25623.1.0.150710",
+    "1.3.6.1.4.1.25623.1.0.150749",
+];
+const INTERNAL_ENDPOINT_TELNET_VULNERABILITY_OIDS: [&str; 1] = ["1.3.6.1.4.1.25623.1.0.108522"];
 const MAX_FINDINGS_PER_GROUP: usize = 100;
 const LEGACY_DELETION_OBLIGATION_DIRECTORY: &str = ".case-deletion-obligations";
 const MAX_LEGACY_DELETION_OBLIGATION_BYTES: u64 = 64 * 1024;
@@ -188,6 +259,19 @@ pub struct ScanPlanRequest {
     /// explicitly requested IDs are retained as `not_executed` records.
     #[serde(default)]
     pub engine_ids: Vec<String>,
+    /// Exact per-engine target routing for a mixed-asset scan. When present,
+    /// these routes replace the legacy `engine_ids` selector: each engine may
+    /// contact only its listed, ownership-confirmed, effectively authorized
+    /// assets. An absent/empty route list preserves the legacy behavior above.
+    #[serde(default)]
+    pub engine_asset_routes: Vec<EngineAssetRoute>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EngineAssetRoute {
+    pub engine_id: String,
+    pub asset_ids: Vec<Id>,
 }
 
 /// A credential-free request that a caller may hand to the container
@@ -1413,7 +1497,7 @@ impl<'a> CaseService<'a> {
         &self,
         case_id: &str,
         label: &str,
-        snapshot: WorkspaceSnapshot,
+        mut snapshot: WorkspaceSnapshot,
     ) -> AppResult<AssessmentCase> {
         let label = required_text("workspace source label", label, 200)?;
         if snapshot.reference.schema_version != WORKSPACE_SNAPSHOT_REFERENCE_SCHEMA
@@ -1435,6 +1519,10 @@ impl<'a> CaseService<'a> {
         }
         let source_id = snapshot.asset.discovered_from[0].clone();
         safe_path_component("workspace source id", &source_id)?;
+        // The source label is the user-facing repository identity. Keep the
+        // content hash as technical evidence, not as the name beginners must
+        // use to distinguish repositories in Review and Results.
+        snapshot.asset.name = label.clone();
         let reference_value = serde_json::to_value(&snapshot.reference)?;
         validate_non_secret_value("workspace snapshot reference", &reference_value)?;
         let mut metadata = BTreeMap::new();
@@ -3539,18 +3627,50 @@ impl<'a> CaseService<'a> {
         code: ScanRequestOutcomeCode,
         now: DateTime<Utc>,
     ) -> AppResult<ScanPlan> {
-        let requested_asset_ids = case
-            .assets
-            .iter()
-            .filter(|asset| {
-                effective.is_empty() || effective.iter().any(|grant| grant.asset_id == asset.id)
-            })
-            .map(|asset| asset.id.clone())
-            .collect::<Vec<_>>();
+        let requested_asset_ids = if request.engine_asset_routes.is_empty() {
+            case.assets
+                .iter()
+                .filter(|asset| {
+                    effective.is_empty() || effective.iter().any(|grant| grant.asset_id == asset.id)
+                })
+                .map(|asset| asset.id.clone())
+                .collect::<Vec<_>>()
+        } else {
+            request
+                .engine_asset_routes
+                .iter()
+                .flat_map(|route| route.asset_ids.iter().cloned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        };
+        let requested_engine_ids = if request.engine_asset_routes.is_empty() {
+            request.engine_ids.clone()
+        } else {
+            request
+                .engine_asset_routes
+                .iter()
+                .map(|route| route.engine_id.clone())
+                .collect()
+        };
+        let report_requested_asset_ids = if request.engine_asset_routes.is_empty() {
+            effective
+                .iter()
+                .map(|grant| grant.asset_id.clone())
+                .collect::<BTreeSet<_>>()
+        } else {
+            request
+                .engine_asset_routes
+                .iter()
+                .flat_map(|route| route.asset_ids.iter().cloned())
+                .collect::<BTreeSet<_>>()
+        };
+        let report_asset_snapshots =
+            freeze_report_asset_snapshots(case, &report_requested_asset_ids)?;
         let request_outcome = ScanRequestOutcome::no_checks_completed(
             code,
             requested_asset_ids,
-            request.engine_ids.clone(),
+            requested_engine_ids,
             match code {
                 ScanRequestOutcomeCode::EffectiveScopeRequired => {
                     "No checks ran because this scan has no active permission for a selected target."
@@ -3583,6 +3703,7 @@ impl<'a> CaseService<'a> {
             created_at: now,
             completed_at: Some(now),
             request_outcome: Some(request_outcome),
+            report_asset_snapshots,
             knowledge_cutoff: now,
             ai_system_applicable,
             ai_system_applicability,
@@ -3657,6 +3778,7 @@ impl<'a> CaseService<'a> {
                 "the case already has an active or paused scan".into(),
             ));
         }
+        let mut request = request;
         if let Some(baseline_run_id) = verification_baseline_run_id {
             let baseline = case
                 .scan_runs
@@ -3670,9 +3792,14 @@ impl<'a> CaseService<'a> {
                     "a rescan baseline must be terminal".into(),
                 ));
             }
+            if request.engine_ids.is_empty() && request.engine_asset_routes.is_empty() {
+                request = scan_plan_request_from_baseline(baseline);
+            }
         }
 
-        let effective = effective_grants(case, now)
+        let engine_asset_routes = normalized_engine_asset_routes(case, &request)?;
+
+        let mut effective = effective_grants(case, now)
             .into_iter()
             .filter(|grant| exact_grant_ids.is_none_or(|grant_ids| grant_ids.contains(&grant.id)))
             .collect::<Vec<_>>();
@@ -3694,6 +3821,29 @@ impl<'a> CaseService<'a> {
                 "no unexpired explicit scope grants exist; discovery alone never authorizes scanning"
                     .into(),
             ));
+        }
+        if !engine_asset_routes.is_empty() {
+            let routed_asset_ids = engine_asset_routes
+                .values()
+                .flatten()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            let unauthorized_asset_ids = routed_asset_ids
+                .iter()
+                .copied()
+                .filter(|asset_id| {
+                    !effective
+                        .iter()
+                        .any(|grant| grant.asset_id.as_str() == *asset_id)
+                })
+                .collect::<Vec<_>>();
+            if !unauthorized_asset_ids.is_empty() {
+                return Err(AppError::NotAuthorized(format!(
+                    "engine route assets have no unexpired explicit scope grant: {}",
+                    unauthorized_asset_ids.join(", ")
+                )));
+            }
+            effective.retain(|grant| routed_asset_ids.contains(grant.asset_id.as_str()));
         }
         let effective_asset_ids = effective
             .iter()
@@ -3726,7 +3876,21 @@ impl<'a> CaseService<'a> {
             ));
         }
 
-        let engine_ids = selected_engine_ids(self.engines, &request, case, &effective, now)?;
+        validate_routed_engine_compatibility(
+            self.engines,
+            case,
+            &effective,
+            &engine_asset_routes,
+            now,
+        )?;
+        let engine_ids = selected_engine_ids(
+            self.engines,
+            &request,
+            &engine_asset_routes,
+            case,
+            &effective,
+            now,
+        )?;
         if engine_ids.is_empty() {
             if intent.is_execution() && intent != ScanPlanIntent::PersistBeforeExecutionPreflight {
                 return Err(scan_preflight_error(&readiness));
@@ -3773,14 +3937,18 @@ impl<'a> CaseService<'a> {
             optional_control_mapping_identity();
 
         for engine_id in engine_ids {
+            let routed_asset_ids = engine_asset_routes.get(&engine_id);
             let Some(manifest) = self.engines.get(&engine_id) else {
                 let engine_run_id = new_id();
                 let explanation = "The requested engine has no installed manifest.".to_owned();
+                let asset_ids: Vec<Id> = routed_asset_ids
+                    .map(|asset_ids| asset_ids.iter().cloned().collect())
+                    .unwrap_or_default();
                 engine_runs.push(not_executed_run(
                     &scan_run_id,
                     &engine_run_id,
                     &engine_id,
-                    Vec::new(),
+                    asset_ids.clone(),
                     ("manifest_unavailable", &explanation),
                     None,
                     now,
@@ -3788,14 +3956,19 @@ impl<'a> CaseService<'a> {
                 not_executed.push(NotExecutedEngine {
                     engine_id,
                     engine_run_id,
-                    asset_ids: Vec::new(),
+                    asset_ids,
                     reason_code: "manifest_unavailable".into(),
                     explanation,
                 });
                 continue;
             };
 
-            let assets = compatible_authorized_assets(case, manifest, &effective, now);
+            let assets = compatible_authorized_assets(case, manifest, &effective, now)
+                .into_iter()
+                .filter(|asset| {
+                    routed_asset_ids.is_none_or(|asset_ids| asset_ids.contains(&asset.id))
+                })
+                .collect::<Vec<_>>();
             let asset_ids = assets
                 .iter()
                 .map(|asset| asset.id.clone())
@@ -3999,6 +4172,20 @@ impl<'a> CaseService<'a> {
             return Err(scan_preflight_error(&readiness));
         }
 
+        let report_requested_asset_ids = if engine_asset_routes.is_empty() {
+            engine_runs
+                .iter()
+                .flat_map(|engine_run| engine_run.asset_ids.iter().cloned())
+                .collect::<BTreeSet<_>>()
+        } else {
+            engine_asset_routes
+                .values()
+                .flatten()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        };
+        let report_asset_snapshots =
+            freeze_report_asset_snapshots(case, &report_requested_asset_ids)?;
         let completed_at = executable.is_empty().then_some(now);
         let scan_run = ScanRun {
             id: scan_run_id,
@@ -4007,6 +4194,7 @@ impl<'a> CaseService<'a> {
             created_at: now,
             completed_at,
             request_outcome: None,
+            report_asset_snapshots,
             knowledge_cutoff: now,
             ai_system_applicable,
             ai_system_applicability,
@@ -7070,6 +7258,13 @@ fn infer_assessment_intent(request: &CreateCaseRequest) -> Option<AssessmentInte
     if request
         .declared_assets
         .iter()
+        .any(|asset| asset.network_service.is_some() || asset.host_scan.is_some())
+    {
+        return Some(AssessmentIntent::InternalItEnvironment);
+    }
+    if request
+        .declared_assets
+        .iter()
         .any(|asset| asset.web_service.is_some())
     {
         return Some(AssessmentIntent::DeployedWebsite);
@@ -7108,102 +7303,334 @@ fn normalize_declared_assets(inputs: &[DeclaredAssetInput]) -> AppResult<Vec<Dis
         )));
     }
     let mut assets = Vec::with_capacity(inputs.len());
-    let mut identities = BTreeSet::new();
+    let mut identities = BTreeMap::new();
     for input in inputs {
+        let declared_contexts = usize::from(input.web_service.is_some())
+            + usize::from(input.network_service.is_some())
+            + usize::from(input.host_scan.is_some());
+        if declared_contexts > 1 {
+            return Err(AppError::InvalidRequest(
+                "one declared target cannot combine website, network-service, and host-scan context"
+                    .into(),
+            ));
+        }
         if input.web_service.is_some() && input.kind != DeclaredAssetKind::ExternalTarget {
             return Err(AppError::InvalidRequest(
                 "website service context is only valid for one external hostname or address".into(),
             ));
         }
-        let (kind, namespace, value, internet_exposed) = match input.kind {
+        if input.network_service.is_some() && input.kind != DeclaredAssetKind::ExternalTarget {
+            return Err(AppError::InvalidRequest(
+                "network service context is only valid for one external hostname or address".into(),
+            ));
+        }
+        if input.host_scan.is_some() && input.kind != DeclaredAssetKind::ExternalTarget {
+            return Err(AppError::InvalidRequest(
+                "host scan context is only valid for one external hostname or address".into(),
+            ));
+        }
+        let (
+            kind,
+            namespace,
+            value,
+            name,
+            internet_exposed,
+            additional_identifiers,
+            web_service,
+            network_service,
+            host_scan,
+        ) = match input.kind {
             DeclaredAssetKind::ExternalTarget => {
                 let target = CanonicalTarget::parse(&input.value)?;
                 let internet_exposed = input.internet_exposed.unwrap_or(true)
                     && !explicit_target_requires_sensitive_network_allowance(&target);
-                match target {
-                    CanonicalTarget::Hostname(hostname) => (
-                        AssetKind::Domain,
-                        "dns_name",
-                        hostname,
+                let (target_kind, target_namespace, target_value) = match &target {
+                    CanonicalTarget::Hostname(hostname) => {
+                        (AssetKind::Domain, "dns_name", hostname.clone())
+                    }
+                    CanonicalTarget::Address(address) => {
+                        (AssetKind::IpAddress, "ip_address", address.to_string())
+                    }
+                    CanonicalTarget::Network(network) => {
+                        (AssetKind::IpAddress, "ip_network", network.to_string())
+                    }
+                };
+                if let Some(service) = input.web_service.as_ref() {
+                    if matches!(target, CanonicalTarget::Network(_)) {
+                        return Err(AppError::InvalidRequest(
+                                "website service context must identify one hostname or address, not a network"
+                                    .into(),
+                            ));
+                    }
+                    let service_metadata = validate_declared_web_service(service)?;
+                    let origin = canonical_declared_web_origin(&target, service);
+                    (
+                        AssetKind::WebService,
+                        DECLARED_WEB_ORIGIN_IDENTIFIER_NAMESPACE.to_owned(),
+                        origin.clone(),
+                        origin.clone(),
                         Some(internet_exposed),
-                    ),
-                    CanonicalTarget::Address(address) => (
-                        AssetKind::IpAddress,
-                        "ip_address",
-                        address.to_string(),
+                        vec![AssetIdentifier {
+                            namespace: target_namespace.into(),
+                            value: target_value,
+                        }],
+                        Some((service_metadata, origin)),
+                        None,
+                        None,
+                    )
+                } else if let Some(service) = input.network_service.as_ref() {
+                    if matches!(target, CanonicalTarget::Network(_)) {
+                        return Err(AppError::InvalidRequest(
+                                "network service context must identify one hostname or address, not a network"
+                                    .into(),
+                            ));
+                    }
+                    let service_metadata = validate_declared_network_service(&target, service)?;
+                    let endpoint = canonical_declared_network_service_endpoint(&target, service);
+                    (
+                        AssetKind::Host,
+                        DECLARED_NETWORK_SERVICE_IDENTIFIER_NAMESPACE.to_owned(),
+                        endpoint.clone(),
+                        endpoint.clone(),
                         Some(internet_exposed),
-                    ),
-                    CanonicalTarget::Network(network) => (
-                        AssetKind::IpAddress,
-                        "ip_network",
-                        network.to_string(),
+                        vec![AssetIdentifier {
+                            namespace: target_namespace.into(),
+                            value: target_value,
+                        }],
+                        None,
+                        Some(service_metadata),
+                        None,
+                    )
+                } else if let Some(host_scan) = input.host_scan.as_ref() {
+                    if matches!(target, CanonicalTarget::Network(_)) {
+                        return Err(AppError::InvalidRequest(
+                            "host scan context must identify one hostname or address, not a network"
+                                .into(),
+                        ));
+                    }
+                    let host_scan_metadata = validate_declared_host_scan(&target, host_scan)?;
+                    (
+                        AssetKind::Host,
+                        target_namespace.to_owned(),
+                        target_value.clone(),
+                        target_value,
                         Some(internet_exposed),
-                    ),
+                        Vec::new(),
+                        None,
+                        None,
+                        Some(host_scan_metadata),
+                    )
+                } else {
+                    (
+                        target_kind,
+                        target_namespace.into(),
+                        target_value.clone(),
+                        target_value,
+                        Some(internet_exposed),
+                        Vec::new(),
+                        None,
+                        None,
+                        None,
+                    )
                 }
             }
-            DeclaredAssetKind::Repository => (
-                AssetKind::Repository,
-                "repository_locator",
-                validate_declared_locator("repository coordinate", &input.value, 2_048)?,
-                None,
-            ),
-            DeclaredAssetKind::IacProject => (
-                AssetKind::IacProject,
-                "iac_locator",
-                validate_declared_locator("IaC project coordinate", &input.value, 2_048)?,
-                None,
-            ),
-            DeclaredAssetKind::ContainerImage => (
-                AssetKind::ContainerImage,
-                "oci_image_digest",
-                validate_declared_image(&input.value)?,
-                None,
-            ),
-            DeclaredAssetKind::KubernetesCluster => (
-                AssetKind::KubernetesCluster,
-                "kubernetes_context",
-                validate_declared_locator("Kubernetes cluster coordinate", &input.value, 512)?,
-                None,
-            ),
+            DeclaredAssetKind::Repository => {
+                let value =
+                    validate_declared_locator("repository coordinate", &input.value, 2_048)?;
+                (
+                    AssetKind::Repository,
+                    "repository_locator".into(),
+                    value.clone(),
+                    value,
+                    None,
+                    Vec::new(),
+                    None,
+                    None,
+                    None,
+                )
+            }
+            DeclaredAssetKind::IacProject => {
+                let value =
+                    validate_declared_locator("IaC project coordinate", &input.value, 2_048)?;
+                (
+                    AssetKind::IacProject,
+                    "iac_locator".into(),
+                    value.clone(),
+                    value,
+                    None,
+                    Vec::new(),
+                    None,
+                    None,
+                    None,
+                )
+            }
+            DeclaredAssetKind::ContainerImage => {
+                let value = validate_declared_image(&input.value)?;
+                (
+                    AssetKind::ContainerImage,
+                    "oci_image_digest".into(),
+                    value.clone(),
+                    value,
+                    None,
+                    Vec::new(),
+                    None,
+                    None,
+                    None,
+                )
+            }
+            DeclaredAssetKind::KubernetesCluster => {
+                let value =
+                    validate_declared_locator("Kubernetes cluster coordinate", &input.value, 512)?;
+                (
+                    AssetKind::KubernetesCluster,
+                    "kubernetes_context".into(),
+                    value.clone(),
+                    value,
+                    None,
+                    Vec::new(),
+                    None,
+                    None,
+                    None,
+                )
+            }
         };
         let identity = format!("{}\u{0}{namespace}\u{0}{value}", enum_key(&kind));
-        if !identities.insert(identity) {
+        let network_service_profile = input
+            .network_service
+            .as_ref()
+            .map(|service| service.scan_profile);
+        if let Some((existing_profile, existing_host_scan)) = identities.get(&identity) {
+            if network_service_profile.is_some() && *existing_profile != network_service_profile {
+                return Err(AppError::InvalidRequest(
+                    "one network service endpoint cannot use conflicting scanner profiles".into(),
+                ));
+            }
+            if host_scan.is_some() && existing_host_scan != &host_scan {
+                return Err(AppError::InvalidRequest(
+                    "one declared host cannot use conflicting scanner profiles or port sets".into(),
+                ));
+            }
             continue;
         }
+        identities.insert(identity, (network_service_profile, host_scan.clone()));
         let mut metadata = BTreeMap::new();
         metadata.insert(
             "questionnaire_kind".into(),
             Value::String(enum_key(&input.kind)),
         );
-        if let Some(service) = input.web_service.as_ref() {
-            if namespace == "ip_network" {
-                return Err(AppError::InvalidRequest(
-                    "website service context must identify one hostname or address, not a network"
-                        .into(),
-                ));
-            }
+        if let Some((service, origin)) = web_service {
+            metadata.insert(DECLARED_WEB_SERVICE_METADATA_KEY.into(), service);
             metadata.insert(
-                "declared_web_service".into(),
-                validate_declared_web_service(service)?,
+                DECLARED_WEB_ORIGIN_METADATA_KEY.into(),
+                Value::String(origin),
+            );
+        }
+        if let Some(service) = network_service {
+            metadata.insert(DECLARED_NETWORK_SERVICE_METADATA_KEY.into(), service);
+        }
+        if let Some(host_scan) = host_scan {
+            metadata.insert(
+                DECLARED_HOST_SCAN_METADATA_KEY.into(),
+                serde_json::to_value(host_scan).map_err(|error| {
+                    AppError::Internal(format!(
+                        "declared host scan metadata could not be normalized: {error}"
+                    ))
+                })?,
             );
         }
         assets.push(DiscoveredAsset {
             observation_key: format!("declared-{}", assets.len() + 1),
             kind,
-            name: value.clone(),
+            name,
             provider: None,
             region: None,
             stable_identifier: AssetIdentifier {
                 namespace: namespace.into(),
                 value,
             },
-            additional_identifiers: vec![],
+            additional_identifiers,
             internet_exposed,
             contains_sensitive_data: None,
             metadata,
         });
     }
     Ok(assets)
+}
+
+fn canonical_declared_web_origin(
+    target: &CanonicalTarget,
+    service: &DeclaredWebServiceInput,
+) -> String {
+    let protocol = match service.protocol {
+        DeclaredWebProtocol::Http => "http",
+        DeclaredWebProtocol::Https => "https",
+    };
+    let host = match target {
+        CanonicalTarget::Address(std::net::IpAddr::V6(address)) => format!("[{address}]"),
+        _ => target.canonical_text(),
+    };
+    format!("{protocol}://{host}:{}", service.port)
+}
+
+fn canonical_declared_network_service_endpoint(
+    target: &CanonicalTarget,
+    service: &DeclaredNetworkServiceInput,
+) -> String {
+    let host = match target {
+        CanonicalTarget::Address(std::net::IpAddr::V6(address)) => format!("[{address}]"),
+        _ => target.canonical_text(),
+    };
+    format!("tcp://{host}:{}", service.port)
+}
+
+fn validate_declared_host_scan(
+    target: &CanonicalTarget,
+    host_scan: &DeclaredHostScanInput,
+) -> AppResult<DeclaredHostScanMetadata> {
+    if matches!(target, CanonicalTarget::Network(_)) {
+        return Err(AppError::InvalidRequest(
+            "host scan context must identify one hostname or address, not a network".into(),
+        ));
+    }
+    if host_scan.ports.is_empty() || host_scan.ports.len() > MAX_DECLARED_HOST_SCAN_PORTS {
+        return Err(AppError::InvalidRequest(format!(
+            "host scan must contain between 1 and {MAX_DECLARED_HOST_SCAN_PORTS} TCP ports"
+        )));
+    }
+    if host_scan.ports.contains(&0) {
+        return Err(AppError::InvalidRequest(
+            "host scan ports must be between 1 and 65535".into(),
+        ));
+    }
+    let ports = host_scan.ports.iter().copied().collect::<BTreeSet<_>>();
+    Ok(DeclaredHostScanMetadata {
+        target: target.canonical_text(),
+        protocol: host_scan.protocol,
+        ports,
+        profile: host_scan.profile,
+    })
+}
+
+fn validate_declared_network_service(
+    target: &CanonicalTarget,
+    service: &DeclaredNetworkServiceInput,
+) -> AppResult<Value> {
+    if service.port == 0 {
+        return Err(AppError::InvalidRequest(
+            "network service port must be between 1 and 65535".into(),
+        ));
+    }
+    let metadata = DeclaredNetworkServiceMetadata {
+        target: target.canonical_text(),
+        protocol: service.protocol,
+        port: service.port,
+        scan_profile: service.scan_profile,
+    };
+    serde_json::to_value(metadata).map_err(|error| {
+        AppError::Internal(format!(
+            "declared network service metadata could not be normalized: {error}"
+        ))
+    })
 }
 
 fn validate_declared_web_service(service: &DeclaredWebServiceInput) -> AppResult<Value> {
@@ -7226,11 +7653,18 @@ fn validate_declared_web_service(service: &DeclaredWebServiceInput) -> AppResult
         DeclaredWebProtocol::Http => "http",
         DeclaredWebProtocol::Https => "https",
     };
-    Ok(serde_json::json!({
-        "protocol": protocol,
-        "port": service.port,
-        "path": service.path,
-    }))
+    let mut metadata = serde_json::Map::from_iter([
+        ("protocol".into(), Value::String(protocol.into())),
+        ("port".into(), Value::Number(service.port.into())),
+        ("path".into(), Value::String(service.path.clone())),
+    ]);
+    if let Some(profile) = service.scan_profile {
+        let profile = match profile {
+            DeclaredWebServiceScanProfile::InternalDeviceHttps => "internal_device_https",
+        };
+        metadata.insert("scan_profile".into(), Value::String(profile.into()));
+    }
+    Ok(Value::Object(metadata))
 }
 
 fn validate_declared_locator(label: &str, value: &str, maximum: usize) -> AppResult<String> {
@@ -7641,6 +8075,9 @@ fn materialize_external_scope(
             "external target is not attributable to the selected discovered asset".into(),
         ));
     }
+    validate_declared_web_service_scope(asset, external)?;
+    validate_declared_network_service_scope(asset, external)?;
+    validate_declared_host_scan_scope(asset, external)?;
     if expected_activity != ExternalActivity::PassivePublicDiscovery {
         let explicitly_sensitive = explicit_target_requires_sensitive_network_allowance(&target);
         match (asset.internet_exposed, explicitly_sensitive) {
@@ -7903,14 +8340,221 @@ pub(crate) fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
     }
 }
 
+fn scan_plan_request_from_baseline(baseline: &ScanRun) -> ScanPlanRequest {
+    let mut asset_ids_by_engine = BTreeMap::<String, BTreeSet<Id>>::new();
+    let mut catalog_engine_ids = BTreeSet::new();
+    for engine_run in baseline
+        .engine_runs
+        .iter()
+        .filter(|engine_run| matches!(engine_run.task_kind, EngineTaskKind::CatalogEngine))
+    {
+        catalog_engine_ids.insert(engine_run.engine_id.clone());
+        if !engine_run.asset_ids.is_empty() {
+            asset_ids_by_engine
+                .entry(engine_run.engine_id.clone())
+                .or_default()
+                .extend(engine_run.asset_ids.iter().cloned());
+        }
+    }
+    if asset_ids_by_engine.is_empty() {
+        return ScanPlanRequest {
+            engine_ids: catalog_engine_ids.into_iter().collect(),
+            engine_asset_routes: Vec::new(),
+        };
+    }
+    ScanPlanRequest {
+        engine_ids: Vec::new(),
+        engine_asset_routes: asset_ids_by_engine
+            .into_iter()
+            .map(|(engine_id, asset_ids)| EngineAssetRoute {
+                engine_id,
+                asset_ids: asset_ids.into_iter().collect(),
+            })
+            .collect(),
+    }
+}
+
+fn freeze_report_asset_snapshots(
+    case: &AssessmentCase,
+    requested_asset_ids: &BTreeSet<Id>,
+) -> AppResult<Vec<ReportAssetSnapshot>> {
+    if case.assessment_intent != Some(AssessmentIntent::InternalItEnvironment) {
+        return Ok(Vec::new());
+    }
+
+    let mut snapshots = Vec::new();
+    let mut frozen_asset_ids = BTreeSet::new();
+    for asset in &case.assets {
+        let disposition = if requested_asset_ids.contains(&asset.id) {
+            Some(ReportAssetDisposition::RequestedForScan)
+        } else if is_explicit_inventory_only_environment_asset(asset) {
+            Some(ReportAssetDisposition::NoSupportedProfile)
+        } else {
+            None
+        };
+        let Some(disposition) = disposition else {
+            continue;
+        };
+        if !frozen_asset_ids.insert(asset.id.as_str()) {
+            return Err(AppError::InvalidRequest(format!(
+                "case repeats report asset identifier {}",
+                asset.id
+            )));
+        }
+        if snapshots.len() >= MAX_SCAN_RUN_REPORT_ASSET_SNAPSHOTS {
+            return Err(AppError::InvalidRequest(format!(
+                "scan run exceeds {MAX_SCAN_RUN_REPORT_ASSET_SNAPSHOTS} frozen report assets"
+            )));
+        }
+        snapshots.push(ReportAssetSnapshot {
+            asset: asset.clone(),
+            disposition,
+        });
+    }
+    Ok(snapshots)
+}
+
+fn is_explicit_inventory_only_environment_asset(asset: &Asset) -> bool {
+    asset
+        .metadata
+        .get("questionnaire_kind")
+        .and_then(Value::as_str)
+        == Some("external_target")
+        && matches!(asset.kind, AssetKind::Domain | AssetKind::IpAddress)
+        && !asset
+            .metadata
+            .contains_key(DECLARED_WEB_SERVICE_METADATA_KEY)
+        && !asset
+            .metadata
+            .contains_key(DECLARED_NETWORK_SERVICE_METADATA_KEY)
+        && !asset.metadata.contains_key(DECLARED_HOST_SCAN_METADATA_KEY)
+        && !asset.metadata.contains_key("workspace_snapshot_id")
+        && !asset.metadata.contains_key("workspace_snapshot_sha256")
+        && !asset.metadata.contains_key("local_input_profile")
+}
+
+fn normalize_engine_id(value: &str) -> AppResult<String> {
+    let value = required_text("engine id", value, 200)?;
+    if !value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(AppError::InvalidRequest(format!(
+            "engine id contains unsupported characters: {value}"
+        )));
+    }
+    Ok(value)
+}
+
+fn normalized_engine_asset_routes(
+    case: &AssessmentCase,
+    request: &ScanPlanRequest,
+) -> AppResult<BTreeMap<String, BTreeSet<Id>>> {
+    if !request.engine_ids.is_empty() && !request.engine_asset_routes.is_empty() {
+        return Err(AppError::InvalidRequest(
+            "engine_ids and engine_asset_routes cannot be combined; routes are the exact engine selection"
+                .into(),
+        ));
+    }
+    if request.engine_asset_routes.len() > MAX_SCAN_REQUEST_ENGINE_IDS {
+        return Err(AppError::InvalidRequest(format!(
+            "scan request exceeds {MAX_SCAN_REQUEST_ENGINE_IDS} engine routes"
+        )));
+    }
+
+    let mut routes = BTreeMap::new();
+    let mut total_asset_ids = 0_usize;
+    for route in &request.engine_asset_routes {
+        let engine_id = normalize_engine_id(&route.engine_id)?;
+        if route.asset_ids.is_empty() {
+            return Err(AppError::InvalidRequest(format!(
+                "engine route {engine_id} must select at least one asset"
+            )));
+        }
+        total_asset_ids = total_asset_ids
+            .checked_add(route.asset_ids.len())
+            .filter(|total| *total <= MAX_SCAN_REQUEST_ASSET_IDS)
+            .ok_or_else(|| {
+                AppError::InvalidRequest(format!(
+                    "scan request exceeds {MAX_SCAN_REQUEST_ASSET_IDS} routed asset identifiers"
+                ))
+            })?;
+        let mut asset_ids = BTreeSet::new();
+        for asset_id in &route.asset_ids {
+            let asset_id = required_text("engine route asset id", asset_id, 512)?;
+            if !asset_ids.insert(asset_id.clone()) {
+                return Err(AppError::InvalidRequest(format!(
+                    "engine route {engine_id} repeats asset {asset_id}"
+                )));
+            }
+            let asset = case
+                .assets
+                .iter()
+                .find(|asset| asset.id == asset_id)
+                .ok_or_else(|| {
+                    AppError::InvalidRequest(format!(
+                        "engine route {engine_id} references an asset outside this case: {asset_id}"
+                    ))
+                })?;
+            if !asset.owner_confirmed || asset.candidate {
+                return Err(AppError::NotAuthorized(format!(
+                    "engine route {engine_id} references an asset that is not ownership-confirmed: {asset_id}"
+                )));
+            }
+        }
+        if routes.insert(engine_id.clone(), asset_ids).is_some() {
+            return Err(AppError::InvalidRequest(format!(
+                "engine route is repeated for engine {engine_id}"
+            )));
+        }
+    }
+    Ok(routes)
+}
+
+fn validate_routed_engine_compatibility(
+    engines: &EngineRegistry,
+    case: &AssessmentCase,
+    effective: &[&ScopeGrant],
+    routes: &BTreeMap<String, BTreeSet<Id>>,
+    now: DateTime<Utc>,
+) -> AppResult<()> {
+    for (engine_id, requested_asset_ids) in routes {
+        let Some(manifest) = engines.get(engine_id) else {
+            // Preserve the established explicit-unknown behavior: planning
+            // records the unavailable manifest against the exact requested
+            // assets instead of guessing what it might have supported.
+            continue;
+        };
+        let compatible_asset_ids = compatible_authorized_assets(case, manifest, effective, now)
+            .into_iter()
+            .map(|asset| asset.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let incompatible_asset_ids = requested_asset_ids
+            .iter()
+            .filter(|asset_id| !compatible_asset_ids.contains(asset_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !incompatible_asset_ids.is_empty() {
+            return Err(AppError::NotAuthorized(format!(
+                "engine route {engine_id} includes assets that are unsupported or do not have every permission required by that engine: {}",
+                incompatible_asset_ids.join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn selected_engine_ids(
     engines: &EngineRegistry,
     request: &ScanPlanRequest,
+    engine_asset_routes: &BTreeMap<String, BTreeSet<Id>>,
     case: &AssessmentCase,
     effective: &[&ScopeGrant],
     now: DateTime<Utc>,
 ) -> AppResult<Vec<String>> {
-    let values = if request.engine_ids.is_empty() {
+    let values = if !engine_asset_routes.is_empty() {
+        engine_asset_routes.keys().cloned().collect::<Vec<_>>()
+    } else if request.engine_ids.is_empty() {
         engines
             .manifests()
             .iter()
@@ -7924,15 +8568,7 @@ fn selected_engine_ids(
     };
     let mut selected = BTreeSet::new();
     for value in values {
-        let value = required_text("engine id", &value, 200)?;
-        if !value
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-        {
-            return Err(AppError::InvalidRequest(format!(
-                "engine id contains unsupported characters: {value}"
-            )));
-        }
+        let value = normalize_engine_id(&value)?;
         selected.insert(value);
     }
     Ok(selected.into_iter().collect())
@@ -7942,7 +8578,7 @@ fn default_scan_admission_issues(
     engines: &EngineRegistry,
     request: &ScanPlanRequest,
 ) -> Vec<crate::domain::EngineAdmissionIssue> {
-    if request.engine_ids.is_empty() {
+    if request.engine_ids.is_empty() && request.engine_asset_routes.is_empty() {
         engines.run_bound_admission_issues()
     } else {
         Vec::new()
@@ -7961,6 +8597,9 @@ fn compatible_authorized_assets<'a>(
         .filter(|asset| manifest.supports_asset(asset))
         .filter(|asset| provider_target_metadata_matches(case, manifest, asset))
         .filter(|asset| local_input_metadata_matches(case, manifest, asset))
+        .filter(|asset| declared_web_service_profile_matches(manifest, asset))
+        .filter(|asset| declared_network_service_profile_matches(manifest, asset))
+        .filter(|asset| declared_host_scan_profile_matches(manifest, asset))
         .filter(|asset| {
             let grants = effective
                 .iter()
@@ -7990,6 +8629,287 @@ fn compatible_authorized_assets<'a>(
             )
         })
         .collect()
+}
+
+/// A declared web-service profile is a scanner selection, not decorative UI
+/// metadata. Keep an internal-device asset on Greenbone even if a caller
+/// tampers with the engine-to-asset route after Review. Legacy/discovered web
+/// services without this metadata retain their existing compatibility path.
+fn declared_web_service_profile_matches(manifest: &EngineManifest, asset: &Asset) -> bool {
+    let Some(value) = asset.metadata.get(DECLARED_WEB_SERVICE_METADATA_KEY) else {
+        return true;
+    };
+    let Ok(service) = serde_json::from_value::<DeclaredWebServiceInput>(value.clone()) else {
+        return false;
+    };
+    if !manifest
+        .required_permissions
+        .contains(&ScanPermission::ActiveExternalTesting)
+    {
+        return true;
+    }
+    match service.scan_profile {
+        Some(_) => manifest.id == INTERNAL_DEVICE_ENGINE_ID,
+        // A declared website and a declared device are separate beginner
+        // choices. Preserve that exact choice even if an IPC caller tampers
+        // with the engine-to-asset route after Review.
+        None => manifest.id == DECLARED_WEBSITE_ENGINE_ID,
+    }
+}
+
+/// A declared service endpoint is a Greenbone vulnerability profile, not
+/// generic host inventory. Keep it from being routed to discovery or
+/// local-snapshot engines even when those manifests also list `host` as a
+/// supported kind.
+fn declared_network_service_profile_matches(manifest: &EngineManifest, asset: &Asset) -> bool {
+    let Some(value) = asset.metadata.get(DECLARED_NETWORK_SERVICE_METADATA_KEY) else {
+        return true;
+    };
+    if serde_json::from_value::<DeclaredNetworkServiceMetadata>(value.clone()).is_err() {
+        return false;
+    }
+    manifest.id == INTERNAL_DEVICE_ENGINE_ID
+}
+
+/// A declared whole-host profile remains an upstream Greenbone scan. Keep it
+/// on that engine even when another manifest also accepts generic host assets.
+fn declared_host_scan_profile_matches(manifest: &EngineManifest, asset: &Asset) -> bool {
+    let Some(value) = asset.metadata.get(DECLARED_HOST_SCAN_METADATA_KEY) else {
+        return true;
+    };
+    if serde_json::from_value::<DeclaredHostScanMetadata>(value.clone()).is_err() {
+        return false;
+    }
+    manifest.id == INTERNAL_DEVICE_ENGINE_ID
+}
+
+fn internal_endpoint_profile_oids(
+    profile: DeclaredNetworkServiceScanProfile,
+) -> &'static [&'static str] {
+    match profile {
+        DeclaredNetworkServiceScanProfile::InternalEndpointSsh => {
+            &INTERNAL_ENDPOINT_SSH_VULNERABILITY_OIDS
+        }
+        DeclaredNetworkServiceScanProfile::InternalEndpointRdpTls => {
+            &INTERNAL_ENDPOINT_RDP_TLS_VULNERABILITY_OIDS
+        }
+        DeclaredNetworkServiceScanProfile::InternalEndpointVnc => {
+            &INTERNAL_ENDPOINT_VNC_VULNERABILITY_OIDS
+        }
+        DeclaredNetworkServiceScanProfile::InternalEndpointSmtp => {
+            &INTERNAL_ENDPOINT_SMTP_VULNERABILITY_OIDS
+        }
+        DeclaredNetworkServiceScanProfile::InternalEndpointTelnet => {
+            &INTERNAL_ENDPOINT_TELNET_VULNERABILITY_OIDS
+        }
+    }
+}
+
+fn internal_device_profile_oids(profile: DeclaredWebServiceScanProfile) -> Vec<&'static str> {
+    match profile {
+        DeclaredWebServiceScanProfile::InternalDeviceHttps => {
+            INTERNAL_DEVICE_TLS_VULNERABILITY_OIDS.to_vec()
+        }
+    }
+}
+
+/// The HTTPS management-service profile saved during setup owns the exact
+/// low-privilege Greenbone policy. Do not let a modified IPC request
+/// substitute other OIDs, another port, or a wider/faster scan while retaining
+/// the reviewed label.
+fn validate_declared_web_service_scope(
+    asset: &Asset,
+    external: &ExternalScopeRequest,
+) -> AppResult<()> {
+    let Some(value) = asset.metadata.get(DECLARED_WEB_SERVICE_METADATA_KEY) else {
+        return Ok(());
+    };
+    let service =
+        serde_json::from_value::<DeclaredWebServiceInput>(value.clone()).map_err(|_| {
+            AppError::NotAuthorized(
+                "declared web-service profile metadata is malformed; review the target again"
+                    .into(),
+            )
+        })?;
+    // Older explicitly low-impact service records are not the fixed website
+    // vulnerability profile. Preserve that narrower legacy path; every new
+    // beginner website/device vulnerability scan uses ActiveExternalTesting.
+    if service.scan_profile.is_none() && external.activity != ExternalActivity::ActiveExternal {
+        return Ok(());
+    }
+    let requested_oids = external
+        .template_policy
+        .allowed_template_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let expected_protocol = match service.protocol {
+        DeclaredWebProtocol::Http => crate::external_scope::TransportProtocol::Http,
+        DeclaredWebProtocol::Https => crate::external_scope::TransportProtocol::Https,
+    };
+    let common_exact_scope = external.protocol == expected_protocol
+        && external.activity == ExternalActivity::ActiveExternal
+        && external.ports == BTreeSet::from([service.port])
+        && !external.template_policy.allow_headless
+        && !external.template_policy.allow_out_of_band
+        && !external.template_policy.allow_fuzzing
+        && !external.template_policy.allow_file_upload
+        && !external.template_policy.allow_denial_of_service
+        && !external.template_policy.allow_credential_attacks;
+    let exact_profile = match service.scan_profile {
+        Some(profile) => {
+            let expected_oids = internal_device_profile_oids(profile);
+            let expected_oid_set = expected_oids.iter().copied().collect::<BTreeSet<_>>();
+            service.protocol == DeclaredWebProtocol::Https
+                && common_exact_scope
+                && external.rate_policy.requests_per_second == 2
+                && external.rate_policy.concurrency == 1
+                && external.rate_policy.timeout_seconds == 15
+                && external.template_policy.revision == INTERNAL_DEVICE_TEMPLATE_REVISION
+                && requested_oids.len() == expected_oids.len()
+                && requested_oids == expected_oid_set
+        }
+        None => {
+            common_exact_scope
+                && external.rate_policy.requests_per_second == 10
+                && external.rate_policy.concurrency == 5
+                && external.rate_policy.timeout_seconds == 10
+                && external.template_policy.revision == DECLARED_WEBSITE_TEMPLATE_REVISION
+                && requested_oids.is_empty()
+                && external.template_policy.profile_id.as_deref()
+                    == Some(NUCLEI_WEB_SAFE_PROFILE_ID)
+        }
+    };
+    if !exact_profile {
+        return Err(AppError::NotAuthorized(
+            "declared web-service authorization no longer matches its selected scanner profile"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The backend-derived endpoint profile owns the complete executable scope. A
+/// modified IPC request cannot change the target, port, transport, feed,
+/// selected upstream checks, rate, or dangerous capabilities while retaining
+/// the reviewed endpoint label.
+fn validate_declared_network_service_scope(
+    asset: &Asset,
+    external: &ExternalScopeRequest,
+) -> AppResult<()> {
+    let Some(value) = asset.metadata.get(DECLARED_NETWORK_SERVICE_METADATA_KEY) else {
+        return Ok(());
+    };
+    let service =
+        serde_json::from_value::<DeclaredNetworkServiceMetadata>(value.clone()).map_err(|_| {
+            AppError::NotAuthorized(
+                "declared network-service profile metadata is malformed; review the target again"
+                    .into(),
+            )
+        })?;
+    let expected_target = CanonicalTarget::parse(&service.target).map_err(|_| {
+        AppError::NotAuthorized(
+            "declared network-service target metadata is malformed; review the target again".into(),
+        )
+    })?;
+    if matches!(expected_target, CanonicalTarget::Network(_)) {
+        return Err(AppError::NotAuthorized(
+            "declared network-service target widened to a network; review the target again".into(),
+        ));
+    }
+    let requested_target = CanonicalTarget::parse(&external.target)?;
+    let requested_oids = external
+        .template_policy
+        .allowed_template_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let expected_oids = internal_endpoint_profile_oids(service.scan_profile);
+    let expected_oid_set = expected_oids.iter().copied().collect::<BTreeSet<_>>();
+    let exact_profile = asset.kind == AssetKind::Host
+        && requested_target == expected_target
+        && service.protocol == DeclaredNetworkProtocol::Tcp
+        && external.protocol == crate::external_scope::TransportProtocol::Tcp
+        && external.activity == ExternalActivity::ActiveExternal
+        && external.ports == BTreeSet::from([service.port])
+        && external.rate_policy.requests_per_second == 2
+        && external.rate_policy.concurrency == 1
+        && external.rate_policy.timeout_seconds == 15
+        && external.template_policy.revision == INTERNAL_ENDPOINT_TEMPLATE_REVISION
+        && requested_oids.len() == expected_oids.len()
+        && requested_oids == expected_oid_set
+        && !external.template_policy.allow_headless
+        && !external.template_policy.allow_out_of_band
+        && !external.template_policy.allow_fuzzing
+        && !external.template_policy.allow_file_upload
+        && !external.template_policy.allow_denial_of_service
+        && !external.template_policy.allow_credential_attacks;
+    if !exact_profile {
+        return Err(AppError::NotAuthorized(
+            "declared network-service authorization no longer matches its reviewed fixed scanner profile"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The generic exact-host profile delegates applicability and vulnerability
+/// selection to the pinned Greenbone feed. The product-owned boundary remains
+/// exact: one reviewed host, its normalized TCP port set, and conservative
+/// execution limits. Any modified request fails before a grant or run exists.
+fn validate_declared_host_scan_scope(
+    asset: &Asset,
+    external: &ExternalScopeRequest,
+) -> AppResult<()> {
+    let Some(value) = asset.metadata.get(DECLARED_HOST_SCAN_METADATA_KEY) else {
+        return Ok(());
+    };
+    let host_scan =
+        serde_json::from_value::<DeclaredHostScanMetadata>(value.clone()).map_err(|_| {
+            AppError::NotAuthorized(
+                "declared host-scan profile metadata is malformed; review the target again".into(),
+            )
+        })?;
+    let expected_target = CanonicalTarget::parse(&host_scan.target).map_err(|_| {
+        AppError::NotAuthorized(
+            "declared host-scan target metadata is malformed; review the target again".into(),
+        )
+    })?;
+    if matches!(expected_target, CanonicalTarget::Network(_)) {
+        return Err(AppError::NotAuthorized(
+            "declared host-scan target widened to a network; review the target again".into(),
+        ));
+    }
+    let requested_target = CanonicalTarget::parse(&external.target)?;
+    let exact_profile = asset.kind == AssetKind::Host
+        && requested_target == expected_target
+        && host_scan.protocol == DeclaredNetworkProtocol::Tcp
+        && host_scan.profile == DeclaredHostScanProfile::GreenboneRemoteSafeV1
+        && !host_scan.ports.is_empty()
+        && host_scan.ports.len() <= MAX_DECLARED_HOST_SCAN_PORTS
+        && !host_scan.ports.contains(&0)
+        && external.protocol == crate::external_scope::TransportProtocol::Tcp
+        && external.activity == ExternalActivity::ActiveExternal
+        && external.ports == host_scan.ports
+        && external.rate_policy.requests_per_second == 2
+        && external.rate_policy.concurrency == 1
+        && external.rate_policy.timeout_seconds == 15
+        && external.template_policy.revision == INTERNAL_ENDPOINT_TEMPLATE_REVISION
+        && external.template_policy.allowed_template_ids.is_empty()
+        && external.template_policy.profile_id.as_deref() == Some(GREENBONE_REMOTE_SAFE_PROFILE_ID)
+        && !external.template_policy.allow_headless
+        && !external.template_policy.allow_out_of_band
+        && !external.template_policy.allow_fuzzing
+        && !external.template_policy.allow_file_upload
+        && !external.template_policy.allow_denial_of_service
+        && !external.template_policy.allow_credential_attacks;
+    if !exact_profile {
+        return Err(AppError::NotAuthorized(
+            "declared host-scan authorization no longer matches its reviewed Greenbone profile"
+                .into(),
+        ));
+    }
+    Ok(())
 }
 
 fn local_input_metadata_matches(
@@ -8408,6 +9328,7 @@ fn comparable_scope_contract_sha256(
                         },
                         "template_policy": {
                             "revision": external.template_policy.revision,
+                            "profile_id": external.template_policy.profile_id,
                             "allowed_template_ids": template_ids,
                             "allow_headless": external.template_policy.allow_headless,
                             "allow_out_of_band": external.template_policy.allow_out_of_band,
@@ -12169,7 +13090,7 @@ impl HtmlReportCatalog {
             AssetKind::Tenant => self.text("Tenant", "租用戶"),
             AssetKind::Domain => self.text("Domain", "網域"),
             AssetKind::IpAddress => self.text("IP address", "IP 位址"),
-            AssetKind::Host => self.text("Host", "主機"),
+            AssetKind::Host => self.text("Server or workstation", "伺服器或工作站"),
             AssetKind::WebService => self.text("Web service", "網站服務"),
             AssetKind::CloudResource => self.text("Cloud resource", "雲端資源"),
             AssetKind::Identity => self.text("Identity", "身分"),
@@ -12378,6 +13299,340 @@ fn readable_target_list(
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HtmlAssetResultStatus {
+    ProblemsFound,
+    NoProblemsInCompletedChecks,
+    IncompleteOrFailed,
+    NotTested,
+}
+
+fn report_check_is_preparation_only(check_id: &str) -> bool {
+    let normalized = check_id.trim().to_ascii_lowercase();
+    normalized == "naabu"
+        || normalized.starts_with("naabu-")
+        || normalized == "httpx"
+        || normalized.starts_with("httpx-")
+        || normalized.starts_with("native localhost tcp check on ")
+}
+
+fn html_gap_next_action(gap: &CoverageGap, catalog: HtmlReportCatalog) -> String {
+    match gap.next_action_code {
+        NextActionCode::ReviewFinding => catalog
+            .text(
+                "Review the problem and its evidence.",
+                "檢視這個問題與相關證據。",
+            )
+            .to_owned(),
+        NextActionCode::RetryCheck => catalog
+            .text(
+                "Retry this check; saved results will remain.",
+                "重試這項檢查；已保存的結果會保留。",
+            )
+            .to_owned(),
+        NextActionCode::ReviewScopeAndRetry => catalog
+            .text(
+                "Review the requested scope, then retry.",
+                "確認要求的範圍後再重試。",
+            )
+            .to_owned(),
+        NextActionCode::ChooseCompatibleCheck => catalog
+            .text(
+                "Choose an available check for this target.",
+                "為這個目標選擇可用的檢查。",
+            )
+            .to_owned(),
+        NextActionCode::WaitOrCancel => catalog
+            .text(
+                "Let it finish, or cancel and keep the partial report.",
+                "等待完成，或取消並保留部分報告。",
+            )
+            .to_owned(),
+        NextActionCode::StartExpectedServiceAndRetry => catalog
+            .text(
+                "Start the expected local service, then retry.",
+                "先啟動預期的本機服務，再重試。",
+            )
+            .to_owned(),
+        NextActionCode::ReviewCoverage => catalog
+            .text(
+                "Review the coverage gap before relying on the result.",
+                "採用結果前，先檢視涵蓋缺口。",
+            )
+            .to_owned(),
+        NextActionCode::PreserveVisibleLimitation => catalog
+            .text(
+                "Keep this limitation visible when sharing the report.",
+                "分享報告時，請保留這項限制。",
+            )
+            .to_owned(),
+        NextActionCode::NoActionUnlessScopeChanges => catalog
+            .text(
+                "No action is needed unless you change the scope.",
+                "除非要更改範圍，否則不需處理。",
+            )
+            .to_owned(),
+        NextActionCode::AddAssetIdentifier => match (catalog.locale, gap.unattributed.as_ref()) {
+            (crate::export::ReportLocale::En, Some(unattributed)) => format!(
+                "Add {} to the asset you authorized as its {} identifier, then scan again.",
+                unattributed.identifier, unattributed.provider
+            ),
+            (crate::export::ReportLocale::ZhHant, Some(unattributed)) => {
+                crate::finding_narrative::unattributed_gap_zh_hant("", unattributed).2
+            }
+            _ => catalog
+                .text(
+                    "Add the identifier the check reported on to the asset you authorized, then scan again.",
+                    "請將這項檢查所回報的識別碼，新增到你已授權的資產上，然後重新掃描。",
+                )
+                .to_owned(),
+        },
+    }
+}
+
+fn html_asset_result_section(
+    report: &BeginnerMasterReport,
+    labels: &BTreeMap<Id, String>,
+    catalog: HtmlReportCatalog,
+) -> String {
+    if report.requested.targets.is_empty() {
+        return String::new();
+    }
+
+    let mut rows = String::new();
+    for target in &report.requested.targets {
+        let checks = report
+            .actual
+            .checks
+            .iter()
+            .filter(|check| check.target_asset_ids.contains(&target.asset_id))
+            .collect::<Vec<_>>();
+        let completed_security_checks = checks
+            .iter()
+            .filter(|check| {
+                check.status == CoverageDimensionStatus::TestedComplete
+                    && !report_check_is_preparation_only(&check.check_id)
+            })
+            .count();
+        let finding_count = report
+            .findings
+            .iter()
+            .filter(|finding| {
+                !finding
+                    .severity_basis_code
+                    .is_some_and(|basis| basis.is_exposure_observation())
+                    && finding.target_asset_ids.contains(&target.asset_id)
+            })
+            .map(|finding| finding.finding_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len();
+        let gaps = report
+            .coverage_gaps
+            .iter()
+            .filter(|gap| gap.target_asset_ids.contains(&target.asset_id))
+            .collect::<Vec<_>>();
+        let has_incomplete_check = checks.iter().any(|check| {
+            matches!(
+                check.status,
+                CoverageDimensionStatus::TestedPartial
+                    | CoverageDimensionStatus::Failed
+                    | CoverageDimensionStatus::TimedOut
+                    | CoverageDimensionStatus::Cancelled
+                    | CoverageDimensionStatus::InProgress
+            )
+        });
+        let has_incomplete_gap = gaps.iter().any(|gap| {
+            matches!(
+                gap.kind,
+                CoverageGapKind::Failed
+                    | CoverageGapKind::TimedOut
+                    | CoverageGapKind::Cancelled
+                    | CoverageGapKind::Truncated
+                    | CoverageGapKind::Unavailable
+                    | CoverageGapKind::Unattributed
+            )
+        });
+        let unfinished_requested_gap = gaps.iter().copied().find(|gap| {
+            gap.kind == CoverageGapKind::NotTested
+                && gap.task_id.as_ref().is_some_and(|task_id| {
+                    !checks.iter().any(|check| {
+                        check.task_id == task_id.as_str()
+                            && check.status == CoverageDimensionStatus::TestedComplete
+                    })
+                })
+        });
+        let has_unfinished_requested_check =
+            completed_security_checks > 0 && unfinished_requested_gap.is_some();
+        let has_incomplete_evidence =
+            has_incomplete_check || has_incomplete_gap || has_unfinished_requested_check;
+        let status = if finding_count > 0 {
+            HtmlAssetResultStatus::ProblemsFound
+        } else if has_incomplete_evidence {
+            HtmlAssetResultStatus::IncompleteOrFailed
+        } else if completed_security_checks > 0 {
+            HtmlAssetResultStatus::NoProblemsInCompletedChecks
+        } else {
+            HtmlAssetResultStatus::NotTested
+        };
+        let preferred_incomplete_gap = gaps.iter().copied().find(|gap| {
+            matches!(
+                gap.kind,
+                CoverageGapKind::Failed
+                    | CoverageGapKind::TimedOut
+                    | CoverageGapKind::Cancelled
+                    | CoverageGapKind::Truncated
+                    | CoverageGapKind::Unavailable
+                    | CoverageGapKind::Unattributed
+            )
+        });
+        let preferred_gap = match status {
+            HtmlAssetResultStatus::IncompleteOrFailed => {
+                preferred_incomplete_gap.or(unfinished_requested_gap)
+            }
+            HtmlAssetResultStatus::NotTested => gaps
+                .iter()
+                .copied()
+                .find(|gap| gap.kind != CoverageGapKind::Excluded),
+            _ => None,
+        };
+        let (class_name, status_label, summary, mut action) = match status {
+            HtmlAssetResultStatus::ProblemsFound => (
+                "problems-found",
+                catalog.text("Problems found", "發現問題"),
+                match catalog.locale {
+                    crate::export::ReportLocale::En if finding_count == 1 => {
+                        "1 problem was found.".to_owned()
+                    }
+                    crate::export::ReportLocale::En => format!(
+                        "Problems found: {}.",
+                        catalog.format_number(finding_count)
+                    ),
+                    crate::export::ReportLocale::ZhHant => {
+                        format!("發現 {} 個問題。", catalog.format_number(finding_count))
+                    }
+                },
+                catalog
+                    .text(
+                        "Review this asset's highest-priority problem first.",
+                        "先檢視這個資產最高優先的問題。",
+                    )
+                    .to_owned(),
+            ),
+            HtmlAssetResultStatus::NoProblemsInCompletedChecks => (
+                "no-problems-completed",
+                catalog.text(
+                    "No problems in completed checks",
+                    "已完成檢查未發現問題",
+                ),
+                match catalog.locale {
+                    crate::export::ReportLocale::En if completed_security_checks == 1 => {
+                        "1 completed security check reported no problems.".to_owned()
+                    }
+                    crate::export::ReportLocale::En => format!(
+                        "Completed security checks reporting no problems: {}.",
+                        catalog.format_number(completed_security_checks)
+                    ),
+                    crate::export::ReportLocale::ZhHant => format!(
+                        "{} 項已完成的資安檢查未回報問題。",
+                        catalog.format_number(completed_security_checks)
+                    ),
+                },
+                catalog
+                    .text(
+                        "Review the stated limits before relying on this result.",
+                        "採用這項結果前，先確認明列的測試限制。",
+                    )
+                    .to_owned(),
+            ),
+            HtmlAssetResultStatus::IncompleteOrFailed => (
+                "incomplete-failed",
+                catalog.text("Incomplete or failed", "未完成或失敗"),
+                catalog
+                    .text(
+                        "At least one requested check did not produce a complete result.",
+                        "至少一項要求的檢查沒有產生完整結果。",
+                    )
+                    .to_owned(),
+                preferred_gap.map_or_else(
+                    || {
+                        catalog
+                            .text(
+                                "Keep completed results, then finish or retry this asset's remaining checks.",
+                                "保留已完成的結果，再完成或重試這個資產的其餘檢查。",
+                            )
+                            .to_owned()
+                    },
+                    |gap| html_gap_next_action(gap, catalog),
+                ),
+            ),
+            HtmlAssetResultStatus::NotTested => (
+                "not-tested",
+                catalog.text("Not tested", "尚未測試"),
+                catalog
+                    .text(
+                        "No completed security check is recorded for this asset.",
+                        "這個資產沒有已完成的資安檢查紀錄。",
+                    )
+                    .to_owned(),
+                preferred_gap.map_or_else(
+                    || {
+                        catalog
+                            .text(
+                                "Choose an applicable security check for this asset, then scan it.",
+                                "為這個資產選擇適用的資安檢查，然後開始掃描。",
+                            )
+                            .to_owned()
+                    },
+                    |gap| html_gap_next_action(gap, catalog),
+                ),
+            ),
+        };
+        if status == HtmlAssetResultStatus::ProblemsFound && has_incomplete_evidence {
+            action.push(' ');
+            action.push_str(catalog.text(
+                "Some checks are also incomplete; keep that limit visible.",
+                "另有檢查尚未完成；請保留這項限制。",
+            ));
+        }
+        let target_label = labels
+            .get(&target.asset_id)
+            .map(String::as_str)
+            .unwrap_or(catalog.text("Saved target", "已保存的目標"));
+        let target_kind = target
+            .asset_kind
+            .as_ref()
+            .map(|kind| format!("<small>{}</small>", html_escape(catalog.asset_kind(kind))))
+            .unwrap_or_default();
+        rows.push_str(&format!(
+            concat!(
+                "<li class=\"asset-result asset-result--{}\">",
+                "<div class=\"asset-result__identity\"><strong>{}</strong>{}</div>",
+                "<strong class=\"pill asset-result__status\">{}</strong>",
+                "<p><strong>{}</strong><br>{}</p></li>"
+            ),
+            class_name,
+            html_escape(target_label),
+            target_kind,
+            html_escape(status_label),
+            html_escape(&summary),
+            html_escape(&action),
+        ));
+    }
+
+    format!(
+        concat!(
+            "<section class=\"asset-results\"><h2>{}</h2><p>{}</p>",
+            "<ul class=\"asset-result-list\">{}</ul></section>"
+        ),
+        catalog.text("Which assets need attention", "哪些資產需要處理"),
+        catalog.text(
+            "Every selected asset appears once. A no-problem result applies only to the security checks that completed.",
+            "每個已選資產都會列出一次；「未發現問題」只適用於已完成的資安檢查。",
+        ),
+        rows,
+    )
 }
 
 fn replace_target_ids(value: &str, labels: &BTreeMap<Id, String>) -> String {
@@ -13575,8 +14830,14 @@ fn html_report_bytes(
         ".report-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem}",
         ".report-card{border:1px solid #ccd1d1;border-radius:.5rem;padding:1rem;background:#f8faf8}",
         ".report-state{display:flex;flex-wrap:wrap;gap:.75rem;align-items:center;padding:1rem;border:1px solid #ccd1d1;border-radius:.5rem}",
+        ".asset-result-list{list-style:none;padding:0;display:grid;gap:.75rem}",
+        ".asset-result{display:grid;grid-template-columns:minmax(12rem,1fr) auto minmax(16rem,2fr);gap:1rem;align-items:start;border:1px solid #ccd1d1;border-left-width:5px;border-radius:.5rem;padding:1rem}",
+        ".asset-result__identity{display:grid;gap:.25rem}.asset-result__identity small{color:#475467}",
+        ".asset-result__status{white-space:nowrap}.asset-result p{margin:0}",
+        ".asset-result--problems-found{border-left-color:#b42318}.asset-result--no-problems-completed{border-left-color:#027a48}",
+        ".asset-result--incomplete-failed{border-left-color:#b54708}.asset-result--not-tested{border-left-color:#475467}",
         "details.technical{margin-top:2rem;border-top:1px solid #ccd1d1;padding-top:1rem}",
-        "@media(max-width:760px){body{padding:1rem}.report-grid{grid-template-columns:1fr}table{display:block;overflow-x:auto}}",
+        "@media(max-width:760px){body{padding:1rem}.report-grid,.asset-result{grid-template-columns:1fr}table{display:block;overflow-x:auto}}",
         ".notice{background:#fff4d6;border-left:5px solid #b9770e;padding:1rem}",
         ".pill{border:1px solid currentColor;border-radius:1rem;padding:.1rem .5rem}</style></head><body>"
     ));
@@ -13618,6 +14879,7 @@ fn html_report_bytes(
         catalog.text("Problems found", "發現的問題"),
         catalog.format_number(problem_count),
     ));
+    document.push_str(&html_asset_result_section(&report, &target_labels, catalog));
     document.push_str(&format!(
         concat!(
             "<section class=\"report-grid\"><div class=\"report-card\">",
@@ -13855,7 +15117,7 @@ mod tests {
                 fs::create_dir_all(selected.join("src")).unwrap();
                 fs::write(
                     selected.join("src").join("main.rs"),
-                    b"fn main() { println!(\"snapshot fixture\"); }\n",
+                    format!("fn main() {{ println!(\"snapshot fixture {fixture_id}\"); }}\n"),
                 )
                 .unwrap();
                 fs::create_dir_all(self.directory.path().join("artifacts")).unwrap();
@@ -14149,6 +15411,7 @@ mod tests {
                 &created.id,
                 ScanPlanRequest {
                     engine_ids: vec![NAABU_ENGINE_ID.into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -17773,6 +19036,7 @@ mod tests {
                     &case_id,
                     ScanPlanRequest {
                         engine_ids: vec!["gitleaks".into()],
+                        engine_asset_routes: Vec::new(),
                     },
                 )
                 .unwrap();
@@ -19235,6 +20499,7 @@ mod tests {
                 }],
                 ScanPlanRequest {
                     engine_ids: vec![NAABU_ENGINE_ID.into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .expect("one Start saves the private target, limits, and scan");
@@ -20117,6 +21382,78 @@ mod tests {
     }
 
     #[test]
+    fn comparable_scope_contract_tracks_the_selected_upstream_profile() {
+        let mut manifest = comparison_scope_manifest();
+        manifest.required_permissions = vec![ScanPermission::ActiveExternalTesting];
+        let approved_at = Utc::now();
+        let asset = Asset {
+            id: "asset-1".into(),
+            kind: AssetKind::Domain,
+            name: "app.example.test".into(),
+            provider: None,
+            region: None,
+            identifiers: vec![AssetIdentifier {
+                namespace: "external_target".into(),
+                value: "app.example.test".into(),
+            }],
+            discovered_from: Vec::new(),
+            candidate: false,
+            owner_confirmed: true,
+            internet_exposed: Some(true),
+            contains_sensitive_data: None,
+            metadata: BTreeMap::new(),
+        };
+        let mut grant = ScopeGrant {
+            id: "grant-1".into(),
+            asset_id: asset.id.clone(),
+            permission: ScanPermission::ActiveExternalTesting,
+            confirmed_by: "operator-a".into(),
+            confirmed_at: approved_at,
+            expires_at: Some(approved_at + Duration::hours(1)),
+            authorization_reference: Some("approved exact origin".into()),
+            notes: None,
+            external_scope: Some(crate::external_scope::ExternalScopeGrant {
+                id: "external-grant-1".into(),
+                case_id: "case-1".into(),
+                asset_id: asset.id.clone(),
+                target: CanonicalTarget::Hostname("app.example.test".into()),
+                ports: BTreeSet::from([443]),
+                protocol: crate::external_scope::TransportProtocol::Https,
+                activity: ExternalActivity::ActiveExternal,
+                rate_policy: crate::external_scope::RatePolicy {
+                    requests_per_second: 10,
+                    concurrency: 5,
+                    timeout_seconds: 10,
+                },
+                template_policy: crate::external_scope::TemplatePolicy::conservative_profile(
+                    DECLARED_WEBSITE_TEMPLATE_REVISION,
+                    "nuclei_web_safe_v1",
+                ),
+                asserted_authority: "approved exact origin".into(),
+                approved_by: "operator-a".into(),
+                approved_at,
+                expires_at: approved_at + Duration::hours(1),
+                allow_sensitive_networks: false,
+            }),
+        };
+        let baseline =
+            comparable_scope_contract_sha256(&manifest, &[&asset], std::slice::from_ref(&grant))
+                .expect("baseline profile scope contract");
+
+        grant
+            .external_scope
+            .as_mut()
+            .expect("external scope")
+            .template_policy
+            .profile_id = Some("nuclei_web_safe_v2".into());
+        assert_ne!(
+            baseline,
+            comparable_scope_contract_sha256(&manifest, &[&asset], &[grant])
+                .expect("changed upstream profile contract")
+        );
+    }
+
+    #[test]
     fn comparable_scope_contract_tracks_exact_target_identifiers() {
         let manifest = comparison_scope_manifest();
         let asset = comparison_scope_asset();
@@ -20185,6 +21522,7 @@ mod tests {
             created_at: time,
             completed_at: Some(time),
             request_outcome: None,
+            report_asset_snapshots: Vec::new(),
             knowledge_cutoff: time,
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),
@@ -20297,6 +21635,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -20331,6 +21670,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -20398,6 +21738,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -22951,6 +24292,7 @@ mod tests {
                 &created.id,
                 ScanPlanRequest {
                     engine_ids: vec!["naabu".into(), "httpx".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23019,6 +24361,7 @@ mod tests {
                 &created.id,
                 ScanPlanRequest {
                     engine_ids: vec!["naabu".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23053,6 +24396,7 @@ mod tests {
                 &created.id,
                 ScanPlanRequest {
                     engine_ids: vec!["greenbone".into(), "nuclei".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23063,6 +24407,2132 @@ mod tests {
             engine.engine_id == "nuclei"
                 && engine.reason_code == "no_compatible_authorized_assets"
                 && engine.asset_ids.is_empty()
+        }));
+    }
+
+    #[test]
+    fn mixed_scan_routes_two_engines_to_disjoint_owned_assets_in_one_run() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, first_asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let (_, second_asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let service = fixture.service();
+        for asset_id in [&first_asset_id, &second_asset_id] {
+            service
+                .approve_scope(
+                    &created.id,
+                    ScopeApprovalRequest {
+                        asset_id: asset_id.clone(),
+                        permissions: vec![ScanPermission::LocalArtifactRead],
+                        confirmed_by: "Repository owner".into(),
+                        expires_at: None,
+                        authorization_reference: None,
+                        notes: None,
+                        external_scope: None,
+                    },
+                )
+                .unwrap();
+        }
+
+        let plan = service
+            .plan_scan_for_execution(
+                &created.id,
+                ScanPlanRequest {
+                    engine_ids: Vec::new(),
+                    engine_asset_routes: vec![
+                        EngineAssetRoute {
+                            engine_id: "gitleaks".into(),
+                            asset_ids: vec![first_asset_id.clone()],
+                        },
+                        EngineAssetRoute {
+                            engine_id: "semgrep".into(),
+                            asset_ids: vec![second_asset_id.clone()],
+                        },
+                    ],
+                },
+            )
+            .unwrap();
+
+        assert_eq!(plan.executable.len(), 2);
+        assert!(plan.not_executed.is_empty());
+        let routed = plan
+            .executable
+            .iter()
+            .map(|execution| {
+                (
+                    execution.manifest.id.as_str(),
+                    execution
+                        .assets
+                        .iter()
+                        .map(|asset| asset.id.as_str())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(routed["gitleaks"], [first_asset_id.as_str()]);
+        assert_eq!(routed["semgrep"], [second_asset_id.as_str()]);
+        assert_eq!(plan.scan_run.engine_runs.len(), 2);
+        assert!(plan.scan_run.engine_runs.iter().all(|engine_run| {
+            let expected = if engine_run.engine_id == "gitleaks" {
+                &first_asset_id
+            } else {
+                &second_asset_id
+            };
+            engine_run.asset_ids == [expected.clone()]
+        }));
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum InvalidMixedEnvironmentStart {
+        WrongWebsiteRate,
+        WrongWebsiteTemplate,
+        WrongDeviceTarget,
+        WrongDevicePort,
+        WrongDeviceRate,
+        WrongDeviceTemplate,
+        DeviceRoutedToNuclei,
+        WebsiteRoutedToGreenbone,
+    }
+
+    struct MixedEnvironmentStart {
+        case_id: Id,
+        website_asset_id: Id,
+        first_device_asset_id: Id,
+        second_device_asset_id: Id,
+        decisions: Vec<ScopeApprovalRequest>,
+        request: ScanPlanRequest,
+    }
+
+    fn mixed_environment_start(fixture: &Fixture) -> MixedEnvironmentStart {
+        let case = fixture
+            .service()
+            .create_case(&CreateCaseRequest {
+                title: "Mixed IT environment".into(),
+                organization_name: "Example Co".into(),
+                employee_range: "2-49".into(),
+                assessment_intent: Some(AssessmentIntent::InternalItEnvironment),
+                ai_generated_artifact: Default::default(),
+                data_classes: vec![],
+                requested_activities: vec![AssessmentActivity::ActiveExternalVulnerabilityTests],
+                source_kinds: vec![],
+                not_applicable_source_kinds: vec![],
+                declared_assets: vec![
+                    DeclaredAssetInput {
+                        kind: DeclaredAssetKind::ExternalTarget,
+                        value: "portal.example.test".into(),
+                        internet_exposed: Some(true),
+                        web_service: Some(DeclaredWebServiceInput {
+                            protocol: DeclaredWebProtocol::Https,
+                            port: 443,
+                            path: "/login".into(),
+                            scan_profile: None,
+                        }),
+                        network_service: None,
+                        host_scan: None,
+                    },
+                    DeclaredAssetInput {
+                        kind: DeclaredAssetKind::ExternalTarget,
+                        value: "10.20.0.8".into(),
+                        internet_exposed: Some(false),
+                        web_service: Some(DeclaredWebServiceInput {
+                            protocol: DeclaredWebProtocol::Https,
+                            port: 443,
+                            path: "/".into(),
+                            scan_profile: Some(DeclaredWebServiceScanProfile::InternalDeviceHttps),
+                        }),
+                        network_service: None,
+                        host_scan: None,
+                    },
+                    DeclaredAssetInput {
+                        kind: DeclaredAssetKind::ExternalTarget,
+                        value: "10.20.0.9".into(),
+                        internet_exposed: Some(false),
+                        web_service: Some(DeclaredWebServiceInput {
+                            protocol: DeclaredWebProtocol::Https,
+                            port: 8080,
+                            path: "/".into(),
+                            scan_profile: Some(DeclaredWebServiceScanProfile::InternalDeviceHttps),
+                        }),
+                        network_service: None,
+                        host_scan: None,
+                    },
+                ],
+                notes: None,
+            })
+            .unwrap();
+        let asset_id = |origin: &str| {
+            case.assets
+                .iter()
+                .find(|asset| {
+                    asset
+                        .metadata
+                        .get(DECLARED_WEB_ORIGIN_METADATA_KEY)
+                        .and_then(Value::as_str)
+                        == Some(origin)
+                })
+                .unwrap_or_else(|| panic!("missing declared service {origin}"))
+                .id
+                .clone()
+        };
+        let website_asset_id = asset_id("https://portal.example.test:443");
+        let first_device_asset_id = asset_id("https://10.20.0.8:443");
+        let second_device_asset_id = asset_id("https://10.20.0.9:8080");
+        let scope_decision =
+            |asset_id: &str, external_scope: ExternalScopeRequest| ScopeApprovalRequest {
+                asset_id: asset_id.into(),
+                permissions: vec![ScanPermission::ActiveExternalTesting],
+                confirmed_by: "Target owner".into(),
+                expires_at: Some(Utc::now() + Duration::hours(1)),
+                authorization_reference: Some("Approved mixed environment scan".into()),
+                notes: None,
+                external_scope: Some(external_scope),
+            };
+        let device_scope = |target: &str, port: u16, profile: DeclaredWebServiceScanProfile| {
+            ExternalScopeRequest {
+                target: target.into(),
+                ports: BTreeSet::from([port]),
+                protocol: crate::external_scope::TransportProtocol::Https,
+                activity: ExternalActivity::ActiveExternal,
+                rate_policy: crate::external_scope::RatePolicy {
+                    requests_per_second: 2,
+                    concurrency: 1,
+                    timeout_seconds: 15,
+                },
+                template_policy: crate::external_scope::TemplatePolicy::conservative(
+                    INTERNAL_DEVICE_TEMPLATE_REVISION,
+                    internal_device_profile_oids(profile)
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect(),
+                ),
+                asserted_authority: "Approved exact internal device endpoint".into(),
+                allow_sensitive_networks: true,
+            }
+        };
+        let decisions = vec![
+            scope_decision(
+                &website_asset_id,
+                ExternalScopeRequest {
+                    target: "portal.example.test".into(),
+                    ports: BTreeSet::from([443]),
+                    protocol: crate::external_scope::TransportProtocol::Https,
+                    activity: ExternalActivity::ActiveExternal,
+                    rate_policy: crate::external_scope::RatePolicy {
+                        requests_per_second: 10,
+                        concurrency: 5,
+                        timeout_seconds: 10,
+                    },
+                    template_policy: crate::external_scope::TemplatePolicy::conservative_profile(
+                        DECLARED_WEBSITE_TEMPLATE_REVISION,
+                        NUCLEI_WEB_SAFE_PROFILE_ID,
+                    ),
+                    asserted_authority: "Approved exact public website origin".into(),
+                    allow_sensitive_networks: false,
+                },
+            ),
+            scope_decision(
+                &first_device_asset_id,
+                device_scope(
+                    "10.20.0.8",
+                    443,
+                    DeclaredWebServiceScanProfile::InternalDeviceHttps,
+                ),
+            ),
+            scope_decision(
+                &second_device_asset_id,
+                device_scope(
+                    "10.20.0.9",
+                    8080,
+                    DeclaredWebServiceScanProfile::InternalDeviceHttps,
+                ),
+            ),
+        ];
+        let request = ScanPlanRequest {
+            engine_ids: Vec::new(),
+            engine_asset_routes: vec![
+                EngineAssetRoute {
+                    engine_id: "nuclei".into(),
+                    asset_ids: vec![website_asset_id.clone()],
+                },
+                EngineAssetRoute {
+                    engine_id: "greenbone".into(),
+                    asset_ids: vec![
+                        first_device_asset_id.clone(),
+                        second_device_asset_id.clone(),
+                    ],
+                },
+            ],
+        };
+        MixedEnvironmentStart {
+            case_id: case.id,
+            website_asset_id,
+            first_device_asset_id,
+            second_device_asset_id,
+            decisions,
+            request,
+        }
+    }
+
+    fn assert_invalid_mixed_environment_start_fails_before_persist(
+        invalid: InvalidMixedEnvironmentStart,
+    ) {
+        let fixture = Fixture::new();
+        let mut start = mixed_environment_start(&fixture);
+        match invalid {
+            InvalidMixedEnvironmentStart::WrongWebsiteRate => {
+                start.decisions[0]
+                    .external_scope
+                    .as_mut()
+                    .unwrap()
+                    .rate_policy
+                    .requests_per_second = 4;
+            }
+            InvalidMixedEnvironmentStart::WrongWebsiteTemplate => {
+                start.decisions[0]
+                    .external_scope
+                    .as_mut()
+                    .unwrap()
+                    .template_policy
+                    .profile_id = Some("nuclei_web_safe_v2".into());
+            }
+            InvalidMixedEnvironmentStart::WrongDeviceTarget => {
+                start.decisions[2].external_scope.as_mut().unwrap().target = "10.20.0.10".into();
+            }
+            InvalidMixedEnvironmentStart::WrongDevicePort => {
+                start.decisions[2].external_scope.as_mut().unwrap().ports = BTreeSet::from([8443]);
+            }
+            InvalidMixedEnvironmentStart::WrongDeviceRate => {
+                start.decisions[2]
+                    .external_scope
+                    .as_mut()
+                    .unwrap()
+                    .rate_policy
+                    .requests_per_second = 3;
+            }
+            InvalidMixedEnvironmentStart::WrongDeviceTemplate => {
+                start.decisions[2]
+                    .external_scope
+                    .as_mut()
+                    .unwrap()
+                    .template_policy
+                    .allowed_template_ids
+                    .pop();
+            }
+            InvalidMixedEnvironmentStart::DeviceRoutedToNuclei => {
+                start.request.engine_asset_routes = vec![
+                    EngineAssetRoute {
+                        engine_id: "nuclei".into(),
+                        asset_ids: vec![
+                            start.website_asset_id.clone(),
+                            start.first_device_asset_id.clone(),
+                        ],
+                    },
+                    EngineAssetRoute {
+                        engine_id: "greenbone".into(),
+                        asset_ids: vec![start.second_device_asset_id.clone()],
+                    },
+                ];
+            }
+            InvalidMixedEnvironmentStart::WebsiteRoutedToGreenbone => {
+                start.request.engine_asset_routes = vec![EngineAssetRoute {
+                    engine_id: "greenbone".into(),
+                    asset_ids: vec![
+                        start.website_asset_id.clone(),
+                        start.first_device_asset_id.clone(),
+                        start.second_device_asset_id.clone(),
+                    ],
+                }];
+            }
+        }
+
+        let error = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &start.case_id,
+                start.decisions,
+                start.request,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, AppError::NotAuthorized(_)),
+            "{invalid:?} should fail closed at the authorization or route boundary: {error}"
+        );
+        let stored = fixture.service().show_case(&start.case_id).unwrap();
+        assert!(
+            stored.scan_runs.is_empty(),
+            "{invalid:?} persisted a run that could reach launcher preflight"
+        );
+        assert!(
+            stored.scope_grants.is_empty(),
+            "{invalid:?} persisted authorization from a rejected atomic Start"
+        );
+    }
+
+    #[test]
+    fn mixed_environment_materializes_disjoint_website_and_device_executions() {
+        let fixture = Fixture::new();
+        let start = mixed_environment_start(&fixture);
+        let plan = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &start.case_id,
+                start.decisions,
+                start.request,
+            )
+            .unwrap();
+
+        assert!(plan.not_executed.is_empty());
+        assert_eq!(plan.executable.len(), 3);
+        assert_eq!(plan.scan_run.engine_runs.len(), 3);
+        assert!(
+            plan.scan_run
+                .engine_runs
+                .iter()
+                .all(|engine_run| engine_run.asset_ids.len() == 1)
+        );
+        assert!(plan.executable.iter().all(|execution| {
+            execution.assets.len() == 1
+                && execution.scope_grants.len() == 1
+                && execution.scope_grants[0].asset_id == execution.assets[0].id
+        }));
+
+        let website = plan
+            .executable
+            .iter()
+            .find(|execution| execution.assets[0].id == start.website_asset_id)
+            .unwrap();
+        assert_eq!(website.manifest.id, "nuclei");
+        let website_scope = website.scope_grants[0].external_scope.as_ref().unwrap();
+        assert_eq!(website_scope.target.canonical_text(), "portal.example.test");
+        assert_eq!(website_scope.ports, BTreeSet::from([443]));
+        assert!(!website_scope.allow_sensitive_networks);
+        assert_eq!(website_scope.rate_policy.requests_per_second, 10);
+        assert_eq!(website_scope.rate_policy.concurrency, 5);
+        assert_eq!(website_scope.rate_policy.timeout_seconds, 10);
+        assert_eq!(
+            website_scope.template_policy.revision,
+            DECLARED_WEBSITE_TEMPLATE_REVISION
+        );
+        assert!(
+            website_scope
+                .template_policy
+                .allowed_template_ids
+                .is_empty()
+        );
+        assert_eq!(
+            website_scope.template_policy.profile_id.as_deref(),
+            Some(NUCLEI_WEB_SAFE_PROFILE_ID)
+        );
+
+        for (asset_id, target, port, profile) in [
+            (
+                &start.first_device_asset_id,
+                "10.20.0.8",
+                443,
+                DeclaredWebServiceScanProfile::InternalDeviceHttps,
+            ),
+            (
+                &start.second_device_asset_id,
+                "10.20.0.9",
+                8080,
+                DeclaredWebServiceScanProfile::InternalDeviceHttps,
+            ),
+        ] {
+            let execution = plan
+                .executable
+                .iter()
+                .find(|execution| execution.assets[0].id == *asset_id)
+                .unwrap();
+            assert_eq!(execution.manifest.id, "greenbone");
+            let scope = execution.scope_grants[0].external_scope.as_ref().unwrap();
+            assert_eq!(scope.target.canonical_text(), target);
+            assert_eq!(scope.ports, BTreeSet::from([port]));
+            assert!(scope.allow_sensitive_networks);
+            assert_eq!(scope.rate_policy.requests_per_second, 2);
+            assert_eq!(scope.rate_policy.concurrency, 1);
+            assert_eq!(scope.rate_policy.timeout_seconds, 15);
+            assert_eq!(
+                scope.template_policy.revision,
+                INTERNAL_DEVICE_TEMPLATE_REVISION
+            );
+            assert_eq!(
+                scope
+                    .template_policy
+                    .allowed_template_ids
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                internal_device_profile_oids(profile)
+                    .into_iter()
+                    .collect::<BTreeSet<_>>()
+            );
+        }
+
+        let stored = fixture.service().show_case(&start.case_id).unwrap();
+        assert_eq!(stored.scan_runs.len(), 1);
+        assert_eq!(stored.scan_runs[0].id, plan.scan_run.id);
+        assert_eq!(stored.scan_runs[0].scope_grant_snapshots.len(), 3);
+    }
+
+    #[test]
+    fn mixed_environment_rejects_wrong_website_rate_before_persisting_a_run() {
+        assert_invalid_mixed_environment_start_fails_before_persist(
+            InvalidMixedEnvironmentStart::WrongWebsiteRate,
+        );
+    }
+
+    #[test]
+    fn mixed_environment_rejects_wrong_website_template_before_persisting_a_run() {
+        assert_invalid_mixed_environment_start_fails_before_persist(
+            InvalidMixedEnvironmentStart::WrongWebsiteTemplate,
+        );
+    }
+
+    #[test]
+    fn mixed_environment_rejects_wrong_device_target_before_persisting_a_run() {
+        assert_invalid_mixed_environment_start_fails_before_persist(
+            InvalidMixedEnvironmentStart::WrongDeviceTarget,
+        );
+    }
+
+    #[test]
+    fn mixed_environment_rejects_wrong_device_port_before_persisting_a_run() {
+        assert_invalid_mixed_environment_start_fails_before_persist(
+            InvalidMixedEnvironmentStart::WrongDevicePort,
+        );
+    }
+
+    #[test]
+    fn mixed_environment_rejects_wrong_device_rate_before_persisting_a_run() {
+        assert_invalid_mixed_environment_start_fails_before_persist(
+            InvalidMixedEnvironmentStart::WrongDeviceRate,
+        );
+    }
+
+    #[test]
+    fn mixed_environment_rejects_wrong_device_template_before_persisting_a_run() {
+        assert_invalid_mixed_environment_start_fails_before_persist(
+            InvalidMixedEnvironmentStart::WrongDeviceTemplate,
+        );
+    }
+
+    #[test]
+    fn mixed_environment_rejects_device_to_nuclei_before_persisting_a_run() {
+        assert_invalid_mixed_environment_start_fails_before_persist(
+            InvalidMixedEnvironmentStart::DeviceRoutedToNuclei,
+        );
+    }
+
+    #[test]
+    fn mixed_environment_rejects_website_to_greenbone_before_persisting_a_run() {
+        assert_invalid_mixed_environment_start_fails_before_persist(
+            InvalidMixedEnvironmentStart::WebsiteRoutedToGreenbone,
+        );
+    }
+
+    struct NetworkEndpointStart {
+        case_id: Id,
+        asset_id: Id,
+        decision: ScopeApprovalRequest,
+        request: ScanPlanRequest,
+    }
+
+    fn generic_host_start(fixture: &Fixture, target: &str, ports: &[u16]) -> NetworkEndpointStart {
+        let case = fixture
+            .service()
+            .create_case(&CreateCaseRequest {
+                title: "Internal host vulnerability scan".into(),
+                organization_name: "Example Co".into(),
+                employee_range: "2-49".into(),
+                assessment_intent: None,
+                ai_generated_artifact: Default::default(),
+                data_classes: vec![],
+                requested_activities: vec![AssessmentActivity::ActiveExternalVulnerabilityTests],
+                source_kinds: vec![],
+                not_applicable_source_kinds: vec![],
+                declared_assets: vec![DeclaredAssetInput {
+                    kind: DeclaredAssetKind::ExternalTarget,
+                    value: target.into(),
+                    internet_exposed: Some(false),
+                    web_service: None,
+                    network_service: None,
+                    host_scan: Some(DeclaredHostScanInput {
+                        protocol: DeclaredNetworkProtocol::Tcp,
+                        ports: ports.to_vec(),
+                        profile: DeclaredHostScanProfile::GreenboneRemoteSafeV1,
+                    }),
+                }],
+                notes: None,
+            })
+            .unwrap();
+        let asset_id = case.assets[0].id.clone();
+        let canonical_target = CanonicalTarget::parse(target).unwrap().canonical_text();
+        let decision = ScopeApprovalRequest {
+            asset_id: asset_id.clone(),
+            permissions: vec![ScanPermission::ActiveExternalTesting],
+            confirmed_by: "Host owner".into(),
+            expires_at: Some(Utc::now() + Duration::hours(1)),
+            authorization_reference: Some("Approved exact internal host scan".into()),
+            notes: None,
+            external_scope: Some(ExternalScopeRequest {
+                target: canonical_target,
+                ports: ports.iter().copied().collect(),
+                protocol: crate::external_scope::TransportProtocol::Tcp,
+                activity: ExternalActivity::ActiveExternal,
+                rate_policy: crate::external_scope::RatePolicy {
+                    requests_per_second: 2,
+                    concurrency: 1,
+                    timeout_seconds: 15,
+                },
+                template_policy: crate::external_scope::TemplatePolicy::conservative_profile(
+                    INTERNAL_ENDPOINT_TEMPLATE_REVISION,
+                    GREENBONE_REMOTE_SAFE_PROFILE_ID,
+                ),
+                asserted_authority: "Approved exact internal host".into(),
+                allow_sensitive_networks: true,
+            }),
+        };
+        NetworkEndpointStart {
+            case_id: case.id,
+            asset_id: asset_id.clone(),
+            decision,
+            request: ScanPlanRequest {
+                engine_ids: Vec::new(),
+                engine_asset_routes: vec![EngineAssetRoute {
+                    engine_id: INTERNAL_DEVICE_ENGINE_ID.into(),
+                    asset_ids: vec![asset_id],
+                }],
+            },
+        }
+    }
+
+    #[test]
+    fn generic_host_profile_normalizes_one_exact_host_and_rejects_wider_or_ambiguous_input() {
+        let host = |target: &str, ports: Vec<u16>| DeclaredAssetInput {
+            kind: DeclaredAssetKind::ExternalTarget,
+            value: target.into(),
+            internet_exposed: Some(false),
+            web_service: None,
+            network_service: None,
+            host_scan: Some(DeclaredHostScanInput {
+                protocol: DeclaredNetworkProtocol::Tcp,
+                ports,
+                profile: DeclaredHostScanProfile::GreenboneRemoteSafeV1,
+            }),
+        };
+
+        let normalized = normalize_declared_assets(&[
+            host("Server.Example.Test.", vec![443, 22, 443]),
+            host("server.example.test", vec![22, 443]),
+        ])
+        .unwrap();
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].kind, AssetKind::Host);
+        assert_eq!(normalized[0].name, "server.example.test");
+        assert_eq!(normalized[0].stable_identifier.namespace, "dns_name");
+        assert_eq!(
+            normalized[0].metadata.get(DECLARED_HOST_SCAN_METADATA_KEY),
+            Some(&serde_json::json!({
+                "target": "server.example.test",
+                "protocol": "tcp",
+                "ports": [22, 443],
+                "profile": "greenbone_remote_safe_v1",
+            }))
+        );
+
+        assert!(normalize_declared_assets(&[host("10.20.0.0/24", vec![443])]).is_err());
+        assert!(normalize_declared_assets(&[host("server.example.test", Vec::new())]).is_err());
+        assert!(normalize_declared_assets(&[host("server.example.test", vec![0])]).is_err());
+        assert!(
+            normalize_declared_assets(&[host("server.example.test", (1..=1_025).collect(),)])
+                .is_err()
+        );
+        assert!(
+            normalize_declared_assets(&[
+                host("server.example.test", vec![22]),
+                host("server.example.test", vec![443]),
+            ])
+            .is_err()
+        );
+
+        let mut ambiguous = host("server.example.test", vec![443]);
+        ambiguous.web_service = Some(DeclaredWebServiceInput {
+            protocol: DeclaredWebProtocol::Https,
+            port: 443,
+            path: "/".into(),
+            scan_profile: None,
+        });
+        assert!(normalize_declared_assets(&[ambiguous]).is_err());
+    }
+
+    #[test]
+    fn generic_host_profile_routes_only_to_greenbone_and_persists_exact_profile_scope() {
+        let fixture = Fixture::new();
+        let start = generic_host_start(&fixture, "Server.Example.Test.", &[443, 22, 443]);
+        let stored = fixture.service().show_case(&start.case_id).unwrap();
+        let asset = &stored.assets[0];
+        assert_eq!(asset.kind, AssetKind::Host);
+        assert_eq!(asset.name, "server.example.test");
+        assert_eq!(
+            asset.metadata.get(DECLARED_HOST_SCAN_METADATA_KEY),
+            Some(&serde_json::json!({
+                "target": "server.example.test",
+                "protocol": "tcp",
+                "ports": [22, 443],
+                "profile": "greenbone_remote_safe_v1",
+            }))
+        );
+        let registry = current_launcher_engine_registry();
+        assert!(declared_host_scan_profile_matches(
+            registry.get(INTERNAL_DEVICE_ENGINE_ID).unwrap(),
+            asset,
+        ));
+        assert!(!declared_host_scan_profile_matches(
+            registry.get("naabu").unwrap(),
+            asset,
+        ));
+
+        let plan = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &start.case_id,
+                vec![start.decision],
+                start.request,
+            )
+            .unwrap();
+        assert!(plan.not_executed.is_empty());
+        assert_eq!(plan.executable.len(), 1);
+        assert_eq!(plan.executable[0].manifest.id, INTERNAL_DEVICE_ENGINE_ID);
+        assert_eq!(plan.executable[0].assets[0].id, start.asset_id);
+        let scope = plan.executable[0].scope_grants[0]
+            .external_scope
+            .as_ref()
+            .unwrap();
+        assert_eq!(scope.target.canonical_text(), "server.example.test");
+        assert_eq!(scope.ports, BTreeSet::from([22, 443]));
+        assert_eq!(
+            scope.protocol,
+            crate::external_scope::TransportProtocol::Tcp
+        );
+        assert_eq!(scope.rate_policy.requests_per_second, 2);
+        assert_eq!(scope.rate_policy.concurrency, 1);
+        assert_eq!(scope.rate_policy.timeout_seconds, 15);
+        assert_eq!(
+            scope.template_policy.revision,
+            INTERNAL_ENDPOINT_TEMPLATE_REVISION
+        );
+        assert!(scope.template_policy.allowed_template_ids.is_empty());
+        assert_eq!(
+            scope.template_policy.profile_id.as_deref(),
+            Some(GREENBONE_REMOTE_SAFE_PROFILE_ID)
+        );
+        assert!(!scope.template_policy.allow_headless);
+        assert!(!scope.template_policy.allow_out_of_band);
+        assert!(!scope.template_policy.allow_fuzzing);
+        assert!(!scope.template_policy.allow_file_upload);
+        assert!(!scope.template_policy.allow_denial_of_service);
+        assert!(!scope.template_policy.allow_credential_attacks);
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum InvalidGenericHostStart {
+        Target,
+        Ports,
+        Protocol,
+        Revision,
+        Profile,
+        Allowlist,
+        RequestsPerSecond,
+        Concurrency,
+        Timeout,
+        DangerousCapability,
+        Metadata,
+        EngineRoute,
+    }
+
+    #[test]
+    fn generic_host_profile_rejects_scope_profile_and_route_tampering_before_persistence() {
+        for invalid in [
+            InvalidGenericHostStart::Target,
+            InvalidGenericHostStart::Ports,
+            InvalidGenericHostStart::Protocol,
+            InvalidGenericHostStart::Revision,
+            InvalidGenericHostStart::Profile,
+            InvalidGenericHostStart::Allowlist,
+            InvalidGenericHostStart::RequestsPerSecond,
+            InvalidGenericHostStart::Concurrency,
+            InvalidGenericHostStart::Timeout,
+            InvalidGenericHostStart::DangerousCapability,
+            InvalidGenericHostStart::Metadata,
+            InvalidGenericHostStart::EngineRoute,
+        ] {
+            let fixture = Fixture::new();
+            let mut start = generic_host_start(&fixture, "host.example.test", &[22, 443]);
+            let external = start.decision.external_scope.as_mut().unwrap();
+            match invalid {
+                InvalidGenericHostStart::Target => external.target = "other.example.test".into(),
+                InvalidGenericHostStart::Ports => external.ports = BTreeSet::from([22]),
+                InvalidGenericHostStart::Protocol => {
+                    external.protocol = crate::external_scope::TransportProtocol::Tls;
+                }
+                InvalidGenericHostStart::Revision => {
+                    external.template_policy.revision =
+                        "greenbone-community-feed@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into();
+                }
+                InvalidGenericHostStart::Profile => {
+                    external.template_policy.profile_id = Some("other_profile".into());
+                }
+                InvalidGenericHostStart::Allowlist => {
+                    external.template_policy.allowed_template_ids = vec!["1.2.3".into()];
+                }
+                InvalidGenericHostStart::RequestsPerSecond => {
+                    external.rate_policy.requests_per_second = 3;
+                }
+                InvalidGenericHostStart::Concurrency => external.rate_policy.concurrency = 2,
+                InvalidGenericHostStart::Timeout => external.rate_policy.timeout_seconds = 16,
+                InvalidGenericHostStart::DangerousCapability => {
+                    external.template_policy.allow_denial_of_service = true;
+                }
+                InvalidGenericHostStart::Metadata => {
+                    let mut stored = fixture.service().show_case(&start.case_id).unwrap();
+                    stored.assets[0].metadata.insert(
+                        DECLARED_HOST_SCAN_METADATA_KEY.into(),
+                        serde_json::json!({
+                            "target": "host.example.test",
+                            "protocol": "tcp",
+                            "ports": [22, 443],
+                            "profile": "unknown_profile",
+                        }),
+                    );
+                    fixture
+                        .storage
+                        .save_case(&mut stored, "test.host_scan_profile_tampered")
+                        .unwrap();
+                }
+                InvalidGenericHostStart::EngineRoute => {
+                    start.request.engine_asset_routes[0].engine_id = "naabu".into();
+                }
+            }
+
+            let error = fixture
+                .service()
+                .authorize_and_persist_scan_before_execution_preflight(
+                    &start.case_id,
+                    vec![start.decision],
+                    start.request,
+                )
+                .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    AppError::InvalidRequest(_) | AppError::NotAuthorized(_)
+                ),
+                "{invalid:?} should fail closed before persistence: {error}"
+            );
+            let stored = fixture.service().show_case(&start.case_id).unwrap();
+            assert!(stored.scan_runs.is_empty(), "{invalid:?} persisted a run");
+            assert!(
+                stored.scope_grants.is_empty(),
+                "{invalid:?} persisted an authorization"
+            );
+        }
+    }
+
+    fn network_endpoint_start(
+        fixture: &Fixture,
+        target: &str,
+        port: u16,
+        profile: DeclaredNetworkServiceScanProfile,
+    ) -> NetworkEndpointStart {
+        let case = fixture
+            .service()
+            .create_case(&CreateCaseRequest {
+                title: "Internal network-service endpoint".into(),
+                organization_name: "Example Co".into(),
+                employee_range: "2-49".into(),
+                assessment_intent: None,
+                ai_generated_artifact: Default::default(),
+                data_classes: vec![],
+                requested_activities: vec![AssessmentActivity::ActiveExternalVulnerabilityTests],
+                source_kinds: vec![],
+                not_applicable_source_kinds: vec![],
+                declared_assets: vec![DeclaredAssetInput {
+                    kind: DeclaredAssetKind::ExternalTarget,
+                    value: target.into(),
+                    internet_exposed: Some(false),
+                    web_service: None,
+                    network_service: Some(DeclaredNetworkServiceInput {
+                        protocol: DeclaredNetworkProtocol::Tcp,
+                        port,
+                        scan_profile: profile,
+                    }),
+                    host_scan: None,
+                }],
+                notes: None,
+            })
+            .unwrap();
+        let asset_id = case.assets[0].id.clone();
+        let canonical_target = CanonicalTarget::parse(target).unwrap().canonical_text();
+        let decision = ScopeApprovalRequest {
+            asset_id: asset_id.clone(),
+            permissions: vec![ScanPermission::ActiveExternalTesting],
+            confirmed_by: "Endpoint owner".into(),
+            expires_at: Some(Utc::now() + Duration::hours(1)),
+            authorization_reference: Some("Approved exact network-service endpoint".into()),
+            notes: None,
+            external_scope: Some(ExternalScopeRequest {
+                target: canonical_target,
+                ports: BTreeSet::from([port]),
+                protocol: crate::external_scope::TransportProtocol::Tcp,
+                activity: ExternalActivity::ActiveExternal,
+                rate_policy: crate::external_scope::RatePolicy {
+                    requests_per_second: 2,
+                    concurrency: 1,
+                    timeout_seconds: 15,
+                },
+                template_policy: crate::external_scope::TemplatePolicy::conservative(
+                    INTERNAL_ENDPOINT_TEMPLATE_REVISION,
+                    internal_endpoint_profile_oids(profile)
+                        .iter()
+                        .copied()
+                        .map(str::to_owned)
+                        .collect(),
+                ),
+                asserted_authority: "Approved exact internal network-service endpoint".into(),
+                allow_sensitive_networks: true,
+            }),
+        };
+        NetworkEndpointStart {
+            case_id: case.id,
+            asset_id: asset_id.clone(),
+            decision,
+            request: ScanPlanRequest {
+                engine_ids: Vec::new(),
+                engine_asset_routes: vec![EngineAssetRoute {
+                    engine_id: "greenbone".into(),
+                    asset_ids: vec![asset_id],
+                }],
+            },
+        }
+    }
+
+    fn ssh_endpoint_start(fixture: &Fixture, target: &str, port: u16) -> NetworkEndpointStart {
+        network_endpoint_start(
+            fixture,
+            target,
+            port,
+            DeclaredNetworkServiceScanProfile::InternalEndpointSsh,
+        )
+    }
+
+    fn rdp_tls_endpoint_start(fixture: &Fixture, target: &str, port: u16) -> NetworkEndpointStart {
+        network_endpoint_start(
+            fixture,
+            target,
+            port,
+            DeclaredNetworkServiceScanProfile::InternalEndpointRdpTls,
+        )
+    }
+
+    fn vnc_endpoint_start(fixture: &Fixture, target: &str, port: u16) -> NetworkEndpointStart {
+        network_endpoint_start(
+            fixture,
+            target,
+            port,
+            DeclaredNetworkServiceScanProfile::InternalEndpointVnc,
+        )
+    }
+
+    fn smtp_endpoint_start(fixture: &Fixture, target: &str, port: u16) -> NetworkEndpointStart {
+        network_endpoint_start(
+            fixture,
+            target,
+            port,
+            DeclaredNetworkServiceScanProfile::InternalEndpointSmtp,
+        )
+    }
+
+    fn telnet_endpoint_start(fixture: &Fixture, target: &str, port: u16) -> NetworkEndpointStart {
+        network_endpoint_start(
+            fixture,
+            target,
+            port,
+            DeclaredNetworkServiceScanProfile::InternalEndpointTelnet,
+        )
+    }
+
+    #[test]
+    fn ssh_endpoint_persists_a_canonical_host_and_plans_only_the_exact_greenbone_profile() {
+        let fixture = Fixture::new();
+        let start = ssh_endpoint_start(&fixture, "SSH.Example.Test.", 2222);
+        let created = fixture.service().show_case(&start.case_id).unwrap();
+        assert_eq!(
+            created.assessment_intent,
+            Some(AssessmentIntent::InternalItEnvironment)
+        );
+        assert_eq!(created.assets.len(), 1);
+        let asset = &created.assets[0];
+        assert_eq!(asset.kind, AssetKind::Host);
+        assert_eq!(asset.name, "tcp://ssh.example.test:2222");
+        assert_eq!(
+            asset
+                .identifiers
+                .iter()
+                .map(|identifier| (identifier.namespace.as_str(), identifier.value.as_str()))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                ("dns_name", "ssh.example.test"),
+                ("network_service_endpoint", "tcp://ssh.example.test:2222"),
+            ])
+        );
+        assert_eq!(
+            asset.metadata.get(DECLARED_NETWORK_SERVICE_METADATA_KEY),
+            Some(&serde_json::json!({
+                "target": "ssh.example.test",
+                "protocol": "tcp",
+                "port": 2222,
+                "scan_profile": "internal_endpoint_ssh",
+            }))
+        );
+        let registry = current_launcher_engine_registry();
+        assert!(declared_network_service_profile_matches(
+            registry.get("greenbone").unwrap(),
+            asset,
+        ));
+        assert!(!declared_network_service_profile_matches(
+            registry.get("naabu").unwrap(),
+            asset,
+        ));
+        assert!(created.scope_grants.is_empty());
+
+        let plan = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &start.case_id,
+                vec![start.decision],
+                start.request,
+            )
+            .unwrap();
+        assert!(plan.not_executed.is_empty());
+        assert_eq!(plan.executable.len(), 1);
+        assert_eq!(plan.executable[0].manifest.id, "greenbone");
+        assert_eq!(plan.executable[0].assets[0].id, start.asset_id);
+        let scope = plan.executable[0].scope_grants[0]
+            .external_scope
+            .as_ref()
+            .unwrap();
+        assert_eq!(scope.target.canonical_text(), "ssh.example.test");
+        assert_eq!(scope.ports, BTreeSet::from([2222]));
+        assert_eq!(
+            scope.protocol,
+            crate::external_scope::TransportProtocol::Tcp
+        );
+        assert_eq!(scope.rate_policy.requests_per_second, 2);
+        assert_eq!(scope.rate_policy.concurrency, 1);
+        assert_eq!(scope.rate_policy.timeout_seconds, 15);
+        assert_eq!(
+            scope.template_policy.revision,
+            INTERNAL_ENDPOINT_TEMPLATE_REVISION
+        );
+        assert_eq!(
+            scope
+                .template_policy
+                .allowed_template_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            INTERNAL_ENDPOINT_SSH_VULNERABILITY_OIDS
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        );
+        assert!(
+            !scope
+                .template_policy
+                .allowed_template_ids
+                .iter()
+                .any(|oid| oid == "1.3.6.1.4.1.25623.1.0.114238")
+        );
+        assert!(!scope.template_policy.allow_headless);
+        assert!(!scope.template_policy.allow_out_of_band);
+        assert!(!scope.template_policy.allow_fuzzing);
+        assert!(!scope.template_policy.allow_file_upload);
+        assert!(!scope.template_policy.allow_denial_of_service);
+        assert!(!scope.template_policy.allow_credential_attacks);
+
+        let stored = fixture.service().show_case(&start.case_id).unwrap();
+        assert_eq!(stored.scan_runs.len(), 1);
+        assert_eq!(stored.scan_runs[0].engine_runs.len(), 1);
+        assert_eq!(stored.scan_runs[0].engine_runs[0].engine_id, "greenbone");
+        assert_eq!(
+            stored.scan_runs[0].engine_runs[0].asset_ids,
+            [start.asset_id]
+        );
+    }
+
+    #[test]
+    fn rdp_tls_endpoint_persists_a_canonical_host_and_plans_only_the_exact_greenbone_profile() {
+        let fixture = Fixture::new();
+        let start = rdp_tls_endpoint_start(&fixture, "10.44.0.18", 3389);
+        let created = fixture.service().show_case(&start.case_id).unwrap();
+        assert_eq!(
+            created.assessment_intent,
+            Some(AssessmentIntent::InternalItEnvironment)
+        );
+        assert_eq!(created.assets.len(), 1);
+        let asset = &created.assets[0];
+        assert_eq!(asset.kind, AssetKind::Host);
+        assert_eq!(asset.name, "tcp://10.44.0.18:3389");
+        assert_eq!(
+            asset
+                .identifiers
+                .iter()
+                .map(|identifier| (identifier.namespace.as_str(), identifier.value.as_str()))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                ("ip_address", "10.44.0.18"),
+                ("network_service_endpoint", "tcp://10.44.0.18:3389"),
+            ])
+        );
+        assert_eq!(
+            asset.metadata.get(DECLARED_NETWORK_SERVICE_METADATA_KEY),
+            Some(&serde_json::json!({
+                "target": "10.44.0.18",
+                "protocol": "tcp",
+                "port": 3389,
+                "scan_profile": "internal_endpoint_rdp_tls",
+            }))
+        );
+
+        let plan = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &start.case_id,
+                vec![start.decision],
+                start.request,
+            )
+            .unwrap();
+        assert!(plan.not_executed.is_empty());
+        assert_eq!(plan.executable.len(), 1);
+        assert_eq!(plan.executable[0].manifest.id, "greenbone");
+        assert_eq!(plan.executable[0].assets[0].id, start.asset_id);
+        let scope = plan.executable[0].scope_grants[0]
+            .external_scope
+            .as_ref()
+            .unwrap();
+        assert_eq!(scope.target.canonical_text(), "10.44.0.18");
+        assert_eq!(scope.ports, BTreeSet::from([3389]));
+        assert_eq!(
+            scope.protocol,
+            crate::external_scope::TransportProtocol::Tcp
+        );
+        assert_eq!(scope.rate_policy.requests_per_second, 2);
+        assert_eq!(scope.rate_policy.concurrency, 1);
+        assert_eq!(scope.rate_policy.timeout_seconds, 15);
+        assert_eq!(
+            scope.template_policy.revision,
+            INTERNAL_ENDPOINT_TEMPLATE_REVISION
+        );
+        assert_eq!(
+            scope
+                .template_policy
+                .allowed_template_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            INTERNAL_ENDPOINT_RDP_TLS_VULNERABILITY_OIDS
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        );
+        assert!(
+            scope
+                .template_policy
+                .allowed_template_ids
+                .iter()
+                .any(|oid| oid == "1.3.6.1.4.1.25623.1.0.902658")
+        );
+        assert!(
+            !scope
+                .template_policy
+                .allowed_template_ids
+                .iter()
+                .any(|oid| oid == "1.3.6.1.4.1.25623.1.0.108094")
+        );
+        assert!(!scope.template_policy.allow_headless);
+        assert!(!scope.template_policy.allow_out_of_band);
+        assert!(!scope.template_policy.allow_fuzzing);
+        assert!(!scope.template_policy.allow_file_upload);
+        assert!(!scope.template_policy.allow_denial_of_service);
+        assert!(!scope.template_policy.allow_credential_attacks);
+    }
+
+    #[test]
+    fn vnc_endpoint_persists_a_canonical_host_and_plans_only_the_exact_greenbone_profile() {
+        let fixture = Fixture::new();
+        let start = vnc_endpoint_start(&fixture, "VNC.Example.Test.", 5900);
+        let created = fixture.service().show_case(&start.case_id).unwrap();
+        assert_eq!(
+            created.assessment_intent,
+            Some(AssessmentIntent::InternalItEnvironment)
+        );
+        assert_eq!(created.assets.len(), 1);
+        let asset = &created.assets[0];
+        assert_eq!(asset.kind, AssetKind::Host);
+        assert_eq!(asset.name, "tcp://vnc.example.test:5900");
+        assert_eq!(
+            asset
+                .identifiers
+                .iter()
+                .map(|identifier| (identifier.namespace.as_str(), identifier.value.as_str()))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                ("dns_name", "vnc.example.test"),
+                ("network_service_endpoint", "tcp://vnc.example.test:5900"),
+            ])
+        );
+        assert_eq!(
+            asset.metadata.get(DECLARED_NETWORK_SERVICE_METADATA_KEY),
+            Some(&serde_json::json!({
+                "target": "vnc.example.test",
+                "protocol": "tcp",
+                "port": 5900,
+                "scan_profile": "internal_endpoint_vnc",
+            }))
+        );
+        let registry = current_launcher_engine_registry();
+        assert!(declared_network_service_profile_matches(
+            registry.get("greenbone").unwrap(),
+            asset,
+        ));
+        assert!(!declared_network_service_profile_matches(
+            registry.get("naabu").unwrap(),
+            asset,
+        ));
+
+        let plan = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &start.case_id,
+                vec![start.decision],
+                start.request,
+            )
+            .unwrap();
+        assert!(plan.not_executed.is_empty());
+        assert_eq!(plan.executable.len(), 1);
+        assert_eq!(plan.executable[0].manifest.id, "greenbone");
+        assert_eq!(plan.executable[0].assets[0].id, start.asset_id);
+        let scope = plan.executable[0].scope_grants[0]
+            .external_scope
+            .as_ref()
+            .unwrap();
+        assert_eq!(scope.target.canonical_text(), "vnc.example.test");
+        assert_eq!(scope.ports, BTreeSet::from([5900]));
+        assert_eq!(
+            scope.protocol,
+            crate::external_scope::TransportProtocol::Tcp
+        );
+        assert_eq!(scope.rate_policy.requests_per_second, 2);
+        assert_eq!(scope.rate_policy.concurrency, 1);
+        assert_eq!(scope.rate_policy.timeout_seconds, 15);
+        assert_eq!(
+            scope.template_policy.revision,
+            INTERNAL_ENDPOINT_TEMPLATE_REVISION
+        );
+        assert_eq!(
+            scope.template_policy.allowed_template_ids,
+            vec!["1.3.6.1.4.1.25623.1.0.108529".to_owned()]
+        );
+        assert!(!scope.template_policy.allow_headless);
+        assert!(!scope.template_policy.allow_out_of_band);
+        assert!(!scope.template_policy.allow_fuzzing);
+        assert!(!scope.template_policy.allow_file_upload);
+        assert!(!scope.template_policy.allow_denial_of_service);
+        assert!(!scope.template_policy.allow_credential_attacks);
+    }
+
+    #[test]
+    fn smtp_and_telnet_endpoints_persist_canonical_hosts_and_plan_only_their_exact_profiles() {
+        for (profile, target, port, serialized_profile, expected_oids) in [
+            (
+                DeclaredNetworkServiceScanProfile::InternalEndpointSmtp,
+                "SMTP.Example.Test.",
+                25,
+                "internal_endpoint_smtp",
+                INTERNAL_ENDPOINT_SMTP_VULNERABILITY_OIDS.as_slice(),
+            ),
+            (
+                DeclaredNetworkServiceScanProfile::InternalEndpointTelnet,
+                "TELNET.Example.Test.",
+                23,
+                "internal_endpoint_telnet",
+                INTERNAL_ENDPOINT_TELNET_VULNERABILITY_OIDS.as_slice(),
+            ),
+        ] {
+            let fixture = Fixture::new();
+            let start = match profile {
+                DeclaredNetworkServiceScanProfile::InternalEndpointSmtp => {
+                    smtp_endpoint_start(&fixture, target, port)
+                }
+                DeclaredNetworkServiceScanProfile::InternalEndpointTelnet => {
+                    telnet_endpoint_start(&fixture, target, port)
+                }
+                _ => unreachable!("this test only covers the two new endpoint profiles"),
+            };
+            let created = fixture.service().show_case(&start.case_id).unwrap();
+            let asset = &created.assets[0];
+            let canonical_target = target.trim_end_matches('.').to_ascii_lowercase();
+            assert_eq!(asset.kind, AssetKind::Host);
+            assert_eq!(asset.name, format!("tcp://{canonical_target}:{port}"));
+            assert_eq!(
+                asset.metadata.get(DECLARED_NETWORK_SERVICE_METADATA_KEY),
+                Some(&serde_json::json!({
+                    "target": canonical_target,
+                    "protocol": "tcp",
+                    "port": port,
+                    "scan_profile": serialized_profile,
+                }))
+            );
+
+            let plan = fixture
+                .service()
+                .authorize_and_persist_scan_before_execution_preflight(
+                    &start.case_id,
+                    vec![start.decision],
+                    start.request,
+                )
+                .unwrap();
+            assert!(plan.not_executed.is_empty());
+            assert_eq!(plan.executable.len(), 1);
+            assert_eq!(plan.executable[0].manifest.id, "greenbone");
+            assert_eq!(plan.executable[0].assets[0].id, start.asset_id);
+            let scope = plan.executable[0].scope_grants[0]
+                .external_scope
+                .as_ref()
+                .unwrap();
+            assert_eq!(scope.target.canonical_text(), canonical_target);
+            assert_eq!(scope.ports, BTreeSet::from([port]));
+            assert_eq!(
+                scope.protocol,
+                crate::external_scope::TransportProtocol::Tcp
+            );
+            assert_eq!(scope.rate_policy.requests_per_second, 2);
+            assert_eq!(scope.rate_policy.concurrency, 1);
+            assert_eq!(scope.rate_policy.timeout_seconds, 15);
+            assert_eq!(
+                scope.template_policy.revision,
+                INTERNAL_ENDPOINT_TEMPLATE_REVISION
+            );
+            assert_eq!(
+                scope
+                    .template_policy
+                    .allowed_template_ids
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                expected_oids.iter().copied().collect::<BTreeSet<_>>()
+            );
+            assert_eq!(
+                scope.template_policy.allowed_template_ids.len(),
+                expected_oids.len()
+            );
+            assert!(!scope.template_policy.allow_credential_attacks);
+            assert!(!scope.template_policy.allow_denial_of_service);
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum InvalidNetworkEndpointStart {
+        Target,
+        Port,
+        Protocol,
+        Oid,
+        CrossProfileOids,
+        Revision,
+        RequestsPerSecond,
+        Concurrency,
+        Timeout,
+        UnknownProfile,
+        CrossProfile,
+        DangerousCapability,
+        EngineRoute,
+    }
+
+    fn other_network_endpoint_profile(
+        profile: DeclaredNetworkServiceScanProfile,
+    ) -> DeclaredNetworkServiceScanProfile {
+        match profile {
+            DeclaredNetworkServiceScanProfile::InternalEndpointSsh => {
+                DeclaredNetworkServiceScanProfile::InternalEndpointRdpTls
+            }
+            DeclaredNetworkServiceScanProfile::InternalEndpointRdpTls => {
+                DeclaredNetworkServiceScanProfile::InternalEndpointVnc
+            }
+            DeclaredNetworkServiceScanProfile::InternalEndpointVnc => {
+                DeclaredNetworkServiceScanProfile::InternalEndpointSmtp
+            }
+            DeclaredNetworkServiceScanProfile::InternalEndpointSmtp => {
+                DeclaredNetworkServiceScanProfile::InternalEndpointTelnet
+            }
+            DeclaredNetworkServiceScanProfile::InternalEndpointTelnet => {
+                DeclaredNetworkServiceScanProfile::InternalEndpointSsh
+            }
+        }
+    }
+
+    fn assert_invalid_network_endpoint_start_fails_before_persist(
+        profile: DeclaredNetworkServiceScanProfile,
+        invalid: InvalidNetworkEndpointStart,
+    ) {
+        let fixture = Fixture::new();
+        let mut start = network_endpoint_start(&fixture, "endpoint.example.test", 2222, profile);
+        match invalid {
+            InvalidNetworkEndpointStart::Target => {
+                start.decision.external_scope.as_mut().unwrap().target =
+                    "other.example.test".into();
+            }
+            InvalidNetworkEndpointStart::Port => {
+                start.decision.external_scope.as_mut().unwrap().ports = BTreeSet::from([22]);
+            }
+            InvalidNetworkEndpointStart::Protocol => {
+                start.decision.external_scope.as_mut().unwrap().protocol =
+                    crate::external_scope::TransportProtocol::Tls;
+            }
+            InvalidNetworkEndpointStart::Oid => {
+                start
+                    .decision
+                    .external_scope
+                    .as_mut()
+                    .unwrap()
+                    .template_policy
+                    .allowed_template_ids
+                    .pop();
+            }
+            InvalidNetworkEndpointStart::CrossProfileOids => {
+                start
+                    .decision
+                    .external_scope
+                    .as_mut()
+                    .unwrap()
+                    .template_policy
+                    .allowed_template_ids =
+                    internal_endpoint_profile_oids(other_network_endpoint_profile(profile))
+                        .iter()
+                        .copied()
+                        .map(str::to_owned)
+                        .collect();
+            }
+            InvalidNetworkEndpointStart::Revision => {
+                start
+                    .decision
+                    .external_scope
+                    .as_mut()
+                    .unwrap()
+                    .template_policy
+                    .revision =
+                    "greenbone-community-feed@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into();
+            }
+            InvalidNetworkEndpointStart::RequestsPerSecond => {
+                start
+                    .decision
+                    .external_scope
+                    .as_mut()
+                    .unwrap()
+                    .rate_policy
+                    .requests_per_second = 3;
+            }
+            InvalidNetworkEndpointStart::Concurrency => {
+                start
+                    .decision
+                    .external_scope
+                    .as_mut()
+                    .unwrap()
+                    .rate_policy
+                    .concurrency = 2;
+            }
+            InvalidNetworkEndpointStart::Timeout => {
+                start
+                    .decision
+                    .external_scope
+                    .as_mut()
+                    .unwrap()
+                    .rate_policy
+                    .timeout_seconds = 16;
+            }
+            InvalidNetworkEndpointStart::UnknownProfile => {
+                let mut stored = fixture.service().show_case(&start.case_id).unwrap();
+                stored.assets[0].metadata.insert(
+                    DECLARED_NETWORK_SERVICE_METADATA_KEY.into(),
+                    serde_json::json!({
+                        "target": "endpoint.example.test",
+                        "protocol": "tcp",
+                        "port": 2222,
+                        "scan_profile": "internal_endpoint_ftp",
+                    }),
+                );
+                fixture
+                    .storage
+                    .save_case(&mut stored, "test.ssh_profile_tampered")
+                    .unwrap();
+            }
+            InvalidNetworkEndpointStart::CrossProfile => {
+                let mut stored = fixture.service().show_case(&start.case_id).unwrap();
+                stored.assets[0].metadata.insert(
+                    DECLARED_NETWORK_SERVICE_METADATA_KEY.into(),
+                    serde_json::to_value(DeclaredNetworkServiceMetadata {
+                        target: "endpoint.example.test".into(),
+                        protocol: DeclaredNetworkProtocol::Tcp,
+                        port: 2222,
+                        scan_profile: other_network_endpoint_profile(profile),
+                    })
+                    .unwrap(),
+                );
+                fixture
+                    .storage
+                    .save_case(&mut stored, "test.network_service_profile_substituted")
+                    .unwrap();
+            }
+            InvalidNetworkEndpointStart::DangerousCapability => {
+                start
+                    .decision
+                    .external_scope
+                    .as_mut()
+                    .unwrap()
+                    .template_policy
+                    .allow_denial_of_service = true;
+            }
+            InvalidNetworkEndpointStart::EngineRoute => {
+                start.request.engine_asset_routes[0].engine_id = "naabu".into();
+            }
+        }
+
+        let error = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &start.case_id,
+                vec![start.decision],
+                start.request,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, AppError::NotAuthorized(_)),
+            "{invalid:?} should fail closed before persistence: {error}"
+        );
+        let stored = fixture.service().show_case(&start.case_id).unwrap();
+        assert!(
+            stored.scan_runs.is_empty(),
+            "{invalid:?} persisted a run that could reach launcher preflight"
+        );
+        assert!(
+            stored.scope_grants.is_empty(),
+            "{invalid:?} persisted authorization from a rejected Start"
+        );
+    }
+
+    #[test]
+    fn endpoint_profiles_reject_scope_profile_oid_and_engine_tampering_before_persistence() {
+        for profile in [
+            DeclaredNetworkServiceScanProfile::InternalEndpointSsh,
+            DeclaredNetworkServiceScanProfile::InternalEndpointRdpTls,
+            DeclaredNetworkServiceScanProfile::InternalEndpointVnc,
+            DeclaredNetworkServiceScanProfile::InternalEndpointSmtp,
+            DeclaredNetworkServiceScanProfile::InternalEndpointTelnet,
+        ] {
+            for invalid in [
+                InvalidNetworkEndpointStart::Target,
+                InvalidNetworkEndpointStart::Port,
+                InvalidNetworkEndpointStart::Protocol,
+                InvalidNetworkEndpointStart::Oid,
+                InvalidNetworkEndpointStart::CrossProfileOids,
+                InvalidNetworkEndpointStart::Revision,
+                InvalidNetworkEndpointStart::RequestsPerSecond,
+                InvalidNetworkEndpointStart::Concurrency,
+                InvalidNetworkEndpointStart::Timeout,
+                InvalidNetworkEndpointStart::UnknownProfile,
+                InvalidNetworkEndpointStart::CrossProfile,
+                InvalidNetworkEndpointStart::DangerousCapability,
+                InvalidNetworkEndpointStart::EngineRoute,
+            ] {
+                assert_invalid_network_endpoint_start_fails_before_persist(profile, invalid);
+            }
+        }
+    }
+
+    #[test]
+    fn ssh_endpoint_accepts_the_full_u16_port_range_but_rejects_port_zero() {
+        let endpoint = |port| DeclaredAssetInput {
+            kind: DeclaredAssetKind::ExternalTarget,
+            value: "ssh.example.test".into(),
+            internet_exposed: Some(false),
+            web_service: None,
+            network_service: Some(DeclaredNetworkServiceInput {
+                protocol: DeclaredNetworkProtocol::Tcp,
+                port,
+                scan_profile: DeclaredNetworkServiceScanProfile::InternalEndpointSsh,
+            }),
+            host_scan: None,
+        };
+        let accepted = normalize_declared_assets(&[endpoint(u16::MAX)]).unwrap();
+        assert_eq!(accepted[0].kind, AssetKind::Host);
+        assert_eq!(accepted[0].name, "tcp://ssh.example.test:65535");
+        assert!(normalize_declared_assets(&[endpoint(0)]).is_err());
+    }
+
+    #[test]
+    fn network_endpoint_profile_serde_accepts_supported_profiles_and_rejects_unknown_profiles() {
+        let rdp = serde_json::from_value::<DeclaredNetworkServiceInput>(serde_json::json!({
+            "protocol": "tcp",
+            "port": 3389,
+            "scan_profile": "internal_endpoint_rdp_tls",
+        }))
+        .unwrap();
+        assert_eq!(
+            rdp.scan_profile,
+            DeclaredNetworkServiceScanProfile::InternalEndpointRdpTls
+        );
+
+        let vnc = serde_json::from_value::<DeclaredNetworkServiceInput>(serde_json::json!({
+            "protocol": "tcp",
+            "port": 5900,
+            "scan_profile": "internal_endpoint_vnc",
+        }))
+        .unwrap();
+        assert_eq!(
+            vnc.scan_profile,
+            DeclaredNetworkServiceScanProfile::InternalEndpointVnc
+        );
+
+        let smtp = serde_json::from_value::<DeclaredNetworkServiceInput>(serde_json::json!({
+            "protocol": "tcp",
+            "port": 25,
+            "scan_profile": "internal_endpoint_smtp",
+        }))
+        .unwrap();
+        assert_eq!(
+            smtp.scan_profile,
+            DeclaredNetworkServiceScanProfile::InternalEndpointSmtp
+        );
+
+        let telnet = serde_json::from_value::<DeclaredNetworkServiceInput>(serde_json::json!({
+            "protocol": "tcp",
+            "port": 23,
+            "scan_profile": "internal_endpoint_telnet",
+        }))
+        .unwrap();
+        assert_eq!(
+            telnet.scan_profile,
+            DeclaredNetworkServiceScanProfile::InternalEndpointTelnet
+        );
+
+        let unknown = serde_json::from_value::<DeclaredNetworkServiceInput>(serde_json::json!({
+            "protocol": "tcp",
+            "port": 3389,
+            "scan_profile": "internal_endpoint_rdp",
+        }));
+        assert!(unknown.is_err());
+    }
+
+    #[test]
+    fn network_endpoint_identity_distinguishes_ports_and_rejects_profile_conflicts() {
+        let endpoint = |target: &str, port, scan_profile| DeclaredAssetInput {
+            kind: DeclaredAssetKind::ExternalTarget,
+            value: target.into(),
+            internet_exposed: Some(false),
+            web_service: None,
+            network_service: Some(DeclaredNetworkServiceInput {
+                protocol: DeclaredNetworkProtocol::Tcp,
+                port,
+                scan_profile,
+            }),
+            host_scan: None,
+        };
+        let ssh = DeclaredNetworkServiceScanProfile::InternalEndpointSsh;
+        let rdp = DeclaredNetworkServiceScanProfile::InternalEndpointRdpTls;
+        let vnc = DeclaredNetworkServiceScanProfile::InternalEndpointVnc;
+        let smtp = DeclaredNetworkServiceScanProfile::InternalEndpointSmtp;
+        let telnet = DeclaredNetworkServiceScanProfile::InternalEndpointTelnet;
+
+        let distinct_ports = normalize_declared_assets(&[
+            endpoint("endpoint.example.test", 22, ssh),
+            endpoint("endpoint.example.test", 3389, rdp),
+            endpoint("endpoint.example.test", 5900, vnc),
+            endpoint("endpoint.example.test", 25, smtp),
+            endpoint("endpoint.example.test", 23, telnet),
+        ])
+        .unwrap();
+        assert_eq!(distinct_ports.len(), 5);
+        assert_eq!(
+            distinct_ports
+                .iter()
+                .map(|asset| asset.name.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "tcp://endpoint.example.test:22",
+                "tcp://endpoint.example.test:3389",
+                "tcp://endpoint.example.test:5900",
+                "tcp://endpoint.example.test:25",
+                "tcp://endpoint.example.test:23",
+            ])
+        );
+
+        let exact_duplicates = normalize_declared_assets(&[
+            endpoint("Endpoint.Example.Test.", 3389, rdp),
+            endpoint("endpoint.example.test", 3389, rdp),
+        ])
+        .unwrap();
+        assert_eq!(exact_duplicates.len(), 1);
+
+        let vnc_duplicates = normalize_declared_assets(&[
+            endpoint("Endpoint.Example.Test.", 5900, vnc),
+            endpoint("endpoint.example.test", 5900, vnc),
+        ])
+        .unwrap();
+        assert_eq!(vnc_duplicates.len(), 1);
+
+        for (first, second) in [
+            (ssh, rdp),
+            (ssh, vnc),
+            (rdp, vnc),
+            (smtp, telnet),
+            (ssh, smtp),
+            (vnc, telnet),
+        ] {
+            let conflict = normalize_declared_assets(&[
+                endpoint("Endpoint.Example.Test.", 5900, first),
+                endpoint("endpoint.example.test", 5900, second),
+            ])
+            .unwrap_err();
+            assert!(matches!(conflict, AppError::InvalidRequest(_)));
+            assert!(
+                conflict
+                    .to_string()
+                    .contains("conflicting scanner profiles")
+            );
+        }
+    }
+
+    #[test]
+    fn report_asset_snapshots_freeze_routed_ssh_and_inventory_only_without_unselected_profiles() {
+        let fixture = Fixture::new();
+        let case = fixture
+            .service()
+            .create_case(&CreateCaseRequest {
+                title: "Mixed endpoint inventory".into(),
+                organization_name: "Example Co".into(),
+                employee_range: "2-49".into(),
+                assessment_intent: Some(AssessmentIntent::InternalItEnvironment),
+                ai_generated_artifact: Default::default(),
+                data_classes: vec![],
+                requested_activities: vec![AssessmentActivity::ActiveExternalVulnerabilityTests],
+                source_kinds: vec![],
+                not_applicable_source_kinds: vec![],
+                declared_assets: vec![
+                    DeclaredAssetInput {
+                        kind: DeclaredAssetKind::ExternalTarget,
+                        value: "SSH.Example.Test.".into(),
+                        internet_exposed: Some(false),
+                        web_service: None,
+                        network_service: Some(DeclaredNetworkServiceInput {
+                            protocol: DeclaredNetworkProtocol::Tcp,
+                            port: 22,
+                            scan_profile: DeclaredNetworkServiceScanProfile::InternalEndpointSsh,
+                        }),
+                        host_scan: None,
+                    },
+                    DeclaredAssetInput {
+                        kind: DeclaredAssetKind::ExternalTarget,
+                        value: "10.44.0.0/24".into(),
+                        internet_exposed: Some(false),
+                        web_service: None,
+                        network_service: None,
+                        host_scan: None,
+                    },
+                    DeclaredAssetInput {
+                        kind: DeclaredAssetKind::ExternalTarget,
+                        value: "web.example.test".into(),
+                        internet_exposed: Some(false),
+                        web_service: Some(DeclaredWebServiceInput {
+                            protocol: DeclaredWebProtocol::Https,
+                            port: 443,
+                            path: "/".into(),
+                            scan_profile: None,
+                        }),
+                        network_service: None,
+                        host_scan: None,
+                    },
+                    DeclaredAssetInput {
+                        kind: DeclaredAssetKind::ExternalTarget,
+                        value: "other-ssh.example.test".into(),
+                        internet_exposed: Some(false),
+                        web_service: None,
+                        network_service: Some(DeclaredNetworkServiceInput {
+                            protocol: DeclaredNetworkProtocol::Tcp,
+                            port: 22,
+                            scan_profile: DeclaredNetworkServiceScanProfile::InternalEndpointSsh,
+                        }),
+                        host_scan: None,
+                    },
+                    DeclaredAssetInput {
+                        kind: DeclaredAssetKind::Repository,
+                        value: "C:/work/unselected-repository".into(),
+                        internet_exposed: None,
+                        web_service: None,
+                        network_service: None,
+                        host_scan: None,
+                    },
+                ],
+                notes: None,
+            })
+            .unwrap();
+        let ssh_asset = case
+            .assets
+            .iter()
+            .find(|asset| asset.name == "tcp://ssh.example.test:22")
+            .unwrap();
+        let ssh_asset_id = ssh_asset.id.clone();
+        let inventory_asset = case
+            .assets
+            .iter()
+            .find(|asset| {
+                asset.identifiers.iter().any(|identifier| {
+                    identifier.namespace == "ip_network" && identifier.value == "10.44.0.0/24"
+                })
+            })
+            .unwrap();
+        let inventory_asset_id = inventory_asset.id.clone();
+        let excluded_asset_ids = case
+            .assets
+            .iter()
+            .filter(|asset| asset.id != ssh_asset_id && asset.id != inventory_asset_id)
+            .map(|asset| asset.id.clone())
+            .collect::<BTreeSet<_>>();
+
+        let plan = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &case.id,
+                vec![ScopeApprovalRequest {
+                    asset_id: ssh_asset_id.clone(),
+                    permissions: vec![ScanPermission::ActiveExternalTesting],
+                    confirmed_by: "Endpoint owner".into(),
+                    expires_at: Some(Utc::now() + Duration::hours(1)),
+                    authorization_reference: Some("Approved exact SSH endpoint".into()),
+                    notes: None,
+                    external_scope: Some(ExternalScopeRequest {
+                        target: "ssh.example.test".into(),
+                        ports: BTreeSet::from([22]),
+                        protocol: crate::external_scope::TransportProtocol::Tcp,
+                        activity: ExternalActivity::ActiveExternal,
+                        rate_policy: crate::external_scope::RatePolicy {
+                            requests_per_second: 2,
+                            concurrency: 1,
+                            timeout_seconds: 15,
+                        },
+                        template_policy: crate::external_scope::TemplatePolicy::conservative(
+                            INTERNAL_ENDPOINT_TEMPLATE_REVISION,
+                            INTERNAL_ENDPOINT_SSH_VULNERABILITY_OIDS
+                                .into_iter()
+                                .map(str::to_owned)
+                                .collect(),
+                        ),
+                        asserted_authority: "Approved exact internal SSH endpoint".into(),
+                        allow_sensitive_networks: true,
+                    }),
+                }],
+                ScanPlanRequest {
+                    engine_ids: Vec::new(),
+                    engine_asset_routes: vec![EngineAssetRoute {
+                        engine_id: "greenbone".into(),
+                        asset_ids: vec![ssh_asset_id.clone()],
+                    }],
+                },
+            )
+            .unwrap();
+
+        assert_eq!(plan.scan_run.report_asset_snapshots.len(), 2);
+        let routed = plan
+            .scan_run
+            .report_asset_snapshots
+            .iter()
+            .find(|snapshot| snapshot.asset.id == ssh_asset_id)
+            .unwrap();
+        assert_eq!(routed.disposition, ReportAssetDisposition::RequestedForScan);
+        assert_eq!(routed.asset.name, "tcp://ssh.example.test:22");
+        let inventory = plan
+            .scan_run
+            .report_asset_snapshots
+            .iter()
+            .find(|snapshot| snapshot.asset.id == inventory_asset_id)
+            .unwrap();
+        assert_eq!(
+            inventory.disposition,
+            ReportAssetDisposition::NoSupportedProfile
+        );
+        assert_eq!(inventory.asset.name, "10.44.0.0/24");
+        assert!(
+            plan.scan_run
+                .report_asset_snapshots
+                .iter()
+                .all(|snapshot| { !excluded_asset_ids.contains(&snapshot.asset.id) })
+        );
+
+        let mut changed_case = fixture.service().show_case(&case.id).unwrap();
+        changed_case
+            .assets
+            .iter_mut()
+            .find(|asset| asset.id == ssh_asset_id)
+            .unwrap()
+            .name = "Renamed current endpoint".into();
+        changed_case
+            .assets
+            .iter_mut()
+            .find(|asset| asset.id == inventory_asset_id)
+            .unwrap()
+            .name = "Renamed current inventory".into();
+        fixture
+            .storage
+            .save_case(&mut changed_case, "test.assets_renamed_after_scan_plan")
+            .unwrap();
+
+        let reopened = fixture.service().show_case(&case.id).unwrap();
+        let frozen_names = reopened.scan_runs[0]
+            .report_asset_snapshots
+            .iter()
+            .map(|snapshot| snapshot.asset.name.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            frozen_names,
+            BTreeSet::from(["10.44.0.0/24", "tcp://ssh.example.test:22"])
+        );
+    }
+
+    #[test]
+    fn report_asset_snapshots_are_filled_for_an_environment_no_checks_run() {
+        let fixture = Fixture::new();
+        let case = fixture
+            .service()
+            .create_case(&CreateCaseRequest {
+                title: "Inventory without a supported profile".into(),
+                organization_name: "Example Co".into(),
+                employee_range: "2-49".into(),
+                assessment_intent: Some(AssessmentIntent::InternalItEnvironment),
+                ai_generated_artifact: Default::default(),
+                data_classes: vec![],
+                requested_activities: vec![],
+                source_kinds: vec![],
+                not_applicable_source_kinds: vec![],
+                declared_assets: vec![DeclaredAssetInput {
+                    kind: DeclaredAssetKind::ExternalTarget,
+                    value: "10.55.0.0/24".into(),
+                    internet_exposed: Some(false),
+                    web_service: None,
+                    network_service: None,
+                    host_scan: None,
+                }],
+                notes: None,
+            })
+            .unwrap();
+
+        let plan = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &case.id,
+                Vec::new(),
+                ScanPlanRequest::default(),
+            )
+            .unwrap();
+        assert!(plan.scan_run.is_terminal_no_checks());
+        assert_eq!(plan.scan_run.report_asset_snapshots.len(), 1);
+        assert_eq!(
+            plan.scan_run.report_asset_snapshots[0].disposition,
+            ReportAssetDisposition::NoSupportedProfile
+        );
+        assert_eq!(
+            plan.scan_run.report_asset_snapshots[0].asset.name,
+            "10.55.0.0/24"
+        );
+        let reopened = fixture.service().show_case(&case.id).unwrap();
+        assert_eq!(reopened.scan_runs[0].report_asset_snapshots.len(), 1);
+    }
+
+    #[test]
+    fn engine_routes_reject_foreign_and_unowned_asset_ids_without_persisting_a_run() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, unowned_asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let service = fixture.service();
+
+        let foreign_error = service
+            .plan_scan(
+                &created.id,
+                ScanPlanRequest {
+                    engine_ids: Vec::new(),
+                    engine_asset_routes: vec![EngineAssetRoute {
+                        engine_id: "gitleaks".into(),
+                        asset_ids: vec!["asset-from-another-case".into()],
+                    }],
+                },
+            )
+            .unwrap_err();
+        assert!(
+            foreign_error
+                .to_string()
+                .contains("references an asset outside this case")
+        );
+
+        let unowned_error = service
+            .plan_scan(
+                &created.id,
+                ScanPlanRequest {
+                    engine_ids: Vec::new(),
+                    engine_asset_routes: vec![EngineAssetRoute {
+                        engine_id: "gitleaks".into(),
+                        asset_ids: vec![unowned_asset_id],
+                    }],
+                },
+            )
+            .unwrap_err();
+        assert!(
+            unowned_error
+                .to_string()
+                .contains("is not ownership-confirmed")
+        );
+        assert!(service.show_case(&created.id).unwrap().scan_runs.is_empty());
+    }
+
+    #[test]
+    fn unknown_routed_engine_keeps_the_exact_requested_assets_in_not_executed() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let service = fixture.service();
+        service
+            .approve_scope(
+                &created.id,
+                ScopeApprovalRequest {
+                    asset_id: asset_id.clone(),
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Repository owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+
+        let plan = service
+            .plan_scan(
+                &created.id,
+                ScanPlanRequest {
+                    engine_ids: Vec::new(),
+                    engine_asset_routes: vec![EngineAssetRoute {
+                        engine_id: "future-scanner".into(),
+                        asset_ids: vec![asset_id.clone()],
+                    }],
+                },
+            )
+            .unwrap();
+
+        assert!(plan.executable.is_empty());
+        assert_eq!(plan.not_executed.len(), 1);
+        assert_eq!(plan.not_executed[0].engine_id, "future-scanner");
+        assert_eq!(plan.not_executed[0].asset_ids, [asset_id.clone()]);
+        assert_eq!(plan.scan_run.engine_runs[0].asset_ids, [asset_id]);
+        assert_eq!(plan.not_executed[0].reason_code, "manifest_unavailable");
+    }
+
+    #[test]
+    fn default_rescan_restores_baseline_engine_asset_routes_without_widening() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, first_asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let (_, second_asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let service = fixture.service();
+        for asset_id in [&first_asset_id, &second_asset_id] {
+            service
+                .approve_scope(
+                    &created.id,
+                    ScopeApprovalRequest {
+                        asset_id: asset_id.clone(),
+                        permissions: vec![ScanPermission::LocalArtifactRead],
+                        confirmed_by: "Repository owner".into(),
+                        expires_at: None,
+                        authorization_reference: None,
+                        notes: None,
+                        external_scope: None,
+                    },
+                )
+                .unwrap();
+        }
+        let baseline = service
+            .plan_scan(
+                &created.id,
+                ScanPlanRequest {
+                    engine_ids: Vec::new(),
+                    engine_asset_routes: vec![
+                        EngineAssetRoute {
+                            engine_id: "gitleaks".into(),
+                            asset_ids: vec![first_asset_id.clone()],
+                        },
+                        EngineAssetRoute {
+                            engine_id: "semgrep".into(),
+                            asset_ids: vec![second_asset_id.clone()],
+                        },
+                    ],
+                },
+            )
+            .unwrap();
+        let mut stored = service.show_case(&created.id).unwrap();
+        let baseline_run = stored
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == baseline.scan_run.id)
+            .unwrap();
+        for engine_run in &mut baseline_run.engine_runs {
+            engine_run.status = EngineRunStatus::Completed;
+            engine_run.progress_percent = 100;
+            engine_run.phase = "completed".into();
+            engine_run.started_at = Some(baseline.scan_run.created_at);
+            engine_run.finished_at = Some(baseline.scan_run.created_at);
+            engine_run.exit_code = Some(0);
+        }
+        baseline_run.completed_at = Some(baseline.scan_run.created_at);
+        stored.status = CaseStatus::ReadyForHandoff;
+        fixture
+            .storage
+            .save_case(&mut stored, "test.routed_baseline_completed")
+            .unwrap();
+
+        let (_, later_asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        service
+            .approve_scope(
+                &created.id,
+                ScopeApprovalRequest {
+                    asset_id: later_asset_id.clone(),
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Repository owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+
+        let rescan = service
+            .plan_rescan(
+                &created.id,
+                &baseline.scan_run.id,
+                ScanPlanRequest::default(),
+            )
+            .unwrap();
+        assert_eq!(rescan.plan.executable.len(), 2);
+        assert!(rescan.plan.executable.iter().all(|execution| {
+            execution.assets.len() == 1
+                && execution.assets[0].id != later_asset_id
+                && ((execution.manifest.id == "gitleaks"
+                    && execution.assets[0].id == first_asset_id)
+                    || (execution.manifest.id == "semgrep"
+                        && execution.assets[0].id == second_asset_id))
         }));
     }
 
@@ -23161,6 +26631,7 @@ mod tests {
                 &created.id,
                 ScanPlanRequest {
                     engine_ids: vec!["steampipe".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23225,6 +26696,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23264,6 +26736,7 @@ mod tests {
                 }],
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23306,6 +26779,7 @@ mod tests {
                 vec![],
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23340,6 +26814,7 @@ mod tests {
                 vec![],
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23395,6 +26870,7 @@ mod tests {
                 ],
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap_err();
@@ -23444,6 +26920,7 @@ mod tests {
                 }],
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap_err();
@@ -23476,6 +26953,7 @@ mod tests {
                 }],
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into(), "missing-engine".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23534,6 +27012,7 @@ mod tests {
                 }],
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23620,6 +27099,7 @@ mod tests {
                 &no_grant_case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23652,6 +27132,7 @@ mod tests {
                 &no_owner_case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23684,7 +27165,10 @@ mod tests {
         let no_applicable = service
             .persist_scan_before_execution_preflight(
                 &no_applicable_case.id,
-                ScanPlanRequest { engine_ids: vec![] },
+                ScanPlanRequest {
+                    engine_ids: vec![],
+                    engine_asset_routes: Vec::new(),
+                },
             )
             .unwrap();
         assert!(no_applicable.scan_run.is_terminal_no_checks());
@@ -23708,6 +27192,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["missing-engine".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23735,6 +27220,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into(), "semgrep".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23784,6 +27270,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23825,6 +27312,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23890,6 +27378,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -23946,6 +27435,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into(), "semgrep".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -24023,6 +27513,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -24105,6 +27596,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -24116,6 +27608,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -24135,6 +27628,7 @@ mod tests {
                 &baseline_run_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -24198,24 +27692,32 @@ mod tests {
                         value: "App.Example.Test.".into(),
                         internet_exposed: None,
                         web_service: None,
+                        network_service: None,
+                        host_scan: None,
                     },
                     DeclaredAssetInput {
                         kind: DeclaredAssetKind::Repository,
                         value: "https://github.com/example/service".into(),
                         internet_exposed: None,
                         web_service: None,
+                        network_service: None,
+                        host_scan: None,
                     },
                     DeclaredAssetInput {
                         kind: DeclaredAssetKind::ContainerImage,
                         value: format!("registry.example/app@sha256:{}", "a".repeat(64)),
                         internet_exposed: None,
                         web_service: None,
+                        network_service: None,
+                        host_scan: None,
                     },
                     DeclaredAssetInput {
                         kind: DeclaredAssetKind::KubernetesCluster,
                         value: "production-eks".into(),
                         internet_exposed: None,
                         web_service: None,
+                        network_service: None,
+                        host_scan: None,
                     },
                 ],
                 notes: None,
@@ -24326,6 +27828,8 @@ mod tests {
             value: "registry.example/app:latest".into(),
             internet_exposed: None,
             web_service: None,
+            network_service: None,
+            host_scan: None,
         });
         assert!(fixture.service().create_case(&request).is_err());
         assert!(fixture.service().list_cases().unwrap().is_empty());
@@ -24351,6 +27855,8 @@ mod tests {
                     value: "10.20.30.40".into(),
                     internet_exposed: Some(false),
                     web_service: None,
+                    network_service: None,
+                    host_scan: None,
                 }],
                 notes: None,
             })
@@ -24384,13 +27890,30 @@ mod tests {
                         protocol: DeclaredWebProtocol::Https,
                         port: 8443,
                         path: "/login".into(),
+                        scan_profile: None,
                     }),
+                    network_service: None,
+                    host_scan: None,
                 }],
                 notes: None,
             })
             .unwrap();
 
         assert_eq!(case.assets.len(), 1);
+        assert_eq!(
+            case.assessment_intent,
+            Some(AssessmentIntent::DeployedWebsite)
+        );
+        assert_eq!(case.assets[0].kind, AssetKind::WebService);
+        assert_eq!(case.assets[0].name, "https://app.example.test:8443");
+        assert_eq!(case.assets[0].identifiers.len(), 2);
+        assert_eq!(case.assets[0].identifiers[0].namespace, "web_origin");
+        assert_eq!(
+            case.assets[0].identifiers[0].value,
+            "https://app.example.test:8443"
+        );
+        assert_eq!(case.assets[0].identifiers[1].namespace, "dns_name");
+        assert_eq!(case.assets[0].identifiers[1].value, "app.example.test");
         assert_eq!(
             case.assets[0].metadata.get("declared_web_service"),
             Some(&serde_json::json!({
@@ -24399,10 +27922,207 @@ mod tests {
                 "path": "/login",
             }))
         );
+        assert_eq!(
+            case.assets[0].metadata.get("canonical_web_origin"),
+            Some(&serde_json::json!("https://app.example.test:8443"))
+        );
+        let registry = current_launcher_engine_registry();
+        assert!(declared_web_service_profile_matches(
+            registry.get("nuclei").unwrap(),
+            &case.assets[0],
+        ));
+        assert!(!declared_web_service_profile_matches(
+            registry.get("greenbone").unwrap(),
+            &case.assets[0],
+        ));
         assert!(
             case.scope_grants.is_empty(),
             "a website preset must never authorize scanning"
         );
+    }
+
+    #[test]
+    fn questionnaire_persists_only_a_known_internal_device_scan_profile() {
+        let fixture = Fixture::new();
+        let case = fixture
+            .service()
+            .create_case(&CreateCaseRequest {
+                title: "HTTPS management review".into(),
+                organization_name: "Example Co".into(),
+                employee_range: "2-49".into(),
+                assessment_intent: Some(AssessmentIntent::InternalItEnvironment),
+                ai_generated_artifact: Default::default(),
+                data_classes: vec![],
+                requested_activities: vec![AssessmentActivity::ActiveExternalVulnerabilityTests],
+                source_kinds: vec![],
+                not_applicable_source_kinds: vec![],
+                declared_assets: vec![DeclaredAssetInput {
+                    kind: DeclaredAssetKind::ExternalTarget,
+                    value: "10.20.30.40".into(),
+                    internet_exposed: Some(false),
+                    web_service: Some(DeclaredWebServiceInput {
+                        protocol: DeclaredWebProtocol::Https,
+                        port: 8080,
+                        path: "/".into(),
+                        scan_profile: Some(DeclaredWebServiceScanProfile::InternalDeviceHttps),
+                    }),
+                    network_service: None,
+                    host_scan: None,
+                }],
+                notes: None,
+            })
+            .unwrap();
+
+        assert_eq!(
+            case.assets[0].metadata.get("declared_web_service"),
+            Some(&serde_json::json!({
+                "protocol": "https",
+                "port": 8080,
+                "path": "/",
+                "scan_profile": "internal_device_https",
+            }))
+        );
+
+        let registry = current_launcher_engine_registry();
+        assert!(declared_web_service_profile_matches(
+            registry.get("greenbone").unwrap(),
+            &case.assets[0],
+        ));
+        assert!(!declared_web_service_profile_matches(
+            registry.get("nuclei").unwrap(),
+            &case.assets[0],
+        ));
+
+        let exact_device_scope = ExternalScopeRequest {
+            target: "10.20.30.40".into(),
+            ports: BTreeSet::from([8080]),
+            protocol: crate::external_scope::TransportProtocol::Https,
+            activity: ExternalActivity::ActiveExternal,
+            rate_policy: crate::external_scope::RatePolicy {
+                requests_per_second: 2,
+                concurrency: 1,
+                timeout_seconds: 15,
+            },
+            template_policy: crate::external_scope::TemplatePolicy::conservative(
+                INTERNAL_DEVICE_TEMPLATE_REVISION,
+                internal_device_profile_oids(DeclaredWebServiceScanProfile::InternalDeviceHttps)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            ),
+            asserted_authority: "Approved exact HTTPS management endpoint".into(),
+            allow_sensitive_networks: true,
+        };
+        validate_declared_web_service_scope(&case.assets[0], &exact_device_scope).unwrap();
+        let mut wrong_profile_scope = exact_device_scope;
+        wrong_profile_scope
+            .template_policy
+            .allowed_template_ids
+            .pop();
+        assert!(
+            validate_declared_web_service_scope(&case.assets[0], &wrong_profile_scope).is_err()
+        );
+
+        let legacy = serde_json::from_value::<DeclaredWebServiceInput>(serde_json::json!({
+            "protocol": "https",
+            "port": 443,
+            "path": "/",
+        }))
+        .unwrap();
+        assert_eq!(legacy.scan_profile, None);
+
+        let unknown_profile =
+            serde_json::from_value::<DeclaredWebServiceInput>(serde_json::json!({
+                "protocol": "https",
+                "port": 443,
+                "path": "/",
+                "scan_profile": "internal_device_unknown",
+            }));
+        assert!(unknown_profile.is_err());
+    }
+
+    #[test]
+    fn questionnaire_distinguishes_web_origins_and_deduplicates_paths_within_one_origin() {
+        let fixture = Fixture::new();
+        let website = |protocol, port, path: &str| DeclaredAssetInput {
+            kind: DeclaredAssetKind::ExternalTarget,
+            value: "App.Example.Test.".into(),
+            internet_exposed: Some(true),
+            web_service: Some(DeclaredWebServiceInput {
+                protocol,
+                port,
+                path: path.into(),
+                scan_profile: None,
+            }),
+            network_service: None,
+            host_scan: None,
+        };
+        let case = fixture
+            .service()
+            .create_case(&CreateCaseRequest {
+                title: "Several website origins".into(),
+                organization_name: "Example Co".into(),
+                employee_range: "2-49".into(),
+                assessment_intent: None,
+                ai_generated_artifact: Default::default(),
+                data_classes: vec![],
+                requested_activities: vec![AssessmentActivity::ActiveExternalVulnerabilityTests],
+                source_kinds: vec![],
+                not_applicable_source_kinds: vec![],
+                declared_assets: vec![
+                    website(DeclaredWebProtocol::Https, 443, "/first"),
+                    website(DeclaredWebProtocol::Https, 443, "/same-origin-path"),
+                    website(DeclaredWebProtocol::Http, 80, "/"),
+                    website(DeclaredWebProtocol::Https, 8443, "/admin"),
+                ],
+                notes: None,
+            })
+            .unwrap();
+
+        assert_eq!(
+            case.assessment_intent,
+            Some(AssessmentIntent::DeployedWebsite)
+        );
+        assert_eq!(case.assets.len(), 3);
+        let assets_by_origin = case
+            .assets
+            .iter()
+            .map(|asset| {
+                (
+                    asset
+                        .metadata
+                        .get("canonical_web_origin")
+                        .and_then(Value::as_str)
+                        .unwrap(),
+                    asset,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            assets_by_origin.keys().copied().collect::<Vec<_>>(),
+            vec![
+                "http://app.example.test:80",
+                "https://app.example.test:443",
+                "https://app.example.test:8443",
+            ]
+        );
+        let default_https = assets_by_origin["https://app.example.test:443"];
+        assert_eq!(default_https.kind, AssetKind::WebService);
+        assert_eq!(
+            default_https.metadata.get("declared_web_service"),
+            Some(&serde_json::json!({
+                "protocol": "https",
+                "port": 443,
+                "path": "/first",
+            })),
+            "a second path on the same origin must not create another asset"
+        );
+        assert!(case.assets.iter().all(|asset| {
+            asset.identifiers.len() == 2
+                && asset.identifiers[0].namespace == "web_origin"
+                && asset.identifiers[1].namespace == "dns_name"
+                && asset.identifiers[1].value == "app.example.test"
+        }));
     }
 
     #[test]
@@ -24429,7 +28149,10 @@ mod tests {
                         protocol: DeclaredWebProtocol::Http,
                         port: 9001,
                         path: "/".into(),
+                        scan_profile: None,
                     }),
+                    network_service: None,
+                    host_scan: None,
                 }],
                 notes: None,
             })
@@ -24515,7 +28238,10 @@ mod tests {
                 protocol: DeclaredWebProtocol::Https,
                 port: 443,
                 path: "/login?token=secret".into(),
+                scan_profile: None,
             }),
+            network_service: None,
+            host_scan: None,
         });
         assert!(fixture.service().create_case(&unsafe_path).is_err());
 
@@ -24528,7 +28254,10 @@ mod tests {
                 protocol: DeclaredWebProtocol::Https,
                 port: 443,
                 path: "/".into(),
+                scan_profile: None,
             }),
+            network_service: None,
+            host_scan: None,
         });
         assert!(fixture.service().create_case(&misplaced).is_err());
         assert!(fixture.service().list_cases().unwrap().is_empty());
@@ -24562,6 +28291,7 @@ mod tests {
                 &created.id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -24663,6 +28393,7 @@ mod tests {
                 result_pointer_sha256: None,
                 observed_at: finished,
                 summary: "Redacted selected-run evidence".into(),
+                location: None,
                 artifact_id: "artifact-html".into(),
                 artifact_sha256: evidence_sha256.clone(),
                 pointer: None,
@@ -24862,6 +28593,27 @@ mod tests {
         assert!(html.contains("Observed services (not vulnerabilities)"));
         assert!(html.contains("port:443 · protocol:tcp"));
         assert!(html.contains("Problems found:</strong> 2"));
+        for asset_result_text in [
+            "Which assets need attention",
+            "Every selected asset appears once",
+            "Problems found",
+            "Problems found: 2.",
+        ] {
+            assert!(
+                html.contains(asset_result_text),
+                "English per-asset result board omitted {asset_result_text}"
+            );
+        }
+        assert_eq!(
+            html.matches("class=\"asset-result asset-result--").count(),
+            report.requested.targets.len(),
+            "the readable report must render exactly one result row per requested asset"
+        );
+        assert!(
+            html.find("Which assets need attention").unwrap()
+                < html.find("What you asked to scan").unwrap(),
+            "the per-asset answer belongs before report detail"
+        );
         assert!(!html.contains("EXPOSURE_IMPACT_MUST_NOT_APPEAR_AS_A_PROBLEM"));
         assert!(!html.contains("EXPOSURE_REMEDIATION_MUST_NOT_APPEAR_AS_A_PRIORITY"));
         for english_block in [
@@ -24903,6 +28655,10 @@ mod tests {
         )
         .unwrap();
         for composed in [
+            "哪些資產需要處理",
+            "每個已選資產都會列出一次",
+            "發現問題",
+            "發現 2 個問題",
             "本產品依據掃描到的原始碼中符合機密資料的樣式",
             "原始碼或憑證可能導致未授權存取或不安全的程式行為",
             "先撤銷並輪替這組已外洩的憑證",
@@ -25017,6 +28773,84 @@ mod tests {
     }
 
     #[test]
+    fn html_asset_board_distinguishes_a_completed_boundary_from_unfinished_work() {
+        let fixture = Fixture::new();
+        let prepared = crate::localhost_quick_scan::prepare_localhost_quick_scan(
+            &fixture.storage,
+            fixture.engines.manifests(),
+            9001,
+        )
+        .unwrap();
+        let case = fixture
+            .storage
+            .get_case(&prepared.prepared.case_id)
+            .unwrap();
+        let mut report =
+            build_beginner_master_report(&case, &prepared.prepared.scan_run_id).unwrap();
+        let target = report.requested.targets.first_mut().unwrap();
+        let asset_id = target.asset_id.clone();
+        target.label = Some("ssh.example.test".into());
+        target.asset_kind = Some(AssetKind::Host);
+        let completed_check = report.actual.checks.first_mut().unwrap();
+        completed_check.task_id = "task-completed".into();
+        completed_check.check_id = "greenbone".into();
+        completed_check.status = CoverageDimensionStatus::TestedComplete;
+        report.findings.clear();
+        report.coverage_gaps = vec![CoverageGap {
+            kind: CoverageGapKind::NotTested,
+            task_id: Some("task-completed".into()),
+            target_asset_ids: vec![asset_id.clone()],
+            dimension: "host operating-system checks".into(),
+            reason: "The completed SSH service profile did not inspect the host operating system."
+                .into(),
+            next_action_code: NextActionCode::PreserveVisibleLimitation,
+            next_action: "Keep this limitation visible.".into(),
+            unattributed: None,
+        }];
+
+        let catalog = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let labels = readable_target_labels(&report, catalog);
+        let completed_html = html_asset_result_section(&report, &labels, catalog);
+        assert!(completed_html.contains("asset-result--no-problems-completed"));
+        assert!(completed_html.contains("Server or workstation"));
+
+        report.coverage_gaps.push(CoverageGap {
+            kind: CoverageGapKind::NotTested,
+            task_id: Some("task-never-ran".into()),
+            target_asset_ids: vec![asset_id.clone()],
+            dimension: "second requested security check".into(),
+            reason: "The second requested task did not run.".into(),
+            next_action_code: NextActionCode::RetryCheck,
+            next_action: "Retry this check.".into(),
+            unattributed: None,
+        });
+        let incomplete_html = html_asset_result_section(&report, &labels, catalog);
+        assert!(incomplete_html.contains("asset-result--incomplete-failed"));
+        assert!(incomplete_html.contains("Retry this check; saved results will remain."));
+        assert!(!incomplete_html.contains("Keep this limitation visible when sharing"));
+
+        report.coverage_gaps.push(CoverageGap {
+            kind: CoverageGapKind::Unavailable,
+            task_id: Some("task-unavailable".into()),
+            target_asset_ids: vec![asset_id],
+            dimension: "saved result processing".into(),
+            reason: "The result could not be processed completely.".into(),
+            next_action_code: NextActionCode::ReviewCoverage,
+            next_action: "Review the coverage gap.".into(),
+            unattributed: None,
+        });
+        let prioritized_html = html_asset_result_section(&report, &labels, catalog);
+        assert!(prioritized_html.contains("Review the coverage gap before relying on the result."));
+        assert!(!prioritized_html.contains("Retry this check; saved results will remain."));
+
+        let zh_catalog = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
+        let zh_labels = readable_target_labels(&report, zh_catalog);
+        let zh_html = html_asset_result_section(&report, &zh_labels, zh_catalog);
+        assert!(zh_html.contains("伺服器或工作站"));
+        assert!(zh_html.contains("採用結果前，先檢視涵蓋缺口。"));
+    }
+
+    #[test]
     fn beginner_visible_html_uses_friendly_labels_and_keeps_exact_ids_collapsed() {
         let fixture = Fixture::new();
         let prepared = crate::localhost_quick_scan::prepare_localhost_quick_scan(
@@ -25112,6 +28946,9 @@ mod tests {
         assert!(html.contains("<html lang=\"en\">"));
         assert!(html.contains("What was actually tested"));
         assert!(html.contains("Framework references are informational mappings"));
+        assert!(html.contains("Which assets need attention"));
+        assert!(html.contains("asset-result--not-tested"));
+        assert!(html.contains("No completed security check is recorded for this asset."));
 
         case.scan_runs
             .iter_mut()
@@ -25152,6 +28989,9 @@ mod tests {
         );
         for expected in [
             "<html lang=\"zh-Hant\">",
+            "哪些資產需要處理",
+            "asset-result--not-tested",
+            "這個資產沒有已完成的資安檢查紀錄。",
             "實際測試的內容",
             "已完成",
             "框架參照僅供資訊對照，不代表取得認證或符合規範。",
@@ -25204,6 +29044,7 @@ mod tests {
             created_at: now,
             completed_at: Some(now),
             request_outcome: None,
+            report_asset_snapshots: Vec::new(),
             knowledge_cutoff: now,
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),
@@ -25247,6 +29088,7 @@ mod tests {
                     result_pointer_sha256: None,
                     observed_at: now,
                     summary: format!("Independent evidence for {id}"),
+                    location: None,
                     artifact_id: format!("artifact-{id}"),
                     artifact_sha256: "a".repeat(64),
                     pointer: Some(format!("/findings/{id}")),
@@ -25900,6 +29742,7 @@ mod tests {
                 created_at: now,
                 completed_at: None,
                 request_outcome: None,
+                report_asset_snapshots: Vec::new(),
                 knowledge_cutoff: now,
                 ai_system_applicable: false,
                 ai_system_applicability: Default::default(),
@@ -25967,6 +29810,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["cloudquery".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap_err();
@@ -26177,6 +30021,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -26247,6 +30092,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -26295,6 +30141,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -26343,6 +30190,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -26386,6 +30234,7 @@ mod tests {
                     "missing-baseline",
                     ScanPlanRequest {
                         engine_ids: vec!["gitleaks".into()],
+                        engine_asset_routes: Vec::new(),
                     },
                 )
                 .is_err()
@@ -26402,6 +30251,7 @@ mod tests {
                 &baseline_run_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -26468,6 +30318,7 @@ mod tests {
                 &baseline_run_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -26495,6 +30346,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -26537,6 +30389,7 @@ mod tests {
                 &baseline_run_id,
                 ScanPlanRequest {
                     engine_ids: vec!["missing".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -26558,6 +30411,7 @@ mod tests {
                 &baseline_run_id,
                 ScanPlanRequest {
                     engine_ids: vec!["missing".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -26598,6 +30452,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["kics".into(), "semgrep".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -26728,7 +30583,13 @@ mod tests {
             )
             .unwrap();
         let plan = service
-            .plan_scan(&case.id, ScanPlanRequest { engine_ids })
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids,
+                    engine_asset_routes: Vec::new(),
+                },
+            )
             .unwrap();
         let mut stored = service.show_case(&case.id).unwrap();
         let run = stored
@@ -27052,6 +30913,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["naabu".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -27233,6 +31095,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["trufflehog".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -27289,6 +31152,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["trufflehog".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -27366,6 +31230,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["kics".into(), "semgrep".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -27563,6 +31428,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -27636,6 +31502,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -27653,6 +31520,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -27737,6 +31605,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -27802,6 +31671,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -27946,6 +31816,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -28040,6 +31911,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -28139,6 +32011,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into(), "cloudquery".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -28211,6 +32084,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["steampipe".into(), "missing".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -28281,6 +32155,7 @@ mod tests {
                     &case.id,
                     ScanPlanRequest {
                         engine_ids: aws_engine_ids.iter().map(|id| (*id).into()).collect(),
+                        engine_asset_routes: Vec::new(),
                     },
                 )
                 .unwrap();
@@ -28332,6 +32207,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["steampipe".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -28376,6 +32252,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["steampipe".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -28505,6 +32382,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["scubagear".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -28635,6 +32513,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["scubagear".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -28683,6 +32562,7 @@ mod tests {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["cloudquery".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -28749,6 +32629,7 @@ mod tests {
             created_at: now,
             completed_at: None,
             request_outcome: None,
+            report_asset_snapshots: Vec::new(),
             knowledge_cutoff: now,
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),
@@ -28855,6 +32736,7 @@ mod tests {
                 result_pointer_sha256: None,
                 observed_at: now,
                 summary: "Observed".into(),
+                location: None,
                 artifact_id: artifact.id.clone(),
                 artifact_sha256: artifact.sha256.clone(),
                 pointer: None,
@@ -29068,6 +32950,7 @@ mod tests {
                 created_at: now,
                 completed_at: Some(now),
                 request_outcome: None,
+                report_asset_snapshots: Vec::new(),
                 knowledge_cutoff: now,
                 ai_system_applicable: false,
                 ai_system_applicability: Default::default(),
@@ -29096,6 +32979,7 @@ mod tests {
                 created_at: now,
                 completed_at,
                 request_outcome: None,
+                report_asset_snapshots: Vec::new(),
                 knowledge_cutoff: now,
                 ai_system_applicable: false,
                 ai_system_applicability: Default::default(),
@@ -29334,6 +33218,7 @@ mod tests {
                 result_pointer_sha256: None,
                 observed_at: Utc::now(),
                 summary: format!("evidence for {run_id}"),
+                location: None,
                 artifact_id: format!("artifact-{run_id}"),
                 artifact_sha256: hash.into(),
                 pointer: Some(format!("/{run_id}")),
@@ -29395,6 +33280,7 @@ mod tests {
             created_at,
             completed_at: None,
             request_outcome: None,
+            report_asset_snapshots: Vec::new(),
             knowledge_cutoff: created_at,
             ai_system_applicable: false,
             ai_system_applicability: AiSystemApplicabilityAnswer::Unknown,
@@ -29436,6 +33322,7 @@ mod tests {
                 result_pointer_sha256: Some(hash_byte.to_string().repeat(64)),
                 observed_at: created_at,
                 summary: format!("evidence for {run_id}"),
+                location: None,
                 artifact_id: format!("artifact-{evidence_id}"),
                 artifact_sha256: hash_byte.to_string().repeat(64),
                 pointer: Some("line:1".into()),

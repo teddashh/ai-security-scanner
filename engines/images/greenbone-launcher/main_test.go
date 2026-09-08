@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -106,6 +108,26 @@ func testFeed() *feedIndex {
 			unsafe.Filename:     unsafeOID,
 		},
 	}
+}
+
+func syntheticFeed(items ...vtMetadata) *feedIndex {
+	tcpScanner := vtMetadata{
+		OID:      tcpScannerOID,
+		Name:     "OpenVAS TCP scanner",
+		Filename: tcpScannerFilename,
+		Category: "scanner",
+		Family:   "Port scanners",
+	}
+	items = append(items, tcpScanner)
+	index := &feedIndex{
+		ByOID:      make(map[string]vtMetadata, len(items)),
+		ByFilename: make(map[string]string, len(items)),
+	}
+	for _, item := range items {
+		index.ByOID[item.OID] = item
+		index.ByFilename[item.Filename] = item.OID
+	}
+	return index
 }
 
 func testRelays() *unitRelays {
@@ -309,11 +331,110 @@ func TestFeedSelectionClosesOnlySafeDependencies(t *testing.T) {
 	}
 }
 
+func TestRemoteSafeProfileDerivesSortedGatherInfoSelection(t *testing.T) {
+	const (
+		firstOID      = "1.3.6.1.4.1.25623.1.0.200001"
+		secondOID     = "1.3.6.1.4.1.25623.1.0.200002"
+		dependencyOID = "1.3.6.1.4.1.25623.1.0.200003"
+	)
+	items := []vtMetadata{
+		{OID: secondOID, Name: "Vendor vulnerability", Filename: "vendor_vuln.nasl", Category: "gather_info", Family: "General", Dependencies: []string{"profile_settings.nasl"}},
+		{OID: firstOID, Name: "Product detector", Filename: "product_detect.nasl", Category: "gather_info", Family: "Product detection"},
+		{OID: dependencyOID, Name: "Settings", Filename: "profile_settings.nasl", Category: "settings", Family: "Settings"},
+		{OID: "1.3.6.1.4.1.25623.1.0.200010", Name: "Deprecated", Filename: "deprecated.nasl", Category: "gather_info", Family: "General", Tag: metadataTag{Deprecated: true}},
+		{OID: "1.3.6.1.4.1.25623.1.0.200011", Name: "Active", Filename: "active.nasl", Category: "attack", Family: "General"},
+	}
+	excludedFamilies := []string{
+		"Fedora Local Security Checks",
+		"Brute force attacks",
+		"Default Accounts",
+		"Credentials",
+		"Policy",
+		"Compliance",
+		"IT-Grundschutz",
+		"IT-Grundschutz-10",
+		"IT-Grundschutz-11",
+		"Port scanners",
+		"Nmap NSE",
+		"Nmap NSE net",
+	}
+	for offset, family := range excludedFamilies {
+		items = append(items, vtMetadata{
+			OID:      fmt.Sprintf("1.3.6.1.4.1.25623.1.0.%d", 200100+offset),
+			Name:     "Excluded " + family,
+			Filename: fmt.Sprintf("excluded_%d.nasl", offset),
+			Category: "gather_info",
+			Family:   family,
+		})
+	}
+	feed := syntheticFeed(items...)
+	profile := remoteSafeProfileID
+	selected, closure, err := feed.resolveTemplateSelection(templatePolicy{
+		Revision:  templateRevision,
+		ProfileID: &profile,
+	})
+	if err != nil {
+		t.Fatalf("remote-safe profile rejected: %v", err)
+	}
+	expected := []string{firstOID, secondOID}
+	if !slices.Equal(selected, expected) {
+		t.Fatalf("derived selection = %v, want %v", selected, expected)
+	}
+	for _, oid := range []string{firstOID, secondOID, dependencyOID, tcpScannerOID} {
+		if _, exists := closure[oid]; !exists {
+			t.Fatalf("safe closure omitted %s", oid)
+		}
+	}
+	if len(closure) != 4 {
+		t.Fatalf("safe closure contains excluded VTs: %#v", closure)
+	}
+}
+
+func TestRemoteSafeProfilePolicyRequiresProfileXORExplicitOIDs(t *testing.T) {
+	profile := remoteSafeProfileID
+	unknown := "greenbone_remote_safe_v2"
+	tests := []struct {
+		name   string
+		policy templatePolicy
+		valid  bool
+	}{
+		{name: "explicit", policy: templatePolicy{Revision: templateRevision, AllowedTemplateIDs: []string{selectedOID}}, valid: true},
+		{name: "profile", policy: templatePolicy{Revision: templateRevision, ProfileID: &profile}, valid: true},
+		{name: "both", policy: templatePolicy{Revision: templateRevision, AllowedTemplateIDs: []string{selectedOID}, ProfileID: &profile}},
+		{name: "neither", policy: templatePolicy{Revision: templateRevision}},
+		{name: "unknown profile", policy: templatePolicy{Revision: templateRevision, ProfileID: &unknown}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateTemplatePolicy(test.policy)
+			if test.valid && err != nil {
+				t.Fatalf("valid policy rejected: %v", err)
+			}
+			if !test.valid && err == nil {
+				t.Fatal("invalid policy accepted")
+			}
+		})
+	}
+}
+
+func TestRemoteSafeProfileExpansionHasIndependentBounds(t *testing.T) {
+	feed := syntheticFeed(
+		vtMetadata{OID: "1.3.6.1.4.1.25623.1.0.201001", Name: "One", Filename: "one.nasl", Category: "gather_info", Family: "General"},
+		vtMetadata{OID: "1.3.6.1.4.1.25623.1.0.201002", Name: "Two", Filename: "two.nasl", Category: "gather_info", Family: "General"},
+	)
+	if _, err := feed.deriveRemoteSafeSelection(1); err == nil {
+		t.Fatal("derived profile exceeded its direct VT bound")
+	}
+	if _, err := feed.validateSafeSelectionBounded([]string{"1.3.6.1.4.1.25623.1.0.201001"}, 1); err == nil {
+		t.Fatal("derived profile exceeded its dependency closure bound")
+	}
+}
+
 func TestBuildScanRequestPreservesExactTargetPortsAndRate(t *testing.T) {
 	document := validScope(time.Now().UTC())
 	unit := scanUnit{AssetID: document.Assets[0].ID, Grant: *document.Assets[0].Grants[0].ExternalScope}
 	unit.Grant.TemplatePolicy.AllowedTemplateIDs = []string{settingOID, selectedOID}
-	request := buildScanRequest(unit, testRelays())
+	request := buildScanRequest(unit, testRelays(), unit.Grant.TemplatePolicy.AllowedTemplateIDs)
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
@@ -380,7 +501,7 @@ func TestRunUnitCancellationStopsAndDeletesExactScan(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, err := api.runUnit(ctx, unit, testRelays())
+		_, err := api.runUnit(ctx, unit, testRelays(), unit.Grant.TemplatePolicy.AllowedTemplateIDs)
 		result <- err
 	}()
 	select {

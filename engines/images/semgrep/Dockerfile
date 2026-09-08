@@ -58,6 +58,7 @@ RUN mkdir -p /src/semgrep \
 
 COPY engines/images/semgrep/submodules.lock /tmp/semgrep-submodules.lock
 COPY .engine-cache/offline/semgrep-submodules /tmp/semgrep-submodules
+COPY engines/images/semgrep/build_rule_pack.py /tmp/build-semgrep-rule-pack.py
 RUN while IFS='|' read -r path repository revision digest size archive; do \
       case "${path}" in ''|'#'*) continue ;; esac; \
       test "$(stat -c '%s' "/tmp/semgrep-submodules/${archive}")" = "${size}"; \
@@ -66,6 +67,11 @@ RUN while IFS='|' read -r path repository revision digest size archive; do \
       mkdir -p "/src/semgrep/${path}"; \
       tar -xzf "/tmp/semgrep-submodules/${archive}" --strip-components=1 -C "/src/semgrep/${path}"; \
     done < /tmp/semgrep-submodules.lock \
+    && python3 /tmp/build-semgrep-rule-pack.py \
+       --archive /tmp/semgrep-submodules/tests__semgrep-rules.tar.gz \
+       --lock /tmp/semgrep-submodules.lock \
+       --output /tmp/semgrep-rule-pack \
+       --source-date-epoch "${SOURCE_DATE_EPOCH}" \
     && tar --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner \
        -czf /tmp/semgrep-complete-source.tar.gz -C /src semgrep
 
@@ -82,15 +88,27 @@ RUN test "${TARGETARCH}" = "amd64" -o "${TARGETARCH}" = "arm64" \
     && UV_PROJECT_ENVIRONMENT=/opt/semgrep uv sync --frozen --no-dev --no-editable --python /usr/bin/python3 \
     && /opt/semgrep/bin/semgrep --version | grep -Fx '1.174.0'
 
+COPY engines/images/semgrep/testdata/insecure.py /tmp/semgrep-rule-fixture/insecure.py
+RUN --network=none /opt/semgrep/bin/semgrep scan --quiet --json \
+      --output /tmp/semgrep-rule-smoke.json \
+      --config /tmp/semgrep-rule-pack/rules \
+      --metrics=off --disable-version-check --no-rewrite-rule-ids \
+      --oss-only --jobs 2 --max-memory 2048 \
+      --timeout 10 --timeout-threshold 3 --max-target-bytes 10000000 \
+      /tmp/semgrep-rule-fixture \
+    && python3 -c 'import json; result=json.load(open("/tmp/semgrep-rule-smoke.json", encoding="utf-8")); assert result.get("errors") == []; ids={finding.get("check_id") for finding in result.get("results", [])}; assert {"dangerous-subprocess-use-audit", "subprocess-shell-true"} <= ids'
+
 FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
 
 LABEL org.opencontainers.image.title="ai-security-scanner Semgrep engine" \
-      org.opencontainers.image.description="Pinned open-source Semgrep build with a project-owned offline rule pack" \
+      org.opencontainers.image.description="Pinned open-source Semgrep build with a pinned upstream offline security rule pack" \
       org.opencontainers.image.source="https://github.com/semgrep/semgrep" \
       org.opencontainers.image.revision="a0c13f304151e531c7e7c00838076211a07a790c" \
       org.opencontainers.image.version="1.174.0-3" \
-      org.opencontainers.image.licenses="LGPL-2.1-or-later AND Apache-2.0" \
-      io.ai-security-scanner.rules-sha256="2081a62359682db1ddd15eda7eed1f3931975870cef8f8dab7120ba86fe2e5f3"
+      org.opencontainers.image.licenses="LGPL-2.1-or-later AND LicenseRef-Semgrep-Rules-License-1.0 AND Apache-2.0" \
+      io.ai-security-scanner.rules-revision="947bf05744d4c95153173a24879f30b3ba1a65aa" \
+      io.ai-security-scanner.rules-count="1620" \
+      io.ai-security-scanner.rules-manifest-sha256="ace912dd7a12516d60f0b37bf28b51a7c7c5384cdc79bb290892b0345f153ec8"
 
 RUN apk add --no-cache \
     git=2.52.0-r0 \
@@ -106,16 +124,23 @@ RUN apk add --no-cache \
 
 COPY --from=build /opt/semgrep /opt/semgrep
 COPY --from=launcher /out/ai-security-scanner-engine-entrypoint /usr/local/bin/ai-security-scanner-engine-entrypoint
-COPY engines/images/semgrep/rules.yml /opt/ai-security-scanner/semgrep/rules.yml
+COPY --from=build /tmp/semgrep-rule-pack/rules /opt/ai-security-scanner/semgrep/rules
+COPY --from=build /tmp/semgrep-rule-pack/RULES.sha256 /opt/ai-security-scanner/semgrep/RULES.sha256
 COPY --from=build /src/semgrep/LICENSE /usr/share/licenses/semgrep/LICENSE
+COPY --from=build /tmp/semgrep-rule-pack/LICENSE /usr/share/licenses/semgrep-rules/LICENSE
 COPY --from=build /tmp/semgrep-complete-source.tar.gz /usr/share/source/semgrep-source.tar.gz
+COPY --from=build /tmp/semgrep-rule-pack/PACK-METADATA.json /usr/share/source/semgrep-rule-pack.json
+COPY --from=build /tmp/semgrep-rule-pack/UPSTREAM-README.md /usr/share/source/semgrep-rules-README.md
 COPY engines/images/semgrep/submodules.lock /usr/share/source/semgrep-submodules.lock
+COPY engines/images/semgrep/build_rule_pack.py /usr/share/source/build-semgrep-rule-pack.py
 COPY engines/images/semgrep/SOURCE-OFFER.md /usr/share/source/SEMGREP-SOURCE-OFFER.md
 COPY engines/images/semgrep/Dockerfile /usr/share/source/ai-security-scanner-semgrep.Dockerfile
 COPY LICENSE /usr/share/licenses/ai-security-scanner/LICENSE
 
 RUN ln -s /opt/semgrep/bin/semgrep /usr/local/bin/semgrep \
-    && chmod 0444 /opt/ai-security-scanner/semgrep/rules.yml \
+    && find /opt/ai-security-scanner/semgrep/rules -type d -exec chmod 0555 {} + \
+    && find /opt/ai-security-scanner/semgrep/rules -type f -exec chmod 0444 {} + \
+    && chmod 0444 /opt/ai-security-scanner/semgrep/RULES.sha256 \
     && /usr/local/bin/semgrep --version | grep -Fx '1.174.0'
 
 ENV HOME="/tmp/ai-security-scanner-home" \

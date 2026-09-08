@@ -1731,6 +1731,7 @@ fn execute_scan(
                 &args.case_id,
                 ScanPlanRequest {
                     engine_ids: args.engine,
+                    engine_asset_routes: Vec::new(),
                 },
             )?;
             print_value(
@@ -1755,6 +1756,7 @@ fn execute_scan(
                 &args.baseline_run_id,
                 ScanPlanRequest {
                     engine_ids: args.engine,
+                    engine_asset_routes: Vec::new(),
                 },
             )?;
             print_value(

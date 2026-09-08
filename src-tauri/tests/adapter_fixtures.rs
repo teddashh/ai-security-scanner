@@ -1040,6 +1040,158 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
     }
 }
 
+#[test]
+fn checkov_all_framework_output_preserves_each_finding_and_its_exact_pointer() {
+    let bytes = br#"[
+      {
+        "check_type": "cloudformation",
+        "results": {
+          "failed_checks": [
+            {
+              "check_id": "CKV_AWS_20",
+              "check_name": "S3 bucket allows public read",
+              "file_path": "/cloudformation/storage.yaml",
+              "severity": "HIGH"
+            }
+          ]
+        }
+      },
+      {
+        "check_type": "dockerfile",
+        "results": {
+          "failed_checks": [
+            {
+              "check_id": "CKV_DOCKER_3",
+              "check_name": "Container runs as root",
+              "file_path": "/Dockerfile",
+              "severity": null
+            }
+          ]
+        }
+      }
+    ]"#;
+
+    let output = normalize_bytes(
+        "checkov",
+        bytes,
+        "checkov-all-frameworks.json",
+        "application/json",
+        "run-checkov-all-frameworks",
+    );
+    assert!(
+        output.complete,
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+    assert_eq!(output.findings.len(), 2);
+
+    let by_title = output
+        .findings
+        .iter()
+        .map(|finding| (finding.title.as_str(), finding))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        by_title["S3 bucket allows public read"].evidence[0]
+            .pointer
+            .as_deref(),
+        Some("/0/results/failed_checks/0")
+    );
+    assert_eq!(
+        by_title["Container runs as root"].evidence[0]
+            .pointer
+            .as_deref(),
+        Some("/1/results/failed_checks/0")
+    );
+    assert_eq!(
+        by_title["S3 bucket allows public read"].evidence[0]
+            .source_rule
+            .as_deref(),
+        Some("CKV_AWS_20")
+    );
+    assert_eq!(
+        by_title["Container runs as root"].evidence[0]
+            .source_rule
+            .as_deref(),
+        Some("CKV_DOCKER_3")
+    );
+
+    let legacy = normalize_fixture("checkov");
+    assert!(legacy.complete, "legacy warnings: {:?}", legacy.warnings);
+    assert!(legacy.findings.iter().all(|finding| {
+        finding.evidence.iter().all(|evidence| {
+            evidence
+                .pointer
+                .as_deref()
+                .is_some_and(|pointer| pointer.starts_with("/results/failed_checks/"))
+        })
+    }));
+}
+
+#[test]
+fn checkov_all_framework_output_contains_malformed_rows_without_losing_valid_findings() {
+    let bytes = br#"[
+      {
+        "check_type": "cloudformation",
+        "results": {
+          "failed_checks": [
+            {
+              "check_id": "CKV_AWS_20",
+              "check_name": "Valid CloudFormation finding",
+              "file_path": "/template.yaml"
+            },
+            null,
+            {"check_name": "Missing identifier", "file_path": "/broken.yaml"}
+          ]
+        }
+      },
+      "not-a-framework-report",
+      {"check_type": "dockerfile", "results": {"failed_checks": {}}},
+      {
+        "check_type": "dockerfile",
+        "results": {
+          "failed_checks": [
+            {
+              "check_id": "CKV_DOCKER_3",
+              "check_name": "Valid Dockerfile finding",
+              "file_path": "/Dockerfile"
+            }
+          ]
+        }
+      }
+    ]"#;
+
+    let output = normalize_bytes(
+        "checkov",
+        bytes,
+        "checkov-all-frameworks-malformed.json",
+        "application/json",
+        "run-checkov-all-frameworks-malformed",
+    );
+    assert_eq!(output.findings.len(), 2);
+    assert!(!output.complete);
+    for expected in [
+        "non-object Checkov failed check at /0/results/failed_checks/1",
+        "Checkov failed check at /0/results/failed_checks/2 had no valid check_id",
+        "non-object Checkov framework result at /1",
+        "Checkov output at /2/results/failed_checks was not an array",
+    ] {
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(expected)),
+            "missing warning {expected:?}: {:?}",
+            output.warnings
+        );
+    }
+    assert!(output.findings.iter().any(|finding| {
+        finding
+            .evidence
+            .iter()
+            .any(|evidence| evidence.pointer.as_deref() == Some("/3/results/failed_checks/0"))
+    }));
+}
+
 /// Checkov is the one engine that both reports severities and mostly does not.
 /// `BaseCheck` hardcodes `severity = None`, and the values that fill it come
 /// from platform metadata that `--skip-download` switches off; exactly one of

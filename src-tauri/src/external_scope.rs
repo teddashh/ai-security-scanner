@@ -149,6 +149,8 @@ impl RatePolicy {
 pub struct TemplatePolicy {
     pub revision: String,
     pub allowed_template_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
     pub allow_headless: bool,
     pub allow_out_of_band: bool,
     pub allow_fuzzing: bool,
@@ -162,6 +164,7 @@ impl TemplatePolicy {
         Self {
             revision: revision.into(),
             allowed_template_ids,
+            profile_id: None,
             allow_headless: false,
             allow_out_of_band: false,
             allow_fuzzing: false,
@@ -171,7 +174,24 @@ impl TemplatePolicy {
         }
     }
 
-    fn validate(&self, activity: ExternalActivity) -> AppResult<()> {
+    pub fn conservative_profile(
+        revision: impl Into<String>,
+        profile_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            revision: revision.into(),
+            allowed_template_ids: Vec::new(),
+            profile_id: Some(profile_id.into()),
+            allow_headless: false,
+            allow_out_of_band: false,
+            allow_fuzzing: false,
+            allow_file_upload: false,
+            allow_denial_of_service: false,
+            allow_credential_attacks: false,
+        }
+    }
+
+    pub(crate) fn validate(&self, activity: ExternalActivity) -> AppResult<()> {
         let revision = self.revision.trim();
         if revision.is_empty() || revision.len() > 512 || revision.contains(['\n', '\r', '\0']) {
             return Err(AppError::InvalidRequest(
@@ -191,9 +211,27 @@ impl TemplatePolicy {
                 "external policy revision must be exact or explicitly not_applicable".into(),
             ));
         }
-        if activity == ExternalActivity::ActiveExternal && self.allowed_template_ids.is_empty() {
+        let has_template_allowlist = !self.allowed_template_ids.is_empty();
+        let has_profile = self.profile_id.is_some();
+        if self
+            .profile_id
+            .as_deref()
+            .is_some_and(|profile_id| !valid_profile_id(profile_id))
+        {
+            return Err(AppError::InvalidRequest(
+                "external template profile identifier is invalid".into(),
+            ));
+        }
+        if has_template_allowlist && has_profile {
+            return Err(AppError::InvalidRequest(
+                "external template policy must select either a template allowlist or one profile, not both"
+                    .into(),
+            ));
+        }
+        if activity == ExternalActivity::ActiveExternal && !(has_template_allowlist ^ has_profile) {
             return Err(AppError::NotAuthorized(
-                "active external testing requires an explicit template allowlist".into(),
+                "active external testing requires exactly one template allowlist or bounded profile"
+                    .into(),
             ));
         }
         if self.allowed_template_ids.len() > 1_000
@@ -234,6 +272,14 @@ impl TemplatePolicy {
         }
         Ok(())
     }
+}
+
+fn valid_profile_id(value: &str) -> bool {
+    (1..=128).contains(&value.len())
+        && !value.starts_with('-')
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
 }
 
 fn valid_pinned_revision(value: &str) -> bool {
@@ -813,5 +859,50 @@ mod tests {
         let mut traversal = grant("app.example.test", ExternalActivity::ActiveExternal);
         traversal.template_policy.allowed_template_ids = vec!["http/../unsafe".into()];
         assert!(traversal.validate(Utc::now()).is_err());
+    }
+
+    #[test]
+    fn legacy_allowlist_policy_omits_and_defaults_profile_id() {
+        let policy = TemplatePolicy::conservative(
+            "nuclei-templates@0123456789abcdef0123456789abcdef01234567",
+            vec!["http/misconfiguration/example".into()],
+        );
+        let serialized = serde_json::to_value(&policy).expect("serialize policy");
+        assert!(serialized.get("profile_id").is_none());
+
+        let decoded: TemplatePolicy = serde_json::from_value(serialized).expect("legacy policy");
+        assert_eq!(decoded.profile_id, None);
+    }
+
+    #[test]
+    fn active_policy_accepts_exactly_one_bounded_profile_or_allowlist() {
+        let mut profile_scope = grant("app.example.test", ExternalActivity::ActiveExternal);
+        profile_scope.template_policy = TemplatePolicy::conservative_profile(
+            "greenbone-community-feed@0123456789abcdef0123456789abcdef01234567",
+            "greenbone_remote_safe_v1",
+        );
+        profile_scope
+            .validate(Utc::now())
+            .expect("bounded profile is a complete active policy selection");
+        let serialized = serde_json::to_value(&profile_scope.template_policy).unwrap();
+        assert_eq!(serialized["profile_id"], "greenbone_remote_safe_v1");
+        assert_eq!(serialized["allowed_template_ids"], serde_json::json!([]));
+
+        let mut ambiguous = profile_scope.clone();
+        ambiguous.template_policy.allowed_template_ids = vec!["1.2.3".into()];
+        assert!(ambiguous.validate(Utc::now()).is_err());
+
+        let mut missing = profile_scope.clone();
+        missing.template_policy.profile_id = None;
+        assert!(missing.validate(Utc::now()).is_err());
+
+        for invalid in ["", "-unsafe", "Unsafe", "contains/slash"] {
+            let mut malformed = profile_scope.clone();
+            malformed.template_policy.profile_id = Some(invalid.into());
+            assert!(malformed.validate(Utc::now()).is_err(), "{invalid}");
+        }
+        let mut oversized = profile_scope;
+        oversized.template_policy.profile_id = Some("a".repeat(129));
+        assert!(oversized.validate(Utc::now()).is_err());
     }
 }

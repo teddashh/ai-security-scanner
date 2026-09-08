@@ -113,12 +113,80 @@ export const localInputDefinitionForAssessmentIntent = (
   : localInputDefinitions[profile];
 
 export const localInputEngines: Record<LocalInputProfile, string> = {
-  repository_working_tree: "Semgrep, Gitleaks, TruffleHog, Checkov, KICS, Trivy, Syft",
+  repository_working_tree: "Gitleaks, Semgrep, Trivy, Grype, TruffleHog, KICS, Checkov",
   iac_working_tree: "Checkov, KICS, Trivy",
   container_image_oci_layout: "Trivy, Grype",
   kubernetes_manifests: "Kubescape",
   kubernetes_node_snapshot: "kube-bench",
 };
 
+/** Exact upstream engine set used when a mixed scan routes work per local asset. */
+export const localInputEngineIds: Record<LocalInputProfile, readonly string[]> = {
+  repository_working_tree: ["gitleaks", "semgrep", "trivy", "grype", "trufflehog", "kics", "checkov"],
+  iac_working_tree: ["checkov", "kics", "trivy"],
+  container_image_oci_layout: ["trivy", "grype"],
+  kubernetes_manifests: ["kubescape"],
+  kubernetes_node_snapshot: ["kube-bench"],
+};
+
 export const localPathDisplayName = (path: string, fallback: string): string =>
   path.split(/[\\/]/).filter(Boolean).at(-1) ?? fallback;
+
+/**
+ * Produces short, privacy-conscious labels for a set of local folders.
+ *
+ * A basename is normally enough. When two selected repositories share it, we
+ * add only the immediate parent folder. If that still collides, stable numbers
+ * distinguish the remaining labels without exposing more of either path.
+ */
+export const localPathDisplayLabels = (paths: readonly string[], fallback: string): string[] => {
+  const entries = paths.map((path, index) => {
+    const segments = path.split(/[\\/]/).filter(Boolean);
+    const basename = segments.at(-1) ?? fallback;
+    const parent = segments.at(-2);
+    return {
+      index,
+      path,
+      basename,
+      basenameKey: basename.toLocaleLowerCase(),
+      parentLabel: parent ? `${parent}/${basename}` : basename,
+    };
+  });
+
+  const basenameCounts = new Map<string, number>();
+  for (const entry of entries) {
+    basenameCounts.set(entry.basenameKey, (basenameCounts.get(entry.basenameKey) ?? 0) + 1);
+  }
+
+  const candidates = entries.map((entry) => ({
+    ...entry,
+    candidate: (basenameCounts.get(entry.basenameKey) ?? 0) > 1
+      ? entry.parentLabel
+      : entry.basename,
+  }));
+  const candidateGroups = new Map<string, typeof candidates>();
+  for (const entry of candidates) {
+    const key = entry.candidate.toLocaleLowerCase();
+    candidateGroups.set(key, [...(candidateGroups.get(key) ?? []), entry]);
+  }
+
+  const labels = new Array<string>(paths.length);
+  for (const group of candidateGroups.values()) {
+    if (group.length === 1) {
+      labels[group[0]!.index] = group[0]!.candidate;
+      continue;
+    }
+    const stableOrder = [...group].sort((left, right) => {
+      const byPath = left.path.replaceAll("\\", "/").localeCompare(
+        right.path.replaceAll("\\", "/"),
+        undefined,
+        { sensitivity: "base" },
+      );
+      return byPath || left.index - right.index;
+    });
+    stableOrder.forEach((entry, index) => {
+      labels[entry.index] = `${entry.candidate} (${index + 1})`;
+    });
+  }
+  return labels;
+};

@@ -98,7 +98,7 @@
     "required": true,
     "strategy": "Run the direct scanner once per exact grant and relay only the authorized original target through the managed SOCKS gateway.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:8bb128bbaabb90f6ebe21447e70c538b9ff232ce5bc45848f0e2015e6fe46ed5"
+    "launcher_sha256": "sha256:73ef4e3a09c31ee6c671be335c0041c2073e5977dc7db3f133ea5f00e7d8a6d6"
   },
   "command": [
     "--engine",

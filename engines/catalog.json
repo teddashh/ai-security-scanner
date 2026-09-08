@@ -1284,7 +1284,7 @@
     "id": "nuclei",
     "display_name": "Nuclei",
     "category": "external_attack_surface",
-    "description": "Runs selected vulnerability templates against explicitly authorized targets.",
+    "description": "Uses Nuclei's upstream technology-aware automatic scan to run applicable read-only vulnerability and exposure templates against an explicitly authorized website origin.",
     "supported_providers": [],
     "repository_url": "https://github.com/projectdiscovery/nuclei",
     "homepage_url": "https://nuclei.projectdiscovery.io/",
@@ -1339,8 +1339,8 @@
     ],
     "status": "integrated",
     "notices": [
-      "Template selection, rate limits, and authorization are enforced by the project-owned capability-boundary launcher.",
-      "Only exact embedded HTTP templates that pass the conservative read-only policy can execute.",
+      "The pinned automatic profile derives 4,674 eligible templates mechanically from the embedded upstream snapshot; Nuclei technology detection selects the applicable checks.",
+      "Exact-origin targeting, rate limits, and the read-only capability boundary are enforced by the launcher; legacy explicit template selections remain supported.",
       "MIT upstream code/templates and the Apache-2.0 project launcher permit redistribution with notices."
     ],
     "license": {
@@ -1395,7 +1395,7 @@
       },
       "wrapper": {
         "required": true,
-        "strategy": "Validate each FrozenExternalScope grant, its exact template allowlist, and each read-only HTTP template before invoking one bounded scan per exact grant port.",
+        "strategy": "Validate each FrozenExternalScope grant and either the pinned upstream automatic web profile or a legacy exact template allowlist before invoking one bounded scan per exact grant port.",
         "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
       },
       "packaging_plan": "engines/images/nuclei/plan.json"
@@ -1573,11 +1573,11 @@
     "id": "semgrep",
     "display_name": "Semgrep",
     "category": "code_and_secrets",
-    "description": "Finds insecure code patterns in user-selected repositories.",
+    "description": "Runs the pinned upstream Semgrep security rule pack across applicable languages in user-selected repository snapshots.",
     "supported_providers": [],
     "repository_url": "https://github.com/semgrep/semgrep",
     "homepage_url": "https://semgrep.dev/",
-    "license_spdx": "LGPL-2.1-or-later",
+    "license_spdx": "LGPL-2.1-or-later AND LicenseRef-Semgrep-Rules-License-1.0",
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-semgrep",
@@ -1587,7 +1587,7 @@
     },
     "source_revision": "a0c13f304151e531c7e7c00838076211a07a790c",
     "engine_version": "source@a0c13f304151e531c7e7c00838076211a07a790c",
-    "rule_version": "sha256:2081a62359682db1ddd15eda7eed1f3931975870cef8f8dab7120ba86fe2e5f3",
+    "rule_version": "947bf05744d4c95153173a24879f30b3ba1a65aa",
     "adapter_version": "0.1.3",
     "supported_asset_kinds": [
       "repository"
@@ -1617,13 +1617,13 @@
     ],
     "status": "integrated",
     "notices": [
-      "Built from the exact open-source Semgrep revision with a checksum-bound project rule pack.",
+      "Built from the exact open-source Semgrep revision with a checksum-bound upstream security rule pack containing 1,620 rules across 1,603 configurations.",
       "Runs against the read-only case workspace with engine networking disabled.",
       "Corresponding source and notices are carried in the image and repository."
     ],
     "license": {
       "disposition": "source_offer",
-      "rationale": "The managed image is built from the pinned LGPL-2.1-or-later source closure and carries corresponding source plus the project source offer.",
+      "rationale": "The managed image is built from the pinned LGPL-2.1-or-later source closure and carries corresponding source; the separate pinned upstream rule license and source records are preserved in the image.",
       "source_offer_path": "engines/images/semgrep/SOURCE-OFFER.md"
     },
     "provenance": {
@@ -1638,9 +1638,9 @@
       },
       "rules": {
         "mode": "embedded",
-        "identifier": "ai-security-scanner Semgrep rule pack",
-        "revision": "sha256:2081a62359682db1ddd15eda7eed1f3931975870cef8f8dab7120ba86fe2e5f3",
-        "acquisition_source": "workspace://engines/images/semgrep/rules.yml"
+        "identifier": "returntocorp/semgrep-rules security selection",
+        "revision": "947bf05744d4c95153173a24879f30b3ba1a65aa",
+        "acquisition_source": "https://github.com/returntocorp/semgrep-rules/commit/947bf05744d4c95153173a24879f30b3ba1a65aa"
       },
       "data": {
         "mode": "runtime_bound",
@@ -1746,7 +1746,7 @@
     "status": "integrated",
     "notices": [
       "Built from the exact MIT-licensed Gitleaks source revision with the scanner-owned default configuration and project hardening patch.",
-      "Scans only the current read-only project snapshot; repository-controlled ignore and allow directives cannot suppress results, and repository history is not included.",
+      "Scans only the current read-only project snapshot; a project .gitleaksignore file and inline gitleaks:allow directives cannot suppress results, and repository history is not included.",
       "Secret values are fully redacted before the managed launcher accepts the JSON evidence."
     ],
     "license": {
@@ -1961,7 +1961,7 @@
     "id": "checkov",
     "display_name": "Checkov",
     "category": "infrastructure_as_code",
-    "description": "Checks Terraform infrastructure-as-code in selected repository snapshots.",
+    "description": "Uses Checkov's upstream framework detection to check applicable infrastructure, deployment, pipeline, and policy files in selected repository snapshots.",
     "supported_providers": [],
     "repository_url": "https://github.com/bridgecrewio/checkov",
     "homepage_url": "https://www.checkov.io/",
@@ -2002,7 +2002,7 @@
       "-d",
       "/workspace",
       "--framework",
-      "terraform",
+      "all",
       "--output",
       "json",
       "--output-file-path",
@@ -2017,7 +2017,7 @@
       "Apache-2.0 permits redistribution with notices; dependency notices remain required.",
       "The managed image builds the exact 3.3.13 source archive with a checksum, installs all 99 Pipfile.lock records through pip's require-hashes mode, and preserves the rendered runtime lock in the image.",
       "The managed runtime uses a direct non-shell entrypoint as uid:gid 65532:65532, disables update and remote configuration fetches, and stores cache data only in the bounded /tmp tmpfs.",
-      "Execution is offline and limited to Terraform in an immutable case-scoped repository working-tree snapshot."
+      "Execution is offline over an immutable case-scoped repository working-tree snapshot; Checkov selects its applicable bundled frameworks from the files present."
     ],
     "license": {
       "disposition": "allow",
@@ -2071,7 +2071,7 @@
       },
       "wrapper": {
         "required": false,
-        "strategy": "The managed pinned-source image provides a direct non-shell entrypoint with fixed offline Terraform arguments, non-root execution, and a bounded tmpfs cache.",
+        "strategy": "The managed pinned-source image provides a direct non-shell entrypoint with fixed offline upstream framework auto-detection, non-root execution, and a bounded tmpfs cache.",
         "entrypoint": null
       },
       "packaging_plan": "engines/images/checkov/plan.json"
@@ -2382,7 +2382,7 @@
     "id": "grype",
     "display_name": "Grype",
     "category": "container_and_sbom",
-    "description": "Finds known vulnerabilities in OS and language packages, including JAR dependencies, in a single immutable OCI image layout.",
+    "description": "Finds known vulnerabilities in language packages in selected repository snapshots and in OS and language packages, including JAR dependencies, in a single immutable OCI image layout.",
     "supported_providers": [],
     "repository_url": "https://github.com/anchore/grype",
     "homepage_url": "https://github.com/anchore/grype",
@@ -2399,9 +2399,11 @@
     "rule_version": "b5fa92bbcbef655497e3be840a2f718380e2cdd3",
     "adapter_version": "0.1.3",
     "supported_asset_kinds": [
+      "repository",
       "container_image"
     ],
     "input_contracts": [
+      { "asset_kind": "repository", "input_profile": "repository_working_tree" },
       { "asset_kind": "container_image", "input_profile": "container_image_oci_layout" }
     ],
     "required_permissions": [
@@ -2428,7 +2430,7 @@
     "status": "integrated",
     "notices": [
       "The vulnerability database archive and extracted database are checksum-bound; automatic updates are disabled.",
-      "Accepts only a backend-validated, single-image OCI Image Layout and invokes Grype with oci-dir:/workspace.",
+      "Accepts only a backend-created read-only repository snapshot or a backend-validated single-image OCI Image Layout; invokes Grype with dir:/workspace or oci-dir:/workspace to match that typed input.",
       "The managed OCI smoke fixture proves offline Java archive cataloging and complements Trivy's intentionally OS-only OCI profile.",
       "Runs against the read-only case workspace with engine networking disabled."
     ],
@@ -2484,7 +2486,7 @@
       },
       "wrapper": {
         "required": true,
-        "strategy": "Invoke the pinned source build against a backend-validated single-image OCI layout with the embedded checksum-verified database, retaining offline OS and language-package cataloging including JAR dependencies.",
+        "strategy": "Invoke the pinned source build against a backend-created repository snapshot or backend-validated single-image OCI layout with the embedded checksum-verified database, retaining upstream directory or OCI package cataloging as applicable.",
         "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
       },
       "packaging_plan": "engines/images/grype/plan.json"

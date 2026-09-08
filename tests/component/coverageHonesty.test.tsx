@@ -59,6 +59,7 @@ const renderCoverage = (assets: Asset[], coverage: CoverageRecord[] = []) =>
         onStartDiscovery={() => Promise.resolve()}
         onAuthorizationChanged={() => Promise.resolve()}
         onStartScan={() => Promise.resolve(true)}
+        onStartEnvironmentScan={() => Promise.resolve(true)}
       />
     </I18nProvider>,
   );

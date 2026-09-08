@@ -1,5 +1,5 @@
 // ai-security-scanner-greenbone-launcher is the non-shell boundary around the
-// product's deliberately reduced Greenbone profile. It accepts only immutable
+// product's bounded upstream-driven Greenbone profile. It accepts only immutable
 // active-external grants, starts the unprivileged Rust openvasd scanner, and
 // converts bounded API results to the released Greenbone XML adapter format.
 //
@@ -47,6 +47,7 @@ const (
 	openvasdPath             = "/usr/local/bin/openvasd"
 	feedRevision             = "b26d7237d56b7cf85e6ace2b9351e7851461b3a8"
 	templateRevision         = "greenbone-community-feed@" + feedRevision
+	remoteSafeProfileID      = "greenbone_remote_safe_v1"
 	tcpScannerOID            = "1.3.6.1.4.1.25623.1.0.10335"
 	tcpScannerFilename       = "2011/openvas_tcp_scanner.nasl"
 	openvasdAddress          = "127.0.0.1:3000"
@@ -61,6 +62,9 @@ const (
 	maxGrantsPerAsset        = 16
 	maxSelectedVTsPerGrant   = 128
 	maxSelectedVTsPerRun     = 512
+	maxExplicitVTClosure     = 20000
+	maxProfileDerivedVTs     = 100000
+	maxProfileVTClosure      = 100000
 	maxResultsPerRun         = 100000
 	feedReadyTimeout         = 5 * time.Minute
 	maximumScanDuration      = 2 * time.Hour
@@ -131,6 +135,7 @@ type ratePolicy struct {
 type templatePolicy struct {
 	Revision               string   `json:"revision"`
 	AllowedTemplateIDs     []string `json:"allowed_template_ids"`
+	ProfileID              *string  `json:"profile_id,omitempty"`
 	AllowHeadless          bool     `json:"allow_headless"`
 	AllowOutOfBand         bool     `json:"allow_out_of_band"`
 	AllowFuzzing           bool     `json:"allow_fuzzing"`
@@ -155,6 +160,7 @@ type metadataTag struct {
 	QODType        string `json:"qod_type"`
 	Summary        string `json:"summary"`
 	Solution       string `json:"solution"`
+	Deprecated     bool   `json:"deprecated"`
 }
 
 type vtMetadata struct {
@@ -317,11 +323,34 @@ func run(ctx context.Context, arguments []string, now time.Time) error {
 		return err
 	}
 	closures := make(map[string]map[string]struct{}, len(units))
+	selections := make(map[string][]string, len(units))
+	profileSelections := make(map[string][]string)
+	profileClosures := make(map[string]map[string]struct{})
 	for _, unit := range units {
-		closure, err := index.validateSafeSelection(unit.Grant.TemplatePolicy.AllowedTemplateIDs)
-		if err != nil {
-			return fmt.Errorf("grant %s template selection: %w", unit.Grant.ID, err)
+		var selected []string
+		var closure map[string]struct{}
+		if unit.Grant.TemplatePolicy.ProfileID != nil {
+			profileID := *unit.Grant.TemplatePolicy.ProfileID
+			selected = profileSelections[profileID]
+			closure = profileClosures[profileID]
 		}
+		if selected == nil || closure == nil {
+			var err error
+			selected, closure, err = index.resolveTemplateSelection(unit.Grant.TemplatePolicy)
+			if err != nil {
+				return fmt.Errorf("grant %s template selection: %w", unit.Grant.ID, err)
+			}
+			if unit.Grant.TemplatePolicy.ProfileID != nil {
+				profileID := *unit.Grant.TemplatePolicy.ProfileID
+				profileSelections[profileID] = selected
+				profileClosures[profileID] = closure
+			}
+		}
+		// openvasd accepts explicit OIDs rather than a profile or family
+		// selector. Resolve the pinned product profile from the embedded feed,
+		// then preserve the existing request path and upstream applicability
+		// behavior for every selected VT.
+		selections[unit.Grant.ID] = selected
 		closures[unit.Grant.ID] = closure
 	}
 
@@ -373,7 +402,7 @@ func run(ctx context.Context, arguments []string, now time.Time) error {
 		if err != nil {
 			return fmt.Errorf("grant %s managed SOCKS relays failed: %w", unit.Grant.ID, err)
 		}
-		results, scanErr := api.runUnit(ctx, unit, relays)
+		results, scanErr := api.runUnit(ctx, unit, relays, selections[unit.Grant.ID])
 		relays.Close()
 		if scanErr != nil {
 			return fmt.Errorf("grant %s scan failed: %w", unit.Grant.ID, scanErr)
@@ -467,9 +496,11 @@ func validateAndPlan(document *scopeDocument, now time.Time) ([]scanUnit, error)
 			} else if caseID != external.CaseID {
 				return nil, errors.New("one execution cannot combine grants from different cases")
 			}
-			templateCount += len(external.TemplatePolicy.AllowedTemplateIDs)
-			if templateCount > maxSelectedVTsPerRun {
-				return nil, errors.New("Greenbone template count exceeds the per-run bound")
+			if external.TemplatePolicy.ProfileID == nil {
+				templateCount += len(external.TemplatePolicy.AllowedTemplateIDs)
+				if templateCount > maxSelectedVTsPerRun {
+					return nil, errors.New("Greenbone template count exceeds the per-run bound")
+				}
 			}
 			units = append(units, scanUnit{AssetID: asset.ID, Grant: external})
 		}
@@ -524,7 +555,21 @@ func validateTemplatePolicy(policy templatePolicy) error {
 	if policy.AllowHeadless || policy.AllowOutOfBand || policy.AllowFuzzing || policy.AllowFileUpload || policy.AllowDenialOfService || policy.AllowCredentialAttacks {
 		return errors.New("prohibited Greenbone template capability was enabled")
 	}
-	if policy.Revision != templateRevision || len(policy.AllowedTemplateIDs) == 0 || len(policy.AllowedTemplateIDs) > maxSelectedVTsPerGrant {
+	if policy.Revision != templateRevision {
+		return errors.New("Greenbone policy does not match the embedded feed revision or bounded allowlist")
+	}
+	profileSelected := policy.ProfileID != nil
+	explicitSelection := len(policy.AllowedTemplateIDs) != 0
+	if profileSelected == explicitSelection {
+		return errors.New("Greenbone policy requires exactly one profile or explicit OID allowlist")
+	}
+	if profileSelected {
+		if *policy.ProfileID != remoteSafeProfileID {
+			return errors.New("Greenbone policy profile is not allowlisted")
+		}
+		return nil
+	}
+	if len(policy.AllowedTemplateIDs) > maxSelectedVTsPerGrant {
 		return errors.New("Greenbone policy does not match the embedded feed revision or bounded allowlist")
 	}
 	seen := make(map[string]struct{}, len(policy.AllowedTemplateIDs))
@@ -637,7 +682,65 @@ func loadFeedIndex(path string) (*feedIndex, error) {
 	return index, nil
 }
 
+func (index *feedIndex) resolveTemplateSelection(policy templatePolicy) ([]string, map[string]struct{}, error) {
+	if err := validateTemplatePolicy(policy); err != nil {
+		return nil, nil, err
+	}
+	if policy.ProfileID == nil {
+		selected := append([]string(nil), policy.AllowedTemplateIDs...)
+		closure, err := index.validateSafeSelection(selected)
+		return selected, closure, err
+	}
+	if *policy.ProfileID != remoteSafeProfileID {
+		return nil, nil, errors.New("Greenbone policy profile is not allowlisted")
+	}
+	selected, err := index.deriveRemoteSafeSelection(maxProfileDerivedVTs)
+	if err != nil {
+		return nil, nil, err
+	}
+	closure, err := index.validateSafeSelectionBounded(selected, maxProfileVTClosure)
+	if err != nil {
+		return nil, nil, err
+	}
+	return selected, closure, nil
+}
+
+func (index *feedIndex) deriveRemoteSafeSelection(maximum int) ([]string, error) {
+	selected := make([]string, 0)
+	for oid, item := range index.ByOID {
+		if item.Category != "gather_info" || item.Tag.Deprecated || excludedRemoteSafeFamily(item.Family) {
+			continue
+		}
+		selected = append(selected, oid)
+		if len(selected) > maximum {
+			return nil, errors.New("Greenbone remote-safe profile exceeds its derived VT bound")
+		}
+	}
+	if len(selected) == 0 {
+		return nil, errors.New("Greenbone remote-safe profile is empty in the exact feed")
+	}
+	sort.Strings(selected)
+	return selected, nil
+}
+
+func excludedRemoteSafeFamily(family string) bool {
+	if strings.HasSuffix(family, " Local Security Checks") || strings.HasPrefix(family, "Nmap NSE") {
+		return true
+	}
+	switch family {
+	case "Brute force attacks", "Default Accounts", "Credentials", "Policy", "Compliance",
+		"IT-Grundschutz", "IT-Grundschutz-10", "IT-Grundschutz-11", "Port scanners":
+		return true
+	default:
+		return false
+	}
+}
+
 func (index *feedIndex) validateSafeSelection(selected []string) (map[string]struct{}, error) {
+	return index.validateSafeSelectionBounded(selected, maxExplicitVTClosure)
+}
+
+func (index *feedIndex) validateSafeSelectionBounded(selected []string, maximumClosure int) (map[string]struct{}, error) {
 	closure := make(map[string]struct{})
 	visiting := make(map[string]bool)
 	var visit func(string, bool) error
@@ -670,7 +773,7 @@ func (index *feedIndex) validateSafeSelection(selected []string) (map[string]str
 		}
 		delete(visiting, oid)
 		closure[oid] = struct{}{}
-		if len(closure) > 20000 {
+		if len(closure) > maximumClosure {
 			return errors.New("Greenbone dependency closure exceeds its bound")
 		}
 		return nil
@@ -1033,7 +1136,7 @@ func (api *openvasdClient) waitReady(ctx context.Context, serverExit <-chan erro
 	}
 }
 
-func (api *openvasdClient) runUnit(ctx context.Context, unit scanUnit, relays *unitRelays) ([]scanResult, error) {
+func (api *openvasdClient) runUnit(ctx context.Context, unit scanUnit, relays *unitRelays, selected []string) ([]scanResult, error) {
 	remaining := time.Until(unit.Grant.ExpiresAt)
 	if remaining <= 0 {
 		return nil, errors.New("grant expired")
@@ -1043,7 +1146,7 @@ func (api *openvasdClient) runUnit(ctx context.Context, unit scanUnit, relays *u
 	}
 	scanContext, cancel := context.WithTimeout(ctx, remaining)
 	defer cancel()
-	request := buildScanRequest(unit, relays)
+	request := buildScanRequest(unit, relays, selected)
 	var scanID string
 	status, err := api.request(scanContext, http.MethodPost, "/scans", request, &scanID)
 	if err != nil || status != http.StatusCreated || !validUUID(scanID) {
@@ -1088,7 +1191,7 @@ func (api *openvasdClient) runUnit(ctx context.Context, unit scanUnit, relays *u
 	}
 }
 
-func buildScanRequest(unit scanUnit, relays *unitRelays) scanRequest {
+func buildScanRequest(unit scanUnit, relays *unitRelays, selected []string) scanRequest {
 	relayPorts := make([]int, 0, len(relays.byRelayPort))
 	for port := range relays.byRelayPort {
 		relayPorts = append(relayPorts, int(port))
@@ -1099,11 +1202,11 @@ func buildScanRequest(unit scanUnit, relays *unitRelays) scanRequest {
 		port := uint16(value)
 		ranges = append(ranges, portRange{Start: port, End: port})
 	}
-	selected := append([]string(nil), unit.Grant.TemplatePolicy.AllowedTemplateIDs...)
-	selected = append(selected, tcpScannerOID)
-	sort.Strings(selected)
-	vts := make([]scanVT, 0, len(selected))
-	for _, oid := range selected {
+	requestOIDs := append([]string(nil), selected...)
+	requestOIDs = append(requestOIDs, tcpScannerOID)
+	sort.Strings(requestOIDs)
+	vts := make([]scanVT, 0, len(requestOIDs))
+	for _, oid := range requestOIDs {
 		vts = append(vts, scanVT{OID: oid})
 	}
 	requestDelay := int(math.Ceil(1000.0 / float64(unit.Grant.RatePolicy.RequestsPerSecond)))

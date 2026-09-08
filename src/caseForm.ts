@@ -1,5 +1,21 @@
 import type { KnownAssetInput } from "./types";
 import type { UseCaseId } from "./useCases";
+import {
+  internalDeviceHttpsProfile,
+  type InternalDeviceEndpointError,
+} from "./internalDeviceProfile.ts";
+import {
+  internalEndpointCoordinate,
+  internalEndpointScanProfileByService,
+  type InternalEndpointService,
+} from "./internalEndpointProfile.ts";
+import {
+  internalHostGreenboneProfile,
+  parseInternalHostPorts,
+  prepareInternalHostTarget,
+  type InternalHostInputError,
+  type InternalHostPortsError,
+} from "./internalHostProfile.ts";
 
 const parseIpv4 = (value: string): [number, number, number, number] | undefined => {
   const parts = value.split(".");
@@ -197,6 +213,24 @@ export const prepareDeployedWebsiteTarget = (input: string): PrepareWebsiteTarge
 export interface CaseAssetDraft {
   selectedUseCase?: UseCaseId;
   websiteUrl: string;
+  /** Complete URLs, one per line, used by the combined IT-environment path. */
+  websiteUrls?: string;
+  /** Explicit HTTPS management endpoints used by the combined IT-environment path. */
+  internalDeviceEndpoints?: Array<{ url: string }>;
+  /** Exact supported services on selected servers or workstations. */
+  internalEndpointServices?: Array<{
+    service?: InternalEndpointService;
+    target: string;
+    port: string | number;
+  }>;
+  /** Exact internal hosts for the beginner Greenbone remote-safe path. */
+  internalHosts?: Array<{
+    target: string;
+    /** Blank selects the reviewed common-port defaults. */
+    ports?: string;
+  }>;
+  /** Form-only signal; selected folders become snapshots rather than declared locator assets. */
+  hasLocalWorkspace?: boolean;
   publicTargets: string;
   internalTargets: string;
   repositories: string;
@@ -210,6 +244,18 @@ export type ExternalTargetInputError =
   | "service_coordinate_not_allowed"
   | "invalid_cidr"
   | "invalid_target";
+
+export type InternalEndpointInputError =
+  | "empty_target"
+  | "url_not_allowed"
+  | "credentials_not_allowed"
+  | "cidr_not_allowed"
+  | "invalid_target"
+  | "invalid_port";
+
+export type PrepareInternalEndpointServiceResult =
+  | { ok: true; value: { target: string; port: number } }
+  | { ok: false; error: InternalEndpointInputError };
 
 export type ValidateExternalTargetResult =
   | { ok: true }
@@ -303,7 +349,24 @@ export const validateExternalTarget = (input: string): ValidateExternalTargetRes
 };
 
 export type CaseAssetDraftError =
-  | { kind: "website"; error: WebsiteInputError }
+  | { kind: "website"; error: WebsiteInputError; value?: string }
+  | { kind: "internal_device"; error: InternalDeviceEndpointError; value?: string }
+  | { kind: "internal_endpoint"; error: InternalEndpointInputError; value?: string; index: number }
+  | {
+      kind: "internal_host";
+      field: "target";
+      error: InternalHostInputError;
+      value?: string;
+      index: number;
+    }
+  | {
+      kind: "internal_host";
+      field: "ports";
+      error: InternalHostPortsError;
+      value?: string;
+      index: number;
+    }
+  | { kind: "missing_environment" }
   | { kind: "missing_target"; target: "public" | "internal" }
   | {
       kind: "invalid_target";
@@ -311,7 +374,13 @@ export type CaseAssetDraftError =
       value: string;
       error: ExternalTargetInputError;
     }
-  | { kind: "conflicting_exposure"; target: string };
+  | { kind: "conflicting_exposure"; target: string }
+  | {
+      kind: "conflicting_scan_profile";
+      target: string;
+      /** Present when two server/workstation rows claim the same TCP service. */
+      internalEndpointIndex?: number;
+    };
 
 export type BuildKnownAssetsResult =
   | { ok: true; knownAssets: KnownAssetInput[] }
@@ -393,15 +462,52 @@ const externalComparisonKey = (value: string): string => {
   return canonicalHostname(trimmed) ?? trimmed.replace(/\.+$/u, "").toLocaleLowerCase("en-US");
 };
 
+/** Non-contacting validation for one exact supported host service and port. */
+export const prepareInternalEndpointService = (
+  input: string,
+  portInput: string | number,
+): PrepareInternalEndpointServiceResult => {
+  const target = input.trim();
+  if (!target) return { ok: false, error: "empty_target" };
+  if (target.includes("@")) return { ok: false, error: "credentials_not_allowed" };
+  if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(target)) {
+    return { ok: false, error: "url_not_allowed" };
+  }
+  if (/\/[^/]*$/u.test(target)) {
+    return /^.+\/[0-9]{1,3}$/u.test(target)
+      ? { ok: false, error: "cidr_not_allowed" }
+      : { ok: false, error: "url_not_allowed" };
+  }
+  if (!validateExternalTarget(target).ok) return { ok: false, error: "invalid_target" };
+
+  const portText = String(portInput).trim();
+  if (!/^(?:[1-9][0-9]{0,4})$/u.test(portText)) {
+    return { ok: false, error: "invalid_port" };
+  }
+  const port = Number(portText);
+  if (port > 65_535) return { ok: false, error: "invalid_port" };
+  return { ok: true, value: { target: externalComparisonKey(target), port } };
+};
+
 export const buildKnownAssets = (draft: CaseAssetDraft): BuildKnownAssetsResult => {
   const knownAssets: KnownAssetInput[] = [];
   const waitsForLocalPicker = Boolean(
     draft.selectedUseCase && guidedLocalUseCases.includes(draft.selectedUseCase),
   );
 
-  if (draft.selectedUseCase === "deployed_website") {
-    const prepared = prepareDeployedWebsiteTarget(draft.websiteUrl);
-    if (!prepared.ok) return { ok: false, error: { kind: "website", error: prepared.error } };
+  const websiteValues = draft.selectedUseCase === "deployed_website"
+    ? [draft.websiteUrl]
+    : draft.selectedUseCase === "internal_it_environment"
+      ? lineValues(draft.websiteUrls ?? "")
+      : [];
+  for (const websiteValue of websiteValues) {
+    const prepared = prepareDeployedWebsiteTarget(websiteValue);
+    if (!prepared.ok) {
+      return {
+        ok: false,
+        error: { kind: "website", error: prepared.error, value: websiteValue.trim() || undefined },
+      };
+    }
     knownAssets.push({
       kind: "external_target",
       value: prepared.value.target,
@@ -416,14 +522,145 @@ export const buildKnownAssets = (draft: CaseAssetDraft): BuildKnownAssetsResult 
     });
   }
 
+  const internalHosts = (draft.internalHosts ?? [])
+    .map((host, index) => ({
+      target: host.target.trim(),
+      ports: host.ports?.trim() ?? "",
+      index,
+    }))
+    .filter((host) => Boolean(host.target || host.ports));
+  for (const host of internalHosts) {
+    const preparedTarget = prepareInternalHostTarget(host.target);
+    if (!preparedTarget.ok) {
+      return {
+        ok: false,
+        error: {
+          kind: "internal_host",
+          field: "target",
+          error: preparedTarget.error,
+          value: host.target || undefined,
+          index: host.index,
+        },
+      };
+    }
+    const preparedPorts = parseInternalHostPorts(host.ports);
+    if (!preparedPorts.ok) {
+      return {
+        ok: false,
+        error: {
+          kind: "internal_host",
+          field: "ports",
+          error: preparedPorts.error,
+          value: host.ports || undefined,
+          index: host.index,
+        },
+      };
+    }
+    knownAssets.push({
+      kind: "external_target",
+      value: preparedTarget.value,
+      internetExposure: "internal",
+      hostScan: {
+        protocol: "tcp",
+        ports: preparedPorts.value,
+        scanProfile: internalHostGreenboneProfile.scanProfile,
+      },
+    });
+  }
+
+  const internalDeviceEndpoints = (draft.internalDeviceEndpoints ?? [])
+    .map((endpoint) => ({ ...endpoint, url: endpoint.url.trim() }))
+    .filter((endpoint) => Boolean(endpoint.url));
+  for (const endpoint of internalDeviceEndpoints) {
+    const prepared = prepareDeployedWebsiteTarget(endpoint.url);
+    if (!prepared.ok) {
+      return {
+        ok: false,
+        error: { kind: "internal_device", error: prepared.error, value: endpoint.url },
+      };
+    }
+    if (prepared.value.service.protocol !== "https") {
+      return {
+        ok: false,
+        error: { kind: "internal_device", error: "https_required", value: endpoint.url },
+      };
+    }
+    knownAssets.push({
+      kind: "external_target",
+      value: prepared.value.target,
+      internetExposure: "internal",
+      webService: {
+        protocol: "https",
+        port: prepared.value.service.port,
+        path: prepared.value.service.path,
+        scanProfile: internalDeviceHttpsProfile.scanProfile,
+      },
+    });
+  }
+
+  const internalEndpointServices = (draft.internalEndpointServices ?? [])
+    .map((service, index) => ({
+      service: service.service ?? "ssh",
+      target: service.target.trim(),
+      port: String(service.port).trim(),
+      index,
+    }));
+  const endpointProfilesByCoordinate = new Map<string, string>();
+  for (const service of internalEndpointServices) {
+    const prepared = prepareInternalEndpointService(service.target, service.port);
+    if (!prepared.ok) {
+      return {
+        ok: false,
+        error: {
+          kind: "internal_endpoint",
+          error: prepared.error,
+          value: service.target || undefined,
+          index: service.index,
+        },
+      };
+    }
+    const scanProfile = internalEndpointScanProfileByService[service.service];
+    const serviceIdentity = `${prepared.value.target}\u{0}tcp:${prepared.value.port}`;
+    const previousProfile = endpointProfilesByCoordinate.get(serviceIdentity);
+    if (previousProfile && previousProfile !== scanProfile) {
+      return {
+        ok: false,
+        error: {
+          kind: "conflicting_scan_profile",
+          target: internalEndpointCoordinate(prepared.value.target, prepared.value.port),
+          internalEndpointIndex: service.index,
+        },
+      };
+    }
+    endpointProfilesByCoordinate.set(serviceIdentity, scanProfile);
+    knownAssets.push({
+      kind: "external_target",
+      value: prepared.value.target,
+      internetExposure: "internal",
+      networkService: {
+        protocol: "tcp",
+        port: prepared.value.port,
+        scanProfile,
+      },
+    });
+  }
+
   const publicTargetValues = lineValues(draft.publicTargets);
   const internalTargetValues = lineValues(draft.internalTargets);
 
   if (draft.selectedUseCase === "external_ip_or_domain" && publicTargetValues.length === 0) {
     return { ok: false, error: { kind: "missing_target", target: "public" } };
   }
-  if (draft.selectedUseCase === "internal_it_environment" && internalTargetValues.length === 0) {
-    return { ok: false, error: { kind: "missing_target", target: "internal" } };
+  if (
+    draft.selectedUseCase === "internal_it_environment"
+    && internalTargetValues.length === 0
+    && websiteValues.length === 0
+    && internalHosts.length === 0
+    && internalDeviceEndpoints.length === 0
+    && internalEndpointServices.length === 0
+    && !draft.hasLocalWorkspace
+  ) {
+    return { ok: false, error: { kind: "missing_environment" } };
   }
 
   for (const [target, values] of [
@@ -441,13 +678,23 @@ export const buildKnownAssets = (draft: CaseAssetDraft): BuildKnownAssetsResult 
     }
   }
 
+  const preparedTargetExposure = new Map(
+    knownAssets
+      .filter((asset) => asset.kind === "external_target" && (asset.webService || asset.networkService || asset.hostScan))
+      .map((asset) => [externalComparisonKey(asset.value), asset.internetExposure] as const),
+  );
+
   knownAssets.push(
-    ...publicTargetValues.map((value) => ({
+    ...publicTargetValues
+      .filter((value) => preparedTargetExposure.get(externalComparisonKey(value)) !== "public")
+      .map((value) => ({
       kind: "external_target" as const,
       value: externalComparisonKey(value),
       internetExposure: "public" as const,
     })),
-    ...internalTargetValues.map((value) => ({
+    ...internalTargetValues
+      .filter((value) => preparedTargetExposure.get(externalComparisonKey(value)) !== "internal")
+      .map((value) => ({
       kind: "external_target" as const,
       value: externalComparisonKey(value),
       internetExposure: "internal" as const,
@@ -471,23 +718,56 @@ export const buildKnownAssets = (draft: CaseAssetDraft): BuildKnownAssetsResult 
   );
 
   const unique = new Map<string, KnownAssetInput>();
+  const externalExposure = new Map<string, KnownAssetInput["internetExposure"]>();
+  const serviceProfiles = new Map<string, string>();
   for (const asset of knownAssets) {
     const comparisonValue = asset.kind === "external_target"
       ? externalComparisonKey(asset.value)
       : asset.value;
-    const key = `${asset.kind}\u{0}${comparisonValue}`;
-    const previous = unique.get(key);
-    if (
-      asset.kind === "external_target"
-      && previous?.kind === "external_target"
-      && previous.internetExposure !== asset.internetExposure
-    ) {
-      return {
-        ok: false,
-        error: { kind: "conflicting_exposure", target: comparisonValue },
-      };
+    if (asset.kind === "external_target") {
+      const previousExposure = externalExposure.get(comparisonValue);
+      if (previousExposure !== undefined && previousExposure !== asset.internetExposure) {
+        return {
+          ok: false,
+          error: { kind: "conflicting_exposure", target: comparisonValue },
+        };
+      }
+      externalExposure.set(comparisonValue, asset.internetExposure);
     }
-    if (!previous) unique.set(key, asset);
+    const webOrigin = asset.kind === "external_target" && asset.webService
+      ? `${asset.webService.protocol}:${asset.webService.port}`
+      : "";
+    const networkService = asset.kind === "external_target" && asset.networkService
+      ? `${asset.networkService.protocol}:${asset.networkService.port}`
+      : "";
+    const hostScan = asset.kind === "external_target" && asset.hostScan
+      ? asset.hostScan.scanProfile
+      : "";
+    if (asset.kind === "external_target" && asset.webService) {
+      const serviceIdentity = `${comparisonValue}\u{0}${webOrigin}`;
+      const scanProfile = asset.webService.scanProfile ?? "website_quick";
+      const previousProfile = serviceProfiles.get(serviceIdentity);
+      if (previousProfile && previousProfile !== scanProfile) {
+        return {
+          ok: false,
+          error: {
+            kind: "conflicting_scan_profile",
+            target: `${asset.webService.protocol}://${comparisonValue}:${asset.webService.port}`,
+          },
+        };
+      }
+      serviceProfiles.set(serviceIdentity, scanProfile);
+    }
+    const key = `${asset.kind}\u{0}${comparisonValue}\u{0}${webOrigin}\u{0}${networkService}\u{0}${hostScan}`;
+    const previous = unique.get(key);
+    if (!previous) {
+      unique.set(key, asset);
+    } else if (previous.hostScan && asset.hostScan) {
+      previous.hostScan.ports = [...new Set([
+        ...previous.hostScan.ports,
+        ...asset.hostScan.ports,
+      ])].sort((left, right) => left - right);
+    }
   }
 
   return { ok: true, knownAssets: [...unique.values()] };

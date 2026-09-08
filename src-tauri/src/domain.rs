@@ -6,7 +6,7 @@ use crate::naabu_work_plan::NaabuWorkPlanV1;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub type Id = String;
@@ -1058,6 +1058,65 @@ where
     Ok(value)
 }
 
+/// One mixed-environment run can route at most 10,000 asset references and a
+/// case questionnaire can add at most 200 explicit inventory-only targets.
+/// Keep that exact combined upper bound when reading durable case data.
+pub const MAX_SCAN_RUN_REPORT_ASSET_SNAPSHOTS: usize = 10_200;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportAssetDisposition {
+    /// Selected for this run at plan time. Completion remains authoritative in
+    /// the corresponding engine run; this value never means a check finished.
+    RequestedForScan,
+    /// Explicitly added to the IT environment, but no supported website,
+    /// network-service, or local-input profile was selected for this run.
+    NoSupportedProfile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReportAssetSnapshot {
+    pub asset: Asset,
+    pub disposition: ReportAssetDisposition,
+}
+
+fn validate_report_asset_snapshots(snapshots: &[ReportAssetSnapshot]) -> Result<(), String> {
+    if snapshots.len() > MAX_SCAN_RUN_REPORT_ASSET_SNAPSHOTS {
+        return Err(format!(
+            "scan run exceeds {MAX_SCAN_RUN_REPORT_ASSET_SNAPSHOTS} frozen report assets"
+        ));
+    }
+    let mut asset_ids = std::collections::BTreeSet::new();
+    for snapshot in snapshots {
+        let asset_id = snapshot.asset.id.as_str();
+        if asset_id.is_empty()
+            || asset_id != asset_id.trim()
+            || asset_id.chars().count() > MAX_SCAN_REQUEST_ID_CHARS
+            || asset_id.chars().any(char::is_control)
+        {
+            return Err("scan run contains an invalid frozen report asset identifier".into());
+        }
+        if !asset_ids.insert(asset_id) {
+            return Err(format!(
+                "scan run repeats frozen report asset identifier {asset_id}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn deserialize_report_asset_snapshots<'de, D>(
+    deserializer: D,
+) -> Result<Vec<ReportAssetSnapshot>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let snapshots = Vec::<ReportAssetSnapshot>::deserialize(deserializer)?;
+    validate_report_asset_snapshots(&snapshots).map_err(serde::de::Error::custom)?;
+    Ok(snapshots)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanRun {
     pub id: Id,
@@ -1071,6 +1130,16 @@ pub struct ScanRun {
     /// `completed_at` and contain no queued engine runs.
     #[serde(default)]
     pub request_outcome: Option<ScanRequestOutcome>,
+    /// Product-report asset identity frozen at planning time for one
+    /// mixed-environment run. Full assets prevent later case edits from
+    /// silently relabeling historical results. Empty means a legacy or
+    /// non-environment run, never that the current case should be substituted.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_report_asset_snapshots",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub report_asset_snapshots: Vec<ReportAssetSnapshot>,
     pub knowledge_cutoff: DateTime<Utc>,
     /// Historical framework-classification context frozen when the run was
     /// planned. It never grants scan permission or changes scanner execution.
@@ -1184,6 +1253,10 @@ pub struct Evidence {
     pub result_pointer_sha256: Option<String>,
     pub observed_at: DateTime<Utc>,
     pub summary: String,
+    /// Scanner-reported location after adapter redaction. Keeping this
+    /// structured avoids making a user interface parse an English sentence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
     pub artifact_id: Id,
     pub artifact_sha256: String,
     pub pointer: Option<String>,
@@ -1895,6 +1968,16 @@ pub struct DeclaredAssetInput {
     /// decision. It never creates a scope grant.
     #[serde(default)]
     pub web_service: Option<DeclaredWebServiceInput>,
+    /// Optional non-web network-service context used to select one fixed,
+    /// service-aware endpoint profile. This is deliberately separate from a
+    /// website origin: it never gives a TCP service HTTP path semantics.
+    #[serde(default)]
+    pub network_service: Option<DeclaredNetworkServiceInput>,
+    /// Optional exact-host vulnerability scan driven by one upstream scanner
+    /// profile across the reviewed TCP ports. It is mutually exclusive with
+    /// website and single-service context.
+    #[serde(default)]
+    pub host_scan: Option<DeclaredHostScanInput>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1904,12 +1987,87 @@ pub enum DeclaredWebProtocol {
     Https,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredWebServiceScanProfile {
+    InternalDeviceHttps,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DeclaredWebServiceInput {
     pub protocol: DeclaredWebProtocol,
     pub port: u16,
     pub path: String,
+    /// Absent preserves the existing website quick-scan intent. A present
+    /// value is a closed, product-owned internal-device profile selector.
+    #[serde(default)]
+    pub scan_profile: Option<DeclaredWebServiceScanProfile>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredNetworkProtocol {
+    Tcp,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredHostScanProfile {
+    GreenboneRemoteSafeV1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DeclaredHostScanInput {
+    pub protocol: DeclaredNetworkProtocol,
+    pub ports: Vec<u16>,
+    pub profile: DeclaredHostScanProfile,
+}
+
+/// Canonical, durable exact-host profile metadata derived by the backend.
+/// Sorting and deduplicating the ports makes the reviewed execution contract
+/// stable across persistence and later authorization checks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DeclaredHostScanMetadata {
+    pub target: String,
+    pub protocol: DeclaredNetworkProtocol,
+    pub ports: BTreeSet<u16>,
+    pub profile: DeclaredHostScanProfile,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredNetworkServiceScanProfile {
+    InternalEndpointSsh,
+    InternalEndpointRdpTls,
+    InternalEndpointVnc,
+    InternalEndpointSmtp,
+    InternalEndpointTelnet,
+}
+
+/// The service-specific part of a declared endpoint. The exact hostname or
+/// address remains the enclosing `DeclaredAssetInput.value`, so callers
+/// cannot supply two competing target identities in one request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DeclaredNetworkServiceInput {
+    pub protocol: DeclaredNetworkProtocol,
+    pub port: u16,
+    pub scan_profile: DeclaredNetworkServiceScanProfile,
+}
+
+/// Canonical, durable endpoint profile metadata derived by the backend. It
+/// binds the normalized target and service profile used later to reject a
+/// modified authorization request before any scanner plan is persisted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DeclaredNetworkServiceMetadata {
+    pub target: String,
+    pub protocol: DeclaredNetworkProtocol,
+    pub port: u16,
+    pub scan_profile: DeclaredNetworkServiceScanProfile,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2006,6 +2164,7 @@ mod tests {
 
         assert!(run.verification_baseline_run_id.is_none());
         assert!(run.request_outcome.is_none());
+        assert!(run.report_asset_snapshots.is_empty());
         assert!(run.engine_admission_issues.is_empty());
         assert!(!run.ai_system_applicable);
         assert_eq!(
@@ -2036,6 +2195,49 @@ mod tests {
     }
 
     #[test]
+    fn frozen_report_asset_snapshots_reject_duplicate_ids_and_the_hard_limit() {
+        let snapshot = ReportAssetSnapshot {
+            asset: Asset {
+                id: "asset-1".into(),
+                kind: AssetKind::Host,
+                name: "tcp://ssh.example.test:22".into(),
+                provider: None,
+                region: None,
+                identifiers: vec![],
+                discovered_from: vec![],
+                candidate: false,
+                owner_confirmed: true,
+                internet_exposed: Some(false),
+                contains_sensitive_data: None,
+                metadata: BTreeMap::new(),
+            },
+            disposition: ReportAssetDisposition::RequestedForScan,
+        };
+        assert!(validate_report_asset_snapshots(&[snapshot.clone()]).is_ok());
+        assert!(validate_report_asset_snapshots(&[snapshot.clone(), snapshot.clone()]).is_err());
+        assert!(
+            validate_report_asset_snapshots(&vec![
+                snapshot.clone();
+                MAX_SCAN_RUN_REPORT_ASSET_SNAPSHOTS + 1
+            ])
+            .is_err()
+        );
+
+        let mut encoded = serde_json::json!({
+            "id": "run-duplicate-assets",
+            "case_id": "case-1",
+            "sequence": 1,
+            "created_at": "2026-08-24T12:00:00Z",
+            "completed_at": "2026-08-24T12:01:00Z",
+            "knowledge_cutoff": "2026-08-24T12:00:00Z",
+            "scope_grant_ids": [],
+            "engine_runs": []
+        });
+        encoded["report_asset_snapshots"] = serde_json::json!([snapshot, snapshot]);
+        assert!(serde_json::from_value::<ScanRun>(encoded).is_err());
+    }
+
+    #[test]
     fn terminal_no_checks_request_outcome_round_trips_without_becoming_queued_work() {
         let now = Utc::now();
         let outcome = ScanRequestOutcome::no_checks_completed(
@@ -2052,6 +2254,7 @@ mod tests {
             created_at: now,
             completed_at: Some(now),
             request_outcome: Some(outcome.clone()),
+            report_asset_snapshots: Vec::new(),
             knowledge_cutoff: now,
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),
@@ -2289,6 +2492,7 @@ mod tests {
                 created_at: now,
                 completed_at: None,
                 request_outcome: None,
+                report_asset_snapshots: Vec::new(),
                 knowledge_cutoff: now,
                 ai_system_applicable: false,
                 ai_system_applicability: Default::default(),
@@ -2366,6 +2570,7 @@ mod tests {
                 created_at: now,
                 completed_at: Some(now),
                 request_outcome: None,
+                report_asset_snapshots: Vec::new(),
                 knowledge_cutoff: now,
                 ai_system_applicable: false,
                 ai_system_applicability: Default::default(),

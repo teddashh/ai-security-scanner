@@ -392,6 +392,7 @@ mod tests {
             created_at: time,
             completed_at: Some(time),
             request_outcome: None,
+            report_asset_snapshots: Vec::new(),
             knowledge_cutoff: time,
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),

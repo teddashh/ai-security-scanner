@@ -8,7 +8,7 @@ A precedence banner is not enough to preserve alignment: a conflicting subordina
 
 ## 1. Product direction
 
-`ai-security-scanner` helps a beginner run a real security check and understand what to do next without first learning scanner tools, Linux, containers, or security terminology.
+`ai-security-scanner` helps an IT generalist or developer find which selected company assets have real security problems and understand what to do next, without first learning a collection of scanner tools, Linux, containers, or security terminology.
 
 Four principles control product decisions:
 
@@ -19,14 +19,14 @@ Four principles control product decisions:
 
 The product succeeds when a user can say:
 
-> I selected something I own, the product actually checked it for security problems, and I can see what matters, what to do, and what was not checked.
+> I selected the repositories, internal systems, endpoints, and websites I am responsible for. The product ran applicable security checks and gave me one report showing which assets need attention, what to do, and what was not checked.
 
 ### 1.1 Primary user
 
-The primary user is a Windows owner, developer, small-business operator, or IT generalist who:
+The primary user is a Windows-based IT generalist, developer, or small-business operator who:
 
 - has little or no security-scanning experience;
-- can identify a website, code project, service, or system they may assess;
+- can identify one or more websites, code projects, services, network devices, or endpoints they may assess;
 - wants useful next actions rather than scanner output;
 - may never have used WSL, Podman, containers, scanner engines, or a CLI.
 
@@ -36,12 +36,13 @@ Experts are secondary users. Their evidence and controls remain available throug
 
 The product makes these jobs simple:
 
-1. Check a website or API for common low-impact security problems.
-2. Check a local project for risky code, exposed secrets, vulnerable dependencies, and unsafe configuration.
-3. Check an explicitly selected local, public, or internal service.
-4. Understand one prioritized report even when some checks do not finish.
-5. Save, share, reopen, and compare results.
-6. Add cloud, infrastructure-code, container, and Kubernetes sources only when needed.
+1. Build one IT scan project from the repositories, internal inventory or endpoints, and websites the user explicitly selects.
+2. Check each selected repository for risky code, exposed secrets, vulnerable dependencies, and unsafe configuration.
+3. Check each selected internal system, network device, or endpoint with an applicable service-aware or vulnerability scanner; inventory alone is preparation, not success.
+4. Check each selected website or API for real security problems with a reviewed web profile.
+5. Run those applicable checks in one scan and answer **which assets have vulnerabilities** in one prioritized report, even when an independent check does not finish.
+6. Save, share, reopen, compare, and add or remove selected assets without rebuilding the project.
+7. Add cloud, infrastructure-code, container, and Kubernetes sources only when needed.
 
 The product is not a security guarantee, an aggressive penetration test by default, an automatic remediation system, a raw-scanner dashboard, or a compliance opinion. It never makes a beginner administer runtime infrastructure merely to use the product.
 
@@ -61,22 +62,31 @@ A DNS lookup, ping, socket connection, open/closed port observation, runtime hea
 
 ### 2.2 Recommended first paths
 
-The home screen leads with two choices:
+The home screen leads with three choices:
 
+- **Scan my IT environment** — in one compact setup, add multiple repository folders, complete website URLs, and approved internal systems by exact hostname or IP address, then run the applicable upstream checks together with one Start.
 - **Check a website** — enter one complete URL and run a conservative, reviewed web-security profile.
 - **Check a project folder** — choose one local folder and run a read-only code profile.
 
-Other target types are secondary. A localhost connection test may remain as a diagnostic labeled exactly as a connection test; it must not be a primary scan action.
+The two single-target choices are shortcuts into the same project model; the user can add more assets later. Cloud accounts and other advanced sources remain secondary. A localhost connection test may remain as a diagnostic labeled exactly as a connection test; it must not be a primary scan action.
 
 ### 2.3 Interaction and time
 
-The beginner path has three decisions:
+The single-target beginner path has three decisions:
 
 1. Choose what to check.
 2. Enter a URL or choose a folder.
 3. Review the exact target and press **Start scan**.
 
 The product derives a useful name from the URL or folder. Naming a project, adding an organization, choosing engines, or visiting a project-management screen is not required before the first scan.
+
+The IT-environment path is additive rather than wizard-heavy:
+
+1. Add the exact repository folders, complete website URLs, and approved internal systems to check. Each internal-system row asks only for one exact hostname or IP address. A collapsed Advanced control may replace the visible common TCP-port defaults with up to 64 exact ports; it never accepts a range, CIDR, URL, credential, or neighboring host. The product, not the beginner, chooses an upstream scanner profile. Inventory ranges remain separate and do not silently become active targets. At least one scan-ready asset is enough to begin.
+2. Review one concise scan plan grouped by asset type. The product selects the applicable upstream profiles and shows any asset that is inventory-only or still needs a port, protocol, or authorization choice.
+3. Confirm the displayed network targets and press one **Start scan** action. Local folders need no network authorization.
+
+Adding ten assets must not create ten copies of the same form. Repeated targets use compact rows, shared safe defaults, and per-target overrides only where the execution boundary differs.
 
 The quick profile aims to show a durable security-relevant update within minutes. The UI shows an honest time range. Longer inventory and deeper checks may continue after the first useful result.
 
@@ -85,8 +95,8 @@ After preparation succeeds in the same uninterrupted UI context, the product
 continues the same reviewed scan without asking for a second Start. It does not
 reuse that request after the user leaves the page, changes projects, cancels
 setup, starts other scan work, or restarts the app. If Windows or the app must
-restart, the project returns to Review with its one eligible target selected;
-the user reviews it and presses **Start scan** again instead of the product
+restart, the project returns to Review with its previously prepared eligible
+assets selected; the user reviews them and presses **Start scan** again instead of the product
 persisting an automatic target-contact instruction across restart.
 
 ## 3. Beginner journey
@@ -95,8 +105,9 @@ persisting an automatic target-contact instruction across restart.
 
 Without technical detail, Home answers what can be checked, which choice is recommended, what result it provides, and roughly how long it takes. Cards name outcomes rather than engines and have one primary action.
 
-Setup asks only for the selected target:
+Setup asks only for the selected target or targets:
 
+- an IT environment: repeatable local-folder and complete website inputs plus repeatable exact hostname-or-IP inputs for approved internal systems; each entry stays independently removable and reviewable, and ports remain an optional Advanced override;
 - a website: one complete `http://` or `https://` URL;
 - a project: one local folder selection;
 - a public or internal system: an exact host, domain, or bounded range plus a concise ownership/authorization confirmation;
@@ -108,8 +119,8 @@ Validation is immediate, specific, and non-contacting. The product does not prob
 
 One focused review shows:
 
-- the exact target or snapshot;
-- included security checks in plain language;
+- every exact target or snapshot, grouped as repositories, internal systems/endpoints, and websites;
+- the applicable included security checks in plain language for each group;
 - expected time and important request or resource limits;
 - the most important exclusions;
 - one **Start scan** action.
@@ -118,7 +129,7 @@ Optional depth, rate, template, and engine controls are collapsed. Unchanged aut
 
 ### 3.3 Progress
 
-Progress leads with what is happening, the first useful result, completed/remaining/attention-needed checks, elapsed time and range, supported controls, and one obvious **View results** action.
+Progress leads with what is happening, which asset is being checked, the first useful result, completed/remaining/attention-needed assets and checks, elapsed time and range, supported controls, and one obvious **View results** action.
 
 Scanner logs and runtime details remain collapsed. A completed useful check updates the report immediately; it does not wait for every independent check.
 
@@ -128,17 +139,17 @@ not a contradictory scan-failed message.
 
 ### 3.4 Results and export
 
-Results open to the unified report. Important problems and next actions appear before technical metrics. A readable HTML report has one primary save action; JSON and specialist formats remain secondary.
+Results open to the unified report. It first answers which repositories, internal systems/endpoints, and websites need attention, then shows the important problems and next actions before technical metrics. A readable HTML report has one primary save action; JSON and specialist formats remain secondary.
 
 ## 4. Real scan semantics
 
 ### 4.1 Website and API
 
-The recommended quick profile checks one exact URL origin: scheme, host, and port. The path the user entered is retained as context, but the profile may request a small fixed set of reviewed paths on that origin. Review states this before Start. A user authorized for only one path must not use the origin-wide profile.
+The recommended quick profile checks one exact URL origin: scheme, host, and port. The path the user entered is retained as context, but upstream templates may request other paths on that same origin. Review states this before Start. A user authorized for only one path must not use the origin-wide profile.
 
-The default profile performs a bounded set of GET requests for common exposed files, debug endpoints, and unsafe published configuration. Its scanner, pinned template revision, exact template IDs, rate, concurrency, request budget, and timeout are product defaults rather than beginner inputs.
+The pinned Nuclei template snapshot owns vulnerability and technology coverage. The launcher mechanically admits its bounded read-only HTTP templates, then Nuclei automatic scan performs Wappalyzer and upstream technology detection before selecting matching vulnerability and exposure templates. The product does not maintain a hand-picked vendor, technology, or CVE list. The selected profile, pinned template revision, rate, concurrency, per-request timeout, and execution ceiling are product defaults rather than beginner inputs.
 
-It does not crawl other hosts, follow redirects, authenticate, submit forms or payloads, use exploit steps, or imply coverage of every page and API workflow. A zero-match result means only that the displayed fixed checks did not match.
+The profile does not crawl other hosts, follow redirects, authenticate, submit forms or request bodies, use out-of-band callbacks, headless flows, fuzzing, credential attacks, uploads, denial-of-service, or exploit-oriented templates. Positive findings retain the upstream template ID, severity, evidence, and remediation. A zero-match result means only that Nuclei completed its applicability-driven scan and returned no findings; it does not mean every eligible template ran or every page and API workflow was tested.
 
 ### 4.2 Local project
 
@@ -151,6 +162,8 @@ The recommended profile creates a bounded read-only snapshot of the chosen folde
 
 The product does not modify, build, execute, upload, commit, or push the project. Unsupported languages and missing manifests are visible limits, not clean results.
 
+Repository ignore rules still prune ordinary ignored files and generated directories. Common secret-bearing regular files in source directories, including `.env` variants, private keys, registry/auth configuration, and `*.tfvars`, remain in the bounded snapshot so the upstream secret scanners can inspect them; ignored dependency, build, cache, and VCS directories are not reopened.
+
 ### 4.3 Local service
 
 A connection observation answers only whether one address and port accepted a TCP connection, refused it, or did not answer in time. It is labeled **Connection test** and never becomes a vulnerability finding.
@@ -159,7 +172,19 @@ A local-service security scan identifies an applicable protocol and runs at leas
 
 ### 4.4 Public, internal, AI, and advanced targets
 
-Public and internal scans contact only displayed approved targets and ports. Quick discovery identifies services; meaningful value begins when a service-aware or vulnerability check completes. Larger ranges are split into visible bounded work without silent sampling or truncation.
+Public and internal scans contact only displayed approved targets and ports. Quick discovery identifies services; meaningful value begins when a service-aware or vulnerability check completes.
+
+The internal-system path accepts any individually approved server, workstation, network appliance, or other TCP-speaking system by exact hostname or IP address. The beginner does not choose a vendor, model, operating system, scanner, or list of product rules. The default profile shows and freezes these common TCP ports before Start: 22, 23, 25, 80, 443, 445, 3389, 5900, 8080, and 8443. Advanced users may replace that list with up to 64 exact ports for the same host. CIDRs and neighboring hosts remain inventory-only unless the user adds and approves each exact system.
+
+The pinned Greenbone Community Feed drives product and vulnerability selection. For this profile, the launcher mechanically selects current, non-deprecated, unauthenticated remote `gather_info` VTs and lets Greenbone's upstream dependency, service-detection, required-key, and required-port logic decide which checks apply. It excludes local security checks, brute-force and default-account checks, credentials, policy/compliance families, Nmap NSE and alternative port scanners. It also excludes every `attack`, `mixed_attack`, `denial`, `destructive_attack`, `kill_host`, and `flood` VT category. The launcher keeps `safe_checks` and upstream optimization enabled, supplies no credentials, and confines traffic to the exact approved host and ports.
+
+Vendor and product names come only from upstream detection evidence. They never select a product-owned branch or vendor-specific wrapper. Updating the pinned feed updates the mechanically derived remote profile without copying detector logic into the application.
+
+A scheduled upstream profile is not proof that every VT executed. Greenbone skips checks whose service, product, key, or port prerequisites are absent, and its current result API does not provide a complete per-VT execution ledger. Positive findings retain their upstream OID, family, severity, evidence, and solution. A zero-finding result says only that Greenbone completed its applicability-driven scan of the displayed ports and returned no findings; it does not claim every feed check ran, whole-host coverage, authenticated patch inventory, or a secure device.
+
+Previously saved exact HTTPS, SSH, RDP, VNC, SMTP, and Telnet profiles keep their original single-service scope and remain runnable. They are compatibility records, not the new beginner setup, and are never silently widened into the generic host profile.
+
+One IT-environment run may contain local repository checks, internal endpoint checks, and website checks at the same time. The execution plan binds each upstream scanner to only its applicable approved assets. An engine selected for one asset never expands to every compatible asset, and a scanner failure for one asset never suppresses completed sibling results.
 
 An AI application scan checks selected code, dependencies, secrets, prompts, configuration, and deployment files the product can inspect. It does not imply model-behavior or jailbreak testing unless those activities ran.
 
@@ -194,20 +219,23 @@ Runtime availability affects only dependent checks. Existing projects, results, 
 
 ## 6. Unified professional report
 
-Every run produces one report model used by live Results, final Results, reopen, preview, and readable export. It is professional because it is consistent, evidence-based, prioritized, and actionable—not because it mirrors an external framework.
+Every run produces one report model used by live Results, final Results, reopen, preview, and readable export. A combined IT-environment run is one report, not separate reports that the user must mentally merge. Every requested repository, website, internal system, legacy service endpoint, or inventory-only item has one asset row derived from its own findings, completed checks, and coverage gaps. It is professional because it is consistent, evidence-based, prioritized, and actionable—not because it mirrors an external framework.
 
 ### 6.1 First layer
 
 Without opening technical details, the user can answer:
 
-1. What needs attention first?
-2. What could happen if I ignore it?
-3. What is the smallest practical next step?
-4. How can I verify the fix?
-5. What exactly was checked and not checked?
-6. Is the scan still running or final?
+1. Which assets have vulnerabilities or other security problems?
+2. What needs attention first?
+3. What could happen if I ignore it?
+4. What is the smallest practical next step?
+5. How can I verify the fix?
+6. What exactly was checked and not checked for each asset?
+7. Is the scan still running or final?
 
 Each priority item shows severity, confidence, affected target/location, plain-language impact, next action, and verification guidance. Priority is transparent ordering, not a pseudo-precise score.
+
+The asset summary gives every requested asset exactly one beginner-readable state: **problems found**, **no problems in completed checks**, **incomplete or failed**, or **not tested**. A finding linked to multiple assets counts for each affected asset. “No problems” applies only to completed security checks; discovery-only or connection-only work cannot earn that state.
 
 Reachability inventory such as an open port or responding HTTP service appears in a separate **Observed services — not vulnerabilities** section. It is not counted as a problem, placed in remediation priorities, or given a fix workflow merely because it shares the saved-result pipeline.
 
@@ -255,7 +283,7 @@ The strongest evidence is an observed user journey with an actual supported scan
 
 A beginner-path change is complete when the maintained product demonstrates:
 
-1. URL or folder selection without unnecessary fields;
+1. URL, folder, or mixed IT-environment selection without unnecessary fields;
 2. one focused Review and Start step;
 3. at least one real security-relevant upstream check;
 4. a durable unified report with an actionable result;
@@ -266,10 +294,10 @@ Connectivity-only fixtures prove connectivity handling, not vulnerability scanni
 
 Unless the product owner directs otherwise, work is ordered by user value:
 
-1. Make website and local-project first scans short, real, and reliable.
-2. Remove naming, project-management, runtime, and navigation detours before Start.
-3. Deliver the unified actionable report as checks finish.
-4. Improve recovery, speed, scanner coverage, and upstream currency for those paths.
-5. Expand advanced targets without regressing the first two paths.
+1. Make the mixed IT-environment, website, and local-project scans short, real, and reliable.
+2. Keep the supported repository, website, and generic exact-host paths reliable together; broaden scanner coverage through pinned upstream profiles rather than product-owned vendor detectors.
+3. Remove naming, project-management, runtime, and navigation detours before Start.
+4. Deliver the unified actionable report as checks finish.
+5. Improve recovery, speed, scanner coverage, and upstream currency without regressing the beginner paths.
 
 Version labels, publication ceremony, certification, framework mapping, and compliance positioning are outside this priority order unless the product owner explicitly requests them. Existing implementation and evidence in those areas remain intact.

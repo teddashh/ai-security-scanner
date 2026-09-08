@@ -1333,6 +1333,11 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
         if !finding.observation_details.is_empty() {
             finding.observation_details = vec!["[redacted observation detail]".into()];
         }
+        for reference in &mut finding.evidence_references {
+            if reference.location.is_some() {
+                reference.location = Some("[redacted location]".into());
+            }
+        }
         // Both carry engine-authored text. `verification_guidance` names the
         // source rule, and the network engines build a rule id out of the
         // scanned address -- so leaving these out of this pass put a private
@@ -1457,6 +1462,9 @@ fn redact_finding(finding: &mut Finding, replacements: &[(String, String)]) {
     redact_known_literals(&mut finding.recommended_expert_type, replacements);
     for evidence in &mut finding.evidence {
         evidence.summary = "[redacted evidence summary]".into();
+        if evidence.location.is_some() {
+            evidence.location = Some("[redacted location]".into());
+        }
         evidence.pointer = None;
         evidence.redacted = true;
     }
@@ -2492,6 +2500,7 @@ mod tests {
             created_at: time,
             completed_at: Some(time),
             request_outcome: None,
+            report_asset_snapshots: Vec::new(),
             knowledge_cutoff: time,
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),
@@ -2567,6 +2576,110 @@ mod tests {
         "CURRENT_ASSET_DISPLAY_CONTEXT_SENTINEL_48e7b34a";
     const OTHER_RUN_REPORT_SENTINEL: &str = "RUN_TWO_REPORT_SENTINEL_7d7f2d60";
 
+    #[test]
+    fn internal_device_limitations_use_the_same_shared_report_for_live_reopen_and_export() {
+        let temp = tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let mut case = fixture(&artifact_root, false);
+        case.assets[0].kind = AssetKind::WebService;
+        case.assets[0].metadata.insert(
+            "declared_web_service".into(),
+            serde_json::json!({
+                "protocol": "https",
+                "port": 443,
+                "path": "/",
+                "scan_profile": "internal_device_https",
+            }),
+        );
+        case.scan_runs[0].engine_runs[0].engine_id = "greenbone".into();
+        case.scan_runs[0].engine_runs[0].phase = "completed".into();
+        case.scan_runs[0].engine_runs[0].exit_code = Some(0);
+        let allowed_template_ids = [
+            "1.3.6.1.4.1.25623.1.0.111012",
+            "1.3.6.1.4.1.25623.1.0.117274",
+            "1.3.6.1.4.1.25623.1.0.802087",
+            "1.3.6.1.4.1.25623.1.0.108094",
+            "1.3.6.1.4.1.25623.1.0.108147",
+            "1.3.6.1.4.1.25623.1.0.108022",
+            "1.3.6.1.4.1.25623.1.0.103440",
+            "1.3.6.1.4.1.25623.1.0.103955",
+            "1.3.6.1.4.1.25623.1.0.105880",
+            "1.3.6.1.4.1.25623.1.0.150710",
+            "1.3.6.1.4.1.25623.1.0.150749",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let now = case.scan_runs[0].created_at;
+        let external_scope = ExternalScopeGrant {
+            id: "external-device".into(),
+            case_id: case.id.clone(),
+            asset_id: "asset-1".into(),
+            target: CanonicalTarget::Hostname("private.example.test".into()),
+            ports: BTreeSet::from([443]),
+            protocol: TransportProtocol::Https,
+            activity: ExternalActivity::ActiveExternal,
+            rate_policy: RatePolicy {
+                requests_per_second: 2,
+                concurrency: 1,
+                timeout_seconds: 15,
+            },
+            template_policy: TemplatePolicy::conservative(
+                "greenbone-community-feed@b26d7237d56b7cf85e6ace2b9351e7851461b3a8",
+                allowed_template_ids,
+            ),
+            asserted_authority: "Approved internal endpoint".into(),
+            approved_by: "Target owner".into(),
+            approved_at: now,
+            expires_at: now + chrono::Duration::hours(1),
+            allow_sensitive_networks: true,
+        };
+        case.scan_runs[0].scope_grant_ids = vec!["grant-device".into()];
+        case.scan_runs[0].scope_grant_snapshots = vec![ScopeGrant {
+            id: "grant-device".into(),
+            asset_id: "asset-1".into(),
+            permission: ScanPermission::ActiveExternalTesting,
+            confirmed_by: "Target owner".into(),
+            confirmed_at: now,
+            expires_at: Some(now + chrono::Duration::hours(1)),
+            authorization_reference: Some("Approved internal endpoint".into()),
+            notes: None,
+            external_scope: Some(external_scope),
+        }];
+
+        let live = build_beginner_master_report(&case, "run-1").unwrap();
+        let exported = beginner_report_for_export(&case, "run-1", RedactionProfile::None).unwrap();
+        assert_eq!(exported, live);
+        let limitation = live
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension == "device product and firmware vulnerability coverage")
+            .expect("live report keeps the device-profile limitation");
+        assert_eq!(limitation.target_asset_ids, vec!["asset-1"]);
+        assert!(limitation.reason.contains("no device product or firmware"));
+
+        let reopened: AssessmentCase =
+            serde_json::from_slice(&serde_json::to_vec(&case).unwrap()).unwrap();
+        assert_eq!(
+            beginner_report_for_export(&reopened, "run-1", RedactionProfile::None).unwrap(),
+            live
+        );
+        let redacted =
+            beginner_report_for_export(&reopened, "run-1", RedactionProfile::Standard).unwrap();
+        let redacted_limitation = redacted
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension == "device product and firmware vulnerability coverage")
+            .expect("standard export keeps the same limitation");
+        assert_eq!(redacted_limitation.kind, limitation.kind);
+        assert_eq!(redacted_limitation.task_id, limitation.task_id);
+        assert_eq!(
+            redacted_limitation.target_asset_ids,
+            limitation.target_asset_ids
+        );
+        assert_eq!(redacted_limitation.reason, limitation.reason);
+    }
+
     fn add_legacy_selected_run_projection_fixture(case: &mut AssessmentCase) {
         let artifact = case.raw_artifacts[0].clone();
         let finding_id = "finding-run-1-legacy".to_owned();
@@ -2599,6 +2712,7 @@ mod tests {
                 result_pointer_sha256: None,
                 observed_at: artifact.created_at,
                 summary: "Original run-one evidence".into(),
+                location: None,
                 artifact_id: artifact.id.clone(),
                 artifact_sha256: artifact.sha256.clone(),
                 pointer: None,
@@ -2694,6 +2808,7 @@ mod tests {
                 result_pointer_sha256: None,
                 observed_at: time,
                 summary: OTHER_RUN_REPORT_SENTINEL.into(),
+                location: None,
                 artifact_id: "artifact-2".into(),
                 artifact_sha256: sha256_bytes(bytes),
                 pointer: None,
@@ -2837,6 +2952,7 @@ mod tests {
                     result_pointer_sha256: None,
                     observed_at: time,
                     summary: "Independent fixture evidence".into(),
+                    location: None,
                     artifact_id: artifact.id.clone(),
                     artifact_sha256: artifact.sha256.clone(),
                     pointer: None,
@@ -3194,6 +3310,7 @@ mod tests {
                 result_pointer_sha256: None,
                 observed_at: artifact.created_at,
                 summary: "Observed".into(),
+                location: None,
                 artifact_id: artifact.id.clone(),
                 artifact_sha256: artifact.sha256.clone(),
                 pointer: Some("/result/0".into()),
@@ -3742,6 +3859,7 @@ mod tests {
                 result_pointer_sha256: None,
                 observed_at: time,
                 summary: SENTINEL.into(),
+                location: Some(SENTINEL.into()),
                 artifact_id: "artifact-1".into(),
                 artifact_sha256: case.raw_artifacts[0].sha256.clone(),
                 pointer: Some(SENTINEL.into()),

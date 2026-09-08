@@ -72,14 +72,14 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/semgrep/Dockerfile",
-    "sha256": "sha256:18e2131edee1174a0e4381f375478498c1985e1c80ca3b425584504020b87afd",
+    "sha256": "sha256:cbd0f55a2d32d880d1bf26be73076a1caf21731c1beb7b2bc21c47179a766335",
     "reason": null
   },
   "wrapper": {
     "required": true,
-    "strategy": "Invoke the pinned source build through the project-owned launcher against only the read-only case workspace and embedded rule pack.",
+    "strategy": "Invoke the pinned OSS source build against only the read-only case workspace and the checksum-verified upstream offline security rule pack.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:8ae5ab14f6c147f166017e0826014c01323217adc278b0358305b880c9d43df6"
+    "launcher_sha256": "sha256:07e94433dd47cd9bc910bdba8fe331757623599e0390b4e76d4efae1010a647a"
   },
   "command": [
     "--engine",
@@ -97,7 +97,7 @@
   },
   "license": {
     "disposition": "source_offer",
-    "rationale": "The managed image is built from the pinned LGPL-2.1-or-later source closure and carries corresponding source plus the project source offer.",
+    "rationale": "The managed image is built from the pinned LGPL-2.1-or-later source closure and carries corresponding source; the separate pinned upstream rule license and source records are preserved in the image.",
     "source_offer_path": "engines/images/semgrep/SOURCE-OFFER.md"
   },
   "blockers": [],

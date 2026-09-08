@@ -7,6 +7,7 @@ import {
   localizedRequestedLimitName,
 } from "../../src/coverageDimensionPresentation.ts";
 import {
+  coverageGapProse,
   localizedRequestedLimitValue,
   testedObservationProse,
 } from "../../src/findingNarrative.ts";
@@ -29,16 +30,26 @@ import {
 // directly, unredacted, so export-only strings never reach this localizer.
 // Widening this to `export.rs` would demand translations for strings no reader
 // ever sees.
-const source = readFileSync(new URL("../../src-tauri/src/beginner_report.rs", import.meta.url), "utf8");
+const source = readFileSync(
+  new URL("../../src-tauri/src/beginner_report.rs", import.meta.url),
+  "utf8",
+);
 const production = source.slice(0, source.indexOf("#[cfg(test)]"));
 
 /** Every coverage dimension the backend names with a fixed string. */
 const staticDimensions = [
-  ...new Set(Array.from(production.matchAll(/\bdimension: "([^"]+)"/gu), (match) => match[1])),
+  ...new Set(
+    Array.from(
+      production.matchAll(/\bdimension: "([^"]+)"/gu),
+      (match) => match[1],
+    ),
+  ),
 ].sort();
 
 /** Every fixed tested-dimension observation the backend writes. */
-const localhostObservationStart = production.indexOf("fn localhost_observation_text");
+const localhostObservationStart = production.indexOf(
+  "fn localhost_observation_text",
+);
 const localhostObservationEnd = production.indexOf(
   "fn selected_run_last_durable_update",
   localhostObservationStart,
@@ -83,7 +94,9 @@ const testedObservations = [
 const FORMAT_HOLE = /\{[^{}]*\}/gu;
 /** A trailing "(…)" hole is a count everywhere the backend writes one. */
 const fillHoles = (frame: string): string =>
-  frame.replace(/\((\{[^{}]*\})\)$/u, "(3)").replaceAll(FORMAT_HOLE, "cloudquery");
+  frame
+    .replace(/\((\{[^{}]*\})\)$/u, "(3)")
+    .replaceAll(FORMAT_HOLE, "cloudquery");
 const composedDimensions = [
   ...new Set([
     ...Array.from(
@@ -96,7 +109,8 @@ const composedDimensions = [
       ),
       (match) => match[1] ?? "",
     ),
-  ])]
+  ]),
+]
   // `"{}: {dimension}"` is `append_task_gap`'s frame, not a name; its six
   // fragments are enumerated below. `"{}: results for {provider} {identifier}"`
   // is the unattributed row, which `findingUnattributedGap` composes from the
@@ -105,7 +119,9 @@ const composedDimensions = [
   .map(fillHoles)
   .concat(
     Array.from(
-      production.matchAll(/CoverageGapKind::\w+,\s*\n\s*"([a-z][^"]*(?:dimension|dimensions))",/gu),
+      production.matchAll(
+        /CoverageGapKind::\w+,\s*\n\s*"([a-z][^"]*(?:dimension|dimensions))",/gu,
+      ),
       (match) => `cloudquery: ${match[1]}`,
     ),
   )
@@ -115,7 +131,10 @@ const composedDimensions = [
 test("the backend's dimension vocabulary was found", () => {
   // Guards the extraction itself: a regex that silently matched nothing would
   // make every assertion below vacuously true.
-  assert.ok(staticDimensions.length >= 13, `found only ${staticDimensions.length} dimensions`);
+  assert.ok(
+    staticDimensions.length >= 13,
+    `found only ${staticDimensions.length} dimensions`,
+  );
   assert.ok(staticDimensions.includes("requested scan stage"));
   assert.ok(staticDimensions.includes("partly completed planned work units"));
 
@@ -130,7 +149,10 @@ test("the backend's dimension vocabulary was found", () => {
     "cloudquery: not-tested check dimension",
     "requested check cloudquery",
   ]) {
-    assert.ok(composedDimensions.includes(expected), `${expected} was not extracted`);
+    assert.ok(
+      composedDimensions.includes(expected),
+      `${expected} was not extracted`,
+    );
   }
 });
 
@@ -141,9 +163,15 @@ test("every tested-dimension observation has a Traditional Chinese sentence", ()
     testedObservations.length >= 7,
     `found only ${testedObservations.length} observations: ${testedObservations.join(" / ")}`,
   );
-  assert.ok(testedObservations.includes("The port accepted the bounded TCP connection."));
   assert.ok(
-    testedObservations.some((observation) => observation.includes("it is not a security pass")),
+    testedObservations.includes(
+      "The port accepted the bounded TCP connection.",
+    ),
+  );
+  assert.ok(
+    testedObservations.some((observation) =>
+      observation.includes("it is not a security pass"),
+    ),
   );
 
   const untranslated = testedObservations.filter((observation) => {
@@ -160,6 +188,121 @@ test("every tested-dimension observation has a Traditional Chinese sentence", ()
   }
 });
 
+test("RDP transport coverage and its explicit limits are readable in both languages", () => {
+  const observation =
+    "The completed Greenbone task retained the exact reviewed RDP transport profile: ten TLS protocol, cipher, and certificate checks plus one check for the legacy fixed private key used by RDP 5.2 or earlier.";
+  const limit =
+    "The unauthenticated RDP transport profile checks one legacy RDP 5.2-or-earlier fixed-private-key issue, but does not inspect broader or current RDP implementation CVEs, authentication or Network Level Authentication (NLA), Windows patch level, installed packages or applications, or local host configuration.";
+  const nextAction =
+    "Keep this limitation visible; choose a separately approved host or RDP-authentication assessment when those checks are needed.";
+
+  assert.equal(
+    localizedCoverageDimension("RDP transport security checks", "zh-TW"),
+    "RDP 傳輸安全性檢查",
+  );
+  assert.equal(
+    localizedCoverageDimension(
+      "RDP implementation, authentication/NLA, and endpoint host coverage",
+      "zh-TW",
+    ),
+    "RDP 實作、驗證／NLA 與端點主機涵蓋範圍",
+  );
+  assert.match(testedObservationProse("zh-TW", observation), /十項 TLS/u);
+  assert.match(testedObservationProse("zh-TW", observation), /RDP 5\.2/u);
+  assert.match(coverageGapProse("zh-TW", limit), /網路層級驗證（NLA）/u);
+  assert.match(coverageGapProse("zh-TW", limit), /更廣泛或現行/u);
+  assert.match(coverageGapProse("zh-TW", nextAction), /RDP 驗證評估/u);
+  assert.equal(testedObservationProse("en", observation), observation);
+  assert.equal(coverageGapProse("en", limit), limit);
+  assert.equal(coverageGapProse("en", nextAction), nextAction);
+});
+
+test("VNC transport coverage and its explicit limits are readable in both languages", () => {
+  const observation =
+    "The completed Greenbone task retained the exact reviewed VNC transport profile containing one check for an unencrypted VNC connection.";
+  const limit =
+    "The unauthenticated VNC transport profile checks whether the VNC connection is encrypted. It does not inspect VNC implementation CVEs, authentication strength, operating-system patch level, installed packages or applications, or local host configuration. No login or desktop session was attempted.";
+  const nextAction =
+    "Keep this limitation visible; use an approved endpoint inventory or a separate authorized VNC assessment when those checks are needed.";
+
+  assert.equal(
+    localizedCoverageDimension("VNC transport security check", "zh-TW"),
+    "VNC 傳輸安全性檢查",
+  );
+  assert.equal(
+    localizedCoverageDimension(
+      "VNC implementation, authentication, and endpoint host coverage",
+      "zh-TW",
+    ),
+    "VNC 實作、驗證與端點主機涵蓋範圍",
+  );
+  assert.match(testedObservationProse("zh-TW", observation), /未加密 VNC/u);
+  assert.match(coverageGapProse("zh-TW", limit), /未嘗試登入/u);
+  assert.match(coverageGapProse("zh-TW", limit), /驗證強度/u);
+  assert.match(coverageGapProse("zh-TW", nextAction), /VNC 評估/u);
+  assert.equal(testedObservationProse("en", observation), observation);
+  assert.equal(coverageGapProse("en", limit), limit);
+  assert.equal(coverageGapProse("en", nextAction), nextAction);
+});
+
+test("SMTP coverage and its explicit mail-server limits are readable in both languages", () => {
+  const observation =
+    "The completed Greenbone task retained the exact reviewed SMTP profile: one banner, EHLO, STARTTLS, and advertised-AUTH check for an unencrypted cleartext login risk, plus ten TLS checks that apply when TLS can be negotiated. No credentials or mail were sent.";
+  const limit =
+    "The unauthenticated SMTP profile reads the banner, issues EHLO, negotiates STARTTLS when offered, and checks advertised AUTH for an unencrypted cleartext-login risk. Its TLS checks apply only when TLS can be negotiated. It does not send credentials or mail, test relay or delivery, authentication enforcement or bypass, anti-spam behavior, general mail-server implementation CVEs, operating-system patches, installed software, or local configuration.";
+  const nextAction =
+    "Keep this limitation visible; use a separately approved mail-server assessment or endpoint inventory when those checks are needed.";
+
+  assert.equal(
+    localizedCoverageDimension("SMTP cleartext-login and TLS security checks", "zh-TW"),
+    "SMTP 明文登入與 TLS 安全性檢查",
+  );
+  assert.equal(
+    localizedCoverageDimension(
+      "SMTP server behavior, implementation, and endpoint host coverage",
+      "zh-TW",
+    ),
+    "SMTP 伺服器行為、實作與端點主機涵蓋範圍",
+  );
+  assert.match(testedObservationProse("zh-TW", observation), /未送出帳號或密碼/u);
+  assert.match(testedObservationProse("zh-TW", observation), /沒有寄信/u);
+  assert.match(coverageGapProse("zh-TW", limit), /relay 或投遞/u);
+  assert.match(coverageGapProse("zh-TW", limit), /一般郵件伺服器實作 CVE/u);
+  assert.match(coverageGapProse("zh-TW", nextAction), /郵件伺服器評估/u);
+  assert.equal(testedObservationProse("en", observation), observation);
+  assert.equal(coverageGapProse("en", limit), limit);
+  assert.equal(coverageGapProse("en", nextAction), nextAction);
+});
+
+test("Telnet coverage and its explicit authentication limits are readable in both languages", () => {
+  const observation =
+    "The completed Greenbone task retained the exact reviewed Telnet profile, which observes whether a login or password prompt is offered without TLS. No username or password was sent and no login was attempted.";
+  const limit =
+    "The unauthenticated Telnet profile observes whether a login or password prompt is offered without TLS. It sends no username or password and does not log in; it does not test default credentials, authentication bypass, Telnet implementation CVEs, operating-system patches, installed software, or local configuration.";
+  const nextAction =
+    "Keep this limitation visible; use a separately approved authentication assessment or endpoint inventory when those checks are needed.";
+
+  assert.equal(
+    localizedCoverageDimension("Telnet cleartext-login security check", "zh-TW"),
+    "Telnet 明文登入安全性檢查",
+  );
+  assert.equal(
+    localizedCoverageDimension(
+      "Telnet authentication, implementation, and endpoint host coverage",
+      "zh-TW",
+    ),
+    "Telnet 驗證、實作與端點主機涵蓋範圍",
+  );
+  assert.match(testedObservationProse("zh-TW", observation), /未送出帳號或密碼/u);
+  assert.match(testedObservationProse("zh-TW", observation), /沒有嘗試登入/u);
+  assert.match(coverageGapProse("zh-TW", limit), /預設帳密/u);
+  assert.match(coverageGapProse("zh-TW", limit), /Telnet 實作 CVE/u);
+  assert.match(coverageGapProse("zh-TW", nextAction), /驗證評估/u);
+  assert.equal(testedObservationProse("en", observation), observation);
+  assert.equal(coverageGapProse("en", limit), limit);
+  assert.equal(coverageGapProse("en", nextAction), nextAction);
+});
+
 test("the row's sentence is the backend's, not one derived from the kind", () => {
   // The backend assigns `CoverageGapKind::NotTested` to several different
   // situations and writes a distinct `reason` for each -- a check that saved
@@ -167,7 +310,9 @@ test("the row's sentence is the backend's, not one derived from the kind", () =>
   // composed from the kind is false for all but one of them and contradicts
   // the dimension rendered beside it on the same row.
   const notTestedProducers = [
-    ...production.matchAll(/CoverageGapKind::NotTested,\s*\n\s*"([^"]+)",\s*\n\s*"([^"]+)"/gu),
+    ...production.matchAll(
+      /CoverageGapKind::NotTested,\s*\n\s*"([^"]+)",\s*\n\s*"([^"]+)"/gu,
+    ),
   ].map((match) => ({ dimension: match[1], reason: match[2] }));
   assert.ok(
     notTestedProducers.length >= 2,
@@ -198,8 +343,9 @@ test("the row's sentence is the backend's, not one derived from the kind", () =>
 test("every dimension the backend names has a Traditional Chinese label", () => {
   // Matched without the separator so this still fires if the fallback is ever
   // reshaped back into a label that simply replaces the name.
-  const untranslated = [...staticDimensions, ...composedDimensions].filter((dimension) =>
-    localizedCoverageDimension(dimension, "zh-TW").startsWith("涵蓋範圍細節"),
+  const untranslated = [...staticDimensions, ...composedDimensions].filter(
+    (dimension) =>
+      localizedCoverageDimension(dimension, "zh-TW").startsWith("涵蓋範圍細節"),
   );
   assert.deepEqual(
     untranslated,
@@ -215,13 +361,30 @@ test("a composed name is translated without losing the identifier it carries", (
   // only the second half, and passed while every composed name was English.
   for (const dimension of composedDimensions) {
     const label = localizedCoverageDimension(dimension, "zh-TW");
-    const identifier = dimension.includes("requested check ") ? "cloudquery" : "cloudquery";
-    assert.ok(label.includes(identifier), `${dimension} lost its identifier: ${label}`);
-    assert.ok(/\p{Script=Han}/u.test(label), `${dimension} was not translated: ${label}`);
+    const identifier = dimension.includes("requested check ")
+      ? "cloudquery"
+      : "cloudquery";
+    assert.ok(
+      label.includes(identifier),
+      `${dimension} lost its identifier: ${label}`,
+    );
+    assert.ok(
+      /\p{Script=Han}/u.test(label),
+      `${dimension} was not translated: ${label}`,
+    );
     // The English kind is what a fallback would have left behind.
-    const kind = dimension.replaceAll("cloudquery", "").replaceAll(/[:()\d]/gu, "").trim();
-    assert.ok(kind.length > 0, `the extraction produced no kind for ${dimension}`);
-    assert.ok(!label.includes(kind), `${dimension} kept its English wording: ${label}`);
+    const kind = dimension
+      .replaceAll("cloudquery", "")
+      .replaceAll(/[:()\d]/gu, "")
+      .trim();
+    assert.ok(
+      kind.length > 0,
+      `the extraction produced no kind for ${dimension}`,
+    );
+    assert.ok(
+      !label.includes(kind),
+      `${dimension} kept its English wording: ${label}`,
+    );
   }
 });
 
@@ -231,8 +394,15 @@ test("two checks reporting the same kind of gap stay apart", () => {
   const labels = ["trivy", "prowler", "gitleaks"].map((engine) =>
     localizedCoverageDimension(`${engine} failed work units (2)`, "zh-TW"),
   );
-  assert.equal(new Set(labels).size, 3, `rows collapsed: ${labels.join(" / ")}`);
-  assert.ok(labels.every((label) => label.includes("（2）")), labels.join(" / "));
+  assert.equal(
+    new Set(labels).size,
+    3,
+    `rows collapsed: ${labels.join(" / ")}`,
+  );
+  assert.ok(
+    labels.every((label) => label.includes("（2）")),
+    labels.join(" / "),
+  );
 });
 
 test("no two dimensions collapse into the same Traditional Chinese label", () => {
@@ -245,7 +415,9 @@ test("no two dimensions collapse into the same Traditional Chinese label", () =>
     const label = localizedCoverageDimension(dimension, "zh-TW");
     byLabel.set(label, [...(byLabel.get(label) ?? []), dimension]);
   }
-  const collisions = [...byLabel.entries()].filter(([, dimensions]) => dimensions.length > 1);
+  const collisions = [...byLabel.entries()].filter(
+    ([, dimensions]) => dimensions.length > 1,
+  );
   assert.deepEqual(
     collisions,
     [],
@@ -265,7 +437,7 @@ test("a name this product did not author keeps its own text", () => {
   // Chinese label substituted for it discards the only part that identified the
   // row. Untranslated detail beats fluent erasure.
   for (const authored of [
-    "Excluded by the project owner: legacy VPN appliance",
+    "Excluded by the project owner: legacy network device",
     "S3 buckets in the archive account",
   ]) {
     assert.match(
@@ -286,11 +458,20 @@ test("limits belonging to different grants stay attributable", () => {
     "asset-secondary approved ports",
     "asset-lab approved ports",
   ];
-  const labels = names.map((name) => localizedRequestedLimitName(name, "zh-TW"));
-  assert.equal(new Set(labels).size, names.length, `limits collapsed: ${labels.join(" / ")}`);
+  const labels = names.map((name) =>
+    localizedRequestedLimitName(name, "zh-TW"),
+  );
+  assert.equal(
+    new Set(labels).size,
+    names.length,
+    `limits collapsed: ${labels.join(" / ")}`,
+  );
   for (const [index, label] of labels.entries()) {
     assert.match(label, /允許檢查的連接埠/u);
-    assert.ok(label.includes(names[index].replace(" approved ports", "")), label);
+    assert.ok(
+      label.includes(names[index].replace(" approved ports", "")),
+      label,
+    );
   }
 });
 
@@ -331,7 +512,10 @@ test("a composed limit whose identifier is empty gains no empty decoration", () 
  */
 const limitNames = [
   ...new Set([
-    ...Array.from(production.matchAll(/\bname: "([^"]+)"\.into\(\)/gu), (match) => match[1] ?? ""),
+    ...Array.from(
+      production.matchAll(/\bname: "([^"]+)"\.into\(\)/gu),
+      (match) => match[1] ?? "",
+    ),
     ...Array.from(
       production.matchAll(/\bname: format!\(\s*"([^"]+)"/gu),
       (match) => (match[1] ?? "").replaceAll(FORMAT_HOLE, "asset-primary"),
@@ -342,7 +526,9 @@ const limitNames = [
 const fillLimitFrame = (frame: string): string => {
   if (frame.includes("per second")) {
     let positional = 0;
-    return frame.replaceAll(FORMAT_HOLE, () => positional++ === 0 ? "5" : "2");
+    return frame.replaceAll(FORMAT_HOLE, () =>
+      positional++ === 0 ? "5" : "2",
+    );
   }
   return frame
     .replaceAll("{port}", "443")
@@ -354,32 +540,49 @@ const fillLimitFrame = (frame: string): string => {
 
 /** Every formatted limit value, kept beside the name that determines its role. */
 const formattedLimitValues = Array.from(
-  production.matchAll(/RequestedLimit\s*\{([\s\S]*?)source:\s*RequestedLimitSource::/gu),
+  production.matchAll(
+    /RequestedLimit\s*\{([\s\S]*?)source:\s*RequestedLimitSource::/gu,
+  ),
   (match) => match[1] ?? "",
 ).flatMap((body) => {
   const fixedName = body.match(/\bname:\s*"([^"]+)"\.into\(\)/u)?.[1];
   const composedName = body.match(/\bname:\s*format!\(\s*"([^"]+)"/u)?.[1];
   const valueFrame = body.match(/\bvalue:\s*format!\(\s*"([^"]+)"/u)?.[1];
   if (!valueFrame || (!fixedName && !composedName)) return [];
-  return [{
-    name: fixedName ?? (composedName ?? "").replaceAll(FORMAT_HOLE, "asset-primary"),
-    frame: valueFrame,
-    value: fillLimitFrame(valueFrame),
-  }];
+  return [
+    {
+      name:
+        fixedName ??
+        (composedName ?? "").replaceAll(FORMAT_HOLE, "asset-primary"),
+      frame: valueFrame,
+      value: fillLimitFrame(valueFrame),
+    },
+  ];
 });
 
-const unitBearingLimitValues = formattedLimitValues.filter(({ value }) => /[A-Za-z]/u.test(value));
+const unitBearingLimitValues = formattedLimitValues.filter(({ value }) =>
+  /[A-Za-z]/u.test(value),
+);
 
 test("every limit name the backend writes is translated around its identifier", () => {
-  assert.ok(limitNames.length >= 8, `found only ${limitNames.length} limit names: ${limitNames.join(", ")}`);
+  assert.ok(
+    limitNames.length >= 8,
+    `found only ${limitNames.length} limit names: ${limitNames.join(", ")}`,
+  );
   assert.ok(limitNames.includes("endpoint"));
   assert.ok(limitNames.includes("asset-primary approved ports"));
   for (const name of limitNames) {
     const label = localizedRequestedLimitName(name, "zh-TW");
-    assert.ok(!label.startsWith("本輪使用的限制："), `${name} reached a Chinese reader as English: ${label}`);
+    assert.ok(
+      !label.startsWith("本輪使用的限制："),
+      `${name} reached a Chinese reader as English: ${label}`,
+    );
     assert.match(label, /\p{Script=Han}/u, label);
     if (name.startsWith("asset-primary")) {
-      assert.ok(label.includes("asset-primary"), `${name} lost its identifier: ${label}`);
+      assert.ok(
+        label.includes("asset-primary"),
+        `${name} lost its identifier: ${label}`,
+      );
     }
     assert.equal(localizedRequestedLimitName(name, "en"), name);
   }
@@ -390,7 +593,11 @@ test("known requested-limit units are translated without changing their numbers"
     ["connection timeout", "250 ms", "250 毫秒"],
     ["application payload", "64 bytes", "64 位元組"],
     ["gitleaks execution timeout", "600 seconds", "600 秒"],
-    ["asset-primary request rate", "5 per second, concurrency 2", "每秒 5 次，並行 2"],
+    [
+      "asset-primary request rate",
+      "5 per second, concurrency 2",
+      "每秒 5 次，並行 2",
+    ],
   ] as const) {
     assert.equal(localizedRequestedLimitValue(name, value, "zh-TW"), expected);
     assert.equal(localizedRequestedLimitValue(name, value, "en"), value);
@@ -412,15 +619,24 @@ test("every unit-bearing limit value frame in the backend is translated", () => 
     unitBearingLimitValues.length >= 5,
     `found only ${unitBearingLimitValues.length} unit-bearing frames: ${unitBearingLimitValues.map(({ frame }) => frame).join(" / ")}`,
   );
-  assert.ok(new Set(unitBearingLimitValues.map(({ value }) => value)).size >= 4);
+  assert.ok(
+    new Set(unitBearingLimitValues.map(({ value }) => value)).size >= 4,
+  );
   for (const { name, value } of unitBearingLimitValues) {
     const translated = localizedRequestedLimitValue(name, value, "zh-TW");
-    assert.notEqual(translated, value, `${name} kept its English unit: ${value}`);
+    assert.notEqual(
+      translated,
+      value,
+      `${name} kept its English unit: ${value}`,
+    );
     assert.match(translated, /\p{Script=Han}/u, translated);
     assert.equal(localizedRequestedLimitValue(name, value, "en"), value);
   }
 });
 
 test("an unrecognized limit name keeps its text instead of being replaced", () => {
-  assert.match(localizedRequestedLimitName("prowler concurrency ceiling", "zh-TW"), /prowler concurrency ceiling/u);
+  assert.match(
+    localizedRequestedLimitName("prowler concurrency ceiling", "zh-TW"),
+    /prowler concurrency ceiling/u,
+  );
 });

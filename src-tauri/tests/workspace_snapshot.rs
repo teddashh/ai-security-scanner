@@ -315,6 +315,20 @@ fn snapshot_is_deterministic_private_source_grounded_and_working_tree_only() {
             .collect::<Vec<_>>(),
         ["workspace_snapshot_id", "workspace_snapshot_sha256"]
     );
+
+    let same_content_different_repository = create_workspace_snapshot(
+        &artifact_root,
+        "case-123",
+        "source-789",
+        &source,
+        small_limits(),
+    )
+    .expect("same content selected as another repository");
+    assert_eq!(
+        first.reference.sha256,
+        same_content_different_repository.reference.sha256
+    );
+    assert_ne!(first.asset.id, same_content_different_repository.asset.id);
     assert_eq!(first.manifest.excluded_entries, [".git"]);
     assert_eq!(
         first.manifest.exclusion_policy,
@@ -474,6 +488,135 @@ fn repository_snapshot_respects_nested_gitignore_negation_and_build_output_rules
         }),
         cfg!(unix)
     );
+}
+
+#[test]
+fn repository_snapshot_keeps_ignored_secret_candidates_without_opening_generated_trees() {
+    let (_temp, artifact_root, source) = roots();
+    initialize_git_repository(&source);
+    fs::write(
+        source.join(".gitignore"),
+        b".env\n.env.*\n.npmrc\n*.tfvars\nignored.txt\nnode_modules/\nbuild/\n",
+    )
+    .unwrap();
+    git_add(&source, &[".gitignore"]);
+
+    fs::write(source.join(".env"), b"EXAMPLE_TOKEN=fixture-only\n").unwrap();
+    fs::write(source.join(".env.local"), b"EXAMPLE_LOCAL=fixture-only\n").unwrap();
+    fs::write(
+        source.join(".npmrc"),
+        b"//registry.example/:_authToken=fixture-only\n",
+    )
+    .unwrap();
+    fs::create_dir(source.join("config")).unwrap();
+    fs::write(
+        source.join("config/.env.production"),
+        b"EXAMPLE_PRODUCTION=fixture-only\n",
+    )
+    .unwrap();
+    fs::create_dir(source.join("infrastructure")).unwrap();
+    fs::write(
+        source.join("infrastructure/private.tfvars"),
+        b"example_password = \"fixture-only\"\n",
+    )
+    .unwrap();
+    fs::write(source.join("ignored.txt"), b"ordinary ignored file").unwrap();
+
+    fs::create_dir_all(source.join("node_modules/package")).unwrap();
+    fs::write(
+        source.join("node_modules/package/.env"),
+        b"GENERATED_EXAMPLE=fixture-only\n",
+    )
+    .unwrap();
+    fs::write(
+        source.join("node_modules/package/index.js"),
+        b"generated dependency",
+    )
+    .unwrap();
+    fs::create_dir_all(source.join("build/cache")).unwrap();
+    fs::write(
+        source.join("build/.env.production"),
+        b"GENERATED_BUILD_EXAMPLE=fixture-only\n",
+    )
+    .unwrap();
+    fs::write(source.join("build/cache/bundle.js"), b"generated build").unwrap();
+
+    let snapshot = create_workspace_snapshot(
+        &artifact_root,
+        "case-ignored-secret-candidates",
+        "source-ignored-secret-candidates",
+        &source,
+        small_limits(),
+    )
+    .expect("ignored secret candidates remain available within snapshot limits");
+    let paths = snapshot
+        .manifest
+        .files
+        .iter()
+        .map(|file| file.relative_path.as_str())
+        .collect::<Vec<_>>();
+
+    for expected in [
+        ".env",
+        ".env.local",
+        ".npmrc",
+        "config/.env.production",
+        "infrastructure/private.tfvars",
+    ] {
+        assert!(
+            paths.contains(&expected),
+            "missing secret candidate {expected}"
+        );
+    }
+    assert!(!paths.contains(&"ignored.txt"));
+    assert!(!paths.iter().any(|path| path.starts_with("node_modules/")));
+    assert!(!paths.iter().any(|path| path.starts_with("build/")));
+    for excluded_directory in ["node_modules", "build"] {
+        assert!(snapshot.manifest.exclusions.iter().any(|exclusion| {
+            exclusion.relative_path == excluded_directory
+                && exclusion.reason
+                    == WorkspaceSnapshotExclusionReason::RepositoryGitignoreUntracked
+        }));
+    }
+
+    let resolved = resolve_workspace_snapshot(
+        &artifact_root,
+        "case-ignored-secret-candidates",
+        &snapshot.reference,
+    )
+    .expect("snapshot with ignored secret candidates remains verifiable");
+    assert_eq!(
+        fs::read(resolved.tree_path.join(".env")).unwrap(),
+        b"EXAMPLE_TOKEN=fixture-only\n"
+    );
+}
+
+#[test]
+fn ignored_secret_candidate_still_obeys_snapshot_byte_limits() {
+    let (_temp, artifact_root, source) = roots();
+    initialize_git_repository(&source);
+    fs::write(source.join(".gitignore"), b".env\n").unwrap();
+    git_add(&source, &[".gitignore"]);
+    fs::write(source.join(".env"), vec![b'x'; 65]).unwrap();
+
+    let limits = WorkspaceSnapshotLimits {
+        max_file_bytes: 64,
+        ..small_limits()
+    };
+    let error = create_workspace_snapshot(
+        &artifact_root,
+        "case-ignored-secret-limit",
+        "source-ignored-secret-limit",
+        &source,
+        limits,
+    )
+    .expect_err("an ignored secret candidate must not bypass the per-file limit");
+
+    assert!(
+        error.to_string().contains(".env"),
+        "unexpected error: {error}"
+    );
+    assert!(snapshot_entries(&artifact_root, "case-ignored-secret-limit").is_empty());
 }
 
 #[test]

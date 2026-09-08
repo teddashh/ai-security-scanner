@@ -52,6 +52,18 @@ test("both locales preserve optional preparation, behavior, and boundary details
   }
 });
 
+test("the combined environment path asks beginners for exact hosts instead of service categories", () => {
+  const english = startPageCopy.en.cards.internal_it_environment;
+  assert.match(english.summary, /exact internal hosts/u);
+  assert.match(english.want, /hostname or IP for each internal system/u);
+  assert.match(english.prepare, /Common ports are selected automatically/u);
+
+  const traditionalChinese = startPageCopy["zh-TW"].cards.internal_it_environment;
+  assert.match(traditionalChinese.summary, /精確內部主機/u);
+  assert.match(traditionalChinese.want, /內部系統的主機名稱或 IP/u);
+  assert.match(traditionalChinese.prepare, /自動選用常用連接埠/u);
+});
+
 test("company or team details are optional and never block scan-project creation", () => {
   assert.ok(casesPageSource.includes('Company or team name (optional)'));
   assert.ok(casesPageSource.includes('公司或團隊名稱（選填）'));
@@ -164,23 +176,33 @@ test("guided local routes choose the exact local input before case creation", ()
   });
 });
 
-test("guided public and internal target fields expose required field errors", () => {
+test("guided public and combined environment fields expose useful field errors", () => {
   assert.ok(casesPageSource.includes("publicTargetsInputRef"));
   assert.ok(casesPageSource.includes("internalTargetsInputRef"));
   assert.ok(casesPageSource.includes('kind: "missing_target", target: "public"'));
-  assert.ok(casesPageSource.includes('kind: "missing_target", target: "internal"'));
+  assert.ok(casesPageSource.includes('assets.error.kind === "missing_environment"'));
   assert.ok(casesPageSource.includes("pageCopy.publicTargetRequired"));
-  assert.ok(casesPageSource.includes("pageCopy.internalTargetRequired"));
+  assert.ok(casesPageSource.includes("pageCopy.environmentAtLeastOne"));
+  assert.ok(casesPageSource.includes("onCreateWithWorkspaces"));
+  assert.ok(casesPageSource.includes("internalHosts: environmentHosts.map"));
+  assert.ok(!casesPageSource.includes("internalDeviceEndpoints: environmentDeviceEndpoints.map"));
+  assert.ok(!casesPageSource.includes("internalEndpointServices: environmentEndpointServices.map"));
+  assert.ok(casesPageSource.includes('assets.error.kind === "internal_host"'));
+  assert.ok(casesPageSource.includes("focusEnvironmentHostInput"));
 });
 
-test("internal network detection stays an explicit bilingual suggestion", () => {
+test("internal network detection stays an explicit inventory-only bilingual suggestion", () => {
   for (const phrase of [
     "We found a likely local network",
     "找到一個可能的區域網路",
     "This computer is connected to more than one possible network, so we won't guess.",
     "這台電腦連到多個可能的網路，因此我們不會猜測",
-    "Using it only fills the box below. It does not start the scan.",
-    "使用它只會填入下方欄位，不會開始掃描",
+    "Using it only adds inventory below. It does not scan any device.",
+    "使用它只會加入下方盤點資料，不會掃描任何設備",
+    "CIDR ranges are recorded only.",
+    "This run will not contact or vulnerability-scan them",
+    "CIDR 網段只會保存為盤點資料",
+    "本次執行不會連線或掃描其弱點",
   ]) assert.ok(casesPageSource.includes(phrase), phrase);
   assert.ok(casesPageSource.includes("scannerService.detectLocalPrivateSubnets()"));
   assert.ok(casesPageSource.includes("onClick={() => useDetectedLocalNetwork(detectedLocalNetwork.target)}"));
@@ -193,13 +215,17 @@ test("local artifacts never inherit an external-contact activity", () => {
   }
 });
 
-test("only the deployed website preset begins with active vulnerability tests", () => {
+test("website and combined environment presets request real vulnerability tests", () => {
   assert.deepEqual(useCaseById("deployed_website").suggestedActivities, [
     "active_external_vulnerability_tests",
   ]);
-  for (const id of ["external_ip_or_domain", "internal_it_environment"] as const) {
-    assert.deepEqual(useCaseById(id).suggestedActivities, ["low_impact_external_checks"]);
-  }
+  assert.deepEqual(useCaseById("internal_it_environment").suggestedActivities, [
+    "local_artifact_analysis",
+    "active_external_vulnerability_tests",
+  ]);
+  assert.deepEqual(useCaseById("external_ip_or_domain").suggestedActivities, [
+    "low_impact_external_checks",
+  ]);
 });
 
 test("each artifact scenario maps to the existing case questionnaire coordinate", () => {

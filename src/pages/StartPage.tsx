@@ -50,7 +50,7 @@ interface MarketingCopy {
 const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
   en: {
     title: "Security checks",
-    description: "Choose a website or project below for the shortest useful scan. We’ll guide you to results that show what was checked, what needs attention, and what to do next.",
+    description: "Scan selected repositories, websites or APIs, and exact internal systems together. Nuclei and Greenbone identify applicable upstream checks; inventory-only ranges stay clearly marked as not tested.",
     previewDescription: "Preview mode · choose a target to review its setup.",
     localhostQuickScanAction: "Test local service connection · 127.0.0.1:9001",
     localhostQuickScanBusy: "Testing the connection…",
@@ -69,7 +69,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     controlSummary: "How scanning stays under your control",
     cards: {
       deployed_website: {
-        outcome: "Check common exposed files and debug or status endpoints with a fixed Nuclei scan, using at most 19 GET requests to the displayed website address.",
+        outcome: "Let Nuclei identify the website technology and run matching upstream vulnerability and exposure checks against the displayed website origin.",
         action: "Check a website",
       },
       external_ip_or_domain: {
@@ -77,8 +77,9 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
         action: "Check public exposure",
       },
       internal_it_environment: {
-        outcome: "Inventory reachable services on the exact internal systems you approve.",
-        action: "Check internal systems",
+        title: "Company IT environment",
+        outcome: "Check selected repositories, websites or APIs, and exact internal hosts together. Greenbone discovers services on the chosen ports and applies matching upstream checks; inventory-only ranges remain visible as not tested.",
+        action: "Scan my environment",
       },
       ai_application: {
         outcome: "Catch risky AI-generated code, exposed secrets, and vulnerable dependencies before they ship.",
@@ -109,7 +110,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
   },
   "zh-TW": {
     title: "資安檢查",
-    description: "從下方選擇網站或專案，就能走最短路徑完成有用的掃描。結果會說清楚檢查了什麼、哪些問題要先處理，以及下一步怎麼做。",
+    description: "把指定的 repo、網站或 API 與精確內部系統一起掃描。Nuclei 與 Greenbone 會判斷適用的上游檢查；僅供盤點的網段會明確標為未測試。",
     previewDescription: "預覽模式 · 選擇目標以查看掃描設定。",
     localhostQuickScanAction: "測試本機服務連線 · 127.0.0.1:9001",
     localhostQuickScanBusy: "正在測試連線…",
@@ -128,7 +129,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     controlSummary: "了解掃描如何由你控制",
     cards: {
       deployed_website: {
-        outcome: "使用固定 Nuclei 掃描檢查常見暴露檔案及除錯／狀態端點，對顯示的網站位址最多送出 19 次 GET 請求。",
+        outcome: "讓 Nuclei 辨識網站技術，並對畫面所列的網站來源範圍執行適用的上游弱點與暴露檢查。",
         action: "檢查網站",
       },
       external_ip_or_domain: {
@@ -136,8 +137,9 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
         action: "檢查對外暴露面",
       },
       internal_it_environment: {
-        outcome: "盤點你明確核准之內部系統上可連線的服務。",
-        action: "檢查內部系統",
+        title: "公司 IT 環境",
+        outcome: "把指定的 repo、網站或 API 與精確內部主機一起掃描。Greenbone 會探索所選連接埠的服務並執行適用的上游檢查；僅供盤點的網段仍會明列為未測試。",
+        action: "掃描公司環境",
       },
       ai_application: {
         outcome: "在上線前抓出 AI 生成程式碼的危險寫法、暴露秘密與有弱點的相依套件。",
@@ -181,6 +183,7 @@ export function StartPage({
 }: StartPageProps) {
   const marketing = marketingCopy[locale];
   const primaryUseCaseIds: readonly UseCaseId[] = [
+    "internal_it_environment",
     "deployed_website",
     "source_code",
   ];

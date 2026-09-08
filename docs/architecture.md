@@ -10,10 +10,10 @@ This document describes the target architecture. Component names and interfaces 
 
 ## 1. Architectural goals
 
-The architecture must support a beginner reaching a durable result quickly across independently maintained scanners while preserving these invariants:
+The architecture must support one IT user combining multiple repositories, internal devices or endpoints, and websites in one project and quickly reaching one durable report across independently maintained scanners, while preserving these invariants:
 
 1. The main workspace and saved reports remain available while disposable runtime work is prepared or repaired.
-2. A run and its known target-stage-engine tasks are persisted before runtime, gateway, image, or credential preflight.
+2. A run and its exact engine-to-asset target tasks are persisted before runtime, gateway, image, or credential preflight.
 3. Independent work fails independently and every run produces the same complete, partial, or no-checks master-report shape.
 4. High-privilege bootstrap credentials never reach scanner engines.
 5. A failed or omitted scan never becomes a passing result, and requested scope is never silently narrowed.
@@ -188,7 +188,7 @@ ScopeGrant
   revoked_at?
 ```
 
-The combined Start action records the applicable assertion together with the exact target and activity; it does not lead to a second permission screen. The backend resolves the selector to concrete targets and freezes the requested contract before contact. A later asset discovered under the same wildcard is not silently added to that run. Selecting materially deeper, more active, or wider work creates a linked child run with its own grant rather than mutating an active run.
+The combined Start action records the applicable assertion for every selected network asset together with its exact target and activity; it does not lead to a second permission screen. Local snapshots require no network assertion. The backend resolves every selector to concrete targets, freezes every requested contract, and binds each engine to only its applicable approved asset IDs before contact. A later discovered asset is not silently added to that run. Selecting materially deeper, more active, or wider work creates a linked child run with its own grant rather than mutating an active run.
 
 ### 5.5 CoverageRecord
 
@@ -307,10 +307,11 @@ Evidence
 
 The stable fingerprint is adapter-versioned. It should combine engine-independent problem identity, stable asset identity, and material location while excluding volatile prose and timestamps. A fingerprint change must be explainable during re-verification.
 
-Related findings may be grouped in an optional Advanced presentation. The beginner report does not
-depend on manual groups, and the original one-to-one mapping between engine output and evidence
-always remains reconstructable. The structures below are deferred until that Advanced workflow has
-a demonstrated human need; they are not part of the minimal durable product model.
+The beginner report may automatically correlate or deduplicate related findings for presentation,
+while the original one-to-one mapping between engine output and evidence always remains
+reconstructable. Manual group correction and history are optional Advanced features. The structures
+below are deferred until that manual workflow has a demonstrated human need; they are not required
+for the shared report's deterministic presentation.
 
 ```text
 FindingGroup
@@ -334,7 +335,7 @@ FindingGroupEvent
   occurred_at
 ```
 
-The active-group collection is a reversible presentation projection. Creating or removing a group appends an immutable event; removal only deletes the active projection. It cannot change a finding fingerprint, evidence, observation, raw artifact, workflow state, or comparison history. A finding belongs to at most one active presentation group, and automatic cross-engine merging remains out of scope.
+The active-group collection is a reversible presentation projection. Creating or removing a group appends an immutable event; removal only deletes the active projection. It cannot change a finding fingerprint, evidence, observation, raw artifact, workflow state, or comparison history. A finding belongs to at most one active presentation group. The shared report may automatically correlate or deduplicate related observations into one user-facing issue, but every source finding and its evidence remain independently traceable.
 
 ### 5.9 ControlMapping
 
@@ -429,13 +430,13 @@ The initial command surface is:
 | `update_finding_workflow` | Append a human handling decision without altering scanner evidence. |
 | `group_findings` | **Advanced/deferred:** create one reversible presentation group for two or more case-owned canonical findings. |
 | `ungroup_findings` | **Advanced/deferred:** remove only the active group projection and append a removal event. |
-| `start_scan` | In one durable mutation, apply the inline target assertion, freeze requested coverage, and persist known target-stage-engine tasks; only then preflight and start independently runnable tasks. |
+| `start_scan` | In one durable mutation, apply each selected network asset's inline assertion, freeze exact engine-to-asset coverage, and persist known target-stage-engine tasks; only then preflight and start independently runnable tasks. |
 | `pause_scan` | Request a safe checkpoint and pause where supported. |
 | `resume_scan` | Resume a paused or recoverable run. |
 | `cancel_scan` | Persist the stop request, prevent new dispatch, and acknowledge after target contact has stopped or within the task's displayed bound. Non-contacting resource cleanup continues in the background. |
 | `export_case` | Create an explicit, optionally redacted portable package. |
 | `verify_case_export` | Recompute package hashes and signature integrity without asserting result correctness. |
-| `start_rescan` | Create a new run from an existing case and selected baseline. |
+| `start_rescan` | Create a new run from an existing case and selected baseline, preserving its exact engine-to-asset bindings unless the user explicitly reviews changed scope and grants. |
 | `get_master_report` | Return the run-bound requested/executed coverage, task outcomes, findings, next steps, and technical-detail references for any run state. |
 
 Frontend controls call these typed backend commands and reload the persisted case. They must not simulate a successful finding, grouping, scope, or source mutation in browser-only state.
@@ -536,23 +537,24 @@ Before disposable dependency checks, a scan run freezes and durably commits:
 - the assessment case revision;
 - the requested target/scope contract and applicable assertion;
 - the resolved target set available at planning time;
-- selected stages and engines, including unavailable candidates;
+- selected stages and engines, including unavailable candidates, with each engine bound to its exact applicable asset IDs;
 - one known target-stage-engine task per independently reportable work unit.
 
 Artifact, ruleset, adapter, runtime, mapping, and explanation versions are attached when the corresponding task or optional enhancement resolves them. Failure to resolve one dependency becomes that task or enhancement's explicit outcome; it does not erase the already-persisted run.
 
-When the request does not name engines, the ordinary combined **Start** action
-atomically creates or refreshes the exact target record, the one required
-public/internal assertion, and its bounded grant before the run is frozen. The
-user is not sent through a separate ownership, consent, or setup page first.
-The backend then derives engines from that just-frozen target kind and grant and
-records every applicable catalog entry: runnable engines become jobs and
-unavailable entries become explicit user-facing `not_tested` coverage (an
-internal engine execution may retain `not_executed` as its technical state).
-Naming exact engine IDs is an Advanced override, not a prerequisite for
-ordinary use.
+The ordinary combined **Start** action atomically creates or refreshes every
+selected asset record, records each required public/internal assertion and
+bounded grant, and freezes exact engine-to-asset bindings. One run may combine
+local repositories, website origins, and internal endpoints. The backend derives
+applicable engines per asset from its type, selected profile, and grant; a
+validated explicit engine-to-asset route may narrow that plan but never widen
+it. Runnable pairs become jobs, incompatible pairs are excluded with a clear
+reason, and unavailable applicable pairs become user-facing `not_tested`
+coverage (an internal engine execution may retain `not_executed` as its
+technical state). Naming engines is an Advanced override, not a prerequisite
+for ordinary use and never applies an engine to every asset by default.
 
-The durable orchestrator schedules independent target-stage-engine jobs with resource limits. Quick discovery starts first and opens the report on its first durable result; full inventory and deep checks update it later. Checkpoints are persisted after state changes and bounded result batches. Completed ports, hosts, pages, repositories, or batches survive failure of later siblings, and Retry selects only unfinished work by default.
+The durable orchestrator schedules independent target-stage-engine jobs with resource limits. Applicable security checks do not wait for unrelated inventory. Discovery and inventory may update target preparation and coverage first, but only a completed security, vulnerability, secret, dependency, configuration, or reviewed exposure check becomes a security result or supports a no-findings statement. The report opens on its first durable security-relevant result and continues updating as sibling checks finish. Checkpoints are persisted after state changes and bounded result batches. Completed ports, hosts, pages, repositories, or batches survive failure of later siblings, and Retry selects only unfinished work by default.
 
 Every checkpoint that can leave a container or managed egress resource behind also persists a typed, non-secret runtime record sufficient for exact cleanup and historical explanation. Compatibility providers record their exact provider; the managed-local provider records the verified runtime generation and artifact identities actually used. Recovery first reconciles the exact product-owned container/network identity. If that exact generation is unavailable, historical results remain readable and the product may create a new attempt on a current verified generation. It never selects or deletes a runtime by a resource-name prefix or whichever executable happens to be on `PATH`, and it never makes byte-identical historical runtime recovery a prerequisite for a current attempt.
 
@@ -595,7 +597,7 @@ An engine requiring a weaker boundary must declare the exception and that engine
 
 ## 12. Discovery and scope planning
 
-Discovery produces candidates plus provenance; it never silently widens direct-contact scope. Selecting a local read-only snapshot is sufficient authorization for analysis of that product-created snapshot. The dedicated local-service connection utility uses one action without an ownership checkbox and remains separate from meaningful scans. Public/internal low-impact contact records the single inline assertion defined by the product specification; only wider, credentialed, active, or more intrusive activity requires another explicit grant.
+Discovery produces candidates plus provenance; it never silently widens direct-contact scope. Selecting a local read-only snapshot is sufficient authorization for analysis of that product-created snapshot. The dedicated local-service connection utility uses one action without an ownership checkbox and remains separate from meaningful scans. One combined Start records the bounded inline assertion required for each selected public or internal direct-contact asset; only wider, credentialed, active, or more intrusive activity requires another explicit grant for the affected asset.
 
 AWS, Azure, GCP, and Microsoft 365 live discovery uses the verified process-memory source capability and a fixed internal engine binding. Each response page is durably synced to the case's content-addressed connector store before pagination inspection or asset parsing. A backend-created manifest binds the exact operation, HTTP status, parser profile, observation time, and SHA-256 reference for every page. The same connector registry used for imported snapshots reopens those references, verifies their hashes, parses provider-native records, and submits the normal reconciliation batch. Credentials and continuation tokens are neither case metadata nor connector inputs.
 
@@ -627,7 +629,7 @@ Public-data-only discovery and direct network contact are separate capabilities.
 
 The canonical model is the source of truth because the product requires requested and executed scope, task outcomes, evidence, findings, workflow, and comparison semantics that do not map losslessly to one external standard.
 
-The primary result is one versioned beginner master report for every run state. Its first layer answers what was requested, what was and was not tested, what was found, what to do next, and whether the report is still changing. Engine identity, raw evidence, framework provenance, and diagnostics are collapsed Technical details.
+The primary result is one versioned beginner master report for every run state. Its first layer identifies which repositories, internal devices or endpoints, and websites have problems; what was and was not tested for each asset; what to do next; and whether the report is still changing. Engine identity, raw evidence, framework provenance, and diagnostics are collapsed Technical details.
 
 - HTML/print and master-report JSON are the default readable exports and work for complete, partial, failed, timed-out, cancelled, and no-checks runs.
 - OCSF and OSCAL are optional Advanced interoperability formats. If they cannot express coverage, they ship with a mandatory coverage sidecar and limitation rather than disabling preservation of existing findings.
@@ -653,12 +655,13 @@ Prioritization may consider:
 
 The canonical internal priority uses a single direction: a higher value sorts earlier. The explanation stores the factors, not only a mysterious number. User-facing lists and HTML show a relative handoff ordinal rather than exposing the internal value as a risk or compliance score.
 
-Questionnaire context can add only bounded, named ordering factors. An internet-exposure factor requires the affected asset itself to carry source-derived `internet_exposed=true`; a sensitive-data factor requires both a source-derived `contains_sensitive_data=true` asset attribute and a matching case data context. Questionnaire answers alone never create a finding, asset attribute, scope grant, severity, confidence, or evidence claim. Applying the projection is idempotent and preserves the scanner report and observation fingerprint. Requested activities may preselect an applicable mode. Direct target contact still requires the canonical bounded assertion and backend grant check, but the ordinary combined **Start** action records them inline and atomically; it never turns them into a separate pre-scan ceremony.
+Questionnaire context can add only bounded, named ordering factors. An internet-exposure factor requires the affected asset itself to carry source-derived `internet_exposed=true`; a sensitive-data factor requires both a source-derived `contains_sensitive_data=true` asset attribute and a matching case data context. Questionnaire answers alone never create a finding, asset attribute, scope grant, severity, confidence, or evidence claim. Applying the projection is idempotent and preserves the scanner report and observation fingerprint. Requested activities may preselect an applicable mode. Direct target contact still requires each affected asset's bounded assertion and backend grant check, but the ordinary combined **Start** action records them inline and atomically; it never turns them into a separate pre-scan ceremony.
 
-When the optional Advanced grouping workflow is enabled, it joins related findings under a
-user-facing issue while retaining all source findings and evidence. Cross-engine corroboration may
-raise confidence or priority; it does not duplicate a control failure or erase distinct technical
-problems. Grouping is not required for the beginner master report or first value.
+When source findings describe the same problem, the shared report may correlate or deduplicate
+their presentation automatically while retaining every source finding and its evidence.
+Cross-engine corroboration may raise confidence or priority; it does not duplicate a control
+failure or erase distinct technical problems. The beginner report never requires manual grouping;
+an Advanced workflow may expose group review, correction, and history.
 
 ## 15. Export package
 
@@ -725,7 +728,7 @@ The durable scope grant is produced inside the canonical combined Start interact
 
 Architecture changes are verified in proportion to the behavior and risk they change. Evidence should show that:
 
-- a beginner can take the shortest applicable website or local-project path to a real security result, understand what matters first, and see what was not tested;
+- a beginner can combine repositories, internal devices or endpoints, and websites in one project, run applicable checks with exact engine-to-asset scope, and see in one report which assets need attention and what was not tested; website-only and project-only shortcuts preserve the same outcome for smaller jobs;
 - connectivity checks remain plainly labeled utilities rather than substitutes for a meaningful scan;
 - adapters translate bounded product inputs to upstream engines and preserve upstream identifiers, severity, evidence, and remediation;
 - one shared report layer owns prioritization, deduplication, plain-language explanation, cross-engine correlation, and presentation;

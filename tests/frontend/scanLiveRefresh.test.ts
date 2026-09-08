@@ -168,6 +168,27 @@ test("an equal-revision native refresh still preserves the live payload already 
   assert.equal(reconciled.workspace?.runs[0]?.id, "event-run");
 });
 
+test("an equal-revision native refresh adds its derived report to the live event workspace", () => {
+  const current = snapshot();
+  current.cases[0] = assessmentCase("case-a", "Live event presentation");
+  current.workspace = workspace("case-a", "Live event presentation", initialUpdatedAt, "event-run");
+
+  const reports = [{ runId: "event-run" }] as unknown as NonNullable<CaseWorkspace["beginnerReports"]>;
+  const fetched = snapshot();
+  fetched.cases[0] = assessmentCase("case-a", "Equal command presentation");
+  fetched.workspace = {
+    ...workspace("case-a", "Equal command presentation", initialUpdatedAt, "command-run"),
+    beginnerReports: reports,
+  };
+
+  const reconciled = reconcileAuthoritativeSnapshot(current, fetched);
+
+  assert.equal(reconciled.workspace?.case.name, "Live event presentation");
+  assert.equal(reconciled.workspace?.runs[0]?.id, "event-run");
+  assert.equal(reconciled.workspace?.beginnerReports, reports);
+  assert.equal(reconciled.workspace?.beginnerReports?.[0]?.runId, "event-run");
+});
+
 test("a fast scan event cannot be overwritten by an older same-case command result", () => {
   const eventWorkspace = workspace(
     "case-a",

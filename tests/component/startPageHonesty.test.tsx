@@ -117,20 +117,27 @@ test("the first screen does not offer the example project action", () => {
   expect(queryByRole("button", { name: "查看範例專案" })).toBeNull();
 });
 
-test("the first screen leads with meaningful website and code scans while demoting connectivity", () => {
+test("the first screen leads with a combined environment scan plus the website and code shortcuts", () => {
   const onOpenExistingCase = vi.fn();
   const { container, getByRole, queryByRole, queryByText } = renderStart({ onOpenExistingCase });
 
   expect(getByRole("heading", { level: 1, name: "Security checks" })).toBeTruthy();
   const primaryActions = Array.from(container.querySelectorAll<HTMLButtonElement>(".start-page__choices > .use-case-grid .use-case-card__action"));
   expect(primaryActions.map((button) => button.textContent?.trim())).toEqual([
+    "Scan my environment",
     "Check a website",
     "Check code or an AI project",
   ]);
+  const environmentCard = Array.from(container.querySelectorAll<HTMLElement>(".use-case-card"))
+    .find((card) => card.textContent?.includes("Scan my environment"));
+  expect(environmentCard?.textContent).toContain("Company IT environment");
+  expect(environmentCard?.textContent).toContain("repositories, websites or APIs, and exact internal hosts");
+  expect(environmentCard?.textContent).toContain("Greenbone discovers services on the chosen ports");
+  expect(environmentCard?.textContent).toContain("not tested");
   const websiteCard = Array.from(container.querySelectorAll<HTMLElement>(".use-case-card"))
     .find((card) => card.textContent?.includes("Check a website"));
   expect(websiteCard?.textContent).toContain(
-    "Check common exposed files and debug or status endpoints with a fixed Nuclei scan, using at most 19 GET requests to the displayed website address.",
+    "Let Nuclei identify the website technology and run matching upstream vulnerability and exposure checks against the displayed website origin.",
   );
   expect(websiteCard?.textContent).not.toContain("basic exposure signals");
   expect(container.querySelector(".start-page__choices > .use-case-grid")?.textContent)
@@ -181,11 +188,14 @@ test("the Traditional Chinese boundary statement carries the same commitments", 
   expect(boundaryText(container)).toContain("最長等待 3 秒");
 });
 
-test("the Traditional Chinese first layer names the real website checks and the combined code path", () => {
+test("the Traditional Chinese first layer names the upstream website and internal-host paths", () => {
   const { container } = renderStart({ locale: "zh-TW" });
   const primaryLayer = container.querySelector(".start-page__choices > .use-case-grid");
 
-  expect(primaryLayer?.textContent).toContain("常見暴露檔案及除錯／狀態端點");
+  expect(primaryLayer?.textContent).toContain("辨識網站技術");
+  expect(primaryLayer?.textContent).toContain("精確內部主機");
+  expect(primaryLayer?.textContent).toContain("Greenbone 會探索所選連接埠的服務");
+  expect(primaryLayer?.textContent).toContain("僅供盤點的網段仍會明列為未測試");
   expect(primaryLayer?.textContent).toContain("程式碼或 AI 專案");
   expect(primaryLayer?.textContent).toContain("檢查程式碼或 AI 專案");
 });

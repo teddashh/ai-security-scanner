@@ -823,6 +823,7 @@ fn empty_azure_resources_still_produce_an_exact_plannable_subscription() {
             &case.id,
             ScanPlanRequest {
                 engine_ids: vec!["prowler".into()],
+                engine_asset_routes: Vec::new(),
             },
         )
         .unwrap();
@@ -1161,6 +1162,7 @@ fn azure_and_gcp_ui_capability_checkout_reaches_narrow_prowler_dispatch() {
                 &case.id,
                 ScanPlanRequest {
                     engine_ids: vec!["prowler".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -1774,6 +1776,7 @@ fn one_gcp_discovery_plus_nine_exact_projects_complete_the_bounded_lifecycle() {
             &case.id,
             ScanPlanRequest {
                 engine_ids: vec!["prowler".into()],
+                engine_asset_routes: Vec::new(),
             },
         )
         .unwrap();

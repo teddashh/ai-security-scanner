@@ -255,6 +255,288 @@ test("a partial run is distinguished from a complete one", () => {
   expect(partialPill.textContent).not.toEqual(completePill.textContent);
 });
 
+test("the first layer gives every requested asset one evidence-derived result status", () => {
+  const base = report("partial");
+  const targets = [
+    ["asset-repo-a", "team-a/api", "repository"],
+    ["asset-repo-b", "team-b/api", "repository"],
+    ["asset-web", "https://portal.example", "web_service"],
+    ["asset-device", "Branch gateway", "web_service"],
+    ["asset-endpoint", "workstation-12", "ip_address"],
+  ].map(([assetId, label, assetKind]) => ({
+    assetId,
+    label,
+    assetKind,
+    labelAvailability: "recorded" as const,
+    assetKindAvailability: "recorded" as const,
+  }));
+  const { container } = renderReport(report("partial", {
+    requested: {
+      ...base.requested,
+      targets,
+      requestedCheckIds: ["trivy", "semgrep", "gitleaks", "naabu"],
+    },
+    actual: {
+      checks: [{
+        taskId: "task-web",
+        checkId: "trivy",
+        targetAssetIds: ["asset-web"],
+        status: "tested_complete",
+        testedDimensions: [{
+          dimension: "completed check-to-target coordinate",
+          value: "trivy on asset asset-web",
+          observation: "The security check completed for this target.",
+        }],
+      }, {
+        taskId: "task-device-complete",
+        checkId: "semgrep",
+        targetAssetIds: ["asset-device"],
+        status: "tested_complete",
+        testedDimensions: [{
+          dimension: "completed check-to-target coordinate",
+          value: "semgrep on asset asset-device",
+          observation: "The security check completed for this target.",
+        }],
+      }, {
+        taskId: "task-device-failed",
+        checkId: "gitleaks",
+        targetAssetIds: ["asset-device"],
+        status: "failed",
+        testedDimensions: [],
+      }, {
+        taskId: "task-endpoint-inventory",
+        checkId: "naabu",
+        targetAssetIds: ["asset-endpoint"],
+        status: "tested_complete",
+        testedDimensions: [{
+          dimension: "completed planned work units",
+          value: "1 of 1",
+          observation: "Service discovery completed.",
+        }],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    findings: [frozenFinding({
+      targetAssetIds: ["asset-repo-a", "asset-repo-b"],
+    })],
+    coverageGaps: [{
+      kind: "failed",
+      taskId: "task-repo-a-secondary",
+      targetAssetIds: ["asset-repo-a"],
+      dimension: "dependency check",
+      reason: "A second check failed.",
+      nextActionCode: "retry_check",
+      nextAction: "Retry the failed check.",
+    }, {
+      kind: "excluded",
+      targetAssetIds: ["asset-web"],
+      dimension: "paths outside the selected profile",
+      reason: "Only the selected profile was in scope.",
+      nextActionCode: "no_action_unless_scope_changes",
+      nextAction: "No action is needed unless scope changes.",
+    }, {
+      kind: "not_tested",
+      taskId: "task-web",
+      targetAssetIds: ["asset-web"],
+      dimension: "authenticated paths",
+      reason: "The selected unauthenticated profile did not test signed-in paths.",
+      nextActionCode: "preserve_visible_limitation",
+      nextAction: "Keep this limit visible.",
+    }, {
+      kind: "unavailable",
+      targetAssetIds: [],
+      dimension: "run-level metadata",
+      reason: "Granular historical metadata was not retained.",
+      nextActionCode: "preserve_visible_limitation",
+      nextAction: "Keep this report-level limit visible.",
+    }, {
+      kind: "not_tested",
+      taskId: "task-device-complete",
+      targetAssetIds: ["asset-device"],
+      dimension: "authenticated administration",
+      reason: "The completed profile deliberately excluded signed-in checks.",
+      nextActionCode: "preserve_visible_limitation",
+      nextAction: "Keep this limitation visible.",
+    }, {
+      kind: "failed",
+      taskId: "task-device-failed",
+      targetAssetIds: ["asset-device"],
+      dimension: "secret check",
+      reason: "The check failed.",
+      nextActionCode: "retry_check",
+      nextAction: "Retry the failed check.",
+    }, {
+      kind: "not_tested",
+      targetAssetIds: ["asset-endpoint"],
+      dimension: "vulnerability checks",
+      reason: "Only service discovery ran.",
+      nextActionCode: "choose_compatible_check",
+      nextAction: "Choose an applicable security check.",
+    }, {
+      kind: "not_tested",
+      taskId: "task-endpoint-later",
+      targetAssetIds: ["asset-endpoint"],
+      dimension: "later optional check",
+      reason: "A later check was not selected.",
+      nextActionCode: "retry_check",
+      nextAction: "Retry this check.",
+    }],
+    coverageCounts: counts({ testedComplete: 3, failed: 2, notTested: 4, excluded: 1, unavailable: 1 }),
+  }));
+
+  const board = container.querySelector<HTMLElement>(".asset-result-board");
+  if (!board) throw new Error("asset result board did not render");
+  const rows = Array.from(board.querySelectorAll<HTMLElement>(".asset-result-row"));
+  expect(rows).toHaveLength(5);
+  const row = (label: string) => {
+    const match = rows.find((candidate) =>
+      candidate.querySelector(".asset-result-row__identity strong")?.textContent === label);
+    if (!match) throw new Error(`no asset result row for ${label}`);
+    return match;
+  };
+
+  expect(row("team-a/api").dataset.assetResult).toBe("problems_found");
+  expect(row("team-a/api").textContent).toContain("1 problem was found.");
+  expect(row("team-a/api").textContent).toContain("Some checks are also incomplete");
+  // One frozen finding can apply to more than one target; each target must get credit for it.
+  expect(row("team-b/api").dataset.assetResult).toBe("problems_found");
+  expect(row("https://portal.example").dataset.assetResult).toBe("no_problems_completed");
+  expect(row("https://portal.example").textContent).toContain("1 completed security check reported no problems");
+  expect(row("https://portal.example").textContent).toContain("Review the stated limits");
+  expect(row("Branch gateway").dataset.assetResult).toBe("incomplete_failed");
+  expect(row("Branch gateway").textContent).toContain("Retry this check");
+  expect(row("Branch gateway").textContent).not.toContain("Keep this limitation visible");
+  // A completed inventory tool is not promoted into a completed security check.
+  expect(row("workstation-12").dataset.assetResult).toBe("not_tested");
+  expect(row("workstation-12").textContent).toContain("Choose an available check for this target");
+  expect(row("workstation-12").textContent).not.toContain("Retry this check");
+
+  const technicalDisclosure = container.querySelector<HTMLElement>(".report-scope-disclosure");
+  expect(board.compareDocumentPosition(technicalDisclosure!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("a completed asset stays bounded while an unrun sibling task makes another asset incomplete", () => {
+  const base = report("partial");
+  const { container } = renderReport(report("partial", {
+    requested: {
+      ...base.requested,
+      targets: [{
+        assetId: "asset-bounded",
+        label: "ssh-bounded.example",
+        assetKind: "host",
+        labelAvailability: "recorded",
+        assetKindAvailability: "recorded",
+      }, {
+        assetId: "asset-unrun-sibling",
+        label: "ssh-incomplete.example",
+        assetKind: "host",
+        labelAvailability: "recorded",
+        assetKindAvailability: "recorded",
+      }],
+    },
+    actual: {
+      checks: [{
+        taskId: "task-bounded",
+        checkId: "greenbone",
+        targetAssetIds: ["asset-bounded"],
+        status: "tested_complete",
+        testedDimensions: [],
+      }, {
+        taskId: "task-completed-sibling",
+        checkId: "greenbone",
+        targetAssetIds: ["asset-unrun-sibling"],
+        status: "tested_complete",
+        testedDimensions: [],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    coverageGaps: [{
+      kind: "not_tested",
+      taskId: "task-bounded",
+      targetAssetIds: ["asset-bounded"],
+      dimension: "host operating-system checks",
+      reason: "The completed SSH service profile did not inspect the host operating system.",
+      nextActionCode: "preserve_visible_limitation",
+      nextAction: "Keep this limitation visible.",
+    }, {
+      kind: "not_tested",
+      taskId: "task-never-ran",
+      targetAssetIds: ["asset-unrun-sibling"],
+      dimension: "second requested security check",
+      reason: "The second requested task did not run.",
+      nextActionCode: "retry_check",
+      nextAction: "Retry this check.",
+    }],
+    coverageCounts: counts({ testedComplete: 2, notTested: 2 }),
+  }));
+
+  const rows = Array.from(container.querySelectorAll<HTMLElement>(".asset-result-row"));
+  const row = (label: string) => {
+    const match = rows.find((candidate) =>
+      candidate.querySelector(".asset-result-row__identity strong")?.textContent === label);
+    if (!match) throw new Error(`no asset result row for ${label}`);
+    return match;
+  };
+
+  expect(row("ssh-bounded.example").dataset.assetResult).toBe("no_problems_completed");
+  expect(row("ssh-incomplete.example").dataset.assetResult).toBe("incomplete_failed");
+  expect(row("ssh-incomplete.example").textContent).toContain("Retry this check");
+});
+
+test("an in-progress asset keeps its wait-or-cancel action on the per-asset board", () => {
+  const { container } = renderReport(report("partial", {
+    actual: {
+      checks: [{
+        taskId: "task-running",
+        checkId: "greenbone",
+        targetAssetIds: ["asset-1"],
+        status: "in_progress",
+        testedDimensions: [],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    coverageGaps: [{
+      kind: "not_tested",
+      taskId: "task-running",
+      targetAssetIds: ["asset-1"],
+      dimension: "unfinished check dimension",
+      reason: "This check is still changing and has not recorded a complete result.",
+      nextActionCode: "wait_or_cancel",
+      nextAction: "Let it continue or cancel it; the partial report remains available.",
+    }],
+    coverageCounts: counts({ notTested: 1 }),
+  }));
+
+  const row = container.querySelector<HTMLElement>(".asset-result-row");
+  expect(row?.dataset.assetResult).toBe("incomplete_failed");
+  expect(row?.textContent).toContain("Let it finish, or cancel and keep the partial report");
+});
+
+test("the asset result board gives a Traditional Chinese beginner the same bounded statuses and action", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderReport(report("no_checks_completed", {
+    coverageGaps: [{
+      kind: "not_tested",
+      targetAssetIds: ["asset-1"],
+      dimension: "vulnerability checks",
+      reason: "No compatible check ran.",
+      nextActionCode: "choose_compatible_check",
+      nextAction: "Choose a compatible check.",
+    }],
+    coverageCounts: counts({ notTested: 1 }),
+  }));
+
+  const board = container.querySelector<HTMLElement>(".asset-result-board");
+  expect(board?.textContent).toContain("哪些資產需要處理");
+  expect(board?.textContent).toContain("尚未測試");
+  expect(board?.textContent).toContain("這個資產沒有已完成的資安檢查紀錄");
+  expect(board?.textContent).toContain("為這個目標選擇可用的檢查");
+  expect(board?.textContent).not.toContain("No compatible check ran");
+});
+
 test("the first layer names the requested target, tested work, top gap, and next action", () => {
   const base = report("partial");
   const { container } = renderReport(report("partial", {
@@ -896,6 +1178,100 @@ test("priority comes before summary metrics", () => {
   expect(metrics).not.toBeNull();
   const children = Array.from(page!.children);
   expect(children.indexOf(priority!)).toBeLessThan(children.indexOf(metrics!));
+});
+
+test("priority cards show target, location, confidence, next action, and verification before opening details", () => {
+  const combinedReport = report("partial", {
+    findings: [frozenFinding({
+      targetAssetIds: ["asset-1", "asset-2"],
+      nextStep: "Ask the application owner to update the affected dependency.",
+      verificationGuidance: "After the approved update, rerun the same dependency check.",
+      evidenceReferences: [{
+        evidenceId: "evidence-1",
+        engineId: "trivy",
+        artifactSha256: "a".repeat(64),
+        observedAt: "2026-09-04T12:00:00Z",
+        location: "package-lock.json · lodash@4.17.20",
+      }],
+    })],
+  });
+  combinedReport.requested.targets.push({
+    assetId: "asset-2",
+    label: "internal-api.example",
+    assetKind: "web_service",
+    labelAvailability: "recorded",
+    assetKindAvailability: "recorded",
+  });
+  const { container } = renderReport(
+    combinedReport,
+    [canonicalFinding()],
+  );
+
+  const card = container.querySelector<HTMLElement>(".priority-card");
+  expect(card).not.toBeNull();
+  expect(card!.textContent).toContain("High confidence");
+  expect(card!.textContent).toContain("Affected target");
+  expect(card!.textContent).toContain("contoso.example");
+  expect(card!.textContent).toContain("internal-api.example");
+  expect(card!.textContent).toContain("Location");
+  expect(card!.textContent).toContain("package-lock.json · lodash@4.17.20");
+  expect(card!.textContent).toContain("Next action");
+  expect(card!.textContent).toContain("Ask the application owner to update the affected dependency.");
+  expect(card!.textContent).toContain("Verify the fix");
+  expect(card!.textContent).toContain("After the approved update, rerun the same dependency check.");
+  expect(container.querySelector<HTMLElement>(".finding-detail")?.classList.contains("finding-detail--empty")).toBe(true);
+});
+
+test("the first report layer filters by exact asset identity, including shared findings", () => {
+  const combinedReport = report("partial", {
+    requested: {
+      ...report("partial").requested,
+      targets: [
+        {
+          assetId: "asset-1",
+          label: "https://edge.example:443",
+          assetKind: "web_service",
+          labelAvailability: "recorded",
+          assetKindAvailability: "recorded",
+        },
+        {
+          assetId: "asset-2",
+          label: "https://edge.example:8443",
+          assetKind: "web_service",
+          labelAvailability: "recorded",
+          assetKindAvailability: "recorded",
+        },
+      ],
+    },
+    findings: [
+      frozenFinding({ findingId: "finding-1", targetAssetIds: ["asset-1"], title: "Port 443 issue" }),
+      frozenFinding({ findingId: "finding-2", fingerprint: "fp-2", targetAssetIds: ["asset-2"], title: "Port 8443 issue" }),
+      frozenFinding({ findingId: "finding-3", fingerprint: "fp-3", targetAssetIds: ["asset-1", "asset-2"], title: "Shared certificate issue" }),
+    ],
+  });
+  const { container } = renderReport(combinedReport, [
+    canonicalFinding({ id: "finding-1", assetId: "asset-1", assetIds: ["asset-1"], title: "Port 443 issue" }),
+    canonicalFinding({ id: "finding-2", fingerprint: "fp-2", assetId: "asset-2", assetIds: ["asset-2"], assetName: "https://edge.example:8443", title: "Port 8443 issue" }),
+    canonicalFinding({ id: "finding-3", fingerprint: "fp-3", assetId: "asset-1", assetIds: ["asset-1", "asset-2"], title: "Shared certificate issue" }),
+  ]);
+
+  const assetRows = [...container.querySelectorAll<HTMLButtonElement>(".affected-asset-row")];
+  expect(assetRows).toHaveLength(2);
+  expect(assetRows.map((row) => row.textContent)).toEqual([
+    expect.stringContaining("https://edge.example:443"),
+    expect.stringContaining("https://edge.example:8443"),
+  ]);
+  expect(assetRows.every((row) => row.textContent?.includes("Problems: 2"))).toBe(true);
+
+  fireEvent.click(assetRows[1]!);
+  expect((within(container).getByRole("searchbox") as HTMLInputElement).value).toBe("");
+  expect(container.querySelector(".finding-asset-filter")?.textContent).toContain("https://edge.example:8443");
+  expect([...container.querySelectorAll(".finding-row")].map((row) => row.textContent)).toEqual([
+    expect.stringContaining("Port 8443 issue"),
+    expect.stringContaining("Shared certificate issue"),
+  ]);
+  expect([...container.querySelectorAll(".finding-row")].some((row) => row.textContent?.includes("Port 443 issue"))).toBe(false);
+  expect(container.querySelector<HTMLElement>(".finding-detail")?.classList.contains("finding-detail--empty")).toBe(false);
 });
 
 test("specialist and framework filters are in one closed Advanced disclosure", () => {

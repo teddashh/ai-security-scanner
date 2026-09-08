@@ -19,8 +19,16 @@ import {
   localInputDefinitions,
   localInputDefinitionForAssessmentIntent,
   localPathDisplayName,
+  localPathDisplayLabels,
   localProfileByAssessmentIntent,
 } from "../localInputProfiles";
+import {
+  internalHostGreenboneProfile,
+  parseInternalHostPorts,
+  prepareInternalHostTarget,
+  type InternalHostInputError,
+  type InternalHostPortsError,
+} from "../internalHostProfile";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import { scannerService } from "../services/scanner";
 import type {
@@ -70,6 +78,10 @@ export interface CasesPageProps {
   onCreateWithWorkspace: (
     input: CreateCaseInput,
     workspace: Omit<AttachWorkspaceSnapshotInput, "caseId">,
+  ) => Promise<boolean>;
+  onCreateWithWorkspaces?: (
+    input: CreateCaseInput,
+    workspaces: Array<Omit<AttachWorkspaceSnapshotInput, "caseId">>,
   ) => Promise<boolean>;
   onChooseWorkspace: () => Promise<string | null>;
   onSeedDemo: () => Promise<void>;
@@ -158,10 +170,61 @@ const pageCopy = {
     en: "Enter one complete http:// or https:// URL. Do not include a username or password.",
     zhTW: "請輸入一個完整的 http:// 或 https:// 網址；不要放入帳號或密碼。",
   },
+  environmentRepositoriesTitle: { en: "Development projects", zhTW: "開發專案" },
+  environmentRepositoriesBody: {
+    en: "Choose each local repository you want checked for risky code, exposed secrets, vulnerable dependencies, and unsafe configuration.",
+    zhTW: "逐一選擇要檢查的本機 repo；產品會找危險程式碼、暴露秘密、有弱點的相依套件與不安全設定。",
+  },
+  environmentAddRepository: { en: "Add a project folder", zhTW: "加入專案資料夾" },
+  environmentRemoveRepository: { en: "Remove {name}", zhTW: "移除 {name}" },
+  environmentWebsitesTitle: { en: "Websites and APIs", zhTW: "網站與 API" },
+  environmentWebsitesPlaceholder: {
+    en: "https://portal.example.com\nhttps://api.example.com",
+    zhTW: "https://portal.example.com\nhttps://api.example.com",
+  },
+  environmentWebsitesHelp: {
+    en: "Enter one complete http:// or https:// website or API URL per line for the fixed Nuclei checks. Do not include sign-in details.",
+    zhTW: "每行輸入一個完整的 http:// 或 https:// 網站或 API 網址，執行固定的 Nuclei 檢查；不要放入登入資訊。",
+  },
+  environmentHostsTitle: { en: "Internal systems", zhTW: "內部系統" },
+  environmentHostsBody: {
+    en: "Add each exact hostname or IP once. Greenbone discovers supported services on common ports and runs the remote-safe checks that apply to that host.",
+    zhTW: "每個精確主機名稱或 IP 只需加入一次。Greenbone 會在常用連接埠探索支援的服務，並執行適用於該主機的 remote-safe 檢查。",
+  },
+  environmentAddHost: { en: "Add another system", zhTW: "再加入一個系統" },
+  environmentRemoveHost: { en: "Remove internal system {number}", zhTW: "移除內部系統 {number}" },
+  environmentHostTarget: { en: "Exact hostname or IP {number}", zhTW: "精確主機名稱或 IP {number}" },
+  environmentHostTargetHelp: {
+    en: "Enter one hostname or IP only—no URL, CIDR range, port, username, or password.",
+    zhTW: "只輸入一個主機名稱或 IP；不要輸入網址、CIDR 網段、連接埠、帳號或密碼。",
+  },
+  environmentHostAdvanced: { en: "Advanced: choose ports", zhTW: "進階：選擇連接埠" },
+  environmentHostPorts: { en: "TCP ports (optional)", zhTW: "TCP 連接埠（選填）" },
+  environmentHostPortsHelp: {
+    en: "Leave blank for common ports: {ports}. Or enter up to 64 comma-separated ports.",
+    zhTW: "留白會使用常用連接埠：{ports}。也可輸入最多 64 個以逗號分隔的連接埠。",
+  },
+  environmentHostCoverage: {
+    en: "Greenbone remote-safe profile · no sign-in or credentials",
+    zhTW: "Greenbone remote-safe 設定 · 不登入、不使用帳密",
+  },
+  environmentInventoryTitle: { en: "Other hosts and ranges — inventory only", zhTW: "其他主機與網段（僅供盤點）" },
+  environmentInventoryHint: {
+    en: "Record unsupported bare hosts or CIDR ranges; this run will not scan them",
+    zhTW: "記錄尚未支援的裸主機或 CIDR 網段；本次執行不會掃描它們",
+  },
+  environmentInventoryHelp: {
+    en: "CIDR ranges are recorded only. This run will not contact or vulnerability-scan them; add each exact host above when it should be checked.",
+    zhTW: "CIDR 網段只會保存為盤點資料。本次執行不會連線或掃描其弱點；要檢查時，請在上方逐一加入精確主機。",
+  },
+  environmentAtLeastOne: {
+    en: "Add at least one project folder, website or API URL, internal system, or inventory-only range.",
+    zhTW: "請至少加入一個專案資料夾、網站或 API 網址、內部系統，或僅供盤點的網段。",
+  },
   websitePreparedTitle: { en: "Ready: {target}", zhTW: "已準備：{target}" },
   websitePrepared: {
-    en: "The page path {path} is kept for reference. The quick scan checks the displayed website address {origin} at a small fixed set of locations; it is not limited to {path}. If you are allowed to test only a specific path, do not use this quick scan.",
-    zhTW: "頁面路徑 {path} 只會保留作為參考。快速掃描會檢查畫面所列的網站來源範圍 {origin} 與一小組固定位置，不會限制於 {path}。如果只獲准測試特定路徑，請勿使用此快速掃描。",
+    en: "The page path {path} is kept for reference. Nuclei checks the displayed website origin {origin} with applicable upstream templates; it is not limited to {path}. If you are allowed to test only a specific path, do not use this quick scan.",
+    zhTW: "頁面路徑 {path} 只會保留作為參考。Nuclei 會以適用的上游模板檢查畫面所列網站來源範圍 {origin}，不會限制於 {path}。如果只獲准測試特定路徑，請勿使用此快速掃描。",
   },
   websitePreparedInternal: {
     en: "This is a private or internal address, so the public-website quick profile will not be selected automatically. Its entered path {path} remains context only; review and explicitly authorize the exact internal target and limits on the next screen.",
@@ -190,8 +253,8 @@ const pageCopy = {
   },
   localNetworkFoundTitle: { en: "We found a likely local network", zhTW: "找到一個可能的區域網路" },
   localNetworkFoundBody: {
-    en: "Is {target} the network you want to check? Using it only fills the box below. It does not start the scan.",
-    zhTW: "你要檢查的是 {target} 嗎？使用它只會填入下方欄位，不會開始掃描。",
+    en: "Is {target} the network you want to record? Using it only adds inventory below. It does not scan any device.",
+    zhTW: "你要記錄的是 {target} 嗎？使用它只會加入下方盤點資料，不會掃描任何設備。",
   },
   localNetworkUseTarget: { en: "Use {target}", zhTW: "使用 {target}" },
   localNetworkTargetAdded: { en: "Added to the target list", zhTW: "已加入目標清單" },
@@ -281,6 +344,7 @@ const pageCopy = {
     zhTW: "大型資料夾可能需要幾分鐘。你可以先前往其他頁面；副本準備完成後，這個已保存的專案仍會留在「我的掃描」。",
   },
   createLocal: { en: "Create scan project", zhTW: "建立掃描專案" },
+  reviewEnvironment: { en: "Review scan", zhTW: "檢查掃描內容" },
   formConflictTitle: { en: "The same target has two different descriptions", zhTW: "同一目標被標成兩種不同環境" },
   formConflict: {
     en: "{target} appears in both public and internal target lists. Keep it in the one list that describes where it is reached.",
@@ -518,6 +582,21 @@ const websiteErrorCopy: Record<WebsiteInputError, BilingualText> = {
   path_too_long: { en: "The encoded website path must be at most 2,048 characters.", zhTW: "編碼後的網站路徑不得超過 2,048 個字元。" },
 };
 
+const internalHostErrorCopy: Record<InternalHostInputError, BilingualText> = {
+  empty_target: { en: "Enter the internal system hostname or IP address.", zhTW: "請輸入內部系統的主機名稱或 IP 位址。" },
+  url_not_allowed: { en: "Enter only the hostname or IP address, not a URL.", zhTW: "只輸入主機名稱或 IP 位址，不要輸入網址。" },
+  credentials_not_allowed: { en: "Remove the username or password. This scan does not use credentials.", zhTW: "請移除帳號或密碼；這項掃描不會使用帳密。" },
+  cidr_not_allowed: { en: "Enter one exact hostname or IP address, not a CIDR range.", zhTW: "請輸入一個精確主機名稱或 IP 位址，不要輸入 CIDR 網段。" },
+  service_coordinate_not_allowed: { en: "Remove the port. Enter it under Advanced if needed.", zhTW: "請移除連接埠；如有需要，請在「進階」中輸入。" },
+  invalid_target: { en: "Enter a valid fully qualified hostname or IP address.", zhTW: "請輸入有效的完整主機名稱或 IP 位址。" },
+};
+
+const internalHostPortsErrorCopy: Record<InternalHostPortsError, BilingualText> = {
+  invalid_ports: { en: "Enter TCP ports separated by commas, such as 22, 443, 8443.", zhTW: "請輸入以逗號分隔的 TCP 連接埠，例如 22, 443, 8443。" },
+  port_out_of_range: { en: "Each port must be from 1 through 65,535.", zhTW: "每個連接埠必須介於 1 到 65,535。" },
+  too_many_ports: { en: "Choose at most 64 ports for one system.", zhTW: "每個系統最多可選擇 64 個連接埠。" },
+};
+
 const targetInputErrorCopy = {
   wildcard_not_allowed: {
     en: "Remove the wildcard from {target}. Add each exact hostname, IP address, or CIDR range separately.",
@@ -548,6 +627,12 @@ const workflowCopy = [
 const useCaseNeeds = (definition: UseCaseDefinition | undefined, id: UseCaseId): boolean =>
   definition?.id === id;
 
+interface EnvironmentHostDraft {
+  id: number;
+  target: string;
+  ports: string;
+}
+
 export function CasesPage({
   cases,
   selectedCase,
@@ -568,6 +653,7 @@ export function CasesPage({
   onClearPreset,
   onCreate,
   onCreateWithWorkspace,
+  onCreateWithWorkspaces,
   onChooseWorkspace,
   onSeedDemo,
   onArchive,
@@ -600,6 +686,9 @@ export function CasesPage({
     useState<AiGeneratedArtifactAnswer>("unknown");
   const [description, setDescription] = useState("");
   const [websiteUrl, setWebsiteUrl] = useState("");
+  const [environmentWebsiteUrls, setEnvironmentWebsiteUrls] = useState("");
+  const [environmentHosts, setEnvironmentHosts] =
+    useState<EnvironmentHostDraft[]>([{ id: 0, target: "", ports: "" }]);
   const [publicTargets, setPublicTargets] = useState("");
   const [internalTargets, setInternalTargets] = useState("");
   const [localNetworkInventory, setLocalNetworkInventory] = useState<LocalNetworkCandidateInventory>();
@@ -609,6 +698,7 @@ export function CasesPage({
   const [containerImages, setContainerImages] = useState("");
   const [kubernetesClusters, setKubernetesClusters] = useState("");
   const [selectedWorkspacePath, setSelectedWorkspacePath] = useState("");
+  const [environmentWorkspacePaths, setEnvironmentWorkspacePaths] = useState<string[]>([]);
   const [choosingWorkspace, setChoosingWorkspace] = useState(false);
   const [workspacePickerError, setWorkspacePickerError] = useState<BilingualText>();
   const [assetDraftError, setAssetDraftError] = useState<CaseAssetDraftError>();
@@ -616,6 +706,13 @@ export function CasesPage({
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [artifactDeleteConfirmation, setArtifactDeleteConfirmation] = useState("");
   const websiteInputRef = useRef<HTMLInputElement>(null);
+  const environmentWebsiteInputRef = useRef<HTMLTextAreaElement>(null);
+  const environmentHostAddButtonRef = useRef<HTMLButtonElement>(null);
+  const environmentHostTargetRefs = useRef(new Map<number, HTMLInputElement>());
+  const environmentHostPortsRefs = useRef(new Map<number, HTMLInputElement>());
+  const environmentHostAdvancedRefs = useRef(new Map<number, HTMLDetailsElement>());
+  const environmentInventoryDetailsRef = useRef<HTMLDetailsElement>(null);
+  const nextEnvironmentHostId = useRef(1);
   const publicTargetsInputRef = useRef<HTMLTextAreaElement>(null);
   const internalTargetsInputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -626,6 +723,7 @@ export function CasesPage({
   const guidedLocalUseCase = Boolean(
     selectedUseCase && guidedLocalUseCaseIds.includes(selectedUseCase),
   );
+  const environmentUseCase = selectedUseCase === "internal_it_environment";
   const guidedLocalProfile = selectedUseCase
     ? localProfileByAssessmentIntent[selectedUseCase]
     : undefined;
@@ -664,6 +762,10 @@ export function CasesPage({
       : new Set(loadStoredDemoCases().map((assessmentCase) => assessmentCase.id)),
     [cases, nativeMode],
   );
+  const environmentWorkspaceLabels = localPathDisplayLabels(
+    environmentWorkspacePaths,
+    text(pageCopy.folderFallback),
+  );
 
   useEffect(() => {
     setArtifactDeleteConfirmation("");
@@ -671,8 +773,11 @@ export function CasesPage({
 
   useEffect(() => {
     if (assetDraftError?.kind !== "missing_target" && assetDraftError?.kind !== "invalid_target") return;
+    if (assetDraftError.target === "internal" && environmentUseCase) {
+      if (environmentInventoryDetailsRef.current) environmentInventoryDetailsRef.current.open = true;
+    }
     (assetDraftError.target === "public" ? publicTargetsInputRef : internalTargetsInputRef).current?.focus();
-  }, [advancedOpen, assetDraftError]);
+  }, [advancedOpen, assetDraftError, environmentUseCase]);
 
   useEffect(() => {
     if (!selectedDefinition) return;
@@ -684,6 +789,12 @@ export function CasesPage({
     setRequestedActivities([...selectedDefinition.suggestedActivities]);
     setAiGeneratedArtifact("unknown");
     setWebsiteUrl("");
+    setEnvironmentWebsiteUrls("");
+    setEnvironmentHosts([{ id: 0, target: "", ports: "" }]);
+    environmentHostTargetRefs.current.clear();
+    environmentHostPortsRefs.current.clear();
+    environmentHostAdvancedRefs.current.clear();
+    nextEnvironmentHostId.current = 1;
     setPublicTargets("");
     setInternalTargets("");
     setRepositories("");
@@ -691,6 +802,7 @@ export function CasesPage({
     setContainerImages("");
     setKubernetesClusters("");
     setSelectedWorkspacePath("");
+    setEnvironmentWorkspacePaths([]);
     setWorkspacePickerError(undefined);
     setAssetDraftError(undefined);
   }, [selectedDefinition, selectionKey]);
@@ -758,6 +870,12 @@ export function CasesPage({
 
   const resetTargetInputs = () => {
     setWebsiteUrl("");
+    setEnvironmentWebsiteUrls("");
+    setEnvironmentHosts([{ id: 0, target: "", ports: "" }]);
+    environmentHostTargetRefs.current.clear();
+    environmentHostPortsRefs.current.clear();
+    environmentHostAdvancedRefs.current.clear();
+    nextEnvironmentHostId.current = 1;
     setPublicTargets("");
     setInternalTargets("");
     setRepositories("");
@@ -765,8 +883,52 @@ export function CasesPage({
     setContainerImages("");
     setKubernetesClusters("");
     setSelectedWorkspacePath("");
+    setEnvironmentWorkspacePaths([]);
     setWorkspacePickerError(undefined);
     setAssetDraftError(undefined);
+  };
+
+  const addEnvironmentHost = () => {
+    const id = nextEnvironmentHostId.current;
+    nextEnvironmentHostId.current += 1;
+    setEnvironmentHosts((current) => [...current, { id, target: "", ports: "" }]);
+    setAssetDraftError(undefined);
+    window.setTimeout(() => environmentHostTargetRefs.current.get(id)?.focus(), 0);
+  };
+
+  const updateEnvironmentHost = (
+    id: number,
+    update: Partial<Pick<EnvironmentHostDraft, "target" | "ports">>,
+  ) => {
+    setEnvironmentHosts((current) => current.map((host) =>
+      host.id === id ? { ...host, ...update } : host));
+    setAssetDraftError(undefined);
+  };
+
+  const removeEnvironmentHost = (id: number) => {
+    environmentHostTargetRefs.current.delete(id);
+    environmentHostPortsRefs.current.delete(id);
+    environmentHostAdvancedRefs.current.delete(id);
+    setEnvironmentHosts((current) => current.length === 1
+      ? [{ ...current[0]!, target: "", ports: "" }]
+      : current.filter((host) => host.id !== id));
+    setAssetDraftError(undefined);
+    environmentHostAddButtonRef.current?.focus();
+  };
+
+  const focusEnvironmentHostInput = (index = 0, field: "target" | "ports" = "target") => {
+    const host = environmentHosts[index];
+    if (!host) {
+      environmentHostAddButtonRef.current?.focus();
+      return;
+    }
+    if (field === "ports") {
+      const advanced = environmentHostAdvancedRefs.current.get(host.id);
+      if (advanced) advanced.open = true;
+      environmentHostPortsRefs.current.get(host.id)?.focus();
+    } else {
+      environmentHostTargetRefs.current.get(host.id)?.focus();
+    }
   };
 
   const chooseWorkspace = async () => {
@@ -775,6 +937,21 @@ export function CasesPage({
     try {
       const path = await onChooseWorkspace();
       if (path) setSelectedWorkspacePath(path);
+    } catch {
+      setWorkspacePickerError(pageCopy.localFolderPickerError);
+    } finally {
+      setChoosingWorkspace(false);
+    }
+  };
+
+  const chooseEnvironmentWorkspace = async () => {
+    setChoosingWorkspace(true);
+    setWorkspacePickerError(undefined);
+    try {
+      const path = await onChooseWorkspace();
+      if (!path) return;
+      setEnvironmentWorkspacePaths((current) => current.includes(path) ? current : [...current, path]);
+      setAssetDraftError(undefined);
     } catch {
       setWorkspacePickerError(pageCopy.localFolderPickerError);
     } finally {
@@ -814,6 +991,9 @@ export function CasesPage({
     const assets = buildKnownAssets({
       selectedUseCase,
       websiteUrl,
+      websiteUrls: environmentWebsiteUrls,
+      internalHosts: environmentHosts.map(({ target, ports }) => ({ target, ports })),
+      hasLocalWorkspace: environmentWorkspacePaths.length > 0,
       publicTargets: platforms.includes("external") ? publicTargets : "",
       internalTargets: platforms.includes("external") ? internalTargets : "",
       repositories: platforms.includes("code") ? repositories : "",
@@ -824,7 +1004,11 @@ export function CasesPage({
     if (!assets.ok) {
       setAssetDraftError(assets.error);
       if (assets.error.kind === "website") {
-        websiteInputRef.current?.focus();
+        (environmentUseCase ? environmentWebsiteInputRef : websiteInputRef).current?.focus();
+      } else if (assets.error.kind === "internal_host") {
+        focusEnvironmentHostInput(assets.error.index, assets.error.field);
+      } else if (assets.error.kind === "missing_environment") {
+        focusEnvironmentHostInput();
       } else if (assets.error.kind === "missing_target" || assets.error.kind === "invalid_target") {
         if (
           (assets.error.target === "public" && !useCaseNeeds(selectedDefinition, "external_ip_or_domain"))
@@ -839,8 +1023,10 @@ export function CasesPage({
 
     setAssetDraftError(undefined);
     setWorkspacePickerError(undefined);
-    const selectedFolderName = selectedWorkspacePath
-      ? localPathDisplayName(selectedWorkspacePath, text(pageCopy.folderFallback))
+    const firstWorkspacePath = environmentWorkspacePaths[0] ?? selectedWorkspacePath;
+    const selectedFolderName = firstWorkspacePath
+      ? environmentWorkspaceLabels[0]
+        ?? localPathDisplayName(firstWorkspacePath, text(pageCopy.folderFallback))
       : undefined;
     const projectName = name.trim()
       || selectedFolderName
@@ -859,7 +1045,15 @@ export function CasesPage({
       dataClasses: dataClasses.length ? dataClasses : ["none"],
       description: description.trim() || undefined,
     };
-    const created = nativeMode && guidedLocalProfile
+    const environmentWorkspaces = environmentWorkspacePaths.map((selectedPath, index) => ({
+      label: environmentWorkspaceLabels[index]
+        ?? localPathDisplayName(selectedPath, text(pageCopy.folderFallback)),
+      selectedPath,
+      inputProfile: "repository_working_tree" as const,
+    }));
+    const created = nativeMode && environmentUseCase && environmentWorkspaces.length > 0 && onCreateWithWorkspaces
+      ? await onCreateWithWorkspaces(input, environmentWorkspaces)
+      : nativeMode && guidedLocalProfile
       ? await onCreateWithWorkspace(input, {
         label: projectName,
         selectedPath: selectedWorkspacePath,
@@ -1004,85 +1198,256 @@ export function CasesPage({
       )}
 
       {useCaseNeeds(selectedDefinition, "internal_it_environment") && (
-        <>
-          <div aria-live="polite">
-            {detectingLocalNetwork && (
-              <InlineNotice tone="info" title={text(pageCopy.localNetworkDetectingTitle)}>
-                <p>{text(pageCopy.localNetworkDetectingBody)}</p>
-              </InlineNotice>
+        <div className="environment-target-builder">
+          <section className="environment-target-group" aria-labelledby="environment-repositories-title">
+            <div className="environment-target-group__heading">
+              <div>
+                <h3 id="environment-repositories-title">{text(pageCopy.environmentRepositoriesTitle)}</h3>
+                <p>{text(pageCopy.environmentRepositoriesBody)}</p>
+              </div>
+              <button
+                className="button button--secondary button--small"
+                type="button"
+                disabled={!nativeMode || busy || choosingWorkspace}
+                onClick={() => void chooseEnvironmentWorkspace()}
+              >
+                <Icon name="plus" size={15} />
+                {choosingWorkspace ? text(pageCopy.choosingFolder) : text(pageCopy.environmentAddRepository)}
+              </button>
+            </div>
+            {!nativeMode && (
+              <small>{text(pageCopy.browserLocalBody)}</small>
             )}
-            {!detectingLocalNetwork && detectedLocalNetwork && (
-              <InlineNotice tone="success" title={text(pageCopy.localNetworkFoundTitle)}>
-                <p>{text(pageCopy.localNetworkFoundBody, { target: detectedLocalNetwork.target })}</p>
-                <button
-                  className="button button--secondary button--small"
-                  type="button"
-                  disabled={detectedLocalNetworkAdded}
-                  onClick={() => useDetectedLocalNetwork(detectedLocalNetwork.target)}
-                >
-                  <Icon name={detectedLocalNetworkAdded ? "check" : "plus"} size={15} />
-                  {text(
-                    detectedLocalNetworkAdded
-                      ? pageCopy.localNetworkTargetAdded
-                      : pageCopy.localNetworkUseTarget,
-                    { target: detectedLocalNetwork.target },
-                  )}
-                </button>
-              </InlineNotice>
+            {environmentWorkspacePaths.length > 0 && (
+              <ul className="environment-folder-list">
+                {environmentWorkspacePaths.map((path, index) => {
+                  const folderName = environmentWorkspaceLabels[index]
+                    ?? localPathDisplayName(path, text(pageCopy.folderFallback));
+                  return (
+                    <li key={path}>
+                      <span><Icon name="file" size={15} /> {folderName}</span>
+                      <button
+                        className="button button--ghost button--small"
+                        type="button"
+                        aria-label={text(pageCopy.environmentRemoveRepository, { name: folderName })}
+                        onClick={() => setEnvironmentWorkspacePaths((current) => current.filter((item) => item !== path))}
+                      >
+                        <Icon name="close" size={14} />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
-            {!detectingLocalNetwork && localNetworkInventory?.status === "none" && (
-              <InlineNotice tone="info" title={text(pageCopy.localNetworkNoneTitle)}>
-                <p>{text(pageCopy.localNetworkNoneBody)}</p>
-              </InlineNotice>
+            {workspacePickerError && (
+              <small className="field-error" role="alert">{text(workspacePickerError)}</small>
             )}
-            {!detectingLocalNetwork && localNetworkInventory?.status === "ambiguous" && (
-              <InlineNotice tone="warning" title={text(pageCopy.localNetworkAmbiguousTitle)}>
-                <p>{text(pageCopy.localNetworkAmbiguousBody)}</p>
-              </InlineNotice>
-            )}
-            {!detectingLocalNetwork && localNetworkInventory?.status === "unavailable" && (
-              <InlineNotice tone="info" title={text(pageCopy.localNetworkUnavailableTitle)}>
-                <p>{text(pageCopy.localNetworkUnavailableBody)}</p>
-              </InlineNotice>
-            )}
-            {!detectingLocalNetwork && localNetworkInventory?.status === "unsupported" && (
-              <InlineNotice tone="info" title={text(pageCopy.localNetworkUnsupportedTitle)}>
-                <p>{text(pageCopy.localNetworkUnsupportedBody)}</p>
-              </InlineNotice>
-            )}
-          </div>
-          <label className="field">
-            <span>{text(pageCopy.internalTargets)}</span>
+          </section>
+
+          <label className="field environment-target-group">
+            <span>{text(pageCopy.environmentWebsitesTitle)}</span>
             <textarea
-              ref={internalTargetsInputRef}
-              required
-              rows={4}
-              value={internalTargets}
-              aria-invalid={(
-                (assetDraftError?.kind === "missing_target" || assetDraftError?.kind === "invalid_target")
-                && assetDraftError.target === "internal"
-              ) || undefined}
-              aria-describedby={
-                (assetDraftError?.kind === "missing_target" || assetDraftError?.kind === "invalid_target")
-                && assetDraftError.target === "internal"
-                  ? "internal-targets-help internal-targets-error"
-                  : "internal-targets-help"
-              }
-              onInvalid={() => setAssetDraftError({ kind: "missing_target", target: "internal" })}
-              onChange={(event) => { setInternalTargets(event.target.value); setAssetDraftError(undefined); }}
-              placeholder={text(pageCopy.internalTargetsPlaceholder)}
+              ref={environmentWebsiteInputRef}
+              rows={3}
+              value={environmentWebsiteUrls}
+              aria-invalid={assetDraftError?.kind === "website" || undefined}
+              onChange={(event) => { setEnvironmentWebsiteUrls(event.target.value); setAssetDraftError(undefined); }}
+              placeholder={text(pageCopy.environmentWebsitesPlaceholder)}
             />
-            <small id="internal-targets-help">{text(pageCopy.internalTargetsHelp)}</small>
-            {assetDraftError?.kind === "missing_target" && assetDraftError.target === "internal" && (
-              <small id="internal-targets-error" className="field-error" role="alert">{text(pageCopy.internalTargetRequired)}</small>
-            )}
-            {assetDraftError?.kind === "invalid_target" && assetDraftError.target === "internal" && (
-              <small id="internal-targets-error" className="field-error" role="alert">
-                {text(targetInputErrorCopy[assetDraftError.error], { target: assetDraftError.value })}
+            <small>{text(pageCopy.environmentWebsitesHelp)}</small>
+            {assetDraftError?.kind === "website" && (
+              <small className="field-error" role="alert">
+                {text(websiteErrorCopy[assetDraftError.error])}
               </small>
             )}
           </label>
-        </>
+
+          <section className="environment-target-group" aria-labelledby="environment-hosts-title">
+            <div className="environment-target-group__heading">
+              <div>
+                <h3 id="environment-hosts-title">{text(pageCopy.environmentHostsTitle)}</h3>
+                <p>{text(pageCopy.environmentHostsBody)}</p>
+              </div>
+              <button
+                ref={environmentHostAddButtonRef}
+                className="button button--secondary button--small"
+                type="button"
+                onClick={addEnvironmentHost}
+              >
+                <Icon name="plus" size={15} />
+                {text(pageCopy.environmentAddHost)}
+              </button>
+            </div>
+
+            <div className="environment-device-list">
+              {environmentHosts.map((host, index) => {
+                const number = index + 1;
+                const submittedError = assetDraftError?.kind === "internal_host"
+                  && assetDraftError.index === index
+                  ? assetDraftError
+                  : undefined;
+                const preparedTarget = host.target.trim()
+                  ? prepareInternalHostTarget(host.target)
+                  : undefined;
+                const preparedPorts = host.ports.trim()
+                  ? parseInternalHostPorts(host.ports)
+                  : undefined;
+                const targetError = submittedError?.field === "target"
+                  ? submittedError.error
+                  : preparedTarget?.ok === false
+                    ? preparedTarget.error
+                    : undefined;
+                const portsError = submittedError?.field === "ports"
+                  ? submittedError.error
+                  : preparedPorts?.ok === false
+                    ? preparedPorts.error
+                    : undefined;
+                const targetHelpId = `environment-host-target-help-${host.id}`;
+                const targetErrorId = targetError ? `environment-host-target-error-${host.id}` : undefined;
+                const portsHelpId = `environment-host-ports-help-${host.id}`;
+                const portsErrorId = portsError ? `environment-host-ports-error-${host.id}` : undefined;
+                return (
+                  <div className="environment-device-row environment-host-row" key={host.id}>
+                    <label className="field environment-host-row__target">
+                      <span>{text(pageCopy.environmentHostTarget, { number })}</span>
+                      <input
+                        ref={(node) => {
+                          if (node) environmentHostTargetRefs.current.set(host.id, node);
+                          else environmentHostTargetRefs.current.delete(host.id);
+                        }}
+                        type="text"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        value={host.target}
+                        aria-invalid={Boolean(targetError) || undefined}
+                        aria-describedby={[targetHelpId, targetErrorId].filter(Boolean).join(" ")}
+                        onChange={(event) => updateEnvironmentHost(host.id, { target: event.target.value })}
+                        placeholder={internalHostGreenboneProfile.exampleTarget}
+                      />
+                      <small id={targetHelpId}>{text(pageCopy.environmentHostTargetHelp)}</small>
+                      {targetError && (
+                        <small id={targetErrorId} className="field-error" role="alert">
+                          {text(internalHostErrorCopy[targetError])}
+                        </small>
+                      )}
+                    </label>
+                    <button
+                      className="button button--ghost button--small environment-device-row__remove"
+                      type="button"
+                      aria-label={text(pageCopy.environmentRemoveHost, { number })}
+                      onClick={() => removeEnvironmentHost(host.id)}
+                    >
+                      <Icon name="close" size={14} />
+                      <span>{text(pageCopy.environmentRemoveHost, { number })}</span>
+                    </button>
+                    <details
+                      ref={(node) => {
+                        if (node) environmentHostAdvancedRefs.current.set(host.id, node);
+                        else environmentHostAdvancedRefs.current.delete(host.id);
+                      }}
+                      className="environment-host-row__advanced"
+                    >
+                      <summary>{text(pageCopy.environmentHostAdvanced)}</summary>
+                      <label className="field">
+                        <span>{text(pageCopy.environmentHostPorts)}</span>
+                        <input
+                          ref={(node) => {
+                            if (node) environmentHostPortsRefs.current.set(host.id, node);
+                            else environmentHostPortsRefs.current.delete(host.id);
+                          }}
+                          type="text"
+                          inputMode="numeric"
+                          value={host.ports}
+                          aria-invalid={Boolean(portsError) || undefined}
+                          aria-describedby={[portsHelpId, portsErrorId].filter(Boolean).join(" ")}
+                          onChange={(event) => updateEnvironmentHost(host.id, { ports: event.target.value })}
+                          placeholder={internalHostGreenboneProfile.defaultPorts.join(", ")}
+                        />
+                        <small id={portsHelpId}>{text(pageCopy.environmentHostPortsHelp, {
+                          ports: internalHostGreenboneProfile.defaultPorts.join(", "),
+                        })}</small>
+                        {portsError && (
+                          <small id={portsErrorId} className="field-error" role="alert">
+                            {text(internalHostPortsErrorCopy[portsError])}
+                          </small>
+                        )}
+                      </label>
+                    </details>
+                    <small className="environment-device-row__coverage">
+                      <strong>{text(pageCopy.environmentHostCoverage)}</strong>{" "}
+                      {text(internalHostGreenboneProfile.coverageNote)}
+                    </small>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          <details ref={environmentInventoryDetailsRef} className="environment-target-group environment-inventory">
+            <summary>
+              <span>
+                <strong>{text(pageCopy.environmentInventoryTitle)}</strong>
+                <small>{text(pageCopy.environmentInventoryHint)}</small>
+              </span>
+              <Icon name="chevron" size={17} />
+            </summary>
+            <div className="environment-inventory__body">
+              <label className="field">
+                <span>{text(pageCopy.internalTargets)}</span>
+                <textarea
+                  ref={internalTargetsInputRef}
+                  rows={3}
+                  value={internalTargets}
+                  aria-invalid={assetDraftError?.kind === "invalid_target" && assetDraftError.target === "internal" || undefined}
+                  aria-describedby={assetDraftError?.kind === "invalid_target" && assetDraftError.target === "internal"
+                    ? "internal-targets-help internal-targets-error"
+                    : "internal-targets-help"}
+                  onChange={(event) => { setInternalTargets(event.target.value); setAssetDraftError(undefined); }}
+                  placeholder={text(pageCopy.internalTargetsPlaceholder)}
+                />
+                <small id="internal-targets-help">{text(pageCopy.environmentInventoryHelp)}</small>
+                {assetDraftError?.kind === "invalid_target" && assetDraftError.target === "internal" && (
+                  <small id="internal-targets-error" className="field-error" role="alert">
+                    {text(targetInputErrorCopy[assetDraftError.error], { target: assetDraftError.value })}
+                  </small>
+                )}
+              </label>
+
+              <details className="environment-network-suggestion">
+                <summary>{text(pageCopy.localNetworkFoundTitle)}</summary>
+                <div aria-live="polite">
+                  {detectingLocalNetwork && <p>{text(pageCopy.localNetworkDetectingBody)}</p>}
+                  {!detectingLocalNetwork && detectedLocalNetwork && (
+                    <>
+                      <p>{text(pageCopy.localNetworkFoundBody, { target: detectedLocalNetwork.target })}</p>
+                      <button
+                        className="button button--secondary button--small"
+                        type="button"
+                        disabled={detectedLocalNetworkAdded}
+                        onClick={() => useDetectedLocalNetwork(detectedLocalNetwork.target)}
+                      >
+                        <Icon name={detectedLocalNetworkAdded ? "check" : "plus"} size={15} />
+                        {text(
+                          detectedLocalNetworkAdded ? pageCopy.localNetworkTargetAdded : pageCopy.localNetworkUseTarget,
+                          { target: detectedLocalNetwork.target },
+                        )}
+                      </button>
+                    </>
+                  )}
+                  {!detectingLocalNetwork && localNetworkInventory?.status === "none" && <p>{text(pageCopy.localNetworkNoneBody)}</p>}
+                  {!detectingLocalNetwork && localNetworkInventory?.status === "ambiguous" && <p>{text(pageCopy.localNetworkAmbiguousBody)}</p>}
+                  {!detectingLocalNetwork && localNetworkInventory?.status === "unavailable" && <p>{text(pageCopy.localNetworkUnavailableBody)}</p>}
+                  {!detectingLocalNetwork && localNetworkInventory?.status === "unsupported" && <p>{text(pageCopy.localNetworkUnsupportedBody)}</p>}
+                </div>
+              </details>
+            </div>
+          </details>
+
+          {assetDraftError?.kind === "missing_environment" && (
+            <p className="form-error" role="alert"><Icon name="warning" size={16} /> {text(pageCopy.environmentAtLeastOne)}</p>
+          )}
+        </div>
       )}
 
       {guidedLocalInput && (
@@ -1309,7 +1674,7 @@ export function CasesPage({
                       )}
                     </label>
                   )}
-                  {platforms.includes("code") && !useCaseNeeds(selectedDefinition, "source_code") && (
+                  {platforms.includes("code") && !environmentUseCase && !useCaseNeeds(selectedDefinition, "source_code") && (
                     <label className="field">
                       <span>{text(pageCopy.repositories)}</span>
                       <textarea rows={4} value={repositories} onChange={(event) => setRepositories(event.target.value)} placeholder={text(pageCopy.repositoriesPlaceholder)} />
@@ -1380,6 +1745,8 @@ export function CasesPage({
                 ? pageCopy.preparingLocalSnapshot
                 : busy
                 ? pageCopy.creating
+                : environmentUseCase
+                  ? pageCopy.reviewEnvironment
                 : !nativeMode && guidedLocalUseCase
                   ? pageCopy.createPreview
                   : guidedLocalInput?.createAction ?? pageCopy.createLocal)}

@@ -399,6 +399,7 @@ mod tests {
                 result_pointer_sha256: None,
                 observed_at: Utc::now(),
                 summary: "raw evidence".into(),
+                location: None,
                 artifact_id: artifact.id.clone(),
                 artifact_sha256: artifact.sha256.clone(),
                 pointer: Some("/result/0".into()),

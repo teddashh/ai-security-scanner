@@ -399,6 +399,7 @@ fn local_case_lifecycle_preserves_scope_evidence_and_comparison_truth() {
                     .iter()
                     .map(|engine_id| (*engine_id).to_owned())
                     .collect(),
+                engine_asset_routes: Vec::new(),
             },
         )
         .expect("fixture-backed local scan plan");
@@ -541,6 +542,7 @@ fn local_case_lifecycle_preserves_scope_evidence_and_comparison_truth() {
             &plan.scan_run.id,
             ScanPlanRequest {
                 engine_ids: vec!["gitleaks".into()],
+                engine_asset_routes: Vec::new(),
             },
         )
         .expect("comparable exact-scope rescan");
@@ -675,6 +677,7 @@ fn local_case_lifecycle_preserves_scope_evidence_and_comparison_truth() {
             &case.id,
             ScanPlanRequest {
                 engine_ids: unavailable_ids.clone(),
+                engine_asset_routes: Vec::new(),
             },
         )
         .expect("truthful unavailable-engine plan");
@@ -812,6 +815,7 @@ fn typed_container_and_kubernetes_inputs_complete_the_product_lifecycle() {
                     .into_iter()
                     .map(str::to_owned)
                     .collect(),
+                engine_asset_routes: Vec::new(),
             },
         )
         .unwrap();

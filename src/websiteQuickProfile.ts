@@ -2,28 +2,14 @@ import type { TransportProtocol } from "./types";
 
 export const websiteQuickProfile = {
   templateRevision: "nuclei-templates@24858b4bfabfa86f0bcfd36aea24fb535152b012",
+  profileId: "nuclei_web_safe_v1",
   engineIds: ["nuclei"],
   ratePolicy: {
-    requestsPerSecond: 3,
-    concurrency: 2,
+    requestsPerSecond: 10,
+    concurrency: 5,
     timeoutSeconds: 10,
   },
-  allowedTemplateIds: [
-    "htpasswd-detection",
-    "git-credentials-disclosure",
-    "npmrc-authtoken",
-    "configuration-listing",
-    "ds-store-file",
-    "webpack-sourcemap-disclosure",
-    "cgi-printenv",
-    "debug-vars",
-    "prometheus-metrics",
-    "apache-server-status",
-    "django-debug-config-enabled",
-    "springboot-configprops",
-    "dockerfile-hidden-disclosure",
-  ],
-  maximumGetRequests: 19,
+  allowedTemplateIds: [] as string[],
 } as const;
 
 export const websiteQuickOrigin = (

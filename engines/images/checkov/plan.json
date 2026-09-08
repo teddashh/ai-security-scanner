@@ -126,7 +126,7 @@
   },
   "wrapper": {
     "required": false,
-    "strategy": "The managed image builds Checkov from the exact release source and hashed dependency lock, then exposes its direct non-shell entrypoint with fixed offline Terraform arguments.",
+    "strategy": "The managed image builds Checkov from the exact release source and hashed dependency lock, then exposes its direct non-shell entrypoint with fixed offline upstream framework auto-detection.",
     "entrypoint": null
   },
   "managed_runtime": {
@@ -164,7 +164,7 @@
     "-d",
     "/workspace",
     "--framework",
-    "terraform",
+    "all",
     "--output",
     "json",
     "--output-file-path",

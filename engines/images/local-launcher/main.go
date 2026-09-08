@@ -250,7 +250,7 @@ func validateEngineInputProfile(engineID string, inputProfile string) error {
 		"semgrep":    {profileRepository: true},
 		"trufflehog": {profileRepository: true},
 		"trivy":      {profileRepository: true, profileIaC: true, profileOCIImage: true},
-		"grype":      {profileOCIImage: true},
+		"grype":      {profileRepository: true, profileOCIImage: true},
 		"kubescape":  {profileKubernetes: true},
 		"kube-bench": {profileNodeSnapshot: true},
 	}
@@ -278,8 +278,10 @@ func planInvocation(engineID string, inputProfile string) (invocation, error) {
 		result.outputPath = "/output/semgrep.json"
 		result.arguments = []string{
 			"scan", "--json", "--output", result.outputPath,
-			"--config", "/opt/ai-security-scanner/semgrep/rules.yml",
+			"--config", semgrepRulePackPath,
 			"--metrics=off", "--disable-version-check", "--no-rewrite-rule-ids",
+			"--oss-only", "--jobs", "2", "--max-memory", "2048",
+			"--timeout", "10", "--timeout-threshold", "3",
 			"--max-target-bytes", "10000000", "/workspace",
 		}
 		result.environment = append(result.environment,
@@ -319,7 +321,11 @@ func planInvocation(engineID string, inputProfile string) (invocation, error) {
 	case "grype":
 		result.program = "/usr/local/bin/grype"
 		result.outputPath = "/output/grype.json"
-		result.arguments = []string{"oci-dir:/workspace", "--output", "json", "--file", result.outputPath}
+		source := "dir:/workspace"
+		if inputProfile == profileOCIImage {
+			source = "oci-dir:/workspace"
+		}
+		result.arguments = []string{source, "--output", "json", "--file", result.outputPath}
 		result.environment = append(result.environment,
 			"GRYPE_CHECK_FOR_APP_UPDATE=false",
 			"GRYPE_DB_AUTO_UPDATE=false",
@@ -361,7 +367,12 @@ func planInvocation(engineID string, inputProfile string) (invocation, error) {
 func verifyEngineInputs(engineID string, workspace string) error {
 	switch engineID {
 	case "semgrep":
-		return verifyFile("/opt/ai-security-scanner/semgrep/rules.yml", semgrepRulesSHA256, 1024*1024)
+		return verifySemgrepRulePack(
+			semgrepRulePackPath,
+			semgrepRuleManifestPath,
+			semgrepRuleManifestSHA256,
+			semgrepRuleFileCount,
+		)
 	case "trivy":
 		if err := verifyFile("/opt/ai-security-scanner/trivy-cache/db/trivy.db", trivyDBSHA256, maxImmutableBytes); err != nil {
 			return err
@@ -381,6 +392,85 @@ func verifyEngineInputs(engineID string, workspace string) error {
 		}
 	case "kube-bench":
 		return validateNodeSnapshot(filepath.Join(workspace, "node-snapshot"))
+	}
+	return nil
+}
+
+func verifySemgrepRulePack(root string, manifestPath string, expectedManifest string, expectedCount int) error {
+	if err := validateDirectory(root, "Semgrep rule pack"); err != nil {
+		return err
+	}
+	if expectedCount < 1 || expectedCount > 10000 {
+		return errors.New("Semgrep rule-pack file count is outside its bound")
+	}
+	if err := verifyFile(manifestPath, expectedManifest, 256*1024); err != nil {
+		return err
+	}
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return fmt.Errorf("read Semgrep rule-pack manifest: %w", err)
+	}
+	seen := make(map[string]bool, expectedCount)
+	previous := ""
+	scanner := bufio.NewScanner(bytes.NewReader(manifest))
+	scanner.Buffer(make([]byte, 1024), 4096)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if len(line) < 68 || line[64:66] != "  " {
+			return errors.New("Semgrep rule-pack manifest contains an invalid record")
+		}
+		digest, relative := line[:64], line[66:]
+		if _, err := hex.DecodeString(digest); err != nil || len(digest) != 64 {
+			return errors.New("Semgrep rule-pack manifest contains an invalid digest")
+		}
+		invalidPath := relative == "" || strings.Contains(relative, "\\") || filepath.IsAbs(relative) ||
+			filepath.ToSlash(filepath.Clean(relative)) != relative || strings.HasPrefix(relative, "../") ||
+			(!strings.HasSuffix(relative, ".yaml") && !strings.HasSuffix(relative, ".yml")) ||
+			seen[relative] || (previous != "" && relative <= previous)
+		if invalidPath {
+			return errors.New("Semgrep rule-pack manifest contains an invalid path")
+		}
+		seen[relative] = true
+		previous = relative
+		if err := verifyFile(filepath.Join(root, filepath.FromSlash(relative)), digest, 1024*1024); err != nil {
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read Semgrep rule-pack manifest: %w", err)
+	}
+	if len(seen) != expectedCount {
+		return fmt.Errorf("Semgrep rule-pack manifest contains %d files; expected %d", len(seen), expectedCount)
+	}
+	actualCount := 0
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == root {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return errors.New("Semgrep rule pack contains a symbolic link")
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			return errors.New("Semgrep rule pack contains a non-regular file")
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil || !seen[filepath.ToSlash(relative)] {
+			return errors.New("Semgrep rule pack contains a file outside its immutable manifest")
+		}
+		actualCount++
+		return nil
+	}); err != nil {
+		return fmt.Errorf("enumerate Semgrep rule pack: %w", err)
+	}
+	if actualCount != expectedCount {
+		return errors.New("Semgrep rule pack does not match its immutable manifest")
 	}
 	return nil
 }
@@ -591,7 +681,10 @@ func requireJSONEOF(decoder *json.Decoder) error {
 // These release constants are verified before any scanner starts. They are
 // updated together with the corresponding Dockerfile and packaging plan.
 const (
-	semgrepRulesSHA256        = "2081a62359682db1ddd15eda7eed1f3931975870cef8f8dab7120ba86fe2e5f3"
+	semgrepRulePackPath       = "/opt/ai-security-scanner/semgrep/rules"
+	semgrepRuleManifestPath   = "/opt/ai-security-scanner/semgrep/RULES.sha256"
+	semgrepRuleManifestSHA256 = "ace912dd7a12516d60f0b37bf28b51a7c7c5384cdc79bb290892b0345f153ec8"
+	semgrepRuleFileCount      = 1603
 	trivyDBSHA256             = "e58db9fad4ce26f9ad77f4116f7a3b52527eb3a75718484903d930d110dee431"
 	trivyMetadataSHA256       = "b253a6f5e90d91bf0e0e4b6f07a6f26cb9169155d0af68309728d9d853ded143"
 	grypeDBSHA256             = "db6f590412955f6b58cec12bfa4b712b2626eef9a030bffd8f32b9ebce074ff8"

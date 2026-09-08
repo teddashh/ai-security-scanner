@@ -7,9 +7,10 @@ use crate::bootstrap::executor::{
 use crate::bootstrap::{BootstrapPlan, BootstrapRequest, create_bootstrap_plan};
 use crate::case_service::{
     ArtifactDeletionResult, CaseDeletionResult, CaseExportFormat, DurableExecutionReport,
-    ExactRuntimeCleanupSuccess, ExportPreview, FindingGroupRequest, FindingUngroupRequest,
-    FindingWorkflowRequest, LiveProviderDiscoveryOutcome, NaabuLauncherV2CoverageApplyOutcome,
-    NoWorkerNaabuCancellation, PersistedPreDispatchTaskOutcome, PersistedPreDispatchTransition,
+    EngineAssetRoute, ExactRuntimeCleanupSuccess, ExportPreview, FindingGroupRequest,
+    FindingUngroupRequest, FindingWorkflowRequest, LiveProviderDiscoveryOutcome,
+    NaabuLauncherV2CoverageApplyOutcome, NoWorkerNaabuCancellation,
+    PersistedPreDispatchTaskOutcome, PersistedPreDispatchTransition,
     PersistedScanPreflightFailureReason, PlannedEngineExecution, ScanPlan, ScanPlanRequest,
     ScanReadiness, ScanReadinessBlocker, ScanReadinessNextStep, ScanReadinessState,
     ScopeApprovalRequest, SourceMutation,
@@ -3191,6 +3192,7 @@ pub async fn start_scan(
     case_id: String,
     decisions: Option<Vec<ScopeDecision>>,
     engine_ids: Option<Vec<String>>,
+    engine_asset_routes: Option<Vec<EngineAssetRoute>>,
     app: AppHandle,
 ) -> AppResult<AssessmentCase> {
     // Authorization and the frozen run/tasks share one case revision. Keep
@@ -3220,6 +3222,7 @@ pub async fn start_scan(
                     .collect(),
                 ScanPlanRequest {
                     engine_ids: engine_ids.unwrap_or_default(),
+                    engine_asset_routes: engine_asset_routes.unwrap_or_default(),
                 },
             )?;
         start_persisted_scan_job(&app, plan)
@@ -3934,6 +3937,8 @@ pub fn cancel_scan(
 pub async fn start_rescan(
     case_id: String,
     baseline_run_id: String,
+    engine_ids: Option<Vec<String>>,
+    engine_asset_routes: Option<Vec<EngineAssetRoute>>,
     app: AppHandle,
 ) -> AppResult<AssessmentCase> {
     let state = app.state::<AppState>();
@@ -3943,7 +3948,10 @@ pub async fn start_rescan(
             .persist_rescan_before_execution_preflight(
                 &case_id,
                 &baseline_run_id,
-                ScanPlanRequest::default(),
+                ScanPlanRequest {
+                    engine_ids: engine_ids.unwrap_or_default(),
+                    engine_asset_routes: engine_asset_routes.unwrap_or_default(),
+                },
             )?;
         start_persisted_scan_job(&app, rescan.plan)
     })
@@ -4662,7 +4670,9 @@ fn run_scan_worker(
     let mut failed = false;
     let mut cancelled = false;
 
-    let mut pending_executions = VecDeque::from(plan.executable.clone());
+    let mut prioritized_executions = plan.executable.clone();
+    prioritize_first_meaningful_results(&mut prioritized_executions);
+    let mut pending_executions = VecDeque::from(prioritized_executions);
     while let Some(execution) = pending_executions.pop_front() {
         let Ok(control) = context.engine(&execution.engine_run_id) else {
             failed = true;
@@ -4979,6 +4989,32 @@ fn run_scan_worker(
         JobCompletion::Cancelled
     } else {
         JobCompletion::Completed
+    }
+}
+
+/// Changes only the in-memory worker queue. The durable run plan and every
+/// engine/asset identity remain untouched, while quick, finding-capable checks
+/// can update the beginner report before slower supplemental work finishes.
+fn prioritize_first_meaningful_results(executions: &mut [PlannedEngineExecution]) {
+    executions.sort_by_key(|execution| beginner_execution_priority(&execution.manifest.id));
+}
+
+fn beginner_execution_priority(engine_id: &str) -> u8 {
+    match engine_id {
+        "gitleaks" => 0,
+        "nuclei" => 1,
+        "semgrep" => 2,
+        "trivy" => 3,
+        "trufflehog" => 4,
+        "kics" => 5,
+        "checkov" => 6,
+        // Greenbone can use the full deep-network execution window for each
+        // device. Do not make every remaining repository result wait behind it.
+        "greenbone" => 7,
+        // Inventory remains useful in a full run, but it must not delay the
+        // first vulnerability, secret, or unsafe-configuration result.
+        "syft" => 100,
+        _ => 50,
     }
 }
 
@@ -7283,6 +7319,41 @@ mod tests {
     }
 
     #[test]
+    fn beginner_worker_priority_puts_fast_security_results_before_supplemental_work() {
+        let mut engine_ids = vec![
+            "checkov",
+            "unknown-a",
+            "syft",
+            "trivy",
+            "nuclei",
+            "unknown-b",
+            "semgrep",
+            "gitleaks",
+            "trufflehog",
+            "greenbone",
+            "kics",
+        ];
+        engine_ids.sort_by_key(|engine_id| beginner_execution_priority(engine_id));
+
+        assert_eq!(
+            engine_ids,
+            [
+                "gitleaks",
+                "nuclei",
+                "semgrep",
+                "trivy",
+                "trufflehog",
+                "kics",
+                "checkov",
+                "greenbone",
+                "unknown-a",
+                "unknown-b",
+                "syft",
+            ]
+        );
+    }
+
+    #[test]
     fn export_commands_require_and_preserve_an_explicit_run_id() {
         let preview: PreviewExportInput = serde_json::from_value(serde_json::json!({
             "caseId": "case-1",
@@ -7676,6 +7747,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -7696,6 +7768,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -7708,6 +7781,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -7729,6 +7803,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["naabu".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -7753,6 +7828,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec![NAABU_ENGINE_ID.into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .expect("persist Naabu run");
@@ -7823,6 +7899,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec![NAABU_ENGINE_ID.into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .expect("persist Naabu run");
@@ -7994,6 +8071,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec![NAABU_ENGINE_ID.into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .expect("persist Naabu run");
@@ -8061,6 +8139,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec![NAABU_ENGINE_ID.into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .expect("persist legacy Naabu run");
@@ -8256,6 +8335,7 @@ mod tests {
                 case_id,
                 ScanPlanRequest {
                     engine_ids: vec![engine_id.into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -8292,6 +8372,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -8320,6 +8401,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -8439,6 +8521,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .expect("untrusted preflight state must not block a new isolated scan");
@@ -8527,6 +8610,7 @@ mod tests {
                     &case_id,
                     ScanPlanRequest {
                         engine_ids: vec!["gitleaks".into()],
+                        engine_asset_routes: Vec::new(),
                     },
                 )
                 .expect("untrusted old state must not block a new isolated scan");
@@ -8543,6 +8627,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .expect("start a later independent run");
@@ -8839,6 +8924,7 @@ mod tests {
                     &case_id,
                     ScanPlanRequest {
                         engine_ids: vec!["gitleaks".into()],
+                        engine_asset_routes: Vec::new(),
                     },
                 )
                 .expect("untrusted cleanup proof must not block a new isolated scan");
@@ -8866,6 +8952,7 @@ mod tests {
                 &healthy_case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .expect("persist interrupted healthy scan");
@@ -8920,6 +9007,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -8951,6 +9039,7 @@ mod tests {
                 case_id,
                 ScanPlanRequest {
                     engine_ids: vec![engine_id.into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9040,6 +9129,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into(), "semgrep".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9100,6 +9190,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["missing-engine".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9139,6 +9230,7 @@ mod tests {
                 &baseline_run_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9167,6 +9259,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["steampipe".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9197,6 +9290,7 @@ mod tests {
                 &baseline_run_id,
                 ScanPlanRequest {
                     engine_ids: vec!["steampipe".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9239,6 +9333,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["steampipe".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9259,6 +9354,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["steampipe".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9285,6 +9381,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["steampipe".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9319,6 +9416,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["steampipe".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9353,6 +9451,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["steampipe".into(), "gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9474,6 +9573,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into(), "semgrep".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9503,6 +9603,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into(), "semgrep".into(), "trufflehog".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9708,6 +9809,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9754,6 +9856,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9833,6 +9936,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();
@@ -9968,6 +10072,7 @@ mod tests {
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["steampipe".into()],
+                    engine_asset_routes: Vec::new(),
                 },
             )
             .unwrap();

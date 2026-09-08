@@ -10,8 +10,10 @@ Use [`docs/product-spec.md`](docs/product-spec.md) as the product source of trut
 ## What this means
 
 - A meaningful scan performs a real security, vulnerability, secret, dependency, configuration, or exposure check. Process completion, setup checks, and a single TCP connection do not count.
-- Lead with the shortest useful website and local-project paths. Ask only for information needed for the selected path; derive safe defaults where possible.
+- Lead with one compact IT-environment path that can combine multiple repositories, internal devices or endpoints, and websites. Keep website-only and project-only shortcuts for users who need just one target type. Ask only for information needed by the selected assets and derive safe defaults where possible.
 - A connectivity-only utility may remain available, but label it plainly and keep it out of the primary scan path.
+- Inventory and service discovery prepare an internal target for an applicable security check; they are not vulnerability results or successful scan outcomes by themselves.
+- Bind each scanner to only its applicable approved assets. A mixed run produces one report organized by asset, and one failed check does not erase completed sibling results.
 - Preserve upstream detector behavior, identifiers, severity, evidence, and remediation. Adapters may translate typed inputs, enforce scope and resource boundaries, invoke upstream, and normalize output; do not rebuild detection logic in wrappers.
 - Put product-owned prioritization, deduplication, plain-language explanation, cross-engine correlation, and report presentation in the shared report layer.
 - The report's first layer answers: what was scanned, what was found, what matters first, why it matters, what to do next, and what was not tested. Keep evidence and upstream provenance available as technical detail.

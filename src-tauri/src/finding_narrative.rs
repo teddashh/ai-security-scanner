@@ -426,6 +426,87 @@ pub(crate) fn recognized_coverage_dimension_zh_hant(dimension: &str) -> Option<S
     for (needle, label) in [
         ("tcp reachability", "TCP 連線狀態"),
         ("bounded connection contract", "受限的連線檢查"),
+        (
+            "internal-device tls vulnerability checks",
+            "內部設備 TLS 弱點檢查",
+        ),
+        (
+            "internal-device scan-profile coverage",
+            "內部設備掃描設定檔涵蓋記錄",
+        ),
+        (
+            "greenbone remote vulnerability scan",
+            "Greenbone 遠端弱點掃描",
+        ),
+        ("nuclei upstream website scan", "Nuclei 上游網站掃描"),
+        ("ssh service vulnerability checks", "SSH 服務弱點檢查"),
+        (
+            "ssh endpoint scan-profile coverage",
+            "SSH 端點掃描設定檔涵蓋記錄",
+        ),
+        ("rdp transport security checks", "RDP 傳輸安全性檢查"),
+        (
+            "rdp transport endpoint scan-profile coverage",
+            "RDP 傳輸端點掃描設定檔涵蓋記錄",
+        ),
+        (
+            "rdp implementation, authentication/nla, and endpoint host coverage",
+            "RDP 實作、驗證／NLA 與端點主機涵蓋範圍",
+        ),
+        ("vnc transport security check", "VNC 傳輸安全性檢查"),
+        (
+            "vnc transport endpoint scan-profile coverage",
+            "VNC 傳輸端點掃描設定檔涵蓋記錄",
+        ),
+        (
+            "vnc implementation, authentication, and endpoint host coverage",
+            "VNC 實作、驗證與端點主機涵蓋範圍",
+        ),
+        (
+            "smtp cleartext-login and tls security checks",
+            "SMTP 明文登入與 TLS 安全性檢查",
+        ),
+        (
+            "smtp fixed security profile attempt",
+            "SMTP 固定安全設定檔嘗試",
+        ),
+        (
+            "smtp tls checks with selected-run evidence",
+            "具有所選本輪證據的 SMTP TLS 檢查",
+        ),
+        (
+            "smtp tls negotiation-dependent coverage",
+            "需成功協商 TLS 的 SMTP 涵蓋範圍",
+        ),
+        (
+            "smtp endpoint scan-profile coverage",
+            "SMTP 端點掃描設定檔涵蓋記錄",
+        ),
+        (
+            "smtp server behavior, implementation, and endpoint host coverage",
+            "SMTP 伺服器行為、實作與端點主機涵蓋範圍",
+        ),
+        (
+            "telnet cleartext-login security check",
+            "Telnet 明文登入安全性檢查",
+        ),
+        (
+            "telnet endpoint scan-profile coverage",
+            "Telnet 端點掃描設定檔涵蓋記錄",
+        ),
+        (
+            "telnet authentication, implementation, and endpoint host coverage",
+            "Telnet 驗證、實作與端點主機涵蓋範圍",
+        ),
+        (
+            "endpoint operating-system, package, application, and local-configuration coverage",
+            "端點作業系統、套件、應用程式與本機設定涵蓋範圍",
+        ),
+        ("supported vulnerability profile", "可用的弱點掃描設定"),
+        (
+            "device product and firmware vulnerability coverage",
+            "設備產品與韌體弱點涵蓋範圍",
+        ),
         ("completed check-to-target coordinate", "完成的目標檢查"),
         ("requested scan stage", "要求的掃描深度"),
         ("requested limits", "要求的掃描限制"),
@@ -493,6 +574,7 @@ pub(crate) fn recognized_coverage_dimension_zh_hant(dimension: &str) -> Option<S
             ("cancelled check dimension", "已取消的檢查項目"),
             ("not-tested check dimension", "未檢測的檢查項目"),
             ("unfinished check dimension", "未完成的檢查項目"),
+            ("vulnerability profile evidence", "弱點掃描設定檔證據"),
         ] {
             if rest == fragment {
                 return Some(with_check(check, label));
@@ -632,6 +714,10 @@ fn with_identifier(label: &str, identifier: &str) -> String {
 /// stored English rather than claiming to understand prose from another build.
 const TESTED_OBSERVATION_PROSE: &[(&str, &str)] = &[
     (
+        "Nuclei completed the pinned upstream automatic web profile on the displayed origin. Upstream technology detection selected applicable read-only templates; completion does not prove that every eligible template executed.",
+        "Nuclei 已對畫面所列網站來源範圍完成固定版本的上游自動網站設定。上游技術偵測會選擇適用的唯讀模板；完成不代表每個合格模板都實際執行。",
+    ),
+    (
         "The port accepted the bounded TCP connection.",
         "這個連接埠接受了受限的 TCP 連線。",
     ),
@@ -650,6 +736,42 @@ const TESTED_OBSERVATION_PROSE: &[(&str, &str)] = &[
     (
         "The durable task reached completed state for this target binding. More granular executed dimensions were not frozen in this case record.",
         "這項已保存的工作已針對這個目標完成。這份案件記錄沒有凍結更細部的執行範圍。",
+    ),
+    (
+        "The completed Greenbone task retained a frozen allowlist containing the profile's TLS protocol, cipher, and certificate vulnerability checks.",
+        "已完成的 Greenbone 工作保留了凍結的允許清單，其中包含此設定檔的 TLS 協定、加密套件與憑證弱點檢查。",
+    ),
+    (
+        "Greenbone completed the frozen remote-safe profile on the displayed host and ports. Its upstream service and product prerequisites decided which feed checks applied; the result API does not prove that every scheduled VT executed.",
+        "Greenbone 已對畫面所列主機與連接埠完成凍結的遠端安全掃描設定。哪些 feed 檢查適用，由上游的服務與產品先決條件決定；結果 API 不能證明每個排程的 VT 都實際執行。",
+    ),
+    (
+        "The completed Greenbone task retained the exact reviewed SSH profile for deprecated protocol, known or static host key, and weak MAC, encryption, host-key, key-size, or key-exchange choices.",
+        "已完成的 Greenbone 工作保留了精確且經過檢視的 SSH 設定檔，用來檢查淘汰的協定、已知或固定的 host key，以及較弱的 MAC、加密、host-key、key size 或 key-exchange 選項。",
+    ),
+    (
+        "The completed Greenbone task retained the exact reviewed RDP transport profile: ten TLS protocol, cipher, and certificate checks plus one check for the legacy fixed private key used by RDP 5.2 or earlier.",
+        "已完成的 Greenbone 工作保留了精確且經過檢視的 RDP 傳輸設定檔：十項 TLS 協定、加密套件與憑證檢查，加上一項針對 RDP 5.2 或更早版本所使用之舊式固定私密金鑰的檢查。",
+    ),
+    (
+        "The completed Greenbone task retained the exact reviewed VNC transport profile containing one check for an unencrypted VNC connection.",
+        "已完成的 Greenbone 工作保留了精確且經過檢視的 VNC 傳輸設定檔，其中包含一項未加密 VNC 連線檢查。",
+    ),
+    (
+        "The completed Greenbone task retained the exact reviewed SMTP profile: one banner, EHLO, STARTTLS, and advertised-AUTH check for an unencrypted cleartext login risk, plus ten TLS checks that apply when TLS can be negotiated. No credentials or mail were sent.",
+        "已完成的 Greenbone 工作保留了精確且經過檢視的 SMTP 設定檔：一項透過 banner、EHLO、STARTTLS 與服務宣告 AUTH 檢查未加密明文登入風險的檢查，加上十項在可協商 TLS 時適用的 TLS 檢查。本輪未送出帳號或密碼，也沒有寄信。",
+    ),
+    (
+        "The completed Greenbone task retained and attempted the exact SMTP profile: one check reads the banner, sends EHLO, tries STARTTLS when offered, and reviews advertised AUTH for cleartext-login risk; ten more checks depend on TLS being available. Task completion alone does not prove those TLS checks ran. No credentials or mail were sent.",
+        "已完成的 Greenbone 工作保留並嘗試執行精確的 SMTP 設定檔：其中一項檢查會讀取 banner、送出 EHLO、在服務提供時嘗試 STARTTLS，並檢視服務宣告的 AUTH 是否有明文登入風險；另有十項檢查必須在 TLS 可用時才能執行。工作完成本身不能證明這些 TLS 檢查實際執行。本輪未送出帳號或密碼，也沒有寄信。",
+    ),
+    (
+        "Only the exact TLS source OIDs present in this selected run's finding evidence are counted here. A finding for one OID does not prove that another TLS check ran.",
+        "此處只計入所選本輪 finding 證據中明確記載的 TLS 來源 OID。某一個 OID 有 finding，不能證明另一項 TLS 檢查也已執行。",
+    ),
+    (
+        "The completed Greenbone task retained the exact reviewed Telnet profile, which observes whether a login or password prompt is offered without TLS. No username or password was sent and no login was attempted.",
+        "已完成的 Greenbone 工作保留了精確且經過檢視的 Telnet 設定檔，用來觀察服務是否在沒有 TLS 的情況下提供登入或密碼提示。本輪未送出帳號或密碼，也沒有嘗試登入。",
     ),
     (
         "These exact frozen work units have validated completed outcomes across all saved attempts. A completed network check reports reachability; it is not a security pass.",
@@ -1126,6 +1248,66 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "本輪記錄了完成的掃描工具與資產對應關係，但沒有記錄實際觀察到的主機、服務、連接埠、路徑、檔案、分支、帳號或資源。",
     ),
     (
+        "This HTTPS management-service profile contains no device product or firmware vulnerability checks. TLS protocol, cipher, and certificate checks are reported separately.",
+        "此 HTTPS 管理服務設定檔不包含設備產品或韌體弱點檢查；TLS 協定、加密套件與憑證檢查會另行回報。",
+    ),
+    (
+        "This run does not retain one exact frozen HTTPS management-service profile for this asset. Current project metadata is not used to claim historical TLS coverage.",
+        "本輪沒有為此資產保留一份精確凍結的 HTTPS 管理服務設定檔。目前的專案資料不會用來宣稱當時已涵蓋 TLS。",
+    ),
+    (
+        "This run does not retain the exact fixed SSH profile for this asset. Current project metadata is not used to claim historical SSH vulnerability coverage.",
+        "本輪沒有為此資產保留精確固定的 SSH 設定檔。目前的專案資料不會用來宣稱當時已完成 SSH 弱點涵蓋。",
+    ),
+    (
+        "The unauthenticated SSH service profile does not inspect operating-system patch level, installed packages or applications, or local host configuration.",
+        "這項不需登入的 SSH 服務設定檔，不會檢查作業系統修補層級、已安裝的套件或應用程式，也不會檢查主機本機設定。",
+    ),
+    (
+        "This run does not retain the exact fixed RDP transport profile for this asset. Current project metadata is not used to claim historical RDP transport security coverage.",
+        "本輪沒有為此資產保留精確固定的 RDP 傳輸設定檔。目前的專案資料不會用來宣稱當時已完成 RDP 傳輸安全性涵蓋。",
+    ),
+    (
+        "The unauthenticated RDP transport profile checks one legacy RDP 5.2-or-earlier fixed-private-key issue, but does not inspect broader or current RDP implementation CVEs, authentication or Network Level Authentication (NLA), Windows patch level, installed packages or applications, or local host configuration.",
+        "這項不需登入的 RDP 傳輸設定檔會檢查一項 RDP 5.2 或更早版本的舊式固定私密金鑰問題，但不會檢查更廣泛或現行的 RDP 實作 CVE、驗證或網路層級驗證（NLA）、Windows 修補層級、已安裝的套件或應用程式，也不會檢查主機本機設定。",
+    ),
+    (
+        "This run does not retain the exact fixed VNC transport profile for this asset. Current project metadata is not used to claim historical VNC transport security coverage.",
+        "本輪沒有為此資產保留精確固定的 VNC 傳輸設定檔。目前的專案資料不會用來宣稱當時已完成 VNC 傳輸安全性涵蓋。",
+    ),
+    (
+        "The unauthenticated VNC transport profile checks whether the VNC connection is encrypted. It does not inspect VNC implementation CVEs, authentication strength, operating-system patch level, installed packages or applications, or local host configuration. No login or desktop session was attempted.",
+        "這項不需登入的 VNC 傳輸設定檔會檢查 VNC 連線是否加密，但不會檢查 VNC 實作 CVE、驗證強度、作業系統修補層級、已安裝的套件或應用程式，也不會檢查主機本機設定；本輪未嘗試登入或建立桌面工作階段。",
+    ),
+    (
+        "This run does not retain the exact fixed SMTP profile for this asset. Current project metadata is not used to claim historical SMTP security coverage.",
+        "本輪沒有為此資產保留精確固定的 SMTP 設定檔。目前的專案資料不會用來宣稱當時已完成 SMTP 安全性涵蓋。",
+    ),
+    (
+        "This run does not retain selected-run finding evidence for every SMTP TLS check. Task completion shows that the fixed profile was attempted, but it does not prove that TLS was available or that every TLS check ran; one finding proves only its own source OID.",
+        "本輪沒有為每一項 SMTP TLS 檢查保留所選本輪的 finding 證據。工作完成只表示已嘗試固定設定檔，不能證明 TLS 可用，也不能證明每一項 TLS 檢查都已執行；一筆 finding 只能證明它自己的來源 OID。",
+    ),
+    (
+        "The unauthenticated SMTP profile reads the banner, issues EHLO, negotiates STARTTLS when offered, and checks advertised AUTH for an unencrypted cleartext-login risk. Its TLS checks apply only when TLS can be negotiated. It does not send credentials or mail, test relay or delivery, authentication enforcement or bypass, anti-spam behavior, general mail-server implementation CVEs, operating-system patches, installed software, or local configuration.",
+        "這項不需登入的 SMTP 設定檔會讀取 banner、送出 EHLO、在服務提供時協商 STARTTLS，並檢查服務宣告的 AUTH 是否存在未加密的明文登入風險。只有在能協商 TLS 時才會執行 TLS 檢查。它不會送出帳號或密碼、寄信，也不會測試 relay 或投遞、驗證強制或繞過、anti-spam 行為、一般郵件伺服器實作 CVE、作業系統修補、已安裝軟體或本機設定。",
+    ),
+    (
+        "This run does not retain the exact fixed Telnet profile for this asset. Current project metadata is not used to claim historical Telnet security coverage.",
+        "本輪沒有為此資產保留精確固定的 Telnet 設定檔。目前的專案資料不會用來宣稱當時已完成 Telnet 安全性涵蓋。",
+    ),
+    (
+        "The unauthenticated Telnet profile observes whether a login or password prompt is offered without TLS. It sends no username or password and does not log in; it does not test default credentials, authentication bypass, Telnet implementation CVEs, operating-system patches, installed software, or local configuration.",
+        "這項不需登入的 Telnet 設定檔會觀察服務是否在沒有 TLS 的情況下提供登入或密碼提示。它不會送出帳號或密碼，也不會登入；不會測試預設帳密、驗證繞過、Telnet 實作 CVE、作業系統修補、已安裝軟體或本機設定。",
+    ),
+    (
+        "The Greenbone process completed, but this run does not retain one exact reviewed vulnerability profile for every bound asset. Process completion is not counted as a vulnerability result.",
+        "Greenbone 程序雖已完成，但本輪沒有為每個綁定資產保留一份精確且經審查的弱點掃描設定檔。因此程序完成不會被算成弱點掃描結果。",
+    ),
+    (
+        "This asset was added to the IT environment, but this run had no supported service-specific vulnerability profile for it. It was not contacted or tested.",
+        "此資產已加入 IT 環境，但本輪沒有適用的服務專屬弱點掃描設定，因此沒有連線，也沒有進行測試。",
+    ),
+    (
         "The task says completed but has neither a finish time nor a bounded native observation time. The report does not invent when it was tested.",
         "這項工作標示為已完成，卻既沒有結束時間，也沒有內建檢查的觀察時間。報告不會臆造檢測的時間。",
     ),
@@ -1185,6 +1367,58 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
     (
         "Keep this limitation visible; do not interpret missing historical detail as completed coverage.",
         "請保留這項限制的說明；不要把缺少的歷史細節解讀為已完成的涵蓋。",
+    ),
+    (
+        "Keep this limitation visible; do not interpret a completed process as completed SSH vulnerability coverage.",
+        "請保留這項限制；不要把程序完成解讀為已完成 SSH 弱點涵蓋。",
+    ),
+    (
+        "Keep this limitation visible; do not interpret a completed process as completed RDP transport security coverage.",
+        "請保留這項限制；不要把程序完成解讀為已完成 RDP 傳輸安全性涵蓋。",
+    ),
+    (
+        "Keep this limitation visible; do not interpret a completed process as completed VNC transport security coverage.",
+        "請保留這項限制；不要把程序完成解讀為已完成 VNC 傳輸安全性涵蓋。",
+    ),
+    (
+        "Keep this limitation visible; do not interpret a completed process as completed SMTP security coverage.",
+        "請保留這項限制；不要把程序完成解讀為已完成 SMTP 安全性涵蓋。",
+    ),
+    (
+        "Keep this limitation visible; do not interpret a completed process as completed Telnet security coverage.",
+        "請保留這項限制；不要把程序完成解讀為已完成 Telnet 安全性涵蓋。",
+    ),
+    (
+        "Keep this limitation visible; use an approved endpoint inventory or local snapshot when those host-level checks are needed.",
+        "請保留這項限制；需要主機層級檢查時，請使用已核准的端點盤點資料或本機快照。",
+    ),
+    (
+        "Keep this limitation visible; choose a separately approved host or RDP-authentication assessment when those checks are needed.",
+        "請保留這項限制；需要這些檢查時，請另外選擇經核准的主機或 RDP 驗證評估。",
+    ),
+    (
+        "Keep this limitation visible; use an approved endpoint inventory or a separate authorized VNC assessment when those checks are needed.",
+        "請保留這項限制；需要這些檢查時，請使用已核准的端點盤點資料，或另行進行已授權的 VNC 評估。",
+    ),
+    (
+        "Keep this limitation visible; use a separately approved mail-server assessment or endpoint inventory when those checks are needed.",
+        "請保留這項限制；需要這些檢查時，請另行進行已核准的郵件伺服器評估，或使用已核准的端點盤點資料。",
+    ),
+    (
+        "Keep this limitation visible; use a separately approved TLS assessment when complete SMTP TLS coverage is needed.",
+        "請保留這項限制；若需要完整的 SMTP TLS 涵蓋，請另行進行已核准的 TLS 評估。",
+    ),
+    (
+        "Keep this limitation visible; use a separately approved authentication assessment or endpoint inventory when those checks are needed.",
+        "請保留這項限制；需要這些檢查時，請另行進行已核准的驗證評估，或使用已核准的端點盤點資料。",
+    ),
+    (
+        "Choose a supported exact asset profile and run it when vulnerability coverage is needed.",
+        "需要弱點涵蓋時，請為資產選擇支援的精確掃描設定檔並執行。",
+    ),
+    (
+        "Add a supported exact service profile when you want this asset vulnerability-tested.",
+        "需要檢測此資產弱點時，請加入支援的精確服務設定。",
     ),
     (
         "Keep the saved results, then retry this scan if you need an internally consistent coverage record.",
@@ -1534,8 +1768,45 @@ mod tests {
             Some("這個連接埠接受了受限的 TCP 連線。".to_owned())
         );
         assert_eq!(
+            tested_observation_zh_hant(
+                "The completed Greenbone task retained the exact reviewed RDP transport profile: ten TLS protocol, cipher, and certificate checks plus one check for the legacy fixed private key used by RDP 5.2 or earlier."
+            ),
+            Some("已完成的 Greenbone 工作保留了精確且經過檢視的 RDP 傳輸設定檔：十項 TLS 協定、加密套件與憑證檢查，加上一項針對 RDP 5.2 或更早版本所使用之舊式固定私密金鑰的檢查。".to_owned())
+        );
+        assert_eq!(
+            tested_observation_zh_hant(
+                "The completed Greenbone task retained the exact reviewed VNC transport profile containing one check for an unencrypted VNC connection."
+            ),
+            Some("已完成的 Greenbone 工作保留了精確且經過檢視的 VNC 傳輸設定檔，其中包含一項未加密 VNC 連線檢查。".to_owned())
+        );
+        assert_eq!(
             tested_observation_zh_hant("A later build recorded a different observation."),
             None
+        );
+    }
+
+    #[test]
+    fn rdp_and_vnc_limit_prose_is_available_in_traditional_chinese() {
+        assert_eq!(
+            coverage_gap_prose_zh_hant(
+                "The unauthenticated RDP transport profile checks one legacy RDP 5.2-or-earlier fixed-private-key issue, but does not inspect broader or current RDP implementation CVEs, authentication or Network Level Authentication (NLA), Windows patch level, installed packages or applications, or local host configuration."
+            ),
+            Some("這項不需登入的 RDP 傳輸設定檔會檢查一項 RDP 5.2 或更早版本的舊式固定私密金鑰問題，但不會檢查更廣泛或現行的 RDP 實作 CVE、驗證或網路層級驗證（NLA）、Windows 修補層級、已安裝的套件或應用程式，也不會檢查主機本機設定。".to_owned())
+        );
+        assert_eq!(
+            coverage_gap_prose_zh_hant(
+                "Keep this limitation visible; choose a separately approved host or RDP-authentication assessment when those checks are needed."
+            ),
+            Some(
+                "請保留這項限制；需要這些檢查時，請另外選擇經核准的主機或 RDP 驗證評估。"
+                    .to_owned()
+            )
+        );
+        assert_eq!(
+            coverage_gap_prose_zh_hant(
+                "The unauthenticated VNC transport profile checks whether the VNC connection is encrypted. It does not inspect VNC implementation CVEs, authentication strength, operating-system patch level, installed packages or applications, or local host configuration. No login or desktop session was attempted."
+            ),
+            Some("這項不需登入的 VNC 傳輸設定檔會檢查 VNC 連線是否加密，但不會檢查 VNC 實作 CVE、驗證強度、作業系統修補層級、已安裝的套件或應用程式，也不會檢查主機本機設定；本輪未嘗試登入或建立桌面工作階段。".to_owned())
         );
     }
 
@@ -1606,6 +1877,24 @@ mod tests {
                 "部分完成的計畫工作單元",
             ),
             ("completed planned work units", "已完成的計畫工作單元"),
+            ("RDP transport security checks", "RDP 傳輸安全性檢查"),
+            (
+                "RDP transport endpoint scan-profile coverage",
+                "RDP 傳輸端點掃描設定檔涵蓋記錄",
+            ),
+            (
+                "RDP implementation, authentication/NLA, and endpoint host coverage",
+                "RDP 實作、驗證／NLA 與端點主機涵蓋範圍",
+            ),
+            ("VNC transport security check", "VNC 傳輸安全性檢查"),
+            (
+                "VNC transport endpoint scan-profile coverage",
+                "VNC 傳輸端點掃描設定檔涵蓋記錄",
+            ),
+            (
+                "VNC implementation, authentication, and endpoint host coverage",
+                "VNC 實作、驗證與端點主機涵蓋範圍",
+            ),
             // Composed around a check or engine id.
             (
                 "cloudquery granular executed scope",

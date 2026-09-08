@@ -36,6 +36,8 @@ const (
 	templateRootPath             = "/opt/nuclei-templates"
 	templateRevision             = "24858b4bfabfa86f0bcfd36aea24fb535152b012"
 	templateRevisionMarker       = "/opt/nuclei-templates/AI_SECURITY_SCANNER_REVISION"
+	nucleiWebSafeProfileID       = "nuclei_web_safe_v1"
+	nucleiWebSafeTemplateCount   = 4674
 	maxScopeBytes                = 4 * 1024 * 1024
 	maxEvidenceBytes             = 512 * 1024 * 1024
 	maxEvidenceLineBytes         = 16 * 1024 * 1024
@@ -51,6 +53,7 @@ const (
 	naabuEngineCeiling           = 4 * time.Hour
 	httpEngineCeiling            = 2 * time.Hour
 	maxNucleiRequestsPerTemplate = 20
+	maxNucleiProfileTemplates    = 10_000
 	launcherPlanLegacyVersion    = 2
 	launcherPlanCurrentVersion   = 3
 	launcherJournalSchemaVersion = 2
@@ -138,6 +141,7 @@ type ratePolicy struct {
 type templatePolicy struct {
 	Revision               string   `json:"revision"`
 	AllowedTemplateIDs     []string `json:"allowed_template_ids"`
+	ProfileID              *string  `json:"profile_id,omitempty"`
 	AllowHeadless          bool     `json:"allow_headless"`
 	AllowOutOfBand         bool     `json:"allow_out_of_band"`
 	AllowFuzzing           bool     `json:"allow_fuzzing"`
@@ -428,6 +432,7 @@ func run(arguments []string, now time.Time) error {
 	}()
 	writer := bufio.NewWriterSize(final, 64*1024)
 	written := int64(0)
+	var nucleiProfileIDs, nucleiProfilePaths []string
 
 	for index, unit := range units {
 		if !now.Before(unit.Grant.ExpiresAt) || !time.Now().UTC().Before(unit.Grant.ExpiresAt) {
@@ -444,8 +449,23 @@ func run(arguments []string, now time.Time) error {
 			command, err = httpxInvocation(unit, proxy, temporaryOutput, environment)
 		case "nuclei":
 			var templatePaths []string
-			templatePaths, err = selectedTemplatePaths(unit.Grant.TemplatePolicy, templates)
+			var templateIDs []string
+			if unit.Grant.TemplatePolicy.ProfileID != nil && len(nucleiProfileIDs) != 0 {
+				templateIDs = nucleiProfileIDs
+				templatePaths = nucleiProfilePaths
+			} else {
+				templateIDs, templatePaths, err = resolvedTemplateSelection(unit.Grant.TemplatePolicy, templates)
+				if err == nil && unit.Grant.TemplatePolicy.ProfileID != nil {
+					nucleiProfileIDs = templateIDs
+					nucleiProfilePaths = templatePaths
+				}
+			}
 			if err == nil {
+				// Evidence validation remains an exact-ID check even when the host
+				// selected a pinned profile. Resolve the profile inside this
+				// read-only launcher, then close both Nuclei and the normalizer over
+				// the same immutable ID set.
+				unit.Grant.TemplatePolicy.AllowedTemplateIDs = templateIDs
 				command, err = nucleiInvocation(unit, nucleiProxy, temporaryOutput, environment, temporaryRoot, index, templatePaths)
 			}
 		}
@@ -1621,13 +1641,27 @@ func validateTemplatePolicy(policy templatePolicy, engineID string) error {
 		return errors.New("prohibited template capability was enabled")
 	}
 	if engineID != "nuclei" {
-		if policy.Revision != "not_applicable" || len(policy.AllowedTemplateIDs) != 0 {
+		if policy.Revision != "not_applicable" || len(policy.AllowedTemplateIDs) != 0 || policy.ProfileID != nil {
 			return errors.New("non-template engine received a template selection")
 		}
 		return nil
 	}
-	if policy.Revision != "nuclei-templates@"+templateRevision || len(policy.AllowedTemplateIDs) == 0 || len(policy.AllowedTemplateIDs) > 1000 {
-		return errors.New("Nuclei policy does not match the embedded exact template revision or bounded allowlist")
+	if policy.Revision != "nuclei-templates@"+templateRevision {
+		return errors.New("Nuclei policy does not match the embedded exact template revision")
+	}
+	explicitSelection := len(policy.AllowedTemplateIDs) != 0
+	profileSelection := policy.ProfileID != nil
+	if explicitSelection == profileSelection {
+		return errors.New("Nuclei policy must select exactly one pinned profile or explicit template allowlist")
+	}
+	if profileSelection {
+		if *policy.ProfileID != nucleiWebSafeProfileID {
+			return errors.New("Nuclei policy selected an unknown pinned profile")
+		}
+		return nil
+	}
+	if len(policy.AllowedTemplateIDs) > 1000 {
+		return errors.New("Nuclei explicit template allowlist exceeds its bound")
 	}
 	seen := make(map[string]struct{}, len(policy.AllowedTemplateIDs))
 	for _, id := range policy.AllowedTemplateIDs {
@@ -1794,35 +1828,102 @@ func nucleiInvocation(unit scanUnit, proxy, output string, environment []string,
 	if err := writeExclusiveLines(idsFile, unit.Grant.TemplatePolicy.AllowedTemplateIDs); err != nil {
 		return invocation{}, err
 	}
+	automaticTemplateRoot := ""
+	if unit.Grant.TemplatePolicy.ProfileID != nil {
+		automaticTemplateRoot, err = prepareNucleiAutomaticRoot(temporaryRoot, index, templatePaths)
+		if err != nil {
+			return invocation{}, err
+		}
+	}
 	concurrency := strconv.Itoa(int(unit.Grant.RatePolicy.Concurrency))
+	requestBudget := uint64(len(templatePaths) * maxNucleiRequestsPerTemplate)
+	if unit.Grant.TemplatePolicy.ProfileID != nil {
+		// A technology detector can run once in the detection pass and once
+		// again if its product tag is selected. Add the separate Wappalyzer GET.
+		requestBudget = requestBudget*2 + 1
+	}
+	totalTimeout := boundedInvocationTimeout(
+		unit.Grant.RatePolicy,
+		requestBudget,
+		httpEngineCeiling,
+	)
+	softTimeout := totalTimeout - scannerProcessAllowance
+	if softTimeout < time.Second {
+		softTimeout = time.Second
+	}
+	arguments := []string{
+		"-target", target,
+		"-templates", templatesFile,
+		"-template-id", idsFile,
+		"-type", "http",
+		"-proxy", proxy,
+		"-rate-limit", strconv.Itoa(int(unit.Grant.RatePolicy.RequestsPerSecond)),
+		"-bulk-size", concurrency,
+		"-concurrency", concurrency,
+		"-payload-concurrency", "1",
+		"-timeout", strconv.Itoa(int(unit.Grant.RatePolicy.TimeoutSeconds)),
+		"-max-time", softTimeout.String(),
+		"-retries", "0",
+		"-response-size-read", strconv.Itoa(4 * 1024 * 1024),
+		"-response-size-save", strconv.Itoa(1024 * 1024),
+		"-jsonl-export", output,
+		"-no-httpx", "-no-interactsh", "-disable-redirects",
+		"-no-stdin", "-disable-update-check",
+		"-omit-raw", "-omit-template", "-silent", "-no-color",
+	}
+	if unit.Grant.TemplatePolicy.ProfileID != nil {
+		// Pinned Nuclei automatic scan performs Wappalyzer and template-based
+		// technology detection, then applies only matching templates. Both its
+		// discovery pass and its applicable-template pass are still filtered by
+		// the exact IDs and paths derived from the embedded safe pool above.
+		arguments = append(arguments,
+			"-automatic-scan",
+			"-update-template-dir", automaticTemplateRoot,
+		)
+	}
 	return invocation{
 		Program: "/usr/local/bin/nuclei",
-		Args: []string{
-			"-target", target,
-			"-templates", templatesFile,
-			"-template-id", idsFile,
-			"-type", "http",
-			"-proxy", proxy,
-			"-rate-limit", strconv.Itoa(int(unit.Grant.RatePolicy.RequestsPerSecond)),
-			"-bulk-size", concurrency,
-			"-concurrency", concurrency,
-			"-timeout", strconv.Itoa(int(unit.Grant.RatePolicy.TimeoutSeconds)),
-			"-retries", "0",
-			"-jsonl-export", output,
-			"-no-httpx", "-no-interactsh", "-disable-redirects",
-			"-no-stdin", "-disable-update-check",
-			"-omit-raw", "-omit-template", "-silent", "-no-color",
-		},
-		Env: environment, Expiry: unit.Grant.ExpiresAt,
+		Args:    arguments,
+		Env:     environment, Expiry: unit.Grant.ExpiresAt,
 		// Every admitted template is independently verified to declare at most
 		// twenty read-only requests. Use that upper bound for the child deadline;
 		// the reviewed engine ceiling remains the final cap.
-		Timeout: boundedInvocationTimeout(
-			unit.Grant.RatePolicy,
-			uint64(len(templatePaths)*maxNucleiRequestsPerTemplate),
-			httpEngineCeiling,
-		),
+		Timeout: totalTimeout,
 	}, nil
+}
+
+// Nuclei's upstream automatic scanner always prepends its configured template
+// directory to the explicit -templates selection. Point that implicit source at
+// a launcher-owned directory containing only one already validated member of
+// the selected pool. The explicit path and ID files then add the rest of that
+// same pool; no unvalidated template tree is available as a fallback.
+func prepareNucleiAutomaticRoot(temporaryRoot string, index int, templatePaths []string) (string, error) {
+	if len(templatePaths) == 0 {
+		return "", errors.New("Nuclei automatic profile has no validated template anchor")
+	}
+	root := filepath.Join(temporaryRoot, fmt.Sprintf("automatic-templates-%06d", index))
+	if err := os.Mkdir(root, 0o700); err != nil {
+		return "", fmt.Errorf("create isolated Nuclei automatic template root: %w", err)
+	}
+	value, err := readBoundedRegularFile(templatePaths[0], maxTemplateBytes)
+	if err != nil {
+		return "", fmt.Errorf("read Nuclei automatic template anchor: %w", err)
+	}
+	anchor := filepath.Join(root, "validated-anchor.yaml")
+	file, err := os.OpenFile(anchor, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", fmt.Errorf("create Nuclei automatic template anchor: %w", err)
+	}
+	if _, err := file.Write(value); err != nil {
+		_ = file.Close()
+		_ = os.Remove(anchor)
+		return "", fmt.Errorf("write Nuclei automatic template anchor: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(anchor)
+		return "", fmt.Errorf("close Nuclei automatic template anchor: %w", err)
+	}
+	return root, nil
 }
 
 func targetURL(unit scanUnit) (string, error) {
@@ -2131,19 +2232,63 @@ func extractTemplateID(value []byte) (string, error) {
 }
 
 func selectedTemplatePaths(policy templatePolicy, index map[string]string) ([]string, error) {
-	paths := make([]string, 0, len(policy.AllowedTemplateIDs))
-	for _, id := range policy.AllowedTemplateIDs {
+	_, paths, err := resolvedTemplateSelection(policy, index)
+	return paths, err
+}
+
+func resolvedTemplateSelection(policy templatePolicy, index map[string]string) ([]string, []string, error) {
+	if policy.ProfileID != nil {
+		if *policy.ProfileID != nucleiWebSafeProfileID || len(policy.AllowedTemplateIDs) != 0 {
+			return nil, nil, errors.New("Nuclei profile selection is unknown or mixed with explicit templates")
+		}
+		ids, paths := deriveNucleiWebSafeProfile(index)
+		if len(ids) != nucleiWebSafeTemplateCount || len(ids) > maxNucleiProfileTemplates {
+			return nil, nil, fmt.Errorf(
+				"embedded Nuclei profile derived %d templates; pinned profile requires %d",
+				len(ids), nucleiWebSafeTemplateCount,
+			)
+		}
+		return ids, paths, nil
+	}
+
+	ids := append([]string(nil), policy.AllowedTemplateIDs...)
+	paths := make([]string, 0, len(ids))
+	for _, id := range ids {
 		path, exists := index[id]
 		if !exists {
-			return nil, fmt.Errorf("Nuclei template %s is not in the embedded exact revision", id)
+			return nil, nil, fmt.Errorf("Nuclei template %s is not in the embedded exact revision", id)
 		}
 		if err := validateSafeTemplate(path, id); err != nil {
-			return nil, fmt.Errorf("Nuclei template %s is prohibited: %w", id, err)
+			return nil, nil, fmt.Errorf("Nuclei template %s is prohibited: %w", id, err)
 		}
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
-	return paths, nil
+	return ids, paths, nil
+}
+
+// deriveNucleiWebSafeProfile keeps product policy mechanical: the pinned
+// upstream template snapshot owns detector coverage, while the launcher admits
+// every template that fits the same bounded, unauthenticated, exact-origin
+// read-only contract. A feed update therefore changes coverage without copying
+// vendor or vulnerability selection into this adapter.
+func deriveNucleiWebSafeProfile(index map[string]string) ([]string, []string) {
+	candidates := make([]string, 0, len(index))
+	for id := range index {
+		candidates = append(candidates, id)
+	}
+	sort.Strings(candidates)
+	ids := make([]string, 0, len(candidates))
+	paths := make([]string, 0, len(candidates))
+	for _, id := range candidates {
+		path := index[id]
+		if validateSafeTemplate(path, id) != nil {
+			continue
+		}
+		ids = append(ids, id)
+		paths = append(paths, path)
+	}
+	return ids, paths
 }
 
 func validateSafeTemplate(path, expectedID string) error {
@@ -2156,13 +2301,21 @@ func validateSafeTemplate(path, expectedID string) error {
 		return errors.New("template identity changed after indexing")
 	}
 	lower := strings.ToLower(string(value))
-	for _, token := range []string{"interactsh", "{{oast", "multipart/form-data", "{{file", "{{env", "race_count:"} {
+	for _, token := range []string{"{{interactsh", "interactsh_", "{{oast", "multipart/form-data", "{{file", "{{env", "race_count:"} {
 		if strings.Contains(lower, token) {
 			return fmt.Errorf("contains denied capability %q", token)
 		}
 	}
-	deniedTopLevel := map[string]bool{"headless": true, "dns": true, "network": true, "file": true, "javascript": true, "code": true, "ssl": true, "websocket": true, "workflows": true, "flow": true}
-	deniedTags := map[string]bool{"headless": true, "oast": true, "fuzz": true, "fuzzing": true, "dast": true, "dos": true, "intrusive": true, "bruteforce": true, "brute-force": true, "credential-stuffing": true, "default-login": true, "file-upload": true, "upload": true}
+	deniedTopLevel := map[string]bool{"headless": true, "dns": true, "network": true, "file": true, "javascript": true, "code": true, "ssl": true, "websocket": true, "workflows": true, "flow": true, "self-contained": true}
+	deniedTags := map[string]bool{
+		"headless": true, "oast": true, "fuzz": true, "fuzzing": true,
+		"dast": true, "dos": true, "intrusive": true, "bruteforce": true,
+		"brute-force": true, "credential-stuffing": true, "default-login": true,
+		"token-spray": true, "file-upload": true, "upload": true,
+		// A GET transport is not read-only when its purpose is to make the
+		// target execute commands or contact another system.
+		"rce": true, "cmdi": true, "command-injection": true, "ssrf": true,
+	}
 	httpFound, methodFound, maxRequest := false, false, 0
 	scanner := bufio.NewScanner(strings.NewReader(lower))
 	scanner.Buffer(make([]byte, 64*1024), maxEvidenceLineBytes)
@@ -2189,6 +2342,14 @@ func validateSafeTemplate(path, expectedID string) error {
 				return fmt.Errorf("uses denied request primitive %s", strings.TrimSuffix(prefix, ":"))
 			}
 		}
+		for _, prefix := range []string{"unsafe:", "race:", "iterate-all:", "cookie-reuse:"} {
+			if strings.HasPrefix(withoutDash, prefix) && yamlBooleanTrue(strings.TrimSpace(strings.TrimPrefix(withoutDash, prefix))) {
+				return fmt.Errorf("enables denied request behavior %s", strings.TrimSuffix(prefix, ":"))
+			}
+		}
+		if strings.HasPrefix(withoutDash, "threads:") {
+			return errors.New("sets template-local request concurrency")
+		}
 		if strings.HasPrefix(withoutDash, "method:") {
 			method := strings.Trim(strings.TrimSpace(strings.TrimPrefix(withoutDash, "method:")), "\"'")
 			if method != "get" && method != "head" {
@@ -2197,7 +2358,7 @@ func validateSafeTemplate(path, expectedID string) error {
 			methodFound = true
 		}
 		if strings.HasPrefix(withoutDash, "redirects:") || strings.HasPrefix(withoutDash, "host-redirects:") {
-			if strings.HasSuffix(withoutDash, "true") {
+			if yamlBooleanTrue(strings.TrimSpace(strings.SplitN(withoutDash, ":", 2)[1])) {
 				return errors.New("enables redirects inside the template")
 			}
 		}
@@ -2219,7 +2380,107 @@ func validateSafeTemplate(path, expectedID string) error {
 	if !httpFound || !methodFound || maxRequest < 1 || maxRequest > 20 {
 		return errors.New("template is not bounded to GET/HEAD HTTP with max-request 1..20")
 	}
+	return validateTemplateRequestOrigins(value)
+}
+
+func yamlBooleanTrue(value string) bool {
+	value = strings.TrimSpace(strings.SplitN(value, "#", 2)[0])
+	value = strings.Trim(value, "\"'")
+	return strings.EqualFold(value, "true")
+}
+
+// validateTemplateRequestOrigins rejects HTTP templates that can directly
+// replace the reviewed origin. Relative paths and Nuclei's exact input-origin
+// variables remain available; protocol-relative, static, userinfo-shaped, and
+// variable-selected origins do not. Raw requests are rejected earlier.
+func validateTemplateRequestOrigins(value []byte) error {
+	scanner := bufio.NewScanner(bytes.NewReader(value))
+	scanner.Buffer(make([]byte, 64*1024), maxEvidenceLineBytes)
+	inHTTP := false
+	pathIndent := -1
+	pathCount := 0
+	for scanner.Scan() {
+		raw := scanner.Text()
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(raw) - len(strings.TrimLeft(raw, " \t"))
+		if indent == 0 {
+			inHTTP = trimmed == "http:"
+			pathIndent = -1
+			continue
+		}
+		if !inHTTP {
+			continue
+		}
+		if pathIndent >= 0 && indent <= pathIndent {
+			pathIndent = -1
+		}
+		withoutDash := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+		if pathIndent < 0 && (withoutDash == "path:" || withoutDash == "paths:") {
+			pathIndent = indent
+			continue
+		}
+		if pathIndent < 0 || !strings.HasPrefix(trimmed, "-") {
+			continue
+		}
+		pathValue, ok := yamlListScalar(strings.TrimSpace(strings.TrimPrefix(trimmed, "-")))
+		if !ok || !sameOriginTemplatePath(pathValue) {
+			return errors.New("template request path can replace the exact reviewed origin")
+		}
+		pathCount++
+		if pathCount > maxNucleiRequestsPerTemplate {
+			return errors.New("template declares more exact-origin paths than the request bound")
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return errors.New("template contains an overlong YAML line")
+	}
+	if pathCount == 0 {
+		return errors.New("template has no exact-origin HTTP request path")
+	}
 	return nil
+}
+
+func yamlListScalar(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false
+	}
+	if value[0] == '\'' || value[0] == '"' {
+		quote := value[0]
+		for index := 1; index < len(value); index++ {
+			if value[index] != quote || (quote == '"' && index > 0 && value[index-1] == '\\') {
+				continue
+			}
+			if quote == '\'' && index+1 < len(value) && value[index+1] == '\'' {
+				index++
+				continue
+			}
+			return value[1:index], true
+		}
+		return "", false
+	}
+	if marker := strings.Index(value, " #"); marker >= 0 {
+		value = value[:marker]
+	}
+	value = strings.TrimSpace(value)
+	return value, value != ""
+}
+
+func sameOriginTemplatePath(value string) bool {
+	if strings.HasPrefix(value, "/") {
+		return !strings.HasPrefix(value, "//")
+	}
+	for _, prefix := range []string{"{{BaseURL}}", "{{RootURL}}", "{{Scheme}}://{{Host}}", "{{Scheme}}://{{Hostname}}"} {
+		if !strings.HasPrefix(value, prefix) {
+			continue
+		}
+		remainder := strings.TrimPrefix(value, prefix)
+		return remainder == "" || strings.ContainsAny(remainder[:1], "/?#")
+	}
+	return false
 }
 
 func readBoundedRegularFile(path string, maximum int64) ([]byte, error) {

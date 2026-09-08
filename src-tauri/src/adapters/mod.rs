@@ -2487,48 +2487,157 @@ fn extract_checkov(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
         push_warning(warnings, "Checkov expected a JSON document");
         return Vec::new();
     };
-    let Some(failed) = root
-        .pointer("/results/failed_checks")
-        .and_then(Value::as_array)
-    else {
-        return Vec::new();
+    let mut records = Vec::new();
+    let mut inspected_rows = 0_usize;
+
+    match root {
+        // Checkov serializes a single detected framework as this legacy object
+        // shape. Keep its pointers stable for already-saved evidence.
+        Value::Object(_) => {
+            extract_checkov_framework(root, "", &mut inspected_rows, &mut records, warnings)
+        }
+        // With `--framework all`, Checkov serializes one report object per
+        // detected framework. The record limit applies across the whole
+        // document, not once per framework.
+        Value::Array(frameworks) => {
+            if frameworks.len() > MAX_RECORDS {
+                push_warning(
+                    warnings,
+                    "Checkov framework result limit reached; later framework results remain only as raw evidence",
+                );
+            }
+            for (framework_index, framework) in frameworks.iter().take(MAX_RECORDS).enumerate() {
+                if inspected_rows >= MAX_RECORDS {
+                    push_warning(
+                        warnings,
+                        "Checkov failed-check record limit reached; later rows remain only as raw evidence",
+                    );
+                    break;
+                }
+                extract_checkov_framework(
+                    framework,
+                    &format!("/{framework_index}"),
+                    &mut inspected_rows,
+                    &mut records,
+                    warnings,
+                );
+            }
+        }
+        _ => push_warning(
+            warnings,
+            "Checkov expected a JSON object or an array of framework result objects",
+        ),
+    }
+
+    records
+}
+
+fn extract_checkov_framework(
+    framework: &Value,
+    framework_pointer: &str,
+    inspected_rows: &mut usize,
+    records: &mut Vec<SourceRecord>,
+    warnings: &mut Vec<String>,
+) {
+    let display_pointer = if framework_pointer.is_empty() {
+        "/"
+    } else {
+        framework_pointer
     };
-    failed
-        .iter()
-        .take(MAX_RECORDS)
-        .enumerate()
-        .filter_map(|(index, value)| {
-            let object = value.as_object()?;
-            let rule_id = exact_rule_string_any(object, &["check_id"])?;
-            Some(record_with_severity_fallback_and_derived_confidence!(
-                format!("/results/failed_checks/{index}"),
-                rule_id.clone(),
-                string_any(object, &["check_name"])
-                    .unwrap_or_else(|| format!("Checkov check {rule_id}")),
-                // `Record.severity` is whatever the check object carried, and
-                // `BaseCheck` hardcodes `None`. The values that fill it come
-                // from downloaded platform metadata, which `--skip-download`
-                // switches off entirely. Of the 256 shipped graph-check YAMLs
-                // exactly one declares a severity locally, so this is populated
-                // for CKV2_AWS_34 and null for every other check.
-                string_any(object, &["severity"]).unwrap_or_default(),
-                // Rating the rest flat is the most that can be justified: the
-                // pack gives no per-check weight offline, and the alternative
-                // sinks a whole engine's output below Low as unknown.
-                DerivedSeverity {
-                    severity: Severity::Medium,
-                    code: SeverityBasisCode::IacPolicyCheck,
-                },
-                string_any(object, &["file_path", "repo_file_path"])
-                    .unwrap_or_else(|| "iac-resource".into()),
-                string_any(object, &["asset_id"]),
-                derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
-                EvidenceKind::Configuration,
-                references_from(value),
-                vec![],
-            ))
-        })
-        .collect()
+    let Some(object) = framework.as_object() else {
+        push_warning(
+            warnings,
+            format!("non-object Checkov framework result at {display_pointer} was skipped"),
+        );
+        return;
+    };
+
+    let failed_pointer = format!("{framework_pointer}/results/failed_checks");
+    let Some(results) = object.get("results") else {
+        // When no runner found an applicable framework, upstream emits its
+        // summary object directly rather than a report object. That is a valid
+        // zero-finding result and must stay distinct from a malformed report.
+        if object.contains_key("checkov_version")
+            && object.contains_key("passed")
+            && object.contains_key("failed")
+            && object.contains_key("skipped")
+        {
+            return;
+        }
+        push_warning(
+            warnings,
+            format!("Checkov framework result at {display_pointer} had no results object"),
+        );
+        return;
+    };
+    let Some(results) = results.as_object() else {
+        push_warning(
+            warnings,
+            format!("Checkov results at {display_pointer} were not an object"),
+        );
+        return;
+    };
+    let Some(failed) = results.get("failed_checks").and_then(Value::as_array) else {
+        push_warning(
+            warnings,
+            format!("Checkov output at {failed_pointer} was not an array"),
+        );
+        return;
+    };
+
+    for (index, value) in failed.iter().enumerate() {
+        if *inspected_rows >= MAX_RECORDS {
+            push_warning(
+                warnings,
+                "Checkov failed-check record limit reached; later rows remain only as raw evidence",
+            );
+            return;
+        }
+        *inspected_rows += 1;
+
+        let pointer = format!("{failed_pointer}/{index}");
+        let Some(check) = value.as_object() else {
+            push_warning(
+                warnings,
+                format!("non-object Checkov failed check at {pointer} was skipped"),
+            );
+            continue;
+        };
+        let Some(rule_id) = exact_rule_string_any(check, &["check_id"]) else {
+            push_warning(
+                warnings,
+                format!("Checkov failed check at {pointer} had no valid check_id and was skipped"),
+            );
+            continue;
+        };
+        records.push(record_with_severity_fallback_and_derived_confidence!(
+            pointer,
+            rule_id.clone(),
+            string_any(check, &["check_name"])
+                .unwrap_or_else(|| format!("Checkov check {rule_id}")),
+            // `Record.severity` is whatever the check object carried, and
+            // `BaseCheck` hardcodes `None`. The values that fill it come
+            // from downloaded platform metadata, which `--skip-download`
+            // switches off entirely. Of the 256 shipped graph-check YAMLs
+            // exactly one declares a severity locally, so this is populated
+            // for CKV2_AWS_34 and null for every other check.
+            string_any(check, &["severity"]).unwrap_or_default(),
+            // Rating the rest flat is the most that can be justified: the
+            // pack gives no per-check weight offline, and the alternative
+            // sinks a whole engine's output below Low as unknown.
+            DerivedSeverity {
+                severity: Severity::Medium,
+                code: SeverityBasisCode::IacPolicyCheck,
+            },
+            string_any(check, &["file_path", "repo_file_path"])
+                .unwrap_or_else(|| "iac-resource".into()),
+            string_any(check, &["asset_id"]),
+            derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
+            EvidenceKind::Configuration,
+            references_from(value),
+            vec![],
+        ));
+    }
 }
 
 fn extract_kics(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
@@ -2996,6 +3105,7 @@ fn merge_finding(
             rule_id,
             safe_text(&location, MAX_SHORT_TEXT)
         ),
+        location: Some(location.clone()),
         artifact_id: artifact.id.clone(),
         artifact_sha256: artifact.sha256.clone(),
         pointer: Some(safe_text(&record.pointer, MAX_SHORT_TEXT)),

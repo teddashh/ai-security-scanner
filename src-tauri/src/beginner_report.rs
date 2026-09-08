@@ -6,10 +6,12 @@
 //! instead of reconstructing it from mutable case state.
 
 use crate::domain::{
-    AssessmentCase, AssetKind, Confidence, ContextFactor, ControlMappingProvenance,
-    DistributionMode, EngineRun, EngineRunStatus, EngineTaskKind, Finding, FindingFamily,
-    FindingObservation, Id, LocalhostTcpObservation, LocalhostTcpOutcome, ScanRequestOutcome,
-    ScanRequestOutcomeCode, ScanRun, Severity, SeverityBasisCode,
+    AssessmentCase, Asset, AssetKind, Confidence, ContextFactor, ControlMappingProvenance,
+    DeclaredNetworkServiceMetadata, DeclaredNetworkServiceScanProfile, DeclaredWebServiceInput,
+    DeclaredWebServiceScanProfile, DistributionMode, EngineRun, EngineRunStatus, EngineTaskKind,
+    Finding, FindingFamily, FindingObservation, Id, LocalhostTcpObservation, LocalhostTcpOutcome,
+    ReportAssetDisposition, ScanRequestOutcome, ScanRequestOutcomeCode, ScanRun, Severity,
+    SeverityBasisCode,
 };
 use crate::execution_coverage::{
     CumulativeNaabuCoverage, WorkUnitOutcome, reduce_naabu_attempt_coverage,
@@ -24,6 +26,77 @@ use std::net::IpAddr;
 pub const BEGINNER_MASTER_REPORT_SCHEMA_VERSION: &str = "1.1.0";
 
 pub const FRAMEWORK_NON_CERTIFICATION_NOTICE: &str = "These references do not establish certification, compliance, control implementation, control effectiveness, endorsement, or a pass/fail result.";
+
+const GREENBONE_ENGINE_ID: &str = "greenbone";
+const GREENBONE_REMOTE_SAFE_PROFILE_ID: &str = "greenbone_remote_safe_v1";
+const NUCLEI_ENGINE_ID: &str = "nuclei";
+const NUCLEI_WEB_SAFE_PROFILE_ID: &str = "nuclei_web_safe_v1";
+const NUCLEI_TEMPLATE_REVISION: &str = "nuclei-templates@24858b4bfabfa86f0bcfd36aea24fb535152b012";
+const INTERNAL_DEVICE_TEMPLATE_REVISION: &str =
+    "greenbone-community-feed@b26d7237d56b7cf85e6ace2b9351e7851461b3a8";
+const INTERNAL_DEVICE_TLS_VULNERABILITY_OIDS: [&str; 11] = [
+    "1.3.6.1.4.1.25623.1.0.111012",
+    "1.3.6.1.4.1.25623.1.0.117274",
+    "1.3.6.1.4.1.25623.1.0.802087",
+    "1.3.6.1.4.1.25623.1.0.108094",
+    "1.3.6.1.4.1.25623.1.0.108147",
+    "1.3.6.1.4.1.25623.1.0.108022",
+    "1.3.6.1.4.1.25623.1.0.103440",
+    "1.3.6.1.4.1.25623.1.0.103955",
+    "1.3.6.1.4.1.25623.1.0.105880",
+    "1.3.6.1.4.1.25623.1.0.150710",
+    "1.3.6.1.4.1.25623.1.0.150749",
+];
+const INTERNAL_ENDPOINT_SSH_VULNERABILITY_OIDS: [&str; 7] = [
+    "1.3.6.1.4.1.25623.1.0.801993",
+    "1.3.6.1.4.1.25623.1.0.105497",
+    "1.3.6.1.4.1.25623.1.0.105610",
+    "1.3.6.1.4.1.25623.1.0.105611",
+    "1.3.6.1.4.1.25623.1.0.117687",
+    "1.3.6.1.4.1.25623.1.0.150712",
+    "1.3.6.1.4.1.25623.1.0.150713",
+];
+const INTERNAL_ENDPOINT_RDP_TLS_VULNERABILITY_OIDS: [&str; 11] = [
+    "1.3.6.1.4.1.25623.1.0.902658",
+    "1.3.6.1.4.1.25623.1.0.111012",
+    "1.3.6.1.4.1.25623.1.0.117274",
+    "1.3.6.1.4.1.25623.1.0.802087",
+    "1.3.6.1.4.1.25623.1.0.108147",
+    "1.3.6.1.4.1.25623.1.0.108022",
+    "1.3.6.1.4.1.25623.1.0.103440",
+    "1.3.6.1.4.1.25623.1.0.103955",
+    "1.3.6.1.4.1.25623.1.0.105880",
+    "1.3.6.1.4.1.25623.1.0.150710",
+    "1.3.6.1.4.1.25623.1.0.150749",
+];
+const INTERNAL_ENDPOINT_VNC_VULNERABILITY_OIDS: [&str; 1] = ["1.3.6.1.4.1.25623.1.0.108529"];
+const INTERNAL_ENDPOINT_SMTP_CLEARTEXT_LOGIN_OID: &str = "1.3.6.1.4.1.25623.1.0.108530";
+const INTERNAL_ENDPOINT_SMTP_TLS_VULNERABILITY_OIDS: [&str; 10] = [
+    "1.3.6.1.4.1.25623.1.0.111012",
+    "1.3.6.1.4.1.25623.1.0.117274",
+    "1.3.6.1.4.1.25623.1.0.802087",
+    "1.3.6.1.4.1.25623.1.0.108147",
+    "1.3.6.1.4.1.25623.1.0.108022",
+    "1.3.6.1.4.1.25623.1.0.103440",
+    "1.3.6.1.4.1.25623.1.0.103955",
+    "1.3.6.1.4.1.25623.1.0.105880",
+    "1.3.6.1.4.1.25623.1.0.150710",
+    "1.3.6.1.4.1.25623.1.0.150749",
+];
+const INTERNAL_ENDPOINT_SMTP_VULNERABILITY_OIDS: [&str; 11] = [
+    INTERNAL_ENDPOINT_SMTP_CLEARTEXT_LOGIN_OID,
+    "1.3.6.1.4.1.25623.1.0.111012",
+    "1.3.6.1.4.1.25623.1.0.117274",
+    "1.3.6.1.4.1.25623.1.0.802087",
+    "1.3.6.1.4.1.25623.1.0.108147",
+    "1.3.6.1.4.1.25623.1.0.108022",
+    "1.3.6.1.4.1.25623.1.0.103440",
+    "1.3.6.1.4.1.25623.1.0.103955",
+    "1.3.6.1.4.1.25623.1.0.105880",
+    "1.3.6.1.4.1.25623.1.0.150710",
+    "1.3.6.1.4.1.25623.1.0.150749",
+];
+const INTERNAL_ENDPOINT_TELNET_VULNERABILITY_OIDS: [&str; 1] = ["1.3.6.1.4.1.25623.1.0.108522"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BeginnerMasterReport {
@@ -347,6 +420,10 @@ pub struct FindingEvidenceReference {
     pub engine_id: String,
     pub artifact_sha256: String,
     pub observed_at: DateTime<Utc>,
+    /// Scanner-reported location after adapter redaction. Older reports may
+    /// omit it, in which case the reader is told it was not retained.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -505,7 +582,7 @@ pub fn build_beginner_master_report(
     }
 
     let requested = project_requested_coverage(case, run, !contradictory_request_outcome);
-    let actual_projection = project_actual_coverage(run);
+    let actual_projection = project_actual_coverage(case, run);
     let actual = actual_projection.actual;
     let mut coverage_gaps = actual_projection.gaps;
     data_quality_warnings.extend(actual_projection.data_quality_warnings);
@@ -513,6 +590,9 @@ pub fn build_beginner_master_report(
     append_engine_admission_gaps(run, &mut coverage_gaps);
     append_unattributed_gaps(run, &mut coverage_gaps);
     append_case_exclusions(case, run, &mut coverage_gaps);
+    append_internal_device_profile_gaps(case, run, &mut coverage_gaps);
+    append_internal_endpoint_profile_gaps(case, run, &mut coverage_gaps);
+    append_report_asset_snapshot_gaps(run, &mut coverage_gaps);
 
     for unavailable in requested
         .unavailable_dimensions
@@ -523,11 +603,11 @@ pub fn build_beginner_master_report(
             unattributed: None,
             kind: CoverageGapKind::Unavailable,
             task_id: None,
-            target_asset_ids: requested
-                .targets
-                .iter()
-                .map(|target| target.asset_id.clone())
-                .collect(),
+            // These rows describe missing run/report metadata, not a failed
+            // security outcome for every asset. Keep them visible globally;
+            // asset-scoped execution gaps are projected with their task or
+            // asset IDs by the producers above.
+            target_asset_ids: Vec::new(),
             dimension: unavailable.dimension.clone(),
             reason: unavailable.explanation.clone(),
             next_action_code: NextActionCode::PreserveVisibleLimitation,
@@ -656,6 +736,15 @@ fn project_requested_coverage(
     let mut target_ids = BTreeSet::new();
     let mut requested_check_ids = BTreeSet::new();
     let mut request_outcome_code = None;
+
+    // New mixed-environment runs freeze both the routed assets and explicitly
+    // added inventory-only assets. This is the authoritative per-run list for
+    // the report; mutable case state must not make an earlier target vanish.
+    target_ids.extend(
+        run.report_asset_snapshots
+            .iter()
+            .map(|snapshot| snapshot.asset.id.clone()),
+    );
 
     if use_request_outcome && run.is_terminal_no_checks() {
         if let Some(ScanRequestOutcome::NoChecksCompleted {
@@ -910,6 +999,33 @@ fn project_requested_target(case: &AssessmentCase, run: &ScanRun, asset_id: Id) 
         .find(|grant| grant.asset_id == asset_id)
         .and_then(|grant| grant.external_scope.as_ref())
     {
+        if let Some(profile) = exact_frozen_internal_endpoint_profile(run, &asset_id) {
+            let scheme = match profile {
+                DeclaredNetworkServiceScanProfile::InternalEndpointSsh => "ssh",
+                DeclaredNetworkServiceScanProfile::InternalEndpointRdpTls => "rdp",
+                DeclaredNetworkServiceScanProfile::InternalEndpointVnc => "vnc",
+                DeclaredNetworkServiceScanProfile::InternalEndpointSmtp => "smtp",
+                DeclaredNetworkServiceScanProfile::InternalEndpointTelnet => "telnet",
+            };
+            if let Some(endpoint) = frozen_network_service_endpoint(external, scheme) {
+                return RequestedTarget {
+                    asset_id,
+                    label: Some(endpoint),
+                    asset_kind: Some(AssetKind::Host),
+                    label_availability: DataAvailability::Recorded,
+                    asset_kind_availability: DataAvailability::Recorded,
+                };
+            }
+        }
+        if let Some(origin) = frozen_web_service_origin(external) {
+            return RequestedTarget {
+                asset_id,
+                label: Some(origin),
+                asset_kind: Some(AssetKind::WebService),
+                label_availability: DataAvailability::Recorded,
+                asset_kind_availability: DataAvailability::Recorded,
+            };
+        }
         let frozen_kind = match &external.target {
             crate::external_scope::CanonicalTarget::Hostname(_) => AssetKind::Domain,
             crate::external_scope::CanonicalTarget::Address(_)
@@ -919,6 +1035,20 @@ fn project_requested_target(case: &AssessmentCase, run: &ScanRun, asset_id: Id) 
             asset_id,
             label: Some(external.target.canonical_text()),
             asset_kind: Some(frozen_kind),
+            label_availability: DataAvailability::Recorded,
+            asset_kind_availability: DataAvailability::Recorded,
+        };
+    }
+
+    if let Some(snapshot) = run
+        .report_asset_snapshots
+        .iter()
+        .find(|snapshot| snapshot.asset.id == asset_id)
+    {
+        return RequestedTarget {
+            asset_id,
+            label: Some(snapshot.asset.name.clone()),
+            asset_kind: Some(snapshot.asset.kind.clone()),
             label_availability: DataAvailability::Recorded,
             asset_kind_availability: DataAvailability::Recorded,
         };
@@ -942,6 +1072,52 @@ fn project_requested_target(case: &AssessmentCase, run: &ScanRun, asset_id: Id) 
     }
 }
 
+fn frozen_network_service_endpoint(
+    external: &crate::external_scope::ExternalScopeGrant,
+    scheme: &str,
+) -> Option<String> {
+    if external.protocol != crate::external_scope::TransportProtocol::Tcp
+        || external.ports.len() != 1
+    {
+        return None;
+    }
+    let port = *external.ports.iter().next()?;
+    let host = match &external.target {
+        crate::external_scope::CanonicalTarget::Hostname(host) => host.clone(),
+        crate::external_scope::CanonicalTarget::Address(IpAddr::V6(address)) => {
+            format!("[{address}]")
+        }
+        crate::external_scope::CanonicalTarget::Address(address) => address.to_string(),
+        crate::external_scope::CanonicalTarget::Network(_) => return None,
+    };
+    Some(format!("{scheme}://{host}:{port}"))
+}
+
+fn frozen_web_service_origin(
+    external: &crate::external_scope::ExternalScopeGrant,
+) -> Option<String> {
+    let scheme = match external.protocol {
+        crate::external_scope::TransportProtocol::Http => "http",
+        crate::external_scope::TransportProtocol::Https => "https",
+        crate::external_scope::TransportProtocol::Tcp
+        | crate::external_scope::TransportProtocol::Udp
+        | crate::external_scope::TransportProtocol::Tls => return None,
+    };
+    if external.ports.len() != 1 {
+        return None;
+    }
+    let port = *external.ports.iter().next()?;
+    let host = match &external.target {
+        crate::external_scope::CanonicalTarget::Hostname(host) => host.clone(),
+        crate::external_scope::CanonicalTarget::Address(IpAddr::V6(address)) => {
+            format!("[{address}]")
+        }
+        crate::external_scope::CanonicalTarget::Address(address) => address.to_string(),
+        crate::external_scope::CanonicalTarget::Network(_) => return None,
+    };
+    Some(format!("{scheme}://{host}:{port}"))
+}
+
 struct ActualCoverageProjection {
     actual: ActualCoverage,
     gaps: Vec<CoverageGap>,
@@ -950,7 +1126,7 @@ struct ActualCoverageProjection {
     exact_complete_task_ids: BTreeSet<Id>,
 }
 
-fn project_actual_coverage(run: &ScanRun) -> ActualCoverageProjection {
+fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCoverageProjection {
     let mut checks = Vec::new();
     let mut network_scopes = Vec::new();
     let mut gaps = Vec::new();
@@ -1058,13 +1234,58 @@ fn project_actual_coverage(run: &ScanRun) -> ActualCoverageProjection {
                         observed_at: task.finished_at,
                     });
                 }
+                append_internal_device_tls_dimensions(run, task, &mut tested_dimensions);
+                append_nuclei_website_dimensions(run, task, &mut tested_dimensions);
+                append_internal_host_greenbone_dimensions(run, task, &mut tested_dimensions);
+                append_internal_endpoint_ssh_dimensions(run, task, &mut tested_dimensions);
+                append_internal_endpoint_rdp_tls_dimensions(run, task, &mut tested_dimensions);
+                append_internal_endpoint_vnc_dimensions(run, task, &mut tested_dimensions);
+                append_internal_endpoint_smtp_dimensions(case, run, task, &mut tested_dimensions);
+                append_internal_endpoint_telnet_dimensions(run, task, &mut tested_dimensions);
                 unavailable_dimensions.push(UnavailableDimension {
                     dimension: format!("{} granular executed scope", task.engine_id),
                     explanation: "The run records the completed engine/asset coordinate but not exact observed hosts, services, ports, paths, files, branches, accounts, or resources."
                         .into(),
                 });
-                useful_result = !tested_dimensions.is_empty();
-                exact_complete = exactly_completed_without_known_gap(task);
+                let meaningful_completed_profile = task.engine_id != GREENBONE_ENGINE_ID
+                    || task_has_exact_frozen_greenbone_vulnerability_profile(run, task);
+                if !meaningful_completed_profile {
+                    // A generic Greenbone task coordinate proves that a
+                    // process completed, not that a reviewed vulnerability
+                    // profile ran. Only exact frozen device/endpoint profiles
+                    // may produce a no-problem security result.
+                    status = CoverageDimensionStatus::NotTested;
+                    gaps.push(CoverageGap {
+                        unattributed: None,
+                        kind: CoverageGapKind::NotTested,
+                        task_id: Some(task.id.clone()),
+                        target_asset_ids: task.asset_ids.clone(),
+                        dimension: format!(
+                            "{}: vulnerability profile evidence",
+                            check_id(task)
+                        ),
+                        reason: "The Greenbone process completed, but this run does not retain one exact reviewed vulnerability profile for every bound asset. Process completion is not counted as a vulnerability result."
+                            .into(),
+                        next_action_code: NextActionCode::ChooseCompatibleCheck,
+                        next_action: "Choose a supported exact asset profile and run it when vulnerability coverage is needed."
+                            .into(),
+                    });
+                    task_gap_already_projected = true;
+                }
+                let smtp_tls_coverage_unproven =
+                    task_has_unproven_smtp_tls_coverage(case, run, task);
+                if meaningful_completed_profile && smtp_tls_coverage_unproven {
+                    // A completed task proves that the exact fixed profile was
+                    // attempted. It does not prove STARTTLS was available or
+                    // that every TLS-dependent VT ran. Keep this check partial
+                    // until selected-run evidence identifies every TLS OID.
+                    status = CoverageDimensionStatus::TestedPartial;
+                    task_gap_already_projected = true;
+                }
+                useful_result = meaningful_completed_profile && !tested_dimensions.is_empty();
+                exact_complete = meaningful_completed_profile
+                    && !smtp_tls_coverage_unproven
+                    && exactly_completed_without_known_gap(task);
             }
             EngineTaskKind::CatalogEngine => {
                 // Older adapters did not freeze granular executed dimensions.
@@ -1793,6 +2014,753 @@ fn debug_assert_tested_dimensions_are_translatable(dimensions: &[TestedDimension
     }
 }
 
+fn declared_internal_device_profile(asset: &Asset) -> Option<DeclaredWebServiceScanProfile> {
+    serde_json::from_value::<DeclaredWebServiceInput>(
+        asset.metadata.get("declared_web_service")?.clone(),
+    )
+    .ok()?
+    .scan_profile
+}
+
+fn expected_internal_device_template_ids(
+    profile: DeclaredWebServiceScanProfile,
+) -> BTreeSet<&'static str> {
+    match profile {
+        DeclaredWebServiceScanProfile::InternalDeviceHttps => {
+            INTERNAL_DEVICE_TLS_VULNERABILITY_OIDS
+                .iter()
+                .copied()
+                .collect()
+        }
+    }
+}
+
+fn exact_frozen_internal_device_profile(
+    run: &ScanRun,
+    asset_id: &str,
+) -> Option<DeclaredWebServiceScanProfile> {
+    let mut matching_grants = run
+        .scope_grant_snapshots
+        .iter()
+        .filter(|grant| grant.asset_id == asset_id && grant.external_scope.is_some());
+    let grant = matching_grants.next()?;
+    if matching_grants.next().is_some()
+        || grant.permission != crate::domain::ScanPermission::ActiveExternalTesting
+    {
+        return None;
+    }
+    let scope = grant.external_scope.as_ref()?;
+    let policy = &scope.template_policy;
+    if scope.case_id != run.case_id
+        || scope.asset_id != asset_id
+        || scope.protocol != crate::external_scope::TransportProtocol::Https
+        || scope.activity != crate::external_scope::ExternalActivity::ActiveExternal
+        || scope.ports.len() != 1
+        || scope.ports.contains(&0)
+        || scope.rate_policy.requests_per_second != 2
+        || scope.rate_policy.concurrency != 1
+        || scope.rate_policy.timeout_seconds != 15
+        || policy.revision != INTERNAL_DEVICE_TEMPLATE_REVISION
+        || policy.allow_headless
+        || policy.allow_out_of_band
+        || policy.allow_fuzzing
+        || policy.allow_file_upload
+        || policy.allow_denial_of_service
+        || policy.allow_credential_attacks
+    {
+        return None;
+    }
+    let actual_ids = policy
+        .allowed_template_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if actual_ids.len() != policy.allowed_template_ids.len() {
+        return None;
+    }
+    let profile = DeclaredWebServiceScanProfile::InternalDeviceHttps;
+    (actual_ids == expected_internal_device_template_ids(profile)).then_some(profile)
+}
+
+fn current_internal_device_profile(
+    case: &AssessmentCase,
+    asset_id: &str,
+) -> Option<DeclaredWebServiceScanProfile> {
+    case.assets
+        .iter()
+        .find(|asset| asset.id == asset_id)
+        .and_then(declared_internal_device_profile)
+}
+
+fn append_internal_device_tls_dimensions(
+    run: &ScanRun,
+    task: &EngineRun,
+    dimensions: &mut Vec<TestedDimension>,
+) {
+    if task.engine_id != GREENBONE_ENGINE_ID || task.status != EngineRunStatus::Completed {
+        return;
+    }
+    for asset_id in &task.asset_ids {
+        if exact_frozen_internal_device_profile(run, asset_id).is_none() {
+            continue;
+        }
+        dimensions.push(TestedDimension {
+            dimension: "internal-device TLS vulnerability checks".into(),
+            value: format!(
+                "{} frozen Greenbone TLS tests on asset {asset_id}",
+                INTERNAL_DEVICE_TLS_VULNERABILITY_OIDS.len()
+            ),
+            observation: "The completed Greenbone task retained a frozen allowlist containing the profile's TLS protocol, cipher, and certificate vulnerability checks."
+                .into(),
+            observed_at: task.finished_at,
+        });
+    }
+}
+
+fn declared_internal_endpoint_profile(asset: &Asset) -> Option<DeclaredNetworkServiceScanProfile> {
+    serde_json::from_value::<DeclaredNetworkServiceMetadata>(
+        asset.metadata.get("declared_network_service")?.clone(),
+    )
+    .ok()
+    .map(|service| service.scan_profile)
+}
+
+fn exact_frozen_internal_endpoint_profile(
+    run: &ScanRun,
+    asset_id: &str,
+) -> Option<DeclaredNetworkServiceScanProfile> {
+    let mut matching_grants = run
+        .scope_grant_snapshots
+        .iter()
+        .filter(|grant| grant.asset_id == asset_id && grant.external_scope.is_some());
+    let grant = matching_grants.next()?;
+    if matching_grants.next().is_some()
+        || grant.permission != crate::domain::ScanPermission::ActiveExternalTesting
+    {
+        return None;
+    }
+    let scope = grant.external_scope.as_ref()?;
+    let policy = &scope.template_policy;
+    if scope.case_id != run.case_id
+        || scope.asset_id != asset_id
+        || scope.protocol != crate::external_scope::TransportProtocol::Tcp
+        || scope.activity != crate::external_scope::ExternalActivity::ActiveExternal
+        || matches!(
+            &scope.target,
+            crate::external_scope::CanonicalTarget::Network(_)
+        )
+        || scope.ports.len() != 1
+        || scope.ports.contains(&0)
+        || scope.rate_policy.requests_per_second != 2
+        || scope.rate_policy.concurrency != 1
+        || scope.rate_policy.timeout_seconds != 15
+        || policy.revision != INTERNAL_DEVICE_TEMPLATE_REVISION
+        || policy.allow_headless
+        || policy.allow_out_of_band
+        || policy.allow_fuzzing
+        || policy.allow_file_upload
+        || policy.allow_denial_of_service
+        || policy.allow_credential_attacks
+    {
+        return None;
+    }
+    let actual_ids = policy
+        .allowed_template_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if actual_ids.len() != policy.allowed_template_ids.len() {
+        return None;
+    }
+    [
+        (
+            DeclaredNetworkServiceScanProfile::InternalEndpointSsh,
+            INTERNAL_ENDPOINT_SSH_VULNERABILITY_OIDS.as_slice(),
+        ),
+        (
+            DeclaredNetworkServiceScanProfile::InternalEndpointRdpTls,
+            INTERNAL_ENDPOINT_RDP_TLS_VULNERABILITY_OIDS.as_slice(),
+        ),
+        (
+            DeclaredNetworkServiceScanProfile::InternalEndpointVnc,
+            INTERNAL_ENDPOINT_VNC_VULNERABILITY_OIDS.as_slice(),
+        ),
+        (
+            DeclaredNetworkServiceScanProfile::InternalEndpointSmtp,
+            INTERNAL_ENDPOINT_SMTP_VULNERABILITY_OIDS.as_slice(),
+        ),
+        (
+            DeclaredNetworkServiceScanProfile::InternalEndpointTelnet,
+            INTERNAL_ENDPOINT_TELNET_VULNERABILITY_OIDS.as_slice(),
+        ),
+    ]
+    .into_iter()
+    .find_map(|(profile, expected_oids)| {
+        (actual_ids == expected_oids.iter().copied().collect::<BTreeSet<_>>()).then_some(profile)
+    })
+}
+
+fn exact_frozen_internal_endpoint_ssh_profile(run: &ScanRun, asset_id: &str) -> bool {
+    exact_frozen_internal_endpoint_profile(run, asset_id)
+        == Some(DeclaredNetworkServiceScanProfile::InternalEndpointSsh)
+}
+
+fn exact_frozen_internal_endpoint_rdp_tls_profile(run: &ScanRun, asset_id: &str) -> bool {
+    exact_frozen_internal_endpoint_profile(run, asset_id)
+        == Some(DeclaredNetworkServiceScanProfile::InternalEndpointRdpTls)
+}
+
+fn exact_frozen_internal_endpoint_vnc_profile(run: &ScanRun, asset_id: &str) -> bool {
+    exact_frozen_internal_endpoint_profile(run, asset_id)
+        == Some(DeclaredNetworkServiceScanProfile::InternalEndpointVnc)
+}
+
+fn exact_frozen_internal_endpoint_smtp_profile(run: &ScanRun, asset_id: &str) -> bool {
+    exact_frozen_internal_endpoint_profile(run, asset_id)
+        == Some(DeclaredNetworkServiceScanProfile::InternalEndpointSmtp)
+}
+
+/// Exact TLS VTs that produced frozen finding evidence for this SMTP asset in
+/// this engine task. A completed task, a current canonical finding, or evidence
+/// from another task is deliberately insufficient: none proves which
+/// negotiation-dependent VTs ran in the selected run.
+fn selected_run_evidenced_smtp_tls_oids(
+    case: &AssessmentCase,
+    run: &ScanRun,
+    task: &EngineRun,
+    asset_id: &str,
+) -> BTreeSet<String> {
+    if case.id != run.case_id || task.engine_id != GREENBONE_ENGINE_ID {
+        return BTreeSet::new();
+    }
+    case.finding_observations
+        .iter()
+        .filter(|observation| {
+            observation.run_id == run.id
+                && observation.asset_ids.iter().any(|id| id == asset_id)
+                && observation
+                    .engine_ids
+                    .iter()
+                    .any(|engine_id| engine_id == GREENBONE_ENGINE_ID)
+        })
+        .filter_map(|observation| {
+            let snapshot = observation.finding_snapshot.as_ref()?;
+            (snapshot.id == observation.finding_id
+                && snapshot.fingerprint == observation.fingerprint
+                && snapshot.case_id == case.id
+                && snapshot.asset_ids.iter().any(|id| id == asset_id))
+            .then_some((observation, snapshot))
+        })
+        .flat_map(|(observation, snapshot)| {
+            snapshot.evidence.iter().filter_map(move |evidence| {
+                let source_rule = evidence.source_rule.as_deref()?;
+                (evidence.finding_id == snapshot.id
+                    && evidence.run_id == run.id
+                    && evidence.engine_run_id.as_deref() == Some(task.id.as_str())
+                    && evidence.engine_id == GREENBONE_ENGINE_ID
+                    && observation
+                        .evidence_hashes
+                        .iter()
+                        .any(|hash| hash == &evidence.artifact_sha256)
+                    && INTERNAL_ENDPOINT_SMTP_TLS_VULNERABILITY_OIDS.contains(&source_rule))
+                .then(|| source_rule.to_owned())
+            })
+        })
+        .collect()
+}
+
+fn task_has_unproven_smtp_tls_coverage(
+    case: &AssessmentCase,
+    run: &ScanRun,
+    task: &EngineRun,
+) -> bool {
+    task.asset_ids.iter().any(|asset_id| {
+        exact_frozen_internal_endpoint_smtp_profile(run, asset_id)
+            && selected_run_evidenced_smtp_tls_oids(case, run, task, asset_id).len()
+                < INTERNAL_ENDPOINT_SMTP_TLS_VULNERABILITY_OIDS.len()
+    })
+}
+
+fn exact_frozen_internal_endpoint_telnet_profile(run: &ScanRun, asset_id: &str) -> bool {
+    exact_frozen_internal_endpoint_profile(run, asset_id)
+        == Some(DeclaredNetworkServiceScanProfile::InternalEndpointTelnet)
+}
+
+fn task_has_exact_frozen_greenbone_vulnerability_profile(run: &ScanRun, task: &EngineRun) -> bool {
+    !task.asset_ids.is_empty()
+        && task.asset_ids.iter().all(|asset_id| {
+            exact_frozen_internal_host_scope(run, asset_id).is_some()
+                || exact_frozen_internal_device_profile(run, asset_id).is_some()
+                || exact_frozen_internal_endpoint_profile(run, asset_id).is_some()
+        })
+}
+
+fn exact_frozen_nuclei_website_scope<'a>(
+    run: &'a ScanRun,
+    asset_id: &str,
+) -> Option<&'a crate::external_scope::ExternalScopeGrant> {
+    let mut matching_grants = run
+        .scope_grant_snapshots
+        .iter()
+        .filter(|grant| grant.asset_id == asset_id && grant.external_scope.is_some());
+    let grant = matching_grants.next()?;
+    if matching_grants.next().is_some()
+        || grant.permission != crate::domain::ScanPermission::ActiveExternalTesting
+    {
+        return None;
+    }
+    let scope = grant.external_scope.as_ref()?;
+    let policy = &scope.template_policy;
+    (scope.case_id == run.case_id
+        && scope.asset_id == asset_id
+        && matches!(
+            scope.protocol,
+            crate::external_scope::TransportProtocol::Http
+                | crate::external_scope::TransportProtocol::Https
+        )
+        && scope.activity == crate::external_scope::ExternalActivity::ActiveExternal
+        && !matches!(
+            &scope.target,
+            crate::external_scope::CanonicalTarget::Network(_)
+        )
+        && scope.ports.len() == 1
+        && !scope.ports.contains(&0)
+        && scope.rate_policy.requests_per_second == 10
+        && scope.rate_policy.concurrency == 5
+        && scope.rate_policy.timeout_seconds == 10
+        && policy.revision == NUCLEI_TEMPLATE_REVISION
+        && policy.allowed_template_ids.is_empty()
+        && policy.profile_id.as_deref() == Some(NUCLEI_WEB_SAFE_PROFILE_ID)
+        && !policy.allow_headless
+        && !policy.allow_out_of_band
+        && !policy.allow_fuzzing
+        && !policy.allow_file_upload
+        && !policy.allow_denial_of_service
+        && !policy.allow_credential_attacks)
+        .then_some(scope)
+}
+
+fn append_nuclei_website_dimensions(
+    run: &ScanRun,
+    task: &EngineRun,
+    dimensions: &mut Vec<TestedDimension>,
+) {
+    if task.engine_id != NUCLEI_ENGINE_ID || task.status != EngineRunStatus::Completed {
+        return;
+    }
+    for asset_id in &task.asset_ids {
+        if exact_frozen_nuclei_website_scope(run, asset_id).is_none() {
+            continue;
+        }
+        dimensions.push(TestedDimension {
+            dimension: "Nuclei upstream website scan".into(),
+            value: format!(
+                "technology-aware upstream profile on exact website origin for asset {asset_id}"
+            ),
+            observation: "Nuclei completed the pinned upstream automatic web profile on the displayed origin. Upstream technology detection selected applicable read-only templates; completion does not prove that every eligible template executed."
+                .into(),
+            observed_at: task.finished_at,
+        });
+    }
+}
+
+fn exact_frozen_internal_host_scope<'a>(
+    run: &'a ScanRun,
+    asset_id: &str,
+) -> Option<&'a crate::external_scope::ExternalScopeGrant> {
+    let mut matching_grants = run
+        .scope_grant_snapshots
+        .iter()
+        .filter(|grant| grant.asset_id == asset_id && grant.external_scope.is_some());
+    let grant = matching_grants.next()?;
+    if matching_grants.next().is_some()
+        || grant.permission != crate::domain::ScanPermission::ActiveExternalTesting
+    {
+        return None;
+    }
+    let scope = grant.external_scope.as_ref()?;
+    let policy = &scope.template_policy;
+    (scope.case_id == run.case_id
+        && scope.asset_id == asset_id
+        && scope.protocol == crate::external_scope::TransportProtocol::Tcp
+        && scope.activity == crate::external_scope::ExternalActivity::ActiveExternal
+        && !matches!(
+            &scope.target,
+            crate::external_scope::CanonicalTarget::Network(_)
+        )
+        && !scope.ports.is_empty()
+        && scope.ports.len() <= 64
+        && !scope.ports.contains(&0)
+        && scope.rate_policy.requests_per_second == 2
+        && scope.rate_policy.concurrency == 1
+        && scope.rate_policy.timeout_seconds == 15
+        && policy.revision == INTERNAL_DEVICE_TEMPLATE_REVISION
+        && policy.allowed_template_ids.is_empty()
+        && policy.profile_id.as_deref() == Some(GREENBONE_REMOTE_SAFE_PROFILE_ID)
+        && !policy.allow_headless
+        && !policy.allow_out_of_band
+        && !policy.allow_fuzzing
+        && !policy.allow_file_upload
+        && !policy.allow_denial_of_service
+        && !policy.allow_credential_attacks)
+        .then_some(scope)
+}
+
+fn append_internal_host_greenbone_dimensions(
+    run: &ScanRun,
+    task: &EngineRun,
+    dimensions: &mut Vec<TestedDimension>,
+) {
+    if task.engine_id != GREENBONE_ENGINE_ID || task.status != EngineRunStatus::Completed {
+        return;
+    }
+    for asset_id in &task.asset_ids {
+        let Some(scope) = exact_frozen_internal_host_scope(run, asset_id) else {
+            continue;
+        };
+        dimensions.push(TestedDimension {
+            dimension: "Greenbone remote vulnerability scan".into(),
+            value: format!(
+                "applicability-driven upstream profile on asset {asset_id} across {} approved TCP ports",
+                scope.ports.len()
+            ),
+            observation: "Greenbone completed the frozen remote-safe profile on the displayed host and ports. Its upstream service and product prerequisites decided which feed checks applied; the result API does not prove that every scheduled VT executed."
+                .into(),
+            observed_at: task.finished_at,
+        });
+    }
+}
+
+fn append_internal_endpoint_ssh_dimensions(
+    run: &ScanRun,
+    task: &EngineRun,
+    dimensions: &mut Vec<TestedDimension>,
+) {
+    if task.engine_id != GREENBONE_ENGINE_ID || task.status != EngineRunStatus::Completed {
+        return;
+    }
+    for asset_id in &task.asset_ids {
+        if !exact_frozen_internal_endpoint_ssh_profile(run, asset_id) {
+            continue;
+        }
+        dimensions.push(TestedDimension {
+            dimension: "SSH service vulnerability checks".into(),
+            value: format!(
+                "{} frozen upstream Greenbone SSH tests on asset {asset_id}",
+                INTERNAL_ENDPOINT_SSH_VULNERABILITY_OIDS.len()
+            ),
+            observation: "The completed Greenbone task retained the exact reviewed SSH profile for deprecated protocol, known or static host key, and weak MAC, encryption, host-key, key-size, or key-exchange choices."
+                .into(),
+            observed_at: task.finished_at,
+        });
+    }
+}
+
+fn append_internal_endpoint_rdp_tls_dimensions(
+    run: &ScanRun,
+    task: &EngineRun,
+    dimensions: &mut Vec<TestedDimension>,
+) {
+    if task.engine_id != GREENBONE_ENGINE_ID || task.status != EngineRunStatus::Completed {
+        return;
+    }
+    for asset_id in &task.asset_ids {
+        if !exact_frozen_internal_endpoint_rdp_tls_profile(run, asset_id) {
+            continue;
+        }
+        dimensions.push(TestedDimension {
+            dimension: "RDP transport security checks".into(),
+            value: format!(
+                "{} frozen upstream Greenbone RDP transport tests on asset {asset_id}",
+                INTERNAL_ENDPOINT_RDP_TLS_VULNERABILITY_OIDS.len()
+            ),
+            observation: "The completed Greenbone task retained the exact reviewed RDP transport profile: ten TLS protocol, cipher, and certificate checks plus one check for the legacy fixed private key used by RDP 5.2 or earlier."
+                .into(),
+            observed_at: task.finished_at,
+        });
+    }
+}
+
+fn append_internal_endpoint_vnc_dimensions(
+    run: &ScanRun,
+    task: &EngineRun,
+    dimensions: &mut Vec<TestedDimension>,
+) {
+    if task.engine_id != GREENBONE_ENGINE_ID || task.status != EngineRunStatus::Completed {
+        return;
+    }
+    for asset_id in &task.asset_ids {
+        if !exact_frozen_internal_endpoint_vnc_profile(run, asset_id) {
+            continue;
+        }
+        dimensions.push(TestedDimension {
+            dimension: "VNC transport security check".into(),
+            value: format!(
+                "{} frozen upstream Greenbone VNC transport test on asset {asset_id}",
+                INTERNAL_ENDPOINT_VNC_VULNERABILITY_OIDS.len()
+            ),
+            observation: "The completed Greenbone task retained the exact reviewed VNC transport profile containing one check for an unencrypted VNC connection."
+                .into(),
+            observed_at: task.finished_at,
+        });
+    }
+}
+
+fn append_internal_endpoint_smtp_dimensions(
+    case: &AssessmentCase,
+    run: &ScanRun,
+    task: &EngineRun,
+    dimensions: &mut Vec<TestedDimension>,
+) {
+    if task.engine_id != GREENBONE_ENGINE_ID || task.status != EngineRunStatus::Completed {
+        return;
+    }
+    for asset_id in &task.asset_ids {
+        if !exact_frozen_internal_endpoint_smtp_profile(run, asset_id) {
+            continue;
+        }
+        dimensions.push(TestedDimension {
+            dimension: "SMTP fixed security profile attempt".into(),
+            value: format!(
+                "exact {}-check upstream Greenbone SMTP profile on asset {asset_id}",
+                INTERNAL_ENDPOINT_SMTP_VULNERABILITY_OIDS.len()
+            ),
+            observation: "The completed Greenbone task retained and attempted the exact SMTP profile: one check reads the banner, sends EHLO, tries STARTTLS when offered, and reviews advertised AUTH for cleartext-login risk; ten more checks depend on TLS being available. Task completion alone does not prove those TLS checks ran. No credentials or mail were sent."
+                .into(),
+            observed_at: task.finished_at,
+        });
+        let evidenced_tls_oids = selected_run_evidenced_smtp_tls_oids(case, run, task, asset_id);
+        if !evidenced_tls_oids.is_empty() {
+            dimensions.push(TestedDimension {
+                dimension: "SMTP TLS checks with selected-run evidence".into(),
+                value: format!(
+                    "{} of {} selected TLS checks on asset {asset_id}",
+                    evidenced_tls_oids.len(),
+                    INTERNAL_ENDPOINT_SMTP_TLS_VULNERABILITY_OIDS.len()
+                ),
+                observation: "Only the exact TLS source OIDs present in this selected run's finding evidence are counted here. A finding for one OID does not prove that another TLS check ran."
+                    .into(),
+                observed_at: task.finished_at,
+            });
+        }
+    }
+}
+
+fn append_internal_endpoint_telnet_dimensions(
+    run: &ScanRun,
+    task: &EngineRun,
+    dimensions: &mut Vec<TestedDimension>,
+) {
+    if task.engine_id != GREENBONE_ENGINE_ID || task.status != EngineRunStatus::Completed {
+        return;
+    }
+    for asset_id in &task.asset_ids {
+        if !exact_frozen_internal_endpoint_telnet_profile(run, asset_id) {
+            continue;
+        }
+        dimensions.push(TestedDimension {
+            dimension: "Telnet cleartext-login security check".into(),
+            value: format!(
+                "{} frozen upstream Greenbone Telnet check on asset {asset_id}",
+                INTERNAL_ENDPOINT_TELNET_VULNERABILITY_OIDS.len()
+            ),
+            observation: "The completed Greenbone task retained the exact reviewed Telnet profile, which observes whether a login or password prompt is offered without TLS. No username or password was sent and no login was attempted."
+                .into(),
+            observed_at: task.finished_at,
+        });
+    }
+}
+
+fn append_internal_endpoint_profile_gaps(
+    case: &AssessmentCase,
+    run: &ScanRun,
+    gaps: &mut Vec<CoverageGap>,
+) {
+    for task in run
+        .engine_runs
+        .iter()
+        .filter(|task| task.engine_id == GREENBONE_ENGINE_ID)
+    {
+        for asset_id in &task.asset_ids {
+            let current_profile = case
+                .assets
+                .iter()
+                .find(|asset| asset.id == *asset_id)
+                .and_then(declared_internal_endpoint_profile);
+            let frozen_profile = exact_frozen_internal_endpoint_profile(run, asset_id);
+            if frozen_profile.is_none() {
+                if let Some(current_profile) = current_profile {
+                    let (dimension, reason, next_action) = match current_profile {
+                        DeclaredNetworkServiceScanProfile::InternalEndpointSsh => (
+                            "SSH endpoint scan-profile coverage",
+                            "This run does not retain the exact fixed SSH profile for this asset. Current project metadata is not used to claim historical SSH vulnerability coverage.",
+                            "Keep this limitation visible; do not interpret a completed process as completed SSH vulnerability coverage.",
+                        ),
+                        DeclaredNetworkServiceScanProfile::InternalEndpointRdpTls => (
+                            "RDP transport endpoint scan-profile coverage",
+                            "This run does not retain the exact fixed RDP transport profile for this asset. Current project metadata is not used to claim historical RDP transport security coverage.",
+                            "Keep this limitation visible; do not interpret a completed process as completed RDP transport security coverage.",
+                        ),
+                        DeclaredNetworkServiceScanProfile::InternalEndpointVnc => (
+                            "VNC transport endpoint scan-profile coverage",
+                            "This run does not retain the exact fixed VNC transport profile for this asset. Current project metadata is not used to claim historical VNC transport security coverage.",
+                            "Keep this limitation visible; do not interpret a completed process as completed VNC transport security coverage.",
+                        ),
+                        DeclaredNetworkServiceScanProfile::InternalEndpointSmtp => (
+                            "SMTP endpoint scan-profile coverage",
+                            "This run does not retain the exact fixed SMTP profile for this asset. Current project metadata is not used to claim historical SMTP security coverage.",
+                            "Keep this limitation visible; do not interpret a completed process as completed SMTP security coverage.",
+                        ),
+                        DeclaredNetworkServiceScanProfile::InternalEndpointTelnet => (
+                            "Telnet endpoint scan-profile coverage",
+                            "This run does not retain the exact fixed Telnet profile for this asset. Current project metadata is not used to claim historical Telnet security coverage.",
+                            "Keep this limitation visible; do not interpret a completed process as completed Telnet security coverage.",
+                        ),
+                    };
+                    gaps.push(CoverageGap {
+                        unattributed: None,
+                        kind: CoverageGapKind::Unavailable,
+                        task_id: Some(task.id.clone()),
+                        target_asset_ids: vec![asset_id.clone()],
+                        dimension: dimension.into(),
+                        reason: reason.into(),
+                        next_action_code: NextActionCode::PreserveVisibleLimitation,
+                        next_action: next_action.into(),
+                    });
+                }
+                continue;
+            }
+            if matches!(
+                frozen_profile.as_ref(),
+                Some(DeclaredNetworkServiceScanProfile::InternalEndpointSmtp)
+            ) && selected_run_evidenced_smtp_tls_oids(case, run, task, asset_id).len()
+                < INTERNAL_ENDPOINT_SMTP_TLS_VULNERABILITY_OIDS.len()
+            {
+                gaps.push(CoverageGap {
+                    unattributed: None,
+                    kind: CoverageGapKind::NotTested,
+                    task_id: Some(task.id.clone()),
+                    target_asset_ids: vec![asset_id.clone()],
+                    dimension: "SMTP TLS negotiation-dependent coverage".into(),
+                    reason: "This run does not retain selected-run finding evidence for every SMTP TLS check. Task completion shows that the fixed profile was attempted, but it does not prove that TLS was available or that every TLS check ran; one finding proves only its own source OID."
+                        .into(),
+                    next_action_code: NextActionCode::PreserveVisibleLimitation,
+                    next_action: "Keep this limitation visible; use a separately approved TLS assessment when complete SMTP TLS coverage is needed."
+                        .into(),
+                });
+            }
+            let (dimension, reason, next_action) = match frozen_profile {
+                Some(DeclaredNetworkServiceScanProfile::InternalEndpointSsh) => (
+                    "endpoint operating-system, package, application, and local-configuration coverage",
+                    "The unauthenticated SSH service profile does not inspect operating-system patch level, installed packages or applications, or local host configuration.",
+                    "Keep this limitation visible; use an approved endpoint inventory or local snapshot when those host-level checks are needed.",
+                ),
+                Some(DeclaredNetworkServiceScanProfile::InternalEndpointRdpTls) => (
+                    "RDP implementation, authentication/NLA, and endpoint host coverage",
+                    "The unauthenticated RDP transport profile checks one legacy RDP 5.2-or-earlier fixed-private-key issue, but does not inspect broader or current RDP implementation CVEs, authentication or Network Level Authentication (NLA), Windows patch level, installed packages or applications, or local host configuration.",
+                    "Keep this limitation visible; choose a separately approved host or RDP-authentication assessment when those checks are needed.",
+                ),
+                Some(DeclaredNetworkServiceScanProfile::InternalEndpointVnc) => (
+                    "VNC implementation, authentication, and endpoint host coverage",
+                    "The unauthenticated VNC transport profile checks whether the VNC connection is encrypted. It does not inspect VNC implementation CVEs, authentication strength, operating-system patch level, installed packages or applications, or local host configuration. No login or desktop session was attempted.",
+                    "Keep this limitation visible; use an approved endpoint inventory or a separate authorized VNC assessment when those checks are needed.",
+                ),
+                Some(DeclaredNetworkServiceScanProfile::InternalEndpointSmtp) => (
+                    "SMTP server behavior, implementation, and endpoint host coverage",
+                    "The unauthenticated SMTP profile reads the banner, issues EHLO, negotiates STARTTLS when offered, and checks advertised AUTH for an unencrypted cleartext-login risk. Its TLS checks apply only when TLS can be negotiated. It does not send credentials or mail, test relay or delivery, authentication enforcement or bypass, anti-spam behavior, general mail-server implementation CVEs, operating-system patches, installed software, or local configuration.",
+                    "Keep this limitation visible; use a separately approved mail-server assessment or endpoint inventory when those checks are needed.",
+                ),
+                Some(DeclaredNetworkServiceScanProfile::InternalEndpointTelnet) => (
+                    "Telnet authentication, implementation, and endpoint host coverage",
+                    "The unauthenticated Telnet profile observes whether a login or password prompt is offered without TLS. It sends no username or password and does not log in; it does not test default credentials, authentication bypass, Telnet implementation CVEs, operating-system patches, installed software, or local configuration.",
+                    "Keep this limitation visible; use a separately approved authentication assessment or endpoint inventory when those checks are needed.",
+                ),
+                None => unreachable!("the missing profile returned above"),
+            };
+            gaps.push(CoverageGap {
+                unattributed: None,
+                kind: CoverageGapKind::NotTested,
+                task_id: Some(task.id.clone()),
+                target_asset_ids: vec![asset_id.clone()],
+                dimension: dimension.into(),
+                reason: reason.into(),
+                next_action_code: NextActionCode::PreserveVisibleLimitation,
+                next_action: next_action.into(),
+            });
+        }
+    }
+}
+
+fn append_report_asset_snapshot_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
+    for snapshot in run
+        .report_asset_snapshots
+        .iter()
+        .filter(|snapshot| snapshot.disposition == ReportAssetDisposition::NoSupportedProfile)
+    {
+        gaps.push(CoverageGap {
+            unattributed: None,
+            kind: CoverageGapKind::NotTested,
+            task_id: None,
+            target_asset_ids: vec![snapshot.asset.id.clone()],
+            dimension: "supported vulnerability profile".into(),
+            reason: "This asset was added to the IT environment, but this run had no supported service-specific vulnerability profile for it. It was not contacted or tested."
+                .into(),
+            next_action_code: NextActionCode::ChooseCompatibleCheck,
+            next_action: "Add a supported exact service profile when you want this asset vulnerability-tested."
+                .into(),
+        });
+    }
+}
+
+fn append_internal_device_profile_gaps(
+    case: &AssessmentCase,
+    run: &ScanRun,
+    gaps: &mut Vec<CoverageGap>,
+) {
+    for task in run
+        .engine_runs
+        .iter()
+        .filter(|task| task.engine_id == GREENBONE_ENGINE_ID)
+    {
+        for asset_id in &task.asset_ids {
+            let Some(profile) = exact_frozen_internal_device_profile(run, asset_id) else {
+                if current_internal_device_profile(case, asset_id).is_some() {
+                    gaps.push(CoverageGap {
+                        unattributed: None,
+                        kind: CoverageGapKind::Unavailable,
+                        task_id: Some(task.id.clone()),
+                        target_asset_ids: vec![asset_id.clone()],
+                        dimension: "internal-device scan-profile coverage".into(),
+                        reason: "This run does not retain one exact frozen HTTPS management-service profile for this asset. Current project metadata is not used to claim historical TLS coverage."
+                            .into(),
+                        next_action_code: NextActionCode::PreserveVisibleLimitation,
+                        next_action: "Keep this limitation visible; do not interpret missing historical detail as completed coverage."
+                            .into(),
+                    });
+                }
+                continue;
+            };
+            let (dimension, reason) = match profile {
+                DeclaredWebServiceScanProfile::InternalDeviceHttps => (
+                    "device product and firmware vulnerability coverage",
+                    "This HTTPS management-service profile contains no device product or firmware vulnerability checks. TLS protocol, cipher, and certificate checks are reported separately.",
+                ),
+            };
+            gaps.push(CoverageGap {
+                unattributed: None,
+                kind: CoverageGapKind::NotTested,
+                task_id: Some(task.id.clone()),
+                target_asset_ids: vec![asset_id.clone()],
+                dimension: dimension.into(),
+                reason: reason.into(),
+                next_action_code: NextActionCode::PreserveVisibleLimitation,
+                next_action: "Keep this limitation visible; do not interpret missing historical detail as completed coverage."
+                    .into(),
+            });
+        }
+    }
+}
+
 fn append_case_exclusions(case: &AssessmentCase, run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
     for entry in case.coverage.iter().filter(|entry| {
         entry.last_run_id.as_deref() == Some(run.id.as_str())
@@ -1927,6 +2895,7 @@ fn project_finding(
                     engine_id: evidence.engine_id.clone(),
                     artifact_sha256: evidence.artifact_sha256.clone(),
                     observed_at: evidence.observed_at,
+                    location: evidence.location.clone(),
                 })
                 .collect()
         })
@@ -2619,20 +3588,21 @@ mod tests {
 
     use super::*;
     use crate::domain::{
-        Asset, AssetIdentifier, BUILT_IN_LOCALHOST_TCP_ASSET_IDENTIFIER_NAMESPACE,
+        AssessmentIntent, Asset, AssetIdentifier,
+        BUILT_IN_LOCALHOST_TCP_ASSET_IDENTIFIER_NAMESPACE,
         BUILT_IN_LOCALHOST_TCP_AUTHORIZATION_REFERENCE, BUILT_IN_LOCALHOST_TCP_ENGINE_ID,
         CaseStatus, ControlReference, CoverageEntry, CoverageStatus, DataClass, EngineRun,
         Evidence, EvidenceKind, FindingGroup, FindingStatus, NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
         NAABU_ATTEMPT_RESULT_SCHEMA_VERSION, NaabuAttemptRequest, NaabuAttemptResult,
-        OrganizationProfile, RawArtifact, ScopeGrant, SourceKind, new_id,
+        OrganizationProfile, RawArtifact, ReportAssetSnapshot, ScopeGrant, SourceKind, new_id,
     };
     use crate::execution_coverage::{
         ExecutionCoverageSummary, FinalArtifactIdentity, LAUNCHER_V2_JOURNAL_SCHEMA_VERSION,
         ValidatedArtifactBinding, ValidatedExecutionCoverage, WorkUnitAttempt, WorkUnitCoverage,
     };
     use crate::external_scope::{
-        CanonicalTarget, ExternalActivity, RatePolicy, ResolutionSnapshot, ResolvedExternalPlan,
-        TemplatePolicy, TransportProtocol,
+        CanonicalTarget, ExternalActivity, ExternalScopeGrant, RatePolicy, ResolutionSnapshot,
+        ResolvedExternalPlan, TemplatePolicy, TransportProtocol,
     };
     use crate::naabu_work_plan::{NaabuWorkPlanIdentity, build_naabu_work_plan};
     use chrono::{Duration, TimeZone};
@@ -2697,6 +3667,7 @@ mod tests {
             created_at: instant(10),
             completed_at: terminal.then(|| instant(20)),
             request_outcome: None,
+            report_asset_snapshots: Vec::new(),
             knowledge_cutoff: instant(10),
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),
@@ -2840,6 +3811,7 @@ mod tests {
             created_at: instant(10),
             completed_at: terminal.then(|| instant(20)),
             request_outcome: None,
+            report_asset_snapshots: Vec::new(),
             knowledge_cutoff: instant(10),
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),
@@ -3225,6 +4197,7 @@ mod tests {
                 )
                 .unwrap(),
             ),
+            report_asset_snapshots: Vec::new(),
             knowledge_cutoff: instant(10),
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),
@@ -3281,6 +4254,160 @@ mod tests {
                 .coverage_gaps
                 .iter()
                 .any(|gap| gap.dimension == "run-frozen target label or type")
+        );
+    }
+
+    #[test]
+    fn frozen_web_origins_keep_same_host_services_distinct_across_live_reopen_and_export() {
+        let mut case = empty_case();
+        case.assets = vec![
+            Asset {
+                id: "website-asset".into(),
+                kind: AssetKind::Domain,
+                name: "mutable website label".into(),
+                provider: None,
+                region: None,
+                identifiers: vec![],
+                discovered_from: vec![],
+                candidate: false,
+                owner_confirmed: true,
+                internet_exposed: Some(true),
+                contains_sensitive_data: None,
+                metadata: BTreeMap::new(),
+            },
+            Asset {
+                id: "device-asset".into(),
+                kind: AssetKind::IpAddress,
+                name: "mutable device label".into(),
+                provider: None,
+                region: None,
+                identifiers: vec![],
+                discovered_from: vec![],
+                candidate: false,
+                owner_confirmed: true,
+                internet_exposed: Some(false),
+                contains_sensitive_data: None,
+                metadata: BTreeMap::new(),
+            },
+        ];
+
+        let case_id = case.id.clone();
+        let frozen_grant = |id: &str, asset_id: &str, port: u16| {
+            let external = ExternalScopeGrant {
+                id: format!("external-{id}"),
+                case_id: case_id.clone(),
+                asset_id: asset_id.into(),
+                target: CanonicalTarget::Hostname("shared.example.test".into()),
+                ports: BTreeSet::from([port]),
+                protocol: TransportProtocol::Https,
+                activity: ExternalActivity::ActiveExternal,
+                rate_policy: RatePolicy {
+                    requests_per_second: 2,
+                    concurrency: 1,
+                    timeout_seconds: 15,
+                },
+                template_policy: TemplatePolicy::conservative(
+                    "templates@0123456789abcdef0123456789abcdef01234567",
+                    vec!["safe-check".into()],
+                ),
+                asserted_authority: "Approved exact origin".into(),
+                approved_by: "Target owner".into(),
+                approved_at: instant(9),
+                expires_at: instant(3_609),
+                allow_sensitive_networks: false,
+            };
+            ScopeGrant {
+                id: id.into(),
+                asset_id: asset_id.into(),
+                permission: crate::domain::ScanPermission::ActiveExternalTesting,
+                confirmed_by: "Target owner".into(),
+                confirmed_at: instant(9),
+                expires_at: Some(instant(3_609)),
+                authorization_reference: Some("Approved exact origin".into()),
+                notes: None,
+                external_scope: Some(external),
+            }
+        };
+        let mut website_task = catalog_task("website", EngineRunStatus::Running);
+        website_task.engine_id = "nuclei".into();
+        website_task.asset_ids = vec!["website-asset".into()];
+        website_task.finished_at = None;
+        let mut device_task = catalog_task("device", EngineRunStatus::Running);
+        device_task.engine_id = GREENBONE_ENGINE_ID.into();
+        device_task.asset_ids = vec!["device-asset".into()];
+        device_task.finished_at = None;
+        case.scan_runs.push(ScanRun {
+            id: "run-1".into(),
+            case_id: case.id.clone(),
+            sequence: 1,
+            created_at: instant(10),
+            completed_at: None,
+            request_outcome: None,
+            report_asset_snapshots: Vec::new(),
+            knowledge_cutoff: instant(10),
+            ai_system_applicable: false,
+            ai_system_applicability: Default::default(),
+            ai_generated_artifact: Default::default(),
+            verification_baseline_run_id: None,
+            scope_grant_ids: vec!["grant-website".into(), "grant-device".into()],
+            scope_grant_snapshots: vec![
+                frozen_grant("grant-website", "website-asset", 443),
+                frozen_grant("grant-device", "device-asset", 8_443),
+            ],
+            engine_admission_issues: Vec::new(),
+            engine_runs: vec![website_task, device_task],
+        });
+
+        let live = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(live.state.lifecycle, ReportLifecycle::Live);
+        let target = |asset_id: &str| {
+            live.requested
+                .targets
+                .iter()
+                .find(|target| target.asset_id == asset_id)
+                .expect("frozen requested target")
+        };
+        assert_eq!(
+            target("website-asset").label.as_deref(),
+            Some("https://shared.example.test:443")
+        );
+        assert_eq!(
+            target("device-asset").label.as_deref(),
+            Some("https://shared.example.test:8443")
+        );
+        assert_eq!(
+            target("website-asset").asset_kind,
+            Some(AssetKind::WebService)
+        );
+        assert_eq!(
+            target("device-asset").asset_kind,
+            Some(AssetKind::WebService)
+        );
+        assert_eq!(
+            target("website-asset").label_availability,
+            DataAvailability::Recorded
+        );
+        assert_eq!(
+            target("device-asset").asset_kind_availability,
+            DataAvailability::Recorded
+        );
+
+        let reopened: AssessmentCase =
+            serde_json::from_slice(&serde_json::to_vec(&case).unwrap()).unwrap();
+        assert_eq!(
+            build_beginner_master_report(&reopened, "run-1").unwrap(),
+            live,
+            "reopening must preserve each frozen origin and web-service kind"
+        );
+        assert_eq!(
+            crate::export::beginner_report_for_export(
+                &reopened,
+                "run-1",
+                crate::export::RedactionProfile::None,
+            )
+            .unwrap(),
+            live,
+            "the readable export must use the same shared live report identity"
         );
     }
 
@@ -3439,6 +4566,12 @@ mod tests {
             FindingSnapshotSource::FrozenSelectedRun
         );
         assert_eq!(report.findings[0].framework_references.len(), 1);
+        assert_eq!(
+            report.findings[0].evidence_references[0]
+                .location
+                .as_deref(),
+            Some("src/config.ts:42")
+        );
         assert_eq!(
             report.findings[0].confidence_basis_code,
             Some(crate::domain::ConfidenceBasisCode::DeterministicPolicyEvaluation)
@@ -3713,6 +4846,7 @@ mod tests {
                 result_pointer_sha256: None,
                 observed_at: instant(17),
                 summary: "Evidence".into(),
+                location: Some("src/config.ts:42".into()),
                 artifact_id: format!("artifact-{id}"),
                 artifact_sha256: format!("hash-{id}"),
                 pointer: None,
@@ -3759,6 +4893,1331 @@ mod tests {
                 .collect(),
             observed_at,
             finding_snapshot: Some(finding.clone()),
+        }
+    }
+
+    fn internal_device_case(profile: DeclaredWebServiceScanProfile) -> AssessmentCase {
+        let profile_name = match profile {
+            DeclaredWebServiceScanProfile::InternalDeviceHttps => "internal_device_https",
+        };
+        let mut case = empty_case();
+        case.assets.push(Asset {
+            id: "device-asset".into(),
+            kind: AssetKind::WebService,
+            name: "Internal management endpoint".into(),
+            provider: None,
+            region: None,
+            identifiers: vec![AssetIdentifier {
+                namespace: "web_origin".into(),
+                value: "https://10.20.0.9:443".into(),
+            }],
+            discovered_from: vec!["questionnaire".into()],
+            candidate: false,
+            owner_confirmed: true,
+            internet_exposed: Some(false),
+            contains_sensitive_data: None,
+            metadata: BTreeMap::from([(
+                "declared_web_service".into(),
+                serde_json::json!({
+                    "protocol": "https",
+                    "port": 443,
+                    "path": "/",
+                    "scan_profile": profile_name,
+                }),
+            )]),
+        });
+
+        let allowed_template_ids = INTERNAL_DEVICE_TLS_VULNERABILITY_OIDS
+            .iter()
+            .map(|oid| (*oid).to_owned())
+            .collect::<Vec<_>>();
+        let external_scope = ExternalScopeGrant {
+            id: "external-device-grant".into(),
+            case_id: case.id.clone(),
+            asset_id: "device-asset".into(),
+            target: CanonicalTarget::Address("10.20.0.9".parse().unwrap()),
+            ports: BTreeSet::from([443]),
+            protocol: TransportProtocol::Https,
+            activity: ExternalActivity::ActiveExternal,
+            rate_policy: RatePolicy {
+                requests_per_second: 2,
+                concurrency: 1,
+                timeout_seconds: 15,
+            },
+            template_policy: TemplatePolicy::conservative(
+                INTERNAL_DEVICE_TEMPLATE_REVISION,
+                allowed_template_ids,
+            ),
+            asserted_authority: "Approved internal endpoint".into(),
+            approved_by: "Target owner".into(),
+            approved_at: instant(9),
+            expires_at: instant(3_609),
+            allow_sensitive_networks: true,
+        };
+        let mut task = catalog_task("device", EngineRunStatus::Completed);
+        task.engine_id = GREENBONE_ENGINE_ID.into();
+        task.asset_ids = vec!["device-asset".into()];
+        task.progress_percent = 100;
+        task.phase = "completed".into();
+        task.exit_code = Some(0);
+        task.error_message = None;
+
+        case.scan_runs.push(ScanRun {
+            id: "run-1".into(),
+            case_id: case.id.clone(),
+            sequence: 1,
+            created_at: instant(10),
+            completed_at: Some(instant(20)),
+            request_outcome: None,
+            report_asset_snapshots: Vec::new(),
+            knowledge_cutoff: instant(10),
+            ai_system_applicable: false,
+            ai_system_applicability: Default::default(),
+            ai_generated_artifact: Default::default(),
+            verification_baseline_run_id: None,
+            scope_grant_ids: vec!["grant-device".into()],
+            scope_grant_snapshots: vec![ScopeGrant {
+                id: "grant-device".into(),
+                asset_id: "device-asset".into(),
+                permission: crate::domain::ScanPermission::ActiveExternalTesting,
+                confirmed_by: "Target owner".into(),
+                confirmed_at: instant(9),
+                expires_at: Some(instant(3_609)),
+                authorization_reference: Some("Approved internal endpoint".into()),
+                notes: None,
+                external_scope: Some(external_scope),
+            }],
+            engine_admission_issues: Vec::new(),
+            engine_runs: vec![task],
+        });
+        case
+    }
+
+    fn internal_host_case() -> AssessmentCase {
+        let mut case = empty_case();
+        case.assets.push(Asset {
+            id: "host-asset".into(),
+            kind: AssetKind::Host,
+            name: "10.20.0.50".into(),
+            provider: None,
+            region: None,
+            identifiers: vec![AssetIdentifier {
+                namespace: "ip_address".into(),
+                value: "10.20.0.50".into(),
+            }],
+            discovered_from: vec!["questionnaire".into()],
+            candidate: false,
+            owner_confirmed: true,
+            internet_exposed: Some(false),
+            contains_sensitive_data: None,
+            metadata: BTreeMap::from([(
+                "declared_host_scan".into(),
+                serde_json::json!({
+                    "target": "10.20.0.50",
+                    "protocol": "tcp",
+                    "ports": [22, 443],
+                    "profile": GREENBONE_REMOTE_SAFE_PROFILE_ID,
+                }),
+            )]),
+        });
+
+        let external_scope = ExternalScopeGrant {
+            id: "external-host-grant".into(),
+            case_id: case.id.clone(),
+            asset_id: "host-asset".into(),
+            target: CanonicalTarget::Address("10.20.0.50".parse().unwrap()),
+            ports: BTreeSet::from([22, 443]),
+            protocol: TransportProtocol::Tcp,
+            activity: ExternalActivity::ActiveExternal,
+            rate_policy: RatePolicy {
+                requests_per_second: 2,
+                concurrency: 1,
+                timeout_seconds: 15,
+            },
+            template_policy: TemplatePolicy::conservative_profile(
+                INTERNAL_DEVICE_TEMPLATE_REVISION,
+                GREENBONE_REMOTE_SAFE_PROFILE_ID,
+            ),
+            asserted_authority: "Approved internal host".into(),
+            approved_by: "Target owner".into(),
+            approved_at: instant(9),
+            expires_at: instant(3_609),
+            allow_sensitive_networks: true,
+        };
+        let mut task = catalog_task("host", EngineRunStatus::Completed);
+        task.engine_id = GREENBONE_ENGINE_ID.into();
+        task.asset_ids = vec!["host-asset".into()];
+        task.progress_percent = 100;
+        task.phase = "completed".into();
+        task.exit_code = Some(0);
+        task.error_message = None;
+
+        case.scan_runs.push(ScanRun {
+            id: "run-1".into(),
+            case_id: case.id.clone(),
+            sequence: 1,
+            created_at: instant(10),
+            completed_at: Some(instant(20)),
+            request_outcome: None,
+            report_asset_snapshots: vec![ReportAssetSnapshot {
+                asset: case.assets[0].clone(),
+                disposition: ReportAssetDisposition::RequestedForScan,
+            }],
+            knowledge_cutoff: instant(10),
+            ai_system_applicable: false,
+            ai_system_applicability: Default::default(),
+            ai_generated_artifact: Default::default(),
+            verification_baseline_run_id: None,
+            scope_grant_ids: vec!["grant-host".into()],
+            scope_grant_snapshots: vec![ScopeGrant {
+                id: "grant-host".into(),
+                asset_id: "host-asset".into(),
+                permission: crate::domain::ScanPermission::ActiveExternalTesting,
+                confirmed_by: "Target owner".into(),
+                confirmed_at: instant(9),
+                expires_at: Some(instant(3_609)),
+                authorization_reference: Some("Approved internal host".into()),
+                notes: None,
+                external_scope: Some(external_scope),
+            }],
+            engine_admission_issues: Vec::new(),
+            engine_runs: vec![task],
+        });
+        case
+    }
+
+    fn nuclei_website_case() -> AssessmentCase {
+        let mut case = internal_host_case();
+        case.assets[0].id = "website-asset".into();
+        case.assets[0].kind = AssetKind::WebService;
+        case.assets[0].name = "https://app.example.test:443".into();
+        case.assets[0].identifiers = vec![AssetIdentifier {
+            namespace: "web_origin".into(),
+            value: "https://app.example.test:443".into(),
+        }];
+        case.assets[0].internet_exposed = Some(true);
+        case.assets[0].metadata = BTreeMap::from([(
+            "declared_web_service".into(),
+            serde_json::json!({
+                "protocol": "https",
+                "port": 443,
+                "path": "/",
+            }),
+        )]);
+
+        let run = &mut case.scan_runs[0];
+        run.report_asset_snapshots[0].asset = case.assets[0].clone();
+        run.scope_grant_snapshots[0].asset_id = "website-asset".into();
+        let scope = run.scope_grant_snapshots[0]
+            .external_scope
+            .as_mut()
+            .expect("website scope");
+        scope.asset_id = "website-asset".into();
+        scope.target = CanonicalTarget::Hostname("app.example.test".into());
+        scope.ports = BTreeSet::from([443]);
+        scope.protocol = TransportProtocol::Https;
+        scope.rate_policy = RatePolicy {
+            requests_per_second: 10,
+            concurrency: 5,
+            timeout_seconds: 10,
+        };
+        scope.template_policy = TemplatePolicy::conservative_profile(
+            NUCLEI_TEMPLATE_REVISION,
+            NUCLEI_WEB_SAFE_PROFILE_ID,
+        );
+        scope.allow_sensitive_networks = false;
+        run.engine_runs[0].engine_id = NUCLEI_ENGINE_ID.into();
+        run.engine_runs[0].asset_ids = vec!["website-asset".into()];
+        case
+    }
+
+    fn internal_endpoint_ssh_case() -> AssessmentCase {
+        let mut case = empty_case();
+        case.assets.push(Asset {
+            id: "ssh-asset".into(),
+            kind: AssetKind::Host,
+            name: "tcp://10.20.0.11:2222".into(),
+            provider: None,
+            region: None,
+            identifiers: vec![
+                AssetIdentifier {
+                    namespace: "network_service_endpoint".into(),
+                    value: "tcp://10.20.0.11:2222".into(),
+                },
+                AssetIdentifier {
+                    namespace: "ip_address".into(),
+                    value: "10.20.0.11".into(),
+                },
+            ],
+            discovered_from: vec!["questionnaire".into()],
+            candidate: false,
+            owner_confirmed: true,
+            internet_exposed: Some(false),
+            contains_sensitive_data: None,
+            metadata: BTreeMap::from([(
+                "declared_network_service".into(),
+                serde_json::json!({
+                    "target": "10.20.0.11",
+                    "protocol": "tcp",
+                    "port": 2222,
+                    "scan_profile": "internal_endpoint_ssh",
+                }),
+            )]),
+        });
+
+        let external_scope = ExternalScopeGrant {
+            id: "external-ssh-grant".into(),
+            case_id: case.id.clone(),
+            asset_id: "ssh-asset".into(),
+            target: CanonicalTarget::Address("10.20.0.11".parse().unwrap()),
+            ports: BTreeSet::from([2222]),
+            protocol: TransportProtocol::Tcp,
+            activity: ExternalActivity::ActiveExternal,
+            rate_policy: RatePolicy {
+                requests_per_second: 2,
+                concurrency: 1,
+                timeout_seconds: 15,
+            },
+            template_policy: TemplatePolicy::conservative(
+                INTERNAL_DEVICE_TEMPLATE_REVISION,
+                INTERNAL_ENDPOINT_SSH_VULNERABILITY_OIDS
+                    .iter()
+                    .map(|oid| (*oid).to_owned())
+                    .collect(),
+            ),
+            asserted_authority: "Approved SSH endpoint".into(),
+            approved_by: "Target owner".into(),
+            approved_at: instant(9),
+            expires_at: instant(3_609),
+            allow_sensitive_networks: true,
+        };
+        let mut task = catalog_task("ssh", EngineRunStatus::Completed);
+        task.engine_id = GREENBONE_ENGINE_ID.into();
+        task.asset_ids = vec!["ssh-asset".into()];
+        task.progress_percent = 100;
+        task.phase = "completed".into();
+        task.exit_code = Some(0);
+        task.error_message = None;
+
+        case.scan_runs.push(ScanRun {
+            id: "run-1".into(),
+            case_id: case.id.clone(),
+            sequence: 1,
+            created_at: instant(10),
+            completed_at: Some(instant(20)),
+            request_outcome: None,
+            report_asset_snapshots: Vec::new(),
+            knowledge_cutoff: instant(10),
+            ai_system_applicable: false,
+            ai_system_applicability: Default::default(),
+            ai_generated_artifact: Default::default(),
+            verification_baseline_run_id: None,
+            scope_grant_ids: vec!["grant-ssh".into()],
+            scope_grant_snapshots: vec![ScopeGrant {
+                id: "grant-ssh".into(),
+                asset_id: "ssh-asset".into(),
+                permission: crate::domain::ScanPermission::ActiveExternalTesting,
+                confirmed_by: "Target owner".into(),
+                confirmed_at: instant(9),
+                expires_at: Some(instant(3_609)),
+                authorization_reference: Some("Approved SSH endpoint".into()),
+                notes: None,
+                external_scope: Some(external_scope),
+            }],
+            engine_admission_issues: Vec::new(),
+            engine_runs: vec![task],
+        });
+        case
+    }
+
+    fn internal_endpoint_rdp_tls_case() -> AssessmentCase {
+        let mut case = internal_endpoint_ssh_case();
+        let asset = &mut case.assets[0];
+        asset.id = "rdp-asset".into();
+        asset.name = "tcp://10.20.0.12:3389".into();
+        asset.identifiers = vec![
+            AssetIdentifier {
+                namespace: "network_service_endpoint".into(),
+                value: "tcp://10.20.0.12:3389".into(),
+            },
+            AssetIdentifier {
+                namespace: "ip_address".into(),
+                value: "10.20.0.12".into(),
+            },
+        ];
+        asset.metadata = BTreeMap::from([(
+            "declared_network_service".into(),
+            serde_json::json!({
+                "target": "10.20.0.12",
+                "protocol": "tcp",
+                "port": 3389,
+                "scan_profile": "internal_endpoint_rdp_tls",
+            }),
+        )]);
+
+        let run = &mut case.scan_runs[0];
+        run.scope_grant_ids = vec!["grant-rdp".into()];
+        let grant = &mut run.scope_grant_snapshots[0];
+        grant.id = "grant-rdp".into();
+        grant.asset_id = "rdp-asset".into();
+        grant.authorization_reference = Some("Approved RDP endpoint".into());
+        let external = grant.external_scope.as_mut().unwrap();
+        external.id = "external-rdp-grant".into();
+        external.asset_id = "rdp-asset".into();
+        external.target = CanonicalTarget::Address("10.20.0.12".parse().unwrap());
+        external.ports = BTreeSet::from([3389]);
+        external.template_policy = TemplatePolicy::conservative(
+            INTERNAL_DEVICE_TEMPLATE_REVISION,
+            INTERNAL_ENDPOINT_RDP_TLS_VULNERABILITY_OIDS
+                .iter()
+                .map(|oid| (*oid).to_owned())
+                .collect(),
+        );
+        external.asserted_authority = "Approved RDP endpoint".into();
+
+        let task = &mut run.engine_runs[0];
+        task.id = "rdp-tls".into();
+        task.asset_ids = vec!["rdp-asset".into()];
+        case
+    }
+
+    fn internal_endpoint_vnc_case() -> AssessmentCase {
+        let mut case = internal_endpoint_ssh_case();
+        let asset = &mut case.assets[0];
+        asset.id = "vnc-asset".into();
+        asset.name = "tcp://vnc.example.test:5900".into();
+        asset.identifiers = vec![
+            AssetIdentifier {
+                namespace: "network_service_endpoint".into(),
+                value: "tcp://vnc.example.test:5900".into(),
+            },
+            AssetIdentifier {
+                namespace: "hostname".into(),
+                value: "vnc.example.test".into(),
+            },
+        ];
+        asset.metadata = BTreeMap::from([(
+            "declared_network_service".into(),
+            serde_json::json!({
+                "target": "vnc.example.test",
+                "protocol": "tcp",
+                "port": 5900,
+                "scan_profile": "internal_endpoint_vnc",
+            }),
+        )]);
+
+        let run = &mut case.scan_runs[0];
+        run.scope_grant_ids = vec!["grant-vnc".into()];
+        let grant = &mut run.scope_grant_snapshots[0];
+        grant.id = "grant-vnc".into();
+        grant.asset_id = "vnc-asset".into();
+        grant.authorization_reference = Some("Approved VNC endpoint".into());
+        let external = grant.external_scope.as_mut().unwrap();
+        external.id = "external-vnc-grant".into();
+        external.asset_id = "vnc-asset".into();
+        external.target = CanonicalTarget::Hostname("vnc.example.test".into());
+        external.ports = BTreeSet::from([5900]);
+        external.template_policy = TemplatePolicy::conservative(
+            INTERNAL_DEVICE_TEMPLATE_REVISION,
+            INTERNAL_ENDPOINT_VNC_VULNERABILITY_OIDS
+                .iter()
+                .map(|oid| (*oid).to_owned())
+                .collect(),
+        );
+        external.asserted_authority = "Approved VNC endpoint".into();
+
+        let task = &mut run.engine_runs[0];
+        task.id = "vnc-transport".into();
+        task.asset_ids = vec!["vnc-asset".into()];
+        case
+    }
+
+    fn internal_endpoint_smtp_case() -> AssessmentCase {
+        let mut case = internal_endpoint_ssh_case();
+        let asset = &mut case.assets[0];
+        asset.id = "smtp-asset".into();
+        asset.name = "tcp://smtp.example.test:25".into();
+        asset.identifiers = vec![
+            AssetIdentifier {
+                namespace: "network_service_endpoint".into(),
+                value: "tcp://smtp.example.test:25".into(),
+            },
+            AssetIdentifier {
+                namespace: "hostname".into(),
+                value: "smtp.example.test".into(),
+            },
+        ];
+        asset.metadata = BTreeMap::from([(
+            "declared_network_service".into(),
+            serde_json::json!({
+                "target": "smtp.example.test",
+                "protocol": "tcp",
+                "port": 25,
+                "scan_profile": "internal_endpoint_smtp",
+            }),
+        )]);
+
+        let run = &mut case.scan_runs[0];
+        run.scope_grant_ids = vec!["grant-smtp".into()];
+        let grant = &mut run.scope_grant_snapshots[0];
+        grant.id = "grant-smtp".into();
+        grant.asset_id = "smtp-asset".into();
+        grant.authorization_reference = Some("Approved SMTP endpoint".into());
+        let external = grant.external_scope.as_mut().unwrap();
+        external.id = "external-smtp-grant".into();
+        external.asset_id = "smtp-asset".into();
+        external.target = CanonicalTarget::Hostname("smtp.example.test".into());
+        external.ports = BTreeSet::from([25]);
+        external.template_policy = TemplatePolicy::conservative(
+            INTERNAL_DEVICE_TEMPLATE_REVISION,
+            INTERNAL_ENDPOINT_SMTP_VULNERABILITY_OIDS
+                .iter()
+                .map(|oid| (*oid).to_owned())
+                .collect(),
+        );
+        external.asserted_authority = "Approved SMTP endpoint".into();
+
+        let task = &mut run.engine_runs[0];
+        task.id = "smtp-transport".into();
+        task.asset_ids = vec!["smtp-asset".into()];
+        case
+    }
+
+    fn add_smtp_tls_finding_evidence(case: &mut AssessmentCase, oid: &str, suffix: &str) {
+        let mut finding = frozen_finding(case, &format!("smtp-tls-{suffix}"), 70, Severity::Medium);
+        finding.asset_ids = vec!["smtp-asset".into()];
+        let evidence = &mut finding.evidence[0];
+        evidence.run_id = "run-1".into();
+        evidence.engine_run_id = Some("smtp-transport".into());
+        evidence.engine_id = GREENBONE_ENGINE_ID.into();
+        evidence.source_rule = Some(oid.into());
+        evidence.artifact_sha256 = format!("smtp-artifact-{suffix}");
+
+        let mut retained = observation(&finding, "run-1", instant(18));
+        retained.engine_ids = vec![GREENBONE_ENGINE_ID.into()];
+        case.findings.push(finding);
+        case.finding_observations.push(retained);
+    }
+
+    fn internal_endpoint_telnet_case() -> AssessmentCase {
+        let mut case = internal_endpoint_ssh_case();
+        let asset = &mut case.assets[0];
+        asset.id = "telnet-asset".into();
+        asset.name = "tcp://10.20.0.23:23".into();
+        asset.identifiers = vec![
+            AssetIdentifier {
+                namespace: "network_service_endpoint".into(),
+                value: "tcp://10.20.0.23:23".into(),
+            },
+            AssetIdentifier {
+                namespace: "ip_address".into(),
+                value: "10.20.0.23".into(),
+            },
+        ];
+        asset.metadata = BTreeMap::from([(
+            "declared_network_service".into(),
+            serde_json::json!({
+                "target": "10.20.0.23",
+                "protocol": "tcp",
+                "port": 23,
+                "scan_profile": "internal_endpoint_telnet",
+            }),
+        )]);
+
+        let run = &mut case.scan_runs[0];
+        run.scope_grant_ids = vec!["grant-telnet".into()];
+        let grant = &mut run.scope_grant_snapshots[0];
+        grant.id = "grant-telnet".into();
+        grant.asset_id = "telnet-asset".into();
+        grant.authorization_reference = Some("Approved Telnet endpoint".into());
+        let external = grant.external_scope.as_mut().unwrap();
+        external.id = "external-telnet-grant".into();
+        external.asset_id = "telnet-asset".into();
+        external.target = CanonicalTarget::Address("10.20.0.23".parse().unwrap());
+        external.ports = BTreeSet::from([23]);
+        external.template_policy = TemplatePolicy::conservative(
+            INTERNAL_DEVICE_TEMPLATE_REVISION,
+            INTERNAL_ENDPOINT_TELNET_VULNERABILITY_OIDS
+                .iter()
+                .map(|oid| (*oid).to_owned())
+                .collect(),
+        );
+        external.asserted_authority = "Approved Telnet endpoint".into();
+
+        let task = &mut run.engine_runs[0];
+        task.id = "telnet-transport".into();
+        task.asset_ids = vec!["telnet-asset".into()];
+        case
+    }
+
+    #[test]
+    fn exact_completed_ssh_profile_is_meaningful_but_keeps_host_level_limits_visible() {
+        let case = internal_endpoint_ssh_case();
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        assert_eq!(report.requested.targets.len(), 1);
+        assert_eq!(
+            report.requested.targets[0].label.as_deref(),
+            Some("ssh://10.20.0.11:2222")
+        );
+        assert_eq!(
+            report.requested.targets[0].asset_kind,
+            Some(AssetKind::Host)
+        );
+        assert_eq!(
+            report.requested.targets[0].label_availability,
+            DataAvailability::Recorded
+        );
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::TestedComplete
+        );
+        assert!(
+            report.actual.checks[0]
+                .tested_dimensions
+                .iter()
+                .any(|dimension| dimension.dimension == "SSH service vulnerability checks")
+        );
+        let gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension.contains("operating-system"))
+            .expect("host-level SSH exclusions remain visible");
+        assert_eq!(gap.kind, CoverageGapKind::NotTested);
+        assert_eq!(gap.target_asset_ids, ["ssh-asset"]);
+        assert!(
+            report
+                .coverage_gaps
+                .iter()
+                .filter(|gap| gap.kind == CoverageGapKind::Unavailable)
+                .all(|gap| gap.target_asset_ids.is_empty()),
+            "missing run metadata stays visible without turning every asset into a failed check"
+        );
+        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+    }
+
+    #[test]
+    fn exact_completed_rdp_tls_profile_is_meaningful_but_keeps_rdp_and_host_limits_visible() {
+        let case = internal_endpoint_rdp_tls_case();
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        assert_eq!(report.requested.targets.len(), 1);
+        assert_eq!(
+            report.requested.targets[0].label.as_deref(),
+            Some("rdp://10.20.0.12:3389")
+        );
+        assert_eq!(
+            report.requested.targets[0].asset_kind,
+            Some(AssetKind::Host)
+        );
+        assert_eq!(
+            report.requested.targets[0].label_availability,
+            DataAvailability::Recorded
+        );
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::TestedComplete
+        );
+        let tested = report.actual.checks[0]
+            .tested_dimensions
+            .iter()
+            .find(|dimension| dimension.dimension == "RDP transport security checks")
+            .expect("the exact frozen RDP transport profile is meaningful coverage");
+        assert!(tested.value.starts_with("11 frozen upstream Greenbone"));
+        assert!(tested.observation.contains("ten TLS"));
+        assert!(tested.observation.contains("RDP 5.2 or earlier"));
+        assert!(
+            report.actual.checks[0]
+                .tested_dimensions
+                .iter()
+                .all(|dimension| dimension.dimension != "SSH service vulnerability checks")
+        );
+        let gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension.contains("authentication/NLA"))
+            .expect("RDP and host-level exclusions remain visible");
+        assert_eq!(gap.kind, CoverageGapKind::NotTested);
+        assert_eq!(gap.task_id.as_deref(), Some("rdp-tls"));
+        assert_eq!(gap.target_asset_ids, ["rdp-asset"]);
+        for exclusion in [
+            "Windows patch level",
+            "broader or current RDP implementation CVEs",
+            "authentication",
+            "Network Level Authentication (NLA)",
+            "installed packages or applications",
+            "local host configuration",
+        ] {
+            assert!(gap.reason.contains(exclusion), "missing {exclusion}");
+        }
+        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+
+        let mut later_project_edit = case.clone();
+        later_project_edit.assets[0]
+            .metadata
+            .get_mut("declared_network_service")
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap()
+            .insert(
+                "scan_profile".into(),
+                serde_json::json!("internal_endpoint_ssh"),
+            );
+        later_project_edit.assets[0].name = "Changed after the run".into();
+        assert_eq!(
+            report,
+            build_beginner_master_report(&later_project_edit, "run-1").unwrap(),
+            "the frozen RDP grant must win over mutable project metadata"
+        );
+    }
+
+    #[test]
+    fn completed_rdp_process_with_a_mismatched_allowlist_remains_not_tested() {
+        let mut case = internal_endpoint_rdp_tls_case();
+        case.scan_runs[0].scope_grant_snapshots[0]
+            .external_scope
+            .as_mut()
+            .unwrap()
+            .template_policy
+            .allowed_template_ids
+            .retain(|oid| oid != "1.3.6.1.4.1.25623.1.0.902658");
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::NotTested
+        );
+        assert!(
+            report.actual.checks[0]
+                .tested_dimensions
+                .iter()
+                .all(|dimension| dimension.dimension != "RDP transport security checks")
+        );
+        assert_eq!(
+            report.state.summary,
+            BeginnerReportSummary::NoChecksCompleted
+        );
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.target_asset_ids == ["rdp-asset"]
+                && gap.dimension == "RDP transport endpoint scan-profile coverage"
+        }));
+    }
+
+    #[test]
+    fn exact_completed_vnc_profile_is_meaningful_but_keeps_vnc_and_host_limits_visible() {
+        let case = internal_endpoint_vnc_case();
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        assert_eq!(report.requested.targets.len(), 1);
+        assert_eq!(
+            report.requested.targets[0].label.as_deref(),
+            Some("vnc://vnc.example.test:5900")
+        );
+        assert_eq!(
+            report.requested.targets[0].asset_kind,
+            Some(AssetKind::Host)
+        );
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::TestedComplete
+        );
+        let tested = report.actual.checks[0]
+            .tested_dimensions
+            .iter()
+            .find(|dimension| dimension.dimension == "VNC transport security check")
+            .expect("the exact frozen VNC transport profile is meaningful coverage");
+        assert!(tested.value.starts_with("1 frozen upstream Greenbone"));
+        assert!(tested.observation.contains("unencrypted VNC connection"));
+        assert!(
+            report.actual.checks[0]
+                .tested_dimensions
+                .iter()
+                .all(|dimension| dimension.dimension != "RDP transport security checks")
+        );
+
+        let gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension.contains("VNC implementation"))
+            .expect("VNC and host-level exclusions remain visible");
+        assert_eq!(gap.kind, CoverageGapKind::NotTested);
+        assert_eq!(gap.task_id.as_deref(), Some("vnc-transport"));
+        assert_eq!(gap.target_asset_ids, ["vnc-asset"]);
+        for exclusion in [
+            "VNC implementation CVEs",
+            "authentication strength",
+            "operating-system patch level",
+            "installed packages or applications",
+            "local host configuration",
+            "No login or desktop session was attempted",
+        ] {
+            assert!(gap.reason.contains(exclusion), "missing {exclusion}");
+        }
+        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+
+        let mut later_project_edit = case.clone();
+        later_project_edit.assets[0]
+            .metadata
+            .get_mut("declared_network_service")
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap()
+            .insert(
+                "scan_profile".into(),
+                serde_json::json!("internal_endpoint_rdp_tls"),
+            );
+        later_project_edit.assets[0].name = "Changed after the run".into();
+        assert_eq!(
+            report,
+            build_beginner_master_report(&later_project_edit, "run-1").unwrap(),
+            "the frozen VNC grant must win over mutable project metadata"
+        );
+    }
+
+    #[test]
+    fn completed_vnc_process_with_a_mismatched_allowlist_remains_not_tested() {
+        let mut case = internal_endpoint_vnc_case();
+        case.scan_runs[0].scope_grant_snapshots[0]
+            .external_scope
+            .as_mut()
+            .unwrap()
+            .template_policy
+            .allowed_template_ids
+            .push("1.3.6.1.4.1.25623.1.0.111012".into());
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::NotTested
+        );
+        assert!(
+            report.actual.checks[0]
+                .tested_dimensions
+                .iter()
+                .all(|dimension| dimension.dimension != "VNC transport security check")
+        );
+        assert_eq!(
+            report.state.summary,
+            BeginnerReportSummary::NoChecksCompleted
+        );
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.target_asset_ids == ["vnc-asset"]
+                && gap.dimension == "VNC transport endpoint scan-profile coverage"
+        }));
+    }
+
+    #[test]
+    fn exact_completed_smtp_profile_is_partial_without_tls_execution_evidence() {
+        let case = internal_endpoint_smtp_case();
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        assert_eq!(
+            report.requested.targets[0].label.as_deref(),
+            Some("smtp://smtp.example.test:25")
+        );
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::TestedPartial
+        );
+        let tested = report.actual.checks[0]
+            .tested_dimensions
+            .iter()
+            .find(|dimension| dimension.dimension == "SMTP fixed security profile attempt")
+            .expect("the exact frozen SMTP profile attempt remains visible");
+        assert!(
+            tested
+                .value
+                .starts_with("exact 11-check upstream Greenbone")
+        );
+        for detail in ["banner", "EHLO", "STARTTLS", "advertised AUTH"] {
+            assert!(tested.observation.contains(detail), "missing {detail}");
+        }
+        assert!(
+            tested
+                .observation
+                .contains("No credentials or mail were sent")
+        );
+        assert!(tested.observation.contains("does not prove"));
+
+        let tls_gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension == "SMTP TLS negotiation-dependent coverage")
+            .expect("unproven TLS execution must remain visibly not tested");
+        assert_eq!(tls_gap.kind, CoverageGapKind::NotTested);
+        assert_eq!(tls_gap.task_id.as_deref(), Some("smtp-transport"));
+        assert_eq!(tls_gap.target_asset_ids, ["smtp-asset"]);
+        assert!(
+            tls_gap
+                .reason
+                .contains("does not prove that TLS was available")
+        );
+        assert!(tls_gap.reason.contains("only its own source OID"));
+
+        let gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension.contains("SMTP server behavior"))
+            .expect("SMTP application and host exclusions remain visible");
+        assert_eq!(gap.kind, CoverageGapKind::NotTested);
+        assert_eq!(gap.task_id.as_deref(), Some("smtp-transport"));
+        assert_eq!(gap.target_asset_ids, ["smtp-asset"]);
+        for exclusion in [
+            "relay or delivery",
+            "authentication enforcement or bypass",
+            "anti-spam behavior",
+            "general mail-server implementation CVEs",
+            "operating-system patches",
+            "installed software",
+            "local configuration",
+        ] {
+            assert!(gap.reason.contains(exclusion), "missing {exclusion}");
+        }
+        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+
+        let mut later_project_edit = case.clone();
+        later_project_edit.assets[0]
+            .metadata
+            .get_mut("declared_network_service")
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap()
+            .insert(
+                "scan_profile".into(),
+                serde_json::json!("internal_endpoint_telnet"),
+            );
+        later_project_edit.assets[0].name = "Changed after the run".into();
+        assert_eq!(
+            report,
+            build_beginner_master_report(&later_project_edit, "run-1").unwrap(),
+            "the frozen SMTP grant must win over mutable project metadata"
+        );
+    }
+
+    #[test]
+    fn one_smtp_tls_finding_evidences_only_its_exact_oid() {
+        let mut case = internal_endpoint_smtp_case();
+        add_smtp_tls_finding_evidence(
+            &mut case,
+            INTERNAL_ENDPOINT_SMTP_TLS_VULNERABILITY_OIDS[0],
+            "one",
+        );
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::TestedPartial
+        );
+        let evidenced = report.actual.checks[0]
+            .tested_dimensions
+            .iter()
+            .find(|dimension| dimension.dimension == "SMTP TLS checks with selected-run evidence")
+            .expect("the exact selected-run TLS finding is visible");
+        assert!(evidenced.value.starts_with("1 of 10 selected TLS checks"));
+        assert!(evidenced.observation.contains("does not prove"));
+        assert!(
+            report
+                .coverage_gaps
+                .iter()
+                .any(|gap| gap.dimension == "SMTP TLS negotiation-dependent coverage")
+        );
+    }
+
+    #[test]
+    fn smtp_tls_coverage_completes_only_with_evidence_for_every_selected_oid() {
+        let mut case = internal_endpoint_smtp_case();
+        for (index, oid) in INTERNAL_ENDPOINT_SMTP_TLS_VULNERABILITY_OIDS
+            .iter()
+            .enumerate()
+        {
+            add_smtp_tls_finding_evidence(&mut case, oid, &index.to_string());
+        }
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::TestedComplete
+        );
+        let evidenced = report.actual.checks[0]
+            .tested_dimensions
+            .iter()
+            .find(|dimension| dimension.dimension == "SMTP TLS checks with selected-run evidence")
+            .expect("all exact selected-run TLS findings are visible");
+        assert!(evidenced.value.starts_with("10 of 10 selected TLS checks"));
+        assert!(
+            report
+                .coverage_gaps
+                .iter()
+                .all(|gap| gap.dimension != "SMTP TLS negotiation-dependent coverage")
+        );
+    }
+
+    #[test]
+    fn exact_completed_telnet_profile_is_meaningful_but_keeps_auth_and_host_limits_visible() {
+        let case = internal_endpoint_telnet_case();
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        assert_eq!(
+            report.requested.targets[0].label.as_deref(),
+            Some("telnet://10.20.0.23:23")
+        );
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::TestedComplete
+        );
+        let tested = report.actual.checks[0]
+            .tested_dimensions
+            .iter()
+            .find(|dimension| dimension.dimension == "Telnet cleartext-login security check")
+            .expect("the exact frozen Telnet profile is meaningful coverage");
+        assert!(tested.value.starts_with("1 frozen upstream Greenbone"));
+        assert!(tested.observation.contains("login or password prompt"));
+        assert!(
+            tested
+                .observation
+                .contains("No username or password was sent")
+        );
+
+        let gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension.contains("Telnet authentication"))
+            .expect("Telnet authentication and host exclusions remain visible");
+        assert_eq!(gap.kind, CoverageGapKind::NotTested);
+        assert_eq!(gap.task_id.as_deref(), Some("telnet-transport"));
+        assert_eq!(gap.target_asset_ids, ["telnet-asset"]);
+        for exclusion in [
+            "default credentials",
+            "authentication bypass",
+            "Telnet implementation CVEs",
+            "operating-system patches",
+            "installed software",
+            "local configuration",
+        ] {
+            assert!(gap.reason.contains(exclusion), "missing {exclusion}");
+        }
+        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+    }
+
+    #[test]
+    fn smtp_and_telnet_processes_with_mismatched_allowlists_remain_not_tested() {
+        for (mut case, asset_id, dimension) in [
+            (
+                internal_endpoint_smtp_case(),
+                "smtp-asset",
+                "SMTP endpoint scan-profile coverage",
+            ),
+            (
+                internal_endpoint_telnet_case(),
+                "telnet-asset",
+                "Telnet endpoint scan-profile coverage",
+            ),
+        ] {
+            case.scan_runs[0].scope_grant_snapshots[0]
+                .external_scope
+                .as_mut()
+                .unwrap()
+                .template_policy
+                .allowed_template_ids
+                .push("1.3.6.1.4.1.25623.1.0.108094".into());
+
+            let report = build_beginner_master_report(&case, "run-1").unwrap();
+            assert_eq!(
+                report.actual.checks[0].status,
+                CoverageDimensionStatus::NotTested
+            );
+            assert_eq!(
+                report.state.summary,
+                BeginnerReportSummary::NoChecksCompleted
+            );
+            assert!(
+                report.coverage_gaps.iter().any(|gap| {
+                    gap.target_asset_ids == [asset_id] && gap.dimension == dimension
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_environment_report_keeps_each_frozen_asset_and_marks_inventory_only_not_tested() {
+        let mut case = internal_endpoint_ssh_case();
+        case.assessment_intent = Some(AssessmentIntent::InternalItEnvironment);
+        let inventory_asset = Asset {
+            id: "inventory-only-asset".into(),
+            kind: AssetKind::IpAddress,
+            name: "Office inventory 10.20.0.50".into(),
+            provider: None,
+            region: None,
+            identifiers: vec![AssetIdentifier {
+                namespace: "ip_address".into(),
+                value: "10.20.0.50".into(),
+            }],
+            discovered_from: vec!["questionnaire".into()],
+            candidate: false,
+            owner_confirmed: true,
+            internet_exposed: Some(false),
+            contains_sensitive_data: None,
+            metadata: BTreeMap::from([(
+                "questionnaire_kind".into(),
+                serde_json::json!("external_target"),
+            )]),
+        };
+        case.assets.push(inventory_asset.clone());
+        case.scan_runs[0].report_asset_snapshots = vec![
+            ReportAssetSnapshot {
+                asset: case.assets[0].clone(),
+                disposition: ReportAssetDisposition::RequestedForScan,
+            },
+            ReportAssetSnapshot {
+                asset: inventory_asset,
+                disposition: ReportAssetDisposition::NoSupportedProfile,
+            },
+        ];
+
+        case.assets
+            .iter_mut()
+            .find(|asset| asset.id == "inventory-only-asset")
+            .unwrap()
+            .name = "Changed after the run".into();
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(report.requested.targets.len(), 2);
+        let inventory_target = report
+            .requested
+            .targets
+            .iter()
+            .find(|target| target.asset_id == "inventory-only-asset")
+            .unwrap();
+        assert_eq!(
+            inventory_target.label.as_deref(),
+            Some("Office inventory 10.20.0.50")
+        );
+        assert_eq!(
+            inventory_target.label_availability,
+            DataAvailability::Recorded
+        );
+        let inventory_gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension == "supported vulnerability profile")
+            .unwrap();
+        assert_eq!(inventory_gap.kind, CoverageGapKind::NotTested);
+        assert_eq!(inventory_gap.target_asset_ids, ["inventory-only-asset"]);
+        assert!(inventory_gap.reason.contains("not contacted or tested"));
+
+        let reopened: AssessmentCase =
+            serde_json::from_str(&serde_json::to_string(&case).unwrap()).unwrap();
+        assert_eq!(
+            build_beginner_master_report(&reopened, "run-1").unwrap(),
+            report
+        );
+    }
+
+    #[test]
+    fn completed_generic_greenbone_host_profile_is_a_meaningful_upstream_scan() {
+        let case = internal_host_case();
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::TestedComplete
+        );
+        let tested = report.actual.checks[0]
+            .tested_dimensions
+            .iter()
+            .find(|dimension| dimension.dimension == "Greenbone remote vulnerability scan")
+            .expect("the frozen generic Greenbone profile is meaningful coverage");
+        assert!(tested.value.contains("2 approved TCP ports"));
+        assert!(tested.observation.contains("prerequisites decided"));
+        assert!(tested.observation.contains("does not prove"));
+    }
+
+    #[test]
+    fn completed_nuclei_automatic_profile_names_the_meaningful_upstream_scan() {
+        let case = nuclei_website_case();
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::TestedComplete
+        );
+        let tested = report.actual.checks[0]
+            .tested_dimensions
+            .iter()
+            .find(|dimension| dimension.dimension == "Nuclei upstream website scan")
+            .expect("the frozen automatic Nuclei profile is meaningful website coverage");
+        assert!(tested.value.contains("technology-aware upstream profile"));
+        assert!(tested.observation.contains("technology detection selected"));
+        assert!(tested.observation.contains("does not prove"));
+    }
+
+    #[test]
+    fn completed_greenbone_host_process_with_a_changed_profile_is_not_a_clean_result() {
+        let mut case = internal_host_case();
+        case.scan_runs[0].scope_grant_snapshots[0]
+            .external_scope
+            .as_mut()
+            .unwrap()
+            .template_policy
+            .profile_id = Some("greenbone_remote_safe_v2".into());
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::NotTested
+        );
+        assert!(
+            report.actual.checks[0]
+                .tested_dimensions
+                .iter()
+                .all(|dimension| dimension.dimension != "Greenbone remote vulnerability scan")
+        );
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.target_asset_ids == ["host-asset"]
+                && gap.dimension == "greenbone: vulnerability profile evidence"
+        }));
+    }
+
+    #[test]
+    fn completed_greenbone_process_without_exact_security_profile_is_not_a_clean_result() {
+        let mut case = internal_endpoint_ssh_case();
+        case.scan_runs[0].scope_grant_snapshots[0]
+            .external_scope
+            .as_mut()
+            .unwrap()
+            .template_policy
+            .allowed_template_ids
+            .pop();
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::NotTested
+        );
+        assert!(
+            report.actual.checks[0]
+                .tested_dimensions
+                .iter()
+                .all(|dimension| dimension.dimension != "SSH service vulnerability checks")
+        );
+        assert_eq!(
+            report.state.summary,
+            BeginnerReportSummary::NoChecksCompleted
+        );
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.target_asset_ids == ["ssh-asset"]
+                && gap.dimension == "SSH endpoint scan-profile coverage"
+        }));
+    }
+
+    #[test]
+    fn completed_https_management_profile_keeps_device_limits_beside_tested_tls() {
+        let case = internal_device_case(DeclaredWebServiceScanProfile::InternalDeviceHttps);
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert!(
+            report.actual.checks[0]
+                .tested_dimensions
+                .iter()
+                .any(|tested| { tested.dimension == "internal-device TLS vulnerability checks" })
+        );
+        let gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension == "device product and firmware vulnerability coverage")
+            .expect("device product and firmware coverage limits stay visible");
+        assert_eq!(gap.kind, CoverageGapKind::NotTested);
+        assert_eq!(gap.task_id.as_deref(), Some("device"));
+        assert_eq!(gap.target_asset_ids, vec!["device-asset"]);
+        assert!(gap.reason.contains("no device product or firmware"));
+        assert!(gap.reason.contains("TLS protocol"));
+        assert_eq!(report.coverage_counts.not_tested, 1);
+        assert_eq!(report.coverage_counts.tested_complete, 1);
+        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+
+        let mut later_project_edit = case.clone();
+        later_project_edit.assets[0]
+            .metadata
+            .get_mut("declared_web_service")
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap()
+            .insert(
+                "scan_profile".into(),
+                serde_json::json!("internal_device_unknown"),
+            );
+        assert_eq!(
+            report,
+            build_beginner_master_report(&later_project_edit, "run-1").unwrap(),
+            "the frozen run allowlist must win over a later asset-profile edit"
+        );
+
+        let reopened: AssessmentCase =
+            serde_json::from_slice(&serde_json::to_vec(&case).unwrap()).unwrap();
+        assert_eq!(
+            report,
+            build_beginner_master_report(&reopened, "run-1").unwrap(),
+            "reopening the durable case must not change the shared report"
+        );
+    }
+
+    #[test]
+    fn device_coverage_requires_one_exact_frozen_production_profile() {
+        let base = internal_device_case(DeclaredWebServiceScanProfile::InternalDeviceHttps);
+        let mut extra_oid = base.clone();
+        extra_oid.scan_runs[0].scope_grant_snapshots[0]
+            .external_scope
+            .as_mut()
+            .unwrap()
+            .template_policy
+            .allowed_template_ids
+            .push("1.3.6.1.4.1.25623.1.0.999999".into());
+        let mut wrong_revision = base.clone();
+        wrong_revision.scan_runs[0].scope_grant_snapshots[0]
+            .external_scope
+            .as_mut()
+            .unwrap()
+            .template_policy
+            .revision = "b26d7237d56b7cf85e6ace2b9351e7851461b3a8".into();
+        let mut wrong_rate = base.clone();
+        wrong_rate.scan_runs[0].scope_grant_snapshots[0]
+            .external_scope
+            .as_mut()
+            .unwrap()
+            .rate_policy
+            .requests_per_second = 3;
+        let mut duplicate_grant = base.clone();
+        let mut second = duplicate_grant.scan_runs[0].scope_grant_snapshots[0].clone();
+        second.id = "grant-device-2".into();
+        duplicate_grant.scan_runs[0]
+            .scope_grant_snapshots
+            .push(second);
+        let mut no_frozen_grant = base;
+        no_frozen_grant.scan_runs[0].scope_grant_snapshots.clear();
+
+        for case in [
+            extra_oid,
+            wrong_revision,
+            wrong_rate,
+            duplicate_grant,
+            no_frozen_grant,
+        ] {
+            let report = build_beginner_master_report(&case, "run-1").unwrap();
+            assert!(
+                report.actual.checks[0]
+                    .tested_dimensions
+                    .iter()
+                    .all(|tested| tested.dimension != "internal-device TLS vulnerability checks")
+            );
+            assert!(
+                report.coverage_gaps.iter().all(
+                    |gap| gap.dimension != "device product and firmware vulnerability coverage"
+                ),
+                "an inexact or absent frozen profile cannot claim the reviewed HTTPS profile"
+            );
+            let unknown = report
+                .coverage_gaps
+                .iter()
+                .find(|gap| gap.dimension == "internal-device scan-profile coverage")
+                .expect("current metadata may only expose an unknown historical profile");
+            assert_eq!(unknown.kind, CoverageGapKind::Unavailable);
+            assert_eq!(unknown.target_asset_ids, vec!["device-asset"]);
         }
     }
 

@@ -1156,7 +1156,10 @@ const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
 
 const safeDeclaredWebService = (value: unknown): KnownAssetInput["webService"] | undefined => {
   if (!isPlainRecord(value)) return undefined;
-  const { protocol, port, path } = value;
+  const { protocol, port, path, scanProfile } = value;
+  const acceptedScanProfile = scanProfile === "internal_device_https"
+    ? scanProfile
+    : undefined;
   return (protocol === "http" || protocol === "https")
     && Number.isInteger(port)
     && Number(port) >= 1
@@ -1168,7 +1171,49 @@ const safeDeclaredWebService = (value: unknown): KnownAssetInput["webService"] |
     && !path.includes("?")
     && !path.includes("#")
     && !/[\u0000-\u001f\u007f]/u.test(path)
-    ? { protocol, port: Number(port), path }
+    && (scanProfile === undefined || acceptedScanProfile !== undefined)
+    ? {
+      protocol,
+      port: Number(port),
+      path,
+      ...(acceptedScanProfile === undefined ? {} : { scanProfile: acceptedScanProfile }),
+    }
+    : undefined;
+};
+
+const safeDeclaredNetworkService = (value: unknown): KnownAssetInput["networkService"] | undefined => {
+  if (!isPlainRecord(value)) return undefined;
+  const { protocol, port, scanProfile } = value;
+  const acceptedScanProfile = scanProfile === "internal_endpoint_ssh"
+    || scanProfile === "internal_endpoint_rdp_tls"
+    || scanProfile === "internal_endpoint_vnc"
+    || scanProfile === "internal_endpoint_smtp"
+    || scanProfile === "internal_endpoint_telnet"
+    ? scanProfile
+    : undefined;
+  return protocol === "tcp"
+    && Number.isInteger(port)
+    && Number(port) >= 1
+    && Number(port) <= 65_535
+    && acceptedScanProfile !== undefined
+    ? { protocol, port: Number(port), scanProfile: acceptedScanProfile }
+    : undefined;
+};
+
+const safeDeclaredHostScan = (value: unknown): KnownAssetInput["hostScan"] | undefined => {
+  if (!isPlainRecord(value)) return undefined;
+  const { protocol, ports, scanProfile } = value;
+  if (
+    protocol !== "tcp"
+    || scanProfile !== "internal_host_greenbone_remote_safe"
+    || !Array.isArray(ports)
+    || ports.length === 0
+    || ports.length > 64
+    || ports.some((port) => !Number.isInteger(port) || Number(port) < 1 || Number(port) > 65_535)
+  ) return undefined;
+  const normalizedPorts = [...new Set(ports.map(Number))].sort((left, right) => left - right);
+  return normalizedPorts.length === ports.length
+    ? { protocol, ports: normalizedPorts, scanProfile }
     : undefined;
 };
 
@@ -1198,6 +1243,19 @@ const safeKnownAsset = (value: unknown): KnownAssetInput | undefined => {
   if (value.webService !== undefined && !webService) return undefined;
   if (kind !== "external_target" && webService) return undefined;
   if (webService && coordinate.includes("/")) return undefined;
+  const networkService = value.networkService === undefined
+    ? undefined
+    : safeDeclaredNetworkService(value.networkService);
+  if (value.networkService !== undefined && !networkService) return undefined;
+  if (kind !== "external_target" && networkService) return undefined;
+  if (networkService && coordinate.includes("/")) return undefined;
+  const hostScan = value.hostScan === undefined
+    ? undefined
+    : safeDeclaredHostScan(value.hostScan);
+  if (value.hostScan !== undefined && !hostScan) return undefined;
+  if (kind !== "external_target" && hostScan) return undefined;
+  if (hostScan && coordinate.includes("/")) return undefined;
+  if ([webService, networkService, hostScan].filter(Boolean).length > 1) return undefined;
 
   return {
     kind,
@@ -1206,6 +1264,8 @@ const safeKnownAsset = (value: unknown): KnownAssetInput | undefined => {
       ? { internetExposure: value.internetExposure }
       : {}),
     ...(webService ? { webService } : {}),
+    ...(networkService ? { networkService } : {}),
+    ...(hostScan ? { hostScan } : {}),
   };
 };
 
@@ -1216,7 +1276,14 @@ const safeKnownAssets = (value: unknown): KnownAssetInput[] => {
   for (const candidate of value) {
     const asset = safeKnownAsset(candidate);
     if (!asset) return [];
-    const identity = `${asset.kind}\u0000${asset.value}`;
+    const serviceIdentity = asset.webService
+      ? `${asset.webService.protocol}:${asset.webService.port}`
+      : asset.networkService
+        ? `${asset.networkService.protocol}:${asset.networkService.port}`
+        : asset.hostScan
+          ? `${asset.hostScan.protocol}:${asset.hostScan.scanProfile}`
+        : "";
+    const identity = `${asset.kind}\u0000${asset.value}\u0000${serviceIdentity}`;
     const serialized = JSON.stringify(asset);
     const existing = identities.get(identity);
     if (existing && existing !== serialized) return [];
@@ -1243,7 +1310,7 @@ const declaredAssetShape = (
   if (input.kind === "external_target") {
     const identity = externalIdentity(input.value);
     return {
-      type: identity.type,
+      type: input.networkService ? "service" : identity.type,
       platform: "external",
       identifiers: [{ namespace: identity.namespace, value: input.value }],
     };
@@ -1321,6 +1388,8 @@ const storedWorkspace = (storedCase: StoredDemoCase): CaseWorkspace => {
       findingCount: 0,
       scanAttempted: false,
       ...(input.webService ? { declaredWebService: input.webService } : {}),
+      ...(input.networkService ? { declaredNetworkService: input.networkService } : {}),
+      ...(input.hostScan ? { declaredHostScan: input.hostScan } : {}),
     };
   });
   const coverage: CoverageRecord[] = assets.map((asset) => ({

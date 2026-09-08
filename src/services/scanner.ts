@@ -10,6 +10,7 @@ import {
   getDemoWorkspace,
 } from "../data/demo";
 import { getActiveLocale } from "../i18n/core";
+import { internalHostGreenboneProfile } from "../internalHostProfile";
 import {
   DEFAULT_LOCALHOST_QUICK_SCAN_PORT,
   isValidLocalhostQuickScanPort,
@@ -347,12 +348,22 @@ export interface ScopeApprovalInput {
   externalScope?: ExternalScopeRequest;
 }
 
+/** An execution choice, kept separate from the user's authorization grant. */
+export interface EngineAssetRoute {
+  engineId: string;
+  assetIds: string[];
+}
+
 export interface StartScanInput {
   caseId: string;
-  /** Present only when Start also records the inline target assertion. */
+  /** Legacy single-boundary form used by the single-target shortcuts. */
   authorization?: Omit<ScopeApprovalInput, "caseId">;
-  /** Empty means every applicable scanner. */
+  /** Per-asset boundaries for one combined multi-target run. */
+  authorizations?: Array<Omit<ScopeApprovalInput, "caseId">>;
+  /** Legacy exact engine set. Omit when engineAssetRoutes is present. */
   engineIds?: string[];
+  /** Exact engine-to-asset plan. It prevents one profile widening to every compatible asset. */
+  engineAssetRoutes?: EngineAssetRoute[];
 }
 
 const nativeScopeDecisions = (input: ScopeApprovalInput) => {
@@ -384,6 +395,9 @@ const nativeScopeDecisions = (input: ScopeApprovalInput) => {
     },
     template_policy: {
       revision: input.externalScope.templatePolicy.revision,
+      ...(input.externalScope.templatePolicy.profileId
+        ? { profile_id: input.externalScope.templatePolicy.profileId }
+        : {}),
       allowed_template_ids: input.externalScope.templatePolicy.allowedTemplateIds,
       allow_headless: input.externalScope.templatePolicy.allowHeadless,
       allow_out_of_band: input.externalScope.templatePolicy.allowOutOfBand,
@@ -468,7 +482,7 @@ export const scannerService = {
         requested_activities: input.requestedActivities,
         source_kinds: plannedSourceKinds(input.platforms),
         not_applicable_source_kinds: plannedNotApplicableSourceKinds(input.platforms),
-        declared_assets: input.knownAssets.map(({ internetExposure, webService, ...asset }) => ({
+        declared_assets: input.knownAssets.map(({ internetExposure, webService, networkService, hostScan, ...asset }) => ({
           ...asset,
           internet_exposed: internetExposure === undefined
             ? null
@@ -478,6 +492,21 @@ export const scannerService = {
               protocol: webService.protocol,
               port: webService.port,
               path: webService.path,
+              scan_profile: webService.scanProfile ?? null,
+            }
+            : null,
+          network_service: networkService
+            ? {
+              protocol: networkService.protocol,
+              port: networkService.port,
+              scan_profile: networkService.scanProfile,
+            }
+            : null,
+          host_scan: hostScan
+            ? {
+              protocol: hostScan.protocol,
+              ports: hostScan.ports,
+              profile: internalHostGreenboneProfile.profileId,
             }
             : null,
         })),
@@ -712,15 +741,27 @@ export const scannerService = {
   },
 
   async startScan(input: StartScanInput): Promise<ServiceResult<ActionResponse>> {
-    const decisions = input.authorization
-      ? nativeScopeDecisions({ caseId: input.caseId, ...input.authorization })
-      : [];
+    if (input.authorization && input.authorizations) {
+      throw new Error("A scan request cannot mix singular and per-asset authorization inputs.");
+    }
+    if (input.engineIds && input.engineAssetRoutes) {
+      throw new Error("A scan request cannot mix a global engine list with per-asset engine routes.");
+    }
+    const authorizations = input.authorizations
+      ?? (input.authorization ? [input.authorization] : []);
+    const decisions = authorizations.flatMap((authorization) =>
+      nativeScopeDecisions({ caseId: input.caseId, ...authorization })
+    );
     return actionResult(
       COMMANDS.startScan,
       {
         caseId: input.caseId,
         decisions,
         engineIds: input.engineIds ?? [],
+        engineAssetRoutes: (input.engineAssetRoutes ?? []).map((route) => ({
+          engine_id: route.engineId,
+          asset_ids: [...route.assetIds],
+        })),
       },
       serviceText(
         "Your exact target, limits, and scan were saved together. Unavailable checks will be listed in the report while the others continue.",

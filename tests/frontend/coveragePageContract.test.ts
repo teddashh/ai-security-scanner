@@ -401,7 +401,7 @@ test("source-code setup says local, masked, and unchanged instead of asking user
 
 test("repository technical details disclose every planned engine", () => {
   assert.ok(localInputProfileSource.includes(
-    'repository_working_tree: "Semgrep, Gitleaks, TruffleHog, Checkov, KICS, Trivy, Syft"',
+    'repository_working_tree: "Gitleaks, Semgrep, Trivy, Grype, TruffleHog, KICS, Checkov"',
   ));
   assert.ok(localInputProfileSource.includes('iac_working_tree: "Checkov, KICS, Trivy"'));
 });

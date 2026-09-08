@@ -72,13 +72,13 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/nuclei/Dockerfile",
-    "sha256": "sha256:5853f2344dd45905f5baf61810288411d77faadd0da812f9b01c84a674173d7f"
+    "sha256": "sha256:baa1055abeb434d6209c4318ab9850c5d74f4e09909cb9f8fde1fcc28d86215e"
   },
   "wrapper": {
     "required": true,
-    "strategy": "Validate each FrozenExternalScope grant, its exact template allowlist, and each read-only HTTP template before invoking one bounded scan per exact grant port.",
+    "strategy": "Validate each FrozenExternalScope grant and either its legacy exact template allowlist or the pinned upstream automatic web profile before invoking one bounded scan per exact grant port.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:a560237acbb7ce60751cccef7412b183d80fb9034a8fd2dac18b0ae4423923d1"
+    "launcher_sha256": "sha256:71ce6a39436420570285a2016a18f1fbc0ed05c76e53d3f72587e2196d1befa2"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",
@@ -91,7 +91,9 @@
     "redirects": false,
     "template_policy": {
       "revision": "nuclei-templates@24858b4bfabfa86f0bcfd36aea24fb535152b012",
-      "exact_allowlist": true,
+      "profile_id": "nuclei_web_safe_v1",
+      "derived_template_count": 4674,
+      "legacy_exact_allowlist_supported": true,
       "denied_capabilities": [
         "headless",
         "out_of_band",

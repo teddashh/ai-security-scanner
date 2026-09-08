@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -466,6 +467,203 @@ http:
 	}
 }
 
+func writeNucleiTemplate(t *testing.T, root, name, id, extraInfo, request string) string {
+	t.Helper()
+	value := fmt.Sprintf(`id: %s
+info:
+  name: %s
+  severity: info
+  metadata:
+    max-request: 1
+  tags: tech,discovery%s
+http:
+%s
+`, id, id, extraInfo, request)
+	path := filepath.Join(root, name+".yaml")
+	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestNucleiWebSafeProfileIsMechanicalBroadAndRejectsSideEffects(t *testing.T) {
+	root := t.TempDir()
+	first := writeNucleiTemplate(t, root, "z-safe", "z-safe", "", `  - method: GET
+    path:
+      - "{{BaseURL}}/version"
+`)
+	second := writeNucleiTemplate(t, root, "a-safe", "a-safe", "", `  - method: HEAD
+    path:
+      - "/health"
+`)
+	writeNucleiTemplate(t, root, "post", "post", "", `  - method: POST
+    path:
+      - "{{BaseURL}}/login"
+    body: data
+`)
+	writeNucleiTemplate(t, root, "credential", "credential", ",token-spray", `  - method: GET
+    path:
+      - "{{BaseURL}}/login"
+`)
+	writeNucleiTemplate(t, root, "execution", "execution", ",rce", `  - method: GET
+    path:
+      - "{{BaseURL}}/run?cmd=id"
+`)
+	writeNucleiTemplate(t, root, "off-origin", "off-origin", "", `  - method: GET
+    path:
+      - "https://elsewhere.example.test/status"
+`)
+	writeNucleiTemplate(t, root, "dynamic", "dynamic", "", `  - method: GET
+    path:
+      - "{{BaseURL}}/{{path}}"
+    iterate-all: true
+`)
+	writeNucleiTemplate(t, root, "redirect", "redirect", "", `  - method: GET
+    path:
+      - "{{BaseURL}}/"
+    host-redirects: true
+`)
+	writeNucleiTemplate(t, root, "oob", "oob", "", `  - method: GET
+    path:
+      - "{{BaseURL}}/fetch?url={{interactsh-url}}"
+`)
+	writeNucleiTemplate(t, root, "upload", "upload", ",file-upload", `  - method: GET
+    path:
+      - "{{BaseURL}}/upload"
+`)
+	writeNucleiTemplate(t, root, "self-contained", "self-contained", "\nself-contained: true", `  - method: GET
+    path:
+      - "{{BaseURL}}/"
+`)
+
+	index, err := loadTemplateIndex(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, paths := deriveNucleiWebSafeProfile(index)
+	if !reflect.DeepEqual(ids, []string{"a-safe", "z-safe"}) {
+		t.Fatalf("profile derivation admitted a denied template or lost deterministic ordering: %v", ids)
+	}
+	wantPaths := []string{second, first}
+	sort.Strings(wantPaths)
+	if !reflect.DeepEqual(paths, wantPaths) {
+		t.Fatalf("profile paths are not the exact sorted safe pool: got %v want %v", paths, wantPaths)
+	}
+}
+
+func TestNucleiProfilePolicyRequiresExactlyOneKnownSelectionMode(t *testing.T) {
+	now := time.Now().UTC()
+	document := fixtureDocument("nuclei", now)
+	policy := &document.Assets[0].Grants[0].ExternalScope.TemplatePolicy
+	profile := nucleiWebSafeProfileID
+	policy.AllowedTemplateIDs = nil
+	policy.ProfileID = &profile
+	if _, err := validateAndPlan(document, "nuclei", now); err != nil {
+		t.Fatalf("known pinned Nuclei profile was rejected: %v", err)
+	}
+
+	policy.AllowedTemplateIDs = []string{"safe-template"}
+	if _, err := validateAndPlan(document, "nuclei", now); err == nil {
+		t.Fatal("mixed profile and explicit Nuclei selection was accepted")
+	}
+	policy.AllowedTemplateIDs = nil
+	unknown := "nuclei_web_safe_v2"
+	policy.ProfileID = &unknown
+	if _, err := validateAndPlan(document, "nuclei", now); err == nil {
+		t.Fatal("unknown Nuclei profile was accepted")
+	}
+	policy.ProfileID = nil
+	if _, err := validateAndPlan(document, "nuclei", now); err == nil {
+		t.Fatal("Nuclei policy without a selection was accepted")
+	}
+
+	httpx := fixtureDocument("httpx", now)
+	httpx.Assets[0].Grants[0].ExternalScope.TemplatePolicy.ProfileID = &profile
+	if _, err := validateAndPlan(httpx, "httpx", now); err == nil {
+		t.Fatal("non-template engine accepted a Nuclei profile")
+	}
+}
+
+func TestNucleiAutomaticProfileHasNoFullTreeFallback(t *testing.T) {
+	root := t.TempDir()
+	first := writeNucleiTemplate(t, root, "a-safe", "a-safe", "", `  - method: GET
+    path:
+      - "{{BaseURL}}/"
+`)
+	second := writeNucleiTemplate(t, root, "b-safe", "b-safe", "", `  - method: GET
+    path:
+      - "{{BaseURL}}/version"
+`)
+	profile := nucleiWebSafeProfileID
+	unit := scanUnit{
+		Grant: externalScope{
+			Target: canonicalTarget{Kind: "hostname", Value: "a.example.test"},
+			Ports:  []uint16{443}, Protocol: "https",
+			RatePolicy: ratePolicy{RequestsPerSecond: 2, Concurrency: 2, TimeoutSeconds: 30},
+			TemplatePolicy: templatePolicy{
+				AllowedTemplateIDs: []string{"a-safe", "b-safe"}, ProfileID: &profile,
+			},
+			ExpiresAt: time.Now().UTC().Add(time.Hour),
+		},
+		Port: 443,
+	}
+	temporaryRoot := t.TempDir()
+	plan, err := nucleiInvocation(
+		unit, "socks5://172.30.0.1:1080", filepath.Join(t.TempDir(), "result.jsonl"),
+		nil, temporaryRoot, 7, []string{first, second},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := " " + strings.Join(plan.Args, " ") + " "
+	for _, required := range []string{
+		" -automatic-scan ", " -update-template-dir ", " -template-id ",
+		" -response-size-read 4194304 ", " -payload-concurrency 1 ", " -max-time ",
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("automatic profile invocation lacks %q: %s", required, joined)
+		}
+	}
+	profileRoot, ok := argumentValue(plan.Args, "-update-template-dir")
+	if !ok || profileRoot == templateRootPath {
+		t.Fatalf("automatic scan can fall back to the full embedded tree: %q", profileRoot)
+	}
+	relative, err := filepath.Rel(temporaryRoot, profileRoot)
+	if err != nil || relative == "." || strings.HasPrefix(relative, "..") {
+		t.Fatalf("automatic root escaped the private launcher directory: %q", profileRoot)
+	}
+	entries, err := os.ReadDir(profileRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "validated-anchor.yaml" || entries[0].Type()&os.ModeSymlink != 0 {
+		t.Fatalf("automatic default root contains something beyond one validated anchor: %#v", entries)
+	}
+	if !bytes.Equal(mustReadFile(t, filepath.Join(profileRoot, entries[0].Name())), mustReadFile(t, first)) {
+		t.Fatal("automatic root anchor differs from the validated pool")
+	}
+	idsPath, ok := argumentValue(plan.Args, "-template-id")
+	if !ok || string(mustReadFile(t, idsPath)) != "a-safe\nb-safe\n" {
+		t.Fatal("automatic scan did not retain its exact ID filter")
+	}
+	templatesPath, ok := argumentValue(plan.Args, "-templates")
+	if !ok || string(mustReadFile(t, templatesPath)) != first+"\n"+second+"\n" {
+		t.Fatal("automatic scan did not retain its exact validated path filter")
+	}
+
+	unit.Grant.TemplatePolicy.ProfileID = nil
+	legacy, err := nucleiInvocation(
+		unit, "socks5://172.30.0.1:1080", filepath.Join(t.TempDir(), "legacy.jsonl"),
+		nil, t.TempDir(), 0, []string{first, second},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(legacy.Args, " "), "automatic-scan") {
+		t.Fatal("legacy explicit-template mode was silently changed to automatic scan")
+	}
+}
+
 func TestPinnedNucleiTemplateTreeWhenProvided(t *testing.T) {
 	root := os.Getenv("NUCLEI_TEMPLATE_ROOT")
 	if root == "" {
@@ -478,9 +676,19 @@ func TestPinnedNucleiTemplateTreeWhenProvided(t *testing.T) {
 	if len(index) < 1000 {
 		t.Fatalf("exact template tree unexpectedly small: %d", len(index))
 	}
-	paths, err := selectedTemplatePaths(templatePolicy{AllowedTemplateIDs: []string{"CVE-2018-16671"}}, index)
-	if err != nil || len(paths) != 1 {
-		t.Fatalf("known bounded GET template failed conservative policy: %v", err)
+	profileIDs := []string{"CVE-2018-16671"}
+	paths, err := selectedTemplatePaths(templatePolicy{AllowedTemplateIDs: profileIDs}, index)
+	if err != nil || len(paths) != len(profileIDs) {
+		t.Fatalf("known bounded GET templates failed conservative policy: %v", err)
+	}
+	profile := nucleiWebSafeProfileID
+	profileIDs, profilePaths, err := resolvedTemplateSelection(templatePolicy{ProfileID: &profile}, index)
+	if err != nil {
+		t.Fatalf("derive pinned automatic profile: %v", err)
+	}
+	t.Logf("pinned Nuclei safe profile: templates=%d", len(profileIDs))
+	if len(profileIDs) != nucleiWebSafeTemplateCount || len(profileIDs) != len(profilePaths) {
+		t.Fatalf("pinned automatic profile is not materially broad and closed: ids=%d paths=%d", len(profileIDs), len(profilePaths))
 	}
 }
 

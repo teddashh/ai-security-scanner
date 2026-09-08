@@ -101,7 +101,10 @@ const managedLocalK8sContracts = new Map([
     planKind: "managed_build",
     license: { disposition: "source_offer", sourceOfferPath: "engines/images/semgrep/SOURCE-OFFER.md" },
     immutableDockerfileInputs: [
-      "COPY engines/images/semgrep/rules.yml /opt/ai-security-scanner/semgrep/rules.yml",
+      "COPY engines/images/semgrep/build_rule_pack.py /tmp/build-semgrep-rule-pack.py",
+      "COPY --from=build /tmp/semgrep-rule-pack/rules /opt/ai-security-scanner/semgrep/rules",
+      "COPY --from=build /tmp/semgrep-rule-pack/RULES.sha256 /opt/ai-security-scanner/semgrep/RULES.sha256",
+      "COPY --from=build /tmp/semgrep-rule-pack/LICENSE /usr/share/licenses/semgrep-rules/LICENSE",
       "COPY engines/images/semgrep/submodules.lock /usr/share/source/semgrep-submodules.lock",
       "COPY engines/images/semgrep/SOURCE-OFFER.md /usr/share/source/SEMGREP-SOURCE-OFFER.md",
       'SEMGREP_ENABLE_VERSION_CHECK="0"',
@@ -1792,8 +1795,9 @@ function validateManagedSourceImage(plan, planRelative, engine) {
     for (const [key, value] of Object.entries(requiredEnvironment)) {
       if (environment?.[key] !== value) errors.push(`${planRelative}: managed Checkov runtime requires ${key}=${value}`);
     }
-    if (!engine.command.includes("--skip-download") || !engine.command.includes("terraform")) {
-      errors.push(`${planRelative}: managed Checkov runtime must retain its fixed offline Terraform command`);
+    const frameworkIndex = engine.command.indexOf("--framework");
+    if (!engine.command.includes("--skip-download") || frameworkIndex < 0 || engine.command[frameworkIndex + 1] !== "all") {
+      errors.push(`${planRelative}: managed Checkov runtime must retain fixed offline upstream framework auto-detection`);
     }
   }
 }
@@ -1911,8 +1915,14 @@ function validateManagedExternalImage(plan, planRelative, engine) {
     } else if (!dockerfileText.includes(`ADD --checksum=${templates.source_archive.sha256}`) || !dockerfileText.includes(templates.source_archive.url)) {
       errors.push(`${planRelative}: Nuclei Dockerfile does not embed the declared exact template artifact`);
     }
-    if (!runtime?.template_policy || runtime.template_policy.revision !== `nuclei-templates@${templates?.revision}` || runtime.template_policy.exact_allowlist !== true || runtime.template_policy.denied_capabilities?.some((value) => typeof value !== "string") || runtime.template_policy.denied_capabilities?.length !== 6) {
-      errors.push(`${planRelative}: Nuclei runtime lacks the exact conservative template contract`);
+    if (!runtime?.template_policy ||
+        runtime.template_policy.revision !== `nuclei-templates@${templates?.revision}` ||
+        runtime.template_policy.profile_id !== "nuclei_web_safe_v1" ||
+        runtime.template_policy.derived_template_count !== 4674 ||
+        runtime.template_policy.legacy_exact_allowlist_supported !== true ||
+        runtime.template_policy.denied_capabilities?.some((value) => typeof value !== "string") ||
+        runtime.template_policy.denied_capabilities?.length !== 6) {
+      errors.push(`${planRelative}: Nuclei runtime lacks the pinned upstream automatic-profile contract`);
     }
   }
 }

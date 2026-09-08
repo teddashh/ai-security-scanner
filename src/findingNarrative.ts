@@ -55,11 +55,15 @@ const REMEDY: Record<FindingFamily, string> = {
   cloud_posture: "將受影響資源的設定或政策改為最小權限",
   cloud_identity: "改用只授予該身分角色所需操作的較小範圍政策",
   microsoft365: "調整這項控制項所檢查的 Microsoft 365 租用戶設定",
-  network_exposure: "記錄這項服務為何需要對外開放，或調整設定以移除、限制這個對外暴露",
+  network_exposure:
+    "記錄這項服務為何需要對外開放，或調整設定以移除、限制這個對外暴露",
   source_code: "修改程式碼以移除回報的不安全寫法",
-  secret: "先撤銷並輪替這組已外洩的憑證，再從原始碼以及仍保留它的歷史紀錄中移除",
-  infrastructure_as_code: "修改基礎架構即程式碼的範本，讓重新部署不會再還原這個設定",
-  vulnerable_component: "將受影響的元件升級到已修正的版本，或記錄目前無法升級的原因",
+  secret:
+    "先撤銷並輪替這組已外洩的憑證，再從原始碼以及仍保留它的歷史紀錄中移除",
+  infrastructure_as_code:
+    "修改基礎架構即程式碼的範本，讓重新部署不會再還原這個設定",
+  vulnerable_component:
+    "將受影響的元件升級到已修正的版本，或記錄目前無法升級的原因",
   kubernetes: "調整這項檢查所指出的工作負載或叢集設定",
 };
 
@@ -93,7 +97,9 @@ export const ALL_CONFIDENCE_BASIS_CODES: readonly ConfidenceBasisCode[] = [
   "missing_detection_quality_score",
 ];
 
-const sourceConfidence = (priorityReasons: readonly string[]): string | undefined =>
+const sourceConfidence = (
+  priorityReasons: readonly string[],
+): string | undefined =>
   priorityReasons
     .map((reason) => reason.trim())
     .find((reason) => reason.startsWith("Source confidence: "))
@@ -149,7 +155,10 @@ const EXPERT: Record<string, string> = {
   "Security professional": "資安專業人員",
 };
 
-export const localizedExpertType = (expert: string, locale: "en" | "zh-TW"): string => {
+export const localizedExpertType = (
+  expert: string,
+  locale: "en" | "zh-TW",
+): string => {
   if (locale === "en") return expert;
   // A name from a build this one has never seen still has to say something, and
   // a general answer beats a confidently wrong one. Kept identical to the Rust
@@ -255,7 +264,12 @@ export const findingImpactSentence = (
   // reader cannot -- and a test that fires on invisible differences gets
   // relaxed until it stops finding the visible ones.
   const composed = `若掃描結果經人工確認，${consequence}。${options.severityLabel}這個等級來自來源工具，不代表整體合規分數。`;
-  return composed + (options.contextFactors ?? []).map((factor) => CONTEXT[factor] ?? "").join("");
+  return (
+    composed +
+    (options.contextFactors ?? [])
+      .map((factor) => CONTEXT[factor] ?? "")
+      .join("")
+  );
 };
 
 /**
@@ -270,7 +284,10 @@ export const ENGLISH_ROLLBACK =
   "Before any manual change, preserve the current approved configuration and document a tested restoration path; this product does not execute remediation.";
 
 /** "Before any manual change, preserve ... does not execute remediation." */
-export const findingRollbackSentence = (locale: "en" | "zh-TW", english: string): string => {
+export const findingRollbackSentence = (
+  locale: "en" | "zh-TW",
+  english: string,
+): string => {
   if (locale === "en" || english.trim() !== ENGLISH_ROLLBACK) return english;
   return "進行任何人工變更前，請先保留目前已核准的設定，並記錄一條經過測試的還原路徑；本產品不會代為執行修復。";
 };
@@ -284,7 +301,10 @@ export const findingRollbackSentence = (locale: "en" | "zh-TW", english: string)
  * have to appear in the Chinese exactly as they do in the English. Returns the
  * English unchanged for any sentence not in this shape.
  */
-export const findingVerificationSentence = (locale: "en" | "zh-TW", english: string): string => {
+export const findingVerificationSentence = (
+  locale: "en" | "zh-TW",
+  english: string,
+): string => {
   if (locale === "en") return english;
   const RERUN = "After an approved manual change, rerun ";
   const SCOPE = " with the same authorized scope and confirm that source rule ";
@@ -310,19 +330,25 @@ export const findingVerificationSentence = (locale: "en" | "zh-TW", english: str
  */
 const BASIS_ENGLISH: Record<SeverityBasisCode, string> = {
   open_port: "an open port observation rather than a defect",
-  reachable_http_service: "a reachable HTTP service observation rather than a defect",
+  reachable_http_service:
+    "a reachable HTTP service observation rather than a defect",
   secret_pattern_match: "a secret pattern match in scanned source",
-  unverified_credential_detector: "a credential detector match that this product does not verify",
+  unverified_credential_detector:
+    "a credential detector match that this product does not verify",
   iac_policy_check:
     "a failed infrastructure-as-code policy check, rated flat because Checkov publishes no per-check severity offline",
   cis_kubernetes_benchmark: "a failed CIS Kubernetes Benchmark check",
-  cloud_control_query: "a failed IAM control from this product's own fixed query",
+  cloud_control_query:
+    "a failed IAM control from this product's own fixed query",
 };
 
 const CONFIDENCE_BASIS_ENGLISH: Record<ConfidenceBasisCode, string> = {
-  deterministic_policy_evaluation: "a deterministic policy or configuration evaluation",
-  advisory_version_match: "an installed-version match against a published advisory range",
-  unverified_pattern_or_detector_match: "an unverified pattern or detector match",
+  deterministic_policy_evaluation:
+    "a deterministic policy or configuration evaluation",
+  advisory_version_match:
+    "an installed-version match against a published advisory range",
+  unverified_pattern_or_detector_match:
+    "an unverified pattern or detector match",
   observed_response: "a response this product observed directly",
   template_matcher: "a template matcher firing on the assessed target",
   missing_detection_quality_score:
@@ -350,11 +376,16 @@ const ENGLISH_SENSITIVE_REASON =
  * list, and printing a confident Chinese sentence for text it cannot read would
  * be inventing that account.
  */
-export const findingPriorityReason = (locale: "en" | "zh-TW", english: string): string => {
+export const findingPriorityReason = (
+  locale: "en" | "zh-TW",
+  english: string,
+): string => {
   if (locale === "en") return english;
   const trimmed = english.trim();
-  if (trimmed === ENGLISH_EVIDENCE_REASON) return "已附上掃描工具的直接證據，仍需人工檢視。";
-  if (trimmed === ENGLISH_EXPOSURE_OBSERVATION_REASON) return "這是可連線服務的盤點觀察，不是漏洞。";
+  if (trimmed === ENGLISH_EVIDENCE_REASON)
+    return "已附上掃描工具的直接證據，仍需人工檢視。";
+  if (trimmed === ENGLISH_EXPOSURE_OBSERVATION_REASON)
+    return "這是可連線服務的盤點觀察，不是漏洞。";
   if (trimmed === ENGLISH_INTERNET_REASON)
     return "受影響的資產被標記為可從網際網路存取，且其保留的來源歸屬皆非問卷填答。";
   if (trimmed === ENGLISH_SENSITIVE_REASON)
@@ -373,7 +404,10 @@ export const findingPriorityReason = (locale: "en" | "zh-TW", english: string): 
   }
   const CONFIDENCE_DERIVED = "Confidence derived from ";
   const CONFIDENCE_TAIL = " reports no confidence of its own.";
-  if (trimmed.startsWith(CONFIDENCE_DERIVED) && trimmed.endsWith(CONFIDENCE_TAIL)) {
+  if (
+    trimmed.startsWith(CONFIDENCE_DERIVED) &&
+    trimmed.endsWith(CONFIDENCE_TAIL)
+  ) {
     const middle = trimmed.slice(
       CONFIDENCE_DERIVED.length,
       trimmed.length - CONFIDENCE_TAIL.length,
@@ -382,9 +416,9 @@ export const findingPriorityReason = (locale: "en" | "zh-TW", english: string): 
     if (at < 0) return english;
     const basisText = middle.slice(0, at);
     const engine = middle.slice(at + 2);
-    const code = (Object.keys(CONFIDENCE_BASIS_ENGLISH) as ConfidenceBasisCode[]).find(
-      (key) => CONFIDENCE_BASIS_ENGLISH[key] === basisText,
-    );
+    const code = (
+      Object.keys(CONFIDENCE_BASIS_ENGLISH) as ConfidenceBasisCode[]
+    ).find((key) => CONFIDENCE_BASIS_ENGLISH[key] === basisText);
     if (!code || !engine) return english;
     return `信心是由${CONFIDENCE_BASIS[code]}推導而來；${engine} 本身不提供信心評定。`;
   }
@@ -458,6 +492,72 @@ export const localizedCoverageDimension = (
   for (const [needle, label] of [
     ["tcp reachability", "TCP 連線狀態"],
     ["bounded connection contract", "受限的連線檢查"],
+    ["nuclei upstream website scan", "Nuclei 上游網站掃描"],
+    ["greenbone remote vulnerability scan", "Greenbone 遠端弱點掃描"],
+    ["internal-device tls vulnerability checks", "內部設備 TLS 弱點檢查"],
+    ["internal-device scan-profile coverage", "內部設備掃描設定檔涵蓋記錄"],
+    ["ssh service vulnerability checks", "SSH 服務弱點檢查"],
+    ["ssh endpoint scan-profile coverage", "SSH 端點掃描設定檔涵蓋記錄"],
+    ["rdp transport security checks", "RDP 傳輸安全性檢查"],
+    [
+      "rdp transport endpoint scan-profile coverage",
+      "RDP 傳輸端點掃描設定檔涵蓋記錄",
+    ],
+    [
+      "rdp implementation, authentication/nla, and endpoint host coverage",
+      "RDP 實作、驗證／NLA 與端點主機涵蓋範圍",
+    ],
+    ["vnc transport security check", "VNC 傳輸安全性檢查"],
+    [
+      "vnc transport endpoint scan-profile coverage",
+      "VNC 傳輸端點掃描設定檔涵蓋記錄",
+    ],
+    [
+      "vnc implementation, authentication, and endpoint host coverage",
+      "VNC 實作、驗證與端點主機涵蓋範圍",
+    ],
+    [
+      "smtp cleartext-login and tls security checks",
+      "SMTP 明文登入與 TLS 安全性檢查",
+    ],
+    [
+      "smtp fixed security profile attempt",
+      "SMTP 固定安全設定檔嘗試",
+    ],
+    [
+      "smtp tls checks with selected-run evidence",
+      "具有所選本輪證據的 SMTP TLS 檢查",
+    ],
+    [
+      "smtp tls negotiation-dependent coverage",
+      "需成功協商 TLS 的 SMTP 涵蓋範圍",
+    ],
+    [
+      "smtp endpoint scan-profile coverage",
+      "SMTP 端點掃描設定檔涵蓋記錄",
+    ],
+    [
+      "smtp server behavior, implementation, and endpoint host coverage",
+      "SMTP 伺服器行為、實作與端點主機涵蓋範圍",
+    ],
+    ["telnet cleartext-login security check", "Telnet 明文登入安全性檢查"],
+    [
+      "telnet endpoint scan-profile coverage",
+      "Telnet 端點掃描設定檔涵蓋記錄",
+    ],
+    [
+      "telnet authentication, implementation, and endpoint host coverage",
+      "Telnet 驗證、實作與端點主機涵蓋範圍",
+    ],
+    [
+      "endpoint operating-system, package, application, and local-configuration coverage",
+      "端點作業系統、套件、應用程式與本機設定涵蓋範圍",
+    ],
+    ["supported vulnerability profile", "可用的弱點掃描設定"],
+    [
+      "device product and firmware vulnerability coverage",
+      "設備產品與韌體弱點涵蓋範圍",
+    ],
     ["completed check-to-target coordinate", "完成的目標檢查"],
     ["requested scan stage", "要求的掃描深度"],
     ["requested limits", "要求的掃描限制"],
@@ -488,7 +588,10 @@ export const localizedCoverageDimension = (
     ] as const) {
       const head = counted[1] ?? "";
       if (head.endsWith(suffix)) {
-        return withCheck(head.slice(0, head.length - suffix.length), `${label}（${counted[2]}）`);
+        return withCheck(
+          head.slice(0, head.length - suffix.length),
+          `${label}（${counted[2]}）`,
+        );
       }
     }
   }
@@ -505,7 +608,10 @@ export const localizedCoverageDimension = (
     [" was cancelled before finishing", "未完成就被取消"],
   ] as const) {
     if (dimension.endsWith(suffix)) {
-      return withCheck(dimension.slice(0, dimension.length - suffix.length), label);
+      return withCheck(
+        dimension.slice(0, dimension.length - suffix.length),
+        label,
+      );
     }
   }
 
@@ -520,8 +626,10 @@ export const localizedCoverageDimension = (
       ["cancelled check dimension", "已取消的檢查項目"],
       ["not-tested check dimension", "未檢測的檢查項目"],
       ["unfinished check dimension", "未完成的檢查項目"],
+      ["vulnerability profile evidence", "弱點掃描設定檔證據"],
     ] as const) {
-      if (rest === fragment) return withCheck(dimension.slice(0, separator), label);
+      if (rest === fragment)
+        return withCheck(dimension.slice(0, separator), label);
     }
   }
 
@@ -685,6 +793,66 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
     "本輪記錄了完成的掃描工具與資產對應關係，但沒有記錄實際觀察到的主機、服務、連接埠、路徑、檔案、分支、帳號或資源。",
   ],
   [
+    "This HTTPS management-service profile contains no device product or firmware vulnerability checks. TLS protocol, cipher, and certificate checks are reported separately.",
+    "此 HTTPS 管理服務設定檔不包含設備產品或韌體弱點檢查；TLS 協定、加密套件與憑證檢查會另行回報。",
+  ],
+  [
+    "This run does not retain one exact frozen HTTPS management-service profile for this asset. Current project metadata is not used to claim historical TLS coverage.",
+    "本輪沒有為此資產保留一份精確凍結的 HTTPS 管理服務設定檔。目前的專案資料不會用來宣稱當時已涵蓋 TLS。",
+  ],
+  [
+    "This run does not retain the exact fixed SSH profile for this asset. Current project metadata is not used to claim historical SSH vulnerability coverage.",
+    "本輪沒有為此資產保留精確固定的 SSH 設定檔。目前的專案資料不會用來宣稱當時已完成 SSH 弱點涵蓋。",
+  ],
+  [
+    "The unauthenticated SSH service profile does not inspect operating-system patch level, installed packages or applications, or local host configuration.",
+    "這項不需登入的 SSH 服務設定檔，不會檢查作業系統修補層級、已安裝的套件或應用程式，也不會檢查主機本機設定。",
+  ],
+  [
+    "This run does not retain the exact fixed RDP transport profile for this asset. Current project metadata is not used to claim historical RDP transport security coverage.",
+    "本輪沒有為此資產保留精確固定的 RDP 傳輸設定檔。目前的專案資料不會用來宣稱當時已完成 RDP 傳輸安全性涵蓋。",
+  ],
+  [
+    "The unauthenticated RDP transport profile checks one legacy RDP 5.2-or-earlier fixed-private-key issue, but does not inspect broader or current RDP implementation CVEs, authentication or Network Level Authentication (NLA), Windows patch level, installed packages or applications, or local host configuration.",
+    "這項不需登入的 RDP 傳輸設定檔會檢查一項 RDP 5.2 或更早版本的舊式固定私密金鑰問題，但不會檢查更廣泛或現行的 RDP 實作 CVE、驗證或網路層級驗證（NLA）、Windows 修補層級、已安裝的套件或應用程式，也不會檢查主機本機設定。",
+  ],
+  [
+    "This run does not retain the exact fixed VNC transport profile for this asset. Current project metadata is not used to claim historical VNC transport security coverage.",
+    "本輪沒有為此資產保留精確固定的 VNC 傳輸設定檔。目前的專案資料不會用來宣稱當時已完成 VNC 傳輸安全性涵蓋。",
+  ],
+  [
+    "The unauthenticated VNC transport profile checks whether the VNC connection is encrypted. It does not inspect VNC implementation CVEs, authentication strength, operating-system patch level, installed packages or applications, or local host configuration. No login or desktop session was attempted.",
+    "這項不需登入的 VNC 傳輸設定檔會檢查 VNC 連線是否加密，但不會檢查 VNC 實作 CVE、驗證強度、作業系統修補層級、已安裝的套件或應用程式，也不會檢查主機本機設定；本輪未嘗試登入或建立桌面工作階段。",
+  ],
+  [
+    "This run does not retain the exact fixed SMTP profile for this asset. Current project metadata is not used to claim historical SMTP security coverage.",
+    "本輪沒有為此資產保留精確固定的 SMTP 設定檔。目前的專案資料不會用來宣稱當時已完成 SMTP 安全性涵蓋。",
+  ],
+  [
+    "The unauthenticated SMTP profile reads the banner, issues EHLO, negotiates STARTTLS when offered, and checks advertised AUTH for an unencrypted cleartext-login risk. Its TLS checks apply only when TLS can be negotiated. It does not send credentials or mail, test relay or delivery, authentication enforcement or bypass, anti-spam behavior, general mail-server implementation CVEs, operating-system patches, installed software, or local configuration.",
+    "這項不需登入的 SMTP 設定檔會讀取 banner、送出 EHLO、在服務提供時協商 STARTTLS，並檢查服務宣告的 AUTH 是否存在未加密的明文登入風險。只有在能協商 TLS 時才會執行 TLS 檢查。它不會送出帳號或密碼、寄信，也不會測試 relay 或投遞、驗證強制或繞過、anti-spam 行為、一般郵件伺服器實作 CVE、作業系統修補、已安裝軟體或本機設定。",
+  ],
+  [
+    "This run does not retain selected-run finding evidence for every SMTP TLS check. Task completion shows that the fixed profile was attempted, but it does not prove that TLS was available or that every TLS check ran; one finding proves only its own source OID.",
+    "本輪沒有為每一項 SMTP TLS 檢查保留所選本輪的 finding 證據。工作完成只表示已嘗試固定設定檔，不能證明 TLS 可用，也不能證明每一項 TLS 檢查都已執行；一筆 finding 只能證明它自己的來源 OID。",
+  ],
+  [
+    "This run does not retain the exact fixed Telnet profile for this asset. Current project metadata is not used to claim historical Telnet security coverage.",
+    "本輪沒有為此資產保留精確固定的 Telnet 設定檔。目前的專案資料不會用來宣稱當時已完成 Telnet 安全性涵蓋。",
+  ],
+  [
+    "The unauthenticated Telnet profile observes whether a login or password prompt is offered without TLS. It sends no username or password and does not log in; it does not test default credentials, authentication bypass, Telnet implementation CVEs, operating-system patches, installed software, or local configuration.",
+    "這項不需登入的 Telnet 設定檔會觀察服務是否在沒有 TLS 的情況下提供登入或密碼提示。它不會送出帳號或密碼，也不會登入；不會測試預設帳密、驗證繞過、Telnet 實作 CVE、作業系統修補、已安裝軟體或本機設定。",
+  ],
+  [
+    "The Greenbone process completed, but this run does not retain one exact reviewed vulnerability profile for every bound asset. Process completion is not counted as a vulnerability result.",
+    "Greenbone 程序雖已完成，但本輪沒有為每個綁定資產保留一份精確且經審查的弱點掃描設定檔。因此程序完成不會被算成弱點掃描結果。",
+  ],
+  [
+    "This asset was added to the IT environment, but this run had no supported service-specific vulnerability profile for it. It was not contacted or tested.",
+    "此資產已加入 IT 環境，但本輪沒有適用的服務專屬弱點掃描設定，因此沒有連線，也沒有進行測試。",
+  ],
+  [
     "The task says completed but has neither a finish time nor a bounded native observation time. The report does not invent when it was tested.",
     "這項工作標示為已完成，卻既沒有結束時間，也沒有內建檢查的觀察時間。報告不會臆造檢測的時間。",
   ],
@@ -739,6 +907,58 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
   [
     "Keep this limitation visible; do not interpret missing historical detail as completed coverage.",
     "請保留這項限制的說明；不要把缺少的歷史細節解讀為已完成的涵蓋。",
+  ],
+  [
+    "Keep this limitation visible; do not interpret a completed process as completed SSH vulnerability coverage.",
+    "請保留這項限制；不要把程序完成解讀為已完成 SSH 弱點涵蓋。",
+  ],
+  [
+    "Keep this limitation visible; do not interpret a completed process as completed RDP transport security coverage.",
+    "請保留這項限制；不要把程序完成解讀為已完成 RDP 傳輸安全性涵蓋。",
+  ],
+  [
+    "Keep this limitation visible; do not interpret a completed process as completed VNC transport security coverage.",
+    "請保留這項限制；不要把程序完成解讀為已完成 VNC 傳輸安全性涵蓋。",
+  ],
+  [
+    "Keep this limitation visible; do not interpret a completed process as completed SMTP security coverage.",
+    "請保留這項限制；不要把程序完成解讀為已完成 SMTP 安全性涵蓋。",
+  ],
+  [
+    "Keep this limitation visible; do not interpret a completed process as completed Telnet security coverage.",
+    "請保留這項限制；不要把程序完成解讀為已完成 Telnet 安全性涵蓋。",
+  ],
+  [
+    "Keep this limitation visible; use an approved endpoint inventory or local snapshot when those host-level checks are needed.",
+    "請保留這項限制；需要主機層級檢查時，請使用已核准的端點盤點資料或本機快照。",
+  ],
+  [
+    "Keep this limitation visible; choose a separately approved host or RDP-authentication assessment when those checks are needed.",
+    "請保留這項限制；需要這些檢查時，請另外選擇經核准的主機或 RDP 驗證評估。",
+  ],
+  [
+    "Keep this limitation visible; use an approved endpoint inventory or a separate authorized VNC assessment when those checks are needed.",
+    "請保留這項限制；需要這些檢查時，請使用已核准的端點盤點資料，或另行進行已授權的 VNC 評估。",
+  ],
+  [
+    "Keep this limitation visible; use a separately approved mail-server assessment or endpoint inventory when those checks are needed.",
+    "請保留這項限制；需要這些檢查時，請另行進行已核准的郵件伺服器評估，或使用已核准的端點盤點資料。",
+  ],
+  [
+    "Keep this limitation visible; use a separately approved TLS assessment when complete SMTP TLS coverage is needed.",
+    "請保留這項限制；若需要完整的 SMTP TLS 涵蓋，請另行進行已核准的 TLS 評估。",
+  ],
+  [
+    "Keep this limitation visible; use a separately approved authentication assessment or endpoint inventory when those checks are needed.",
+    "請保留這項限制；需要這些檢查時，請另行進行已核准的驗證評估，或使用已核准的端點盤點資料。",
+  ],
+  [
+    "Choose a supported exact asset profile and run it when vulnerability coverage is needed.",
+    "需要弱點涵蓋時，請為資產選擇支援的精確掃描設定檔並執行。",
+  ],
+  [
+    "Add a supported exact service profile when you want this asset vulnerability-tested.",
+    "需要檢測此資產弱點時，請加入支援的精確服務設定。",
   ],
   [
     "Keep the saved results, then retry this scan if you need an internally consistent coverage record.",
@@ -846,7 +1066,10 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
  * `not_tested` kind is written for a check that saved partial work, one that
  * never started, and one still running.
  */
-export const coverageGapProse = (locale: "en" | "zh-TW", english: string): string => {
+export const coverageGapProse = (
+  locale: "en" | "zh-TW",
+  english: string,
+): string => {
   if (locale === "en") return english;
   const trimmed = english.trim();
   // Six reasons gain a diagnostic code when the task recorded one. It is the
@@ -869,8 +1092,22 @@ const lookupProse = (english: string): string | undefined =>
  * the backend writes it before any locale is known and freezes it in the case.
  */
 const TESTED_OBSERVATION_PROSE: ReadonlyArray<readonly [string, string]> = [
-  ["The port accepted the bounded TCP connection.", "這個連接埠接受了受限的 TCP 連線。"],
-  ["The port refused the bounded TCP connection.", "這個連接埠拒絕了受限的 TCP 連線。"],
+  [
+    "Nuclei completed the pinned upstream automatic web profile on the displayed origin. Upstream technology detection selected applicable read-only templates; completion does not prove that every eligible template executed.",
+    "Nuclei 已對畫面所列網站來源範圍完成固定版本的上游自動網站設定。上游技術偵測會選擇適用的唯讀模板；完成不代表每個合格模板都實際執行。",
+  ],
+  [
+    "Greenbone completed the frozen remote-safe profile on the displayed host and ports. Its upstream service and product prerequisites decided which feed checks applied; the result API does not prove that every scheduled VT executed.",
+    "Greenbone 已對畫面所列主機與連接埠完成凍結的遠端安全掃描設定。哪些 feed 檢查適用，由上游的服務與產品先決條件決定；結果 API 不能證明每個排程的 VT 都實際執行。",
+  ],
+  [
+    "The port accepted the bounded TCP connection.",
+    "這個連接埠接受了受限的 TCP 連線。",
+  ],
+  [
+    "The port refused the bounded TCP connection.",
+    "這個連接埠拒絕了受限的 TCP 連線。",
+  ],
   [
     "The bounded TCP connection attempt timed out; reachability was not established.",
     "受限的 TCP 連線嘗試逾時；無法確認連線可達。",
@@ -884,6 +1121,38 @@ const TESTED_OBSERVATION_PROSE: ReadonlyArray<readonly [string, string]> = [
     "這項已保存的工作已針對這個目標完成。這份案件記錄沒有凍結更細部的執行範圍。",
   ],
   [
+    "The completed Greenbone task retained a frozen allowlist containing the profile's TLS protocol, cipher, and certificate vulnerability checks.",
+    "已完成的 Greenbone 工作保留了凍結的允許清單，其中包含此設定檔的 TLS 協定、加密套件與憑證弱點檢查。",
+  ],
+  [
+    "The completed Greenbone task retained the exact reviewed SSH profile for deprecated protocol, known or static host key, and weak MAC, encryption, host-key, key-size, or key-exchange choices.",
+    "已完成的 Greenbone 工作保留了精確且經過檢視的 SSH 設定檔，用來檢查淘汰的協定、已知或固定的 host key，以及較弱的 MAC、加密、host-key、key size 或 key-exchange 選項。",
+  ],
+  [
+    "The completed Greenbone task retained the exact reviewed RDP transport profile: ten TLS protocol, cipher, and certificate checks plus one check for the legacy fixed private key used by RDP 5.2 or earlier.",
+    "已完成的 Greenbone 工作保留了精確且經過檢視的 RDP 傳輸設定檔：十項 TLS 協定、加密套件與憑證檢查，加上一項針對 RDP 5.2 或更早版本所使用之舊式固定私密金鑰的檢查。",
+  ],
+  [
+    "The completed Greenbone task retained the exact reviewed VNC transport profile containing one check for an unencrypted VNC connection.",
+    "已完成的 Greenbone 工作保留了精確且經過檢視的 VNC 傳輸設定檔，其中包含一項未加密 VNC 連線檢查。",
+  ],
+  [
+    "The completed Greenbone task retained the exact reviewed SMTP profile: one banner, EHLO, STARTTLS, and advertised-AUTH check for an unencrypted cleartext login risk, plus ten TLS checks that apply when TLS can be negotiated. No credentials or mail were sent.",
+    "已完成的 Greenbone 工作保留了精確且經過檢視的 SMTP 設定檔：一項透過 banner、EHLO、STARTTLS 與服務宣告 AUTH 檢查未加密明文登入風險的檢查，加上十項在可協商 TLS 時適用的 TLS 檢查。本輪未送出帳號或密碼，也沒有寄信。",
+  ],
+  [
+    "The completed Greenbone task retained and attempted the exact SMTP profile: one check reads the banner, sends EHLO, tries STARTTLS when offered, and reviews advertised AUTH for cleartext-login risk; ten more checks depend on TLS being available. Task completion alone does not prove those TLS checks ran. No credentials or mail were sent.",
+    "已完成的 Greenbone 工作保留並嘗試執行精確的 SMTP 設定檔：其中一項檢查會讀取 banner、送出 EHLO、在服務提供時嘗試 STARTTLS，並檢視服務宣告的 AUTH 是否有明文登入風險；另有十項檢查必須在 TLS 可用時才能執行。工作完成本身不能證明這些 TLS 檢查實際執行。本輪未送出帳號或密碼，也沒有寄信。",
+  ],
+  [
+    "Only the exact TLS source OIDs present in this selected run's finding evidence are counted here. A finding for one OID does not prove that another TLS check ran.",
+    "此處只計入所選本輪 finding 證據中明確記載的 TLS 來源 OID。某一個 OID 有 finding，不能證明另一項 TLS 檢查也已執行。",
+  ],
+  [
+    "The completed Greenbone task retained the exact reviewed Telnet profile, which observes whether a login or password prompt is offered without TLS. No username or password was sent and no login was attempted.",
+    "已完成的 Greenbone 工作保留了精確且經過檢視的 Telnet 設定檔，用來觀察服務是否在沒有 TLS 的情況下提供登入或密碼提示。本輪未送出帳號或密碼，也沒有嘗試登入。",
+  ],
+  [
     "These exact frozen work units have validated completed outcomes across all saved attempts. A completed network check reports reachability; it is not a security pass.",
     "這些已凍結的特定工作單元，在所有已儲存的嘗試中都有通過驗證的完成結果。完成的網路檢查只回報連線是否可達；不代表安全性檢查通過。",
   ],
@@ -894,10 +1163,17 @@ const TESTED_OBSERVATION_PROSE: ReadonlyArray<readonly [string, string]> = [
 ];
 
 /** A tested-dimension observation in the reader's language. */
-export const testedObservationProse = (locale: "en" | "zh-TW", english: string): string => {
+export const testedObservationProse = (
+  locale: "en" | "zh-TW",
+  english: string,
+): string => {
   if (locale === "en") return english;
   const trimmed = english.trim();
-  return TESTED_OBSERVATION_PROSE.find(([candidate]) => candidate === trimmed)?.[1] ?? english;
+  return (
+    TESTED_OBSERVATION_PROSE.find(
+      ([candidate]) => candidate === trimmed,
+    )?.[1] ?? english
+  );
 };
 
 /** Fixed coverage-ledger explanations shared by the screen and case export. */
@@ -953,7 +1229,11 @@ const LOCALHOST_ATTEMPT_SUFFIX = [
   "。這只記錄這些連線嘗試；無法證明服務或電腦安全，也不涵蓋其他連接埠或主機。",
 ] as const;
 
-const stripFrame = (value: string, prefix: string, suffix: string): string | undefined => {
+const stripFrame = (
+  value: string,
+  prefix: string,
+  suffix: string,
+): string | undefined => {
   if (!value.startsWith(prefix) || !value.endsWith(suffix)) return undefined;
   const end = suffix ? value.length - suffix.length : value.length;
   return value.slice(prefix.length, end);
@@ -976,14 +1256,28 @@ const translateTrailingCoverageFrame = (
 };
 
 const translateCoverageRecordDetail = (english: string): string | undefined => {
-  const fixed = COVERAGE_RECORD_DETAIL_PROSE.find(([candidate]) => candidate === english)?.[1];
+  const fixed = COVERAGE_RECORD_DETAIL_PROSE.find(
+    ([candidate]) => candidate === english,
+  )?.[1];
   if (fixed) return fixed;
 
-  const stale = translateTrailingCoverageFrame(english, STALE_KNOWLEDGE_APPEND, STALE_KNOWLEDGE_SUFFIX);
+  const stale = translateTrailingCoverageFrame(
+    english,
+    STALE_KNOWLEDGE_APPEND,
+    STALE_KNOWLEDGE_SUFFIX,
+  );
   if (stale) return stale;
-  const localhost = translateTrailingCoverageFrame(english, LOCALHOST_ATTEMPT_APPEND, LOCALHOST_ATTEMPT_SUFFIX);
+  const localhost = translateTrailingCoverageFrame(
+    english,
+    LOCALHOST_ATTEMPT_APPEND,
+    LOCALHOST_ATTEMPT_SUFFIX,
+  );
   if (localhost) return localhost;
-  const provider = translateTrailingCoverageFrame(english, PROVIDER_DISCOVERY_APPEND, ["", ""]);
+  const provider = translateTrailingCoverageFrame(
+    english,
+    PROVIDER_DISCOVERY_APPEND,
+    ["", ""],
+  );
   if (provider) return provider;
 
   const summary = english.endsWith(COVERAGE_STATE_APPEND[0])
@@ -1012,7 +1306,9 @@ const translateCoverageRecordDetail = (english: string): string | undefined => {
     return `來源已連線，且最近一次可歸屬的探索未傳回任何資產。這不是掃描成功的結果；仍保留 ${retainedCount} 筆先前的資產觀察結果。`;
   }
 
-  const disconnected = english.match(/^The source is not currently connected \(status: (.+)\)\. Its present coverage is unknown; (\d+) previously attributed asset\(s\) are retained but do not make the source green\.$/u);
+  const disconnected = english.match(
+    /^The source is not currently connected \(status: (.+)\)\. Its present coverage is unknown; (\d+) previously attributed asset\(s\) are retained but do not make the source green\.$/u,
+  );
   if (disconnected?.[1] && disconnected[2]) {
     return `來源目前未連線（狀態：${disconnected[1]}）。目前的涵蓋未知；仍保留 ${disconnected[2]} 筆先前歸屬的資產，但這不會讓來源顯示為綠色。`;
   }
@@ -1056,7 +1352,9 @@ const translateCoverageRecordDetail = (english: string): string | undefined => {
 };
 
 /** Reviewed English catalog rationales and their Traditional Chinese presentation. */
-const CONTROL_MAPPING_RATIONALE_PROSE: ReadonlyArray<readonly [string, string]> = [
+const CONTROL_MAPPING_RATIONALE_PROSE: ReadonlyArray<
+  readonly [string, string]
+> = [
   [
     "Evidence that an identity has no registered multi-factor device is related to authenticating users and safeguarding authentication information.",
     "某個身分未登記多重要素驗證裝置的證據，與驗證使用者及保護驗證資訊有關。",
@@ -1131,19 +1429,27 @@ const CONTROL_MAPPING_RATIONALE_PROSE: ReadonlyArray<readonly [string, string]> 
   ],
 ];
 
-export const controlMappingRationaleZhHant = (english: string): string | undefined =>
-  CONTROL_MAPPING_RATIONALE_PROSE.find(([candidate]) => candidate === english)?.[1];
+export const controlMappingRationaleZhHant = (
+  english: string,
+): string | undefined =>
+  CONTROL_MAPPING_RATIONALE_PROSE.find(
+    ([candidate]) => candidate === english,
+  )?.[1];
 
 export const localizedControlMappingRationale = (
   rationale: string,
   locale: "en" | "zh-TW",
-): string => locale === "en" ? rationale : controlMappingRationaleZhHant(rationale) ?? rationale;
+): string =>
+  locale === "en"
+    ? rationale
+    : (controlMappingRationaleZhHant(rationale) ?? rationale);
 
 /** A stored coverage-record explanation in the reader's language. */
 export const localizedCoverageRecordDetail = (
   detail: string,
   locale: "en" | "zh-TW",
-): string => locale === "en" ? detail : translateCoverageRecordDetail(detail) ?? detail;
+): string =>
+  locale === "en" ? detail : (translateCoverageRecordDetail(detail) ?? detail);
 
 const DATA_QUALITY_WARNING_PROSE: ReadonlyArray<readonly [string, string]> = [
   [
@@ -1165,32 +1471,41 @@ const DATA_QUALITY_WARNING_PROSE: ReadonlyArray<readonly [string, string]> = [
 ];
 
 const translateDataQualityWarning = (english: string): string | undefined => {
-  const fixed = DATA_QUALITY_WARNING_PROSE.find(([candidate]) => candidate === english)?.[1];
+  const fixed = DATA_QUALITY_WARNING_PROSE.find(
+    ([candidate]) => candidate === english,
+  )?.[1];
   if (fixed) return fixed;
   const missingSnapshot = stripFrame(
     english,
     "Finding ",
     " has no selected-run presentation snapshot; current canonical wording is labeled as a legacy fallback.",
   );
-  if (missingSnapshot) return `問題 ${missingSnapshot} 沒有所選輪次的呈現快照；目前的正式措辭已標示為舊版備援。`;
+  if (missingSnapshot)
+    return `問題 ${missingSnapshot} 沒有所選輪次的呈現快照；目前的正式措辭已標示為舊版備援。`;
   const observationOnly = stripFrame(
     english,
     "Finding ",
     " has only its retained run observation; presentation detail is unavailable.",
   );
-  if (observationOnly) return `問題 ${observationOnly} 只有保留的輪次觀察記錄；無法取得呈現細節。`;
+  if (observationOnly)
+    return `問題 ${observationOnly} 只有保留的輪次觀察記錄；無法取得呈現細節。`;
   return undefined;
 };
 
 export const localizedDataQualityWarning = (
   warning: string,
   locale: "en" | "zh-TW",
-): string => locale === "en" ? warning : translateDataQualityWarning(warning) ?? warning;
+): string =>
+  locale === "en" ? warning : (translateDataQualityWarning(warning) ?? warning);
 
 /** "Have the recommended specialist ({expert}) review ... then plan and approve {remedy}." */
 export const findingActionSentence = (
   locale: "en" | "zh-TW",
-  options: { englishFallback: string; expertType: string; family?: FindingFamily },
+  options: {
+    englishFallback: string;
+    expertType: string;
+    family?: FindingFamily;
+  },
 ): string => {
   if (locale === "en") return options.englishFallback;
   const remedy = options.family ? REMEDY[options.family] : undefined;
@@ -1230,7 +1545,10 @@ export const localizedRequestedLimitName = (
     ["execution timeout", "檢查逾時限制"],
   ] as const) {
     if (name.endsWith(suffix)) {
-      return withIdentifier(label, name.slice(0, name.length - suffix.length).trim());
+      return withIdentifier(
+        label,
+        name.slice(0, name.length - suffix.length).trim(),
+      );
     }
   }
   return `本輪使用的限制：${name}`;
@@ -1242,7 +1560,10 @@ const REQUESTED_LIMIT_VALUE_UNITS: ReadonlyArray<readonly [string, string]> = [
   [" seconds", " 秒"],
 ];
 
-const REQUEST_RATE_MIDDLE = [" per second, concurrency ", " 次，並行 "] as const;
+const REQUEST_RATE_MIDDLE = [
+  " per second, concurrency ",
+  " 次，並行 ",
+] as const;
 
 /** One stored requested-limit value in the reader's language. */
 export const localizedRequestedLimitValue = (
@@ -1257,7 +1578,11 @@ export const localizedRequestedLimitValue = (
   }
 
   const [requests, concurrency, extra] = value.split(REQUEST_RATE_MIDDLE[0]);
-  if (!extra && /^\d+$/u.test(requests ?? "") && /^\d+$/u.test(concurrency ?? "")) {
+  if (
+    !extra &&
+    /^\d+$/u.test(requests ?? "") &&
+    /^\d+$/u.test(concurrency ?? "")
+  ) {
     return `每秒 ${requests}${REQUEST_RATE_MIDDLE[1]}${concurrency}`;
   }
 
@@ -1265,9 +1590,10 @@ export const localizedRequestedLimitValue = (
   // these names here mirrors the backend's producer census distinction between
   // a recognized identifier and an unknown unit-bearing value.
   if (
-    name === "endpoint"
-    || name.endsWith(" authorized network target")
-    || name.endsWith(" approved ports")
-  ) return value;
+    name === "endpoint" ||
+    name.endsWith(" authorized network target") ||
+    name.endsWith(" approved ports")
+  )
+    return value;
   return value;
 };

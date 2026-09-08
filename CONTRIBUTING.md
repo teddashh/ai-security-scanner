@@ -17,11 +17,15 @@ A connectivity check, process launch, or empty report is not meaningful scan val
 
 Prefer the shortest complete beginner journey:
 
-- ask only for information needed to start the selected scan;
+- let one environment project contain multiple repositories, internal devices or endpoints, and websites, while retaining single-target shortcuts;
+- ask only for information needed to start checks for the selected assets;
 - provide useful defaults and keep advanced controls out of the primary path;
-- show what was scanned, the most important results, their impact, and the next action;
+- route each upstream engine to only its applicable approved asset IDs;
+- show which assets were scanned, the most important results, their impact, and the next action in one report;
 - distinguish no findings from checks that did not run; and
 - preserve saved work and allow unaffected checks to continue when one scanner fails.
+
+Inventory, service discovery, port reachability, and connectivity may prepare an internal target, but they cannot satisfy vulnerability-scan value by themselves.
 
 Test rendered behavior and a real user path where practical. Source-text assertions and schema checks can support that evidence, but they do not replace exercising the interaction they describe.
 
@@ -43,11 +47,12 @@ An engine contribution should include its official source and license, a support
 
 All scanners feed one report model. A report contribution should improve the shared presentation of:
 
-- scope and checks actually run;
+- scope and checks actually run, grouped by affected repository, internal device or endpoint, and website;
 - prioritized findings with evidence and impact;
 - recommended next actions;
 - coverage gaps, failures, and exclusions; and
-- technical details available when needed.
+- technical details available when needed;
+- cross-engine correlation or deduplication without losing any source finding or evidence.
 
 Framework mappings may enrich a report, but they do not replace findings and should not control whether a scan can run.
 

@@ -1,4 +1,7 @@
 import type { UseCaseId } from "./useCases";
+import type { InternalDeviceScanProfile } from "./internalDeviceProfile";
+import type { InternalEndpointScanProfile } from "./internalEndpointProfile";
+import type { InternalHostScanProfile } from "./internalHostProfile";
 
 export type AppMode = "native" | "demo";
 
@@ -105,6 +108,20 @@ export interface KnownAssetInput {
     protocol: "http" | "https";
     port: number;
     path: string;
+    /** Selects an explicit internal-device vulnerability profile; absent means the website path. */
+    scanProfile?: InternalDeviceScanProfile;
+  };
+  /** Exact unauthenticated internal service selected for a fixed vulnerability profile. */
+  networkService?: {
+    protocol: "tcp";
+    port: number;
+    scanProfile: InternalEndpointScanProfile;
+  };
+  /** One exact internal host using the pinned Greenbone remote-safe profile. */
+  hostScan?: {
+    protocol: "tcp";
+    ports: number[];
+    scanProfile: InternalHostScanProfile;
   };
 }
 
@@ -510,6 +527,17 @@ export interface Asset {
     protocol: "http" | "https";
     port: number;
     path: string;
+    scanProfile?: InternalDeviceScanProfile;
+  };
+  declaredNetworkService?: {
+    protocol: "tcp";
+    port: number;
+    scanProfile: InternalEndpointScanProfile;
+  };
+  declaredHostScan?: {
+    protocol: "tcp";
+    ports: number[];
+    scanProfile: InternalHostScanProfile;
   };
 }
 
@@ -524,6 +552,8 @@ export interface ExternalRatePolicy {
 
 export interface ExternalTemplatePolicy {
   revision: string;
+  /** Backend-owned upstream profile; IDs remain empty when this is present. */
+  profileId?: string;
   allowedTemplateIds: string[];
   allowHeadless: boolean;
   allowOutOfBand: boolean;
@@ -905,6 +935,8 @@ export interface BeginnerReportFinding {
     engineId: string;
     artifactSha256: string;
     observedAt: string;
+    /** Scanner-reported, product-redacted file, package, URL, or service location. */
+    location?: string;
   }>;
   frameworkReferences: Array<{
     framework: string;
@@ -1055,6 +1087,8 @@ export interface Evidence {
   sourceEngine: string;
   observedAt: string;
   summary: string;
+  /** Scanner-reported location kept separate from explanatory prose. */
+  location?: string;
   rawArtifactHash: string;
   rawArtifactPath?: string;
   kind?: string;

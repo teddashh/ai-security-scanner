@@ -5,6 +5,10 @@ import { CoveragePage } from "../../src/pages/CoveragePage";
 import { I18nProvider, localeStorageKey } from "../../src/i18n";
 import { scannerService } from "../../src/services/scanner";
 import type { Asset, BootstrapCleanupObligationSummary, ConnectedSource, CoverageRecord, InstalledProviderAuthorization } from "../../src/types";
+import { internalDeviceHttpsProfile } from "../../src/internalDeviceProfile";
+import { internalEndpointProfiles } from "../../src/internalEndpointProfile";
+import { internalHostGreenboneProfile } from "../../src/internalHostProfile";
+import { websiteQuickProfile } from "../../src/websiteQuickProfile";
 
 const pendingAsset = (overrides: Partial<Asset>): Asset => ({
   id: "asset-1",
@@ -28,6 +32,7 @@ type RouteOptions = Pick<React.ComponentProps<typeof CoveragePage>, "assessmentI
   busy?: boolean;
   runtimeSetupNotice?: React.ReactNode;
   onStartScan?: React.ComponentProps<typeof CoveragePage>["onStartScan"];
+  onStartEnvironmentScan?: React.ComponentProps<typeof CoveragePage>["onStartEnvironmentScan"];
 };
 
 const routeElement = ({
@@ -41,6 +46,7 @@ const routeElement = ({
   busy = false,
   runtimeSetupNotice,
   onStartScan = () => Promise.resolve(true),
+  onStartEnvironmentScan = () => Promise.resolve(true),
 }: RouteOptions) => (
   <I18nProvider>
     <CoveragePage
@@ -62,6 +68,7 @@ const routeElement = ({
       onStartDiscovery={() => Promise.resolve()}
       onAuthorizationChanged={() => Promise.resolve()}
       onStartScan={onStartScan}
+      onStartEnvironmentScan={onStartEnvironmentScan}
     />
   </I18nProvider>
 );
@@ -341,10 +348,32 @@ test("many assets render as compact selectable rows with closed technical detail
     .every((details) => details.open === false)).toBe(true);
 });
 
+test("a host-shaped local snapshot keeps local guidance instead of external-target guidance", () => {
+  const { queryByText, getByText } = renderRoute({
+    assessmentIntent: undefined,
+    requestedActivities: ["local_artifact_analysis"],
+    assets: [pendingAsset({
+      id: "node-snapshot",
+      name: "saved-node-settings",
+      type: "service",
+      platform: "external",
+      locator: "private-copy://node-snapshot",
+      internetExposed: false,
+      localInputProfile: "kubernetes_node_snapshot",
+      scanAttempted: true,
+    })],
+  });
+
+  expect(getByText("Allow offline review of this saved Kubernetes input only.")).not.toBeNull();
+  expect(queryByText(/Confirm this is your internal system/u)).toBeNull();
+});
+
 test("guided local Start keeps the exact copy, read-only check, and unchanged-source boundary visible", async () => {
+  const onStartScan = vi.fn().mockResolvedValue(true);
   const { container } = renderRoute({
     assessmentIntent: "source_code",
     requestedActivities: ["local_artifact_analysis"],
+    onStartScan,
     assets: [pendingAsset({
       name: "source-tree-copy",
       localInputProfile: "repository_working_tree",
@@ -357,6 +386,19 @@ test("guided local Start keeps the exact copy, read-only check, and unchanged-so
     );
   });
   expect(container.querySelector(".scope-mode-fieldset")).toBeNull();
+
+  const start = Array.from(container.querySelectorAll<HTMLButtonElement>(".scope-confirmation-panel button[type='submit']"))
+    .find((button) => button.textContent?.includes("Confirm and start scan"));
+  expect(start).toBeTruthy();
+  fireEvent.click(start!);
+
+  expect(onStartScan).toHaveBeenCalledWith(
+    ["asset-1"],
+    ["local_artifact"],
+    "The user explicitly selected this saved local copy and confirmed the recommended read-only checks.",
+    undefined,
+    ["gitleaks", "semgrep", "trivy", "grype", "trufflehog", "kics", "checkov"],
+  );
 });
 
 test("guided cloud Start keeps the exact signed-in account, checks, and no-change boundary visible", async () => {
@@ -419,11 +461,14 @@ test("public website flow applies the fixed Nuclei quick profile and starts with
     onStartScan,
     assets: [pendingAsset({
       id: "asset-example",
-      name: "example.com",
-      type: "domain",
+      name: "https://example.com:443",
+      type: "service",
       platform: "external",
-      locator: "example.com",
-      identifiers: [{ namespace: "dns_name", value: "example.com" }],
+      locator: "https://example.com:443",
+      identifiers: [
+        { namespace: "web_origin", value: "https://example.com:443" },
+        { namespace: "dns_name", value: "example.com" },
+      ],
       internetExposed: true,
       declaredWebService: { protocol: "https", port: 443, path: "/account" },
     })],
@@ -431,7 +476,7 @@ test("public website flow applies the fixed Nuclei quick profile and starts with
 
   await waitFor(() => {
     expect(container.querySelector(".coverage-guided-boundary")?.textContent).toBe(
-      "Website to check: https://example.com:443, not only the entered page path /account. The fixed scan sends at most 19 GET requests to a small fixed set of common exposure and diagnostic locations, at max 3/s, 2 concurrent, and 10s timeout. It does not sign in, submit forms, follow redirects, or exploit findings. If you are allowed to test only a specific path, do not use this quick scan.",
+      "Website to check: https://example.com:443, not only the entered page path /account. Nuclei identifies the technology and applies matching read-only checks from the pinned upstream template set, at max 10/s, 5 concurrent, and 10s per-request timeout. It does not sign in, submit forms, follow redirects, or exploit findings. If you are allowed to test only a specific path, do not use this quick scan.",
     );
   });
 
@@ -491,27 +536,14 @@ test("public website flow applies the fixed Nuclei quick profile and starts with
       ports: [443],
       activity: "active_external",
       ratePolicy: {
-        requestsPerSecond: 3,
-        concurrency: 2,
+        requestsPerSecond: 10,
+        concurrency: 5,
         timeoutSeconds: 10,
       },
       templatePolicy: {
         revision: "nuclei-templates@24858b4bfabfa86f0bcfd36aea24fb535152b012",
-        allowedTemplateIds: [
-          "htpasswd-detection",
-          "git-credentials-disclosure",
-          "npmrc-authtoken",
-          "configuration-listing",
-          "ds-store-file",
-          "webpack-sourcemap-disclosure",
-          "cgi-printenv",
-          "debug-vars",
-          "prometheus-metrics",
-          "apache-server-status",
-          "django-debug-config-enabled",
-          "springboot-configprops",
-          "dockerfile-hidden-disclosure",
-        ],
+        profileId: "nuclei_web_safe_v1",
+        allowedTemplateIds: [],
         allowHeadless: false,
         allowOutOfBand: false,
         allowFuzzing: false,
@@ -525,6 +557,456 @@ test("public website flow applies the fixed Nuclei quick profile and starts with
     ["nuclei"],
   );
 }, 15_000);
+
+test("one IT-environment Start routes repositories and exact website origins into one combined run", async () => {
+  const onStartScan = vi.fn().mockResolvedValue(true);
+  const onStartEnvironmentScan = vi.fn().mockResolvedValue(true);
+  const { getAllByText, getByRole, getByText } = renderRoute({
+    assessmentIntent: "internal_it_environment",
+    requestedActivities: ["local_artifact_analysis", "active_external_vulnerability_tests"],
+    nativeMode: false,
+    onStartScan,
+    onStartEnvironmentScan,
+    assets: [
+      pendingAsset({
+        id: "repo-a",
+        name: "billing-api",
+        locator: "private-copy://repo-a",
+        localInputProfile: "repository_working_tree",
+      }),
+      pendingAsset({
+        id: "repo-b",
+        name: "customer-portal",
+        locator: "private-copy://repo-b",
+        localInputProfile: "repository_working_tree",
+      }),
+      pendingAsset({
+        id: "website-public",
+        name: "https://portal.example.com:443",
+        type: "service",
+        platform: "external",
+        locator: "https://portal.example.com:443",
+        identifiers: [
+          { namespace: "web_origin", value: "https://portal.example.com:443" },
+          { namespace: "dns_name", value: "portal.example.com" },
+        ],
+        internetExposed: true,
+        declaredWebService: { protocol: "https", port: 443, path: "/login" },
+      }),
+      pendingAsset({
+        id: "website-internal",
+        name: "https://10.20.0.5:8443",
+        type: "service",
+        platform: "external",
+        locator: "https://10.20.0.5:8443",
+        identifiers: [
+          { namespace: "web_origin", value: "https://10.20.0.5:8443" },
+          { namespace: "ip_address", value: "10.20.0.5" },
+        ],
+        internetExposed: false,
+        declaredWebService: { protocol: "https", port: 8443, path: "/admin" },
+      }),
+      pendingAsset({
+        id: "internal-host",
+        name: "host.internal.example",
+        type: "domain",
+        platform: "external",
+        locator: "host.internal.example",
+        identifiers: [{ namespace: "dns_name", value: "host.internal.example" }],
+        internetExposed: false,
+        declaredHostScan: {
+          protocol: "tcp",
+          ports: [22, 25, 443, 445, 3389],
+          scanProfile: "internal_host_greenbone_remote_safe",
+        },
+      }),
+      pendingAsset({
+        id: "device-gateway",
+        name: "https://10.20.0.8:443",
+        type: "service",
+        platform: "external",
+        locator: "https://10.20.0.8:443",
+        identifiers: [
+          { namespace: "web_origin", value: "https://10.20.0.8:443" },
+          { namespace: "ip_address", value: "10.20.0.8" },
+        ],
+        internetExposed: false,
+        declaredWebService: {
+          protocol: "https",
+          port: 443,
+          path: "/",
+          scanProfile: "internal_device_https",
+        },
+      }),
+      pendingAsset({
+        id: "endpoint-ssh",
+        name: "server.internal.example",
+        type: "service",
+        platform: "external",
+        locator: "server.internal.example",
+        identifiers: [{ namespace: "dns_name", value: "server.internal.example" }],
+        internetExposed: false,
+        declaredNetworkService: {
+          protocol: "tcp",
+          port: 2222,
+          scanProfile: "internal_endpoint_ssh",
+        },
+      }),
+      pendingAsset({
+        id: "endpoint-rdp",
+        name: "desktop.internal.example",
+        type: "service",
+        platform: "external",
+        locator: "desktop.internal.example",
+        identifiers: [{ namespace: "dns_name", value: "desktop.internal.example" }],
+        internetExposed: false,
+        declaredNetworkService: {
+          protocol: "tcp",
+          port: 3389,
+          scanProfile: "internal_endpoint_rdp_tls",
+        },
+      }),
+      pendingAsset({
+        id: "endpoint-vnc",
+        name: "workstation.internal.example",
+        type: "service",
+        platform: "external",
+        locator: "workstation.internal.example",
+        identifiers: [{ namespace: "dns_name", value: "workstation.internal.example" }],
+        internetExposed: false,
+        declaredNetworkService: {
+          protocol: "tcp",
+          port: 5900,
+          scanProfile: "internal_endpoint_vnc",
+        },
+      }),
+      pendingAsset({
+        id: "endpoint-smtp",
+        name: "mail.internal.example",
+        type: "service",
+        platform: "external",
+        locator: "mail.internal.example",
+        identifiers: [{ namespace: "dns_name", value: "mail.internal.example" }],
+        internetExposed: false,
+        declaredNetworkService: {
+          protocol: "tcp",
+          port: 587,
+          scanProfile: "internal_endpoint_smtp",
+        },
+      }),
+      pendingAsset({
+        id: "endpoint-telnet",
+        name: "switch.internal.example",
+        type: "service",
+        platform: "external",
+        locator: "switch.internal.example",
+        identifiers: [{ namespace: "dns_name", value: "switch.internal.example" }],
+        internetExposed: false,
+        declaredNetworkService: {
+          protocol: "tcp",
+          port: 23,
+          scanProfile: "internal_endpoint_telnet",
+        },
+      }),
+      pendingAsset({
+        id: "device-switch",
+        name: "https://10.20.0.9:8080",
+        type: "service",
+        platform: "external",
+        locator: "https://10.20.0.9:8080",
+        identifiers: [
+          { namespace: "web_origin", value: "https://10.20.0.9:8080" },
+          { namespace: "ip_address", value: "10.20.0.9" },
+        ],
+        internetExposed: false,
+        declaredWebService: {
+          protocol: "https",
+          port: 8080,
+          path: "/",
+          scanProfile: "internal_device_https",
+        },
+      }),
+      pendingAsset({
+        id: "inventory-only",
+        name: "10.20.0.19",
+        type: "ip",
+        platform: "external",
+        locator: "10.20.0.19",
+        identifiers: [{ namespace: "ip_address", value: "10.20.0.19" }],
+        internetExposed: false,
+      }),
+    ],
+  });
+
+  expect(getByText("1 bare host(s) or range(s) are inventory only — not scanned")).not.toBeNull();
+  expect(getByText(/These legacy bare hosts or ranges will not be contacted or vulnerability-scanned in this run/i)).not.toBeNull();
+  expect(getByText("10.20.0.19")).not.toBeNull();
+  expect(getByText("host.internal.example")).not.toBeNull();
+  expect(getByText("Greenbone remote-safe profile · TCP 22, 25, 443, 445, 3389")).not.toBeNull();
+  expect(getByText("server.internal.example:2222")).not.toBeNull();
+  expect(getByText("desktop.internal.example:3389")).not.toBeNull();
+  expect(getByText("workstation.internal.example:5900")).not.toBeNull();
+  expect(getByText("mail.internal.example:587")).not.toBeNull();
+  expect(getByText("switch.internal.example:23")).not.toBeNull();
+  expect(getByText("SSH service · Greenbone · 7 security checks")).not.toBeNull();
+  expect(getByText("RDP transport security · Greenbone · 11 security checks")).not.toBeNull();
+  expect(getByText("VNC transport security · Greenbone · 1 security check")).not.toBeNull();
+  expect(getByText("SMTP transport security · Greenbone · 11 security checks")).not.toBeNull();
+  expect(getByText("Telnet cleartext exposure · Greenbone · 1 security check")).not.toBeNull();
+  expect(getByText(/Reads the RFB security types offered by the exact VNC service/i)).not.toBeNull();
+  expect(getByText(/It does not sign in, start a desktop session/i)).not.toBeNull();
+  expect(getAllByText(/HTTPS management-service security · Greenbone · 11 TLS vulnerability checks/i)).toHaveLength(2);
+  expect(getAllByText(/does not sign in, inspect the whole device/i)).toHaveLength(1);
+
+  const start = getByRole("button", { name: "Start one combined scan" });
+  await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(true));
+  fireEvent.click(getByRole("checkbox", {
+    name: /I confirm I am allowed to scan every selected website, API, and exact internal system/i,
+  }));
+  expect((start as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(start);
+
+  await waitFor(() => expect(onStartEnvironmentScan).toHaveBeenCalledTimes(1));
+  expect(onStartScan).not.toHaveBeenCalled();
+  const [authorizations, routes] = onStartEnvironmentScan.mock.calls[0] as [
+    Array<{ assetIds: string[]; modes: string[]; externalScope?: Record<string, unknown> }>,
+    Array<{ engineId: string; assetIds: string[] }>,
+  ];
+  expect(authorizations).toHaveLength(12);
+  expect(authorizations.filter(({ modes }) => modes.includes("local_artifact"))).toHaveLength(2);
+  expect(authorizations.find(({ assetIds }) => assetIds[0] === "website-public")?.externalScope).toMatchObject({
+    target: "portal.example.com",
+    ports: [443],
+    protocol: "https",
+    activity: "active_external",
+    allowSensitiveNetworks: false,
+    templatePolicy: {
+      revision: websiteQuickProfile.templateRevision,
+      profileId: websiteQuickProfile.profileId,
+      allowedTemplateIds: [...websiteQuickProfile.allowedTemplateIds],
+    },
+  });
+  expect(authorizations.find(({ assetIds }) => assetIds[0] === "website-internal")?.externalScope).toMatchObject({
+    target: "10.20.0.5",
+    ports: [8443],
+    allowSensitiveNetworks: true,
+  });
+  expect(authorizations.find(({ assetIds }) => assetIds[0] === "internal-host")?.externalScope).toMatchObject({
+    target: "host.internal.example",
+    ports: [22, 25, 443, 445, 3389],
+    protocol: "tcp",
+    activity: "active_external",
+    allowSensitiveNetworks: true,
+    ratePolicy: internalHostGreenboneProfile.ratePolicy,
+    templatePolicy: {
+      revision: internalHostGreenboneProfile.templateRevision,
+      profileId: "greenbone_remote_safe_v1",
+      allowedTemplateIds: [],
+      allowCredentialAttacks: false,
+      allowDenialOfService: false,
+    },
+  });
+  expect(authorizations.find(({ assetIds }) => assetIds[0] === "endpoint-ssh")?.externalScope).toMatchObject({
+    target: "server.internal.example",
+    ports: [2222],
+    protocol: "tcp",
+    activity: "active_external",
+    allowSensitiveNetworks: true,
+    ratePolicy: internalEndpointProfiles.ssh.ratePolicy,
+    templatePolicy: {
+      revision: internalEndpointProfiles.ssh.templateRevision,
+      allowedTemplateIds: [...internalEndpointProfiles.ssh.allowedTemplateIds],
+      allowCredentialAttacks: false,
+    },
+  });
+  expect(authorizations.find(({ assetIds }) => assetIds[0] === "endpoint-rdp")?.externalScope).toMatchObject({
+    target: "desktop.internal.example",
+    ports: [3389],
+    protocol: "tcp",
+    activity: "active_external",
+    allowSensitiveNetworks: true,
+    ratePolicy: internalEndpointProfiles.rdp_tls.ratePolicy,
+    templatePolicy: {
+      revision: internalEndpointProfiles.rdp_tls.templateRevision,
+      allowedTemplateIds: [...internalEndpointProfiles.rdp_tls.allowedTemplateIds],
+      allowCredentialAttacks: false,
+      allowDenialOfService: false,
+      allowFileUpload: false,
+      allowFuzzing: false,
+      allowHeadless: false,
+      allowOutOfBand: false,
+    },
+  });
+  expect(authorizations.find(({ assetIds }) => assetIds[0] === "endpoint-vnc")?.externalScope).toMatchObject({
+    target: "workstation.internal.example",
+    ports: [5900],
+    protocol: "tcp",
+    activity: "active_external",
+    allowSensitiveNetworks: true,
+    ratePolicy: internalEndpointProfiles.vnc.ratePolicy,
+    templatePolicy: {
+      revision: internalEndpointProfiles.vnc.templateRevision,
+      allowedTemplateIds: [...internalEndpointProfiles.vnc.allowedTemplateIds],
+      allowCredentialAttacks: false,
+      allowDenialOfService: false,
+      allowFileUpload: false,
+      allowFuzzing: false,
+      allowHeadless: false,
+      allowOutOfBand: false,
+    },
+  });
+  expect(authorizations.find(({ assetIds }) => assetIds[0] === "endpoint-smtp")?.externalScope).toMatchObject({
+    target: "mail.internal.example",
+    ports: [587],
+    protocol: "tcp",
+    activity: "active_external",
+    allowSensitiveNetworks: true,
+    ratePolicy: internalEndpointProfiles.smtp.ratePolicy,
+    templatePolicy: {
+      revision: internalEndpointProfiles.smtp.templateRevision,
+      allowedTemplateIds: [...internalEndpointProfiles.smtp.allowedTemplateIds],
+      allowCredentialAttacks: false,
+      allowDenialOfService: false,
+      allowFileUpload: false,
+      allowFuzzing: false,
+      allowHeadless: false,
+      allowOutOfBand: false,
+    },
+  });
+  expect(authorizations.find(({ assetIds }) => assetIds[0] === "endpoint-telnet")?.externalScope).toMatchObject({
+    target: "switch.internal.example",
+    ports: [23],
+    protocol: "tcp",
+    activity: "active_external",
+    allowSensitiveNetworks: true,
+    ratePolicy: internalEndpointProfiles.telnet.ratePolicy,
+    templatePolicy: {
+      revision: internalEndpointProfiles.telnet.templateRevision,
+      allowedTemplateIds: [...internalEndpointProfiles.telnet.allowedTemplateIds],
+      allowCredentialAttacks: false,
+      allowDenialOfService: false,
+      allowFileUpload: false,
+      allowFuzzing: false,
+      allowHeadless: false,
+      allowOutOfBand: false,
+    },
+  });
+  expect(authorizations.find(({ assetIds }) => assetIds[0] === "device-gateway")?.externalScope).toMatchObject({
+    target: "10.20.0.8",
+    ports: [443],
+    protocol: "https",
+    activity: "active_external",
+    allowSensitiveNetworks: true,
+    templatePolicy: {
+      revision: internalDeviceHttpsProfile.templateRevision,
+      allowedTemplateIds: [...internalDeviceHttpsProfile.allowedTemplateIds],
+    },
+  });
+  expect(authorizations.find(({ assetIds }) => assetIds[0] === "device-switch")?.externalScope).toMatchObject({
+    target: "10.20.0.9",
+    ports: [8080],
+    templatePolicy: {
+      revision: internalDeviceHttpsProfile.templateRevision,
+      allowedTemplateIds: [...internalDeviceHttpsProfile.allowedTemplateIds],
+    },
+  });
+  expect(routes.find(({ engineId }) => engineId === "semgrep")).toEqual({
+    engineId: "semgrep",
+    assetIds: ["repo-a", "repo-b"],
+  });
+  expect(routes.find(({ engineId }) => engineId === "grype")).toEqual({
+    engineId: "grype",
+    assetIds: ["repo-a", "repo-b"],
+  });
+  expect(routes.find(({ engineId }) => engineId === "nuclei")).toEqual({
+    engineId: "nuclei",
+    assetIds: ["website-public", "website-internal"],
+  });
+  expect(routes.find(({ engineId }) => engineId === "greenbone")).toEqual({
+    engineId: "greenbone",
+    assetIds: [
+      "internal-host",
+      "endpoint-ssh",
+      "endpoint-rdp",
+      "endpoint-vnc",
+      "endpoint-smtp",
+      "endpoint-telnet",
+      "device-gateway",
+      "device-switch",
+    ],
+  });
+  expect(routes.flatMap(({ assetIds }) => assetIds)).not.toContain("inventory-only");
+  expect(routes.some(({ engineId }) => engineId === "naabu" || engineId === "httpx")).toBe(false);
+}, 15_000);
+
+test("changing the selected environment network targets requires authorization again", async () => {
+  const onStartEnvironmentScan = vi.fn().mockResolvedValue(true);
+  const { getByRole } = renderRoute({
+    assessmentIntent: "internal_it_environment",
+    requestedActivities: ["local_artifact_analysis", "active_external_vulnerability_tests"],
+    nativeMode: false,
+    onStartEnvironmentScan,
+    assets: [
+      pendingAsset({
+        id: "repo-a",
+        name: "billing-api",
+        locator: "private-copy://repo-a",
+        localInputProfile: "repository_working_tree",
+      }),
+      pendingAsset({
+        id: "website-a",
+        name: "https://portal.example.com:443",
+        type: "service",
+        platform: "external",
+        locator: "https://portal.example.com:443",
+        identifiers: [
+          { namespace: "web_origin", value: "https://portal.example.com:443" },
+          { namespace: "dns_name", value: "portal.example.com" },
+        ],
+        internetExposed: true,
+        declaredWebService: { protocol: "https", port: 443, path: "/" },
+      }),
+      pendingAsset({
+        id: "website-b",
+        name: "https://api.example.com:443",
+        type: "service",
+        platform: "external",
+        locator: "https://api.example.com:443",
+        identifiers: [
+          { namespace: "web_origin", value: "https://api.example.com:443" },
+          { namespace: "dns_name", value: "api.example.com" },
+        ],
+        internetExposed: true,
+        declaredWebService: { protocol: "https", port: 443, path: "/" },
+      }),
+    ],
+  });
+
+  const start = getByRole("button", { name: "Start one combined scan" }) as HTMLButtonElement;
+  const confirmation = getByRole("checkbox", {
+    name: /I confirm I am allowed to scan every selected website, API, and exact internal system/i,
+  }) as HTMLInputElement;
+
+  await waitFor(() => expect(start.disabled).toBe(true));
+  fireEvent.click(confirmation);
+  expect(confirmation.checked).toBe(true);
+  expect(start.disabled).toBe(false);
+
+  fireEvent.click(getByRole("checkbox", { name: "Choose billing-api" }));
+  expect(confirmation.checked).toBe(true);
+  expect(start.disabled).toBe(false);
+
+  fireEvent.click(getByRole("checkbox", { name: "Choose https://portal.example.com:443" }));
+  expect(confirmation.checked).toBe(false);
+  expect(start.disabled).toBe(true);
+
+  fireEvent.click(confirmation);
+  expect(start.disabled).toBe(false);
+  fireEvent.click(getByRole("checkbox", { name: "Choose https://portal.example.com:443" }));
+  expect(confirmation.checked).toBe(false);
+  expect(start.disabled).toBe(true);
+  expect(onStartEnvironmentScan).not.toHaveBeenCalled();
+});
 
 test("a scan waiting for its tools keeps the reviewed website request immutable", async () => {
   const { container } = renderRoute({

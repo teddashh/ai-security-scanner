@@ -1,35 +1,34 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { websiteQuickOrigin, websiteQuickProfile } from "../../src/websiteQuickProfile.ts";
 
-test("the public website quick profile is one exact pinned Nuclei contract", () => {
+const nativeCaseServiceSource = readFileSync(
+  new URL("../../src-tauri/src/case_service.rs", import.meta.url),
+  "utf8",
+);
+
+test("the public website quick profile delegates applicability to one pinned upstream Nuclei profile", () => {
   assert.equal(
     websiteQuickProfile.templateRevision,
     "nuclei-templates@24858b4bfabfa86f0bcfd36aea24fb535152b012",
   );
+  assert.equal(websiteQuickProfile.profileId, "nuclei_web_safe_v1");
   assert.deepEqual(websiteQuickProfile.engineIds, ["nuclei"]);
   assert.deepEqual(websiteQuickProfile.ratePolicy, {
-    requestsPerSecond: 3,
-    concurrency: 2,
+    requestsPerSecond: 10,
+    concurrency: 5,
     timeoutSeconds: 10,
   });
-  assert.deepEqual(websiteQuickProfile.allowedTemplateIds, [
-    "htpasswd-detection",
-    "git-credentials-disclosure",
-    "npmrc-authtoken",
-    "configuration-listing",
-    "ds-store-file",
-    "webpack-sourcemap-disclosure",
-    "cgi-printenv",
-    "debug-vars",
-    "prometheus-metrics",
-    "apache-server-status",
-    "django-debug-config-enabled",
-    "springboot-configprops",
-    "dockerfile-hidden-disclosure",
-  ]);
-  assert.equal(websiteQuickProfile.maximumGetRequests, 19);
+  assert.deepEqual(websiteQuickProfile.allowedTemplateIds, []);
+
+  assert.match(nativeCaseServiceSource, /DECLARED_WEBSITE_ENGINE_ID: &str = "nuclei"/u);
+  assert.ok(nativeCaseServiceSource.includes(websiteQuickProfile.templateRevision));
+  assert.ok(nativeCaseServiceSource.includes(websiteQuickProfile.profileId));
+  assert.match(nativeCaseServiceSource, /requests_per_second == 10/u);
+  assert.match(nativeCaseServiceSource, /concurrency == 5/u);
+  assert.match(nativeCaseServiceSource, /timeout_seconds == 10/u);
 });
 
 test("the website boundary always names an explicit scheme, host, and port", () => {

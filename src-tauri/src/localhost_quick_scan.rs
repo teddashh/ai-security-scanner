@@ -198,6 +198,7 @@ pub fn prepare_localhost_quick_scan(
         created_at: now,
         completed_at: None,
         request_outcome: None,
+        report_asset_snapshots: Vec::new(),
         knowledge_cutoff: now,
         ai_system_applicable: false,
         ai_system_applicability: AiSystemApplicabilityAnswer::NotApplicable,

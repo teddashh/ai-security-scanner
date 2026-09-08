@@ -340,10 +340,81 @@ const copy = {
   doNow: { en: "START HERE", zhTW: "從這裡開始" },
   priorityTitle: { en: "Start with these issues", zhTW: "優先處理這些問題" },
   priorityDescription: {
-    en: "These are likely to matter most. Open one to see the impact, evidence, and suggested next step.",
-    zhTW: "這些問題最值得先看。打開任一項，就能查看影響、證據與建議的下一步。",
+    en: "Each item names the affected target, likely impact, next action, and how to check the fix.",
+    zhTW: "每一項都直接列出受影響目標、可能影響、下一步與修復後的確認方式。",
   },
-  reviewEvidence: { en: "Review evidence", zhTW: "查看證據" },
+  affectedAssetEyebrow: { en: "AFFECTED ASSETS", zhTW: "受影響資產" },
+  affectedAssetTitle: { en: "See where the problems are", zhTW: "直接看哪些資產有問題" },
+  affectedAssetDescription: {
+    en: "Every affected repository, device, website, cloud resource, or other selected system is listed here.",
+    zhTW: "這裡列出每個受影響的 repo、設備、網站、雲端資源或其他已選系統。",
+  },
+  affectedAssetIssueCountOne: { en: "1 problem", zhTW: "1 個問題" },
+  affectedAssetIssueCountMany: { en: "Problems: {count}", zhTW: "問題：{count}" },
+  affectedAssetTopIssue: { en: "First issue", zhTW: "優先問題" },
+  affectedAssetOpen: { en: "Show this asset's problems", zhTW: "查看這個資產的問題" },
+  affectedAssetFilter: { en: "Showing problems for {asset}", zhTW: "目前顯示 {asset} 的問題" },
+  assetResultEyebrow: { en: "BY ASSET", zhTW: "逐項資產" },
+  assetResultTitle: { en: "Which assets need attention", zhTW: "哪些資產需要處理" },
+  assetResultDescription: {
+    en: "Every selected asset appears once. A no-problem result applies only to the security checks that completed.",
+    zhTW: "每個已選資產都會列出一次；「未發現問題」只適用於已完成的資安檢查。",
+  },
+  assetStatusProblems: { en: "Problems found", zhTW: "發現問題" },
+  assetStatusNoProblems: {
+    en: "No problems in completed checks",
+    zhTW: "已完成檢查未發現問題",
+  },
+  assetStatusIncomplete: { en: "Incomplete or failed", zhTW: "未完成或失敗" },
+  assetStatusNotTested: { en: "Not tested", zhTW: "尚未測試" },
+  assetProblemCountOne: { en: "1 problem was found.", zhTW: "發現 1 個問題。" },
+  assetProblemCountMany: { en: "Problems found: {count}.", zhTW: "發現 {count} 個問題。" },
+  assetProblemAction: {
+    en: "Review this asset's highest-priority problem first.",
+    zhTW: "先檢視這個資產最高優先的問題。",
+  },
+  assetProblemIncomplete: {
+    en: "Some checks are also incomplete; keep that limit visible.",
+    zhTW: "另有檢查尚未完成；請保留這項限制。",
+  },
+  assetNoProblemSummaryOne: {
+    en: "1 completed security check reported no problems.",
+    zhTW: "1 項已完成的資安檢查未回報問題。",
+  },
+  assetNoProblemSummaryMany: {
+    en: "{count} completed security checks reported no problems.",
+    zhTW: "{count} 項已完成的資安檢查未回報問題。",
+  },
+  assetNoProblemAction: {
+    en: "Review the stated limits before relying on this result.",
+    zhTW: "採用這項結果前，先確認明列的測試限制。",
+  },
+  assetIncompleteSummary: {
+    en: "At least one requested check did not produce a complete result.",
+    zhTW: "至少一項要求的檢查沒有產生完整結果。",
+  },
+  assetIncompleteAction: {
+    en: "Keep completed results, then finish or retry this asset's remaining checks.",
+    zhTW: "保留已完成的結果，再完成或重試這個資產的其餘檢查。",
+  },
+  assetNotTestedSummary: {
+    en: "No completed security check is recorded for this asset.",
+    zhTW: "這個資產沒有已完成的資安檢查紀錄。",
+  },
+  assetNotTestedAction: {
+    en: "Choose an applicable security check for this asset, then scan it.",
+    zhTW: "為這個資產選擇適用的資安檢查，然後開始掃描。",
+  },
+  affectedTarget: { en: "Affected target", zhTW: "受影響目標" },
+  reportedLocation: { en: "Location", zhTW: "位置" },
+  locationUnavailable: { en: "Not retained by this result", zhTW: "這筆結果未保留位置" },
+  nextActionNow: { en: "Next action", zhTW: "下一步" },
+  verifyFix: { en: "Verify the fix", zhTW: "確認修復" },
+  verifyFallback: {
+    en: "After an approved change, rerun the same check and confirm this problem is no longer reported.",
+    zhTW: "完成核准的變更後，以相同範圍重跑同一項檢查，確認不再回報這個問題。",
+  },
+  reviewEvidence: { en: "Open evidence and details", zhTW: "開啟證據與詳細資料" },
   boundaryTitle: { en: "This is not an audit conclusion or an executable fix", zhTW: "這不是稽核結論，也不是可執行修復" },
   boundaryBody: {
     en: "This page records observations, possible impact, human decisions, and the kind of specialist to consult. Authorized people evaluate and perform any environment change outside this product.",
@@ -682,6 +753,7 @@ const localizedAssetKind = (kind: string, locale: "en" | "zh-TW"): string => {
   if (locale === "en") return kind.replaceAll("_", " ");
   return ({
     web_service: "網站或本機服務",
+    host: "伺服器或工作站",
     ip_address: "IP 位址",
     domain: "網域",
     repository: "程式碼儲存庫",
@@ -691,6 +763,156 @@ const localizedAssetKind = (kind: string, locale: "en" | "zh-TW"): string => {
     cloud_account: "雲端帳號",
   } as Record<string, string>)[kind] ?? "掃描目標";
 };
+
+type AssetResultStatus =
+  | "problems_found"
+  | "no_problems_completed"
+  | "incomplete_failed"
+  | "not_tested";
+
+const incompleteCheckStatuses = new Set<BeginnerCoverageStatus>([
+  "tested_partial",
+  "failed",
+  "timed_out",
+  "cancelled",
+  "in_progress",
+]);
+
+const incompleteGapKinds = new Set<BeginnerMasterReport["coverageGaps"][number]["kind"]>([
+  "failed",
+  "timed_out",
+  "cancelled",
+  "truncated",
+  "unavailable",
+  "unattributed",
+]);
+
+/** Discovery and a bounded connection observation are useful inventory, not security checks. */
+const isPreparationOnlyCheck = (checkId: string): boolean => {
+  const normalized = checkId.trim().toLocaleLowerCase("en-US");
+  return normalized === "naabu"
+    || normalized.startsWith("naabu-")
+    || normalized === "httpx"
+    || normalized.startsWith("httpx-")
+    || normalized.startsWith("native localhost tcp check on ");
+};
+
+function AssetResultBoard({ report }: { report: BeginnerMasterReport }) {
+  const { locale, text, formatNumber } = useI18n();
+  if (report.requested.targets.length === 0) return null;
+
+  const securityFindings = report.findings.filter(isSecurityFinding);
+  const rows = report.requested.targets.map((target) => {
+    const findingCount = new Set(
+      securityFindings
+        .filter((finding) => finding.targetAssetIds.includes(target.assetId))
+        .map((finding) => finding.findingId),
+    ).size;
+    const checks = report.actual.checks.filter((check) =>
+      check.targetAssetIds.includes(target.assetId));
+    const completedSecurityChecks = checks.filter((check) =>
+      check.status === "tested_complete" && !isPreparationOnlyCheck(check.checkId));
+    const gaps = report.coverageGaps.filter((gap) =>
+      gap.targetAssetIds.includes(target.assetId));
+    const firstApplicableGap = gaps.find((gap) => gap.kind !== "excluded");
+    const firstIncompleteGap = gaps.find((gap) => incompleteGapKinds.has(gap.kind));
+    const hasIncompleteOutcome = checks.some((check) => incompleteCheckStatuses.has(check.status));
+    // A deliberate `not_tested` boundary attached to a completed task (for
+    // example SSH host-level exclusions) does not erase that task's bounded
+    // result. A different requested task that did not run still makes the
+    // asset incomplete when another security check did complete.
+    const unfinishedRequestedGap = gaps.find((gap) => gap.kind === "not_tested"
+      && Boolean(gap.taskId)
+      && !checks.some((check) => check.taskId === gap.taskId && check.status === "tested_complete"));
+    const hasIncompleteGap = Boolean(firstIncompleteGap);
+    const hasIncompleteEvidence = hasIncompleteOutcome
+      || hasIncompleteGap
+      || (completedSecurityChecks.length > 0 && Boolean(unfinishedRequestedGap));
+
+    let status: AssetResultStatus;
+    if (findingCount > 0) status = "problems_found";
+    else if (hasIncompleteEvidence) status = "incomplete_failed";
+    else if (completedSecurityChecks.length > 0) status = "no_problems_completed";
+    else status = "not_tested";
+
+    const actionGap = status === "incomplete_failed"
+      ? firstIncompleteGap ?? unfinishedRequestedGap
+      : firstApplicableGap;
+    const recordedNextAction = actionGap
+      ? text(nextActionCopy(actionGap.nextActionCode))
+      : undefined;
+    const presentation = (() => {
+      switch (status) {
+        case "problems_found":
+          return {
+            label: text(copy.assetStatusProblems),
+            tone: "danger",
+            summary: text(
+              findingCount === 1 ? copy.assetProblemCountOne : copy.assetProblemCountMany,
+              { count: formatNumber(findingCount) },
+            ),
+            action: [
+              text(copy.assetProblemAction),
+              hasIncompleteEvidence ? text(copy.assetProblemIncomplete) : undefined,
+            ].filter((value): value is string => Boolean(value)).join(" "),
+          };
+        case "no_problems_completed":
+          return {
+            label: text(copy.assetStatusNoProblems),
+            tone: "positive",
+            summary: text(
+              completedSecurityChecks.length === 1
+                ? copy.assetNoProblemSummaryOne
+                : copy.assetNoProblemSummaryMany,
+              { count: formatNumber(completedSecurityChecks.length) },
+            ),
+            action: text(copy.assetNoProblemAction),
+          };
+        case "incomplete_failed":
+          return {
+            label: text(copy.assetStatusIncomplete),
+            tone: "warning",
+            summary: text(copy.assetIncompleteSummary),
+            action: recordedNextAction ?? text(copy.assetIncompleteAction),
+          };
+        case "not_tested":
+          return {
+            label: text(copy.assetStatusNotTested),
+            tone: "neutral",
+            summary: text(copy.assetNotTestedSummary),
+            action: recordedNextAction ?? text(copy.assetNotTestedAction),
+          };
+      }
+    })();
+
+    return { target, status, presentation };
+  });
+
+  return (
+    <section className="section-block asset-result-board" aria-labelledby="asset-result-board-title">
+      <div className="section-heading">
+        <p className="eyebrow">{text(copy.assetResultEyebrow)}</p>
+        <h2 id="asset-result-board-title">{text(copy.assetResultTitle)}</h2>
+        <p>{text(copy.assetResultDescription)}</p>
+      </div>
+      <ul className="asset-result-board__list">
+        {rows.map(({ target, status, presentation }) => (
+          <li key={target.assetId} className={`asset-result-row asset-result-row--${status}`} data-asset-result={status}>
+            <div className="asset-result-row__identity">
+              <strong>{target.label ?? target.assetId}</strong>
+              {target.assetKind && <span>{localizedAssetKind(target.assetKind, locale)}</span>}
+            </div>
+            <StatusPill label={presentation.label} tone={presentation.tone} />
+            <div className="asset-result-row__outcome">
+              <strong>{presentation.summary}</strong>
+              <span>{presentation.action}</span>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 // A first/last-seen timestamp exists to answer one question: how long has this
 // been here? The shared `formatDateTime` default omits the year, which is right
@@ -723,6 +945,7 @@ const projectReportFindings = (
         sourceEngine: reference.engineId,
         observedAt: reference.observedAt,
         summary: retained?.summary ?? (locale === "en" ? "Run-bound evidence record" : "本輪保存的證據紀錄"),
+        location: reference.location ?? retained?.location,
         rawArtifactHash: reference.artifactSha256,
         kind: retained?.kind,
         runId: report.runId,
@@ -732,9 +955,10 @@ const projectReportFindings = (
       };
     });
     const observedTimes = evidence.map((item) => item.observedAt).sort();
-    const targetLabel = frozen.targetAssetIds
+    const targetLabels = frozen.targetAssetIds
       .map((assetId) => targetById.get(assetId)?.label)
-      .find((label): label is string => Boolean(label));
+      .filter((label): label is string => Boolean(label));
+    const targetLabel = [...new Set(targetLabels)].join(locale === "en" ? ", " : "、");
     return {
       id: frozen.findingId,
       caseId: report.caseId,
@@ -1389,6 +1613,7 @@ export function FindingsPage({
   const [workflow, setWorkflow] = useState<FindingWorkflowState | "all">("all");
   const [expertType, setExpertType] = useState("all");
   const [control, setControl] = useState("all");
+  const [selectedAssetId, setSelectedAssetId] = useState<string | undefined>(undefined);
   const [selectedId, setSelectedId] = useState<string | undefined>(focusedFindingId);
   const [decisionStatus, setDecisionStatus] = useState<(typeof decisionStates)[number]>("expert_review_requested");
   const [decidedBy, setDecidedBy] = useState("");
@@ -1403,10 +1628,15 @@ export function FindingsPage({
   useEffect(() => {
     if (focusedFindingId && appliedFocusId.current !== focusedFindingId && findings.some((finding) => finding.id === focusedFindingId)) {
       appliedFocusId.current = focusedFindingId;
+      setSelectedAssetId(undefined);
       setSelectedId(focusedFindingId);
       window.setTimeout(() => document.getElementById("finding-browser")?.scrollIntoView({ block: "start" }), 0);
     }
   }, [findings, focusedFindingId]);
+
+  useEffect(() => {
+    setSelectedAssetId(undefined);
+  }, [report?.caseId, report?.runId]);
 
   useEffect(() => {
     setSelectedId((current) => findings.some((finding) => finding.id === current) ? current : undefined);
@@ -1443,6 +1673,8 @@ export function FindingsPage({
       const matchesControl = control === "all" || finding.controls.some(
         (item) => controlKey(item.framework, item.version, item.controlId) === control,
       );
+      const findingAssetIds = finding.assetIds?.length ? finding.assetIds : [finding.assetId];
+      const matchesAsset = selectedAssetId === undefined || findingAssetIds.includes(selectedAssetId);
       const matchesQuery = !normalizedQuery || [
         finding.title,
         finding.assetName,
@@ -1453,19 +1685,69 @@ export function FindingsPage({
         ...finding.evidence.map((item) => `${item.sourceEngine} ${item.summary}`),
         ...finding.controls.map((item) => `${item.framework} ${item.controlId} ${item.title ?? ""}`),
       ].join(" ").toLocaleLowerCase(collationLocale).includes(normalizedQuery);
-      return matchesSeverity && matchesWorkflow && matchesExpert && matchesControl && matchesQuery;
+      return matchesSeverity && matchesWorkflow && matchesExpert && matchesControl && matchesAsset && matchesQuery;
     });
-  }, [collationLocale, control, expertType, ordered, query, severity, workflow]);
+  }, [collationLocale, control, expertType, ordered, query, selectedAssetId, severity, workflow]);
 
   const selected = findings.find((finding) => finding.id === selectedId);
   const selectedEvents = workflowEvents
     .filter((event) => event.findingId === selectedId)
     .sort((left, right) => right.decidedAt.localeCompare(left.decidedAt));
   const topFindings = ordered.filter((finding) => finding.workflowState !== "verified_resolved" && finding.workflowState !== "false_positive").slice(0, 3);
+  const affectedAssetSummaries = useMemo(() => {
+    const targetLabels = new Map(
+      (report?.requested.targets ?? []).map((target) => [
+        target.assetId,
+        target.label ?? target.assetId,
+      ]),
+    );
+    const summaries = new Map<string, {
+      assetId: string;
+      label: string;
+      findingCount: number;
+      highestSeverity: Severity;
+      topFindingId: string;
+      topFindingTitle: string;
+    }>();
+    for (const finding of ordered) {
+      if (finding.workflowState === "verified_resolved" || finding.workflowState === "false_positive") continue;
+      const assetIds = finding.assetIds?.length ? finding.assetIds : [finding.assetId];
+      for (const assetId of new Set(assetIds)) {
+        const existing = summaries.get(assetId);
+        if (existing) {
+          existing.findingCount += 1;
+          if (severityOrder.indexOf(finding.severity) < severityOrder.indexOf(existing.highestSeverity)) {
+            existing.highestSeverity = finding.severity;
+          }
+          continue;
+        }
+        summaries.set(assetId, {
+          assetId,
+          label: targetLabels.get(assetId)
+            ?? (assetIds.length === 1 ? finding.assetName : assetId),
+          findingCount: 1,
+          highestSeverity: finding.severity,
+          topFindingId: finding.id,
+          topFindingTitle: finding.title,
+        });
+      }
+    }
+    return [...summaries.values()].sort((left, right) =>
+      severityOrder.indexOf(left.highestSeverity) - severityOrder.indexOf(right.highestSeverity)
+      || right.findingCount - left.findingCount
+      || left.label.localeCompare(right.label, collationLocale));
+  }, [collationLocale, ordered, report?.requested.targets]);
+  const locationsFor = (finding: Finding): string[] => [
+    ...new Set(finding.evidence
+      .map((evidence) => evidence.location?.trim())
+      .filter((location): location is string => Boolean(location))),
+  ];
   const criticalCount = findings.filter((finding) => finding.severity === "critical").length;
   const highCount = findings.filter((finding) => finding.severity === "high").length;
   const needsReview = findings.filter((finding) => ["unreviewed", "unconfirmed", "expert_review_requested"].includes(finding.workflowState)).length;
   const affectedAssets = new Set(findings.flatMap((finding) => finding.assetIds ?? [finding.assetId])).size;
+  const selectedAssetLabel = affectedAssetSummaries.find((asset) => asset.assetId === selectedAssetId)?.label
+    ?? selectedAssetId;
   const groupedFindingIds = useMemo(
     () => new Set(findingGroups.flatMap((group) => group.findingIds)),
     [findingGroups],
@@ -1685,6 +1967,7 @@ export function FindingsPage({
               : copy.emptyHeaderDescription)}
           actions={reportActions}
         />
+        {report && <AssetResultBoard report={report} />}
         {report && <BeginnerReportOverview report={report} run={latestRun} />}
         {reportUnavailable && <InlineNotice tone="warning" title={text(unavailableReportNotice.title)}><p>{text(unavailableReportNotice.body)}</p></InlineNotice>}
         {observationSection}
@@ -1721,8 +2004,9 @@ export function FindingsPage({
     setWorkflow("all");
     setExpertType("all");
     setControl("all");
+    setSelectedAssetId(undefined);
   };
-  const activeFilterCount = [severity !== "all", workflow !== "all", expertType !== "all", control !== "all", Boolean(query.trim())].filter(Boolean).length;
+  const activeFilterCount = [severity !== "all", workflow !== "all", expertType !== "all", control !== "all", Boolean(query.trim()), selectedAssetId !== undefined].filter(Boolean).length;
   const submitDecision = async (event: FormEvent) => {
     event.preventDefault();
     if (!selected || !decidedBy.trim() || !decisionReason.trim()) return;
@@ -1797,6 +2081,8 @@ export function FindingsPage({
         </InlineNotice>
       )}
 
+      {report && <AssetResultBoard report={report} />}
+
       {topFindings.length > 0 && (
         <section className="section-block priority-section">
           <div className="section-heading">
@@ -1815,19 +2101,86 @@ export function FindingsPage({
                 }}
               >
                 <span className="priority-card__number">{String(index + 1).padStart(2, "0")}</span>
-                <StatusPill label={severityMeta[finding.severity].label} tone={severityMeta[finding.severity].tone} />
+                <span className="priority-card__status">
+                  <StatusPill label={severityMeta[finding.severity].label} tone={severityMeta[finding.severity].tone} />
+                  <StatusPill label={confidenceMeta[finding.confidence]} tone="neutral" />
+                </span>
                 <h3>{finding.title}</h3>
-                <p>{findingImpactSentence(locale, {
+                <p className="priority-card__impact">{findingImpactSentence(locale, {
                   englishFallback: finding.impact,
                   severityLabel: severityMeta[finding.severity].label,
                   family: finding.family,
                   contextFactors: finding.contextFactors,
                 })}</p>
-                <span className="priority-card__asset">{finding.assetName}</span>
+                <span className="priority-card__target">
+                  <span><strong>{text(copy.affectedTarget)}</strong>{finding.assetName}</span>
+                  <span><strong>{text(copy.reportedLocation)}</strong>{locationsFor(finding).join(" · ") || text(copy.locationUnavailable)}</span>
+                </span>
+                <span className="priority-card__guidance">
+                  <span>
+                    <strong>{text(copy.nextActionNow)}</strong>
+                    {findingActionSentence(locale, {
+                      englishFallback: finding.recommendation,
+                      expertType: finding.expertType,
+                      family: finding.family,
+                    })}
+                  </span>
+                  <span>
+                    <strong>{text(copy.verifyFix)}</strong>
+                    {finding.verificationGuidance
+                      ? findingVerificationSentence(locale, finding.verificationGuidance)
+                      : text(copy.verifyFallback)}
+                  </span>
+                </span>
                 <span className="priority-card__action">{text(copy.reviewEvidence)} <Icon name="arrow" size={15} /></span>
               </button>
             ))}
           </div>
+        </section>
+      )}
+
+      {affectedAssetSummaries.length > 0 && (
+        <section className="section-block affected-asset-section" aria-labelledby="affected-assets-title">
+          <div className="section-heading">
+            <p className="eyebrow">{text(copy.affectedAssetEyebrow)}</p>
+            <h2 id="affected-assets-title">{text(copy.affectedAssetTitle)}</h2>
+            <p>{text(copy.affectedAssetDescription)}</p>
+          </div>
+          <ul className="affected-asset-list">
+            {affectedAssetSummaries.map((asset) => (
+              <li key={asset.assetId}>
+                <button
+                  type="button"
+                  className="affected-asset-row"
+                  onClick={() => {
+                    setSeverity("all");
+                    setWorkflow("all");
+                    setExpertType("all");
+                    setControl("all");
+                    setQuery("");
+                    setSelectedAssetId(asset.assetId);
+                    setSelectedId(asset.topFindingId);
+                    window.setTimeout(() => document.getElementById("finding-browser")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+                  }}
+                  aria-label={`${text(copy.affectedAssetOpen)}: ${asset.label}`}
+                >
+                  <span className="affected-asset-row__identity">
+                    <strong>{asset.label}</strong>
+                    <small>
+                      {text(copy.affectedAssetTopIssue)} · {asset.topFindingTitle}
+                    </small>
+                  </span>
+                  <span className="affected-asset-row__summary">
+                    <StatusPill label={severityMeta[asset.highestSeverity].label} tone={severityMeta[asset.highestSeverity].tone} />
+                    <strong>{asset.findingCount === 1
+                      ? text(copy.affectedAssetIssueCountOne)
+                      : text(copy.affectedAssetIssueCountMany, { count: formatNumber(asset.findingCount) })}</strong>
+                    <Icon name="arrow" size={15} />
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
 
@@ -2106,6 +2459,12 @@ export function FindingsPage({
           </div>
 
           <div className="finding-filter-stack">
+            {selectedAssetId && selectedAssetLabel && (
+              <div className="finding-asset-filter" role="status">
+                <Icon name="database" size={15} />
+                <span>{text(copy.affectedAssetFilter, { asset: selectedAssetLabel })}</span>
+              </div>
+            )}
             <label className="search-field">
               <span className="sr-only">{text(copy.searchAria)}</span>
               <Icon name="search" size={18} />

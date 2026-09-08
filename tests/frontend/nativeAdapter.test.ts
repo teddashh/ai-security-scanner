@@ -15,7 +15,7 @@ const scannerSource = readFileSync(
 
 const bundled = await build({
   stdin: {
-    contents: 'export { adaptBeginnerMasterReport, adaptDeclaredWebServiceMetadata, adaptLocalNetworkCandidateInventory, adaptManagedRuntimeSetupStatus, adaptNativeCase, adaptNativeExport, adaptNativeExportPreview, adaptNativeManifest, adaptNativeProviderBinding, adaptNativeSnapshot, exportRunFileIdentity } from "./src/services/nativeAdapter.ts"; export { caseDisplayLabels } from "./src/caseIdentityPresentation.ts";',
+    contents: 'export { adaptBeginnerMasterReport, adaptDeclaredHostScanMetadata, adaptDeclaredNetworkServiceMetadata, adaptDeclaredWebServiceMetadata, adaptLocalNetworkCandidateInventory, adaptManagedRuntimeSetupStatus, adaptNativeCase, adaptNativeExport, adaptNativeExportPreview, adaptNativeManifest, adaptNativeProviderBinding, adaptNativeSnapshot, exportRunFileIdentity } from "./src/services/nativeAdapter.ts"; export { caseDisplayLabels } from "./src/caseIdentityPresentation.ts";',
     loader: "ts",
     resolveDir: process.cwd(),
     sourcefile: "native-adapter-test-entry.ts",
@@ -30,6 +30,8 @@ const source = bundled.outputFiles[0]?.text;
 assert.ok(source, "the native adapter test bundle should contain JavaScript");
 const {
   adaptBeginnerMasterReport,
+  adaptDeclaredHostScanMetadata,
+  adaptDeclaredNetworkServiceMetadata,
   adaptDeclaredWebServiceMetadata,
   adaptLocalNetworkCandidateInventory,
   adaptManagedRuntimeSetupStatus,
@@ -217,6 +219,7 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
         engine_id: "native.localhost_tcp",
         artifact_sha256: "a".repeat(64),
         observed_at: "2026-08-30T12:00:03Z",
+        location: "src/config.ts:42",
       }],
       framework_references: [],
     }],
@@ -242,6 +245,7 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
   assert.equal(report.actual.checks[0]?.status, "tested_partial");
   assert.equal(report.coverageGaps[0]?.nextActionCode, "start_expected_service_and_retry");
   assert.equal(report.findings[0]?.findingId, "finding-1");
+  assert.equal(report.findings[0]?.evidenceReferences[0]?.location, "src/config.ts:42");
   assert.equal(report.nextSteps[0]?.taskId, "task-1");
 });
 
@@ -314,7 +318,7 @@ test("the report the findings list is built from carries severity and codes the 
       possible_impact:
         "If the scanner result is confirmed, an internet-reachable service may expose unintended functionality.",
       severity: "informational",
-      confidence: "high",
+      confidence: "confirmed",
       priority: 15,
       priority_reasons: [
         "Confidence derived from a response this product observed directly; naabu reports no confidence of its own.",
@@ -348,6 +352,7 @@ test("the report the findings list is built from carries severity and codes the 
   assert.ok(finding, "the report dropped its only finding");
 
   assert.equal(finding.severity, "info");
+  assert.equal(finding.confidence, "high");
   assert.ok(
     RENDERABLE_SEVERITIES.includes(finding.severity),
     `severityMeta has no "${finding.severity}" entry, so every row renderer reads .label of undefined`,
@@ -639,6 +644,20 @@ test("declared website metadata adapts a bounded preset", () => {
   assert.deepEqual(adaptDeclaredWebServiceMetadata({
     declared_web_service: { protocol: "https", port: 8443, path: "/login" },
   }), { protocol: "https", port: 8443, path: "/login" });
+
+  assert.deepEqual(adaptDeclaredWebServiceMetadata({
+    declared_web_service: {
+      protocol: "https",
+      port: 8080,
+      path: "/",
+      scan_profile: "internal_device_https",
+    },
+  }), {
+    protocol: "https",
+    port: 8080,
+    path: "/",
+    scanProfile: "internal_device_https",
+  });
 });
 
 test("declared website metadata rejects malformed or query-bearing values", () => {
@@ -650,6 +669,107 @@ test("declared website metadata rejects malformed or query-bearing values", () =
   }), undefined);
   assert.equal(adaptDeclaredWebServiceMetadata({
     declared_web_service: { protocol: "http", port: 0, path: "/" },
+  }), undefined);
+  assert.equal(adaptDeclaredWebServiceMetadata({
+    declared_web_service: {
+      protocol: "https",
+      port: 443,
+      path: "/",
+      scan_profile: "website_quick",
+    },
+  }), undefined, "an unknown profile must not silently become a website quick scan");
+});
+
+test("declared endpoint metadata adapts only the fixed SSH, RDP, VNC, SMTP, and Telnet profiles", () => {
+  assert.deepEqual(adaptDeclaredNetworkServiceMetadata({
+    declared_network_service: {
+      protocol: "tcp",
+      port: 2222,
+      scan_profile: "internal_endpoint_ssh",
+    },
+  }), {
+    protocol: "tcp",
+    port: 2222,
+    scanProfile: "internal_endpoint_ssh",
+  });
+  assert.deepEqual(adaptDeclaredNetworkServiceMetadata({
+    declared_network_service: {
+      protocol: "tcp",
+      port: 3389,
+      scan_profile: "internal_endpoint_rdp_tls",
+    },
+  }), {
+    protocol: "tcp",
+    port: 3389,
+    scanProfile: "internal_endpoint_rdp_tls",
+  });
+  assert.deepEqual(adaptDeclaredNetworkServiceMetadata({
+    declared_network_service: {
+      protocol: "tcp",
+      port: 5900,
+      scan_profile: "internal_endpoint_vnc",
+    },
+  }), {
+    protocol: "tcp",
+    port: 5900,
+    scanProfile: "internal_endpoint_vnc",
+  });
+  assert.deepEqual(adaptDeclaredNetworkServiceMetadata({
+    declared_network_service: {
+      protocol: "tcp",
+      port: 587,
+      scan_profile: "internal_endpoint_smtp",
+    },
+  }), {
+    protocol: "tcp",
+    port: 587,
+    scanProfile: "internal_endpoint_smtp",
+  });
+  assert.deepEqual(adaptDeclaredNetworkServiceMetadata({
+    declared_network_service: {
+      protocol: "tcp",
+      port: 23,
+      scan_profile: "internal_endpoint_telnet",
+    },
+  }), {
+    protocol: "tcp",
+    port: 23,
+    scanProfile: "internal_endpoint_telnet",
+  });
+  for (const declared_network_service of [
+    { protocol: "udp", port: 22, scan_profile: "internal_endpoint_ssh" },
+    { protocol: "tcp", port: 0, scan_profile: "internal_endpoint_ssh" },
+    { protocol: "tcp", port: 22, scan_profile: "unknown_profile" },
+  ]) {
+    assert.equal(adaptDeclaredNetworkServiceMetadata({ declared_network_service }), undefined);
+  }
+});
+
+test("declared host metadata adapts only the generic exact-host profile and bounded ports", () => {
+  assert.deepEqual(adaptDeclaredHostScanMetadata({
+    declared_host_scan: {
+      protocol: "tcp",
+      ports: [8443, 22, 443],
+      profile: "greenbone_remote_safe_v1",
+    },
+  }), {
+    protocol: "tcp",
+    ports: [22, 443, 8443],
+    scanProfile: "internal_host_greenbone_remote_safe",
+  });
+  assert.equal(adaptDeclaredHostScanMetadata({
+    declared_host_scan: {
+      protocol: "tcp",
+      ports: [22, 22],
+      profile: "greenbone_remote_safe_v1",
+    },
+  }), undefined);
+  assert.equal(adaptDeclaredHostScanMetadata({
+    declared_host_scan: {
+      protocol: "tcp",
+      ports: [22],
+      profile: "internal_endpoint_ssh",
+    },
   }), undefined);
 });
 
@@ -1159,6 +1279,134 @@ test("full cases combine asset and applicable source platforms without questionn
   const workspace = adaptNativeCase(platformCaseFixture());
 
   assert.deepEqual(workspace.case.platforms, ["code", "azure", "kubernetes"]);
+});
+
+test("a native SSH host remains an external service with its exact declared port", () => {
+  const workspace = adaptNativeCase(platformCaseFixture({
+    assets: [{
+      id: "ssh-host",
+      kind: "host",
+      name: "server.example.test",
+      provider: null,
+      region: null,
+      identifiers: [{ namespace: "dns_name", value: "server.example.test" }],
+      discovered_from: [],
+      candidate: true,
+      owner_confirmed: false,
+      internet_exposed: false,
+      metadata: {
+        declared_network_service: {
+          protocol: "tcp",
+          port: 2222,
+          scan_profile: "internal_endpoint_ssh",
+        },
+      },
+    }],
+  }));
+
+  assert.equal(workspace.assets[0]?.type, "service");
+  assert.equal(workspace.assets[0]?.platform, "external");
+  assert.deepEqual(workspace.assets[0]?.declaredNetworkService, {
+    protocol: "tcp",
+    port: 2222,
+    scanProfile: "internal_endpoint_ssh",
+  });
+});
+
+test("a native generic host remains one external asset with its exact Greenbone profile", () => {
+  const workspace = adaptNativeCase(platformCaseFixture({
+    assets: [{
+      id: "generic-host",
+      kind: "host",
+      name: "host.example.test",
+      provider: null,
+      region: null,
+      identifiers: [{ namespace: "dns_name", value: "host.example.test" }],
+      discovered_from: [],
+      candidate: true,
+      owner_confirmed: false,
+      internet_exposed: false,
+      metadata: {
+        declared_host_scan: {
+          target: "host.example.test",
+          protocol: "tcp",
+          ports: [22, 25, 443, 445, 3389],
+          profile: "greenbone_remote_safe_v1",
+        },
+      },
+    }],
+  }));
+
+  assert.equal(workspace.assets[0]?.platform, "external");
+  assert.deepEqual(workspace.assets[0]?.declaredHostScan, {
+    protocol: "tcp",
+    ports: [22, 25, 443, 445, 3389],
+    scanProfile: "internal_host_greenbone_remote_safe",
+  });
+});
+
+test("a native RDP transport host remains an external service with its exact declared port", () => {
+  const workspace = adaptNativeCase(platformCaseFixture({
+    assets: [{
+      id: "rdp-host",
+      kind: "host",
+      name: "desktop.example.test",
+      provider: null,
+      region: null,
+      identifiers: [{ namespace: "dns_name", value: "desktop.example.test" }],
+      discovered_from: [],
+      candidate: true,
+      owner_confirmed: false,
+      internet_exposed: false,
+      metadata: {
+        declared_network_service: {
+          protocol: "tcp",
+          port: 3389,
+          scan_profile: "internal_endpoint_rdp_tls",
+        },
+      },
+    }],
+  }));
+
+  assert.equal(workspace.assets[0]?.type, "service");
+  assert.equal(workspace.assets[0]?.platform, "external");
+  assert.deepEqual(workspace.assets[0]?.declaredNetworkService, {
+    protocol: "tcp",
+    port: 3389,
+    scanProfile: "internal_endpoint_rdp_tls",
+  });
+});
+
+test("a native VNC host remains an external service with its exact declared port", () => {
+  const workspace = adaptNativeCase(platformCaseFixture({
+    assets: [{
+      id: "vnc-host",
+      kind: "host",
+      name: "workstation.example.test",
+      provider: null,
+      region: null,
+      identifiers: [{ namespace: "dns_name", value: "workstation.example.test" }],
+      discovered_from: [],
+      candidate: true,
+      owner_confirmed: false,
+      internet_exposed: false,
+      metadata: {
+        declared_network_service: {
+          protocol: "tcp",
+          port: 5900,
+          scan_profile: "internal_endpoint_vnc",
+        },
+      },
+    }],
+  }));
+
+  assert.equal(workspace.assets[0]?.type, "service");
+  assert.equal(workspace.assets[0]?.platform, "external");
+  assert.deepEqual(workspace.assets[0]?.declaredNetworkService, {
+    protocol: "tcp",
+    port: 5900,
+    scanProfile: "internal_endpoint_vnc",
+  });
 });
 
 test("native findings keep unknown severity distinct from informational", () => {

@@ -52,6 +52,89 @@ func TestTruffleHogIsFilesystemOnlyAndCannotVerify(t *testing.T) {
 	}
 }
 
+func TestSemgrepUsesThePinnedOfflineRulePackWithResourceBounds(t *testing.T) {
+	planned, err := planInvocation("semgrep", profileRepository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(planned.arguments, " ")
+	for _, required := range []string{
+		"--config " + semgrepRulePackPath,
+		"--metrics=off",
+		"--disable-version-check",
+		"--no-rewrite-rule-ids",
+		"--oss-only",
+		"--jobs 2",
+		"--max-memory 2048",
+		"--timeout 10",
+		"--timeout-threshold 3",
+		"--max-target-bytes 10000000",
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("Semgrep plan lacks %q: %s", required, joined)
+		}
+	}
+	for _, forbidden := range []string{"--config auto", "--autofix", "--pro", "rules.yml"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("Semgrep plan contains forbidden option %q: %s", forbidden, joined)
+		}
+	}
+}
+
+func TestSemgrepRulePackManifestRejectsTamperingAndUninventoriedFiles(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "python", "security", "first.yaml")
+	second := filepath.Join(root, "typescript", "security", "second.yml")
+	if err := os.MkdirAll(filepath.Dir(first), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(second), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(first, []byte("rules: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("rules: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	firstDigest, err := fileSHA256(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDigest, err := fileSHA256(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := firstDigest + "  python/security/first.yaml\n" +
+		secondDigest + "  typescript/security/second.yml\n"
+	manifestPath := filepath.Join(t.TempDir(), "RULES.sha256")
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifestDigest, err := fileSHA256(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySemgrepRulePack(root, manifestPath, manifestDigest, 2); err != nil {
+		t.Fatalf("valid Semgrep rule pack rejected: %v", err)
+	}
+	if err := os.WriteFile(first, []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySemgrepRulePack(root, manifestPath, manifestDigest, 2); err == nil {
+		t.Fatal("tampered Semgrep rule was accepted")
+	}
+	if err := os.WriteFile(first, []byte("rules: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "extra.yaml"), []byte("rules: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySemgrepRulePack(root, manifestPath, manifestDigest, 2); err == nil {
+		t.Fatal("uninventoried Semgrep rule was accepted")
+	}
+}
+
 func TestKubescapeIsOfflineManifestOnly(t *testing.T) {
 	planned, err := planInvocation("kubescape", profileKubernetes)
 	if err != nil {
@@ -91,6 +174,20 @@ func TestTypedContainerPlansUseOCIImageLayout(t *testing.T) {
 	}
 }
 
+func TestGrypeRepositoryUsesTheUpstreamDirectoryCataloger(t *testing.T) {
+	planned, err := planInvocation("grype", profileRepository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"dir:/workspace", "--output", "json", "--file", "/output/grype.json"}
+	if !reflect.DeepEqual(planned.arguments, want) {
+		t.Fatalf("Grype repository invocation drifted:\n got: %#v\nwant: %#v", planned.arguments, want)
+	}
+	if planned.stdoutIsOutput {
+		t.Fatal("Grype repository evidence must use its fixed JSON output path")
+	}
+}
+
 func TestTrivyFilesystemProfilesUseLibraryPackagesAndKeepTheImmutableDatabaseReadOnly(t *testing.T) {
 	for _, profile := range []string{profileRepository, profileIaC} {
 		planned, err := planInvocation("trivy", profile)
@@ -113,7 +210,7 @@ func TestTrivyFilesystemProfilesUseLibraryPackagesAndKeepTheImmutableDatabaseRea
 
 func TestEngineProfilesRejectCrossTypeExecution(t *testing.T) {
 	for _, test := range []struct{ engine, profile string }{
-		{"grype", profileRepository},
+		{"grype", profileIaC},
 		{"kubescape", profileIaC},
 		{"kube-bench", profileKubernetes},
 		{"semgrep", profileOCIImage},

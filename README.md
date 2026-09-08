@@ -6,52 +6,56 @@
 
 `ai-security-scanner` is a desktop scanner for developers, small teams, and IT owners who want useful findings and clear next steps.
 
-Choose something you own or are allowed to assess. The app guides the setup, runs the applicable checks, and keeps the results in one understandable report.
+Choose the repositories, internal systems, endpoints, and websites you own or are allowed to assess. The app runs the applicable checks and keeps the results in one report that shows which assets need attention.
 
 ## What should I scan first?
 
-### A website or API
+### Scan one IT environment
 
-Enter one exact public `http://` or `https://` URL. The beginner path runs a fixed, pinned Nuclei profile of 13 checks for common exposed files and debug or status endpoints. It sends at most 19 GET requests, limited to 3 requests per second, 2 concurrent requests, and a 10-second timeout.
+Use one compact setup to add multiple repository folders, complete website or API URLs, and approved internal systems. For each internal system, enter one exact hostname or IP address. Common TCP ports are ready by default; an optional Advanced control lets you replace them with up to 64 exact ports. Review one plan and press Start once.
 
-The scan boundary is the entire `scheme://host:port` origin, not only the path entered in the URL. The path is retained as context while the profile requests its own fixed detector paths. Do not use this quick profile if you are authorized to test only a specific path. It does not sign in, submit forms, follow redirects, or exploit findings, and it does not replace a penetration test.
+Internal systems are not divided into vendor-specific paths. The app passes the exact approved host and ports to a pinned Greenbone Community Feed profile. Greenbone detects the exposed products and services, applies the upstream remote checks whose prerequisites match, and returns the findings. Network appliances, servers, workstations, and other TCP-speaking systems all use this same upstream-driven path.
 
-### A local code or AI project
+The default profile does not use credentials, expand to neighboring hosts, try default passwords, run denial-of-service checks, or perform local authenticated patch inspection. A completed zero-finding run means Greenbone returned no findings from its applicability-driven checks on the displayed ports. It does not mean that every feed test ran or that the whole device is secure.
 
-Choose a project folder. The app scans a private read-only snapshot for applicable risky code patterns, exposed secrets, vulnerable dependencies, and configuration problems.
+When you need to check only one item, use a quick shortcut into the same project model:
 
-It does not upload or modify the project, push changes, or test detected credentials against live services.
+- **Website or API.** Enter one exact public `http://` or `https://` URL. Nuclei identifies the website technology and selects matching read-only vulnerability and exposure checks from 4,674 eligible templates in the pinned upstream snapshot. The profile is limited to 10 requests per second, 5 concurrent requests, and a 10-second per-request timeout.
 
-### Infrastructure files or a container image
+  The scan boundary is the entire `scheme://host:port` origin, not only the path entered in the URL. The path is retained as context while applicable upstream templates may request other paths on that origin. Do not use this quick profile if you are authorized to test only a specific path. It does not sign in, submit forms or request bodies, follow redirects, use out-of-band callbacks, or run exploit-oriented checks, and it does not replace a penetration test. Because Nuclei selects templates from detected technology, completion does not mean all 4,674 templates ran.
 
-Choose infrastructure-as-code files, Kubernetes manifests, or an exported container image. The app checks the exact selected artifact for applicable configuration, package, and known-vulnerability issues.
+- **Local code or AI project.** Choose a project folder. The app scans a private read-only snapshot for applicable risky code patterns, exposed secrets, vulnerable dependencies, and configuration problems.
 
-It does not deploy infrastructure or run the container image. Live cloud and cluster checks are separate advanced paths with their own scope.
+  Common secret-bearing files such as `.env`, private keys, and `*.tfvars` remain available to the secret scanners even when ignored by Git; ignored dependency, build, and cache directories stay excluded. The app does not upload or modify the project, push changes, or test detected credentials against live services.
 
-Public IPs, approved internal networks, and supported cloud accounts are also available when you are ready to define their exact scope.
+- **Infrastructure artifact or container image.** Choose infrastructure-as-code files, Kubernetes manifests, or an exported container image. The app checks the exact selected artifact for applicable configuration, package, and known-vulnerability issues.
 
-## Connectivity is not a vulnerability scan
+  It does not deploy infrastructure or run the container image. Live cloud and cluster checks are separate advanced paths with their own scope.
+
+Supported cloud accounts, infrastructure artifacts, and other specialist sources remain available when you need them.
+
+## Inventory and connectivity are not vulnerability scans
 
 The collapsed **Test local service connection at 127.0.0.1:9001** utility makes one payload-free TCP connection attempt. It tells you only whether that exact port accepted, refused, or timed out.
 
-That shortcut does not check vulnerabilities, HTTP behavior, other ports, or the rest of the computer. Likewise, “reachable,” “closed,” and “no findings” never mean “secure.” The report names the checks that actually ran.
+That shortcut does not check vulnerabilities, HTTP behavior, other ports, or the rest of the computer. Asset inventory, an open port, or a responding service can help select a later check, but none is a vulnerability result. Likewise, “reachable,” “closed,” and “no findings” never mean “secure.” The report names the checks that actually ran.
 
 ## Start in three steps
 
 1. **Install the app.** Download a desktop installer from [GitHub Releases](https://github.com/teddashh/ai-security-scanner/releases).
-2. **Choose and start a check.** Select a website, local project, configuration artifact, image, network, or account. Review the exact target and limits, then press Start.
-3. **Use the report.** Begin with the highest-priority findings, follow the suggested next action, and review anything the scan could not test.
+2. **Build the scan project.** Add the repositories, websites, and exact approved internal hosts you want to check—or use a single-target shortcut. Review the exact assets and ports, then press Start once.
+3. **Use the unified report.** Every selected asset is shown as problems found, no problems in completed checks, incomplete or failed, or not tested. Start with the assets that need attention and keep every stated limit with the result.
 
-For the most useful first result, scan a real website, project, or artifact you understand. Use the collapsed localhost utility only when you specifically need a port-connectivity check.
+For the most useful first result, select real assets you understand and run their applicable security checks. Use the collapsed localhost utility only when you specifically need a port-connectivity check.
 
 ## How to read the result
 
-Every report answers five practical questions:
+Every report answers these practical questions:
 
 - **What did I ask to scan?** The selected target and limits.
 - **What was actually tested?** The checks and target dimensions that completed.
 - **What was not tested?** Failed, unavailable, excluded, timed-out, or cancelled work.
-- **What was found?** Prioritized findings with severity, confidence, and affected item.
+- **Which assets have problems?** Prioritized findings with severity, confidence, and affected item.
 - **What should I do next?** A bounded action and the type of expert to involve when needed.
 
 A report may be complete, partial, or contain no completed checks. Completed work is kept even if another check fails. Projects and reports can be reopened, compared with later scans, and exported as readable HTML or structured data.

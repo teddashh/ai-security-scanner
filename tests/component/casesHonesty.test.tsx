@@ -553,7 +553,7 @@ test("a beginner can create a website scan without inventing a project name", as
     target: { value: "https://portal.example.test/login" },
   });
   expect(container.querySelector(".inline-notice")?.textContent).toContain(
-    "The page path /login is kept for reference. The quick scan checks the displayed website address https://portal.example.test:443 at a small fixed set of locations; it is not limited to /login.",
+    "The page path /login is kept for reference. Nuclei checks the displayed website origin https://portal.example.test:443 with applicable upstream templates; it is not limited to /login.",
   );
   expect(container.querySelector(".inline-notice")?.textContent).toContain(
     "If you are allowed to test only a specific path, do not use this quick scan.",
@@ -598,6 +598,46 @@ test("a guided source-code scan chooses and attaches its folder in one creation 
     selectedPath: "C:\\work\\agent-console",
     inputProfile: "repository_working_tree",
   });
+});
+
+test("one environment keeps same-named repository folders distinct through creation", async () => {
+  const onCreateWithWorkspaces = vi.fn(() => Promise.resolve(true));
+  const selectedPaths = ["/work/team-a/api", "/work/team-b/api"];
+  const onChooseWorkspace = vi.fn(() => Promise.resolve(selectedPaths.shift() ?? null));
+  const { container, getByRole } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "internal_it_environment",
+    selectionKey: 1,
+    onCreateWithWorkspaces,
+    onChooseWorkspace,
+  });
+
+  fireEvent.click(getByRole("button", { name: "Add a project folder" }));
+  await waitFor(() => expect(container.textContent).toContain("api"));
+  fireEvent.click(getByRole("button", { name: "Add a project folder" }));
+  await waitFor(() => {
+    expect(container.textContent).toContain("team-a/api");
+    expect(container.textContent).toContain("team-b/api");
+  });
+  expect(container.textContent).not.toContain("/work/team-a/api");
+  expect(container.textContent).not.toContain("/work/team-b/api");
+
+  fireEvent.submit(container.querySelector(".create-case-panel")!);
+
+  await waitFor(() => expect(onCreateWithWorkspaces).toHaveBeenCalledTimes(1));
+  expect(onCreateWithWorkspaces.mock.calls[0]?.[1]).toEqual([
+    {
+      label: "team-a/api",
+      selectedPath: "/work/team-a/api",
+      inputProfile: "repository_working_tree",
+    },
+    {
+      label: "team-b/api",
+      selectedPath: "/work/team-b/api",
+      inputProfile: "repository_working_tree",
+    },
+  ]);
 });
 
 test("guided local creation requires an explicit folder and never starts from a blank target", async () => {
@@ -685,7 +725,7 @@ test("an invalid public target stays in the form with field-specific accessible 
   ]);
 });
 
-test("an invalid internal CIDR is reported by the internal target field", async () => {
+test("an invalid inventory-only CIDR opens its collapsed field and receives focus", async () => {
   const onCreate = vi.fn(() => Promise.resolve(true));
   const { container, getByLabelText } = renderCases({
     selectedCase: undefined,
@@ -696,6 +736,8 @@ test("an invalid internal CIDR is reported by the internal target field", async 
   });
 
   const nameInput = getByLabelText("Scan project name (optional)");
+  const inventoryDetails = container.querySelector<HTMLDetailsElement>(".environment-inventory")!;
+  expect(inventoryDetails.open).toBe(false);
   const targetsInput = getByLabelText(/Internal IP addresses or small network ranges/u);
   fireEvent.change(nameInput, { target: { value: "Internal network" } });
   fireEvent.change(targetsInput, { target: { value: "10.20.0.8\n10.20.0.0/99" } });
@@ -710,9 +752,114 @@ test("an invalid internal CIDR is reported by the internal target field", async 
   expect(error.textContent).toContain("10.20.0.0/99 is not a valid IP CIDR range");
   expect(targetsInput.getAttribute("aria-invalid")).toBe("true");
   expect(targetsInput.getAttribute("aria-describedby")).toBe("internal-targets-help internal-targets-error");
+  expect(inventoryDetails.open).toBe(true);
   expect(document.activeElement).toBe(targetsInput);
 });
 
+test("one environment starts with one generic exact-host row and reviewed common ports", async () => {
+  const onCreate = vi.fn(() => Promise.resolve(true));
+  const { container, getByLabelText, getByRole, queryByRole } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "internal_it_environment",
+    selectionKey: 1,
+    onCreate,
+  });
+
+  expect(getByLabelText(/^Exact hostname or IP 1/u)).not.toBeNull();
+  expect(queryByRole("combobox", { name: /Security check/u })).toBeNull();
+  expect(container.textContent).toContain("Greenbone discovers supported services on common ports");
+  expect(container.querySelector('input[type="password"]')).toBeNull();
+  expect(getByRole("button", { name: "Review scan" })).not.toBeNull();
+
+  fireEvent.change(getByLabelText(/^Exact hostname or IP 1/u), {
+    target: { value: " Server.Example.Internal. " },
+  });
+  fireEvent.submit(container.querySelector(".create-case-panel")!);
+
+  await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+  expect(onCreate.mock.calls[0]?.[0].knownAssets).toEqual([{
+    kind: "external_target",
+    value: "server.example.internal",
+    internetExposure: "internal",
+    hostScan: {
+      protocol: "tcp",
+      ports: [22, 23, 25, 80, 443, 445, 3389, 5900, 8080, 8443],
+      scanProfile: "internal_host_greenbone_remote_safe",
+    },
+  }]);
+});
+
+test("one environment accepts repeatable generic hosts with advanced custom ports", async () => {
+  const onCreate = vi.fn(() => Promise.resolve(true));
+  const { container, getAllByLabelText, getByLabelText, getByRole } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "internal_it_environment",
+    selectionKey: 1,
+    onCreate,
+  });
+
+  fireEvent.change(getByLabelText(/^Exact hostname or IP 1/u), { target: { value: "10.20.0.8" } });
+  fireEvent.click(getByRole("button", { name: "Add another system" }));
+  fireEvent.change(getByLabelText(/^Exact hostname or IP 2/u), {
+    target: { value: "gateway.example.internal" },
+  });
+  fireEvent.click(container.querySelectorAll<HTMLDetailsElement>(".environment-host-row__advanced summary")[1]!);
+  fireEvent.change(getAllByLabelText(/^TCP ports \(optional\)/u)[1]!, {
+    target: { value: "8443, 22, 443, 22" },
+  });
+  fireEvent.submit(container.querySelector(".create-case-panel")!);
+
+  await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+  expect(onCreate.mock.calls[0]?.[0].knownAssets).toEqual([
+    expect.objectContaining({
+      value: "10.20.0.8",
+      hostScan: expect.objectContaining({
+        ports: [22, 23, 25, 80, 443, 445, 3389, 5900, 8080, 8443],
+      }),
+    }),
+    expect.objectContaining({
+      value: "gateway.example.internal",
+      hostScan: expect.objectContaining({ ports: [22, 443, 8443] }),
+    }),
+  ]);
+});
+
+test("generic internal-host validation keeps ranges and malformed ports out of scan assets", async () => {
+  const onCreate = vi.fn(() => Promise.resolve(true));
+  const { container, getByLabelText, getByText } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "internal_it_environment",
+    selectionKey: 1,
+    onCreate,
+  });
+
+  const target = getByLabelText(/^Exact hostname or IP 1/u);
+  fireEvent.change(target, { target: { value: "10.20.0.0/24" } });
+  fireEvent.submit(container.querySelector(".create-case-panel")!);
+  await waitFor(() => expect(container.textContent).toContain(
+    "Enter one exact hostname or IP address, not a CIDR range.",
+  ));
+  expect(document.activeElement).toBe(target);
+  expect(onCreate).not.toHaveBeenCalled();
+
+  fireEvent.change(target, { target: { value: "server.example.internal" } });
+  const advancedSummary = getByText("Advanced: choose ports");
+  fireEvent.click(advancedSummary);
+  const ports = getByLabelText(/^TCP ports \(optional\)/u);
+  fireEvent.change(ports, { target: { value: "22, 65536" } });
+  fireEvent.click(advancedSummary);
+  expect(advancedSummary.closest("details")?.hasAttribute("open")).toBe(false);
+  fireEvent.submit(container.querySelector(".create-case-panel")!);
+  await waitFor(() => expect(container.textContent).toContain(
+    "Each port must be from 1 through 65,535.",
+  ));
+  expect(advancedSummary.closest("details")?.hasAttribute("open")).toBe(true);
+  expect(document.activeElement).toBe(ports);
+  expect(onCreate).not.toHaveBeenCalled();
+});
 test("an invalid optional target opens its advanced section and receives focus", async () => {
   const onCreate = vi.fn(() => Promise.resolve(true));
   const { container, getByLabelText } = renderCases({

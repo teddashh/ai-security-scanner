@@ -3776,19 +3776,7 @@ fn validate_resolved_plan(
     }
 
     validate_plan_rate_policy(plan)?;
-    if plan.template_policy.allow_denial_of_service || plan.template_policy.allow_credential_attacks
-    {
-        return Err(AppError::NotAuthorized(
-            "prohibited external template classes cannot enter managed egress".into(),
-        ));
-    }
-    if plan.activity == ExternalActivity::ActiveExternal
-        && plan.template_policy.allowed_template_ids.is_empty()
-    {
-        return Err(AppError::NotAuthorized(
-            "active external testing requires a frozen template allowlist".into(),
-        ));
-    }
+    plan.template_policy.validate(plan.activity)?;
 
     match &plan.target {
         CanonicalTarget::Hostname(hostname) => {
@@ -5785,6 +5773,32 @@ mod tests {
         let value = serde_json::to_value(&policy).expect("JSON");
         assert!(value.get("limits").is_some());
         assert!(value.get("max_concurrency").is_none());
+    }
+
+    #[test]
+    fn active_profile_reaches_the_same_exact_destination_policy_as_legacy_template_ids() {
+        let now = Utc::now();
+        let mut profiled = plan(now, "203.0.113.8", 5, 2, 30);
+        profiled.template_policy = TemplatePolicy::conservative_profile(
+            "nuclei-templates@0123456789abcdef0123456789abcdef01234567",
+            "nuclei_web_safe_v1",
+        );
+
+        let policy = EgressGatewayPolicy::from_resolved_plans(
+            "policy-profile",
+            "172.29.0.1:1080".parse().expect("listener"),
+            "172.29.0.0/24".parse().expect("network"),
+            &[profiled],
+            now,
+        )
+        .expect("a bounded upstream profile must not be rejected as an empty allowlist");
+
+        assert_eq!(policy.destinations.len(), 1);
+        assert_eq!(
+            policy.destinations[0].addresses,
+            ["203.0.113.8".parse().unwrap()].into_iter().collect()
+        );
+        assert_eq!(policy.destinations[0].ports, [443].into_iter().collect());
     }
 
     #[test]
