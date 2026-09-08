@@ -176,6 +176,9 @@ pub fn export_oscal_assessment_results_bytes(
 }
 
 fn oscal_observation(finding: &Finding, observation: &FindingObservation) -> Value {
+    let exposure_observation = finding
+        .severity_basis_code
+        .is_some_and(|code| code.is_exposure_observation());
     let mut props = vec![
         property("canonical-finding-id", &finding.id),
         property("canonical-fingerprint", &observation.fingerprint),
@@ -184,7 +187,29 @@ fn oscal_observation(finding: &Finding, observation: &FindingObservation) -> Val
             "canonical-confidence",
             confidence_name(&observation.confidence),
         ),
+        property(
+            "record-kind",
+            if exposure_observation {
+                "service-inventory-observation"
+            } else {
+                "security-finding-observation"
+            },
+        ),
     ];
+    if exposure_observation {
+        let observation_kind = serde_json::to_value(finding.severity_basis_code)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "reachable_service".into());
+        props.push(property("observation-kind", &observation_kind));
+        for detail in finding.tags.iter().filter(|tag| {
+            tag.starts_with("port:")
+                || tag.starts_with("protocol:")
+                || tag.starts_with("http-status:")
+        }) {
+            props.push(property("observed-service-detail", detail));
+        }
+    }
 
     let mut asset_ids = observation.asset_ids.clone();
     asset_ids.sort();
@@ -241,25 +266,39 @@ fn oscal_observation(finding: &Finding, observation: &FindingObservation) -> Val
         evidence.into_iter().map(oscal_evidence).collect()
     };
 
+    let (description, types, remarks) = if exposure_observation {
+        (
+            crate::finding_narrative::EXPOSURE_OBSERVATION_RISK.to_owned(),
+            vec!["inventory", "service-discovery"],
+            crate::finding_narrative::EXPOSURE_OBSERVATION_NEXT_STEP.to_owned(),
+        )
+    } else {
+        (
+            format!(
+                "{} Possible impact: {}",
+                finding.plain_language_summary, finding.possible_impact
+            ),
+            vec!["discovery"],
+            format!(
+                "Preliminary observation. Suggested next step: {} Verification guidance: {}",
+                finding.recommendation, finding.verification_guidance
+            ),
+        )
+    };
+
     json!({
         "uuid": stable_uuid(&format!(
             "observation:{}:{}:{}",
             observation.run_id, observation.id, observation.fingerprint
         )),
         "title": finding.title,
-        "description": format!(
-            "{} Possible impact: {}",
-            finding.plain_language_summary, finding.possible_impact
-        ),
+        "description": description,
         "props": props,
         "methods": ["EXAMINE"],
-        "types": ["discovery"],
+        "types": types,
         "relevant-evidence": relevant_evidence,
         "collected": observation.observed_at.to_rfc3339(),
-        "remarks": format!(
-            "Preliminary observation. Suggested next step: {} Verification guidance: {}",
-            finding.recommendation, finding.verification_guidance
-        )
+        "remarks": remarks
     })
 }
 
@@ -446,6 +485,47 @@ mod tests {
                 .unwrap()
                 .contains("no assessment result")
         );
+    }
+
+    #[test]
+    fn reachable_service_is_an_inventory_observation_without_vulnerability_remediation() {
+        let mut case = fixture();
+        let finding = &mut case.findings[0];
+        finding.severity = Severity::Informational;
+        finding.severity_basis_code = Some(SeverityBasisCode::ReachableHttpService);
+        finding.plain_language_summary = "STALE_EXPOSURE_SUMMARY".into();
+        finding.possible_impact = "STALE_EXPOSURE_IMPACT".into();
+        finding.recommendation = "STALE_EXPOSURE_REMEDIATION".into();
+        finding.verification_guidance = "STALE_EXPOSURE_VERIFICATION".into();
+        finding.tags = vec!["http-status:200".into()];
+        case.finding_observations[0].severity = Severity::Informational;
+
+        let value = export_oscal_assessment_results(&case, "run-1").unwrap();
+        let observation = &value["assessment-results"]["results"][0]["observations"][0];
+        let props = observation["props"].as_array().unwrap();
+
+        assert!(props.iter().any(|property| {
+            property["name"] == "record-kind"
+                && property["value"] == "service-inventory-observation"
+        }));
+        assert!(props.iter().any(|property| {
+            property["name"] == "observation-kind" && property["value"] == "reachable_http_service"
+        }));
+        assert_eq!(
+            observation["types"],
+            json!(["inventory", "service-discovery"])
+        );
+        assert_eq!(
+            observation["description"],
+            crate::finding_narrative::EXPOSURE_OBSERVATION_RISK
+        );
+        assert_eq!(
+            observation["remarks"],
+            crate::finding_narrative::EXPOSURE_OBSERVATION_NEXT_STEP
+        );
+        let encoded = observation.to_string();
+        assert!(!encoded.contains("STALE_EXPOSURE"));
+        assert!(encoded.contains("Canonical evidence content hash"));
     }
 
     #[test]

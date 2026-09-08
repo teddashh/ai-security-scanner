@@ -62,7 +62,7 @@ test("SettingsPage keeps detail-heavy lifecycle and privacy honesty collapsed", 
   assert.match(source, /<details className="settings-details">[\s\S]*Data boundaries/u);
   assert.match(source, /connections and exports can send data out/u);
   assert.match(source, /unless you connect a source or choose an export destination/u);
-  assert.match(source, /Advanced tools unavailable · localhost check still works/u);
+  assert.match(source, /Some scan tools are unavailable · saved results are unaffected/u);
   assert.match(source, /Retry safely continues reusable download progress/u);
   assert.match(source, /Cancelling keeps downloaded progress; Continue resumes it/u);
   assert.match(source, /If Windows requires a restart/u);

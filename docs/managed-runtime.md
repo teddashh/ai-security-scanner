@@ -1,8 +1,8 @@
-# Release-managed local runtime
+# Managed local runtime
 
-Normative status: this is the subordinate implementation contract for the managed runtime. The [canonical product specification](product-spec.md) controls every user-visible outcome. The [product audit](product-audit.md) records where the current implementation has not reached this contract. This document must not be read as a claim that an unqualified path is already implemented.
+Direction: [product-spec.md](product-spec.md) controls product priorities and user-visible behavior. This document describes managed-runtime implementation and safety boundaries only; it cannot create a roadmap, acceptance program, or standing work. Versioning, release timing, packaging, signing, and compliance work begins only when the product owner explicitly requests it.
 
-Runtime implementation detail may strengthen isolation at an exact package, process, directory, or deletion boundary. It may not add a product-wide readiness gate, hide the application shell, require a beginner to administer WSL, or stop independent work. If this document conflicts with the canonical specification, the canonical specification wins and this document must be corrected.
+Runtime implementation may strengthen isolation at an exact component, process, directory, or deletion boundary. It must not hide the application shell, require a beginner to administer WSL, or stop independent work.
 
 ## Product-facing runtime contract
 
@@ -26,13 +26,13 @@ The official Windows install flow owns prerequisite detection and preparation:
 3. The installer records restart-required and durable resume state before it exits. It never restarts Windows without the operating system/user decision.
 4. After restart or relaunch, the application opens the main shell and resumes creation of the private runtime automatically.
 
-Servicing failure, cancellation, or timeout does not roll back otherwise valid application binaries and does not replace the product with a manual setup journey. It makes only runtime-dependent tasks temporarily unavailable, preserves the requested run/task, and offers **Retry**. A build that cannot complete the reference first-value path cannot be promoted as a passing Windows candidate, but an installed safe build still opens its projects and reports.
+Servicing failure, cancellation, or timeout does not roll back otherwise valid application binaries and does not replace the product with a manual setup journey. It makes only runtime-dependent tasks temporarily unavailable, preserves the requested run/task, and offers **Retry**. Projects and reports remain available.
 
 The installer never exposes a generic elevation helper and the desktop never asks a beginner to open Terminal, type `wsl` commands, identify a distribution, or decide which runtime object is safe to remove.
 
 ## Runtime bundle and download integrity
 
-- A release carries or references an immutable platform-specific managed-runtime bundle. Every bundled file has an exact size and SHA-256 in its release manifest.
+- A managed-runtime distribution carries or references an immutable platform-specific bundle. Every bundled file has an exact size and SHA-256 in its manifest.
 - The app verifies the bundle before copying or executing it. Managed commands use absolute verified executable paths, a cleared allowlisted environment, a fixed provider working directory, and no current-directory executable lookup.
 - A missing or corrupt installed component is never executed. Bounded automatic Repair restores it from the signed installer payload or another already verified product cache, then reinitializes the manager or relaunches into the same project.
 - When no verified repair source is available, the exact dependent tasks become `not_tested` or `failed` after bounded reconciliation. Unaffected capabilities continue.
@@ -172,54 +172,47 @@ A breach stops only the owned container/task, preserves already committed bounde
 
 ## Current provider payloads
 
-| Host | Managed provider | Release payload | Host prerequisite |
+| Host | Managed provider | Managed payload | Host prerequisite |
 | --- | --- | --- | --- |
 | Linux x86-64 | Rootless Podman machine + QEMU | Podman, gvproxy, static x86-64 QEMU emulator, `qemu-img`, `virtiofsd`, firmware | None; KVM when available, otherwise the bounded native launcher may use QEMU TCG |
 | macOS Intel/Apple silicon | Rootless Podman machine + AppleHV | Universal Podman, vfkit, gvproxy | Supported macOS with Apple virtualization support |
 | Windows x86-64 | Rootless Podman machine + WSL | Podman, gvproxy, win-sshproxy | WSL 2, detected/prepared by the signed installer flow |
 
-Provider payload availability is a capability statement, not a claim that every platform path has passed human qualification. Platform promotion follows the canonical acceptance policy.
+Provider payload availability describes implementation capability only. It does not choose platform support, packaging, or release policy.
 
 ## CLI and developer interfaces
 
-The standalone development CLI may expose bounded lifecycle diagnostics and operations such as status, install/start/stop/update, qualification, and exact uninstall. These are maintainer/developer interfaces, not steps in the beginner desktop journey.
+The standalone development CLI may expose bounded lifecycle diagnostics and operations such as status, install/start/stop/update, runtime checks, and exact uninstall. These are maintainer/developer interfaces, not steps in the beginner desktop journey.
 
 - `status` reads and reconciles authoritative state; it does not mutate unrelated objects.
 - `install`, `start`, `update`, and `Repair` use the same durable operation/generation rules as the desktop.
 - `stop` refuses to interrupt target-contacting containers unless the exact bounded cancellation contract is invoked.
 - `uninstall` resolves exact ownership and follows the same data-preservation choices; `--force` must never widen the resolved target or turn name matching into ownership.
 - An unpackaged build may take an explicit absolute bundle override. This does not alter installed-product discovery or allow a case/webview value to choose an executable.
-- Runtime `qualify` executes a fixed no-network fixture through the admitted container path. It proves that exact runtime execution/cleanup path only; it does not prove scan coverage, first-value UX, authorization, or release readiness and is never a normal scan gate.
+- Runtime `qualify` is a maintainer diagnostic that executes a fixed no-network fixture through the admitted container path. It proves only that runtime execution and cleanup path; it is not a meaningful scan or a beginner-path test.
 
-## Release staging and supply-chain boundary
+## Runtime supply-chain boundary
 
-The release workflow vendors managed-runtime payloads before application packaging. The vendor step:
+When runtime payload preparation is in scope, its vendor step:
 
 - reads `runtime/upstreams.lock.json`;
 - accepts only approved HTTPS origins;
 - verifies every source and binary by locked size and SHA-256;
-- extracts/builds without invoking untrusted archive scripts;
-- validates platform/architecture and required helper capabilities;
-- atomically publishes the completed staged directory and manifest.
+- extracts or builds without invoking untrusted archive scripts;
+- validates platform, architecture, and required helper capabilities;
+- atomically stages the completed directory and manifest.
 
-Manifest schema and management-contract revisions identify how the staged bytes are interpreted. A schema/revision change requires a reviewed contract change; admission or public promotion of the affected platform payload requires real-platform evidence. Neither requirement may be used to manufacture ownership of an existing runtime or block unrelated development work. An old admitted payload may be reopened only through its exact recorded manifest identity for a durable checkpoint or rollback. If identity is absent or ambiguous, preserve the old object and create a new generation.
+Manifest schema and management-contract revisions identify how bytes are interpreted. Source and binary identities change only through the lock file, with every affected URL, size, SHA-256, source revision, helper identity, and machine image updated together. These integrity controls govern only whether the exact payload may execute; they do not create product priorities or authorize packaging or publication work.
 
-Development lock validation may verify pinned metadata without building installers. Public platform promotion additionally requires its own real installer/runtime qualification. Failure of one platform payload, provenance record, updater entry, or publication signature blocks only that package/platform/publication action; it does not block ordinary documentation/product CI or an installed trusted build.
+## Maintainer verification
 
-Source and binary identities are updated only through the lock file. A version update replaces every affected URL, size, SHA-256, source revision, helper identity, and machine image together. No hash, signature, provenance, or qualification result may be fabricated to make a gate pass.
+Verify runtime changes in proportion to the risk changed. Relevant checks include:
 
-## Runtime acceptance summary
+- durable resume and bounded recovery after interruption;
+- preservation of projects, evidence, settings, and unrelated runtime objects;
+- refusal to execute corrupt or ambiguously owned bytes;
+- exact cleanup ownership and retention of unexpected objects;
+- task-scoped degradation when a runtime, gateway, or engine is unavailable;
+- real execution of the affected engine path when runtime behavior changes.
 
-A Windows candidate containing runtime changes is promoted as beginner-ready or stable only after the canonical exact-candidate human path and the applicable focused real-boundary fixtures pass. An earlier technically qualified public testing prerelease may expose the exact installer while clearly recording every unobserved path; it cannot claim candidate acceptance. Promotion evidence demonstrates:
-
-- fresh Windows with WSL absent reaches the main shell and resumes after the fixed signed-installer action/restart without Terminal;
-- `127.0.0.1:9001` reaches the Windows host and produces a saved report;
-- unrelated and similarly named WSL objects remain unchanged while a unique generation continues;
-- interruption and one dropped event converge to authoritative state without an infinite wait or generation churn;
-- one unavailable runtime, gateway, or engine leaves independent work and a truthful partial report available;
-- same-version Repair and N-1 upgrade preserve projects, evidence, settings, signing identity, unrelated WSL state, and a runnable prior binary/runtime until replacement works;
-- all three uninstall choices stop target contact and prove their exact preservation/removal promises;
-- corrupt packaged bytes are never executed and trigger bounded automatic repair or task-scoped degradation;
-- exact unsafe deletion/replacement attempts remain blocked without broadening that block to the product.
-
-Modeled tests and a runtime qualification fixture support these claims but cannot substitute for the exact installed-Windows human-path record required by the canonical specification.
+Modeled and fixture tests support these checks. Product usability is established by the rendered beginner path and a meaningful security scan, not by a runtime diagnostic alone.

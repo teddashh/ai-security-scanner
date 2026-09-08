@@ -1,12 +1,11 @@
 # Evidence-to-control mappings
 
-Normative status: this is a subordinate mapping-maintenance reference. The [canonical product specification](../docs/product-spec.md) controls the beginner master report and non-certification wording. NIST, ISO 27001, and AIDEFEND are optional finding/evidence relationship layers—not scan prerequisites, coverage proof, pass/fail results, or product-wide release gates.
+Direction: [product-spec.md](../docs/product-spec.md) controls product priorities and the professional report. This document describes an optional report-reference layer only; it cannot create a roadmap, acceptance program, or standing work. Versioning, release timing, packaging, signing, and compliance work begins only when the product owner explicitly requests it. NIST, ISO 27001, and AIDEFEND relationships are never scan prerequisites, coverage proof, or pass/fail results.
 
 `control-mappings.json` is the versioned, checked-in catalog used to add
 control references to normalized findings. A reference means only that the
-specific source rule is topically related to the named control. It is not a
-compliance result, certification statement, control-effectiveness test, or
-substitute for expert assessment.
+specific source rule is topically related to the named control. It is not a compliance result,
+certification statement, control-effectiveness test, or substitute for expert assessment.
 
 Mappings are deliberately allowlisted by engine and exact source rule.
 Bounded prefixes are used only for the standardized `CVE-` identifier family
@@ -81,7 +80,4 @@ SHA-256 before deriving the selected records. AIDEFEND tool recommendations or
 threat mappings are not included and must never be treated as automatic
 scanner-to-control mappings.
 
-Mapping validation and provenance tests are mapping-maintenance evidence, not substitutes for the
-exact-candidate installed-Windows human path. Any proposal to make a mapping failure block more than
-the exact relationship/export enhancement must satisfy the canonical complexity budget and show a
-reproducible harm that cannot be addressed by omission plus explicit disclosure.
+Mapping validation and provenance tests protect the accuracy of this optional reference layer. A mapping failure omits or marks the affected relationship unavailable; it does not block the meaningful scan, findings, professional report, or readable export.

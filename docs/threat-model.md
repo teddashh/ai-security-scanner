@@ -4,7 +4,7 @@ Status: design-time threat model
 
 Last updated: 2026-09-03
 
-Normative status: this threat model is subordinate to the [canonical product specification](product-spec.md). It may require an operation-scoped safety control, but cannot turn optional-engine, mapping, signing, updater, or disposable-runtime failure into a product-wide gate unless the specification's hard-block rule permits it.
+Direction: [product-spec.md](product-spec.md) controls product priorities and user-visible behavior. This document identifies technical threats and security controls only; it cannot create a roadmap, acceptance program, or standing work. Versioning, release timing, packaging, signing, and compliance work begins only when the product owner explicitly requests it. Concrete scope, credential, destructive-action, evidence-integrity, and untrusted-code boundaries remain mandatory for the operation they protect.
 
 This document defines threats and required controls for the intended product. It does not assert that the controls are implemented or that the product has passed a security review. Risk acceptance requires an explicit repository decision; silence is not acceptance.
 
@@ -29,7 +29,7 @@ It considers a single human user on one workstation. Shared-workstation authoriz
 3. **Evidence integrity:** raw evidence and provenance cannot be silently replaced, dropped, or confused with another case.
 4. **Coverage honesty:** missing, partial, failed, or unknown work cannot appear as a pass.
 5. **Local confidentiality:** the product does not transmit credentials or case data without an explicit user action.
-6. **Supply-chain accountability:** every product-distributed or product-downloaded executable, engine image, ruleset, template set, and database is traceable to a pinned artifact and an operation-scoped release disposition. OS-owned facilities such as the verified Windows `System32\\wsl.exe` boundary remain governed by platform trust rather than being misrepresented as project artifacts.
+6. **Supply-chain accountability:** every product-distributed or product-downloaded executable, engine image, ruleset, template set, and database is traceable to a pinned artifact and an operation-scoped admission decision. OS-owned facilities such as the verified Windows `System32\\wsl.exe` boundary remain governed by platform trust rather than being misrepresented as project artifacts.
 7. **Safe failure:** interruption or partial cleanup is visible and recoverable.
 8. **Non-remediation:** the product cannot use scanner authority to change the assessed environment.
 9. **Outcome continuity:** product-owned reversible failure is repaired automatically, ambiguous objects are preserved beside a new isolated object, and optional failure leaves independent work plus an honest partial report available.
@@ -82,7 +82,7 @@ tools prepare in the background, and a beginner is never instructed to administe
 ### Boundary A3: desktop build to packaged-component recovery source
 
 The running desktop may recover a rejected packaged managed-runtime component only from an
-independent source bound to that exact application release. The current cache slice admits a private
+independent source bound to that exact application build. The current cache slice admits a private
 installed copy only when an expected manifest SHA-256 was embedded from the staged manifest at
 desktop build time and the selected copy passes the current management contract, platform and
 architecture selection, private-namespace and canonical-path checks, and every manifest size/digest
@@ -92,7 +92,7 @@ the private installed-bundle driver reopens the checked canonical ancestor chain
 protected current-user DACLs for `versions`, every manifest-derived installed directory, the
 manifest, and every listed file; rejects reparse points, multiple hard links, and unlisted entries;
 compares stable file IDs; and
-computes the release-locked digest through the retained handle. Listed-file handles deny
+computes the build-locked digest through the retained handle. Listed-file handles deny
 write/delete sharing and remain live through process exit and output drain; directory handles deny
 rename/delete of the checked directory objects. The closed inventory is checked immediately before
 launch, and verification polls the command deadline plus any applicable cancellation between files,
@@ -101,14 +101,14 @@ afterward. Managed-local contexts without this contract fail closed. Verified Sy
 managed helper directory in
 `PATH`. The recovery diagnostic exposes only a fixed boundary/source, the digest read from the
 admitted manager, and the original typed packaged-failure reason—never rejected paths, bytes, or raw
-open/parser errors. This source boundary still lacks installed-artifact qualification and does not
-replace the damaged packaged application resource. Installer-based recovery must additionally bind
+open/parser errors. This source boundary does not replace the damaged packaged application resource.
+Installer-based recovery must additionally bind
 the exact same-version installer or payload to its updater/OS signature and approved publisher, run
 replacement out of process, and resume idempotently. Missing or rejected recovery material disables
 only dependent tasks.
 
 On a fresh NSIS install, a separate feature-gated CLI command attempts to create that private copy
-before the desktop first opens. The release build stages and verifies the runtime manifest before
+before the desktop first opens. The packaged build stages and verifies the runtime manifest before
 building the Windows CLI, which embeds its SHA-256. The installed command accepts no paths or
 actions, ignores environment path overrides, rejects command-line path overrides, and resolves only
 the real direct `managed-runtime` sibling of its own executable. It takes the fixed private-data and
@@ -118,7 +118,7 @@ scan. Missing/rejected input, contention, interruption, timeout, and malformed o
 redacted non-fatal result. A later locked attempt removes only exact abandoned
 `.installing-<lowercase-v4-UUID>` directories; similar unknown siblings remain. Registration
 overlays do not invoke this seed path because Repair/upgrade must preserve existing private bytes.
-An NSIS qualification's pre-desktop `initial_status=installed` observation supports only
+The pre-desktop `initial_status=installed` observation supports only
 `installer_runtime_cache_seed`; it does not exercise packaged corruption, installed-resource
 replacement, or `packaged_component_auto_recovery`.
 
@@ -152,8 +152,8 @@ Repository skills and external models are separate trust domains. Raw findings a
 
 ## 6. Credential architecture
 
-Cloud/provider authorization is an Advanced target path. It is never a prerequisite for localhost,
-website, public/internal network, local source, saved-report, or unsigned-export work. Missing,
+Cloud/provider authorization is an Advanced target path. It is never a prerequisite for the local
+connectivity utility, website, public/internal network, local source, saved-report, or unsigned-export work. Missing,
 expired, or rejected provider authorization affects only the exact provider target/task and appears
 as a coverage gap in the same master report as any successful sibling work.
 
@@ -236,7 +236,7 @@ Active template collections require policy classification. Destructive, denial-o
 | T-01 | Secrets appear in CLI arguments, environment, logs, history, or crash output. | Credential theft. | Opaque handles, protected channels, structured redaction before persistence, no secret command arguments, core-dump controls, secret test fixtures. |
 | T-02 | Administrative credential reaches a scanner container. | Full cloud or tenant compromise through a third-party engine. | Separate broker binary; scanner plan can resolve only read-only capability handles; invariant tests reject admin profiles in engine manifests. |
 | T-03 | A frontend flaw invokes privileged runtime operations. | Host takeover. | No runtime socket in UI; typed backend allowlist; capability-based job API; CSP and Tauri permission minimization. |
-| T-04 | A container mounts the daemon socket or broad host directories. | Container-to-host compromise and data theft. | Manifest validation; deny socket/privileged/host namespace flags; narrow read-only mounts; dedicated workdir; release review for exceptions. |
+| T-04 | A container mounts the daemon socket or broad host directories. | Container-to-host compromise and data theft. | Manifest validation; deny socket/privileged/host namespace flags; narrow read-only mounts; dedicated workdir; explicit security review for exceptions. |
 | T-05 | Upstream image or binary is replaced. | Malicious code executes with scan access. | Pin cryptographic digest, verify configured signatures/provenance, approved download source, SBOM, no `latest`, compatibility manifest; block only that artifact and record its task as not tested while admitted siblings continue. |
 | T-06 | Rules, templates, or vulnerability databases change independently of the engine. | Irreproducible or malicious findings. | Pin and record data artifact versions and hashes; treat feeds as separate third parties; show knowledge date. |
 | T-07 | A stale engine silently misses current issues. | False reassurance. | Support dates, update status, visible knowledge date, expired-engine warning, no claim that absence of findings means safety. |
@@ -260,16 +260,16 @@ Active template collections require policy classification. Destructive, denial-o
 | T-25 | Case IDs, asset IDs, or blob references cross cases. | Confidentiality breach and incorrect comparison. | Case-scoped queries, foreign-key constraints, capability-bound case ID, authorization checks, no user-controlled blob paths. |
 | T-26 | Export redaction omits an unknown sensitive field. | Sensitive disclosure. | Data-classification metadata, allowlisted export schemas, group title/rationale/actor redaction, preview and manifest, engine raw output excluded by default when not safely redacted. |
 | T-27 | Update rollback or registry outage makes historical cases unexplained. | Lost reproducibility. | Persist resolved manifests and provenance in the case; cache only legally allowed artifacts; distinguish unavailable artifact from resolved finding. |
-| T-28 | License-incompatible component is redistributed. | Forced takedown or license violation. | Per-artifact license disposition, release deny-by-default, notices/source offer, SBOM, manual review of feeds and multi-component stacks. |
+| T-28 | License-incompatible component is redistributed. | Forced takedown or license violation. | Per-artifact license disposition, deny distribution by default, notices/source offer, SBOM, manual review of feeds and multi-component stacks. |
 | T-29 | A forged update manifest redirects the desktop to attacker-controlled code. | Local code execution and case-data compromise. | Fixed HTTPS endpoint; allowlist for the exact GitHub repository/tag asset path; embedded updater public key; verify the selected current-platform payload, URL, digest, and detached signature before install; invalid material blocks only that update. Cross-platform completeness is publication policy. Compatible downgrade preserves/read-opens data; incompatible downgrade refuses before mutation. |
 | T-30 | A forged provider prompt sends the user to a credential-phishing site. | Provider account compromise. | Backend provider-host allowlist; frontend URL revalidation; OS-browser opening only through a Tauri capability scoped to the exact AWS, Microsoft, and Google HTTPS host families; no general URL or path opener permission. |
 | T-31 | A later provider bootstrap overwrites an earlier cleanup journal. | Orphaned privileged resources and unrecoverable cleanup obligations. | One private ledger per validated operation ID; immutable provider/resource binding; immediate atomic journal updates; explicit retryable cleanup surface. |
 | T-32 | A provider response redirects pagination, floods records, or becomes partial after some pages. | SSRF, resource exhaustion, or falsely complete inventory. | No redirects; exact continuation allowlists; per-page/aggregate/time/record limits; one bounded safe retry; raw-page-first storage; explicit connected-empty, failed, cancelled, partial, and needs-reauthorization states. |
-| T-33 | A tampered, replayed, wrong-version/platform/architecture, or path-swapped packaged-component repair source is treated as trusted. | Local code execution or a runtime/app version mismatch during automatic recovery. | The cache slice selects only the current desktop build's independently embedded exact manifest digest, then rechecks the current contract, target, namespace, canonical path, file type, size, and every payload digest. Unix private-mode checks apply. Windows source enforcement additionally proves exact DACLs for `versions` and the manifest-derived installed tree, a pre-launch closed bundle inventory, single-link real files, stable IDs, and same-handle digests while retaining no-write/no-delete-share handles for listed files through every private-bundle process execution. Directory handles deny rename/delete of the checked directory objects, not same-user child creation. Guard verification consumes the command deadline and polls applicable cancellation. A managed context without that contract fails closed. Installed-Windows artifact qualification remains required. Installer recovery must also verify the exact same-version updater/Authenticode identity and approved publisher and perform bounded out-of-process replacement with an idempotent journal. Material rejected by admission is never selected as the command source; absent or ineligible recovery material leaves only dependent tasks unavailable. |
+| T-33 | A tampered, replayed, wrong-version/platform/architecture, or path-swapped packaged-component repair source is treated as trusted. | Local code execution or a runtime/app version mismatch during automatic recovery. | The cache slice selects only the current desktop build's independently embedded exact manifest digest, then rechecks the current contract, target, namespace, canonical path, file type, size, and every payload digest. Unix private-mode checks apply. Windows source enforcement additionally proves exact DACLs for `versions` and the manifest-derived installed tree, a pre-launch closed bundle inventory, single-link real files, stable IDs, and same-handle digests while retaining no-write/no-delete-share handles for listed files through every private-bundle process execution. Directory handles deny rename/delete of the checked directory objects, not same-user child creation. Guard verification consumes the command deadline and polls applicable cancellation. A managed context without that contract fails closed. Installer recovery must verify the exact updater or OS-signature identity and approved publisher for the selected recovery source, then perform bounded out-of-process replacement with an idempotent journal. Material rejected by admission is never selected as the command source; absent or ineligible recovery material leaves only dependent tasks unavailable. |
 
 ## 9. Supply-chain policy
 
-An engine is not trusted because it is popular or open source. Admission to a distributed release requires:
+An engine is not trusted because it is popular or open source. Before an engine artifact is distributed or executed, its admission review requires:
 
 - exact upstream repository and pinned source revision;
 - artifact version, digest, and retrieval source;
@@ -280,9 +280,9 @@ An engine is not trusted because it is popular or open source. Admission to a di
 - declared provider APIs, network destinations, mounts, credentials, and resource needs;
 - known security-reporting channel and maintenance status;
 - rollback and end-of-support behavior;
-- release SBOM and required license/source materials.
+- an SBOM and required license/source materials for any distributed artifact.
 
-Research checkouts under `.upstreams` are untrusted reference material. Their presence does not admit code into a release.
+Research checkouts under `.upstreams` are untrusted reference material. Their presence does not admit code for execution or distribution.
 
 These are engine admission/publication controls, not product-wide readiness. Missing, stale, or unverifiable evidence prevents distribution or execution of the exact affected artifact. It must not stop an already installed trusted build from opening projects, running unaffected admitted engines, producing a partial master report, or exporting readable unsigned results. A publication channel may withhold its exact untrusted artifact without fate-sharing unrelated platforms or ordinary development work.
 
@@ -299,7 +299,7 @@ product namespace. The implementation must demonstrate protection against a fore
 that final namespace or key; unusual but non-exploitable ancestor ACLs are diagnostics, not automatic
 product-wide blockers. Key identity/rotation is durable and explicit so an old identity is not
 silently replaced. Any stronger ACL shape, predecessor chain, continuity anchor, or recovery
-transaction must first satisfy the canonical complexity budget with a reproducible replacement risk.
+transaction must address a documented replacement risk and be tested at that boundary.
 A key or identity mismatch hard-blocks only production of the requested signed bundle and immediately
 offers an unsigned readable export. It never blocks scanning, reopening, reports, or existing
 integrity-only verification of independently valid bundles.
@@ -368,8 +368,8 @@ The following cannot be eliminated by this design:
   code already running as the same user. On Unix, same-user code can path-swap after admission; on
   Windows, the launch guard narrows that window by pinning listed files and checked directory
   objects, but same-user code can still mutate dynamic provider/configuration state or add an
-  unlisted child after the pre-launch inventory. The Windows slice has not been qualified through
-  the signed installed artifact. Fresh NSIS source wiring attempts to pre-seed the cache, but MSI,
+  unlisted child after the pre-launch inventory. Fresh NSIS source wiring attempts to pre-seed the
+  cache, but MSI,
   registration overlays, and any failed/interrupted seed can still begin without it. The cache is
   not a replacement for damaged installed application resources. Abandoned-staging cleanup has no
   separate entry-count or elapsed-time budget; the outer NSIS timeout keeps a hostile or pathological
@@ -381,30 +381,22 @@ The following cannot be eliminated by this design:
 
 The product must describe these as limits, not hide them behind a disclaimer or a score.
 
-## 14. Verification plan
+## 14. Risk-proportionate verification
 
-Implementation should eventually provide evidence for at least:
+Verify the behavior and boundary changed. Relevant evidence includes:
 
-- the exact-candidate installed-Windows beginner path: install, combined `127.0.0.1:9001` Start, master report, reopen, and readable export within the canonical budget, without maintainer takeover or Terminal;
-- a real-boundary optional-engine/gateway failure that preserves a successful sibling and produces an honest partial report;
-- a deliberately lost lifecycle event corrected by startup/focus/resume/watchdog reconciliation;
-- unit tests for state transitions, scope canonicalization, coverage, fingerprints, redaction, and comparison;
+- a real beginner website or local-project scan that produces security findings or an honest no-findings result, plus clear untested coverage;
+- a real-boundary optional-engine or gateway failure that preserves successful sibling work and produces an honest partial report;
+- unit tests for state transitions, scope normalization, coverage, fingerprints, redaction, and comparison;
 - broker tests proving administrative credentials cannot enter engine plans or persisted structures;
-- runtime escape and forbidden-mount tests;
+- runtime escape, forbidden-mount, SSRF, redirect, DNS-rebinding, and metadata-address tests;
 - adapter fuzzing and malicious-output fixtures;
-- SSRF, redirect, DNS rebinding, IPv4/IPv6 normalization, and metadata-address tests;
 - cancellation and crash-recovery tests that detect orphaned credentials, containers, and files;
-- dependency, image, signature, license, and SBOM checks for release artifacts;
-- an installed Windows packaged-component fixture that proves the staged manifest, bundled
-  manifest, binary-embedded digest, and recovered private copy share one exact identity, then
-  exercises DACL, hard-link, unlisted-entry, overwrite/rename, manager-drop, direct-command, and
-  retained container-context launch guards against the signed artifact;
-- a separate fresh-NSIS `installer_runtime_cache_seed` observation proving that the exact private
-  copy is already `installed` before desktop launch or an explicit lifecycle install, without
-  treating that observation as packaged-component corruption/recovery evidence;
+- artifact integrity, dependency, image, signature, license, and SBOM tests when those mechanisms change;
+- packaged-component tests for manifest identity, path protections, overwrite or rename attempts, and launch guards when recovery behavior changes;
 - export traversal, hash, signature, truncation, and redaction tests;
-- UI tests that distinguish demo, partial, failed, unknown, no-findings, and verified states;
-- mapping tests that reject unsupported AIDEFEND coordinates, missing attribution, and relationships on non-applicable scanner results;
+- rendered UI tests that distinguish demo, partial, failed, unknown, no-findings, and verified states;
+- mapping tests when optional framework references change;
 - manual security review before making security or isolation claims.
 
-Modeled, unit, and CI checks support but never substitute for the exact-candidate human path. Listing a control or test here is not proof that it passes. Before adding a new hard block, durable state, recovery transaction, or global qualification, the review must identify the reproducible harm, show why preservation/isolation/warning is insufficient, measure blocked user work, and meet the canonical complexity budget.
+Listing a control or test here does not prove that it passes. Add an operation-scoped hard block or recovery transaction only for a concrete threat, keep unrelated user work available, and verify the real boundary. Tests support the product direction; they do not establish release policy or choose the roadmap.

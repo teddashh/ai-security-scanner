@@ -1,225 +1,57 @@
-# AI Security Scanner v0.1.8 前景 QC 作業報告
-
-> **歷史快照（2026-09-02；2026-09-06 補註）。** 本報告的操作、測試與產物證據
-> 固定在各自標明的 checkpoint，不是目前 `main` 狀態。舊
-> `codex/v0.1.8-foreground-qc` 分支在整合後已刪除；後續引擎／結果狀態見
-> [引擎接線與結果對齊交接](../../engine-alignment-handover.zh-TW.md)。`545f9f6`
-> 後來完成 digest-anchored private-cache slice，只部分 supersede A19；獨立驗證的
-> same-version repair source 與 installed-Windows qualification 仍未完成。
+# v0.1.8 Foreground 作業歷史紀錄
 
 日期：2026-09-02
-Repository：`teddashh/ai-security-scanner`
-Canonical 分支：`main`
-基底：`fa1fa9d401995de45080fbfaffc6b39d99955387`（`v0.1.8`）
-原始功能整合提交：`503542271ff8b2178ed2d334fd47d76c494d1c75`
-Provider／case bundle／Settings 強化提交：`a538778a34cd7db72b28256591575aee77937ab8`
-Foreground QC fast-forward point：`1d4054e18b5b8a4014ffd2634ac507fa569e72a7`
-歷史完整 GitHub affected-lane baseline：`31f137d03997c221e7c81ba8fc5ae579348b0c14`
-CodeQL source remediation：`8ba72315b6d136bdaf89617d95aa06aea0c72e8c`
-Linux Clippy follow-up／當時最後 source checkpoint：`09ff38e2d7ba8d9b3ca1fcc63faa73d41092dcef`
 
-- Canonical source：https://github.com/teddashh/ai-security-scanner/tree/main
-- 原始功能整合：https://github.com/teddashh/ai-security-scanner/commit/503542271ff8b2178ed2d334fd47d76c494d1c75
-- 本輪主要強化：https://github.com/teddashh/ai-security-scanner/commit/a538778a34cd7db72b28256591575aee77937ab8
-- Linux warning 修正：https://github.com/teddashh/ai-security-scanner/commit/0077b2c5a6df8c758afbb44be5a1c6a9b2202a64
+這份文件記錄一輪已結束的工程工作，不指定後續工作，也不代表目前產品狀態。當時的原始碼範圍從 `fa1fa9d` 延伸至 `09ff38e`。
 
-## 結論先講
+## 完成的產品與工程工作
 
-這一輪完成的是「原始碼整合、風險修正、automated regression、歷史 unsigned Windows installer build、commit、GitHub push，以及將完整工作線 fast-forward 到 `main`」。不是正式 release qualification，也不是已安裝的人機驗收。
+### Managed runtime 與資料保護
 
-我沒有安裝、啟動或操作 App，沒有使用 BAT，沒有建立新的 Git tag／GitHub Release、updater artifact，也沒有簽章。使用者後來要求先停止操作 App，因此本輪所有 UI/UX 結論都來自程式碼、結構化 fixture、automated tests 與 build，不冒充真人操作證據。`main` 是依使用者明確授權直接 fast-forward，所以沒有另建 PR。
+- 全新 Windows managed runtime 從隔離的 generation 1 開始；已被精確辨識的既有 generation 0 仍可重用。
+- 加強 product-data root、process lifetime lease、workspace snapshot 與 uninstall staging。
+- packaged runtime component 不可用時，錯誤被限制在相關工作；既有 case 與 report 仍可存取。
+- provider artifact 寫入中斷後可以在四個固定 recovery slots 內重試；既有 collision 不會被刪除或覆寫。
+- Windows canonical root 的 DACL 修補發生在內容、identity 與 durability 確認之後；custom root 維持 verify-only。
+- Unix artifact 流程加入 file 與 parent-directory sync、identity 與 mode 重驗。
 
-9-commit foreground line 已從 `fa1fa9d` fast-forward 到 GitHub `main`，fast-forward整合點是 `1d4054e`；整合後三個 CI 修正形成歷史完整 GitHub baseline `31f137d`，其後文件 commit、CodeQL source remediation `8ba7231` 與 Linux Clippy follow-up `09ff38e` 又推進 `main`。Windows、GitHub 與 Castle clean checkout目前在 `09ff38e` 對齊。GitHub CI 對 `31f137d` 的 ephemeral NSIS compile已 PASS，但 workflow沒有上傳或保存該檔，也未做 hash／sign／publish／install；本機列出的 unsigned installer仍是 pre-`a538778` historical candidate，不能代表最新 source。`09ff38e` 的 affected-lane GitHub CI與CodeQL均已terminal SUCCESS；這不改變installer與human qualification邊界。
+### 結果與報告
 
-## 實際交付
+- findings、preview、export 與 verification presentation 綁定明確的 case、run 與 locale。
+- HTML 報告加入實際掃描的 address/port 範圍與結果，同時保留 redaction。
+- signed case bundle 被實作為 case-wide records 加上 run-bound reports；selected run 的 observation/evidence 另行綁定。
+- Browser demo export 只輸出已實作的 selected-run JSON，不再顯示未實作格式。
+- partial、no-check、取消、重試與新 attempt 狀態有各自的持久化結果，不再以單一成功狀態涵蓋。
 
-歷史 `fa1fa9d..31f137d` 範圍合計 12 commits、84 個檔案、14,046 additions、1,421 deletions。原始 `5035422` 功能提交占 74 個檔案、11,778 additions、1,423 deletions；後續包含安全修正、測試、文件與 CI 契約。`8ba7231` 是另計的 5-file security remediation（52 additions／55 deletions），`09ff38e` 是 1-line platform-scope follow-up；不把文件 commit或重疊測試數灌入產品價值。這些數字只描述變更規模，不等於價值；實質推進如下。
+### 介面
 
-### 1. Managed runtime 與資料安全
+- 加入雙語 Settings、行動版導覽、case/run identity 與 progressive disclosure。
+- Settings 區分「尚未檢查」和「已確認不可用」。
+- 當時加入 localhost TCP-connect 功能與 deadline；這只能說明連線結果，不會找出漏洞。
 
-- 全新 Windows managed runtime 不再預設占用固定 generation 0，而是從隔離的 generation 1 開始配置。
-- 已有且能精確證明的 generation 0 部署仍可重用；沒有把舊環境粗暴搬移、刪除或重建。
-- ambiguous／legacy WSL runtime 採 append-only generation 選擇，保留不明狀態並建立產品隔離 runtime。
-- 加強 product-data root、process lifetime lease、Windows DACL admission、workspace snapshot 與 uninstall staging。
-- CLI managed-runtime status 在建立 DB、artifact 或 signing key 等隱性 mutation 前取得 data-directory lease。
-- packaged runtime component 不可用時採 task-scoped degradation，避免整個產品永久失效，且仍讓既有 case/report 可讀。
-- hard-block 的方向維持在不可逆、非產品資料的危險操作；沒有把一般可恢復情況變成多餘 gate。
+### 原始碼安全修正
 
-### 2. Artifact、evidence 與 report 正確性
+- Linux interface enumeration 從 raw `getifaddrs` pointer traversal 改為 Linux-only `nix 0.30.1` safe API。
+- 三個測試路徑不再把動態 fixture 資料帶入 panic/assert output。
+- 後續 Linux Clippy 找到 macOS-only helper 在 Linux 成為 dead code，`09ff38e` 將它限制到正確平台。
 
-- Provider response 的 deterministic canonical artifact 若遭中斷或碰撞，不再永久毒化後續重試。
-- 原碰撞檔會保留；recovery 改成固定最多 4 個 deterministic slots，內容完全相符時重用既有 slot，內容不符時才前進到下一格。
-- hardlink、custom/noncanonical authority 的不安全 DACL、identity 或其他非內容型安全失敗會立即 fail closed，不會嘗試下一格、修補或覆寫；4 格用盡也只回傳錯誤並保留所有既有 bytes。
-- Windows custom root 的 DACL policy 永遠 verify-only；matching reuse 仍以同一 write-capable pinned handle 執行 durability sync，但不要求 `WRITE_DAC`。Canonical product root 也只有在內容、identity 與 sync 都證明後才做 bounded DACL repair，sync 失敗會在修補前停止。
-- Unix fresh path 會先 file sync，再驗證 identity/mode、sync pinned parent directory 並重驗；matching reuse 則在 parent sync 後才 `chmod(0600)`，再做第二次 file sync 與最終 proof。Parent sync 失敗不會 chmod、回成功或前進 recovery slot。
-- Findings、preview、export 與 verification 改以明確 case/run/locale coordinates 綁定；stale coordinate fail closed。
-- HTML report 增加精確 network scope：address、port、stage、target、transport、outcome、observed time。
-- standard redaction 會把 address 與 port 替換成對應的 redacted set，不把原始目標漏進報告。
-- Browser demo export 改成誠實的 selected-run JSON only：不再宣稱輸出未實作的 HTML／OCSF／OSCAL serializer，不宣稱 raw evidence、redaction 或 signature。
-- Signed case bundle 的產品契約是「case-wide records + run-bound reports」；reports 選所選 run 的 observations/evidence，但 legacy observation 缺 frozen presentation snapshot 時可用目前 canonical finding，workflow status 與 asset display 也可能來自 current case projection。signed manifest notice、`case.json`、README 與 Export UI 使用同一份 disclosure，不再暗示整包或全部 report 欄位都是單一 run 的 frozen snapshot。
+## 整合與觀察
 
-### 3. First value、partial truth 與 UI/UX
+- 原始功能位於 `5035422`；provider、bundle、Settings 增量位於 `a538778`。
+- 工作線在 `1d4054e` 整合到 `main`，後續 dependency 與 CI fixture 修正形成 `31f137d`。
+- CodeQL 回報修正在 `8ba7231`，平台 scope 修正在 `09ff38e`。
+- 當時 Windows、GitHub 與 Castle checkout 曾對齊 `09ff38e`。
+- GitHub CI 曾發現 minimal-feature dependency、Windows fixture ownership 與 Linux dead-code 問題；每一項都以原始碼修正後重跑相關測試。
+- GitHub API 當時顯示 CodeQL #2、#4、#5、#7 已由新分析標示為 fixed，沒有使用 dismissal。
+- Linux desktop dependency graph 仍包含 `glib 0.18.5` 的 moderate advisory；Windows 與 Linux CLI-only graph 不包含該 dependency path。
 
-- 補強 bounded localhost first-value path、partial/no-check truth、cancel race、retry/new-attempt 與 beginner master report。
-- partial result 不會被假裝成完整成功；沒有 silent scope reduction。
-- 加入 bilingual Settings route/page/navigation、mobile navigation、case/run identity presentation、report locale 與 beginner-first progressive disclosure。
-- Settings、Cases、Findings、Progress、Export、Start、Verification 與 AppShell 的資料流與顯示狀態同步更新。
-- Settings runtime presentation 現在把 unknown／尚未檢查與已確認 unavailable 分成不同狀態、圖示與說明，不再混為同一警告。
-- localhost 同步測試改成有 deadline 與 `recv_timeout`，避免 regression 讓 CI 無限掛住。
+## 當時未執行的操作
 
-### 4. Release／CI 證據
+- 沒有使用 BAT，沒有安裝、啟動或操作 App。
+- 沒有真人從輸入目標、執行有意義掃描到理解結果的流程紀錄。
+- 沒有操作 installer 的安裝、upgrade、restart 或 uninstall。
+- 沒有簽署或發布新的 installer、updater artifact 或 Nuclei production image。
+- Nuclei 只在真實 pinned template tree 上執行 targeted test 1/1。
+- 本機 unsigned installer 產生於 `a538778` 之前；只記錄檔案大小、時間與 SHA-256，沒有執行它。
 
-- 更新 release self-test、release validator、publication artifact 與 Windows fixture evidence。
-- 更新 CI change classification，讓新增 release／runtime 路徑不會被漏分類。
-- 驗證 engine catalog、line-ending fixtures、release policy、AIDEFEND snapshot 與 usability evidence schema。
-- Castle 已用 digest-pinned Go 1.26.0 container 對精確 pinned template tree 執行 targeted Go test，測試本身 PASS。曾評估把它直接加進 production Dockerfile，但該檔仍綁定既有 immutable `3.11.1-5` digest／attestation；為避免偽造 provenance，這個 recipe 改動已撤回。新 gate 必須配合新 immutable tag 與新 publication evidence 才能交付。
-- 歷史上成功建立 pre-`a538778` unsigned NSIS installer，並複製到使用者輸出目錄；未安裝、未啟動，也不是目前 `main` 的 binary。
-- 合併後第一次 GitHub CI 真正找到兩個移植問題：minimal-feature binaries 看不到 optional `directories` dependency，以及 Windows hosted runner 測試 fixture 預設 owner 是 Administrators。修正方式是讓共用 library dependency 永遠可用，並只在測試 helper 明確設定 current-user owner；production ACL admission 沒有放寬。
-- Managed egress gateway 的既有 immutable tag `0.1.8-1` 已由 run `33243068682` 綁定 source `59e34af14f4aa829419ae8cafa9fa352e2e450c2` 與 index digest `sha256:9f0575f58a6329740eca6a042f8c9d44a3af25144fc80946956823924c445725`。`main@1d4054e` 的 run `33695158567` 嘗試同一 tag 時，publication guard 正確拒絕覆寫，後續 build／publish／evidence／promote 均 skipped；既有 tag 未被改寫。Workflow 已改成只接受手動觸發，並以 dependency-free CI contract 鎖定，不再讓每次 `main` push 嘗試重綁舊 tag。
-
-### 5. CodeQL follow-up
-
-- `main@0b5498f` 的 CodeQL API列出四個 open high alerts：production Linux `rust/access-invalid-pointer` #2，以及 test code 的 `rust/cleartext-logging` #4、#5、#7。這是 analyzer回報，不外推成四個已證實可利用漏洞。
-- `8ba7231` 以 `nix::ifaddrs::getifaddrs` safe iterator取代 Linux raw `libc::getifaddrs` list ownership／pointer traversal，並把三個 test panic/log paths改成不輸出動態 fixture資料的 invariant messages。
-- `8ba7231` CodeQL run [`33700815840`](https://github.com/teddashh/ai-security-scanner/actions/runs/33700815840) 的 Rust與JavaScript/TypeScript analysis均SUCCESS。GitHub API目前回報0個open code-scanning alerts；#2／#4／#5／#7均在`2026-09-03T00:54:32Z`由新分析判定fixed，`dismissed_at`與dismiss reason皆空，並非人工略過。
-- `nix 0.30.1`（feature `net`）只在 `cfg(target_os = "linux")` dependency table啟用；lockfile因此變更。這個新增 dependency不修復、不取代 Linux desktop graph中的 `glib 0.18.5`。
-- Windows 在 `8ba7231` 重跑 locked CLI 1,340/1,340 PASS；Windows run不編譯或執行 Linux-only `nix` path，因此另以 Castle/Linux驗證。
-- `8ba7231` GitHub CI run `33700815872` 的 Rust core/CLI job `100479547294` 在 Linux Clippy `-D warnings` FAIL：`src-tauri/src/target_candidates.rs:190` 的 `ipv4_from_network_order` 已成 dead code，exit 101，CLI test step skipped。`09ff38e` 以 macOS-only `cfg`修正。
-- `09ff38e` GitHub affected-lane [CI `33701122412`](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122412) 已 terminal SUCCESS：Rust core/CLI、Tauri Linux compile與aggregate均SUCCESS，不相關lanes依classifier預期skipped。[CodeQL `33701122410`](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122410) 也已對Rust與JavaScript/TypeScript terminal SUCCESS，API維持0 open alerts。歷史完整 affected-lane baseline仍是`31f137d` run `33697821312`，不可把這次安全修正run冒充完整矩陣重跑。
-
-### 6. Castle 跨機器驗證
-
-- GitHub `main` 已在 Castle 的 `/home/ted-h/projects/ai-security-scanner` checkout，沒有依賴此筆電的 `outputs` 或 BAT archive。
-- Castle Linux Rust 1.98：完整 CLI workspace 1,307/1,307、provider artifact module 14/14（包含 Unix hardlink/permission/durability regressions）、all-targets Clippy `-D warnings`、Rustfmt與 diff check 全 PASS。
-- Castle Node 24.15.0／npm 11.12.1：typecheck、364/364 frontend、93-module Vite build、53/53 release evidence、5/5 usability schema、engine validation 167 inputs／21 records／19 runnable、Prowler 8/8、AIDEFEND 6 records、release validation 全 PASS。一次 build 與一次 final status query 在命令啟動前遇到 SSH timeout；重連後相同 validation command PASS，不算測試 failure。
-- Castle `npm ci` audit 36 packages，0 vulnerabilities；這只代表 npm lockfile 安裝圖，不抵銷 Cargo `glib 0.18.5` 的 open moderate alert。
-- Windows 端以明確 Rust 1.98 完整重跑 desktop 1,347/1,347（library 892）與 CLI 1,340/1,340（library 852），desktop／CLI all-targets Clippy `-D warnings`、Rustfmt均 PASS。
-- 安全 follow-up在 Castle `main@09ff38e` 重跑 target-candidate 10/10、完整 locked CLI workspace 1,307/1,307、all-targets Clippy `-D warnings`、Rustfmt、locked Cargo metadata/tree，全數 PASS；checkout clean，並與 Windows／GitHub SHA對齊。
-
-### 7. 0.1.8 後續增量修正與驗證
-
-- Provider artifact recovery 的 Windows desktop module 19/19、CLI module 19/19，Castle/Linux module 14/14 PASS；不同 feature/platform 的重疊測試不相加成獨立總數。
-- Frontend 364/364、release evidence 53/53、usability schema 5/5、Prowler 8/8 PASS。
-- Typecheck、Vite build、engine validation 與 AIDEFEND validation PASS。
-- Case bundle disclosure 與 Settings unknown／unavailable presentation 已有對應 automated coverage。
-- Signed case-bundle targeted regression 1/1 PASS；證明另一 run 的 finding/observation 不進入四種 reports，而 legacy/current projection caveat 與 case-wide records 如實出現。
-- Castle Nuclei 真實 template-tree targeted test 1/1 PASS；production gate NOT IMPLEMENTED，image build／publication NOT RUN，三者不混為一談。
-
-## Git 與 GitHub 結果
-
-- 原始功能 commit：`503542271ff8b2178ed2d334fd47d76c494d1c75`
-- 本輪主要程式 commit：`a538778a34cd7db72b28256591575aee77937ab8`
-- Linux warning 修正 commit：`0077b2c5a6df8c758afbb44be5a1c6a9b2202a64`
-- Foreground line fast-forward integration：`1d4054e18b5b8a4014ffd2634ac507fa569e72a7`
-- 整合後 CI 修正：`fa13835902346fbe9590d09d5fede93e0a6dc813`、`2cb7a23a4d8b17d8e1c5c4bc5c3dbfab787e5a92`、`31f137d03997c221e7c81ba8fc5ae579348b0c14`
-- CodeQL source remediation：`8ba72315b6d136bdaf89617d95aa06aea0c72e8c`
-- Linux dead-code scope follow-up：`09ff38e2d7ba8d9b3ca1fcc63faa73d41092dcef`
-- 遠端／upstream：`origin/main`
-- 當時 source checkpoint `09ff38e` 已確認 Windows HEAD、GitHub `origin/main` 與 Castle HEAD一致；後續狀態應以新的 GitHub `main` HEAD 為準，這不是永久同步保證。
-- Castle checkout：`/home/ted-h/projects/ai-security-scanner`，branch `main`；`09ff38e` 驗證後 clean。
-- 依使用者授權採 fast-forward direct push，沒有建立 PR；沒有建立新 tag 或 Release。
-- 以 `main@31f137d` 做的 remote ancestry audit顯示，所有 `codex/*` 工作線（包括 foreground、ghost/VHD/WSL lines）與 `release/gateway-v0.1.6-candidate` 都已是 `main` ancestor，沒有遺漏的 branch-only commit。原 foreground branch 後來已刪除；commit ancestry 與 Git 歷史保留稽核證據。
-- `31f137d` 當時的歷史 inventory 中，尚非 `main` ancestor 的是 7 個舊-base Dependabot branches與 2 個 engine-publication branches；每個只有 1 個 branch-only commit，且都從明顯較舊的 base分岔。之後 GitHub 又建立 PR #24（`dependabot/cargo/rust-81a2f3bcd0`、`67f80fb`），從 `8ba7231` 分岔並一次更新5項Rust dependencies，包括把本輪新增的`nix 0.30.1`升到`0.31.3`。它們都不是本 foreground產品工作線，且涉及dependency或image publication，因此不因「全部 merge」而盲合併；應在最新`main`上重建／更新後跑對應qualification。
-- GitHub Dependabot alert #1 已查明為 Linux desktop graph 的 `glib 0.18.5`：`GHSA-wrw7-89jp-8q8g`／`RUSTSEC-2024-0429`，Moderate 6.9。Windows 與 Linux CLI-only graph 不受此依賴影響；因 GTK3 graph 限制，不能用 lockfile 單獨升到 patched `0.20.0`。`8ba7231` 的 lockfile變更只加入Linux-only `nix 0.30.1`；本輪未做未稽核 fork/vendor，也不宣稱 `glib` 警報已修復。
-
-## Installer 與供應鏈輸出
-
-輸出檔：`C:\Users\tedjc\Documents\Codex\2026-08-27\t\outputs\ai-security-scanner_0.1.8_x64-setup-foreground-qc-unsigned.exe`
-
-- Size：39,985,091 bytes
-- Last write UTC：`2026-09-02T09:24:15.3379353Z`
-- SHA-256：`15A74C9EAA9BA0864B03524D7F2B40B1B2C854D6DEA5E8079C81B1C96AAD56B9`
-- Authenticode：`NotSigned`
-- File version／Product version：`0.1.8`
-
-Packaged managed-runtime evidence：
-
-- `bin/gvproxy.exe`：12,954,624 bytes，SHA-256 `8803CAF895325DC2EA52337FA2C7C835C1F7F115B0BDE71FDB1479D1B3710526`
-- `bin/podman.exe`：45,106,176 bytes，SHA-256 `8A956D9BAFB253AF9932FFA1ACF17477235E043131A5D73D963830398C33D837`
-- `bin/win-sshproxy.exe`：4,826,112 bytes，SHA-256 `AFA4C0D97787F2A4E6509CFE472E9D2CEB5FCFD41A870E66687AA314909B4D10`
-- `manifest.json`：3,724 bytes，SHA-256 `A8112473E5D87655E6145EA5F6CFF569C872329D2EC14BFB9463078ABCB60E3A`
-- CycloneDX：`32D2590F4097063A1667F0AC961079785677B8B6038CF4DD14C38B5AA653096B`
-- NOTICES：`3F7DB58C47CF777755C9E21F01A2F96F8B4440FAF21E67C19EB92A57DB1FF4B6`
-- SPDX：`AAE562377FCE9CC56C5BFE44950571CE39E06228E18FCF202BB5CF532869F467`
-
-## 過程中失敗、修正、再驗證
-
-這些失敗沒有藏掉，也沒有把第一次失敗當成最終結果：
-
-- 一開始誤跑 `npm.cmd test -- --run`，package 沒有 `test` script；改用實際存在的 `test:frontend`。
-- demo export 修正後，第一次完整 frontend run 有 3 個舊的 source-regex assertions 失敗；同步更新已過時的期望後，targeted 25/25 與完整 358/358 通過。
-- 曾遇到 ACL startup denial；修正 admission／bootstrap 順序後再跑精準與完整套件。
-- 曾否決兩個會過度傳播 ACL 的設計，沒有為了讓測試變綠而放寬安全邊界。
-- HTML report 變更曾出現 Rust `E0435`；改成正確資料綁定後重跑。
-- locale 測試曾出現 0 filter，表示當時沒有真的測到目標；修正 test selection 後才接受結果。
-- 曾用錯 desktop feature 造成 0-test；改成 `--features desktop` 並重跑完整 desktop suite。
-- Clippy 曾先報 10 項、再剩 2 項；逐項清掉後才以 `-D warnings` 通過。
-- library suite 曾在 lowercase assertion 停於 837/838；修正後完整通過。
-- managed-runtime bootstrap 曾因 transient access denied 停於 879/880；修正後先跑精準測試，再跑完整 882/882。
-- 第一次 commit 因 checkout 沒有 author identity 被 Git 拒絕；只在 repo-local 設定既有作者身份後重試，沒有改 global config。
-- push 後此 clone 的 fetch refspec 原本只追蹤 `v0.1.8` tag；加入這一個 branch 的精確 refspec 後 upstream 可正常解析。
-- 本機 default stable 一度仍是 Rust 1.97；Cargo 因 `rust-version = "1.98"` 在測試開始前正確拒絕。改用已安裝的 `cargo +1.98.0` 後重跑成功。先前把 handover 改成 1.97 是判讀錯誤，本次已恢復正確需求並留下紀錄。
-- Castle 第一次 Linux Clippy 找到 8 個跨平台 lint（2 `drop_non_drop`、4 `unused_mut`、2 `dead_code`）；以 lexical guard lifetime 與精確 `cfg(windows)` 修正，提交為 `20cf935`，重跑 tests／Clippy 後全綠。
-- 本輪第一次非互動 Castle Rust 命令因 PATH 找不到 `cargo`，尚未啟動測試；確認既有 stable toolchain 是 Rust/Cargo 1.98 後，以 `/home/ted-h/.cargo/bin` 的既有工具重跑。
-- 新的 Unix implementation 讓共用 `verify_provider_artifact_open_file` 只在 Windows 使用；Castle targeted test 先以 ordinary warnings 揭露 `dead_code`。加上精確 `#[cfg(windows)]` 並提交為 `0077b2c` 後，Windows 19/19、Castle 14/14 與 Linux all-targets Clippy 全綠。
-- Castle 驗證期間有 SSH connect timeout；都發生在遠端命令啟動前，重連並核對 HEAD/clean worktree 後才重跑，不算測試 PASS 或 FAIL。
-- `1d4054e` 合併到 `main` 後的第一次 GitHub CI 有三個真實失敗：兩個 minimal-feature build 因共用程式引用 optional `directories` 而編譯失敗；Windows managed-runtime 141 項中 3 項因 hosted-runner fixture owner 是 Administrators 而失敗。`fa13835` 修正 dependency 與測試 fixture owner，重跑本機 141/141、release self-test、desktop／CLI 完整 Rust suites與三個 Windows sidecar builds均 PASS。
-- 同一次 push 的 gateway publication run 因 immutable `0.1.8-1` 已綁定舊 source 而失敗；這是防覆寫 guard 正確工作，不是理由去覆寫 tag。Workflow 改為 manual-only，validation 與 CI test 鎖定 trigger/order 契約。
-- `fa13835` 的下一次 CI classifier 因新測試 import `yaml`、但 classifier job 刻意不做 `npm ci` 而失敗。這是測試設計錯誤；`2cb7a23` 改成零 dependency 的文字契約測試，23/23 PASS。該次 GitHub CI 雖綠但重型 jobs 因 classifier 判定只有 test file 變更而跳過，因此沒有把它冒充完整 CI；`31f137d` 另形成 Cargo-path checkpoint以跑真正受影響的重型 lanes。
-- `main@31f137d` 的 affected-lane CI run [`33697821312`](https://github.com/teddashh/ai-security-scanner/actions/runs/33697821312) 最終 SUCCESS：classifier、Rust core/CLI、release contracts、Tauri Linux compile、Windows managed-runtime/sidecars/runtime manifest/desktop/NSIS compile與 aggregate都成功；frontend、engine、framework三個不受 Cargo-path變更影響的 lanes由 classifier明確 skipped。這是「所有應跑 lanes成功」，不是虛構每個 lane都重跑。
-- 同一 SHA 的 CodeQL run [`33697821316`](https://github.com/teddashh/ai-security-scanner/actions/runs/33697821316) 最終 SUCCESS，Rust與 JavaScript/TypeScript analysis jobs都成功。Workflow成功只證明分析完成，不等於宣稱零安全 finding。
-- `main@8ba7231` 的 CodeQL run [`33700815840`](https://github.com/teddashh/ai-security-scanner/actions/runs/33700815840) 最終SUCCESS，並由新分析把#2／#4／#5／#7判定fixed；GitHub API目前0個open code-scanning alerts，沒有人工dismiss。相同SHA的CI run [`33700815872`](https://github.com/teddashh/ai-security-scanner/actions/runs/33700815872) 則留下真實Linux Clippy failure：Rust core/CLI job `100479547294` 因macOS-only byte-order helper仍在Linux編譯而以dead code／exit 101失敗，CLI test step skipped。
-- `09ff38e` 加上精確macOS-only `cfg`；Castle target-candidate 10/10、CLI 1,307/1,307、Clippy／Rustfmt／locked metadata/tree已PASS。GitHub affected-lane [CI `33701122412`](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122412) 也已terminal SUCCESS：Rust core/CLI、Tauri Linux compile與aggregate成功，不相關lanes依classifier預期skipped。[CodeQL `33701122410`](https://github.com/teddashh/ai-security-scanner/actions/runs/33701122410) 對Rust與JavaScript/TypeScript同樣terminal SUCCESS，API維持0 open alerts。
-
-## 「水分」稽核
-
-### 有實質證據的部分
-
-- Rust desktop、CLI、integration、frontend、release evidence、CI classification、typecheck、Clippy、Vite build 與 unsigned NSIS build 都有實際成功結果。
-- 後續增量有 Windows desktop 1,347/1,347、CLI 1,340/1,340、Castle CLI 1,307/1,307、frontend 364/364、release evidence 53/53、usability schema 5/5、Prowler 8/8，以及 provider Windows desktop／CLI 各 19/19、Castle module 14/14 的實際結果；feature/platform 重疊不相加。
-- GitHub remote SHA 可由 `git ls-remote` 對上本地 SHA。
-- Installer 的 size、hash、version、signature status 已直接讀取。
-- 安全與資料保留方向有 code path、fixture 與 regression tests，不只改文案。
-
-### 不能拿來灌水的部分
-
-- 11,778 additions 不代表 11,778 行價值；其中含測試、fixtures、CSS、型別、文件與既有邏輯重整。
-- Rust 測試數來自多個 feature/build target，彼此有重疊，不能把所有數字相加宣稱成一個巨大「總測試數」。
-- source-regex UX tests 只證明必要字串／結構仍存在，不代表真人能在十分鐘完成流程。
-- demo mode 的通過不證明 native provider、WSL 或真實 engine 能在一台乾淨 Windows 機器完成掃描。
-- 先前 unsigned NSIS candidate 的 historical build成功，加上 `31f137d` CI ephemeral compile成功，仍不等於已有可保存、可核對 hash的 current-source candidate，也不等於 installer已安裝、啟動、升級、重啟或解除安裝成功。
-- usability evidence validator 的 5/5 是 schema/fixture 驗證；validator 明確說沒有 human session，不能當人機研究。
-- unsigned installer 不是可推薦給一般使用者的正式 release。
-
-### 實際完成度判斷
-
-- 原始碼與 automated regression：`31f137d` 保留歷史完整 affected-lane baseline；`09ff38e` 的安全修正範圍另由Windows local、Castle Linux、GitHub affected-lane CI與CodeQL實證為綠。這是乾淨 source checkpoint，不宣稱在`09ff38e`重新執行整套歷史跨平台矩陣。
-- P0/P1 產品方向：大部分核心切片已落地，但 **A19 是 P0，完整 A19 仍未完成**，因此不能說 canonical P0 或 canonical spec 全部完成。
-- installed Windows qualification：0 次；沒有操作 App。
-- human UX qualification：0 個 session。
-- 本 foreground application source 的 installer signing／release qualification：未開始。這不否定 `59e34af…`／`0.1.8-1`／`sha256:9f0575…` 的歷史獨立 gateway publication evidence；該證據不適用於 `1d4054e…`、`31f137d…` 或其後 source。
-
-## 仍未完成與已知風險
-
-1. **P0 A19 同版本 packaged-component 自動修復仍開放。** Running app 沒有獨立、authenticated 的同版本 installer／payload cache；不能從可能已損壞的 resource tree 自我修復。現況是安全降級與誠實 recovery 指引，不能把局部保護描述成完整 A19。
-   **2026-09-06 補註：** `545f9f6` 後來完成 digest-anchored、完整重新驗證的 private-cache slice，所以上述「沒有 payload cache」只保留為當時紀錄。獨立 authenticated same-version repair source、out-of-process repair/relaunch 與 installed-Windows qualification 仍未完成。
-2. **Signed case bundle scope 契約已定義，但尚未做人機／installed qualification。** Bundle 是 case-wide records + run-bound reports；reports 的 observations/evidence 綁 selected run，但 legacy presentation、workflow status與 asset display 有已揭露的 current case projection caveat。signed manifest、`case.json`、README 與 UI 已同步，但仍沒有真實簽章 bundle 的端到端 human path。
-3. Provider recovery 已限制為 4 格且安全失敗 fail closed；4 格皆被不同內容占用時會回傳錯誤。後續若要 GC，仍需不破壞 chain-of-custody 的 retention 規則。
-4. Nuclei 真實 pinned-template-tree test 已在 Castle PASS，但 production `3.11.1-5` 仍是舊 immutable recipe。下一版需新 tag、新 attestation／digest 與單 engine publication 路徑後才能把 gate 納入；不可覆寫或冒用 `-5` evidence。
-5. CLI canonical data-root 首次建立／ACL admission 仍發生在主要 lease 前，存在小型 concurrency surface；後續 runtime mutation 已有 lease。
-6. 新 localhost polling wait 有 2 秒 deadline，但既有測試仍有少數無 timeout 的 `Barrier::wait()`；屬測試韌性風險，不是 runtime 產品路徑。
-7. Vite main JS 877.98 kB minified／265.59 kB gzip，仍有 >500 kB 非阻擋 warning。
-8. Unix provider artifact module 已在 Castle 執行；但部分 namespace 操作仍是 pathname-relative，same-user mutation 可發生在循序 checks 之間及 final proof／pin 釋放之後。Identity rechecks 可偵測已觀察到的置換，但無法讓 namespace proof 原子化；完全消除需 dirfd-relative 操作或把 handle 保留到 consumption。這是目前 trust boundary 下的非阻擋殘餘風險。
-9. Administrators-owned、conditional/object ACE、foreign inheritable-write 的 legacy roots 目前故意 fail closed；尚未做 enterprise policy qualification。
-10. 沒有 clean VM、standard-user、N-1 upgrade、restart、WSL、real localhost、real engine、export、uninstall 或 accessibility/mobile human path。
-11. Installer 未簽章，未發布為新的 GitHub Release／updater artifact；現有 installer早於最新 `main` source，不能代表最新 source。
-12. GitHub Dependabot alert #1 的 `glib 0.18.5` moderate advisory 尚未修復。它只在 Linux desktop Tauri/GTK3 dependency graph；目前 `gtk 0.18.2` 對 `glib ^0.18` 的限制讓單獨 lockfile bump 不成立。`8ba7231` 新增的 Linux-only `nix 0.30.1` 只取代interface enumeration pointer traversal，不修復或取代`glib`。真正短期修補需 audited、immutable fork/vendor backport，長期需 GTK4/Tauri migration，兩者都不能用未稽核的臨時 dependency substitution 代替。
-
-## 建議下一步
-
-1. 先從最終 `main` HEAD 重建新的 unsigned candidate；再於明確非 production 的乾淨 Windows VM 做完整 human path，逐步記錄新 SHA-256、畫面、時間、資料保留與 recovery 結果。不可用本報告列出的舊 installer 驗證最新 source。
-2. P0 A19 必須設計獨立 authenticated same-version repair source、out-of-process exit/repair/relaunch 與 locked/interrupted repair qualification；不要降低 manifest 或 ACL 驗證來假裝修復。
-3. 以已定義的 case-wide records + run-bound reports（含 current case projection caveat）契約做真實簽章 bundle、manifest 驗證、README／UI disclosure 與 installed human-path acceptance。
-4. 為下一個 Nuclei image 設計新 immutable tag 與單 engine publication evidence，再把已通過的真實 template-tree test 納入新 build recipe 並實際建置。
-5. 對已定位的 `glib 0.18.5` advisory 做獨立安全決策：audited immutable backport 或 GTK4/Tauri migration；補 Linux release-mode regression 與 desktop packaging smoke，且不要宣稱 Dependabot range alert會因 backport 自動關閉。
-6. 量測 startup 後再做 frontend code splitting，不把目前 chunk warning臨時升格成與產品價值無關的 gate。
+這些未執行事項只界定本紀錄涵蓋的事實，不構成後續待辦。

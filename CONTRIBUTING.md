@@ -1,46 +1,61 @@
 # Contributing
 
-Contributions are welcome, especially complete engine adapters and test fixtures that improve handoff quality without weakening safety boundaries.
+Contributions should make the product faster to understand, easier to start, and more useful after the first scan. Read the [product specification](docs/product-spec.md) before changing user-visible behavior.
 
-The [canonical product specification](docs/product-spec.md) is the sole source of truth for user-visible behavior. Architecture, threat, provider, engine, mapping, maintenance, and release documents are subordinate implementation references. A change must not reintroduce a full-screen setup gate, global readiness, silent scope reduction, all-or-nothing execution, or framework/supply-chain coupling that conflicts with it.
+## Product priorities
 
-## Before opening a change
+Use these priorities when choosing and reviewing work:
 
-Read the [product specification](docs/product-spec.md), [product audit](docs/product-audit.md), [architecture](docs/architecture.md), [threat model](docs/threat-model.md), and [engine catalog](docs/engine-catalog.md). A scanner button or raw report import alone is not an integration.
+1. A beginner can quickly start a meaningful scan and understand the result.
+2. Scanner integrations stay close to upstream behavior and data.
+3. The product combines engine output into one clear, professional report.
+4. Versioning, release timing, publication, and compliance positioning are product-owner decisions. Do not expand work into those areas unless the owner explicitly requests it.
 
-For product-facing changes, explain how the change preserves:
+A connectivity check, process launch, or empty report is not meaningful scan value. Product-facing work should help the user discover a real exposure, vulnerability, secret, risky configuration, or other actionable security signal—or clearly explain why a requested check could not run.
 
-- the four primary destinations: New scan, Projects, Report, and Settings;
-- persistence of the requested run/tasks before disposable dependency preflight;
-- independent per-task failure and the complete/partial/no-checks beginner master report;
-- event-as-hint plus startup/focus/resume/watchdog reconciliation;
-- operation-scoped engine, mapping, signing, update, and publication controls;
-- the exact-candidate installed-Windows beginner path and ten-minute first-value gate.
+## Product changes
 
-A proposed hard block, durable state, recovery transaction, or global qualification must include the canonical complexity-budget evidence: concrete reproducible harm, why preservation/isolation/warning cannot address it, delayed user work, maintenance owner, tests, and removal condition. Exact irreversible mutation of non-product/user data and execution of an untrusted artifact remain legitimate operation-scoped blocks.
+Prefer the shortest complete beginner journey:
 
-An engine contribution must include:
+- ask only for information needed to start the selected scan;
+- provide useful defaults and keep advanced controls out of the primary path;
+- show what was scanned, the most important results, their impact, and the next action;
+- distinguish no findings from checks that did not run; and
+- preserve saved work and allow unaffected checks to continue when one scanner fails.
 
-1. an engine manifest with official source, license, supported version or digest, rule/database revision, resource and network requirements, and distribution mode;
-2. a task-local preflight check, performed after the run/task is persisted, and a command plan that does not invoke a shell;
-3. explicit asset kinds and required scope permissions;
-4. a parser that preserves raw evidence and emits canonical findings;
-5. redacted fixtures and adapter contract tests;
-6. completed, partial, failed, timed-out, cancelled, and `not_tested` behavior;
-7. coverage ledger behavior when the engine cannot run;
-8. export and repeat-run comparison behavior;
-9. third-party notices and any separate rule, feed, plugin, or database terms.
+Test rendered behavior and a real user path where practical. Source-text assertions and schema checks can support that evidence, but they do not replace exercising the interaction they describe.
 
-Active external engines also require tests proving that execution fails closed without an asset-level authorization record.
+## Scanner integrations
 
-An engine's admission failure blocks only execution/distribution of that exact artifact. Fixtures must also prove that an unavailable engine leaves sibling tasks running, records `not_tested` coverage, and produces the same partial master report. NIST, ISO 27001, and AIDEFEND relationships are optional finding/evidence references; missing mappings cannot block engine execution or the underlying report.
+Keep adapters thin. Let the upstream scanner own detection, rule behavior, severities, and scanner-specific evidence. Product code should concentrate on:
 
-## Proportional development checks
+- converting the user's approved target and options into typed scanner input;
+- launching without shell interpolation and with bounded resources;
+- preserving upstream identifiers, versions, evidence, and raw output references;
+- translating execution outcomes into consistent task and coverage states; and
+- normalizing results for the shared report without inventing findings.
 
-For a source change that affects the corresponding full frontend/backend boundaries, the baseline commands are:
+Avoid duplicating upstream detection logic or maintaining product-specific rewrites of titles, severity, and remediation when the upstream scanner already supplies them.
+
+An engine contribution should include its official source and license, a supported version or digest, input and permission requirements, a typed launcher, redacted fixtures, parser tests, and honest completed/partial/failed/timed-out/cancelled behavior. An unavailable scanner should leave sibling checks usable and its coverage visibly untested.
+
+## Professional reporting
+
+All scanners feed one report model. A report contribution should improve the shared presentation of:
+
+- scope and checks actually run;
+- prioritized findings with evidence and impact;
+- recommended next actions;
+- coverage gaps, failures, and exclusions; and
+- technical details available when needed.
+
+Framework mappings may enrich a report, but they do not replace findings and should not control whether a scan can run.
+
+## Verification
+
+Run checks proportional to the changed boundary. Common commands include:
 
 ```bash
-npm ci
 npm run test:frontend
 npm run test:component
 npm run typecheck
@@ -50,16 +65,14 @@ cargo clippy --locked --workspace --no-default-features --features cli --all-tar
 cargo test --locked --workspace --no-default-features --features cli
 ```
 
-Desktop builds additionally require Tauri's platform dependencies.
+For a small copy or documentation change, focused tests and link checks are enough. For a changed scan path, exercise the affected input, execution, saved result, and report flow. Release packaging, signing, publication, and compliance work are outside ordinary contribution scope unless explicitly requested by the product owner.
 
-Run checks proportional to the changed boundary. A documentation or UI-copy change must not require engine publication, installer construction, or three-platform release qualification. Engine admission, platform installer qualification, and publication/signing are separate lanes. When a change affects the beginner journey, modeled CI supports but cannot replace the exact-candidate installed-Windows human acceptance record required for promotion.
+## Data and scope safety
 
-## Fixture safety
+- Never commit credentials, tokens, customer findings, personal data, internal addresses, or real scan reports.
+- Use synthetic, redacted fixtures and reserved example domains or address ranges.
+- Never contact a target without the user's explicit scope authorization.
+- Do not execute remediation commands.
+- Explain new network, process, filesystem, credential, or data-retention behavior in the pull request.
 
-Never commit real credentials, tokens, customer findings, internal addresses, personal data, or scan reports. Fixtures must be synthetic, redacted, and visibly marked. Reserved example domains and address ranges are preferred.
-
-## Commit and pull request scope
-
-Keep changes focused. Explain which case-lifecycle stages the change affects, what was tested, any license implications, and any new network or filesystem access. Do not hide a safety-relevant behavior change inside a formatting or dependency update.
-
-When changing a subordinate normative document, update contradictory body text in the same change; a precedence banner alone is not sufficient. If implementation still differs from the canonical specification, label it as a current implementation gap rather than restating it as intended behavior.
+Keep each change focused and rewrite obsolete guidance where it lives instead of adding contradictory correction sections.

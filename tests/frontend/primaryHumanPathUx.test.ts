@@ -11,12 +11,42 @@ test("the edited localhost port path keeps its action and validation feedback ac
   const source = await readSource("pages/StartPage.tsx");
 
   assert.match(source, /localhostQuickScanAction\.replace\([\s\S]*localhostPortDisplay/u);
+  assert.match(source, /<details className="start-page__connection-tools">/u);
   assert.match(source, /disabled=\{localhostQuickScanBusy \|\| localhostPort === undefined\}/u);
   assert.match(source, /aria-describedby="localhost-quick-scan-port-help"/u);
   assert.match(
     source,
     /id="localhost-quick-scan-port-help"[\s\S]*aria-live="polite"[\s\S]*aria-atomic="true"/u,
   );
+});
+
+test("guided local creation attaches the chosen snapshot and preserves a created case if attachment fails", async () => {
+  const app = await readSource("App.tsx");
+  const start = app.indexOf("const createCaseWithWorkspace");
+  const end = app.indexOf("const seedDemoCase", start);
+  const action = app.slice(start, end);
+
+  assert.ok(start >= 0 && end > start);
+  assert.ok(action.indexOf("scannerService.createCase(input)") < action.indexOf("scannerService.attachWorkspaceSnapshot"));
+  assert.match(action, /const shouldReturnToReview = \(\)[\s\S]*pageTransitionGeneration\.current === pageGenerationAtStart[\s\S]*caseSelectionBarrierRef\.current\.generation === caseSelectionGenerationAtStart/u);
+  assert.match(action, /if \(!attached\.data\.accepted\)[\s\S]*loadSnapshot\(returnToReview \? caseId : undefined, true\)[\s\S]*if \(returnToReview\)[\s\S]*navigate\("coverage"\)/u);
+  assert.doesNotMatch(action, /await loadSnapshot\(caseId, true\);\s*setSelectedUseCase\(undefined\);\s*navigate\("coverage"\)/u);
+  assert.match(action, /Scan project created; folder not added/u);
+  assert.match(action, /The project was kept\. Choose the folder again in Scan setup; no scan started\./u);
+  assert.match(action, /The private snapshot is attached\. Review the exact checks, then press Start; no scan has started yet\./u);
+  assert.doesNotMatch(action, /startScan|onStartScan/u);
+});
+
+test("project creation opens Review only while the user remains on the requesting page", async () => {
+  const app = await readSource("App.tsx");
+  const start = app.indexOf("const createCase = async");
+  const end = app.indexOf("const createCaseWithWorkspace", start);
+  const action = app.slice(start, end);
+
+  assert.ok(start >= 0 && end > start);
+  assert.match(action, /const shouldReturnToReview = \(\)[\s\S]*pageTransitionGeneration\.current === pageGenerationAtStart[\s\S]*caseSelectionBarrierRef\.current\.generation === caseSelectionGenerationAtStart/u);
+  assert.match(action, /loadSnapshot\(returnToReview \? result\.data\.id : undefined, true\)[\s\S]*if \(returnToReview\)[\s\S]*navigate\("coverage"\)/u);
+  assert.doesNotMatch(action, /await loadSnapshot\(result\.data\.id, true\);\s*setSelectedUseCase\(undefined\);\s*navigate\("coverage"\)/u);
 });
 
 test("the two primary report formats form a named radio group and the save action names the selection", async () => {
@@ -157,7 +187,7 @@ test("recoverable scan and export failures stay visible and expose a real destin
   assert.match(app, /if \(!toast\.persistent\) \{[\s\S]*window\.setTimeout/u);
   assert.match(app, /const recoverScanProgress = \(\) => \{[\s\S]*loadSnapshot\(undefined, true\)\.finally\(\(\) => navigate\("progress"\)\)/u);
   assert.match(app, /persistent: result\.mode === "native"[\s\S]*action: result\.mode === "native" \? recoverScanProgress/u);
-  assert.match(app, /recordTechnicalError\("start localhost quick scan"[\s\S]*persistent: true[\s\S]*action: recoverScanProgress/u);
+  assert.match(app, /recordTechnicalError\("start local connection test"[\s\S]*persistent: true[\s\S]*action: recoverScanProgress/u);
   assert.match(app, /recordTechnicalError\("export case"[\s\S]*persistent: true[\s\S]*actionCaseId: exportCaseId/u);
   assert.match(app, /selectedCaseIdRef\.current === exportCaseId\)[\s\S]*exportCase\(options\)/u);
   assert.match(app, /appendExportToMatchingSnapshot\(current, exportCaseId, exported\)/u);

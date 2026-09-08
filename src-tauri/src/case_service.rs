@@ -16,7 +16,7 @@ use crate::artifact_store::{
 use crate::beginner_report::{
     BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerMasterReport, BeginnerReportSummary,
     CoverageDimensionStatus, CoverageGapKind, FindingSnapshotSource, ReportLifecycle,
-    ReportScanStage, RequestedLimitSource,
+    ReportScanStage, RequestedLimitSource, run_is_service_inventory_only,
 };
 use crate::bootstrap::executor::list_bootstrap_cleanup_obligations;
 use crate::connectors::{
@@ -4175,7 +4175,7 @@ impl<'a> CaseService<'a> {
                             "The saved cancellation was completed after the app restarted. No connection result was inferred."
                                 .into()
                         } else {
-                            "The app closed before this localhost check saved a result. This attempt has no usable result; start the check again."
+                            "The app closed before this local connection test saved a result. This attempt has no usable result; start the test again."
                                 .into()
                         });
                         run_changed = true;
@@ -6264,7 +6264,7 @@ impl<'a> CaseService<'a> {
                 })
         {
             return Err(AppError::NotAvailable(
-                "the bounded localhost check does not support pause or resume; let this fixed three-second attempt finish or cancel it"
+                "the bounded local connection test does not support pause or resume; let this fixed three-second attempt finish or cancel it"
                     .into(),
             ));
         }
@@ -12150,6 +12150,10 @@ impl HtmlReportCatalog {
 
     fn report_stage(&self, stage: &ReportScanStage) -> &'static str {
         match stage {
+            ReportScanStage::ConnectionDiagnostic => self.text(
+                "Connection test (not a vulnerability scan)",
+                "連線測試（不是漏洞掃描）",
+            ),
             ReportScanStage::QuickDiscovery => self.text("Quick discovery", "快速探索"),
             ReportScanStage::Inventory => self.text("Inventory", "資產盤點"),
             ReportScanStage::Deep => self.text("Deep scan", "深度掃描"),
@@ -12426,18 +12430,44 @@ fn html_report_bytes(
     };
     let target_labels = readable_target_labels(&report, catalog);
 
-    let report_summary = match report.state.summary {
-        BeginnerReportSummary::Complete => catalog.text("Complete", "完整"),
-        BeginnerReportSummary::Partial => catalog.text("Partial results", "部分結果"),
-        BeginnerReportSummary::NoChecksCompleted => {
-            catalog.text("No checks completed", "沒有已完成的檢查")
+    let connection_diagnostic = matches!(
+        report.requested.stage.value,
+        Some(ReportScanStage::ConnectionDiagnostic)
+    );
+    let service_inventory_only = case
+        .scan_runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .is_some_and(run_is_service_inventory_only);
+    let report_summary = if connection_diagnostic {
+        catalog.text("Connection test only", "僅連線測試")
+    } else if service_inventory_only {
+        catalog.text("Service inventory only", "僅完成服務盤點")
+    } else {
+        match report.state.summary {
+            BeginnerReportSummary::Complete => catalog.text("Complete", "完整"),
+            BeginnerReportSummary::Partial => catalog.text("Partial results", "部分結果"),
+            BeginnerReportSummary::NoChecksCompleted => {
+                catalog.text("No checks completed", "沒有已完成的檢查")
+            }
         }
     };
     let report_lifecycle = match report.state.lifecycle {
         ReportLifecycle::Live => catalog.text("This report is still updating", "這份報告仍在更新"),
         ReportLifecycle::Final => catalog.text("Final for this run", "本輪最終報告"),
     };
-    let report_explanation = match (report.state.summary, report.state.lifecycle) {
+    let report_explanation = if connection_diagnostic {
+        catalog.text(
+            "No vulnerability scan ran. This result records only whether one local port accepted, refused, or timed out during a bounded TCP connection attempt.",
+            "沒有執行漏洞掃描。這份結果只記錄單一本機連接埠在有限制的 TCP 連線嘗試中接受、拒絕或逾時。",
+        )
+    } else if service_inventory_only {
+        catalog.text(
+            "This run only checked which network or HTTP services responded. It did not run a vulnerability or configuration check.",
+            "本輪只確認哪些網路或 HTTP 服務有回應；沒有執行漏洞或設定檢查。",
+        )
+    } else {
+        match (report.state.summary, report.state.lifecycle) {
         (BeginnerReportSummary::Complete, ReportLifecycle::Final) => catalog.text(
             "Every saved check reached a complete terminal result for this run.",
             "本輪每一項已保存的檢查都已取得完整的最終結果。",
@@ -12458,6 +12488,7 @@ fn html_report_bytes(
             "Saved checks are complete so far, but this live report can still change.",
             "目前已保存的檢查均已完成，但這份即時報告仍可能變更。",
         ),
+        }
     };
     let requested_stage = report
         .requested
@@ -12837,6 +12868,8 @@ fn html_report_bytes(
     );
 
     let mut findings = String::new();
+    let mut observations = String::new();
+    let mut problem_count = 0usize;
     for (index, finding) in report.findings.iter().enumerate() {
         let priority = finding
             .priority
@@ -13043,6 +13076,56 @@ fn html_report_bytes(
             ));
         }
         let targets = readable_target_list(&finding.target_asset_ids, &target_labels, catalog);
+        if finding
+            .severity_basis_code
+            .is_some_and(|code| code.is_exposure_observation())
+        {
+            let observation_kind = match finding.severity_basis_code {
+                Some(crate::domain::SeverityBasisCode::OpenPort) => {
+                    catalog.text("Open network service", "可連線的網路服務")
+                }
+                _ => catalog.text("Reachable HTTP service", "可連線的 HTTP 服務"),
+            };
+            let details = if finding.observation_details.is_empty() {
+                catalog
+                    .text(
+                        "Exact port or response detail was not retained.",
+                        "未保留確切連接埠或回應細節。",
+                    )
+                    .into()
+            } else {
+                finding
+                    .observation_details
+                    .iter()
+                    .map(|detail| html_escape(detail))
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            };
+            observations.push_str(&format!(
+                concat!(
+                    "<article><h3>{}</h3>",
+                    "<p>{}</p>",
+                    "<p><strong>{}:</strong> {} · <strong>{}:</strong> {}</p>",
+                    "<p><strong>{}:</strong> <code>{}</code></p>",
+                    "<h4>{}</h4><ul>{}</ul></article>"
+                ),
+                observation_kind,
+                catalog.text(
+                    "Discovery confirmed that this service responded. Reachability is useful inventory, but it does not by itself establish a vulnerability.",
+                    "探索檢查確認這項服務有回應。這是有用的盤點資料，但僅能連線本身不代表存在漏洞。",
+                ),
+                catalog.text("Target", "目標"),
+                targets,
+                catalog.text("Observed detail", "觀察細節"),
+                details,
+                catalog.text("Record ID", "紀錄 ID"),
+                html_escape(&finding.finding_id),
+                catalog.text("Evidence SHA-256", "證據 SHA-256"),
+                evidence,
+            ));
+            continue;
+        }
+        problem_count += 1;
         let next_step_html = format!(
             "{}{safety_block}{verification_block}",
             html_escape(&next_step)
@@ -13095,10 +13178,28 @@ fn html_report_bytes(
     }
     if findings.is_empty() {
         findings.push_str(catalog.text(
-            "<p>No finding was retained for this run. This does not by itself establish successful coverage.</p>",
-            "<p>本輪未保留任何問題。這一點本身不能證明涵蓋完整或掃描成功。</p>",
+            "<p>No vulnerability finding was retained for this run. This does not by itself establish successful coverage.</p>",
+            "<p>本輪未保留任何漏洞問題。這一點本身不能證明涵蓋完整或掃描成功。</p>",
         ));
     }
+    let observation_section = if observations.is_empty() {
+        String::new()
+    } else {
+        format!(
+            concat!(
+                "<section><h2>{}</h2><p>{}</p>{}</section>"
+            ),
+            catalog.text(
+                "Observed services (not vulnerabilities)",
+                "觀察到的服務（不是漏洞）"
+            ),
+            catalog.text(
+                "These records are kept separate from problems and remediation priorities. Confirm that each service is expected; run an applicable security check if you need to look for weaknesses.",
+                "這些紀錄與問題及修復優先順序分開呈現。請確認各項服務符合預期；若要找弱點，請執行適用的資安檢查。",
+            ),
+            observations,
+        )
+    };
 
     let mut technical_tasks = String::new();
     for task in &report.technical_details.tasks {
@@ -13515,7 +13616,7 @@ fn html_report_bytes(
         catalog.text("Coverage gaps", "涵蓋缺口"),
         catalog.format_number(report.coverage_gaps.len()),
         catalog.text("Problems found", "發現的問題"),
-        catalog.format_number(report.findings.len()),
+        catalog.format_number(problem_count),
     ));
     document.push_str(&format!(
         concat!(
@@ -13530,7 +13631,7 @@ fn html_report_bytes(
             "<section class=\"notice\"><strong>{}:</strong> {}",
             "<br><strong>{}:</strong> {}</section>",
             "<h2>{}</h2>",
-            "<p>{}</p>{}"
+            "<p>{}</p>{}{}"
         ),
         catalog.text("What you asked to scan", "你要求掃描的內容"),
         catalog.text("Scan depth", "掃描深度"),
@@ -13566,6 +13667,7 @@ fn html_report_bytes(
             "問題依主要報告順序排列。嚴重程度描述可能影響；信心程度描述證據強度；優先順序是報告保存的分流值，不是合規分數。",
         ),
         findings,
+        observation_section,
     ));
     document.push_str(&format!(
         concat!(
@@ -18877,7 +18979,8 @@ mod tests {
             html_report_bytes(&case, &prepared.scan_run_id, &ExportOptions::default()).unwrap(),
         )
         .unwrap();
-        assert!(html.contains("Partial results"));
+        assert!(html.contains("Service inventory only"));
+        assert!(html.contains("did not run a vulnerability or configuration check"));
         assert!(html.contains(&expected_unit_count));
         assert!(html.contains("Exact network coverage and outcome"));
         assert!(html.contains("[redacted address set 1]"));
@@ -24613,6 +24716,43 @@ mod tests {
             observed_at: finished,
             finding_snapshot: Some(frozen_finding),
         });
+        let mut exposure_observation = case.findings[0].clone();
+        exposure_observation.id = "reachable-service-html".into();
+        exposure_observation.fingerprint = "naabu:reachable-service-html".into();
+        exposure_observation.title = "Externally reachable network service".into();
+        exposure_observation.plain_language_summary =
+            "Naabu observed a reachable service. Reachability is inventory evidence, not a vulnerability."
+                .into();
+        exposure_observation.possible_impact =
+            "EXPOSURE_IMPACT_MUST_NOT_APPEAR_AS_A_PROBLEM".into();
+        exposure_observation.severity = Severity::Informational;
+        exposure_observation.severity_basis_code = Some(crate::domain::SeverityBasisCode::OpenPort);
+        exposure_observation.confidence_basis_code =
+            Some(crate::domain::ConfidenceBasisCode::ObservedResponse);
+        exposure_observation.priority = 0;
+        exposure_observation.priority_reasons =
+            vec![crate::finding_narrative::ENGLISH_EXPOSURE_OBSERVATION_REASON.into()];
+        exposure_observation.recommendation =
+            "EXPOSURE_REMEDIATION_MUST_NOT_APPEAR_AS_A_PRIORITY".into();
+        exposure_observation.tags = vec!["port:443".into(), "protocol:tcp".into()];
+        exposure_observation.evidence[0].id = "evidence-reachable-service".into();
+        exposure_observation.evidence[0].finding_id = exposure_observation.id.clone();
+        exposure_observation.evidence[0].engine_id = "naabu".into();
+        exposure_observation.evidence[0].artifact_sha256 = "9".repeat(64);
+        case.findings.push(exposure_observation.clone());
+        case.finding_observations.push(FindingObservation {
+            id: "observation-reachable-service-html".into(),
+            run_id: run_id.clone(),
+            finding_id: exposure_observation.id.clone(),
+            fingerprint: exposure_observation.fingerprint.clone(),
+            asset_ids: vec![asset_id.clone()],
+            engine_ids: vec!["naabu".into()],
+            severity: Severity::Informational,
+            confidence: Confidence::High,
+            evidence_hashes: vec!["9".repeat(64)],
+            observed_at: finished,
+            finding_snapshot: Some(exposure_observation),
+        });
         case.finding_observations.push(FindingObservation {
             id: "observation-only-html".into(),
             run_id: run_id.clone(),
@@ -24628,11 +24768,59 @@ mod tests {
         });
 
         let report = build_beginner_master_report(&case, &run_id).unwrap();
-        assert_eq!(report.findings.len(), 2);
+        assert_eq!(report.findings.len(), 3);
         assert!(report.findings.iter().any(|finding| {
             finding.snapshot_source
                 == crate::beginner_report::FindingSnapshotSource::ObservationOnly
         }));
+        let canonical: Value = serde_json::from_slice(
+            &canonical_json_bytes(
+                &case,
+                &run_id,
+                &ExportOptions {
+                    redaction: RedactionProfile::None,
+                    include_raw_artifacts: false,
+                    locale: crate::export::ReportLocale::En,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let canonical_exposure = canonical["report"]["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|finding| finding["finding_id"] == "reachable-service-html")
+            .expect("canonical exposure observation");
+        assert_eq!(canonical_exposure["severity_basis_code"], "open_port");
+        assert!(canonical_exposure["priority"].is_null());
+        assert_eq!(
+            canonical_exposure["priority_reasons"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            canonical_exposure["possible_impact"],
+            crate::finding_narrative::EXPOSURE_OBSERVATION_IMPACT
+        );
+        assert_eq!(
+            canonical_exposure["next_step"],
+            crate::finding_narrative::EXPOSURE_OBSERVATION_NEXT_STEP
+        );
+        assert!(
+            canonical_exposure["evidence_references"]
+                .as_array()
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert!(
+            !canonical_exposure
+                .to_string()
+                .contains("EXPOSURE_IMPACT_MUST_NOT_APPEAR")
+        );
+        assert!(
+            !canonical_exposure
+                .to_string()
+                .contains("EXPOSURE_REMEDIATION_MUST_NOT_APPEAR")
+        );
         let html = String::from_utf8(
             html_report_bytes(
                 &case,
@@ -24671,6 +24859,11 @@ mod tests {
             readable_report_time(&finished)
         )));
         assert!(html.contains(&format!("Observed: {}", readable_report_time(&finished))));
+        assert!(html.contains("Observed services (not vulnerabilities)"));
+        assert!(html.contains("port:443 · protocol:tcp"));
+        assert!(html.contains("Problems found:</strong> 2"));
+        assert!(!html.contains("EXPOSURE_IMPACT_MUST_NOT_APPEAR_AS_A_PROBLEM"));
+        assert!(!html.contains("EXPOSURE_REMEDIATION_MUST_NOT_APPEAR_AS_A_PRIORITY"));
         for english_block in [
             "Before changing anything",
             "Before any manual change, preserve",
@@ -24880,9 +25073,10 @@ mod tests {
             .expect("readable report keeps technical details in a separate collapsed section");
 
         for expected in [
-            "Quick discovery",
+            "Connection test (not a vulnerability scan)",
+            "Connection test only",
+            "No vulnerability scan ran.",
             "Web service",
-            "Completed",
             "saved task settings",
             "127.0.0.1:9001",
             "2026-09-01 12:34:56 UTC",
@@ -24985,7 +25179,7 @@ mod tests {
         )
         .unwrap();
         for canonical_value in [
-            "quick_discovery",
+            "connection_diagnostic",
             "web_service",
             "tested_complete",
             "frozen_task_contract",
@@ -27336,7 +27530,7 @@ mod tests {
             .unwrap();
         let engine = &mut requested.scan_runs[0].engine_runs[0];
         engine.phase = "cancel_requested".into();
-        engine.error_message = Some("Stopping this localhost check.".into());
+        engine.error_message = Some("Stopping this local connection test.".into());
         fixture
             .storage
             .save_case(&mut requested, "test.localhost_cancel_before_restart")

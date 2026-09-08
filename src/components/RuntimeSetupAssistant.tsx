@@ -31,6 +31,7 @@ interface RuntimeSetupAssistantProps {
 interface RuntimeActionCopy {
   title: string;
   description: string;
+  action?: string;
 }
 
 interface RuntimeAssistantCopy {
@@ -76,24 +77,24 @@ interface RuntimeAssistantCopy {
 const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
   en: {
     eyebrow: "ADVANCED LOCAL SCAN SETUP",
-    title: "Preparing advanced local scan tools automatically",
+    title: "Preparing the local scan tools you requested",
     description:
-      "This setup is only for advanced local scans. The localhost quick check that attempts one TCP connection and your saved results remain available while preparation continues.",
+      "The app starts this work only after you start a selected scan that needs these tools or select a setup action. Your saved results and unaffected checks remain available while preparation continues.",
     readyTitle: "Advanced local scan tools were ready at the last check",
     readyDescription: "Choose an advanced local scan and get started. The app checks the tools again before it runs.",
-    idleTitle: "Advanced local scan tools need setup",
-    idleDescription: "The localhost quick check that attempts one TCP connection and your saved results remain available. Try again and the app will safely continue or restart advanced setup.",
+    idleTitle: "This scan needs additional local tools",
+    idleDescription: "Nothing is downloaded until you select Prepare scan tools. Your saved results and unaffected checks remain available.",
     demoTitle: "Explore a scan with sample results",
     demoDescription: "Open the desktop app when you are ready to scan a real website, cloud account, network, or codebase.",
-    progressTitle: "Preparing advanced local scan tools in the background",
-    progressDescription: "The app is downloading and preparing advanced local scan tools automatically. The localhost quick check and your saved results remain available.",
+    progressTitle: "Preparing the local scan tools you requested",
+    progressDescription: "The app is downloading and preparing the tools needed for this scan. Your saved results remain available.",
     staleTitle: "Advanced local scan-tool setup is taking longer than expected",
-    staleDescription: "The app is stopping that exact advanced-setup attempt safely and will offer Retry when it has stopped. The localhost quick check and your saved results remain available.",
+    staleDescription: "The app is stopping that advanced-setup attempt safely and will offer Retry when it has stopped. Your saved results remain available.",
     recoveryTitle: "Preparing a fresh advanced local scan workspace",
-    recoveryDescription: "Older or unfinished advanced-tool data is being preserved while the app prepares an isolated replacement automatically. The localhost quick check and your saved results remain available.",
+    recoveryDescription: "Older or unfinished advanced-tool data is being preserved while the app prepares an isolated replacement for this request. Your saved results remain available.",
     cancelledTitle: "Advanced local scan-tool setup paused",
-    cancelledDescription: "The advanced-tool download was kept on this computer. Continue when you are ready; the localhost quick check and your saved results remain available.",
-    start: "Try advanced scan setup again",
+    cancelledDescription: "The advanced-tool download was kept on this computer. Continue when you are ready; your saved results remain available.",
+    start: "Prepare scan tools",
     continue: "Continue advanced scan setup",
     retry: "Try advanced scan setup again",
     starting: "Starting advanced scan setup…",
@@ -103,9 +104,9 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     downloaded: "downloaded",
     resumed: "Existing download reused",
     failedTitle: "Advanced local scan-tool setup did not finish",
-    failedDescription: "The localhost quick check that attempts one TCP connection and your saved results remain available. Try advanced scan setup again when ready.",
+    failedDescription: "Your saved results and unaffected checks remain available. Try advanced scan setup again when ready.",
     nonRetryableTitle: "An advanced local scan tool is unavailable in this app version",
-    nonRetryableDescription: "The localhost quick check that attempts one TCP connection and your saved results remain available. The report lists the affected advanced check under what was not tested, never as a pass; install a newer complete app version when one is available.",
+    nonRetryableDescription: "Your saved results and unaffected checks remain available. The report lists the affected advanced check under what was not tested, never as a pass; update the app when a compatible build is available.",
     scannerIssues: {
       no_runnable_authorized_targets: {
         title: "This check is unavailable in the installed version",
@@ -139,46 +140,47 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     actions: {
       install_wsl: {
         title: "Advanced local scan-tool setup did not finish",
-        description: "Automatic advanced-tool setup did not finish. The localhost quick check that attempts one TCP connection and your saved results remain available; try automatic setup again.",
+        description: "Advanced-tool setup did not finish. Your saved results and unaffected checks remain available; try setup again.",
       },
       enable_wsl_optional_features: {
         title: "Advanced local scan-tool setup did not finish",
-        description: "Automatic advanced-tool setup did not finish. The localhost quick check that attempts one TCP connection and your saved results remain available; try automatic setup again.",
+        description: "Advanced-tool setup did not finish. Your saved results and unaffected checks remain available; try setup again.",
       },
       update_wsl: {
         title: "Advanced local scan-tool setup did not finish",
-        description: "Automatic advanced-tool setup did not finish. The localhost quick check that attempts one TCP connection and your saved results remain available; try automatic setup again.",
+        description: "Advanced-tool setup did not finish. Your saved results and unaffected checks remain available; try setup again.",
       },
       restart_windows: {
         title: "Advanced local scan-tool setup is waiting for a Windows restart",
-        description: "Windows requires a restart to finish the advanced-tool change. After Windows restarts, reopen ai-security-scanner and automatic setup will resume. The localhost quick check and your saved results remain available.",
+        description: "Windows requires a restart to finish the advanced-tool change. After Windows restarts, reopen ai-security-scanner and select Continue setup. Your saved results remain available.",
+        action: "Continue after restarting Windows",
       },
       retry_wsl_check: {
         title: "Advanced local scan-tool setup did not finish",
-        description: "The automatic advanced-tool check did not finish. The localhost quick check that attempts one TCP connection and your saved results remain available; try automatic setup again.",
+        description: "The advanced-tool check did not finish. Your saved results and unaffected checks remain available; try setup again.",
       },
     },
   },
   "zh-TW": {
     eyebrow: "進階本機掃描設定",
-    title: "正在自動準備進階本機掃描工具",
+    title: "正在準備你要求的本機掃描工具",
     description:
-      "這項設定只供進階本機掃描使用；準備期間，只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用。",
+      "只有在你開始所選且需要這些工具的掃描，或按下設定操作後，程式才會開始準備；準備期間，已保存的結果與不受影響的檢查仍可使用。",
     readyTitle: "進階本機掃描工具上次檢查時可用",
     readyDescription: "選擇進階本機掃描即可開始；程式會在執行前再次確認工具狀態。",
-    idleTitle: "進階本機掃描工具需要設定",
-    idleDescription: "只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用。請再試一次，程式會安全地繼續或重新開始進階設定。",
+    idleTitle: "這項掃描需要額外的本機工具",
+    idleDescription: "按下「準備掃描工具」前不會下載任何內容；已保存的結果與不受影響的檢查仍可使用。",
     demoTitle: "先用範例結果看看掃描怎麼運作",
     demoDescription: "準備掃描真實網站、雲端帳號、網路或程式碼時，再開啟桌面版即可。",
-    progressTitle: "正在背景準備進階本機掃描工具",
-    progressDescription: "程式會自動下載並準備進階本機掃描工具；localhost 快速檢查與已保存的結果仍可使用。",
+    progressTitle: "正在準備你要求的本機掃描工具",
+    progressDescription: "程式正在下載並準備這項掃描所需的工具；已保存的結果仍可使用。",
     staleTitle: "進階本機掃描工具設定時間超過預期",
-    staleDescription: "程式正在安全停止這次進階設定；停止後會提供「重試」。localhost 快速檢查與已保存的結果仍可使用。",
+    staleDescription: "程式正在安全停止這次進階設定；停止後會提供「重試」。已保存的結果仍可使用。",
     recoveryTitle: "正在準備新的進階本機掃描隔離工作區",
-    recoveryDescription: "程式會保留舊的或未完成的進階工具資料，並自動準備隔離的新工作空間；localhost 快速檢查與已保存的結果仍可使用。",
+    recoveryDescription: "程式會保留舊的或未完成的進階工具資料，並為這次要求準備隔離的新工作空間；已保存的結果仍可使用。",
     cancelledTitle: "進階本機掃描工具設定已暫停",
-    cancelledDescription: "進階工具的下載進度已保留在這台電腦上。準備好時可繼續；localhost 快速檢查與已保存的結果仍可使用。",
-    start: "再試一次進階掃描設定",
+    cancelledDescription: "進階工具的下載進度已保留在這台電腦上。準備好時可繼續；已保存的結果仍可使用。",
+    start: "準備掃描工具",
     continue: "繼續進階掃描設定",
     retry: "再試一次進階掃描設定",
     starting: "正在開始進階掃描設定…",
@@ -188,9 +190,9 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     downloaded: "已下載",
     resumed: "已沿用先前下載進度",
     failedTitle: "進階本機掃描工具設定未能完成",
-    failedDescription: "只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用；準備好時可再試一次進階掃描設定。",
+    failedDescription: "已保存的結果與不受影響的檢查仍可使用；準備好時可再試一次進階掃描設定。",
     nonRetryableTitle: "這個程式版本無法使用一項進階本機掃描工具",
-    nonRetryableDescription: "只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用。報告會把受影響的進階檢查列在「沒有測到的內容」裡，不會當成通過；有新版完整程式時再更新即可。",
+    nonRetryableDescription: "已保存的結果與不受影響的檢查仍可使用。報告會把受影響的進階檢查列在「沒有測到的內容」裡，不會當成通過；有相容版本時再更新即可。",
     scannerIssues: {
       no_runnable_authorized_targets: {
         title: "目前安裝版本無法執行這項檢查",
@@ -224,23 +226,24 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     actions: {
       install_wsl: {
         title: "進階本機掃描工具設定未能完成",
-        description: "進階工具自動設定未能完成。只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用；請再試一次自動設定。",
+        description: "進階工具設定未能完成。已保存的結果與不受影響的檢查仍可使用；請再試一次設定。",
       },
       enable_wsl_optional_features: {
         title: "進階本機掃描工具設定未能完成",
-        description: "進階工具自動設定未能完成。只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用；請再試一次自動設定。",
+        description: "進階工具設定未能完成。已保存的結果與不受影響的檢查仍可使用；請再試一次設定。",
       },
       update_wsl: {
         title: "進階本機掃描工具設定未能完成",
-        description: "進階工具自動設定未能完成。只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用；請再試一次自動設定。",
+        description: "進階工具設定未能完成。已保存的結果與不受影響的檢查仍可使用；請再試一次設定。",
       },
       restart_windows: {
         title: "進階本機掃描工具設定正在等待 Windows 重新啟動",
-        description: "Windows 必須重新啟動才能完成進階工具變更。Windows 重新啟動後，再開啟 ai-security-scanner，自動設定就會繼續；localhost 快速檢查與已保存的結果仍可使用。",
+        description: "Windows 必須重新啟動才能完成進階工具變更。Windows 重新啟動後，請再開啟 ai-security-scanner 並按下「繼續設定」；已保存的結果仍可使用。",
+        action: "重新啟動 Windows 後繼續",
       },
       retry_wsl_check: {
         title: "進階本機掃描工具設定未能完成",
-        description: "進階工具自動檢查未能完成。只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用；請再試一次自動設定。",
+        description: "進階工具檢查未能完成。已保存的結果與不受影響的檢查仍可使用；請再試一次設定。",
       },
     },
   },
@@ -414,7 +417,7 @@ export function RuntimeSetupAssistant({
         ) : setupNonRetryable || (!setupFailed && !setupCancelled && !setupIdleUnavailable) ? null : (
           <button className="button button--primary" type="button" disabled={busy} onClick={onSetup}>
             <Icon name="refresh" size={17} />
-            {setupFailed ? text.retry : setupCancelled ? text.continue : text.start}
+            {setupFailed ? nextAction?.action ?? text.retry : setupCancelled ? text.continue : text.start}
           </button>
         )}
       </div>

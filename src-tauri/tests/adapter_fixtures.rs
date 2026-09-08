@@ -7,8 +7,8 @@ use ai_security_scanner_lib::domain::{
     SeverityBasisCode,
 };
 use ai_security_scanner_lib::finding_narrative::{
-    ENGLISH_ROLLBACK, expert_type_zh_hant, priority_reason_zh_hant, rollback_zh_hant,
-    verification_zh_hant,
+    ENGLISH_EXPOSURE_OBSERVATION_REASON, ENGLISH_ROLLBACK, expert_type_zh_hant,
+    priority_reason_zh_hant, rollback_zh_hant, verification_zh_hant,
 };
 use ai_security_scanner_lib::registry::EngineRegistry;
 use chrono::{TimeZone, Utc};
@@ -390,6 +390,9 @@ fn engines_that_emit_no_severity_disclose_that_the_rating_is_this_products_own()
             "{engine_id} fixture produced nothing to check"
         );
         for finding in &output.findings {
+            let exposure_observation = finding
+                .severity_basis_code
+                .is_some_and(|code| code.is_exposure_observation());
             assert_eq!(
                 finding.severity, *expected_severity,
                 "{engine_id} finding {} was rated {:?}",
@@ -413,21 +416,47 @@ fn engines_that_emit_no_severity_disclose_that_the_rating_is_this_products_own()
                 finding.id,
                 finding.tags
             );
-            assert!(
-                finding
-                    .priority_reasons
-                    .iter()
-                    .any(|reason| reason.contains(expected_basis)),
-                "{engine_id} finding {} does not name its basis {expected_basis:?}: {:?}",
-                finding.id,
-                finding.priority_reasons
-            );
-            assert!(
-                finding.plain_language_summary.contains("without rating it"),
-                "{engine_id} finding {} reads as though the engine rated it: {}",
-                finding.id,
-                finding.plain_language_summary
-            );
+            if exposure_observation {
+                assert_eq!(finding.priority, 0);
+                assert!(
+                    finding
+                        .priority_reasons
+                        .iter()
+                        .any(|reason| { reason == ENGLISH_EXPOSURE_OBSERVATION_REASON })
+                );
+                assert_eq!(
+                    finding
+                        .severity_basis_code
+                        .map(ai_security_scanner_lib::finding_narrative::basis_english),
+                    Some(*expected_basis)
+                );
+                assert!(
+                    finding
+                        .plain_language_summary
+                        .contains("inventory evidence")
+                );
+                assert!(
+                    finding
+                        .plain_language_summary
+                        .contains("not a vulnerability")
+                );
+            } else {
+                assert!(
+                    finding
+                        .priority_reasons
+                        .iter()
+                        .any(|reason| reason.contains(expected_basis)),
+                    "{engine_id} finding {} does not name its basis {expected_basis:?}: {:?}",
+                    finding.id,
+                    finding.priority_reasons
+                );
+                assert!(
+                    finding.plain_language_summary.contains("without rating it"),
+                    "{engine_id} finding {} reads as though the engine rated it: {}",
+                    finding.id,
+                    finding.plain_language_summary
+                );
+            }
         }
     }
 }
@@ -537,6 +566,9 @@ fn engines_without_confidence_disclose_this_products_basis() {
             "{engine_id} fixture produced nothing to check"
         );
         for finding in &output.findings {
+            let exposure_observation = finding
+                .severity_basis_code
+                .is_some_and(|code| code.is_exposure_observation());
             assert_eq!(&finding.confidence, expected_confidence, "{engine_id}");
             assert_eq!(
                 finding.confidence_basis_code,
@@ -563,25 +595,34 @@ fn engines_without_confidence_disclose_this_products_basis() {
             let basis = ai_security_scanner_lib::finding_narrative::confidence_basis_english(
                 *expected_code,
             );
-            assert!(finding.priority_reasons.iter().any(|reason| {
-                reason
-                    == &format!(
-                        "Confidence derived from {basis}; {} reports no confidence of its own.",
-                        normalize_engine_display_name(engine_id)
-                    )
-            }));
-            assert!(
-                finding
-                    .plain_language_summary
-                    .contains("reported no confidence rating for it"),
-                "{engine_id}: {}",
-                finding.plain_language_summary
-            );
-            assert!(
-                finding.plain_language_summary.contains(basis),
-                "{engine_id}: {}",
-                finding.plain_language_summary
-            );
+            if exposure_observation {
+                assert_eq!(finding.priority, 0);
+                assert!(
+                    finding
+                        .plain_language_summary
+                        .contains("inventory evidence")
+                );
+            } else {
+                assert!(finding.priority_reasons.iter().any(|reason| {
+                    reason
+                        == &format!(
+                            "Confidence derived from {basis}; {} reports no confidence of its own.",
+                            normalize_engine_display_name(engine_id)
+                        )
+                }));
+                assert!(
+                    finding
+                        .plain_language_summary
+                        .contains("reported no confidence rating for it"),
+                    "{engine_id}: {}",
+                    finding.plain_language_summary
+                );
+                assert!(
+                    finding.plain_language_summary.contains(basis),
+                    "{engine_id}: {}",
+                    finding.plain_language_summary
+                );
+            }
         }
     }
 }
@@ -877,6 +918,9 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
             "native fixture for {engine_id} should produce a finding"
         );
         for finding in output.findings {
+            let exposure_observation = finding
+                .severity_basis_code
+                .is_some_and(|code| code.is_exposure_observation());
             assert_eq!(finding.status, FindingStatus::Unreviewed);
             assert_eq!(finding.case_id, "case-1");
             assert_eq!(finding.last_seen_run_id, "run-1");
@@ -895,19 +939,35 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
             }
             assert!(!finding.possible_impact.is_empty());
             assert!(!finding.recommendation.is_empty());
-            assert!(
-                finding
-                    .recommendation
-                    .starts_with("Have the recommended specialist (")
-            );
-            assert!(
-                finding
-                    .recommendation
-                    .contains(&format!("({})", finding.recommended_expert_type))
-            );
-            assert!(!finding.recommendation.contains("Have a Application"));
+            if exposure_observation {
+                assert_eq!(finding.priority, 0);
+                assert!(
+                    finding
+                        .possible_impact
+                        .contains("does not establish a vulnerability")
+                );
+                assert!(
+                    finding
+                        .recommendation
+                        .starts_with("Confirm that the reachable service")
+                );
+                assert!(finding.recommendation.contains("applicable security check"));
+                assert!(finding.rollback_considerations.is_none());
+            } else {
+                assert!(
+                    finding
+                        .recommendation
+                        .starts_with("Have the recommended specialist (")
+                );
+                assert!(
+                    finding
+                        .recommendation
+                        .contains(&format!("({})", finding.recommended_expert_type))
+                );
+                assert!(!finding.recommendation.contains("Have a Application"));
+                assert!(finding.rollback_considerations.is_some());
+            }
             assert!(!finding.verification_guidance.is_empty());
-            assert!(finding.rollback_considerations.is_some());
             // Deliberately not `!is_empty()`: `merge_finding` seeds this list
             // with the manifest's own repository URL before any engine
             // reference is considered, so an emptiness check here can never
@@ -2699,16 +2759,21 @@ fn the_codes_a_localized_client_reads_agree_with_the_english_they_replace() {
             let family = finding
                 .family
                 .unwrap_or_else(|| panic!("{engine_id} finding carries no family code"));
+            let exposure_observation = finding
+                .severity_basis_code
+                .is_some_and(|code| code.is_exposure_observation());
 
             // The action clause is composed from the family, so two findings
             // sharing a family must share it and two families must not.
-            let action = finding
-                .recommendation
-                .rsplit_once("then plan and approve ")
-                .unwrap_or_else(|| panic!("{engine_id}: {}", finding.recommendation))
-                .1
-                .to_owned();
-            action_by_family.entry(family).or_default().insert(action);
+            if !exposure_observation {
+                let action = finding
+                    .recommendation
+                    .rsplit_once("then plan and approve ")
+                    .unwrap_or_else(|| panic!("{engine_id}: {}", finding.recommendation))
+                    .1
+                    .to_owned();
+                action_by_family.entry(family).or_default().insert(action);
+            }
 
             // Exactly the findings tagged as derived carry a basis code, so a
             // client can trust one to explain the other.
@@ -2724,11 +2789,24 @@ fn the_codes_a_localized_client_reads_agree_with_the_english_they_replace() {
             );
             if let Some(code) = finding.severity_basis_code {
                 seen_basis.insert(code);
-                assert!(
-                    finding.plain_language_summary.contains("without rating it"),
-                    "{engine_id} carries a basis code for a rating the engine gave: {}",
-                    finding.plain_language_summary
-                );
+                if code.is_exposure_observation() {
+                    assert!(
+                        finding
+                            .plain_language_summary
+                            .contains("inventory evidence")
+                    );
+                    assert!(
+                        finding
+                            .plain_language_summary
+                            .contains("not a vulnerability")
+                    );
+                } else {
+                    assert!(
+                        finding.plain_language_summary.contains("without rating it"),
+                        "{engine_id} carries a basis code for a rating the engine gave: {}",
+                        finding.plain_language_summary
+                    );
+                }
             }
         }
     }
@@ -2819,6 +2897,23 @@ fn the_safety_and_verification_sentences_are_the_ones_the_translator_knows() {
     for engine_id in BUILTIN_ENGINE_IDS {
         for finding in normalize_fixture(engine_id).findings {
             engines_seen += 1;
+
+            if finding
+                .severity_basis_code
+                .is_some_and(|code| code.is_exposure_observation())
+            {
+                assert!(
+                    finding.rollback_considerations.is_none(),
+                    "{engine_id} service inventory carried vulnerability-remediation safety prose"
+                );
+                assert!(
+                    finding.verification_guidance.starts_with("Repeat ")
+                        && finding.verification_guidance.contains("discovery"),
+                    "{engine_id} service inventory did not explain how to repeat discovery: {}",
+                    finding.verification_guidance
+                );
+                continue;
+            }
 
             let safety = finding
                 .rollback_considerations

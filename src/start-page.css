@@ -49,9 +49,9 @@
 
 .start-page__localhost-quick-scan {
   display: grid;
-  flex: 1 0 100%;
   justify-items: start;
   gap: 9px;
+  padding: 0 14px 14px;
 }
 
 .start-page__localhost-boundary {
@@ -113,7 +113,7 @@
   gap: 10px;
 }
 
-.start-page__primary-action {
+.start-page__connection-action {
   min-height: 42px;
   padding-inline: 17px;
   font-size: 0.84rem;
@@ -154,6 +154,53 @@
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.62);
+}
+
+.start-page__connection-tools {
+  margin-top: 9px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.start-page__connection-tools > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 14px;
+  color: var(--ink-strong);
+  cursor: pointer;
+  list-style: none;
+}
+
+.start-page__connection-tools > summary::-webkit-details-marker {
+  display: none;
+}
+
+.start-page__connection-tools > summary span {
+  display: grid;
+  gap: 3px;
+}
+
+.start-page__connection-tools > summary strong {
+  font-size: 0.8rem;
+}
+
+.start-page__connection-tools > summary small {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.start-page__connection-tools > summary > svg {
+  flex: 0 0 auto;
+  color: var(--teal);
+  transition: transform 150ms ease;
+}
+
+.start-page__connection-tools[open] > summary > svg {
+  transform: rotate(90deg);
 }
 
 .start-page__more-use-cases > summary {

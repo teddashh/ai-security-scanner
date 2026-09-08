@@ -65,7 +65,7 @@ export const useCaseDefinitions = [
     id: "deployed_website",
     icon: "external",
     inputKind: "url",
-    suggestedActivities: ["low_impact_external_checks"],
+    suggestedActivities: ["active_external_vulnerability_tests"],
     suggestedPlatforms: ["external"],
     knownAssetKind: "external_target",
     internetExposure: "public",
@@ -165,15 +165,15 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
     cards: {
       deployed_website: {
         title: "A website or API that is already online",
-        summary: "Find common website and API weaknesses before they become incidents.",
+        summary: "Check a public website for common exposed files and debug or status endpoints with a fixed Nuclei profile.",
         want:
           "An exact website or API URL, including the hostname and the service you want reviewed.",
         prepare:
-          "The URL, proof that you may test it, and a choice between low-impact checks and separately approved active tests.",
+          "The URL and permission to test its entire scheme://host:port origin. Do not use this quick profile for path-only permission.",
         productDoes:
-          "Confirms reachable web services and runs only the network and vulnerability checks you approve, with target and rate limits.",
+          "Runs 13 pinned Nuclei checks with at most 19 GET requests, limited to 3 requests per second and 2 concurrent requests.",
         productDoesNot:
-          "It does not try to bypass your application's sign-in or business workflows, follow redirects outside the approved target, or replace a human penetration test.",
+          "It does not sign in, submit forms, follow redirects, exploit findings, or replace a human penetration test.",
       },
       external_ip_or_domain: {
         title: "External IP addresses or domains",
@@ -189,7 +189,7 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
       },
       internal_it_environment: {
         title: "An internal IT environment",
-        summary: "Spot weaknesses and risky settings across selected internal systems.",
+        summary: "Map reachable services on selected internal systems and analyze attached configuration evidence.",
         want:
           "Specific internal servers, workstations, or network devices—not an undefined entire company network.",
         prepare:
@@ -201,7 +201,7 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
       },
       ai_application: {
         title: "An AI app or agent you are building",
-        summary: "Check vibe-coded and AI-assisted software before the next release.",
+        summary: "Find security problems in vibe-coded and AI-assisted project files before deployment.",
         want:
           "The local project for an AI app, agent, or codebase generated or materially changed with AI.",
         prepare:
@@ -213,13 +213,13 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
       },
       source_code: {
         title: "Source code you have written",
-        summary: "Catch risky code and exposed secrets before the next release.",
+        summary: "Find exposed secrets, vulnerable dependencies, risky code, and unsafe configuration locally.",
         want:
           "A local project folder or read-only copy of a repository that you are allowed to assess.",
         prepare:
           "The exact local folder or read-only repository snapshot you want checked.",
         productDoes:
-          "Checks only the selected read-only copy on this device, masks detected secret values in results, and never changes project files.",
+          "Runs the applicable upstream code, secret, dependency, and configuration checks on this device against only the selected read-only copy, masks detected secret values, and never changes project files.",
         productDoesNot:
           "It does not push changes, verify discovered secrets against live services, inspect unselected folders, or prove that the code is bug-free.",
       },
@@ -237,7 +237,7 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
       },
       cloud_account: {
         title: "An AWS, Azure, GCP, or Microsoft 365 account",
-        summary: "Turn cloud assets, identity, and security settings into a prioritized fix list.",
+        summary: "Review the supported identity and configuration controls for one selected cloud account.",
         want:
           "One exact AWS account, Azure subscription, GCP project, or Microsoft 365 tenant at a time.",
         prepare:
@@ -292,11 +292,11 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
     cards: {
       deployed_website: {
         title: "已經架好的網站或 API",
-        summary: "在問題變成事故前，找出網站與 API 的常見弱點。",
+        summary: "使用固定 Nuclei 設定，檢查公開網站常見的暴露檔案，以及除錯或狀態端點。",
         want: "一個精確的網站或 API 網址，包含要檢查的主機名稱與服務。",
-        prepare: "網址、你可以測試它的證明，以及要做低影響檢查，或另行核准的主動測試。",
-        productDoes: "先確認可連線的網站服務，再依你的授權執行網路與弱點檢查，並限制目標與速度。",
-        productDoesNot: "不測商業邏輯、不冒充使用者登入、不跟著重新導向跑出核准範圍，也不能取代人工滲透測試。",
+        prepare: "網址，以及可測試整個 scheme://host:port 網站來源範圍的許可；如果只獲准特定路徑，請勿使用此快速設定。",
+        productDoes: "執行 13 項固定版本的 Nuclei 檢查，最多送出 19 次 GET 請求，每秒最多 3 次且同時最多 2 次。",
+        productDoesNot: "不登入、不送出表單、不跟隨重新導向、不利用發現的弱點，也不能取代人工滲透測試。",
       },
       external_ip_or_domain: {
         title: "外部 IP 或網域",
@@ -308,7 +308,7 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
       },
       internal_it_environment: {
         title: "公司內部 IT 環境",
-        summary: "找出所選內部系統的弱點與高風險設定。",
+        summary: "盤點所選內部系統可連線的服務，並分析附加的設定證據。",
         want: "明確的內部伺服器、工作站或網路設備，不是一句模糊的「整間公司」。",
         prepare: "一台能連到核准目標的電腦、精確 IP 清單或設定快照、掃描限制，以及 IT 負責人的同意。",
         productDoes: "用相同的精確目標與限速保護執行內部檢查，也能在本機分析你附上的設定證據。",
@@ -316,7 +316,7 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
       },
       ai_application: {
         title: "正在開發的 AI 應用或 Agent",
-        summary: "在上線前檢查 vibe coding 與 AI 協作產生的軟體。",
+        summary: "在部署前找出 vibe coding 與 AI 協作專案檔案裡的資安問題。",
         want: "AI 應用、Agent，或由 AI 生成／大幅修改的本機程式碼專案。",
         prepare: "你想檢查的精確本機專案資料夾或唯讀程式碼儲存庫快照。",
         productDoes: "在本機檢查選定副本的危險程式碼、暴露秘密、相依套件與相關部署檔案，並在適用結果上附上 AIDEFEND 參考座標。",
@@ -324,10 +324,10 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
       },
       source_code: {
         title: "自己寫的程式碼",
-        summary: "在上線前抓出危險寫法與暴露的秘密。",
+        summary: "在本機找出暴露秘密、有弱點的相依套件、危險程式碼與不安全設定。",
         want: "你有權檢查的本機專案資料夾或唯讀程式碼儲存庫副本。",
         prepare: "你想檢查的精確本機資料夾或唯讀程式碼儲存庫快照。",
-        productDoes: "只在這台裝置上檢查選定的唯讀副本，在結果中遮罩找到的秘密值，而且不會修改專案檔案。",
+        productDoes: "在這台裝置上，以適用的上游工具檢查選定唯讀副本的程式碼、秘密、相依套件與設定，在結果中遮罩找到的秘密值，而且不會修改專案檔案。",
         productDoesNot: "不推送修改、不拿找到的秘密去登入線上服務、不讀未選取資料夾，也不保證程式完全沒有錯誤。",
       },
       infrastructure_as_code: {
@@ -340,7 +340,7 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
       },
       cloud_account: {
         title: "AWS、Azure、GCP 或 Microsoft 365 帳號",
-        summary: "把雲端資產、身分與安全設定整理成改善清單。",
+        summary: "檢查單一所選雲端帳號目前支援的身分與設定控制。",
         want: "一次只檢查一個精確的 AWS 帳號、Azure 訂閱、GCP 專案或 Microsoft 365 租用戶。",
         prepare: "帳號或租用戶識別碼、檢查許可，以及能開啟雲端服務商官方登入頁面的權限；不要把管理員密碼貼進產品。",
         productDoes: "開啟雲端服務商的官方登入流程，確認取得的是綁定所選帳號的唯讀能力，再執行適用檢查。",

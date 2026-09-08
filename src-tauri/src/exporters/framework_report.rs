@@ -355,6 +355,18 @@ pub fn export_master_framework_report(
 
     let selected_run_finding_count = observations
         .iter()
+        .filter(|observation| {
+            let details = observation.finding_snapshot.as_ref().or_else(|| {
+                case.findings
+                    .iter()
+                    .find(|finding| finding.id == observation.finding_id)
+            });
+            !details.is_some_and(|finding| {
+                finding
+                    .severity_basis_code
+                    .is_some_and(|code| code.is_exposure_observation())
+            })
+        })
         .map(|observation| observation.finding_id.as_str())
         .collect::<BTreeSet<_>>()
         .len();
@@ -1717,6 +1729,41 @@ mod tests {
                 .all(|framework| framework.explanation.contains("not")
                     || framework.control_count > 0)
         );
+    }
+
+    #[test]
+    fn framework_finding_count_excludes_reachable_service_inventory() {
+        let mut case = fixture();
+        let mut exposure = case.findings[0].clone();
+        exposure.id = "service-inventory-1".into();
+        exposure.fingerprint = "naabu:service-inventory-1".into();
+        exposure.title = "Reachable service".into();
+        exposure.severity = Severity::Informational;
+        exposure.severity_basis_code = Some(crate::domain::SeverityBasisCode::OpenPort);
+        exposure.priority = 0;
+        exposure.priority_reasons.clear();
+        exposure.control_references.clear();
+        exposure.evidence.clear();
+        case.findings.push(exposure.clone());
+        case.finding_observations.push(FindingObservation {
+            id: "service-inventory-observation-1".into(),
+            run_id: "run-1".into(),
+            finding_id: exposure.id.clone(),
+            fingerprint: exposure.fingerprint.clone(),
+            asset_ids: exposure.asset_ids.clone(),
+            engine_ids: vec!["semgrep".into()],
+            severity: exposure.severity.clone(),
+            confidence: exposure.confidence.clone(),
+            evidence_hashes: Vec::new(),
+            observed_at: case.scan_runs[0].created_at,
+            finding_snapshot: Some(exposure),
+        });
+
+        let report = export_master_framework_report(&case, "run-1").unwrap();
+
+        assert_eq!(report.observation_provenance.len(), 2);
+        assert_eq!(report.coverage.selected_run_finding_count, 1);
+        assert_eq!(report.coverage.selected_run_snapshot_count, 2);
     }
 
     #[test]

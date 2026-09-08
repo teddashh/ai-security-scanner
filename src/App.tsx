@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "./components/AppShell";
 import { Icon } from "./components/Icon";
 import { RuntimeSetupAssistant } from "./components/RuntimeSetupAssistant";
-import { EmptyState } from "./components/Shared";
+import { EmptyState, InlineNotice } from "./components/Shared";
 import { useI18n, type BilingualText } from "./i18n";
 import { CasesPage } from "./pages/CasesPage";
 import { CoveragePage } from "./pages/CoveragePage";
@@ -29,13 +29,19 @@ import {
 } from "./scanLifecycleDisposition";
 import { findRunCreatedAfterStart, hasActiveScanWork } from "./freshScanSelection";
 import { reconcileReportRunId } from "./exportRunSelection";
+import { isSecurityFinding } from "./findingClassification";
 import {
   afterLatestCaseSelection,
   appendExportToMatchingSnapshot,
   selectVerificationBaselineRunId,
 } from "./caseScopedUiState";
 import { isExactBuiltInLocalhostQuickScanRun } from "./localhostQuickScan";
-import { shouldAutomaticallyPrepareRuntime } from "./runtimeFirstLaunch";
+import {
+  cloneRuntimeBlockedScanInput,
+  shouldPrepareRuntimeAfterScanAction,
+  shouldResumeRuntimeBlockedScan,
+  shouldShowRuntimeSetupAssistant,
+} from "./runtimeFirstLaunch";
 import {
   hasManagedRuntimeSetupRequestStarted,
   isManagedRuntimePackageAdmissionFailure,
@@ -70,6 +76,7 @@ import { displaySafeTechnicalDetail } from "./technicalDetails";
 import type {
   AppMode,
   AppSnapshot,
+  AttachWorkspaceSnapshotInput,
   CaseArtifactCleanupResult,
   CaseArtifactDeletionPlan,
   CaseWorkspace,
@@ -98,6 +105,25 @@ interface AppToastMessage extends ToastMessage {
   action?: () => void;
 }
 
+interface PendingRuntimeScanRetry {
+  input: StartScanInput;
+  page: PageId;
+  pageTransitionGeneration: number;
+  caseSelectionGeneration: number;
+  setupCommandGeneration: number;
+}
+
+interface RuntimeSetupCompletion {
+  setupCommandGeneration: number;
+  phase: ManagedRuntimeSetupStatus["phase"];
+  operationId?: string;
+}
+
+interface RuntimeSetupCompletionSnapshot {
+  completion: RuntimeSetupCompletion;
+  snapshot: AppSnapshot | undefined;
+}
+
 const pageFromHash = (): PageId => {
   const value = window.location.hash.replace(/^#\/?/, "") as PageId;
   return ["start", "cases", "coverage", "progress", "findings", "export", "settings", "verification"].includes(value)
@@ -115,6 +141,7 @@ const recordTechnicalError = (context: string, error: unknown): void => {
 const busyActionCopy = {
   "runtime-setup": { en: "scan-tool setup", zhTW: "掃描工具設定" },
   create: { en: "scan project creation", zhTW: "建立掃描專案" },
+  "create-local": { en: "local scan project setup", zhTW: "建立本機掃描專案" },
   "archive-case": { en: "case archiving", zhTW: "封存案件" },
   "delete-case": { en: "case-record deletion", zhTW: "刪除案件紀錄" },
   "delete-artifacts": { en: "evidence deletion", zhTW: "刪除證據" },
@@ -123,7 +150,7 @@ const busyActionCopy = {
   "attach-workspace": { en: "local-file attachment", zhTW: "附加本機檔案" },
   discovery: { en: "asset discovery", zhTW: "盤點資產" },
   scope: { en: "permission confirmation", zhTW: "確認授權範圍" },
-  "localhost-quick-scan": { en: "checking this computer", zhTW: "檢查這台電腦" },
+  "localhost-quick-scan": { en: "testing a local service connection", zhTW: "測試本機服務連線" },
   "start-scan": { en: "starting the scan", zhTW: "開始掃描" },
   "pause-scan": { en: "pausing the scan", zhTW: "暫停掃描" },
   "resume-scan": { en: "resuming the scan", zhTW: "繼續掃描" },
@@ -238,8 +265,8 @@ const scanStartIssueCopy = {
     zhTW: "目標已準備好，但這個版本沒有可執行這項檢查的工具。請取得最新安裝程式；這台電腦上的掃描專案會完整保留。",
   },
   runtime_unavailable: {
-    en: "The target is ready. Try again and the app will prepare the private scan tools automatically.",
-    zhTW: "目標已準備好。請再試一次，程式會自動準備專用掃描工具。",
+    en: "The target is ready, but this scan needs additional local tools. No scan has started yet.",
+    zhTW: "目標已準備好，但這項掃描需要額外的本機工具；掃描尚未開始。",
   },
   provider_source_required: {
     en: "Connect the cloud account you want to scan. No scan has started yet.",
@@ -323,7 +350,8 @@ export default function App() {
   const [artifactCleanupPlan, setArtifactCleanupPlan] = useState<CaseArtifactDeletionPlan>();
   const [artifactCleanupResult, setArtifactCleanupResult] = useState<CaseArtifactCleanupResult>();
   const [runtimeSetup, setRuntimeSetup] = useState<ManagedRuntimeSetupStatus>();
-  const [runtimeSetupStatusLoaded, setRuntimeSetupStatusLoaded] = useState(!scannerService.isNative());
+  const [runtimeSetupCompletion, setRuntimeSetupCompletion] = useState<RuntimeSetupCompletion>();
+  const [runtimeSetupCompletionSnapshot, setRuntimeSetupCompletionSnapshot] = useState<RuntimeSetupCompletionSnapshot>();
   const [runtimeSetupCommandPolling, setRuntimeSetupCommandPolling] = useState(false);
   const [runtimeSetupAdmissionPending, setRuntimeSetupAdmissionPending] = useState(false);
   const [scanReadiness, setScanReadiness] = useState<ScanReadiness>();
@@ -346,6 +374,8 @@ export default function App() {
   const scanReadinessRequestGeneration = useRef(0);
   const scanReadinessResponseGeneration = useRef(0);
   const selectedCaseIdRef = useRef<string | undefined>(undefined);
+  const currentPageRef = useRef<PageId>(page);
+  const pageTransitionGeneration = useRef(0);
   const caseSelectionBarrierRef = useRef({
     generation: 0,
     settled: Promise.resolve(),
@@ -360,7 +390,6 @@ export default function App() {
     workspace: CaseWorkspace;
     freshestWorkspace: CaseWorkspace;
   }>());
-  const automaticRuntimeSetupAttempted = useRef(false);
   const runtimeSetupStatusRequestGeneration = useRef(0);
   const runtimeSetupStatusRefreshInFlight = useRef<Promise<ManagedRuntimeSetupStatus | undefined> | undefined>(undefined);
   const runtimeSetupStatusReadCoalescer = useRef(
@@ -374,8 +403,10 @@ export default function App() {
     createInFlightReadCoalescer<string, ServiceResult<ScanReadiness>>(),
   ).current;
   const runtimeSetupCommandGeneration = useRef(0);
+  const pendingRuntimeScanRetry = useRef<PendingRuntimeScanRetry | undefined>(undefined);
   const runtimeSetupRequestAdmission = useRef<{
     baseline: ManagedRuntimeSetupRequestBaseline;
+    setupCommandGeneration: number;
     minimumStatusRequestGeneration: number;
     observed: boolean;
   } | undefined>(undefined);
@@ -560,6 +591,24 @@ export default function App() {
     return refresh;
   }, [loadSnapshot]);
 
+  const refreshRuntimeSnapshotAfterCurrent = useCallback(async () => {
+    // A runtime read that began before setup reached its terminal state cannot
+    // prove the newly prepared tools are ready. Let it settle, then start a
+    // read whose observation point is after that terminal state.
+    const previousRefresh = runtimeSnapshotRefreshInFlight.current;
+    if (previousRefresh) {
+      try {
+        await previousRefresh;
+      } catch {
+        // A fresh authoritative read is still the useful next step.
+      }
+      if (runtimeSnapshotRefreshInFlight.current === previousRefresh) {
+        runtimeSnapshotRefreshInFlight.current = undefined;
+      }
+    }
+    return refreshRuntimeSnapshot();
+  }, [refreshRuntimeSnapshot]);
+
   useEffect(() => {
     void loadSnapshot();
   }, [loadSnapshot]);
@@ -573,6 +622,16 @@ export default function App() {
   useEffect(() => {
     selectedCaseIdRef.current = snapshot?.selectedCaseId;
   }, [snapshot?.selectedCaseId]);
+
+  useEffect(() => {
+    const pending = pendingRuntimeScanRetry.current;
+    if (
+      pending
+      && (pending.page !== page || pending.input.caseId !== snapshot?.selectedCaseId)
+    ) {
+      pendingRuntimeScanRetry.current = undefined;
+    }
+  }, [page, snapshot?.selectedCaseId]);
 
   const refreshManagedRuntimeSetupStatus = useCallback(() => {
     if (!scannerService.isNative()) return undefined;
@@ -591,16 +650,22 @@ export default function App() {
             setRuntimeSetupAdmissionPending(false);
           }
           if (requestStarted && isManagedRuntimeSetupTerminal(result.data)) {
+            const scanWillResume = result.data.phase === "completed"
+              && pendingRuntimeScanRetry.current?.setupCommandGeneration
+                === admission.setupCommandGeneration;
+            setRuntimeSetupCompletion({
+              setupCommandGeneration: admission.setupCommandGeneration,
+              phase: result.data.phase,
+              operationId: result.data.operationId,
+            });
             runtimeSetupRequestAdmission.current = undefined;
             setRuntimeSetupAdmissionPending(false);
             setRuntimeSetupCommandPolling(false);
-            setBusyAction((current) => current === "runtime-setup" ? undefined : current);
+            if (!scanWillResume) {
+              setBusyAction((current) => current === "runtime-setup" ? undefined : current);
+            }
           }
         }
-        // A failed read is not authoritative permission to launch another
-        // lifecycle operation. Only a successful status response unlocks the
-        // one automatic preparation attempt.
-        setRuntimeSetupStatusLoaded(true);
         return result.data;
       };
 
@@ -694,8 +759,33 @@ export default function App() {
     ].join(":");
     if (reconciledRuntimeTerminalKey.current === terminalKey) return;
     reconciledRuntimeTerminalKey.current = terminalKey;
+    const matchingCompletionOwnsRefresh = runtimeSetupCompletion
+      && runtimeSetupCompletion.phase === runtimeSetup.phase
+      && runtimeSetupCompletion.operationId === runtimeSetup.operationId;
+    if (matchingCompletionOwnsRefresh) return;
     void refreshRuntimeSnapshot();
-  }, [refreshRuntimeSnapshot, runtimeSetup, runtimeSetupTerminal]);
+  }, [refreshRuntimeSnapshot, runtimeSetup, runtimeSetupCompletion, runtimeSetupTerminal]);
+
+  useEffect(() => {
+    if (!runtimeSetupCompletion) return;
+    if (runtimeSetupCompletion.phase !== "completed") {
+      if (
+        pendingRuntimeScanRetry.current?.setupCommandGeneration
+        === runtimeSetupCompletion.setupCommandGeneration
+      ) pendingRuntimeScanRetry.current = undefined;
+      return;
+    }
+    let disposed = false;
+    const completion = runtimeSetupCompletion;
+    void refreshRuntimeSnapshotAfterCurrent().then((refreshedSnapshot) => {
+      if (!disposed) {
+        setRuntimeSetupCompletionSnapshot({ completion, snapshot: refreshedSnapshot });
+      }
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [refreshRuntimeSnapshotAfterCurrent, runtimeSetupCompletion]);
 
   const checkAppUpdate = useCallback(async () => {
     if (!scannerService.isNative()) return;
@@ -723,14 +813,26 @@ export default function App() {
     }
   }, [pushToast, text]);
 
-  const setupManagedRuntime = async ({ automatic = false }: { automatic?: boolean } = {}) => {
+  const setupManagedRuntime = async () => {
     if (isManagedRuntimePackageAdmissionFailure(runtimeSetup)) return;
     const commandGeneration = ++runtimeSetupCommandGeneration.current;
+    const clearMatchingPendingScan = () => {
+      if (pendingRuntimeScanRetry.current?.setupCommandGeneration === commandGeneration) {
+        pendingRuntimeScanRetry.current = undefined;
+      }
+    };
+    if (
+      pendingRuntimeScanRetry.current
+      && pendingRuntimeScanRetry.current.setupCommandGeneration !== commandGeneration
+    ) pendingRuntimeScanRetry.current = undefined;
+    setRuntimeSetupCompletion(undefined);
+    setRuntimeSetupCompletionSnapshot(undefined);
     const requestBaseline: ManagedRuntimeSetupRequestBaseline = {
       operationId: runtimeSetup?.operationId,
     };
     runtimeSetupRequestAdmission.current = {
       baseline: requestBaseline,
+      setupCommandGeneration: commandGeneration,
       // Ignore a status response that was already in flight before this click.
       minimumStatusRequestGeneration: runtimeSetupStatusRequestGeneration.current + 1,
       observed: false,
@@ -775,7 +877,7 @@ export default function App() {
       if (currentRequestWasObserved && isManagedRuntimeSetupTerminal(setupStatus)) {
         // The reply was lost after the operation reached a real terminal
         // state. The assistant now presents that backend truth.
-        await refreshRuntimeSnapshot();
+        await refreshRuntimeSnapshotAfterCurrent();
         return "terminal";
       }
       return "unconfirmed";
@@ -790,7 +892,8 @@ export default function App() {
       if (commandObservation.outcome === "timed_out") {
         // This is an unknown command outcome, not a setup failure. A bounded
         // status read decides whether to follow an operation or return to Retry.
-        await reconcileUnknownSetupOutcome();
+        const reconciliation = await reconcileUnknownSetupOutcome();
+        if (reconciliation === "unconfirmed") clearMatchingPendingScan();
         return;
       }
       if (commandObservation.outcome === "failed") throw commandObservation.error;
@@ -804,13 +907,40 @@ export default function App() {
         retainActiveSetup();
         return;
       }
-      const refreshedSnapshot = await refreshRuntimeSnapshot();
+      const refreshedSnapshot = await refreshRuntimeSnapshotAfterCurrent();
       const completed = setupStatus.phase === "completed";
       const runtimeReady = refreshedSnapshot?.runtime?.available === true;
       const completedAndReady = completed && runtimeReady;
+      const pendingScan = pendingRuntimeScanRetry.current;
+      const willResumeRequestedScan = completedAndReady
+        && runtimeSetupRequestAdmission.current === undefined
+        && pendingScan !== undefined
+        && pendingScan.setupCommandGeneration === commandGeneration
+        && selectedCaseIdRef.current === pendingScan.input.caseId
+        && shouldResumeRuntimeBlockedScan({
+          requestedPage: pendingScan.page,
+          currentPage: currentPageRef.current,
+          requestedPageTransitionGeneration: pendingScan.pageTransitionGeneration,
+          currentPageTransitionGeneration: pageTransitionGeneration.current,
+          requestedCaseSelectionGeneration: pendingScan.caseSelectionGeneration,
+          currentCaseSelectionGeneration: caseSelectionBarrierRef.current.generation,
+          requestedCaseId: pendingScan.input.caseId,
+          selectedCaseId: refreshedSnapshot?.selectedCaseId,
+          workspaceCaseId: refreshedSnapshot?.workspace?.case.id,
+          runtimeAvailable: refreshedSnapshot?.runtime?.available,
+          setupPhase: setupStatus.phase,
+          activeScanWork: refreshedSnapshot?.workspace
+            ? hasActiveScanWork(refreshedSnapshot.workspace.runs)
+            : false,
+        });
+      if (willResumeRequestedScan) keepFollowingAuthoritativeOperation = true;
       const cancelled = setupStatus.phase === "cancelled";
       const nonRetryable = isManagedRuntimePackageAdmissionFailure(setupStatus);
-      if (!automatic && !completed && !cancelled) {
+      if (!completed && !cancelled) {
+        if (currentPageRef.current !== "start") {
+          currentPageRef.current = "start";
+          pageTransitionGeneration.current += 1;
+        }
         window.location.hash = "start";
         setPage("start");
       }
@@ -827,32 +957,27 @@ export default function App() {
             : text({ en: "Advanced local scan-tool setup stopped", zhTW: "進階本機掃描工具設定已停止" }),
         detail: completed
           ? completedAndReady
-            ? automatic
-              ? text({
-                en: "Advanced local scan setup is complete. You can start using those scans now.",
-                zhTW: "進階本機掃描設定已完成，現在可以使用這些掃描。",
-              })
-              : text({
-                en: "You can continue with your chosen advanced local scan.",
-                zhTW: "現在可以繼續你選擇的進階本機掃描。",
-              })
+            ? text({
+              en: "The scan tools are ready.",
+              zhTW: "掃描工具已就緒。",
+            })
             : text({
-              en: "Advanced local scan setup finished, but the app has not confirmed that the advanced tools are available. The localhost quick check that attempts one TCP connection and your saved results remain available; use Retry if this does not update.",
-              zhTW: "進階本機掃描設定已完成，但程式尚未確認進階工具可用。只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用；若狀態沒有更新，請按「再試一次」。",
+              en: "Advanced local scan setup finished, but the app has not confirmed that the advanced tools are available. Your saved results are unchanged; use Retry if this does not update.",
+              zhTW: "進階本機掃描設定已完成，但程式尚未確認工具可用。已保存的結果不受影響；若狀態沒有更新，請按「再試一次」。",
             })
           : nonRetryable
             ? text({
-              en: "The localhost quick check that attempts one TCP connection and your saved results remain available. Results will mark the affected advanced check as not tested.",
-              zhTW: "只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用；結果會把受影響的進階檢查標示為「未測試」。",
+              en: "Your saved results and checks that do not need this tool remain available. Results will mark the affected advanced check as not tested.",
+              zhTW: "已保存的結果與不需要這項工具的檢查仍可使用；結果會把受影響的進階檢查標示為「未測試」。",
             })
           : cancelled
             ? text({
-              en: "The completed part of the advanced-tool download was kept. The localhost quick check and your saved results remain available; continue setup whenever you are ready.",
-              zhTW: "進階工具已完成的下載進度已保留；localhost 快速檢查與已保存的結果仍可使用，準備好時可繼續設定。",
+              en: "The completed part of the advanced-tool download was kept, and your saved results remain available. Continue setup whenever you are ready.",
+              zhTW: "進階工具已完成的下載進度與既有結果都已保留；準備好時可繼續設定。",
             })
             : text({
-              en: "Advanced local scan-tool setup did not finish. The localhost quick check that attempts one TCP connection and your saved results remain available. Try setup again; open Technical details if it keeps happening.",
-              zhTW: "進階本機掃描工具設定未能完成。只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用；請再試一次。如果問題持續發生，可查看「技術細節」。",
+              en: "Advanced local scan-tool setup did not finish. Your saved results and unaffected checks remain available. Try setup again; open Technical details if it keeps happening.",
+              zhTW: "進階本機掃描工具設定未能完成。已保存的結果與不受影響的檢查仍可使用；請再試一次。如果問題持續發生，可查看「技術細節」。",
             }),
       });
     } catch (error) {
@@ -863,12 +988,13 @@ export default function App() {
         if (commandGeneration !== runtimeSetupCommandGeneration.current) return;
         if (reconciliation !== "unconfirmed") return;
       }
+      clearMatchingPendingScan();
       pushToast({
         tone: "danger",
         title: text({ en: "Advanced local scan-tool setup did not finish", zhTW: "進階本機掃描工具設定未能完成" }),
         detail: text({
-          en: "The localhost quick check that attempts one TCP connection and your saved results remain available; retry advanced local scan preparation when ready.",
-          zhTW: "只嘗試一次 TCP 連線的 localhost 快速檢查與已保存的結果仍可使用；準備好時可再試一次進階本機掃描準備。",
+          en: "Your saved results and unaffected checks remain available; retry advanced local scan preparation when ready.",
+          zhTW: "已保存的結果與不受影響的檢查仍可使用；準備好時可再試一次進階本機掃描準備。",
         }),
       });
     } finally {
@@ -884,32 +1010,8 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    if (
-      mode === "native"
-      && snapshot?.runtime?.provider === "managed_local"
-      && snapshot.runtime.available === true
-    ) {
-      // A completed healthy episode may be followed by a real stopped-machine
-      // episode later. Reset only after authoritative runtime health is ready,
-      // never merely because setup reported a terminal phase.
-      automaticRuntimeSetupAttempted.current = false;
-    }
-  }, [mode, snapshot?.runtime?.available, snapshot?.runtime?.provider]);
-
-  useEffect(() => {
-    if (!shouldAutomaticallyPrepareRuntime(
-      mode,
-      snapshot?.runtime,
-      runtimeSetup,
-      runtimeSetupStatusLoaded,
-      automaticRuntimeSetupAttempted.current,
-    )) return;
-    automaticRuntimeSetupAttempted.current = true;
-    void setupManagedRuntime({ automatic: true });
-  }, [mode, runtimeSetup?.canRetry, runtimeSetup?.phase, runtimeSetupStatusLoaded, snapshot?.runtime?.available, snapshot?.runtime?.phase, snapshot?.runtime?.provider]);
-
   const cancelManagedRuntimeSetup = async () => {
+    pendingRuntimeScanRetry.current = undefined;
     try {
       const result = await scannerService.cancelManagedRuntimeSetup();
       applyServiceMeta(result);
@@ -938,7 +1040,14 @@ export default function App() {
   };
 
   useEffect(() => {
-    const onHashChange = () => setPage(pageFromHash());
+    const onHashChange = () => {
+      const nextPage = pageFromHash();
+      if (currentPageRef.current !== nextPage) {
+        currentPageRef.current = nextPage;
+        pageTransitionGeneration.current += 1;
+      }
+      setPage(nextPage);
+    };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
@@ -1029,12 +1138,25 @@ export default function App() {
   }, [applyScanWorkspaceEvent, applyServiceMeta, loadSnapshot, pushToast, readScanReadinessWithin, text]);
 
   const navigate = (target: PageId) => {
+    if (
+      pendingRuntimeScanRetry.current
+      && pendingRuntimeScanRetry.current.page !== target
+    ) {
+      pendingRuntimeScanRetry.current = undefined;
+    }
+    if (currentPageRef.current !== target) {
+      currentPageRef.current = target;
+      pageTransitionGeneration.current += 1;
+    }
     if (target !== "findings") setFocusedFindingId(undefined);
     window.location.hash = target;
     setPage(target);
   };
 
-  const selectCase = async (caseId: string) => {
+  const selectCase = async (caseId: string): Promise<CaseWorkspace | undefined> => {
+    if (pendingRuntimeScanRetry.current) {
+      pendingRuntimeScanRetry.current = undefined;
+    }
     supersedeCaseSelectionRef.current();
     let settleSelection: () => void = () => undefined;
     let supersedeSelection: () => void = () => undefined;
@@ -1055,7 +1177,7 @@ export default function App() {
     setLoading(true);
     try {
       const result = await scannerService.selectCase(caseId);
-      if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
+      if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return undefined;
       applyServiceMeta(result);
       selectedCaseIdRef.current = caseId;
       setCaseSelectionUnavailableId(undefined);
@@ -1093,8 +1215,9 @@ export default function App() {
       } catch (error) {
         handleReadinessError(error);
       }
+      return result.data;
     } catch (error) {
-      if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
+      if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return undefined;
       recordTechnicalError("select case", error);
       setCaseSelectionUnavailableId(caseId);
       pushToast({
@@ -1105,10 +1228,32 @@ export default function App() {
           zhTW: "目前掃描專案沒有被更動；請再開啟一次。",
         }),
       });
+      return undefined;
     } finally {
       if (caseSelectionBarrierRef.current.generation === selectionGeneration) setLoading(false);
       settleSelection();
     }
+  };
+
+  const openCaseAtUsefulStep = async (caseId: string): Promise<void> => {
+    const requestedPage = currentPageRef.current;
+    const pageGenerationAtStart = pageTransitionGeneration.current;
+    const selection = selectCase(caseId);
+    const caseSelectionGenerationAtStart = caseSelectionBarrierRef.current.generation;
+    const workspace = await selection;
+    if (
+      !workspace
+      || selectedCaseIdRef.current !== caseId
+      || currentPageRef.current !== requestedPage
+      || pageTransitionGeneration.current !== pageGenerationAtStart
+      || caseSelectionBarrierRef.current.generation !== caseSelectionGenerationAtStart
+    ) return;
+    const activeRun = workspace.runs.find((run) => ["queued", "running", "paused"].includes(run.status));
+    const interruptedRun = workspace.runs.find((run) => run.engineRuns.some(
+      (engine) => engine.phase === "interrupted_restart" || engine.errorCode === "desktop_process_restarted",
+    ));
+    const terminalRun = workspace.runs.find((run) => ["completed", "partial", "failed", "cancelled"].includes(run.status));
+    navigate(activeRun || interruptedRun ? "progress" : terminalRun ? "findings" : "coverage");
   };
 
   const retryScanReadiness = async (caseId: string) => {
@@ -1158,19 +1303,32 @@ export default function App() {
   };
 
   const createCase = async (input: CreateCaseInput): Promise<boolean> => {
+    const requestedPage = currentPageRef.current;
+    const pageGenerationAtStart = pageTransitionGeneration.current;
+    const caseSelectionGenerationAtStart = caseSelectionBarrierRef.current.generation;
+    const shouldReturnToReview = () => currentPageRef.current === requestedPage
+      && pageTransitionGeneration.current === pageGenerationAtStart
+      && caseSelectionBarrierRef.current.generation === caseSelectionGenerationAtStart;
     setBusyAction("create");
     try {
       const result = await scannerService.createCase(input);
       applyServiceMeta(result);
-      await loadSnapshot(result.data.id, true);
-      setSelectedUseCase(undefined);
+      let returnToReview = shouldReturnToReview();
+      await loadSnapshot(returnToReview ? result.data.id : undefined, true);
+      returnToReview = returnToReview && shouldReturnToReview();
+      if (returnToReview) {
+        setSelectedUseCase(undefined);
+        navigate("coverage");
+      }
       pushToast({
         tone: result.mode === "native" ? "success" : "info",
         title: result.mode === "native"
           ? text({ en: "Scan project created", zhTW: "掃描專案已建立" })
           : text({ en: "Demo scan project created", zhTW: "展示掃描專案已建立" }),
         detail: result.mode === "native"
-          ? text({ en: "The scan project is saved on this device. No scan has started.", zhTW: "掃描專案已保存在這台電腦；尚未開始任何掃描。" })
+          ? returnToReview
+            ? text({ en: "The scan project is saved on this device. No scan has started.", zhTW: "掃描專案已保存在這台電腦；尚未開始任何掃描。" })
+            : text({ en: "The scan project is saved on this device. Open My scans when ready; no scan has started.", zhTW: "掃描專案已保存在這台電腦。準備好時請開啟「我的掃描」；尚未開始任何掃描。" })
           : text({ en: "It is saved only in this browser. No real target was contacted.", zhTW: "只保存在這個瀏覽器；沒有接觸任何真實目標。" }),
       });
       return true;
@@ -1180,6 +1338,111 @@ export default function App() {
         tone: "danger",
         title: text({ en: "The scan project was not created", zhTW: "掃描專案沒有建立成功" }),
         detail: text({ en: "Review the highlighted fields and try again.", zhTW: "請檢查畫面標示的欄位後再試一次。" }),
+      });
+      return false;
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
+  const createCaseWithWorkspace = async (
+    input: CreateCaseInput,
+    workspace: Omit<AttachWorkspaceSnapshotInput, "caseId">,
+  ): Promise<boolean> => {
+    const requestedPage = currentPageRef.current;
+    const pageGenerationAtStart = pageTransitionGeneration.current;
+    const caseSelectionGenerationAtStart = caseSelectionBarrierRef.current.generation;
+    const shouldReturnToReview = () => currentPageRef.current === requestedPage
+      && pageTransitionGeneration.current === pageGenerationAtStart
+      && caseSelectionBarrierRef.current.generation === caseSelectionGenerationAtStart;
+    setBusyAction("create-local");
+    let caseId: string;
+    try {
+      const created = await scannerService.createCase(input);
+      applyServiceMeta(created);
+      caseId = created.data.id;
+      selectedCaseIdRef.current = caseId;
+    } catch (error) {
+      recordTechnicalError("create local scan project", error);
+      pushToast({
+        tone: "danger",
+        title: text({ en: "The scan project was not created", zhTW: "掃描專案沒有建立成功" }),
+        detail: text({ en: "The folder was not copied. Check the current choices and try again.", zhTW: "資料夾沒有被複製；請檢查目前選項後再試一次。" }),
+      });
+      setBusyAction(undefined);
+      return false;
+    }
+
+    try {
+      const attached = await scannerService.attachWorkspaceSnapshot({ caseId, ...workspace });
+      applyServiceMeta(attached);
+      if (!attached.data.accepted) {
+        recordTechnicalError("attach initial local scan snapshot", attached.data.message);
+        let returnToReview = shouldReturnToReview();
+        await loadSnapshot(returnToReview ? caseId : undefined, true);
+        returnToReview = returnToReview && shouldReturnToReview();
+        if (returnToReview) {
+          setSelectedUseCase(undefined);
+          navigate("coverage");
+        }
+        pushToast({
+          tone: "warning",
+          title: text({ en: "Scan project created; folder not added", zhTW: "掃描專案已建立；資料夾尚未加入" }),
+          detail: returnToReview
+            ? text({
+              en: "The project was kept. Choose the folder again in Scan setup; no scan started.",
+              zhTW: "專案已保留。請在掃描設定中重新選擇資料夾；尚未開始掃描。",
+            })
+            : text({
+              en: "The project was kept. Open My scans when ready, then choose the folder again; no scan started.",
+              zhTW: "專案已保留。準備好時請開啟「我的掃描」，再重新選擇資料夾；尚未開始掃描。",
+            }),
+        });
+        return false;
+      }
+
+      let returnToReview = shouldReturnToReview();
+      await loadSnapshot(returnToReview ? caseId : undefined, true);
+      returnToReview = returnToReview && shouldReturnToReview();
+      if (returnToReview) {
+        setSelectedUseCase(undefined);
+        navigate("coverage");
+      }
+      pushToast({
+        tone: "success",
+        title: text({ en: "Local project ready for review", zhTW: "本機專案可供檢查" }),
+        detail: returnToReview
+          ? text({
+            en: "The private snapshot is attached. Review the exact checks, then press Start; no scan has started yet.",
+            zhTW: "私密快照已附加。請先檢查確切掃描項目，再按下「開始」；目前尚未開始掃描。",
+          })
+          : text({
+            en: "The private snapshot is attached. Open My scans when ready to review and start it.",
+            zhTW: "私密快照已附加。準備好時請開啟「我的掃描」，檢查後再開始。",
+          }),
+      });
+      return true;
+    } catch (error) {
+      recordTechnicalError("attach initial local scan snapshot", error);
+      let returnToReview = shouldReturnToReview();
+      await loadSnapshot(returnToReview ? caseId : undefined, true);
+      returnToReview = returnToReview && shouldReturnToReview();
+      if (returnToReview) {
+        setSelectedUseCase(undefined);
+        navigate("coverage");
+      }
+      pushToast({
+        tone: "warning",
+        title: text({ en: "Scan project created; folder not added", zhTW: "掃描專案已建立；資料夾尚未加入" }),
+        detail: returnToReview
+          ? text({
+            en: "The project was kept. Choose the folder again in Scan setup; no scan started.",
+            zhTW: "專案已保留。請在掃描設定中重新選擇資料夾；尚未開始掃描。",
+          })
+          : text({
+            en: "The project was kept. Open My scans when ready, then choose the folder again; no scan started.",
+            zhTW: "專案已保留。準備好時請開啟「我的掃描」，再重新選擇資料夾；尚未開始掃描。",
+          }),
       });
       return false;
     } finally {
@@ -1291,11 +1554,11 @@ export default function App() {
       });
       navigate("progress");
       // The queued workspace is enough to make Progress and Cancel usable.
-      // Optional manifest enrichment must not keep this first-value action
+      // Optional manifest enrichment must not keep this connection utility
       // busy longer than the fixed three-second target contact.
       void loadSnapshot(selectedQuickWorkspace.case.id, true);
     } catch (error) {
-      recordTechnicalError("start localhost quick scan", error);
+      recordTechnicalError("start local connection test", error);
       pushToast({
         tone: "danger",
         persistent: true,
@@ -1322,6 +1585,7 @@ export default function App() {
     key: string,
     action: () => Promise<ServiceResult<ActionResponse>>,
     onResult?: (response: ActionResponse) => void,
+    options: { suppressToast?: (response: ActionResponse) => boolean } = {},
   ): Promise<boolean> => {
     setBusyAction(key);
     const workspaceEventGenerationAtRequest = scanWorkspaceEventGeneration.current;
@@ -1383,12 +1647,15 @@ export default function App() {
         ? { ...result.data, workspace: selectedWorkspace, lifecycleDisposition }
         : result.data;
       onResult?.(response);
-      if (!response.accepted) recordTechnicalError(`action ${key} did not start`, response.message);
+      const suppressToast = options.suppressToast?.(response) === true;
+      if (!response.accepted && !suppressToast) {
+        recordTechnicalError(`action ${key} did not start`, response.message);
+      }
       const preflightCode = Object.keys(scanStartIssueCopy).find((code) => result.data.message.includes(`scan_preflight:${code}`)) as keyof typeof scanStartIssueCopy | undefined;
       const lifecycleToast = lifecycleDisposition
         ? scanLifecycleToastPresentation(lifecycleDisposition)
         : undefined;
-      pushToast({
+      if (!suppressToast) pushToast({
         tone: lifecycleToast
           ? lifecycleToast.tone
           : response.accepted ? "success" : result.mode === "demo" ? "info" : "warning",
@@ -1446,8 +1713,8 @@ export default function App() {
     pushToast({
       tone: "info",
       title: text({
-        en: "This quick check cannot be paused or resumed",
-        zhTW: "這項快速檢查不能暫停或續跑",
+        en: "This connection test cannot be paused or resumed",
+        zhTW: "這項連線測試不能暫停或續跑",
       }),
       detail: text({
         en: "Its connection attempt has a three-second maximum. Let it finish, or cancel it and start a new check later.",
@@ -1470,31 +1737,130 @@ export default function App() {
     await executeAction(key, action);
   };
 
-  const startScan = async (input: StartScanInput): Promise<boolean> => {
+  const startScan = async (
+    input: StartScanInput,
+    options: { allowRuntimePreparation?: boolean } = {},
+  ): Promise<boolean> => {
+    const allowRuntimePreparation = options.allowRuntimePreparation !== false;
+    const requestedPage = currentPageRef.current;
+    const pageGenerationAtStart = pageTransitionGeneration.current;
+    const caseSelectionGenerationAtStart = caseSelectionBarrierRef.current.generation;
+    const selectedCaseAtStart = selectedCaseIdRef.current;
+    const startContextStillCurrent = () => selectedCaseAtStart === input.caseId
+      && selectedCaseIdRef.current === input.caseId
+      && currentPageRef.current === requestedPage
+      && pageTransitionGeneration.current === pageGenerationAtStart
+      && caseSelectionBarrierRef.current.generation === caseSelectionGenerationAtStart;
+    if (allowRuntimePreparation) pendingRuntimeScanRetry.current = undefined;
     const existingRunIds = new Set(
       snapshot?.workspace?.case.id === input.caseId
         ? snapshot.workspace.runs.map((run) => run.id)
         : [],
     );
+    let scanActionRuntimeBlocker: "runtime_unavailable" | undefined;
+    let runtimeAtScanAction = snapshot?.runtime;
     setStartingScanCaseId(input.caseId);
     try {
       const accepted = await executeAction(
         "start-scan",
         () => scannerService.startScan(input),
         (response) => {
+          runtimeAtScanAction = response.snapshot?.runtime ?? runtimeAtScanAction;
+          if (
+            !response.accepted
+            && response.message.includes("scan_preflight:runtime_unavailable")
+          ) {
+            scanActionRuntimeBlocker = "runtime_unavailable";
+          }
           if (!response.accepted) return;
           const returnedWorkspace = response.workspace ?? response.snapshot?.workspace;
           if (!returnedWorkspace || returnedWorkspace.case.id !== input.caseId) return;
           const createdRunId = findRunCreatedAfterStart(returnedWorkspace.runs, existingRunIds);
           if (createdRunId) setSelectedReportRunId(createdRunId);
         },
+        {
+          suppressToast: (response) => !response.accepted
+            && allowRuntimePreparation
+            && startContextStillCurrent()
+            && shouldPrepareRuntimeAfterScanAction({
+              mode,
+              runtime: runtimeAtScanAction,
+              status: runtimeSetup,
+              scanActionRequested: true,
+              blocker: scanActionRuntimeBlocker,
+            }),
+        },
       );
       if (accepted) navigate("progress");
+      else if (
+        allowRuntimePreparation
+        && startContextStillCurrent()
+        && shouldPrepareRuntimeAfterScanAction({
+        mode,
+        runtime: runtimeAtScanAction,
+        status: runtimeSetup,
+        scanActionRequested: true,
+        blocker: scanActionRuntimeBlocker,
+        })
+      ) {
+        // Preserve only this exact, explicitly reviewed request. A matching
+        // setup completion may resume it once; a second runtime blocker cannot
+        // start another setup cycle.
+        pendingRuntimeScanRetry.current = {
+          input: cloneRuntimeBlockedScanInput(input),
+          page: requestedPage,
+          pageTransitionGeneration: pageGenerationAtStart,
+          caseSelectionGeneration: caseSelectionGenerationAtStart,
+          setupCommandGeneration: runtimeSetupCommandGeneration.current + 1,
+        };
+        void setupManagedRuntime();
+      }
       return accepted;
     } finally {
       setStartingScanCaseId((current) => current === input.caseId ? undefined : current);
     }
   };
+
+  useEffect(() => {
+    const pending = pendingRuntimeScanRetry.current;
+    const observed = runtimeSetupCompletionSnapshot;
+    if (!observed) return;
+    if (!pending) {
+      setBusyAction((current) => current === "runtime-setup" ? undefined : current);
+      return;
+    }
+    if (
+      pending.setupCommandGeneration
+      !== observed.completion.setupCommandGeneration
+    ) return;
+
+    // Consume before deciding or starting. Repeated terminal status, snapshot
+    // refreshes, or another runtime blocker can never create a retry loop.
+    pendingRuntimeScanRetry.current = undefined;
+    const refreshedSnapshot = observed.snapshot;
+    const sameCaseStillSelected = selectedCaseIdRef.current === pending.input.caseId;
+    if (!sameCaseStillSelected || !shouldResumeRuntimeBlockedScan({
+      requestedPage: pending.page,
+      currentPage: currentPageRef.current,
+      requestedPageTransitionGeneration: pending.pageTransitionGeneration,
+      currentPageTransitionGeneration: pageTransitionGeneration.current,
+      requestedCaseSelectionGeneration: pending.caseSelectionGeneration,
+      currentCaseSelectionGeneration: caseSelectionBarrierRef.current.generation,
+      requestedCaseId: pending.input.caseId,
+      selectedCaseId: refreshedSnapshot?.selectedCaseId,
+      workspaceCaseId: refreshedSnapshot?.workspace?.case.id,
+      runtimeAvailable: refreshedSnapshot?.runtime?.available,
+      setupPhase: observed.completion.phase,
+      activeScanWork: refreshedSnapshot?.workspace
+        ? hasActiveScanWork(refreshedSnapshot.workspace.runs)
+        : false,
+    })) {
+      setBusyAction((current) => current === "runtime-setup" ? undefined : current);
+      return;
+    }
+
+    void startScan(pending.input, { allowRuntimePreparation: false });
+  }, [runtimeSetupCompletionSnapshot]);
 
   const deleteCase = async (caseId: string, confirmation: string): Promise<boolean> => {
     setBusyAction("delete-case");
@@ -1871,12 +2237,16 @@ export default function App() {
     && isScannerSetupBlocker(scanReadiness.blockerCode)
     ? scanReadiness.blockerCode
     : undefined;
-  const showStartRuntimeSetup = mode !== "native"
-    || snapshot?.runtime?.available !== true
-    || runtimeSetupRequestPending
-    || runtimeSetup?.active === true
-    || runtimeSetup?.prerequisiteRepairActive === true
-    || startScannerSetupBlocker !== undefined;
+  const showStartRuntimeSetup = shouldShowRuntimeSetupAssistant({
+    mode,
+    runtimeAvailable: snapshot?.runtime?.available,
+    status: runtimeSetup,
+    requestPending: runtimeSetupRequestPending,
+    selectedScanNeedsSetup: startScannerSetupBlocker !== undefined,
+  });
+  const coverageRuntimePreparing = mode === "native"
+    && snapshot?.runtime?.available !== true
+    && (runtimeSetupRequestPending || runtimeSetupPolling);
 
   const content = (() => {
     if (loading && !snapshot) {
@@ -1949,13 +2319,14 @@ export default function App() {
           selectedUseCase={selectedUseCase?.definition.id}
           selectionKey={selectedUseCase?.selectionKey}
           assetCount={workspace?.assets.length ?? 0}
-          findingCount={workspace?.findings.length ?? 0}
+          findingCount={workspace?.findings.filter(isSecurityFinding).length ?? 0}
           unknownSourceCount={workspace?.coverage.filter((item) => item.state === "source_unavailable_unknown").length ?? 0}
           connectedNoAssetSourceCount={workspace?.coverage.filter((item) => item.state === "source_connected_none").length ?? 0}
           latestRun={workspace?.runs[0]}
           runs={workspace?.runs ?? []}
           verificationBaselineRunId={verificationBaselineRunId}
-          busy={["create", "seed-demo", "archive-case", "delete-case", "delete-artifacts", "rescan"].includes(busyAction ?? "")}
+          busy={["create", "create-local", "seed-demo", "archive-case", "delete-case", "delete-artifacts", "rescan"].includes(busyAction ?? "")}
+          preparingLocalSnapshot={busyAction === "create-local"}
           nativeMode={scannerService.isNative()}
           artifactCleanupPlan={artifactCleanupPlan}
           artifactCleanupResult={artifactCleanupResult}
@@ -1964,6 +2335,8 @@ export default function App() {
             navigate("start");
           }}
           onCreate={createCase}
+          onCreateWithWorkspace={createCaseWithWorkspace}
+          onChooseWorkspace={() => scannerService.chooseWorkspaceDirectory()}
           onSeedDemo={seedDemoCase}
           onArchive={(caseId) => runAction("archive-case", () => scannerService.archiveCase(caseId))}
           onDelete={deleteCase}
@@ -1973,9 +2346,10 @@ export default function App() {
             setSelectedUseCase(undefined);
             navigate("start");
           }}
-          onSelect={(caseId) => void selectCase(caseId)}
+          onOpenCase={(caseId) => void openCaseAtUsefulStep(caseId)}
           onContinue={() => navigate("coverage")}
           onOpenProgress={() => navigate("progress")}
+          onOpenResults={() => navigate("findings")}
           onSelectVerificationBaseline={setVerificationBaselineRunId}
           onStartRescan={(baselineRunId) => currentCaseId
             ? runAction("rescan", () => scannerService.startRescan(currentCaseId, baselineRunId))
@@ -2030,8 +2404,52 @@ export default function App() {
             assets={workspace.assets}
             scopeGrants={workspace.scopeGrants}
             nativeMode={mode === "native"}
-            busy={busyAction === "connect-source" || busyAction === "attach-workspace" || busyAction === "discovery" || busyAction === "start-scan"}
+            busy={busyAction === "connect-source" || busyAction === "attach-workspace" || busyAction === "discovery" || busyAction === "start-scan" || coverageRuntimePreparing}
             discoveryBusy={busyAction === "discovery"}
+            runtimeSetupNotice={(
+              coverageRuntimePreparing
+              || (snapshot?.runtime?.available !== true && runtimeSetup?.nextAction === "restart_windows")
+            ) ? (
+              <>
+                <InlineNotice
+                  tone="info"
+                  title={text(pendingRuntimeScanRetry.current?.input.caseId === currentCaseId
+                    ? { en: "Preparing the tools this scan needs", zhTW: "正在準備這次掃描需要的工具" }
+                    : runtimeSetup?.nextAction === "restart_windows"
+                      ? { en: "Restart Windows, then continue this scan", zhTW: "重新啟動 Windows，再繼續這次掃描" }
+                      : { en: "Finish preparing the tools, then start this scan", zhTW: "完成工具準備，再開始這次掃描" })}
+                >
+                  <p>{text(pendingRuntimeScanRetry.current?.input.caseId === currentCaseId
+                    ? {
+                      en: "Progress and download status appear below. When the tools are ready, this exact reviewed scan will start automatically.",
+                      zhTW: "下載與準備進度會顯示在下方。工具就緒後，這次已確認的掃描會自動開始。",
+                    }
+                    : runtimeSetup?.nextAction === "restart_windows"
+                      ? {
+                        en: "Your scan project and choices are saved. After the restart, reopen this project, continue tool setup, review the selected target, and press Start.",
+                        zhTW: "掃描專案與選擇都已保存。重新啟動後，請再次開啟這個專案、繼續工具設定，確認已選目標後按下「開始」。",
+                      }
+                      : {
+                        en: "Progress appears below. When setup finishes, review the selected target and press Start.",
+                        zhTW: "準備進度會顯示在下方。完成後，請確認已選目標並按下「開始」。",
+                      })}</p>
+                </InlineNotice>
+                <RuntimeSetupAssistant
+                  locale={locale}
+                  mode={mode}
+                  runtime={snapshot?.runtime}
+                  status={runtimeSetup}
+                  busy={runtimeSetupRequestPending
+                    || runtimeSetup?.active
+                    || runtimeSetup?.prerequisiteRepairActive}
+                  scannerIssueBusy={busyAction === "scan-readiness"}
+                  scannerSetupBlocker={startScannerSetupBlocker}
+                  onSetup={() => void setupManagedRuntime()}
+                  onCheckScannerAvailability={() => void retryScanReadiness(currentCaseId)}
+                  onCancel={() => void cancelManagedRuntimeSetup()}
+                />
+              </>
+            ) : undefined}
             onChooseSnapshot={() => scannerService.chooseSourceSnapshot()}
             onConnectSourceSnapshot={(input) => runAction("connect-source", () => scannerService.connectSourceSnapshot(input))}
             onChooseWorkspace={() => scannerService.chooseWorkspaceDirectory()}
@@ -2040,9 +2458,10 @@ export default function App() {
             onAuthorizationChanged={async () => {
               await loadSnapshot(currentCaseId, true);
             }}
-            onStartScan={(assetIds, modes, confirmation, externalScope) => startScan({
+            onStartScan={(assetIds, modes, confirmation, externalScope, engineIds) => startScan({
               caseId: currentCaseId,
               authorization: { assetIds, modes, confirmation, externalScope },
+              engineIds,
             })}
           />
         );
@@ -2051,6 +2470,7 @@ export default function App() {
           <ProgressPage
             caseId={currentCaseId}
             runs={workspace.runs}
+            findings={workspace.findings}
             selectedRunId={currentRun?.id}
             readiness={scanReadiness?.caseId === currentCaseId ? scanReadiness : undefined}
             readinessCheckFailed={scanReadinessErrorCaseId === currentCaseId}

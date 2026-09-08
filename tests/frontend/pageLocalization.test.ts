@@ -524,10 +524,10 @@ test("count copy stays grammatical when exactly one item is shown", async () => 
     "Assets: {count}",
     "Decisions: {count}",
   ]) assert.ok(findings.includes(phrase), phrase);
-  for (const phrase of ["Files: {count}", "Findings: {count}"]) {
+  for (const phrase of ["Files: {count}", "Saved results: {count}"]) {
     assert.ok(progress.includes(phrase), phrase);
   }
-  assert.ok(cases.includes("Assets: {assets} · Findings: {findings}"));
+  assert.ok(cases.includes("Assets: {assets} · Saved results: {findings}"));
   assert.ok(exports.includes("Original evidence files included: {count}"));
   assert.ok(coverage.includes("Exact CIDR scope — usable addresses: {addresses}; ports: {ports}; connection checks: {probes}."));
   assert.ok(coverage.includes("Pacing floor: {effectiveRate}/s; requested rate: {requestedRate}/s; concurrency: {concurrency}."));

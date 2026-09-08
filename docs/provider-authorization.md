@@ -1,6 +1,6 @@
 # Provider-native authorization and isolated bootstrap
 
-Normative status: this is a subordinate Advanced-feature reference. The [canonical product specification](product-spec.md) controls authorization UX and guarantees that provider setup never blocks localhost, website, internal-network, or local-code first value.
+Direction: [product-spec.md](product-spec.md) controls product priorities and user-visible behavior. This document describes the Advanced provider-authorization feature and its security boundaries only; it cannot create a roadmap, acceptance program, or standing work. Versioning, release timing, packaging, signing, and compliance work begins only when the product owner explicitly requests it.
 
 Product integration rule: cloud is reached through **Settings → Advanced** or an explicitly selected cloud target. Missing, expired, rejected, or interrupted provider authorization marks only the exact cloud target-stage-engine task `not_tested`/`failed`; the run is persisted first, independent tasks continue, and the beginner master report names the coverage gap. Provider setup is not a fifth primary destination and cannot gate New scan, Projects, Report, or Settings.
 
@@ -74,17 +74,17 @@ The raw response body is synced first to a private `0600` SHA-256-addressed file
 
 A complete response with no supported resource records is `connected but empty`, never scanned or green. Azure still retains the exact verified `Enabled` subscription as an attributable subscription asset when its resource inventory is empty; the resource record count remains zero. Expired/missing authorization becomes a target-specific `needs_reauthorization`; transport, malformed-response, unsafe-pagination, storage, cancellation, and partial-capture outcomes remain failed/unknown coverage. Already captured pages and prior assets are retained and appear in the run-bound report. After restart, raw evidence remains available for offline re-parsing, but the process-memory capability is absent and only a new live provider request requires reauthorization.
 
-## Released source boundaries
+## Implemented source boundaries
 
 Every live capability belongs to exactly one `case_id + source_id`. A source holds one exact live
 provider proof at a time; authorizing another native provider coordinate requires another explicit
 source rather than widening the existing proof.
 
-| Provider source | Released boundary | Current limit and execution rule |
+| Provider source | Implemented boundary | Current limit and execution rule |
 |---|---|---|
-| AWS Organizations | One Organizations-enabled caller account per source. Standalone-account onboarding is not a released source profile. | `ListAccounts` may discover organization members, but every scanner execution still requires a short-lived caller credential whose STS account equals that one exact account. A child member therefore needs its own exact-caller source/capability before it can run; organization enumeration alone never authorizes the child. |
+| AWS Organizations | One Organizations-enabled caller account per source. Standalone-account onboarding is not an implemented source profile. | `ListAccounts` may discover organization members, but every scanner execution still requires a short-lived caller credential whose STS account equals that one exact account. A child member therefore needs its own exact-caller source/capability before it can run; organization enumeration alone never authorizes the child. |
 | Azure | One exact tenant plus subscription coordinate per source. | ARM must return that exact subscription with case-sensitive `state == Enabled`. Each Prowler execution contains one subscription; another subscription requires another source/capability. |
-| Google Cloud | One exact organization per source. Organization-less project onboarding is not a released source profile. | Discovery is bounded to 1,000 provider records and Prowler splits approved projects into one exact-project execution each. The capability hard cap is 1,001 checkouts: one discovery plus at most one execution per bounded record. |
+| Google Cloud | One exact organization per source. Organization-less project onboarding is not an implemented source profile. | Discovery is bounded to 1,000 provider records and Prowler splits approved projects into one exact-project execution each. The capability hard cap is 1,001 checkouts: one discovery plus at most one execution per bounded record. |
 | Microsoft 365 | One exact tenant per source. | Discovery and M365 scanners cannot reuse the tenant capability for another tenant; another tenant requires another source/capability. |
 
 AWS, Azure, and Microsoft 365 retain the smaller eight-checkout ceiling. The higher GCP ceiling is
@@ -161,7 +161,7 @@ The native application exposes these Tauri commands and matching methods in `src
 
 The Advanced provider panel exposes both paths without accepting a password or client secret. The current implementation still places this panel in the shared Coverage journey; that is a tracked product gap and not the target information architecture. The target panel binds the selected case source to a fixed engine set and provider-specific bounded checkout ceiling, shows only the non-secret user code or PKCE authorization URL, polls at the provider-supplied interval, and makes revocation visible. Provider links are opened by the operating-system browser through Tauri's opener capability. Both the frontend validator and the Tauri permission scope restrict those links to the AWS, Microsoft, and Google provider hosts used by these flows.
 
-The Advanced bootstrap disclosure first shows the immutable operation list, provider endpoint hosts, embedded template hash, expiry, and cleanup obligations. Only a separate confirmation starts the isolated process. That confirmation is an authorization boundary for an exact provider mutation, not a scan/product/development/release gate.
+The Advanced bootstrap disclosure first shows the immutable operation list, provider endpoint hosts, embedded template hash, expiry, and cleanup obligations. Only a separate confirmation starts the isolated process. That confirmation authorizes one exact provider mutation; it does not govern unrelated scans or development work.
 
 Preferred authorization sessions and installed capabilities are intentionally process-memory-only. Restarting the desktop application requires reauthorization only for unfinished/future live provider contact; captured evidence, reports, offline parsing, and unrelated work remain usable. A short-lived CLI process cannot persist a capability safely; automation should invoke the broker protocol from a parent process that immediately consumes the one-shot frame and performs the bound work in that same process.
 
@@ -195,6 +195,6 @@ Cleanup order removes Azure/Microsoft assignments before service principals and 
 
 Changing an administrator password is not cleanup by itself. Existing sessions, refresh tokens, application credentials, grants, roles, and provider identities must be handled as separate exact obligations.
 
-## Product acceptance boundary
+## Feature verification
 
-Provider security tests prove only this Advanced feature. They cannot substitute for or block the canonical exact-candidate Windows beginner path. Provider acceptance additionally proves that an unavailable/expired cloud capability leaves local work running, saves a partial master report, and returns from official reauthorization to only the unfinished cloud tasks. The broker's exact mutation and cleanup protections are retained because they prevent concrete external-account changes; proposals for another gate, ledger state, or provider-wide qualification must still satisfy the canonical complexity budget.
+Verify provider authorization in proportion to the account and credential risk changed. Tests should demonstrate that administrative material never reaches engines or persistence, provider mutations stay within the disclosed operation, cleanup remains exact and recoverable, expired capabilities do not become authorization, and unavailable cloud access leaves unrelated local work plus an honest partial report available. These checks protect real external accounts; they do not choose the product roadmap or substitute for testing the rendered beginner scan and report path.

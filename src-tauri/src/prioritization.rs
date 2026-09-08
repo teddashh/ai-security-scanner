@@ -17,6 +17,17 @@ const SENSITIVE_IMPACT: &str = " The affected asset is marked as containing sens
 /// Adds bounded, explainable case-context factors without changing severity,
 /// confidence, fingerprints, evidence, workflow status, or any authorization.
 pub fn apply_case_context(case: &AssessmentCase, finding: &mut Finding) {
+    // Reachability inventory is not a weakness to triage. Raising its priority
+    // because the target is internet-facing would turn the defining fact of
+    // the observation into a vulnerability claim.
+    if finding
+        .severity_basis_code
+        .is_some_and(|code| code.is_exposure_observation())
+    {
+        deduplicate(&mut finding.priority_reasons);
+        deduplicate(&mut finding.tags);
+        return;
+    }
     let affected = case
         .assets
         .iter()
@@ -267,6 +278,35 @@ mod tests {
         assert_eq!(finding.possible_impact, original.possible_impact);
         assert!(!finding.priority_reasons.contains(&INTERNET_REASON.into()));
         assert!(!finding.tags.contains(&CONTEXT_VERSION_TAG.into()));
+    }
+
+    #[test]
+    fn reachable_service_inventory_is_never_promoted_as_a_problem() {
+        let case = contextual_case();
+        let mut observation = finding(&case);
+        observation.severity = Severity::Informational;
+        observation.priority = 0;
+        observation.severity_basis_code = Some(crate::domain::SeverityBasisCode::OpenPort);
+        observation.possible_impact = "Reachability alone is not a vulnerability.".into();
+
+        apply_case_context(&case, &mut observation);
+
+        assert_eq!(observation.priority, 0);
+        assert_eq!(
+            observation.possible_impact,
+            "Reachability alone is not a vulnerability."
+        );
+        assert!(observation.context_factors.is_empty());
+        assert!(
+            !observation
+                .priority_reasons
+                .contains(&INTERNET_REASON.into())
+        );
+        assert!(
+            !observation
+                .priority_reasons
+                .contains(&SENSITIVE_REASON.into())
+        );
     }
 
     #[test]

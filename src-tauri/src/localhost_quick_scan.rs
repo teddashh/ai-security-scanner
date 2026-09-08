@@ -1,5 +1,5 @@
-//! Durable, product-owned first-value scan for one TCP service on this
-//! computer.
+//! Durable, product-owned connection diagnostic for one TCP service on this
+//! computer. It is not a vulnerability scan or a measure of first product value.
 //!
 //! The user starts this check with one explicit action. The exact loopback
 //! target, permission, task contract, and queued state are committed before
@@ -218,7 +218,7 @@ pub fn prepare_localhost_quick_scan(
         tracing::warn!(
             error = %error,
             case_id = %case.id,
-            "localhost check was queued but could not become the selected case"
+            "local connection test was queued but could not become the selected case"
         );
     }
 
@@ -293,7 +293,7 @@ pub fn localhost_quick_scan_for_snapshot(
 
 /// Find the already-live exact task for one requested port. Snapshot or
 /// storage corruption is advisory here: it must not turn an unrelated old job
-/// into a global first-value gate, and JobManager still protects every exact
+/// into a global connection-utility blocker, and JobManager still protects every exact
 /// `(case, run)` identity independently.
 pub fn live_localhost_quick_scan_for_port(
     storage: &Storage,
@@ -568,7 +568,7 @@ fn persist_localhost_running_once(
             && (engine_run.status != EngineRunStatus::Queued || engine_run.phase != "queued")
         {
             return Err(AppError::Conflict(
-                "the localhost check is no longer queued".into(),
+                "the local connection test is no longer queued".into(),
             ));
         }
         if !already_running {
@@ -611,7 +611,7 @@ fn complete_localhost_quick_scan_once(
             && (engine_run.status != EngineRunStatus::Running || engine_run.phase != "connecting")
         {
             return Err(AppError::Conflict(
-                "the localhost check is no longer running".into(),
+                "the local connection test is no longer running".into(),
             ));
         }
         if !already_terminal {
@@ -724,14 +724,14 @@ fn record_localhost_cancel_requested_once(
             "queued" | "connecting" | "cancel_requested"
         ) {
             return Err(AppError::Conflict(
-                "the localhost check cannot accept cancellation from its saved state".into(),
+                "the local connection test cannot accept cancellation from its saved state".into(),
             ));
         }
         already_requested = engine_run.phase == "cancel_requested";
         if !already_requested {
             engine_run.phase = "cancel_requested".into();
             engine_run.error_message = Some(
-                "Stopping this localhost check. Any connection result that has not already been saved will be discarded."
+                "Stopping this local connection test. Any connection result that has not already been saved will be discarded."
                     .into(),
             );
         }
@@ -766,7 +766,7 @@ pub fn record_localhost_cancel_transition(
                 .iter()
                 .find(|engine| engine.id == prepared.engine_run_id)
         })
-        .ok_or_else(|| AppError::Conflict("the localhost check disappeared".into()))?;
+        .ok_or_else(|| AppError::Conflict("the local connection test disappeared".into()))?;
     if matches!(
         engine_run.status,
         EngineRunStatus::Queued | EngineRunStatus::Preparing | EngineRunStatus::Running
@@ -840,7 +840,7 @@ fn record_localhost_cancelled_once(
         engine_run.localhost_tcp_observation = None;
         engine_run.error_code = Some("cancelled_without_observation".into());
         engine_run.error_message = Some(
-            "This localhost check was cancelled before its connection result was committed. No result was inferred."
+            "This local connection test was cancelled before its result was committed. No result was inferred."
                 .into(),
         );
     }
@@ -873,7 +873,7 @@ pub fn reconcile_managed_localhost_terminal(
                 .iter()
                 .find(|engine| engine.id == prepared.engine_run_id)
         })
-        .ok_or_else(|| AppError::Conflict("the localhost check disappeared".into()))?;
+        .ok_or_else(|| AppError::Conflict("the local connection test disappeared".into()))?;
     if matches!(
         engine_run.status,
         EngineRunStatus::Completed
@@ -931,7 +931,7 @@ fn reconcile_interrupted_localhost_quick_scan_once(
             )
         {
             return Err(AppError::Conflict(
-                "the localhost check cannot be reconciled from its saved state".into(),
+                "the local connection test cannot be reconciled from its saved state".into(),
             ));
         }
         if !already_terminal {
@@ -943,7 +943,7 @@ fn reconcile_interrupted_localhost_quick_scan_once(
             engine_run.localhost_tcp_observation = None;
             engine_run.error_code = Some("localhost_probe_interrupted".into());
             engine_run.error_message = Some(
-                "This localhost check stopped before a result was safely saved. No result was inferred; start the check again."
+                "This local connection test stopped before a result was safely saved. No result was inferred; start the test again."
                     .into(),
             );
         }
@@ -994,13 +994,13 @@ fn exact_prepared_task_mut<'a>(
         .engine_runs
         .iter_mut()
         .find(|engine_run| engine_run.id == prepared.engine_run_id)
-        .ok_or_else(|| AppError::Conflict("the localhost check disappeared".into()))?;
+        .ok_or_else(|| AppError::Conflict("the local connection test disappeared".into()))?;
     if engine_run.engine_id != LOCALHOST_TCP_ENGINE_ID
         || engine_run.task_kind != EngineTaskKind::built_in_localhost_tcp(prepared.port)
         || engine_run.asset_ids.len() != 1
     {
         return Err(AppError::NotAuthorized(
-            "the saved localhost check no longer matches its exact loopback contract".into(),
+            "the saved local connection test no longer matches its exact loopback contract".into(),
         ));
     }
     Ok(engine_run)
@@ -1281,7 +1281,7 @@ mod tests {
     }
 
     #[test]
-    fn first_value_journey_reopens_and_exports_the_same_durable_localhost_result() {
+    fn connection_diagnostic_reopens_and_exports_the_same_durable_result() {
         let (directory, storage) = storage();
         let database_path = directory.path().join("casework.db");
         let storage = Arc::new(storage);
@@ -1336,7 +1336,7 @@ mod tests {
             directory.path().join("artifacts"),
             directory.path().join("signing.key"),
         );
-        let destination = directory.path().join("first-value-report.html");
+        let destination = directory.path().join("connection-diagnostic-report.html");
         let exported = service
             .export_case(
                 &prepared.case_id,

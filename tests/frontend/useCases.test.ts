@@ -9,6 +9,7 @@ import {
   type UseCaseId,
 } from "../../src/useCases.ts";
 import { prepareDeployedWebsiteTarget } from "../../src/caseForm.ts";
+import { localProfileByAssessmentIntent } from "../../src/localInputProfiles.ts";
 
 const requiredUseCases = [
   "deployed_website",
@@ -88,6 +89,8 @@ test("AI-application onboarding is explicit, local, and does not ask users to hi
 
   assert.ok(startPageSource.includes("Check an AI project"));
   assert.ok(startPageSource.includes("檢查 AI 專案"));
+  assert.ok(startPageSource.includes("Code or AI project"));
+  assert.ok(startPageSource.includes("程式碼或 AI 專案"));
   assert.doesNotMatch(startPageSource, /committed secrets|不小心放進程式碼的秘密/u);
 });
 
@@ -145,11 +148,20 @@ test("code onboarding asks one plain-language bilingual AI-origin question and s
   assert.doesNotMatch(casesPageSource, /aiGeneratedQuestionUseCaseIds/u);
 });
 
-test("guided local routes defer asset creation to the real local picker", () => {
+test("guided local routes choose the exact local input before case creation", () => {
   assert.ok(casesPageSource.includes("guidedLocalUseCase"));
-  assert.ok(casesPageSource.includes("pageCopy.localPickerNextTitle"));
+  assert.ok(casesPageSource.includes("onChooseWorkspace"));
+  assert.ok(casesPageSource.includes("onCreateWithWorkspace"));
+  assert.ok(casesPageSource.includes("selectedWorkspacePath"));
   assert.ok(casesPageSource.includes("pageCopy.localPickerBoundary"));
   assert.ok(casesPageSource.includes("!guidedLocalUseCase && ("));
+  assert.deepEqual(localProfileByAssessmentIntent, {
+    ai_application: "repository_working_tree",
+    source_code: "repository_working_tree",
+    infrastructure_as_code: "iac_working_tree",
+    container_image: "container_image_oci_layout",
+    kubernetes: "kubernetes_manifests",
+  });
 });
 
 test("guided public and internal target fields expose required field errors", () => {
@@ -181,12 +193,11 @@ test("local artifacts never inherit an external-contact activity", () => {
   }
 });
 
-test("external presets begin with low-impact checks while keeping active testing available elsewhere", () => {
-  for (const id of [
-    "deployed_website",
-    "external_ip_or_domain",
-    "internal_it_environment",
-  ] as const) {
+test("only the deployed website preset begins with active vulnerability tests", () => {
+  assert.deepEqual(useCaseById("deployed_website").suggestedActivities, [
+    "active_external_vulnerability_tests",
+  ]);
+  for (const id of ["external_ip_or_domain", "internal_it_environment"] as const) {
     assert.deepEqual(useCaseById(id).suggestedActivities, ["low_impact_external_checks"]);
   }
 });

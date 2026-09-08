@@ -211,7 +211,11 @@ test("result pages use the bounded summary and keep catalog provenance out of th
     readFile(new URL("../../src/pages/FindingsPage.tsx", import.meta.url), "utf8"),
     readFile(new URL("../../src/pages/ProgressPage.tsx", import.meta.url), "utf8"),
   ]);
-  assert.match(findings, /localhostTcpBeginnerSummary\(engine\)/u);
+  assert.match(
+    findings,
+    /latestRun && isExactBuiltInLocalhostQuickScanRun\(latestRun\)[\s\S]*localhostTcpBeginnerSummary\(latestRun\.engineRuns\[0\]!\)/u,
+  );
+  assert.match(findings, /Connection test only — no vulnerability scan ran/u);
   assert.match(findings, /text\(localhostSummary\.exclusions\)/u);
   assert.doesNotMatch(findings, /Good news:/u);
   assert.match(

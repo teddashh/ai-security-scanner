@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { ProgressPage } from "../../src/pages/ProgressPage";
 import { I18nProvider, localeStorageKey } from "../../src/i18n";
-import type { EngineRun, EngineRunStatus, ScanRun } from "../../src/types";
+import type { EngineRun, EngineRunStatus, Finding, ScanRun } from "../../src/types";
 
 // The progress view is read while a scan is still the user's live picture of
 // what happened. Two of its states are easy to lose on the way to the screen:
@@ -50,12 +50,43 @@ const run = (engineRuns: EngineRun[], status: ScanRun["status"] = "partial"): Sc
   totalAssetCount: 1,
 });
 
-const renderProgress = (value: ScanRun) =>
+const finding = (overrides: Partial<Finding> = {}): Finding => ({
+  id: "finding-1",
+  caseId: "case-1",
+  fingerprint: "fingerprint-1",
+  assetId: "asset-1",
+  assetName: "asset-1",
+  title: "Unsafe code execution",
+  summary: "A security detector matched unsafe code execution.",
+  impact: "Untrusted input could execute code.",
+  recommendation: "Review and replace the unsafe call.",
+  expertType: "Application security engineer",
+  severity: "high",
+  confidence: "high",
+  priority: 90,
+  workflowState: "unreviewed",
+  evidence: [{
+    id: "evidence-1",
+    sourceEngine: "semgrep",
+    observedAt: "2026-09-04T12:01:00Z",
+    summary: "unsafe call",
+    rawArtifactHash: "a".repeat(64),
+    runId: "run-1",
+  }],
+  firstSeenRunId: "run-1",
+  lastSeenRunId: "run-1",
+  firstSeenAt: "2026-09-04T12:01:00Z",
+  lastSeenAt: "2026-09-04T12:01:00Z",
+  ...overrides,
+});
+
+const renderProgress = (value: ScanRun, findings: Finding[] = []) =>
   render(
     <I18nProvider>
       <ProgressPage
         caseId="case-1"
         runs={[value]}
+        findings={findings}
         selectedRunId={value.id}
         onStart={() => Promise.resolve()}
         onRetryLocalhostQuickScan={() => Promise.resolve()}
@@ -212,4 +243,81 @@ test("collapsing every check into one shared failure still states how many stopp
   if (activity) {
     expect(recovery!.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   }
+});
+
+test("an active scan exposes durable security findings without waiting for the run to finish", () => {
+  const { container } = renderProgress(
+    run([engine("semgrep", "running", { findingCount: 2 })], "running"),
+    [finding()],
+  );
+
+  const results = container.querySelector<HTMLAnchorElement>('a[href="#findings"]');
+  expect(results?.textContent).toContain("View results");
+  expect(results?.className).toContain("button--primary");
+});
+
+test("the live results action is clear in Traditional Chinese", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderProgress(
+    run([engine("semgrep", "running", { findingCount: 1 })], "running"),
+    [finding()],
+  );
+
+  const results = container.querySelector<HTMLAnchorElement>('a[href="#findings"]');
+  expect(results?.textContent).toContain("查看結果");
+  expect(results?.className).toContain("button--primary");
+});
+
+test("an active scan with no durable finding does not offer results yet", () => {
+  const { container } = renderProgress(
+    run([engine("semgrep", "running", { findingCount: 0 })], "running"),
+  );
+
+  expect(container.querySelector('a[href="#findings"]')).toBeNull();
+});
+
+test("reachable-service inventory does not unlock security results", () => {
+  const { container } = renderProgress(
+    run([engine("naabu", "running", { findingCount: 1 })], "running"),
+    [finding({
+      id: "observation-1",
+      severityBasisCode: "open_port",
+      title: "Open TCP port",
+      severity: "info",
+      priority: 0,
+    })],
+  );
+
+  expect(container.querySelector('a[href="#findings"]')).toBeNull();
+});
+
+test("the localhost connection utility never unlocks security results", () => {
+  const { container } = renderProgress(
+    run([
+      engine("builtin-localhost-tcp", "running", {
+        category: "built_in_localhost_tcp",
+        taskKind: {
+          kind: "built_in_localhost_tcp",
+          port: 9001,
+          timeoutMs: 1_500,
+          payloadBytes: 0,
+        },
+        // Defensive fixture: even malformed legacy data cannot turn a
+        // connectivity observation into a security finding.
+        findingCount: 1,
+      }),
+    ], "running"),
+  );
+
+  expect(container.querySelector('a[href="#findings"]')).toBeNull();
+});
+
+test("a terminal scan keeps the results entry even when it found no problems", () => {
+  const { container } = renderProgress(
+    run([engine("semgrep", "completed", { findingCount: 0, progress: 100 })], "completed"),
+  );
+
+  const results = container.querySelector<HTMLAnchorElement>('a[href="#findings"]');
+  expect(results?.textContent).toContain("View results");
+  expect(results?.className).toContain("button--secondary");
 });

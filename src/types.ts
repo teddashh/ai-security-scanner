@@ -741,7 +741,7 @@ export interface EngineAdmissionIssue {
 export type BeginnerReportSummary = "complete" | "partial" | "no_checks_completed";
 export type BeginnerReportLifecycle = "live" | "final";
 export type BeginnerReportDataAvailability = "recorded" | "current_case_fallback" | "unavailable";
-export type BeginnerReportStage = "quick_discovery" | "inventory" | "deep";
+export type BeginnerReportStage = "connection_diagnostic" | "quick_discovery" | "inventory" | "deep";
 export type BeginnerCoverageStatus =
   | "tested_complete"
   | "tested_partial"
@@ -893,6 +893,8 @@ export interface BeginnerReportFinding {
   family?: FindingFamily;
   severityBasisCode?: SeverityBasisCode;
   confidenceBasisCode?: ConfidenceBasisCode;
+  /** Useful reachability facts retained without claiming a vulnerability. */
+  observationDetails?: string[];
   /** Empty unless this case raised the finding's priority. */
   contextFactors?: ContextFactor[];
   /** What to preserve before changing anything, and how to confirm the fix. */
@@ -1147,6 +1149,8 @@ export interface Finding {
   family?: FindingFamily;
   severityBasisCode?: SeverityBasisCode;
   confidenceBasisCode?: ConfidenceBasisCode;
+  /** Product-owned port/protocol/status facts for reachability observations. */
+  observationDetails?: string[];
   /**
    * Why this case raised the priority. The backend appends a sentence to
    * `impact` for each; a composed impact sentence replaces that string, so

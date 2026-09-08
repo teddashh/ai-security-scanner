@@ -261,7 +261,7 @@ test("the native localhost quick scan invokes its command once with the default 
   }
 });
 
-test("queued localhost first value does not wait for an unrelated manifest read", async () => {
+test("queued localhost connection utility does not wait for an unrelated manifest read", async () => {
   let manifestReads = 0;
   setTestWindow({
     __TAURI_INTERNALS__: {

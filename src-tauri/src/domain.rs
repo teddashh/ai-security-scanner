@@ -1307,6 +1307,16 @@ pub enum SeverityBasisCode {
     CloudControlQuery,
 }
 
+impl SeverityBasisCode {
+    /// Reachability records are useful inventory, but they are not evidence of
+    /// a weakness. Keeping this distinction on the durable product-owned code
+    /// prevents Naabu/httpx observations from being counted or presented as
+    /// problems merely because they share the finding storage pipeline.
+    pub fn is_exposure_observation(self) -> bool {
+        matches!(self, Self::OpenPort | Self::ReachableHttpService)
+    }
+}
+
 /// Why this product assigned confidence when the engine supplied no confidence
 /// rating of its own.
 ///

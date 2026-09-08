@@ -12,6 +12,14 @@
   justify-content: flex-end;
 }
 
+.create-case-panel__locked-fields {
+  display: contents;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 .case-primary-target > legend {
   padding: 0 6px;
 }
@@ -68,6 +76,26 @@
 .case-primary-target .inline-notice,
 .case-more-details .inline-notice {
   margin-top: 0;
+}
+
+.case-local-picker {
+  display: grid;
+  gap: 12px;
+}
+
+.case-local-picker > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.case-local-picker .snapshot-picker {
+  margin-top: 5px;
+}
+
+.case-local-picker .form-error {
+  margin: 0;
 }
 
 .case-more-details {

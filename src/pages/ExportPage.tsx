@@ -11,6 +11,7 @@ import {
   runSupportsFindingOnlyExport,
 } from "../exportFormatEligibility";
 import { useI18n } from "../i18n";
+import { isExactBuiltInLocalhostQuickScanRun } from "../localhostQuickScan";
 import { reportLocaleForUiLocale } from "../reportLocale";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import type { CaseExport, CaseWorkspace, ExportFormat, ExportPreview } from "../types";
@@ -62,6 +63,14 @@ const copy = {
   incompleteBody: {
     en: "Some checks did not finish. The file records those gaps but may omit unreported problems.",
     zhTW: "有些檢查未完成；檔案會記錄缺口，但可能缺少尚未回報的問題。",
+  },
+  connectionOnlyTitle: {
+    en: "Connection test only — no vulnerability scan ran",
+    zhTW: "這只是連線測試，沒有執行漏洞掃描",
+  },
+  connectionOnlyBody: {
+    en: "The exported file records only whether one local port accepted a bounded TCP connection. Choose a website, project, or applicable network scan for a security report.",
+    zhTW: "匯出檔只會記錄單一本機連接埠是否接受有限制的 TCP 連線。若要取得資安報告，請選擇網站、專案或適用的網路掃描。",
   },
   demoTitle: { en: "This downloads a sample report", zhTW: "這次會下載一份範例報告" },
   demoBody: {
@@ -209,7 +218,7 @@ const copy = {
   dataSources: { en: "Data sources", zhTW: "資料來源" },
   coverageEntries: { en: "Coverage records", zhTW: "涵蓋紀錄" },
   assets: { en: "Known / candidate assets", zhTW: "全部／候選資產" },
-  findings: { en: "Case / selected-run findings", zhTW: "案件全部／本輪問題" },
+  findings: { en: "Case / selected-run result records", zhTW: "案件全部／本輪結果紀錄" },
   evidenceIndexes: { en: "All / selected-run evidence records", zhTW: "全部／本輪證據索引" },
   runs: { en: "Scan runs / selected-run jobs", zhTW: "掃描輪次／本輪工作" },
   externalPolicies: { en: "Pinned external-scope grants", zhTW: "固定的外部範圍授權" },
@@ -219,7 +228,7 @@ const copy = {
   unknownSourceFact: { en: "Sources with no visibility", zhTW: "看不到的資料來源" },
   contentsScope: { en: "Scope statement and coverage record", zhTW: "範圍聲明與涵蓋紀錄" },
   contentsVersions: { en: "Scanner, rule library, and result-adapter versions", zhTW: "掃描工具、規則庫與結果轉換器版本" },
-  contentsHashes: { en: "Source-evidence hash for each finding", zhTW: "每個問題的原始證據雜湊" },
+  contentsHashes: { en: "Source-evidence hash for each result record", zhTW: "每筆結果紀錄的原始證據雜湊" },
   // `case.asset_relations` is serialized in exactly one place -- the bundle's
   // `assets.json`. OCSF names "asset relationships" in its own
   // `omitted_canonical_areas`, and the master JSON, HTML, OSCAL, and framework
@@ -298,7 +307,7 @@ const formatCopy = {
     extension: ".frameworks.json",
   },
   ocsf: {
-    title: { en: "OCSF findings", zhTW: "OCSF 問題資料" },
+    title: { en: "OCSF events", zhTW: "OCSF 事件資料" },
     detail: {
       en: "For OCSF-compatible security tools.",
       zhTW: "供支援 OCSF 的資安工具使用。",
@@ -328,8 +337,8 @@ const advancedFormats = [
 ] as const satisfies readonly ExportFormat[];
 const findingOnlyCoverageCopy = {
   ocsf: {
-    en: "OCSF findings plus a coverage manifest for missing or unfinished checks.",
-    zhTW: "OCSF 問題資料，另附涵蓋說明檔記錄未測或未完成項目。",
+    en: "OCSF finding and service-inventory events plus a coverage manifest for missing or unfinished checks.",
+    zhTW: "OCSF 問題與服務盤點事件，另附涵蓋說明檔記錄未測或未完成項目。",
   },
   oscal: {
     en: "OSCAL observations plus a coverage manifest for missing or unfinished checks.",
@@ -342,6 +351,7 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
   const reportLocale = reportLocaleForUiLocale(locale);
   const selectedRun = workspace.runs.find((run) => run.id === selectedRunId);
   const selectedRunUnavailable = !selectedRun;
+  const connectionOnlyRun = Boolean(selectedRun && isExactBuiltInLocalhostQuickScanRun(selectedRun));
   const activeRun = selectedRun && ["queued", "running", "paused"].includes(selectedRun.status)
     ? selectedRun
     : undefined;
@@ -534,6 +544,12 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
       {incompleteTerminalRun && !demoMode && (
         <InlineNotice tone="warning" title={text(copy.incompleteTitle)}>
           <p>{text(copy.incompleteBody)}</p>
+        </InlineNotice>
+      )}
+
+      {connectionOnlyRun && !demoMode && (
+        <InlineNotice tone="warning" title={text(copy.connectionOnlyTitle)}>
+          <p>{text(copy.connectionOnlyBody)}</p>
         </InlineNotice>
       )}
 

@@ -1,21 +1,21 @@
 # Third-party inventory for ai-security-scanner
 
-Status: current source and artifact inventory; generated release evidence is artifact-specific
+Status: current source and artifact inventory; generated evidence is artifact-specific
 
 Last updated: 2026-09-06
 
-Normative status: this is an artifact/license inventory, not a product specification. The [canonical product specification](docs/product-spec.md) controls user-visible behavior and release acceptance. A license, provenance, or admission problem may withhold the affected artifact or engine; it does not block the installed application, unaffected engines, saved reports, or an independently qualified platform.
+This is an artifact and license inventory, not a product specification or roadmap. The [product specification](docs/product-spec.md) controls user-visible behavior and priorities. Update source and license facts when an engine relationship changes. Distribution work begins only when the product owner explicitly requests it.
 
-`ai-security-scanner` orchestrates independent upstream projects. This file explains their current packaging relationships and also retains research projects that are not release dependencies. [`engines/catalog.json`](engines/catalog.json) is authoritative for the exact engine source, artifact digest, runnable state, blockers, and license disposition. The managed-runtime manifest is authoritative for platform-specific runtime files. This narrative cannot make a missing artifact runnable or prove that a GitHub Release or image was published.
+`ai-security-scanner` orchestrates independent upstream projects. This file explains their current artifact relationships and also retains research projects that are not product dependencies. [`engines/catalog.json`](engines/catalog.json) is authoritative for the exact engine source, artifact digest, runnable state, blockers, and license disposition. The managed-runtime manifest is authoritative for platform-specific runtime files. This narrative cannot make a missing artifact runnable or prove that an external artifact exists.
 
-The applicable terms are those attached to each exact source revision and distributed artifact, including its dependencies, images, plugins, rules, templates, feeds, and databases. Every release generates locked dependency notices, engine notices, managed-runtime component inventories, and SPDX/CycloneDX SBOMs from the resolved artifacts. Those generated files describe the bytes in that release; this source inventory is not a substitute for them or for legal advice.
+The applicable terms are those attached to each exact source revision and distributed artifact, including its dependencies, images, plugins, rules, templates, feeds, and databases. When the product owner requests distribution, the artifact workflow generates locked dependency notices, engine notices, managed-runtime component inventories, and SPDX/CycloneDX SBOMs from the resolved bytes. This source inventory is not a substitute for that artifact-specific evidence or for legal advice.
 
 The `ai-security-scanner` repository currently carries the Apache License 2.0 in the root `LICENSE` file. That license covers this project's own work only and does not replace, relicense, or override any third-party terms recorded here.
 
 ## Disposition labels
 
-- `ALLOW`: the engineering release record marks the exact project-managed artifact for distribution with its required license texts, notices, and dependency obligations.
-- `SOURCE_OFFER`: the release record identifies a project-managed copyleft artifact and its corresponding-source or source-offer path.
+- `ALLOW`: the engineering record has an allow disposition for the exact project-managed artifact with its required license texts, notices, and dependency obligations.
+- `SOURCE_OFFER`: the artifact record identifies a project-managed copyleft artifact and its corresponding-source or source-offer path.
 - `SOURCE_ARCHIVE`: a managed-runtime record binds a distributed copyleft binary to an exact corresponding-source archive URL, digest, and size.
 - `UPSTREAM_PINNED`: the product retrieves an exact verified upstream artifact by digest and does not republish it as a project-managed engine image.
 - `GENERATED_INVENTORY`: the resolved release graph, notices, and SBOM—not this row—enumerate the artifact-specific dependency terms.
@@ -77,14 +77,14 @@ The `ai-security-scanner` repository currently carries the Apache License 2.0 in
 | Nikto | [sullo/nikto](https://github.com/sullo/nikto) | NOASSERTION | Authorized web-server assessment research | MANUAL / RESEARCH |
 | VibeScan | [Armur-Ai/vibescan](https://github.com/Armur-Ai/vibescan/tree/52efb12fdcd8118c6f0f2b642558b2f335e7bf66) | MIT at audited revision `52efb12fdcd8118c6f0f2b642558b2f335e7bf66` | Vibe-coding journey and normalized multi-tool-report research only; no code, binary, image, or package is shipped | RESEARCH / NOT_DISTRIBUTED |
 
-The VibeScan packaging decision and security review are recorded in
+The VibeScan integration decision and security review are recorded in
 [`docs/research/vibescan-evaluation.md`](docs/research/vibescan-evaluation.md). Its useful guided
 journey and common-results-envelope ideas are being implemented independently over this project's
 existing scanners; VibeScan itself is not a release dependency.
 
 ## Supporting standards and runtime inventory
 
-The platform-specific managed-runtime manifest records every bundled file, first-setup download, source revision, license expression, size, and SHA-256. For each offered platform artifact, the release pipeline emits the applicable manifest plus runtime notices and SPDX/CycloneDX SBOMs. Platforms that are absent or unqualified remain explicitly `not-offered`; evidence for one platform does not stand in for another. The relationships below summarize generated evidence rather than claiming that every research repository is packaged.
+The platform-specific managed-runtime manifest records every bundled file, first-setup download, source revision, license expression, size, and SHA-256. For an artifact the product owner chooses to distribute, the artifact workflow emits the applicable manifest, runtime notices, and SPDX/CycloneDX SBOMs. An absent platform remains `not-offered`; evidence for one platform does not describe another. The relationships below summarize current source records rather than claiming that every research repository is packaged.
 
 | Component | Official source | Pinned license record | Current relationship | Disposition |
 |---|---|---|---|---|
@@ -120,7 +120,7 @@ implementation, effectiveness, certification, or compliance.
 
 [Docker Desktop licensing](https://docs.docker.com/subscription/desktop-license/) is not the same as the Apache-2.0 licenses on Moby, Docker CLI, or Docker Compose. `ai-security-scanner` must not bundle, redistribute, or require an enterprise user to use Docker Desktop based only on those repository licenses.
 
-The intended packaged path uses a private, versioned Podman machine runtime: QEMU on Linux, Apple Virtualization.framework through vfkit on macOS, and a Windows WSL 2 capability that the signed installer must detect and prepare automatically when needed. This inventory does not claim that the Windows path is implemented or qualified; current gaps remain in the [product audit](docs/product-audit.md). Docker or a user-installed Podman remains an optional compatibility provider and is never treated as part of the installer.
+The product's private runtime design uses Podman with QEMU on Linux, Apple Virtualization.framework through vfkit on macOS, and WSL 2 capability on Windows. Runtime preparation remains behind the user's selected scan task; this inventory makes no claim about installer behavior. Docker or a user-installed Podman remains an optional compatibility provider and is not treated as part of the application.
 
 ## Rules, feeds, plugins, and databases
 
@@ -154,7 +154,7 @@ MPL-2.0 has file-level source obligations for covered files and modifications. A
 
 ### LGPL-2.1
 
-LGPL obligations depend on whether the project links, modifies, or merely distributes a separate executable. Distribution still requires the license and applicable source/relinking obligations. The release review must examine the actual wrapper and artifact, not rely on the words “separate process.”
+LGPL obligations depend on whether the project links, modifies, or merely distributes a separate executable. Distribution still requires the license and applicable source/relinking obligations. For any distribution the product owner requests, review the actual wrapper and artifact rather than relying on the words “separate process.”
 
 ### GPL-2.0 and GPL-3.0
 
@@ -168,9 +168,9 @@ AGPL includes GPL distribution obligations and a network-interaction source prov
 
 `NOASSERTION` means the automated repository metadata was not sufficient. It does not mean no license or unrestricted use. These components remain non-redistributable until a human reviews the pinned revision and records a decision.
 
-## Release compliance requirements
+## Artifact notice requirements when distribution work is requested
 
-The release workflow enforces the mechanical evidence requirements below. They support license compliance work but do not replace qualified legal analysis:
+When the product owner requests distribution work, the artifact workflow uses the mechanical evidence below. It supports license review but does not replace qualified legal analysis:
 
 1. Resolve every included artifact to a source revision, version, and digest.
 2. Generate an SBOM for the desktop application, broker, runtime, images, adapters, and bundled data.
@@ -179,9 +179,8 @@ The release workflow enforces the mechanical evidence requirements below. They s
 5. Verify trademarks and naming restrictions separately from copyright licenses.
 6. Confirm whether each artifact is bundled, built by the project, or downloaded on demand.
 7. Confirm that on-demand download terms allow the proposed use; downloading later is not a license bypass.
-8. Record the decision in the engine catalog, plan, generated notices, and release evidence.
-9. Exclude only the exact engine artifact from distribution and execution when its catalog entry is non-runnable, blocked, lacks an immutable artifact digest, or lacks an `allow`/`source_offer` disposition. The stable application and unaffected admitted engines may still ship with an explicit support matrix and coverage gap.
+8. Record the artifact facts in the engine catalog, plan, generated notices, and artifact evidence.
+9. Exclude only the exact engine artifact from the requested distribution and execution when its catalog entry is non-runnable, blocked, lacks an immutable artifact digest, or lacks an `allow`/`source_offer` disposition. Do not infer a decision for the application or unaffected engines.
 
-This file must be updated whenever a catalog engine, offered runtime component, ruleset, feed,
-database, plugin, or license relationship changes. That maintenance obligation does not make every
-catalog entry a product-wide release requirement.
+Update this file when a catalog engine, runtime component, ruleset, feed, database, plugin, or
+license relationship changes. That source-record maintenance does not initiate distribution work.

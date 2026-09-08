@@ -25,6 +25,8 @@ type RouteOptions = Pick<React.ComponentProps<typeof CoveragePage>, "assessmentI
   sources?: ConnectedSource[];
   coverage?: CoverageRecord[];
   nativeMode?: boolean;
+  busy?: boolean;
+  runtimeSetupNotice?: React.ReactNode;
   onStartScan?: React.ComponentProps<typeof CoveragePage>["onStartScan"];
 };
 
@@ -36,6 +38,8 @@ const routeElement = ({
   coverage = [],
   sources = [],
   nativeMode = true,
+  busy = false,
+  runtimeSetupNotice,
   onStartScan = () => Promise.resolve(true),
 }: RouteOptions) => (
   <I18nProvider>
@@ -49,6 +53,8 @@ const routeElement = ({
       assets={assets}
       scopeGrants={[]}
       nativeMode={nativeMode}
+      busy={busy}
+      runtimeSetupNotice={runtimeSetupNotice}
       onChooseSnapshot={() => Promise.resolve(null)}
       onConnectSourceSnapshot={() => Promise.resolve()}
       onChooseWorkspace={() => Promise.resolve(null)}
@@ -404,11 +410,11 @@ test("guided cloud Start keeps the exact signed-in account, checks, and no-chang
   expect(advanced?.open).toBe(false);
 });
 
-test("browser-preview website flow keeps one concise boundary and starts without another form", async () => {
+test("public website flow applies the fixed Nuclei quick profile and starts without another form", async () => {
   const onStartScan = vi.fn().mockResolvedValue(true);
   const { container, queryByText } = renderRoute({
     assessmentIntent: "deployed_website",
-    requestedActivities: ["low_impact_external_checks"],
+    requestedActivities: ["active_external_vulnerability_tests"],
     nativeMode: false,
     onStartScan,
     assets: [pendingAsset({
@@ -419,13 +425,13 @@ test("browser-preview website flow keeps one concise boundary and starts without
       locator: "example.com",
       identifiers: [{ namespace: "dns_name", value: "example.com" }],
       internetExposed: true,
-      declaredWebService: { protocol: "https", port: 443, path: "/" },
+      declaredWebService: { protocol: "https", port: 443, path: "/account" },
     })],
   });
 
   await waitFor(() => {
     expect(container.querySelector(".coverage-guided-boundary")?.textContent).toBe(
-      "example.com · HTTPS 443 · max 25/s · 10 concurrent · 3s timeout. No exploitation, credentials, destructive actions, or added targets. Start confirms authorization.",
+      "Website to check: https://example.com:443, not only the entered page path /account. The fixed scan sends at most 19 GET requests to a small fixed set of common exposure and diagnostic locations, at max 3/s, 2 concurrent, and 10s timeout. It does not sign in, submit forms, follow redirects, or exploit findings. If you are allowed to test only a specific path, do not use this quick scan.",
     );
   });
 
@@ -443,6 +449,7 @@ test("browser-preview website flow keeps one concise boundary and starts without
   expect(queryByText("Use a different scan type (advanced)")).toBeNull();
   expect(queryByText("I confirm this is my website or a system I am allowed to scan")).toBeNull();
   expect(queryByText("Note (optional)")).toBeNull();
+  expect(queryByText("Approval reference (required)")).toBeNull();
 
   const advancedSettings = container.querySelectorAll<HTMLDetailsElement>("details.coverage-scan-advanced");
   expect(advancedSettings).toHaveLength(1);
@@ -452,6 +459,7 @@ test("browser-preview website flow keeps one concise boundary and starts without
   expect(advancedSettings[0]?.open).toBe(true);
   expect((within(advancedSettings[0]).getByLabelText(/Website or system to check/) as HTMLSelectElement).value).toBe("example.com");
   expect((within(advancedSettings[0]).getByLabelText(/Allowed ports/) as HTMLInputElement).value).toBe("443");
+  expect(within(advancedSettings[0]).queryByLabelText(/Exact active-test IDs/)).toBeNull();
 
   const editInputs = Array.from(pageHeader?.querySelectorAll<HTMLButtonElement>("button") ?? [])
     .find((button) => button.textContent?.includes("Edit inputs"));
@@ -475,25 +483,84 @@ test("browser-preview website flow keeps one concise boundary and starts without
   expect(onStartScan).toHaveBeenCalledTimes(1);
   expect(onStartScan).toHaveBeenCalledWith(
     ["asset-example"],
-    ["low_impact_external"],
-    "The user explicitly confirmed this exact low-impact network target in the guided local interface.",
-    expect.objectContaining({
+    ["active_external"],
+    "The user explicitly confirmed authorization to scan the exact https://example.com:443 origin with the displayed fixed quick profile.",
+    {
       target: "example.com",
       protocol: "https",
       ports: [443],
-      activity: "low_impact_external",
+      activity: "active_external",
       ratePolicy: {
-        requestsPerSecond: 25,
-        concurrency: 10,
-        timeoutSeconds: 3,
+        requestsPerSecond: 3,
+        concurrency: 2,
+        timeoutSeconds: 10,
       },
-    }),
+      templatePolicy: {
+        revision: "nuclei-templates@24858b4bfabfa86f0bcfd36aea24fb535152b012",
+        allowedTemplateIds: [
+          "htpasswd-detection",
+          "git-credentials-disclosure",
+          "npmrc-authtoken",
+          "configuration-listing",
+          "ds-store-file",
+          "webpack-sourcemap-disclosure",
+          "cgi-printenv",
+          "debug-vars",
+          "prometheus-metrics",
+          "apache-server-status",
+          "django-debug-config-enabled",
+          "springboot-configprops",
+          "dockerfile-hidden-disclosure",
+        ],
+        allowHeadless: false,
+        allowOutOfBand: false,
+        allowFuzzing: false,
+        allowFileUpload: false,
+        allowDenialOfService: false,
+        allowCredentialAttacks: false,
+      },
+      assertedAuthority: "The user explicitly confirmed authorization to scan the exact https://example.com:443 origin with the displayed fixed quick profile.",
+      allowSensitiveNetworks: false,
+    },
+    ["nuclei"],
   );
 }, 15_000);
 
-test("public-record mode keeps the exact website and honest no-contact boundary visible", async () => {
+test("a scan waiting for its tools keeps the reviewed website request immutable", async () => {
   const { container } = renderRoute({
     assessmentIntent: "deployed_website",
+    requestedActivities: ["active_external_vulnerability_tests"],
+    busy: true,
+    runtimeSetupNotice: <div data-testid="runtime-progress">Downloading scan tools: 42%</div>,
+    assets: [pendingAsset({
+      id: "asset-example",
+      name: "example.com",
+      type: "domain",
+      platform: "external",
+      locator: "example.com",
+      identifiers: [{ namespace: "dns_name", value: "example.com" }],
+      internetExposed: true,
+      declaredWebService: { protocol: "https", port: 443, path: "/" },
+    })],
+  });
+
+  await waitFor(() => expect(container.querySelector(".scope-confirmation-panel")).not.toBeNull());
+  const reviewControls = Array.from(container.querySelectorAll<
+    HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement
+  >(".scope-confirmation-panel input, .scope-confirmation-panel select, .scope-confirmation-panel textarea, .scope-confirmation-panel button"));
+  expect(reviewControls.length).toBeGreaterThan(0);
+  expect(reviewControls.every((control) => control.disabled)).toBe(true);
+  expect(container.querySelector('[data-testid="runtime-progress"]')?.textContent).toContain("42%");
+  expect(container.querySelector(".scope-confirmation-panel .button--primary")?.textContent).toContain("Preparing scan tools");
+
+  const editInputs = Array.from(container.querySelectorAll<HTMLButtonElement>(".page-header button"))
+    .find((button) => button.textContent?.includes("Edit inputs"));
+  expect(editInputs?.disabled).toBe(true);
+});
+
+test("public-record mode keeps the exact website and honest no-contact boundary visible", async () => {
+  const { container } = renderRoute({
+    assessmentIntent: "external_ip_or_domain",
     requestedActivities: [],
     nativeMode: false,
     assets: [pendingAsset({
@@ -527,3 +594,32 @@ test("public-record mode keeps the exact website and honest no-contact boundary 
   expect(Array.from(container.querySelectorAll<HTMLButtonElement>(".scope-confirmation-panel button[type='submit']"))
     .some((button) => button.textContent?.includes("Start without contacting this system"))).toBe(true);
 }, 15_000);
+
+test("an internal deployed website never receives the public Nuclei quick profile automatically", async () => {
+  const onStartScan = vi.fn().mockResolvedValue(true);
+  const { container, queryByText } = renderRoute({
+    assessmentIntent: "deployed_website",
+    requestedActivities: ["active_external_vulnerability_tests"],
+    onStartScan,
+    assets: [pendingAsset({
+      id: "asset-internal-website",
+      name: "app.internal.test",
+      type: "domain",
+      platform: "external",
+      locator: "app.internal.test",
+      identifiers: [{ namespace: "dns_name", value: "app.internal.test" }],
+      internetExposed: false,
+      declaredWebService: { protocol: "https", port: 443, path: "/health" },
+    })],
+  });
+
+  await waitFor(() => expect(container.querySelector(".scope-mode-fieldset")).not.toBeNull());
+  const activeMode = Array.from(container.querySelectorAll<HTMLLabelElement>(".scope-mode-card"))
+    .find((label) => label.textContent?.includes("Approved active website tests"))
+    ?.querySelector<HTMLInputElement>("input");
+  expect(activeMode).toBeTruthy();
+  expect(activeMode?.checked).toBe(false);
+  expect(queryByText(/Whole origin:/)).toBeNull();
+  expect(container.querySelector(".scope-confirmation-panel button[type='submit']")?.hasAttribute("disabled")).toBe(true);
+  expect(onStartScan).not.toHaveBeenCalled();
+});

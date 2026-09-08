@@ -37,43 +37,47 @@ interface MarketingCopy {
   localhostQuickScanPortLabel: string;
   localhostQuickScanPortHelp: string;
   localhostQuickScanPortError: string;
+  connectionToolsTitle: string;
+  connectionToolsDescription: string;
   choiceTitle: string;
   scopeAndLimits: string;
   moreWaysTitle: string;
   moreWaysDescription: string;
   controlSummary: string;
-  cards: Record<UseCaseId, { outcome: string; action: string }>;
+  cards: Record<UseCaseId, { title?: string; outcome: string; action: string }>;
 }
 
 const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
   en: {
     title: "Security checks",
-    description: "",
+    description: "Choose a website or project below for the shortest useful scan. We’ll guide you to results that show what was checked, what needs attention, and what to do next.",
     previewDescription: "Preview mode · choose a target to review its setup.",
-    localhostQuickScanAction: "Check this computer · 127.0.0.1:9001",
-    localhostQuickScanBusy: "Starting this check…",
+    localhostQuickScanAction: "Test local service connection · 127.0.0.1:9001",
+    localhostQuickScanBusy: "Testing the connection…",
     localhostQuickScanBoundary:
-      "One TCP connection to 127.0.0.1:9001; no payload; up to 3 seconds. This is not a security guarantee.",
+      "Connectivity only: one TCP connection to 127.0.0.1:9001, no payload, up to 3 seconds. This is not a vulnerability scan and does not check this computer for security problems.",
     localhostQuickScanOptions: "Use a different local port",
     localhostQuickScanPortLabel: "Local port",
     localhostQuickScanPortHelp: "Enter a port from 1 to 65535.",
     localhostQuickScanPortError: "Enter a whole-number port from 1 to 65535.",
+    connectionToolsTitle: "Connection utility (not a security scan)",
+    connectionToolsDescription: "Use this only to see whether one local service accepts a TCP connection.",
     choiceTitle: "Choose a target",
     scopeAndLimits: "Scope and limits",
     moreWaysTitle: "More ways to scan",
-    moreWaysDescription: "Source code, cloud accounts, infrastructure code, containers, and Kubernetes",
+    moreWaysDescription: "Public or internal systems, cloud accounts, infrastructure code, containers, and Kubernetes",
     controlSummary: "How scanning stays under your control",
     cards: {
       deployed_website: {
-        outcome: "Catch common website and API weaknesses before they turn into incidents.",
+        outcome: "Check common exposed files and debug or status endpoints with a fixed Nuclei scan, using at most 19 GET requests to the displayed website address.",
         action: "Check a website",
       },
       external_ip_or_domain: {
-        outcome: "See the services your organization exposes to the public Internet.",
+        outcome: "Inventory the ports and services your organization exposes to the public Internet.",
         action: "Check public exposure",
       },
       internal_it_environment: {
-        outcome: "Spot weaknesses and risky settings across your approved internal systems.",
+        outcome: "Inventory reachable services on the exact internal systems you approve.",
         action: "Check internal systems",
       },
       ai_application: {
@@ -81,8 +85,9 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
         action: "Check an AI project",
       },
       source_code: {
-        outcome: "Check source code locally for risky patterns and exposed secrets.",
-        action: "Check my code",
+        title: "Code or AI project",
+        outcome: "Find exposed secrets, vulnerable dependencies, risky code, and unsafe configuration in one local project.",
+        action: "Check code or an AI project",
       },
       infrastructure_as_code: {
         outcome: "Find risky cloud and deployment settings before they go live.",
@@ -104,32 +109,34 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
   },
   "zh-TW": {
     title: "資安檢查",
-    description: "",
+    description: "從下方選擇網站或專案，就能走最短路徑完成有用的掃描。結果會說清楚檢查了什麼、哪些問題要先處理，以及下一步怎麼做。",
     previewDescription: "預覽模式 · 選擇目標以查看掃描設定。",
-    localhostQuickScanAction: "檢查這台電腦 · 127.0.0.1:9001",
-    localhostQuickScanBusy: "正在開始檢查…",
+    localhostQuickScanAction: "測試本機服務連線 · 127.0.0.1:9001",
+    localhostQuickScanBusy: "正在測試連線…",
     localhostQuickScanBoundary:
-      "只會嘗試一次到 127.0.0.1:9001 的 TCP 連線；不會傳送內容；最長等待 3 秒。這不代表這台電腦一定安全。",
+      "這只是連線測試：只嘗試一次到 127.0.0.1:9001 的 TCP 連線，不傳送內容，最長等待 3 秒。這不是漏洞掃描，也不會檢查這台電腦的資安問題。",
     localhostQuickScanOptions: "改用其他本機連接埠",
     localhostQuickScanPortLabel: "本機連接埠",
     localhostQuickScanPortHelp: "請輸入 1 到 65535 的連接埠。",
     localhostQuickScanPortError: "請輸入 1 到 65535 的整數連接埠。",
+    connectionToolsTitle: "連線工具（不是資安掃描）",
+    connectionToolsDescription: "只有在你想確認單一個本機服務是否接受 TCP 連線時才使用。",
     choiceTitle: "選擇目標",
     scopeAndLimits: "範圍與限制",
     moreWaysTitle: "更多檢查方式",
-    moreWaysDescription: "一般程式碼、雲端帳號、基礎設施程式碼、容器映像與 Kubernetes",
+    moreWaysDescription: "公開或內部系統、雲端帳號、基礎設施程式碼、容器映像與 Kubernetes",
     controlSummary: "了解掃描如何由你控制",
     cards: {
       deployed_website: {
-        outcome: "在問題變成事故前，找出網站與 API 的常見弱點。",
+        outcome: "使用固定 Nuclei 掃描檢查常見暴露檔案及除錯／狀態端點，對顯示的網站位址最多送出 19 次 GET 請求。",
         action: "檢查網站",
       },
       external_ip_or_domain: {
-        outcome: "看清楚你的組織在公開網路上暴露了哪些服務。",
+        outcome: "盤點你的組織在公開網路上暴露的連接埠與服務。",
         action: "檢查對外暴露面",
       },
       internal_it_environment: {
-        outcome: "找出核准內部系統的弱點與高風險設定。",
+        outcome: "盤點你明確核准之內部系統上可連線的服務。",
         action: "檢查內部系統",
       },
       ai_application: {
@@ -137,8 +144,9 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
         action: "檢查 AI 專案",
       },
       source_code: {
-        outcome: "在本機檢查程式碼，找出危險寫法與暴露的秘密。",
-        action: "檢查我的程式碼",
+        title: "程式碼或 AI 專案",
+        outcome: "在一個本機專案找出暴露秘密、有弱點的相依套件、危險程式碼與不安全設定。",
+        action: "檢查程式碼或 AI 專案",
       },
       infrastructure_as_code: {
         outcome: "在部署前找出雲端與基礎設施設定裡的風險。",
@@ -172,8 +180,16 @@ export function StartPage({
   onOpenExistingCase,
 }: StartPageProps) {
   const marketing = marketingCopy[locale];
-  const primaryUseCases = useCaseDefinitions.slice(0, 4);
-  const additionalUseCases = useCaseDefinitions.slice(4);
+  const primaryUseCaseIds: readonly UseCaseId[] = [
+    "deployed_website",
+    "source_code",
+  ];
+  const primaryUseCases = primaryUseCaseIds.map(
+    (id) => useCaseDefinitions.find((useCase) => useCase.id === id)!,
+  );
+  const additionalUseCases = useCaseDefinitions.filter(
+    (useCase) => !primaryUseCaseIds.includes(useCase.id),
+  );
   const [localhostPortInput, setLocalhostPortInput] = useState(String(DEFAULT_LOCALHOST_QUICK_SCAN_PORT));
   const localhostPort = parseLocalhostQuickScanPort(localhostPortInput);
   const localhostPortDisplay = localhostPortInput.trim() || "—";
@@ -206,7 +222,7 @@ export function StartPage({
             <Icon name={useCase.icon} size={22} />
           </span>
           <div>
-            <h3>{card.title}</h3>
+            <h3>{marketingCard.title ?? card.title}</h3>
             <p>{marketingCard.outcome}</p>
           </div>
         </header>
@@ -233,50 +249,6 @@ export function StartPage({
             <p className="start-page__hero-description">{nativeMode ? marketing.description : marketing.previewDescription}</p>
           )}
           <div className="start-page__hero-actions">
-            {nativeMode && (
-              <div className="start-page__localhost-quick-scan">
-                <button
-                  className="button button--primary start-page__primary-action"
-                  type="button"
-                  disabled={localhostQuickScanBusy || localhostPort === undefined}
-                  aria-busy={localhostQuickScanBusy}
-                  onClick={() => {
-                    if (localhostPort !== undefined) onStartLocalhostQuickScan(localhostPort);
-                  }}
-                >
-                  {localhostQuickScanBusy ? marketing.localhostQuickScanBusy : localhostQuickScanAction}
-                  <Icon name="arrow" size={18} />
-                </button>
-                <p className="start-page__localhost-boundary">{localhostQuickScanBoundary}</p>
-                <details className="start-page__localhost-options">
-                  <summary>{marketing.localhostQuickScanOptions}</summary>
-                  <label htmlFor="localhost-quick-scan-port">{marketing.localhostQuickScanPortLabel}</label>
-                  <input
-                    id="localhost-quick-scan-port"
-                    type="number"
-                    inputMode="numeric"
-                    min={1}
-                    max={65535}
-                    step={1}
-                    required
-                    value={localhostPortInput}
-                    aria-invalid={localhostPort === undefined}
-                    aria-describedby="localhost-quick-scan-port-help"
-                    onChange={(event) => setLocalhostPortInput(event.currentTarget.value)}
-                  />
-                  <small
-                    id="localhost-quick-scan-port-help"
-                    className={localhostPort === undefined ? "start-page__localhost-port-error" : undefined}
-                    aria-live="polite"
-                    aria-atomic="true"
-                  >
-                    {localhostPort === undefined
-                      ? marketing.localhostQuickScanPortError
-                      : marketing.localhostQuickScanPortHelp}
-                  </small>
-                </details>
-              </div>
-            )}
             {onOpenExistingCase && (
               <div className="start-page__hero-secondary-actions">
                 <button className="button button--secondary" type="button" onClick={onOpenExistingCase}>
@@ -310,6 +282,60 @@ export function StartPage({
             {additionalUseCases.map(renderUseCaseCard)}
           </div>
         </details>
+
+        {nativeMode && (
+          <details className="start-page__connection-tools">
+            <summary>
+              <span>
+                <strong>{marketing.connectionToolsTitle}</strong>
+                <small>{marketing.connectionToolsDescription}</small>
+              </span>
+              <Icon name="chevron" size={20} />
+            </summary>
+            <div className="start-page__localhost-quick-scan">
+              <button
+                className="button button--secondary start-page__connection-action"
+                type="button"
+                disabled={localhostQuickScanBusy || localhostPort === undefined}
+                aria-busy={localhostQuickScanBusy}
+                onClick={() => {
+                  if (localhostPort !== undefined) onStartLocalhostQuickScan(localhostPort);
+                }}
+              >
+                {localhostQuickScanBusy ? marketing.localhostQuickScanBusy : localhostQuickScanAction}
+                <Icon name="arrow" size={18} />
+              </button>
+              <p className="start-page__localhost-boundary">{localhostQuickScanBoundary}</p>
+              <details className="start-page__localhost-options">
+                <summary>{marketing.localhostQuickScanOptions}</summary>
+                <label htmlFor="localhost-quick-scan-port">{marketing.localhostQuickScanPortLabel}</label>
+                <input
+                  id="localhost-quick-scan-port"
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={65535}
+                  step={1}
+                  required
+                  value={localhostPortInput}
+                  aria-invalid={localhostPort === undefined}
+                  aria-describedby="localhost-quick-scan-port-help"
+                  onChange={(event) => setLocalhostPortInput(event.currentTarget.value)}
+                />
+                <small
+                  id="localhost-quick-scan-port-help"
+                  className={localhostPort === undefined ? "start-page__localhost-port-error" : undefined}
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
+                  {localhostPort === undefined
+                    ? marketing.localhostQuickScanPortError
+                    : marketing.localhostQuickScanPortHelp}
+                </small>
+              </details>
+            </div>
+          </details>
+        )}
 
         <details className="start-page__scan-limits">
           <summary>{marketing.scopeAndLimits}</summary>

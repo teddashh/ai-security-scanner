@@ -35,15 +35,15 @@ export function SettingsPage({
     },
     unavailable: {
       status: {
-        en: "Advanced tools unavailable · localhost check still works",
-        zhTW: "進階工具無法使用 · localhost 檢查仍可執行",
+        en: "Some scan tools are unavailable · saved results are unaffected",
+        zhTW: "部分掃描工具無法使用 · 已保存的結果不受影響",
       },
       action: { en: "Choose a scan", zhTW: "選擇掃描" },
     },
     unchecked: {
       status: {
-        en: "Not checked yet · localhost check still works",
-        zhTW: "尚未檢查 · localhost 檢查仍可執行",
+        en: "Scan tools not checked yet · saved results are available",
+        zhTW: "尚未檢查掃描工具 · 已保存的結果仍可查看",
       },
       action: { en: "Choose a scan", zhTW: "選擇掃描" },
     },

@@ -16,6 +16,7 @@ import {
   localizedRequestedLimitName,
 } from "../coverageDimensionPresentation";
 import { projectVisibleFindingGroups } from "../findingGroupPresentation";
+import { isExposureObservation, isSecurityFinding } from "../findingClassification";
 import {
   engineNameFrom,
   findingActionSentence,
@@ -133,6 +134,57 @@ const copy = {
     en: "Your scan results and recommended next steps will appear here.",
     zhTW: "掃描結果與建議的下一步會顯示在這裡。",
   },
+  connectionHeaderEyebrow: { en: "CONNECTION RESULT", zhTW: "連線結果" },
+  connectionHeaderTitle: {
+    en: "Connection test only — no vulnerability scan ran",
+    zhTW: "這只是連線測試，沒有執行漏洞掃描",
+  },
+  connectionHeaderDescription: {
+    en: "This result shows only whether one local port accepted a TCP connection. Choose a website, project, or applicable network scan to look for security problems.",
+    zhTW: "這份結果只顯示單一本機連接埠是否接受 TCP 連線。若要找資安問題，請改選網站、專案或適用的網路掃描。",
+  },
+  inventoryHeaderEyebrow: { en: "SERVICE INVENTORY", zhTW: "服務盤點" },
+  inventoryHeaderTitle: {
+    en: "Service inventory only — no vulnerability scan ran",
+    zhTW: "只完成服務盤點，沒有執行漏洞掃描",
+  },
+  inventoryHeaderDescription: {
+    en: "Naabu or httpx checked which services responded. Use an applicable security check to look for weaknesses in those services.",
+    zhTW: "Naabu 或 httpx 只確認哪些服務有回應；若要找弱點，請再執行適用的資安檢查。",
+  },
+  inventoryEmptyTitle: { en: "Service inventory results", zhTW: "服務盤點結果" },
+  inventoryEmptyDescription: {
+    en: "This run only performs service discovery. A reachable service is not a vulnerability, and no vulnerability or configuration check runs in this path.",
+    zhTW: "這個流程只進行服務探索。可連線服務不等於漏洞，且這條路徑不會執行漏洞或設定檢查。",
+  },
+  observationsEyebrow: { en: "SERVICE INVENTORY", zhTW: "服務盤點" },
+  observationsTitle: {
+    en: "Reachable services observed — not vulnerabilities",
+    zhTW: "觀察到可連線服務，但這些不是漏洞",
+  },
+  observationsDescription: {
+    en: "Discovery confirmed that these services responded. This is useful inventory, but reachability alone does not show a security weakness.",
+    zhTW: "探索檢查確認這些服務有回應。這是有用的盤點資料，但僅能連線不代表存在資安弱點。",
+  },
+  observationSummary: {
+    en: "{services} observed services across {assets} assets",
+    zhTW: "共觀察到 {services} 項服務，分布於 {assets} 項資產",
+  },
+  observationExamples: { en: "Representative services", zhTW: "代表項目" },
+  observationCompleteList: {
+    en: "View all {count} observed services",
+    zhTW: "查看全部 {count} 項觀察服務",
+  },
+  observationOpenPort: { en: "Open network service", zhTW: "可連線的網路服務" },
+  observationHttp: { en: "Reachable HTTP service", zhTW: "可連線的 HTTP 服務" },
+  observationPort: { en: "Port", zhTW: "連接埠" },
+  observationProtocol: { en: "Protocol", zhTW: "協定" },
+  observationStatus: { en: "HTTP status", zhTW: "HTTP 狀態" },
+  observationNext: {
+    en: "Confirm the service is expected. To look for weaknesses, choose an applicable security check.",
+    zhTW: "先確認這項服務符合預期；若要找弱點，請選擇適用的資安檢查。",
+  },
+  chooseSecurityChecks: { en: "Choose security checks", zhTW: "選擇資安檢查" },
   emptyNoRunTitle: { en: "No scan results yet", zhTW: "尚未產生掃描結果" },
   emptyActiveTitle: {
     en: "The scan is still running; no problems have arrived yet",
@@ -405,6 +457,8 @@ const copy = {
   masterEyebrow: { en: "YOUR SCAN REPORT", zhTW: "你的掃描報告" },
   masterTitle: { en: "What was checked—and what was not", zhTW: "這次檢查了什麼，也漏了什麼" },
   reportComplete: { en: "Requested checks complete", zhTW: "要求的檢查已完成" },
+  reportConnectionOnly: { en: "Connection result only", zhTW: "僅連線結果" },
+  reportInventoryOnly: { en: "Service inventory only", zhTW: "僅完成服務盤點" },
   reportPartial: { en: "Partial results", zhTW: "部分結果" },
   reportNoChecks: { en: "No checks completed", zhTW: "沒有完成任何檢查" },
   reportLive: { en: "Still updating", zhTW: "仍在更新" },
@@ -487,6 +541,7 @@ const copy = {
     zhTW: "請檢視已保存的結果與明列限制；若需要更廣泛的確認，請執行更深入的檢查。",
   },
   stage: { en: "Scan depth", zhTW: "掃描深度" },
+  stageConnection: { en: "Connection test (not a vulnerability scan)", zhTW: "連線測試（不是漏洞掃描）" },
   stageQuick: { en: "Quick discovery", zhTW: "快速探索" },
   stageInventory: { en: "Full inventory", zhTW: "完整盤點" },
   stageDeep: { en: "Deep scan", zhTW: "深度掃描" },
@@ -574,6 +629,7 @@ const reportSummaryPresentation = (summary: BeginnerReportSummary) => {
 
 const reportStageCopy = (stage?: BeginnerReportStage) => {
   switch (stage) {
+    case "connection_diagnostic": return copy.stageConnection;
     case "quick_discovery": return copy.stageQuick;
     case "inventory": return copy.stageInventory;
     case "deep": return copy.stageDeep;
@@ -700,6 +756,8 @@ const projectReportFindings = (
       // tells the reader the engine assigned a rating this product derived.
       family: frozen.family,
       severityBasisCode: frozen.severityBasisCode,
+      confidenceBasisCode: frozen.confidenceBasisCode,
+      observationDetails: frozen.observationDetails,
       contextFactors: frozen.contextFactors,
       priority: frozen.priority ?? report.findings.length - index,
       priorityReasons: [...frozen.priorityReasons],
@@ -749,10 +807,20 @@ const projectReportFindings = (
 
 function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport; run?: ScanRun }) {
   const { locale, text, formatDateTime, formatNumber } = useI18n();
-  const summary = reportSummaryPresentation(report.state.summary);
+  const securityFindingIds = new Set(
+    report.findings.filter(isSecurityFinding).map((finding) => finding.findingId),
+  );
+  const problemCount = securityFindingIds.size;
   const localhostSummary = run && isExactBuiltInLocalhostQuickScanRun(run)
     ? localhostTcpBeginnerSummary(run.engineRuns[0]!)
     : undefined;
+  const serviceInventoryOnly = report.actual.checks.length > 0
+    && report.actual.checks.every((check) => check.checkId === "naabu" || check.checkId === "httpx");
+  const summary = localhostSummary
+    ? { label: copy.reportConnectionOnly, tone: "neutral" as const }
+    : serviceInventoryOnly
+      ? { label: copy.reportInventoryOnly, tone: "neutral" as const }
+    : reportSummaryPresentation(report.state.summary);
   const noRecordedGapDetail = localhostSummary?.exclusions ?? copy.noGap;
   const testedChecks = report.actual.checks.filter((check) =>
     check.status === "tested_complete"
@@ -769,7 +837,9 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
     report.requested.targets.map((target) => [target.assetId, target.label ?? target.assetId]),
   );
   const engineByTaskId = new Map(run?.engineRuns.map((engine) => [engine.id, engine]) ?? []);
-  const orderedNextSteps = [...report.nextSteps].sort((left, right) => left.priority - right.priority);
+  const orderedNextSteps = report.nextSteps
+    .filter((step) => !step.findingId || securityFindingIds.has(step.findingId))
+    .sort((left, right) => left.priority - right.priority);
   const firstRequestedTarget = report.requested.targets[0];
   const firstTestedCheck = testedChecks[0];
   const firstTestedEngine = firstTestedCheck ? engineByTaskId.get(firstTestedCheck.taskId) : undefined;
@@ -1027,10 +1097,10 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         />
         <MetricCard
           label={text(copy.reportFindings)}
-          value={formatNumber(report.findings.length)}
+          value={formatNumber(problemCount)}
           detail={text(copy.priorityDescription)}
           icon="findings"
-          tone={report.findings.length > 0 ? "warning" : "default"}
+          tone={problemCount > 0 ? "warning" : "default"}
         />
       </div>
 
@@ -1203,7 +1273,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
       <div className="section-heading">
         <h3>{text(copy.nextTitle)}</h3>
       </div>
-      {report.nextSteps.length > 0 ? (
+      {orderedNextSteps.length > 0 ? (
         <ol className="detail-list">
           {orderedNextSteps.map((step, index) => (
               <li key={`${step.code}-${step.findingId ?? step.taskId ?? index}`}>
@@ -1297,13 +1367,21 @@ export function FindingsPage({
   onSelectRun,
 }: FindingsPageProps) {
   const { locale, text, formatDateTime, formatNumber } = useI18n();
-  const findings = useMemo(
+  const resultRecords = useMemo(
     () => report
       ? projectReportFindings(report, canonicalFindings, locale)
       : reportUnavailable
         ? []
         : canonicalFindings,
     [canonicalFindings, locale, report, reportUnavailable],
+  );
+  const findings = useMemo(
+    () => resultRecords.filter(isSecurityFinding),
+    [resultRecords],
+  );
+  const observations = useMemo(
+    () => resultRecords.filter(isExposureObservation),
+    [resultRecords],
   );
   const collationLocale = locale === "en" ? "en" : "zh-Hant";
   const [query, setQuery] = useState("");
@@ -1467,15 +1545,91 @@ export function FindingsPage({
   const unavailableReportNotice = latestRun
     ? unavailableRunBoundReportCopy
     : unavailableSelectedRunCopy;
+  const serviceInventoryOnly = Boolean(
+    (report?.actual.checks.length
+      && report.actual.checks.every((check) => check.checkId === "naabu" || check.checkId === "httpx"))
+    || (latestRun?.engineRuns.length
+      && latestRun.engineRuns.every((engine) => engine.engineId === "naabu" || engine.engineId === "httpx")),
+  );
+  const observationDetails = (finding: Finding): string[] => {
+    const retained = finding.observationDetails
+      ?? finding.tags?.filter((tag) =>
+        tag.startsWith("port:")
+        || tag.startsWith("protocol:")
+        || tag.startsWith("http-status:"))
+      ?? [];
+    return retained.map((detail) => {
+      const [key, ...valueParts] = detail.split(":");
+      const value = valueParts.join(":");
+      if (!value) return detail;
+      if (key === "port") return `${text(copy.observationPort)} ${value}`;
+      if (key === "protocol") return `${text(copy.observationProtocol)} ${value}`;
+      if (key === "http-status") return `${text(copy.observationStatus)} ${value}`;
+      return detail;
+    });
+  };
+  const observationAssetCount = new Set(observations.flatMap((finding) =>
+    finding.assetIds?.length ? finding.assetIds : [finding.assetId])).size;
+  const representativeObservations = observations.slice(0, 3);
+  const renderObservation = (finding: Finding, complete: boolean) => {
+    const details = observationDetails(finding);
+    return (
+      <article className="evidence-item" key={finding.id}>
+        <div>
+          <strong>{text(finding.severityBasisCode === "open_port" ? copy.observationOpenPort : copy.observationHttp)}</strong>
+          <span>{[finding.assetName, ...details].join(" · ")}</span>
+        </div>
+        {complete && (
+          <>
+            <p>{text(copy.observationNext)}</p>
+            <small>{[
+              finding.evidence[0]?.sourceEngine,
+              text(copy.evidenceCount, { count: formatNumber(finding.evidence.length) }),
+            ].filter(Boolean).join(" · ")}</small>
+          </>
+        )}
+      </article>
+    );
+  };
+  const observationSection = observations.length > 0 ? (
+    <section className="section-block" aria-labelledby="service-observations-title">
+      <div className="section-heading">
+        <p className="eyebrow">{text(copy.observationsEyebrow)}</p>
+        <h2 id="service-observations-title">{text(copy.observationsTitle)}</h2>
+        <p>{text(copy.observationsDescription)}</p>
+      </div>
+      <p className="service-observations__summary">
+        <strong>{text(copy.observationSummary, {
+          services: formatNumber(observations.length),
+          assets: formatNumber(observationAssetCount),
+        })}</strong>
+      </p>
+      <div className="section-heading">
+        <h3>{text(copy.observationExamples)}</h3>
+      </div>
+      <div className="evidence-list service-observations__representatives">
+        {representativeObservations.map((finding) => renderObservation(finding, false))}
+      </div>
+      <details className="page-secondary-feature service-observations__complete">
+        <summary>{text(copy.observationCompleteList, { count: formatNumber(observations.length) })}</summary>
+        <div className="evidence-list">
+          {observations.map((finding) => renderObservation(finding, true))}
+        </div>
+      </details>
+      <button className="button button--primary button--small" type="button" onClick={onOpenCoverage}>
+        <Icon name="coverage" size={16} />{text(copy.chooseSecurityChecks)}
+      </button>
+    </section>
+  ) : null;
 
   if (findings.length === 0) {
     const unknownSources = coverage.filter((item) => item.state === "source_unavailable_unknown").length;
     const connectedWithoutAssets = coverage.filter((item) => item.state === "source_connected_none").length;
     const latestRunIsActive = Boolean(latestRun && activeRunStatuses.has(latestRun.status));
     const incompleteRun = latestRun && !latestRunIsActive && latestRun.status !== "completed";
-    const localhostSummary = latestRun?.engineRuns
-      .map((engine) => localhostTcpBeginnerSummary(engine))
-      .find((summary) => summary !== undefined);
+    const localhostSummary = latestRun && isExactBuiltInLocalhostQuickScanRun(latestRun)
+      ? localhostTcpBeginnerSummary(latestRun.engineRuns[0]!)
+      : undefined;
     const requestOutcomeSummary = latestRequestOutcomeSummary;
     const title = !latestRun
       ? text(copy.emptyNoRunTitle)
@@ -1483,6 +1637,8 @@ export function FindingsPage({
         ? text(requestOutcomeSummary.title)
         : localhostSummary
           ? text(localhostSummary.title)
+          : serviceInventoryOnly
+            ? text(copy.inventoryEmptyTitle)
           : latestRunIsActive
             ? text(copy.emptyActiveTitle)
             : incompleteRun
@@ -1500,6 +1656,8 @@ export function FindingsPage({
               text(localhostSummary.exclusions),
               text(localhostSummary.nextStep),
             ].join(" ")
+          : serviceInventoryOnly
+            ? text(copy.inventoryEmptyDescription)
           : latestRunIsActive
             ? text(copy.emptyActiveDescription)
             : incompleteRun
@@ -1509,9 +1667,27 @@ export function FindingsPage({
                 : text(copy.emptyCompletedDescription, { count: formatNumber(connectedWithoutAssets) });
     return (
       <div className="page">
-        <PageHeader eyebrow={text(copy.eyebrow)} title={text(copy.emptyHeaderTitle)} description={text(copy.emptyHeaderDescription)} actions={reportActions} />
+        <PageHeader
+          eyebrow={text(localhostSummary
+            ? copy.connectionHeaderEyebrow
+            : serviceInventoryOnly
+              ? copy.inventoryHeaderEyebrow
+              : copy.eyebrow)}
+          title={text(localhostSummary
+            ? copy.connectionHeaderTitle
+            : serviceInventoryOnly
+              ? copy.inventoryHeaderTitle
+              : copy.emptyHeaderTitle)}
+          description={text(localhostSummary
+            ? copy.connectionHeaderDescription
+            : serviceInventoryOnly
+              ? copy.inventoryHeaderDescription
+              : copy.emptyHeaderDescription)}
+          actions={reportActions}
+        />
         {report && <BeginnerReportOverview report={report} run={latestRun} />}
         {reportUnavailable && <InlineNotice tone="warning" title={text(unavailableReportNotice.title)}><p>{text(unavailableReportNotice.body)}</p></InlineNotice>}
+        {observationSection}
         <EmptyState
           icon={latestRunIsActive
             || incompleteRun
@@ -1663,6 +1839,8 @@ export function FindingsPage({
       </section>
 
       {report && <BeginnerReportOverview report={report} run={latestRun} />}
+
+      {observationSection}
 
       <details className="section-block page-secondary-feature findings-related-work">
         <summary>{text(copy.relatedGroups)}</summary>

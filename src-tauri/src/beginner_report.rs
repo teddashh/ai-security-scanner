@@ -130,6 +130,7 @@ pub struct RecordedStage {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReportScanStage {
+    ConnectionDiagnostic,
     QuickDiscovery,
     Inventory,
     Deep,
@@ -312,6 +313,11 @@ pub struct BeginnerFinding {
     pub severity_basis_code: Option<SeverityBasisCode>,
     #[serde(default)]
     pub confidence_basis_code: Option<crate::domain::ConfidenceBasisCode>,
+    /// Small, product-owned inventory facts such as the observed port,
+    /// transport, or HTTP status. These make reachability observations useful
+    /// without turning them into vulnerability claims.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observation_details: Vec<String>,
     /// The case-specific reasons this finding's priority was raised. Carried
     /// for the same reason as the two codes above: the surfaces that compose
     /// their own impact sentence replace the prose these were appended to.
@@ -609,7 +615,11 @@ pub fn build_beginner_master_report(
         summary,
         lifecycle,
         last_durable_update: selected_run_last_durable_update(case, run),
-        explanation: state_explanation(summary, lifecycle).into(),
+        explanation: if run_is_service_inventory_only(run) {
+            service_inventory_explanation(summary, lifecycle).into()
+        } else {
+            state_explanation(summary, lifecycle).into()
+        },
     };
     let next_steps = project_next_steps(&state, &findings, &coverage_gaps, &actual);
     let technical_details = project_technical_details(case, run);
@@ -698,10 +708,11 @@ fn project_requested_coverage(
         !naabu_tasks.is_empty() && valid_naabu_plans.len() == naabu_tasks.len();
     let stage = if exact_localhost_only {
         RecordedStage {
-            value: Some(ReportScanStage::QuickDiscovery),
+            value: Some(ReportScanStage::ConnectionDiagnostic),
             availability: DataAvailability::Recorded,
             explanation:
-                "The frozen native localhost task is a quick reachability discovery check.".into(),
+                "The frozen native localhost task is a bounded connection diagnostic, not a vulnerability scan."
+                    .into(),
         }
     } else if !valid_naabu_plans.is_empty() {
         let includes_inventory = valid_naabu_plans
@@ -1942,7 +1953,31 @@ fn project_finding(
     } else {
         Vec::new()
     };
+    let observation_details = details
+        .filter(|finding| {
+            finding
+                .severity_basis_code
+                .is_some_and(|code| code.is_exposure_observation())
+        })
+        .map(|finding| {
+            finding
+                .tags
+                .iter()
+                .filter(|tag| {
+                    tag.starts_with("port:")
+                        || tag.starts_with("protocol:")
+                        || tag.starts_with("http-status:")
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
 
+    let exposure_observation = details.is_some_and(|finding| {
+        finding
+            .severity_basis_code
+            .is_some_and(|code| code.is_exposure_observation())
+    });
     BeginnerFinding {
         finding_id: observation.finding_id.clone(),
         fingerprint: observation.fingerprint.clone(),
@@ -1950,43 +1985,80 @@ fn project_finding(
         title: details
             .map(|finding| finding.title.clone())
             .unwrap_or_else(|| "Finding details unavailable for this legacy run".into()),
-        plain_language_risk: details
-            .map(|finding| finding.plain_language_summary.clone())
-            .unwrap_or_else(|| {
-                "A retained observation exists, but this older run did not save its full plain-language description."
-                    .into()
-            }),
-        possible_impact: details
-            .map(|finding| finding.possible_impact.clone())
-            .unwrap_or_else(|| "The historical impact description is unavailable.".into()),
+        plain_language_risk: if exposure_observation {
+            crate::finding_narrative::EXPOSURE_OBSERVATION_RISK.into()
+        } else {
+            details
+                .map(|finding| finding.plain_language_summary.clone())
+                .unwrap_or_else(|| {
+                    "A retained observation exists, but this older run did not save its full plain-language description."
+                        .into()
+                })
+        },
+        possible_impact: if exposure_observation {
+            crate::finding_narrative::EXPOSURE_OBSERVATION_IMPACT.into()
+        } else {
+            details
+                .map(|finding| finding.possible_impact.clone())
+                .unwrap_or_else(|| "The historical impact description is unavailable.".into())
+        },
         severity: observation.severity.clone(),
         confidence: observation.confidence.clone(),
-        priority: details.map(|finding| finding.priority),
-        priority_reasons: details
-            .map(|finding| finding.priority_reasons.clone())
-            .unwrap_or_default(),
+        priority: if exposure_observation {
+            None
+        } else {
+            details.map(|finding| finding.priority)
+        },
+        priority_reasons: if exposure_observation {
+            Vec::new()
+        } else {
+            details
+                .map(|finding| finding.priority_reasons.clone())
+                .unwrap_or_default()
+        },
         target_asset_ids: observation.asset_ids.clone(),
-        next_step: details
-            .map(|finding| finding.recommendation.clone())
-            .unwrap_or_else(|| {
-                "Ask a security professional to review the retained observation and evidence."
-                    .into()
-            }),
-        recommended_expert_type: details
-            .map(|finding| finding.recommended_expert_type.clone())
-            .unwrap_or_else(|| "Security professional".into()),
+        next_step: if exposure_observation {
+            crate::finding_narrative::EXPOSURE_OBSERVATION_NEXT_STEP.into()
+        } else {
+            details
+                .map(|finding| finding.recommendation.clone())
+                .unwrap_or_else(|| {
+                    "Ask a security professional to review the retained observation and evidence."
+                        .into()
+                })
+        },
+        recommended_expert_type: if exposure_observation {
+            crate::finding_narrative::EXPOSURE_OBSERVATION_OWNER.into()
+        } else {
+            details
+                .map(|finding| finding.recommended_expert_type.clone())
+                .unwrap_or_else(|| "Security professional".into())
+        },
         evidence_references,
         framework_references,
         family: details.and_then(|finding| finding.family),
         severity_basis_code: details.and_then(|finding| finding.severity_basis_code),
         confidence_basis_code: details.and_then(|finding| finding.confidence_basis_code),
-        context_factors: details
-            .map(|finding| finding.context_factors.clone())
-            .unwrap_or_default(),
-        rollback_considerations: details.and_then(|finding| finding.rollback_considerations.clone()),
-        verification_guidance: details
-            .map(|finding| finding.verification_guidance.clone())
-            .filter(|guidance| !guidance.trim().is_empty()),
+        observation_details,
+        context_factors: if exposure_observation {
+            Vec::new()
+        } else {
+            details
+                .map(|finding| finding.context_factors.clone())
+                .unwrap_or_default()
+        },
+        rollback_considerations: if exposure_observation {
+            None
+        } else {
+            details.and_then(|finding| finding.rollback_considerations.clone())
+        },
+        verification_guidance: if exposure_observation {
+            Some(crate::finding_narrative::EXPOSURE_OBSERVATION_VERIFICATION.into())
+        } else {
+            details
+                .map(|finding| finding.verification_guidance.clone())
+                .filter(|guidance| !guidance.trim().is_empty())
+        },
     }
 }
 
@@ -2047,6 +2119,11 @@ fn project_next_steps(
 ) -> Vec<BeginnerNextStep> {
     let mut steps = findings
         .iter()
+        .filter(|finding| {
+            !finding
+                .severity_basis_code
+                .is_some_and(|code| code.is_exposure_observation())
+        })
         .enumerate()
         .map(|(index, finding)| BeginnerNextStep {
             unattributed: None,
@@ -2410,6 +2487,38 @@ fn selected_run_last_durable_update(case: &AssessmentCase, run: &ScanRun) -> Dat
     times.into_iter().max().unwrap_or(run.created_at)
 }
 
+/// Naabu and httpx establish reachable-service inventory. Even when every
+/// requested work unit completed, that is not a completed vulnerability or
+/// security assessment. Keep the distinction derived from the frozen run,
+/// rather than from whether the inventory happened to contain any records.
+pub(crate) fn run_is_service_inventory_only(run: &ScanRun) -> bool {
+    !run.engine_runs.is_empty()
+        && run.engine_runs.iter().all(|task| {
+            matches!(task.task_kind, EngineTaskKind::CatalogEngine)
+                && matches!(task.engine_id.as_str(), "naabu" | "httpx")
+        })
+}
+
+fn service_inventory_explanation(
+    summary: BeginnerReportSummary,
+    lifecycle: ReportLifecycle,
+) -> &'static str {
+    match (summary, lifecycle) {
+        (BeginnerReportSummary::Complete, ReportLifecycle::Final) => {
+            "The requested service inventory completed. It only records reachable ports or HTTP services; no vulnerability or configuration check ran."
+        }
+        (BeginnerReportSummary::NoChecksCompleted, _) => {
+            "The service-inventory request finished without a usable reachability result. No vulnerability or configuration check ran."
+        }
+        (_, ReportLifecycle::Live) => {
+            "The service inventory is still changing. Saved reachability observations are available now, but no vulnerability or configuration check has run."
+        }
+        (BeginnerReportSummary::Partial, ReportLifecycle::Final) => {
+            "Useful service-inventory results were saved, but some requested discovery work is incomplete or unavailable. No vulnerability or configuration check ran."
+        }
+    }
+}
+
 fn state_explanation(summary: BeginnerReportSummary, lifecycle: ReportLifecycle) -> &'static str {
     match (summary, lifecycle) {
         (BeginnerReportSummary::Complete, ReportLifecycle::Final) => {
@@ -2757,7 +2866,7 @@ mod tests {
         assert_eq!(report.state.lifecycle, ReportLifecycle::Final);
         assert_eq!(
             report.requested.stage.value,
-            Some(ReportScanStage::QuickDiscovery)
+            Some(ReportScanStage::ConnectionDiagnostic)
         );
         assert_eq!(
             report.requested.targets[0].label_availability,
@@ -3337,6 +3446,104 @@ mod tests {
         assert_eq!(
             report.framework_notice.non_certification,
             FRAMEWORK_NON_CERTIFICATION_NOTICE
+        );
+    }
+
+    #[test]
+    fn reachable_service_inventory_stays_in_evidence_but_out_of_remediation_steps() {
+        let mut case = localhost_case(
+            LocalhostTcpOutcome::Reachable,
+            EngineRunStatus::Completed,
+            true,
+        );
+        let mut exposure = frozen_finding(&case, "reachable-service", 10, Severity::Informational);
+        exposure.severity_basis_code = Some(crate::domain::SeverityBasisCode::OpenPort);
+        exposure.plain_language_summary = "STALE_VULNERABILITY_SUMMARY".into();
+        exposure.possible_impact = "STALE_VULNERABILITY_IMPACT".into();
+        exposure.priority = 99;
+        exposure.priority_reasons = vec!["STALE_VULNERABILITY_PRIORITY".into()];
+        exposure.recommendation = "STALE_VULNERABILITY_REMEDIATION".into();
+        exposure.verification_guidance = "STALE_VULNERABILITY_VERIFICATION".into();
+        exposure.rollback_considerations = Some("STALE_VULNERABILITY_ROLLBACK".into());
+        exposure.tags = vec!["port:443".into(), "protocol:tcp".into()];
+        let problem = frozen_finding(&case, "actual-problem", 80, Severity::High);
+        case.findings = vec![exposure.clone(), problem.clone()];
+        case.finding_observations = vec![
+            observation(&exposure, "run-1", instant(17)),
+            observation(&problem, "run-1", instant(18)),
+        ];
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        let retained_exposure = report
+            .findings
+            .iter()
+            .find(|finding| finding.finding_id == exposure.id)
+            .expect("the inventory observation remains available");
+        assert_eq!(
+            retained_exposure.observation_details,
+            ["port:443", "protocol:tcp"]
+        );
+        assert_eq!(retained_exposure.priority, None);
+        assert!(retained_exposure.priority_reasons.is_empty());
+        assert_eq!(
+            retained_exposure.plain_language_risk,
+            crate::finding_narrative::EXPOSURE_OBSERVATION_RISK
+        );
+        assert_eq!(
+            retained_exposure.possible_impact,
+            crate::finding_narrative::EXPOSURE_OBSERVATION_IMPACT
+        );
+        assert_eq!(
+            retained_exposure.next_step,
+            crate::finding_narrative::EXPOSURE_OBSERVATION_NEXT_STEP
+        );
+        assert!(retained_exposure.rollback_considerations.is_none());
+        assert_eq!(
+            retained_exposure.severity_basis_code,
+            Some(crate::domain::SeverityBasisCode::OpenPort)
+        );
+        assert!(!retained_exposure.evidence_references.is_empty());
+        let encoded = serde_json::to_string(retained_exposure).unwrap();
+        assert!(!encoded.contains("STALE_VULNERABILITY"));
+        assert!(
+            report
+                .next_steps
+                .iter()
+                .all(|step| { step.finding_id.as_deref() != Some(exposure.id.as_str()) })
+        );
+        assert!(
+            report
+                .next_steps
+                .iter()
+                .any(|step| { step.finding_id.as_deref() == Some(problem.id.as_str()) })
+        );
+    }
+
+    #[test]
+    fn httpx_only_run_says_it_is_service_inventory_not_security_checks() {
+        let mut task = catalog_task("completed", EngineRunStatus::Completed);
+        task.engine_id = "httpx".into();
+        let case = case_with_catalog_tasks(vec![task], true);
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+        assert!(run_is_service_inventory_only(&case.scan_runs[0]));
+        assert!(
+            report
+                .state
+                .explanation
+                .contains("No vulnerability or configuration check ran")
+        );
+        assert!(
+            !report
+                .state
+                .explanation
+                .contains("Every exact requested dimension")
+        );
+        assert!(
+            service_inventory_explanation(BeginnerReportSummary::Complete, ReportLifecycle::Final)
+                .contains("service inventory completed")
         );
     }
 

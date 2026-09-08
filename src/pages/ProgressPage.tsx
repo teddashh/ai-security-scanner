@@ -41,10 +41,12 @@ import {
   findRunCreatedAfterStart,
   hasActiveScanWork,
 } from "../freshScanSelection";
+import { isSecurityFinding } from "../findingClassification";
 import type {
   EngineRun,
   EngineRunStatus,
   ExecutionStage,
+  Finding,
   ScanReadiness,
   ScanReadinessBlocker,
   ScanRun,
@@ -56,6 +58,7 @@ import { localizedEngineWarning } from "../engineWarningPresentation.ts";
 interface ProgressPageProps {
   caseId?: string;
   runs: ScanRun[];
+  findings: Finding[];
   selectedRunId?: string;
   readiness?: ScanReadiness;
   readinessCheckFailed?: boolean;
@@ -111,12 +114,13 @@ const copy = {
     zhTW: "程式驗證已保存的目標並建立新掃描時，先前的掃描仍會顯示；新的掃描紀錄可用後，頁面會自動切換。",
   },
   start: { en: "Start scan", zhTW: "開始掃描" },
+  viewResults: { en: "View results", zhTW: "查看結果" },
   startFreshScan: { en: "Start a new scan for fresh results", zhTW: "開始新的掃描取得新結果" },
   retryLocalhostQuickScan: { en: "Run this check again", zhTW: "重新執行這項檢查" },
   retryingLocalhostQuickScan: { en: "Starting a new attempt…", zhTW: "正在開始新的嘗試…" },
   retryLocalhostQuickScanTitle: {
-    en: "Run another localhost check",
-    zhTW: "再次執行本機檢查",
+    en: "Run another local connection test",
+    zhTW: "再次執行本機連線測試",
   },
   retryLocalhostQuickScanDescription: {
     en: "Running it again creates a new saved attempt for 127.0.0.1:{port}. This result stays unchanged.",
@@ -528,12 +532,12 @@ const copy = {
   cleanupDone: { en: "Done", zhTW: "完成" },
   cleanupPending: { en: "Still needed", zhTW: "仍待處理" },
   legacyFindingUnknown: { en: "Problem count unavailable", zhTW: "目前無法取得問題數量" },
-  findingCount: { en: "Findings: {count}", zhTW: "{count} 個問題" },
+  findingCount: { en: "Saved results: {count}", zhTW: "{count} 筆已保存結果" },
   targets: { en: "Targets", zhTW: "目標數" },
   rawEvidenceFiles: { en: "Raw evidence files", zhTW: "原始證據檔案" },
   technicalDetails: { en: "Technical status and errors", zhTW: "技術狀態與錯誤" },
   scannerName: { en: "Scanner name", zhTW: "掃描工具名稱" },
-  builtInCheck: { en: "Built-in localhost TCP check", zhTW: "內建本機 TCP 檢查" },
+  builtInCheck: { en: "Built-in local TCP connection test", zhTW: "內建本機 TCP 連線測試" },
   taskId: { en: "Check job ID", zhTW: "檢查工作 ID" },
   endpoint: { en: "Exact endpoint", zhTW: "確切端點" },
   timeout: { en: "Maximum wait", zhTW: "最長等待時間" },
@@ -678,6 +682,7 @@ const terminalRunStatuses = new Set<ScanRun["status"]>([
   "failed",
   "cancelled",
 ]);
+const activeRunStatuses = new Set<ScanRun["status"]>(["queued", "running", "paused"]);
 
 const isExecutionStage = (phase: string): phase is ExecutionStage =>
   Object.prototype.hasOwnProperty.call(executionStageMeta, phase);
@@ -694,6 +699,7 @@ const engineIcon = (engine: EngineRun) => {
 export function ProgressPage({
   caseId,
   runs,
+  findings,
   selectedRunId: controlledSelectedRunId,
   readiness,
   readinessCheckFailed,
@@ -709,7 +715,7 @@ export function ProgressPage({
   onCancel,
   onSelectRun,
 }: ProgressPageProps) {
-  const { locale, t, text, formatDate, formatDateTime, formatNumber } = useI18n();
+  const { locale, text, formatDate, formatDateTime, formatNumber } = useI18n();
   const [localSelectedRunId, setLocalSelectedRunId] = useState(runs[0]?.id);
   const selectedRunId = controlledSelectedRunId ?? localSelectedRunId;
   const selectRun = (runId: string) => {
@@ -734,8 +740,22 @@ export function ProgressPage({
       || needsFreshLocalhostTcpAttempt(terminalLocalhostSummary.outcome)
     ),
   );
+  const durableSecurityFindingCount = selectedRun
+    ? findings.filter((finding) => isSecurityFinding(finding) && (
+      finding.lastSeenRunId === selectedRun.id
+      || finding.evidence.some((evidence) => evidence.runId === selectedRun.id)
+    )).length
+    : 0;
+  const activeRunHasDurableSecurityFindings = Boolean(
+    selectedRun
+    && activeRunStatuses.has(selectedRun.status)
+    && durableSecurityFindingCount > 0,
+  );
   const showResultsAction = Boolean(
-    selectedRun && terminalRunStatuses.has(selectedRun.status),
+    selectedRun && (
+      terminalRunStatuses.has(selectedRun.status)
+      || activeRunHasDurableSecurityFindings
+    ),
   );
   const scanWorkActive = hasActiveScanWork(runs);
   const canStart = !terminalExactLocalhostQuickScan
@@ -1068,8 +1088,11 @@ export function ProgressPage({
               </button>
             )}
             {showResultsAction && (
-              <a className="button button--secondary" href="#findings">
-                <Icon name="findings" size={17} />{t("nav.findings.label")}
+              <a
+                className={`button ${activeRunHasDurableSecurityFindings ? "button--primary" : "button--secondary"}`}
+                href="#findings"
+              >
+                <Icon name="findings" size={17} />{text(copy.viewResults)}
               </a>
             )}
             {canStart && !hasReleaseIncompatibleWork && (

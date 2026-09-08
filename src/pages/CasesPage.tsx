@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from "
 
 import {
   buildKnownAssets,
+  explicitTargetRequiresSensitiveNetworkAllowance,
   prepareDeployedWebsiteTarget,
   type CaseAssetDraftError,
   type ExternalTargetInputError,
@@ -14,6 +15,12 @@ import { StatusPill } from "../components/StatusPill";
 import { loadStoredDemoCases } from "../data/demo";
 import { useI18n, type BilingualText, type StaticTranslationKey } from "../i18n";
 import { phaseMeta, runStatusMeta } from "../lib";
+import {
+  localInputDefinitions,
+  localInputDefinitionForAssessmentIntent,
+  localPathDisplayName,
+  localProfileByAssessmentIntent,
+} from "../localInputProfiles";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import { scannerService } from "../services/scanner";
 import type {
@@ -26,6 +33,7 @@ import type {
   CompanySize,
   CreateCaseInput,
   DataClass,
+  AttachWorkspaceSnapshotInput,
   LocalNetworkCandidateInventory,
   ScanRun,
 } from "../types";
@@ -35,6 +43,7 @@ import {
   type UseCaseDefinition,
   type UseCaseId,
 } from "../useCases";
+import { websiteQuickOrigin } from "../websiteQuickProfile";
 
 import "../cases-page.css";
 import "./page-technical-details.css";
@@ -54,18 +63,25 @@ export interface CasesPageProps {
   artifactCleanupPlan?: CaseArtifactDeletionPlan;
   artifactCleanupResult?: CaseArtifactCleanupResult;
   busy?: boolean;
+  preparingLocalSnapshot?: boolean;
   nativeMode: boolean;
   onClearPreset?: () => void;
   onCreate: (input: CreateCaseInput) => Promise<boolean>;
+  onCreateWithWorkspace: (
+    input: CreateCaseInput,
+    workspace: Omit<AttachWorkspaceSnapshotInput, "caseId">,
+  ) => Promise<boolean>;
+  onChooseWorkspace: () => Promise<string | null>;
   onSeedDemo: () => Promise<void>;
   onArchive: (caseId: string) => Promise<void>;
   onDelete: (caseId: string, confirmation: string) => Promise<boolean>;
   onDeleteArtifacts: (confirmation: string) => Promise<boolean>;
   onDismissArtifactCleanup: () => void;
   onStartNewScan: () => void;
-  onSelect: (caseId: string) => void;
+  onOpenCase: (caseId: string) => void;
   onContinue: () => void;
   onOpenProgress: () => void;
+  onOpenResults: () => void;
   onSelectVerificationBaseline: (runId: string) => void;
   onStartRescan: (baselineRunId: string) => Promise<void>;
   onOpenVerification: () => void;
@@ -83,12 +99,13 @@ const pageCopy = {
   newCaseEyebrow: { en: "New scan", zhTW: "新的檢查" },
   newCaseTitle: { en: "New scan", zhTW: "新掃描" },
   newCaseDescription: {
-    en: "Name the scan and add its first target.",
-    zhTW: "命名掃描，並加入第一個目標。",
+    en: "Add the target. You can leave the project name blank and we’ll create one from it.",
+    zhTW: "加入目標即可；專案名稱可以留白，我們會依目標自動建立。",
   },
   changeUseCase: { en: "Choose a different scan", zhTW: "改選其他檢查方式" },
-  caseName: { en: "Scan project name", zhTW: "掃描專案名稱" },
-  caseNamePlaceholder: { en: "Example: 2026 first security check", zhTW: "例如：2026 年首次安全健檢" },
+  caseName: { en: "Scan project name (optional)", zhTW: "掃描專案名稱（選填）" },
+  caseNamePlaceholder: { en: "Created from the target if left blank", zhTW: "留白時會依目標自動建立" },
+  defaultCaseName: { en: "Security scan", zhTW: "資安掃描" },
   organizationName: { en: "Company or team name (optional)", zhTW: "公司或團隊名稱（選填）" },
   organizationPlaceholder: { en: "Optional, and fixed once the project is created", zhTW: "選填，專案建立後就不能修改" },
   selectedGoal: { en: "What are you checking?", zhTW: "這次要檢查什麼？" },
@@ -113,25 +130,42 @@ const pageCopy = {
     en: "Nothing runs until you press Start.",
     zhTW: "按下「開始」前不會執行掃描。",
   },
-  localPickerNextTitle: { en: "Next, choose your project", zhTW: "下一步，選擇你的專案" },
-  localPickerNextBody: {
-    en: "Create the scan project, then pick the folder or exported image. We'll prepare the right local checks automatically.",
-    zhTW: "建立掃描專案後，選擇資料夾或匯出映像；我們會自動準備合適的本機檢查。",
-  },
+  localPickerEyebrow: { en: "Local check", zhTW: "本機檢查" },
   localPickerBoundary: {
-    en: "You choose exactly what is checked, and nothing runs until you press Start.",
-    zhTW: "由你決定要檢查什麼；按下「開始」前不會執行任何檢查。",
+    en: "The selected folder is copied into a private local snapshot. Nothing runs until you review the checks and press Start.",
+    zhTW: "所選資料夾會複製成私密本機快照；你檢查掃描項目並按下「開始」前，不會執行任何檢查。",
   },
+  localPathHelp: {
+    en: "Only the folder name is shown here. Its full location stays on this computer.",
+    zhTW: "這裡只顯示資料夾名稱；完整位置只留在這台電腦上。",
+  },
+  choosingFolder: { en: "Opening folder picker…", zhTW: "正在開啟資料夾選擇器…" },
+  folderFallback: { en: "Selected folder", zhTW: "已選資料夾" },
+  localFolderRequired: { en: "Choose the folder you want checked first.", zhTW: "請先選擇想檢查的資料夾。" },
+  localFolderPickerError: {
+    en: "The local folder picker could not open. Nothing was read or copied.",
+    zhTW: "無法開啟本機資料夾選擇器；沒有讀取或複製任何內容。",
+  },
+  browserLocalTitle: { en: "Browser preview cannot read a local folder", zhTW: "瀏覽器預覽不會讀取本機資料夾" },
+  browserLocalBody: {
+    en: "No folder is read or copied here. You can create a preview project to see the review steps; use the desktop app for a real local scan.",
+    zhTW: "這裡不會讀取或複製任何資料夾。你可以建立預覽專案查看後續檢查步驟；真正的本機掃描請使用桌面程式。",
+  },
+  createPreview: { en: "Create preview project", zhTW: "建立預覽專案" },
   websiteUrl: { en: "Website or API URL", zhTW: "網站或 API 網址" },
-  websitePlaceholder: { en: "https://portal.example.com/login", zhTW: "https://portal.example.com/login" },
+  websitePlaceholder: { en: "https://portal.example.com", zhTW: "https://portal.example.com" },
   websiteHelp: {
     en: "Enter one complete http:// or https:// URL. Do not include a username or password.",
     zhTW: "請輸入一個完整的 http:// 或 https:// 網址；不要放入帳號或密碼。",
   },
   websitePreparedTitle: { en: "Ready: {target}", zhTW: "已準備：{target}" },
   websitePrepared: {
-    en: "Review the exact target and limits on the next screen.",
-    zhTW: "下一頁會確認精確目標與限制。",
+    en: "The page path {path} is kept for reference. The quick scan checks the displayed website address {origin} at a small fixed set of locations; it is not limited to {path}. If you are allowed to test only a specific path, do not use this quick scan.",
+    zhTW: "頁面路徑 {path} 只會保留作為參考。快速掃描會檢查畫面所列的網站來源範圍 {origin} 與一小組固定位置，不會限制於 {path}。如果只獲准測試特定路徑，請勿使用此快速掃描。",
+  },
+  websitePreparedInternal: {
+    en: "This is a private or internal address, so the public-website quick profile will not be selected automatically. Its entered path {path} remains context only; review and explicitly authorize the exact internal target and limits on the next screen.",
+    zhTW: "這是私人或內部位址，因此不會自動選取公開網站快速設定。輸入的路徑 {path} 只會保留作為上下文；請在下一頁檢查並明確授權精確的內部目標與限制。",
   },
   websiteQueryRemoved: {
     en: "Query parameters and page fragments are not saved because they can contain private tokens or personal data.",
@@ -184,8 +218,8 @@ const pageCopy = {
   repositories: { en: "Source project or repository", zhTW: "程式碼專案或儲存庫" },
   repositoriesPlaceholder: { en: "Local project name or read-only repository coordinate", zhTW: "本機專案名稱或唯讀程式碼儲存庫位置" },
   repositoriesHelp: {
-    en: "Name the project here; you'll choose its local folder on the next screen.",
-    zhTW: "先填專案名稱；下一頁再選擇本機資料夾。",
+    en: "Choose the project folder above. A project name is optional.",
+    zhTW: "請在上方選擇專案資料夾；專案名稱可留白。",
   },
   iacProjects: { en: "Infrastructure-code project", zhTW: "基礎設施程式碼專案" },
   iacPlaceholder: { en: "infra/production\nterraform/prod", zhTW: "infra/production\nterraform/prod" },
@@ -196,14 +230,14 @@ const pageCopy = {
   containerImages: { en: "Container image name", zhTW: "容器映像名稱" },
   containerPlaceholder: { en: "Example: production-api", zhTW: "例如：production-api" },
   containerHelp: {
-    en: "Name the image here. On the next screen, choose the exact local image copy you want checked.",
-    zhTW: "先填映像名稱；下一頁再選擇要檢查的精確本機映像副本。",
+    en: "Choose the exported image folder above. A project name is optional.",
+    zhTW: "請在上方選擇匯出的映像資料夾；專案名稱可留白。",
   },
   kubernetes: { en: "Kubernetes cluster or snapshot name", zhTW: "Kubernetes 叢集或快照名稱" },
   kubernetesPlaceholder: { en: "production-eks\nstaging-gke", zhTW: "production-eks\nstaging-gke" },
   kubernetesHelp: {
-    en: "Name the cluster or project here. On the next screen, choose the configuration copy you want checked.",
-    zhTW: "先填叢集或專案名稱；下一頁再選擇要檢查的設定副本。",
+    en: "Choose the exported settings folder above. A project name is optional.",
+    zhTW: "請在上方選擇匯出的設定資料夾；專案名稱可留白。",
   },
   cloudChoice: { en: "Which cloud do you want to check first?", zhTW: "想先檢查哪一個雲端服務？" },
   cloudChoiceHelp: {
@@ -240,6 +274,12 @@ const pageCopy = {
     zhTW: "這會幫助產品說明影響，但只有在掃描獨立發現對應資產時才會生效；僅憑你的回答不會提高任何結果的優先順序。",
   },
   creating: { en: "Creating…", zhTW: "建立中…" },
+  preparingLocalSnapshot: { en: "Preparing a private scan copy…", zhTW: "正在建立私密掃描副本…" },
+  preparingLocalSnapshotTitle: { en: "Preparing your private scan copy", zhTW: "正在建立你的私密掃描副本" },
+  preparingLocalSnapshotBody: {
+    en: "Large folders can take a few minutes. You may open another page; this saved project will remain available when the copy is ready.",
+    zhTW: "大型資料夾可能需要幾分鐘。你可以先前往其他頁面；副本準備完成後，這個已保存的專案仍會留在「我的掃描」。",
+  },
   createLocal: { en: "Create scan project", zhTW: "建立掃描專案" },
   formConflictTitle: { en: "The same target has two different descriptions", zhTW: "同一目標被標成兩種不同環境" },
   formConflict: {
@@ -254,6 +294,8 @@ const pageCopy = {
   caseSystems: { en: "Systems in this scan", zhTW: "這次檢查的系統" },
   caseIntent: { en: "Planned checks", zhTW: "預計檢查項目" },
   handleInterrupted: { en: "Handle interrupted work", zhTW: "處理重啟後中斷" },
+  viewProgress: { en: "View scan progress", zhTW: "查看掃描進度" },
+  viewResults: { en: "View results", zhTW: "查看結果" },
   viewCoverage: { en: "Set up this scan", zhTW: "設定這次掃描" },
   verificationEyebrow: { en: "Check fixes", zhTW: "確認修復" },
   verificationTitle: { en: "Choose the earlier run to compare", zhTW: "選擇要比較的先前掃描" },
@@ -339,7 +381,7 @@ const pageCopy = {
     en: "Start with a website, IP address, internal system, code project, cloud account, container, or Kubernetes.",
     zhTW: "從網站、IP、內部系統、程式碼、雲端帳號、容器或 Kubernetes 開始。",
   },
-  assetFindingCount: { en: "Assets: {assets} · Findings: {findings}", zhTW: "{assets} 個資產 · {findings} 個問題" },
+  assetFindingCount: { en: "Assets: {assets} · Saved results: {findings}", zhTW: "{assets} 個資產 · {findings} 筆已保存結果" },
   archiveAria: { en: "Archive {name}", zhTW: "封存 {name}" },
   archiveTitle: { en: "Archive case", zhTW: "封存案件" },
   beginDeleteAria: { en: "Begin deleting {name}", zhTW: "開始刪除 {name}" },
@@ -521,18 +563,22 @@ export function CasesPage({
   artifactCleanupPlan,
   artifactCleanupResult,
   busy,
+  preparingLocalSnapshot,
   nativeMode,
   onClearPreset,
   onCreate,
+  onCreateWithWorkspace,
+  onChooseWorkspace,
   onSeedDemo,
   onArchive,
   onDelete,
   onDeleteArtifacts,
   onDismissArtifactCleanup,
   onStartNewScan,
-  onSelect,
+  onOpenCase,
   onContinue,
   onOpenProgress,
+  onOpenResults,
   onSelectVerificationBaseline,
   onStartRescan,
   onOpenVerification,
@@ -562,6 +608,9 @@ export function CasesPage({
   const [iacProjects, setIacProjects] = useState("");
   const [containerImages, setContainerImages] = useState("");
   const [kubernetesClusters, setKubernetesClusters] = useState("");
+  const [selectedWorkspacePath, setSelectedWorkspacePath] = useState("");
+  const [choosingWorkspace, setChoosingWorkspace] = useState(false);
+  const [workspacePickerError, setWorkspacePickerError] = useState<BilingualText>();
   const [assetDraftError, setAssetDraftError] = useState<CaseAssetDraftError>();
   const [pendingDeleteId, setPendingDeleteId] = useState<string>();
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
@@ -577,6 +626,12 @@ export function CasesPage({
   const guidedLocalUseCase = Boolean(
     selectedUseCase && guidedLocalUseCaseIds.includes(selectedUseCase),
   );
+  const guidedLocalProfile = selectedUseCase
+    ? localProfileByAssessmentIntent[selectedUseCase]
+    : undefined;
+  const guidedLocalInput = guidedLocalProfile
+    ? localInputDefinitionForAssessmentIntent(guidedLocalProfile, selectedUseCase)
+    : undefined;
   const selectedUseCaseTitle = selectedUseCase
     ? text({
       en: startPageCopy.en.cards[selectedUseCase].title,
@@ -590,6 +645,9 @@ export function CasesPage({
     })
     : undefined;
   const preparedWebsite = websiteUrl.trim() ? prepareDeployedWebsiteTarget(websiteUrl) : undefined;
+  const guidedPublicWebsite = selectedUseCase === "deployed_website"
+    && preparedWebsite?.ok === true
+    && !explicitTargetRequiresSensitiveNetworkAllowance(preparedWebsite.value.target);
   const interruptedEngineCount = latestRun?.engineRuns.filter(
     (engine) => engine.phase === "interrupted_restart" || engine.errorCode === "desktop_process_restarted",
   ).length ?? 0;
@@ -632,6 +690,8 @@ export function CasesPage({
     setIacProjects("");
     setContainerImages("");
     setKubernetesClusters("");
+    setSelectedWorkspacePath("");
+    setWorkspacePickerError(undefined);
     setAssetDraftError(undefined);
   }, [selectedDefinition, selectionKey]);
 
@@ -704,7 +764,22 @@ export function CasesPage({
     setIacProjects("");
     setContainerImages("");
     setKubernetesClusters("");
+    setSelectedWorkspacePath("");
+    setWorkspacePickerError(undefined);
     setAssetDraftError(undefined);
+  };
+
+  const chooseWorkspace = async () => {
+    setChoosingWorkspace(true);
+    setWorkspacePickerError(undefined);
+    try {
+      const path = await onChooseWorkspace();
+      if (path) setSelectedWorkspacePath(path);
+    } catch {
+      setWorkspacePickerError(pageCopy.localFolderPickerError);
+    } finally {
+      setChoosingWorkspace(false);
+    }
   };
 
   const closeForm = () => {
@@ -730,7 +805,11 @@ export function CasesPage({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!name.trim() || platforms.length === 0 || requestedActivities.length === 0) return;
+    if (platforms.length === 0 || requestedActivities.length === 0) return;
+    if (nativeMode && guidedLocalProfile && !selectedWorkspacePath) {
+      setWorkspacePickerError(pageCopy.localFolderRequired);
+      return;
+    }
 
     const assets = buildKnownAssets({
       selectedUseCase,
@@ -759,8 +838,17 @@ export function CasesPage({
     }
 
     setAssetDraftError(undefined);
-    const created = await onCreate({
-      name: name.trim(),
+    setWorkspacePickerError(undefined);
+    const selectedFolderName = selectedWorkspacePath
+      ? localPathDisplayName(selectedWorkspacePath, text(pageCopy.folderFallback))
+      : undefined;
+    const projectName = name.trim()
+      || selectedFolderName
+      || assets.knownAssets[0]?.value
+      || selectedUseCaseTitle
+      || text(pageCopy.defaultCaseName);
+    const input: CreateCaseInput = {
+      name: projectName,
       assessmentIntent: selectedUseCase,
       aiGeneratedArtifact: platforms.includes("code") ? aiGeneratedArtifact : "unknown",
       organizationName: organizationName.trim(),
@@ -770,7 +858,14 @@ export function CasesPage({
       knownAssets: assets.knownAssets,
       dataClasses: dataClasses.length ? dataClasses : ["none"],
       description: description.trim() || undefined,
-    });
+    };
+    const created = nativeMode && guidedLocalProfile
+      ? await onCreateWithWorkspace(input, {
+        label: projectName,
+        selectedPath: selectedWorkspacePath,
+        inputProfile: guidedLocalProfile,
+      })
+      : await onCreate(input);
     if (!created) return;
 
     setShowForm(false);
@@ -860,7 +955,16 @@ export function CasesPage({
 
       {useCaseNeeds(selectedDefinition, "deployed_website") && preparedWebsite?.ok && (
         <InlineNotice tone="info" title={text(pageCopy.websitePreparedTitle, { target: preparedWebsite.value.target })}>
-          <p>{text(pageCopy.websitePrepared)}</p>
+          <p>{explicitTargetRequiresSensitiveNetworkAllowance(preparedWebsite.value.target)
+            ? text(pageCopy.websitePreparedInternal, { path: preparedWebsite.value.service.path })
+            : text(pageCopy.websitePrepared, {
+              origin: websiteQuickOrigin(
+                preparedWebsite.value.target,
+                preparedWebsite.value.service.protocol,
+                preparedWebsite.value.service.port,
+              ),
+              path: preparedWebsite.value.service.path,
+            })}</p>
           {preparedWebsite.value.service.queryWasRemoved && <p>{text(pageCopy.websiteQueryRemoved)}</p>}
         </InlineNotice>
       )}
@@ -981,10 +1085,49 @@ export function CasesPage({
         </>
       )}
 
-      {guidedLocalUseCase && (
-        <InlineNotice tone="info" title={text(pageCopy.localPickerNextTitle)}>
-          <p>{text(pageCopy.localPickerNextBody)}</p>
-        </InlineNotice>
+      {guidedLocalInput && (
+        <div className="case-local-picker">
+          <p>{text(guidedLocalInput.formIntro)}</p>
+
+          <InlineNotice tone="warning" title={text(guidedLocalInput.cautionTitle)}>
+            <p>{text(guidedLocalInput.cautionBody)}</p>
+          </InlineNotice>
+
+          {!nativeMode && (
+            <InlineNotice tone="info" title={text(pageCopy.browserLocalTitle)}>
+              <p>{text(pageCopy.browserLocalBody)}</p>
+            </InlineNotice>
+          )}
+
+          <div className="field">
+            <span id="new-scan-workspace-label">{text(guidedLocalInput.directoryLabel)}</span>
+            <button
+              className="snapshot-picker"
+              type="button"
+              disabled={!nativeMode || busy || choosingWorkspace}
+              aria-describedby={workspacePickerError
+                ? "new-scan-workspace-help new-scan-workspace-error"
+                : "new-scan-workspace-help"}
+              onClick={() => void chooseWorkspace()}
+            >
+              <Icon name="database" size={18} />
+              <span>{selectedWorkspacePath
+                ? localPathDisplayName(selectedWorkspacePath, text(pageCopy.folderFallback))
+                : choosingWorkspace
+                  ? text(pageCopy.choosingFolder)
+                  : text(guidedLocalInput.selection)}</span>
+              <Icon name="chevron" size={16} />
+            </button>
+            <small id="new-scan-workspace-help">{text(pageCopy.localPathHelp)}</small>
+          </div>
+
+          {workspacePickerError && (
+            <p id="new-scan-workspace-error" className="form-error" role="alert">
+              <Icon name="warning" size={16} />
+              {text(workspacePickerError)}
+            </p>
+          )}
+        </div>
       )}
 
       {useCaseNeeds(selectedDefinition, "cloud_account") && (
@@ -1014,7 +1157,7 @@ export function CasesPage({
         title={text(showForm ? pageCopy.newCaseTitle : pageCopy.headerTitle)}
         description={showForm ? text(pageCopy.newCaseDescription) : undefined}
         actions={
-          <button className="button button--primary" type="button" onClick={showForm ? closeForm : openBlankForm}>
+          <button className="button button--primary" type="button" disabled={showForm && busy} onClick={showForm ? closeForm : openBlankForm}>
             <Icon name={showForm ? "close" : "plus"} size={18} />
             {text(showForm ? pageCopy.closeForm : pageCopy.create)}
           </button>
@@ -1022,7 +1165,13 @@ export function CasesPage({
       />
 
       {showForm && (
-        <form className="create-case-panel" onSubmit={submit}>
+        <form className="create-case-panel" aria-busy={preparingLocalSnapshot || undefined} onSubmit={submit}>
+          <fieldset className="create-case-panel__locked-fields" disabled={busy}>
+          {preparingLocalSnapshot && (
+            <InlineNotice tone="info" title={text(pageCopy.preparingLocalSnapshotTitle)} announce>
+              <p>{text(pageCopy.preparingLocalSnapshotBody)}</p>
+            </InlineNotice>
+          )}
           {selectedDefinition && onClearPreset && (
             <div className="create-case-panel__top-actions">
               <button className="button button--ghost button--small" type="button" onClick={changeUseCase}>
@@ -1031,13 +1180,6 @@ export function CasesPage({
               </button>
             </div>
           )}
-
-          <div className="form-grid">
-            <label className="field">
-              <span>{text(pageCopy.caseName)}</span>
-              <input required value={name} onChange={(event) => setName(event.target.value)} placeholder={text(pageCopy.caseNamePlaceholder)} />
-            </label>
-          </div>
 
           {primaryTarget}
 
@@ -1057,6 +1199,10 @@ export function CasesPage({
             </summary>
             <div className="case-more-details__body">
               <div className="form-grid form-grid--two">
+                <label className="field">
+                  <span>{text(pageCopy.caseName)}</span>
+                  <input value={name} onChange={(event) => setName(event.target.value)} placeholder={text(pageCopy.caseNamePlaceholder)} />
+                </label>
                 <label className="field">
                   <span>{text(pageCopy.organizationName)}</span>
                   <input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} placeholder={text(pageCopy.organizationPlaceholder)} />
@@ -1206,7 +1352,7 @@ export function CasesPage({
                     </label>
                   ))}
                 </div>
-                {requestedActivities.includes("active_external_vulnerability_tests") && (
+                {requestedActivities.includes("active_external_vulnerability_tests") && !guidedPublicWebsite && (
                   <InlineNotice tone="warning" title={text(pageCopy.activeWarningTitle)}>
                     <p>{text(pageCopy.activeWarning)}</p>
                   </InlineNotice>
@@ -1229,11 +1375,18 @@ export function CasesPage({
           </details>
 
           <div className="form-actions">
-            <button className="button button--primary" type="submit" disabled={busy || !name.trim() || platforms.length === 0 || requestedActivities.length === 0}>
-              {text(busy ? pageCopy.creating : pageCopy.createLocal)}
+            <button className="button button--primary" type="submit" disabled={busy || platforms.length === 0 || requestedActivities.length === 0}>
+              {text(preparingLocalSnapshot
+                ? pageCopy.preparingLocalSnapshot
+                : busy
+                ? pageCopy.creating
+                : !nativeMode && guidedLocalUseCase
+                  ? pageCopy.createPreview
+                  : guidedLocalInput?.createAction ?? pageCopy.createLocal)}
               <Icon name="arrow" size={17} />
             </button>
           </div>
+          </fieldset>
         </form>
       )}
 
@@ -1256,8 +1409,22 @@ export function CasesPage({
               {selectedCase.platforms.length > 3 && <span>+{formatNumber(selectedCase.platforms.length - 3)}</span>}
             </div>
           </div>
-          <button className="button button--light" type="button" onClick={interruptedEngineCount > 0 ? onOpenProgress : onContinue}>
-            {text(interruptedEngineCount > 0 ? pageCopy.handleInterrupted : pageCopy.viewCoverage)}
+          <button
+            className="button button--light"
+            type="button"
+            onClick={interruptedEngineCount > 0 || activeRun
+              ? onOpenProgress
+              : terminalRuns.length > 0
+                ? onOpenResults
+                : onContinue}
+          >
+            {text(interruptedEngineCount > 0
+              ? pageCopy.handleInterrupted
+              : activeRun
+                ? pageCopy.viewProgress
+                : terminalRuns.length > 0
+                  ? pageCopy.viewResults
+                  : pageCopy.viewCoverage)}
             <Icon name="arrow" size={17} />
           </button>
         </section>
@@ -1421,7 +1588,7 @@ export function CasesPage({
               return (
                 <Fragment key={assessmentCase.id}>
                   <article className={active ? "case-row case-row--active" : "case-row"}>
-                    <button type="button" className="case-row__main" onClick={() => onSelect(assessmentCase.id)}>
+                    <button type="button" className="case-row__main" disabled={busy} onClick={() => onOpenCase(assessmentCase.id)}>
                       <span className="case-row__icon"><Icon name="cases" /></span>
                       <span className="case-row__copy">
                         <span className="case-row__title"><strong>{displayedName}</strong>{assessmentCase.isDemo && <small>{text(pageCopy.demo)}</small>}</span>
@@ -1455,7 +1622,7 @@ export function CasesPage({
                           <Icon name={confirmingDelete ? "close" : "trash"} size={17} />
                         </button>
                       )}
-                      <button className="icon-button" type="button" aria-label={text(pageCopy.selectAria, { name: displayedName })} onClick={() => onSelect(assessmentCase.id)}><Icon name="chevron" /></button>
+                      <button className="icon-button" type="button" disabled={busy} aria-label={text(pageCopy.selectAria, { name: displayedName })} onClick={() => onOpenCase(assessmentCase.id)}><Icon name="chevron" /></button>
                     </div>
                   </article>
                   {canDelete && confirmingDelete && (

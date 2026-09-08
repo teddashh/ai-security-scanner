@@ -108,10 +108,15 @@ test("a completed setup claims ready only after the refreshed runtime is authori
     appSource.indexOf("const setupManagedRuntime ="),
     appSource.indexOf("useEffect(() => {", appSource.indexOf("const setupManagedRuntime =")),
   );
+  const postSetupRuntimeRefresh = appSource.slice(
+    appSource.indexOf("const refreshRuntimeSnapshotAfterCurrent ="),
+    appSource.indexOf("useEffect(() => {", appSource.indexOf("const refreshRuntimeSnapshotAfterCurrent =")),
+  );
 
   assert.match(loadSnapshot, /return await applySnapshotResult\(boundedSnapshotRead\.value\)/u);
   assert.match(loadSnapshot, /catch \(error\)[\s\S]*return undefined/u);
-  assert.match(setup, /const refreshedSnapshot = await refreshRuntimeSnapshot\(\)/u);
+  assert.match(postSetupRuntimeRefresh, /const previousRefresh = runtimeSnapshotRefreshInFlight\.current[\s\S]*await previousRefresh[\s\S]*return refreshRuntimeSnapshot\(\)/u);
+  assert.match(setup, /const refreshedSnapshot = await refreshRuntimeSnapshotAfterCurrent\(\)/u);
   assert.match(setup, /const runtimeReady = refreshedSnapshot\?\.runtime\?\.available === true/u);
   assert.match(setup, /const completedAndReady = completed && runtimeReady/u);
   assert.match(setup, /tone: completedAndReady \? "success" : "warning"/u);

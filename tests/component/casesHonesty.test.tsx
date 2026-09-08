@@ -66,15 +66,18 @@ const renderCases = (overrides: Partial<CasesPageProps> = {}) =>
         runs={[]}
         nativeMode
         onCreate={() => Promise.resolve(true)}
+        onCreateWithWorkspace={() => Promise.resolve(true)}
+        onChooseWorkspace={() => Promise.resolve(null)}
         onSeedDemo={() => Promise.resolve()}
         onArchive={() => Promise.resolve()}
         onDelete={() => Promise.resolve(true)}
         onDeleteArtifacts={() => Promise.resolve(true)}
         onDismissArtifactCleanup={() => {}}
         onStartNewScan={() => {}}
-        onSelect={() => {}}
+        onOpenCase={() => {}}
         onContinue={() => {}}
         onOpenProgress={() => {}}
+        onOpenResults={() => {}}
         onSelectVerificationBaseline={() => {}}
         onStartRescan={() => Promise.resolve()}
         onOpenVerification={() => {}}
@@ -421,6 +424,66 @@ test("a run that failed is offered as a baseline without being called completed"
   expect(option?.textContent).toContain("Failed");
 });
 
+test("the selected project opens the useful next step instead of always returning to setup", () => {
+  const onContinue = vi.fn();
+  const onOpenProgress = vi.fn();
+  const onOpenResults = vi.fn();
+
+  const completedRun = run({ status: "completed" });
+  const completed = renderCases({
+    latestRun: completedRun,
+    runs: [completedRun],
+    onContinue,
+    onOpenProgress,
+    onOpenResults,
+  });
+  fireEvent.click(completed.getByRole("button", { name: /View results/u }));
+  expect(onOpenResults).toHaveBeenCalledTimes(1);
+  expect(onContinue).not.toHaveBeenCalled();
+  cleanup();
+
+  const activeRun = run({ status: "running", progress: 35, finishedAt: undefined });
+  const active = renderCases({
+    latestRun: activeRun,
+    runs: [activeRun],
+    onContinue,
+    onOpenProgress,
+    onOpenResults,
+  });
+  fireEvent.click(active.getByRole("button", { name: /View scan progress/u }));
+  expect(onOpenProgress).toHaveBeenCalledTimes(1);
+  cleanup();
+
+  const draft = renderCases({ onContinue, onOpenProgress, onOpenResults });
+  fireEvent.click(draft.getByRole("button", { name: /Set up this scan/u }));
+  expect(onContinue).toHaveBeenCalledTimes(1);
+});
+
+test("a project row opens that project instead of silently changing a distant hero", () => {
+  const onOpenCase = vi.fn();
+  const { container } = renderCases({ onOpenCase });
+  fireEvent.click(container.querySelector<HTMLButtonElement>(".case-row__main")!);
+  expect(onOpenCase).toHaveBeenCalledWith("case-1");
+});
+
+test("local snapshot preparation explains the wait and locks inputs that would change it", () => {
+  const { container, getByRole } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "source_code",
+    selectionKey: 1,
+    busy: true,
+    preparingLocalSnapshot: true,
+  });
+
+  expect(container.querySelector(".create-case-panel")?.getAttribute("aria-busy")).toBe("true");
+  expect(container.textContent).toContain("Preparing your private scan copy");
+  expect(container.textContent).toContain("Large folders can take a few minutes");
+  expect((getByRole("button", { name: /Close setup/u }) as HTMLButtonElement).disabled).toBe(true);
+  expect(container.querySelector<HTMLFieldSetElement>(".create-case-panel__locked-fields")?.disabled).toBe(true);
+  expect((getByRole("button", { name: /Preparing a private scan copy/u }) as HTMLButtonElement).disabled).toBe(true);
+});
+
 test("outcome counts appear only after a scan run exists", () => {
   // `assetCount` and `findingCount` default to 0 when no workspace is loaded.
   // Rendering "Problems found: 0" then states a result for a scan that has not
@@ -474,6 +537,109 @@ test("the optional organization field does not promise an edit the app cannot ma
   expect(organization!.placeholder).toBe("Optional, and fixed once the project is created");
 });
 
+test("a beginner can create a website scan without inventing a project name", async () => {
+  const onCreate = vi.fn(() => Promise.resolve(true));
+  const { container, getByLabelText } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "deployed_website",
+    selectionKey: 1,
+    onCreate,
+  });
+
+  const projectName = getByLabelText("Scan project name (optional)");
+  expect(projectName.hasAttribute("required")).toBe(false);
+  fireEvent.change(getByLabelText(/Website or API URL/u), {
+    target: { value: "https://portal.example.test/login" },
+  });
+  expect(container.querySelector(".inline-notice")?.textContent).toContain(
+    "The page path /login is kept for reference. The quick scan checks the displayed website address https://portal.example.test:443 at a small fixed set of locations; it is not limited to /login.",
+  );
+  expect(container.querySelector(".inline-notice")?.textContent).toContain(
+    "If you are allowed to test only a specific path, do not use this quick scan.",
+  );
+  fireEvent.submit(container.querySelector(".create-case-panel")!);
+
+  await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+  expect(onCreate.mock.calls[0]?.[0].name).toBe("portal.example.test");
+});
+
+test("a guided source-code scan chooses and attaches its folder in one creation action", async () => {
+  const onCreate = vi.fn(() => Promise.resolve(true));
+  const onCreateWithWorkspace = vi.fn(() => Promise.resolve(true));
+  const onChooseWorkspace = vi.fn(() => Promise.resolve("C:\\work\\agent-console"));
+  const { container, getByRole, getByLabelText } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "source_code",
+    selectionKey: 1,
+    onCreate,
+    onCreateWithWorkspace,
+    onChooseWorkspace,
+  });
+
+  const optionalDetails = container.querySelector<HTMLDetailsElement>(".case-more-details")!;
+  expect(optionalDetails.open).toBe(false);
+  expect(optionalDetails.contains(getByLabelText("Scan project name (optional)"))).toBe(true);
+
+  fireEvent.click(getByRole("button", { name: /Choose the source-code folder/u }));
+  await waitFor(() => expect(getByRole("button", { name: /agent-console/u })).toBeTruthy());
+  fireEvent.submit(container.querySelector(".create-case-panel")!);
+
+  await waitFor(() => expect(onCreateWithWorkspace).toHaveBeenCalledTimes(1));
+  expect(onCreate).not.toHaveBeenCalled();
+  expect(onCreateWithWorkspace.mock.calls[0]?.[0]).toMatchObject({
+    name: "agent-console",
+    assessmentIntent: "source_code",
+    knownAssets: [],
+  });
+  expect(onCreateWithWorkspace.mock.calls[0]?.[1]).toEqual({
+    label: "agent-console",
+    selectedPath: "C:\\work\\agent-console",
+    inputProfile: "repository_working_tree",
+  });
+});
+
+test("guided local creation requires an explicit folder and never starts from a blank target", async () => {
+  const onCreateWithWorkspace = vi.fn(() => Promise.resolve(true));
+  const { container } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "container_image",
+    selectionKey: 1,
+    onCreateWithWorkspace,
+  });
+
+  fireEvent.submit(container.querySelector(".create-case-panel")!);
+
+  expect(onCreateWithWorkspace).not.toHaveBeenCalled();
+  expect(container.querySelector("#new-scan-workspace-error")?.textContent).toContain(
+    "Choose the folder you want checked first.",
+  );
+});
+
+test("browser local setup is an honest preview and never claims to read a folder", async () => {
+  const onCreate = vi.fn(() => Promise.resolve(true));
+  const onCreateWithWorkspace = vi.fn(() => Promise.resolve(true));
+  const { container, getByRole } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "infrastructure_as_code",
+    selectionKey: 1,
+    nativeMode: false,
+    onCreate,
+    onCreateWithWorkspace,
+  });
+
+  expect(container.textContent).toContain("Browser preview cannot read a local folder");
+  expect(container.textContent).toContain("No folder is read or copied here");
+  expect(getByRole<HTMLButtonElement>("button", { name: /Choose the infrastructure-code folder/u }).disabled).toBe(true);
+  fireEvent.click(getByRole("button", { name: "Create preview project" }));
+
+  await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+  expect(onCreateWithWorkspace).not.toHaveBeenCalled();
+});
+
 test("an invalid public target stays in the form with field-specific accessible feedback", async () => {
   const onCreate = vi.fn(() => Promise.resolve(true));
   const { container, getByLabelText } = renderCases({
@@ -484,7 +650,7 @@ test("an invalid public target stays in the form with field-specific accessible 
     onCreate,
   });
 
-  const nameInput = getByLabelText("Scan project name");
+  const nameInput = getByLabelText("Scan project name (optional)");
   const targetsInput = getByLabelText(/Public domains, IP addresses, or small network ranges/u);
   fireEvent.change(nameInput, { target: { value: "External perimeter" } });
   fireEvent.change(targetsInput, {
@@ -529,7 +695,7 @@ test("an invalid internal CIDR is reported by the internal target field", async 
     onCreate,
   });
 
-  const nameInput = getByLabelText("Scan project name");
+  const nameInput = getByLabelText("Scan project name (optional)");
   const targetsInput = getByLabelText(/Internal IP addresses or small network ranges/u);
   fireEvent.change(nameInput, { target: { value: "Internal network" } });
   fireEvent.change(targetsInput, { target: { value: "10.20.0.8\n10.20.0.0/99" } });
@@ -557,7 +723,7 @@ test("an invalid optional target opens its advanced section and receives focus",
     onCreate,
   });
 
-  fireEvent.change(getByLabelText("Scan project name"), { target: { value: "Website check" } });
+  fireEvent.change(getByLabelText("Scan project name (optional)"), { target: { value: "Website check" } });
   fireEvent.change(getByLabelText(/Website or API URL/u), { target: { value: "https://app.example.test/" } });
   const targetsInput = getByLabelText(/Public domains, IP addresses, or small network ranges/u);
   fireEvent.change(targetsInput, { target: { value: "app.example.test:443" } });
@@ -586,15 +752,18 @@ test("the empty native project list offers and opens the synthetic example", asy
           runs={[]}
           nativeMode
           onCreate={() => Promise.resolve(true)}
+          onCreateWithWorkspace={() => Promise.resolve(true)}
+          onChooseWorkspace={() => Promise.resolve(null)}
           onSeedDemo={async () => { await onSeedDemo(); setOpened(true); }}
           onArchive={() => Promise.resolve()}
           onDelete={() => Promise.resolve(true)}
           onDeleteArtifacts={() => Promise.resolve(true)}
           onDismissArtifactCleanup={() => {}}
           onStartNewScan={() => {}}
-          onSelect={() => {}}
+          onOpenCase={() => {}}
           onContinue={() => {}}
           onOpenProgress={() => {}}
+          onOpenResults={() => {}}
           onSelectVerificationBaseline={() => {}}
           onStartRescan={() => Promise.resolve()}
           onOpenVerification={() => {}}

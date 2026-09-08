@@ -326,6 +326,7 @@ test("the report the findings list is built from carries severity and codes the 
       family: "network_exposure",
       severity_basis_code: "open_port",
       confidence_basis_code: "observed_response",
+      observation_details: ["port:443", "protocol:tcp"],
       evidence_references: [{
         evidence_id: "evidence-1",
         engine_id: "naabu",
@@ -359,6 +360,7 @@ test("the report the findings list is built from carries severity and codes the 
   assert.equal(finding.family, "network_exposure");
   assert.equal(finding.severityBasisCode, "open_port");
   assert.equal(finding.confidenceBasisCode, "observed_response");
+  assert.deepEqual(finding.observationDetails, ["port:443", "protocol:tcp"]);
 });
 
 test("beginner report adapter preserves exact tested and untested network scope slices", () => {

@@ -4,7 +4,7 @@ Status: implementation architecture
 
 Last updated: 2026-09-06
 
-Normative status: this is a subordinate implementation reference. The [canonical product specification](product-spec.md) controls user-visible behavior and acceptance. Any conflict in views, gates, runtime readiness, recovery, or delivery order is a current implementation/design gap, not an additional product requirement.
+Direction: [product-spec.md](product-spec.md) controls product priorities and user-visible behavior. This document describes implementation boundaries only; it cannot create a roadmap, acceptance program, or standing work. Versioning, release timing, packaging, signing, and compliance work begins only when the product owner explicitly requests it.
 
 This document describes the target architecture. Component names and interfaces are requirements or proposed contracts until corresponding code and tests exist; they are not implementation claims.
 
@@ -66,7 +66,7 @@ The Rust backend owns case state, persistence, authorization decisions, orchestr
 
 ### 3.3 Bootstrap broker
 
-The broker is an Advanced cloud-only, separate minimal process used only when the user cannot establish provider-native read-only authorization directly. It exchanges a high-privilege login for a dedicated short-lived read-only scan role, verifies that role, transfers only a capability handle for the read-only role, and exits. Its absence or failure cannot appear in or block localhost, website, public/internal network, local source, project/report, or unsigned-export paths.
+The broker is an Advanced cloud-only, separate minimal process used only when the user cannot establish provider-native read-only authorization directly. It exchanges a high-privilege login for a dedicated short-lived read-only scan role, verifies that role, transfers only a capability handle for the read-only role, and exits. Its absence or failure cannot appear in or block the local connectivity utility, website, public/internal network, local source, project/report, or unsigned-export paths.
 
 It must not load third-party adapters, call the container runtime, accept arbitrary commands, persist secrets, write secrets to logs, or expose a general network proxy. Detailed requirements are in [threat-model.md](threat-model.md).
 
@@ -76,7 +76,7 @@ The runtime provider is the only backend component that controls engine processe
 
 Supported provider implementations are:
 
-- `managed_local`: the background-prepared, zero-engine-install path for supported desktop releases;
+- `managed_local`: the background-prepared, zero-engine-install path on supported desktop platforms;
 - `docker`: an Advanced compatibility and development provider for an existing Docker Engine;
 - `podman`: an Advanced compatibility and development provider for an existing Podman installation.
 
@@ -491,7 +491,7 @@ support:
 
 An entry without a license disposition or artifact digest may be retained for research but cannot be executed or distributed as that engine. Admission failure is operation-scoped: it creates `not_tested` coverage for affected tasks and cannot block the installed app, unaffected engines, the master report, or readable unsigned export.
 
-`supported_providers` is a fail-closed release declaration, not a summary of upstream features.
+`supported_providers` is a fail-closed catalog declaration, not a summary of upstream features.
 Provider-bound engines require an exact provider value on every target asset. Missing provider
 identity and non-matching providers are incompatible in planning, coverage recomputation, and
 resume. CloudQuery, Steampipe, ScoutSuite, and Cloudsplaining declare only `aws`. Prowler declares
@@ -595,7 +595,7 @@ An engine requiring a weaker boundary must declare the exception and that engine
 
 ## 12. Discovery and scope planning
 
-Discovery produces candidates plus provenance; it never silently widens direct-contact scope. Selecting a local read-only snapshot is sufficient authorization for analysis of that product-created snapshot. Localhost uses the combined Start action without an ownership checkbox. Public/internal low-impact contact records the single inline assertion defined by the canonical specification; only wider, credentialed, active, or more intrusive activity requires another explicit grant.
+Discovery produces candidates plus provenance; it never silently widens direct-contact scope. Selecting a local read-only snapshot is sufficient authorization for analysis of that product-created snapshot. The dedicated local-service connection utility uses one action without an ownership checkbox and remains separate from meaningful scans. Public/internal low-impact contact records the single inline assertion defined by the product specification; only wider, credentialed, active, or more intrusive activity requires another explicit grant.
 
 AWS, Azure, GCP, and Microsoft 365 live discovery uses the verified process-memory source capability and a fixed internal engine binding. Each response page is durably synced to the case's content-addressed connector store before pagination inspection or asset parsing. A backend-created manifest binds the exact operation, HTTP status, parser profile, observation time, and SHA-256 reference for every page. The same connector registry used for imported snapshots reopens those references, verifies their hashes, parses provider-native records, and submits the normal reconciliation batch. Credentials and continuation tokens are neither case metadata nor connector inputs.
 
@@ -607,19 +607,19 @@ The planner computes applicability from:
 requested targets and stage
 ∩ applicable authorization
 ∩ engine target capabilities
-∩ exact released provider applicability
+∩ exact implemented provider applicability
 = persisted target-stage-engine task set
 ```
 
 Credential, input, image, gateway, and runtime availability are task preflight outcomes after this set is persisted. The plan records why an engine was included or excluded. Exclusion contributes to coverage, not a pass result. A missing cloud capability cannot prevent a local snapshot task; a gateway failure cannot prevent an offline source task.
 
-Provider-native discovery is independently released from scanner images. The released Prowler
+Provider-native discovery is implemented independently from scanner images. The current Prowler
 wrapper has three separate exact-scope profiles: one AWS account, one Azure subscription, or one
 GCP project per execution. Each profile has its own native identifier validation, short-lived
 credential shape, provider preflight, and fixed endpoint closure. CloudQuery, Steampipe,
 ScoutSuite, and Cloudsplaining remain AWS-only. Neither Prowler's other upstream provider support
 nor another engine's upstream multi-provider support widens a case/source binding without an exact
-provider-specific wrapper contract and release evidence.
+provider-specific wrapper contract and real execution evidence.
 
 Public-data-only discovery and direct network contact are separate capabilities. DNS and certificate transparency queries may be permitted without contacting a target; port probing, header retrieval, and vulnerability templates require the corresponding direct-contact grant.
 
@@ -698,20 +698,18 @@ If those conditions fail, the result is `unverifiable`, not `resolved`.
 
 Differences caused by an engine, ruleset, mapping, or adapter update are labeled separately from observed environment changes wherever the evidence permits.
 
-### Signed application updates
+### Optional signed application update path
 
-Desktop releases use Tauri's signed updater artifacts and one fixed HTTPS GitHub Release endpoint.
-The updater public key is compiled into the application configuration; its private key exists only
-as a GitHub Actions secret. The client validates the selected current-platform payload, URL,
-signature, and digest before applying it. Missing or invalid entries for another platform do not
-hide a valid current-platform update; cross-platform completeness belongs to publication policy.
-Invalid current-platform update material blocks only applying that update, while the installed
-version, projects, reports, unsigned exports, and admitted engines remain usable. The UI
-distinguishes an available application update from case validity: an older case remains readable
-and keeps the exact provenance captured when its runs were planned. Updater signing is not
-represented as Apple notarization, Apple Developer ID, or Windows Authenticode signing. Compatible
-downgrade preserves/reopens data read-only; an incompatible downgrade refuses before mutation
-rather than globally disabling the installed version.
+When the product owner requests application-update distribution, the existing Tauri path uses
+signed updater artifacts and one fixed HTTPS endpoint. The public key is compiled into the
+application; private material stays outside the product. The client validates the selected
+current-platform payload, URL, signature, and digest before applying it.
+
+Invalid material blocks only that requested update. The installed application, projects, reports,
+unsigned exports, and admitted scanners remain usable. Case validity is independent of update
+availability, and historical runs keep their captured provenance. Updater signatures are not
+represented as Apple notarization, Apple Developer ID, or Windows Authenticode. Which platforms or
+channels are distributed remains a product-owner decision, not an architecture prerequisite.
 
 ## 17. Demo data
 
@@ -723,25 +721,20 @@ Claude/Codex skills call documented application or maintenance commands. They ma
 
 The durable scope grant is produced inside the canonical combined Start interaction. Skills cannot supply the user's public/internal assertion, widen an existing contract, or enable a deeper/active activity on the user's behalf.
 
-## 19. Architectural acceptance conditions
+## 19. Implementation evidence
 
-The architecture is implemented only when evidence demonstrates:
+Architecture changes are verified in proportion to the behavior and risk they change. Evidence should show that:
 
-- an installed Windows beginner reaches the exact `127.0.0.1:9001` master report within the canonical ten-minute and interaction budget;
-- the workspace exposes only New scan, Projects, Report, and Settings as primary destinations and remains usable while managed tools reconcile;
+- a beginner can take the shortest applicable website or local-project path to a real security result, understand what matters first, and see what was not tested;
+- connectivity checks remain plainly labeled utilities rather than substitutes for a meaningful scan;
+- adapters translate bounded product inputs to upstream engines and preserve upstream identifiers, severity, evidence, and remediation;
+- one shared report layer owns prioritization, deduplication, plain-language explanation, cross-engine correlation, and presentation;
 - UI-to-backend commands are typed and backend-authorized;
-- case and job state survives process restarts;
-- the run/task plan survives dependency preflight and one unavailable engine/gateway still yields sibling results plus a partial master report;
-- startup/focus/resume/watchdog polling corrects missed events within the canonical bounded refresh contract;
-- credential capability handles cannot be resolved by the UI or unrelated engines;
-- runtime providers enforce target, mount, network, and resource restrictions;
-- adapter failure cannot create green coverage;
-- requested and executed scope remain distinct and no host, port, path, stage, or engine is silently omitted;
-- raw evidence is immutable and hash-addressed;
-- exporters disclose loss or extension fields;
-- mapping, signing, updater, and supply-chain failure is limited to the exact relationship, signed export, update, or untrusted engine operation;
-- export verification distinguishes integrity from correctness;
-- re-verification does not mark an unrun check as resolved;
-- demo provenance cannot be confused with a real case;
-- the exact-candidate human path passes before beginner-ready/stable Windows promotion; a public testing prerelease discloses that it remains unobserved, and modeled tests remain supporting evidence;
-- every added gate, durable state, or recovery transaction satisfies the canonical complexity budget with a reproducible harm and a simpler-alternative analysis.
+- case and job state survives process restarts, while an unavailable dependency leaves unaffected work and an honest partial report available;
+- credential capabilities, targets, mounts, network access, and resources remain bounded to the approved task;
+- adapter failure cannot create green coverage, and requested scope is never silently narrowed;
+- raw evidence remains immutable and attributable to the engine that produced it;
+- exports disclose omissions and distinguish package integrity from scan correctness;
+- re-verification does not mark an unrun check as resolved, and demo data cannot be confused with a real result.
+
+Rendered beginner-path tests and real engine execution carry the most product value. Unit, schema, and security-boundary tests support those outcomes; none independently chooses product priority or authorizes version, release, signing, packaging, or compliance work.

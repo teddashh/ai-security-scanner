@@ -1,0 +1,124 @@
+import type { BilingualText } from "./i18n";
+import type { AttachWorkspaceSnapshotInput } from "./types";
+import type { UseCaseId } from "./useCases";
+
+export type LocalInputProfile = AttachWorkspaceSnapshotInput["inputProfile"];
+
+const bilingual = (en: string, zhTW: string): BilingualText => ({ en, zhTW });
+
+export interface LocalInputDefinition {
+  label: BilingualText;
+  detail: BilingualText;
+  formTitle: BilingualText;
+  formIntro: BilingualText;
+  cautionTitle: BilingualText;
+  cautionBody: BilingualText;
+  directoryLabel: BilingualText;
+  selection: BilingualText;
+  attachAction: BilingualText;
+  createAction: BilingualText;
+  technical: BilingualText;
+}
+
+export const localProfileByAssessmentIntent: Partial<Record<UseCaseId, LocalInputProfile>> = {
+  ai_application: "repository_working_tree",
+  source_code: "repository_working_tree",
+  infrastructure_as_code: "iac_working_tree",
+  container_image: "container_image_oci_layout",
+  kubernetes: "kubernetes_manifests",
+};
+
+export const localInputDefinitions: Record<LocalInputProfile, LocalInputDefinition> = {
+  repository_working_tree: {
+    label: bilingual("Source-code project", "程式碼專案"),
+    detail: bilingual("Check one local project without changing its files.", "在本機檢查一個專案，不會修改任何檔案。"),
+    formTitle: bilingual("Choose the source code you want checked", "選擇想檢查的程式碼"),
+    formIntro: bilingual("Pick one project folder. We'll check it locally for risky code, exposed secrets, and vulnerable packages without changing its files.", "選擇一個專案資料夾；我們會在本機檢查危險程式碼、暴露的秘密與有弱點的套件，不會修改任何檔案。"),
+    cautionTitle: bilingual("Your project stays local and unchanged", "專案留在本機，檔案不會被修改"),
+    cautionBody: bilingual("Only the selected folder is copied into the private local scan. Detected secret values are masked in results.", "只會把選定資料夾複製到私密的本機掃描；找到的秘密值會在結果中遮罩。"),
+    directoryLabel: bilingual("Source-code folder", "程式碼資料夾"),
+    selection: bilingual("Choose the source-code folder", "選擇程式碼資料夾"),
+    attachAction: bilingual("Add this source-code project", "加入這份程式碼專案"),
+    createAction: bilingual("Create scan with this code", "用這份程式碼建立掃描"),
+    technical: bilingual("Input profile: repository_working_tree. Every .git directory, including refs and hooks, is excluded from the saved copy.", "輸入格式：repository_working_tree。保存副本時會排除所有 .git 目錄，包括 refs 與 hooks。"),
+  },
+  iac_working_tree: {
+    label: bilingual("Infrastructure-code project", "基礎設施程式碼專案"),
+    detail: bilingual("Check the Terraform, JSON, and YAML files in one project folder without changing them.", "檢查一個專案資料夾內的 Terraform、JSON 與 YAML 檔案，不會修改內容。"),
+    formTitle: bilingual("Choose the infrastructure code you want checked", "選擇想檢查的基礎設施程式碼"),
+    formIntro: bilingual("Pick the folder that contains your Terraform, CloudFormation, JSON, or YAML deployment files. We'll look for risky settings before they go live.", "選擇包含 Terraform、CloudFormation、JSON 或 YAML 部署檔案的資料夾；我們會在上線前找出危險設定。"),
+    cautionTitle: bilingual("Remove secret values from deployment files first", "請先移除部署檔案中的秘密值"),
+    cautionBody: bilingual("The selected files are copied for local checks. Replace embedded passwords, keys, and tokens before adding the folder.", "所選檔案會複製到本機進行檢查；加入資料夾前，請先移除檔案內的密碼、金鑰與 token。"),
+    directoryLabel: bilingual("Infrastructure-code folder", "基礎設施程式碼資料夾"),
+    selection: bilingual("Choose the infrastructure-code folder", "選擇基礎設施程式碼資料夾"),
+    attachAction: bilingual("Add this infrastructure code", "加入這份基礎設施程式碼"),
+    createAction: bilingual("Create scan with this infrastructure code", "用這份基礎設施程式碼建立掃描"),
+    technical: bilingual("Input profile: iac_working_tree. The saved copy accepts Terraform, JSON, and YAML deployment files.", "輸入格式：iac_working_tree。保存副本接受 Terraform、JSON 與 YAML 部署檔案。"),
+  },
+  container_image_oci_layout: {
+    label: bilingual("Exported container image", "匯出的容器映像"),
+    detail: bilingual("Check one exported container image on this computer without signing in to a registry.", "在這台電腦上檢查一份匯出的容器映像，不必登入映像倉庫。"),
+    formTitle: bilingual("Choose the container image you want checked", "選擇想檢查的容器映像"),
+    formIntro: bilingual("Pick one exported OCI image folder. We'll inspect its packages and known vulnerabilities locally without running the image.", "選擇一個匯出的 OCI 映像資料夾；我們會在本機檢查其中套件與已知弱點，不會執行映像。"),
+    cautionTitle: bilingual("Choose an exported image, not a running container", "請選擇匯出的映像，不是正在執行的容器"),
+    cautionBody: bilingual("The app reads only this exported copy. It does not start the image or sign in to a container registry.", "產品只讀取這份匯出副本，不會啟動映像，也不會登入容器映像倉庫。"),
+    directoryLabel: bilingual("Exported image folder", "匯出映像資料夾"),
+    selection: bilingual("Choose the exported container-image folder", "選擇匯出的容器映像資料夾"),
+    attachAction: bilingual("Add this container image", "加入這份容器映像"),
+    createAction: bilingual("Create scan with this container image", "用這份容器映像建立掃描"),
+    technical: bilingual("Input profile: container_image_oci_layout. Choose one digest-bound OCI Image Layout containing oci-layout, index.json, and blobs/.", "輸入格式：container_image_oci_layout。請選擇一份綁定精確內容指紋、且包含 oci-layout、index.json 與 blobs/ 的 OCI Image Layout。"),
+  },
+  kubernetes_manifests: {
+    label: bilingual("Kubernetes configuration", "Kubernetes 設定"),
+    detail: bilingual("Check exported Kubernetes settings on this computer without connecting to the live cluster.", "在這台電腦上檢查匯出的 Kubernetes 設定，不會連線到正在運作的叢集。"),
+    formTitle: bilingual("Choose the Kubernetes settings you want checked", "選擇想檢查的 Kubernetes 設定"),
+    formIntro: bilingual("Pick a folder of exported YAML or JSON settings. We'll find risky workload and cluster settings without connecting to the live cluster.", "選擇包含匯出 YAML 或 JSON 設定的資料夾；我們會找出危險的工作負載與叢集設定，不會連線到正式叢集。"),
+    cautionTitle: bilingual("Use exported settings, not live-cluster credentials", "請使用匯出設定，不要加入正式叢集憑證"),
+    cautionBody: bilingual("Do not include kubeconfig files, tokens, or certificates. This route checks saved settings only.", "請勿加入 kubeconfig、token 或憑證；這條路線只檢查已保存的設定。"),
+    directoryLabel: bilingual("Kubernetes settings folder", "Kubernetes 設定資料夾"),
+    selection: bilingual("Choose the Kubernetes configuration folder", "選擇 Kubernetes 設定資料夾"),
+    attachAction: bilingual("Add these Kubernetes settings", "加入這些 Kubernetes 設定"),
+    createAction: bilingual("Create scan with these Kubernetes settings", "用這些 Kubernetes 設定建立掃描"),
+    technical: bilingual("Input profile: kubernetes_manifests. The folder may contain Kubernetes YAML and JSON manifest files.", "輸入格式：kubernetes_manifests。資料夾可包含 Kubernetes YAML 與 JSON manifest 檔。"),
+  },
+  kubernetes_node_snapshot: {
+    label: bilingual("Exported Kubernetes node settings", "匯出的 Kubernetes 節點設定"),
+    detail: bilingual("Check an exported copy of one node's security settings on this computer.", "在這台電腦上檢查一份節點安全設定的匯出副本。"),
+    formTitle: bilingual("Choose the Kubernetes node settings you want checked", "選擇想檢查的 Kubernetes 節點設定"),
+    formIntro: bilingual("Pick one exported node-settings folder. We'll check the saved security settings without mounting or reading the live node.", "選擇一個匯出的節點設定資料夾；我們會檢查已保存的安全設定，不會掛載或讀取正式節點。"),
+    cautionTitle: bilingual("Use an exported node snapshot", "請使用匯出的節點快照"),
+    cautionBody: bilingual("This route checks the saved snapshot only. Do not add live-cluster credentials or unrelated host files.", "這條路線只檢查已保存的快照；請勿加入正式叢集憑證或其他主機檔案。"),
+    directoryLabel: bilingual("Exported node-settings folder", "匯出節點設定資料夾"),
+    selection: bilingual("Choose the exported node-settings folder", "選擇匯出的節點設定資料夾"),
+    attachAction: bilingual("Add these node settings", "加入這些節點設定"),
+    createAction: bilingual("Create scan with these node settings", "用這些節點設定建立掃描"),
+    technical: bilingual("Input profile: kubernetes_node_snapshot. Choose the parent of node-snapshot/; the bounded CIS snapshot is read without mounting the host filesystem.", "輸入格式：kubernetes_node_snapshot。請選擇 node-snapshot/ 的父目錄；產品不掛載 host filesystem，只讀取有限範圍的 CIS 快照。"),
+  },
+};
+
+const aiApplicationInputDefinition: LocalInputDefinition = {
+  ...localInputDefinitions.repository_working_tree,
+  label: bilingual("Code you wrote or generated with AI", "自己寫或 AI 生成的程式碼"),
+  formTitle: bilingual("Choose code you wrote or generated with AI", "選擇自己寫或 AI 生成的程式碼"),
+  formIntro: bilingual("Pick the AI app or agent project folder. We'll check it locally for risky code, exposed secrets, vulnerable packages, and related deployment settings without changing its files.", "選擇 AI 應用或 Agent 的專案資料夾；我們會在本機檢查危險程式碼、暴露的秘密、有弱點的套件與相關部署設定，不會修改任何檔案。"),
+  attachAction: bilingual("Add this AI project", "加入這份 AI 專案"),
+  createAction: bilingual("Create scan with this AI project", "用這份 AI 專案建立掃描"),
+};
+
+export const localInputDefinitionForAssessmentIntent = (
+  profile: LocalInputProfile,
+  assessmentIntent: UseCaseId | undefined,
+): LocalInputDefinition => assessmentIntent === "ai_application" && profile === "repository_working_tree"
+  ? aiApplicationInputDefinition
+  : localInputDefinitions[profile];
+
+export const localInputEngines: Record<LocalInputProfile, string> = {
+  repository_working_tree: "Semgrep, Gitleaks, TruffleHog, Checkov, KICS, Trivy, Syft",
+  iac_working_tree: "Checkov, KICS, Trivy",
+  container_image_oci_layout: "Trivy, Grype",
+  kubernetes_manifests: "Kubescape",
+  kubernetes_node_snapshot: "kube-bench",
+};
+
+export const localPathDisplayName = (path: string, fallback: string): string =>
+  path.split(/[\\/]/).filter(Boolean).at(-1) ?? fallback;

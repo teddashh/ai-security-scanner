@@ -102,28 +102,31 @@ test("only the exact single built-in task receives localhost lifecycle controls"
   assert.equal(isExactBuiltInLocalhostQuickScanRun(run([engine(), engine({ id: "second-task" })])), false);
 });
 
-test("the installed start page leads with the bounded localhost action and keeps other use cases secondary", async () => {
+test("the installed start page keeps localhost as an explicitly non-scan connection utility", async () => {
   const startPage = await readFile(new URL("../../src/pages/StartPage.tsx", import.meta.url), "utf8");
 
   for (const copy of [
-    "Check this computer · 127.0.0.1:9001",
-    "檢查這台電腦 · 127.0.0.1:9001",
-    "One TCP connection",
+    "Test local service connection · 127.0.0.1:9001",
+    "測試本機服務連線 · 127.0.0.1:9001",
+    "one TCP connection",
     "up to 3 seconds",
     "no payload",
-    "This is not a security guarantee.",
-    "只會嘗試一次",
+    "This is not a vulnerability scan",
+    "只嘗試一次",
     "最長等待 3 秒",
-    "不會傳送內容",
-    "這不代表這台電腦一定安全",
+    "不傳送內容",
+    "這不是漏洞掃描",
   ]) assert.ok(startPage.includes(copy), copy);
 
   assert.match(startPage, /nativeMode && \([\s\S]*start-page__localhost-quick-scan/u);
+  assert.match(startPage, /<details className="start-page__connection-tools">/u);
   assert.match(startPage, /disabled=\{localhostQuickScanBusy \|\| localhostPort === undefined\}/u);
   assert.match(startPage, /aria-busy=\{localhostQuickScanBusy\}/u);
   assert.match(startPage, /onStartLocalhostQuickScan\(localhostPort\)/u);
   assert.match(startPage, /<details className="start-page__localhost-options">[\s\S]*type="number"[\s\S]*min=\{1\}[\s\S]*max=\{65535\}/u);
-  assert.match(startPage, /button--primary start-page__primary-action/u);
+  assert.match(startPage, /button--secondary start-page__connection-action/u);
+  assert.doesNotMatch(startPage, /button--primary start-page__connection-action/u);
+  assert.match(startPage, /const primaryUseCaseIds:[\s\S]*"deployed_website",\s*"source_code",\s*\];/u);
   assert.doesNotMatch(startPage, /href="#start-a-check"/u);
 });
 
@@ -206,8 +209,8 @@ test("the scanner service adapts the queued localhost workspace without loading 
   assert.match(action, /port = DEFAULT_LOCALHOST_QUICK_SCAN_PORT/u);
   assert.match(action, /invoke<NativeAssessmentCase>\(COMMANDS\.startLocalhostQuickScan, \{ port \}\)/u);
   assert.match(action, /workspace: adaptNativeCase\(returnedCase, \[\]\)/u);
-  assert.match(action, /The localhost check was saved\. Scan progress will show when the connection begins\./u);
-  assert.match(action, /本機連接埠檢查已儲存；開始連線時會顯示在掃描進度。/u);
+  assert.match(action, /The local connection test was saved\. Progress will show when the connection begins\./u);
+  assert.match(action, /本機連線測試已儲存；開始連線時會顯示在進度頁。/u);
   assert.doesNotMatch(action, /saved and started|已儲存並開始|target was contacted/iu);
   assert.match(action, /Browser demo mode did not contact this computer or start a real scan\./u);
   assert.doesNotMatch(action, /getNativeManifests|actionResult/u);

@@ -141,8 +141,9 @@ test("runtime failures become plain-language guidance without echoing backend ou
 
   const guidance = i18n.translate("en", "runtime.prerequisite.localSupport");
   assert.match(guidance, /advanced local scan tool has not finished setup/u);
-  assert.match(guidance, /localhost quick check that attempts one TCP connection/u);
-  assert.match(guidance, /saved results remain available/u);
+  assert.match(guidance, /unaffected checks remain available/u);
+  assert.match(guidance, /saved results.*remain available/u);
+  assert.doesNotMatch(guidance, /localhost|TCP/u);
   assert.doesNotMatch(guidance, /exit status|System32|runtime error/u);
   assert.doesNotMatch(guidance, /WSL|Terminal|PowerShell/u);
 
@@ -165,11 +166,11 @@ test("runtime failures become plain-language guidance without echoing backend ou
 
   const chineseGuidance = i18n.translate("zh-TW", "runtime.prerequisite.localSupport");
   assert.match(chineseGuidance, /進階本機掃描工具尚未完成設定/u);
-  assert.match(chineseGuidance, /只嘗試一次 TCP 連線的 localhost 快速檢查/u);
-  assert.match(chineseGuidance, /已保存的結果仍可使用/u);
+  assert.match(chineseGuidance, /已保存的結果與不受影響的檢查仍可使用/u);
+  assert.doesNotMatch(chineseGuidance, /localhost|TCP/u);
 });
 
-test("every managed-runtime warning distinguishes advanced tools from the localhost quick check", () => {
+test("every managed-runtime warning stays focused on advanced tools and preserved work", () => {
   const warningKeys = [
     "runtime.prerequisite.localSupport",
     "runtime.prerequisite.virtualization",
@@ -189,12 +190,12 @@ test("every managed-runtime warning distinguishes advanced tools from the localh
   for (const key of warningKeys) {
     const english = i18n.translate("en", key);
     assert.match(english, /advanced|advanced-tool/iu, `${key} should name advanced-tool scope in English`);
-    assert.match(english, /localhost quick check/u, `${key} should preserve the quick-check path in English`);
     assert.match(english, /saved results/u, `${key} should preserve saved results in English`);
+    assert.doesNotMatch(english, /localhost|TCP/u, `${key} should not advertise an unrelated connection utility`);
 
     const chinese = i18n.translate("zh-TW", key);
     assert.match(chinese, /進階/u, `${key} should name advanced-tool scope in Traditional Chinese`);
-    assert.match(chinese, /localhost 快速檢查/u, `${key} should preserve the quick-check path in Traditional Chinese`);
-    assert.match(chinese, /已保存的結果/u, `${key} should preserve saved results in Traditional Chinese`);
+    assert.match(chinese, /保存.*結果/u, `${key} should preserve saved results in Traditional Chinese`);
+    assert.doesNotMatch(chinese, /localhost|TCP/u, `${key} should not advertise an unrelated connection utility`);
   }
 });

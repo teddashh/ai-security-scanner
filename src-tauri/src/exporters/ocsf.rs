@@ -9,11 +9,11 @@ use std::collections::BTreeMap;
 pub const OCSF_SCHEMA_VERSION: &str = "1.10.0-dev";
 pub const OCSF_EXPORT_NOTICE: &str = "Preliminary scanner observations only. Related control references are navigation coordinates, not compliance results. This export is not an audit or forensic conclusion.";
 
-/// Convert canonical observations for one run into OCSF Detection Finding events.
+/// Convert canonical observations for one run into OCSF events.
 ///
-/// Detection Finding (class UID 2004) is used because the canonical model can
-/// represent several scanner families and does not always contain the fields
-/// required by the narrower Vulnerability or Compliance Finding classes.
+/// Security problems use Detection Finding (class UID 2004). Naabu/httpx
+/// reachability rows use Network Activity (class UID 4001) because a service
+/// response is an inventory observation, not a detection finding.
 pub fn export_ocsf_finding_events(case: &AssessmentCase, run_id: &str) -> AppResult<Vec<Value>> {
     let run = case
         .scan_runs
@@ -165,6 +165,109 @@ fn to_event(
     engines.sort();
     engines.dedup();
 
+    if finding
+        .severity_basis_code
+        .is_some_and(|code| code.is_exposure_observation())
+    {
+        let observation_kind = serde_json::to_value(finding.severity_basis_code)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "reachable_service".into());
+        let observation_details = finding
+            .tags
+            .iter()
+            .filter(|tag| {
+                tag.starts_with("port:")
+                    || tag.starts_with("protocol:")
+                    || tag.starts_with("http-status:")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let destination = asset_ids
+            .first()
+            .map(|asset_id| match assets.get(asset_id.as_str()) {
+                Some(asset) => json!({ "uid": asset.id, "name": asset.name }),
+                None => json!({ "uid": asset_id, "name": "Unknown canonical asset" }),
+            });
+        let mut event = json!({
+            "activity_id": 1,
+            "activity_name": "Open",
+            "category_uid": 4,
+            "category_name": "Network Activity",
+            "class_uid": 4001,
+            "class_name": "Network Activity",
+            "type_uid": 400101,
+            "type_name": "Network Activity: Open",
+            "time": observation.observed_at.timestamp_millis(),
+            "severity_id": severity_id,
+            "severity": severity,
+            "message": crate::finding_narrative::EXPOSURE_OBSERVATION_RISK,
+            "metadata": {
+                "uid": observation.id,
+                "original_event_uid": observation.id,
+                "correlation_uid": case.id,
+                "version": OCSF_SCHEMA_VERSION,
+                "product": {
+                    "name": "ai-security-scanner",
+                    "vendor_name": "ai-security-scanner",
+                    "version": env!("CARGO_PKG_VERSION")
+                },
+                "source": "Scanner service inventory observation"
+            },
+            "unmapped": {
+                "ai_security_scanner": {
+                    "record_kind": "service_inventory_observation",
+                    "observation_kind": observation_kind,
+                    "canonical_record_id": finding.id,
+                    "canonical_fingerprint": observation.fingerprint,
+                    "canonical_confidence": confidence_name(&observation.confidence),
+                    "observation_details": observation_details,
+                    "engine_ids": engines,
+                    "run_id": run_id,
+                    "evidences": evidences,
+                    "export_notice": OCSF_EXPORT_NOTICE,
+                    "omitted_canonical_areas": [
+                        "case scope grants",
+                        "coverage ledger",
+                        "asset relationships",
+                        "workflow history"
+                    ]
+                }
+            }
+        });
+        if let Some(destination) = destination {
+            event
+                .as_object_mut()
+                .expect("OCSF inventory event is an object")
+                .insert("dst_endpoint".into(), destination);
+        }
+        return event;
+    }
+
+    let scanner_extension = json!({
+        "record_kind": "security_finding",
+        "canonical_fingerprint": observation.fingerprint,
+        "canonical_confidence": confidence_name(&observation.confidence),
+        "priority": finding.priority,
+        "priority_reasons": finding.priority_reasons,
+        "possible_impact": finding.possible_impact,
+        "recommendation": finding.recommendation,
+        "verification_guidance": finding.verification_guidance,
+        "rollback_considerations": finding.rollback_considerations,
+        "official_references": finding.official_references,
+        "recommended_expert_type": finding.recommended_expert_type,
+        "engine_ids": engines,
+        "run_id": run_id,
+        "related_control_coordinates": control_coordinates,
+        "control_mapping_notice": "References are navigation coordinates only; no control pass, failure, compliance, or audit conclusion is asserted.",
+        "export_notice": OCSF_EXPORT_NOTICE,
+        "omitted_canonical_areas": [
+            "case scope grants",
+            "coverage ledger",
+            "asset relationships",
+            "workflow history"
+        ]
+    });
     json!({
         "activity_id": activity_id,
         "activity_name": activity_name,
@@ -208,29 +311,7 @@ fn to_event(
         "resources": resources,
         "evidences": evidences,
         "unmapped": {
-            "ai_security_scanner": {
-                "canonical_fingerprint": observation.fingerprint,
-                "canonical_confidence": confidence_name(&observation.confidence),
-                "priority": finding.priority,
-                "priority_reasons": finding.priority_reasons,
-                "possible_impact": finding.possible_impact,
-                "recommendation": finding.recommendation,
-                "verification_guidance": finding.verification_guidance,
-                "rollback_considerations": finding.rollback_considerations,
-                "official_references": finding.official_references,
-                "recommended_expert_type": finding.recommended_expert_type,
-                "engine_ids": engines,
-                "run_id": run_id,
-                "related_control_coordinates": control_coordinates,
-                "control_mapping_notice": "References are navigation coordinates only; no control pass, failure, compliance, or audit conclusion is asserted.",
-                "export_notice": OCSF_EXPORT_NOTICE,
-                "omitted_canonical_areas": [
-                    "case scope grants",
-                    "coverage ledger",
-                    "asset relationships",
-                    "workflow history"
-                ]
-            }
+            "ai_security_scanner": scanner_extension
         }
     })
 }
@@ -437,6 +518,45 @@ mod tests {
         assert!(event.get("compliance").is_none());
         let coordinates = &event["unmapped"]["ai_security_scanner"]["related_control_coordinates"];
         assert_eq!(coordinates[0]["assertion"], "related_coordinate_only");
+    }
+
+    #[test]
+    fn reachable_service_is_network_inventory_not_a_detection_finding() {
+        let mut case = fixture();
+        let finding = &mut case.findings[0];
+        finding.severity = Severity::Informational;
+        finding.severity_basis_code = Some(SeverityBasisCode::OpenPort);
+        finding.plain_language_summary = "STALE_EXPOSURE_SUMMARY".into();
+        finding.possible_impact = "STALE_EXPOSURE_IMPACT".into();
+        finding.priority = 91;
+        finding.priority_reasons = vec!["STALE_EXPOSURE_PRIORITY".into()];
+        finding.recommendation = "STALE_EXPOSURE_REMEDIATION".into();
+        finding.tags = vec!["port:443".into(), "protocol:tcp".into()];
+        case.finding_observations[0].severity = Severity::Informational;
+
+        let events = export_ocsf_finding_events(&case, "run-1").unwrap();
+        let event = &events[0];
+
+        assert_eq!(event["category_uid"], 4);
+        assert_eq!(event["class_uid"], 4001);
+        assert_eq!(event["class_name"], "Network Activity");
+        assert_eq!(event["activity_name"], "Open");
+        assert!(event.get("finding_info").is_none());
+        assert!(event.get("status").is_none());
+        assert_eq!(
+            event["unmapped"]["ai_security_scanner"]["record_kind"],
+            "service_inventory_observation"
+        );
+        assert_eq!(
+            event["unmapped"]["ai_security_scanner"]["observation_kind"],
+            "open_port"
+        );
+        assert_eq!(event["dst_endpoint"]["uid"], "asset-1");
+        let encoded = event.to_string();
+        assert!(!encoded.contains("STALE_EXPOSURE"));
+        assert!(!encoded.contains("priority"));
+        assert!(!encoded.contains("recommendation"));
+        assert!(encoded.contains("Canonical evidence hash"));
     }
 
     #[test]

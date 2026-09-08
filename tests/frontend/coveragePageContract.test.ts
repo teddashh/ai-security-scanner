@@ -6,6 +6,10 @@ const source = readFileSync(
   new URL("../../src/pages/CoveragePage.tsx", import.meta.url),
   "utf8",
 );
+const localInputProfileSource = readFileSync(
+  new URL("../../src/localInputProfiles.ts", import.meta.url),
+  "utf8",
+);
 const coverageCss = readFileSync(
   new URL("../../src/coverage-page.css", import.meta.url),
   "utf8",
@@ -205,8 +209,8 @@ test("a readiness fix opens the exact cloud, workspace, or read-only source step
   assert.match(source, /id="workspace-snapshot-form"/u);
 });
 
-test("guided network, local, and signed-in cloud setup combine confirmation and Start", () => {
-  assert.ok(source.includes("conciseGuidedConsent = guidedLowImpactNetwork || guidedLocalConsent || guidedCloudConsent"));
+test("guided network, website quick profile, local, and signed-in cloud setup combine confirmation and Start", () => {
+  assert.ok(source.includes("conciseGuidedConsent = guidedLowImpactNetwork || guidedWebsiteQuickProfile || guidedLocalConsent || guidedCloudConsent"));
   assert.ok(source.includes("simpleGuidedConsent = passivePublicConsent || conciseGuidedConsent"));
   assert.ok(source.includes("pageCopy.confirmAndStart"));
   assert.ok(source.includes("pageCopy.scanSignedInCloud"));
@@ -250,6 +254,7 @@ test("the desktop submits authorization and Start through one native command", (
   const progressStart = appSource.indexOf("case \"progress\"", coverageStart);
   const coverageWiring = appSource.slice(coverageStart, progressStart);
   assert.match(coverageWiring, /onStartScan=\{[\s\S]*startScan\(\{[\s\S]*authorization:/u);
+  assert.match(coverageWiring, /onStartScan=\{\(assetIds, modes, confirmation, externalScope, engineIds\)[\s\S]*engineIds,/u);
   assert.doesNotMatch(coverageWiring, /scannerService\.approveScope|executeAction\("scope"/u);
 
   const serviceStart = scannerServiceSource.indexOf("async startScan(input: StartScanInput)");
@@ -259,7 +264,7 @@ test("the desktop submits authorization and Start through one native command", (
   assert.match(service, /caseId: input\.caseId,[\s\S]*decisions,[\s\S]*engineIds:/u);
   assert.doesNotMatch(service, /COMMANDS\.approveScope/u);
 
-  const appStart = appSource.indexOf("const startScan = async (input: StartScanInput)");
+  const appStart = appSource.indexOf("const startScan = async (");
   const appStartEnd = appSource.indexOf("const deleteCase", appStart);
   const appStartFlow = appSource.slice(appStart, appStartEnd);
   assert.match(appStartFlow, /existingRunIds = new Set\(/u);
@@ -381,7 +386,7 @@ test("source-code setup says local, masked, and unchanged instead of asking user
     "Detected secret values are masked in results",
     "找到的秘密值會在結果中遮罩",
   ]) {
-    assert.ok(source.includes(phrase), phrase);
+    assert.ok(`${source}\n${localInputProfileSource}`.includes(phrase), phrase);
   }
 
   for (const outdated of [
@@ -395,10 +400,10 @@ test("source-code setup says local, masked, and unchanged instead of asking user
 });
 
 test("repository technical details disclose every planned engine", () => {
-  assert.ok(source.includes(
+  assert.ok(localInputProfileSource.includes(
     'repository_working_tree: "Semgrep, Gitleaks, TruffleHog, Checkov, KICS, Trivy, Syft"',
   ));
-  assert.ok(source.includes('iac_working_tree: "Checkov, KICS, Trivy"'));
+  assert.ok(localInputProfileSource.includes('iac_working_tree: "Checkov, KICS, Trivy"'));
 });
 
 test("a failed workspace copy stays visible and suggests a source-only folder", () => {
@@ -421,8 +426,8 @@ test("each guided local route has plain-language first-layer copy in both locale
     ["Add this container image", "加入這份容器映像"],
     ["Add these Kubernetes settings", "加入這些 Kubernetes 設定"],
   ]) {
-    assert.ok(source.includes(english), english);
-    assert.ok(source.includes(traditionalChinese), traditionalChinese);
+    assert.ok(localInputProfileSource.includes(english), english);
+    assert.ok(localInputProfileSource.includes(traditionalChinese), traditionalChinese);
   }
 });
 

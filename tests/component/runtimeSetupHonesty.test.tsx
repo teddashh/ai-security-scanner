@@ -95,8 +95,8 @@ test("a check that can never run says the results will record it as untested", (
   expect(explanation(container)).toContain(
     "lists the affected advanced check under what was not tested, never as a pass",
   );
-  expect(explanation(container)).toContain("localhost quick check that attempts one TCP connection");
-  expect(explanation(container)).toContain("saved results remain available");
+  expect(explanation(container)).toContain("unaffected checks remain available");
+  expect(explanation(container)).not.toContain("localhost");
   // No phase line: "Setup needs attention" beside a terminal failure implies
   // something is still being attempted.
   expect(container.querySelector(".runtime-assistant__status")).toBeNull();
@@ -125,10 +125,8 @@ test("a failure that could succeed on another attempt does offer the retry", () 
   expect(buttons[0].disabled).toBe(false);
 
   expect(heading(container)).toBe("Advanced local scan-tool setup did not finish");
-  expect(explanation(container)).toContain(
-    "localhost quick check that attempts one TCP connection",
-  );
-  expect(explanation(container)).toContain("saved results remain available");
+  expect(explanation(container)).toContain("unaffected checks remain available");
+  expect(explanation(container)).not.toContain("localhost");
   // A failure names a bounded category rather than leaving the user with a
   // headline and nothing to quote to anyone.
   const technical = container.querySelector(".runtime-assistant__technical");
@@ -136,13 +134,17 @@ test("a failure that could succeed on another attempt does offer the retry", () 
   expect(technical?.querySelector("code")?.textContent).toBe("local_scan_tool_unavailable");
 });
 
-test("an idle advanced-tool setup does not imply the localhost quick check is unavailable", () => {
-  const { container } = renderAssistant({ status: setupStatus({ phase: "idle" }) });
+test("an admitted idle setup says no download starts until the user asks", () => {
+  const { container, onSetup } = renderAssistant({ status: setupStatus({ phase: "idle" }) });
 
-  expect(heading(container)).toBe("Advanced local scan tools need setup");
-  expect(explanation(container)).toContain("localhost quick check that attempts one TCP connection");
-  expect(explanation(container)).toContain("saved results remain available");
-  expect(actionButtons(container)[0].textContent).toContain("Try advanced scan setup again");
+  expect(heading(container)).toBe("This scan needs additional local tools");
+  expect(explanation(container)).toContain("Nothing is downloaded until you select Prepare scan tools");
+  expect(explanation(container)).toContain("unaffected checks remain available");
+  expect(explanation(container)).not.toContain("localhost");
+  expect(actionButtons(container)[0].textContent).toContain("Prepare scan tools");
+  expect(onSetup).not.toHaveBeenCalled();
+  fireEvent.click(actionButtons(container)[0]);
+  expect(onSetup).toHaveBeenCalledTimes(1);
 });
 
 test("a Windows restart requirement replaces the generic failure, and still says the scans are intact", () => {
@@ -159,9 +161,10 @@ test("a Windows restart requirement replaces the generic failure, and still says
 
   expect(heading(container)).toBe("Advanced local scan-tool setup is waiting for a Windows restart");
   expect(explanation(container)).toContain("Windows requires a restart to finish the advanced-tool change");
-  expect(explanation(container)).toContain("localhost quick check");
+  expect(explanation(container)).not.toContain("localhost");
   expect(explanation(container)).toContain("saved results remain available");
   expect(explanation(container)).not.toContain("readable exports remain available");
+  expect(actionButtons(container)[0]?.textContent).toContain("Continue after restarting Windows");
 });
 
 test("a slow attempt says Retry comes later, and does not show a Retry now", () => {
@@ -174,7 +177,7 @@ test("a slow attempt says Retry comes later, and does not show a Retry now", () 
 
   expect(heading(container)).toBe("Advanced local scan-tool setup is taking longer than expected");
   expect(explanation(container)).toContain("will offer Retry when it has stopped");
-  expect(explanation(container)).toContain("localhost quick check");
+  expect(explanation(container)).not.toContain("localhost");
   expect(explanation(container)).toContain("saved results remain available");
 
   const buttons = actionButtons(container);
@@ -199,7 +202,7 @@ test("stopping promises the download is kept, and the paused state confirms it w
   const { container } = renderAssistant({ status: setupStatus({ phase: "cancelled" }) });
   expect(heading(container)).toBe("Advanced local scan-tool setup paused");
   expect(explanation(container)).toContain("The advanced-tool download was kept on this computer");
-  expect(explanation(container)).toContain("localhost quick check");
+  expect(explanation(container)).not.toContain("localhost");
   expect(explanation(container)).toContain("saved results remain available");
   // "Continue" and "Try again" are different claims about what was kept.
   expect(actionButtons(container)[0].textContent).toContain("Continue advanced scan setup");
@@ -311,8 +314,8 @@ test("the Traditional Chinese panel carries the same two report promises", () =>
   const untested = renderAssistant({ locale: "zh-TW", status: packagedAdmissionFailure });
   // 「沒有測到的內容」 is the exact FindingsPage gaps heading in this locale.
   expect(explanation(untested.container)).toContain("報告會把受影響的進階檢查列在「沒有測到的內容」裡，不會當成通過");
-  expect(explanation(untested.container)).toContain("只嘗試一次 TCP 連線的 localhost 快速檢查");
-  expect(explanation(untested.container)).toContain("已保存的結果仍可使用");
+  expect(explanation(untested.container)).toContain("已保存的結果與不受影響的檢查仍可使用");
+  expect(explanation(untested.container)).not.toContain("localhost");
   expect(actionButtons(untested.container)).toHaveLength(0);
 
   cleanup();

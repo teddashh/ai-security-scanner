@@ -3236,7 +3236,7 @@ fn snapshot_localhost_quick_scan(
     Some(prepared)
 }
 
-/// The first-value path is deliberately independent of the managed runtime
+/// This connection utility is deliberately independent of the managed runtime
 /// and catalog engines. Preparation and JobManager admission share one short
 /// boundary; the detached worker owns the only bounded, payload-free contact.
 #[tauri::command]
@@ -3310,7 +3310,7 @@ pub async fn start_localhost_quick_scan(port: u16, app: AppHandle) -> AppResult<
         }
 
         if let Err(error) = emit(&app, RUN_PROGRESS_EVENT, &queued_case) {
-            tracing::warn!(error = %error, "queued localhost check event could not be emitted");
+            tracing::warn!(error = %error, "queued local connection test event could not be emitted");
         }
         Ok(queued_case)
     })
@@ -3767,7 +3767,7 @@ pub fn pause_scan(
         .is_some_and(run_is_exact_localhost_quick_scan)
     {
         return Err(AppError::NotAvailable(
-            "the fixed three-second localhost check cannot be paused".into(),
+            "the fixed three-second local connection test cannot be paused".into(),
         ));
     }
     let key = JobKey::new(case_id.clone(), run_id.clone())
@@ -3800,7 +3800,7 @@ pub async fn resume_scan(
         .is_some_and(run_is_exact_localhost_quick_scan)
     {
         return Err(AppError::NotAvailable(
-            "the fixed three-second localhost check cannot be resumed; start a new check after it finishes"
+            "the fixed three-second local connection test cannot be resumed; start a new test after it finishes"
                 .into(),
         ));
     }

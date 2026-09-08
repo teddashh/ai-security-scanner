@@ -7,7 +7,7 @@ import {
   recommendedGuidedLowImpactRatePolicy,
   recommendedGuidedNetworkPreset,
   shouldPromptForFirstAsset,
-  singleGuidedPendingAsset,
+  singleGuidedSelectableAsset,
 } from "../../src/coverageGuidance.ts";
 import { estimateNetworkScanMinimum } from "../../src/networkScanEstimate.ts";
 import type { Asset } from "../../src/types.ts";
@@ -27,14 +27,14 @@ const asset = (overrides: Partial<Asset>): Asset => ({
 
 test("a guided route preselects one exact matching item but never guesses between two", () => {
   const network = asset({ id: "network" });
-  assert.equal(singleGuidedPendingAsset([network], { kind: "network" })?.id, "network");
-  assert.equal(singleGuidedPendingAsset([
+  assert.equal(singleGuidedSelectableAsset([network], { kind: "network" })?.id, "network");
+  assert.equal(singleGuidedSelectableAsset([
     network,
     asset({ id: "network-2" }),
   ], { kind: "network" }), undefined);
 
   const cloud = asset({ id: "cloud", platform: "azure", type: "subscription" });
-  assert.equal(singleGuidedPendingAsset([network, cloud], { kind: "cloud" })?.id, "cloud");
+  assert.equal(singleGuidedSelectableAsset([network, cloud], { kind: "cloud" })?.id, "cloud");
 
   const code = asset({
     id: "code",
@@ -48,19 +48,20 @@ test("a guided route preselects one exact matching item but never guesses betwee
     type: "repository",
     localInputProfile: "iac_working_tree",
   });
-  assert.equal(singleGuidedPendingAsset([code, iac], {
+  assert.equal(singleGuidedSelectableAsset([code, iac], {
     kind: "local",
     profile: "iac_working_tree",
   })?.id, "iac");
 });
 
-test("guided matching never selects an already confirmed item or a different route", () => {
+test("guided matching restores one already confirmed item after setup or restart", () => {
   const confirmedCloud = asset({
     platform: "aws",
     type: "cloud_account",
     authorizationState: "authorized",
   });
-  assert.equal(matchesGuidedCoverageRoute(confirmedCloud, { kind: "cloud" }), false);
+  assert.equal(matchesGuidedCoverageRoute(confirmedCloud, { kind: "cloud" }), true);
+  assert.equal(singleGuidedSelectableAsset([confirmedCloud], { kind: "cloud" }), confirmedCloud);
   assert.equal(matchesGuidedCoverageRoute(asset({}), { kind: "cloud" }), false);
   assert.equal(matchesGuidedCoverageRoute(asset({ platform: "gcp", type: "project" }), { kind: "none" }), false);
 });

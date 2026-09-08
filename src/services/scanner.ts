@@ -759,13 +759,13 @@ export const scannerService = {
     try {
       // The returned case contains only the product-owned localhost task, so it
       // needs no catalog context. Waiting for engine manifests here would put an
-      // unrelated optional read back on the first-value path.
+      // unrelated optional read back on the connection-utility path.
       const returnedCase = await invoke<NativeAssessmentCase>(COMMANDS.startLocalhostQuickScan, { port });
       return nativeResult({
         accepted: true,
         message: serviceText(
-          "The localhost check was saved. Scan progress will show when the connection begins.",
-          "本機連接埠檢查已儲存；開始連線時會顯示在掃描進度。",
+          "The local connection test was saved. Progress will show when the connection begins.",
+          "本機連線測試已儲存；開始連線時會顯示在進度頁。",
         ),
         workspace: adaptNativeCase(returnedCase, []),
       });

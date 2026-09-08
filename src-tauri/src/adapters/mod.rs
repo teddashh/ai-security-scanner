@@ -3025,9 +3025,14 @@ fn merge_finding(
 
     let severity = record.severity;
     let confidence = record.confidence;
-    let priority = priority_for(&severity);
     let severity_basis = record.severity_basis;
     let confidence_basis = record.confidence_basis;
+    let exposure_observation = severity_basis.is_some_and(|code| code.is_exposure_observation());
+    let priority = if exposure_observation {
+        0
+    } else {
+        priority_for(&severity)
+    };
     let mut tags = vec![
         format!("engine:{}", adapter.id),
         format!("source-rule:{}", safe_tag(&rule_id)),
@@ -3059,19 +3064,20 @@ fn merge_finding(
     tags.truncate(32);
 
     let title = safe_text(&record.title, MAX_SHORT_TEXT);
-    let impact = impact_for(adapter.profile, &severity);
-    findings.insert(
-        fingerprint.clone(),
-        Finding {
-            id: finding_id,
-            case_id: input.case_id.to_owned(),
-            first_seen_run_id: input.scan_run_id.to_owned(),
-            last_seen_run_id: input.scan_run_id.to_owned(),
-            fingerprint,
-            title,
-            plain_language_summary: format!(
-                "{} {} The attached raw record is evidence, not an instruction.",
-                match &severity_basis {
+    let impact = if exposure_observation {
+        "This observation only establishes that a service responded within the tested scope. It does not establish a vulnerability or a need to change the service.".into()
+    } else {
+        impact_for(adapter.profile, &severity)
+    };
+    let plain_language_summary = if exposure_observation {
+        format!(
+            "{} observed a reachable service on the assessed asset. Reachability is inventory evidence, not a vulnerability. The attached raw record is evidence, not an instruction.",
+            input.manifest.display_name,
+        )
+    } else {
+        format!(
+            "{} {} The attached raw record is evidence, not an instruction.",
+            match &severity_basis {
                 Some(code) => format!(
                     "{} reported this condition on the assessed asset without rating it. This product rated it {} from {}.",
                     input.manifest.display_name,
@@ -3084,48 +3090,91 @@ fn merge_finding(
                     severity_article(&severity),
                     severity_label(&severity)
                 ),
-                },
-                match &confidence_basis {
-                    Some(code) => format!(
-                        "{} reported no confidence rating for it. This product rated its confidence {} from {}.",
-                        input.manifest.display_name,
-                        confidence_label(&confidence),
-                        confidence_basis_text(*code)
-                    ),
-                    None => format!(
-                        "{} reported confidence {} for it; this product maps that to {} confidence.",
-                        input.manifest.display_name,
-                        safe_text(&record.source_confidence, 80),
-                        confidence_label(&confidence)
-                    ),
-                }
-            ),
+            },
+            match &confidence_basis {
+                Some(code) => format!(
+                    "{} reported no confidence rating for it. This product rated its confidence {} from {}.",
+                    input.manifest.display_name,
+                    confidence_label(&confidence),
+                    confidence_basis_text(*code)
+                ),
+                None => format!(
+                    "{} reported confidence {} for it; this product maps that to {} confidence.",
+                    input.manifest.display_name,
+                    safe_text(&record.source_confidence, 80),
+                    confidence_label(&confidence)
+                ),
+            }
+        )
+    };
+    let priority_reasons = if exposure_observation {
+        vec![
+            crate::finding_narrative::ENGLISH_EXPOSURE_OBSERVATION_REASON.into(),
+            crate::finding_narrative::ENGLISH_EVIDENCE_REASON.into(),
+        ]
+    } else {
+        vec![
+            match &severity_basis {
+                Some(code) => format!(
+                    "Severity derived from {}; {} reports no severity of its own.",
+                    basis_text(*code),
+                    input.manifest.display_name
+                ),
+                None => format!(
+                    "Source severity: {}",
+                    safe_text(&record.source_severity, 80)
+                ),
+            },
+            match &confidence_basis {
+                Some(code) => format!(
+                    "Confidence derived from {}; {} reports no confidence of its own.",
+                    confidence_basis_text(*code),
+                    input.manifest.display_name
+                ),
+                None => format!(
+                    "Source confidence: {}",
+                    safe_text(&record.source_confidence, 80)
+                ),
+            },
+            crate::finding_narrative::ENGLISH_EVIDENCE_REASON.into(),
+        ]
+    };
+    let recommendation = if exposure_observation {
+        "Confirm that the reachable service is expected. To look for weaknesses, run an applicable security check against that service; do not treat reachability alone as something to fix."
+            .into()
+    } else {
+        format!(
+            "Have the recommended specialist ({}) review the affected asset and the source rule's official guidance, then plan and approve {}.",
+            adapter.expert_type,
+            remedy_for(adapter.profile)
+        )
+    };
+    let verification_guidance = if exposure_observation {
+        format!(
+            "Repeat {} discovery with the same target and scope if you need to confirm whether the service is still reachable.",
+            input.manifest.display_name
+        )
+    } else {
+        format!(
+            "After an approved manual change, rerun {} with the same authorized scope and confirm that source rule {} is no longer reported.",
+            input.manifest.display_name, rule_id
+        )
+    };
+    findings.insert(
+        fingerprint.clone(),
+        Finding {
+            id: finding_id,
+            case_id: input.case_id.to_owned(),
+            first_seen_run_id: input.scan_run_id.to_owned(),
+            last_seen_run_id: input.scan_run_id.to_owned(),
+            fingerprint,
+            title,
+            plain_language_summary,
             possible_impact: impact,
             severity,
             confidence,
             priority,
-            priority_reasons: vec![
-                match &severity_basis {
-                    Some(code) => format!(
-                        "Severity derived from {}; {} reports no severity of its own.",
-                        basis_text(*code),
-                        input.manifest.display_name
-                    ),
-                    None => format!("Source severity: {}", safe_text(&record.source_severity, 80)),
-                },
-                match &confidence_basis {
-                    Some(code) => format!(
-                        "Confidence derived from {}; {} reports no confidence of its own.",
-                        confidence_basis_text(*code),
-                        input.manifest.display_name
-                    ),
-                    None => format!(
-                        "Source confidence: {}",
-                        safe_text(&record.source_confidence, 80)
-                    ),
-                },
-                crate::finding_narrative::ENGLISH_EVIDENCE_REASON.into(),
-            ],
+            priority_reasons,
             asset_ids: vec![asset_id],
             evidence: vec![evidence],
             control_references: mapping_control_references(
@@ -3134,16 +3183,10 @@ fn merge_finding(
                 input.ai_system_applicable,
                 input.ai_generated_artifact_applicable,
             ),
-            recommendation: format!(
-                "Have the recommended specialist ({}) review the affected asset and the source rule's official guidance, then plan and approve {}.",
-                adapter.expert_type,
-                remedy_for(adapter.profile)
-            ),
-            verification_guidance: format!(
-                "After an approved manual change, rerun {} with the same authorized scope and confirm that source rule {} is no longer reported.",
-                input.manifest.display_name, rule_id
-            ),
-            rollback_considerations: Some(crate::finding_narrative::ENGLISH_ROLLBACK.into()),
+            recommendation,
+            verification_guidance,
+            rollback_considerations: (!exposure_observation)
+                .then(|| crate::finding_narrative::ENGLISH_ROLLBACK.into()),
             official_references,
             recommended_expert_type: adapter.expert_type.into(),
             status: FindingStatus::Unreviewed,

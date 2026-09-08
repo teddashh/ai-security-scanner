@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   ALL_CONFIDENCE_BASIS_CODES,
+  ENGLISH_EXPOSURE_OBSERVATION_REASON,
   ENGLISH_ROLLBACK,
   findingActionSentence,
   findingConfidencePresentation,
@@ -317,6 +318,10 @@ test("why this priority is said in Chinese, keeping the engine's own words", () 
   assert.ok(raw.includes("High"), raw);
 
   assert.equal(findingPriorityReason("en", derived), derived);
+  assert.equal(
+    findingPriorityReason("zh-TW", ENGLISH_EXPOSURE_OBSERVATION_REASON),
+    "這是可連線服務的盤點觀察，不是漏洞。",
+  );
 });
 
 test("a priority reason this build cannot identify is left alone, not invented", () => {

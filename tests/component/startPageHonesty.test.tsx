@@ -5,15 +5,9 @@ import { StartPage } from "../../src/pages/StartPage";
 import { DEFAULT_LOCALHOST_QUICK_SCAN_PORT } from "../../src/localhostQuickScan";
 import { startPageCopy, useCaseDefinitions } from "../../src/useCases";
 
-// This is the first screen, and the only one a user reads before they have any
-// results to calibrate against. Two claims on it are load-bearing.
-//
-// The quick scan is the one action the app performs straight from marketing
-// copy, and the copy states exactly what it will do: one TCP connection, to a
-// named port, for at most three seconds, with no payload. The port is
-// substituted into that sentence at render time, so the sentence and the action
-// can drift apart -- and a boundary statement naming a port the app is not
-// about to touch is worse than no statement at all.
+// The first screen must lead beginners to a meaningful security scan. The
+// built-in TCP attempt remains available only as a collapsed connection
+// utility, and its copy must make the narrower capability unmistakable.
 //
 // Every use-case card also carries a "what this does not do" line beside its
 // pitch. A card that loses it advertises a capability with no limit attached.
@@ -36,7 +30,7 @@ const renderStart = (props: Partial<Parameters<typeof StartPage>[0]> = {}) => {
 };
 
 const quickScanButton = (container: HTMLElement): HTMLButtonElement =>
-  container.querySelector<HTMLButtonElement>(".start-page__primary-action")!;
+  container.querySelector<HTMLButtonElement>(".start-page__connection-action")!;
 
 const boundaryText = (container: HTMLElement): string =>
   container.querySelector(".start-page__localhost-boundary")?.textContent ?? "";
@@ -46,16 +40,17 @@ const portInput = (container: HTMLElement): HTMLInputElement =>
 
 afterEach(cleanup);
 
-test("the quick scan states its exact boundary rather than a reassurance", () => {
+test("the connection utility states its exact boundary and is not called a vulnerability scan", () => {
   const { container } = renderStart();
 
   const boundary = boundaryText(container);
   // Every clause here is a commitment about behaviour, not a mood.
-  expect(boundary).toContain("One TCP connection");
+  expect(boundary).toContain("one TCP connection");
   expect(boundary).toContain(`127.0.0.1:${DEFAULT_LOCALHOST_QUICK_SCAN_PORT}`);
   expect(boundary).toContain("up to 3 seconds");
   expect(boundary).toContain("no payload");
-  expect(boundary).toContain("not a security guarantee");
+  expect(boundary).toContain("not a vulnerability scan");
+  expect(container.querySelector<HTMLDetailsElement>(".start-page__connection-tools")?.open).toBe(false);
 });
 
 test("choosing another port changes what the app says it will do, with no stale port left behind", () => {
@@ -72,7 +67,7 @@ test("choosing another port changes what the app says it will do, with no stale 
   expect(boundaryText(container)).not.toContain(String(DEFAULT_LOCALHOST_QUICK_SCAN_PORT));
   // The rest of the statement survives the substitution intact.
   expect(boundaryText(container)).toContain("up to 3 seconds");
-  expect(boundaryText(container)).toContain("not a security guarantee");
+  expect(boundaryText(container)).toContain("not a vulnerability scan");
 });
 
 test("the port the app scans is the port it just named", () => {
@@ -122,12 +117,26 @@ test("the first screen does not offer the example project action", () => {
   expect(queryByRole("button", { name: "查看範例專案" })).toBeNull();
 });
 
-test("the first screen leads with one quick action and no duplicate marketing journey", () => {
+test("the first screen leads with meaningful website and code scans while demoting connectivity", () => {
   const onOpenExistingCase = vi.fn();
   const { container, getByRole, queryByRole, queryByText } = renderStart({ onOpenExistingCase });
 
   expect(getByRole("heading", { level: 1, name: "Security checks" })).toBeTruthy();
-  expect(quickScanButton(container).textContent).toContain("127.0.0.1:9001");
+  const primaryActions = Array.from(container.querySelectorAll<HTMLButtonElement>(".start-page__choices > .use-case-grid .use-case-card__action"));
+  expect(primaryActions.map((button) => button.textContent?.trim())).toEqual([
+    "Check a website",
+    "Check code or an AI project",
+  ]);
+  const websiteCard = Array.from(container.querySelectorAll<HTMLElement>(".use-case-card"))
+    .find((card) => card.textContent?.includes("Check a website"));
+  expect(websiteCard?.textContent).toContain(
+    "Check common exposed files and debug or status endpoints with a fixed Nuclei scan, using at most 19 GET requests to the displayed website address.",
+  );
+  expect(websiteCard?.textContent).not.toContain("basic exposure signals");
+  expect(container.querySelector(".start-page__choices > .use-case-grid")?.textContent)
+    .toContain("Code or AI project");
+  expect(quickScanButton(container).classList.contains("button--primary")).toBe(false);
+  expect(container.querySelector<HTMLDetailsElement>(".start-page__connection-tools")?.open).toBe(false);
   expect(queryByRole("link", { name: "Start a security check" })).toBeNull();
   expect(getByRole("button", { name: "Open my scans" })).toBeTruthy();
   expect(queryByText("What you get")).toBeNull();
@@ -138,8 +147,8 @@ test("every offered scan keeps its capability and limit in one collapsed disclos
   const { container } = renderStart();
 
   const cards = Array.from(container.querySelectorAll<HTMLElement>(".use-case-card"));
-  // Primary and additional cards both render; a page showing only the first
-  // four would leave five offers undescribed.
+  // Primary and additional cards both render; progressive disclosure changes
+  // prominence without removing any supported path.
   expect(cards.length).toBe(useCaseDefinitions.length);
   const disclosure = container.querySelector<HTMLDetailsElement>(".start-page__scan-limits");
   expect(disclosure).not.toBeNull();
@@ -163,11 +172,20 @@ test("the Traditional Chinese boundary statement carries the same commitments", 
   const { container } = renderStart({ locale: "zh-TW" });
 
   expect(boundaryText(container)).toContain(`127.0.0.1:${DEFAULT_LOCALHOST_QUICK_SCAN_PORT}`);
-  expect(boundaryText(container)).toContain("不會傳送內容");
-  expect(boundaryText(container)).toContain("不代表這台電腦一定安全");
+  expect(boundaryText(container)).toContain("不傳送內容");
+  expect(boundaryText(container)).toContain("這不是漏洞掃描");
 
   fireEvent.change(portInput(container), { target: { value: "8080" } });
   expect(boundaryText(container)).toContain("127.0.0.1:8080");
   expect(boundaryText(container)).not.toContain(String(DEFAULT_LOCALHOST_QUICK_SCAN_PORT));
   expect(boundaryText(container)).toContain("最長等待 3 秒");
+});
+
+test("the Traditional Chinese first layer names the real website checks and the combined code path", () => {
+  const { container } = renderStart({ locale: "zh-TW" });
+  const primaryLayer = container.querySelector(".start-page__choices > .use-case-grid");
+
+  expect(primaryLayer?.textContent).toContain("常見暴露檔案及除錯／狀態端點");
+  expect(primaryLayer?.textContent).toContain("程式碼或 AI 專案");
+  expect(primaryLayer?.textContent).toContain("檢查程式碼或 AI 專案");
 });

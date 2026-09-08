@@ -877,7 +877,7 @@ fn build_documents(
         },
     );
     documents.insert(
-        "exports/ocsf-detection-findings.json".into(),
+        "exports/ocsf-events.json".into(),
         PreparedDocument {
             media_type: "application/json".into(),
             bytes: export_ocsf_finding_events_bytes(case, run_id)?,
@@ -1085,6 +1085,17 @@ pub(crate) fn case_for_export(
 ) -> AssessmentCase {
     let mut exported = case.clone();
     exported.exports.clear();
+    // Portable bundles must not revive the vulnerability-oriented prose that
+    // older cases stored for Naabu/httpx reachability rows. The durable source
+    // remains untouched; only the report/export projection is normalized.
+    for finding in &mut exported.findings {
+        normalize_exposure_observation_for_export(finding);
+    }
+    for observation in &mut exported.finding_observations {
+        if let Some(snapshot) = &mut observation.finding_snapshot {
+            normalize_exposure_observation_for_export(snapshot);
+        }
+    }
     sort_case(&mut exported);
 
     if redaction == RedactionProfile::Standard {
@@ -1179,6 +1190,26 @@ pub(crate) fn case_for_export(
         }
     }
     exported
+}
+
+fn normalize_exposure_observation_for_export(finding: &mut Finding) {
+    if !finding
+        .severity_basis_code
+        .is_some_and(|code| code.is_exposure_observation())
+    {
+        return;
+    }
+
+    finding.plain_language_summary = crate::finding_narrative::EXPOSURE_OBSERVATION_RISK.into();
+    finding.possible_impact = crate::finding_narrative::EXPOSURE_OBSERVATION_IMPACT.into();
+    finding.priority = 0;
+    finding.priority_reasons.clear();
+    finding.context_factors.clear();
+    finding.recommendation = crate::finding_narrative::EXPOSURE_OBSERVATION_NEXT_STEP.into();
+    finding.verification_guidance =
+        crate::finding_narrative::EXPOSURE_OBSERVATION_VERIFICATION.into();
+    finding.rollback_considerations = None;
+    finding.recommended_expert_type = crate::finding_narrative::EXPOSURE_OBSERVATION_OWNER.into();
 }
 
 /// Builds the authoritative run report from the full durable case before any
@@ -1298,6 +1329,9 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
         }
         for reason in &mut finding.priority_reasons {
             redact_known_literals(reason, &replacements);
+        }
+        if !finding.observation_details.is_empty() {
+            finding.observation_details = vec!["[redacted observation detail]".into()];
         }
         // Both carry engine-authored text. `verification_guidance` names the
         // source rule, and the network engines build a rule id out of the
@@ -2982,7 +3016,7 @@ mod tests {
         let report_paths = [
             "exports/beginner-master-report.json",
             "exports/master-framework-report.json",
-            "exports/ocsf-detection-findings.json",
+            "exports/ocsf-events.json",
             "exports/oscal-assessment-results.json",
         ];
         let exported_reports = report_paths
@@ -3002,7 +3036,7 @@ mod tests {
         }
         for path in [
             "exports/beginner-master-report.json",
-            "exports/ocsf-detection-findings.json",
+            "exports/ocsf-events.json",
             "exports/oscal-assessment-results.json",
         ] {
             assert!(
@@ -3017,7 +3051,7 @@ mod tests {
         );
         for path in [
             "exports/beginner-master-report.json",
-            "exports/ocsf-detection-findings.json",
+            "exports/ocsf-events.json",
         ] {
             assert!(
                 exported_reports[path].contains(CURRENT_ASSET_DISPLAY_CONTEXT_SENTINEL),
@@ -3044,8 +3078,7 @@ mod tests {
             "current_canonical_legacy_fallback"
         );
         let ocsf_report: Value =
-            serde_json::from_str(&exported_reports["exports/ocsf-detection-findings.json"])
-                .unwrap();
+            serde_json::from_str(&exported_reports["exports/ocsf-events.json"]).unwrap();
         let legacy_ocsf_event = ocsf_report
             .as_array()
             .unwrap()
@@ -4136,5 +4169,57 @@ mod tests {
                 .contains(UNREGISTERED),
             "standard-redacted case bundle leaked an unregistered cloud identifier"
         );
+    }
+
+    #[test]
+    fn case_bundle_projection_replaces_stale_exposure_triage_without_losing_evidence_or_kind() {
+        let temp = tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let mut case = fixture(&artifact_root, false);
+        add_legacy_selected_run_projection_fixture(&mut case);
+        let finding = &mut case.findings[0];
+        finding.severity_basis_code = Some(SeverityBasisCode::ReachableHttpService);
+        finding.plain_language_summary = "STALE_EXPOSURE_SUMMARY".into();
+        finding.possible_impact = "STALE_EXPOSURE_IMPACT".into();
+        finding.priority = 88;
+        finding.priority_reasons = vec!["STALE_EXPOSURE_PRIORITY".into()];
+        finding.recommendation = "STALE_EXPOSURE_REMEDIATION".into();
+        finding.verification_guidance = "STALE_EXPOSURE_VERIFICATION".into();
+        finding.rollback_considerations = Some("STALE_EXPOSURE_ROLLBACK".into());
+        let evidence_before = serde_json::to_value(&finding.evidence).unwrap();
+        case.finding_observations[0].finding_snapshot = Some(finding.clone());
+
+        let bundle_case = case_for_export(&case, RedactionProfile::None);
+        let exported = &bundle_case.findings[0];
+        let exported_snapshot = bundle_case.finding_observations[0]
+            .finding_snapshot
+            .as_ref()
+            .unwrap();
+
+        for record in [exported, exported_snapshot] {
+            assert_eq!(
+                record.severity_basis_code,
+                Some(SeverityBasisCode::ReachableHttpService)
+            );
+            assert_eq!(record.priority, 0);
+            assert!(record.priority_reasons.is_empty());
+            assert_eq!(
+                record.possible_impact,
+                crate::finding_narrative::EXPOSURE_OBSERVATION_IMPACT
+            );
+            assert_eq!(
+                record.recommendation,
+                crate::finding_narrative::EXPOSURE_OBSERVATION_NEXT_STEP
+            );
+            assert_eq!(
+                serde_json::to_value(&record.evidence).unwrap(),
+                evidence_before
+            );
+            assert!(
+                !serde_json::to_string(record)
+                    .unwrap()
+                    .contains("STALE_EXPOSURE")
+            );
+        }
     }
 }

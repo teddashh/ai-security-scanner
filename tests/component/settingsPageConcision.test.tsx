@@ -74,8 +74,8 @@ test("storage and privacy expose one compact state and one action before closed 
 
 test.each([
   { mode: "native" as const, runtimeAvailable: true, state: "ready", status: "Ready at the last check", action: "New scan" },
-  { mode: "native" as const, runtimeAvailable: false, state: "unavailable", status: "Advanced tools unavailable · localhost check still works", action: "Choose a scan" },
-  { mode: "native" as const, runtimeAvailable: undefined, state: "unchecked", status: "Not checked yet · localhost check still works", action: "Choose a scan" },
+  { mode: "native" as const, runtimeAvailable: false, state: "unavailable", status: "Some scan tools are unavailable · saved results are unaffected", action: "Choose a scan" },
+  { mode: "native" as const, runtimeAvailable: undefined, state: "unchecked", status: "Scan tools not checked yet · saved results are available", action: "Choose a scan" },
   { mode: "demo" as const, runtimeAvailable: true, state: "demo", status: "Preview only · real checks do not run", action: "Open preview" },
 ])("runtime $state keeps one truthful status and one action", ({ mode, runtimeAvailable, state, status, action }) => {
   const { container, getByRole, onOpenNewScan } = renderSettings({ mode, runtimeAvailable });

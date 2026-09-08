@@ -80,7 +80,13 @@ const workspace: CaseWorkspace = {
  * selection, so a fixed answer would turn every toggle in these tests into a
  * coordinate mismatch and hide the sentence under test behind an error notice.
  */
-const renderExport = ({ demoMode = false }: { demoMode?: boolean } = {}) => {
+const renderExport = ({
+  demoMode = false,
+  workspaceValue = workspace,
+}: {
+  demoMode?: boolean;
+  workspaceValue?: CaseWorkspace;
+} = {}) => {
   const onPreview = vi.fn((request: {
     runId: string;
     locale: "en" | "zh-Hant";
@@ -120,7 +126,7 @@ const renderExport = ({ demoMode = false }: { demoMode?: boolean } = {}) => {
   const { container } = render(
     <I18nProvider>
       <ExportPage
-        workspace={workspace}
+        workspace={workspaceValue}
         selectedRunId={CHOSEN}
         exports={[]}
         demoMode={demoMode}
@@ -205,6 +211,48 @@ test("the default export states that captured source files are left out", async 
 
   // The promise that was there before, in the form that made it false.
   expect(container.textContent).not.toContain("Passwords and access keys are never included");
+});
+
+test("a connection-only export says that no vulnerability scan ran", async () => {
+  const connectionRun: ScanRun = {
+    ...run(CHOSEN),
+    engineRuns: [{
+      id: "connection-test-1",
+      engineId: "built-in-localhost-tcp",
+      engineName: "Localhost TCP reachability",
+      category: "built_in_localhost_tcp",
+      taskKind: {
+        kind: "built_in_localhost_tcp",
+        port: 9001,
+        timeoutMs: 3_000,
+        payloadBytes: 0,
+      },
+      localhostTcpObservation: {
+        outcome: "reachable",
+        observedAt: "2026-08-31T12:00:03Z",
+      },
+      warnings: [],
+      status: "completed",
+      progress: 100,
+      phase: "completed",
+      startedAt: "2026-08-31T12:00:00Z",
+      finishedAt: "2026-08-31T12:00:03Z",
+      assetIds: ["asset-1"],
+      rawArtifactCount: 0,
+      findingCount: 0,
+      resumable: false,
+    }],
+  };
+  const { container } = renderExport({
+    workspaceValue: { ...workspace, runs: [connectionRun] },
+  });
+
+  await waitFor(() => expect(container.textContent).toContain(
+    "Connection test only — no vulnerability scan ran",
+  ));
+  expect(container.textContent).toContain(
+    "The exported file records only whether one local port accepted a bounded TCP connection.",
+  );
 });
 
 test("attaching source files without redaction says the secrets are in the file", async () => {

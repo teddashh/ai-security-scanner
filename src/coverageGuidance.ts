@@ -15,14 +15,14 @@ interface GuidedCloudConnection {
 }
 
 export const matchesGuidedCoverageRoute = (asset: Asset, route: GuidedCoverageRoute): boolean => {
-  if (asset.authorizationState !== "pending") return false;
+  if (asset.authorizationState !== "pending" && asset.authorizationState !== "authorized") return false;
   if (route.kind === "network") return asset.platform === "external";
   if (route.kind === "cloud") return cloudPlatforms.has(asset.platform);
   if (route.kind === "local") return asset.localInputProfile === route.profile;
   return false;
 };
 
-export const singleGuidedPendingAsset = (
+export const singleGuidedSelectableAsset = (
   assets: readonly Asset[],
   route: GuidedCoverageRoute,
 ): Asset | undefined => {

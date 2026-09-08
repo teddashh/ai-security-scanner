@@ -378,6 +378,7 @@ export interface NativeBeginnerMasterReport {
     family?: string | null;
     severity_basis_code?: string | null;
     confidence_basis_code?: string | null;
+    observation_details?: string[] | null;
     context_factors?: string[] | null;
     rollback_considerations?: string | null;
     verification_guidance?: string | null;
@@ -1762,6 +1763,7 @@ export const adaptNativeCase = (
   const findings: Finding[] = nativeCase.findings.map((finding) => {
     const observations = finding.evidence.map((evidence) => evidence.observed_at).sort();
     const assetNames = finding.asset_ids.map((id) => assetById.get(id)?.name).filter((name): name is string => Boolean(name));
+    const severityBasisCode = mapSeverityBasisCode(finding.severity_basis_code);
     return {
       id: finding.id,
       caseId: finding.case_id,
@@ -1774,8 +1776,14 @@ export const adaptNativeCase = (
       impact: finding.possible_impact,
       recommendation: finding.recommendation,
       family: mapFindingFamily(finding.family),
-      severityBasisCode: mapSeverityBasisCode(finding.severity_basis_code),
+      severityBasisCode,
       confidenceBasisCode: mapConfidenceBasisCode(finding.confidence_basis_code),
+      observationDetails: severityBasisCode === "open_port" || severityBasisCode === "reachable_http_service"
+        ? (finding.tags ?? []).filter((tag) =>
+          tag.startsWith("port:")
+          || tag.startsWith("protocol:")
+          || tag.startsWith("http-status:"))
+        : undefined,
       contextFactors: mapContextFactors(finding.context_factors),
       expertType: finding.recommended_expert_type,
       severity: mapSeverity(finding.severity),
@@ -2320,6 +2328,7 @@ export const adaptBeginnerMasterReport = (
     family: mapFindingFamily(finding.family),
     severityBasisCode: mapSeverityBasisCode(finding.severity_basis_code),
     confidenceBasisCode: mapConfidenceBasisCode(finding.confidence_basis_code),
+    observationDetails: finding.observation_details ? [...finding.observation_details] : undefined,
     contextFactors: mapContextFactors(finding.context_factors),
     rollbackConsiderations: finding.rollback_considerations ?? undefined,
     verificationGuidance: finding.verification_guidance ?? undefined,

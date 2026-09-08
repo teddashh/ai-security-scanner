@@ -76,8 +76,8 @@ test("the export page explains mandatory coverage companions", () => {
   assert.match(source, /if \(selectedFormatUnavailable\) \{[\s\S]*setPreviewPending\(false\);[\s\S]*return;/u);
   assert.match(source, /disabled=\{unavailable\}/u);
   assert.match(source, /const unavailableInDemo = demoMode && id !== "json"/u);
-  assert.match(source, /OCSF findings plus a coverage manifest for missing or unfinished checks/u);
-  assert.match(source, /OCSF 問題資料，另附涵蓋說明檔記錄未測或未完成項目/u);
+  assert.match(source, /OCSF finding and service-inventory events plus a coverage manifest for missing or unfinished checks/u);
+  assert.match(source, /OCSF 問題與服務盤點事件，另附涵蓋說明檔記錄未測或未完成項目/u);
   assert.match(source, /OSCAL observations plus a coverage manifest for missing or unfinished checks/u);
   assert.match(source, /OSCAL 觀察資料，另附涵蓋說明檔記錄未測或未完成項目/u);
 });
@@ -124,7 +124,7 @@ test("the technical case bundle discloses its case-wide and run-bound scope befo
   assert.match(source, /工作流程狀態與資產名稱也可能反映目前案件/u);
   assert.doesNotMatch(source, /Reports inside the bundle remain limited to the selected scan run/u);
   assert.doesNotMatch(source, /包內報告仍只涵蓋選定的掃描輪次/u);
-  assert.match(source, /Case \/ selected-run findings/u);
+  assert.match(source, /Case \/ selected-run result records/u);
   assert.match(source, /All \/ selected-run evidence records/u);
 });
 

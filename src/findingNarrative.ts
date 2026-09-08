@@ -332,6 +332,8 @@ const CONFIDENCE_BASIS_ENGLISH: Record<ConfidenceBasisCode, string> = {
 /** The one priority reason every adapter finding carries. */
 export const ENGLISH_EVIDENCE_REASON =
   "Direct scanner evidence is attached and still requires human review.";
+export const ENGLISH_EXPOSURE_OBSERVATION_REASON =
+  "Classified as a reachable-service inventory observation, not a vulnerability.";
 
 /** The two reasons `apply_case_context` pushes when the case raises a finding. */
 const ENGLISH_INTERNET_REASON =
@@ -352,6 +354,7 @@ export const findingPriorityReason = (locale: "en" | "zh-TW", english: string): 
   if (locale === "en") return english;
   const trimmed = english.trim();
   if (trimmed === ENGLISH_EVIDENCE_REASON) return "已附上掃描工具的直接證據，仍需人工檢視。";
+  if (trimmed === ENGLISH_EXPOSURE_OBSERVATION_REASON) return "這是可連線服務的盤點觀察，不是漏洞。";
   if (trimmed === ENGLISH_INTERNET_REASON)
     return "受影響的資產被標記為可從網際網路存取，且其保留的來源歸屬皆非問卷填答。";
   if (trimmed === ENGLISH_SENSITIVE_REASON)

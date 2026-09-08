@@ -194,7 +194,7 @@ test("localhost evidence records the observed TCP outcome and durable report ide
   assert.throws(() => validateBoundArtifactEvidence(unsaved, expected), /not durably saved/u);
 });
 
-test("first-value evidence uses canonical master-report states and rejects zero completed checks", () => {
+test("historical evidence uses canonical report states and rejects zero completed checks", () => {
   const zeroChecks = humanEvidence();
   zeroChecks.details.finalCoverage = {
     state: "no-checks-completed",

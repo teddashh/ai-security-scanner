@@ -344,16 +344,31 @@ pub fn rollback_zh_hant(english: &str) -> String {
 /// The one priority reason every adapter finding carries.
 pub const ENGLISH_EVIDENCE_REASON: &str =
     "Direct scanner evidence is attached and still requires human review.";
+pub const ENGLISH_EXPOSURE_OBSERVATION_REASON: &str =
+    "Classified as a reachable-service inventory observation, not a vulnerability.";
+
+/// Report-layer wording for Naabu/httpx reachability records. Older cases may
+/// contain the vulnerability-oriented impact and remediation prose used before
+/// reachability was separated from findings. Export projections replace those
+/// stale fields with these inventory semantics while retaining the original
+/// evidence and the machine-readable severity basis code.
+pub const EXPOSURE_OBSERVATION_RISK: &str = "A service responded within the tested scope. Reachability is inventory evidence, not a vulnerability.";
+pub const EXPOSURE_OBSERVATION_IMPACT: &str =
+    "Reachability alone does not establish a security weakness or a need to change the service.";
+pub const EXPOSURE_OBSERVATION_NEXT_STEP: &str = "Confirm that the service is expected. To look for weaknesses, run an applicable security check against it.";
+pub const EXPOSURE_OBSERVATION_VERIFICATION: &str = "Repeat the same bounded discovery if you need to confirm whether the service is still reachable.";
+pub const EXPOSURE_OBSERVATION_OWNER: &str = "System or service owner";
 
 /// "Why this priority", in the reader's language.
 ///
 /// `priority_reasons` is a bare `Vec<String>` with no per-entry code, so each
-/// entry is recognised by its shape rather than looked up. There are four
-/// producers and they are all closed:
+/// entry is recognised by its shape rather than looked up. The producers are
+/// closed and listed below:
 ///
 ///  - the derived-severity reason, built from a basis code and an engine name
 ///  - `Source severity: {value}`, whose value is the engine's own raw word
 ///  - the evidence constant above
+///  - the reachable-service inventory constant above
 ///  - the two case-context reasons `apply_case_context` pushes
 ///
 /// Anything else is returned unchanged. A reason is the product's account of
@@ -1298,6 +1313,9 @@ pub fn priority_reason_zh_hant(english: &str) -> String {
     let trimmed = english.trim();
     if trimmed == ENGLISH_EVIDENCE_REASON {
         return "已附上掃描工具的直接證據，仍需人工檢視。".to_owned();
+    }
+    if trimmed == ENGLISH_EXPOSURE_OBSERVATION_REASON {
+        return "這是可連線服務的盤點觀察，不是漏洞。".to_owned();
     }
     if trimmed == crate::prioritization::INTERNET_REASON {
         return "受影響的資產被標記為可從網際網路存取，且其保留的來源歸屬皆非問卷填答。".to_owned();

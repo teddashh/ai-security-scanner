@@ -542,13 +542,27 @@ test("an absent coverage gap is scoped to the requested checks rather than imply
 });
 
 test("a completed localhost connection check puts its exact exclusions in the master report", () => {
-  const { container } = renderReport(report("complete"), [], [localhostRun()]);
+  const base = report("complete");
+  const { container } = renderReport(report("complete", {
+    requested: {
+      ...base.requested,
+      stage: {
+        value: "connection_diagnostic",
+        availability: "recorded",
+        explanation: "A bounded connection diagnostic, not a vulnerability scan.",
+      },
+    },
+  }), [], [localhostRun()]);
   const section = container.querySelector<HTMLElement>(
     "section[aria-labelledby='beginner-master-report-title']",
   );
   if (!section) throw new Error("the beginner report section did not render");
 
-  expect(statePill(container).textContent).toContain("Requested checks complete");
+  expect(container.querySelector(".page-header")?.textContent).toContain(
+    "Connection test only — no vulnerability scan ran",
+  );
+  expect(statePill(container).textContent).toContain("Connection result only");
+  expect(section.textContent).toContain("Connection test (not a vulnerability scan)");
   expect(section.textContent).toContain(
     "Not checked: vulnerabilities, protocol behavior, website or API content, other ports, or other hosts.",
   );
@@ -574,6 +588,9 @@ test("a mixed run does not apply localhost-only exclusions to the whole report",
   );
   if (!section) throw new Error("the beginner report section did not render");
 
+  expect(container.querySelector(".page-header")?.textContent).not.toContain(
+    "Connection test only — no vulnerability scan ran",
+  );
   expect(section.textContent).toContain(
     "No gap was recorded within the requested checks. This does not mean broader security testing was performed.",
   );
@@ -705,6 +722,109 @@ test("a Traditional Chinese reader hears why completed network coverage is not a
   expect(section!.textContent).toContain("完成的網路檢查只回報連線是否可達；不代表安全性檢查通過。");
   expect(section!.textContent).not.toContain(englishObservation);
   window.localStorage.setItem(localeStorageKey, "en");
+});
+
+test("reachable-service inventory is not counted or triaged as a vulnerability", () => {
+  const observation = frozenFinding({
+    title: "Externally reachable network service",
+    plainLanguageRisk: "Naabu observed a reachable service.",
+    possibleImpact: "Legacy impact wording that must not become a problem claim.",
+    severity: "info",
+    severityBasisCode: "open_port",
+    observationDetails: ["port:443", "protocol:tcp"],
+    nextStep: "Legacy remediation that must not become a priority.",
+  });
+  const { container } = renderReport(report("complete", {
+    actual: {
+      checks: [{
+        taskId: "httpx-task",
+        checkId: "httpx",
+        targetAssetIds: ["asset-1"],
+        status: "tested_complete",
+        testedDimensions: [],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    findings: [observation],
+    nextSteps: [{
+      priority: 0,
+      code: "review_finding",
+      action: observation.nextStep,
+      reason: observation.title,
+      findingId: observation.findingId,
+    }],
+  }));
+
+  expect(container.textContent).toContain("Reachable services observed — not vulnerabilities");
+  expect(container.querySelector(".page-header")?.textContent).toContain(
+    "Service inventory only — no vulnerability scan ran",
+  );
+  expect(statePill(container).textContent).toContain("Service inventory only");
+  expect(container.textContent).toContain("Port 443");
+  expect(container.textContent).toContain("Protocol tcp");
+  expect(container.textContent).toContain("choose an applicable security check");
+  expect(container.textContent).not.toContain(observation.possibleImpact);
+  expect(container.textContent).not.toContain(observation.nextStep);
+  expect(container.textContent).toContain(
+    "Review the saved results and stated limits. Run broader checks if you need broader assurance.",
+  );
+  const nextActionsHeading = Array.from(container.querySelectorAll("h3"))
+    .find((heading) => heading.textContent === "What to do next");
+  expect(nextActionsHeading?.parentElement?.nextElementSibling?.tagName).toBe("P");
+  const problemMetric = Array.from(container.querySelectorAll<HTMLElement>(".metric-card"))
+    .find((card) => card.textContent?.includes("Problems found"));
+  expect(problemMetric?.textContent).toContain("0");
+  expect(container.querySelector("#finding-browser")).toBeNull();
+});
+
+test("service inventory leads with counts and three examples while retaining every observation in a collapsed list", () => {
+  const observations = Array.from({ length: 5 }, (_, index) => frozenFinding({
+    findingId: `observation-${index + 1}`,
+    fingerprint: `observation-fingerprint-${index + 1}`,
+    title: `Reachable service ${index + 1}`,
+    severity: "info",
+    severityBasisCode: index % 2 === 0 ? "open_port" : "reachable_http_service",
+    targetAssetIds: [`asset-${(index % 3) + 1}`],
+    observationDetails: [`port:${8000 + index}`, "protocol:tcp"],
+  }));
+  const base = report("complete");
+  const { container } = renderReport({
+    ...base,
+    requested: {
+      ...base.requested,
+      targets: [1, 2, 3].map((number) => ({
+        assetId: `asset-${number}`,
+        label: `service-${number}.example`,
+        assetKind: "domain",
+        labelAvailability: "recorded" as const,
+        assetKindAvailability: "recorded" as const,
+      })),
+    },
+    findings: observations,
+  });
+
+  const section = container.querySelector<HTMLElement>(
+    "section[aria-labelledby='service-observations-title']",
+  );
+  expect(section).not.toBeNull();
+  expect(section!.querySelector(".service-observations__summary")?.textContent)
+    .toContain("5 observed services across 3 assets");
+
+  const representatives = section!.querySelector<HTMLElement>(
+    ".service-observations__representatives",
+  );
+  expect(representatives?.querySelectorAll(".evidence-item")).toHaveLength(3);
+  expect(representatives?.textContent).toContain("Port 8000");
+  expect(representatives?.textContent).not.toContain("Port 8004");
+
+  const complete = section!.querySelector<HTMLDetailsElement>(
+    ".service-observations__complete",
+  );
+  expect(complete?.open).toBe(false);
+  expect(complete?.textContent).toContain("View all 5 observed services");
+  expect(complete?.querySelectorAll(".evidence-item")).toHaveLength(5);
+  expect(complete?.textContent).toContain("Port 8004");
 });
 
 test("what the run could not establish is shown with its own dimension", () => {

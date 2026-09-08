@@ -523,7 +523,7 @@ mod desktop_nonblocking_source_invariants {
     }
 
     #[test]
-    fn localhost_first_value_path_has_one_managed_detached_lifecycle() {
+    fn localhost_connection_utility_has_one_managed_detached_lifecycle() {
         let commands = normalized_source(include_str!("commands.rs"));
         let start = commands
             .find("pub async fn start_localhost_quick_scan(")
