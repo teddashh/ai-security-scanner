@@ -1377,6 +1377,12 @@ func writeXMLResult(writer io.Writer, indexNumber int, result scanResult, unit s
 		{"severity", strconv.FormatFloat(severity, 'f', 1, 64)},
 		{"threat", threat},
 		{"asset_id", unit.AssetID},
+		// Summary and solution come from the exact pinned Greenbone feed entry,
+		// while description is the scan result message and may contain target
+		// material. Keeping them as separate XML fields lets the adapter expose
+		// upstream rule guidance without presenting target-controlled evidence as
+		// remediation.
+		{"summary", boundedText(metadata.Tag.Summary, 64*1024)},
 		{"description", boundedText(result.Message, maxMessageBytes)},
 		{"solution", boundedText(metadata.Tag.Solution, 64*1024)},
 		{"raw_host", result.IPAddress},

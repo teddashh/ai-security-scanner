@@ -79,7 +79,7 @@
     "required": true,
     "strategy": "Invoke the pinned OSS source build against only the read-only case workspace and the checksum-verified upstream offline security rule pack.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:07e94433dd47cd9bc910bdba8fe331757623599e0390b4e76d4efae1010a647a"
+    "launcher_sha256": "sha256:c0fca8b02946066d3ec59d152d09eb9e5e7fea0a8f05bb27ce0cbdd6e79b1668"
   },
   "command": [
     "--engine",

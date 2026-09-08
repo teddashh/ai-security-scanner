@@ -4,7 +4,7 @@ use crate::beginner_report::{
 };
 use crate::domain::{
     AssessmentCase, CaseExport, DataSource, EngineTaskKind, Finding, RawArtifact, ScanRun,
-    ScopeGrant, new_id,
+    ScannerFindingDetails, ScopeGrant, new_id,
 };
 use crate::error::{AppError, AppResult};
 use crate::export_identity::{
@@ -1334,8 +1334,19 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
             finding.observation_details = vec!["[redacted observation detail]".into()];
         }
         for reference in &mut finding.evidence_references {
+            if reference.summary.is_some() {
+                reference.summary = Some("[redacted evidence summary]".into());
+            }
             if reference.location.is_some() {
                 reference.location = Some("[redacted location]".into());
+            }
+            if let Some(details) = &mut reference.scanner_details {
+                redact_scanner_finding_details(details, &replacements);
+            }
+        }
+        if let Some(references) = &mut finding.official_references {
+            for reference in references {
+                redact_known_literals(reference, &replacements);
             }
         }
         // Both carry engine-authored text. `verification_guidance` names the
@@ -1465,8 +1476,29 @@ fn redact_finding(finding: &mut Finding, replacements: &[(String, String)]) {
         if evidence.location.is_some() {
             evidence.location = Some("[redacted location]".into());
         }
+        if let Some(details) = &mut evidence.scanner_details {
+            redact_scanner_finding_details(details, replacements);
+        }
         evidence.pointer = None;
         evidence.redacted = true;
+    }
+}
+
+fn redact_scanner_finding_details(
+    details: &mut ScannerFindingDetails,
+    replacements: &[(String, String)],
+) {
+    if details.description.is_some() {
+        details.description = Some("[redacted scanner-provided description]".into());
+    }
+    if details.remediation.is_some() {
+        details.remediation = Some("[redacted scanner-provided remediation]".into());
+    }
+    if let Some(installed_version) = &mut details.installed_version {
+        redact_known_literals(installed_version, replacements);
+    }
+    if let Some(fixed_version) = &mut details.fixed_version {
+        redact_known_literals(fixed_version, replacements);
     }
 }
 
@@ -2708,6 +2740,7 @@ mod tests {
                 engine_run_id: Some("engine-run-1".into()),
                 kind: EvidenceKind::Observation,
                 engine_id: "engine-1".into(),
+                scanner_details: None,
                 source_rule: None,
                 result_pointer_sha256: None,
                 observed_at: artifact.created_at,
@@ -2804,6 +2837,7 @@ mod tests {
                 engine_run_id: Some("engine-run-2".into()),
                 kind: EvidenceKind::Observation,
                 engine_id: "engine-1".into(),
+                scanner_details: None,
                 source_rule: None,
                 result_pointer_sha256: None,
                 observed_at: time,
@@ -2948,6 +2982,7 @@ mod tests {
                     engine_run_id: Some(artifact.engine_run_id.clone()),
                     kind: EvidenceKind::Observation,
                     engine_id: "engine-1".into(),
+                    scanner_details: None,
                     source_rule: None,
                     result_pointer_sha256: None,
                     observed_at: time,
@@ -3306,6 +3341,7 @@ mod tests {
                 engine_run_id: Some("engine-run-1".into()),
                 kind: EvidenceKind::Observation,
                 engine_id: "engine-1".into(),
+                scanner_details: None,
                 source_rule: None,
                 result_pointer_sha256: None,
                 observed_at: artifact.created_at,
@@ -3652,6 +3688,10 @@ mod tests {
         const PLAN_ADDRESS_TWO: &str = "10.44.55.67";
         const HISTORICAL_HOSTNAME: &str = "retired-secret.example.test";
         const HISTORICAL_HOSTNAME_RENDERED: &str = "Retired-Secret.Example.Test";
+        const ARBITRARY_SCANNER_DESCRIPTION: &str =
+            "SCANNER_DESCRIPTION_WITH_UNREGISTERED_TARGET_713b";
+        const ARBITRARY_SCANNER_REMEDIATION: &str =
+            "SCANNER_REMEDIATION_WITH_UNREGISTERED_TARGET_92ac";
         const PLAN_PORT_ONE: u16 = 49_151;
         const PLAN_PORT_TWO: u16 = 49_152;
         let temp = tempdir().unwrap();
@@ -3855,6 +3895,12 @@ mod tests {
                 engine_run_id: Some("engine-run-1".into()),
                 kind: EvidenceKind::Observation,
                 engine_id: NAABU_ENGINE_ID.into(),
+                scanner_details: Some(ScannerFindingDetails {
+                    description: Some(ARBITRARY_SCANNER_DESCRIPTION.into()),
+                    remediation: Some(ARBITRARY_SCANNER_REMEDIATION.into()),
+                    installed_version: Some(format!("installed on {PLAN_HOSTNAME}")),
+                    fixed_version: Some(format!("fixed for {PLAN_ADDRESS_ONE}")),
+                }),
                 source_rule: None,
                 result_pointer_sha256: None,
                 observed_at: time,
@@ -3887,6 +3933,7 @@ mod tests {
             observed_at: time,
             finding_snapshot: None,
         });
+        case.finding_observations[0].finding_snapshot = Some(case.findings[0].clone());
         case.comparisons.push(VerificationComparison {
             id: "comparison-1".into(),
             case_id: case.id.clone(),
@@ -3926,6 +3973,8 @@ mod tests {
             unredacted.contains(SENTINEL),
             "the sentinel fixture must be meaningful"
         );
+        assert!(unredacted.contains(ARBITRARY_SCANNER_DESCRIPTION));
+        assert!(unredacted.contains(ARBITRARY_SCANNER_REMEDIATION));
         for private_value in [PLAN_HOSTNAME, PLAN_ADDRESS_ONE, PLAN_ADDRESS_TWO] {
             assert!(
                 json_holds_text(&unredacted_value, private_value),
@@ -3958,6 +4007,34 @@ mod tests {
         let redacted_value = serde_json::to_value(&redacted).expect("the redacted case serializes");
         let redacted_json = serde_json::to_string(&redacted).unwrap();
         assert!(!redacted_json.contains(SENTINEL));
+        assert!(!redacted_json.contains(ARBITRARY_SCANNER_DESCRIPTION));
+        assert!(!redacted_json.contains(ARBITRARY_SCANNER_REMEDIATION));
+        let redacted_evidence = &redacted.findings[0].evidence[0];
+        assert_eq!(redacted_evidence.summary, "[redacted evidence summary]");
+        let redacted_scanner_details = redacted_evidence
+            .scanner_details
+            .as_ref()
+            .expect("scanner details remain structurally available");
+        assert_eq!(
+            redacted_scanner_details.description.as_deref(),
+            Some("[redacted scanner-provided description]")
+        );
+        assert_eq!(
+            redacted_scanner_details.remediation.as_deref(),
+            Some("[redacted scanner-provided remediation]")
+        );
+        assert_eq!(
+            redacted_scanner_details.installed_version.as_deref(),
+            Some("installed on Asset 1")
+        );
+        assert_eq!(
+            redacted_scanner_details.fixed_version.as_deref(),
+            Some("fixed for Asset 1")
+        );
+        assert_eq!(
+            redacted.findings[0].official_references,
+            vec!["https://Asset 1/help"]
+        );
         for private_target in [PLAN_HOSTNAME, PLAN_ADDRESS_ONE, PLAN_ADDRESS_TWO] {
             assert!(
                 !redacted_json.contains(private_target),
@@ -3996,6 +4073,43 @@ mod tests {
         );
         let standard_report =
             beginner_report_for_export(&case, "run-1", RedactionProfile::Standard).unwrap();
+        let report_finding = standard_report
+            .findings
+            .iter()
+            .find(|finding| finding.finding_id == "finding-1")
+            .expect("selected-run finding remains in the report");
+        let report_evidence = &report_finding.evidence_references[0];
+        assert_eq!(
+            report_evidence.summary.as_deref(),
+            Some("[redacted evidence summary]")
+        );
+        let report_scanner_details = report_evidence
+            .scanner_details
+            .as_ref()
+            .expect("frozen scanner details remain structurally available");
+        assert_eq!(
+            report_scanner_details.description.as_deref(),
+            Some("[redacted scanner-provided description]")
+        );
+        assert_eq!(
+            report_scanner_details.remediation.as_deref(),
+            Some("[redacted scanner-provided remediation]")
+        );
+        assert_eq!(
+            report_scanner_details.installed_version.as_deref(),
+            Some("installed on Asset 1")
+        );
+        assert_eq!(
+            report_scanner_details.fixed_version.as_deref(),
+            Some("fixed for Asset 1")
+        );
+        assert_eq!(
+            report_finding
+                .official_references
+                .as_ref()
+                .expect("official references are frozen"),
+            &["https://Asset 1/help"]
+        );
         assert_eq!(
             standard_report.actual.network_scopes.len(),
             private_attempt_unit_count,
@@ -4026,6 +4140,8 @@ mod tests {
             HISTORICAL_HOSTNAME,
             &PLAN_PORT_ONE.to_string(),
             &PLAN_PORT_TWO.to_string(),
+            ARBITRARY_SCANNER_DESCRIPTION,
+            ARBITRARY_SCANNER_REMEDIATION,
         ] {
             assert!(
                 !standard_report_json

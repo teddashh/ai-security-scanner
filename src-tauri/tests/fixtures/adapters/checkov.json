@@ -23,7 +23,7 @@
         "severity": null,
         "bc_category": null,
         "benchmarks": {},
-        "description": null,
+        "description": "The bucket rule requires access logging to be enabled.",
         "short_description": null,
         "vulnerability_details": null,
         "connected_node": null,

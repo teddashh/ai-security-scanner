@@ -262,6 +262,39 @@ pub fn validate_adapter_output(
                     finding.fingerprint
                 )));
             }
+            if let Some(details) = &evidence.scanner_details {
+                if details.description.is_none()
+                    && details.remediation.is_none()
+                    && details.installed_version.is_none()
+                    && details.fixed_version.is_none()
+                {
+                    return Err(AppError::Runtime(format!(
+                        "finding {} has an empty scanner-provided detail record",
+                        finding.fingerprint
+                    )));
+                }
+                for (label, value, limit) in [
+                    ("description", details.description.as_deref(), 2_048),
+                    ("remediation", details.remediation.as_deref(), 2_048),
+                    (
+                        "installed version",
+                        details.installed_version.as_deref(),
+                        512,
+                    ),
+                    ("fixed version", details.fixed_version.as_deref(), 512),
+                ] {
+                    if value.is_some_and(|value| {
+                        value.is_empty()
+                            || value.chars().count() > limit
+                            || value.chars().any(char::is_control)
+                    }) {
+                        return Err(AppError::Runtime(format!(
+                            "finding {} has invalid scanner-provided {label}",
+                            finding.fingerprint
+                        )));
+                    }
+                }
+            }
             let artifact = artifacts
                 .get(evidence.artifact_id.as_str())
                 .ok_or_else(|| {
@@ -395,6 +428,7 @@ mod tests {
                 engine_run_id: Some(artifact.engine_run_id.clone()),
                 kind: EvidenceKind::RawToolOutput,
                 engine_id: "scanner".into(),
+                scanner_details: None,
                 source_rule: None,
                 result_pointer_sha256: None,
                 observed_at: Utc::now(),
@@ -505,6 +539,46 @@ mod tests {
         let error = validate_adapter_output(&input, &adapter, &adapter.output)
             .expect_err("forged evidence rejected");
         assert!(error.to_string().contains("hash or execution context"));
+    }
+
+    #[test]
+    fn scanner_provided_details_are_bounded_untrusted_evidence() {
+        let manifest = manifest();
+        let artifact = artifact();
+        let mut bad_finding = finding(&artifact);
+        bad_finding.evidence[0].scanner_details = Some(crate::domain::ScannerFindingDetails {
+            description: Some("rule text with\na control character".into()),
+            remediation: None,
+            installed_version: None,
+            fixed_version: None,
+        });
+        let adapter = TestAdapter {
+            output: AdapterOutput {
+                unattributed: Vec::new(),
+                findings: vec![bad_finding],
+                warnings: vec![],
+                complete: true,
+            },
+        };
+        let artifacts = vec![artifact];
+        let assets = vec!["asset-1".into()];
+        let asset_identifier_map = AdapterAssetIdentifierMap::default();
+        let input = AdapterInput {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
+            asset_ids: &assets,
+            asset_identifier_map: &asset_identifier_map,
+            artifact_root: Path::new("/tmp"),
+            raw_artifacts: &artifacts,
+        };
+
+        let error = validate_adapter_output(&input, &adapter, &adapter.output)
+            .expect_err("control characters in scanner text must be rejected");
+        assert!(error.to_string().contains("scanner-provided description"));
     }
 
     #[test]

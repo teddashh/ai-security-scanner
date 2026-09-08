@@ -9,7 +9,7 @@ mod control_mapping;
 use crate::adapter::{AdapterInput, AdapterOutput, AdapterRegistry, EngineAdapter};
 use crate::domain::{
     Confidence, ConfidenceBasisCode, Evidence, EvidenceKind, Finding, FindingFamily, FindingStatus,
-    RawArtifact, Severity, SeverityBasisCode,
+    RawArtifact, ScannerFindingDetails, Severity, SeverityBasisCode,
 };
 use crate::error::{AppError, AppResult};
 use quick_xml::events::{BytesRef, BytesStart, Event};
@@ -129,6 +129,7 @@ struct SourceRecord {
     /// assigned one from the behavior that produced the finding.
     confidence_basis: Option<ConfidenceBasisCode>,
     evidence_kind: EvidenceKind,
+    scanner_details: Option<ScannerFindingDetails>,
     references: Vec<String>,
     tags: Vec<String>,
 }
@@ -417,6 +418,8 @@ enum XmlElement {
     Port,
     Severity,
     Threat,
+    Summary,
+    Solution,
     Qod,
     Value,
     AssetId,
@@ -437,6 +440,8 @@ struct GreenboneXmlResult {
     port: Option<String>,
     severity: Option<String>,
     threat: Option<String>,
+    summary: Option<String>,
+    solution: Option<String>,
     qod: Option<String>,
     asset_id: Option<String>,
     family: Option<String>,
@@ -1344,6 +1349,8 @@ fn xml_element(name: &[u8]) -> XmlElement {
         b"port" => XmlElement::Port,
         b"severity" => XmlElement::Severity,
         b"threat" => XmlElement::Threat,
+        b"summary" => XmlElement::Summary,
+        b"solution" => XmlElement::Solution,
         b"qod" => XmlElement::Qod,
         b"value" => XmlElement::Value,
         b"asset_id" => XmlElement::AssetId,
@@ -1361,6 +1368,8 @@ fn is_greenbone_field(stack: &[XmlElement]) -> bool {
         || stack.ends_with(&[XmlElement::Result, XmlElement::Port])
         || stack.ends_with(&[XmlElement::Result, XmlElement::Severity])
         || stack.ends_with(&[XmlElement::Result, XmlElement::Threat])
+        || stack.ends_with(&[XmlElement::Result, XmlElement::Summary])
+        || stack.ends_with(&[XmlElement::Result, XmlElement::Solution])
         || stack.ends_with(&[XmlElement::Result, XmlElement::Qod, XmlElement::Value])
         || stack.ends_with(&[XmlElement::Result, XmlElement::AssetId])
         || stack.ends_with(&[XmlElement::Result, XmlElement::Nvt, XmlElement::Family])
@@ -1387,6 +1396,10 @@ fn apply_greenbone_text(record: &mut GreenboneXmlResult, stack: &[XmlElement], v
         &mut record.severity
     } else if stack.ends_with(&[XmlElement::Result, XmlElement::Threat]) {
         &mut record.threat
+    } else if stack.ends_with(&[XmlElement::Result, XmlElement::Summary]) {
+        &mut record.summary
+    } else if stack.ends_with(&[XmlElement::Result, XmlElement::Solution]) {
+        &mut record.solution
     } else if stack.ends_with(&[XmlElement::Result, XmlElement::Qod, XmlElement::Value]) {
         &mut record.qod
     } else if stack.ends_with(&[XmlElement::Result, XmlElement::AssetId]) {
@@ -1438,6 +1451,65 @@ fn normalize_cve(value: &str) -> Option<String> {
         return None;
     }
     Some(value)
+}
+
+/// Attach only explicitly selected scanner rule/advisory metadata.
+///
+/// Scanner output remains untrusted data. Every field is bounded and stripped
+/// of control characters here, in one place, before it reaches durable
+/// evidence. Callers must still allowlist the source paths: secret values, raw
+/// matches, response bodies, and target-observed values never belong here.
+fn with_scanner_details(
+    mut record: SourceRecord,
+    description: Option<String>,
+    remediation: Option<String>,
+    installed_version: Option<String>,
+    fixed_version: Option<String>,
+) -> SourceRecord {
+    let details = ScannerFindingDetails {
+        description: bounded_scanner_detail(description, MAX_LONG_TEXT),
+        remediation: bounded_scanner_detail(remediation, MAX_LONG_TEXT),
+        installed_version: bounded_scanner_detail(installed_version, MAX_SHORT_TEXT),
+        fixed_version: bounded_scanner_detail(fixed_version, MAX_SHORT_TEXT),
+    };
+    if details.description.is_some()
+        || details.remediation.is_some()
+        || details.installed_version.is_some()
+        || details.fixed_version.is_some()
+    {
+        record.scanner_details = Some(details);
+    }
+    record
+}
+
+fn bounded_scanner_detail(value: Option<String>, max_chars: usize) -> Option<String> {
+    let value = value?;
+    let cleaned = value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .take(max_chars)
+        .collect::<String>();
+    let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!cleaned.is_empty()).then_some(cleaned)
+}
+
+fn bounded_string_list(value: Option<&Value>, max_items: usize) -> Option<String> {
+    let values = value?.as_array()?;
+    let joined = values
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|value| safe_text(value, MAX_SHORT_TEXT))
+        .filter(|value| !value.is_empty())
+        .take(max_items)
+        .collect::<Vec<_>>()
+        .join(", ");
+    (!joined.is_empty()).then_some(joined)
 }
 
 fn extract_records(
@@ -1572,7 +1644,13 @@ fn extract_prowler(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
         );
         record.asset_provider = nested_string(value, &["cloud", "provider"])
             .or_else(|| nested_string(value, &["unmapped", "provider"]));
-        records.push(record);
+        records.push(with_scanner_details(
+            record,
+            None,
+            nested_string(value, &["remediation", "desc"]),
+            None,
+            None,
+        ));
     }
     records
 }
@@ -1609,18 +1687,24 @@ fn extract_scoutsuite(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                 .or_else(|| scoutsuite_rule_key(&pointer))?;
             let title = string_any(object, &["description", "title", "name"])
                 .unwrap_or_else(|| format!("ScoutSuite rule {rule_id}"));
-            Some(record_with_derived_confidence!(
-                pointer,
-                rule_id,
-                title,
-                string_any(object, &["level", "severity"]).unwrap_or_else(|| "unknown".into()),
-                string_any(object, &["resource", "path", "service"])
-                    .unwrap_or_else(|| "cloud-resource".into()),
-                string_any(object, &["account_id", "subscription_id", "project_id"]),
-                derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
-                EvidenceKind::Configuration,
-                references_from(value),
-                vec![],
+            Some(with_scanner_details(
+                record_with_derived_confidence!(
+                    pointer,
+                    rule_id,
+                    title,
+                    string_any(object, &["level", "severity"]).unwrap_or_else(|| "unknown".into()),
+                    string_any(object, &["resource", "path", "service"])
+                        .unwrap_or_else(|| "cloud-resource".into()),
+                    string_any(object, &["account_id", "subscription_id", "project_id"]),
+                    derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
+                    EvidenceKind::Configuration,
+                    references_from(value),
+                    vec![],
+                ),
+                string_any(object, &["rationale"]),
+                string_any(object, &["remediation"]),
+                None,
+                None,
             ))
         })
         .take(MAX_RECORDS)
@@ -2159,13 +2243,31 @@ fn extract_httpx(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
     json_rows(parsed, warnings)
         .into_iter()
         .filter_map(|(pointer, value)| {
-            let object = value.as_object()?;
-            let target = string_any(object, &["url", "input", "host"])?;
-            let status = scalar_string(
-                object
-                    .get("status_code")
-                    .or_else(|| object.get("status-code"))?,
-            )?;
+            let Some(object) = value.as_object() else {
+                push_warning(
+                    warnings,
+                    format!("HTTPx record at {pointer} was not an object; retry with the supported pinned JSONL output"),
+                );
+                return None;
+            };
+            let Some(target) = string_any(object, &["url", "input", "host"]) else {
+                push_warning(
+                    warnings,
+                    format!("HTTPx record at {pointer} lacked its target; the raw record was retained, and the scan should be retried with the supported pinned JSONL output"),
+                );
+                return None;
+            };
+            let Some(status) = object
+                .get("status_code")
+                .or_else(|| object.get("status-code"))
+                .and_then(scalar_string)
+            else {
+                push_warning(
+                    warnings,
+                    format!("HTTPx record at {pointer} lacked its HTTP status; the raw record was retained, and the scan should be retried with the supported pinned JSONL output"),
+                );
+                return None;
+            };
             Some(record_with_derived_severity_and_confidence!(
                 pointer,
                 "http-service-observed".into(),
@@ -2192,9 +2294,22 @@ fn extract_nuclei(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<So
     json_rows(parsed, warnings)
         .into_iter()
         .filter_map(|(pointer, value)| {
-            let object = value.as_object()?;
-            let rule_id =
-                exact_rule_string_any(object, &["template-id", "template_id", "templateID"])?;
+            let Some(object) = value.as_object() else {
+                push_warning(
+                    warnings,
+                    format!("Nuclei record at {pointer} was not an object; retry with the supported pinned JSONL output"),
+                );
+                return None;
+            };
+            let Some(rule_id) =
+                exact_rule_string_any(object, &["template-id", "template_id", "templateID"])
+            else {
+                push_warning(
+                    warnings,
+                    format!("Nuclei record at {pointer} lacked its template id; the raw record was retained, and the scan should be retried with the supported pinned JSONL output"),
+                );
+                return None;
+            };
             let title = nested_string(value, &["info", "name"])
                 .unwrap_or_else(|| format!("Nuclei template {rule_id}"));
             let severity = nested_string(value, &["info", "severity"])
@@ -2209,17 +2324,23 @@ fn extract_nuclei(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<So
             if let Some(matcher) = string_any(object, &["matcher-name", "matcher_name"]) {
                 tags.push(format!("matcher:{}", safe_tag(&matcher)));
             }
-            Some(record_with_derived_confidence!(
-                pointer,
-                rule_id,
-                title,
-                severity,
-                redact_location(&target),
-                string_any(object, &["asset_id"]),
-                derived_confidence(ConfidenceBasisCode::TemplateMatcher),
-                EvidenceKind::ExternalValidation,
-                references_from(value),
-                tags,
+            Some(with_scanner_details(
+                record_with_derived_confidence!(
+                    pointer,
+                    rule_id,
+                    title,
+                    severity,
+                    redact_location(&target),
+                    string_any(object, &["asset_id"]),
+                    derived_confidence(ConfidenceBasisCode::TemplateMatcher),
+                    EvidenceKind::ExternalValidation,
+                    references_from(value),
+                    tags,
+                ),
+                nested_string(value, &["info", "description"]),
+                nested_string(value, &["info", "remediation"]),
+                None,
+                None,
             ))
         })
         .collect()
@@ -2302,22 +2423,32 @@ fn extract_greenbone(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
             tags.push(format!("quality-of-detection:{qod}"));
         }
 
-        records.push(record_with_confidence_fallback!(
-            result.pointer.clone(),
-            rule_id.clone(),
-            result
-                .nvt_name
-                .clone()
-                .or_else(|| result.result_name.clone())
-                .unwrap_or_else(|| format!("Greenbone NVT {rule_id}")),
-            source_severity,
-            location,
-            result.asset_id.clone(),
-            source_confidence,
-            derived_confidence(ConfidenceBasisCode::MissingDetectionQualityScore),
-            EvidenceKind::ExternalValidation,
-            references,
-            tags,
+        records.push(with_scanner_details(
+            record_with_confidence_fallback!(
+                result.pointer.clone(),
+                rule_id.clone(),
+                result
+                    .nvt_name
+                    .clone()
+                    .or_else(|| result.result_name.clone())
+                    .unwrap_or_else(|| format!("Greenbone NVT {rule_id}")),
+                source_severity,
+                location,
+                result.asset_id.clone(),
+                source_confidence,
+                derived_confidence(ConfidenceBasisCode::MissingDetectionQualityScore),
+                EvidenceKind::ExternalValidation,
+                references,
+                tags,
+            ),
+            // Only these two result-level fields are copied from the product
+            // launcher, which writes them from the pinned feed metadata.
+            // `<description>` is the target-observed result message and must
+            // remain only in the raw artifact.
+            result.summary.clone(),
+            result.solution.clone(),
+            None,
+            None,
         ));
     }
     records
@@ -2340,38 +2471,66 @@ fn extract_semgrep(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
             let object = value.as_object()?;
             let rule_id = exact_rule_string_any(object, &["check_id"])?;
             let path = string_any(object, &["path"]).unwrap_or_else(|| "source-file".into());
-            let line = nested_string(value, &["start", "line"]);
+            let line = value.pointer("/start/line").and_then(positive_u32_scalar);
+            let column = value.pointer("/start/col").and_then(positive_u32_scalar);
+            let location = source_coordinate_location(&path, line, column, None);
             let pointer = format!("/results/{index}");
-            Some(record_with_confidence_fallback!(
-                pointer,
-                rule_id.clone(),
-                // Semgrep writes the human-readable explanation here and it is
-                // the only sentence a reader can act on; the rule id alone says
-                // nothing. Falls back to the id when a rule ships no message.
-                nested_string(value, &["extra", "message"])
-                    .map(|message| safe_text(&message, MAX_SHORT_TEXT))
-                    .filter(|message| !message.is_empty())
-                    .unwrap_or_else(|| format!("Semgrep rule {rule_id}")),
-                nested_string(value, &["extra", "severity"]).unwrap_or_else(|| "unknown".into()),
-                path,
-                string_any(object, &["asset_id"]),
-                nested_string(value, &["extra", "metadata", "confidence"]).unwrap_or_default(),
-                derived_confidence(ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch),
-                EvidenceKind::SourceCode,
-                references_from(value),
-                line.map(|line| vec![format!("source-line:{}", safe_tag(&line))])
-                    .unwrap_or_default(),
+            Some(with_scanner_details(
+                record_with_confidence_fallback!(
+                    pointer,
+                    rule_id.clone(),
+                    // Semgrep writes the human-readable explanation here and it is
+                    // the only sentence a reader can act on; the rule id alone says
+                    // nothing. Falls back to the id when a rule ships no message.
+                    nested_string(value, &["extra", "message"])
+                        .map(|message| safe_text(&message, MAX_SHORT_TEXT))
+                        .filter(|message| !message.is_empty())
+                        .unwrap_or_else(|| format!("Semgrep rule {rule_id}")),
+                    nested_string(value, &["extra", "severity"])
+                        .unwrap_or_else(|| "unknown".into()),
+                    location,
+                    string_any(object, &["asset_id"]),
+                    nested_string(value, &["extra", "metadata", "confidence"]).unwrap_or_default(),
+                    derived_confidence(ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch),
+                    EvidenceKind::SourceCode,
+                    references_from(value),
+                    line.map(|line| vec![format!("source-line:{line}")])
+                        .unwrap_or_default(),
+                ),
+                nested_string(value, &["extra", "metadata", "description"]),
+                nested_string(value, &["extra", "fix"]),
+                None,
+                None,
             ))
         })
         .collect()
 }
 
 fn extract_gitleaks(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
+    if !matches!(parsed, ParsedArtifact::Json(Value::Array(_))) {
+        push_warning(
+            warnings,
+            "Gitleaks output was not its supported JSON finding array; the raw artifact was retained, and the scan should be retried with the pinned JSON reporter",
+        );
+        return Vec::new();
+    }
     json_rows(parsed, warnings)
         .into_iter()
         .filter_map(|(pointer, value)| {
-            let object = value.as_object()?;
-            let rule_id = exact_rule_string_any(object, &["RuleID", "rule_id"])?;
+            let Some(object) = value.as_object() else {
+                push_warning(
+                    warnings,
+                    format!("Gitleaks finding at {pointer} was not an object; the raw record was retained"),
+                );
+                return None;
+            };
+            let Some(rule_id) = exact_rule_string_any(object, &["RuleID", "rule_id"]) else {
+                push_warning(
+                    warnings,
+                    format!("Gitleaks finding at {pointer} lacked its RuleID; the raw record was retained, and the scan should be retried with the pinned JSON reporter"),
+                );
+                return None;
+            };
             let location = gitleaks_location(object);
             Some(record_with_derived_severity_and_confidence!(
                 pointer,
@@ -2424,15 +2583,44 @@ fn gitleaks_location(object: &Map<String, Value>) -> String {
 }
 
 fn positive_u32_any(object: &Map<String, Value>, keys: &[&str]) -> Option<u32> {
-    keys.iter().find_map(|key| {
-        let value = object.get(*key)?;
-        let parsed = match value {
-            Value::Number(number) => number.as_u64()?,
-            Value::String(value) => value.parse::<u64>().ok()?,
-            _ => return None,
-        };
-        u32::try_from(parsed).ok().filter(|value| *value > 0)
-    })
+    keys.iter()
+        .find_map(|key| object.get(*key).and_then(positive_u32_scalar))
+}
+
+fn positive_u32_scalar(value: &Value) -> Option<u32> {
+    let parsed = match value {
+        Value::Number(number) => number.as_u64()?,
+        Value::String(value) => value.parse::<u64>().ok()?,
+        _ => return None,
+    };
+    u32::try_from(parsed).ok().filter(|value| *value > 0)
+}
+
+/// Build a stable, secret-free source coordinate from fields the scanner
+/// explicitly reports. The fingerprint includes this location, so omitting a
+/// line or resource silently merges distinct observations from the same rule
+/// and file into one finding.
+fn source_coordinate_location(
+    path: &str,
+    line: Option<u32>,
+    column: Option<u32>,
+    resource: Option<&str>,
+) -> String {
+    let mut location = safe_text(&redact_location(path), 360);
+    if let Some(line) = line {
+        location.push_str(&format!(":line={line}"));
+    }
+    if let Some(column) = column {
+        location.push_str(&format!(":column={column}"));
+    }
+    if let Some(resource) = resource
+        .map(|resource| safe_text(resource, 120))
+        .filter(|resource| !resource.is_empty())
+    {
+        location.push_str(":resource=");
+        location.push_str(&resource);
+    }
+    safe_text(&location, MAX_SHORT_TEXT)
 }
 
 fn normalized_git_object_id(value: &str) -> Option<String> {
@@ -2449,11 +2637,35 @@ fn extract_trufflehog(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
     json_rows(parsed, warnings)
         .into_iter()
         .filter_map(|(pointer, value)| {
-            let object = value.as_object()?;
-            let detector = exact_rule_string_any(object, &["DetectorName", "DetectorType"])?;
-            let source = nested_string(value, &["SourceMetadata", "Data", "Filesystem", "file"])
-                .or_else(|| nested_string(value, &["SourceMetadata", "Data", "Git", "file"]))
+            let Some(object) = value.as_object() else {
+                push_warning(
+                    warnings,
+                    format!("TruffleHog record at {pointer} was not an object; retry with the supported pinned JSONL output"),
+                );
+                return None;
+            };
+            let Some(detector) = exact_rule_string_any(object, &["DetectorName", "DetectorType"])
+            else {
+                push_warning(
+                    warnings,
+                    format!("TruffleHog record at {pointer} lacked its detector identity; the raw record was retained, and the scan should be retried with the supported pinned JSONL output"),
+                );
+                return None;
+            };
+            let filesystem = value.pointer("/SourceMetadata/Data/Filesystem");
+            let git = value.pointer("/SourceMetadata/Data/Git");
+            let source = filesystem
+                .and_then(|metadata| nested_string(metadata, &["file"]))
+                .or_else(|| git.and_then(|metadata| nested_string(metadata, &["file"])))
                 .unwrap_or_else(|| "repository".into());
+            let line = filesystem
+                .and_then(|metadata| metadata.get("line"))
+                .and_then(positive_u32_scalar)
+                .or_else(|| {
+                    git.and_then(|metadata| metadata.get("line"))
+                        .and_then(positive_u32_scalar)
+                });
+            let location = source_coordinate_location(&source, line, None, None);
             Some(record_with_derived_severity_and_confidence!(
                 pointer,
                 format!("trufflehog:{detector}"),
@@ -2468,7 +2680,7 @@ fn extract_trufflehog(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                     severity: Severity::High,
                     code: SeverityBasisCode::UnverifiedCredentialDetector,
                 },
-                source,
+                location,
                 string_any(object, &["asset_id"]),
                 derived_confidence(ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch),
                 EvidenceKind::SourceCode,
@@ -2610,32 +2822,45 @@ fn extract_checkov_framework(
             );
             continue;
         };
-        records.push(record_with_severity_fallback_and_derived_confidence!(
-            pointer,
-            rule_id.clone(),
-            string_any(check, &["check_name"])
-                .unwrap_or_else(|| format!("Checkov check {rule_id}")),
-            // `Record.severity` is whatever the check object carried, and
-            // `BaseCheck` hardcodes `None`. The values that fill it come
-            // from downloaded platform metadata, which `--skip-download`
-            // switches off entirely. Of the 256 shipped graph-check YAMLs
-            // exactly one declares a severity locally, so this is populated
-            // for CKV2_AWS_34 and null for every other check.
-            string_any(check, &["severity"]).unwrap_or_default(),
-            // Rating the rest flat is the most that can be justified: the
-            // pack gives no per-check weight offline, and the alternative
-            // sinks a whole engine's output below Low as unknown.
-            DerivedSeverity {
-                severity: Severity::Medium,
-                code: SeverityBasisCode::IacPolicyCheck,
-            },
-            string_any(check, &["file_path", "repo_file_path"])
-                .unwrap_or_else(|| "iac-resource".into()),
-            string_any(check, &["asset_id"]),
-            derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
-            EvidenceKind::Configuration,
-            references_from(value),
-            vec![],
+        let path = string_any(check, &["file_path", "repo_file_path"])
+            .unwrap_or_else(|| "iac-resource".into());
+        let line = check
+            .get("file_line_range")
+            .and_then(Value::as_array)
+            .and_then(|range| range.first())
+            .and_then(positive_u32_scalar);
+        let resource = string_any(check, &["resource", "resource_address"]);
+        records.push(with_scanner_details(
+            record_with_severity_fallback_and_derived_confidence!(
+                pointer,
+                rule_id.clone(),
+                string_any(check, &["check_name"])
+                    .unwrap_or_else(|| format!("Checkov check {rule_id}")),
+                // `Record.severity` is whatever the check object carried, and
+                // `BaseCheck` hardcodes `None`. The values that fill it come
+                // from downloaded platform metadata, which `--skip-download`
+                // switches off entirely. Of the 256 shipped graph-check YAMLs
+                // exactly one declares a severity locally, so this is populated
+                // for CKV2_AWS_34 and null for every other check.
+                string_any(check, &["severity"]).unwrap_or_default(),
+                // Rating the rest flat is the most that can be justified: the
+                // pack gives no per-check weight offline, and the alternative
+                // sinks a whole engine's output below Low as unknown.
+                DerivedSeverity {
+                    severity: Severity::Medium,
+                    code: SeverityBasisCode::IacPolicyCheck,
+                },
+                source_coordinate_location(&path, line, None, resource.as_deref()),
+                string_any(check, &["asset_id"]),
+                derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
+                EvidenceKind::Configuration,
+                references_from(value),
+                vec![],
+            ),
+            string_any(check, &["description", "short_description"]),
+            None,
+            None,
+            None,
         ));
     }
 }
@@ -2666,17 +2891,43 @@ fn extract_kics(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sour
             let Some(file_object) = file.as_object() else {
                 continue;
             };
-            records.push(record_with_derived_confidence!(
-                format!("/queries/{query_index}/files/{file_index}"),
-                rule_id.clone(),
-                title.clone(),
-                severity.clone(),
-                string_any(file_object, &["file_name"]).unwrap_or_else(|| "iac-resource".into()),
-                string_any(file_object, &["asset_id"]),
-                derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
-                EvidenceKind::Configuration,
-                references_from(query),
-                vec![],
+            let path =
+                string_any(file_object, &["file_name"]).unwrap_or_else(|| "iac-resource".into());
+            let line = positive_u32_any(file_object, &["line", "search_line"]);
+            let resource = [
+                string_any(file_object, &["resource_name"])
+                    .filter(|value| !value.is_empty())
+                    .map(|value| format!("resource:{value}")),
+                string_any(file_object, &["similarity_id", "old_similarity_id"])
+                    .filter(|value| !value.is_empty())
+                    .map(|value| format!("similarity:{value}")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(",");
+            records.push(with_scanner_details(
+                record_with_derived_confidence!(
+                    format!("/queries/{query_index}/files/{file_index}"),
+                    rule_id.clone(),
+                    title.clone(),
+                    severity.clone(),
+                    source_coordinate_location(
+                        &path,
+                        line,
+                        None,
+                        (!resource.is_empty()).then_some(resource.as_str()),
+                    ),
+                    string_any(file_object, &["asset_id"]),
+                    derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
+                    EvidenceKind::Configuration,
+                    references_from(query),
+                    vec![],
+                ),
+                string_any(query_object, &["description"]),
+                None,
+                None,
+                None,
             ));
             if records.len() >= MAX_RECORDS {
                 return records;
@@ -2696,6 +2947,10 @@ fn extract_trivy(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
         .or_else(|| root.get("results"))
         .and_then(Value::as_array)
     else {
+        push_warning(
+            warnings,
+            "Trivy output lacked its Results array; the raw artifact was retained, and the scan should be retried with the pinned JSON reporter",
+        );
         return Vec::new();
     };
     let mut records = Vec::new();
@@ -2729,11 +2984,23 @@ fn extract_trivy(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
             };
             for (item_index, item) in items.iter().enumerate() {
                 let Some(object) = item.as_object() else {
+                    push_warning(
+                        warnings,
+                        format!(
+                            "Trivy {prefix} at /Results/{result_index}/{field}/{item_index} was not an object and remains only as raw evidence"
+                        ),
+                    );
                     continue;
                 };
                 let Some(rule_id) =
                     exact_rule_string_any(object, &["VulnerabilityID", "ID", "RuleID"])
                 else {
+                    push_warning(
+                        warnings,
+                        format!(
+                            "Trivy {prefix} at /Results/{result_index}/{field}/{item_index} lacked its native rule id; the raw record was retained, and the scan should be retried with the pinned JSON reporter"
+                        ),
+                    );
                     continue;
                 };
                 let title = string_any(object, &["Title", "Message"])
@@ -2745,17 +3012,69 @@ fn extract_trivy(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                 if field == "Secrets" {
                     tags.push("secret-value:redacted".into());
                 }
-                records.push(record_with_derived_confidence!(
-                    format!("/Results/{result_index}/{field}/{item_index}"),
-                    rule_id,
-                    title,
-                    string_any(object, &["Severity"]).unwrap_or_else(|| "unknown".into()),
-                    target.clone(),
-                    string_any(object, &["asset_id"]),
-                    derived_confidence(confidence_basis),
-                    kind.clone(),
-                    references_from(item),
-                    tags,
+                let (location, asset_hint) = match field {
+                    "Vulnerabilities" => {
+                        let package =
+                            string_any(object, &["PkgName"]).unwrap_or_else(|| "package".into());
+                        let installed = string_any(object, &["InstalledVersion"])
+                            .unwrap_or_else(|| "unknown-version".into());
+                        let package_path = string_any(object, &["PkgPath", "PkgID"]);
+                        let resource = package_path
+                            .map(|path| format!("{package}@{installed}:{path}"))
+                            .unwrap_or_else(|| format!("{package}@{installed}"));
+                        (
+                            source_coordinate_location(&target, None, None, Some(&resource)),
+                            string_any(object, &["asset_id"]),
+                        )
+                    }
+                    "Secrets" => {
+                        let offset = positive_u32_any(object, &["Offset"])
+                            .map(|offset| format!("offset:{offset}"));
+                        (
+                            source_coordinate_location(
+                                &target,
+                                positive_u32_any(object, &["StartLine"]),
+                                None,
+                                offset.as_deref(),
+                            ),
+                            string_any(object, &["asset_id"]),
+                        )
+                    }
+                    "Misconfigurations" => (
+                        source_coordinate_location(
+                            &target,
+                            object
+                                .get("CauseMetadata")
+                                .and_then(Value::as_object)
+                                .and_then(|cause| positive_u32_any(cause, &["StartLine"])),
+                            None,
+                            object
+                                .get("CauseMetadata")
+                                .and_then(Value::as_object)
+                                .and_then(|cause| string_any(cause, &["Resource"]))
+                                .as_deref(),
+                        ),
+                        string_any(object, &["asset_id"]),
+                    ),
+                    _ => unreachable!("closed Trivy result kinds"),
+                };
+                records.push(with_scanner_details(
+                    record_with_derived_confidence!(
+                        format!("/Results/{result_index}/{field}/{item_index}"),
+                        rule_id,
+                        title,
+                        string_any(object, &["Severity"]).unwrap_or_else(|| "unknown".into()),
+                        location,
+                        asset_hint,
+                        derived_confidence(confidence_basis),
+                        kind.clone(),
+                        references_from(item),
+                        tags,
+                    ),
+                    string_any(object, &["Description"]),
+                    None,
+                    string_any(object, &["InstalledVersion"]),
+                    string_any(object, &["FixedVersion"]),
                 ));
                 if records.len() >= MAX_RECORDS {
                     return records;
@@ -2772,6 +3091,10 @@ fn extract_grype(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
         return Vec::new();
     };
     let Some(matches) = root.get("matches").and_then(Value::as_array) else {
+        push_warning(
+            warnings,
+            "Grype output lacked its matches array; the raw artifact was retained, and the scan should be retried with the pinned JSON reporter",
+        );
         return Vec::new();
     };
     matches
@@ -2784,20 +3107,26 @@ fn extract_grype(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                 nested_string(value, &["artifact", "name"]).unwrap_or_else(|| "package".into());
             let location = nested_string(value, &["artifact", "locations", "0", "path"])
                 .unwrap_or_else(|| package.clone());
-            Some(record_with_derived_confidence!(
-                format!("/matches/{index}"),
-                rule_id.clone(),
-                format!("Vulnerable package {package} ({rule_id})"),
-                nested_string(value, &["vulnerability", "severity"])
-                    .unwrap_or_else(|| "unknown".into()),
-                location,
-                value
-                    .as_object()
-                    .and_then(|object| string_any(object, &["asset_id"])),
-                derived_confidence(ConfidenceBasisCode::AdvisoryVersionMatch),
-                EvidenceKind::PackageInventory,
-                references_from(value),
-                vec![format!("package:{}", safe_tag(&package))],
+            Some(with_scanner_details(
+                record_with_derived_confidence!(
+                    format!("/matches/{index}"),
+                    rule_id.clone(),
+                    format!("Vulnerable package {package} ({rule_id})"),
+                    nested_string(value, &["vulnerability", "severity"])
+                        .unwrap_or_else(|| "unknown".into()),
+                    location,
+                    value
+                        .as_object()
+                        .and_then(|object| string_any(object, &["asset_id"])),
+                    derived_confidence(ConfidenceBasisCode::AdvisoryVersionMatch),
+                    EvidenceKind::PackageInventory,
+                    references_from(value),
+                    vec![format!("package:{}", safe_tag(&package))],
+                ),
+                nested_string(value, &["vulnerability", "description"]),
+                None,
+                nested_string(value, &["artifact", "version"]),
+                bounded_string_list(value.pointer("/vulnerability/fix/versions"), 16),
             ))
         })
         .collect()
@@ -2953,6 +3282,10 @@ fn extract_kube_bench(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
         .or_else(|| root.get("controls"))
         .and_then(Value::as_array);
     let Some(controls) = controls else {
+        push_warning(
+            warnings,
+            "kube-bench output lacked its Controls array; the raw artifact was retained, and the scan should be retried with the pinned JSON reporter",
+        );
         return Vec::new();
     };
     let mut records = Vec::new();
@@ -2979,27 +3312,35 @@ fn extract_kube_bench(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                 let Some(rule_id) = exact_rule_string_any(object, &["test_number", "id"]) else {
                     continue;
                 };
-                records.push(record_with_derived_severity_and_confidence!(
-                    format!("/Controls/{control_index}/tests/{test_index}/results/{result_index}"),
-                    rule_id.clone(),
-                    string_any(object, &["test_desc", "desc"])
-                        .unwrap_or_else(|| format!("kube-bench control {rule_id}")),
-                    // kube-bench's `Check` struct carries no severity field, so
-                    // there is nothing to read here and every finding would
-                    // otherwise sort below Low as Unknown. Upstream's own ASFF
-                    // exporter reaches the same conclusion and labels every
-                    // failed check High for exactly this reason.
-                    DerivedSeverity {
-                        severity: Severity::High,
-                        code: SeverityBasisCode::CisKubernetesBenchmark,
-                    },
-                    string_any(object, &["resource", "node_type"])
-                        .unwrap_or_else(|| "kubernetes-cluster".into()),
-                    string_any(object, &["asset_id"]),
-                    derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
-                    EvidenceKind::Configuration,
-                    references_from(value),
-                    vec![],
+                records.push(with_scanner_details(
+                    record_with_derived_severity_and_confidence!(
+                        format!(
+                            "/Controls/{control_index}/tests/{test_index}/results/{result_index}"
+                        ),
+                        rule_id.clone(),
+                        string_any(object, &["test_desc", "desc"])
+                            .unwrap_or_else(|| format!("kube-bench control {rule_id}")),
+                        // kube-bench's `Check` struct carries no severity field, so
+                        // there is nothing to read here and every finding would
+                        // otherwise sort below Low as Unknown. Upstream's own ASFF
+                        // exporter reaches the same conclusion and labels every
+                        // failed check High for exactly this reason.
+                        DerivedSeverity {
+                            severity: Severity::High,
+                            code: SeverityBasisCode::CisKubernetesBenchmark,
+                        },
+                        string_any(object, &["resource", "node_type"])
+                            .unwrap_or_else(|| "kubernetes-cluster".into()),
+                        string_any(object, &["asset_id"]),
+                        derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
+                        EvidenceKind::Configuration,
+                        references_from(value),
+                        vec![],
+                    ),
+                    None,
+                    string_any(object, &["remediation"]),
+                    None,
+                    None,
                 ));
                 if records.len() >= MAX_RECORDS {
                     return records;
@@ -3096,6 +3437,7 @@ fn merge_finding(
         engine_run_id: Some(input.engine_run_id.to_owned()),
         kind: record.evidence_kind,
         engine_id: adapter.id.to_owned(),
+        scanner_details: record.scanner_details.clone(),
         source_rule: record.mapping_source_rule.clone(),
         result_pointer_sha256: Some(result_pointer_sha256),
         observed_at: artifact.created_at,
@@ -3386,6 +3728,7 @@ fn record_from_draft(draft: RecordDraft) -> SourceRecord {
         source_confidence,
         confidence_basis,
         evidence_kind: draft.evidence_kind,
+        scanner_details: None,
         references: draft.references,
         tags: draft.tags,
     }
@@ -4029,6 +4372,47 @@ mod tests {
             priority_for(&Severity::Unknown) > priority_for(&Severity::Informational),
             "unknown impact must not be buried as a known informational observation"
         );
+    }
+
+    #[test]
+    fn scanner_details_are_bounded_and_control_clean() {
+        let record = record_from_draft(draft_with_rule("example-rule"));
+        let details = with_scanner_details(
+            record,
+            Some(format!(
+                "description\0with\ncontrols{}",
+                "x".repeat(MAX_LONG_TEXT * 2)
+            )),
+            Some("  review\tupstream guidance  ".into()),
+            Some("1.0\r\n".into()),
+            Some("1.1\u{7f}".into()),
+        )
+        .scanner_details
+        .expect("non-empty scanner details");
+
+        for value in [
+            details.description.as_deref(),
+            details.remediation.as_deref(),
+            details.installed_version.as_deref(),
+            details.fixed_version.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            assert!(!value.chars().any(char::is_control), "{value:?}");
+        }
+        assert!(
+            details
+                .description
+                .as_deref()
+                .is_some_and(|value| value.chars().count() <= MAX_LONG_TEXT)
+        );
+        assert_eq!(
+            details.remediation.as_deref(),
+            Some("review upstream guidance")
+        );
+        assert_eq!(details.installed_version.as_deref(), Some("1.0"));
+        assert_eq!(details.fixed_version.as_deref(), Some("1.1"));
     }
 
     #[test]

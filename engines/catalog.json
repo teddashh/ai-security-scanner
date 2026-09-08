@@ -2008,7 +2008,6 @@
       "--output-file-path",
       "/output/checkov.json,",
       "--skip-download",
-      "--compact",
       "--quiet",
       "--soft-fail"
     ],

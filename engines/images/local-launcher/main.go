@@ -355,7 +355,7 @@ func planInvocation(engineID string, inputProfile string) (invocation, error) {
 			"run", "--benchmark", "ai-security-scanner-snapshot", "--targets", "node",
 			"--config-dir", "/opt/ai-security-scanner/kube-bench/cfg",
 			"--config", "/opt/ai-security-scanner/kube-bench/cfg/config.yaml",
-			"--json", "--outputfile", result.outputPath, "--noremediations",
+			"--json", "--outputfile", result.outputPath,
 			"--exit-code", "0",
 		}
 	default:

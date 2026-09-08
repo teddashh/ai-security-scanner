@@ -1230,6 +1230,32 @@ pub enum EvidenceKind {
     RawToolOutput,
 }
 
+/// Bounded fields reported by the scanner for one exact result.
+///
+/// These strings are retained as untrusted evidence. They are not product
+/// instructions and must never be executed automatically. Keeping them
+/// separate from [`Finding::recommendation`] preserves upstream meaning while
+/// leaving the product-owned next action safe and beginner-readable.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScannerFindingDetails {
+    /// Scanner- or rule-provided explanation, excluding raw secret values and
+    /// target response bodies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Scanner- or rule-provided remediation text. A reader must review and
+    /// approve it before making any change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<String>,
+    /// Version the scanner identified on the affected component, when the
+    /// scanner exposes one as a distinct field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_version: Option<String>,
+    /// Fixed version or bounded list of fixed versions reported by the
+    /// scanner, without product-side version inference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_version: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Evidence {
     pub id: Id,
@@ -1241,6 +1267,12 @@ pub struct Evidence {
     pub engine_run_id: Option<Id>,
     pub kind: EvidenceKind,
     pub engine_id: String,
+    /// Structured scanner text for this exact evidence record. It remains
+    /// untrusted data even when it originated in an embedded upstream rule
+    /// pack; interfaces label it as scanner-provided detail rather than a
+    /// product recommendation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scanner_details: Option<ScannerFindingDetails>,
     /// Exact normalized scanner rule that produced this evidence. New adapter
     /// records bind this value into the evidence ID. `None` identifies legacy
     /// evidence and can never support a verified-current catalog claim.

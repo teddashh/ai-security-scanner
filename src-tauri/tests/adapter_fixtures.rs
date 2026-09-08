@@ -2093,6 +2093,326 @@ fn gitleaks_keeps_same_rule_findings_at_distinct_source_coordinates_without_secr
 }
 
 #[test]
+fn source_coordinates_prevent_distinct_upstream_results_from_being_silently_merged() {
+    let cases = [
+        (
+            "semgrep",
+            "semgrep-multiple.json",
+            "application/json",
+            br#"{
+              "results": [
+                {
+                  "check_id": "python.lang.security.audit.exec-used.exec-used",
+                  "path": "src/worker.py",
+                  "start": {"line": 12, "col": 3},
+                  "extra": {"message": "exec() used", "severity": "ERROR"},
+                  "asset_id": "asset-1"
+                },
+                {
+                  "check_id": "python.lang.security.audit.exec-used.exec-used",
+                  "path": "src/worker.py",
+                  "start": {"line": 29, "col": 7},
+                  "extra": {"message": "exec() used", "severity": "ERROR"},
+                  "asset_id": "asset-1"
+                }
+              ]
+            }"#
+            .as_slice(),
+            ["src/worker.py:line=12:column=3", "src/worker.py:line=29:column=7"],
+        ),
+        (
+            "checkov",
+            "checkov-multiple.json",
+            "application/json",
+            br#"{
+              "results": {
+                "failed_checks": [
+                  {
+                    "check_id": "CKV_AWS_18",
+                    "check_name": "Ensure access logging is enabled",
+                    "file_path": "/infra/storage.tf",
+                    "file_line_range": [4, 10],
+                    "resource": "aws_s3_bucket.logs",
+                    "severity": null,
+                    "asset_id": "asset-1"
+                  },
+                  {
+                    "check_id": "CKV_AWS_18",
+                    "check_name": "Ensure access logging is enabled",
+                    "file_path": "/infra/storage.tf",
+                    "file_line_range": [18, 24],
+                    "resource": "aws_s3_bucket.archive",
+                    "severity": null,
+                    "asset_id": "asset-1"
+                  }
+                ]
+              }
+            }"#
+            .as_slice(),
+            [
+                "/infra/storage.tf:line=4:resource=aws_s3_bucket.logs",
+                "/infra/storage.tf:line=18:resource=aws_s3_bucket.archive",
+            ],
+        ),
+        (
+            "trufflehog",
+            "trufflehog-multiple.jsonl",
+            "application/x-ndjson",
+            br#"{"SourceMetadata":{"Data":{"Filesystem":{"file":"/workspace/config/.env","line":6}}},"DetectorType":17,"DetectorName":"AWS","Verified":false,"Raw":"FIRST_SECRET_SENTINEL_MUST_NEVER_LEAK","asset_id":"asset-1"}
+{"SourceMetadata":{"Data":{"Filesystem":{"file":"/workspace/config/.env","line":21}}},"DetectorType":17,"DetectorName":"AWS","Verified":false,"Raw":"SECOND_SECRET_SENTINEL_MUST_NEVER_LEAK","asset_id":"asset-1"}
+"#
+            .as_slice(),
+            ["config/.env:line=6", "config/.env:line=21"],
+        ),
+    ];
+
+    for (engine_id, filename, media_type, bytes, expected_locations) in cases {
+        let output = normalize_bytes(engine_id, bytes, filename, media_type, "run-coordinates");
+        assert!(
+            output.complete,
+            "{engine_id} unexpectedly incomplete: {:?}",
+            output.warnings
+        );
+        assert_eq!(
+            output.findings.len(),
+            2,
+            "{engine_id} merged two distinct upstream observations"
+        );
+        assert_eq!(
+            output
+                .findings
+                .iter()
+                .map(|finding| finding.fingerprint.as_str())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            2,
+            "{engine_id} produced colliding fingerprints for distinct coordinates"
+        );
+        let serialized = serde_json::to_string(&output.findings).expect("serialize findings");
+        for expected in expected_locations {
+            assert!(
+                serialized.contains(expected),
+                "{engine_id} did not preserve source coordinate {expected}: {serialized}"
+            );
+        }
+        assert!(!serialized.contains("SECRET_SENTINEL_MUST_NEVER_LEAK"));
+    }
+}
+
+#[test]
+fn kics_and_trivy_keep_distinct_upstream_resources_and_secret_coordinates() {
+    let kics = br#"{
+      "queries": [{
+        "query_id": "query-1",
+        "query_name": "Encryption required",
+        "severity": "HIGH",
+        "files": [
+          {
+            "file_name": "infra/storage.tf",
+            "line": 4,
+            "resource_name": "aws_s3_bucket.logs",
+            "similarity_id": "similarity-logs",
+            "asset_id": "asset-1"
+          },
+          {
+            "file_name": "infra/storage.tf",
+            "line": 18,
+            "resource_name": "aws_s3_bucket.archive",
+            "similarity_id": "similarity-archive",
+            "asset_id": "asset-1"
+          }
+        ]
+      }]
+    }"#;
+    let kics = normalize_bytes(
+        "kics",
+        kics,
+        "kics-multiple.json",
+        "application/json",
+        "run-kics-coordinates",
+    );
+    assert!(kics.complete, "unexpected warnings: {:?}", kics.warnings);
+    assert_eq!(kics.findings.len(), 2);
+    let kics_serialized = serde_json::to_string(&kics.findings).expect("serialize KICS findings");
+    for coordinate in [
+        "infra/storage.tf:line=4:resource=resource:aws_s3_bucket.logs,similarity:similarity-logs",
+        "infra/storage.tf:line=18:resource=resource:aws_s3_bucket.archive,similarity:similarity-archive",
+    ] {
+        assert!(kics_serialized.contains(coordinate), "{kics_serialized}");
+    }
+
+    let trivy = br#"{
+      "SchemaVersion": 2,
+      "Results": [{
+        "Target": "example:latest",
+        "Vulnerabilities": [
+          {
+            "VulnerabilityID": "CVE-2026-0001",
+            "PkgName": "libalpha",
+            "InstalledVersion": "1.0",
+            "Severity": "HIGH"
+          },
+          {
+            "VulnerabilityID": "CVE-2026-0001",
+            "PkgName": "libbeta",
+            "InstalledVersion": "2.0",
+            "Severity": "HIGH"
+          }
+        ],
+        "Secrets": [
+          {
+            "RuleID": "generic-api-key",
+            "Title": "API key",
+            "Severity": "HIGH",
+            "StartLine": 7,
+            "Offset": 101,
+            "Match": "FIRST_SECRET_SENTINEL_MUST_NEVER_LEAK"
+          },
+          {
+            "RuleID": "generic-api-key",
+            "Title": "API key",
+            "Severity": "HIGH",
+            "StartLine": 31,
+            "Offset": 202,
+            "Match": "SECOND_SECRET_SENTINEL_MUST_NEVER_LEAK"
+          }
+        ],
+        "asset_id": "asset-1"
+      }]
+    }"#;
+    let trivy = normalize_bytes(
+        "trivy",
+        trivy,
+        "trivy-multiple.json",
+        "application/json",
+        "run-trivy-coordinates",
+    );
+    assert!(trivy.complete, "unexpected warnings: {:?}", trivy.warnings);
+    assert_eq!(
+        trivy.findings.len(),
+        4,
+        "Trivy merged distinct packages or secret locations"
+    );
+    let trivy_serialized =
+        serde_json::to_string(&trivy.findings).expect("serialize Trivy findings");
+    for coordinate in [
+        "example:latest:resource=libalpha@1.0",
+        "example:latest:resource=libbeta@2.0",
+        "example:latest:line=7:resource=offset:101",
+        "example:latest:line=31:resource=offset:202",
+    ] {
+        assert!(trivy_serialized.contains(coordinate), "{trivy_serialized}");
+    }
+    assert!(!trivy_serialized.contains("SECRET_SENTINEL_MUST_NEVER_LEAK"));
+}
+
+#[test]
+fn missing_primary_result_shapes_are_incomplete_but_known_empty_shapes_are_complete() {
+    let malformed = [
+        (
+            "httpx",
+            br#"{}"#.as_slice(),
+            "httpx.jsonl",
+            "application/x-ndjson",
+        ),
+        (
+            "nuclei",
+            br#"{"info":{"name":"missing template id"}}"#.as_slice(),
+            "nuclei.jsonl",
+            "application/x-ndjson",
+        ),
+        (
+            "gitleaks",
+            br#"{}"#.as_slice(),
+            "gitleaks.json",
+            "application/json",
+        ),
+        (
+            "trufflehog",
+            br#"{"SourceMetadata":{}}"#.as_slice(),
+            "trufflehog.jsonl",
+            "application/x-ndjson",
+        ),
+        (
+            "trivy",
+            br#"{}"#.as_slice(),
+            "trivy.json",
+            "application/json",
+        ),
+        (
+            "grype",
+            br#"{}"#.as_slice(),
+            "grype.json",
+            "application/json",
+        ),
+        (
+            "kube-bench",
+            br#"{}"#.as_slice(),
+            "kube-bench.json",
+            "application/json",
+        ),
+    ];
+    for (engine_id, bytes, filename, media_type) in malformed {
+        let output = normalize_bytes(engine_id, bytes, filename, media_type, "run-missing-shape");
+        assert!(
+            !output.complete,
+            "{engine_id} accepted a missing result shape"
+        );
+        assert!(output.findings.is_empty());
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|warning| { warning.contains("retry") || warning.contains("retried") }),
+            "{engine_id} warning was not actionable: {:?}",
+            output.warnings
+        );
+    }
+
+    let empty = [
+        (
+            "gitleaks",
+            br#"[]"#.as_slice(),
+            "gitleaks.json",
+            "application/json",
+        ),
+        (
+            "trivy",
+            br#"{"Results":[]}"#.as_slice(),
+            "trivy.json",
+            "application/json",
+        ),
+        (
+            "grype",
+            br#"{"matches":[]}"#.as_slice(),
+            "grype.json",
+            "application/json",
+        ),
+        (
+            "kube-bench",
+            br#"{"Controls":[]}"#.as_slice(),
+            "kube-bench.json",
+            "application/json",
+        ),
+    ];
+    for (engine_id, bytes, filename, media_type) in empty {
+        let output = normalize_bytes(
+            engine_id,
+            bytes,
+            filename,
+            media_type,
+            "run-known-empty-shape",
+        );
+        assert!(
+            output.complete,
+            "{engine_id} rejected its known empty shape: {:?}",
+            output.warnings
+        );
+        assert!(output.findings.is_empty());
+    }
+}
+
+#[test]
 fn greenbone_xml_is_bounded_evidence_preserving_and_ignores_instruction_fields() {
     let output = normalize_fixture("greenbone");
     assert_eq!(output.findings.len(), 1);
@@ -2108,9 +2428,120 @@ fn greenbone_xml_is_bounded_evidence_preserving_and_ignores_instruction_fields()
             .iter()
             .any(|reference| reference.ends_with("CVE-2025-0003"))
     );
+    let details = finding.evidence[0]
+        .scanner_details
+        .as_ref()
+        .expect("pinned-feed scanner details");
+    assert_eq!(
+        details.description.as_deref(),
+        Some(
+            "The pinned Greenbone feed identifies an outdated service with a known remote weakness."
+        )
+    );
+    assert_eq!(
+        details.remediation.as_deref(),
+        Some("Install the vendor security update for the affected service.")
+    );
     let serialized = serde_json::to_string(finding).expect("serialize Greenbone finding");
     assert!(!serialized.contains("SECRET_SENTINEL_MUST_NEVER_LEAK"));
-    assert!(!serialized.contains("target-controlled remediation command"));
+    assert!(serialized.contains("pinned Greenbone feed identifies an outdated service"));
+    assert!(serialized.contains("Install the vendor security update"));
+}
+
+#[test]
+fn upstream_rule_details_are_retained_as_evidence_without_replacing_product_recommendations() {
+    let details = |engine_id: &str| {
+        normalize_fixture(engine_id)
+            .findings
+            .into_iter()
+            .flat_map(|finding| finding.evidence)
+            .filter_map(|evidence| evidence.scanner_details)
+            .collect::<Vec<_>>()
+    };
+
+    let prowler = normalize_fixture("prowler");
+    assert!(prowler.findings.iter().any(|finding| {
+        finding.evidence.iter().any(|evidence| {
+            evidence.scanner_details.as_ref().is_some_and(|details| {
+                details.remediation.as_deref()
+                    == Some("Replace the wildcard action and resource with the specific permissions the role needs.")
+            })
+        }) && !finding.recommendation.contains("Replace the wildcard action")
+    }));
+
+    let scoutsuite = details("scoutsuite");
+    assert!(scoutsuite.iter().any(|details| {
+        details
+            .description
+            .as_deref()
+            .is_some_and(|text| text.contains("password policy did not require"))
+            && details
+                .remediation
+                .as_deref()
+                .is_some_and(|text| text.contains("require at least one uppercase letter"))
+    }));
+
+    let nuclei = normalize_fixture("nuclei");
+    assert!(nuclei.findings.iter().any(|finding| {
+        finding.evidence.iter().any(|evidence| {
+            evidence.scanner_details.as_ref().is_some_and(|details| {
+                details.description.as_deref()
+                    == Some("A phpMyAdmin administration panel was detected.")
+                    && details
+                        .remediation
+                        .as_deref()
+                        .is_some_and(|text| text.starts_with("Restrict access"))
+            })
+        }) && !finding.recommendation.contains("Restrict access")
+    }));
+
+    let semgrep = details("semgrep");
+    assert!(semgrep.iter().any(|details| {
+        details
+            .description
+            .as_deref()
+            .is_some_and(|text| text.contains("untrusted input executable"))
+            && details.remediation.as_deref()
+                == Some("Call the subprocess without a command shell.")
+    }));
+
+    let checkov = details("checkov");
+    assert!(checkov.iter().any(|details| {
+        details.description.as_deref()
+            == Some("The bucket rule requires access logging to be enabled.")
+    }));
+
+    let kics = details("kics");
+    assert!(kics.iter().any(|details| {
+        details.description.as_deref()
+            == Some("S3 Bucket Object should have server-side encryption enabled")
+    }));
+
+    let trivy = details("trivy");
+    assert!(trivy.iter().any(|details| {
+        details
+            .description
+            .as_deref()
+            .is_some_and(|text| text.contains("affected by the advisory"))
+            && details.installed_version.as_deref() == Some("1.0")
+            && details.fixed_version.as_deref() == Some("1.1")
+    }));
+
+    let grype = details("grype");
+    assert!(grype.iter().any(|details| {
+        details
+            .description
+            .as_deref()
+            .is_some_and(|text| text.contains("critical vulnerability"))
+            && details.installed_version.as_deref() == Some("1.0")
+            && details.fixed_version.as_deref() == Some("1.1, 1.2")
+    }));
+
+    let kube_bench = details("kube-bench");
+    assert!(kube_bench.iter().any(|details| {
+        details.remediation.as_deref()
+            == Some("Set anonymous authentication to false in the kubelet configuration.")
+    }));
 }
 
 #[test]

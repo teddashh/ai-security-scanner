@@ -1,6 +1,6 @@
 use crate::domain::{
-    AssessmentCase, Confidence, EngineRunStatus, Evidence, Finding, FindingObservation, ScanRun,
-    Severity,
+    AssessmentCase, Confidence, EngineRunStatus, Evidence, EvidenceKind, Finding,
+    FindingObservation, FindingStatus, ScanRun, Severity,
 };
 use crate::error::{AppError, AppResult};
 use serde_json::{Value, json};
@@ -51,11 +51,15 @@ pub fn export_oscal_assessment_results(case: &AssessmentCase, run_id: &str) -> A
     let observations = canonical_observations
         .into_iter()
         .filter_map(|observation| {
-            observation
+            let canonical_finding = findings.get(observation.finding_id.as_str()).copied();
+            let finding = observation
                 .finding_snapshot
                 .as_ref()
-                .or_else(|| findings.get(observation.finding_id.as_str()).copied())
-                .map(|finding| oscal_observation(finding, observation))
+                .or(canonical_finding)?;
+            let effective_status = canonical_finding
+                .map(|canonical| &canonical.status)
+                .unwrap_or(&finding.status);
+            Some(oscal_observation(finding, effective_status, observation))
         })
         .collect::<Vec<_>>();
 
@@ -175,7 +179,11 @@ pub fn export_oscal_assessment_results_bytes(
     )?)
 }
 
-fn oscal_observation(finding: &Finding, observation: &FindingObservation) -> Value {
+fn oscal_observation(
+    finding: &Finding,
+    effective_status: &FindingStatus,
+    observation: &FindingObservation,
+) -> Value {
     let exposure_observation = finding
         .severity_basis_code
         .is_some_and(|code| code.is_exposure_observation());
@@ -223,6 +231,42 @@ fn oscal_observation(finding: &Finding, observation: &FindingObservation) -> Val
     engine_ids.dedup();
     for engine_id in engine_ids {
         props.push(property("source-engine-id", &engine_id));
+    }
+
+    if !exposure_observation {
+        props.push(property("priority", &finding.priority.to_string()));
+        props.push(property(
+            "finding-status",
+            &enum_value(effective_status, "unknown"),
+        ));
+        props.push(property(
+            "recommended-expert-type",
+            &finding.recommended_expert_type,
+        ));
+        props.push(property("possible-impact", &finding.possible_impact));
+        props.push(property("recommendation", &finding.recommendation));
+        props.push(property(
+            "verification-guidance",
+            &finding.verification_guidance,
+        ));
+        if let Some(family) = &finding.family {
+            props.push(property("finding-family", &enum_value(family, "unknown")));
+        }
+        if let Some(basis) = &finding.severity_basis_code {
+            props.push(property("severity-basis", &enum_value(basis, "unknown")));
+        }
+        if let Some(basis) = &finding.confidence_basis_code {
+            props.push(property("confidence-basis", &enum_value(basis, "unknown")));
+        }
+        for factor in &finding.context_factors {
+            props.push(property("context-factor", &enum_value(factor, "unknown")));
+        }
+        if let Some(rollback) = &finding.rollback_considerations {
+            props.push(property("rollback-considerations", rollback));
+        }
+        for reference in &finding.official_references {
+            props.push(property("official-reference", reference));
+        }
     }
 
     for reference in &finding.control_references {
@@ -305,6 +349,7 @@ fn oscal_observation(finding: &Finding, observation: &FindingObservation) -> Val
 fn oscal_evidence(evidence: &Evidence) -> Value {
     let mut props = vec![
         property("canonical-evidence-id", &evidence.id),
+        property("evidence-kind", evidence_kind_name(&evidence.kind)),
         property("source-engine-id", &evidence.engine_id),
         property("canonical-scan-run-id", &evidence.run_id),
         property("raw-artifact-id", &evidence.artifact_id),
@@ -319,6 +364,36 @@ fn oscal_evidence(evidence: &Evidence) -> Value {
             "legacy-not-recorded",
         ));
     }
+    if let Some(source_rule) = &evidence.source_rule {
+        props.push(property("source-rule-id", source_rule));
+    }
+    if let Some(result_pointer_sha256) = &evidence.result_pointer_sha256 {
+        props.push(property("result-pointer-sha-256", result_pointer_sha256));
+    }
+    if let Some(location) = &evidence.location {
+        props.push(property("evidence-location", location));
+    }
+    if let Some(pointer) = &evidence.pointer {
+        props.push(property("result-pointer", pointer));
+    }
+    if let Some(details) = &evidence.scanner_details {
+        props.push(property("scanner-provided-details-trust", "untrusted"));
+        if let Some(description) = &details.description {
+            props.push(property("scanner-provided-description", description));
+        }
+        if let Some(remediation) = &details.remediation {
+            props.push(property("scanner-provided-remediation", remediation));
+        }
+        if let Some(installed_version) = &details.installed_version {
+            props.push(property(
+                "scanner-provided-installed-version",
+                installed_version,
+            ));
+        }
+        if let Some(fixed_version) = &details.fixed_version {
+            props.push(property("scanner-provided-fixed-version", fixed_version));
+        }
+    }
     json!({
         "description": evidence.summary,
         "props": props
@@ -331,6 +406,25 @@ fn property(name: &str, value: &str) -> Value {
         "ns": OSCAL_PROPERTY_NAMESPACE,
         "value": value
     })
+}
+
+fn enum_value<T: serde::Serialize>(value: &T, fallback: &str) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| fallback.to_owned())
+}
+
+fn evidence_kind_name(kind: &EvidenceKind) -> &'static str {
+    match kind {
+        EvidenceKind::Configuration => "configuration",
+        EvidenceKind::Observation => "observation",
+        EvidenceKind::ExternalValidation => "external_validation",
+        EvidenceKind::SourceCode => "source_code",
+        EvidenceKind::PackageInventory => "package_inventory",
+        EvidenceKind::UserDeclaration => "user_declaration",
+        EvidenceKind::RawToolOutput => "raw_tool_output",
+    }
 }
 
 fn stable_uuid(seed: &str) -> String {
@@ -458,7 +552,15 @@ mod tests {
 
     #[test]
     fn emits_observations_and_coordinate_only_control_properties() {
-        let value = export_oscal_assessment_results(&fixture(), "run-1").unwrap();
+        let mut case = fixture();
+        case.findings[0].family = Some(FindingFamily::CloudPosture);
+        case.findings[0].severity_basis_code = Some(SeverityBasisCode::CloudControlQuery);
+        case.findings[0].confidence_basis_code =
+            Some(ConfidenceBasisCode::DeterministicPolicyEvaluation);
+        case.findings[0].context_factors = vec![ContextFactor::SensitiveDataAsset];
+        case.findings[0].rollback_considerations = Some("Keep the prior policy available.".into());
+        case.findings[0].official_references = vec!["https://example.invalid/rule".into()];
+        let value = export_oscal_assessment_results(&case, "run-1").unwrap();
         let root = &value["assessment-results"];
         assert_eq!(root["metadata"]["oscal-version"], OSCAL_VERSION);
         let result = &root["results"][0];
@@ -486,6 +588,114 @@ mod tests {
                 .unwrap()
                 .contains("no assessment result")
         );
+        let property_value = |name: &str| {
+            props
+                .iter()
+                .find(|property| property["name"] == name)
+                .map(|property| property["value"].clone())
+        };
+        assert_eq!(
+            property_value("possible-impact"),
+            Some(json!("Unexpected access"))
+        );
+        assert_eq!(
+            property_value("recommendation"),
+            Some(json!("Have the system owner review it."))
+        );
+        assert_eq!(
+            property_value("finding-family"),
+            Some(json!("cloud_posture"))
+        );
+        assert_eq!(
+            property_value("severity-basis"),
+            Some(json!("cloud_control_query"))
+        );
+        assert_eq!(
+            property_value("confidence-basis"),
+            Some(json!("deterministic_policy_evaluation"))
+        );
+        assert_eq!(
+            property_value("context-factor"),
+            Some(json!("sensitive_data_asset"))
+        );
+        assert_eq!(
+            property_value("official-reference"),
+            Some(json!("https://example.invalid/rule"))
+        );
+    }
+
+    #[test]
+    fn preserves_generic_upstream_evidence_identity_and_location() {
+        let mut case = fixture();
+        let evidence = Evidence {
+            id: "evidence-1".into(),
+            finding_id: "finding-1".into(),
+            run_id: "run-1".into(),
+            engine_run_id: Some("engine-run-1".into()),
+            kind: EvidenceKind::Configuration,
+            engine_id: "unfamiliar-scanner".into(),
+            scanner_details: Some(ScannerFindingDetails {
+                description: Some("Upstream scanner explanation".into()),
+                remediation: Some("Upstream scanner remediation".into()),
+                installed_version: Some("1.2.3".into()),
+                fixed_version: Some("1.2.4".into()),
+            }),
+            source_rule: Some("UPSTREAM-RULE-42".into()),
+            result_pointer_sha256: Some("def".into()),
+            observed_at: case.finding_observations[0].observed_at,
+            summary: "Upstream evidence summary".into(),
+            location: Some("config/policy.json:4".into()),
+            artifact_id: "artifact-1".into(),
+            artifact_sha256: "abc".into(),
+            pointer: Some("/results/0".into()),
+            redacted: false,
+        };
+        case.findings[0].evidence = vec![evidence];
+
+        let value = export_oscal_assessment_results(&case, "run-1").unwrap();
+        let relevant =
+            &value["assessment-results"]["results"][0]["observations"][0]["relevant-evidence"][0];
+        let props = relevant["props"].as_array().unwrap();
+        let has = |name: &str, expected: &str| {
+            props
+                .iter()
+                .any(|property| property["name"] == name && property["value"] == expected)
+        };
+
+        assert_eq!(relevant["description"], "Upstream evidence summary");
+        assert!(has("evidence-kind", "configuration"));
+        assert!(has("source-engine-id", "unfamiliar-scanner"));
+        assert!(has("source-rule-id", "UPSTREAM-RULE-42"));
+        assert!(has("result-pointer-sha-256", "def"));
+        assert!(has("evidence-location", "config/policy.json:4"));
+        assert!(has("result-pointer", "/results/0"));
+        assert!(has("scanner-provided-details-trust", "untrusted"));
+        assert!(has(
+            "scanner-provided-description",
+            "Upstream scanner explanation"
+        ));
+        assert!(has(
+            "scanner-provided-remediation",
+            "Upstream scanner remediation"
+        ));
+        assert!(has("scanner-provided-installed-version", "1.2.3"));
+        assert!(has("scanner-provided-fixed-version", "1.2.4"));
+        for name in [
+            "scanner-provided-details-trust",
+            "scanner-provided-description",
+            "scanner-provided-remediation",
+            "scanner-provided-installed-version",
+            "scanner-provided-fixed-version",
+        ] {
+            assert!(props.iter().any(|property| {
+                property["name"] == name && property["ns"] == OSCAL_PROPERTY_NAMESPACE
+            }));
+        }
+        let remarks = value["assessment-results"]["results"][0]["observations"][0]["remarks"]
+            .as_str()
+            .expect("product remarks");
+        assert!(remarks.contains("Have the system owner review it."));
+        assert!(!remarks.contains("Upstream scanner remediation"));
     }
 
     #[test]
@@ -542,9 +752,11 @@ mod tests {
         let mut original = case.findings[0].clone();
         original.title = "Run one title".into();
         original.plain_language_summary = "Run one summary".into();
+        original.status = FindingStatus::FalsePositive;
         case.finding_observations[0].finding_snapshot = Some(original);
         case.findings[0].title = "Later run title".into();
         case.findings[0].plain_language_summary = "Later run summary".into();
+        case.findings[0].status = FindingStatus::Confirmed;
 
         let value =
             export_oscal_assessment_results(&case, "run-1").expect("historical OSCAL export");
@@ -556,6 +768,15 @@ mod tests {
                 .as_str()
                 .expect("description")
                 .contains("Run one summary")
+        );
+        assert!(
+            observation["props"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|property| {
+                    property["name"] == "finding-status" && property["value"] == "confirmed"
+                })
         );
         assert!(!observation.to_string().contains("Later run"));
     }

@@ -140,22 +140,22 @@ const copy = {
     zhTW: "這只是連線測試，沒有執行漏洞掃描",
   },
   connectionHeaderDescription: {
-    en: "This result shows only whether one local port accepted a TCP connection. Choose a website, project, or applicable network scan to look for security problems.",
-    zhTW: "這份結果只顯示單一本機連接埠是否接受 TCP 連線。若要找資安問題，請改選網站、專案或適用的網路掃描。",
+    en: "This result shows only whether one local port accepted a TCP connection. It did not complete a vulnerability, configuration, code, or secret check. Choose an applicable security scan to look for problems.",
+    zhTW: "這份結果只顯示單一本機連接埠是否接受 TCP 連線，未完成漏洞、設定、程式碼或秘密資訊檢查。若要找資安問題，請選擇適用的資安掃描。",
   },
-  inventoryHeaderEyebrow: { en: "SERVICE INVENTORY", zhTW: "服務盤點" },
-  inventoryHeaderTitle: {
-    en: "Service inventory only — no vulnerability scan ran",
-    zhTW: "只完成服務盤點，沒有執行漏洞掃描",
+  nonSecurityHeaderEyebrow: { en: "INVENTORY / CONNECTIVITY", zhTW: "盤點／連線" },
+  nonSecurityHeaderTitle: {
+    en: "Inventory or connectivity only — no security check ran",
+    zhTW: "只完成盤點或連線工作，沒有執行資安檢查",
   },
-  inventoryHeaderDescription: {
-    en: "Naabu or httpx checked which services responded. Use an applicable security check to look for weaknesses in those services.",
-    zhTW: "Naabu 或 httpx 只確認哪些服務有回應；若要找弱點，請再執行適用的資安檢查。",
+  nonSecurityHeaderDescription: {
+    en: "This run did not complete a vulnerability, configuration, code, or secret check. Inventory and connectivity observations are not a no-problems security result.",
+    zhTW: "本輪未完成漏洞、設定、程式碼或秘密資訊檢查。盤點與連線觀察不能解讀為未發現資安問題。",
   },
-  inventoryEmptyTitle: { en: "Service inventory results", zhTW: "服務盤點結果" },
-  inventoryEmptyDescription: {
-    en: "This run only performs service discovery. A reachable service is not a vulnerability, and no vulnerability or configuration check runs in this path.",
-    zhTW: "這個流程只進行服務探索。可連線服務不等於漏洞，且這條路徑不會執行漏洞或設定檢查。",
+  nonSecurityEmptyTitle: { en: "Inventory or connectivity results", zhTW: "盤點或連線結果" },
+  nonSecurityEmptyDescription: {
+    en: "The completed work records inventory or connectivity only. Choose an applicable security check to look for weaknesses.",
+    zhTW: "已完成的工作只記錄盤點或連線資訊。若要尋找弱點，請選擇適用的資安檢查。",
   },
   observationsEyebrow: { en: "SERVICE INVENTORY", zhTW: "服務盤點" },
   observationsTitle: {
@@ -493,8 +493,24 @@ const copy = {
     en: "This problem has no evidence record to check. Ask a specialist to confirm whether the data is complete.",
     zhTW: "這筆問題沒有可核對的證據；請交由專家確認資料完整性。",
   },
+  frozenEvidenceSummaryUnavailable: {
+    en: "The selected run did not retain an evidence summary.",
+    zhTW: "本輪未保留證據摘要。",
+  },
   technicalEvidence: { en: "Technical evidence details", zhTW: "證據技術細節" },
   evidenceKind: { en: "Type", zhTW: "種類" },
+  sourceRule: { en: "Source rule", zhTW: "來源規則" },
+  scannerDescription: { en: "Scanner-provided description", zhTW: "掃描器提供的說明" },
+  installedVersion: { en: "Observed version", zhTW: "觀察到的版本" },
+  fixedVersion: { en: "Scanner-reported fixed version", zhTW: "掃描器回報的修正版" },
+  scannerRemediation: {
+    en: "Scanner-provided remediation — review before acting",
+    zhTW: "掃描器提供的修復資訊——採取行動前請先審查",
+  },
+  scannerRemediationBoundary: {
+    en: "This is untrusted scanner evidence, not the product's recommended next step. Have an authorized person review and approve any change; this product does not execute it.",
+    zhTW: "這是未受信任的掃描器證據，不是產品建議的下一步。任何變更都必須由獲授權的人員審查並核准；本產品不會自動執行。",
+  },
   scanRun: { en: "Scan run", zhTW: "掃描輪次" },
   engineRun: { en: "Scanner job", zhTW: "掃描器工作" },
   artifactId: { en: "Evidence file ID", zhTW: "證據檔案 ID" },
@@ -530,6 +546,7 @@ const copy = {
   reportComplete: { en: "Requested checks complete", zhTW: "要求的檢查已完成" },
   reportConnectionOnly: { en: "Connection result only", zhTW: "僅連線結果" },
   reportInventoryOnly: { en: "Service inventory only", zhTW: "僅完成服務盤點" },
+  reportNonSecurityOnly: { en: "Inventory or connectivity only", zhTW: "僅完成盤點或連線工作" },
   reportPartial: { en: "Partial results", zhTW: "部分結果" },
   reportNoChecks: { en: "No checks completed", zhTW: "沒有完成任何檢查" },
   reportLive: { en: "Still updating", zhTW: "仍在更新" },
@@ -787,15 +804,21 @@ const incompleteGapKinds = new Set<BeginnerMasterReport["coverageGaps"][number][
   "unattributed",
 ]);
 
-/** Discovery and a bounded connection observation are useful inventory, not security checks. */
-const isPreparationOnlyCheck = (checkId: string): boolean => {
+/** Conservative fallback for reports saved before `resultKind` was frozen. */
+const legacyCheckResultKind = (
+  checkId: string,
+): "security_check" | "inventory" | "connectivity" => {
   const normalized = checkId.trim().toLocaleLowerCase("en-US");
-  return normalized === "naabu"
-    || normalized.startsWith("naabu-")
-    || normalized === "httpx"
-    || normalized.startsWith("httpx-")
-    || normalized.startsWith("native localhost tcp check on ");
+  if (normalized.startsWith("native localhost tcp check on ")) return "connectivity";
+  if (["cloudquery", "syft", "naabu", "httpx"].some((engine) =>
+    normalized === engine || normalized.startsWith(`${engine}-`))) return "inventory";
+  return "security_check";
 };
+
+const checkResultKind = (
+  check: BeginnerMasterReport["actual"]["checks"][number],
+): "security_check" | "inventory" | "connectivity" =>
+  check.resultKind ?? legacyCheckResultKind(check.checkId);
 
 function AssetResultBoard({ report }: { report: BeginnerMasterReport }) {
   const { locale, text, formatNumber } = useI18n();
@@ -811,7 +834,7 @@ function AssetResultBoard({ report }: { report: BeginnerMasterReport }) {
     const checks = report.actual.checks.filter((check) =>
       check.targetAssetIds.includes(target.assetId));
     const completedSecurityChecks = checks.filter((check) =>
-      check.status === "tested_complete" && !isPreparationOnlyCheck(check.checkId));
+      check.status === "tested_complete" && checkResultKind(check) === "security_check");
     const gaps = report.coverageGaps.filter((gap) =>
       gap.targetAssetIds.includes(target.assetId));
     const firstApplicableGap = gaps.find((gap) => gap.kind !== "excluded");
@@ -935,29 +958,52 @@ const projectReportFindings = (
 ): Finding[] => {
   const canonicalById = new Map(canonicalFindings.map((finding) => [finding.id, finding]));
   const targetById = new Map(report.requested.targets.map((target) => [target.assetId, target]));
+  const frozenEvidenceSummaryUnavailable = locale === "en"
+    ? copy.frozenEvidenceSummaryUnavailable.en
+    : copy.frozenEvidenceSummaryUnavailable.zhTW;
   return report.findings.map((frozen, index) => {
     const current = canonicalById.get(frozen.findingId);
     const currentEvidenceById = new Map(current?.evidence.map((evidence) => [evidence.id, evidence]));
     const evidence = frozen.evidenceReferences.map((reference) => {
       const retained = currentEvidenceById.get(reference.evidenceId);
+      const legacyFallback = reference.detailsFrozen === true ? undefined : retained;
       return {
         id: reference.evidenceId,
         sourceEngine: reference.engineId,
+        sourceRule: reference.detailsFrozen === true
+          ? reference.sourceRule
+          : legacyFallback?.sourceRule,
+        scannerDetails: reference.detailsFrozen === true
+          ? reference.scannerDetails
+          : legacyFallback?.scannerDetails,
         observedAt: reference.observedAt,
-        summary: retained?.summary ?? (locale === "en" ? "Run-bound evidence record" : "本輪保存的證據紀錄"),
-        location: reference.location ?? retained?.location,
+        summary: reference.detailsFrozen === true
+          ? reference.summary ?? frozenEvidenceSummaryUnavailable
+          : legacyFallback?.summary ?? frozenEvidenceSummaryUnavailable,
+        location: reference.detailsFrozen === true
+          ? reference.location
+          : reference.location ?? legacyFallback?.location,
         rawArtifactHash: reference.artifactSha256,
-        kind: retained?.kind,
+        kind: reference.detailsFrozen === true ? reference.kind : legacyFallback?.kind,
         runId: report.runId,
-        engineRunId: retained?.engineRunId,
-        artifactId: retained?.artifactId,
-        redacted: retained?.redacted ?? true,
+        engineRunId: reference.detailsFrozen === true
+          ? reference.engineRunId
+          : legacyFallback?.engineRunId,
+        artifactId: reference.detailsFrozen === true
+          ? reference.artifactId
+          : legacyFallback?.artifactId,
+        redacted: reference.detailsFrozen === true
+          ? reference.redacted
+          : legacyFallback?.redacted,
       };
     });
     const observedTimes = evidence.map((item) => item.observedAt).sort();
-    const targetLabels = frozen.targetAssetIds
-      .map((assetId) => targetById.get(assetId)?.label)
-      .filter((label): label is string => Boolean(label));
+    // A run can retain an affected asset coordinate even when an older report
+    // did not retain that asset's display label. Keep the exact ID visible;
+    // omitting it turns attributable scanner output into an apparently
+    // asset-less problem (or silently hides one member of a shared finding).
+    const targetLabels = frozen.targetAssetIds.map((assetId) =>
+      targetById.get(assetId)?.label ?? assetId);
     const targetLabel = [...new Set(targetLabels)].join(locale === "en" ? ", " : "、");
     return {
       id: frozen.findingId,
@@ -965,7 +1011,7 @@ const projectReportFindings = (
       fingerprint: frozen.fingerprint,
       assetId: frozen.targetAssetIds[0] ?? current?.assetId ?? "unknown-target",
       assetIds: [...frozen.targetAssetIds],
-      assetName: targetLabel ?? current?.assetName ?? (locale === "en" ? "Recorded target" : "已記錄目標"),
+      assetName: targetLabel || current?.assetName || (locale === "en" ? "Recorded target" : "已記錄目標"),
       title: frozen.title,
       summary: frozen.plainLanguageRisk,
       impact: frozen.possibleImpact,
@@ -998,12 +1044,12 @@ const projectReportFindings = (
         rationale: reference.rationale,
         mappingVersion: reference.mappingVersion,
       })),
-      // Adapter findings always carry at least the engine's repository URL
-      // (adapters/mod.rs:2440) and the frozen snapshot has no reference field of
-      // its own, so the canonical finding is the only source -- exactly as for
-      // the two fields below. Leaving this empty told every reader the scanner
-      // had published nothing to read.
-      officialReferences: current?.officialReferences ?? [],
+      // New reports freeze this collection, including a meaningful empty
+      // collection. Only reports that predate the field fall back to the
+      // current canonical finding; never replace a frozen empty collection.
+      officialReferences: frozen.officialReferences !== undefined
+        ? [...frozen.officialReferences]
+        : current?.officialReferences ?? [],
       // Prefer the frozen snapshot: these describe the selected run, and a
       // finding the case no longer holds still has to explain itself.
       verificationGuidance: frozen.verificationGuidance ?? current?.verificationGuidance,
@@ -1038,12 +1084,12 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
   const localhostSummary = run && isExactBuiltInLocalhostQuickScanRun(run)
     ? localhostTcpBeginnerSummary(run.engineRuns[0]!)
     : undefined;
-  const serviceInventoryOnly = report.actual.checks.length > 0
-    && report.actual.checks.every((check) => check.checkId === "naabu" || check.checkId === "httpx");
+  const nonSecurityOnly = report.actual.checks.length > 0
+    && report.actual.checks.every((check) => checkResultKind(check) !== "security_check");
   const summary = localhostSummary
     ? { label: copy.reportConnectionOnly, tone: "neutral" as const }
-    : serviceInventoryOnly
-      ? { label: copy.reportInventoryOnly, tone: "neutral" as const }
+    : nonSecurityOnly
+      ? { label: copy.reportNonSecurityOnly, tone: "neutral" as const }
     : reportSummaryPresentation(report.state.summary);
   const noRecordedGapDetail = localhostSummary?.exclusions ?? copy.noGap;
   const testedChecks = report.actual.checks.filter((check) =>
@@ -1827,12 +1873,8 @@ export function FindingsPage({
   const unavailableReportNotice = latestRun
     ? unavailableRunBoundReportCopy
     : unavailableSelectedRunCopy;
-  const serviceInventoryOnly = Boolean(
-    (report?.actual.checks.length
-      && report.actual.checks.every((check) => check.checkId === "naabu" || check.checkId === "httpx"))
-    || (latestRun?.engineRuns.length
-      && latestRun.engineRuns.every((engine) => engine.engineId === "naabu" || engine.engineId === "httpx")),
-  );
+  const nonSecurityOnly = Boolean(report?.actual.checks.length
+    && report.actual.checks.every((check) => checkResultKind(check) !== "security_check"));
   const observationDetails = (finding: Finding): string[] => {
     const retained = finding.observationDetails
       ?? finding.tags?.filter((tag) =>
@@ -1919,8 +1961,8 @@ export function FindingsPage({
         ? text(requestOutcomeSummary.title)
         : localhostSummary
           ? text(localhostSummary.title)
-          : serviceInventoryOnly
-            ? text(copy.inventoryEmptyTitle)
+          : nonSecurityOnly
+            ? text(copy.nonSecurityEmptyTitle)
           : latestRunIsActive
             ? text(copy.emptyActiveTitle)
             : incompleteRun
@@ -1938,8 +1980,8 @@ export function FindingsPage({
               text(localhostSummary.exclusions),
               text(localhostSummary.nextStep),
             ].join(" ")
-          : serviceInventoryOnly
-            ? text(copy.inventoryEmptyDescription)
+          : nonSecurityOnly
+            ? text(copy.nonSecurityEmptyDescription)
           : latestRunIsActive
             ? text(copy.emptyActiveDescription)
             : incompleteRun
@@ -1952,18 +1994,18 @@ export function FindingsPage({
         <PageHeader
           eyebrow={text(localhostSummary
             ? copy.connectionHeaderEyebrow
-            : serviceInventoryOnly
-              ? copy.inventoryHeaderEyebrow
+            : nonSecurityOnly
+              ? copy.nonSecurityHeaderEyebrow
               : copy.eyebrow)}
           title={text(localhostSummary
             ? copy.connectionHeaderTitle
-            : serviceInventoryOnly
-              ? copy.inventoryHeaderTitle
+            : nonSecurityOnly
+              ? copy.nonSecurityHeaderTitle
               : copy.emptyHeaderTitle)}
           description={text(localhostSummary
             ? copy.connectionHeaderDescription
-            : serviceInventoryOnly
-              ? copy.inventoryHeaderDescription
+            : nonSecurityOnly
+              ? copy.nonSecurityHeaderDescription
               : copy.emptyHeaderDescription)}
           actions={reportActions}
         />
@@ -2686,10 +2728,34 @@ export function FindingsPage({
                       <article key={evidence.id} className="evidence-item">
                         <div><strong>{evidence.sourceEngine}</strong><span>{formatDateTime(evidence.observedAt)}</span></div>
                         <p>{evidence.summary}</p>
+                        {evidence.scannerDetails?.description && (
+                          <div className="scanner-evidence-description">
+                            <strong>{text(copy.scannerDescription)}</strong>
+                            <p>{evidence.scannerDetails.description}</p>
+                          </div>
+                        )}
+                        {(evidence.scannerDetails?.installedVersion || evidence.scannerDetails?.fixedVersion) && (
+                          <dl className="evidence-provenance scanner-evidence-versions">
+                            {evidence.scannerDetails.installedVersion && (
+                              <div><dt>{text(copy.installedVersion)}</dt><dd><code>{evidence.scannerDetails.installedVersion}</code></dd></div>
+                            )}
+                            {evidence.scannerDetails.fixedVersion && (
+                              <div><dt>{text(copy.fixedVersion)}</dt><dd><code>{evidence.scannerDetails.fixedVersion}</code></dd></div>
+                            )}
+                          </dl>
+                        )}
+                        {evidence.scannerDetails?.remediation && (
+                          <div className="scanner-evidence-remediation">
+                            <strong>{text(copy.scannerRemediation)}</strong>
+                            <p>{evidence.scannerDetails.remediation}</p>
+                            <small>{text(copy.scannerRemediationBoundary)}</small>
+                          </div>
+                        )}
                         <details className="page-technical-details">
                           <summary>{text(copy.technicalEvidence)}</summary>
                           <dl className="evidence-provenance">
                             <div><dt>{text(copy.evidenceKind)}</dt><dd>{evidence.kind?.replaceAll("_", " ") ?? text(copy.notReported)}</dd></div>
+                            <div><dt>{text(copy.sourceRule)}</dt><dd><code>{evidence.sourceRule ?? text(copy.notReported)}</code></dd></div>
                             <div><dt>{text(copy.scanRun)}</dt><dd><code>{evidence.runId ?? selected.lastSeenRunId ?? text(copy.notReported)}</code></dd></div>
                             <div><dt>{text(copy.engineRun)}</dt><dd><code>{evidence.engineRunId ?? text(copy.legacyEngineRun)}</code></dd></div>
                             <div><dt>{text(copy.artifactId)}</dt><dd><code>{evidence.artifactId ?? text(copy.notReported)}</code></dd></div>

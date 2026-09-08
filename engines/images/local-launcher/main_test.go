@@ -208,6 +208,23 @@ func TestTrivyFilesystemProfilesUseLibraryPackagesAndKeepTheImmutableDatabaseRea
 	}
 }
 
+func TestKubeBenchKeepsUpstreamRemediationInItsReport(t *testing.T) {
+	planned, err := planInvocation("kube-bench", profileNodeSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, argument := range planned.arguments {
+		if argument == "--noremediations" {
+			t.Fatal("kube-bench remediation was suppressed before normalization")
+		}
+	}
+	arguments := strings.Join(planned.arguments, "\n")
+	if !strings.Contains(arguments, "--json") ||
+		!strings.Contains(arguments, "--outputfile") {
+		t.Fatalf("kube-bench did not retain its bounded JSON report: %#v", planned.arguments)
+	}
+}
+
 func TestEngineProfilesRejectCrossTypeExecution(t *testing.T) {
 	for _, test := range []struct{ engine, profile string }{
 		{"grype", profileIaC},

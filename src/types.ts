@@ -843,6 +843,8 @@ export interface BeginnerRequestedCoverage {
 export interface BeginnerActualCheck {
   taskId: string;
   checkId: string;
+  /** Absent only on reports saved before check-result semantics were frozen. */
+  resultKind?: "security_check" | "inventory" | "connectivity";
   targetAssetIds: string[];
   status: BeginnerCoverageStatus;
   startedAt?: string;
@@ -933,11 +935,24 @@ export interface BeginnerReportFinding {
   evidenceReferences: Array<{
     evidenceId: string;
     engineId: string;
+    /** True only when the optional provenance came from this selected run. */
+    detailsFrozen?: boolean;
+    /** Exact normalized upstream rule or detector identifier, when retained. */
+    sourceRule?: string;
+    /** Scanner-authored, untrusted evidence detail; never a product action. */
+    scannerDetails?: ScannerFindingDetails;
+    summary?: string;
+    kind?: string;
+    engineRunId?: string;
+    artifactId?: string;
+    redacted?: boolean;
     artifactSha256: string;
     observedAt: string;
     /** Scanner-reported, product-redacted file, package, URL, or service location. */
     location?: string;
   }>;
+  /** Undefined only for reports that predate run-frozen official references. */
+  officialReferences?: string[];
   frameworkReferences: Array<{
     framework: string;
     frameworkVersion: string;
@@ -1085,6 +1100,10 @@ export type FindingWorkflowState =
 export interface Evidence {
   id: string;
   sourceEngine: string;
+  /** Exact normalized upstream rule or detector identifier, when retained. */
+  sourceRule?: string;
+  /** Scanner-authored, untrusted evidence detail; never a product action. */
+  scannerDetails?: ScannerFindingDetails;
   observedAt: string;
   summary: string;
   /** Scanner-reported location kept separate from explanatory prose. */
@@ -1096,6 +1115,13 @@ export interface Evidence {
   engineRunId?: string;
   artifactId?: string;
   redacted?: boolean;
+}
+
+export interface ScannerFindingDetails {
+  description?: string;
+  remediation?: string;
+  installedVersion?: string;
+  fixedVersion?: string;
 }
 
 export interface ControlReference {

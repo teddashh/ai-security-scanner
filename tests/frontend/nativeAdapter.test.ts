@@ -167,6 +167,7 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
       checks: [{
         task_id: "task-1",
         check_id: "localhost_tcp_endpoint",
+        result_kind: "connectivity",
         target_asset_ids: ["asset-1"],
         status: "tested_partial",
         started_at: "2026-08-30T12:00:00Z",
@@ -217,10 +218,24 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
       evidence_references: [{
         evidence_id: "evidence-1",
         engine_id: "native.localhost_tcp",
+        details_frozen: true,
+        source_rule: "upstream-rule-42",
+        scanner_details: {
+          description: "Scanner description",
+          remediation: "Scanner remediation",
+          installed_version: "1.0.0",
+          fixed_version: "1.0.1",
+        },
+        summary: "Frozen evidence summary",
+        kind: "observation",
+        engine_run_id: "task-1",
+        artifact_id: "artifact-1",
+        redacted: true,
         artifact_sha256: "a".repeat(64),
         observed_at: "2026-08-30T12:00:03Z",
         location: "src/config.ts:42",
       }],
+      official_references: ["https://example.test/frozen-rule"],
       framework_references: [],
     }],
     next_steps: [{
@@ -243,9 +258,32 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
   assert.equal(report.state.summary, "partial");
   assert.equal(report.requested.targets[0]?.label, "127.0.0.1:9001");
   assert.equal(report.actual.checks[0]?.status, "tested_partial");
+  assert.equal(report.actual.checks[0]?.resultKind, "connectivity");
   assert.equal(report.coverageGaps[0]?.nextActionCode, "start_expected_service_and_retry");
   assert.equal(report.findings[0]?.findingId, "finding-1");
   assert.equal(report.findings[0]?.evidenceReferences[0]?.location, "src/config.ts:42");
+  assert.equal(report.findings[0]?.evidenceReferences[0]?.sourceRule, "upstream-rule-42");
+  assert.deepEqual(report.findings[0]?.evidenceReferences[0], {
+    evidenceId: "evidence-1",
+    engineId: "native.localhost_tcp",
+    detailsFrozen: true,
+    sourceRule: "upstream-rule-42",
+    scannerDetails: {
+      description: "Scanner description",
+      remediation: "Scanner remediation",
+      installedVersion: "1.0.0",
+      fixedVersion: "1.0.1",
+    },
+    summary: "Frozen evidence summary",
+    kind: "observation",
+    engineRunId: "task-1",
+    artifactId: "artifact-1",
+    redacted: true,
+    artifactSha256: "a".repeat(64),
+    observedAt: "2026-08-30T12:00:03Z",
+    location: "src/config.ts:42",
+  });
+  assert.deepEqual(report.findings[0]?.officialReferences, ["https://example.test/frozen-rule"]);
   assert.equal(report.nextSteps[0]?.taskId, "task-1");
 });
 
@@ -365,6 +403,8 @@ test("the report the findings list is built from carries severity and codes the 
   assert.equal(finding.family, "network_exposure");
   assert.equal(finding.severityBasisCode, "open_port");
   assert.equal(finding.confidenceBasisCode, "observed_response");
+  assert.equal(finding.evidenceReferences[0]?.detailsFrozen, false);
+  assert.equal(finding.officialReferences, undefined);
   assert.deepEqual(finding.observationDetails, ["port:443", "protocol:tcp"]);
 });
 
@@ -1450,6 +1490,63 @@ test("native findings keep unknown severity distinct from informational", () => 
       ["explicit-info", "info"],
     ],
   );
+});
+
+test("canonical evidence retains scanner-authored detail for exact-ID legacy report fallback", () => {
+  const workspace = adaptNativeCase(platformCaseFixture({
+    findings: [{
+      id: "finding-scanner-detail",
+      case_id: "case-platforms-1",
+      first_seen_run_id: "run-1",
+      last_seen_run_id: "run-1",
+      fingerprint: "fingerprint-scanner-detail",
+      title: "Scanner detail",
+      plain_language_summary: "Review this scanner observation.",
+      possible_impact: "Impact",
+      severity: "high",
+      confidence: "medium",
+      priority: 50,
+      priority_reasons: [],
+      asset_ids: ["repository-asset"],
+      evidence: [{
+        id: "evidence-scanner-detail",
+        finding_id: "finding-scanner-detail",
+        run_id: "run-1",
+        engine_run_id: "task-1",
+        kind: "package_inventory",
+        engine_id: "trivy",
+        source_rule: "CVE-2026-12345",
+        scanner_details: {
+          description: "Scanner description",
+          remediation: "Scanner remediation",
+          installed_version: "1.0.0",
+          fixed_version: "1.0.1",
+        },
+        observed_at: "2026-09-04T12:00:00Z",
+        summary: "Evidence summary",
+        artifact_id: "artifact-1",
+        artifact_sha256: "a".repeat(64),
+        pointer: null,
+        redacted: false,
+      }],
+      control_references: [],
+      recommendation: "Use the product recommendation.",
+      verification_guidance: "Rerun the check.",
+      rollback_considerations: null,
+      official_references: [],
+      recommended_expert_type: "Security reviewer",
+      status: "unreviewed",
+      tags: [],
+    }],
+  }));
+
+  assert.deepEqual(workspace.findings[0]?.evidence[0]?.scannerDetails, {
+    description: "Scanner description",
+    remediation: "Scanner remediation",
+    installedVersion: "1.0.0",
+    fixedVersion: "1.0.1",
+  });
+  assert.equal(workspace.findings[0]?.recommendation, "Use the product recommendation.");
 });
 
 test("draft full cases with no assets or applicable sources use the assessment route fallback", () => {

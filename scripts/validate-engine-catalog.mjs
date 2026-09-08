@@ -1799,6 +1799,9 @@ function validateManagedSourceImage(plan, planRelative, engine) {
     if (!engine.command.includes("--skip-download") || frameworkIndex < 0 || engine.command[frameworkIndex + 1] !== "all") {
       errors.push(`${planRelative}: managed Checkov runtime must retain fixed offline upstream framework auto-detection`);
     }
+    if (engine.command.includes("--compact")) {
+      errors.push(`${planRelative}: managed Checkov JSON output must retain upstream evidence code blocks`);
+    }
   }
 }
 

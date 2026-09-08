@@ -85,6 +85,7 @@ func testFeed() *feedIndex {
 		Tag: metadataTag{
 			SeverityVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
 			QODType:        "remote_banner",
+			Summary:        "The detected service matches an affected version.",
 			Solution:       "Upgrade & verify.",
 		},
 	}
@@ -610,6 +611,10 @@ func TestWriteXMLResultProducesEscapedAdapterEvidence(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "&lt;risk&gt; &amp; evidence") || !strings.Contains(output.String(), `type="cve" id="CVE-2024-12345"`) {
 		t.Fatalf("XML did not preserve escaped evidence and normalized CVE: %s", output.String())
+	}
+	if !strings.Contains(output.String(), "<summary>The detected service matches an affected version.</summary>") ||
+		!strings.Contains(output.String(), "<solution>Upgrade &amp; verify.</solution>") {
+		t.Fatalf("XML lost pinned-feed summary or solution: %s", output.String())
 	}
 	if !strings.Contains(output.String(), "<port>443/tcp</port>") || !strings.Contains(output.String(), "<raw_port>40443/tcp</raw_port>") {
 		t.Fatalf("XML lost the authorized projection or raw relay provenance: %s", output.String())

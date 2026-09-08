@@ -269,11 +269,31 @@ pub struct NetworkScopeCoverage {
 pub struct ActualCheck {
     pub task_id: Id,
     pub check_id: String,
+    /// Product report semantics for this completed work. Optional only so a
+    /// report saved before this field existed can still be opened and
+    /// classified conservatively from its stable check identifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_kind: Option<CheckResultKind>,
     pub target_asset_ids: Vec<Id>,
     pub status: CoverageDimensionStatus,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub tested_dimensions: Vec<TestedDimension>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckResultKind {
+    SecurityCheck,
+    Inventory,
+    Connectivity,
+}
+
+impl ActualCheck {
+    pub fn effective_result_kind(&self) -> CheckResultKind {
+        self.result_kind
+            .unwrap_or_else(|| legacy_check_result_kind(&self.check_id))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -374,6 +394,11 @@ pub struct BeginnerFinding {
     pub next_step: String,
     pub recommended_expert_type: String,
     pub evidence_references: Vec<FindingEvidenceReference>,
+    /// Selected-run official documentation links. `None` means an older
+    /// report did not freeze this field; `Some([])` means the frozen finding
+    /// really recorded no links.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub official_references: Option<Vec<String>>,
     pub framework_references: Vec<FrameworkReference>,
     /// The codes `plain_language_risk`, `possible_impact` and `next_step` were
     /// composed from, carried so a report rendered in another language can
@@ -418,6 +443,29 @@ pub enum FindingSnapshotSource {
 pub struct FindingEvidenceReference {
     pub evidence_id: Id,
     pub engine_id: String,
+    /// True only when the fields below came from the selected run's immutable
+    /// finding snapshot. It distinguishes a genuinely absent value from a
+    /// field an older report schema never saved.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub details_frozen: bool,
+    /// Exact normalized upstream rule or detector identifier. Older evidence
+    /// may not have retained it; never infer one from the title or prose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_rule: Option<String>,
+    /// Structured scanner-authored detail retained as untrusted evidence. It
+    /// never replaces the product-owned finding recommendation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scanner_details: Option<crate::domain::ScannerFindingDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<crate::domain::EvidenceKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_run_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redacted: Option<bool>,
     pub artifact_sha256: String,
     pub observed_at: DateTime<Utc>,
     /// Scanner-reported location after adapter redaction. Older reports may
@@ -695,8 +743,8 @@ pub fn build_beginner_master_report(
         summary,
         lifecycle,
         last_durable_update: selected_run_last_durable_update(case, run),
-        explanation: if run_is_service_inventory_only(run) {
-            service_inventory_explanation(summary, lifecycle).into()
+        explanation: if run_is_non_security_only(run) {
+            non_security_only_explanation(run, lifecycle)
         } else {
             state_explanation(summary, lifecycle).into()
         },
@@ -1323,6 +1371,7 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
         checks.push(ActualCheck {
             task_id: task.id.clone(),
             check_id: check_id(task),
+            result_kind: Some(task_result_kind(task)),
             target_asset_ids: task.asset_ids.clone(),
             status,
             started_at: task.started_at,
@@ -2884,6 +2933,7 @@ fn project_finding(
     details: Option<&Finding>,
     run: &ScanRun,
 ) -> BeginnerFinding {
+    let evidence_details_frozen = snapshot_source == FindingSnapshotSource::FrozenSelectedRun;
     let evidence_references = details
         .map(|finding| {
             finding
@@ -2893,6 +2943,20 @@ fn project_finding(
                 .map(|evidence| FindingEvidenceReference {
                     evidence_id: evidence.id.clone(),
                     engine_id: evidence.engine_id.clone(),
+                    details_frozen: evidence_details_frozen,
+                    source_rule: evidence_details_frozen
+                        .then(|| evidence.source_rule.clone())
+                        .flatten(),
+                    scanner_details: evidence_details_frozen
+                        .then(|| evidence.scanner_details.clone())
+                        .flatten(),
+                    summary: evidence_details_frozen.then(|| evidence.summary.clone()),
+                    kind: evidence_details_frozen.then(|| evidence.kind.clone()),
+                    engine_run_id: evidence_details_frozen
+                        .then(|| evidence.engine_run_id.clone())
+                        .flatten(),
+                    artifact_id: evidence_details_frozen.then(|| evidence.artifact_id.clone()),
+                    redacted: evidence_details_frozen.then_some(evidence.redacted),
                     artifact_sha256: evidence.artifact_sha256.clone(),
                     observed_at: evidence.observed_at,
                     location: evidence.location.clone(),
@@ -3004,6 +3068,11 @@ fn project_finding(
                 .unwrap_or_else(|| "Security professional".into())
         },
         evidence_references,
+        official_references: if snapshot_source == FindingSnapshotSource::FrozenSelectedRun {
+            details.map(|finding| finding.official_references.clone())
+        } else {
+            None
+        },
         framework_references,
         family: details.and_then(|finding| finding.family),
         severity_basis_code: details.and_then(|finding| finding.severity_basis_code),
@@ -3456,36 +3525,66 @@ fn selected_run_last_durable_update(case: &AssessmentCase, run: &ScanRun) -> Dat
     times.into_iter().max().unwrap_or(run.created_at)
 }
 
-/// Naabu and httpx establish reachable-service inventory. Even when every
-/// requested work unit completed, that is not a completed vulnerability or
-/// security assessment. Keep the distinction derived from the frozen run,
-/// rather than from whether the inventory happened to contain any records.
-pub(crate) fn run_is_service_inventory_only(run: &ScanRun) -> bool {
-    !run.engine_runs.is_empty()
-        && run.engine_runs.iter().all(|task| {
-            matches!(task.task_kind, EngineTaskKind::CatalogEngine)
-                && matches!(task.engine_id.as_str(), "naabu" | "httpx")
-        })
+fn task_result_kind(task: &EngineRun) -> CheckResultKind {
+    match task.task_kind {
+        EngineTaskKind::BuiltInLocalhostTcp { .. } => CheckResultKind::Connectivity,
+        EngineTaskKind::CatalogEngine
+            if matches!(
+                task.engine_id.to_ascii_lowercase().as_str(),
+                "cloudquery" | "syft" | "naabu" | "httpx"
+            ) =>
+        {
+            CheckResultKind::Inventory
+        }
+        EngineTaskKind::CatalogEngine => CheckResultKind::SecurityCheck,
+    }
 }
 
-fn service_inventory_explanation(
-    summary: BeginnerReportSummary,
-    lifecycle: ReportLifecycle,
-) -> &'static str {
-    match (summary, lifecycle) {
-        (BeginnerReportSummary::Complete, ReportLifecycle::Final) => {
-            "The requested service inventory completed. It only records reachable ports or HTTP services; no vulnerability or configuration check ran."
-        }
-        (BeginnerReportSummary::NoChecksCompleted, _) => {
-            "The service-inventory request finished without a usable reachability result. No vulnerability or configuration check ran."
-        }
-        (_, ReportLifecycle::Live) => {
-            "The service inventory is still changing. Saved reachability observations are available now, but no vulnerability or configuration check has run."
-        }
-        (BeginnerReportSummary::Partial, ReportLifecycle::Final) => {
-            "Useful service-inventory results were saved, but some requested discovery work is incomplete or unavailable. No vulnerability or configuration check ran."
-        }
+fn legacy_check_result_kind(check_id: &str) -> CheckResultKind {
+    let normalized = check_id.trim().to_ascii_lowercase();
+    if normalized.starts_with("native localhost tcp check on ") {
+        return CheckResultKind::Connectivity;
     }
+    if ["cloudquery", "syft", "naabu", "httpx"]
+        .iter()
+        .any(|engine| normalized == *engine || normalized.starts_with(&format!("{engine}-")))
+    {
+        return CheckResultKind::Inventory;
+    }
+    CheckResultKind::SecurityCheck
+}
+
+pub(crate) fn run_is_non_security_only(run: &ScanRun) -> bool {
+    !run.engine_runs.is_empty()
+        && run
+            .engine_runs
+            .iter()
+            .all(|task| task_result_kind(task) != CheckResultKind::SecurityCheck)
+}
+
+fn non_security_only_explanation(run: &ScanRun, lifecycle: ReportLifecycle) -> String {
+    let has_inventory = run
+        .engine_runs
+        .iter()
+        .any(|task| task_result_kind(task) == CheckResultKind::Inventory);
+    let has_connectivity = run
+        .engine_runs
+        .iter()
+        .any(|task| task_result_kind(task) == CheckResultKind::Connectivity);
+    let work = match (has_inventory, has_connectivity) {
+        (true, true) => "inventory and connectivity",
+        (true, false) => "inventory",
+        (false, true) => "connectivity",
+        (false, false) => "non-security",
+    };
+    let progress = if lifecycle == ReportLifecycle::Live {
+        "This live run contains only"
+    } else {
+        "This run contained only"
+    };
+    format!(
+        "{progress} {work} work. No vulnerability, configuration, code, or secret security check completed. Inventory and connectivity observations are not a no-problems security result."
+    )
 }
 
 fn state_explanation(summary: BeginnerReportSummary, lifecycle: ReportLifecycle) -> &'static str {
@@ -4549,6 +4648,13 @@ mod tests {
         let mut high = frozen_finding(&case, "finding-high", 90, Severity::High);
         high.confidence_basis_code =
             Some(crate::domain::ConfidenceBasisCode::DeterministicPolicyEvaluation);
+        high.official_references = vec!["https://example.test/frozen-rule".into()];
+        high.evidence[0].scanner_details = Some(crate::domain::ScannerFindingDetails {
+            description: Some("Frozen scanner description".into()),
+            remediation: Some("Frozen scanner remediation".into()),
+            installed_version: Some("1.0.0".into()),
+            fixed_version: Some("1.0.1".into()),
+        });
         case.findings = vec![low.clone(), high.clone()];
         case.finding_observations = vec![
             observation(&low, "run-1", instant(17)),
@@ -4571,6 +4677,35 @@ mod tests {
                 .location
                 .as_deref(),
             Some("src/config.ts:42")
+        );
+        assert_eq!(
+            report.findings[0].evidence_references[0]
+                .source_rule
+                .as_deref(),
+            Some("upstream-rule-finding-high")
+        );
+        let evidence = &report.findings[0].evidence_references[0];
+        assert!(evidence.details_frozen);
+        assert_eq!(evidence.summary.as_deref(), Some("Evidence"));
+        assert_eq!(
+            evidence.scanner_details,
+            Some(crate::domain::ScannerFindingDetails {
+                description: Some("Frozen scanner description".into()),
+                remediation: Some("Frozen scanner remediation".into()),
+                installed_version: Some("1.0.0".into()),
+                fixed_version: Some("1.0.1".into()),
+            })
+        );
+        assert_eq!(evidence.kind, Some(EvidenceKind::Observation));
+        assert_eq!(evidence.engine_run_id.as_deref(), Some("task-1"));
+        assert_eq!(
+            evidence.artifact_id.as_deref(),
+            Some("artifact-finding-high")
+        );
+        assert_eq!(evidence.redacted, Some(true));
+        assert_eq!(
+            report.findings[0].official_references.as_deref(),
+            Some(["https://example.test/frozen-rule".into()].as_slice())
         );
         assert_eq!(
             report.findings[0].confidence_basis_code,
@@ -4653,7 +4788,7 @@ mod tests {
     }
 
     #[test]
-    fn httpx_only_run_says_it_is_service_inventory_not_security_checks() {
+    fn httpx_only_run_says_it_is_inventory_not_security_checks() {
         let mut task = catalog_task("completed", EngineRunStatus::Completed);
         task.engine_id = "httpx".into();
         let case = case_with_catalog_tasks(vec![task], true);
@@ -4661,12 +4796,11 @@ mod tests {
         let report = build_beginner_master_report(&case, "run-1").unwrap();
 
         assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
-        assert!(run_is_service_inventory_only(&case.scan_runs[0]));
+        assert!(run_is_non_security_only(&case.scan_runs[0]));
         assert!(
-            report
-                .state
-                .explanation
-                .contains("No vulnerability or configuration check ran")
+            report.state.explanation.contains(
+                "No vulnerability, configuration, code, or secret security check completed"
+            )
         );
         assert!(
             !report
@@ -4674,9 +4808,82 @@ mod tests {
                 .explanation
                 .contains("Every exact requested dimension")
         );
-        assert!(
-            service_inventory_explanation(BeginnerReportSummary::Complete, ReportLifecycle::Final)
-                .contains("service inventory completed")
+        assert_eq!(
+            report.actual.checks[0].effective_result_kind(),
+            CheckResultKind::Inventory
+        );
+    }
+
+    #[test]
+    fn inventory_engines_are_not_completed_security_checks() {
+        for engine_id in ["cloudquery", "syft", "naabu", "httpx"] {
+            let mut task = catalog_task("completed", EngineRunStatus::Completed);
+            task.engine_id = engine_id.into();
+            let case = case_with_catalog_tasks(vec![task], true);
+
+            let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+            assert_eq!(
+                report.actual.checks[0].result_kind,
+                Some(CheckResultKind::Inventory),
+                "{engine_id} must remain inventory"
+            );
+            assert!(run_is_non_security_only(&case.scan_runs[0]));
+            assert!(report.state.explanation.contains(
+                "No vulnerability, configuration, code, or secret security check completed"
+            ));
+            assert!(!report.state.explanation.contains("no problems"));
+        }
+    }
+
+    #[test]
+    fn mixed_inventory_and_security_tasks_keep_each_result_kind() {
+        let mut syft = catalog_task("syft-completed", EngineRunStatus::Completed);
+        syft.engine_id = "syft".into();
+        let mut trivy = catalog_task("trivy-completed", EngineRunStatus::Completed);
+        trivy.engine_id = "trivy".into();
+        let case = case_with_catalog_tasks(vec![syft, trivy], true);
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        let kinds = report
+            .actual
+            .checks
+            .iter()
+            .map(|check| (check.check_id.as_str(), check.result_kind))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(kinds.get("syft"), Some(&Some(CheckResultKind::Inventory)));
+        assert_eq!(
+            kinds.get("trivy"),
+            Some(&Some(CheckResultKind::SecurityCheck))
+        );
+        assert!(!run_is_non_security_only(&case.scan_runs[0]));
+        assert!(!report.state.explanation.contains("only inventory"));
+    }
+
+    #[test]
+    fn legacy_result_kind_is_conservative_for_known_non_security_checks() {
+        for check_id in [
+            "cloudquery",
+            "cloudquery-aws",
+            "syft",
+            "syft-repository",
+            "naabu",
+            "httpx-service",
+        ] {
+            assert_eq!(
+                legacy_check_result_kind(check_id),
+                CheckResultKind::Inventory,
+                "legacy {check_id} must not become a clean security result"
+            );
+        }
+        assert_eq!(
+            legacy_check_result_kind("native localhost TCP check on 127.0.0.1:9001"),
+            CheckResultKind::Connectivity
+        );
+        assert_eq!(
+            legacy_check_result_kind("trivy"),
+            CheckResultKind::SecurityCheck
         );
     }
 
@@ -4794,21 +5001,75 @@ mod tests {
 
     #[test]
     fn legacy_report_without_group_projection_deserializes_with_an_empty_projection() {
-        let case = localhost_case(
+        let mut case = localhost_case(
             LocalhostTcpOutcome::Reachable,
             EngineRunStatus::Completed,
             true,
         );
+        let finding = frozen_finding(&case, "finding-legacy", 50, Severity::Medium);
+        case.findings.push(finding.clone());
+        case.finding_observations
+            .push(observation(&finding, "run-1", instant(18)));
         let report = build_beginner_master_report(&case, "run-1").unwrap();
         let mut legacy = serde_json::to_value(report).unwrap();
         let legacy = legacy.as_object_mut().unwrap();
         legacy.insert("schema_version".into(), serde_json::json!("1.0.0"));
         legacy.remove("finding_groups");
+        legacy
+            .get_mut("actual")
+            .and_then(serde_json::Value::as_object_mut)
+            .and_then(|actual| actual.get_mut("checks"))
+            .and_then(serde_json::Value::as_array_mut)
+            .and_then(|checks| checks.first_mut())
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap()
+            .remove("result_kind");
+        let legacy_finding = legacy
+            .get_mut("findings")
+            .and_then(serde_json::Value::as_array_mut)
+            .and_then(|findings| findings.first_mut())
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap();
+        legacy_finding.remove("official_references");
+        let legacy_evidence = legacy_finding
+            .get_mut("evidence_references")
+            .and_then(serde_json::Value::as_array_mut)
+            .and_then(|references| references.first_mut())
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap();
+        for field in [
+            "details_frozen",
+            "source_rule",
+            "scanner_details",
+            "summary",
+            "kind",
+            "engine_run_id",
+            "artifact_id",
+            "redacted",
+        ] {
+            legacy_evidence.remove(field);
+        }
 
         let decoded: BeginnerMasterReport =
             serde_json::from_value(serde_json::Value::Object(legacy.clone())).unwrap();
         assert_eq!(decoded.schema_version, "1.0.0");
         assert!(decoded.finding_groups.is_empty());
+        assert_eq!(decoded.actual.checks[0].result_kind, None);
+        assert_eq!(
+            decoded.actual.checks[0].effective_result_kind(),
+            CheckResultKind::Connectivity
+        );
+        let decoded_finding = &decoded.findings[0];
+        assert!(decoded_finding.official_references.is_none());
+        let decoded_evidence = &decoded_finding.evidence_references[0];
+        assert!(!decoded_evidence.details_frozen);
+        assert!(decoded_evidence.source_rule.is_none());
+        assert!(decoded_evidence.scanner_details.is_none());
+        assert!(decoded_evidence.summary.is_none());
+        assert!(decoded_evidence.kind.is_none());
+        assert!(decoded_evidence.engine_run_id.is_none());
+        assert!(decoded_evidence.artifact_id.is_none());
+        assert!(decoded_evidence.redacted.is_none());
     }
 
     fn frozen_finding(
@@ -4842,7 +5103,8 @@ mod tests {
                 engine_run_id: Some("task-1".into()),
                 kind: EvidenceKind::Observation,
                 engine_id: BUILT_IN_LOCALHOST_TCP_ENGINE_ID.into(),
-                source_rule: None,
+                scanner_details: None,
+                source_rule: Some(format!("upstream-rule-{id}")),
                 result_pointer_sha256: None,
                 observed_at: instant(17),
                 summary: "Evidence".into(),

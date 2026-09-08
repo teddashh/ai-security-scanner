@@ -15,8 +15,8 @@ use crate::artifact_store::{
 };
 use crate::beginner_report::{
     BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerMasterReport, BeginnerReportSummary,
-    CoverageDimensionStatus, CoverageGap, CoverageGapKind, FindingSnapshotSource, NextActionCode,
-    ReportLifecycle, ReportScanStage, RequestedLimitSource, run_is_service_inventory_only,
+    CheckResultKind, CoverageDimensionStatus, CoverageGap, CoverageGapKind, FindingSnapshotSource,
+    NextActionCode, ReportLifecycle, ReportScanStage, RequestedLimitSource,
 };
 use crate::bootstrap::executor::list_bootstrap_cleanup_obligations;
 use crate::connectors::{
@@ -10593,6 +10593,7 @@ fn same_retry_evidence_commitment(
         && existing.engine_run_id == incoming.engine_run_id
         && existing.kind == incoming.kind
         && existing.engine_id == incoming.engine_id
+        && existing.scanner_details == incoming.scanner_details
         && existing.source_rule == incoming.source_rule
         && existing.result_pointer_sha256 == incoming.result_pointer_sha256
         && existing.summary == incoming.summary
@@ -13309,15 +13310,6 @@ enum HtmlAssetResultStatus {
     NotTested,
 }
 
-fn report_check_is_preparation_only(check_id: &str) -> bool {
-    let normalized = check_id.trim().to_ascii_lowercase();
-    normalized == "naabu"
-        || normalized.starts_with("naabu-")
-        || normalized == "httpx"
-        || normalized.starts_with("httpx-")
-        || normalized.starts_with("native localhost tcp check on ")
-}
-
 fn html_gap_next_action(gap: &CoverageGap, catalog: HtmlReportCatalog) -> String {
     match gap.next_action_code {
         NextActionCode::ReviewFinding => catalog
@@ -13413,7 +13405,7 @@ fn html_asset_result_section(
             .iter()
             .filter(|check| {
                 check.status == CoverageDimensionStatus::TestedComplete
-                    && !report_check_is_preparation_only(&check.check_id)
+                    && check.effective_result_kind() == CheckResultKind::SecurityCheck
             })
             .count();
         let finding_count = report
@@ -13670,6 +13662,175 @@ fn replace_target_ids(value: &str, labels: &BTreeMap<Id, String>) -> String {
     display
 }
 
+fn html_evidence_reference(
+    reference: &crate::beginner_report::FindingEvidenceReference,
+    catalog: HtmlReportCatalog,
+) -> String {
+    let identity = format!(
+        concat!("<code>{}</code><br>", "{} {} · {} {} · {} {}"),
+        html_escape(&reference.artifact_sha256),
+        catalog.text("Evidence", "證據"),
+        html_escape(&reference.evidence_id),
+        catalog.text("Check", "檢查"),
+        html_escape(&reference.engine_id),
+        catalog.text("Observed", "觀察時間"),
+        html_escape(&catalog.format_time(&reference.observed_at)),
+    );
+    if !reference.details_frozen {
+        return format!(
+            "<li>{identity}<p><em>{}</em></p></li>",
+            catalog.text(
+                "Detailed evidence fields were not frozen for this legacy result; this report does not infer them from the current finding or another run.",
+                "這筆舊版結果未凍結詳細證據欄位；本報告不會從目前的問題紀錄或其他掃描輪次推測這些內容。",
+            )
+        );
+    }
+
+    let unavailable = catalog.text("not provided", "未提供");
+    let source_rule = reference.source_rule.as_deref().unwrap_or(unavailable);
+    let summary = reference.summary.as_deref().unwrap_or(unavailable);
+    let kind = reference
+        .kind
+        .as_ref()
+        .map(|kind| catalog.identifier(&enum_key(kind)))
+        .unwrap_or_else(|| unavailable.into());
+    let engine_run_id = reference.engine_run_id.as_deref().unwrap_or(unavailable);
+    let artifact_id = reference.artifact_id.as_deref().unwrap_or(unavailable);
+    let location = reference.location.as_deref().unwrap_or(unavailable);
+    let redacted = match reference.redacted {
+        Some(true) => catalog.text("Yes", "是"),
+        Some(false) => catalog.text("No", "否"),
+        None => unavailable,
+    };
+
+    let scanner_details = match &reference.scanner_details {
+        Some(details) => {
+            let mut rows = String::new();
+            if let Some(description) = &details.description {
+                rows.push_str(&format!(
+                    "<dt>{}</dt><dd>{}</dd>",
+                    catalog.text(
+                        "Scanner-provided description (untrusted)",
+                        "掃描工具提供的說明（不受信任）"
+                    ),
+                    html_escape(description),
+                ));
+            }
+            if let Some(remediation) = &details.remediation {
+                rows.push_str(&format!(
+                    "<dt>{}</dt><dd>{}</dd>",
+                    catalog.text(
+                        "Scanner-provided remediation (untrusted; human review required; does not replace the product recommendation)",
+                        "掃描工具提供的修復資訊（不受信任；必須由人工審查；不取代本產品的建議）"
+                    ),
+                    html_escape(remediation),
+                ));
+            }
+            if let Some(installed_version) = &details.installed_version {
+                rows.push_str(&format!(
+                    "<dt>{}</dt><dd><code>{}</code></dd>",
+                    catalog.text(
+                        "Scanner-provided installed version",
+                        "掃描工具提供的已安裝版本"
+                    ),
+                    html_escape(installed_version),
+                ));
+            }
+            if let Some(fixed_version) = &details.fixed_version {
+                rows.push_str(&format!(
+                    "<dt>{}</dt><dd><code>{}</code></dd>",
+                    catalog.text(
+                        "Scanner-provided fixed version",
+                        "掃描工具提供的修正版版本"
+                    ),
+                    html_escape(fixed_version),
+                ));
+            }
+            if rows.is_empty() {
+                format!(
+                    "<p><em>{}</em></p>",
+                    catalog.text(
+                        "The scanner retained no structured description, remediation, or version detail for this evidence.",
+                        "掃描工具未替這筆證據保留結構化說明、修復資訊或版本細節。"
+                    )
+                )
+            } else {
+                format!(
+                    "<p><strong>{}</strong></p><dl>{rows}</dl>",
+                    catalog.text(
+                        "Scanner-provided details are untrusted evidence. Review them as text; this product never executes them.",
+                        "掃描工具提供的細節是不受信任的證據。請僅以文字檢視；本產品絕不執行其中內容。"
+                    )
+                )
+            }
+        }
+        None => format!(
+            "<p><em>{}</em></p>",
+            catalog.text(
+                "The scanner provided no structured description, remediation, or version detail for this evidence.",
+                "掃描工具未替這筆證據提供結構化說明、修復資訊或版本細節。"
+            )
+        ),
+    };
+
+    format!(
+        concat!(
+            "<li>{}<dl>",
+            "<dt>{}</dt><dd><code>{}</code></dd>",
+            "<dt>{}</dt><dd>{}</dd>",
+            "<dt>{}</dt><dd>{}</dd>",
+            "<dt>{}</dt><dd><code>{}</code></dd>",
+            "<dt>{}</dt><dd><code>{}</code></dd>",
+            "<dt>{}</dt><dd>{}</dd>",
+            "<dt>{}</dt><dd>{}</dd>",
+            "</dl>{}</li>"
+        ),
+        identity,
+        catalog.text("Source rule", "來源規則"),
+        html_escape(source_rule),
+        catalog.text("Evidence summary", "證據摘要"),
+        html_escape(summary),
+        catalog.text("Evidence kind", "證據類型"),
+        html_escape(&kind),
+        catalog.text("Engine run ID", "掃描工具執行 ID"),
+        html_escape(engine_run_id),
+        catalog.text("Artifact ID", "成品 ID"),
+        html_escape(artifact_id),
+        catalog.text("Redacted", "已遮蔽"),
+        redacted,
+        catalog.text("Evidence location", "證據位置"),
+        html_escape(location),
+        scanner_details,
+    )
+}
+
+fn html_official_references(
+    references: &Option<Vec<String>>,
+    catalog: HtmlReportCatalog,
+) -> String {
+    match references {
+        Some(references) if !references.is_empty() => references
+            .iter()
+            // Render scanner URLs as inert text. The report never creates a
+            // remote-loading element or turns untrusted scanner text into a
+            // clickable navigation instruction.
+            .map(|reference| format!("<li><code>{}</code></li>", html_escape(reference)))
+            .collect(),
+        Some(_) => catalog
+            .text(
+                "<li>No official scanner reference was retained for this selected-run finding.</li>",
+                "<li>本輪保存的問題未保留掃描工具官方參照。</li>",
+            )
+            .into(),
+        None => catalog
+            .text(
+                "<li>Official references were not frozen for this legacy result; none are inferred from the current finding.</li>",
+                "<li>這筆舊版結果未凍結官方參照；本報告不會從目前的問題紀錄推測參照。</li>",
+            )
+            .into(),
+    }
+}
+
 fn html_report_bytes(
     case: &AssessmentCase,
     run_id: &str,
@@ -13689,15 +13850,16 @@ fn html_report_bytes(
         report.requested.stage.value,
         Some(ReportScanStage::ConnectionDiagnostic)
     );
-    let service_inventory_only = case
-        .scan_runs
-        .iter()
-        .find(|run| run.id == run_id)
-        .is_some_and(run_is_service_inventory_only);
+    let non_security_only = !report.actual.checks.is_empty()
+        && report
+            .actual
+            .checks
+            .iter()
+            .all(|check| check.effective_result_kind() != CheckResultKind::SecurityCheck);
     let report_summary = if connection_diagnostic {
         catalog.text("Connection test only", "僅連線測試")
-    } else if service_inventory_only {
-        catalog.text("Service inventory only", "僅完成服務盤點")
+    } else if non_security_only {
+        catalog.text("Inventory or connectivity only", "僅完成盤點或連線工作")
     } else {
         match report.state.summary {
             BeginnerReportSummary::Complete => catalog.text("Complete", "完整"),
@@ -13713,13 +13875,13 @@ fn html_report_bytes(
     };
     let report_explanation = if connection_diagnostic {
         catalog.text(
-            "No vulnerability scan ran. This result records only whether one local port accepted, refused, or timed out during a bounded TCP connection attempt.",
-            "沒有執行漏洞掃描。這份結果只記錄單一本機連接埠在有限制的 TCP 連線嘗試中接受、拒絕或逾時。",
+            "No vulnerability, configuration, code, or secret security check completed. This result records only whether one local port accepted, refused, or timed out during a bounded TCP connection attempt; it is not a no-problems security result.",
+            "未完成漏洞、設定、程式碼或秘密資訊資安檢查。這份結果只記錄單一本機連接埠在有限制的 TCP 連線嘗試中接受、拒絕或逾時，不能解讀為未發現資安問題。",
         )
-    } else if service_inventory_only {
+    } else if non_security_only {
         catalog.text(
-            "This run only checked which network or HTTP services responded. It did not run a vulnerability or configuration check.",
-            "本輪只確認哪些網路或 HTTP 服務有回應；沒有執行漏洞或設定檢查。",
+            "This run contains only inventory or connectivity work. It did not complete a vulnerability, configuration, code, or secret security check. These observations are not a no-problems security result.",
+            "本輪只包含盤點或連線工作；未完成漏洞、設定、程式碼或秘密資訊資安檢查。這些觀察不能解讀為未發現資安問題。",
         )
     } else {
         match (report.state.summary, report.state.lifecycle) {
@@ -14246,18 +14408,7 @@ fn html_report_bytes(
         let mut evidence = finding
             .evidence_references
             .iter()
-            .map(|reference| {
-                format!(
-                    concat!("<li><code>{}</code><br>", "{} {} · {} {} · {} {}</li>"),
-                    html_escape(&reference.artifact_sha256),
-                    catalog.text("Evidence", "證據"),
-                    html_escape(&reference.evidence_id),
-                    catalog.text("Check", "檢查"),
-                    html_escape(&reference.engine_id),
-                    catalog.text("Observed", "觀察時間"),
-                    html_escape(&catalog.format_time(&reference.observed_at)),
-                )
-            })
+            .map(|reference| html_evidence_reference(reference, catalog))
             .collect::<String>();
         if evidence.is_empty() {
             evidence.push_str(
@@ -14267,6 +14418,7 @@ fn html_report_bytes(
                 ),
             );
         }
+        let official_references = html_official_references(&finding.official_references, catalog);
         let mut frameworks = finding
             .framework_references
             .iter()
@@ -14362,6 +14514,7 @@ fn html_report_bytes(
                     "<p>{}</p>",
                     "<p><strong>{}:</strong> {} · <strong>{}:</strong> {}</p>",
                     "<p><strong>{}:</strong> <code>{}</code></p>",
+                    "<h4>{}</h4><ul>{}</ul>",
                     "<h4>{}</h4><ul>{}</ul></article>"
                 ),
                 observation_kind,
@@ -14377,6 +14530,8 @@ fn html_report_bytes(
                 html_escape(&finding.finding_id),
                 catalog.text("Evidence SHA-256", "證據 SHA-256"),
                 evidence,
+                catalog.text("Official scanner references", "掃描工具官方參照"),
+                official_references,
             ));
             continue;
         }
@@ -14398,6 +14553,7 @@ fn html_report_bytes(
                 "<h4>{}</h4><ul>{}</ul>",
                 "<h4>{}</h4><p>{}</p>",
                 "<p><strong>{}:</strong> {}</p>",
+                "<h4>{}</h4><ul>{}</ul>",
                 "<h4>{}</h4><ul>{}</ul>",
                 "<h4>{}</h4><ul>{}</ul></article>"
             ),
@@ -14427,6 +14583,8 @@ fn html_report_bytes(
             html_escape(&expert_type),
             catalog.text("Evidence SHA-256", "證據 SHA-256"),
             evidence,
+            catalog.text("Official scanner references", "掃描工具官方參照"),
+            official_references,
             catalog.text("Related framework coordinates", "相關框架座標"),
             frameworks,
         ));
@@ -20243,8 +20401,10 @@ mod tests {
             html_report_bytes(&case, &prepared.scan_run_id, &ExportOptions::default()).unwrap(),
         )
         .unwrap();
-        assert!(html.contains("Service inventory only"));
-        assert!(html.contains("did not run a vulnerability or configuration check"));
+        assert!(html.contains("Inventory or connectivity only"));
+        assert!(html.contains(
+            "did not complete a vulnerability, configuration, code, or secret security check"
+        ));
         assert!(html.contains(&expected_unit_count));
         assert!(html.contains("Exact network coverage and outcome"));
         assert!(html.contains("[redacted address set 1]"));
@@ -28267,6 +28427,7 @@ mod tests {
     fn html_report_projects_master_report_timing_findings_and_redacted_technical_details() {
         const RAW_SCANNER_SENTINEL: &str = "RAW_SCANNER_MESSAGE_MUST_NOT_APPEAR";
         const MUTABLE_CANONICAL_SENTINEL: &str = "MUTABLE_CANONICAL_TITLE_MUST_NOT_APPEAR";
+        const NEWER_EVIDENCE_SENTINEL: &str = "NEWER_EVIDENCE_MUST_NOT_APPEAR";
 
         let fixture = Fixture::new();
         let created = fixture.create();
@@ -28389,11 +28550,19 @@ mod tests {
                 engine_run_id: Some(task_id.clone()),
                 kind: EvidenceKind::SourceCode,
                 engine_id: "gitleaks".into(),
+                scanner_details: Some(crate::domain::ScannerFindingDetails {
+                    description: Some(
+                        "Scanner description <img src=\"https://remote.invalid/x\">".into(),
+                    ),
+                    remediation: Some("Run <script>alert('unsafe')</script> manually".into()),
+                    installed_version: Some("installed<1.2.3>".into()),
+                    fixed_version: Some("1.2.4&later".into()),
+                }),
                 source_rule: Some("generic-api-key".into()),
                 result_pointer_sha256: None,
                 observed_at: finished,
-                summary: "Redacted selected-run evidence".into(),
-                location: None,
+                summary: "Redacted selected-run evidence <summary>".into(),
+                location: Some("src/<secret>&token.txt".into()),
                 artifact_id: "artifact-html".into(),
                 artifact_sha256: evidence_sha256.clone(),
                 pointer: None,
@@ -28426,13 +28595,23 @@ mod tests {
                 "After an approved manual change, rerun Gitleaks with the same authorized scope and confirm that source rule generic-api-key is no longer reported."
                     .into(),
             rollback_considerations: Some(crate::finding_narrative::ENGLISH_ROLLBACK.into()),
-            official_references: vec![],
+            official_references: vec!["https://docs.example/rule?<raw>&x=1".into()],
             recommended_expert_type: "Secrets-response specialist".into(),
             status: FindingStatus::Unreviewed,
             tags: vec![],
         };
         let mut mutable_canonical = frozen_finding.clone();
         mutable_canonical.title = MUTABLE_CANONICAL_SENTINEL.into();
+        mutable_canonical.evidence[0].summary = NEWER_EVIDENCE_SENTINEL.into();
+        mutable_canonical.evidence[0].source_rule = Some(NEWER_EVIDENCE_SENTINEL.into());
+        mutable_canonical.evidence[0].scanner_details =
+            Some(crate::domain::ScannerFindingDetails {
+                description: Some(NEWER_EVIDENCE_SENTINEL.into()),
+                remediation: Some(NEWER_EVIDENCE_SENTINEL.into()),
+                installed_version: Some(NEWER_EVIDENCE_SENTINEL.into()),
+                fixed_version: Some(NEWER_EVIDENCE_SENTINEL.into()),
+            });
+        mutable_canonical.official_references = vec![NEWER_EVIDENCE_SENTINEL.into()];
         case.findings.push(mutable_canonical);
         case.finding_observations.push(FindingObservation {
             id: "observation-html".into(),
@@ -28465,10 +28644,14 @@ mod tests {
             vec![crate::finding_narrative::ENGLISH_EXPOSURE_OBSERVATION_REASON.into()];
         exposure_observation.recommendation =
             "EXPOSURE_REMEDIATION_MUST_NOT_APPEAR_AS_A_PRIORITY".into();
+        exposure_observation.official_references.clear();
         exposure_observation.tags = vec!["port:443".into(), "protocol:tcp".into()];
         exposure_observation.evidence[0].id = "evidence-reachable-service".into();
         exposure_observation.evidence[0].finding_id = exposure_observation.id.clone();
         exposure_observation.evidence[0].engine_id = "naabu".into();
+        exposure_observation.evidence[0].scanner_details = None;
+        exposure_observation.evidence[0].source_rule = None;
+        exposure_observation.evidence[0].summary = "Reachable service evidence".into();
         exposure_observation.evidence[0].artifact_sha256 = "9".repeat(64);
         case.findings.push(exposure_observation.clone());
         case.finding_observations.push(FindingObservation {
@@ -28581,6 +28764,30 @@ mod tests {
             "Redacted diagnostic log".into(),
             "Availability:</strong> Unavailable".into(),
             "No run-bound redacted diagnostic log is retained in the case model.".into(),
+            "Source rule".into(),
+            "generic-api-key".into(),
+            "Evidence summary".into(),
+            "Redacted selected-run evidence &lt;summary&gt;".into(),
+            "Evidence kind".into(),
+            "Source Code".into(),
+            "Engine run ID".into(),
+            task_id.clone(),
+            "Artifact ID".into(),
+            "artifact-html".into(),
+            "Redacted</dt><dd>Yes".into(),
+            "Evidence location".into(),
+            "src/&lt;secret&gt;&amp;token.txt".into(),
+            "Scanner-provided details are untrusted evidence".into(),
+            "Scanner-provided description (untrusted)".into(),
+            "Scanner description &lt;img src=&quot;https://remote.invalid/x&quot;&gt;".into(),
+            "Scanner-provided remediation (untrusted; human review required; does not replace the product recommendation)".into(),
+            "Run &lt;script&gt;alert(&#39;unsafe&#39;)&lt;/script&gt; manually".into(),
+            "Scanner-provided installed version".into(),
+            "installed&lt;1.2.3&gt;".into(),
+            "Scanner-provided fixed version".into(),
+            "1.2.4&amp;later".into(),
+            "Official scanner references".into(),
+            "https://docs.example/rule?&lt;raw&gt;&amp;x=1".into(),
         ] {
             assert!(html.contains(&expected), "HTML omitted {expected}");
         }
@@ -28636,6 +28843,10 @@ mod tests {
         }
         assert!(!html.contains(RAW_SCANNER_SENTINEL));
         assert!(!html.contains(MUTABLE_CANONICAL_SENTINEL));
+        assert!(!html.contains(NEWER_EVIDENCE_SENTINEL));
+        assert!(!html.contains("<img src="));
+        assert!(!html.contains("<script>"));
+        assert!(!html.contains("href=\"https://docs.example"));
 
         // The zh-Hant report translated its headings and printed the finding's
         // own three sentences as stored English underneath them: 可能影響 over
@@ -28707,6 +28918,24 @@ mod tests {
             "Frozen selected-run secret exposure — 嚴重程度：高；信心程度：低 — 本產品依據尚未驗證的樣式或偵測器比對結果評定",
             "某個身分未登記多重要素驗證裝置的證據，與驗證使用者及保護驗證資訊有關。",
             "<br>關係: 相關",
+            "來源規則",
+            "證據摘要",
+            "Redacted selected-run evidence &lt;summary&gt;",
+            "證據類型",
+            "Source Code",
+            "掃描工具執行 ID",
+            "成品 ID",
+            "已遮蔽</dt><dd>是",
+            "證據位置",
+            "src/&lt;secret&gt;&amp;token.txt",
+            "掃描工具提供的細節是不受信任的證據",
+            "掃描工具提供的說明（不受信任）",
+            "Scanner description &lt;img src=&quot;https://remote.invalid/x&quot;&gt;",
+            "掃描工具提供的修復資訊（不受信任；必須由人工審查；不取代本產品的建議）",
+            "Run &lt;script&gt;alert(&#39;unsafe&#39;)&lt;/script&gt; manually",
+            "掃描工具提供的已安裝版本",
+            "掃描工具提供的修正版版本",
+            "掃描工具官方參照",
         ] {
             assert!(
                 zh_html.contains(composed),
@@ -28756,6 +28985,59 @@ mod tests {
             assert!(zh_html.contains(verbatim), "zh-Hant report lost {verbatim}");
             assert!(html.contains(verbatim), "English report lost {verbatim}");
         }
+        assert!(!zh_html.contains(NEWER_EVIDENCE_SENTINEL));
+        assert!(!zh_html.contains("<img src="));
+        assert!(!zh_html.contains("<script>"));
+        assert!(!zh_html.contains("href=\"https://docs.example"));
+    }
+
+    #[test]
+    fn html_evidence_legacy_fallback_never_reads_unfrozen_detail_fields() {
+        let sentinel = "NEWER_OR_UNFROZEN_EVIDENCE_MUST_NOT_RENDER";
+        let reference = crate::beginner_report::FindingEvidenceReference {
+            evidence_id: "legacy-evidence".into(),
+            engine_id: "legacy-engine".into(),
+            details_frozen: false,
+            source_rule: Some(sentinel.into()),
+            scanner_details: Some(crate::domain::ScannerFindingDetails {
+                description: Some(sentinel.into()),
+                remediation: Some(sentinel.into()),
+                installed_version: Some(sentinel.into()),
+                fixed_version: Some(sentinel.into()),
+            }),
+            summary: Some(sentinel.into()),
+            kind: Some(EvidenceKind::Configuration),
+            engine_run_id: Some(sentinel.into()),
+            artifact_id: Some(sentinel.into()),
+            redacted: Some(false),
+            artifact_sha256: "a".repeat(64),
+            observed_at: Utc::now(),
+            location: Some(sentinel.into()),
+        };
+
+        let en = html_evidence_reference(
+            &reference,
+            HtmlReportCatalog::new(crate::export::ReportLocale::En),
+        );
+        assert!(en.contains("Detailed evidence fields were not frozen for this legacy result"));
+        assert!(!en.contains(sentinel));
+        let zh = html_evidence_reference(
+            &reference,
+            HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant),
+        );
+        assert!(zh.contains("這筆舊版結果未凍結詳細證據欄位"));
+        assert!(!zh.contains(sentinel));
+
+        let en_references = html_official_references(
+            &None,
+            HtmlReportCatalog::new(crate::export::ReportLocale::En),
+        );
+        assert!(en_references.contains("not frozen for this legacy result"));
+        let zh_references = html_official_references(
+            &None,
+            HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant),
+        );
+        assert!(zh_references.contains("這筆舊版結果未凍結官方參照"));
     }
 
     #[test]
@@ -28794,6 +29076,7 @@ mod tests {
         let completed_check = report.actual.checks.first_mut().unwrap();
         completed_check.task_id = "task-completed".into();
         completed_check.check_id = "greenbone".into();
+        completed_check.result_kind = Some(CheckResultKind::SecurityCheck);
         completed_check.status = CoverageDimensionStatus::TestedComplete;
         report.findings.clear();
         report.coverage_gaps = vec![CoverageGap {
@@ -28848,6 +29131,47 @@ mod tests {
         let zh_html = html_asset_result_section(&report, &zh_labels, zh_catalog);
         assert!(zh_html.contains("伺服器或工作站"));
         assert!(zh_html.contains("採用結果前，先檢視涵蓋缺口。"));
+    }
+
+    #[test]
+    fn html_asset_board_does_not_promote_inventory_and_counts_mixed_security_work() {
+        let fixture = Fixture::new();
+        let prepared = crate::localhost_quick_scan::prepare_localhost_quick_scan(
+            &fixture.storage,
+            fixture.engines.manifests(),
+            9001,
+        )
+        .unwrap();
+        let case = fixture
+            .storage
+            .get_case(&prepared.prepared.case_id)
+            .unwrap();
+        let mut report =
+            build_beginner_master_report(&case, &prepared.prepared.scan_run_id).unwrap();
+        let inventory = report.actual.checks.first_mut().unwrap();
+        inventory.status = CoverageDimensionStatus::TestedComplete;
+        inventory.result_kind = Some(CheckResultKind::Inventory);
+        report.findings.clear();
+        report.coverage_gaps.clear();
+
+        let catalog = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let labels = readable_target_labels(&report, catalog);
+        for check_id in ["syft", "cloudquery"] {
+            report.actual.checks[0].check_id = check_id.into();
+            let html = html_asset_result_section(&report, &labels, catalog);
+            assert!(html.contains("asset-result--not-tested"));
+            assert!(!html.contains("completed security check reported no problems"));
+        }
+
+        let mut trivy = report.actual.checks[0].clone();
+        trivy.task_id = "trivy-task".into();
+        trivy.check_id = "trivy".into();
+        trivy.result_kind = Some(CheckResultKind::SecurityCheck);
+        report.actual.checks.push(trivy);
+        let mixed_html = html_asset_result_section(&report, &labels, catalog);
+        assert!(mixed_html.contains("asset-result--no-problems-completed"));
+        assert!(mixed_html.contains("1 completed security check reported no problems"));
+        assert!(!mixed_html.contains("2 completed security checks"));
     }
 
     #[test]
@@ -28909,7 +29233,7 @@ mod tests {
         for expected in [
             "Connection test (not a vulnerability scan)",
             "Connection test only",
-            "No vulnerability scan ran.",
+            "No vulnerability, configuration, code, or secret security check completed.",
             "Web service",
             "saved task settings",
             "127.0.0.1:9001",
@@ -29084,6 +29408,7 @@ mod tests {
                     engine_run_id: None,
                     kind: EvidenceKind::Configuration,
                     engine_id: fingerprint.split(':').next().unwrap().into(),
+                    scanner_details: None,
                     source_rule: None,
                     result_pointer_sha256: None,
                     observed_at: now,
@@ -32732,6 +33057,7 @@ mod tests {
                 engine_run_id: Some("engine-run-1".into()),
                 kind: EvidenceKind::Configuration,
                 engine_id: "cloudquery".into(),
+                scanner_details: None,
                 source_rule: None,
                 result_pointer_sha256: None,
                 observed_at: now,
@@ -33214,6 +33540,7 @@ mod tests {
                 engine_run_id: Some(format!("engine-{run_id}")),
                 kind: EvidenceKind::Configuration,
                 engine_id: "cloudquery".into(),
+                scanner_details: None,
                 source_rule: None,
                 result_pointer_sha256: None,
                 observed_at: Utc::now(),
@@ -33318,6 +33645,7 @@ mod tests {
                 engine_run_id: Some(format!("engine-{run_id}")),
                 kind: EvidenceKind::ExternalValidation,
                 engine_id: NAABU_ENGINE_ID.into(),
+                scanner_details: None,
                 source_rule: Some("open-tcp-port".into()),
                 result_pointer_sha256: Some(hash_byte.to_string().repeat(64)),
                 observed_at: created_at,

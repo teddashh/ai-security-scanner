@@ -202,6 +202,7 @@ fn to_event(
             "severity_id": severity_id,
             "severity": severity,
             "message": crate::finding_narrative::EXPOSURE_OBSERVATION_RISK,
+            "resources": resources,
             "metadata": {
                 "uid": observation.id,
                 "original_event_uid": observation.id,
@@ -248,6 +249,10 @@ fn to_event(
         "record_kind": "security_finding",
         "canonical_fingerprint": observation.fingerprint,
         "canonical_confidence": confidence_name(&observation.confidence),
+        "finding_family": finding.family,
+        "severity_basis": finding.severity_basis_code,
+        "confidence_basis": finding.confidence_basis_code,
+        "context_factors": finding.context_factors,
         "priority": finding.priority,
         "priority_reasons": finding.priority_reasons,
         "possible_impact": finding.possible_impact,
@@ -340,20 +345,40 @@ fn asset_kind_name(asset: &Asset) -> String {
 }
 
 fn evidence_value(evidence: &Evidence) -> Value {
+    let mut data = json!({
+        "summary": evidence.summary,
+        "engine_id": evidence.engine_id,
+        "source_rule": evidence.source_rule,
+        "scan_run_id": evidence.run_id,
+        "engine_run_id": evidence.engine_run_id,
+        "artifact_uid": evidence.artifact_id,
+        "artifact_sha256": evidence.artifact_sha256,
+        "result_pointer_sha256": evidence.result_pointer_sha256,
+        "location": evidence.location,
+        "pointer": evidence.pointer,
+        "redacted": evidence.redacted,
+        "observed_time": evidence.observed_at.timestamp_millis()
+    });
+    if let Some(details) = &evidence.scanner_details {
+        data.as_object_mut()
+            .expect("OCSF evidence data is an object")
+            .insert(
+                "ai_security_scanner".into(),
+                json!({
+                    "scanner_provided_details": {
+                        "trust": "untrusted",
+                        "description": details.description,
+                        "remediation": details.remediation,
+                        "installed_version": details.installed_version,
+                        "fixed_version": details.fixed_version
+                    }
+                }),
+            );
+    }
     json!({
         "uid": evidence.id,
         "name": format!("{:?}", evidence.kind),
-        "data": {
-            "summary": evidence.summary,
-            "engine_id": evidence.engine_id,
-            "scan_run_id": evidence.run_id,
-            "engine_run_id": evidence.engine_run_id,
-            "artifact_uid": evidence.artifact_id,
-            "artifact_sha256": evidence.artifact_sha256,
-            "pointer": evidence.pointer,
-            "redacted": evidence.redacted,
-            "observed_time": evidence.observed_at.timestamp_millis()
-        }
+        "data": data
     })
 }
 
@@ -507,7 +532,13 @@ mod tests {
 
     #[test]
     fn maps_to_detection_finding_without_compliance_assertions() {
-        let events = export_ocsf_finding_events(&fixture(), "run-1").unwrap();
+        let mut case = fixture();
+        case.findings[0].family = Some(FindingFamily::CloudPosture);
+        case.findings[0].severity_basis_code = Some(SeverityBasisCode::CloudControlQuery);
+        case.findings[0].confidence_basis_code =
+            Some(ConfidenceBasisCode::DeterministicPolicyEvaluation);
+        case.findings[0].context_factors = vec![ContextFactor::InternetExposedAsset];
+        let events = export_ocsf_finding_events(&case, "run-1").unwrap();
         assert_eq!(events.len(), 1);
         let event = &events[0];
         assert_eq!(event["class_uid"], 2004);
@@ -519,11 +550,26 @@ mod tests {
         assert!(event.get("compliance").is_none());
         let coordinates = &event["unmapped"]["ai_security_scanner"]["related_control_coordinates"];
         assert_eq!(coordinates[0]["assertion"], "related_coordinate_only");
+        let extension = &event["unmapped"]["ai_security_scanner"];
+        assert_eq!(extension["finding_family"], "cloud_posture");
+        assert_eq!(extension["severity_basis"], "cloud_control_query");
+        assert_eq!(
+            extension["confidence_basis"],
+            "deterministic_policy_evaluation"
+        );
+        assert_eq!(extension["context_factors"][0], "internet_exposed_asset");
     }
 
     #[test]
     fn reachable_service_is_network_inventory_not_a_detection_finding() {
         let mut case = fixture();
+        let mut second_asset = case.assets[0].clone();
+        second_asset.id = "asset-2".into();
+        second_asset.name = "Second account".into();
+        case.assets.push(second_asset);
+        case.finding_observations[0]
+            .asset_ids
+            .push("asset-2".into());
         let finding = &mut case.findings[0];
         finding.severity = Severity::Informational;
         finding.severity_basis_code = Some(SeverityBasisCode::OpenPort);
@@ -553,6 +599,8 @@ mod tests {
             "open_port"
         );
         assert_eq!(event["dst_endpoint"]["uid"], "asset-1");
+        assert_eq!(event["resources"].as_array().unwrap().len(), 2);
+        assert_eq!(event["resources"][1]["uid"], "asset-2");
         let encoded = event.to_string();
         assert!(!encoded.contains("STALE_EXPOSURE"));
         assert!(!encoded.contains("priority"));
@@ -573,12 +621,18 @@ mod tests {
             run_id: "run-1".into(),
             engine_run_id: None,
             kind: EvidenceKind::Configuration,
-            engine_id: "prowler".into(),
-            source_rule: None,
-            result_pointer_sha256: None,
+            engine_id: "unfamiliar-scanner".into(),
+            scanner_details: Some(ScannerFindingDetails {
+                description: Some("Upstream scanner explanation".into()),
+                remediation: Some("Upstream scanner remediation".into()),
+                installed_version: Some("1.2.3".into()),
+                fixed_version: Some("1.2.4".into()),
+            }),
+            source_rule: Some("UPSTREAM-RULE-42".into()),
+            result_pointer_sha256: Some("def".into()),
             observed_at: Utc.with_ymd_and_hms(2026, 8, 24, 12, 0, 0).unwrap(),
             summary: "Run one evidence".into(),
-            location: None,
+            location: Some("config/policy.json:4".into()),
             artifact_id: "artifact-1".into(),
             artifact_sha256: "abc".into(),
             pointer: None,
@@ -597,6 +651,39 @@ mod tests {
         assert_eq!(
             events[0]["evidences"][0]["data"]["summary"],
             "Run one evidence"
+        );
+        assert_eq!(
+            events[0]["evidences"][0]["data"]["engine_id"],
+            "unfamiliar-scanner"
+        );
+        assert_eq!(
+            events[0]["evidences"][0]["data"]["source_rule"],
+            "UPSTREAM-RULE-42"
+        );
+        assert_eq!(
+            events[0]["evidences"][0]["data"]["result_pointer_sha256"],
+            "def"
+        );
+        assert_eq!(
+            events[0]["evidences"][0]["data"]["location"],
+            "config/policy.json:4"
+        );
+        let scanner_details =
+            &events[0]["evidences"][0]["data"]["ai_security_scanner"]["scanner_provided_details"];
+        assert_eq!(scanner_details["trust"], "untrusted");
+        assert_eq!(
+            scanner_details["description"],
+            "Upstream scanner explanation"
+        );
+        assert_eq!(
+            scanner_details["remediation"],
+            "Upstream scanner remediation"
+        );
+        assert_eq!(scanner_details["installed_version"], "1.2.3");
+        assert_eq!(scanner_details["fixed_version"], "1.2.4");
+        assert_eq!(
+            events[0]["unmapped"]["ai_security_scanner"]["recommendation"],
+            "Ask the cloud owner to review access."
         );
         assert!(!events[0].to_string().contains("Later run"));
     }

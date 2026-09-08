@@ -179,6 +179,21 @@ const localhostRun = (): ScanRun => ({
   }],
 });
 
+const catalogRun = (engineId: string): ScanRun => {
+  const run = localhostRun();
+  return {
+    ...run,
+    engineRuns: [{
+      ...run.engineRuns[0]!,
+      engineId,
+      engineName: engineId,
+      category: "inventory",
+      taskKind: { kind: "catalog_engine" },
+      localhostTcpObservation: undefined,
+    }],
+  };
+};
+
 /** The report's own state pill, not a per-finding one. */
 const statePill = (container: HTMLElement): HTMLElement => {
   const section = container.querySelector<HTMLElement>(
@@ -414,6 +429,71 @@ test("the first layer gives every requested asset one evidence-derived result st
 
   const technicalDisclosure = container.querySelector<HTMLElement>(".report-scope-disclosure");
   expect(board.compareDocumentPosition(technicalDisclosure!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test.each(["syft", "cloudquery"])(
+  "%s-only reports say inventory completed without claiming a clean security check",
+  (engineId) => {
+    const base = report("complete");
+    const value = report("complete", {
+      actual: {
+        checks: [{
+          taskId: `${engineId}-task`,
+          checkId: engineId,
+          resultKind: "inventory",
+          targetAssetIds: ["asset-1"],
+          status: "tested_complete",
+          testedDimensions: [{
+            dimension: "inventory",
+            value: engineId,
+            observation: "Inventory completed.",
+          }],
+        }],
+        networkScopes: [],
+        unavailableDimensions: [],
+      },
+      requested: { ...base.requested, requestedCheckIds: [engineId] },
+    });
+
+    const { container } = renderReport(value, [], [catalogRun(engineId)]);
+    const row = container.querySelector<HTMLElement>(".asset-result-row");
+    expect(row?.dataset.assetResult).toBe("not_tested");
+    expect(container.textContent).toContain("Inventory or connectivity only — no security check ran");
+    expect(container.textContent).toContain(
+      "This run did not complete a vulnerability, configuration, code, or secret check.",
+    );
+    expect(container.textContent).not.toContain("completed security check reported no problems");
+  },
+);
+
+test("mixed Syft and Trivy work counts only Trivy as a completed security check", () => {
+  const value = report("complete", {
+    actual: {
+      checks: [{
+        taskId: "syft-task",
+        checkId: "syft",
+        resultKind: "inventory",
+        targetAssetIds: ["asset-1"],
+        status: "tested_complete",
+        testedDimensions: [],
+      }, {
+        taskId: "trivy-task",
+        checkId: "trivy",
+        resultKind: "security_check",
+        targetAssetIds: ["asset-1"],
+        status: "tested_complete",
+        testedDimensions: [],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+  });
+
+  const { container } = renderReport(value, [], [catalogRun("trivy")]);
+  const row = container.querySelector<HTMLElement>(".asset-result-row");
+  expect(row?.dataset.assetResult).toBe("no_problems_completed");
+  expect(row?.textContent).toContain("1 completed security check reported no problems");
+  expect(row?.textContent).not.toContain("2 completed security checks");
 });
 
 test("a completed asset stays bounded while an unrun sibling task makes another asset incomplete", () => {
@@ -1040,9 +1120,9 @@ test("reachable-service inventory is not counted or triaged as a vulnerability",
 
   expect(container.textContent).toContain("Reachable services observed — not vulnerabilities");
   expect(container.querySelector(".page-header")?.textContent).toContain(
-    "Service inventory only — no vulnerability scan ran",
+    "Inventory or connectivity only — no security check ran",
   );
-  expect(statePill(container).textContent).toContain("Service inventory only");
+  expect(statePill(container).textContent).toContain("Inventory or connectivity only");
   expect(container.textContent).toContain("Port 443");
   expect(container.textContent).toContain("Protocol tcp");
   expect(container.textContent).toContain("choose an applicable security check");
@@ -1220,6 +1300,268 @@ test("priority cards show target, location, confidence, next action, and verific
   expect(card!.textContent).toContain("Verify the fix");
   expect(card!.textContent).toContain("After the approved update, rerun the same dependency check.");
   expect(container.querySelector<HTMLElement>(".finding-detail")?.classList.contains("finding-detail--empty")).toBe(true);
+});
+
+test("run-bound upstream rule identity reaches the finding evidence drawer", () => {
+  const { container } = renderReport(report("partial", {
+    findings: [frozenFinding({
+      evidenceReferences: [{
+        evidenceId: "evidence-1",
+        engineId: "trivy",
+        detailsFrozen: true,
+        sourceRule: "CVE-2026-12345",
+        summary: "Frozen evidence summary",
+        artifactSha256: "a".repeat(64),
+        observedAt: "2026-09-04T12:00:00Z",
+      }],
+    })],
+  }));
+
+  openFirstFinding(container);
+  const evidenceDetails = container.querySelector<HTMLElement>(".evidence-provenance");
+  expect(evidenceDetails).not.toBeNull();
+  expect(evidenceDetails!.textContent).toContain("Source rule");
+  expect(evidenceDetails!.textContent).toContain("CVE-2026-12345");
+});
+
+test("selected-run evidence details and references do not drift to the current canonical finding", () => {
+  const { container } = renderReport(
+    report("partial", {
+      findings: [frozenFinding({
+        officialReferences: ["https://example.test/frozen-rule"],
+        evidenceReferences: [{
+          evidenceId: "evidence-1",
+          engineId: "trivy",
+          detailsFrozen: true,
+          sourceRule: "CVE-2026-FROZEN",
+          scannerDetails: {
+            description: "Frozen upstream package description",
+            remediation: "Frozen upstream remediation; human review required",
+            installedVersion: "1.0.0",
+            fixedVersion: "1.0.1",
+          },
+          summary: "Frozen selected-run evidence summary",
+          kind: "package_inventory",
+          engineRunId: "task-frozen",
+          artifactId: "artifact-frozen",
+          redacted: false,
+          artifactSha256: "a".repeat(64),
+          observedAt: "2026-09-04T12:00:00Z",
+          location: "package-lock.json · frozen-package@1.0.0",
+        }],
+      })],
+    }),
+    [canonicalFinding({
+      officialReferences: ["https://example.test/current-rule"],
+      evidence: [{
+        id: "evidence-1",
+        sourceEngine: "different-current-engine",
+        sourceRule: "CVE-2026-CURRENT",
+        scannerDetails: {
+          description: "Current scanner description must not drift backward",
+          remediation: "Current scanner remediation must not drift backward",
+          installedVersion: "9.0.0",
+          fixedVersion: "9.0.1",
+        },
+        observedAt: "2026-09-08T12:00:00Z",
+        summary: "Different current evidence summary",
+        location: "current-location",
+        rawArtifactHash: "b".repeat(64),
+        kind: "configuration",
+        runId: "run-current",
+        engineRunId: "task-current",
+        artifactId: "artifact-current",
+        redacted: true,
+      }],
+    })],
+  );
+
+  openFirstFinding(container);
+  const evidence = container.querySelector<HTMLElement>(".finding-detail .evidence-list .evidence-item");
+  expect(evidence).not.toBeNull();
+  expect(evidence!.textContent).toContain("Frozen selected-run evidence summary");
+  expect(evidence!.textContent).toContain("CVE-2026-FROZEN");
+  expect(evidence!.textContent).toContain("package inventory");
+  expect(evidence!.textContent).toContain("Frozen upstream package description");
+  expect(evidence!.textContent).toContain("Observed version");
+  expect(evidence!.textContent).toContain("1.0.0");
+  expect(evidence!.textContent).toContain("Scanner-reported fixed version");
+  expect(evidence!.textContent).toContain("1.0.1");
+  expect(evidence!.textContent).toContain("Scanner-provided remediation — review before acting");
+  expect(evidence!.textContent).toContain("Frozen upstream remediation; human review required");
+  expect(evidence!.textContent).toContain("untrusted scanner evidence, not the product's recommended next step");
+  expect(evidence!.textContent).toContain("task-frozen");
+  expect(evidence!.textContent).toContain("artifact-frozen");
+  expect(evidence!.textContent).toContain("Not marked as redacted");
+  expect(evidence!.textContent).not.toContain("CURRENT");
+  expect(evidence!.textContent).not.toContain("Different current");
+  expect(evidence!.textContent).not.toContain("Current scanner");
+  expect(evidence!.textContent).not.toContain("9.0");
+
+  const links = Array.from(container.querySelectorAll<HTMLAnchorElement>('a[href^="https://example.test/"]'));
+  expect(links.map((link) => link.href)).toEqual(["https://example.test/frozen-rule"]);
+});
+
+test("a frozen absence stays unavailable instead of borrowing newer canonical evidence", () => {
+  const { container } = renderReport(
+    report("partial", {
+      findings: [frozenFinding({
+        officialReferences: [],
+        evidenceReferences: [{
+          evidenceId: "evidence-1",
+          engineId: "trivy",
+          detailsFrozen: true,
+          artifactSha256: "a".repeat(64),
+          observedAt: "2026-09-04T12:00:00Z",
+        }],
+      })],
+    }),
+    [canonicalFinding({
+      officialReferences: ["https://example.test/newer-reference"],
+      evidence: [{
+        id: "evidence-1",
+        sourceEngine: "trivy",
+        sourceRule: "NEWER-RULE",
+        scannerDetails: {
+          description: "NEWER-SCANNER-DESCRIPTION",
+          remediation: "NEWER-SCANNER-REMEDIATION",
+          installedVersion: "9.0.0",
+          fixedVersion: "9.0.1",
+        },
+        observedAt: "2026-09-08T12:00:00Z",
+        summary: "Newer canonical evidence must not fill a frozen absence",
+        rawArtifactHash: "b".repeat(64),
+        kind: "configuration",
+        engineRunId: "newer-task",
+        artifactId: "newer-artifact",
+        redacted: true,
+      }],
+    })],
+  );
+
+  openFirstFinding(container);
+  const detail = container.querySelector<HTMLElement>(".finding-detail");
+  expect(detail!.textContent).toContain("The selected run did not retain an evidence summary.");
+  expect(detail!.textContent).not.toContain("NEWER-RULE");
+  expect(detail!.textContent).not.toContain("Newer canonical evidence");
+  expect(detail!.textContent).not.toContain("NEWER-SCANNER");
+  expect(detail!.textContent).not.toContain("newer-task");
+  expect(detail!.textContent).not.toContain("newer-artifact");
+  expect(container.querySelector('a[href="https://example.test/newer-reference"]')).toBeNull();
+  expect(detail!.textContent).toContain("No official reference link is recorded for this finding");
+});
+
+test("an older report falls back only through the same retained evidence ID", () => {
+  const { container } = renderReport(
+    report("partial", {
+      findings: [frozenFinding({
+        evidenceReferences: [{
+          evidenceId: "evidence-legacy",
+          engineId: "trivy",
+          artifactSha256: "a".repeat(64),
+          observedAt: "2026-09-04T12:00:00Z",
+        }],
+      })],
+    }),
+    [canonicalFinding({
+      evidence: [{
+        id: "evidence-legacy",
+        sourceEngine: "trivy",
+        sourceRule: "LEGACY-RULE",
+        scannerDetails: {
+          description: "Legacy exact-ID scanner description",
+          remediation: "Legacy exact-ID scanner remediation",
+          installedVersion: "2.0.0",
+          fixedVersion: "2.0.1",
+        },
+        observedAt: "2026-09-04T12:00:00Z",
+        summary: "Legacy exact-ID fallback summary",
+        rawArtifactHash: "a".repeat(64),
+        kind: "package_inventory",
+        engineRunId: "legacy-task",
+        artifactId: "legacy-artifact",
+        redacted: true,
+      }, {
+        id: "different-evidence",
+        sourceEngine: "trivy",
+        sourceRule: "WRONG-RULE",
+        observedAt: "2026-09-08T12:00:00Z",
+        summary: "Wrong evidence must never be guessed",
+        rawArtifactHash: "b".repeat(64),
+      }],
+    })],
+  );
+
+  openFirstFinding(container);
+  const detail = container.querySelector<HTMLElement>(".finding-detail");
+  expect(detail!.textContent).toContain("Legacy exact-ID fallback summary");
+  expect(detail!.textContent).toContain("LEGACY-RULE");
+  expect(detail!.textContent).toContain("legacy-task");
+  expect(detail!.textContent).toContain("Legacy exact-ID scanner description");
+  expect(detail!.textContent).toContain("Legacy exact-ID scanner remediation");
+  expect(detail!.textContent).not.toContain("WRONG-RULE");
+  expect(detail!.textContent).not.toContain("Wrong evidence must never be guessed");
+});
+
+test("target-controlled raw evidence text is never relabelled as remediation guidance", () => {
+  const rawSentinel = "RAW_TARGET_SENTINEL_DO_NOT_FOLLOW";
+  const { container } = renderReport(report("partial", {
+    findings: [frozenFinding({
+      nextStep: "Use the product-owned safe next step.",
+      evidenceReferences: [{
+        evidenceId: "evidence-raw",
+        engineId: "nuclei",
+        detailsFrozen: true,
+        summary: rawSentinel,
+        artifactSha256: "a".repeat(64),
+        observedAt: "2026-09-04T12:00:00Z",
+      }],
+    })],
+  }));
+
+  openFirstFinding(container);
+  const evidence = container.querySelector<HTMLElement>(".finding-detail .evidence-list .evidence-item");
+  expect(evidence!.textContent).toContain(rawSentinel);
+  expect(evidence!.querySelector(".scanner-evidence-remediation")).toBeNull();
+  expect(evidence!.textContent).not.toContain("Scanner-provided remediation");
+  expect(container.querySelector<HTMLElement>(".detail-section--advice")!.textContent)
+    .toContain("Use the product-owned safe next step.");
+});
+
+test("scanner remediation keeps its review boundary in Traditional Chinese", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderReport(report("partial", {
+    findings: [frozenFinding({
+      evidenceReferences: [{
+        evidenceId: "evidence-1",
+        engineId: "trivy",
+        detailsFrozen: true,
+        scannerDetails: { remediation: "UPSTREAM_REMEDIATION_TEXT" },
+        summary: "Frozen evidence summary",
+        artifactSha256: "a".repeat(64),
+        observedAt: "2026-09-04T12:00:00Z",
+      }],
+    })],
+  }));
+
+  openFirstFinding(container);
+  const remediation = container.querySelector<HTMLElement>(".scanner-evidence-remediation");
+  expect(remediation!.textContent).toContain("掃描器提供的修復資訊——採取行動前請先審查");
+  expect(remediation!.textContent).toContain("未受信任的掃描器證據，不是產品建議的下一步");
+  expect(remediation!.textContent).toContain("UPSTREAM_REMEDIATION_TEXT");
+});
+
+test("an affected asset without a retained label remains visible by exact ID", () => {
+  const { container } = renderReport(report("partial", {
+    findings: [frozenFinding({
+      targetAssetIds: ["asset-1", "asset-label-unavailable"],
+    })],
+  }));
+
+  const card = container.querySelector<HTMLElement>(".priority-card");
+  expect(card).not.toBeNull();
+  expect(card!.textContent).toContain("contoso.example");
+  expect(card!.textContent).toContain("asset-label-unavailable");
 });
 
 test("the first report layer filters by exact asset identity, including shared findings", () => {

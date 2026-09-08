@@ -305,6 +305,7 @@ export interface NativeBeginnerMasterReport {
     checks: Array<{
       task_id: string;
       check_id: string;
+      result_kind?: "security_check" | "inventory" | "connectivity" | null;
       target_asset_ids: string[];
       status: BeginnerMasterReport["actual"]["checks"][number]["status"];
       started_at: string | null;
@@ -386,10 +387,19 @@ export interface NativeBeginnerMasterReport {
     evidence_references: Array<{
       evidence_id: string;
       engine_id: string;
+      details_frozen?: boolean;
+      source_rule?: string | null;
+      scanner_details?: NativeScannerFindingDetails | null;
+      summary?: string | null;
+      kind?: string | null;
+      engine_run_id?: string | null;
+      artifact_id?: string | null;
+      redacted?: boolean | null;
       artifact_sha256: string;
       observed_at: string;
       location?: string | null;
     }>;
+    official_references?: string[] | null;
     framework_references: Array<{
       framework: string;
       framework_version: string;
@@ -440,6 +450,8 @@ interface NativeEvidence {
   engine_run_id?: string | null;
   kind?: string;
   engine_id: string;
+  source_rule?: string | null;
+  scanner_details?: NativeScannerFindingDetails | null;
   observed_at: string;
   summary: string;
   location?: string | null;
@@ -447,6 +459,13 @@ interface NativeEvidence {
   artifact_id?: string;
   pointer: string | null;
   redacted?: boolean;
+}
+
+interface NativeScannerFindingDetails {
+  description?: string | null;
+  remediation?: string | null;
+  installed_version?: string | null;
+  fixed_version?: string | null;
 }
 
 interface NativeControlReference {
@@ -1862,6 +1881,13 @@ export const adaptNativeCase = (
       evidence: finding.evidence.map((evidence) => ({
         id: evidence.id,
         sourceEngine: evidence.engine_id,
+        sourceRule: evidence.source_rule ?? undefined,
+        scannerDetails: evidence.scanner_details ? {
+          description: evidence.scanner_details.description ?? undefined,
+          remediation: evidence.scanner_details.remediation ?? undefined,
+          installedVersion: evidence.scanner_details.installed_version ?? undefined,
+          fixedVersion: evidence.scanner_details.fixed_version ?? undefined,
+        } : undefined,
         observedAt: evidence.observed_at,
         summary: evidence.summary,
         location: evidence.location ?? undefined,
@@ -2327,6 +2353,7 @@ export const adaptBeginnerMasterReport = (
     checks: report.actual.checks.map((check) => ({
       taskId: check.task_id,
       checkId: check.check_id,
+      resultKind: check.result_kind ?? undefined,
       targetAssetIds: [...check.target_asset_ids],
       status: check.status,
       startedAt: check.started_at ?? undefined,
@@ -2409,10 +2436,26 @@ export const adaptBeginnerMasterReport = (
     evidenceReferences: finding.evidence_references.map((evidence) => ({
       evidenceId: evidence.evidence_id,
       engineId: evidence.engine_id,
+      detailsFrozen: evidence.details_frozen ?? false,
+      sourceRule: evidence.source_rule ?? undefined,
+      scannerDetails: evidence.scanner_details ? {
+        description: evidence.scanner_details.description ?? undefined,
+        remediation: evidence.scanner_details.remediation ?? undefined,
+        installedVersion: evidence.scanner_details.installed_version ?? undefined,
+        fixedVersion: evidence.scanner_details.fixed_version ?? undefined,
+      } : undefined,
+      summary: evidence.summary ?? undefined,
+      kind: evidence.kind ?? undefined,
+      engineRunId: evidence.engine_run_id ?? undefined,
+      artifactId: evidence.artifact_id ?? undefined,
+      redacted: evidence.redacted ?? undefined,
       artifactSha256: evidence.artifact_sha256,
       observedAt: evidence.observed_at,
       location: evidence.location ?? undefined,
     })),
+    officialReferences: finding.official_references
+      ? [...finding.official_references]
+      : undefined,
     frameworkReferences: finding.framework_references.map((reference) => ({
       framework: reference.framework,
       frameworkVersion: reference.framework_version,
