@@ -3,8 +3,8 @@ use ai_security_scanner_lib::adapters::{BUILTIN_ENGINE_IDS, builtin_adapter_regi
 use ai_security_scanner_lib::correlation::correlation_report;
 use ai_security_scanner_lib::domain::{
     AssessmentCase, Asset, AssetIdentifier, AssetKind, Confidence, ConfidenceBasisCode, DataClass,
-    Finding, FindingFamily, FindingStatus, OrganizationProfile, RawArtifact, Severity,
-    SeverityBasisCode,
+    Finding, FindingFamily, FindingStatus, InventoryObservationKind, OrganizationProfile,
+    RawArtifact, Severity, SeverityBasisCode,
 };
 use ai_security_scanner_lib::finding_narrative::{
     ENGLISH_EXPOSURE_OBSERVATION_REASON, ENGLISH_ROLLBACK, expert_type_zh_hant,
@@ -20,8 +20,8 @@ fn fixture(engine_id: &str) -> (&'static [u8], &'static str, &'static str) {
     match engine_id {
         "cloudquery" => (
             include_bytes!("fixtures/adapters/cloudquery.json"),
-            "cloudquery.json",
-            "application/json",
+            "aws_iam_users.json",
+            "application/x-ndjson",
         ),
         "steampipe" => (
             include_bytes!("fixtures/adapters/steampipe.json"),
@@ -134,7 +134,7 @@ fn normalize_bytes(
     media_type: &str,
     run_id: &str,
 ) -> AdapterOutput {
-    let assets = if engine_id == "prowler" {
+    let assets = if matches!(engine_id, "cloudquery" | "prowler") {
         vec![authorized_asset(
             "asset-1",
             AssetKind::CloudAccount,
@@ -341,9 +341,10 @@ fn registry_covers_exactly_the_twenty_one_catalog_engines() {
 /// Each of these was previously handed a hard-coded severity string, which
 /// reached the user as `source-severity:high` or `source-severity:informational`
 /// — a rating the engine never gave. Verified against the pinned checkouts: the
-/// word "severity" does not appear in gitleaks' or naabu's Go sources at all;
-/// TruffleHog's JSON printer marshals a fixed struct with no such field; httpx's
-/// result struct has none; and kube-bench's `Check` struct has none.
+/// word "severity" does not appear in gitleaks' Go sources at all;
+/// TruffleHog's JSON printer marshals a fixed struct with no such field, and
+/// kube-bench's `Check` struct has none. Naabu and HTTPx inventory no longer
+/// enters the finding severity pipeline.
 const DERIVED_SEVERITY_ENGINES: &[(&str, Severity, &str)] = &[
     (
         "kube-bench",
@@ -359,16 +360,6 @@ const DERIVED_SEVERITY_ENGINES: &[(&str, Severity, &str)] = &[
         "trufflehog",
         Severity::High,
         "a credential detector match that this product does not verify",
-    ),
-    (
-        "naabu",
-        Severity::Informational,
-        "an open port observation rather than a defect",
-    ),
-    (
-        "httpx",
-        Severity::Informational,
-        "a reachable HTTP service observation rather than a defect",
     ),
     // Steampipe is the odd one: its output does carry a `severity` column, and
     // reading it was still circular, because the value is a literal this
@@ -494,16 +485,6 @@ const DERIVED_CONFIDENCE_ENGINES: &[(&str, Confidence, ConfidenceBasisCode)] = &
         "maester",
         Confidence::High,
         ConfidenceBasisCode::DeterministicPolicyEvaluation,
-    ),
-    (
-        "naabu",
-        Confidence::High,
-        ConfidenceBasisCode::ObservedResponse,
-    ),
-    (
-        "httpx",
-        Confidence::High,
-        ConfidenceBasisCode::ObservedResponse,
     ),
     (
         "nuclei",
@@ -894,25 +875,26 @@ fn trufflehog_findings_say_verification_was_not_attempted_rather_than_failed() {
 
 #[test]
 fn native_fixtures_normalize_without_inventing_inventory_findings() {
-    let no_security_findings = BTreeSet::from(["cloudquery", "syft"]);
+    let inventory_engines = BTreeSet::from(["cloudquery", "syft", "naabu", "httpx"]);
     for engine_id in BUILTIN_ENGINE_IDS {
         let output = normalize_fixture(engine_id);
         assert!(
             output.complete,
             "native fixture for {engine_id} must normalize completely"
         );
-        if no_security_findings.contains(engine_id) {
+        if inventory_engines.contains(engine_id) {
             assert!(
                 output.findings.is_empty(),
-                "{engine_id} must not infer issues from unsupported/inventory output"
+                "{engine_id} must not put inventory into the finding pipeline"
             );
             assert!(
-                !output.warnings.is_empty(),
-                "{engine_id} must explain why raw evidence has no normalized finding"
+                !output.observations.is_empty(),
+                "{engine_id} must retain its typed upstream inventory"
             );
             continue;
         }
 
+        assert!(output.observations.is_empty(), "{engine_id}");
         assert!(
             !output.findings.is_empty(),
             "native fixture for {engine_id} should produce a finding"
@@ -1037,6 +1019,228 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
                     && evidence.pointer.is_some()
             }));
         }
+    }
+}
+
+#[test]
+fn inventory_fixtures_preserve_typed_upstream_facts_and_exact_provenance() {
+    for engine_id in ["cloudquery", "syft", "naabu", "httpx"] {
+        let output = normalize_fixture(engine_id);
+        assert!(output.complete, "{engine_id}: {:?}", output.warnings);
+        assert!(output.findings.is_empty(), "{engine_id}");
+        assert!(!output.observations.is_empty(), "{engine_id}");
+        for observation in &output.observations {
+            assert_eq!(observation.case_id, "case-1");
+            assert_eq!(observation.run_id, "run-1");
+            assert_eq!(observation.engine_run_id, "engine-run-run-1");
+            assert_eq!(observation.asset_id, "asset-1");
+            assert_eq!(observation.engine_id, engine_id);
+            assert_eq!(observation.artifact_id, format!("artifact-{engine_id}"));
+            assert_eq!(observation.artifact_sha256.len(), 64);
+            assert!(!observation.pointer.is_empty());
+            assert!(!observation.pointer.chars().any(char::is_control));
+            assert_eq!(
+                observation.observed_at,
+                Utc.with_ymd_and_hms(2026, 8, 24, 12, 0, 0).unwrap()
+            );
+        }
+    }
+
+    let cloudquery = normalize_fixture("cloudquery");
+    assert!(matches!(
+        &cloudquery.observations[0].kind,
+        InventoryObservationKind::CloudResource {
+            resource_type,
+            native_id: Some(native_id),
+            display_name: Some(display_name),
+        } if resource_type == "aws_iam_users"
+            && native_id == "arn:aws:iam::123456789012:user/example-user"
+            && display_name == "example-user"
+    ));
+    let cloudquery_json = serde_json::to_string(&cloudquery.observations).unwrap();
+    assert!(!cloudquery_json.contains("SECRET_SENTINEL_MUST_NEVER_LEAK"));
+    assert!(!cloudquery_json.contains("MUST_NOT_BE_USED"));
+
+    let syft = normalize_fixture("syft");
+    assert!(matches!(
+        &syft.observations[0].kind,
+        InventoryObservationKind::SoftwareComponent {
+            name,
+            version: Some(version),
+            package_type: Some(package_type),
+            purl: Some(purl),
+        } if name == "example-package"
+            && version == "1.0"
+            && package_type == "deb"
+            && purl == "pkg:deb/debian/example-package@1.0"
+    ));
+    assert!(
+        !serde_json::to_string(&syft.observations)
+            .unwrap()
+            .contains("SECRET_SENTINEL_MUST_NEVER_LEAK")
+    );
+
+    let naabu = normalize_fixture("naabu");
+    assert_eq!(naabu.observations.len(), 2);
+    assert!(naabu.observations.iter().any(|observation| matches!(
+        &observation.kind,
+        InventoryObservationKind::Service {
+            endpoint,
+            port: Some(443),
+            transport: Some(transport),
+            scheme: None,
+            http_status: None,
+            tls: Some(true),
+        } if endpoint == "192.0.2.10" && transport == "tcp"
+    )));
+
+    let httpx = normalize_fixture("httpx");
+    assert_eq!(httpx.observations.len(), 2);
+    assert!(httpx.observations.iter().any(|observation| matches!(
+        &observation.kind,
+        InventoryObservationKind::Service {
+            endpoint,
+            port: Some(443),
+            transport: Some(transport),
+            scheme: Some(scheme),
+            http_status: Some(200),
+            ..
+        } if endpoint == "192.0.2.11" && transport == "tcp" && scheme == "https"
+    )));
+    let httpx_json = serde_json::to_string(&httpx.observations).unwrap();
+    for forbidden in [
+        "/login",
+        "session=must-not-appear",
+        "target-controlled text is data",
+        "SECRET_SENTINEL_MUST_NEVER_LEAK",
+    ] {
+        assert!(!httpx_json.contains(forbidden), "{httpx_json}");
+    }
+}
+
+#[test]
+fn inventory_schema_and_asset_boundaries_fail_closed_but_known_empty_shapes_complete() {
+    for (engine_id, bytes, filename, media_type) in [
+        (
+            "cloudquery",
+            br#"{}"#.as_slice(),
+            "aws_s3_buckets.json",
+            "application/x-ndjson",
+        ),
+        (
+            "cloudquery",
+            br#"{}"#.as_slice(),
+            "aws_iam_users.json",
+            "application/x-ndjson",
+        ),
+        ("syft", br#"{}"#.as_slice(), "syft.json", "application/json"),
+    ] {
+        let output = normalize_bytes(engine_id, bytes, filename, media_type, "run-invalid");
+        assert!(!output.complete, "{engine_id}");
+        assert!(output.findings.is_empty());
+        assert!(output.observations.is_empty());
+        assert!(!output.warnings.is_empty());
+    }
+
+    for (engine_id, bytes, filename, media_type) in [
+        (
+            "cloudquery",
+            b"".as_slice(),
+            "aws_iam_users.json",
+            "application/x-ndjson",
+        ),
+        (
+            "cloudquery",
+            br#"[]"#.as_slice(),
+            "aws_iam_users.json",
+            "application/x-ndjson",
+        ),
+        (
+            "syft",
+            br#"{"artifacts":[]}"#.as_slice(),
+            "syft.json",
+            "application/json",
+        ),
+    ] {
+        let output = normalize_bytes(engine_id, bytes, filename, media_type, "run-empty");
+        assert!(output.complete, "{engine_id}: {:?}", output.warnings);
+        assert!(output.findings.is_empty());
+        assert!(output.observations.is_empty());
+    }
+
+    let assets = vec![
+        authorized_asset("asset-1", AssetKind::Repository, None, &[]),
+        authorized_asset("asset-2", AssetKind::Repository, None, &[]),
+    ];
+    let output = normalize_bytes_with_assets(
+        "syft",
+        br#"{"artifacts":[{"name":"component"}]}"#,
+        "syft.json",
+        "application/json",
+        "run-multi-asset",
+        &assets,
+    );
+    assert!(!output.complete);
+    assert!(output.observations.is_empty());
+    assert!(
+        output
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("multi-asset"))
+    );
+
+    let cleaned = normalize_bytes(
+        "syft",
+        br#"{"artifacts":[{"name":"component\nname","version":"1.0\tdebug"}]}"#,
+        "syft.json",
+        "application/json",
+        "run-control-clean",
+    );
+    assert!(cleaned.complete, "{:?}", cleaned.warnings);
+    assert!(matches!(
+        &cleaned.observations[0].kind,
+        InventoryObservationKind::SoftwareComponent {
+            name,
+            version: Some(version),
+            ..
+        } if name == "component name" && version == "1.0 debug"
+    ));
+}
+
+#[test]
+fn service_inventory_uses_a_path_free_endpoint_that_report_code_can_correlate() {
+    let naabu = normalize_bytes(
+        "naabu",
+        br#"{"host":"service.example.test","port":443,"protocol":"tcp","asset_id":"asset-1"}"#,
+        "naabu.jsonl",
+        "application/x-ndjson",
+        "run-service-correlation",
+    );
+    let httpx = normalize_bytes(
+        "httpx",
+        br#"{"url":"https://service.example.test/login?session=SECRET","host":"service.example.test/target-path?raw=SECRET","port":443,"scheme":"https","status_code":200,"title":"SECRET_TITLE","body":"SECRET_BODY","asset_id":"asset-1"}"#,
+        "httpx.jsonl",
+        "application/x-ndjson",
+        "run-service-correlation",
+    );
+    let coordinate = |kind: &InventoryObservationKind| match kind {
+        InventoryObservationKind::Service { endpoint, port, .. } => (endpoint.clone(), *port),
+        _ => panic!("expected service observation"),
+    };
+    assert_eq!(
+        coordinate(&naabu.observations[0].kind),
+        coordinate(&httpx.observations[0].kind)
+    );
+    let serialized = serde_json::to_string(&httpx.observations).unwrap();
+    for forbidden in [
+        "/login",
+        "target-path",
+        "session=SECRET",
+        "raw=SECRET",
+        "SECRET_TITLE",
+        "SECRET_BODY",
+    ] {
+        assert!(!serialized.contains(forbidden), "{serialized}");
     }
 }
 
@@ -1946,11 +2150,12 @@ fn versioned_control_references_are_allowlisted_relationships_not_assurance_clai
 
     for engine_id in ["naabu", "httpx"] {
         let output = normalize_fixture(engine_id);
+        assert!(output.findings.is_empty());
         assert!(
             output
-                .findings
+                .observations
                 .iter()
-                .all(|finding| finding.control_references.is_empty())
+                .all(|observation| observation.engine_id == engine_id)
         );
     }
 }
@@ -2019,10 +2224,11 @@ fn secret_values_and_target_instructions_never_enter_findings() {
         assert!(!serialized.contains("SECRET_SENTINEL_MUST_NEVER_LEAK"));
     }
 
-    let httpx = serde_json::to_string(&normalize_fixture("httpx").findings)
-        .expect("serialize httpx findings");
+    let httpx = serde_json::to_string(&normalize_fixture("httpx").observations)
+        .expect("serialize httpx inventory observations");
     assert!(!httpx.contains("target-controlled text is data"));
     assert!(!httpx.contains("session=must-not-appear"));
+    assert!(!httpx.contains("SECRET_SENTINEL_MUST_NEVER_LEAK"));
 
     // kube-bench's `actual_value` is the verbatim contents of a file read off
     // the scanned node, so it is the one field of its output an attacker who
@@ -3094,11 +3300,24 @@ fn json_lines_fixtures_carry_more_than_one_record_so_the_line_loop_actually_runs
         );
 
         let output = normalize_fixture(engine_id);
-        assert!(
-            output.findings.len() >= 2,
-            "{engine_id} produced {} finding(s) from {records} records; a record was dropped",
+        let normalized_count = if matches!(*engine_id, "naabu" | "httpx") {
+            output.observations.len()
+        } else {
             output.findings.len()
+        };
+        assert!(
+            normalized_count >= 2,
+            "{engine_id} produced {normalized_count} normalized record(s) from {records} records; a record was dropped"
         );
+        if matches!(*engine_id, "naabu" | "httpx") {
+            let ids = output
+                .observations
+                .iter()
+                .map(|observation| observation.id.as_str())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(ids.len(), output.observations.len(), "{engine_id}");
+            continue;
+        }
         let fingerprints = output
             .findings
             .iter()
@@ -3416,8 +3635,8 @@ fn the_codes_a_localized_client_reads_agree_with_the_english_they_replace() {
     // A code no fixture produces is a translation nobody has ever seen render.
     assert_eq!(
         seen_basis.len(),
-        7,
-        "only {} of the seven severity bases are exercised: {seen_basis:?}",
+        5,
+        "only {} of the five finding severity bases are exercised: {seen_basis:?}",
         seen_basis.len()
     );
 }
@@ -3577,10 +3796,11 @@ fn every_priority_reason_the_engines_write_is_one_the_reader_can_read() {
             }
         }
     }
-    assert!(reasons_seen >= 42, "only {reasons_seen} reasons exercised");
-    // The seven engines that publish no severity of their own.
+    assert!(reasons_seen >= 38, "only {reasons_seen} reasons exercised");
+    // The five finding engines that publish no severity of their own. Naabu
+    // and HTTPx now emit typed inventory observations instead.
     assert!(
-        derived_seen >= 7,
+        derived_seen >= 5,
         "only {derived_seen} derived-severity reasons exercised"
     );
 }

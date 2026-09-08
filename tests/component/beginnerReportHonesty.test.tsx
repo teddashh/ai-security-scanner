@@ -1140,6 +1140,103 @@ test("reachable-service inventory is not counted or triaged as a vulnerability",
   expect(container.querySelector("#finding-browser")).toBeNull();
 });
 
+test("typed inventory leads over legacy exposure rows and presents all three scanner-neutral kinds", () => {
+  const source = (id: string, engineId: string) => ({
+    observationId: id,
+    engineId,
+    engineRunId: `${engineId}-task`,
+    artifactId: `${id}-artifact`,
+    artifactSha256: "a".repeat(64),
+    pointer: `/items/${id}`,
+    observedAt: "2026-09-04T12:00:00Z",
+  });
+  const items: NonNullable<BeginnerMasterReport["inventory"]>["items"] = [{
+    kind: "service",
+    assetId: "asset-1",
+    endpoint: "10.0.0.5",
+    port: 443,
+    transport: "tcp",
+    schemes: ["https"],
+    httpStatuses: [200],
+    tlsObservations: [true],
+    sources: [
+      source("service-naabu", "naabu"),
+      source("service-naabu-second", "naabu"),
+      source("service-httpx", "httpx"),
+    ],
+  }, {
+    kind: "software_component",
+    assetId: "asset-1",
+    name: "scanner <component>",
+    version: "1.2.3",
+    packageType: "npm",
+    purl: "pkg:npm/scanner-component@1.2.3",
+    sources: [source("component", "syft")],
+  }, {
+    kind: "cloud_resource",
+    assetId: "asset-1",
+    resourceType: "aws_s3_bucket",
+    nativeId: "bucket-1",
+    displayName: "Uploads & archives",
+    sources: [source("cloud", "cloudquery")],
+  }];
+  const legacyExposure = frozenFinding({
+    title: "Legacy reachable service that must not duplicate typed inventory",
+    severity: "info",
+    severityBasisCode: "open_port",
+    observationDetails: ["port:443", "protocol:tcp"],
+  });
+  const value = report("complete", {
+    actual: {
+      checks: [{
+        taskId: "inventory-task",
+        checkId: "syft",
+        resultKind: "inventory",
+        targetAssetIds: ["asset-1"],
+        status: "tested_complete",
+        testedDimensions: [],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    inventory: {
+      total: 3,
+      counts: { services: 1, softwareComponents: 1, cloudResources: 1 },
+      assetIds: ["asset-1"],
+      representativeSample: items,
+      items,
+      byAsset: [{
+        assetId: "asset-1",
+        total: 3,
+        counts: { services: 1, softwareComponents: 1, cloudResources: 1 },
+        representativeSample: items,
+      }],
+    },
+    findings: [legacyExposure],
+  });
+
+  const { container, unmount } = renderReport(value, [], [catalogRun("syft")]);
+  expect(container.textContent).toContain("What the scanners inventoried");
+  expect(container.textContent).toContain("3 inventory items across 1 assets");
+  expect(container.textContent).toContain("10.0.0.5:443");
+  expect(container.textContent).toContain("scanner <component>");
+  expect(container.textContent).toContain("Uploads & archives");
+  expect(container.textContent).toContain("Sources: 3 · httpx, naabu");
+  expect(container.textContent).not.toContain("naabu, naabu");
+  expect(container.textContent).not.toContain("Reachable services observed — not vulnerabilities");
+  expect(container.textContent).not.toContain(legacyExposure.title);
+  expect(container.textContent).not.toContain("completed security check reported no problems");
+  expect(container.querySelector("#finding-browser")).toBeNull();
+  unmount();
+
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const zh = renderReport(value, [], [catalogRun("syft")]);
+  expect(zh.container.textContent).toContain("掃描工具盤點到的項目");
+  expect(zh.container.textContent).toContain("共 3 個盤點項目，分布於 1 個資產");
+  expect(zh.container.textContent).toContain("這些是服務、軟體元件與雲端資源，不是資安問題或修復建議。");
+  window.localStorage.setItem(localeStorageKey, "en");
+});
+
 test("service inventory leads with counts and three examples while retaining every observation in a collapsed list", () => {
   const observations = Array.from({ length: 5 }, (_, index) => frozenFinding({
     findingId: `observation-${index + 1}`,

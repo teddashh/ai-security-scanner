@@ -1,10 +1,10 @@
 use crate::beginner_report::{
-    BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerMasterReport, TechnicalExecution,
-    build_beginner_master_report,
+    BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerInventoryItem, BeginnerInventoryItemKind,
+    BeginnerMasterReport, TechnicalExecution, build_beginner_master_report,
 };
 use crate::domain::{
-    AssessmentCase, CaseExport, DataSource, EngineTaskKind, Finding, RawArtifact, ScanRun,
-    ScannerFindingDetails, ScopeGrant, new_id,
+    AssessmentCase, CaseExport, DataSource, EngineTaskKind, Finding, InventoryObservation,
+    InventoryObservationKind, RawArtifact, ScanRun, ScannerFindingDetails, ScopeGrant, new_id,
 };
 use crate::error::{AppError, AppResult};
 use crate::export_identity::{
@@ -1174,6 +1174,9 @@ pub(crate) fn case_for_export(
                 redact_finding(snapshot, &sensitive_replacements);
             }
         }
+        for observation in &mut exported.inventory_observations {
+            redact_inventory_observation(observation);
+        }
         for artifact in &mut exported.raw_artifacts {
             artifact.relative_path = "[redacted]".into();
         }
@@ -1190,6 +1193,34 @@ pub(crate) fn case_for_export(
         }
     }
     exported
+}
+
+fn redact_inventory_observation(observation: &mut InventoryObservation) {
+    observation.pointer = "[redacted inventory pointer]".into();
+    match &mut observation.kind {
+        InventoryObservationKind::Service { endpoint, port, .. } => {
+            *endpoint = "[redacted service endpoint]".into();
+            *port = None;
+        }
+        InventoryObservationKind::SoftwareComponent {
+            name,
+            version,
+            purl,
+            ..
+        } => {
+            *name = "[redacted software component]".into();
+            *version = None;
+            *purl = None;
+        }
+        InventoryObservationKind::CloudResource {
+            native_id,
+            display_name,
+            ..
+        } => {
+            *native_id = None;
+            *display_name = None;
+        }
+    }
 }
 
 fn normalize_exposure_observation_for_export(finding: &mut Finding) {
@@ -1244,6 +1275,17 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
                 .map(|index| format!("Asset {}", index + 1))
                 .unwrap_or_else(|| "[redacted target]".into()),
         );
+    }
+    for item in &mut report.inventory.items {
+        redact_beginner_inventory_item(item);
+    }
+    for item in &mut report.inventory.representative_sample {
+        redact_beginner_inventory_item(item);
+    }
+    for asset in &mut report.inventory.by_asset {
+        for item in &mut asset.representative_sample {
+            redact_beginner_inventory_item(item);
+        }
     }
     redact_known_literals(&mut report.requested.stage.explanation, &replacements);
     for limit in &mut report.requested.limits {
@@ -1432,6 +1474,36 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
     );
     for warning in &mut report.data_quality_warnings {
         redact_known_literals(warning, &replacements);
+    }
+}
+
+fn redact_beginner_inventory_item(item: &mut BeginnerInventoryItem) {
+    for source in &mut item.sources {
+        source.pointer = "[redacted inventory pointer]".into();
+    }
+    match &mut item.details {
+        BeginnerInventoryItemKind::Service { endpoint, port, .. } => {
+            *endpoint = "[redacted service endpoint]".into();
+            *port = None;
+        }
+        BeginnerInventoryItemKind::SoftwareComponent {
+            name,
+            version,
+            purl,
+            ..
+        } => {
+            *name = "[redacted software component]".into();
+            *version = None;
+            *purl = None;
+        }
+        BeginnerInventoryItemKind::CloudResource {
+            native_id,
+            display_name,
+            ..
+        } => {
+            *native_id = None;
+            *display_name = None;
+        }
     }
 }
 
@@ -1759,6 +1831,15 @@ fn sort_case(case: &mut AssessmentCase) {
             finding.tags.sort();
         }
     }
+    case.inventory_observations.sort_by(|left, right| {
+        left.run_id
+            .cmp(&right.run_id)
+            .then_with(|| left.asset_id.cmp(&right.asset_id))
+            .then_with(|| left.engine_id.cmp(&right.engine_id))
+            .then_with(|| left.engine_run_id.cmp(&right.engine_run_id))
+            .then_with(|| left.observed_at.cmp(&right.observed_at))
+            .then_with(|| left.id.cmp(&right.id))
+    });
     case.raw_artifacts
         .sort_by(|left, right| left.id.cmp(&right.id));
     case.comparisons.sort_by(|left, right| {
@@ -3571,6 +3652,266 @@ mod tests {
         assert!(redacted.findings[0].title.contains("Asset 2"));
         assert!(!encoded.contains("private.example.test"));
         assert!(!encoded.contains("customer-database.internal"));
+    }
+
+    #[test]
+    fn typed_inventory_redaction_preserves_counts_and_provenance_without_scanner_text() {
+        const ENDPOINT: &str = "INVENTORY_TARGET_SENTINEL.internal";
+        const COMPONENT: &str = "INVENTORY_COMPONENT_SENTINEL";
+        const VERSION: &str = "INVENTORY_VERSION_SENTINEL";
+        const PURL: &str = "pkg:generic/INVENTORY_PURL_SENTINEL@1";
+        const CLOUD_ID: &str = "INVENTORY_CLOUD_ID_SENTINEL";
+        const CLOUD_NAME: &str = "INVENTORY_CLOUD_NAME_SENTINEL";
+        const POINTER: &str = "/INVENTORY_POINTER_SENTINEL/0";
+        const NEWER: &str = "INVENTORY_NEWER_RUN_SENTINEL";
+
+        let temp = tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let mut case = fixture(&artifact_root, false);
+        let time = case.scan_runs[0].created_at;
+        let observation =
+            |id: &str, run_id: &str, kind: InventoryObservationKind| InventoryObservation {
+                id: id.into(),
+                case_id: case.id.clone(),
+                run_id: run_id.into(),
+                engine_run_id: "engine-run-1".into(),
+                asset_id: "asset-1".into(),
+                engine_id: "inventory-engine".into(),
+                kind,
+                artifact_id: "artifact-1".into(),
+                artifact_sha256: case.raw_artifacts[0].sha256.clone(),
+                pointer: POINTER.into(),
+                observed_at: time,
+            };
+        case.inventory_observations = vec![
+            observation(
+                "inventory-z-cloud",
+                "run-1",
+                InventoryObservationKind::CloudResource {
+                    resource_type: "aws_s3_bucket".into(),
+                    native_id: Some(CLOUD_ID.into()),
+                    display_name: Some(CLOUD_NAME.into()),
+                },
+            ),
+            observation(
+                "inventory-y-component",
+                "run-1",
+                InventoryObservationKind::SoftwareComponent {
+                    name: COMPONENT.into(),
+                    version: Some(VERSION.into()),
+                    package_type: Some("generic".into()),
+                    purl: Some(PURL.into()),
+                },
+            ),
+            observation(
+                "inventory-x-service",
+                "run-1",
+                InventoryObservationKind::Service {
+                    endpoint: ENDPOINT.into(),
+                    port: Some(49_151),
+                    transport: Some("tcp".into()),
+                    scheme: Some("https".into()),
+                    http_status: Some(200),
+                    tls: Some(true),
+                },
+            ),
+            observation(
+                "inventory-a-newer",
+                "run-2",
+                InventoryObservationKind::SoftwareComponent {
+                    name: NEWER.into(),
+                    version: None,
+                    package_type: Some("generic".into()),
+                    purl: None,
+                },
+            ),
+        ];
+
+        let unredacted_case = case_for_export(&case, RedactionProfile::None);
+        assert_eq!(
+            unredacted_case
+                .inventory_observations
+                .iter()
+                .map(|observation| observation.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "inventory-x-service",
+                "inventory-y-component",
+                "inventory-z-cloud",
+                "inventory-a-newer",
+            ]
+        );
+        let unredacted_report =
+            beginner_report_for_export(&case, "run-1", RedactionProfile::None).unwrap();
+        assert_eq!(unredacted_report.inventory.total, 3);
+        assert_eq!(unredacted_report.inventory.counts.services, 1);
+        assert_eq!(unredacted_report.inventory.counts.software_components, 1);
+        assert_eq!(unredacted_report.inventory.counts.cloud_resources, 1);
+        let unredacted_report_json = serde_json::to_string(&unredacted_report).unwrap();
+        for sentinel in [
+            ENDPOINT, COMPONENT, VERSION, PURL, CLOUD_ID, CLOUD_NAME, POINTER,
+        ] {
+            assert!(
+                unredacted_report_json.contains(sentinel),
+                "None-redacted beginner report lost {sentinel}"
+            );
+        }
+        assert!(!unredacted_report_json.contains(NEWER));
+        let unredacted_json = serde_json::to_string(&unredacted_case).unwrap();
+        for sentinel in [
+            ENDPOINT, COMPONENT, VERSION, PURL, CLOUD_ID, CLOUD_NAME, POINTER, NEWER,
+        ] {
+            assert!(
+                unredacted_json.contains(sentinel),
+                "None redaction lost {sentinel}"
+            );
+        }
+
+        let redacted_case = case_for_export(&case, RedactionProfile::Standard);
+        let redacted_json = serde_json::to_string(&redacted_case).unwrap();
+        for sentinel in [
+            ENDPOINT, COMPONENT, VERSION, PURL, CLOUD_ID, CLOUD_NAME, POINTER, NEWER,
+        ] {
+            assert!(
+                !redacted_json.contains(sentinel),
+                "standard case leaked {sentinel}"
+            );
+        }
+        assert_eq!(redacted_case.inventory_observations.len(), 4);
+        for (original, redacted) in unredacted_case
+            .inventory_observations
+            .iter()
+            .zip(&redacted_case.inventory_observations)
+        {
+            assert_eq!(redacted.id, original.id);
+            assert_eq!(redacted.run_id, original.run_id);
+            assert_eq!(redacted.asset_id, original.asset_id);
+            assert_eq!(redacted.engine_id, original.engine_id);
+            assert_eq!(redacted.engine_run_id, original.engine_run_id);
+            assert_eq!(redacted.artifact_id, original.artifact_id);
+            assert_eq!(redacted.artifact_sha256, original.artifact_sha256);
+            assert_eq!(redacted.observed_at, original.observed_at);
+            assert_eq!(redacted.pointer, "[redacted inventory pointer]");
+        }
+        let redacted_service = redacted_case
+            .inventory_observations
+            .iter()
+            .find(|observation| observation.id == "inventory-x-service")
+            .unwrap();
+        assert!(matches!(
+            &redacted_service.kind,
+            InventoryObservationKind::Service {
+                endpoint,
+                port: None,
+                transport: Some(transport),
+                scheme: Some(scheme),
+                http_status: Some(200),
+                tls: Some(true),
+            } if endpoint == "[redacted service endpoint]"
+                && transport == "tcp"
+                && scheme == "https"
+        ));
+        assert!(
+            redacted_case
+                .inventory_observations
+                .iter()
+                .any(|observation| {
+                    matches!(
+                        &observation.kind,
+                        InventoryObservationKind::SoftwareComponent {
+                            name,
+                            version: None,
+                            package_type: Some(package_type),
+                            purl: None,
+                        } if name == "[redacted software component]" && package_type == "generic"
+                    )
+                })
+        );
+        assert!(
+            redacted_case
+                .inventory_observations
+                .iter()
+                .any(|observation| {
+                    matches!(
+                        &observation.kind,
+                        InventoryObservationKind::CloudResource {
+                            resource_type,
+                            native_id: None,
+                            display_name: None,
+                        } if resource_type == "aws_s3_bucket"
+                    )
+                })
+        );
+
+        let redacted_report =
+            beginner_report_for_export(&case, "run-1", RedactionProfile::Standard).unwrap();
+        assert_eq!(
+            redacted_report.inventory.total,
+            unredacted_report.inventory.total
+        );
+        assert_eq!(
+            redacted_report.inventory.counts,
+            unredacted_report.inventory.counts
+        );
+        assert_eq!(
+            redacted_report.inventory.asset_ids,
+            unredacted_report.inventory.asset_ids
+        );
+        let redacted_report_json = serde_json::to_string(&redacted_report).unwrap();
+        for sentinel in [
+            ENDPOINT, COMPONENT, VERSION, PURL, CLOUD_ID, CLOUD_NAME, POINTER, NEWER,
+        ] {
+            assert!(
+                !redacted_report_json.contains(sentinel),
+                "standard beginner report leaked {sentinel}"
+            );
+        }
+        assert_eq!(redacted_report.inventory.items.len(), 3);
+        assert_eq!(redacted_report.inventory.representative_sample.len(), 3);
+        assert_eq!(
+            redacted_report.inventory.by_asset[0]
+                .representative_sample
+                .len(),
+            3
+        );
+        for item in redacted_report
+            .inventory
+            .items
+            .iter()
+            .chain(&redacted_report.inventory.representative_sample)
+            .chain(&redacted_report.inventory.by_asset[0].representative_sample)
+        {
+            assert!(item.sources.iter().all(|source| {
+                source.engine_id == "inventory-engine"
+                    && source.engine_run_id == "engine-run-1"
+                    && source.artifact_id == "artifact-1"
+                    && source.pointer == "[redacted inventory pointer]"
+            }));
+            match &item.details {
+                BeginnerInventoryItemKind::Service { endpoint, port, .. } => {
+                    assert_eq!(endpoint, "[redacted service endpoint]");
+                    assert_eq!(*port, None);
+                }
+                BeginnerInventoryItemKind::SoftwareComponent {
+                    name,
+                    version,
+                    purl,
+                    ..
+                } => {
+                    assert_eq!(name, "[redacted software component]");
+                    assert!(version.is_none());
+                    assert!(purl.is_none());
+                }
+                BeginnerInventoryItemKind::CloudResource {
+                    native_id,
+                    display_name,
+                    ..
+                } => {
+                    assert!(native_id.is_none());
+                    assert!(display_name.is_none());
+                }
+            }
+        }
     }
 
     #[test]

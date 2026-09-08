@@ -9,9 +9,9 @@ use crate::domain::{
     AssessmentCase, Asset, AssetKind, Confidence, ContextFactor, ControlMappingProvenance,
     DeclaredNetworkServiceMetadata, DeclaredNetworkServiceScanProfile, DeclaredWebServiceInput,
     DeclaredWebServiceScanProfile, DistributionMode, EngineRun, EngineRunStatus, EngineTaskKind,
-    Finding, FindingFamily, FindingObservation, Id, LocalhostTcpObservation, LocalhostTcpOutcome,
-    ReportAssetDisposition, ScanRequestOutcome, ScanRequestOutcomeCode, ScanRun, Severity,
-    SeverityBasisCode,
+    Finding, FindingFamily, FindingObservation, Id, InventoryObservation, InventoryObservationKind,
+    LocalhostTcpObservation, LocalhostTcpOutcome, ReportAssetDisposition, ScanRequestOutcome,
+    ScanRequestOutcomeCode, ScanRun, Severity, SeverityBasisCode,
 };
 use crate::execution_coverage::{
     CumulativeNaabuCoverage, WorkUnitOutcome, reduce_naabu_attempt_coverage,
@@ -109,6 +109,8 @@ pub struct BeginnerMasterReport {
     pub actual: ActualCoverage,
     pub coverage_gaps: Vec<CoverageGap>,
     pub coverage_counts: CoverageCounts,
+    #[serde(default)]
+    pub inventory: BeginnerInventory,
     pub findings: Vec<BeginnerFinding>,
     #[serde(default)]
     pub finding_groups: Vec<BeginnerFindingGroup>,
@@ -116,6 +118,74 @@ pub struct BeginnerMasterReport {
     pub technical_details: TechnicalDetails,
     pub framework_notice: FrameworkNotice,
     pub data_quality_warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BeginnerInventory {
+    pub total: usize,
+    pub counts: BeginnerInventoryCounts,
+    pub asset_ids: Vec<Id>,
+    pub representative_sample: Vec<BeginnerInventoryItem>,
+    pub items: Vec<BeginnerInventoryItem>,
+    pub by_asset: Vec<BeginnerAssetInventory>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BeginnerInventoryCounts {
+    pub services: usize,
+    pub software_components: usize,
+    pub cloud_resources: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BeginnerAssetInventory {
+    pub asset_id: Id,
+    pub total: usize,
+    pub counts: BeginnerInventoryCounts,
+    pub representative_sample: Vec<BeginnerInventoryItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BeginnerInventoryItem {
+    pub asset_id: Id,
+    #[serde(flatten)]
+    pub details: BeginnerInventoryItemKind,
+    pub sources: Vec<BeginnerInventorySource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BeginnerInventoryItemKind {
+    Service {
+        endpoint: String,
+        port: Option<u16>,
+        transport: Option<String>,
+        schemes: Vec<String>,
+        http_statuses: Vec<u16>,
+        tls_observations: Vec<bool>,
+    },
+    SoftwareComponent {
+        name: String,
+        version: Option<String>,
+        package_type: Option<String>,
+        purl: Option<String>,
+    },
+    CloudResource {
+        resource_type: String,
+        native_id: Option<String>,
+        display_name: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BeginnerInventorySource {
+    pub observation_id: Id,
+    pub engine_id: String,
+    pub engine_run_id: Id,
+    pub artifact_id: Id,
+    pub artifact_sha256: String,
+    pub pointer: String,
+    pub observed_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -752,6 +822,7 @@ pub fn build_beginner_master_report(
     let next_steps = project_next_steps(&state, &findings, &coverage_gaps, &actual);
     let technical_details = project_technical_details(case, run);
     let coverage_counts = coverage_counts(&actual, &coverage_gaps);
+    let inventory = project_inventory(case, run);
 
     Ok(BeginnerMasterReport {
         schema_version: BEGINNER_MASTER_REPORT_SCHEMA_VERSION.into(),
@@ -763,6 +834,7 @@ pub fn build_beginner_master_report(
         actual,
         coverage_gaps,
         coverage_counts,
+        inventory,
         findings,
         finding_groups,
         next_steps,
@@ -774,6 +846,223 @@ pub fn build_beginner_master_report(
         },
         data_quality_warnings,
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum InventoryAggregateKey {
+    Service(Id, String, Option<u16>, Option<String>),
+    SoftwarePurl(Id, String),
+    SoftwareCoordinates(Id, String, Option<String>, Option<String>),
+    CloudNativeId(Id, String, String),
+    CloudCoordinates(Id, String, Option<String>),
+}
+
+fn project_inventory(case: &AssessmentCase, run: &ScanRun) -> BeginnerInventory {
+    let mut observations = case
+        .inventory_observations
+        .iter()
+        .filter(|observation| observation.run_id == run.id)
+        .collect::<Vec<_>>();
+    observations.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let mut grouped = BTreeMap::<InventoryAggregateKey, BeginnerInventoryItem>::new();
+    for observation in observations {
+        let (key, details) = inventory_item(observation);
+        let source = BeginnerInventorySource {
+            observation_id: observation.id.clone(),
+            engine_id: observation.engine_id.clone(),
+            engine_run_id: observation.engine_run_id.clone(),
+            artifact_id: observation.artifact_id.clone(),
+            artifact_sha256: observation.artifact_sha256.clone(),
+            pointer: observation.pointer.clone(),
+            observed_at: observation.observed_at,
+        };
+        match grouped.entry(key) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(BeginnerInventoryItem {
+                    asset_id: observation.asset_id.clone(),
+                    details,
+                    sources: vec![source],
+                });
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                merge_inventory_details(&mut entry.get_mut().details, &details);
+                entry.get_mut().sources.push(source);
+            }
+        }
+    }
+
+    let mut items = grouped.into_values().collect::<Vec<_>>();
+    for item in &mut items {
+        item.sources.sort();
+        item.sources.dedup();
+    }
+    let counts = beginner_inventory_counts(&items);
+    let asset_ids = items
+        .iter()
+        .map(|item| item.asset_id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let representative_sample = items.iter().take(3).cloned().collect();
+    let by_asset = asset_ids
+        .iter()
+        .map(|asset_id| {
+            let asset_items = items
+                .iter()
+                .filter(|item| item.asset_id == *asset_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            BeginnerAssetInventory {
+                asset_id: asset_id.clone(),
+                total: asset_items.len(),
+                counts: beginner_inventory_counts(&asset_items),
+                representative_sample: asset_items.into_iter().take(3).collect(),
+            }
+        })
+        .collect();
+    BeginnerInventory {
+        total: items.len(),
+        counts,
+        asset_ids,
+        representative_sample,
+        items,
+        by_asset,
+    }
+}
+
+fn inventory_item(
+    observation: &InventoryObservation,
+) -> (InventoryAggregateKey, BeginnerInventoryItemKind) {
+    match &observation.kind {
+        InventoryObservationKind::Service {
+            endpoint,
+            port,
+            transport,
+            scheme,
+            http_status,
+            tls,
+        } => (
+            InventoryAggregateKey::Service(
+                observation.asset_id.clone(),
+                endpoint.clone(),
+                *port,
+                transport.clone(),
+            ),
+            BeginnerInventoryItemKind::Service {
+                endpoint: endpoint.clone(),
+                port: *port,
+                transport: transport.clone(),
+                schemes: scheme.iter().cloned().collect(),
+                http_statuses: http_status.iter().copied().collect(),
+                tls_observations: tls.iter().copied().collect(),
+            },
+        ),
+        InventoryObservationKind::SoftwareComponent {
+            name,
+            version,
+            package_type,
+            purl,
+        } => {
+            let key = purl.as_ref().map_or_else(
+                || {
+                    InventoryAggregateKey::SoftwareCoordinates(
+                        observation.asset_id.clone(),
+                        name.clone(),
+                        version.clone(),
+                        package_type.clone(),
+                    )
+                },
+                |purl| {
+                    InventoryAggregateKey::SoftwarePurl(observation.asset_id.clone(), purl.clone())
+                },
+            );
+            (
+                key,
+                BeginnerInventoryItemKind::SoftwareComponent {
+                    name: name.clone(),
+                    version: version.clone(),
+                    package_type: package_type.clone(),
+                    purl: purl.clone(),
+                },
+            )
+        }
+        InventoryObservationKind::CloudResource {
+            resource_type,
+            native_id,
+            display_name,
+        } => {
+            let key = native_id.as_ref().map_or_else(
+                || {
+                    InventoryAggregateKey::CloudCoordinates(
+                        observation.asset_id.clone(),
+                        resource_type.clone(),
+                        display_name.clone(),
+                    )
+                },
+                |native_id| {
+                    InventoryAggregateKey::CloudNativeId(
+                        observation.asset_id.clone(),
+                        resource_type.clone(),
+                        native_id.clone(),
+                    )
+                },
+            );
+            (
+                key,
+                BeginnerInventoryItemKind::CloudResource {
+                    resource_type: resource_type.clone(),
+                    native_id: native_id.clone(),
+                    display_name: display_name.clone(),
+                },
+            )
+        }
+    }
+}
+
+fn merge_inventory_details(
+    retained: &mut BeginnerInventoryItemKind,
+    additional: &BeginnerInventoryItemKind,
+) {
+    if let (
+        BeginnerInventoryItemKind::Service {
+            schemes,
+            http_statuses,
+            tls_observations,
+            ..
+        },
+        BeginnerInventoryItemKind::Service {
+            schemes: added_schemes,
+            http_statuses: added_statuses,
+            tls_observations: added_tls,
+            ..
+        },
+    ) = (retained, additional)
+    {
+        schemes.extend(added_schemes.iter().cloned());
+        schemes.sort();
+        schemes.dedup();
+        http_statuses.extend(added_statuses);
+        http_statuses.sort_unstable();
+        http_statuses.dedup();
+        tls_observations.extend(added_tls);
+        tls_observations.sort_unstable();
+        tls_observations.dedup();
+    }
+}
+
+fn beginner_inventory_counts(items: &[BeginnerInventoryItem]) -> BeginnerInventoryCounts {
+    let mut counts = BeginnerInventoryCounts::default();
+    for item in items {
+        match &item.details {
+            BeginnerInventoryItemKind::Service { .. } => counts.services += 1,
+            BeginnerInventoryItemKind::SoftwareComponent { .. } => {
+                counts.software_components += 1;
+            }
+            BeginnerInventoryItemKind::CloudResource { .. } => counts.cloud_resources += 1,
+        }
+    }
+    counts
 }
 
 fn project_requested_coverage(
@@ -4862,6 +5151,180 @@ mod tests {
     }
 
     #[test]
+    fn typed_inventory_is_selected_run_only_and_deduplicates_native_identities() {
+        let mut task = catalog_task("completed", EngineRunStatus::Completed);
+        task.engine_id = "naabu".into();
+        let mut case = case_with_catalog_tasks(vec![task], true);
+        let service = InventoryObservationKind::Service {
+            endpoint: "10.0.0.5".into(),
+            port: Some(443),
+            transport: Some("tcp".into()),
+            scheme: None,
+            http_status: None,
+            tls: None,
+        };
+        let observation = |id: &str,
+                           run_id: &str,
+                           engine_id: &str,
+                           kind: InventoryObservationKind,
+                           asset_id: &str| InventoryObservation {
+            id: id.into(),
+            case_id: case.id.clone(),
+            run_id: run_id.into(),
+            engine_run_id: format!("{engine_id}-task"),
+            asset_id: asset_id.into(),
+            engine_id: engine_id.into(),
+            kind,
+            artifact_id: format!("artifact-{id}"),
+            artifact_sha256: id.repeat(64).chars().take(64).collect(),
+            pointer: format!("/records/{id}"),
+            observed_at: instant(18),
+        };
+        case.inventory_observations = vec![
+            observation("a", "run-1", "naabu", service.clone(), "asset-1"),
+            observation(
+                "b",
+                "run-1",
+                "httpx",
+                InventoryObservationKind::Service {
+                    endpoint: "10.0.0.5".into(),
+                    port: Some(443),
+                    transport: Some("tcp".into()),
+                    scheme: Some("https".into()),
+                    http_status: Some(200),
+                    tls: Some(true),
+                },
+                "asset-1",
+            ),
+            observation(
+                "c",
+                "run-1",
+                "syft",
+                InventoryObservationKind::SoftwareComponent {
+                    name: "openssl".into(),
+                    version: Some("3.0.0".into()),
+                    package_type: Some("deb".into()),
+                    purl: Some("pkg:deb/openssl@3.0.0".into()),
+                },
+                "asset-1",
+            ),
+            observation(
+                "c2",
+                "run-1",
+                "syft-second-source",
+                InventoryObservationKind::SoftwareComponent {
+                    name: "openssl renamed by another scanner".into(),
+                    version: Some("3.0.0".into()),
+                    package_type: Some("deb".into()),
+                    purl: Some("pkg:deb/openssl@3.0.0".into()),
+                },
+                "asset-1",
+            ),
+            observation(
+                "d",
+                "run-1",
+                "cloudquery",
+                InventoryObservationKind::CloudResource {
+                    resource_type: "aws_s3_bucket".into(),
+                    native_id: Some("bucket-1".into()),
+                    display_name: Some("uploads".into()),
+                },
+                "asset-2",
+            ),
+            observation(
+                "d2",
+                "run-1",
+                "cloudquery-second-source",
+                InventoryObservationKind::CloudResource {
+                    resource_type: "aws_s3_bucket".into(),
+                    native_id: Some("bucket-1".into()),
+                    display_name: Some("uploads-renamed".into()),
+                },
+                "asset-2",
+            ),
+            observation(
+                "e",
+                "run-1",
+                "syft",
+                InventoryObservationKind::SoftwareComponent {
+                    name: "curl".into(),
+                    version: Some("8.0.0".into()),
+                    package_type: Some("deb".into()),
+                    purl: Some("pkg:deb/curl@8.0.0".into()),
+                },
+                "asset-2",
+            ),
+            observation(
+                "newer",
+                "run-newer",
+                "syft",
+                InventoryObservationKind::SoftwareComponent {
+                    name: "must-not-drift".into(),
+                    version: None,
+                    package_type: None,
+                    purl: None,
+                },
+                "asset-1",
+            ),
+        ];
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        assert_eq!(report.inventory.total, 4);
+        assert_eq!(report.inventory.counts.services, 1);
+        assert_eq!(report.inventory.counts.software_components, 2);
+        assert_eq!(report.inventory.counts.cloud_resources, 1);
+        assert_eq!(report.inventory.asset_ids, ["asset-1", "asset-2"]);
+        assert_eq!(report.inventory.representative_sample.len(), 3);
+        assert_eq!(report.inventory.by_asset.len(), 2);
+        let service = report
+            .inventory
+            .items
+            .iter()
+            .find(|item| matches!(item.details, BeginnerInventoryItemKind::Service { .. }))
+            .unwrap();
+        assert_eq!(service.sources.len(), 2);
+        assert_eq!(
+            service
+                .sources
+                .iter()
+                .map(|source| source.engine_id.as_str())
+                .collect::<Vec<_>>(),
+            ["naabu", "httpx"]
+        );
+        let openssl = report
+            .inventory
+            .items
+            .iter()
+            .find(|item| {
+                matches!(
+                    &item.details,
+                    BeginnerInventoryItemKind::SoftwareComponent { purl: Some(purl), .. }
+                        if purl == "pkg:deb/openssl@3.0.0"
+                )
+            })
+            .unwrap();
+        assert_eq!(openssl.sources.len(), 2);
+        let cloud = report
+            .inventory
+            .items
+            .iter()
+            .find(|item| {
+                matches!(
+                    item.details,
+                    BeginnerInventoryItemKind::CloudResource { .. }
+                )
+            })
+            .unwrap();
+        assert_eq!(cloud.sources.len(), 2);
+        assert!(
+            !serde_json::to_string(&report.inventory)
+                .unwrap()
+                .contains("must-not-drift")
+        );
+    }
+
+    #[test]
     fn legacy_result_kind_is_conservative_for_known_non_security_checks() {
         for check_id in [
             "cloudquery",
@@ -5015,6 +5478,7 @@ mod tests {
         let legacy = legacy.as_object_mut().unwrap();
         legacy.insert("schema_version".into(), serde_json::json!("1.0.0"));
         legacy.remove("finding_groups");
+        legacy.remove("inventory");
         legacy
             .get_mut("actual")
             .and_then(serde_json::Value::as_object_mut)
@@ -5054,6 +5518,7 @@ mod tests {
             serde_json::from_value(serde_json::Value::Object(legacy.clone())).unwrap();
         assert_eq!(decoded.schema_version, "1.0.0");
         assert!(decoded.finding_groups.is_empty());
+        assert_eq!(decoded.inventory, BeginnerInventory::default());
         assert_eq!(decoded.actual.checks[0].result_kind, None);
         assert_eq!(
             decoded.actual.checks[0].effective_result_kind(),

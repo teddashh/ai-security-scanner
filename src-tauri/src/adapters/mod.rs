@@ -9,7 +9,8 @@ mod control_mapping;
 use crate::adapter::{AdapterInput, AdapterOutput, AdapterRegistry, EngineAdapter};
 use crate::domain::{
     Confidence, ConfidenceBasisCode, Evidence, EvidenceKind, Finding, FindingFamily, FindingStatus,
-    RawArtifact, ScannerFindingDetails, Severity, SeverityBasisCode,
+    InventoryObservation, InventoryObservationKind, RawArtifact, ScannerFindingDetails, Severity,
+    SeverityBasisCode,
 };
 use crate::error::{AppError, AppResult};
 use quick_xml::events::{BytesRef, BytesStart, Event};
@@ -132,6 +133,14 @@ struct SourceRecord {
     scanner_details: Option<ScannerFindingDetails>,
     references: Vec<String>,
     tags: Vec<String>,
+}
+
+#[derive(Debug)]
+struct InventoryRecord {
+    pointer: String,
+    asset_hint: Option<String>,
+    asset_provider: Option<String>,
+    kind: InventoryObservationKind,
 }
 
 /// A severity this product assigned because the engine emits none at all.
@@ -633,6 +642,7 @@ fn normalize_artifacts(
 ) -> AppResult<AdapterOutput> {
     let mut output = AdapterOutput::default();
     let mut findings: BTreeMap<String, Finding> = BTreeMap::new();
+    let mut observations: BTreeMap<String, InventoryObservation> = BTreeMap::new();
     let mut processed_bytes = 0_u64;
     let mut processed_records = 0_usize;
     // Provider-qualified identifiers the engine reported on that no authorized
@@ -696,6 +706,58 @@ fn normalize_artifacts(
         let Some(parsed) = parsed else {
             continue;
         };
+        if matches!(
+            adapter.profile,
+            Profile::CloudQuery | Profile::Naabu | Profile::Httpx | Profile::Syft
+        ) {
+            let warnings_before_extract = output.warnings.len();
+            let records =
+                extract_inventory_records(adapter.profile, &parsed, artifact, &mut output.warnings);
+            if output.warnings.len() > warnings_before_extract {
+                output.complete = false;
+            }
+            if records.len() >= MAX_RECORDS {
+                output.complete = false;
+                push_warning(
+                    &mut output.warnings,
+                    "adapter extraction reached the record safety boundary; completeness cannot be established",
+                );
+            }
+            for record in records {
+                if processed_records >= MAX_RECORDS {
+                    output.complete = false;
+                    push_warning(
+                        &mut output.warnings,
+                        "adapter record limit reached; remaining raw records were retained but not normalized",
+                    );
+                    break;
+                }
+                processed_records += 1;
+                let warnings_before_resolution = output.warnings.len();
+                let asset_id = resolve_inventory_asset(
+                    &record,
+                    input.asset_ids,
+                    input.asset_identifier_map,
+                    &mut output.warnings,
+                    &mut unmatched_identifiers,
+                );
+                if output.warnings.len() > warnings_before_resolution {
+                    output.complete = false;
+                }
+                let Some(asset_id) = asset_id else {
+                    continue;
+                };
+                merge_inventory_observation(
+                    &mut observations,
+                    adapter,
+                    input,
+                    artifact,
+                    record,
+                    asset_id,
+                );
+            }
+            continue;
+        }
         let warnings_before_extract = output.warnings.len();
         let records = extract_records(adapter.profile, &parsed, &mut output.warnings);
         if output.warnings.len() > warnings_before_extract {
@@ -808,6 +870,7 @@ fn normalize_artifacts(
     }
 
     output.findings = findings.into_values().collect();
+    output.observations = observations.into_values().collect();
     Ok(output)
 }
 
@@ -819,7 +882,11 @@ fn normalize_artifacts(
 fn is_complete_empty_json_lines(profile: Profile, artifact: &RawArtifact, bytes: &[u8]) -> bool {
     if !matches!(
         profile,
-        Profile::Naabu | Profile::Httpx | Profile::Nuclei | Profile::Trufflehog
+        Profile::CloudQuery
+            | Profile::Naabu
+            | Profile::Httpx
+            | Profile::Nuclei
+            | Profile::Trufflehog
     ) || bytes.iter().any(|byte| !byte.is_ascii_whitespace())
     {
         return false;
@@ -1512,12 +1579,313 @@ fn bounded_string_list(value: Option<&Value>, max_items: usize) -> Option<String
     (!joined.is_empty()).then_some(joined)
 }
 
+fn inventory_text(value: Option<String>, max_chars: usize) -> Option<String> {
+    bounded_scanner_detail(value, max_chars)
+}
+
+fn inventory_string_any(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
+    inventory_text(string_any(object, keys), MAX_SHORT_TEXT)
+}
+
+fn inventory_u16(value: Option<&Value>) -> Option<u16> {
+    value
+        .and_then(scalar_string)
+        .and_then(|value| value.parse::<u16>().ok())
+}
+
+fn inventory_host(value: Option<String>) -> Option<String> {
+    let value = inventory_text(value, MAX_SHORT_TEXT)?;
+    if let Ok(address) = value.parse::<std::net::IpAddr>() {
+        return Some(address.to_string());
+    }
+    let parsed = url::Url::parse(&format!("http://{value}")).ok()?;
+    if parsed.username() != ""
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return None;
+    }
+    inventory_text(parsed.host_str().map(str::to_owned), MAX_SHORT_TEXT)
+}
+
+fn extract_inventory_records(
+    profile: Profile,
+    parsed: &ParsedArtifact,
+    artifact: &RawArtifact,
+    warnings: &mut Vec<String>,
+) -> Vec<InventoryRecord> {
+    match profile {
+        Profile::CloudQuery => extract_cloudquery_inventory(parsed, artifact, warnings),
+        Profile::Naabu => extract_naabu_inventory(parsed, warnings),
+        Profile::Httpx => extract_httpx_inventory(parsed, warnings),
+        Profile::Syft => extract_syft_inventory(parsed, warnings),
+        _ => Vec::new(),
+    }
+}
+
+fn cloudquery_resource_type(relative_path: &str) -> Option<&'static str> {
+    let basename = Path::new(relative_path).file_name()?.to_str()?;
+    match basename {
+        "aws_iam_accounts.json" => Some("aws_iam_accounts"),
+        "aws_iam_credential_reports.json" => Some("aws_iam_credential_reports"),
+        "aws_iam_groups.json" => Some("aws_iam_groups"),
+        "aws_iam_password_policies.json" => Some("aws_iam_password_policies"),
+        "aws_iam_policies.json" => Some("aws_iam_policies"),
+        "aws_iam_roles.json" => Some("aws_iam_roles"),
+        "aws_iam_users.json" => Some("aws_iam_users"),
+        _ => None,
+    }
+}
+
+fn extract_cloudquery_inventory(
+    parsed: &ParsedArtifact,
+    artifact: &RawArtifact,
+    warnings: &mut Vec<String>,
+) -> Vec<InventoryRecord> {
+    let Some(resource_type) = cloudquery_resource_type(&artifact.relative_path) else {
+        push_warning(
+            warnings,
+            "CloudQuery artifact basename was not one of the fixed seven IAM tables; it was retained only as raw evidence",
+        );
+        return Vec::new();
+    };
+    let mut records = Vec::new();
+    for (pointer, value) in json_rows(parsed, warnings) {
+        let Some(object) = value.as_object() else {
+            push_warning(
+                warnings,
+                format!(
+                    "CloudQuery inventory record at {pointer} was not an object and was not normalized"
+                ),
+            );
+            continue;
+        };
+        let Some(account_id) = inventory_string_any(object, &["account_id"]) else {
+            push_warning(
+                warnings,
+                format!(
+                    "CloudQuery inventory record at {pointer} lacked its account_id and was not normalized"
+                ),
+            );
+            continue;
+        };
+        let (native_id, display_name) = match resource_type {
+            "aws_iam_accounts" | "aws_iam_password_policies" => (Some(account_id.clone()), None),
+            "aws_iam_credential_reports" => (
+                inventory_string_any(object, &["arn", "user_id"]),
+                inventory_string_any(object, &["user", "user_name"]),
+            ),
+            "aws_iam_groups" => (
+                inventory_string_any(object, &["arn", "group_id"]),
+                inventory_string_any(object, &["group_name"]),
+            ),
+            "aws_iam_policies" => (
+                inventory_string_any(object, &["arn", "policy_id"]),
+                inventory_string_any(object, &["policy_name"]),
+            ),
+            "aws_iam_roles" => (
+                inventory_string_any(object, &["arn", "role_id"]),
+                inventory_string_any(object, &["role_name"]),
+            ),
+            "aws_iam_users" => (
+                inventory_string_any(object, &["arn", "user_id"]),
+                inventory_string_any(object, &["user_name"]),
+            ),
+            _ => unreachable!("resource type came from the fixed table allowlist"),
+        };
+        records.push(InventoryRecord {
+            pointer,
+            asset_hint: Some(account_id),
+            asset_provider: Some("aws".into()),
+            kind: InventoryObservationKind::CloudResource {
+                resource_type: resource_type.into(),
+                native_id,
+                display_name,
+            },
+        });
+        if records.len() >= MAX_RECORDS {
+            break;
+        }
+    }
+    records
+}
+
+fn extract_syft_inventory(
+    parsed: &ParsedArtifact,
+    warnings: &mut Vec<String>,
+) -> Vec<InventoryRecord> {
+    let ParsedArtifact::Json(Value::Object(document)) = parsed else {
+        push_warning(
+            warnings,
+            "Syft output was not its supported JSON document; the raw artifact was retained, and the scan should be retried with the pinned Syft JSON reporter",
+        );
+        return Vec::new();
+    };
+    let Some(artifacts) = document.get("artifacts").and_then(Value::as_array) else {
+        push_warning(
+            warnings,
+            "Syft output lacked its artifacts array; the raw artifact was retained, and the scan should be retried with the pinned Syft JSON reporter",
+        );
+        return Vec::new();
+    };
+    artifacts
+        .iter()
+        .take(MAX_RECORDS)
+        .enumerate()
+        .filter_map(|(index, value)| {
+            let pointer = format!("/artifacts/{index}");
+            let Some(object) = value.as_object() else {
+                push_warning(
+                    warnings,
+                    format!("Syft component at {pointer} was not an object and was not normalized"),
+                );
+                return None;
+            };
+            let Some(name) = inventory_string_any(object, &["name"]) else {
+                push_warning(
+                    warnings,
+                    format!("Syft component at {pointer} lacked its name and was not normalized"),
+                );
+                return None;
+            };
+            Some(InventoryRecord {
+                pointer,
+                asset_hint: None,
+                asset_provider: None,
+                kind: InventoryObservationKind::SoftwareComponent {
+                    name,
+                    version: inventory_string_any(object, &["version"]),
+                    package_type: inventory_string_any(object, &["type"]),
+                    purl: inventory_string_any(object, &["purl"]),
+                },
+            })
+        })
+        .collect()
+}
+
+fn extract_naabu_inventory(
+    parsed: &ParsedArtifact,
+    warnings: &mut Vec<String>,
+) -> Vec<InventoryRecord> {
+    json_rows(parsed, warnings)
+        .into_iter()
+        .filter_map(|(pointer, value)| {
+            let Some(object) = value.as_object() else {
+                push_warning(
+                    warnings,
+                    format!("Naabu record at {pointer} was not an object and was not normalized"),
+                );
+                return None;
+            };
+            let Some(host) = inventory_host(string_any(object, &["host", "ip"])) else {
+                push_warning(
+                    warnings,
+                    format!("Naabu record at {pointer} had no bounded host and was not normalized"),
+                );
+                return None;
+            };
+            let Some(port) = inventory_u16(object.get("port")).filter(|port| *port > 0) else {
+                push_warning(
+                    warnings,
+                    format!("Naabu record at {pointer} had no bounded port and was not normalized"),
+                );
+                return None;
+            };
+            Some(InventoryRecord {
+                pointer,
+                asset_hint: inventory_string_any(object, &["asset_id"]),
+                asset_provider: None,
+                kind: InventoryObservationKind::Service {
+                    endpoint: host,
+                    port: Some(port),
+                    transport: inventory_string_any(object, &["protocol"])
+                        .or_else(|| Some("tcp".into())),
+                    scheme: None,
+                    http_status: None,
+                    tls: object.get("tls").and_then(Value::as_bool),
+                },
+            })
+        })
+        .collect()
+}
+
+fn extract_httpx_inventory(
+    parsed: &ParsedArtifact,
+    warnings: &mut Vec<String>,
+) -> Vec<InventoryRecord> {
+    json_rows(parsed, warnings)
+        .into_iter()
+        .filter_map(|(pointer, value)| {
+            let Some(object) = value.as_object() else {
+                push_warning(
+                    warnings,
+                    format!("HTTPx record at {pointer} was not an object; retry with the supported pinned JSONL output"),
+                );
+                return None;
+            };
+            let parsed_url = inventory_string_any(object, &["url"])
+                .and_then(|value| url::Url::parse(&value).ok());
+            let Some(endpoint) = inventory_host(string_any(object, &["host"]))
+                .or_else(|| inventory_host(string_any(object, &["input"])))
+                .or_else(|| {
+                    parsed_url.as_ref().and_then(|url| {
+                        inventory_text(url.host_str().map(str::to_owned), MAX_SHORT_TEXT)
+                    })
+                })
+            else {
+                push_warning(
+                    warnings,
+                    format!("HTTPx record at {pointer} lacked its target; the raw record was retained, and the scan should be retried with the supported pinned JSONL output"),
+                );
+                return None;
+            };
+            let Some(status) = inventory_u16(
+                object
+                    .get("status_code")
+                    .or_else(|| object.get("status-code")),
+            )
+            .filter(|status| (100..=599).contains(status))
+            else {
+                push_warning(
+                    warnings,
+                    format!("HTTPx record at {pointer} lacked its HTTP status; the raw record was retained, and the scan should be retried with the supported pinned JSONL output"),
+                );
+                return None;
+            };
+            Some(InventoryRecord {
+                pointer,
+                asset_hint: inventory_string_any(object, &["asset_id"]),
+                asset_provider: None,
+                kind: InventoryObservationKind::Service {
+                    endpoint,
+                    port: inventory_u16(object.get("port"))
+                        .filter(|port| *port > 0)
+                        .or_else(|| parsed_url.as_ref().and_then(url::Url::port_or_known_default)),
+                    transport: Some("tcp".into()),
+                    scheme: inventory_string_any(object, &["scheme"]).or_else(|| {
+                        parsed_url.as_ref().and_then(|url| {
+                            inventory_text(Some(url.scheme().to_owned()), MAX_SHORT_TEXT)
+                        })
+                    }),
+                    http_status: Some(status),
+                    tls: object.get("tls").and_then(Value::as_bool),
+                },
+            })
+        })
+        .collect()
+}
+
 fn extract_records(
     profile: Profile,
     parsed: &ParsedArtifact,
     warnings: &mut Vec<String>,
 ) -> Vec<SourceRecord> {
-    if matches!(profile, Profile::CloudQuery | Profile::Syft) {
+    if matches!(
+        profile,
+        Profile::CloudQuery | Profile::Naabu | Profile::Httpx | Profile::Syft
+    ) {
         return Vec::new();
     }
 
@@ -1527,8 +1895,6 @@ fn extract_records(
         Profile::Cloudsplaining => extract_cloudsplaining(parsed, warnings),
         Profile::ScubaGear => extract_scubagear(parsed, warnings),
         Profile::Maester => extract_maester(parsed, warnings),
-        Profile::Naabu => extract_naabu(parsed, warnings),
-        Profile::Httpx => extract_httpx(parsed, warnings),
         Profile::Nuclei => extract_nuclei(parsed, warnings),
         Profile::Greenbone => extract_greenbone(parsed, warnings),
         Profile::Semgrep => extract_semgrep(parsed, warnings),
@@ -1541,7 +1907,7 @@ fn extract_records(
         Profile::Kubescape => extract_kubescape(parsed, warnings),
         Profile::KubeBench => extract_kube_bench(parsed, warnings),
         Profile::Steampipe => extract_steampipe(parsed, warnings),
-        Profile::CloudQuery | Profile::Syft => Vec::new(),
+        Profile::CloudQuery | Profile::Naabu | Profile::Httpx | Profile::Syft => Vec::new(),
     }
 }
 
@@ -2185,109 +2551,6 @@ fn extract_m365(
         }
     }
     records
-}
-
-fn extract_naabu(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
-    json_rows(parsed, warnings)
-        .into_iter()
-        .filter_map(|(pointer, value)| {
-            let Some(object) = value.as_object() else {
-                push_warning(
-                    warnings,
-                    format!("Naabu record at {pointer} was not an object and was not normalized"),
-                );
-                return None;
-            };
-            let Some(host) = string_any(object, &["host", "ip"]) else {
-                push_warning(
-                    warnings,
-                    format!("Naabu record at {pointer} had no bounded host and was not normalized"),
-                );
-                return None;
-            };
-            let Some(port) = object.get("port").and_then(scalar_string) else {
-                push_warning(
-                    warnings,
-                    format!("Naabu record at {pointer} had no bounded port and was not normalized"),
-                );
-                return None;
-            };
-            let protocol = string_any(object, &["protocol"]).unwrap_or_else(|| "tcp".into());
-            Some(record_with_derived_severity_and_confidence!(
-                pointer,
-                format!("open-{protocol}-port"),
-                "Externally reachable network service".into(),
-                // Naabu is a port scanner and emits no severity; the only
-                // `confidence` in its output grades service fingerprinting, not
-                // risk. An open port is an exposure fact, so it is recorded
-                // rather than rated, and the record says which of the two it is.
-                DerivedSeverity {
-                    severity: Severity::Informational,
-                    code: SeverityBasisCode::OpenPort,
-                },
-                format!("{}:{port}", redact_location(&host)),
-                string_any(object, &["asset_id"]),
-                derived_confidence(ConfidenceBasisCode::ObservedResponse),
-                EvidenceKind::ExternalValidation,
-                vec![],
-                vec![
-                    format!("port:{}", safe_tag(&port)),
-                    format!("protocol:{}", safe_tag(&protocol)),
-                ],
-            ))
-        })
-        .collect()
-}
-
-fn extract_httpx(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
-    json_rows(parsed, warnings)
-        .into_iter()
-        .filter_map(|(pointer, value)| {
-            let Some(object) = value.as_object() else {
-                push_warning(
-                    warnings,
-                    format!("HTTPx record at {pointer} was not an object; retry with the supported pinned JSONL output"),
-                );
-                return None;
-            };
-            let Some(target) = string_any(object, &["url", "input", "host"]) else {
-                push_warning(
-                    warnings,
-                    format!("HTTPx record at {pointer} lacked its target; the raw record was retained, and the scan should be retried with the supported pinned JSONL output"),
-                );
-                return None;
-            };
-            let Some(status) = object
-                .get("status_code")
-                .or_else(|| object.get("status-code"))
-                .and_then(scalar_string)
-            else {
-                push_warning(
-                    warnings,
-                    format!("HTTPx record at {pointer} lacked its HTTP status; the raw record was retained, and the scan should be retried with the supported pinned JSONL output"),
-                );
-                return None;
-            };
-            Some(record_with_derived_severity_and_confidence!(
-                pointer,
-                "http-service-observed".into(),
-                "Externally reachable HTTP service".into(),
-                // httpx probes reachability and emits no severity on a result.
-                // Reaching a service is an exposure fact, so it is recorded
-                // rather than rated, and the record says which of the two it is.
-                DerivedSeverity {
-                    severity: Severity::Informational,
-                    code: SeverityBasisCode::ReachableHttpService,
-                },
-                redact_location(&target),
-                string_any(object, &["asset_id"]),
-                derived_confidence(ConfidenceBasisCode::ObservedResponse),
-                EvidenceKind::ExternalValidation,
-                vec![],
-                vec![format!("http-status:{}", safe_tag(&status))],
-            ))
-        })
-        .collect()
 }
 
 fn extract_nuclei(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
@@ -3835,6 +4098,117 @@ fn resolve_asset(
         ),
     );
     None
+}
+
+fn resolve_inventory_asset(
+    record: &InventoryRecord,
+    allowed_assets: &[String],
+    asset_identifier_map: &crate::adapter::AdapterAssetIdentifierMap,
+    warnings: &mut Vec<String>,
+    unmatched_identifiers: &mut BTreeMap<(String, String), usize>,
+) -> Option<String> {
+    if let Some(hint) = record.asset_hint.as_deref() {
+        if record.asset_provider.is_none() {
+            if allowed_assets.iter().any(|asset| asset == hint) {
+                return Some(hint.to_owned());
+            }
+            push_warning(
+                warnings,
+                "inventory record named an asset outside this engine task and was not normalized",
+            );
+            return None;
+        }
+
+        if let Some(candidates) =
+            asset_identifier_map.candidates(record.asset_provider.as_deref(), hint)
+        {
+            let authorized = candidates
+                .iter()
+                .filter(|candidate| allowed_assets.iter().any(|asset| asset == *candidate))
+                .collect::<Vec<_>>();
+            if authorized.len() == 1 {
+                return authorized.first().map(|asset| (*asset).clone());
+            }
+            if authorized.len() > 1 {
+                push_warning(
+                    warnings,
+                    "inventory record matched an ambiguous native asset identifier and was not normalized",
+                );
+                return None;
+            }
+        }
+
+        let provider = record
+            .asset_provider
+            .as_deref()
+            .unwrap_or("unknown-provider");
+        push_warning(
+            warnings,
+            "inventory record had no exact authorized provider identifier match and was not normalized",
+        );
+        let key = (
+            safe_text(provider, 60).to_ascii_lowercase(),
+            safe_text(hint, 120),
+        );
+        if unmatched_identifiers.len() < MAX_UNMATCHED_IDENTIFIERS
+            || unmatched_identifiers.contains_key(&key)
+        {
+            *unmatched_identifiers.entry(key).or_insert(0) += 1;
+        }
+        return None;
+    }
+
+    if allowed_assets.len() == 1 {
+        return allowed_assets.first().cloned();
+    }
+    push_warning(
+        warnings,
+        "inventory record carried no asset identifier in a multi-asset task and was not normalized",
+    );
+    None
+}
+
+fn merge_inventory_observation(
+    observations: &mut BTreeMap<String, InventoryObservation>,
+    adapter: &BuiltinAdapter,
+    input: &AdapterInput<'_>,
+    artifact: &RawArtifact,
+    record: InventoryRecord,
+    asset_id: String,
+) {
+    let kind_bytes = serde_json::to_vec(&record.kind).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    for component in [
+        b"ai-security-scanner.inventory-observation-v1".as_slice(),
+        input.case_id.as_bytes(),
+        input.scan_run_id.as_bytes(),
+        input.engine_run_id.as_bytes(),
+        adapter.id.as_bytes(),
+        asset_id.as_bytes(),
+        artifact.sha256.as_bytes(),
+        record.pointer.as_bytes(),
+        kind_bytes.as_slice(),
+    ] {
+        hasher.update(component);
+        hasher.update([0]);
+    }
+    let id = format!("inventory-{}", &hex::encode(hasher.finalize())[..32]);
+    observations
+        .entry(id.clone())
+        .or_insert(InventoryObservation {
+            id,
+            case_id: input.case_id.to_owned(),
+            run_id: input.scan_run_id.to_owned(),
+            engine_run_id: input.engine_run_id.to_owned(),
+            asset_id,
+            engine_id: adapter.id.to_owned(),
+            kind: record.kind,
+            artifact_id: artifact.id.clone(),
+            artifact_sha256: artifact.sha256.clone(),
+            pointer: inventory_text(Some(record.pointer), MAX_SHORT_TEXT)
+                .unwrap_or_else(|| "/".into()),
+            observed_at: artifact.created_at,
+        });
 }
 
 fn stable_fingerprint(engine: &str, rule: &str, asset: &str, location: &str) -> String {

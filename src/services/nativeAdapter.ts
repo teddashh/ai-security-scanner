@@ -5,6 +5,7 @@ import type {
   AiGeneratedArtifactAnswer,
   Asset,
   AssetType,
+  BeginnerInventoryItem,
   BeginnerMasterReport,
   CaseExport,
   ContextFactor,
@@ -259,6 +260,56 @@ interface NativeEngineAdmissionIssue {
   detail: string;
 }
 
+type NativeBeginnerInventoryItem = {
+  asset_id: string;
+  sources: Array<{
+    observation_id: string;
+    engine_id: string;
+    engine_run_id: string;
+    artifact_id: string;
+    artifact_sha256: string;
+    pointer: string;
+    observed_at: string;
+  }>;
+} & ({
+  kind: "service";
+  endpoint: string;
+  port: number | null;
+  transport: string | null;
+  schemes: string[];
+  http_statuses: number[];
+  tls_observations: boolean[];
+} | {
+  kind: "software_component";
+  name: string;
+  version: string | null;
+  package_type: string | null;
+  purl: string | null;
+} | {
+  kind: "cloud_resource";
+  resource_type: string;
+  native_id: string | null;
+  display_name: string | null;
+});
+
+interface NativeBeginnerInventory {
+  total: number;
+  counts: {
+    services: number;
+    software_components: number;
+    cloud_resources: number;
+  };
+  asset_ids: string[];
+  representative_sample: NativeBeginnerInventoryItem[];
+  items: NativeBeginnerInventoryItem[];
+  by_asset: Array<{
+    asset_id: string;
+    total: number;
+    counts: NativeBeginnerInventory["counts"];
+    representative_sample: NativeBeginnerInventoryItem[];
+  }>;
+}
+
 export interface NativeBeginnerMasterReport {
   schema_version: string;
   case_id: string;
@@ -358,6 +409,7 @@ export interface NativeBeginnerMasterReport {
     unavailable: number;
     unattributed?: number;
   };
+  inventory?: NativeBeginnerInventory | null;
   findings: Array<{
     finding_id: string;
     fingerprint: string;
@@ -2314,6 +2366,54 @@ export const adaptNativeSnapshot = (
   };
 };
 
+const adaptBeginnerInventoryItem = (
+  item: NativeBeginnerInventoryItem,
+): BeginnerInventoryItem => {
+  const common = {
+    assetId: item.asset_id,
+    sources: item.sources.map((source) => ({
+      observationId: source.observation_id,
+      engineId: source.engine_id,
+      engineRunId: source.engine_run_id,
+      artifactId: source.artifact_id,
+      artifactSha256: source.artifact_sha256,
+      pointer: source.pointer,
+      observedAt: source.observed_at,
+    })),
+  };
+  if (item.kind === "service") return {
+    ...common,
+    kind: item.kind,
+    endpoint: item.endpoint,
+    port: item.port ?? undefined,
+    transport: item.transport ?? undefined,
+    schemes: [...item.schemes],
+    httpStatuses: [...item.http_statuses],
+    tlsObservations: [...item.tls_observations],
+  };
+  if (item.kind === "software_component") return {
+    ...common,
+    kind: item.kind,
+    name: item.name,
+    version: item.version ?? undefined,
+    packageType: item.package_type ?? undefined,
+    purl: item.purl ?? undefined,
+  };
+  return {
+    ...common,
+    kind: item.kind,
+    resourceType: item.resource_type,
+    nativeId: item.native_id ?? undefined,
+    displayName: item.display_name ?? undefined,
+  };
+};
+
+const adaptBeginnerInventoryCounts = (counts: NativeBeginnerInventory["counts"]) => ({
+  services: counts.services,
+  softwareComponents: counts.software_components,
+  cloudResources: counts.cloud_resources,
+});
+
 export const adaptBeginnerMasterReport = (
   report: NativeBeginnerMasterReport,
 ): BeginnerMasterReport => ({
@@ -2405,6 +2505,19 @@ export const adaptBeginnerMasterReport = (
     // reason it did not know about.
     unattributed: report.coverage_counts.unattributed ?? 0,
   },
+  inventory: report.inventory ? {
+    total: report.inventory.total,
+    counts: adaptBeginnerInventoryCounts(report.inventory.counts),
+    assetIds: [...report.inventory.asset_ids],
+    representativeSample: report.inventory.representative_sample.map(adaptBeginnerInventoryItem),
+    items: report.inventory.items.map(adaptBeginnerInventoryItem),
+    byAsset: report.inventory.by_asset.map((asset) => ({
+      assetId: asset.asset_id,
+      total: asset.total,
+      counts: adaptBeginnerInventoryCounts(asset.counts),
+      representativeSample: asset.representative_sample.map(adaptBeginnerInventoryItem),
+    })),
+  } : undefined,
   findings: report.findings.map((finding) => ({
     findingId: finding.finding_id,
     fingerprint: finding.fingerprint,

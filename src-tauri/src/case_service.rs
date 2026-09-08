@@ -14,9 +14,10 @@ use crate::artifact_store::{
     inspect_raw_artifacts, read_verified_raw_artifact,
 };
 use crate::beginner_report::{
-    BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerMasterReport, BeginnerReportSummary,
-    CheckResultKind, CoverageDimensionStatus, CoverageGap, CoverageGapKind, FindingSnapshotSource,
-    NextActionCode, ReportLifecycle, ReportScanStage, RequestedLimitSource,
+    BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerInventoryItem, BeginnerInventoryItemKind,
+    BeginnerMasterReport, BeginnerReportSummary, CheckResultKind, CoverageDimensionStatus,
+    CoverageGap, CoverageGapKind, FindingSnapshotSource, NextActionCode, ReportLifecycle,
+    ReportScanStage, RequestedLimitSource,
 };
 use crate::bootstrap::executor::list_bootstrap_cleanup_obligations;
 use crate::connectors::{
@@ -588,6 +589,10 @@ pub struct DurableExecutionReport {
     pub raw_artifacts: Vec<RawArtifact>,
     #[serde(default)]
     pub findings: Vec<Finding>,
+    // Keep the byte commitment of pre-inventory execution reports stable when
+    // they are deserialized and replayed after an app update.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observations: Vec<crate::domain::InventoryObservation>,
     #[serde(default)]
     pub warnings: Vec<String>,
     #[serde(default)]
@@ -603,6 +608,7 @@ impl From<&ExecutionReport> for DurableExecutionReport {
             exit_code: report.exit_code,
             raw_artifacts: report.raw_artifacts.clone(),
             findings: report.findings.clone(),
+            observations: report.observations.clone(),
             warnings: report.warnings.clone(),
             unattributed: report.unattributed.clone(),
         }
@@ -3187,6 +3193,14 @@ impl<'a> CaseService<'a> {
                         engine_run.adapter_version
                     ))
                 })?;
+                validate_inventory_observations(
+                    &case,
+                    engine_run,
+                    scan_run_id,
+                    NAABU_ENGINE_ID,
+                    &adapter_artifacts,
+                    &output.observations,
+                )?;
                 let (current_mapping_version, current_mapping_provenance, _) =
                     optional_control_mapping_identity();
                 let mapping_identity_matches = current_mapping_version.is_some()
@@ -3199,6 +3213,7 @@ impl<'a> CaseService<'a> {
 
         if let Some(output) = output.as_mut()
             && !mapping_identity_matches
+            && !output.findings.is_empty()
         {
             for finding in &mut output.findings {
                 finding.control_references.clear();
@@ -3213,6 +3228,14 @@ impl<'a> CaseService<'a> {
 
         let mut changed = false;
         if let Some(output) = output.as_ref() {
+            for observation in &output.observations {
+                let is_new = !case
+                    .inventory_observations
+                    .iter()
+                    .any(|existing| existing.id == observation.id);
+                insert_or_validate_inventory_observation(&mut case, observation)?;
+                changed |= is_new;
+            }
             for finding in &output.findings {
                 let mut contextual_finding = finding.clone();
                 crate::prioritization::apply_case_context(&case, &mut contextual_finding);
@@ -4656,6 +4679,7 @@ impl<'a> CaseService<'a> {
                 exit_code: engine_snapshot.exit_code,
                 raw_artifacts,
                 findings: Vec::new(),
+                observations: Vec::new(),
                 warnings: Vec::new(),
                 unattributed: Vec::new(),
             };
@@ -6305,6 +6329,9 @@ impl<'a> CaseService<'a> {
         inspect_raw_artifacts(&self.artifact_root, &report.raw_artifacts)?;
         for artifact in &report.raw_artifacts {
             insert_or_validate_artifact(case, artifact)?;
+        }
+        for observation in &report.observations {
+            insert_or_validate_inventory_observation(case, observation)?;
         }
         for finding in &report.findings {
             // Keep the durable engine report immutable. Contextual priority is
@@ -9769,6 +9796,7 @@ fn validate_naabu_report_attempt_binding(
             && report.exit_code.is_none()
             && report.raw_artifacts.is_empty()
             && report.findings.is_empty()
+            && report.observations.is_empty()
             && exact_resource_free_handoff
     });
     match (matching, report.checkpoint.launcher_plan_sha256.as_deref()) {
@@ -9793,6 +9821,11 @@ fn validate_report_payload(
     engine_run: &EngineRun,
     report: &DurableExecutionReport,
 ) -> AppResult<()> {
+    if checkpoint_has_no_contact_resources(&report.checkpoint) && !report.observations.is_empty() {
+        return Err(AppError::NotAuthorized(
+            "a resource-free execution report cannot contain inventory observations".into(),
+        ));
+    }
     if report.warnings.len() > 256 {
         return Err(AppError::Runtime(
             "execution report contains too many warnings".into(),
@@ -9868,6 +9901,14 @@ fn validate_report_payload(
             )));
         }
     }
+    validate_inventory_observations(
+        case,
+        engine_run,
+        &report.checkpoint.scan_run_id,
+        &report.checkpoint.engine_id,
+        &report.raw_artifacts,
+        &report.observations,
+    )?;
     let allowed_assets = engine_run.asset_ids.iter().collect::<BTreeSet<_>>();
     for finding in &report.findings {
         if finding.case_id != case.id
@@ -9916,6 +9957,155 @@ fn validate_report_payload(
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_inventory_observations(
+    case: &AssessmentCase,
+    engine_run: &EngineRun,
+    scan_run_id: &str,
+    engine_id: &str,
+    eligible_artifacts: &[RawArtifact],
+    observations: &[crate::domain::InventoryObservation],
+) -> AppResult<()> {
+    const MAX_INVENTORY_OBSERVATIONS: usize = 10_000;
+    if observations.len() > MAX_INVENTORY_OBSERVATIONS {
+        return Err(AppError::Runtime(
+            "adapter output contains too many inventory observations".into(),
+        ));
+    }
+    let allowed_assets = engine_run.asset_ids.iter().collect::<BTreeSet<_>>();
+    let mut observation_ids = BTreeSet::new();
+    for observation in observations {
+        if !observation_ids.insert(observation.id.as_str()) {
+            return Err(AppError::Runtime(
+                "execution report contains duplicate inventory observation IDs".into(),
+            ));
+        }
+        let artifact = eligible_artifacts
+            .iter()
+            .find(|artifact| artifact.id == observation.artifact_id)
+            .ok_or_else(|| {
+                AppError::Runtime(format!(
+                    "inventory observation refers to ineligible artifact {}",
+                    observation.artifact_id
+                ))
+            })?;
+        if observation.case_id != case.id
+            || observation.run_id != scan_run_id
+            || observation.engine_run_id != engine_run.id
+            || observation.engine_id != engine_id
+            || !allowed_assets.contains(&observation.asset_id)
+            || artifact.case_id != observation.case_id
+            || artifact.run_id != observation.run_id
+            || artifact.engine_run_id != observation.engine_run_id
+            || artifact.created_at != observation.observed_at
+            || !observation
+                .artifact_sha256
+                .eq_ignore_ascii_case(&artifact.sha256)
+        {
+            return Err(AppError::NotAuthorized(format!(
+                "inventory observation {} has invalid case, run, engine, asset, or artifact provenance",
+                observation.id
+            )));
+        }
+        validate_inventory_observation_fields(observation)?;
+    }
+    Ok(())
+}
+
+fn validate_inventory_observation_fields(
+    observation: &crate::domain::InventoryObservation,
+) -> AppResult<()> {
+    use crate::domain::InventoryObservationKind;
+
+    validate_inventory_text("inventory observation ID", &observation.id, 512)?;
+    validate_inventory_text("inventory observation case ID", &observation.case_id, 512)?;
+    validate_inventory_text("inventory observation run ID", &observation.run_id, 512)?;
+    validate_inventory_text(
+        "inventory observation engine-run ID",
+        &observation.engine_run_id,
+        512,
+    )?;
+    validate_inventory_text("inventory observation asset ID", &observation.asset_id, 512)?;
+    validate_inventory_text(
+        "inventory observation engine ID",
+        &observation.engine_id,
+        512,
+    )?;
+    validate_inventory_text(
+        "inventory observation artifact ID",
+        &observation.artifact_id,
+        512,
+    )?;
+    validate_inventory_text(
+        "inventory observation artifact digest",
+        &observation.artifact_sha256,
+        64,
+    )?;
+    validate_inventory_text("inventory observation pointer", &observation.pointer, 512)?;
+    let optional = |label: &str, value: Option<&str>| -> AppResult<()> {
+        if let Some(value) = value {
+            validate_inventory_text(label, value, 512)?;
+        }
+        Ok(())
+    };
+    match &observation.kind {
+        InventoryObservationKind::Service {
+            endpoint,
+            port,
+            transport,
+            scheme,
+            http_status,
+            tls: _,
+        } => {
+            validate_inventory_text("inventory service endpoint", endpoint, 512)?;
+            if *port == Some(0) {
+                return Err(AppError::Runtime(
+                    "inventory service port is outside its valid range".into(),
+                ));
+            }
+            if http_status.is_some_and(|status| !(100..=599).contains(&status)) {
+                return Err(AppError::Runtime(
+                    "inventory service HTTP status is outside its valid range".into(),
+                ));
+            }
+            optional("inventory service transport", transport.as_deref())?;
+            optional("inventory service scheme", scheme.as_deref())?;
+        }
+        InventoryObservationKind::SoftwareComponent {
+            name,
+            version,
+            package_type,
+            purl,
+        } => {
+            validate_inventory_text("inventory component name", name, 512)?;
+            optional("inventory component version", version.as_deref())?;
+            optional("inventory component package type", package_type.as_deref())?;
+            optional("inventory component purl", purl.as_deref())?;
+        }
+        InventoryObservationKind::CloudResource {
+            resource_type,
+            native_id,
+            display_name,
+        } => {
+            validate_inventory_text("inventory resource type", resource_type, 512)?;
+            optional("inventory resource native ID", native_id.as_deref())?;
+            optional("inventory resource display name", display_name.as_deref())?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_inventory_text(label: &str, value: &str, maximum_chars: usize) -> AppResult<()> {
+    if value.trim().is_empty()
+        || value.chars().count() > maximum_chars
+        || value.chars().any(char::is_control)
+    {
+        return Err(AppError::Runtime(format!(
+            "{label} exceeds its durable storage boundary"
+        )));
     }
     Ok(())
 }
@@ -10092,6 +10282,22 @@ fn report_already_applied(
     };
     if saved_report_sha256 != durable_execution_report_sha256(report)? {
         return Ok(false);
+    }
+    for observation in &report.observations {
+        let Some(existing) = case
+            .inventory_observations
+            .iter()
+            .find(|existing| existing.id == observation.id)
+        else {
+            return Err(exact_report_replay_conflict(
+                "its committed inventory observation is missing",
+            ));
+        };
+        if existing != observation {
+            return Err(exact_report_replay_conflict(
+                "its committed inventory observation changed",
+            ));
+        }
     }
     // Resume planning deliberately keeps the captured-evidence checkpoint but
     // changes its durable projection to queued_for_resume. An adapter retry
@@ -10386,6 +10592,27 @@ fn insert_or_validate_artifact(case: &mut AssessmentCase, artifact: &RawArtifact
     } else {
         case.raw_artifacts.push(artifact.clone());
     }
+    Ok(())
+}
+
+fn insert_or_validate_inventory_observation(
+    case: &mut AssessmentCase,
+    observation: &crate::domain::InventoryObservation,
+) -> AppResult<()> {
+    if let Some(existing) = case
+        .inventory_observations
+        .iter()
+        .find(|existing| existing.id == observation.id)
+    {
+        if existing != observation {
+            return Err(AppError::Conflict(format!(
+                "inventory observation {} conflicts with an existing record",
+                observation.id
+            )));
+        }
+        return Ok(());
+    }
+    case.inventory_observations.push(observation.clone());
     Ok(())
 }
 
@@ -13268,6 +13495,7 @@ fn readable_target_labels(
                 .iter()
                 .flat_map(|gap| &gap.target_asset_ids),
         )
+        .chain(&report.inventory.asset_ids)
     {
         if !labels.contains_key(asset_id) {
             labels.insert(
@@ -13831,6 +14059,256 @@ fn html_official_references(
     }
 }
 
+fn html_inventory_item_summary(item: &BeginnerInventoryItem, catalog: HtmlReportCatalog) -> String {
+    let mut details = Vec::new();
+    let kind = match &item.details {
+        BeginnerInventoryItemKind::Service {
+            endpoint,
+            port,
+            transport,
+            schemes,
+            http_statuses,
+            tls_observations,
+        } => {
+            details.push(format!(
+                "{} <code>{}</code>",
+                catalog.text("Endpoint", "端點"),
+                html_escape(endpoint)
+            ));
+            if let Some(port) = port {
+                details.push(format!(
+                    "{} {}",
+                    catalog.text("port", "連接埠"),
+                    catalog.format_number(*port as usize)
+                ));
+            }
+            if let Some(transport) = transport {
+                details.push(format!(
+                    "{} <code>{}</code>",
+                    catalog.text("transport", "傳輸協定"),
+                    html_escape(transport)
+                ));
+            }
+            if !schemes.is_empty() {
+                details.push(format!(
+                    "{} {}",
+                    catalog.text("schemes", "通訊方案"),
+                    schemes
+                        .iter()
+                        .map(|value| format!("<code>{}</code>", html_escape(value)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if !http_statuses.is_empty() {
+                details.push(format!(
+                    "{} {}",
+                    catalog.text("HTTP status", "HTTP 狀態"),
+                    http_statuses
+                        .iter()
+                        .map(|value| catalog.format_number(*value as usize))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if !tls_observations.is_empty() {
+                details.push(format!(
+                    "TLS {}",
+                    tls_observations
+                        .iter()
+                        .map(|value| catalog.text(
+                            if *value { "yes" } else { "no" },
+                            if *value { "是" } else { "否" }
+                        ))
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            catalog.text("Service", "服務")
+        }
+        BeginnerInventoryItemKind::SoftwareComponent {
+            name,
+            version,
+            package_type,
+            purl,
+        } => {
+            details.push(format!(
+                "{} <code>{}</code>",
+                catalog.text("Name", "名稱"),
+                html_escape(name)
+            ));
+            for (label, value) in [
+                (catalog.text("version", "版本"), version.as_deref()),
+                (
+                    catalog.text("package type", "套件類型"),
+                    package_type.as_deref(),
+                ),
+                ("purl", purl.as_deref()),
+            ] {
+                if let Some(value) = value {
+                    details.push(format!("{label} <code>{}</code>", html_escape(value)));
+                }
+            }
+            catalog.text("Software component", "軟體元件")
+        }
+        BeginnerInventoryItemKind::CloudResource {
+            resource_type,
+            native_id,
+            display_name,
+        } => {
+            details.push(format!(
+                "{} <code>{}</code>",
+                catalog.text("Resource type", "資源類型"),
+                html_escape(resource_type)
+            ));
+            for (label, value) in [
+                (catalog.text("native ID", "原生 ID"), native_id.as_deref()),
+                (
+                    catalog.text("display name", "顯示名稱"),
+                    display_name.as_deref(),
+                ),
+            ] {
+                if let Some(value) = value {
+                    details.push(format!("{label} <code>{}</code>", html_escape(value)));
+                }
+            }
+            catalog.text("Cloud resource", "雲端資源")
+        }
+    };
+    format!("<strong>{kind}</strong> — {}", details.join(" · "))
+}
+
+fn html_inventory_sources(item: &BeginnerInventoryItem, catalog: HtmlReportCatalog) -> String {
+    let sources = item
+        .sources
+        .iter()
+        .map(|source| {
+            format!(
+                concat!(
+                    "<li><strong>{}</strong> <code>{}</code> · ",
+                    "{} <code>{}</code> · {} <code>{}</code>",
+                    "<br>{} <code>{}</code> · SHA-256 <code>{}</code>",
+                    "<br>{} <code>{}</code> · {} {}</li>"
+                ),
+                catalog.text("Observation", "觀察紀錄"),
+                html_escape(&source.observation_id),
+                catalog.text("engine", "掃描工具"),
+                html_escape(&source.engine_id),
+                catalog.text("engine run", "掃描工具執行"),
+                html_escape(&source.engine_run_id),
+                catalog.text("artifact", "成品"),
+                html_escape(&source.artifact_id),
+                html_escape(&source.artifact_sha256),
+                catalog.text("pointer", "資料指標"),
+                html_escape(&source.pointer),
+                catalog.text("observed", "觀察時間"),
+                html_escape(&catalog.format_time(&source.observed_at)),
+            )
+        })
+        .collect::<String>();
+    if sources.is_empty() {
+        catalog
+            .text(
+                "<li>No selected-run source provenance was retained.</li>",
+                "<li>未保留本輪的來源追溯資料。</li>",
+            )
+            .into()
+    } else {
+        sources
+    }
+}
+
+fn html_typed_inventory_section(
+    report: &BeginnerMasterReport,
+    target_labels: &BTreeMap<Id, String>,
+    catalog: HtmlReportCatalog,
+) -> String {
+    if report.inventory.total == 0 {
+        return String::new();
+    }
+
+    let sample = report
+        .inventory
+        .representative_sample
+        .iter()
+        .take(3)
+        .map(|item| {
+            format!(
+                "<li class=\"inventory-sample-item\">{}</li>",
+                html_inventory_item_summary(item, catalog)
+            )
+        })
+        .collect::<String>();
+    let mut grouped = String::new();
+    for asset_id in &report.inventory.asset_ids {
+        let label = target_labels
+            .get(asset_id)
+            .map(String::as_str)
+            .unwrap_or(catalog.text("Saved target", "已保存的目標"));
+        let items = report
+            .inventory
+            .items
+            .iter()
+            .filter(|item| item.asset_id == *asset_id)
+            .map(|item| {
+                format!(
+                    "<li>{}<details><summary>{}</summary><ul>{}</ul></details></li>",
+                    html_inventory_item_summary(item, catalog),
+                    catalog.text("Source provenance", "來源追溯資料"),
+                    html_inventory_sources(item, catalog),
+                )
+            })
+            .collect::<String>();
+        grouped.push_str(&format!(
+            "<section><h4>{} <code>{}</code></h4><ul>{}</ul></section>",
+            html_escape(label),
+            html_escape(asset_id),
+            items,
+        ));
+    }
+
+    format!(
+        concat!(
+            "<section><h2>{}</h2><p>{}</p>",
+            "<p><strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
+            "<strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
+            "<strong>{}:</strong> {} · <strong>{}:</strong> {}</p>",
+            "<p><strong>{}:</strong> {}</p>",
+            "<h3>{}</h3><ul class=\"inventory-sample\">{}</ul>",
+            "<details class=\"inventory-complete\"><summary><strong>{}</strong></summary>{}</details></section>"
+        ),
+        catalog.text("Inventory observations", "盤點觀察"),
+        catalog.text(
+            "Inventory records are not vulnerability findings, remediation recommendations, or proof of a clean security result. They describe what scanners observed in this selected run and should be reviewed before planning any change.",
+            "盤點紀錄不是漏洞問題、修復建議，也不能證明資安結果安全無虞。這些紀錄描述掃描工具在本輪觀察到的內容；規劃任何變更前仍須人工檢視。",
+        ),
+        catalog.text("Total", "總數"),
+        catalog.format_number(report.inventory.total),
+        catalog.text("Services", "服務"),
+        catalog.format_number(report.inventory.counts.services),
+        catalog.text("Software components", "軟體元件"),
+        catalog.format_number(report.inventory.counts.software_components),
+        catalog.text("Cloud resources", "雲端資源"),
+        catalog.format_number(report.inventory.counts.cloud_resources),
+        catalog.text("Inventoried assets", "已盤點資產"),
+        catalog.format_number(report.inventory.asset_ids.len()),
+        catalog.text("Representative records", "代表性紀錄"),
+        catalog.format_number(report.inventory.representative_sample.len().min(3)),
+        catalog.text("Inventoried asset list", "已盤點資產清單"),
+        readable_target_list(
+            &report.inventory.asset_ids,
+            target_labels,
+            catalog,
+        ),
+        catalog.text("Representative sample (maximum 3)", "代表性樣本（最多 3 筆）"),
+        sample,
+        catalog.text("Complete inventory by asset", "依資產列出的完整盤點清單"),
+        grouped,
+    )
+}
+
 fn html_report_bytes(
     case: &AssessmentCase,
     run_id: &str,
@@ -13845,6 +14323,7 @@ fn html_report_bytes(
             .unwrap_or_else(|| catalog.text("not recorded", "未記錄").into())
     };
     let target_labels = readable_target_labels(&report, catalog);
+    let typed_inventory_section = html_typed_inventory_section(&report, &target_labels, catalog);
 
     let connection_diagnostic = matches!(
         report.requested.stage.value,
@@ -14487,6 +14966,12 @@ fn html_report_bytes(
             .severity_basis_code
             .is_some_and(|code| code.is_exposure_observation())
         {
+            if report.inventory.total > 0 {
+                // Typed inventory is authoritative for this run. Do not also
+                // render legacy exposure-shaped findings as either duplicate
+                // inventory or security problems.
+                continue;
+            }
             let observation_kind = match finding.severity_basis_code {
                 Some(crate::domain::SeverityBasisCode::OpenPort) => {
                     catalog.text("Open network service", "可連線的網路服務")
@@ -15038,6 +15523,7 @@ fn html_report_bytes(
         catalog.format_number(problem_count),
     ));
     document.push_str(&html_asset_result_section(&report, &target_labels, catalog));
+    document.push_str(&typed_inventory_section);
     document.push_str(&format!(
         concat!(
             "<section class=\"report-grid\"><div class=\"report-card\">",
@@ -16110,6 +16596,7 @@ mod tests {
             exit_code: Some(0),
             raw_artifacts,
             findings: Vec::new(),
+            observations: Vec::new(),
             warnings: Vec::new(),
         }
     }
@@ -16385,10 +16872,42 @@ mod tests {
     #[test]
     fn launcher_v2_report_and_derived_coverage_share_one_atomic_case_revision() {
         let fixture = Fixture::new();
-        let (prepared, report) =
+        let (prepared, mut report) =
             prepared_naabu_launcher_v2_execution_report(&fixture, WorkUnitOutcome::TestedComplete);
         let service = fixture.service();
         let before = service.show_case(&prepared.case_id).unwrap();
+        let asset_id = before.scan_runs[0]
+            .engine_runs
+            .iter()
+            .find(|engine_run| engine_run.id == prepared.engine_run_id)
+            .and_then(|engine_run| engine_run.asset_ids.first())
+            .cloned()
+            .expect("Naabu execution has one authorized asset");
+        let observation_artifact = report
+            .raw_artifacts
+            .first()
+            .expect("captured Naabu report has an artifact");
+        let observation = crate::domain::InventoryObservation {
+            id: "naabu-inventory-observation".into(),
+            case_id: prepared.case_id.clone(),
+            run_id: prepared.scan_run_id.clone(),
+            engine_run_id: prepared.engine_run_id.clone(),
+            asset_id,
+            engine_id: NAABU_ENGINE_ID.into(),
+            kind: crate::domain::InventoryObservationKind::Service {
+                endpoint: "198.51.100.1:443".into(),
+                port: Some(443),
+                transport: Some("tcp".into()),
+                scheme: None,
+                http_status: None,
+                tls: None,
+            },
+            artifact_id: observation_artifact.id.clone(),
+            artifact_sha256: observation_artifact.sha256.clone(),
+            pointer: "/0".into(),
+            observed_at: observation_artifact.created_at,
+        };
+        report.observations = vec![observation.clone()];
         let events_before = fixture
             .storage
             .list_case_events(&prepared.case_id)
@@ -16412,6 +16931,7 @@ mod tests {
             }
         );
         assert_eq!(applied.case.storage_revision, before.storage_revision + 1);
+        assert_eq!(applied.case.inventory_observations, [observation]);
         let engine_run = applied.case.scan_runs[0]
             .engine_runs
             .iter()
@@ -17216,6 +17736,7 @@ mod tests {
                 unreferenced_final_raw.clone(),
             ],
             findings: Vec::new(),
+            observations: Vec::new(),
             warnings: vec![
                 "This scan batch stopped after saving output. The app will keep only journal-verified results; unfinished work remains not tested."
                     .into(),
@@ -17869,7 +18390,7 @@ mod tests {
     }
 
     #[test]
-    fn naabu_adaptation_atomically_saves_findings_and_trusted_completion() {
+    fn naabu_adaptation_atomically_saves_inventory_and_trusted_completion() {
         let fixture = Fixture::new();
         let prepared =
             prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedComplete, false);
@@ -17908,6 +18429,7 @@ mod tests {
         assert_eq!(retained.storage_revision, before.storage_revision);
         assert!(retained.findings.is_empty());
         assert!(retained.finding_observations.is_empty());
+        assert!(retained.inventory_observations.is_empty());
         assert!(
             !retained.scan_runs[0].engine_runs[0].naabu_attempt_results[0].normalization_complete
         );
@@ -17939,17 +18461,26 @@ mod tests {
         assert!(
             adapted.scan_runs[0].engine_runs[0].naabu_attempt_results[0].normalization_complete
         );
-        assert_eq!(adapted.findings.len(), 1);
-        assert_eq!(adapted.finding_observations.len(), 1);
-        assert_eq!(adapted.findings[0].evidence.len(), 1);
+        assert!(adapted.findings.is_empty());
+        assert!(adapted.finding_observations.is_empty());
+        assert_eq!(adapted.inventory_observations.len(), 1);
         assert_eq!(
-            adapted.findings[0].evidence[0].artifact_id,
+            adapted.inventory_observations[0].artifact_id,
             "raw-naabu-final-1"
         );
         assert_ne!(
-            adapted.findings[0].evidence[0].artifact_id,
+            adapted.inventory_observations[0].artifact_id,
             prepared.result.journal_raw_artifact_id
         );
+        assert!(matches!(
+            &adapted.inventory_observations[0].kind,
+            crate::domain::InventoryObservationKind::Service {
+                endpoint,
+                port: Some(443),
+                transport: Some(transport),
+                ..
+            } if endpoint == "198.51.100.1" && transport == "tcp"
+        ));
         let events = fixture.storage.list_case_events(&prepared.case_id).unwrap();
         assert_eq!(events.len(), events_before + 1);
         assert_eq!(
@@ -18193,7 +18724,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_naabu_adaptation_keeps_valid_findings_without_terminalizing() {
+    fn partial_naabu_adaptation_keeps_valid_inventory_without_terminalizing() {
         let fixture = Fixture::with_engines(current_launcher_engine_registry());
         let prepared = prepared_naabu_attempt_result_with_suffix(
             &fixture,
@@ -18236,10 +18767,11 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("no bounded port"))
         );
-        assert_eq!(adapted.findings.len(), 1);
-        assert_eq!(adapted.finding_observations.len(), 1);
+        assert!(adapted.findings.is_empty());
+        assert!(adapted.finding_observations.is_empty());
+        assert_eq!(adapted.inventory_observations.len(), 1);
         assert_eq!(
-            adapted.findings[0].evidence[0].artifact_id,
+            adapted.inventory_observations[0].artifact_id,
             "raw-naabu-final-1"
         );
         let events = fixture.storage.list_case_events(&prepared.case_id).unwrap();
@@ -18284,7 +18816,8 @@ mod tests {
             finalized_engine.error_code.as_deref(),
             Some("normalization_incomplete")
         );
-        assert_eq!(finalized.findings.len(), 1);
+        assert!(finalized.findings.is_empty());
+        assert_eq!(finalized.inventory_observations.len(), 1);
     }
 
     #[test]
@@ -18357,7 +18890,8 @@ mod tests {
         assert_eq!(resumed_engine.naabu_attempt_requests, request_history);
         assert_eq!(resumed_engine.naabu_attempt_results.len(), 1);
         assert!(!resumed_engine.naabu_attempt_results[0].normalization_complete);
-        assert_eq!(resumed.findings.len(), 1);
+        assert!(resumed.findings.is_empty());
+        assert_eq!(resumed.inventory_observations.len(), 1);
 
         let new_events = fixture
             .storage
@@ -18396,12 +18930,36 @@ mod tests {
 
             fn normalize(
                 &self,
-                _input: &crate::adapter::AdapterInput<'_>,
+                input: &crate::adapter::AdapterInput<'_>,
             ) -> AppResult<crate::adapter::AdapterOutput> {
                 let call = self.calls.fetch_add(1, Ordering::SeqCst);
+                let artifact = input
+                    .raw_artifacts
+                    .first()
+                    .expect("validated Naabu adapter input has one artifact");
                 Ok(crate::adapter::AdapterOutput {
                     unattributed: Vec::new(),
                     findings: Vec::new(),
+                    observations: vec![crate::domain::InventoryObservation {
+                        id: "progressive-naabu-service".into(),
+                        case_id: input.case_id.into(),
+                        run_id: input.scan_run_id.into(),
+                        engine_run_id: input.engine_run_id.into(),
+                        asset_id: input.asset_ids[0].clone(),
+                        engine_id: NAABU_ENGINE_ID.into(),
+                        kind: crate::domain::InventoryObservationKind::Service {
+                            endpoint: "198.51.100.2:443".into(),
+                            port: Some(443),
+                            transport: Some("tcp".into()),
+                            scheme: None,
+                            http_status: None,
+                            tls: None,
+                        },
+                        artifact_id: artifact.id.clone(),
+                        artifact_sha256: artifact.sha256.clone(),
+                        pointer: "/0".into(),
+                        observed_at: artifact.created_at,
+                    }],
                     warnings: vec!["Stable bounded adapter output".into()],
                     complete: call > 0,
                 })
@@ -18449,6 +19007,7 @@ mod tests {
         let partial_engine = &partial.scan_runs[0].engine_runs[0];
         assert_eq!(partial_engine.status, EngineRunStatus::PartiallyCompleted);
         assert!(!partial_engine.naabu_attempt_results[0].normalization_complete);
+        assert_eq!(partial.inventory_observations.len(), 1);
         let report_commitment = partial_engine.last_execution_report_sha256.clone();
         let checkpoint_token = partial_engine.resume_token.clone();
         let request_history = partial_engine.naabu_attempt_requests.clone();
@@ -18486,6 +19045,7 @@ mod tests {
         assert_eq!(completed_engine.phase, "completed");
         assert_eq!(completed_engine.progress_percent, 100);
         assert!(completed_engine.naabu_attempt_results[0].normalization_complete);
+        assert_eq!(completed.inventory_observations.len(), 1);
         assert_eq!(
             completed_engine.last_execution_report_sha256,
             report_commitment
@@ -19608,6 +20168,7 @@ mod tests {
                     exit_code: None,
                     raw_artifacts: Vec::new(),
                     findings: Vec::new(),
+                    observations: Vec::new(),
                     warnings: Vec::new(),
                 },
             )
@@ -19696,6 +20257,7 @@ mod tests {
                 Ok(crate::adapter::AdapterOutput {
                     unattributed: Vec::new(),
                     findings: Vec::new(),
+                    observations: Vec::new(),
                     warnings: vec!["empty input reached the adapter".into()],
                     complete: false,
                 })
@@ -19860,6 +20422,7 @@ mod tests {
                 Ok(crate::adapter::AdapterOutput {
                     unattributed: Vec::new(),
                     findings: Vec::new(),
+                    observations: Vec::new(),
                     warnings: vec!["tampered empty input reached the adapter".into()],
                     complete: true,
                 })
@@ -20023,7 +20586,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_naabu_output_can_add_a_finding_when_host_only_retry_completes() {
+    fn partial_naabu_output_can_add_inventory_when_host_only_retry_completes() {
         #[derive(Clone)]
         struct ChangedNaabuAdapter {
             output: crate::adapter::AdapterOutput,
@@ -20072,21 +20635,26 @@ mod tests {
             )
             .expect("first partial output is committed");
         let revision = adapted.storage_revision;
-        let retained_finding = adapted.findings[0].clone();
-        let mut added_finding = retained_finding.clone();
-        added_finding.id = new_id();
-        added_finding.fingerprint = format!("{}-second", added_finding.fingerprint);
-        added_finding.title = "A second captured port was organized on retry".into();
-        for evidence in &mut added_finding.evidence {
-            evidence.id = new_id();
-            evidence.finding_id = added_finding.id.clone();
-        }
+        assert!(adapted.findings.is_empty());
+        let retained_observation = adapted.inventory_observations[0].clone();
+        let mut added_observation = retained_observation.clone();
+        added_observation.id = new_id();
+        added_observation.pointer = "/1".into();
+        added_observation.kind = crate::domain::InventoryObservationKind::Service {
+            endpoint: "198.51.100.2".into(),
+            port: Some(443),
+            transport: Some("tcp".into()),
+            scheme: None,
+            http_status: None,
+            tls: None,
+        };
         let mut adapters = AdapterRegistry::default();
         adapters
             .register(std::sync::Arc::new(ChangedNaabuAdapter {
                 output: crate::adapter::AdapterOutput {
                     unattributed: Vec::new(),
-                    findings: vec![retained_finding, added_finding],
+                    findings: Vec::new(),
+                    observations: vec![retained_observation, added_observation],
                     warnings: adapted.scan_runs[0].engine_runs[0].warnings.clone(),
                     complete: true,
                 },
@@ -20107,16 +20675,17 @@ mod tests {
                 &prepared.engine_run_id,
                 1,
             )
-            .expect("host-only retry may add results without deleting earlier findings");
+            .expect("host-only retry may add inventory without deleting earlier observations");
         assert_eq!(completed.storage_revision, revision + 1);
-        assert_eq!(completed.findings.len(), 2);
+        assert!(completed.findings.is_empty());
+        assert_eq!(completed.inventory_observations.len(), 2);
         assert!(
             completed.scan_runs[0].engine_runs[0].naabu_attempt_results[0].normalization_complete
         );
     }
 
     #[test]
-    fn naabu_adaptation_keeps_findings_when_framework_mapping_identity_changed() {
+    fn naabu_inventory_is_independent_of_framework_mapping_identity() {
         let fixture = Fixture::new();
         let prepared =
             prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedComplete, false);
@@ -20154,16 +20723,18 @@ mod tests {
                 &prepared.engine_run_id,
                 1,
             )
-            .expect("framework mapping drift is a reporting warning, not a finding gate");
+            .expect("framework mapping does not gate inventory observations");
 
-        assert_eq!(adapted.findings.len(), 1);
-        assert!(adapted.findings[0].control_references.is_empty());
+        assert!(adapted.findings.is_empty());
+        assert_eq!(adapted.inventory_observations.len(), 1);
         let engine_run = &adapted.scan_runs[0].engine_runs[0];
         assert!(engine_run.naabu_attempt_results[0].normalization_complete);
-        assert!(engine_run.warnings.iter().any(|warning| {
-            warning.contains("Framework relationships were omitted")
-                && warning.contains("Scanner findings remain usable")
-        }));
+        assert!(
+            !engine_run
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Framework relationships were omitted"))
+        );
     }
 
     #[test]
@@ -20927,7 +21498,7 @@ mod tests {
     }
 
     #[test]
-    fn naabu_retry_unions_same_run_finding_evidence_without_duplicates() {
+    fn naabu_retry_unions_same_run_inventory_evidence_without_duplicates() {
         let fixture = Fixture::new();
         let prepared =
             prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedPartial, false);
@@ -20949,10 +21520,11 @@ mod tests {
                 1,
             )
             .unwrap();
-        assert_eq!(first.findings.len(), 1);
-        assert_eq!(first.findings[0].evidence.len(), 1);
-        let first_evidence_id = first.findings[0].evidence[0].id.clone();
-        let first_evidence_artifact = first.findings[0].evidence[0].artifact_id.clone();
+        assert!(first.findings.is_empty());
+        assert!(first.finding_observations.is_empty());
+        assert_eq!(first.inventory_observations.len(), 1);
+        let first_observation_id = first.inventory_observations[0].id.clone();
+        let first_observation_artifact = first.inventory_observations[0].artifact_id.clone();
 
         mark_naabu_attempt_clean_for_retry(&fixture, &prepared);
         let second_result =
@@ -20980,33 +21552,24 @@ mod tests {
                 &prepared.engine_run_id,
                 2,
             )
-            .expect("same fingerprint retry evidence is monotonic");
+            .expect("same-run inventory evidence is monotonic across retries");
 
         assert_eq!(merged.storage_revision, before_second.storage_revision + 1);
-        assert_eq!(merged.findings.len(), 1);
-        assert_eq!(merged.finding_observations.len(), 1);
-        assert_eq!(merged.findings[0].evidence.len(), 2);
+        assert!(merged.findings.is_empty());
+        assert!(merged.finding_observations.is_empty());
+        assert_eq!(merged.inventory_observations.len(), 2);
         assert!(
-            merged.findings[0]
-                .evidence
+            merged
+                .inventory_observations
                 .iter()
-                .any(|evidence| evidence.id == first_evidence_id
-                    && evidence.artifact_id == first_evidence_artifact)
+                .any(|observation| observation.id == first_observation_id
+                    && observation.artifact_id == first_observation_artifact)
         );
         assert!(
-            merged.findings[0]
-                .evidence
+            merged
+                .inventory_observations
                 .iter()
-                .any(|evidence| evidence.artifact_id == "raw-naabu-final-2")
-        );
-        assert_eq!(
-            merged.finding_observations[0]
-                .finding_snapshot
-                .as_ref()
-                .unwrap()
-                .evidence
-                .len(),
-            2
+                .any(|observation| observation.artifact_id == "raw-naabu-final-2")
         );
         assert!(merged.scan_runs[0].engine_runs[0].naabu_attempt_results[1].normalization_complete);
         let events = fixture.storage.list_case_events(&prepared.case_id).unwrap();
@@ -21022,6 +21585,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(replayed.storage_revision, merged.storage_revision);
+        assert_eq!(replayed.inventory_observations.len(), 2);
         assert_eq!(
             fixture
                 .storage
@@ -21241,6 +21805,7 @@ mod tests {
             exit_code: None,
             raw_artifacts: Vec::new(),
             findings: Vec::new(),
+            observations: Vec::new(),
             warnings: Vec::new(),
         }
     }
@@ -22929,6 +23494,7 @@ mod tests {
                 exit_code: None,
                 raw_artifacts: Vec::new(),
                 findings: Vec::new(),
+                observations: Vec::new(),
                 warnings: vec!["No target was contacted.".into()],
             };
             fs::create_dir_all(fixture.directory.path().join("artifacts")).unwrap();
@@ -23037,6 +23603,7 @@ mod tests {
             exit_code: None,
             raw_artifacts: Vec::new(),
             findings: Vec::new(),
+            observations: Vec::new(),
             warnings: Vec::new(),
         };
         assert!(matches!(
@@ -23144,6 +23711,7 @@ mod tests {
                 exit_code: Some(0),
                 raw_artifacts: Vec::new(),
                 findings: Vec::new(),
+                observations: Vec::new(),
                 warnings: Vec::new(),
             };
             assert!(matches!(
@@ -23229,6 +23797,7 @@ mod tests {
             exit_code: None,
             raw_artifacts: Vec::new(),
             findings: Vec::new(),
+            observations: Vec::new(),
             warnings: Vec::new(),
         };
         validate_naabu_report_attempt_binding(&case, &report)
@@ -27730,6 +28299,7 @@ mod tests {
             exit_code: None,
             raw_artifacts: Vec::new(),
             findings: Vec::new(),
+            observations: Vec::new(),
             warnings: Vec::new(),
         };
         assert!(
@@ -28672,7 +29242,7 @@ mod tests {
             run_id: run_id.clone(),
             finding_id: "legacy-observation-only".into(),
             fingerprint: "legacy:observation-only".into(),
-            asset_ids: vec![asset_id],
+            asset_ids: vec![asset_id.clone()],
             engine_ids: vec!["legacy-engine".into()],
             severity: Severity::Medium,
             confidence: Confidence::Low,
@@ -28680,9 +29250,74 @@ mod tests {
             observed_at: finished,
             finding_snapshot: None,
         });
+        let inventory_case_id = case.id.clone();
+        let inventory_source =
+            |id: &str, details: crate::domain::InventoryObservationKind, pointer: &str| {
+                crate::domain::InventoryObservation {
+                    id: id.into(),
+                    case_id: inventory_case_id.clone(),
+                    run_id: run_id.clone(),
+                    engine_run_id: task_id.clone(),
+                    asset_id: asset_id.clone(),
+                    engine_id: "inventory-engine<img src=https://remote.invalid>".into(),
+                    kind: details,
+                    artifact_id: "artifact-html".into(),
+                    artifact_sha256: evidence_sha256.clone(),
+                    pointer: pointer.into(),
+                    observed_at: finished,
+                }
+            };
+        case.inventory_observations.extend([
+            inventory_source(
+                "inventory-service-html",
+                crate::domain::InventoryObservationKind::Service {
+                    endpoint: "inventory.example/<script>service</script>".into(),
+                    port: Some(443),
+                    transport: Some("tcp".into()),
+                    scheme: Some("https".into()),
+                    http_status: Some(200),
+                    tls: Some(true),
+                },
+                "/services/<script>0</script>",
+            ),
+            inventory_source(
+                "inventory-software-purl-html",
+                crate::domain::InventoryObservationKind::SoftwareComponent {
+                    name: "openssl<img src=https://remote.invalid>".into(),
+                    version: Some("3.0<&>".into()),
+                    package_type: Some("deb".into()),
+                    purl: Some("pkg:deb/openssl?<unsafe>".into()),
+                },
+                "/packages/0",
+            ),
+            inventory_source(
+                "inventory-software-coordinate-html",
+                crate::domain::InventoryObservationKind::SoftwareComponent {
+                    name: "libxml<&>".into(),
+                    version: Some("2.12".into()),
+                    package_type: Some("rpm".into()),
+                    purl: None,
+                },
+                "/packages/1",
+            ),
+            inventory_source(
+                "inventory-cloud-full-only-html",
+                crate::domain::InventoryObservationKind::CloudResource {
+                    resource_type: "aws_instance".into(),
+                    native_id: Some("FULL_ONLY_CLOUD_<script>".into()),
+                    display_name: Some("production & primary".into()),
+                },
+                "/resources/<img>",
+            ),
+        ]);
 
         let report = build_beginner_master_report(&case, &run_id).unwrap();
         assert_eq!(report.findings.len(), 3);
+        assert_eq!(report.inventory.total, 4);
+        assert_eq!(report.inventory.counts.services, 1);
+        assert_eq!(report.inventory.counts.software_components, 2);
+        assert_eq!(report.inventory.counts.cloud_resources, 1);
+        assert_eq!(report.inventory.representative_sample.len(), 3);
         assert!(report.findings.iter().any(|finding| {
             finding.snapshot_source
                 == crate::beginner_report::FindingSnapshotSource::ObservationOnly
@@ -28797,8 +29432,33 @@ mod tests {
             readable_report_time(&finished)
         )));
         assert!(html.contains(&format!("Observed: {}", readable_report_time(&finished))));
-        assert!(html.contains("Observed services (not vulnerabilities)"));
-        assert!(html.contains("port:443 · protocol:tcp"));
+        for inventory_text in [
+            "Inventory observations",
+            "Inventory records are not vulnerability findings, remediation recommendations, or proof of a clean security result.",
+            "Total:</strong> 4",
+            "Services:</strong> 1",
+            "Software components:</strong> 2",
+            "Cloud resources:</strong> 1",
+            "Inventoried assets:</strong> 1",
+            "Representative records:</strong> 3",
+            "Representative sample (maximum 3)",
+            "Complete inventory by asset",
+            "Source provenance",
+            "inventory.example/&lt;script&gt;service&lt;/script&gt;",
+            "openssl&lt;img src=https://remote.invalid&gt;",
+            "FULL_ONLY_CLOUD_&lt;script&gt;",
+            "inventory-engine&lt;img src=https://remote.invalid&gt;",
+            "/services/&lt;script&gt;0&lt;/script&gt;",
+        ] {
+            assert!(
+                html.contains(inventory_text),
+                "HTML omitted {inventory_text}"
+            );
+        }
+        assert_eq!(html.matches("class=\"inventory-sample-item\"").count(), 3);
+        assert!(!html.contains("Observed services (not vulnerabilities)"));
+        assert!(!html.contains("reachable-service-html"));
+        assert!(!html.contains("port:443 · protocol:tcp"));
         assert!(html.contains("Problems found:</strong> 2"));
         for asset_result_text in [
             "Which assets need attention",
@@ -28936,10 +29596,58 @@ mod tests {
             "掃描工具提供的已安裝版本",
             "掃描工具提供的修正版版本",
             "掃描工具官方參照",
+            "盤點觀察",
+            "盤點紀錄不是漏洞問題、修復建議，也不能證明資安結果安全無虞",
+            "總數:</strong> 4",
+            "服務:</strong> 1",
+            "軟體元件:</strong> 2",
+            "雲端資源:</strong> 1",
+            "已盤點資產:</strong> 1",
+            "代表性紀錄:</strong> 3",
+            "代表性樣本（最多 3 筆）",
+            "依資產列出的完整盤點清單",
+            "來源追溯資料",
+            "FULL_ONLY_CLOUD_&lt;script&gt;",
         ] {
             assert!(
                 zh_html.contains(composed),
                 "zh-Hant report omitted {composed}"
+            );
+        }
+        let standard_redacted_html = String::from_utf8(
+            html_report_bytes(
+                &case,
+                &run_id,
+                &ExportOptions {
+                    redaction: RedactionProfile::Standard,
+                    include_raw_artifacts: false,
+                    locale: crate::export::ReportLocale::En,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for expected in [
+            "[redacted service endpoint]",
+            "[redacted software component]",
+            "[redacted inventory pointer]",
+            "Inventory observations",
+            "Complete inventory by asset",
+        ] {
+            assert!(
+                standard_redacted_html.contains(expected),
+                "standard-redacted inventory HTML omitted {expected}"
+            );
+        }
+        for withheld in [
+            "inventory.example/",
+            "openssl&lt;img",
+            "FULL_ONLY_CLOUD_",
+            "/services/&lt;script&gt;",
+        ] {
+            assert!(
+                !standard_redacted_html.contains(withheld),
+                "standard-redacted inventory HTML leaked {withheld}"
             );
         }
         for english_prose in [
@@ -32917,6 +33625,86 @@ mod tests {
     }
 
     #[test]
+    fn inventory_observation_fields_reject_empty_optionals_and_invalid_service_numbers() {
+        use crate::domain::{InventoryObservation, InventoryObservationKind};
+
+        let base = InventoryObservation {
+            id: "inventory-validation".into(),
+            case_id: "case-1".into(),
+            run_id: "run-1".into(),
+            engine_run_id: "engine-run-1".into(),
+            asset_id: "asset-1".into(),
+            engine_id: "scanner".into(),
+            kind: InventoryObservationKind::Service {
+                endpoint: "198.51.100.2:443".into(),
+                port: Some(443),
+                transport: Some("tcp".into()),
+                scheme: Some("https".into()),
+                http_status: Some(200),
+                tls: Some(true),
+            },
+            artifact_id: "artifact-1".into(),
+            artifact_sha256: "a".repeat(64),
+            pointer: "/0".into(),
+            observed_at: Utc::now(),
+        };
+        let invalid_kinds = [
+            InventoryObservationKind::Service {
+                endpoint: "198.51.100.2:443".into(),
+                port: Some(443),
+                transport: Some(" ".into()),
+                scheme: None,
+                http_status: Some(200),
+                tls: None,
+            },
+            InventoryObservationKind::SoftwareComponent {
+                name: "openssl".into(),
+                version: Some("".into()),
+                package_type: None,
+                purl: None,
+            },
+            InventoryObservationKind::CloudResource {
+                resource_type: "aws_instance".into(),
+                native_id: Some("".into()),
+                display_name: None,
+            },
+            InventoryObservationKind::Service {
+                endpoint: "198.51.100.2".into(),
+                port: Some(0),
+                transport: Some("tcp".into()),
+                scheme: None,
+                http_status: None,
+                tls: None,
+            },
+            InventoryObservationKind::Service {
+                endpoint: "http://198.51.100.2".into(),
+                port: Some(80),
+                transport: Some("tcp".into()),
+                scheme: Some("http".into()),
+                http_status: Some(99),
+                tls: Some(false),
+            },
+            InventoryObservationKind::Service {
+                endpoint: "http://198.51.100.2".into(),
+                port: Some(80),
+                transport: Some("tcp".into()),
+                scheme: Some("http".into()),
+                http_status: Some(600),
+                tls: Some(false),
+            },
+        ];
+
+        for kind in invalid_kinds {
+            let mut observation = base.clone();
+            observation.kind = kind;
+            assert!(matches!(
+                validate_inventory_observation_fields(&observation),
+                Err(AppError::Runtime(_))
+            ));
+        }
+    }
+
+    #[test]
     fn durable_execution_report_is_idempotent() {
         let fixture = Fixture::new();
         let mut case = fixture.create();
@@ -33077,6 +33865,23 @@ mod tests {
             status: FindingStatus::Unreviewed,
             tags: vec![],
         };
+        let inventory_observation = crate::domain::InventoryObservation {
+            id: "inventory-1".into(),
+            case_id: case.id.clone(),
+            run_id: "scan-1".into(),
+            engine_run_id: "engine-run-1".into(),
+            asset_id: "asset-1".into(),
+            engine_id: "cloudquery".into(),
+            kind: crate::domain::InventoryObservationKind::CloudResource {
+                resource_type: "aws_iam_role".into(),
+                native_id: Some("arn:aws:iam::123456789012:role/example".into()),
+                display_name: Some("example".into()),
+            },
+            artifact_id: artifact.id.clone(),
+            artifact_sha256: artifact.sha256.clone(),
+            pointer: "/resources/0".into(),
+            observed_at: artifact.created_at,
+        };
         let report = DurableExecutionReport {
             unattributed: Vec::new(),
             checkpoint: ExecutionCheckpoint {
@@ -33112,8 +33917,66 @@ mod tests {
             exit_code: Some(0),
             raw_artifacts: vec![artifact],
             findings: vec![finding],
+            observations: vec![inventory_observation.clone()],
             warnings: vec!["scanner emitted a bounded warning".into()],
         };
+        let mut pre_inventory_report = report.clone();
+        pre_inventory_report.observations.clear();
+        let pre_inventory_bytes = serde_json::to_vec(&pre_inventory_report).unwrap();
+        assert!(
+            !pre_inventory_bytes
+                .windows(b"\"observations\"".len())
+                .any(|window| window == b"\"observations\"")
+        );
+        let decoded_pre_inventory: DurableExecutionReport =
+            serde_json::from_slice(&pre_inventory_bytes).unwrap();
+        assert!(decoded_pre_inventory.observations.is_empty());
+        assert_eq!(
+            serde_json::to_vec(&decoded_pre_inventory).unwrap(),
+            pre_inventory_bytes,
+            "an older execution report must retain its byte commitment after decoding"
+        );
+        let prepared_engine = &case.scan_runs[0].engine_runs[0];
+        validate_report_payload(&case, prepared_engine, &report)
+            .expect("bounded observation with exact artifact provenance is valid");
+
+        let mut wrong_case_observation = report.clone();
+        wrong_case_observation.observations[0].case_id = "another-case".into();
+        assert!(matches!(
+            validate_report_payload(&case, prepared_engine, &wrong_case_observation),
+            Err(AppError::NotAuthorized(_))
+        ));
+
+        let mut oversized_pointer = report.clone();
+        oversized_pointer.observations[0].pointer = "x".repeat(513);
+        assert!(matches!(
+            validate_report_payload(&case, prepared_engine, &oversized_pointer),
+            Err(AppError::Runtime(_))
+        ));
+
+        let mut resource_free_with_observation = report.clone();
+        resource_free_with_observation.checkpoint.container_name = None;
+        resource_free_with_observation.checkpoint.scope_sha256 = None;
+        resource_free_with_observation
+            .checkpoint
+            .launcher_plan_sha256 = None;
+        resource_free_with_observation
+            .checkpoint
+            .artifact_ids
+            .clear();
+        resource_free_with_observation
+            .checkpoint
+            .runtime_command_provenance = None;
+        resource_free_with_observation.checkpoint.runtime_provider = None;
+        resource_free_with_observation.checkpoint.managed_network = None;
+        assert!(checkpoint_has_no_contact_resources(
+            &resource_free_with_observation.checkpoint
+        ));
+        assert!(matches!(
+            validate_report_payload(&case, prepared_engine, &resource_free_with_observation),
+            Err(AppError::NotAuthorized(_))
+        ));
+
         let service = fixture.service();
         assert!(
             !service
@@ -33131,6 +33994,10 @@ mod tests {
         assert_eq!(stored.raw_artifacts.len(), 1);
         assert_eq!(stored.findings.len(), 1);
         assert_eq!(stored.finding_observations.len(), 1);
+        assert_eq!(
+            stored.inventory_observations,
+            [inventory_observation.clone()]
+        );
         let stored_run = &stored.scan_runs[0].engine_runs[0];
         assert_eq!(stored_run.runtime_provider.as_deref(), Some("podman"));
         assert_eq!(stored_run.runtime_version.as_deref(), Some("5.2.2"));
@@ -33147,6 +34014,25 @@ mod tests {
                 .apply_execution_report(&case.id, &conflicting)
                 .is_err()
         );
+
+        let mut conflicting_observation = report.clone();
+        conflicting_observation.observations[0].pointer = "/resources/changed".into();
+        assert!(
+            service
+                .apply_execution_report(&case.id, &conflicting_observation)
+                .is_err()
+        );
+
+        let mut collision_case = stored.clone();
+        insert_or_validate_inventory_observation(&mut collision_case, &inventory_observation)
+            .expect("byte-identical observation is idempotent");
+        assert_eq!(collision_case.inventory_observations.len(), 1);
+        let mut same_id_different_bytes = inventory_observation.clone();
+        same_id_different_bytes.pointer = "/resources/conflict".into();
+        assert!(matches!(
+            insert_or_validate_inventory_observation(&mut collision_case, &same_id_different_bytes),
+            Err(AppError::Conflict(_))
+        ));
 
         let workflow = service
             .update_finding_workflow(

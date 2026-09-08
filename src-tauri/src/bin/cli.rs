@@ -2188,6 +2188,7 @@ async fn execute_runtime(
                     exit_code: None,
                     raw_artifacts,
                     findings: Vec::new(),
+                    observations: Vec::new(),
                     warnings: vec![
                         "A prior exact runtime cleanup obligation was resolved without executing a scanner."
                             .into(),

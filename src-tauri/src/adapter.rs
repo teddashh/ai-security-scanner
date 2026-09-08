@@ -1,4 +1,6 @@
-use crate::domain::{Asset, EngineManifest, Finding, FindingStatus, RawArtifact};
+use crate::domain::{
+    Asset, EngineManifest, Finding, FindingStatus, InventoryObservation, RawArtifact,
+};
 use crate::error::{AppError, AppResult};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -109,6 +111,9 @@ pub struct AdapterInput<'a> {
 #[derive(Debug, Clone)]
 pub struct AdapterOutput {
     pub findings: Vec<Finding>,
+    /// Scanner-authored inventory facts. These are deliberately separate from
+    /// findings because inventory alone is not evidence of a vulnerability.
+    pub observations: Vec<InventoryObservation>,
     pub warnings: Vec<String>,
     /// Identifiers the engine reported on that no authorized asset claims.
     /// Beside the warnings rather than instead of them: the warning is the
@@ -123,6 +128,7 @@ impl Default for AdapterOutput {
     fn default() -> Self {
         Self {
             findings: Vec::new(),
+            observations: Vec::new(),
             warnings: Vec::new(),
             unattributed: Vec::new(),
             complete: true,
@@ -316,6 +322,126 @@ pub fn validate_adapter_output(
         }
     }
 
+    let mut observation_ids = BTreeSet::new();
+    for observation in &output.observations {
+        if observation.case_id != input.case_id
+            || observation.run_id != input.scan_run_id
+            || observation.engine_run_id != input.engine_run_id
+            || observation.engine_id != input.manifest.id
+        {
+            return Err(AppError::Runtime(format!(
+                "inventory observation {} has mismatched case, run, or engine provenance",
+                observation.id
+            )));
+        }
+        if observation.id.trim().is_empty() || !observation_ids.insert(observation.id.as_str()) {
+            return Err(AppError::Runtime(
+                "adapter inventory observation identifiers must be non-empty and unique".into(),
+            ));
+        }
+        if !allowed_assets.contains(observation.asset_id.as_str()) {
+            return Err(AppError::Runtime(format!(
+                "inventory observation {} references an asset outside the authorized run",
+                observation.id
+            )));
+        }
+        if observation.pointer.is_empty()
+            || observation.pointer.chars().count() > 512
+            || observation.pointer.chars().any(char::is_control)
+        {
+            return Err(AppError::Runtime(format!(
+                "inventory observation {} has an invalid raw evidence pointer",
+                observation.id
+            )));
+        }
+        let mut text_fields: Vec<(&str, &str)> = Vec::new();
+        match &observation.kind {
+            crate::domain::InventoryObservationKind::Service {
+                endpoint,
+                port,
+                transport,
+                scheme,
+                http_status,
+                ..
+            } => {
+                if port == &Some(0)
+                    || http_status.is_some_and(|status| !(100..=599).contains(&status))
+                {
+                    return Err(AppError::Runtime(format!(
+                        "inventory observation {} has an invalid service coordinate",
+                        observation.id
+                    )));
+                }
+                text_fields.push(("service endpoint", endpoint));
+                if let Some(value) = transport.as_deref() {
+                    text_fields.push(("service transport", value));
+                }
+                if let Some(value) = scheme.as_deref() {
+                    text_fields.push(("service scheme", value));
+                }
+            }
+            crate::domain::InventoryObservationKind::SoftwareComponent {
+                name,
+                version,
+                package_type,
+                purl,
+            } => {
+                text_fields.push(("component name", name));
+                for (label, value) in [
+                    ("component version", version.as_deref()),
+                    ("component package type", package_type.as_deref()),
+                    ("component purl", purl.as_deref()),
+                ] {
+                    if let Some(value) = value {
+                        text_fields.push((label, value));
+                    }
+                }
+            }
+            crate::domain::InventoryObservationKind::CloudResource {
+                resource_type,
+                native_id,
+                display_name,
+            } => {
+                text_fields.push(("cloud resource type", resource_type));
+                if let Some(value) = native_id.as_deref() {
+                    text_fields.push(("cloud native identifier", value));
+                }
+                if let Some(value) = display_name.as_deref() {
+                    text_fields.push(("cloud display name", value));
+                }
+            }
+        }
+        for (label, value) in text_fields {
+            if value.is_empty()
+                || value.chars().count() > 512
+                || value.chars().any(char::is_control)
+            {
+                return Err(AppError::Runtime(format!(
+                    "inventory observation {} has invalid {label}",
+                    observation.id
+                )));
+            }
+        }
+        let artifact = artifacts
+            .get(observation.artifact_id.as_str())
+            .ok_or_else(|| {
+                AppError::Runtime(format!(
+                    "inventory observation {} references an unknown raw artifact",
+                    observation.id
+                ))
+            })?;
+        if artifact.sha256 != observation.artifact_sha256
+            || artifact.case_id != input.case_id
+            || artifact.run_id != input.scan_run_id
+            || artifact.engine_run_id != input.engine_run_id
+        {
+            return Err(AppError::Runtime(format!(
+                "inventory observation {} raw artifact hash or execution context does not match",
+                observation.id
+            )));
+        }
+    }
+
     Ok(())
 }
 
@@ -450,6 +576,29 @@ mod tests {
         }
     }
 
+    fn inventory_observation(artifact: &RawArtifact) -> InventoryObservation {
+        InventoryObservation {
+            id: "inventory-1".into(),
+            case_id: "case-1".into(),
+            run_id: "run-1".into(),
+            engine_run_id: "engine-run-1".into(),
+            asset_id: "asset-1".into(),
+            engine_id: "scanner".into(),
+            kind: crate::domain::InventoryObservationKind::Service {
+                endpoint: "service.example.test".into(),
+                port: Some(443),
+                transport: Some("tcp".into()),
+                scheme: Some("https".into()),
+                http_status: Some(200),
+                tls: Some(true),
+            },
+            artifact_id: artifact.id.clone(),
+            artifact_sha256: artifact.sha256.clone(),
+            pointer: "/lines/1".into(),
+            observed_at: artifact.created_at,
+        }
+    }
+
     #[test]
     fn native_identifier_map_requires_an_explicit_matching_provider() {
         let make_asset = |id: &str, provider: Option<&str>| Asset {
@@ -507,6 +656,49 @@ mod tests {
     }
 
     #[test]
+    fn inventory_observations_must_be_bounded_control_clean_and_run_bound() {
+        let manifest = manifest();
+        let artifact = artifact();
+        let mut bad_observation = inventory_observation(&artifact);
+        bad_observation.kind = crate::domain::InventoryObservationKind::Service {
+            endpoint: "service.example.test\nforged".into(),
+            port: Some(443),
+            transport: Some("tcp".into()),
+            scheme: Some("https".into()),
+            http_status: Some(200),
+            tls: Some(true),
+        };
+        let adapter = TestAdapter {
+            output: AdapterOutput {
+                unattributed: Vec::new(),
+                findings: Vec::new(),
+                observations: vec![bad_observation],
+                warnings: Vec::new(),
+                complete: true,
+            },
+        };
+        let artifacts = vec![artifact];
+        let assets = vec!["asset-1".into()];
+        let asset_identifier_map = AdapterAssetIdentifierMap::default();
+        let input = AdapterInput {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
+            asset_ids: &assets,
+            asset_identifier_map: &asset_identifier_map,
+            artifact_root: Path::new("/tmp"),
+            raw_artifacts: &artifacts,
+        };
+
+        let error = validate_adapter_output(&input, &adapter, &adapter.output)
+            .expect_err("control characters in inventory text must be rejected");
+        assert!(error.to_string().contains("service endpoint"));
+    }
+
+    #[test]
     fn evidence_must_reference_the_exact_hashed_artifact() {
         let manifest = manifest();
         let artifact = artifact();
@@ -516,6 +708,7 @@ mod tests {
             output: AdapterOutput {
                 unattributed: Vec::new(),
                 findings: vec![bad_finding],
+                observations: Vec::new(),
                 warnings: vec![],
                 complete: true,
             },
@@ -556,6 +749,7 @@ mod tests {
             output: AdapterOutput {
                 unattributed: Vec::new(),
                 findings: vec![bad_finding],
+                observations: Vec::new(),
                 warnings: vec![],
                 complete: true,
             },
@@ -591,6 +785,7 @@ mod tests {
             output: AdapterOutput {
                 unattributed: Vec::new(),
                 findings: vec![bad_finding],
+                observations: Vec::new(),
                 warnings: vec![],
                 complete: true,
             },

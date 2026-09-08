@@ -201,6 +201,55 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
       truncated: 0,
       unavailable: 0,
     },
+    inventory: {
+      total: 1,
+      counts: { services: 1, software_components: 0, cloud_resources: 0 },
+      asset_ids: ["asset-1"],
+      representative_sample: [{
+        kind: "service",
+        asset_id: "asset-1",
+        endpoint: "127.0.0.1",
+        port: 9001,
+        transport: "tcp",
+        schemes: ["http"],
+        http_statuses: [200],
+        tls_observations: [false],
+        sources: [{
+          observation_id: "inventory-1",
+          engine_id: "httpx",
+          engine_run_id: "task-1",
+          artifact_id: "artifact-inventory-1",
+          artifact_sha256: "b".repeat(64),
+          pointer: "/items/0",
+          observed_at: "2026-08-30T12:00:03Z",
+        }],
+      }],
+      items: [{
+        kind: "service",
+        asset_id: "asset-1",
+        endpoint: "127.0.0.1",
+        port: 9001,
+        transport: "tcp",
+        schemes: ["http"],
+        http_statuses: [200],
+        tls_observations: [false],
+        sources: [{
+          observation_id: "inventory-1",
+          engine_id: "httpx",
+          engine_run_id: "task-1",
+          artifact_id: "artifact-inventory-1",
+          artifact_sha256: "b".repeat(64),
+          pointer: "/items/0",
+          observed_at: "2026-08-30T12:00:03Z",
+        }],
+      }],
+      by_asset: [{
+        asset_id: "asset-1",
+        total: 1,
+        counts: { services: 1, software_components: 0, cloud_resources: 0 },
+        representative_sample: [],
+      }],
+    },
     findings: [{
       finding_id: "finding-1",
       fingerprint: "fp-1",
@@ -259,6 +308,30 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
   assert.equal(report.requested.targets[0]?.label, "127.0.0.1:9001");
   assert.equal(report.actual.checks[0]?.status, "tested_partial");
   assert.equal(report.actual.checks[0]?.resultKind, "connectivity");
+  assert.deepEqual(report.inventory?.counts, {
+    services: 1,
+    softwareComponents: 0,
+    cloudResources: 0,
+  });
+  assert.deepEqual(report.inventory?.items[0], {
+    kind: "service",
+    assetId: "asset-1",
+    endpoint: "127.0.0.1",
+    port: 9001,
+    transport: "tcp",
+    schemes: ["http"],
+    httpStatuses: [200],
+    tlsObservations: [false],
+    sources: [{
+      observationId: "inventory-1",
+      engineId: "httpx",
+      engineRunId: "task-1",
+      artifactId: "artifact-inventory-1",
+      artifactSha256: "b".repeat(64),
+      pointer: "/items/0",
+      observedAt: "2026-08-30T12:00:03Z",
+    }],
+  });
   assert.equal(report.coverageGaps[0]?.nextActionCode, "start_expected_service_and_retry");
   assert.equal(report.findings[0]?.findingId, "finding-1");
   assert.equal(report.findings[0]?.evidenceReferences[0]?.location, "src/config.ts:42");
@@ -406,6 +479,7 @@ test("the report the findings list is built from carries severity and codes the 
   assert.equal(finding.evidenceReferences[0]?.detailsFrozen, false);
   assert.equal(finding.officialReferences, undefined);
   assert.deepEqual(finding.observationDetails, ["port:443", "protocol:tcp"]);
+  assert.equal(report.inventory, undefined, "legacy reports must not invent typed inventory");
 });
 
 test("beginner report adapter preserves exact tested and untested network scope slices", () => {

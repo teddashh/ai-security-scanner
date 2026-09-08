@@ -1295,6 +1295,65 @@ pub struct Evidence {
     pub redacted: bool,
 }
 
+/// One inventory fact emitted by an upstream scanner for an exact run and
+/// authorized asset.
+///
+/// Inventory observations are durable, untrusted scanner data. They are kept
+/// separate from [`Finding`] because a reachable service, installed component,
+/// or cloud resource does not by itself establish a security weakness.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InventoryObservation {
+    pub id: Id,
+    pub case_id: Id,
+    pub run_id: Id,
+    pub engine_run_id: Id,
+    pub asset_id: Id,
+    pub engine_id: String,
+    pub kind: InventoryObservationKind,
+    pub artifact_id: Id,
+    pub artifact_sha256: String,
+    /// Bounded pointer into the exact raw artifact. This remains untrusted data
+    /// and is never interpreted as an instruction or local filesystem path.
+    pub pointer: String,
+    pub observed_at: DateTime<Utc>,
+}
+
+/// Scanner-neutral inventory semantics. Vendor-specific JSON paths belong only
+/// in adapters; durable storage and report code consume these typed facts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InventoryObservationKind {
+    Service {
+        endpoint: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transport: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheme: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        http_status: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tls: Option<bool>,
+    },
+    SoftwareComponent {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        package_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        purl: Option<String>,
+    },
+    CloudResource {
+        resource_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display_name: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawArtifact {
     pub id: Id,
@@ -1725,6 +1784,8 @@ pub struct AssessmentCase {
     #[serde(default)]
     pub finding_workflow_events: Vec<FindingWorkflowEvent>,
     pub finding_observations: Vec<FindingObservation>,
+    #[serde(default)]
+    pub inventory_observations: Vec<InventoryObservation>,
     pub raw_artifacts: Vec<RawArtifact>,
     pub exports: Vec<CaseExport>,
     pub comparisons: Vec<VerificationComparison>,
@@ -1757,6 +1818,7 @@ impl AssessmentCase {
             finding_group_events: Vec::new(),
             finding_workflow_events: Vec::new(),
             finding_observations: Vec::new(),
+            inventory_observations: Vec::new(),
             raw_artifacts: Vec::new(),
             exports: Vec::new(),
             comparisons: Vec::new(),

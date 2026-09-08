@@ -1,1 +1,1 @@
-{"artifacts":[{"id":"pkg-1","name":"example-package","version":"1.0","type":"deb"}],"source":{"type":"image","target":{"userInput":"example:latest"}}}
+{"artifacts":[{"id":"pkg-1","name":"example-package","version":"1.0","type":"deb","purl":"pkg:deb/debian/example-package@1.0","metadata":{"raw":"SECRET_SENTINEL_MUST_NEVER_LEAK"}}],"source":{"type":"directory","target":{"userInput":"/workspace?token=SECRET_SENTINEL_MUST_NEVER_LEAK"}}}

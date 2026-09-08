@@ -46,6 +46,7 @@ import { scanRequestOutcomeBeginnerSummary } from "../scanRequestOutcomePresenta
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import type {
   BeginnerCoverageStatus,
+  BeginnerInventoryItem,
   BeginnerMasterReport,
   BeginnerNextActionCode,
   BeginnerReportStage,
@@ -185,6 +186,26 @@ const copy = {
     zhTW: "先確認這項服務符合預期；若要找弱點，請選擇適用的資安檢查。",
   },
   chooseSecurityChecks: { en: "Choose security checks", zhTW: "選擇資安檢查" },
+  typedInventoryEyebrow: { en: "INVENTORY", zhTW: "盤點" },
+  typedInventoryTitle: { en: "What the scanners inventoried", zhTW: "掃描工具盤點到的項目" },
+  typedInventoryDescription: {
+    en: "These are services, software components, and cloud resources—not security problems or remediation advice.",
+    zhTW: "這些是服務、軟體元件與雲端資源，不是資安問題或修復建議。",
+  },
+  typedInventorySummary: {
+    en: "{total} inventory items across {assets} assets",
+    zhTW: "共 {total} 個盤點項目，分布於 {assets} 個資產",
+  },
+  inventoryServices: { en: "Services", zhTW: "服務" },
+  inventoryComponents: { en: "Software components", zhTW: "軟體元件" },
+  inventoryCloudResources: { en: "Cloud resources", zhTW: "雲端資源" },
+  inventoryExamples: { en: "Representative examples", zhTW: "代表性範例" },
+  inventoryAllItems: { en: "Show all {count} inventory items", zhTW: "顯示全部 {count} 個盤點項目" },
+  inventoryAssetSummary: { en: "{count} items for this asset", zhTW: "此資產共有 {count} 個項目" },
+  inventorySources: { en: "Sources: {count}", zhTW: "來源：{count}" },
+  inventoryHttpStatus: { en: "HTTP status", zhTW: "HTTP 狀態" },
+  inventoryTlsObserved: { en: "TLS observed", zhTW: "觀察到 TLS" },
+  inventoryNativeId: { en: "Native ID", zhTW: "原生識別碼" },
   emptyNoRunTitle: { en: "No scan results yet", zhTW: "尚未產生掃描結果" },
   emptyActiveTitle: {
     en: "The scan is still running; no problems have arrived yet",
@@ -1649,9 +1670,10 @@ export function FindingsPage({
     () => resultRecords.filter(isSecurityFinding),
     [resultRecords],
   );
+  const hasTypedInventory = Boolean(report?.inventory?.total);
   const observations = useMemo(
-    () => resultRecords.filter(isExposureObservation),
-    [resultRecords],
+    () => hasTypedInventory ? [] : resultRecords.filter(isExposureObservation),
+    [hasTypedInventory, resultRecords],
   );
   const collationLocale = locale === "en" ? "en" : "zh-Hant";
   const [query, setQuery] = useState("");
@@ -1895,6 +1917,98 @@ export function FindingsPage({
   const observationAssetCount = new Set(observations.flatMap((finding) =>
     finding.assetIds?.length ? finding.assetIds : [finding.assetId])).size;
   const representativeObservations = observations.slice(0, 3);
+  const typedInventory = report?.inventory;
+  const inventoryTargetLabels = new Map(
+    report?.requested.targets.map((target) => [target.assetId, target.label ?? target.assetId]) ?? [],
+  );
+  const inventoryItemPresentation = (item: BeginnerInventoryItem) => {
+    if (item.kind === "service") {
+      return {
+        title: `${item.endpoint}${item.port === undefined ? "" : `:${item.port}`}`,
+        detail: [
+          item.transport,
+          ...item.schemes,
+          item.httpStatuses.length > 0
+            ? `${text(copy.inventoryHttpStatus)} ${item.httpStatuses.join(", ")}`
+            : undefined,
+          item.tlsObservations.includes(true) ? text(copy.inventoryTlsObserved) : undefined,
+        ].filter(Boolean).join(" · "),
+      };
+    }
+    if (item.kind === "software_component") {
+      return {
+        title: [item.name, item.version].filter(Boolean).join(" "),
+        detail: [item.packageType, item.purl].filter(Boolean).join(" · "),
+      };
+    }
+    return {
+      title: item.displayName ?? item.nativeId ?? item.resourceType,
+      detail: [
+        item.resourceType,
+        item.nativeId ? `${text(copy.inventoryNativeId)} ${item.nativeId}` : undefined,
+      ].filter(Boolean).join(" · "),
+    };
+  };
+  const renderInventoryItem = (item: BeginnerInventoryItem, key: string) => {
+    const presentation = inventoryItemPresentation(item);
+    const sourceEngines = [...new Set(item.sources.map((source) => source.engineId))]
+      .sort((left, right) => left.localeCompare(right, collationLocale));
+    return (
+      <article className="evidence-item" key={key}>
+        <div>
+          <strong>{presentation.title}</strong>
+          <span>{[
+            inventoryTargetLabels.get(item.assetId) ?? item.assetId,
+            presentation.detail,
+          ].filter(Boolean).join(" · ")}</span>
+        </div>
+        <small>{text(copy.inventorySources, { count: formatNumber(item.sources.length) })} · {
+          sourceEngines.join(locale === "en" ? ", " : "、")
+        }</small>
+      </article>
+    );
+  };
+  const typedInventorySection = typedInventory && typedInventory.total > 0 ? (
+    <section className="section-block" aria-labelledby="typed-inventory-title">
+      <div className="section-heading">
+        <p className="eyebrow">{text(copy.typedInventoryEyebrow)}</p>
+        <h2 id="typed-inventory-title">{text(copy.typedInventoryTitle)}</h2>
+        <p>{text(copy.typedInventoryDescription)}</p>
+      </div>
+      <p className="service-observations__summary">
+        <strong>{text(copy.typedInventorySummary, {
+          total: formatNumber(typedInventory.total),
+          assets: formatNumber(typedInventory.assetIds.length),
+        })}</strong>
+      </p>
+      <div className="metrics-grid metrics-grid--three">
+        <MetricCard label={text(copy.inventoryServices)} value={typedInventory.counts.services} icon="database" />
+        <MetricCard label={text(copy.inventoryComponents)} value={typedInventory.counts.softwareComponents} icon="file" />
+        <MetricCard label={text(copy.inventoryCloudResources)} value={typedInventory.counts.cloudResources} icon="database" />
+      </div>
+      <div className="section-heading"><h3>{text(copy.inventoryExamples)}</h3></div>
+      <div className="evidence-list">
+        {typedInventory.representativeSample.slice(0, 3).map((item, index) =>
+          renderInventoryItem(item, `inventory-sample-${index}`))}
+      </div>
+      <details className="page-secondary-feature service-observations__complete">
+        <summary>{text(copy.inventoryAllItems, { count: formatNumber(typedInventory.total) })}</summary>
+        {typedInventory.byAsset.map((asset) => (
+          <section className="section-block" key={asset.assetId}>
+            <div className="section-heading">
+              <h3>{inventoryTargetLabels.get(asset.assetId) ?? asset.assetId}</h3>
+              <p>{text(copy.inventoryAssetSummary, { count: formatNumber(asset.total) })}</p>
+            </div>
+            <div className="evidence-list">
+              {typedInventory.items
+                .filter((item) => item.assetId === asset.assetId)
+                .map((item, index) => renderInventoryItem(item, `${asset.assetId}-${index}`))}
+            </div>
+          </section>
+        ))}
+      </details>
+    </section>
+  ) : null;
   const renderObservation = (finding: Finding, complete: boolean) => {
     const details = observationDetails(finding);
     return (
@@ -1915,7 +2029,7 @@ export function FindingsPage({
       </article>
     );
   };
-  const observationSection = observations.length > 0 ? (
+  const observationSection = !hasTypedInventory && observations.length > 0 ? (
     <section className="section-block" aria-labelledby="service-observations-title">
       <div className="section-heading">
         <p className="eyebrow">{text(copy.observationsEyebrow)}</p>
@@ -2012,6 +2126,7 @@ export function FindingsPage({
         {report && <AssetResultBoard report={report} />}
         {report && <BeginnerReportOverview report={report} run={latestRun} />}
         {reportUnavailable && <InlineNotice tone="warning" title={text(unavailableReportNotice.title)}><p>{text(unavailableReportNotice.body)}</p></InlineNotice>}
+        {typedInventorySection}
         {observationSection}
         <EmptyState
           icon={latestRunIsActive
@@ -2235,6 +2350,7 @@ export function FindingsPage({
 
       {report && <BeginnerReportOverview report={report} run={latestRun} />}
 
+      {typedInventorySection}
       {observationSection}
 
       <details className="section-block page-secondary-feature findings-related-work">

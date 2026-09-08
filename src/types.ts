@@ -979,6 +979,60 @@ export interface BeginnerTechnicalTaskDetails {
   execution: Record<string, unknown> & { kind?: string };
 }
 
+export interface BeginnerInventorySource {
+  observationId: string;
+  engineId: string;
+  engineRunId: string;
+  artifactId: string;
+  artifactSha256: string;
+  pointer: string;
+  observedAt: string;
+}
+
+export type BeginnerInventoryItem = {
+  assetId: string;
+  sources: BeginnerInventorySource[];
+} & ({
+  kind: "service";
+  endpoint: string;
+  port?: number;
+  transport?: string;
+  schemes: string[];
+  httpStatuses: number[];
+  tlsObservations: boolean[];
+} | {
+  kind: "software_component";
+  name: string;
+  version?: string;
+  packageType?: string;
+  purl?: string;
+} | {
+  kind: "cloud_resource";
+  resourceType: string;
+  nativeId?: string;
+  displayName?: string;
+});
+
+export interface BeginnerInventoryCounts {
+  services: number;
+  softwareComponents: number;
+  cloudResources: number;
+}
+
+export interface BeginnerInventory {
+  total: number;
+  counts: BeginnerInventoryCounts;
+  assetIds: string[];
+  representativeSample: BeginnerInventoryItem[];
+  items: BeginnerInventoryItem[];
+  byAsset: Array<{
+    assetId: string;
+    total: number;
+    counts: BeginnerInventoryCounts;
+    representativeSample: BeginnerInventoryItem[];
+  }>;
+}
+
 export interface BeginnerMasterReport {
   schemaVersion: string;
   caseId: string;
@@ -1006,6 +1060,8 @@ export interface BeginnerMasterReport {
     | "unattributed",
     number
   >;
+  /** Absent only for reports created before typed inventory was projected. */
+  inventory?: BeginnerInventory;
   findings: BeginnerReportFinding[];
   nextSteps: Array<{
     priority: number;

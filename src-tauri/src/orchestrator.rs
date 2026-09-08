@@ -196,6 +196,7 @@ pub struct ExecutionReport {
     pub exit_code: Option<i32>,
     pub raw_artifacts: Vec<RawArtifact>,
     pub findings: Vec<Finding>,
+    pub observations: Vec<crate::domain::InventoryObservation>,
     pub warnings: Vec<String>,
     /// Identifiers the adapter could not attribute to an authorized asset.
     pub unattributed: Vec<crate::domain::UnattributedResults>,
@@ -216,6 +217,7 @@ impl ExecutionReport {
             exit_code: None,
             raw_artifacts: Vec::new(),
             findings: Vec::new(),
+            observations: Vec::new(),
             warnings: Vec::new(),
             unattributed: Vec::new(),
             artifact_root,
@@ -880,6 +882,7 @@ fn adapt_captured_artifacts(
     match adapters.normalize(&input) {
         Ok(Some(output)) => {
             report.findings = output.findings;
+            report.observations = output.observations;
             report.warnings.extend(output.warnings);
             report.unattributed = output.unattributed;
             if output.complete {
@@ -893,6 +896,7 @@ fn adapt_captured_artifacts(
         }
         Ok(None) => {
             report.findings.clear();
+            report.observations.clear();
             report.warnings.push(format!(
                 "scanner output was captured, but no verified adapter is registered for {} version {}",
                 request.manifest.id, request.manifest.adapter_version
@@ -902,6 +906,7 @@ fn adapt_captured_artifacts(
         }
         Err(error) => {
             report.findings.clear();
+            report.observations.clear();
             report.warnings.push(format!(
                 "scanner output was captured, but adapter {} version {} failed validation",
                 request.manifest.id, request.manifest.adapter_version
@@ -1714,10 +1719,31 @@ mod tests {
             "adapter-1"
         }
 
-        fn normalize(&self, _input: &AdapterInput<'_>) -> AppResult<AdapterOutput> {
+        fn normalize(&self, input: &AdapterInput<'_>) -> AppResult<AdapterOutput> {
+            let artifact = input
+                .raw_artifacts
+                .first()
+                .expect("captured adapter input includes raw evidence");
             Ok(AdapterOutput {
                 unattributed: Vec::new(),
                 findings: Vec::new(),
+                observations: vec![crate::domain::InventoryObservation {
+                    id: "adapter-inventory-observation".into(),
+                    case_id: input.case_id.into(),
+                    run_id: input.scan_run_id.into(),
+                    engine_run_id: input.engine_run_id.into(),
+                    asset_id: input.asset_ids[0].clone(),
+                    engine_id: input.manifest.id.clone(),
+                    kind: crate::domain::InventoryObservationKind::CloudResource {
+                        resource_type: "test_resource".into(),
+                        native_id: Some("resource-1".into()),
+                        display_name: None,
+                    },
+                    artifact_id: artifact.id.clone(),
+                    artifact_sha256: artifact.sha256.clone(),
+                    pointer: "/resources/0".into(),
+                    observed_at: artifact.created_at,
+                }],
                 warnings: vec!["one malformed record was retained only as raw evidence".into()],
                 complete: false,
             })
@@ -3638,6 +3664,12 @@ mod tests {
             Some(expected_name.as_str())
         );
         assert!(report.checkpoint.cleanup_completed);
+        assert!(report.findings.is_empty());
+        assert!(report.observations.is_empty());
+        assert!(
+            !report.raw_artifacts.is_empty(),
+            "failed output remains captured without being misreported as inventory"
+        );
         assert_eq!(
             runtime.calls().last(),
             Some(&RuntimeCall::Cleanup(expected_name))
