@@ -1,6 +1,6 @@
 # Beginner product review
 
-Reviewed: current source on 2026-09-08
+Reviewed: current source on 2026-09-09
 Product behavior: [product-spec.md](product-spec.md)
 
 This review asks whether a beginner can run useful upstream security checks and
@@ -103,6 +103,29 @@ Previously saved single-service HTTPS, SSH, RDP, VNC, SMTP, and Telnet records
 remain runnable with their original boundaries. They are compatibility data,
 not the new setup model, and are not silently widened.
 
+### Advanced Kubernetes node snapshots
+
+The kube-bench build source no longer contains the product-authored six-check
+benchmark that reused upstream CIS identifiers with different meanings. Its
+next managed image is prepared to run the checksum-bound, unmodified upstream
+CIS 1.11 node profile: all 26 upstream checks, identifiers, verdicts, evidence,
+and remediation remain scanner-owned.
+
+The thin offline adapter accepts five explicit files plus their original mode,
+owner, group, and source path, and captured kubelet and kube-proxy command
+lines. It validates the complete immutable inventory, replays only the `ps` and
+`stat` forms used by that upstream profile, and never executes captured text.
+Only the kubelet and kube-proxy configuration YAML is parsed. Metadata-only
+files use non-secret placeholders; credentials, private keys, and real
+certificates remain out of scope.
+
+This source change is not deployed. The catalog still pins the published
+`0.16.0-3` image with the older schema-1 six-check profile, and current UI copy
+continues to describe that released boundary. The host reader accepts both the
+released schema 1 and the strictly validated schema 2 so the eventual immutable
+image switch does not erase existing cases. Image versioning, publication, and
+activation remain product-owner decisions.
+
 ## Report behavior
 
 The first layer answers:
@@ -127,8 +150,11 @@ stated scope visible.
 
 The high-value remaining gaps are:
 
-1. Continue removing product-owned subsets from advanced cloud and Kubernetes
-   paths where the current scanner invocation is narrower than upstream.
+1. Continue removing product-owned subsets from advanced cloud paths. A wider
+   upstream profile must first receive an explicit product-owner decision for
+   its assets, permissions, and endpoint closure; it must not silently widen an
+   existing grant. The kube-bench source replacement is complete, while its
+   immutable image publication remains owner-controlled.
 2. Add the pinned Java vulnerability database needed before Trivy can safely
    enable JAR scanning without turning an otherwise useful repository run into
    a fatal error. Grype already covers recognized repository language packages.

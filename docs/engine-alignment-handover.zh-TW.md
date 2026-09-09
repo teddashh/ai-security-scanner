@@ -161,6 +161,50 @@ scanned」的斷言，其實是**空洞通過**的——因為整個 map 是空�
 與 desktop build 在 `cfg` 之下壞掉數個 commit 沒被發現是同一種形狀：看起來像證據，
 其實沒有執行到。
 
+## kube-bench 產品自訂 subset 已從建置來源移除（`f6b6171`）
+
+原本 kube-bench image 不包含上游 benchmark，而是產品自行撰寫的六個 check。它不只縮小
+coverage，還改寫了上游 ID 的意義：例如產品的 `4.2.6` 檢查
+`protectKernelDefaults`，但 pinned upstream CIS 1.11 的同一 ID 實際檢查
+`makeIPTablesUtilChains`；產品的 `4.2.11` 也不是上游的 server-certificate feature-gate
+check。這已越過 thin adapter 邊界，等於在 wrapper 內重做 detection logic。
+
+`f6b6171` 已把這個自訂 `node.yaml` 從建置來源刪除，改為：
+
+- 從同一個 checksum-pinned kube-bench source archive 複製上游原始
+  `cfg/cis-1.11/node.yaml` 與 `config.yaml`；Docker build 另核對兩個檔案各自的 SHA-256，
+  launcher 固定執行 `--benchmark cis-1.11 --targets node`，不再帶產品 check allowlist。
+- 新的 `kubernetes_node_snapshot` schema 2.0.0 必須帶完整五個有界檔案、每個檔案的原始
+  path／mode／owner／group／digest，以及 kubelet 與 kube-proxy 的單行 process arguments。
+  backend 在建立 case snapshot 前會核對 exact inventory、digest 與有界字元；未知欄位、
+  未列檔案、未知 process、symlink 或被修改的內容都 fail closed。
+- image 內的 `ps`／`stat` 是同一個無 shell launcher 的有界模式，只接受 pinned upstream
+  node profile 實際發出的三種 `ps` 形狀與兩種 `stat` format。它只把已驗證的 snapshot
+  facts 寫到 stdout；captured command 永遠不執行，原 host path 只機械式映射到已核對的
+  snapshot copy。kubelet／proxy YAML 才交給上游 parser；kubeconfig、certificate 與 service
+  file 可用不含秘密的 placeholder 保存 metadata，文件明確禁止 token、private key 與真實
+  certificate。
+- 真實建置後以 `--network none`、read-only rootfs、drop-all capabilities、non-root user 與
+  read-only fixture mount 執行成功。輸出是上游 `cis-1.11` 的完整 26 checks：15 PASS、6 FAIL、
+  5 WARN；三個 upstream groups 分別是 10、15、1 checks。這份真實 artifact 已取代手寫的
+  adapter fixture，mapping guard 也直接核對 26 個可達 ID。
+- host reader 暫時同時接受現行 schema 1 與新 schema 2。schema 1 是 catalog 目前發布 image
+  的相容邊界；schema 2 走完整新驗證。這不是把舊資料升格成 26-check coverage。
+
+部署邊界必須據實保留：catalog 現在仍固定舊 image
+`0.16.0-3@sha256:d748f983…c563`，所以實際安裝產品仍執行舊的六個產品自訂 checks。
+`f6b6171` 只準備新建置來源並更新共用 launcher 與 kube-bench Dockerfile 的 plan checksum，
+沒有改 image tag、digest、發布狀態、UI 的現行 schema 說明或 released-scope 文件。何時提高
+不可變版本並發布／切換 image 是產品負責人的決定；在那之前不得宣稱 26-check runtime 已部署。
+
+同輪也核對了 cloud 路徑，但沒有擴權：AWS 與 Azure Prowler 已使用上游 `iam` service；GCP
+仍固定四個 checks。pinned upstream GCP IAM service 有 13 checks，會新增 Access Approval、
+Cloud Asset、Service Usage、Monitoring、IAM 與 Essential Contacts 等 API 行為；現有 downstream
+patch 的安全說明又明定只適用四-check profile。直接把 `--checks` 換成 `--service iam` 會在沒有
+新 grant、endpoint closure 與 exact-project 行為審查時靜默擴大授權，因此本輪沒有這樣做。
+ScoutSuite、CloudQuery 與 Steampipe 的進階固定 subsets 也仍是後續 cloud 工作，不因 Kubernetes
+修正而被宣稱完成。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -183,14 +227,16 @@ docker run --rm --network none \
   sh -c 'cp -R /src/. . && test -z "$(gofmt -d main.go main_test.go)" && go test ./...'
 ```
 
-`601da4b` 的 Rust 1,583 項、frontend 568 項、component 237 項、CI contract 32 項與
-engine contract 8 項全部通過；TypeScript、clippy、format、diff check 與上述 Go 測試
-也通過。所有 Nuclei 行為測試都只讀 checked-in fixture 或執行無網路的本機程序。
+`f6b6171` 的 Rust 1,584 項、frontend 568 項、component 237 項、CI contract 32 項與
+engine contract 8 項全部通過；TypeScript、clippy、format、diff check、launcher Go 測試
+與真實 kube-bench image build／offline execution 也通過。scanner execution 沒有接觸任何
+外部或未授權目標；建置只取得 checksum-pinned upstream source 與 Go modules。
 
 ## 後續順序
 
-1. 移除進階 cloud／Kubernetes 路徑中產品自訂的窄 subsets，改由上游 profile 與使用者
-   選定資產驅動。
+1. 繼續移除進階 cloud 路徑中的產品固定 subsets。任何較廣 upstream service/profile 都必須
+   先取得產品負責人對新資產／權限／endpoint closure 的明確決定，不得以 refactor 名義擴權。
+   kube-bench 的 source replacement 已完成；何時發布與切換 image 另由產品負責人決定。
 2. 補齊 Trivy JAR 掃描所需的固定 Java vulnerability DB。
 3. 用受控自有 fixture 走一次完整 mixed IT flow，包含第一次以新語意真實執行 Greenbone，
    量測從加入資產到第一個有用結果所需時間，優先修掉阻礙新手的步驟。
