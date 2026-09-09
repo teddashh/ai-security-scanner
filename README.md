@@ -36,7 +36,7 @@ Supported cloud accounts, infrastructure artifacts, and other specialist sources
 
 ## Inventory and connectivity are not vulnerability scans
 
-The collapsed **Test local service connection at 127.0.0.1:9001** utility makes one payload-free TCP connection attempt. It tells you only whether that exact port accepted, refused, or timed out.
+The collapsed **Test local service connection at 127.0.0.1:9001** utility makes one payload-free TCP connection attempt. It tells you only whether that exact port accepted, refused, or timed out. It is a connectivity check, not a vulnerability scan.
 
 That shortcut does not check vulnerabilities, HTTP behavior, other ports, or the rest of the computer. Asset inventory, an open port, or a responding service can help select a later check, but none is a vulnerability result. Likewise, “reachable,” “closed,” and “no findings” never mean “secure.” The report names the checks that actually ran.
 

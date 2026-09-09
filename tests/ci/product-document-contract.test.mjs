@@ -98,9 +98,14 @@ test("beginner-facing documentation leads to real scans and labels TCP as connec
     assert.match(content, /TCP/u);
     assert.match(content, /not a vulnerability scan|不是漏洞掃描|不是弱點掃描|不等於弱點掃描/iu);
     assert.match(content, /Nuclei/u);
-    assert.match(content, /13/u);
-    assert.match(content, /19/u);
-    assert.match(content, /GET/u);
+    // The website path is upstream-driven: Nuclei's technology detection
+    // selects read-only templates from the pinned snapshot, so the README
+    // describes that boundary instead of a hand-picked check count or a fixed
+    // request budget.
+    assert.match(content, /read-only|唯讀/u);
+    assert.match(content, /follow redirects|跟隨重新導向/u);
+    assert.match(content, /does not replace a penetration test|不能取代滲透測試/u);
+    assert.match(content, /does not mean all [\d,]+ templates ran|不代表 [\d,]+ 個模板全部執行/u);
     assert.match(content, /scheme:\/\/host:port/u);
   }
   assert.match(english, /entire `scheme:\/\/host:port` origin, not only the path/u);

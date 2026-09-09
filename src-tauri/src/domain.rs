@@ -2218,6 +2218,9 @@ pub struct DeclaredNetworkServiceInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DeclaredNetworkServiceMetadata {
+// The variant names are the persisted snake_case profile identifiers, so the
+// shared prefix is part of the stored contract rather than naming noise.
+#[allow(clippy::enum_variant_names)]
     pub target: String,
     pub protocol: DeclaredNetworkProtocol,
     pub port: u16,
@@ -2367,7 +2370,7 @@ mod tests {
             },
             disposition: ReportAssetDisposition::RequestedForScan,
         };
-        assert!(validate_report_asset_snapshots(&[snapshot.clone()]).is_ok());
+        assert!(validate_report_asset_snapshots(std::slice::from_ref(&snapshot)).is_ok());
         assert!(validate_report_asset_snapshots(&[snapshot.clone(), snapshot.clone()]).is_err());
         assert!(
             validate_report_asset_snapshots(&vec![

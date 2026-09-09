@@ -1506,11 +1506,11 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
             );
             continue;
         }
-        if let Some(finding_id) = step.finding_id.as_deref() {
-            if let Some((action, reason)) = redacted_finding_steps.get(finding_id) {
-                step.action = (*action).to_owned();
-                step.reason = reason.clone();
-            }
+        if let Some(finding_id) = step.finding_id.as_deref()
+            && let Some((action, reason)) = redacted_finding_steps.get(finding_id)
+        {
+            step.action = (*action).to_owned();
+            step.reason = reason.clone();
         }
         redact_known_literals(&mut step.action, &replacements);
         redact_known_literals(&mut step.reason, &replacements);

@@ -7593,10 +7593,7 @@ fn normalize_declared_assets(inputs: &[DeclaredAssetInput]) -> AppResult<Vec<Dis
             name,
             provider: None,
             region: None,
-            stable_identifier: AssetIdentifier {
-                namespace: namespace.into(),
-                value,
-            },
+            stable_identifier: AssetIdentifier { namespace, value },
             additional_identifiers,
             internet_exposed,
             contains_sensitive_data: None,
@@ -14071,7 +14068,7 @@ fn html_evidence_reference(
                             .join(" · ");
                         let omitted = items.len().saturating_sub(6);
                         if omitted > 0 {
-                            preview.push_str(&catalog.text(
+                            preview.push_str(catalog.text(
                                 &format!(" · +{omitted} more"),
                                 &format!(" · 另有 {omitted} 項"),
                             ));
@@ -27459,7 +27456,10 @@ mod tests {
         assert!(plan.executable.is_empty());
         assert_eq!(plan.not_executed.len(), 1);
         assert_eq!(plan.not_executed[0].engine_id, "future-scanner");
-        assert_eq!(plan.not_executed[0].asset_ids, [asset_id.clone()]);
+        assert_eq!(
+            plan.not_executed[0].asset_ids,
+            std::slice::from_ref(&asset_id)
+        );
         assert_eq!(plan.scan_run.engine_runs[0].asset_ids, [asset_id]);
         assert_eq!(plan.not_executed[0].reason_code, "manifest_unavailable");
     }
@@ -34542,7 +34542,7 @@ mod tests {
         assert_eq!(stored.finding_observations.len(), 1);
         assert_eq!(
             stored.inventory_observations,
-            [inventory_observation.clone()]
+            std::slice::from_ref(&inventory_observation)
         );
         let stored_run = &stored.scan_runs[0].engine_runs[0];
         assert_eq!(stored_run.runtime_provider.as_deref(), Some("podman"));

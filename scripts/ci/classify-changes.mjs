@@ -15,6 +15,11 @@ const FRONTEND_PATHS = [
   /^tsconfig(?:\.[^/]+)?\.json$/,
   // Matches both the Vite build config and the Vitest component-test config.
   /^vite(?:st)?\.config\.[cm]?[jt]s$/,
+  // `internalDeviceProfile.test.ts` and `internalEndpointProfile.test.ts` read
+  // the Greenbone launcher source to hold the frozen internal device and
+  // endpoint profiles to the exact upstream OIDs the launcher pins. A
+  // launcher-only commit must therefore run the frontend lane too.
+  /^engines\/images\/greenbone-launcher\/main\.go$/,
   // Frontend tests read these Rust files directly to check contracts that span
   // the boundary: the beginner-report vocabulary, the coverage-ledger detail
   // vocabulary, the verification-diff reason vocabulary, its reason-code

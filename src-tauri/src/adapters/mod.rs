@@ -2564,8 +2564,7 @@ fn extract_cloudsplaining(
     let Some(root) = json_root(parsed).and_then(Value::as_object) else {
         push_warning(
             warnings,
-            "Cloudsplaining results were not a single JSON object, so no policy findings could be read."
-                .to_owned(),
+            "Cloudsplaining results were not a single JSON object, so no policy findings could be read.",
         );
         return Vec::new();
     };
