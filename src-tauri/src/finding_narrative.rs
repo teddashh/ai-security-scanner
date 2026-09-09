@@ -89,11 +89,14 @@ pub fn basis_english(code: SeverityBasisCode) -> &'static str {
         SeverityBasisCode::CloudControlQuery => {
             "a failed IAM control from this product's own fixed query"
         }
+        SeverityBasisCode::CloudsplainingIamPolicyFinding => {
+            "an IAM policy finding Cloudsplaining did not rate"
+        }
     }
 }
 
 /// Every basis code, so a new one cannot be added without being translated.
-pub const ALL_SEVERITY_BASIS_CODES: [SeverityBasisCode; 7] = [
+pub const ALL_SEVERITY_BASIS_CODES: [SeverityBasisCode; 8] = [
     SeverityBasisCode::OpenPort,
     SeverityBasisCode::ReachableHttpService,
     SeverityBasisCode::SecretPatternMatch,
@@ -101,6 +104,7 @@ pub const ALL_SEVERITY_BASIS_CODES: [SeverityBasisCode; 7] = [
     SeverityBasisCode::IacPolicyCheck,
     SeverityBasisCode::CisKubernetesBenchmark,
     SeverityBasisCode::CloudControlQuery,
+    SeverityBasisCode::CloudsplainingIamPolicyFinding,
 ];
 
 /// The canonical English clause explaining why this product assigned a
@@ -201,6 +205,9 @@ fn basis(code: SeverityBasisCode) -> &'static str {
         }
         SeverityBasisCode::CisKubernetesBenchmark => "一項未通過的 CIS Kubernetes Benchmark 檢查",
         SeverityBasisCode::CloudControlQuery => "本產品自有固定查詢中一項未通過的 IAM 控制項",
+        SeverityBasisCode::CloudsplainingIamPolicyFinding => {
+            "Cloudsplaining 未評定嚴重程度的 IAM 政策問題"
+        }
     }
 }
 
@@ -2168,6 +2175,7 @@ mod tests {
             SeverityBasisCode::IacPolicyCheck,
             SeverityBasisCode::CisKubernetesBenchmark,
             SeverityBasisCode::CloudControlQuery,
+            SeverityBasisCode::CloudsplainingIamPolicyFinding,
         ];
         let summaries = bases
             .iter()

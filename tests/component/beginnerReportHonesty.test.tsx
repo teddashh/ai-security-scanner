@@ -1454,6 +1454,34 @@ test("run-bound upstream rule identity reaches the finding evidence drawer", () 
   expect(evidenceDetails!.textContent).toContain("CVE-2026-12345");
 });
 
+test("scanner HTML descriptions remain complete visible text and never become active markup", () => {
+  const upstreamDescription =
+    '<p>These policies allow a combination of IAM actions that allow a principal with these permissions to escalate their privileges - for example, by creating an access key for another IAM user, or modifying their own permissions. This research was pioneered by Spencer Gietzen at Rhino Security Labs. Remediation guidance can be found <a href="https://rhinosecuritylabs.com/aws/aws-privilege-escalation-methods-mitigation/">here</a>.</p>';
+  const { container } = renderReport(report("partial", {
+    findings: [frozenFinding({
+      evidenceReferences: [{
+        evidenceId: "evidence-cloudsplaining-1",
+        engineId: "cloudsplaining",
+        detailsFrozen: true,
+        sourceRule: "PrivilegeEscalation",
+        scannerDetails: { description: upstreamDescription },
+        artifactSha256: "a".repeat(64),
+        observedAt: "2026-09-04T12:00:00Z",
+      }],
+    })],
+  }));
+
+  openFirstFinding(container);
+  const description = container.querySelector<HTMLElement>(
+    ".scanner-evidence-description p",
+  );
+  expect(description).not.toBeNull();
+  expect(description!.textContent).toBe(upstreamDescription);
+  expect(description!.querySelector("a")).toBeNull();
+  expect(description!.innerHTML).toContain("&lt;p&gt;");
+  expect(description!.innerHTML).toContain("&lt;a href=");
+});
+
 test("selected-run evidence details and references do not drift to the current canonical finding", () => {
   const { container } = renderReport(
     report("partial", {

@@ -3591,15 +3591,27 @@ fn scoutsuite_rule_identity_survives_being_stored_only_as_a_parent_key() {
 #[test]
 fn cloudsplaining_risks_are_read_from_policies_not_the_document_root() {
     // `iam-findings-<account>.json` is `authorization_details.results`, keyed by
-    // principal and policy collection. Every risk array sits inside a policy
-    // object, so nothing recognisable appears at the root.
+    // principal and policy collection. Every risk is an object whose
+    // `findings` array sits inside a policy, so nothing recognisable appears at
+    // the root.
     let output = normalize_fixture("cloudsplaining");
     let found = rules_and_severities(&output);
 
-    // Severities are upstream's own grading (`shared/constants.py`), not a
-    // scale invented here, so this engine stays comparable with the others.
-    // The tag is lowercased by `safe_tag`; the mapping lookup keeps the exact
-    // case, which the control-reference assertion below covers.
+    assert!(
+        output.complete,
+        "the pinned upstream shape is complete: {:?}",
+        output.warnings
+    );
+    assert_eq!(
+        output.findings.len(),
+        18,
+        "each upstream finding remains distinct instead of collapsing a whole category into one result"
+    );
+
+    // Severities come from each category object's upstream field, not a table
+    // repeated in the adapter. The tag is lowercased by `safe_tag`; the mapping
+    // lookup keeps the exact case, which the control-reference assertion below
+    // covers.
     assert_eq!(found["privilegeescalation"], Severity::High);
     assert_eq!(found["credentialsexposure"], Severity::High);
     assert_eq!(found["resourceexposure"], Severity::High);
@@ -3630,15 +3642,15 @@ fn cloudsplaining_risks_are_read_from_policies_not_the_document_root() {
         .map(|finding| finding.title.as_str())
         .collect::<BTreeSet<_>>();
     assert!(
-        titles.contains("Privilege escalation path in policy IAMFullAccess"),
-        "a finding names the policy a reader has to change: {titles:?}"
+        titles.contains("PrivilegeEscalation: CreateAccessKey in policy IAMFullAccess"),
+        "a finding names both the upstream identity and policy: {titles:?}"
     );
     assert!(
-        titles.contains("Resource exposure in policy InsecurePolicy"),
+        titles.contains("ResourceExposure: s3:PutObjectAcl in policy InsecurePolicy"),
         "customer-managed policies are read too: {titles:?}"
     );
     assert!(
-        titles.contains("Data exfiltration exposure in policy InlinePolicyForAdminGroup"),
+        titles.contains("DataExfiltration: s3:GetObject in policy InlinePolicyForAdminGroup"),
         "inline policies are read too: {titles:?}"
     );
 
@@ -3661,6 +3673,582 @@ fn cloudsplaining_risks_are_read_from_policies_not_the_document_root() {
         sources,
         BTreeSet::from(["aws-managed", "customer-managed", "inline"]),
         "each policy collection is distinguishable in the findings list"
+    );
+
+    let create_key = output
+        .findings
+        .iter()
+        .find(|finding| {
+            finding.title == "PrivilegeEscalation: CreateAccessKey in policy IAMFullAccess"
+        })
+        .expect("individual privilege-escalation method");
+    assert_eq!(create_key.severity, Severity::High);
+    assert_eq!(create_key.severity_basis_code, None);
+    assert!(
+        create_key
+            .tags
+            .iter()
+            .any(|tag| tag == "source-severity:high"),
+        "the report identifies the category rating as upstream-provided"
+    );
+    let evidence = create_key.evidence.first().expect("raw result evidence");
+    assert_eq!(
+        evidence.location.as_deref(),
+        Some("arn:aws:iam::aws:policy/IAMFullAccess :: CreateAccessKey")
+    );
+    assert_eq!(
+        evidence.pointer.as_deref(),
+        Some("/aws_managed_policies/ANPAI7XKCFMBPM3QQRRVQ/PrivilegeEscalation/findings/0")
+    );
+    assert_eq!(
+        evidence
+            .scanner_details
+            .as_ref()
+            .and_then(|details| details.description.as_deref()),
+        Some(
+            "<p>These policies allow a combination of IAM actions that allow a principal with these permissions to escalate their privileges - for example, by creating an access key for another IAM user, or modifying their own permissions. This research was pioneered by Spencer Gietzen at Rhino Security Labs. Remediation guidance can be found <a href=\"https://rhinosecuritylabs.com/aws/aws-privilege-escalation-methods-mitigation/\">here</a>.</p>"
+        ),
+        "the pinned upstream HTML description is retained as untrusted text rather than paraphrased by the adapter"
+    );
+    assert!(
+        create_key
+            .official_references
+            .iter()
+            .any(|reference| reference == "https://pathfinding.cloud/paths/iam-002"),
+        "the category's method link survives normalization"
+    );
+    assert!(
+        create_key
+            .official_references
+            .iter()
+            .any(|reference| reference.contains("docs.aws.amazon.com/service-authorization")),
+        "the upstream action link survives normalization"
+    );
+}
+
+#[test]
+fn cloudsplaining_severity_is_read_from_the_category_object() {
+    let mut document: serde_json::Value =
+        serde_json::from_slice(fixture("cloudsplaining").0).expect("Cloudsplaining fixture JSON");
+    document["aws_managed_policies"]["ANPAI7XKCFMBPM3QQRRVQ"]["PrivilegeEscalation"]["severity"] =
+        serde_json::json!("critical");
+    let bytes = serde_json::to_vec(&document).expect("changed fixture JSON");
+    let output = normalize_bytes(
+        "cloudsplaining",
+        &bytes,
+        "cloudsplaining.json",
+        "application/json",
+        "run-source-severity",
+    );
+
+    let escalations = output
+        .findings
+        .iter()
+        .filter(|finding| {
+            finding
+                .tags
+                .iter()
+                .any(|tag| tag == "source-rule:privilegeescalation")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(escalations.len(), 2);
+    assert!(
+        escalations.iter().all(|finding| {
+            finding.severity == Severity::Critical
+                && finding.severity_basis_code.is_none()
+                && finding
+                    .tags
+                    .iter()
+                    .any(|tag| tag == "source-severity:critical")
+        }),
+        "changing the upstream field changes the normalized rating without an adapter-side category scale"
+    );
+    assert!(
+        output.complete,
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn cloudsplaining_schema_drift_is_partial_without_erasing_valid_siblings() {
+    let mut document: serde_json::Value =
+        serde_json::from_slice(fixture("cloudsplaining").0).expect("Cloudsplaining fixture JSON");
+    document
+        .as_object_mut()
+        .expect("fixture root")
+        .remove("inline_policies");
+    document["customer_managed_policies"] = serde_json::json!([]);
+    let policy = &mut document["aws_managed_policies"]["ANPAI7XKCFMBPM3QQRRVQ"];
+    policy["DataExfiltration"] = serde_json::json!([]);
+    policy["ResourceExposure"]
+        .as_object_mut()
+        .expect("category object")
+        .remove("findings");
+    policy
+        .as_object_mut()
+        .expect("policy object")
+        .remove("ServiceWildcard");
+    policy["InfrastructureModification"]
+        .as_object_mut()
+        .expect("category object")
+        .remove("severity");
+    policy["CredentialsExposure"]["severity"] = serde_json::json!("   ");
+    policy["CredentialsExposure"]
+        .as_object_mut()
+        .expect("category object")
+        .remove("description");
+    policy["PrivilegeEscalation"]["findings"]
+        .as_array_mut()
+        .expect("findings array")
+        .push(serde_json::json!({"actions": ["iam:putuserpolicy"]}));
+
+    let bytes = serde_json::to_vec(&document).expect("drifted fixture JSON");
+    let output = normalize_bytes(
+        "cloudsplaining",
+        &bytes,
+        "cloudsplaining.json",
+        "application/json",
+        "run-schema-drift",
+    );
+
+    assert!(!output.complete, "schema drift must never look clean");
+    assert_eq!(
+        output.findings.len(),
+        6,
+        "missing or empty category severity does not erase otherwise valid findings"
+    );
+    assert!(
+        output
+            .findings
+            .iter()
+            .any(|finding| finding.title.contains("CreateAccessKey")),
+        "a valid sibling remains actionable"
+    );
+    let unrated = output
+        .findings
+        .iter()
+        .filter(|finding| {
+            finding
+                .tags
+                .iter()
+                .any(|tag| tag == "severity-basis:unrated")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        unrated.len(),
+        4,
+        "both findings in each missing- and empty-severity category survive as unrated"
+    );
+    assert!(unrated.iter().all(|finding| {
+        finding.severity == Severity::Unknown
+            && finding.severity_basis_code
+                == Some(SeverityBasisCode::CloudsplainingIamPolicyFinding)
+            && finding
+                .plain_language_summary
+                .contains("did not assign a severity")
+    }));
+    for expected in [
+        "lacked required policy section inline_policies",
+        "policy section customer_managed_policies was not an object",
+        "category at /aws_managed_policies/ANPAI7XKCFMBPM3QQRRVQ/DataExfiltration was not an object",
+        "category at /aws_managed_policies/ANPAI7XKCFMBPM3QQRRVQ/ResourceExposure lacked its findings array",
+        "policy at /aws_managed_policies/ANPAI7XKCFMBPM3QQRRVQ lacked category ServiceWildcard",
+        "category at /aws_managed_policies/ANPAI7XKCFMBPM3QQRRVQ/InfrastructureModification lacked its source severity",
+        "category at /aws_managed_policies/ANPAI7XKCFMBPM3QQRRVQ/CredentialsExposure lacked its source severity",
+        "category at /aws_managed_policies/ANPAI7XKCFMBPM3QQRRVQ/CredentialsExposure lacked its source description",
+        "finding at /aws_managed_policies/ANPAI7XKCFMBPM3QQRRVQ/PrivilegeEscalation/findings/2 did not match the pinned PrivilegeEscalation entry shape",
+    ] {
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(expected)),
+            "missing warning for {expected}: {:?}",
+            output.warnings
+        );
+    }
+}
+
+#[test]
+fn cloudsplaining_enforces_each_pinned_category_entry_shape() {
+    let mut document: serde_json::Value =
+        serde_json::from_slice(fixture("cloudsplaining").0).expect("Cloudsplaining fixture JSON");
+    let policy = &mut document["aws_managed_policies"]["ANPAI7XKCFMBPM3QQRRVQ"];
+    policy["PrivilegeEscalation"]["findings"][0] = serde_json::json!("CreateAccessKey");
+    policy["PrivilegeEscalation"]["findings"][1] = serde_json::json!({
+        "type": "CreateLoginProfile",
+        "actions": ["iam:createloginprofile"],
+        "unexpected": true
+    });
+    document["inline_policies"]["ffd2b5250e18691dbd9f0fb8b36640ec574867835837f17d39f859c3193fb3f2"]
+        ["DataExfiltration"]["findings"][0] = serde_json::json!({
+        "type": "s3:GetObject",
+        "actions": ["s3:GetObject"]
+    });
+    document["customer_managed_policies"]["InsecurePolicy"]["InfrastructureModification"]["findings"]
+        [0] = serde_json::json!("   ");
+
+    let bytes = serde_json::to_vec(&document).expect("shape-drifted fixture JSON");
+    let output = normalize_bytes(
+        "cloudsplaining",
+        &bytes,
+        "cloudsplaining.json",
+        "application/json",
+        "run-entry-shapes",
+    );
+
+    assert!(!output.complete, "wrong entry shapes must be disclosed");
+    assert_eq!(
+        output.findings.len(),
+        14,
+        "only the four malformed entries are withheld from normalized findings"
+    );
+    for expected in [
+        "/PrivilegeEscalation/findings/0 did not match the pinned PrivilegeEscalation entry shape",
+        "/PrivilegeEscalation/findings/1 did not match the pinned PrivilegeEscalation entry shape",
+        "/DataExfiltration/findings/0 did not match the pinned DataExfiltration entry shape",
+        "/InfrastructureModification/findings/0 did not match the pinned InfrastructureModification entry shape",
+    ] {
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(expected)),
+            "missing shape warning {expected:?}: {:?}",
+            output.warnings
+        );
+    }
+}
+
+#[test]
+fn cloudsplaining_requires_an_explicit_boolean_exclusion_decision_per_policy() {
+    let mut document: serde_json::Value =
+        serde_json::from_slice(fixture("cloudsplaining").0).expect("Cloudsplaining fixture JSON");
+    document["customer_managed_policies"]["InsecurePolicy"]
+        .as_object_mut()
+        .expect("customer-managed policy")
+        .remove("is_excluded");
+    document["aws_managed_policies"]["ANPAI7XKCFMBPM3QQRRVQ"]["is_excluded"] =
+        serde_json::json!("false");
+
+    let bytes = serde_json::to_vec(&document).expect("exclusion-drifted fixture JSON");
+    let output = normalize_bytes(
+        "cloudsplaining",
+        &bytes,
+        "cloudsplaining.json",
+        "application/json",
+        "run-exclusion-shape",
+    );
+
+    assert!(!output.complete, "unknown exclusion state must be partial");
+    assert_eq!(
+        output.findings.len(),
+        6,
+        "the two ambiguous policies stay raw-only while the valid inline-policy sibling survives"
+    );
+    assert!(
+        output
+            .findings
+            .iter()
+            .any(|finding| finding.title.contains("InlinePolicyForAdminGroup")),
+        "a valid sibling policy remains actionable"
+    );
+    for policy_pointer in [
+        "/customer_managed_policies/InsecurePolicy",
+        "/aws_managed_policies/ANPAI7XKCFMBPM3QQRRVQ",
+    ] {
+        assert!(
+            output.warnings.iter().any(|warning| {
+                warning.contains(policy_pointer) && warning.contains("required boolean is_excluded")
+            }),
+            "missing exclusion warning for {policy_pointer}: {:?}",
+            output.warnings
+        );
+    }
+}
+
+#[test]
+fn cloudsplaining_required_links_are_partial_but_never_erase_findings() {
+    let original: serde_json::Value =
+        serde_json::from_slice(fixture("cloudsplaining").0).expect("Cloudsplaining fixture JSON");
+    let mut cases = Vec::new();
+
+    let mut missing_root = original.clone();
+    missing_root
+        .as_object_mut()
+        .expect("fixture root")
+        .remove("links");
+    cases.push((
+        "missing-root",
+        missing_root,
+        "lacked its required links object",
+    ));
+
+    let mut wrong_root = original.clone();
+    wrong_root["links"] = serde_json::json!([]);
+    cases.push(("wrong-root", wrong_root, "output links were not an object"));
+
+    let mut missing_category_links = original.clone();
+    missing_category_links["aws_managed_policies"]["ANPAI7XKCFMBPM3QQRRVQ"]["PrivilegeEscalation"]
+        .as_object_mut()
+        .expect("privilege-escalation category")
+        .remove("links");
+    cases.push((
+        "missing-category-links",
+        missing_category_links,
+        "PrivilegeEscalation category at /aws_managed_policies/ANPAI7XKCFMBPM3QQRRVQ/PrivilegeEscalation lacked its required links object",
+    ));
+
+    let mut wrong_category_links = original.clone();
+    wrong_category_links["aws_managed_policies"]["ANPAI7XKCFMBPM3QQRRVQ"]["PrivilegeEscalation"]
+        ["links"] = serde_json::json!([]);
+    cases.push((
+        "wrong-category-links",
+        wrong_category_links,
+        "PrivilegeEscalation category at /aws_managed_policies/ANPAI7XKCFMBPM3QQRRVQ/PrivilegeEscalation lacked its required links object",
+    ));
+
+    let mut missing_method = original.clone();
+    missing_method["aws_managed_policies"]["ANPAI7XKCFMBPM3QQRRVQ"]["PrivilegeEscalation"]["links"]
+        .as_object_mut()
+        .expect("privilege-escalation links")
+        .remove("CreateAccessKey");
+    cases.push((
+        "missing-method",
+        missing_method,
+        "privilege-escalation finding at /aws_managed_policies/ANPAI7XKCFMBPM3QQRRVQ/PrivilegeEscalation/findings/0 lacked its required method link",
+    ));
+
+    let mut malformed_action = original.clone();
+    malformed_action["links"]["iam:createaccesskey"] = serde_json::json!(42);
+    cases.push((
+        "malformed-action",
+        malformed_action,
+        "action link for iam:createaccesskey was malformed",
+    ));
+
+    for (name, document, expected_warning) in cases {
+        let bytes = serde_json::to_vec(&document).expect("changed fixture JSON");
+        let output = normalize_bytes(
+            "cloudsplaining",
+            &bytes,
+            "cloudsplaining.json",
+            "application/json",
+            &format!("run-links-{name}"),
+        );
+        assert_eq!(
+            output.findings.len(),
+            18,
+            "{name}: link drift must not erase valid policy findings"
+        );
+        assert!(!output.complete, "{name}: required link drift is partial");
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(expected_warning)),
+            "{name}: missing warning {expected_warning:?}: {:?}",
+            output.warnings
+        );
+    }
+
+    let mut allowed_sparse_actions = original;
+    let action_links = allowed_sparse_actions["links"]
+        .as_object_mut()
+        .expect("root action links");
+    action_links.insert("iam:createaccesskey".into(), serde_json::Value::Null);
+    action_links.remove("iam:createloginprofile");
+    let bytes = serde_json::to_vec(&allowed_sparse_actions).expect("changed fixture JSON");
+    let output = normalize_bytes(
+        "cloudsplaining",
+        &bytes,
+        "cloudsplaining.json",
+        "application/json",
+        "run-sparse-action-links",
+    );
+    assert!(
+        output.complete,
+        "upstream explicitly permits null or absent action-documentation links: {:?}",
+        output.warnings
+    );
+    assert_eq!(output.findings.len(), 18);
+}
+
+#[test]
+fn cloudsplaining_exact_long_identities_do_not_collapse_or_miss_links() {
+    let mut document: serde_json::Value =
+        serde_json::from_slice(fixture("cloudsplaining").0).expect("Cloudsplaining fixture JSON");
+    let shared_prefix = "X".repeat(700);
+    let identity_a = format!("{shared_prefix}-A");
+    let identity_b = format!("{shared_prefix}-B");
+    let category =
+        &mut document["aws_managed_policies"]["ANPAI7XKCFMBPM3QQRRVQ"]["PrivilegeEscalation"];
+    category["findings"] = serde_json::json!([
+        {"type": identity_a.clone(), "actions": ["iam:createaccesskey"]},
+        {"type": identity_b.clone(), "actions": ["iam:createloginprofile"]}
+    ]);
+    category["links"] = serde_json::json!({
+        identity_a.clone(): "https://pathfinding.cloud/paths/test-a",
+        identity_b.clone(): "https://pathfinding.cloud/paths/test-b"
+    });
+
+    let bytes = serde_json::to_vec(&document).expect("long-identity fixture JSON");
+    let output = normalize_bytes(
+        "cloudsplaining",
+        &bytes,
+        "cloudsplaining.json",
+        "application/json",
+        "run-long-identities",
+    );
+    assert!(
+        output.complete,
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+    let mut escalations = output
+        .findings
+        .iter()
+        .filter(|finding| {
+            finding
+                .tags
+                .iter()
+                .any(|tag| tag == "source-rule:privilegeescalation")
+        })
+        .collect::<Vec<_>>();
+    escalations.sort_by(|left, right| left.fingerprint.cmp(&right.fingerprint));
+    assert_eq!(escalations.len(), 2);
+    assert_eq!(
+        escalations[0].title, escalations[1].title,
+        "the bounded display prefix intentionally cannot distinguish these identities"
+    );
+    assert_ne!(
+        escalations[0].fingerprint, escalations[1].fingerprint,
+        "fingerprints must use the exact source identity, not bounded display text"
+    );
+    let references = escalations
+        .iter()
+        .flat_map(|finding| finding.official_references.iter())
+        .filter(|reference| reference.contains("/paths/test-"))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        references,
+        BTreeSet::from([
+            "https://pathfinding.cloud/paths/test-a".to_owned(),
+            "https://pathfinding.cloud/paths/test-b".to_owned(),
+        ]),
+        "the exact identity is also used for the upstream method-link lookup"
+    );
+}
+
+#[test]
+fn cloudsplaining_record_bound_keeps_late_high_findings_before_early_low_rows() {
+    let low_findings = (0..10_001)
+        .map(|index| serde_json::Value::String(format!("ec2:ModifyResource{index:05}")))
+        .collect::<Vec<_>>();
+    let empty_category = |severity: &str| {
+        serde_json::json!({
+            "severity": severity,
+            "description": "Pinned upstream category description",
+            "findings": []
+        })
+    };
+    let low_policy = serde_json::json!({
+        "PolicyName": "EarlyLowPolicy",
+        "PolicyId": "early-low-policy",
+        "AttachedTo": {"roles": ["EarlyRole"], "groups": [], "users": []},
+        "PrivilegeEscalation": {
+            "severity": "high",
+            "description": "Pinned upstream category description",
+            "findings": [],
+            "links": {}
+        },
+        "DataExfiltration": empty_category("medium"),
+        "ResourceExposure": empty_category("high"),
+        "ServiceWildcard": empty_category("medium"),
+        "CredentialsExposure": empty_category("high"),
+        "InfrastructureModification": {
+            "severity": "low",
+            "description": "Pinned upstream category description",
+            "findings": low_findings
+        },
+        "is_excluded": false
+    });
+    let high_policy = serde_json::json!({
+        "PolicyName": "LateHighPolicy",
+        "PolicyId": "late-high-policy",
+        "AttachedTo": {"roles": [], "groups": [], "users": ["LateUser"]},
+        "PrivilegeEscalation": {
+            "severity": "high",
+            "description": "Pinned upstream category description",
+            "findings": [{"type": "LateEscalation", "actions": ["iam:createaccesskey"]}],
+            "links": {"LateEscalation": "https://pathfinding.cloud/paths/late-high"}
+        },
+        "DataExfiltration": empty_category("medium"),
+        "ResourceExposure": empty_category("high"),
+        "ServiceWildcard": empty_category("medium"),
+        "CredentialsExposure": empty_category("high"),
+        "InfrastructureModification": empty_category("low"),
+        "is_excluded": false
+    });
+    let document = serde_json::json!({
+        "customer_managed_policies": {"early-low-policy": low_policy},
+        "inline_policies": {},
+        "aws_managed_policies": {"late-high-policy": high_policy},
+        "groups": [],
+        "users": [],
+        "roles": [],
+        "exclusions": {"policies": [], "roles": [], "users": [], "groups": []},
+        "links": {}
+    });
+    let bytes = serde_json::to_vec(&document).expect("large synthetic Cloudsplaining JSON");
+    assert!(
+        bytes.len() < 16 * 1024 * 1024,
+        "fixture fits the artifact bound"
+    );
+    let output = normalize_bytes(
+        "cloudsplaining",
+        &bytes,
+        "cloudsplaining.json",
+        "application/json",
+        "run-priority-bound",
+    );
+
+    assert!(!output.complete, "record truncation must be disclosed");
+    assert_eq!(output.findings.len(), 10_000);
+    assert_eq!(
+        output
+            .findings
+            .iter()
+            .filter(|finding| finding.severity == Severity::High)
+            .count(),
+        1,
+        "the later high-severity entry is admitted before early low rows"
+    );
+    assert!(
+        output
+            .findings
+            .iter()
+            .any(|finding| finding.title.contains("LateEscalation")),
+        "the late high finding remains actionable"
+    );
+    assert_eq!(
+        output
+            .findings
+            .iter()
+            .filter(|finding| finding.severity == Severity::Low)
+            .count(),
+        9_999
+    );
+    assert!(
+        output.warnings.iter().any(|warning| {
+            warning.contains("reported 10002 valid policy findings")
+                && warning.contains("retained 10000 in Critical, High, Medium, Unknown, Low")
+                && warning.contains("2 remain only in raw evidence")
+        }),
+        "precise truncation warning missing: {:?}",
+        output.warnings
     );
 }
 

@@ -40,6 +40,7 @@ const BASES: SeverityBasisCode[] = [
   "iac_policy_check",
   "cis_kubernetes_benchmark",
   "cloud_control_query",
+  "cloudsplaining_iam_policy_finding",
 ];
 
 const ENGLISH_IMPACT =

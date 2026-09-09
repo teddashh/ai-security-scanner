@@ -39,24 +39,53 @@
       "Path": "/",
       "DefaultVersionId": "v1",
       "AttachmentCount": 1,
+      "AttachedTo": {"roles": [], "groups": ["AdminGroup"], "users": []},
       "IsAttachable": true,
       "CreateDate": "2015-02-06 18:40:55+00:00",
       "UpdateDate": "2019-05-31 16:44:59+00:00",
-      "PrivilegeEscalation": [
-        { "type": "CreateAccessKey", "actions": ["iam:createaccesskey"] },
-        { "type": "CreateLoginProfile", "actions": ["iam:createloginprofile"] }
-      ],
-      "DataExfiltration": [],
-      "ResourceExposure": [
-        "iam:AddClientIDToOpenIDConnectProvider",
-        "iam:AddRoleToInstanceProfile"
-      ],
-      "ServiceWildcard": ["iam"],
-      "CredentialsExposure": ["iam:CreateAccessKey", "iam:CreateLoginProfile"],
-      "InfrastructureModification": [
-        "iam:AddClientIDToOpenIDConnectProvider",
-        "iam:AddRoleToInstanceProfile"
-      ],
+      "PrivilegeEscalation": {
+        "severity": "high",
+        "description": "<p>These policies allow a combination of IAM actions that allow a principal with these permissions to escalate their privileges - for example, by creating an access key for another IAM user, or modifying their own permissions. This research was pioneered by Spencer Gietzen at Rhino Security Labs.  Remediation guidance can be found <a href=\"https://rhinosecuritylabs.com/aws/aws-privilege-escalation-methods-mitigation/\">here</a>.</p>",
+        "findings": [
+          {"type": "CreateAccessKey", "actions": ["iam:createaccesskey"]},
+          {"type": "CreateLoginProfile", "actions": ["iam:createloginprofile"]}
+        ],
+        "links": {
+          "CreateAccessKey": "https://pathfinding.cloud/paths/iam-002",
+          "CreateLoginProfile": "https://pathfinding.cloud/paths/iam-004"
+        }
+      },
+      "DataExfiltration": {
+        "severity": "medium",
+        "description": "These policies allow read-only actions with data-exfiltration potential without resource constraints.",
+        "findings": []
+      },
+      "ResourceExposure": {
+        "severity": "high",
+        "description": "These actions can change resource policies or otherwise expose AWS resources.",
+        "findings": [
+          "iam:AddClientIDToOpenIDConnectProvider",
+          "iam:AddRoleToInstanceProfile"
+        ]
+      },
+      "ServiceWildcard": {
+        "severity": "medium",
+        "description": "A service wildcard grants access to all actions under a service.",
+        "findings": ["iam"]
+      },
+      "CredentialsExposure": {
+        "severity": "high",
+        "description": "These actions return credentials as part of the API response.",
+        "findings": ["iam:CreateAccessKey", "iam:CreateLoginProfile"]
+      },
+      "InfrastructureModification": {
+        "severity": "low",
+        "description": "",
+        "findings": [
+          "iam:AddClientIDToOpenIDConnectProvider",
+          "iam:AddRoleToInstanceProfile"
+        ]
+      },
       "is_excluded": false
     },
     "ANPAEXAMPLEADMINPOLICY": {
@@ -66,17 +95,43 @@
       "Path": "/",
       "DefaultVersionId": "v1",
       "AttachmentCount": 1,
+      "AttachedTo": {"roles": [], "groups": [], "users": []},
       "IsAttachable": true,
       "CreateDate": "2015-02-06 18:39:46+00:00",
       "UpdateDate": "2015-02-06 18:39:46+00:00",
-      "PrivilegeEscalation": [
-        { "type": "CreateAccessKey", "actions": ["iam:createaccesskey"] }
-      ],
-      "DataExfiltration": ["s3:GetObject"],
-      "ResourceExposure": ["iam:PassRole"],
-      "ServiceWildcard": ["*"],
-      "CredentialsExposure": ["iam:CreateAccessKey"],
-      "InfrastructureModification": ["iam:AddUserToGroup"],
+      "PrivilegeEscalation": {
+        "severity": "high",
+        "description": "<p>These policies allow a combination of IAM actions that allow a principal with these permissions to escalate their privileges - for example, by creating an access key for another IAM user, or modifying their own permissions. This research was pioneered by Spencer Gietzen at Rhino Security Labs.  Remediation guidance can be found <a href=\"https://rhinosecuritylabs.com/aws/aws-privilege-escalation-methods-mitigation/\">here</a>.</p>",
+        "findings": [{"type": "CreateAccessKey", "actions": ["iam:createaccesskey"]}],
+        "links": {
+          "CreateAccessKey": "https://pathfinding.cloud/paths/iam-002"
+        }
+      },
+      "DataExfiltration": {
+        "severity": "medium",
+        "description": "These policies allow read-only actions with data-exfiltration potential without resource constraints.",
+        "findings": ["s3:GetObject"]
+      },
+      "ResourceExposure": {
+        "severity": "high",
+        "description": "These actions can change resource policies or otherwise expose AWS resources.",
+        "findings": ["iam:PassRole"]
+      },
+      "ServiceWildcard": {
+        "severity": "medium",
+        "description": "A service wildcard grants access to all actions under a service.",
+        "findings": ["*"]
+      },
+      "CredentialsExposure": {
+        "severity": "high",
+        "description": "These actions return credentials as part of the API response.",
+        "findings": ["iam:CreateAccessKey"]
+      },
+      "InfrastructureModification": {
+        "severity": "low",
+        "description": "",
+        "findings": ["iam:AddUserToGroup"]
+      },
       "is_excluded": true
     }
   },
@@ -88,15 +143,41 @@
       "Path": "/",
       "DefaultVersionId": "v1",
       "AttachmentCount": 1,
+      "AttachedTo": {"roles": [], "groups": [], "users": ["ExampleUser"]},
       "IsAttachable": true,
       "CreateDate": "2026-08-24 12:00:00+00:00",
       "UpdateDate": "2026-08-24 12:00:00+00:00",
-      "PrivilegeEscalation": [],
-      "DataExfiltration": [],
-      "ResourceExposure": ["s3:PutObjectAcl"],
-      "ServiceWildcard": [],
-      "CredentialsExposure": [],
-      "InfrastructureModification": ["s3:PutObject", "s3:PutObjectAcl"],
+      "PrivilegeEscalation": {
+        "severity": "high",
+        "description": "<p>These policies allow a combination of IAM actions that allow a principal with these permissions to escalate their privileges - for example, by creating an access key for another IAM user, or modifying their own permissions. This research was pioneered by Spencer Gietzen at Rhino Security Labs.  Remediation guidance can be found <a href=\"https://rhinosecuritylabs.com/aws/aws-privilege-escalation-methods-mitigation/\">here</a>.</p>",
+        "findings": [],
+        "links": {}
+      },
+      "DataExfiltration": {
+        "severity": "medium",
+        "description": "These policies allow read-only actions with data-exfiltration potential without resource constraints.",
+        "findings": []
+      },
+      "ResourceExposure": {
+        "severity": "high",
+        "description": "These actions can change resource policies or otherwise expose AWS resources.",
+        "findings": ["s3:PutObjectAcl"]
+      },
+      "ServiceWildcard": {
+        "severity": "medium",
+        "description": "A service wildcard grants access to all actions under a service.",
+        "findings": []
+      },
+      "CredentialsExposure": {
+        "severity": "high",
+        "description": "These actions return credentials as part of the API response.",
+        "findings": []
+      },
+      "InfrastructureModification": {
+        "severity": "low",
+        "description": "",
+        "findings": ["s3:PutObject", "s3:PutObjectAcl"]
+      },
       "is_excluded": false
     }
   },
@@ -104,18 +185,38 @@
     "ffd2b5250e18691dbd9f0fb8b36640ec574867835837f17d39f859c3193fb3f2": {
       "PolicyName": "InlinePolicyForAdminGroup",
       "PolicyId": "ffd2b5250e18691dbd9f0fb8b36640ec574867835837f17d39f859c3193fb3f2",
-      "PrivilegeEscalation": [],
-      "DataExfiltration": ["s3:GetObject"],
-      "ResourceExposure": [
-        "s3:BypassGovernanceRetention",
-        "s3:DeleteAccessPointPolicy"
-      ],
-      "ServiceWildcard": ["s3"],
-      "CredentialsExposure": [],
-      "InfrastructureModification": [
-        "s3:AbortMultipartUpload",
-        "s3:BypassGovernanceRetention"
-      ],
+      "AttachedTo": {"roles": [], "groups": ["AdminGroup"], "users": []},
+      "PrivilegeEscalation": {
+        "severity": "high",
+        "description": "<p>These policies allow a combination of IAM actions that allow a principal with these permissions to escalate their privileges - for example, by creating an access key for another IAM user, or modifying their own permissions. This research was pioneered by Spencer Gietzen at Rhino Security Labs.  Remediation guidance can be found <a href=\"https://rhinosecuritylabs.com/aws/aws-privilege-escalation-methods-mitigation/\">here</a>.</p>",
+        "findings": [],
+        "links": {}
+      },
+      "DataExfiltration": {
+        "severity": "medium",
+        "description": "These policies allow read-only actions with data-exfiltration potential without resource constraints.",
+        "findings": ["s3:GetObject"]
+      },
+      "ResourceExposure": {
+        "severity": "high",
+        "description": "These actions can change resource policies or otherwise expose AWS resources.",
+        "findings": ["s3:BypassGovernanceRetention", "s3:DeleteAccessPointPolicy"]
+      },
+      "ServiceWildcard": {
+        "severity": "medium",
+        "description": "A service wildcard grants access to all actions under a service.",
+        "findings": ["s3"]
+      },
+      "CredentialsExposure": {
+        "severity": "high",
+        "description": "These actions return credentials as part of the API response.",
+        "findings": []
+      },
+      "InfrastructureModification": {
+        "severity": "low",
+        "description": "",
+        "findings": ["s3:AbortMultipartUpload", "s3:BypassGovernanceRetention"]
+      },
       "is_excluded": false
     }
   },
@@ -125,5 +226,18 @@
     "users": [""],
     "groups": [""]
   },
-  "links": {}
+  "links": {
+    "iam:createaccesskey": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagementiam.html",
+    "iam:createloginprofile": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagementiam.html",
+    "iam:AddClientIDToOpenIDConnectProvider": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagementiam.html",
+    "iam:AddRoleToInstanceProfile": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagementiam.html",
+    "iam:CreateAccessKey": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagementiam.html",
+    "iam:CreateLoginProfile": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_identityandaccessmanagementiam.html",
+    "s3:GetObject": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html",
+    "s3:PutObject": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html",
+    "s3:PutObjectAcl": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html",
+    "s3:AbortMultipartUpload": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html",
+    "s3:BypassGovernanceRetention": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html",
+    "s3:DeleteAccessPointPolicy": "https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html"
+  }
 }

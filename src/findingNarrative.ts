@@ -78,6 +78,8 @@ const BASIS: Record<SeverityBasisCode, string> = {
     "一項未通過的基礎架構即程式碼政策檢查；因為 Checkov 離線執行時不提供各別檢查的嚴重程度，所以一律採用相同等級",
   cis_kubernetes_benchmark: "一項未通過的 CIS Kubernetes Benchmark 檢查",
   cloud_control_query: "本產品自有固定查詢中一項未通過的 IAM 控制項",
+  cloudsplaining_iam_policy_finding:
+    "Cloudsplaining 未評定嚴重程度的 IAM 政策問題",
 };
 
 const CONFIDENCE_BASIS: Record<ConfidenceBasisCode, string> = {
@@ -388,6 +390,8 @@ const BASIS_ENGLISH: Record<SeverityBasisCode, string> = {
   cis_kubernetes_benchmark: "a failed CIS Kubernetes Benchmark check",
   cloud_control_query:
     "a failed IAM control from this product's own fixed query",
+  cloudsplaining_iam_policy_finding:
+    "an IAM policy finding Cloudsplaining did not rate",
 };
 
 const CONFIDENCE_BASIS_ENGLISH: Record<ConfidenceBasisCode, string> = {

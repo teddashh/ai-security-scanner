@@ -1235,7 +1235,8 @@ export type SeverityBasisCode =
   | "unverified_credential_detector"
   | "iac_policy_check"
   | "cis_kubernetes_benchmark"
-  | "cloud_control_query";
+  | "cloud_control_query"
+  | "cloudsplaining_iam_policy_finding";
 
 /** Why this product assigned confidence when the engine supplied none. */
 export type ConfidenceBasisCode =

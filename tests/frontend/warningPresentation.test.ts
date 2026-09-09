@@ -45,6 +45,9 @@ const calls = (source: string, needles: readonly string[]): string[] => {
 };
 
 const sample = (rustFormat: string): string => rustFormat
+  // Preserve the numeric contract of count-bearing warnings. The generic
+  // placeholder below intentionally remains nonnumeric for every other field.
+  .replaceAll(/\{(?:total|retained|omitted)_findings\}/gu, "1")
   .replaceAll(/\{[^}]*\}/gu, "retained-value")
   .replaceAll("{}", "retained-value");
 
@@ -171,6 +174,85 @@ test("Steampipe inventory warnings have exact Traditional Chinese presentations"
 
   const laterBuildWarning = `${cases[8][0]}; later-build detail`;
   assert.equal(localizedEngineWarning(laterBuildWarning, "zh-TW"), laterBuildWarning);
+});
+
+test("Cloudsplaining schema-drift warnings preserve actionable context in Traditional Chinese", () => {
+  const cases = [
+    ["Cloudsplaining output links were not an object; findings were preserved without those references", "Cloudsplaining 輸出的 links 不是物件；問題已保留，但不含那些參照"],
+    ["Cloudsplaining output lacked its required links object; findings were preserved without those references", "Cloudsplaining 輸出缺少必要的 links 物件；問題已保留，但不含那些參照"],
+    [
+      "Cloudsplaining policy section customer_managed_policies was not an object; valid sibling findings were preserved",
+      "Cloudsplaining 原則區段 customer_managed_policies 不是物件；已保留其他有效問題",
+    ],
+    ["Cloudsplaining output lacked required policy section inline_policies; valid sibling findings were preserved", "Cloudsplaining 輸出缺少必要的原則區段 inline_policies；已保留其他有效問題"],
+    [
+      "Cloudsplaining policy at /aws_managed_policies/policy was not an object; valid sibling findings were preserved",
+      "/aws_managed_policies/policy 的 Cloudsplaining 原則不是物件；已保留其他有效問題",
+    ],
+    [
+      "Cloudsplaining policy at /aws_managed_policies/policy did not carry its required boolean is_excluded value and was retained only as raw evidence",
+      "/aws_managed_policies/policy 的 Cloudsplaining 原則缺少必要的布林 is_excluded 值，因此只保留在原始證據中",
+    ],
+    [
+      "Cloudsplaining category at /aws_managed_policies/policy/DataExfiltration was not an object; valid sibling findings were preserved",
+      "/aws_managed_policies/policy/DataExfiltration 的 Cloudsplaining 風險類別不是物件；已保留其他有效問題",
+    ],
+    [
+      "Cloudsplaining policy at /customer_managed_policies/policy lacked category CredentialsExposure; valid sibling findings were preserved",
+      "/customer_managed_policies/policy 的 Cloudsplaining 原則缺少風險類別 CredentialsExposure；已保留其他有效問題",
+    ],
+    [
+      "Cloudsplaining category at /inline_policies/policy/ResourceExposure lacked its findings array; valid sibling findings were preserved",
+      "/inline_policies/policy/ResourceExposure 的 Cloudsplaining 風險類別缺少 findings 陣列；已保留其他有效問題",
+    ],
+    [
+      "Cloudsplaining category at /inline_policies/policy/InfrastructureModification lacked its source severity; valid sibling findings were preserved",
+      "/inline_policies/policy/InfrastructureModification 的 Cloudsplaining 風險類別缺少來源嚴重性；已保留其他有效問題",
+    ],
+    [
+      "Cloudsplaining category at /inline_policies/policy/ServiceWildcard lacked its source description; findings were preserved without it",
+      "/inline_policies/policy/ServiceWildcard 的 Cloudsplaining 風險類別缺少來源說明；問題已保留，但不含該說明",
+    ],
+    [
+      "Cloudsplaining PrivilegeEscalation category at /inline_policies/policy/PrivilegeEscalation lacked its required links object; findings were preserved without those references",
+      "/inline_policies/policy/PrivilegeEscalation 的 Cloudsplaining 權限提升類別缺少必要的 links 物件；問題已保留，但不含那些參照",
+    ],
+    [
+      "Cloudsplaining category links at /inline_policies/policy/PrivilegeEscalation/links were not an object; findings were preserved without those references",
+      "/inline_policies/policy/PrivilegeEscalation/links 的 Cloudsplaining 風險類別 links 不是物件；問題已保留，但不含那些參照",
+    ],
+    [
+      "Cloudsplaining finding at /inline_policies/policy/PrivilegeEscalation/findings/2 did not match the pinned PrivilegeEscalation entry shape and was retained only as raw evidence",
+      "/inline_policies/policy/PrivilegeEscalation/findings/2 的 Cloudsplaining 問題不符合此版本採用的 PrivilegeEscalation 項目格式，因此只保留在原始證據中",
+    ],
+    [
+      "Cloudsplaining finding at /inline_policies/policy/DataExfiltration/findings/2 did not match the pinned DataExfiltration entry shape and was retained only as raw evidence",
+      "/inline_policies/policy/DataExfiltration/findings/2 的 Cloudsplaining 問題不符合此版本採用的 DataExfiltration 項目格式，因此只保留在原始證據中",
+    ],
+    [
+      "Cloudsplaining privilege-escalation finding at /inline_policies/policy/PrivilegeEscalation/findings/0 lacked its required method link; the finding was preserved without that reference",
+      "/inline_policies/policy/PrivilegeEscalation/findings/0 的 Cloudsplaining 權限提升問題缺少必要的方法參照連結；問題已保留，但不含該參照",
+    ],
+    [
+      "Cloudsplaining action link for iam:CreateAccessKey was malformed; the finding was preserved without that reference",
+      "Cloudsplaining 操作 iam:CreateAccessKey 的參照連結格式錯誤；問題已保留，但不含該參照",
+    ],
+    [
+      "Cloudsplaining reported 10002 valid policy findings; the bounded report retained 10000 in Critical, High, Medium, Unknown, Low, then Informational order, and 2 remain only in raw evidence",
+      "Cloudsplaining 回報 10002 筆有效的 IAM 原則問題；有界報告依重大、高、中、未知、低、資訊的優先順序保留 10000 筆，其餘 2 筆只保留在原始證據中",
+    ],
+  ] as const;
+
+  for (const [english, zhTW] of cases) {
+    assert.equal(recognizedEngineWarningZhTW(english), zhTW);
+  }
+  assert.equal(
+    recognizedEngineWarningZhTW(
+      "Cloudsplaining reported many valid policy findings; the bounded report retained all in Critical, High, Medium, Unknown, Low, then Informational order, and none remain only in raw evidence",
+    ),
+    undefined,
+    "only the adapter's numeric cardinality warning is recognized as product-authored copy",
+  );
 });
 
 test("repo adapter shape-loss warnings have bounded Traditional Chinese presentations", () => {

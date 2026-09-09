@@ -114,6 +114,14 @@ struct SourceRecord {
     /// Collision-resistant internal identity. Valid rules use their exact
     /// bytes; invalid rules use a domain-separated digest of the raw bytes.
     rule_identity: String,
+    /// Optional per-result identity used only by the finding fingerprint.
+    ///
+    /// Some upstream formats map many result instances to one control-mapping
+    /// rule. Keeping an exact, hashed instance coordinate separate prevents
+    /// long display values from collapsing. This changes only the instance
+    /// fingerprint; `mapping_source_rule` remains the scanner's exact category
+    /// identifier and continues to drive control mapping.
+    fingerprint_identity: Option<String>,
     title: String,
     severity: Severity,
     source_severity: String,
@@ -2262,40 +2270,370 @@ const CLOUDSPLAINING_POLICY_SECTIONS: [(&str, &str); 3] = [
     ("aws_managed_policies", "aws-managed"),
 ];
 
-/// The risk categories Cloudsplaining writes into every policy object, with the
-/// severity upstream assigns each one in `cloudsplaining/shared/constants.py`.
-/// Reading the tool's own grading keeps this engine comparable with the others
-/// instead of inventing a scale here.
-const CLOUDSPLAINING_RISKS: [(&str, &str, &str); 6] = [
-    ("PrivilegeEscalation", "high", "Privilege escalation path"),
-    ("DataExfiltration", "medium", "Data exfiltration exposure"),
-    ("ResourceExposure", "high", "Resource exposure"),
-    ("ServiceWildcard", "medium", "Service wildcard permission"),
-    ("CredentialsExposure", "high", "Credentials exposure"),
-    (
-        "InfrastructureModification",
-        "low",
-        "Infrastructure modification permission",
-    ),
+/// The category keys Cloudsplaining 0.9.1 writes into every policy object.
+///
+/// Their severity and description are fields in that same upstream object and
+/// must be read from the artifact. Repeating those values here would make this
+/// adapter a second, independently drifting detector.
+const CLOUDSPLAINING_RISKS: [&str; 6] = [
+    "PrivilegeEscalation",
+    "DataExfiltration",
+    "ResourceExposure",
+    "ServiceWildcard",
+    "CredentialsExposure",
+    "InfrastructureModification",
 ];
+
+/// Admission order when a real account contains more findings than one
+/// bounded report can normalize. Unknown precedes Low deliberately: a missing
+/// upstream rating needs review and must not be buried under tens of thousands
+/// of known-low infrastructure-modification actions.
+const CLOUDSPLAINING_SEVERITY_ORDER: [Severity; 6] = [
+    Severity::Critical,
+    Severity::High,
+    Severity::Medium,
+    Severity::Unknown,
+    Severity::Low,
+    Severity::Informational,
+];
+
+struct CloudsplainingEntry<'a> {
+    exact_identity: &'a str,
+    actions: &'a [Value],
+}
+
+fn cloudsplaining_entry<'a>(risk: &str, value: &'a Value) -> Option<CloudsplainingEntry<'a>> {
+    if risk == "PrivilegeEscalation" {
+        let object = value.as_object()?;
+        if object.len() != 2 || !object.contains_key("type") || !object.contains_key("actions") {
+            return None;
+        }
+        let exact_identity = object.get("type")?.as_str()?.trim();
+        let actions = object.get("actions")?.as_array()?.as_slice();
+        if exact_identity.is_empty() || actions.is_empty() {
+            return None;
+        }
+        if actions
+            .iter()
+            .any(|action| action.as_str().map(str::trim).is_none_or(str::is_empty))
+        {
+            return None;
+        }
+        return Some(CloudsplainingEntry {
+            exact_identity,
+            actions,
+        });
+    }
+
+    let exact_identity = value.as_str()?.trim();
+    (!exact_identity.is_empty()).then(|| CloudsplainingEntry {
+        exact_identity,
+        actions: std::slice::from_ref(value),
+    })
+}
+
+fn cloudsplaining_source_severity(category: &Map<String, Value>) -> Option<&str> {
+    category
+        .get("severity")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|severity| !severity.is_empty())
+}
+
+fn cloudsplaining_severity_slot(severity: &Severity) -> usize {
+    CLOUDSPLAINING_SEVERITY_ORDER
+        .iter()
+        .position(|candidate| candidate == severity)
+        .expect("every canonical severity has an admission slot")
+}
+
+fn cloudsplaining_exact_string_any<'a>(
+    object: &'a Map<String, Value>,
+    keys: &[&str],
+) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|key| object.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn cloudsplaining_fingerprint_identity(
+    section: &str,
+    risk: &str,
+    exact_policy_identity: &str,
+    exact_finding_identity: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    for component in [
+        "ai-security-scanner.cloudsplaining-finding-v1",
+        section,
+        risk,
+        exact_policy_identity,
+        exact_finding_identity,
+    ] {
+        hasher.update(component.as_bytes());
+        hasher.update([0]);
+    }
+    format!(
+        "cloudsplaining-instance:sha256:{}",
+        hex::encode(hasher.finalize())
+    )
+}
 
 /// Read Cloudsplaining's IAM findings document.
 ///
-/// The artifact is `authorization_details.results` (`command/scan.py`), keyed by
-/// principal and policy collection. Each risk category is an array *inside* a
-/// policy object, so nothing recognisable appears at the document root.
+/// The artifact is `authorization_details.results` (`command/scan.py`). Each
+/// risk category inside a policy is an object containing the upstream
+/// `severity`, `description`, and `findings` array. Privilege-escalation
+/// findings are `{type, actions}` objects; the other current categories carry
+/// action strings. Each entry remains a separate finding and points back to its
+/// exact raw JSON location.
 fn extract_cloudsplaining(
     parsed: &ParsedArtifact,
     warnings: &mut Vec<String>,
 ) -> Vec<SourceRecord> {
     let Some(root) = json_root(parsed).and_then(Value::as_object) else {
-        warnings.push(
+        push_warning(
+            warnings,
             "Cloudsplaining results were not a single JSON object, so no policy findings could be read."
-                .into(),
+                .to_owned(),
         );
         return Vec::new();
     };
-    let mut records = Vec::new();
+    let root_links = match root.get("links") {
+        Some(Value::Object(links)) => Some(links),
+        Some(_) => {
+            push_warning(
+                warnings,
+                "Cloudsplaining output links were not an object; findings were preserved without those references",
+            );
+            None
+        }
+        None => {
+            push_warning(
+                warnings,
+                "Cloudsplaining output lacked its required links object; findings were preserved without those references",
+            );
+            None
+        }
+    };
+
+    // First pass: validate the entire pinned document and count only entries
+    // whose category-specific upstream shape is intact. Counting is bounded
+    // constant memory, so a huge early Low category cannot prevent a later
+    // High or Unknown category from being considered for admission.
+    let mut severity_counts = [0_usize; 6];
+    for (section, _) in CLOUDSPLAINING_POLICY_SECTIONS {
+        let policies = match root.get(section) {
+            Some(Value::Object(policies)) => policies,
+            Some(_) => {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Cloudsplaining policy section {section} was not an object; valid sibling findings were preserved"
+                    ),
+                );
+                continue;
+            }
+            None => {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Cloudsplaining output lacked required policy section {section}; valid sibling findings were preserved"
+                    ),
+                );
+                continue;
+            }
+        };
+        for (policy_key, policy) in policies {
+            let escaped_policy = policy_key.replace('~', "~0").replace('/', "~1");
+            let policy_pointer = format!("/{section}/{escaped_policy}");
+            let Some(policy) = policy.as_object() else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Cloudsplaining policy at {policy_pointer} was not an object; valid sibling findings were preserved"
+                    ),
+                );
+                continue;
+            };
+            // Cloudsplaining already applied the operator's exclusions file;
+            // re-reporting what it excluded would overrule the tool's own call.
+            // Absence is not equivalent to false: the adapter cannot know
+            // whether a malformed policy was intentionally excluded.
+            match policy.get("is_excluded").and_then(Value::as_bool) {
+                Some(true) => continue,
+                Some(false) => {}
+                None => {
+                    push_warning(
+                        warnings,
+                        format!(
+                            "Cloudsplaining policy at {policy_pointer} did not carry its required boolean is_excluded value and was retained only as raw evidence"
+                        ),
+                    );
+                    continue;
+                }
+            }
+            for risk in CLOUDSPLAINING_RISKS {
+                let category_pointer = format!("{policy_pointer}/{risk}");
+                let category = match policy.get(risk) {
+                    Some(Value::Object(category)) => category,
+                    Some(_) => {
+                        push_warning(
+                            warnings,
+                            format!(
+                                "Cloudsplaining category at {category_pointer} was not an object; valid sibling findings were preserved"
+                            ),
+                        );
+                        continue;
+                    }
+                    None => {
+                        push_warning(
+                            warnings,
+                            format!(
+                                "Cloudsplaining policy at {policy_pointer} lacked category {risk}; valid sibling findings were preserved"
+                            ),
+                        );
+                        continue;
+                    }
+                };
+
+                let Some(entries) = category.get("findings").and_then(Value::as_array) else {
+                    push_warning(
+                        warnings,
+                        format!(
+                            "Cloudsplaining category at {category_pointer} lacked its findings array; valid sibling findings were preserved"
+                        ),
+                    );
+                    continue;
+                };
+                let source_severity = cloudsplaining_source_severity(category);
+                if source_severity.is_none() {
+                    push_warning(
+                        warnings,
+                        format!(
+                            "Cloudsplaining category at {category_pointer} lacked its source severity; valid sibling findings were preserved"
+                        ),
+                    );
+                }
+                match category.get("description") {
+                    Some(Value::String(_)) => {}
+                    Some(_) | None => {
+                        push_warning(
+                            warnings,
+                            format!(
+                                "Cloudsplaining category at {category_pointer} lacked its source description; findings were preserved without it"
+                            ),
+                        );
+                    }
+                }
+                let category_links = match (risk, category.get("links")) {
+                    ("PrivilegeEscalation", Some(Value::Object(links))) => Some(links),
+                    ("PrivilegeEscalation", _) => {
+                        push_warning(
+                            warnings,
+                            format!(
+                                "Cloudsplaining PrivilegeEscalation category at {category_pointer} lacked its required links object; findings were preserved without those references"
+                            ),
+                        );
+                        None
+                    }
+                    (_, Some(Value::Object(links))) => Some(links),
+                    (_, Some(_)) => {
+                        push_warning(
+                            warnings,
+                            format!(
+                                "Cloudsplaining category links at {category_pointer}/links were not an object; findings were preserved without those references"
+                            ),
+                        );
+                        None
+                    }
+                    (_, None) => None,
+                };
+
+                for (entry_index, entry) in entries.iter().enumerate() {
+                    let entry_pointer = format!("{category_pointer}/findings/{entry_index}");
+                    let Some(entry) = cloudsplaining_entry(risk, entry) else {
+                        push_warning(
+                            warnings,
+                            format!(
+                                "Cloudsplaining finding at {entry_pointer} did not match the pinned {risk} entry shape and was retained only as raw evidence"
+                            ),
+                        );
+                        continue;
+                    };
+                    if risk == "PrivilegeEscalation"
+                        && !category_links.is_some_and(|links| {
+                            links
+                                .get(entry.exact_identity)
+                                .and_then(Value::as_str)
+                                .is_some_and(|link| !link.trim().is_empty())
+                        })
+                    {
+                        push_warning(
+                            warnings,
+                            format!(
+                                "Cloudsplaining privilege-escalation finding at {entry_pointer} lacked its required method link; the finding was preserved without that reference"
+                            ),
+                        );
+                    }
+                    if let Some(links) = root_links {
+                        for action in entry
+                            .actions
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::trim)
+                        {
+                            if links.get(action).is_some_and(|link| {
+                                !matches!(link, Value::Null | Value::String(_))
+                                    || link.as_str().is_some_and(|link| link.trim().is_empty())
+                            }) {
+                                push_warning(
+                                    warnings,
+                                    format!(
+                                        "Cloudsplaining action link for {} was malformed; the finding was preserved without that reference",
+                                        safe_text(action, 160)
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                    let severity = source_severity
+                        .map(parse_severity)
+                        .unwrap_or(Severity::Unknown);
+                    let slot = cloudsplaining_severity_slot(&severity);
+                    severity_counts[slot] = severity_counts[slot].saturating_add(1);
+                }
+            }
+        }
+    }
+
+    let total_findings = severity_counts
+        .iter()
+        .copied()
+        .fold(0_usize, usize::saturating_add);
+    let mut severity_quotas = [0_usize; 6];
+    let mut remaining = MAX_RECORDS;
+    for slot in 0..severity_quotas.len() {
+        severity_quotas[slot] = severity_counts[slot].min(remaining);
+        remaining -= severity_quotas[slot];
+    }
+    if total_findings > MAX_RECORDS {
+        let retained_findings = MAX_RECORDS;
+        let omitted_findings = total_findings - MAX_RECORDS;
+        push_warning(
+            warnings,
+            format!(
+                "Cloudsplaining reported {total_findings} valid policy findings; the bounded report retained {retained_findings} in Critical, High, Medium, Unknown, Low, then Informational order, and {omitted_findings} remain only in raw evidence"
+            ),
+        );
+    }
+
+    // Second pass: create at most MAX_RECORDS records using the quotas above.
+    // The pass still spans all three sections; source document order matters
+    // only among entries with the same severity.
+    let mut emitted = [0_usize; 6];
+    let mut records = Vec::with_capacity(total_findings.min(MAX_RECORDS));
     for (section, policy_source) in CLOUDSPLAINING_POLICY_SECTIONS {
         let Some(policies) = root.get(section).and_then(Value::as_object) else {
             continue;
@@ -2304,43 +2642,132 @@ fn extract_cloudsplaining(
             let Some(policy) = policy.as_object() else {
                 continue;
             };
-            // Cloudsplaining already applied the operator's exclusions file;
-            // re-reporting what it excluded would overrule the tool's own call.
-            if policy.get("is_excluded").and_then(Value::as_bool) == Some(true) {
+            if policy.get("is_excluded").and_then(Value::as_bool) != Some(false) {
                 continue;
             }
-            let policy_name = string_any(policy, &["PolicyName", "PolicyId"])
-                .unwrap_or_else(|| policy_key.clone());
-            for (risk, severity, label) in CLOUDSPLAINING_RISKS {
-                if records.len() >= MAX_RECORDS {
-                    return records;
-                }
-                let Some(entries) = policy.get(risk).and_then(Value::as_array) else {
+            let exact_policy_identity =
+                cloudsplaining_exact_string_any(policy, &["Arn", "PolicyId", "PolicyName"])
+                    .unwrap_or_else(|| policy_key.trim());
+            let policy_name = safe_text(
+                cloudsplaining_exact_string_any(policy, &["PolicyName", "PolicyId"])
+                    .unwrap_or_else(|| policy_key.trim()),
+                MAX_SHORT_TEXT,
+            );
+            let policy_location = safe_text(exact_policy_identity, MAX_SHORT_TEXT);
+            let escaped_policy = policy_key.replace('~', "~0").replace('/', "~1");
+            let policy_pointer = format!("/{section}/{escaped_policy}");
+
+            for risk in CLOUDSPLAINING_RISKS {
+                let Some(category) = policy.get(risk).and_then(Value::as_object) else {
                     continue;
                 };
-                if entries.is_empty() {
+                let Some(entries) = category.get("findings").and_then(Value::as_array) else {
+                    continue;
+                };
+                let source_severity = cloudsplaining_source_severity(category);
+                let severity = source_severity
+                    .map(parse_severity)
+                    .unwrap_or(Severity::Unknown);
+                let slot = cloudsplaining_severity_slot(&severity);
+                if emitted[slot] >= severity_quotas[slot] {
                     continue;
                 }
-                let escaped = policy_key.replace('~', "~0").replace('/', "~1");
-                records.push(record_with_derived_confidence!(
-                    format!("/{section}/{escaped}/{risk}"),
-                    risk.to_owned(),
-                    format!("{label} in policy {policy_name}"),
-                    severity.to_owned(),
-                    policy_name.clone(),
-                    // The findings document carries no account identifier at
-                    // any level, and a policy ARN is not an asset identity —
-                    // offering one as a hint would strand these records in a
-                    // multi-asset scope instead of resolving them.
-                    None,
-                    derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
-                    EvidenceKind::Configuration,
-                    vec![],
-                    vec![
+                let category_pointer = format!("{policy_pointer}/{risk}");
+                let description = bounded_scanner_detail(
+                    category
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    MAX_LONG_TEXT,
+                );
+                let category_links = category.get("links").and_then(Value::as_object);
+
+                for (entry_index, value) in entries.iter().enumerate() {
+                    if emitted[slot] >= severity_quotas[slot] {
+                        break;
+                    }
+                    let Some(entry) = cloudsplaining_entry(risk, value) else {
+                        continue;
+                    };
+                    emitted[slot] += 1;
+                    let entry_pointer = format!("{category_pointer}/findings/{entry_index}");
+                    let display_identity = safe_text(entry.exact_identity, MAX_SHORT_TEXT);
+                    let mut references = Vec::new();
+                    if risk == "PrivilegeEscalation"
+                        && let Some(link) = category_links
+                            .and_then(|links| links.get(entry.exact_identity))
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|link| !link.is_empty())
+                    {
+                        references.push(link.to_owned());
+                    }
+                    if let Some(links) = root_links {
+                        references.extend(
+                            entry
+                                .actions
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .filter_map(|action| {
+                                    links
+                                        .get(action.trim())
+                                        .and_then(Value::as_str)
+                                        .map(str::trim)
+                                        .filter(|link| !link.is_empty())
+                                        .map(str::to_owned)
+                                })
+                                .take(12_usize.saturating_sub(references.len())),
+                        );
+                    }
+                    references.sort();
+                    references.dedup();
+
+                    let mut tags = vec![
                         format!("policy-source:{policy_source}"),
-                        format!("flagged-permissions:{}", entries.len()),
-                    ],
-                ));
+                        format!("upstream-finding:{}", safe_tag(&display_identity)),
+                    ];
+                    tags.extend(
+                        entry
+                            .actions
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .take(8)
+                            .map(|action| format!("upstream-action:{}", safe_tag(action))),
+                    );
+                    let mut record = with_scanner_details(
+                        record_with_severity_fallback_and_derived_confidence!(
+                            entry_pointer,
+                            risk.to_owned(),
+                            format!("{risk}: {display_identity} in policy {policy_name}"),
+                            source_severity.unwrap_or_default().to_owned(),
+                            DerivedSeverity {
+                                severity: Severity::Unknown,
+                                code: SeverityBasisCode::CloudsplainingIamPolicyFinding,
+                            },
+                            format!("{policy_location} :: {display_identity}"),
+                            // The document has no canonical top-level account
+                            // identifier shared by every policy (AWS-managed
+                            // ARNs carry no customer account). A policy ARN is
+                            // the finding location, not an authorized asset ID.
+                            None,
+                            derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
+                            EvidenceKind::Configuration,
+                            references,
+                            tags,
+                        ),
+                        description.clone(),
+                        None,
+                        None,
+                        None,
+                    );
+                    record.fingerprint_identity = Some(cloudsplaining_fingerprint_identity(
+                        section,
+                        risk,
+                        exact_policy_identity,
+                        entry.exact_identity,
+                    ));
+                    records.push(record);
+                }
             }
         }
     }
@@ -3878,7 +4305,11 @@ fn merge_finding(
 ) {
     let rule_id = record.rule_id.clone();
     let location = redact_location(&record.location);
-    let fingerprint = stable_fingerprint(adapter.id, &record.rule_identity, &asset_id, &location);
+    let fingerprint_identity = record
+        .fingerprint_identity
+        .as_deref()
+        .unwrap_or(&record.rule_identity);
+    let fingerprint = stable_fingerprint(adapter.id, fingerprint_identity, &asset_id, &location);
     let finding_id = format!(
         "finding-{}",
         &fingerprint.rsplit(':').next().unwrap_or(&fingerprint)[..32]
@@ -4188,6 +4619,7 @@ fn record_from_draft(draft: RecordDraft) -> SourceRecord {
         rule_id: safe_text(&draft.rule_id, MAX_SHORT_TEXT),
         mapping_source_rule,
         rule_identity,
+        fingerprint_identity: None,
         title: safe_text(&draft.title, MAX_SHORT_TEXT),
         severity,
         source_severity,

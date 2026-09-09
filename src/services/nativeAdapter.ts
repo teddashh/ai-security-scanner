@@ -1326,6 +1326,7 @@ const SEVERITY_BASIS_CODES: readonly SeverityBasisCode[] = [
   "iac_policy_check",
   "cis_kubernetes_benchmark",
   "cloud_control_query",
+  "cloudsplaining_iam_policy_finding",
 ];
 
 const CONFIDENCE_BASIS_CODES: readonly ConfidenceBasisCode[] = [

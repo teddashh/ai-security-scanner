@@ -1475,6 +1475,7 @@ pub enum SeverityBasisCode {
     IacPolicyCheck,
     CisKubernetesBenchmark,
     CloudControlQuery,
+    CloudsplainingIamPolicyFinding,
 }
 
 impl SeverityBasisCode {
