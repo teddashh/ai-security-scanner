@@ -2,7 +2,7 @@
 
 狀態日期：2026-09-09
 
-最後完成的產品程式 checkpoint：`601da4b`
+最後完成的產品程式 checkpoint：`686e427`
 
 這份文件是目前唯一的開發交接摘要，已直接取代舊的歷史版。產品決策以[產品規格](product-spec.md)為準，能力現況以[產品檢視](product-audit.md)為準。
 
@@ -39,6 +39,12 @@ Scanner 應盡量保留上游行為、規則、識別碼、severity、證據與 
   `-jsonl -matcher-status` stdout，adapter 將 error-free non-match 保存成逐資產的
   typed execution evidence；零 finding 現在可以誠實成為 tested，而 silent skip、
   scanner error、舊版 match-only 輸出仍 fail closed。細節與部署邊界見下節。
+- `f6b6171` 以 pinned upstream CIS 1.11 node profile 取代建置來源中的六筆產品自寫
+  kube-bench checks；`796d80b` 記錄其 26-check 真實離線執行與尚未發布的部署邊界。
+- `686e427` 補齊 checksum-pinned Trivy Java index DB，並以兩個不重疊的上游 profile
+  分別處理 working-tree lockfiles 與 individual packages；真實 no-network smoke 已證明
+  unidentified JAR 可經 Java index 對上套件，再由標準 vulnerability DB 產生 CVE finding。
+  詳細來源、驗證與尚未發布的邊界見下節。
 
 ## 已在 main 上成立的產品能力
 
@@ -202,8 +208,47 @@ check。這已越過 thin adapter 邊界，等於在 wrapper 內重做 detection
 Cloud Asset、Service Usage、Monitoring、IAM 與 Essential Contacts 等 API 行為；現有 downstream
 patch 的安全說明又明定只適用四-check profile。直接把 `--checks` 換成 `--service iam` 會在沒有
 新 grant、endpoint closure 與 exact-project 行為審查時靜默擴大授權，因此本輪沒有這樣做。
-ScoutSuite、CloudQuery 與 Steampipe 的進階固定 subsets 也仍是後續 cloud 工作，不因 Kubernetes
-修正而被宣稱完成。
+
+後續逐一核對其餘 cloud launcher 後，沒有找到另一個可像 kube-bench 一樣直接移除的產品偵測
+subset：ScoutSuite 已以 `aws --services iam` 交給上游完整 IAM service，產品 patch 只移除
+HTML／SQLite 報告依賴並保留 JSON；CloudQuery 的七張 table 與 Steampipe 的單一 SQL 都明確是
+inventory evidence，不是 security detector 或成功掃描。擴充它們會改變收集資料、權限或
+endpoint closure，不能以「補齊 detector」名義進行。GCP Prowler 的四-check 邊界仍需產品
+負責人先決定新增資產、權限與 endpoint；在此之前 cloud subset 稽核沒有安全的程式變更。
+
+## Trivy Java index 與 JAR working-tree 路徑已在建置來源完成（`686e427`）
+
+原本 managed Trivy image 只有標準 vulnerability DB。Repository／IaC 的 `filesystem` profile
+能讀 lockfile 與 `pom.xml`，但 pinned Trivy 上游會在這個 mode 明確停用
+`TypeIndividualPkgs`，所以只存在於 JAR 內容中的套件不會被分析。直接改成 `rootfs` 也不對：
+上游 `rootfs` 恰好會停用 lockfile analyzers，會讓現有 manifest coverage 消失。
+
+`686e427` 保留兩組上游 detector family，而沒有在 wrapper 重寫判斷：
+
+- `prepare-offline-engine-data.mjs` 以 anonymous pull 取得並驗證 Java DB schema 1 的 immutable
+  manifest `sha256:0a859620…8829`、單一 layer `sha256:90775452…de4`、media type、title 與
+  963,142,179-byte 大小；Docker build 再核對 archive、`trivy-java.db` 與 `metadata.json`
+  SHA-256，並把 DB 設為唯讀。標準 vulnerability DB 的既有 pin 不變。
+- Repository 與 IaC 先跑上游 `filesystem --pkg-types library` 保存 lockfile 結果，再跑上游
+  `rootfs --pkg-types library` 保存 individual package archive／binary 結果到獨立 JSON。
+  兩次都固定 `--scanners vuln`、memory cache、所有 DB／VEX／version／telemetry update 關閉，
+  讀同一份已授權的唯讀 snapshot，沒有 shell 或動態 scanner argument。OCI profile 仍只有
+  一次 `image --pkg-types os`，不會加入 working-tree pass 或 OCI language-package coverage。
+- Launcher 在 repository／IaC 執行前核對標準 DB 與 Java DB 的實際檔案 hash；兩個 output
+  path 都必須事先不存在，且每份 evidence 都要通過 bounded JSON 驗證。Rust adapter 原本就
+  能處理同一次 engine run 的多個 raw artifacts；新增的 non-vacuity 測試同時餵入 lockfile
+  與 individual-package JSON，確認兩筆 finding 保留各自 artifact provenance。
+- 真實 image build 以 workflow 同等的 read-only rootfs、non-root user、drop-all capabilities、
+  `--network none` 走過三條路徑：`lodash` 4.17.20 lockfile finding；沒有可用 package metadata、
+  只能靠 SHA-1 查 Java index 的 upstream JAR fixture，解析成
+  `org.apache.tomcat.embed:tomcat-embed-websocket` 9.0.65 並回報 `CVE-2024-23672`；以及原本的
+  single-image OCI OS-only profile，確認沒有 `lang-pkgs` 與第二份 working-tree output。
+
+部署邊界仍與其他 source-prepared engine 相同：catalog 目前固定的 Trivy image 是
+`0.74.0-3@sha256:6b19f889…dfe4`，它沒有 Java DB，也只會產生舊的單一 filesystem output；
+`engines/catalog.json` 與使用者文件因此仍據實排除 JAR-only repository discovery。
+`686e427` 沒有提高 tag、改 digest、發布 image 或切換 runtime。何時建立新的 immutable image
+coordinate 並啟用它，是產品負責人的發布決定；在那之前不得宣稱 JAR coverage 已部署。
 
 ## 驗證方式
 
@@ -232,14 +277,20 @@ engine contract 8 項全部通過；TypeScript、clippy、format、diff check、
 與真實 kube-bench image build／offline execution 也通過。scanner execution 沒有接觸任何
 外部或未授權目標；建置只取得 checksum-pinned upstream source 與 Go modules。
 
+`686e427` 的 pinned Go launcher test、完整 Rust CLI suite（含 92 項 adapter fixtures）、
+clippy、format、engine admission、line-ending、fixture reproduction 與 32 項 CI contract 均通過；
+Trivy 離線資料 materialization、image build、embedded label／notice 核對，以及上述三條真實
+no-network smoke 也通過。執行只讀 repository／JAR／OCI fixtures，沒有接觸任何掃描目標。
+
 ## 後續順序
 
-1. 繼續移除進階 cloud 路徑中的產品固定 subsets。任何較廣 upstream service/profile 都必須
-   先取得產品負責人對新資產／權限／endpoint closure 的明確決定，不得以 refactor 名義擴權。
-   kube-bench 的 source replacement 已完成；何時發布與切換 image 另由產品負責人決定。
-2. 補齊 Trivy JAR 掃描所需的固定 Java vulnerability DB。
-3. 用受控自有 fixture 走一次完整 mixed IT flow，包含第一次以新語意真實執行 Greenbone，
-   量測從加入資產到第一個有用結果所需時間，優先修掉阻礙新手的步驟。
+1. 用受控自有 fixture 走一次完整 mixed IT flow，涵蓋 repository、內部 host 與 website 的
+   setup、progress、共同報告、保存重開與 readable export，量測從加入資產到第一個有用結果
+   的時間，優先修掉阻礙新手的步驟。任何真實 network target 都必須先有 exact authorization；
+   若要驗證新 Greenbone result-type 語意，還需要產品負責人先決定對應 immutable image 切換。
+2. Cloud 稽核目前唯一確定仍窄於 upstream service 的 GCP Prowler profile 會改變權限與 endpoint
+   closure。只有在產品負責人明確決定新資產／權限／endpoint 後才繼續；ScoutSuite 已是完整
+   upstream IAM service，CloudQuery 與 Steampipe 是 inventory，不列為 detector subset 待辦。
 
 ## 交接判準
 

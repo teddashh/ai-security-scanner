@@ -52,6 +52,21 @@ KICS for infrastructure configuration, and the shared report layer. Scanner
 adapters preserve upstream identifiers and evidence instead of reimplementing
 detectors.
 
+The next managed Trivy image source is prepared to add checksum-pinned offline
+JAR identification without replacing upstream detection logic. Trivy's
+non-overlapping `filesystem` and `rootfs` library-package profiles preserve
+both lockfile analysis and individual package archive or binary analysis. An
+embedded Java index resolves otherwise unidentified JARs; the existing standard
+database still performs vulnerability matching. Both JSON artifacts enter the
+same adapter and retain separate raw provenance.
+
+This source change is not deployed. The catalog still pins the published
+`0.74.0-3` image, which has no Java index and covers repository/IaC package
+manifests but not dependencies discoverable only from JAR contents. Its current
+user-facing limitation remains correct until the product owner chooses a new
+immutable image coordinate and activation. The OCI profile remains OS-only;
+Grype continues to provide complementary OCI language-package coverage.
+
 Repository ignore rules continue to prune ordinary ignored files and generated
 directories, while common secret-bearing files such as `.env` variants, private
 keys, registry/auth configuration, and `*.tfvars` remain available to the
@@ -150,18 +165,20 @@ stated scope visible.
 
 The high-value remaining gaps are:
 
-1. Continue removing product-owned subsets from advanced cloud paths. A wider
-   upstream profile must first receive an explicit product-owner decision for
-   its assets, permissions, and endpoint closure; it must not silently widen an
-   existing grant. The kube-bench source replacement is complete, while its
-   immutable image publication remains owner-controlled.
-2. Add the pinned Java vulnerability database needed before Trivy can safely
-   enable JAR scanning without turning an otherwise useful repository run into
-   a fatal error. Grype already covers recognized repository language packages.
-3. Exercise a controlled installed-desktop mixed scan with repositories,
+1. Exercise a controlled installed-desktop mixed scan with repositories,
    internal hosts, and websites through progress, reopen, and readable export.
-4. Measure time to first useful finding and remove any remaining beginner input
+2. Measure time to first useful finding and remove any remaining beginner input
    that does not change target scope or result quality.
+3. Make an explicit product-owner decision before widening GCP Prowler beyond
+   its reviewed four-check permission and endpoint closure. The other advanced
+   AWS cloud paths do not hide a comparable product-authored security subset:
+   ScoutSuite already delegates to its complete upstream IAM service, while
+   CloudQuery's seven tables and Steampipe's fixed SQL are inventory evidence,
+   not vulnerability checks.
+
+The kube-bench and Trivy source replacements are complete but not deployed.
+Immutable image versioning, publication, and activation remain owner-controlled
+decisions rather than implied follow-up work.
 
 Tests protect interaction, routing, parsing, and report contracts. They support
 these product outcomes; passing a test suite does not make a narrow scanner
