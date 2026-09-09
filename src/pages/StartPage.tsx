@@ -44,7 +44,7 @@ interface MarketingCopy {
   moreWaysTitle: string;
   moreWaysDescription: string;
   controlSummary: string;
-  cards: Record<UseCaseId, { title?: string; outcome: string; action: string }>;
+  cards: Record<UseCaseId, { title?: string; outcome: string; timing?: string; action: string }>;
 }
 
 const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
@@ -70,6 +70,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     cards: {
       deployed_website: {
         outcome: "Let Nuclei identify the website technology and run matching upstream vulnerability and exposure checks against the displayed website origin.",
+        timing: "Aim: a useful result within minutes after tools are ready; site response time and applicable checks can make it longer.",
         action: "Check a website",
       },
       external_ip_or_domain: {
@@ -79,6 +80,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
       internal_it_environment: {
         title: "Company IT environment",
         outcome: "Check selected repositories, websites or APIs, and exact internal hosts together. Greenbone discovers services on the chosen ports and applies matching upstream checks; inventory-only ranges remain visible as not tested.",
+        timing: "Aim: a first useful result within minutes after tools are ready; added assets and deeper host checks can extend the full run.",
         action: "Scan my environment",
       },
       ai_application: {
@@ -88,6 +90,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
       source_code: {
         title: "Code or AI project",
         outcome: "Find exposed secrets, vulnerable dependencies, risky code, and unsafe configuration in one local project.",
+        timing: "Aim: a useful result within minutes after tools are ready; large folders can take longer.",
         action: "Check code or an AI project",
       },
       infrastructure_as_code: {
@@ -130,6 +133,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     cards: {
       deployed_website: {
         outcome: "讓 Nuclei 辨識網站技術，並對畫面所列的網站來源範圍執行適用的上游弱點與暴露檢查。",
+        timing: "目標：工具就緒後幾分鐘內提供有用結果；網站回應速度與適用檢查可能延長時間。",
         action: "檢查網站",
       },
       external_ip_or_domain: {
@@ -139,6 +143,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
       internal_it_environment: {
         title: "公司 IT 環境",
         outcome: "把指定的 repo、網站或 API 與精確內部主機一起掃描。Greenbone 會探索所選連接埠的服務並執行適用的上游檢查；僅供盤點的網段仍會明列為未測試。",
+        timing: "目標：工具就緒後幾分鐘內提供第一個有用結果；加入更多資產或較深入的主機檢查會延長完整執行時間。",
         action: "掃描公司環境",
       },
       ai_application: {
@@ -148,6 +153,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
       source_code: {
         title: "程式碼或 AI 專案",
         outcome: "在一個本機專案找出暴露秘密、有弱點的相依套件、危險程式碼與不安全設定。",
+        timing: "目標：工具就緒後幾分鐘內提供有用結果；大型資料夾可能需要更久。",
         action: "檢查程式碼或 AI 專案",
       },
       infrastructure_as_code: {
@@ -229,6 +235,10 @@ export function StartPage({
             <p>{marketingCard.outcome}</p>
           </div>
         </header>
+
+        {marketingCard.timing && (
+          <p className="use-case-card__timing">{marketingCard.timing}</p>
+        )}
 
         <button
           className="button button--secondary use-case-card__action"

@@ -128,6 +128,14 @@ test("the first screen leads with a combined environment scan plus the website a
     "Check a website",
     "Check code or an AI project",
   ]);
+  const primaryTimings = Array.from(container.querySelectorAll<HTMLElement>(
+    ".start-page__choices > .use-case-grid .use-case-card__timing",
+  )).map((timing) => timing.textContent ?? "");
+  expect(primaryTimings).toHaveLength(3);
+  expect(primaryTimings.every((timing) => timing.includes("within minutes after tools are ready"))).toBe(true);
+  expect(primaryTimings.join(" ")).toContain("extend the full run");
+  expect(primaryTimings.join(" ")).toContain("site response time");
+  expect(primaryTimings.join(" ")).toContain("large folders can take longer");
   const environmentCard = Array.from(container.querySelectorAll<HTMLElement>(".use-case-card"))
     .find((card) => card.textContent?.includes("Scan my environment"));
   expect(environmentCard?.textContent).toContain("Company IT environment");
@@ -198,4 +206,11 @@ test("the Traditional Chinese first layer names the upstream website and interna
   expect(primaryLayer?.textContent).toContain("僅供盤點的網段仍會明列為未測試");
   expect(primaryLayer?.textContent).toContain("程式碼或 AI 專案");
   expect(primaryLayer?.textContent).toContain("檢查程式碼或 AI 專案");
+  const timings = Array.from(primaryLayer?.querySelectorAll<HTMLElement>(".use-case-card__timing") ?? [])
+    .map((timing) => timing.textContent ?? "");
+  expect(timings).toHaveLength(3);
+  expect(timings.every((timing) => timing.includes("工具就緒後幾分鐘內"))).toBe(true);
+  expect(timings.join(" ")).toContain("完整執行時間");
+  expect(timings.join(" ")).toContain("網站回應速度");
+  expect(timings.join(" ")).toContain("大型資料夾可能需要更久");
 });

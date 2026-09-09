@@ -300,6 +300,14 @@
   -webkit-line-clamp: 2;
 }
 
+.use-case-card__timing {
+  margin: 10px 0 0;
+  color: var(--ink);
+  font-size: 0.75rem;
+  font-weight: 650;
+  line-height: 1.42;
+}
+
 .use-case-card__action {
   width: 100%;
   margin-top: 12px;
