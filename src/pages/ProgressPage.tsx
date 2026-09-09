@@ -467,8 +467,17 @@ const copy = {
   runIdTitle: { en: "Local scan run ID", zhTW: "本機掃描輪次 ID" },
   processed: { en: "{percent}% processed", zhTW: "已處理 {percent}%" },
   runSummary: {
-    en: "Targets fully checked: {covered} of {total} · Started {started}",
-    zhTW: "已完整檢查 {covered}／{total} 個目標 · 開始於 {started}",
+    en: "Selected assets: {total} · Started {started}",
+    zhTW: "已選資產：{total} · 開始於 {started}",
+  },
+  progressCountsAria: { en: "Asset and check progress summary", zhTW: "資產與檢查進度摘要" },
+  assetProgressCounts: {
+    en: "Assets · Fully checked {completed} · Remaining {remaining} · Need attention {attention}",
+    zhTW: "資產 · 已完整檢查 {completed} · 尚待完成 {remaining} · 需要處理 {attention}",
+  },
+  checkProgressCounts: {
+    en: "Checks · Completed {completed} · Remaining {remaining} · Need attention {attention}",
+    zhTW: "檢查 · 已完成 {completed} · 尚待完成 {remaining} · 需要處理 {attention}",
   },
   finished: { en: " · Ended {finished}", zhTW: " · 結束於 {finished}" },
   elapsed: { en: "Elapsed {time}", zhTW: "已執行 {time}" },
@@ -1110,6 +1119,24 @@ export function ProgressPage({
   );
   const incompleteCount = stateCounts.partial + stateCounts.failed + stateCounts.not_executed + stateCounts.cancelled;
   const terminalCount = terminalEngineStates.reduce((sum, state) => sum + stateCounts[state], 0);
+  const completedAssetCount = Math.min(selectedRun.totalAssetCount, selectedRun.coveredAssetCount);
+  const uncoveredAssetCount = Math.max(0, selectedRun.totalAssetCount - completedAssetCount);
+  const knownAttentionAssetCount = Math.min(
+    uncoveredAssetCount,
+    new Set(selectedRun.engineRuns
+      .filter((engine) => ["partial", "failed", "not_executed", "cancelled"].includes(engine.status))
+      .flatMap((engine) => engine.assetIds)).size,
+  );
+  const attentionAssetCount = activeRunStatuses.has(selectedRun.status)
+    ? knownAttentionAssetCount
+    : uncoveredAssetCount;
+  const remainingAssetCount = Math.max(0, uncoveredAssetCount - attentionAssetCount);
+  const completedCheckCount = stateCounts.completed;
+  const attentionCheckCount = incompleteCount;
+  const remainingCheckCount = Math.max(
+    0,
+    selectedRun.engineRuns.length - completedCheckCount - attentionCheckCount,
+  );
   const today = new Date().toISOString().slice(0, 10);
   const expiredSupportEngines = selectedRun.engineRuns.filter((engine) =>
     Boolean(engine.knowledgeInput?.supportUntil && engine.knowledgeInput.supportUntil < today),
@@ -1291,12 +1318,25 @@ export function ProgressPage({
               <h2>{text(copy.processed, { percent: formatNumber(selectedRun.progress) })}</h2>
               <p>
                 {text(copy.runSummary, {
-                  covered: formatNumber(selectedRun.coveredAssetCount),
                   total: formatNumber(selectedRun.totalAssetCount),
                   started: showDateTime(selectedRun.startedAt),
                 })}
                 {selectedRun.finishedAt ? text(copy.finished, { finished: showDateTime(selectedRun.finishedAt) }) : ""}
               </p>
+              {!exactLocalhostQuickScan && (
+                <div className="run-overview__progress-counts" aria-label={text(copy.progressCountsAria)}>
+                  <p>{text(copy.assetProgressCounts, {
+                    completed: formatNumber(completedAssetCount),
+                    remaining: formatNumber(remainingAssetCount),
+                    attention: formatNumber(attentionAssetCount),
+                  })}</p>
+                  <p>{text(copy.checkProgressCounts, {
+                    completed: formatNumber(completedCheckCount),
+                    remaining: formatNumber(remainingCheckCount),
+                    attention: formatNumber(attentionCheckCount),
+                  })}</p>
+                </div>
+              )}
               <p className="run-overview__timing">
                 {text(copy.elapsed, { time: elapsedLabel })}
                 {activeTimingStatus ? ` · ${activeTimingStatus}` : ""}

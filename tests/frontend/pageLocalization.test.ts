@@ -321,13 +321,15 @@ test("progress keeps scanner implementation data below the first layer", async (
   assert.doesNotMatch(source, /<code>\{run\.id\}<\/code>/u);
 });
 
-test("progress describes its asset coverage count as fully checked targets", async () => {
+test("progress separates completed, remaining, and attention-needed assets and checks", async () => {
   const source = await readPage("ProgressPage.tsx");
-  assert.match(source, /Targets fully checked: \{covered\} of \{total\}/u);
-  assert.match(source, /已完整檢查 \{covered\}／\{total\} 個目標/u);
+  assert.match(source, /Assets · Fully checked \{completed\} · Remaining \{remaining\} · Need attention \{attention\}/u);
+  assert.match(source, /資產 · 已完整檢查 \{completed\} · 尚待完成 \{remaining\} · 需要處理 \{attention\}/u);
+  assert.match(source, /Checks · Completed \{completed\} · Remaining \{remaining\} · Need attention \{attention\}/u);
+  assert.match(source, /檢查 · 已完成 \{completed\} · 尚待完成 \{remaining\} · 需要處理 \{attention\}/u);
   assert.doesNotMatch(source, /\{covered\} of \{total\} checks have reported/u);
   assert.doesNotMatch(source, /\{covered\}／\{total\} 項檢查已有結果/u);
-  assert.match(source, /covered: formatNumber\(selectedRun\.coveredAssetCount\)/u);
+  assert.match(source, /completedAssetCount = Math\.min\(selectedRun\.totalAssetCount, selectedRun\.coveredAssetCount\)/u);
   assert.match(source, /total: formatNumber\(selectedRun\.totalAssetCount\)/u);
 });
 

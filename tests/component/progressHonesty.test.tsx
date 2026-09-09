@@ -48,7 +48,11 @@ const engine = (
   ...overrides,
 });
 
-const run = (engineRuns: EngineRun[], status: ScanRun["status"] = "partial"): ScanRun => ({
+const run = (
+  engineRuns: EngineRun[],
+  status: ScanRun["status"] = "partial",
+  overrides: Partial<ScanRun> = {},
+): ScanRun => ({
   id: "run-1",
   caseId: "case-1",
   label: "Scan 1",
@@ -60,6 +64,7 @@ const run = (engineRuns: EngineRun[], status: ScanRun["status"] = "partial"): Sc
   engineRuns,
   coveredAssetCount: 1,
   totalAssetCount: 1,
+  ...overrides,
 });
 
 const finding = (overrides: Partial<Finding> = {}): Finding => ({
@@ -362,6 +367,38 @@ test("live activity names the saved assets in the current check", () => {
   expect(current).not.toContain("current-project-name");
   expect(current).not.toContain("later-asset");
   expect(current).not.toContain("missing-private-id");
+});
+
+test("live progress separates completed, remaining, and attention-needed work", () => {
+  const { container } = renderProgress(
+    run([
+      engine("completed-check", "completed", { assetIds: ["asset-1"], progress: 100 }),
+      engine("active-check", "running", { assetIds: ["asset-2"] }),
+      engine("failed-check", "failed", { assetIds: ["asset-3"] }),
+    ], "running", { coveredAssetCount: 1, totalAssetCount: 3, progress: 55 }),
+    [],
+    "internal_it_environment",
+    [asset("asset-1", "complete"), asset("asset-2", "active"), asset("asset-3", "attention")],
+  );
+
+  const summary = container.querySelector(".run-overview__progress-counts")?.textContent;
+  expect(summary).toContain("Assets · Fully checked 1 · Remaining 1 · Need attention 1");
+  expect(summary).toContain("Checks · Completed 1 · Remaining 1 · Need attention 1");
+});
+
+test("terminal uncovered work needs attention instead of appearing to remain active", () => {
+  const { container } = renderProgress(
+    run([
+      engine("completed-check", "completed", { assetIds: ["asset-1"], progress: 100 }),
+      engine("stopped-check", "cancelled", { assetIds: ["asset-2"] }),
+    ], "cancelled", { coveredAssetCount: 1, totalAssetCount: 3, progress: 50 }),
+    [],
+    "internal_it_environment",
+  );
+
+  const summary = container.querySelector(".run-overview__progress-counts")?.textContent;
+  expect(summary).toContain("Assets · Fully checked 1 · Remaining 0 · Need attention 2");
+  expect(summary).toContain("Checks · Completed 1 · Remaining 0 · Need attention 1");
 });
 
 const primaryTimingCases: Array<[UseCaseId, string]> = [
