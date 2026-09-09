@@ -4,19 +4,24 @@ use ai_security_scanner_lib::beginner_report::{
     BeginnerInventoryItemKind, build_beginner_master_report,
 };
 use ai_security_scanner_lib::case_service::{
-    CaseExportFormat, CaseService, DurableExecutionReport, PlannedEngineExecution, ScanPlanRequest,
-    ScopeApprovalRequest,
+    CaseExportFormat, CaseService, DurableExecutionReport, EngineAssetRoute,
+    PlannedEngineExecution, ScanPlanRequest, ScopeApprovalRequest,
 };
 use ai_security_scanner_lib::container_runtime::{
     CancellationToken, FakeContainerRuntime, FakeRunBehavior, NetworkPolicy, ResourceLimits,
     ScannerCredentialSet,
 };
 use ai_security_scanner_lib::domain::{
-    AiGeneratedArtifactAnswer, Asset, AssetKind, CaseStatus, CoverageStatus, CreateCaseRequest,
-    DataClass, EngineRunStatus, FindingDiffStatus, InventoryObservationKind, ScanPermission,
-    ScopeGrant,
+    AiGeneratedArtifactAnswer, AssessmentActivity, AssessmentIntent, Asset, AssetKind, CaseStatus,
+    CoverageStatus, CreateCaseRequest, DataClass, DeclaredAssetInput, DeclaredAssetKind,
+    DeclaredHostScanInput, DeclaredHostScanProfile, DeclaredNetworkProtocol, EngineRunStatus,
+    FindingDiffStatus, InventoryObservationKind, ScanPermission, ScopeGrant,
+    UnevaluatedTargetCause,
 };
 use ai_security_scanner_lib::export::ExportOptions;
+use ai_security_scanner_lib::external_scope::{
+    ExternalActivity, ExternalScopeRequest, RatePolicy, TemplatePolicy, TransportProtocol,
+};
 use ai_security_scanner_lib::orchestrator::{
     EngineExecutionRequest, ExecutionReport, ExecutionStage, Orchestrator,
 };
@@ -26,7 +31,8 @@ use ai_security_scanner_lib::workspace_snapshot::{
     WorkspaceInputProfile, WorkspaceSnapshotLimits, WorkspaceSnapshotReference,
     create_workspace_snapshot, create_workspace_snapshot_with_profile, resolve_workspace_snapshot,
 };
-use chrono::Utc;
+use chrono::{DateTime, Duration, NaiveDate, Utc};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -41,6 +47,8 @@ const TRIVY_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/trivy.json");
 const GRYPE_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/grype.json");
 const KUBESCAPE_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/kubescape.json");
 const KUBE_BENCH_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/kube-bench.json");
+const GREENBONE_RESULT_TYPES_FIXTURE: &[u8] =
+    include_bytes!("fixtures/adapters/greenbone-result-types.xml");
 
 fn output_filename(engine_id: &str) -> &'static str {
     match engine_id {
@@ -941,4 +949,654 @@ fn typed_container_and_kubernetes_inputs_complete_the_product_lifecycle() {
             .filter(|entry| entry.asset_id.is_some())
             .all(|entry| entry.status == CoverageStatus::DiscoveredAuthorizedScanned)
     );
+}
+
+struct GreenboneFrameworkVertical {
+    report: Value,
+    finding_ids: BTreeSet<String>,
+    evidence_ids: BTreeSet<String>,
+    artifact_ids: BTreeSet<String>,
+}
+
+fn execute_greenbone_framework_vertical(ai_system_applicable: bool) -> GreenboneFrameworkVertical {
+    let temporary = tempfile::tempdir().expect("Greenbone framework vertical temporary directory");
+    let storage = Storage::open(temporary.path().join("casework.db")).expect("private storage");
+    let engines = EngineRegistry::load_builtin().expect("supported built-in engine catalog");
+    let adapters = builtin_adapter_registry().expect("built-in adapters");
+    let artifacts =
+        ArtifactStore::open(temporary.path().join("artifacts")).expect("private artifact store");
+    let artifact_root = artifacts.root().to_path_buf();
+    let service = CaseService::new(
+        &storage,
+        &engines,
+        &adapters,
+        &artifact_root,
+        temporary.path().join("integrity-signing-key"),
+    );
+    let case = service
+        .create_case(&CreateCaseRequest {
+            title: "Fixture-backed internal host vulnerability scan".into(),
+            organization_name: "Example organization".into(),
+            employee_range: "1-10".into(),
+            assessment_intent: Some(if ai_system_applicable {
+                AssessmentIntent::AiApplication
+            } else {
+                AssessmentIntent::InternalItEnvironment
+            }),
+            ai_generated_artifact: AiGeneratedArtifactAnswer::No,
+            data_classes: vec![],
+            requested_activities: vec![AssessmentActivity::ActiveExternalVulnerabilityTests],
+            source_kinds: vec![],
+            not_applicable_source_kinds: vec![],
+            declared_assets: vec![DeclaredAssetInput {
+                kind: DeclaredAssetKind::ExternalTarget,
+                value: "203.0.113.10".into(),
+                internet_exposed: Some(false),
+                web_service: None,
+                network_service: None,
+                host_scan: Some(DeclaredHostScanInput {
+                    protocol: DeclaredNetworkProtocol::Tcp,
+                    ports: vec![443, 8443],
+                    profile: DeclaredHostScanProfile::GreenboneRemoteSafeV1,
+                }),
+            }],
+            notes: Some("Checked-in XML and in-process fake runtime only".into()),
+        })
+        .expect("internal-host case creation");
+    let asset_id = case.assets[0].id.clone();
+    let greenbone_revision = format!(
+        "greenbone-community-feed@{}",
+        engines
+            .get("greenbone")
+            .expect("Greenbone manifest")
+            .rule_version
+            .as_deref()
+            .expect("Greenbone pinned feed revision")
+    );
+    let plan = service
+        .authorize_and_persist_scan_before_execution_preflight(
+            &case.id,
+            vec![ScopeApprovalRequest {
+                asset_id: asset_id.clone(),
+                permissions: vec![ScanPermission::ActiveExternalTesting],
+                confirmed_by: "Fixture target owner".into(),
+                expires_at: Some(Utc::now() + Duration::hours(1)),
+                authorization_reference: Some("Approved exact fixture host scan".into()),
+                notes: Some("No target contact; FakeContainerRuntime only".into()),
+                external_scope: Some(ExternalScopeRequest {
+                    target: "203.0.113.10".into(),
+                    ports: BTreeSet::from([443, 8443]),
+                    protocol: TransportProtocol::Tcp,
+                    activity: ExternalActivity::ActiveExternal,
+                    rate_policy: RatePolicy {
+                        requests_per_second: 2,
+                        concurrency: 1,
+                        timeout_seconds: 15,
+                    },
+                    template_policy: TemplatePolicy::conservative_profile(
+                        greenbone_revision,
+                        "greenbone_remote_safe_v1",
+                    ),
+                    asserted_authority: "Approved exact fixture host".into(),
+                    allow_sensitive_networks: true,
+                }),
+            }],
+            ScanPlanRequest {
+                engine_ids: vec![],
+                engine_asset_routes: vec![EngineAssetRoute {
+                    engine_id: "greenbone".into(),
+                    asset_ids: vec![asset_id.clone()],
+                }],
+            },
+        )
+        .expect("authorized Greenbone plan");
+    assert!(plan.not_executed.is_empty());
+    assert_eq!(plan.executable.len(), 1);
+    let execution = &plan.executable[0];
+    assert_eq!(execution.manifest.id, "greenbone");
+    assert_eq!(execution.ai_system_applicable, ai_system_applicable);
+
+    let scope_grant_id = execution.scope_grants[0].id.clone();
+    let fixture = String::from_utf8(GREENBONE_RESULT_TYPES_FIXTURE.to_vec())
+        .expect("Greenbone XML fixture is UTF-8")
+        .replace("asset-1", &asset_id)
+        .replace("grant-1", &scope_grant_id)
+        .into_bytes();
+    let runtime = FakeContainerRuntime::default();
+    runtime.set_behavior(FakeRunBehavior {
+        exit_code: Some(0),
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        output_files: BTreeMap::from([("greenbone.xml".into(), fixture)]),
+    });
+    let network = NetworkPolicy::managed(
+        "fixture-greenbone-network",
+        "fixture-greenbone-policy",
+        vec!["203.0.113.10:443".into(), "203.0.113.10:8443".into()],
+        "socks5h://172.29.0.1:1080",
+    )
+    .expect("fixture-only managed network contract");
+    let resources = ResourceLimits {
+        memory_mb: execution.manifest.estimated_memory_mb,
+        tmpfs_mb: execution.manifest.estimated_disk_mb.clamp(16, 4_096),
+        ..ResourceLimits::default()
+    };
+    let credentials = ScannerCredentialSet::default();
+    let orchestrator = Orchestrator::new(&runtime, &artifacts, &adapters);
+    let execution_report = orchestrator
+        .execute(
+            &EngineExecutionRequest {
+                case_id: &execution.case_id,
+                scan_run_id: &execution.scan_run_id,
+                engine_run_id: &execution.engine_run_id,
+                manifest: &execution.manifest,
+                ai_system_applicable: execution.ai_system_applicable,
+                ai_generated_artifact_applicable: execution.ai_generated_artifact
+                    == AiGeneratedArtifactAnswer::Yes,
+                assets: &execution.assets,
+                scope_grants: &execution.scope_grants,
+                frozen_destinations: None,
+                naabu_launcher_plan: None,
+                expected_naabu_launcher_plan_sha256: None,
+                workspace: None,
+                network_policy: &network,
+                resource_limits: &resources,
+                credentials: &credentials,
+                attempt: execution.attempt,
+            },
+            &CancellationToken::default(),
+        )
+        .expect("fixture-backed Greenbone execution");
+    assert_eq!(execution_report.checkpoint.stage, ExecutionStage::Completed);
+    assert_eq!(execution_report.findings.len(), 2);
+    assert_eq!(execution_report.unevaluated_targets.len(), 2);
+    assert!(
+        execution_report
+            .unevaluated_targets
+            .iter()
+            .all(|target| target.asset_id == asset_id)
+    );
+    assert!(execution_report.unevaluated_targets.iter().any(|target| {
+        target.cause == UnevaluatedTargetCause::TargetDidNotRespond && target.result_count == 1
+    }));
+    assert!(execution_report.unevaluated_targets.iter().any(|target| {
+        target.cause == UnevaluatedTargetCause::ScannerError && target.result_count == 2
+    }));
+    let finding_ids = execution_report
+        .findings
+        .iter()
+        .map(|finding| finding.id.clone())
+        .collect::<BTreeSet<_>>();
+    let evidence_ids = execution_report
+        .findings
+        .iter()
+        .flat_map(|finding| finding.evidence.iter().map(|evidence| evidence.id.clone()))
+        .collect::<BTreeSet<_>>();
+    let artifact_ids = execution_report
+        .raw_artifacts
+        .iter()
+        .map(|artifact| artifact.id.clone())
+        .collect::<BTreeSet<_>>();
+    service
+        .apply_execution_report(&case.id, &DurableExecutionReport::from(&execution_report))
+        .expect("durable Greenbone execution reconciliation");
+
+    let destination = temporary.path().join(if ai_system_applicable {
+        "ai-framework-report.json"
+    } else {
+        "non-ai-framework-report.json"
+    });
+    service
+        .export_case(
+            &case.id,
+            &execution.scan_run_id,
+            CaseExportFormat::FrameworkReport,
+            &destination,
+            ExportOptions::default(),
+        )
+        .expect("standardized framework report export");
+    let bytes = fs::read(destination).expect("exported framework report bytes");
+    let report: Value = serde_json::from_slice(&bytes).expect("MasterFrameworkReport JSON");
+    let schema: Value = serde_json::from_str(include_str!(
+        "../../schemas/master-framework-report.schema.json"
+    ))
+    .expect("checked-in MasterFrameworkReport schema");
+    validate_schema_value(&schema, &schema, &report, "$")
+        .expect("exported bytes validate against the MasterFrameworkReport schema");
+
+    GreenboneFrameworkVertical {
+        report,
+        finding_ids,
+        evidence_ids,
+        artifact_ids,
+    }
+}
+
+fn framework<'a>(report: &'a Value, framework_name: &str) -> &'a Value {
+    report["frameworks"]
+        .as_array()
+        .expect("framework report summaries")
+        .iter()
+        .find(|framework| framework["framework"] == framework_name)
+        .unwrap_or_else(|| panic!("missing {framework_name} framework summary"))
+}
+
+fn control_relationships<'a>(
+    report: &'a Value,
+    framework_name: &str,
+    framework_version: &str,
+    control_id: &str,
+) -> Vec<&'a Value> {
+    framework(report, framework_name)["controls"]
+        .as_array()
+        .expect("framework controls")
+        .iter()
+        .find(|control| {
+            control["framework_version"] == framework_version
+                && control["control_id"] == control_id
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing Greenbone relationship for {framework_name} {framework_version} {control_id}"
+            )
+        })["relationships"]
+        .as_array()
+        .expect("control relationships")
+        .iter()
+        .collect()
+}
+
+fn assert_current_greenbone_relationships(
+    vertical: &GreenboneFrameworkVertical,
+    framework_name: &str,
+    framework_version: &str,
+    control_id: &str,
+) {
+    let relationships = control_relationships(
+        &vertical.report,
+        framework_name,
+        framework_version,
+        control_id,
+    );
+    assert!(
+        !relationships.is_empty(),
+        "missing Greenbone relationship for {framework_name} {framework_version} {control_id}"
+    );
+    for relationship in relationships {
+        assert_eq!(relationship["relationship"], "related");
+        assert_eq!(relationship["mapping_version"], "2026-09-09.1");
+        assert_eq!(
+            relationship["mapping_provenance_state"],
+            "verified_current_catalog"
+        );
+        assert_eq!(relationship["mapping_version_state"], "exact_match");
+        assert_eq!(
+            relationship["mapping_provenance"]["mapping_version"],
+            "2026-09-09.1"
+        );
+        let finding_id = relationship["finding"]["finding_id"]
+            .as_str()
+            .expect("relationship finding ID");
+        assert!(
+            vertical.finding_ids.contains(finding_id),
+            "{framework_name} {control_id} does not resolve to a Greenbone fixture finding"
+        );
+        let bindings = relationship["evidence_bindings"]
+            .as_array()
+            .expect("relationship evidence bindings");
+        assert!(!bindings.is_empty());
+        for binding in bindings {
+            assert_eq!(binding["engine_id"], "greenbone");
+            assert_eq!(binding["engine_mapping_version"], "2026-09-09.1");
+            assert_eq!(
+                binding["engine_mapping_provenance_state"],
+                "verified_current_catalog"
+            );
+            assert_eq!(binding["mapping_version_state"], "exact_match");
+            assert!(
+                binding["source_rule"]
+                    .as_str()
+                    .is_some_and(|rule| rule.starts_with("1.3.6.1.4.1.25623."))
+            );
+            assert!(
+                vertical
+                    .evidence_ids
+                    .contains(binding["evidence_id"].as_str().expect("bound evidence ID")),
+                "{framework_name} {control_id} evidence does not resolve to the fixture finding"
+            );
+            assert!(
+                vertical
+                    .artifact_ids
+                    .contains(binding["artifact_id"].as_str().expect("bound artifact ID")),
+                "{framework_name} {control_id} evidence does not resolve to the fixture artifact"
+            );
+        }
+    }
+    let summary = framework(&vertical.report, framework_name);
+    assert_eq!(
+        summary["observed_mapping_versions"],
+        serde_json::json!(["2026-09-09.1"])
+    );
+    assert_eq!(
+        summary["evidence_engine_mapping_versions"],
+        serde_json::json!(["2026-09-09.1"])
+    );
+    assert_eq!(
+        summary["mapping_version_state"],
+        "all_relationships_exact_match"
+    );
+    assert_eq!(summary["mismatch_relationship_count"], 0);
+    assert_eq!(summary["unavailable_relationship_count"], 0);
+}
+
+#[test]
+fn greenbone_framework_report_vertical_preserves_relationships_ai_gating_and_incomplete_coverage() {
+    let ai = execute_greenbone_framework_vertical(true);
+    assert_current_greenbone_relationships(&ai, "NIST CSF", "2.0", "ID.RA-01");
+    assert_current_greenbone_relationships(&ai, "ISO/IEC 27001", "2022", "A.8.8");
+    assert_current_greenbone_relationships(&ai, "AIDEFEND", "1.20260805", "AID-H-003.010");
+    assert_eq!(
+        ai.report["declared_ai_context"]["ai_system_applicability"],
+        "applicable"
+    );
+    assert_eq!(
+        ai.report["declared_ai_context"]["aidefend_applicability"],
+        "applicable"
+    );
+
+    let coverage = &ai.report["coverage"];
+    assert_eq!(coverage["state"], "incomplete_or_unknown");
+    assert_eq!(coverage["selected_run_checks_complete"], true);
+    assert_eq!(
+        coverage["selected_run_coverage_has_unknown_or_incomplete_entries"],
+        true
+    );
+    // The claim that has to survive both open defects below: Greenbone reported
+    // this host as dead and errored, so nothing in the standardized export may
+    // count it as scanned. Whatever the ledger records, this stays true.
+    assert!(
+        coverage["selected_run_coverage_states"]
+            .as_object()
+            .expect("selected-run coverage states")
+            .get("discovered_authorized_scanned")
+            .is_none(),
+        "a host Greenbone never evaluated must not be counted as scanned"
+    );
+    // Present behaviour, not desired behaviour, pinned so any change is visible.
+    // Two defects meet here:
+    //   1. `coverage.rs::assess_asset_coverage` never reads
+    //      `unevaluated_targets`, so `authorized_incomplete_count` stays 0 even
+    //      though this run reported both a dead host and a scanner error; and
+    //   2. the one coverage-ledger entry bound to this run does not match the
+    //      one frozen planned asset, so the exporter excludes it entirely and
+    //      reports no ledger at all.
+    // Only the second currently keeps a scanned state out of the export. When
+    // either is fixed, revisit these numbers -- not the assertion above.
+    assert_eq!(coverage["authorized_incomplete_count"], 0);
+    assert_eq!(coverage["selected_run_coverage_ledger_available"], false);
+    assert_eq!(
+        coverage["selected_run_missing_planned_asset_coverage_count"],
+        1
+    );
+    assert_eq!(coverage["selected_run_unmatched_coverage_entry_count"], 1);
+    assert!(
+        coverage["limitations"]
+            .as_array()
+            .expect("coverage limitations")
+            .iter()
+            .any(|limitation| limitation.as_str().is_some_and(|limitation| {
+                limitation.contains("cannot establish complete scan coverage")
+            }))
+    );
+
+    let non_ai = execute_greenbone_framework_vertical(false);
+    assert_current_greenbone_relationships(&non_ai, "NIST CSF", "2.0", "ID.RA-01");
+    assert_current_greenbone_relationships(&non_ai, "ISO/IEC 27001", "2022", "A.8.8");
+    let aidefend = framework(&non_ai.report, "AIDEFEND");
+    assert_eq!(aidefend["state"], "not_applicable_to_declared_context");
+    assert_eq!(aidefend["relationship_count"], 0);
+    assert_eq!(aidefend["control_count"], 0);
+    assert!(
+        aidefend["controls"]
+            .as_array()
+            .expect("AIDEFEND controls")
+            .is_empty(),
+        "AID-H-003.010 must be absent when AI-system applicability is not declared"
+    );
+    assert_eq!(
+        non_ai.report["declared_ai_context"]["ai_system_applicability"],
+        "not_applicable"
+    );
+    assert_eq!(
+        non_ai.report["declared_ai_context"]["aidefend_applicability"],
+        "not_applicable"
+    );
+}
+
+// Keep integration validation aligned with the exporter's checked-in-schema
+// test helper. The crate deliberately has no runtime JSON Schema dependency.
+fn validate_schema_value(
+    root: &Value,
+    schema: &Value,
+    value: &Value,
+    path: &str,
+) -> Result<(), String> {
+    if let Some(all_of) = schema.get("allOf").and_then(Value::as_array) {
+        for child_schema in all_of {
+            validate_schema_value(root, child_schema, value, path)?;
+        }
+    }
+    if let Some(one_of) = schema.get("oneOf").and_then(Value::as_array) {
+        let matches = one_of
+            .iter()
+            .filter(|candidate| validate_schema_value(root, candidate, value, path).is_ok())
+            .count();
+        if matches != 1 {
+            return Err(format!(
+                "expected exactly one matching schema at {path}, found {matches}"
+            ));
+        }
+    }
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        let name = reference
+            .strip_prefix("#/$defs/")
+            .ok_or_else(|| format!("unsupported schema reference at {path}: {reference}"))?;
+        let resolved = root
+            .get("$defs")
+            .and_then(|defs| defs.get(name))
+            .ok_or_else(|| format!("missing schema definition at {path}: {name}"))?;
+        return validate_schema_value(root, resolved, value, path);
+    }
+    if let Some(expected) = schema.get("const")
+        && expected != value
+    {
+        return Err(format!("const mismatch at {path}"));
+    }
+    if let Some(allowed) = schema.get("enum").and_then(Value::as_array)
+        && !allowed.contains(value)
+    {
+        return Err(format!("enum mismatch at {path}: {value}"));
+    }
+    if let Some(kind) = schema.get("type").and_then(Value::as_str) {
+        match kind {
+            "object" => {
+                let object = value
+                    .as_object()
+                    .ok_or_else(|| format!("expected object at {path}"))?;
+                let properties = schema
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                for required in schema
+                    .get("required")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    let required = required
+                        .as_str()
+                        .ok_or_else(|| format!("non-string required key at {path}"))?;
+                    if !object.contains_key(required) {
+                        return Err(format!("missing required key at {path}.{required}"));
+                    }
+                }
+                for (key, child) in object {
+                    if let Some(child_schema) = properties.get(key) {
+                        validate_schema_value(root, child_schema, child, &format!("{path}.{key}"))?;
+                    } else {
+                        match schema.get("additionalProperties") {
+                            Some(Value::Bool(false)) => {
+                                return Err(format!("unexpected key at {path}.{key}"));
+                            }
+                            Some(additional @ Value::Object(_)) => {
+                                validate_schema_value(
+                                    root,
+                                    additional,
+                                    child,
+                                    &format!("{path}.{key}"),
+                                )?;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            "array" => {
+                let values = value
+                    .as_array()
+                    .ok_or_else(|| format!("expected array at {path}"))?;
+                if let Some(minimum) = schema.get("minItems").and_then(Value::as_u64)
+                    && values.len() < minimum as usize
+                {
+                    return Err(format!("too few array items at {path}"));
+                }
+                if let Some(maximum) = schema.get("maxItems").and_then(Value::as_u64)
+                    && values.len() > maximum as usize
+                {
+                    return Err(format!("too many array items at {path}"));
+                }
+                if schema.get("uniqueItems") == Some(&Value::Bool(true)) {
+                    let unique = values.iter().map(Value::to_string).collect::<BTreeSet<_>>();
+                    if unique.len() != values.len() {
+                        return Err(format!("duplicate array item at {path}"));
+                    }
+                }
+                let prefix_items = schema
+                    .get("prefixItems")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                for (index, child_schema) in prefix_items.iter().enumerate() {
+                    let child = values
+                        .get(index)
+                        .ok_or_else(|| format!("missing prefix item at {path}[{index}]"))?;
+                    validate_schema_value(root, child_schema, child, &format!("{path}[{index}]"))?;
+                }
+                if schema.get("items") == Some(&Value::Bool(false))
+                    && values.len() > prefix_items.len()
+                {
+                    return Err(format!("unexpected trailing array item at {path}"));
+                }
+                if let Some(item_schema @ Value::Object(_)) = schema.get("items") {
+                    for (index, child) in values.iter().enumerate() {
+                        validate_schema_value(
+                            root,
+                            item_schema,
+                            child,
+                            &format!("{path}[{index}]"),
+                        )?;
+                    }
+                }
+            }
+            "string" => {
+                let text = value
+                    .as_str()
+                    .ok_or_else(|| format!("expected string at {path}"))?;
+                if let Some(minimum) = schema.get("minLength").and_then(Value::as_u64)
+                    && text.chars().count() < minimum as usize
+                {
+                    return Err(format!("string is too short at {path}"));
+                }
+                if let Some(maximum) = schema.get("maxLength").and_then(Value::as_u64)
+                    && text.chars().count() > maximum as usize
+                {
+                    return Err(format!("string is too long at {path}"));
+                }
+                if let Some(pattern) = schema.get("pattern").and_then(Value::as_str) {
+                    match pattern {
+                        "^[0-9a-f]{64}$"
+                            if text.len() != 64
+                                || !text.bytes().all(|byte| {
+                                    byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+                                }) =>
+                        {
+                            return Err(format!("string does not match SHA-256 pattern at {path}"));
+                        }
+                        "^[0-9a-f]{64}$" => {}
+                        "^[0-9]{4}-[0-9]{2}-[0-9]{2}\\.[1-9][0-9]*$"
+                            if mapping_version_date(text).is_err() =>
+                        {
+                            return Err(format!("string is not a valid mapping version at {path}"));
+                        }
+                        "^[0-9]{4}-[0-9]{2}-[0-9]{2}\\.[1-9][0-9]*$" => {}
+                        "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                            if text.len() != 10
+                                || NaiveDate::parse_from_str(text, "%Y-%m-%d").is_err() =>
+                        {
+                            return Err(format!("string is not a valid date at {path}"));
+                        }
+                        "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" => {}
+                        other => {
+                            return Err(format!(
+                                "unsupported schema string pattern at {path}: {other}"
+                            ));
+                        }
+                    }
+                }
+                if schema.get("format").and_then(Value::as_str) == Some("date-time") {
+                    DateTime::parse_from_rfc3339(text)
+                        .map_err(|_| format!("invalid date-time at {path}"))?;
+                }
+            }
+            "integer" => {
+                let number = value
+                    .as_i64()
+                    .ok_or_else(|| format!("expected integer at {path}"))?;
+                if let Some(minimum) = schema.get("minimum").and_then(Value::as_i64)
+                    && number < minimum
+                {
+                    return Err(format!("integer is below minimum at {path}"));
+                }
+            }
+            "boolean" => {
+                if !value.is_boolean() {
+                    return Err(format!("expected boolean at {path}"));
+                }
+            }
+            "null" => {
+                if !value.is_null() {
+                    return Err(format!("expected null at {path}"));
+                }
+            }
+            other => return Err(format!("unsupported schema type at {path}: {other}")),
+        }
+    }
+    Ok(())
+}
+
+fn mapping_version_date(value: &str) -> Result<NaiveDate, String> {
+    let Some((date, revision)) = value.split_once('.') else {
+        return Err("mapping version must be YYYY-MM-DD.N".into());
+    };
+    if date.len() != 10
+        || date.as_bytes().get(4) != Some(&b'-')
+        || date.as_bytes().get(7) != Some(&b'-')
+        || revision.starts_with('0')
+        || !revision.parse::<u32>().is_ok_and(|value| value > 0)
+    {
+        return Err("mapping version must be YYYY-MM-DD.N".into());
+    }
+    NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map_err(|_| "mapping version contains an invalid calendar date".into())
 }
