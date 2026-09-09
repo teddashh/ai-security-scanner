@@ -299,6 +299,18 @@ rendered website setup test 確認收合區內的預設值與送出的 case 都�
 test 確認 wire value 是 `Not provided`；adapter test 確認重開不會再把它投影成 small。這只移除
 product-owned metadata guess，沒有增加問題、權限、目標或 scanner 執行。
 
+## Home primary cards 會先說明 minutes-level timing target（`a94131a`）
+
+Home 的三個主要路徑先前只說明結果與動作，沒有呈現 product spec 要求的概略時間。現在 company
+IT environment、website 與 code／AI project card 都直接寫出「工具就緒後，目標是在幾分鐘內提供
+有用結果」，並在同一行分別說明完整執行可能因更多資產／較深入 host check、website response／
+適用 checks 或大型 folder 而更久。文案刻意使用 aim 而不是完成保證，也不在沒有 installed-run
+量測時編造 2–10 分鐘之類的數字 ETA。
+
+rendered component test 在 English 與 Traditional Chinese 都核對三張 primary card 有 timing line、
+都有 tools-ready caveat，並各自保留延長因素。這沒有改變任何 timeout、rate、engine plan 或 target
+scope。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -341,6 +353,9 @@ build 全部通過。production build 只有既有的大型 chunk 提示，沒�
 
 `77c54fc` 新增後，相同的 frontend 568 項、component 238 項、TypeScript typecheck 與 production
 frontend build 再次全部通過；build 仍只有既有的大型 chunk 提示。
+
+`a94131a` 新增後，frontend 568 項、component 238 項、TypeScript typecheck 與 production frontend
+build 全部通過；build 只有既有的大型 chunk 提示。
 
 ## 後續順序
 

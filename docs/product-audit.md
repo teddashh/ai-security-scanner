@@ -44,6 +44,13 @@ screen. If the user does not choose an organization size, the case records
 `Not provided`; it no longer silently invents the 2–49-person band. Existing
 cases with a selected size retain their saved band.
 
+Each of the three primary Home choices now states the maintained timing target:
+a useful result is aimed for within minutes after local tools are ready. The
+same first-layer line prevents that target from becoming a full-run promise by
+naming the relevant extension—additional assets and host depth, website
+response and applicable checks, or a large project folder. Numeric ETAs remain
+unset until a controlled installed run supplies measurements.
+
 ## What the common paths actually run
 
 ### Repositories
@@ -183,8 +190,10 @@ The high-value remaining gaps are:
 2. Measure time to first useful finding and remove any remaining beginner input
    that does not change target scope or result quality. The known
    inventory-only creation dead end was removed in `d2599a1`, and the hidden
-   organization-size guess was removed in `77c54fc`; this still needs
-   observation in a controlled installed-desktop walkthrough.
+   organization-size guess was removed in `77c54fc`. `a94131a` makes the
+   unmeasured minutes-level timing target visible without inventing a numeric
+   ETA; this still needs observation in a controlled installed-desktop
+   walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
    AWS cloud paths do not hide a comparable product-authored security subset:
