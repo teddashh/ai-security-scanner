@@ -165,6 +165,12 @@ impl LocalInputProfile {
 pub struct EngineInputContract {
     pub asset_kind: AssetKind,
     pub input_profile: LocalInputProfile,
+    /// Optional complete static argv for this exact typed local input. When
+    /// absent, the manifest's top-level command remains the execution command.
+    /// The registry and container runtime both reject dynamic or shell-shaped
+    /// values before dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -303,6 +303,12 @@
         }
       }
     },
+    "staticCommand": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": { "type": "string", "minLength": 1, "maxLength": 4096 }
+    },
     "inputContract": {
       "type": "object",
       "additionalProperties": false,
@@ -313,7 +319,8 @@
         },
         "input_profile": {
           "enum": ["repository_working_tree", "iac_working_tree", "container_image_oci_layout", "kubernetes_manifests", "kubernetes_node_snapshot"]
-        }
+        },
+        "command": { "$ref": "#/$defs/staticCommand" }
       }
     },
     "providerExecutionContract": {
@@ -441,12 +448,7 @@
           "uniqueItems": true,
           "items": { "type": "string", "minLength": 1 }
         },
-        "command": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 128,
-          "items": { "type": "string", "minLength": 1, "maxLength": 4096 }
-        },
+        "command": { "$ref": "#/$defs/staticCommand" },
         "status": { "enum": ["integrated", "experimental", "research_only", "deprecated", "license_review"] },
         "notices": {
           "type": "array",

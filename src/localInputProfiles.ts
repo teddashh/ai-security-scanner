@@ -33,7 +33,7 @@ export const localInputDefinitions: Record<LocalInputProfile, LocalInputDefiniti
     label: bilingual("Source-code project", "程式碼專案"),
     detail: bilingual("Check one local project without changing its files.", "在本機檢查一個專案，不會修改任何檔案。"),
     formTitle: bilingual("Choose the source code you want checked", "選擇想檢查的程式碼"),
-    formIntro: bilingual("Pick one project folder. We'll check it locally for risky code, exposed secrets, and vulnerable packages without changing its files.", "選擇一個專案資料夾；我們會在本機檢查危險程式碼、暴露的秘密與有弱點的套件，不會修改任何檔案。"),
+    formIntro: bilingual("Pick one project folder. We'll check it locally for risky code, exposed secrets, software components, and vulnerable packages without changing its files.", "選擇一個專案資料夾；我們會在本機檢查危險程式碼、暴露的秘密、軟體元件與有弱點的套件，不會修改任何檔案。"),
     cautionTitle: bilingual("Your project stays local and unchanged", "專案留在本機，檔案不會被修改"),
     cautionBody: bilingual("Only the selected folder is copied into the private local scan. Detected secret values are masked in results.", "只會把選定資料夾複製到私密的本機掃描；找到的秘密值會在結果中遮罩。"),
     directoryLabel: bilingual("Source-code folder", "程式碼資料夾"),
@@ -59,7 +59,7 @@ export const localInputDefinitions: Record<LocalInputProfile, LocalInputDefiniti
     label: bilingual("Exported container image", "匯出的容器映像"),
     detail: bilingual("Check one exported container image on this computer without signing in to a registry.", "在這台電腦上檢查一份匯出的容器映像，不必登入映像倉庫。"),
     formTitle: bilingual("Choose the container image you want checked", "選擇想檢查的容器映像"),
-    formIntro: bilingual("Pick one exported OCI image folder. We'll inspect its packages and known vulnerabilities locally without running the image.", "選擇一個匯出的 OCI 映像資料夾；我們會在本機檢查其中套件與已知弱點，不會執行映像。"),
+    formIntro: bilingual("Pick one exported OCI image folder. Syft inventories its software components, while Trivy and Grype check them for known vulnerabilities. Everything runs locally without starting the image.", "選擇一個匯出的 OCI 映像資料夾；Syft 會盤點其中的軟體元件，Trivy 與 Grype 會檢查已知弱點。所有工作都在本機完成，不會執行映像。"),
     cautionTitle: bilingual("Choose an exported image, not a running container", "請選擇匯出的映像，不是正在執行的容器"),
     cautionBody: bilingual("The app reads only this exported copy. It does not start the image or sign in to a container registry.", "產品只讀取這份匯出副本，不會啟動映像，也不會登入容器映像倉庫。"),
     directoryLabel: bilingual("Exported image folder", "匯出映像資料夾"),
@@ -113,18 +113,18 @@ export const localInputDefinitionForAssessmentIntent = (
   : localInputDefinitions[profile];
 
 export const localInputEngines: Record<LocalInputProfile, string> = {
-  repository_working_tree: "Gitleaks, Semgrep, Trivy, Grype, TruffleHog, KICS, Checkov",
+  repository_working_tree: "Gitleaks, Semgrep, Syft, Trivy, Grype, TruffleHog, KICS, Checkov",
   iac_working_tree: "Checkov, KICS, Trivy",
-  container_image_oci_layout: "Trivy, Grype",
+  container_image_oci_layout: "Syft, Trivy, Grype",
   kubernetes_manifests: "Kubescape",
   kubernetes_node_snapshot: "kube-bench",
 };
 
 /** Exact upstream engine set used when a mixed scan routes work per local asset. */
 export const localInputEngineIds: Record<LocalInputProfile, readonly string[]> = {
-  repository_working_tree: ["gitleaks", "semgrep", "trivy", "grype", "trufflehog", "kics", "checkov"],
+  repository_working_tree: ["gitleaks", "semgrep", "syft", "trivy", "grype", "trufflehog", "kics", "checkov"],
   iac_working_tree: ["checkov", "kics", "trivy"],
-  container_image_oci_layout: ["trivy", "grype"],
+  container_image_oci_layout: ["syft", "trivy", "grype"],
   kubernetes_manifests: ["kubescape"],
   kubernetes_node_snapshot: ["kube-bench"],
 };

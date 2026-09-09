@@ -2516,7 +2516,7 @@
     "id": "syft",
     "display_name": "Syft",
     "category": "container_and_sbom",
-    "description": "Produces software bills of materials for selected repository working-tree snapshots.",
+    "description": "Produces software bills of materials for selected repository working-tree snapshots and single-image OCI layouts.",
     "supported_providers": [],
     "repository_url": "https://github.com/anchore/syft",
     "homepage_url": "https://github.com/anchore/syft",
@@ -2533,10 +2533,21 @@
     "rule_version": "2293641e3bd628a01bb37639318d62c0ebe89b39",
     "adapter_version": "0.1.3",
     "supported_asset_kinds": [
-      "repository"
+      "repository",
+      "container_image"
     ],
     "input_contracts": [
-      { "asset_kind": "repository", "input_profile": "repository_working_tree" }
+      { "asset_kind": "repository", "input_profile": "repository_working_tree" },
+      {
+        "asset_kind": "container_image",
+        "input_profile": "container_image_oci_layout",
+        "command": [
+          "oci-dir:/workspace",
+          "-o",
+          "syft-json=/output/syft.json",
+          "--quiet"
+        ]
+      }
     ],
     "required_permissions": [
       "local_artifact_read"
@@ -2561,7 +2572,7 @@
     "notices": [
       "Apache-2.0 permits redistribution with notices.",
       "The managed image is rebased from an immutable upstream Syft image, runs as non-root, disables update checks, and stores cache data only in the bounded /tmp tmpfs.",
-      "Execution is offline and limited to an immutable case-scoped working-tree snapshot; repository history is not included."
+      "Execution is offline and limited to an immutable case-scoped repository snapshot or one backend-validated OCI Image Layout; repository history and registry pulls are not included."
     ],
     "license": {
       "disposition": "allow",

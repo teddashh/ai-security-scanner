@@ -401,9 +401,10 @@ test("source-code setup says local, masked, and unchanged instead of asking user
 
 test("repository technical details disclose every planned engine", () => {
   assert.ok(localInputProfileSource.includes(
-    'repository_working_tree: "Gitleaks, Semgrep, Trivy, Grype, TruffleHog, KICS, Checkov"',
+    'repository_working_tree: "Gitleaks, Semgrep, Syft, Trivy, Grype, TruffleHog, KICS, Checkov"',
   ));
   assert.ok(localInputProfileSource.includes('iac_working_tree: "Checkov, KICS, Trivy"'));
+  assert.ok(localInputProfileSource.includes('container_image_oci_layout: "Syft, Trivy, Grype"'));
 });
 
 test("a failed workspace copy stays visible and suggests a source-only folder", () => {
@@ -429,6 +430,11 @@ test("each guided local route has plain-language first-layer copy in both locale
     assert.ok(localInputProfileSource.includes(english), english);
     assert.ok(localInputProfileSource.includes(traditionalChinese), traditionalChinese);
   }
+
+  for (const phrase of [
+    "Syft inventories its software components, while Trivy and Grype check them for known vulnerabilities.",
+    "Syft 會盤點其中的軟體元件，Trivy 與 Grype 會檢查已知弱點。",
+  ]) assert.ok(localInputProfileSource.includes(phrase), phrase);
 });
 
 test("guided selection status is honest and does not keep prompting after auto-selection", () => {

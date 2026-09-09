@@ -4064,62 +4064,81 @@ impl<'a> CaseService<'a> {
                     })
                     .cloned()
                     .collect::<Vec<_>>();
-                let execution_contract = (|| -> AppResult<(String, String, String)> {
-                    let planned_resume_token = ExecutionCheckpoint {
-                        case_id: case.id.clone(),
-                        scan_run_id: scan_run_id.clone(),
-                        engine_run_id: engine_run_id.clone(),
-                        engine_id: manifest.id.clone(),
-                        attempt: 1,
-                        stage: ExecutionStage::Planned,
-                        container_name: None,
-                        scope_sha256: None,
-                        launcher_plan_sha256: None,
-                        artifact_ids: Vec::new(),
-                        cleanup_completed: true,
-                        last_error: None,
-                        runtime_command_provenance: None,
-                        runtime_provider: None,
-                        managed_network: None,
-                    }
-                    .resume_token()?;
-                    let command_sha256 = sha256_bytes(&serde_json::to_vec(&manifest.command)?);
-                    let scope_contract_sha256 =
-                        comparable_scope_contract_sha256(manifest, &assets, &relevant_grants)?;
-                    Ok((planned_resume_token, command_sha256, scope_contract_sha256))
-                })();
-                let (planned_resume_token, command_sha256, scope_contract_sha256) =
-                    match execution_contract {
-                        Ok(contract) => contract,
-                        Err(error) => {
-                            tracing::warn!(
-                                engine_id = %manifest.id,
-                                error = %error,
-                                "engine task contract could not be planned; preserving sibling work"
-                            );
-                            let reason_code = "engine_execution_contract_invalid";
-                            let explanation = ScanReadinessBlocker::EngineExecutionContractInvalid
-                                .diagnostic()
-                                .to_owned();
-                            engine_runs.push(not_executed_run(
-                                &scan_run_id,
-                                &engine_run_id,
-                                &manifest.id,
-                                asset_ids.clone(),
-                                (reason_code, &explanation),
-                                Some(manifest),
-                                now,
-                            ));
-                            not_executed.push(NotExecutedEngine {
-                                engine_id: manifest.id.clone(),
-                                engine_run_id,
-                                asset_ids,
-                                reason_code: reason_code.into(),
-                                explanation,
-                            });
-                            continue;
+                let execution_contract =
+                    (|| -> AppResult<(EngineManifest, String, String, String)> {
+                        let execution_manifest = execution_manifest_for_verified_single_asset(
+                            manifest,
+                            assets.iter().copied(),
+                        )?;
+                        let planned_resume_token = ExecutionCheckpoint {
+                            case_id: case.id.clone(),
+                            scan_run_id: scan_run_id.clone(),
+                            engine_run_id: engine_run_id.clone(),
+                            engine_id: manifest.id.clone(),
+                            attempt: 1,
+                            stage: ExecutionStage::Planned,
+                            container_name: None,
+                            scope_sha256: None,
+                            launcher_plan_sha256: None,
+                            artifact_ids: Vec::new(),
+                            cleanup_completed: true,
+                            last_error: None,
+                            runtime_command_provenance: None,
+                            runtime_provider: None,
+                            managed_network: None,
                         }
-                    };
+                        .resume_token()?;
+                        let command_sha256 =
+                            sha256_bytes(&serde_json::to_vec(&execution_manifest.command)?);
+                        let scope_contract_sha256 = comparable_scope_contract_sha256(
+                            &execution_manifest,
+                            &assets,
+                            &relevant_grants,
+                        )?;
+                        Ok((
+                            execution_manifest,
+                            planned_resume_token,
+                            command_sha256,
+                            scope_contract_sha256,
+                        ))
+                    })();
+                let (
+                    execution_manifest,
+                    planned_resume_token,
+                    command_sha256,
+                    scope_contract_sha256,
+                ) = match execution_contract {
+                    Ok(contract) => contract,
+                    Err(error) => {
+                        tracing::warn!(
+                            engine_id = %manifest.id,
+                            error = %error,
+                            "engine task contract could not be planned; preserving sibling work"
+                        );
+                        let reason_code = "engine_execution_contract_invalid";
+                        let explanation = ScanReadinessBlocker::EngineExecutionContractInvalid
+                            .diagnostic()
+                            .to_owned();
+                        engine_runs.push(not_executed_run(
+                            &scan_run_id,
+                            &engine_run_id,
+                            &manifest.id,
+                            asset_ids.clone(),
+                            (reason_code, &explanation),
+                            Some(manifest),
+                            now,
+                        ));
+                        not_executed.push(NotExecutedEngine {
+                            engine_id: manifest.id.clone(),
+                            engine_run_id,
+                            asset_ids,
+                            reason_code: reason_code.into(),
+                            explanation,
+                        });
+                        continue;
+                    }
+                };
+                let manifest = &execution_manifest;
                 let engine_run = EngineRun {
                     id: engine_run_id.clone(),
                     scan_run_id: scan_run_id.clone(),
@@ -5690,6 +5709,42 @@ impl<'a> CaseService<'a> {
                 });
                 continue;
             }
+            let assets = engine_run
+                .asset_ids
+                .iter()
+                .map(|asset_id| {
+                    case.assets
+                        .iter()
+                        .find(|asset| asset.id == *asset_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            AppError::InvalidRequest(format!(
+                                "resume target asset is no longer present: {asset_id}"
+                            ))
+                        })
+                })
+                .collect::<AppResult<Vec<_>>>()?;
+            let compatible_ids =
+                compatible_authorized_assets(&case, manifest, &frozen_effective_grants, now)
+                    .into_iter()
+                    .map(|asset| asset.id.as_str())
+                    .collect::<BTreeSet<_>>();
+            if assets
+                .iter()
+                .any(|asset| !compatible_ids.contains(asset.id.as_str()))
+            {
+                blocked.push(ResumeBlocked {
+                    engine_index,
+                    phase: "resume_scope_unavailable",
+                    error_code: "resume_scope_unavailable".into(),
+                    clear_resume_token: false,
+                    explanation: "This check needs renewed target access before it can contact anything again. Its saved results remain available, and other checks can continue.".into(),
+                });
+                continue;
+            }
+            let execution_manifest =
+                execution_manifest_for_verified_single_asset(manifest, assets.iter())?;
+            let manifest = &execution_manifest;
             let current_execution_timeout_seconds = manifest.execution_timeout_seconds();
             // Releases before the enforced execution-deadline contract did
             // not record a timeout and did not enforce the current limit. A
@@ -5764,39 +5819,6 @@ impl<'a> CaseService<'a> {
                     "The frozen release identity differs from the installed release ({release_differences}). Resume was allowed only because this engine's adapter input is verified zero-byte JSONL; its frozen values remain unchanged, no finding or control reference can be remapped, and no scanner or runtime will be re-executed for this engine."
                 )
             });
-            let assets = engine_run
-                .asset_ids
-                .iter()
-                .map(|asset_id| {
-                    case.assets
-                        .iter()
-                        .find(|asset| asset.id == *asset_id)
-                        .cloned()
-                        .ok_or_else(|| {
-                            AppError::InvalidRequest(format!(
-                                "resume target asset is no longer present: {asset_id}"
-                            ))
-                        })
-                })
-                .collect::<AppResult<Vec<_>>>()?;
-            let compatible_ids =
-                compatible_authorized_assets(&case, manifest, &frozen_effective_grants, now)
-                    .into_iter()
-                    .map(|asset| asset.id.as_str())
-                    .collect::<BTreeSet<_>>();
-            if assets
-                .iter()
-                .any(|asset| !compatible_ids.contains(asset.id.as_str()))
-            {
-                blocked.push(ResumeBlocked {
-                    engine_index,
-                    phase: "resume_scope_unavailable",
-                    error_code: "resume_scope_unavailable".into(),
-                    clear_resume_token: false,
-                    explanation: "This check needs renewed target access before it can contact anything again. Its saved results remain available, and other checks can continue.".into(),
-                });
-                continue;
-            }
             let relevant_grants = frozen_effective_grants
                 .iter()
                 .copied()
@@ -8937,6 +8959,54 @@ fn validate_declared_host_scan_scope(
         ));
     }
     Ok(())
+}
+
+/// Resolves the immutable execution command only after the caller has reduced
+/// the work to one asset returned by `compatible_authorized_assets`. That
+/// earlier check binds a local asset to its backend-authored input profile and
+/// snapshot digest; this function only applies the static argv declared for
+/// that already-verified typed contract.
+fn execution_manifest_for_verified_single_asset<'a>(
+    manifest: &EngineManifest,
+    assets: impl IntoIterator<Item = &'a Asset>,
+) -> AppResult<EngineManifest> {
+    if !manifest
+        .required_permissions
+        .contains(&ScanPermission::LocalArtifactRead)
+    {
+        return Ok(manifest.clone());
+    }
+
+    let mut assets = assets.into_iter();
+    let asset = assets.next().ok_or_else(|| {
+        AppError::EngineRegistry(format!(
+            "engine {} execution has no verified asset",
+            manifest.id
+        ))
+    })?;
+    if assets.next().is_some() {
+        return Err(AppError::EngineRegistry(format!(
+            "engine {} execution must bind exactly one verified asset",
+            manifest.id
+        )));
+    }
+    let mut execution_manifest = manifest.clone();
+    let contract = manifest
+        .input_contracts
+        .iter()
+        .find(|contract| {
+            contract.asset_kind == asset.kind && contract.input_profile.asset_kind() == asset.kind
+        })
+        .ok_or_else(|| {
+            AppError::EngineRegistry(format!(
+                "engine {} has no exact local input contract for asset {}",
+                manifest.id, asset.id
+            ))
+        })?;
+    if let Some(command) = &contract.command {
+        execution_manifest.command.clone_from(command);
+    }
+    Ok(execution_manifest)
 }
 
 fn local_input_metadata_matches(
@@ -15912,6 +15982,119 @@ mod tests {
 
     fn current_launcher_engine_registry() -> EngineRegistry {
         EngineRegistry::load_builtin().unwrap()
+    }
+
+    fn typed_syft_engine_registry(container_command: &[&str]) -> EngineRegistry {
+        let mut entries: Vec<Value> =
+            serde_json::from_str(include_str!("../../engines/catalog.json")).unwrap();
+        let syft = entries
+            .iter_mut()
+            .find(|entry| entry["id"] == "syft")
+            .expect("Syft catalog entry");
+        syft["supported_asset_kinds"] = serde_json::json!(["repository", "container_image"]);
+        syft["input_contracts"] = serde_json::json!([
+            {
+                "asset_kind": "repository",
+                "input_profile": "repository_working_tree"
+            },
+            {
+                "asset_kind": "container_image",
+                "input_profile": "container_image_oci_layout",
+                "command": container_command
+            }
+        ]);
+        EngineRegistry::load_catalog(&serde_json::to_string(&entries).unwrap())
+            .expect("typed Syft test catalog")
+    }
+
+    fn write_empty_test_oci_layout(root: &Path) {
+        let blobs = root.join("blobs/sha256");
+        fs::create_dir_all(&blobs).unwrap();
+        fs::write(
+            root.join("oci-layout"),
+            br#"{"imageLayoutVersion":"1.0.0"}"#,
+        )
+        .unwrap();
+        let config = serde_json::to_vec(&serde_json::json!({
+            "architecture": "amd64",
+            "os": "linux",
+            "rootfs": {"type": "layers", "diff_ids": []},
+            "config": {}
+        }))
+        .unwrap();
+        let config_digest = hex::encode(Sha256::digest(&config));
+        fs::write(blobs.join(&config_digest), &config).unwrap();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {
+                "mediaType": "application/vnd.oci.image.config.v1+json",
+                "digest": format!("sha256:{config_digest}"),
+                "size": config.len()
+            },
+            "layers": []
+        }))
+        .unwrap();
+        let manifest_digest = hex::encode(Sha256::digest(&manifest));
+        fs::write(blobs.join(&manifest_digest), &manifest).unwrap();
+        fs::write(
+            root.join("index.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.index.v1+json",
+                "manifests": [{
+                    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                    "digest": format!("sha256:{manifest_digest}"),
+                    "size": manifest.len()
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn attach_test_oci_snapshot(fixture: &Fixture, case_id: &str) -> Id {
+        let source_id = format!("typed-oci-source-{}", new_id());
+        let selected = fixture
+            .directory
+            .path()
+            .join("selected-oci-layouts")
+            .join(&source_id);
+        write_empty_test_oci_layout(&selected);
+        fs::create_dir_all(fixture.directory.path().join("artifacts")).unwrap();
+        let snapshot = crate::workspace_snapshot::create_workspace_snapshot_with_profile(
+            fixture.directory.path().join("artifacts"),
+            case_id,
+            &source_id,
+            &selected,
+            crate::workspace_snapshot::WorkspaceInputProfile::ContainerImageOciLayout,
+            crate::workspace_snapshot::WorkspaceSnapshotLimits::default(),
+        )
+        .expect("validated OCI layout snapshot");
+        let asset_id = snapshot.asset.id.clone();
+        fixture
+            .service()
+            .attach_workspace_snapshot(case_id, "OCI image", snapshot)
+            .unwrap();
+        asset_id
+    }
+
+    fn approve_local_asset(fixture: &Fixture, case_id: &str, asset_id: &str) {
+        fixture
+            .service()
+            .approve_scope(
+                case_id,
+                ScopeApprovalRequest {
+                    asset_id: asset_id.into(),
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Input owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
     }
 
     fn approve_direct_external_target(
@@ -32917,6 +33100,181 @@ mod tests {
             after_cleanup.scan_runs[1].engine_runs[0].status,
             EngineRunStatus::Queued
         );
+    }
+
+    #[test]
+    fn typed_local_commands_are_frozen_per_asset_for_new_runs() {
+        let fixture = Fixture::with_engines(typed_syft_engine_registry(&[
+            "oci-dir:/workspace",
+            "-o",
+            "syft-json=/output/syft.json",
+            "--quiet",
+        ]));
+        let case = fixture.create();
+        let (_, repository_id) = fixture.discovered_asset(&case.id, AssetKind::Repository);
+        let container_id = attach_test_oci_snapshot(&fixture, &case.id);
+        approve_local_asset(&fixture, &case.id, &repository_id);
+        approve_local_asset(&fixture, &case.id, &container_id);
+
+        let catalog_syft = fixture.engines.get("syft").unwrap();
+        assert_eq!(
+            catalog_syft
+                .command
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "dir:/workspace",
+                "-o",
+                "syft-json=/output/syft.json",
+                "--quiet"
+            ]
+        );
+        let plan = fixture
+            .service()
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["syft".into()],
+                    engine_asset_routes: Vec::new(),
+                },
+            )
+            .unwrap();
+        assert!(plan.not_executed.is_empty());
+        assert_eq!(plan.executable.len(), 2);
+
+        for execution in &plan.executable {
+            assert_eq!(execution.assets.len(), 1);
+            let command = execution
+                .manifest
+                .command
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            match execution.assets[0].kind {
+                AssetKind::Repository => assert_eq!(
+                    command,
+                    [
+                        "dir:/workspace",
+                        "-o",
+                        "syft-json=/output/syft.json",
+                        "--quiet"
+                    ]
+                ),
+                AssetKind::ContainerImage => assert_eq!(
+                    command,
+                    [
+                        "oci-dir:/workspace",
+                        "-o",
+                        "syft-json=/output/syft.json",
+                        "--quiet"
+                    ]
+                ),
+                ref other => panic!("unexpected typed Syft asset: {other:?}"),
+            }
+            let expected_command_sha256 =
+                sha256_bytes(&serde_json::to_vec(&execution.manifest.command).unwrap());
+            let frozen = plan
+                .scan_run
+                .engine_runs
+                .iter()
+                .find(|engine_run| engine_run.id == execution.engine_run_id)
+                .unwrap();
+            assert_eq!(
+                frozen.command_sha256.as_deref(),
+                Some(expected_command_sha256.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn typed_local_command_resume_reuses_the_frozen_profile_command() {
+        let fixture = Fixture::with_engines(typed_syft_engine_registry(&[
+            "oci-dir:/workspace",
+            "-o",
+            "syft-json=/output/syft.json",
+            "--quiet",
+        ]));
+        let case = fixture.create();
+        let container_id = attach_test_oci_snapshot(&fixture, &case.id);
+        approve_local_asset(&fixture, &case.id, &container_id);
+        let service = fixture.service();
+        let original = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["syft".into()],
+                    engine_asset_routes: Vec::new(),
+                },
+            )
+            .unwrap();
+        let frozen_command_sha256 = original.scan_run.engine_runs[0]
+            .command_sha256
+            .clone()
+            .unwrap();
+        assert_eq!(service.recover_interrupted_scans().unwrap(), 1);
+
+        let resumed = service
+            .plan_resume(&case.id, &original.scan_run.id)
+            .unwrap();
+        assert_eq!(resumed.executable.len(), 1);
+        assert_eq!(resumed.executable[0].attempt, 2);
+        assert_eq!(
+            resumed.executable[0]
+                .manifest
+                .command
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "oci-dir:/workspace",
+                "-o",
+                "syft-json=/output/syft.json",
+                "--quiet"
+            ]
+        );
+        assert_eq!(
+            resumed.scan_run.engine_runs[0].command_sha256.as_deref(),
+            Some(frozen_command_sha256.as_str())
+        );
+    }
+
+    #[test]
+    fn typed_local_command_resume_rejects_a_tampered_command_commitment() {
+        let fixture = Fixture::with_engines(typed_syft_engine_registry(&[
+            "oci-dir:/workspace",
+            "-o",
+            "syft-json=/output/syft.json",
+            "--quiet",
+        ]));
+        let case = fixture.create();
+        let container_id = attach_test_oci_snapshot(&fixture, &case.id);
+        approve_local_asset(&fixture, &case.id, &container_id);
+        let service = fixture.service();
+        let original = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["syft".into()],
+                    engine_asset_routes: Vec::new(),
+                },
+            )
+            .unwrap();
+        assert_eq!(service.recover_interrupted_scans().unwrap(), 1);
+        let mut tampered = service.show_case(&case.id).unwrap();
+        tampered.scan_runs[0].engine_runs[0].command_sha256 = Some("0".repeat(64));
+        fixture
+            .storage
+            .save_case(&mut tampered, "test.command_commitment_tampered")
+            .unwrap();
+
+        let error = service
+            .plan_resume(&case.id, &original.scan_run.id)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            AppError::NotAvailable(message) if message.contains("command")
+        ));
     }
 
     #[test]

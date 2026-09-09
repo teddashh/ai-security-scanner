@@ -3448,7 +3448,7 @@ impl ContainerRuntime for FakeContainerRuntime {
     }
 }
 
-fn validate_static_manifest_command(command: &[String]) -> AppResult<()> {
+pub(crate) fn validate_static_manifest_command(command: &[String]) -> AppResult<()> {
     if command.is_empty() || command.len() > 128 {
         return Err(AppError::EngineRegistry(
             "engine command must contain between 1 and 128 static argv tokens".into(),

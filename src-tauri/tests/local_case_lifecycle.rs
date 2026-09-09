@@ -1,5 +1,8 @@
 use ai_security_scanner_lib::adapters::builtin_adapter_registry;
 use ai_security_scanner_lib::artifact_store::ArtifactStore;
+use ai_security_scanner_lib::beginner_report::{
+    BeginnerInventoryItemKind, build_beginner_master_report,
+};
 use ai_security_scanner_lib::case_service::{
     CaseExportFormat, CaseService, DurableExecutionReport, PlannedEngineExecution, ScanPlanRequest,
     ScopeApprovalRequest,
@@ -9,8 +12,9 @@ use ai_security_scanner_lib::container_runtime::{
     ScannerCredentialSet,
 };
 use ai_security_scanner_lib::domain::{
-    AiGeneratedArtifactAnswer, Asset, CaseStatus, CoverageStatus, CreateCaseRequest, DataClass,
-    EngineRunStatus, FindingDiffStatus, ScanPermission, ScopeGrant,
+    AiGeneratedArtifactAnswer, Asset, AssetKind, CaseStatus, CoverageStatus, CreateCaseRequest,
+    DataClass, EngineRunStatus, FindingDiffStatus, InventoryObservationKind, ScanPermission,
+    ScopeGrant,
 };
 use ai_security_scanner_lib::export::ExportOptions;
 use ai_security_scanner_lib::orchestrator::{
@@ -811,7 +815,7 @@ fn typed_container_and_kubernetes_inputs_complete_the_product_lifecycle() {
         .plan_scan(
             &case.id,
             ScanPlanRequest {
-                engine_ids: ["trivy", "grype", "kubescape", "kube-bench"]
+                engine_ids: ["syft", "trivy", "grype", "kubescape", "kube-bench"]
                     .into_iter()
                     .map(str::to_owned)
                     .collect(),
@@ -820,7 +824,7 @@ fn typed_container_and_kubernetes_inputs_complete_the_product_lifecycle() {
         )
         .unwrap();
     assert!(plan.not_executed.is_empty());
-    assert_eq!(plan.executable.len(), 4);
+    assert_eq!(plan.executable.len(), 5);
     assert!(plan.executable.iter().all(|execution| {
         execution.assets.len() == 1
             && execution.manifest.input_contracts.iter().any(|contract| {
@@ -828,6 +832,26 @@ fn typed_container_and_kubernetes_inputs_complete_the_product_lifecycle() {
                     && contract.input_profile == references[&execution.assets[0].id].input_profile
             })
     }));
+    let syft_execution = plan
+        .executable
+        .iter()
+        .find(|execution| execution.manifest.id == "syft")
+        .expect("typed OCI input routes to Syft");
+    assert_eq!(syft_execution.assets[0].kind, AssetKind::ContainerImage);
+    assert_eq!(
+        syft_execution
+            .manifest
+            .command
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "oci-dir:/workspace",
+            "-o",
+            "syft-json=/output/syft.json",
+            "--quiet"
+        ]
+    );
 
     let runtime = FakeContainerRuntime::default();
     let orchestrator = Orchestrator::new(&runtime, &artifacts, &adapters);
@@ -858,6 +882,58 @@ fn typed_container_and_kubernetes_inputs_complete_the_product_lifecycle() {
         .map(|execution| expected_finding_count(&execution.manifest.id))
         .sum::<usize>();
     assert_eq!(completed.findings.len(), expected_total);
+    for engine_id in ["trivy", "grype"] {
+        assert!(completed.findings.iter().any(|finding| {
+            finding
+                .evidence
+                .iter()
+                .any(|evidence| evidence.engine_id == engine_id)
+        }));
+    }
+    assert!(completed.findings.iter().all(|finding| {
+        finding
+            .evidence
+            .iter()
+            .all(|evidence| evidence.engine_id != "syft")
+    }));
+    let oci_asset_id = syft_execution.assets[0].id.as_str();
+    let syft_inventory = completed
+        .inventory_observations
+        .iter()
+        .filter(|observation| observation.engine_id == "syft")
+        .collect::<Vec<_>>();
+    assert_eq!(syft_inventory.len(), 1);
+    assert_eq!(syft_inventory[0].asset_id, oci_asset_id);
+    assert!(matches!(
+        &syft_inventory[0].kind,
+        InventoryObservationKind::SoftwareComponent {
+            name,
+            version: Some(version),
+            package_type: Some(package_type),
+            purl: Some(purl),
+        } if name == "example-package"
+            && version == "1.0"
+            && package_type == "deb"
+            && purl == "pkg:deb/debian/example-package@1.0"
+    ));
+    let beginner = build_beginner_master_report(&completed, &plan.scan_run.id).unwrap();
+    assert_eq!(beginner.inventory.counts.software_components, 1);
+    assert!(beginner.inventory.items.iter().any(|item| {
+        item.asset_id == oci_asset_id
+            && matches!(
+                &item.details,
+                BeginnerInventoryItemKind::SoftwareComponent {
+                    name,
+                    version: Some(version),
+                    package_type: Some(package_type),
+                    purl: Some(purl),
+                } if name == "example-package"
+                    && version == "1.0"
+                    && package_type == "deb"
+                    && purl == "pkg:deb/debian/example-package@1.0"
+            )
+            && item.sources.iter().any(|source| source.engine_id == "syft")
+    }));
     assert!(
         completed
             .coverage

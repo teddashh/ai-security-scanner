@@ -776,18 +776,27 @@ function validateSchemaValue(value, rule, path, rootSchema, targetErrors) {
   }
 }
 
-function validateStaticCommand(engine) {
-  const path = `catalog:${engine.id}.command`;
-  if (!Array.isArray(engine.command) || engine.command.length === 0) return;
-  const program = basename(engine.command[0]).toLowerCase();
+function validateStaticArgv(command, path) {
+  if (!Array.isArray(command) || command.length === 0) return;
+  const program = typeof command[0] === "string" ? basename(command[0]).toLowerCase() : "";
   if (shellNames.has(program)) errors.push(`${path}: may not invoke shell ${program}`);
-  for (const token of engine.command) {
+  for (const token of command) {
+    if (typeof token !== "string") continue;
     const lower = token.toLowerCase();
     if (shellNames.has(basename(lower))) errors.push(`${path}: shell token ${token} is forbidden`);
     if (token.includes("\0") || token.includes("${") || token.includes("$(") || token.includes("{{") || token.includes("`")) {
       errors.push(`${path}: dynamic or unsafe token ${JSON.stringify(token)}`);
     }
     if ([";", "&&", "||", "|", ">", ">>", "<"].includes(token)) errors.push(`${path}: shell operator ${token} is forbidden`);
+  }
+}
+
+function validateStaticCommand(engine) {
+  validateStaticArgv(engine.command, `catalog:${engine.id}.command`);
+  for (const [index, contract] of (engine.input_contracts ?? []).entries()) {
+    if (contract?.command !== undefined) {
+      validateStaticArgv(contract.command, `catalog:${engine.id}.input_contracts[${index}].command`);
+    }
   }
 }
 
@@ -2220,7 +2229,13 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
     }));
     if (expectedContracts.some((contract) => contract.input_profile === undefined)) {
       errors.push(`${label}: local-artifact engine declares an asset kind without a backend input profile`);
-    } else if (!deepEqual(inputContracts, expectedContracts)) {
+    } else if (!deepEqual(
+      inputContracts.map((contract) => ({
+        asset_kind: contract?.asset_kind,
+        input_profile: contract?.input_profile,
+      })),
+      expectedContracts,
+    )) {
       errors.push(`${label}: input_contracts must bind every supported asset kind to its exact backend profile`);
     }
   } else if (inputContracts.length > 0) {

@@ -1,3 +1,4 @@
+use crate::container_runtime::validate_static_manifest_command;
 use crate::domain::{
     AssetKind, EngineAdmissionIssue, EngineManifest, LocalInputProfile,
     MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS, MIN_ENGINE_EXECUTION_TIMEOUT_SECONDS, ScanPermission,
@@ -435,6 +436,11 @@ fn validate_release_contract(manifest: &EngineManifest) -> AppResult<()> {
                 "local input contracts must exactly bind every supported asset kind",
             ));
         }
+        for contract in &manifest.input_contracts {
+            if let Some(command) = contract.command.as_deref() {
+                validate_static_manifest_command(command)?;
+            }
+        }
     } else if !manifest.input_contracts.is_empty() {
         return Err(fail(
             "an engine without local-artifact permission cannot declare local input contracts",
@@ -589,6 +595,42 @@ mod tests {
                 .execution_timeout_seconds(),
             3_600
         );
+    }
+
+    #[test]
+    fn unsafe_typed_input_commands_isolate_only_their_engine() {
+        for command in [
+            serde_json::json!([]),
+            serde_json::json!(["sh", "-c", "syft dir:/workspace"]),
+            serde_json::json!(["oci-dir:/workspace", "${target}"]),
+        ] {
+            let mut entries: Vec<Value> = serde_json::from_str(BUILTIN_CATALOG).unwrap();
+            let syft = entries
+                .iter_mut()
+                .find(|entry| entry["id"] == "syft")
+                .expect("Syft catalog entry");
+            syft["supported_asset_kinds"] = serde_json::json!(["repository", "container_image"]);
+            syft["input_contracts"] = serde_json::json!([
+                {
+                    "asset_kind": "repository",
+                    "input_profile": "repository_working_tree"
+                },
+                {
+                    "asset_kind": "container_image",
+                    "input_profile": "container_image_oci_layout",
+                    "command": command
+                }
+            ]);
+
+            let registry = EngineRegistry::load_catalog(&serde_json::to_string(&entries).unwrap())
+                .expect("one invalid engine remains isolated");
+            assert!(registry.get("syft").is_none());
+            assert!(registry.get("grype").is_some());
+            assert!(registry.admission_issues().iter().any(|issue| {
+                issue.engine_id.as_deref() == Some("syft")
+                    && issue.code == "engine_contract_invalid"
+            }));
+        }
     }
 
     #[test]

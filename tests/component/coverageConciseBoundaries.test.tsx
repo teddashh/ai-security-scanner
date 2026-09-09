@@ -397,7 +397,45 @@ test("guided local Start keeps the exact copy, read-only check, and unchanged-so
     ["local_artifact"],
     "The user explicitly selected this saved local copy and confirmed the recommended read-only checks.",
     undefined,
-    ["gitleaks", "semgrep", "trivy", "grype", "trufflehog", "kics", "checkov"],
+    ["gitleaks", "semgrep", "syft", "trivy", "grype", "trufflehog", "kics", "checkov"],
+  );
+});
+
+test("guided container Start routes Syft inventory with Trivy and Grype vulnerability checks", async () => {
+  const onStartScan = vi.fn().mockResolvedValue(true);
+  const { container, getByText } = renderRoute({
+    assessmentIntent: "container_image",
+    requestedActivities: ["local_artifact_analysis"],
+    onStartScan,
+    assets: [pendingAsset({
+      name: "payments-image-copy",
+      type: "image",
+      platform: "container",
+      localInputProfile: "container_image_oci_layout",
+    })],
+  });
+
+  expect(getByText(
+    "Pick one exported OCI image folder. Syft inventories its software components, while Trivy and Grype check them for known vulnerabilities. Everything runs locally without starting the image.",
+  )).not.toBeNull();
+
+  await waitFor(() => {
+    expect(container.querySelector(".coverage-guided-boundary")?.textContent).toBe(
+      "Saved copy: payments-image-copy · Read-only checks: Review the saved local copy. The original source stays unchanged.",
+    );
+  });
+
+  const start = Array.from(container.querySelectorAll<HTMLButtonElement>(".scope-confirmation-panel button[type='submit']"))
+    .find((button) => button.textContent?.includes("Confirm and start scan"));
+  expect(start).toBeTruthy();
+  fireEvent.click(start!);
+
+  expect(onStartScan).toHaveBeenCalledWith(
+    ["asset-1"],
+    ["local_artifact"],
+    "The user explicitly selected this saved local copy and confirmed the recommended read-only checks.",
+    undefined,
+    ["syft", "trivy", "grype"],
   );
 });
 
