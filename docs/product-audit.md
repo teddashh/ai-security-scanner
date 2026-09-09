@@ -39,6 +39,11 @@ is also selected, while an inventory-only submission stays in setup with a
 plain-language prompt focused on the first exact-host field. Malformed CIDRs
 still receive their specific validation error before that scan-readiness check.
 
+The collapsed project-details section is optional in storage as well as in the
+screen. If the user does not choose an organization size, the case records
+`Not provided`; it no longer silently invents the 2–49-person band. Existing
+cases with a selected size retain their saved band.
+
 ## What the common paths actually run
 
 ### Repositories
@@ -177,7 +182,8 @@ The high-value remaining gaps are:
    shared HTML export; it does not count as a real scanner or installed-UI run.
 2. Measure time to first useful finding and remove any remaining beginner input
    that does not change target scope or result quality. The known
-   inventory-only creation dead end was removed in `d2599a1`; this still needs
+   inventory-only creation dead end was removed in `d2599a1`, and the hidden
+   organization-size guess was removed in `77c54fc`; this still needs
    observation in a controlled installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced

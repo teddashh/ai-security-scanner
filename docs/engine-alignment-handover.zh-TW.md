@@ -288,6 +288,17 @@ scan-ready 說明並把焦點移到第一個 exact-host 欄位。unit test 同�
 「搭配 repository snapshot 時仍完整保存」，rendered component test 則鎖住錯誤文案、未建立 case
 與 focus 行為。本輪只調整 setup validation／presentation，沒有執行 scanner 或接觸 target。
 
+## 選填的 organization size 不再暗中猜成 2–49 人（`77c54fc`）
+
+`Optional project details` 預設是收合的，但先前表單 state 仍預選 `small`，所以完全沒打開這一區的
+新手也會被保存成 2–49 人。現在 frontend model 有明確的 `unknown`；新建 case 預設保存既有 schema
+可接受的 `Not provided`，native snapshot 重開後也還原為 `unknown`。使用者主動選取的 solo、small、
+medium、large band 與舊 case 都不變，scanner routing／finding priority 也沒有因此改寫。
+
+rendered website setup test 確認收合區內的預設值與送出的 case 都是 unknown；native serialization
+test 確認 wire value 是 `Not provided`；adapter test 確認重開不會再把它投影成 small。這只移除
+product-owned metadata guess，沒有增加問題、權限、目標或 scanner 執行。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -327,6 +338,9 @@ case database、private artifact directory、checked-in outputs 與 `FakeContain
 
 `d2599a1` 新增後，frontend 568 項、component 238 項、TypeScript typecheck 與 production frontend
 build 全部通過。production build 只有既有的大型 chunk 提示，沒有 build failure。
+
+`77c54fc` 新增後，相同的 frontend 568 項、component 238 項、TypeScript typecheck 與 production
+frontend build 再次全部通過；build 仍只有既有的大型 chunk 提示。
 
 ## 後續順序
 
