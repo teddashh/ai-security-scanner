@@ -5624,6 +5624,7 @@ fn resume_captured_execution(
         exit_code: None,
         raw_artifacts,
         findings: Vec::new(),
+        observations: Vec::new(),
         warnings: vec![
             "Normalization resumed from previously hashed local artifacts; the scanner container was not re-run."
                 .into(),
@@ -6836,6 +6837,7 @@ fn terminal_report(
         exit_code: None,
         raw_artifacts: vec![],
         findings: vec![],
+        observations: vec![],
         warnings: vec![],
         unattributed: vec![],
         unevaluated_targets: vec![],
@@ -7203,6 +7205,7 @@ fn persist_terminal_job_state_reconciliation(
             exit_code: None,
             raw_artifacts,
             findings: vec![],
+            observations: vec![],
             warnings: vec![],
             unattributed: vec![],
             unevaluated_targets: vec![],
