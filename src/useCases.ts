@@ -165,7 +165,7 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
     cards: {
       deployed_website: {
         title: "A website or API that is already online",
-        summary: "Let Nuclei identify a public website's technology and run the matching upstream vulnerability and exposure checks.",
+        summary: "Let Nuclei identify a website's technology and run the matching upstream vulnerability and exposure checks.",
         want:
           "An exact website or API URL, including the hostname and the service you want reviewed.",
         prepare:
@@ -292,7 +292,7 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
     cards: {
       deployed_website: {
         title: "已經架好的網站或 API",
-        summary: "讓 Nuclei 辨識公開網站的技術，並執行適用的上游弱點與暴露檢查。",
+        summary: "讓 Nuclei 辨識網站的技術，並執行適用的上游弱點與暴露檢查。",
         want: "一個精確的網站或 API 網址，包含要檢查的主機名稱與服務。",
         prepare: "網址，以及可測試整個 scheme://host:port 網站來源範圍的許可；如果只獲准特定路徑，請勿使用此快速設定。",
         productDoes: "對精確獲准的網站來源範圍執行固定版本的 Nuclei 上游自動網站設定，每秒最多 10 次且同時最多 5 次。",

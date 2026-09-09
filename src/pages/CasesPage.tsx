@@ -227,8 +227,8 @@ const pageCopy = {
     zhTW: "頁面路徑 {path} 只會保留作為參考。Nuclei 會以適用的上游模板檢查畫面所列網站來源範圍 {origin}，不會限制於 {path}。如果只獲准測試特定路徑，請勿使用此快速掃描。",
   },
   websitePreparedInternal: {
-    en: "This is a private or internal address, so the public-website quick profile will not be selected automatically. Its entered path {path} remains context only; review and explicitly authorize the exact internal target and limits on the next screen.",
-    zhTW: "這是私人或內部位址，因此不會自動選取公開網站快速設定。輸入的路徑 {path} 只會保留作為上下文；請在下一頁檢查並明確授權精確的內部目標與限制。",
+    en: "The page path {path} is kept for reference. The fixed Nuclei quick profile checks the displayed internal website origin {origin}; it is not limited to {path}. On the next screen, you must confirm access to this exact internal network target before Start is available. If you are allowed to test only a specific path, do not use this quick scan.",
+    zhTW: "頁面路徑 {path} 只會保留作為參考。固定的 Nuclei 快速設定會檢查畫面所列的內部網站來源範圍 {origin}，不會限制於 {path}。在下一頁明確確認可存取這個精確的內部網路目標後，才能開始掃描。如果只獲准測試特定路徑，請勿使用此快速掃描。",
   },
   websiteQueryRemoved: {
     en: "Query parameters and page fragments are not saved because they can contain private tokens or personal data.",
@@ -1150,7 +1150,14 @@ export function CasesPage({
       {useCaseNeeds(selectedDefinition, "deployed_website") && preparedWebsite?.ok && (
         <InlineNotice tone="info" title={text(pageCopy.websitePreparedTitle, { target: preparedWebsite.value.target })}>
           <p>{explicitTargetRequiresSensitiveNetworkAllowance(preparedWebsite.value.target)
-            ? text(pageCopy.websitePreparedInternal, { path: preparedWebsite.value.service.path })
+            ? text(pageCopy.websitePreparedInternal, {
+              origin: websiteQuickOrigin(
+                preparedWebsite.value.target,
+                preparedWebsite.value.service.protocol,
+                preparedWebsite.value.service.port,
+              ),
+              path: preparedWebsite.value.service.path,
+            })
             : text(pageCopy.websitePrepared, {
               origin: websiteQuickOrigin(
                 preparedWebsite.value.target,

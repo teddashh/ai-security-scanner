@@ -649,7 +649,8 @@ fn semgrep_without_a_source_confidence_is_an_unverified_low_confidence_match() {
         "path": "src/example.py",
         "extra": {"message": "Pattern matched", "severity": "ERROR"},
         "asset_id": "asset-1"
-      }]
+      }],
+      "errors": []
     }"#;
     let output = normalize_bytes(
         "semgrep",
@@ -2321,7 +2322,8 @@ fn source_coordinates_prevent_distinct_upstream_results_from_being_silently_merg
                   "extra": {"message": "exec() used", "severity": "ERROR"},
                   "asset_id": "asset-1"
                 }
-              ]
+              ],
+              "errors": []
             }"#
             .as_slice(),
             ["src/worker.py:line=12:column=3", "src/worker.py:line=29:column=7"],
@@ -2615,6 +2617,297 @@ fn missing_primary_result_shapes_are_incomplete_but_known_empty_shapes_are_compl
             output.warnings
         );
         assert!(output.findings.is_empty());
+    }
+}
+
+#[test]
+fn semgrep_preserves_valid_findings_but_withholds_completion_for_errors_and_bad_rows() {
+    let output = normalize_bytes(
+        "semgrep",
+        br#"{
+          "results": [
+            {
+              "check_id": "example.valid-rule",
+              "path": "src/example.rs",
+              "extra": {"message": "Valid sibling", "severity": "ERROR"},
+              "asset_id": "asset-1"
+            },
+            "ROW_SENTINEL_MUST_NOT_LEAK",
+            {"path": "src/missing-rule.rs", "asset_id": "asset-1"}
+          ],
+          "errors": [{"message": "ERROR_SENTINEL_MUST_NOT_LEAK"}]
+        }"#,
+        "semgrep-malformed-shapes.json",
+        "application/json",
+        "run-semgrep-malformed-shapes",
+    );
+
+    assert!(!output.complete);
+    assert_eq!(output.findings.len(), 1);
+    for expected in [
+        "Semgrep reported one or more scanner errors",
+        "Semgrep finding at /results/1 was not an object",
+        "Semgrep finding at /results/2 lacked its check_id",
+    ] {
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(expected)),
+            "missing {expected:?}: {:?}",
+            output.warnings
+        );
+    }
+    let warnings = output.warnings.join(" ");
+    assert!(!warnings.contains("ERROR_SENTINEL_MUST_NOT_LEAK"));
+    assert!(!warnings.contains("ROW_SENTINEL_MUST_NOT_LEAK"));
+
+    for bytes in [
+        br#"{"results":[]}"#.as_slice(),
+        br#"{"results":[],"errors":{"message":"ERROR_SHAPE_SENTINEL_MUST_NOT_LEAK"}}"#.as_slice(),
+    ] {
+        let missing_errors = normalize_bytes(
+            "semgrep",
+            bytes,
+            "semgrep-errors-shape.json",
+            "application/json",
+            "run-semgrep-errors-shape",
+        );
+        assert!(!missing_errors.complete);
+        assert!(missing_errors.findings.is_empty());
+        assert!(missing_errors.warnings.iter().any(|warning| {
+            warning.contains("Semgrep output lacked its required errors array")
+        }));
+        assert!(
+            !missing_errors
+                .warnings
+                .join(" ")
+                .contains("ERROR_SHAPE_SENTINEL_MUST_NOT_LEAK")
+        );
+    }
+}
+
+#[test]
+fn kics_preserves_valid_files_but_withholds_completion_for_malformed_declared_shapes() {
+    let output = normalize_bytes(
+        "kics",
+        br#"{
+          "queries": [
+            {
+              "query_id": "11111111-1111-1111-1111-111111111111",
+              "query_name": "Valid sibling one",
+              "severity": "HIGH",
+              "files": [{"file_name": "infra/one.tf", "asset_id": "asset-1"}]
+            },
+            "QUERY_SENTINEL_MUST_NOT_LEAK",
+            {"query_name": "Missing id", "files": []},
+            {"query_id": " ", "files": []},
+            {"query_id": "22222222-2222-2222-2222-222222222222"},
+            {
+              "query_id": "33333333-3333-3333-3333-333333333333",
+              "files": "FILES_SENTINEL_MUST_NOT_LEAK"
+            },
+            {
+              "query_id": "44444444-4444-4444-4444-444444444444",
+              "query_name": "Valid sibling two",
+              "files": [
+                "FILE_SENTINEL_MUST_NOT_LEAK",
+                {"file_name": "infra/two.tf", "asset_id": "asset-1"}
+              ]
+            }
+          ]
+        }"#,
+        "kics-malformed-shapes.json",
+        "application/json",
+        "run-kics-malformed-shapes",
+    );
+
+    assert!(!output.complete);
+    assert_eq!(output.findings.len(), 2);
+    for expected in [
+        "KICS query at /queries/1 was not an object",
+        "KICS query at /queries/2 lacked a valid query_id",
+        "KICS query at /queries/3 lacked a valid query_id",
+        "KICS query at /queries/4 lacked its files array",
+        "KICS query at /queries/5 lacked its files array",
+        "KICS file at /queries/6/files/0 was not an object",
+    ] {
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(expected)),
+            "missing {expected:?}: {:?}",
+            output.warnings
+        );
+    }
+    let warnings = output.warnings.join(" ");
+    for sentinel in [
+        "QUERY_SENTINEL_MUST_NOT_LEAK",
+        "FILES_SENTINEL_MUST_NOT_LEAK",
+        "FILE_SENTINEL_MUST_NOT_LEAK",
+    ] {
+        assert!(!warnings.contains(sentinel));
+    }
+
+    for bytes in [br#"{}"#.as_slice(), br#"{"queries":{}}"#.as_slice()] {
+        let missing_queries = normalize_bytes(
+            "kics",
+            bytes,
+            "kics-queries-shape.json",
+            "application/json",
+            "run-kics-queries-shape",
+        );
+        assert!(!missing_queries.complete);
+        assert!(missing_queries.findings.is_empty());
+        assert!(
+            missing_queries
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("KICS output lacked its queries array"))
+        );
+    }
+}
+
+#[test]
+fn trivy_preserves_valid_items_but_withholds_completion_for_malformed_result_shapes() {
+    let output = normalize_bytes(
+        "trivy",
+        br#"{
+          "Results": [
+            {
+              "Target": "TARGET_SENTINEL_MUST_NOT_LEAK",
+              "Vulnerabilities": [
+                {
+                  "VulnerabilityID": "CVE-2026-1000",
+                  "PkgName": "example",
+                  "InstalledVersion": "1.0",
+                  "Severity": "HIGH",
+                  "asset_id": "asset-1"
+                },
+                "ITEM_SENTINEL_MUST_NOT_LEAK"
+              ],
+              "Misconfigurations": {"message": "CATEGORY_SENTINEL_MUST_NOT_LEAK"},
+              "Secrets": "SECRET_CATEGORY_SENTINEL_MUST_NOT_LEAK"
+            },
+            {
+              "Vulnerabilities": {"message": "VULNERABILITY_CATEGORY_SENTINEL_MUST_NOT_LEAK"},
+              "Misconfigurations": [],
+              "Secrets": []
+            },
+            "RESULT_SENTINEL_MUST_NOT_LEAK"
+          ]
+        }"#,
+        "trivy-malformed-shapes.json",
+        "application/json",
+        "run-trivy-malformed-shapes",
+    );
+
+    assert!(!output.complete);
+    assert_eq!(output.findings.len(), 1);
+    for expected in [
+        "Trivy vulnerability at /Results/0/Vulnerabilities/1 was not an object",
+        "Trivy Misconfigurations at /Results/0/Misconfigurations was present but not an array",
+        "Trivy Secrets at /Results/0/Secrets was present but not an array",
+        "Trivy Vulnerabilities at /Results/1/Vulnerabilities was present but not an array",
+        "Trivy result at /Results/2 was not an object",
+    ] {
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(expected)),
+            "missing {expected:?}: {:?}",
+            output.warnings
+        );
+    }
+    let warnings = output.warnings.join(" ");
+    for sentinel in [
+        "TARGET_SENTINEL_MUST_NOT_LEAK",
+        "ITEM_SENTINEL_MUST_NOT_LEAK",
+        "CATEGORY_SENTINEL_MUST_NOT_LEAK",
+        "SECRET_CATEGORY_SENTINEL_MUST_NOT_LEAK",
+        "VULNERABILITY_CATEGORY_SENTINEL_MUST_NOT_LEAK",
+        "RESULT_SENTINEL_MUST_NOT_LEAK",
+    ] {
+        assert!(!warnings.contains(sentinel));
+    }
+}
+
+#[test]
+fn grype_preserves_valid_matches_but_withholds_completion_for_malformed_match_shapes() {
+    let output = normalize_bytes(
+        "grype",
+        br#"{
+          "matches": [
+            {
+              "vulnerability": {"id": "CVE-2026-2000", "severity": "High"},
+              "artifact": {"name": "example", "version": "1.0"},
+              "asset_id": "asset-1"
+            },
+            "MATCH_SENTINEL_MUST_NOT_LEAK",
+            {"artifact": {"name": "MISSING_ID_SENTINEL_MUST_NOT_LEAK"}},
+            {"vulnerability": {"id": null, "description": "NULL_ID_SENTINEL_MUST_NOT_LEAK"}}
+          ]
+        }"#,
+        "grype-malformed-shapes.json",
+        "application/json",
+        "run-grype-malformed-shapes",
+    );
+
+    assert!(!output.complete);
+    assert_eq!(output.findings.len(), 1);
+    for expected in [
+        "Grype match at /matches/1 was not an object",
+        "Grype match at /matches/2 lacked vulnerability.id",
+        "Grype match at /matches/3 lacked vulnerability.id",
+    ] {
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(expected)),
+            "missing {expected:?}: {:?}",
+            output.warnings
+        );
+    }
+    let warnings = output.warnings.join(" ");
+    for sentinel in [
+        "MATCH_SENTINEL_MUST_NOT_LEAK",
+        "MISSING_ID_SENTINEL_MUST_NOT_LEAK",
+        "NULL_ID_SENTINEL_MUST_NOT_LEAK",
+    ] {
+        assert!(!warnings.contains(sentinel));
+    }
+}
+
+#[test]
+fn repo_adapters_accept_their_explicit_empty_result_shapes_without_warnings() {
+    for (engine_id, bytes) in [
+        ("semgrep", br#"{"results":[],"errors":[]}"#.as_slice()),
+        ("kics", br#"{"queries":[]}"#.as_slice()),
+        ("trivy", br#"{"Results":[]}"#.as_slice()),
+        (
+            "trivy",
+            br#"{"Results":[{"Vulnerabilities":[],"Misconfigurations":[],"Secrets":[]}]}"#
+                .as_slice(),
+        ),
+        ("grype", br#"{"matches":[]}"#.as_slice()),
+    ] {
+        let output = normalize_bytes(
+            engine_id,
+            bytes,
+            &format!("{engine_id}-empty-shape.json"),
+            "application/json",
+            "run-repo-empty-shape",
+        );
+        assert!(
+            output.complete,
+            "{engine_id} rejected its explicit empty shape: {:?}",
+            output.warnings
+        );
+        assert!(output.findings.is_empty());
+        assert!(output.warnings.is_empty());
     }
 }
 

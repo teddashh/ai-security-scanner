@@ -12,5 +12,6 @@
       "start": { "line": 2 },
       "extra": { "severity": "ERROR" }
     }
-  ]
+  ],
+  "errors": []
 }

@@ -2722,6 +2722,20 @@ fn extract_semgrep(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
         push_warning(warnings, "Semgrep expected a JSON document");
         return Vec::new();
     };
+    // Semgrep errors may contain source paths and scanner/target-controlled
+    // messages. Their presence affects completeness, but only this fixed
+    // aggregate warning leaves the raw artifact.
+    match root.get("errors").and_then(Value::as_array) {
+        Some(errors) if !errors.is_empty() => push_warning(
+            warnings,
+            "Semgrep reported one or more scanner errors; valid findings were preserved, but the error details remain only in the raw artifact and completeness cannot be established",
+        ),
+        Some(_) => {}
+        None => push_warning(
+            warnings,
+            "Semgrep output lacked its required errors array; valid findings were preserved, but completeness cannot be established",
+        ),
+    }
     let Some(results) = root.get("results").and_then(Value::as_array) else {
         push_warning(warnings, "Semgrep output had no results array");
         return Vec::new();
@@ -2731,13 +2745,29 @@ fn extract_semgrep(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
         .take(MAX_RECORDS)
         .enumerate()
         .filter_map(|(index, value)| {
-            let object = value.as_object()?;
-            let rule_id = exact_rule_string_any(object, &["check_id"])?;
+            let pointer = format!("/results/{index}");
+            let Some(object) = value.as_object() else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Semgrep finding at {pointer} was not an object; the raw record was retained"
+                    ),
+                );
+                return None;
+            };
+            let Some(rule_id) = exact_rule_string_any(object, &["check_id"]) else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Semgrep finding at {pointer} lacked its check_id; the raw record was retained"
+                    ),
+                );
+                return None;
+            };
             let path = string_any(object, &["path"]).unwrap_or_else(|| "source-file".into());
             let line = value.pointer("/start/line").and_then(positive_u32_scalar);
             let column = value.pointer("/start/col").and_then(positive_u32_scalar);
             let location = source_coordinate_location(&path, line, column, None);
-            let pointer = format!("/results/{index}");
             Some(with_scanner_details(
                 record_with_confidence_fallback!(
                     pointer,
@@ -3134,24 +3164,59 @@ fn extract_kics(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sour
         return Vec::new();
     };
     let Some(queries) = root.get("queries").and_then(Value::as_array) else {
+        push_warning(
+            warnings,
+            "KICS output lacked its queries array; the raw artifact was retained",
+        );
         return Vec::new();
     };
     let mut records = Vec::new();
     for (query_index, query) in queries.iter().enumerate() {
+        let query_pointer = format!("/queries/{query_index}");
         let Some(query_object) = query.as_object() else {
+            push_warning(
+                warnings,
+                format!(
+                    "KICS query at {query_pointer} was not an object; the raw record was retained"
+                ),
+            );
             continue;
         };
-        let Some(rule_id) = exact_rule_string_any(query_object, &["query_id"]) else {
+        let Some(rule_id) = query_object
+            .get("query_id")
+            .and_then(Value::as_str)
+            .filter(|value| exact_mapping_source_rule(value).is_some())
+            .map(str::to_owned)
+        else {
+            push_warning(
+                warnings,
+                format!(
+                    "KICS query at {query_pointer} lacked a valid query_id; the raw record was retained"
+                ),
+            );
             continue;
         };
         let title = string_any(query_object, &["query_name"])
             .unwrap_or_else(|| format!("KICS query {rule_id}"));
         let severity = string_any(query_object, &["severity"]).unwrap_or_else(|| "unknown".into());
         let Some(files) = query_object.get("files").and_then(Value::as_array) else {
+            push_warning(
+                warnings,
+                format!(
+                    "KICS query at {query_pointer} lacked its files array; the raw record was retained"
+                ),
+            );
             continue;
         };
         for (file_index, file) in files.iter().enumerate() {
+            let file_pointer = format!("{query_pointer}/files/{file_index}");
             let Some(file_object) = file.as_object() else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "KICS file at {file_pointer} was not an object; the raw record was retained"
+                    ),
+                );
                 continue;
             };
             let path =
@@ -3171,7 +3236,7 @@ fn extract_kics(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sour
             .join(",");
             records.push(with_scanner_details(
                 record_with_derived_confidence!(
-                    format!("/queries/{query_index}/files/{file_index}"),
+                    file_pointer,
                     rule_id.clone(),
                     title.clone(),
                     severity.clone(),
@@ -3218,7 +3283,14 @@ fn extract_trivy(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
     };
     let mut records = Vec::new();
     for (result_index, result) in results.iter().enumerate() {
+        let result_pointer = format!("/Results/{result_index}");
         let Some(result_object) = result.as_object() else {
+            push_warning(
+                warnings,
+                format!(
+                    "Trivy result at {result_pointer} was not an object; the raw record was retained"
+                ),
+            );
             continue;
         };
         let target = string_any(result_object, &["Target", "target"])
@@ -3242,7 +3314,16 @@ fn extract_trivy(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                 "Secrets" => ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch,
                 _ => unreachable!("closed Trivy result kinds"),
             };
-            let Some(items) = result_object.get(field).and_then(Value::as_array) else {
+            let Some(category) = result_object.get(field) else {
+                continue;
+            };
+            let Some(items) = category.as_array() else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Trivy {field} at {result_pointer}/{field} was present but not an array; the raw value was retained"
+                    ),
+                );
                 continue;
             };
             for (item_index, item) in items.iter().enumerate() {
@@ -3365,22 +3446,38 @@ fn extract_grype(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
         .take(MAX_RECORDS)
         .enumerate()
         .filter_map(|(index, value)| {
-            let rule_id = exact_nested_rule_scalar(value, &["vulnerability", "id"])?;
+            let pointer = format!("/matches/{index}");
+            let Some(object) = value.as_object() else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Grype match at {pointer} was not an object; the raw record was retained"
+                    ),
+                );
+                return None;
+            };
+            let Some(rule_id) = exact_nested_rule_scalar(value, &["vulnerability", "id"]) else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Grype match at {pointer} lacked vulnerability.id; the raw record was retained"
+                    ),
+                );
+                return None;
+            };
             let package =
                 nested_string(value, &["artifact", "name"]).unwrap_or_else(|| "package".into());
             let location = nested_string(value, &["artifact", "locations", "0", "path"])
                 .unwrap_or_else(|| package.clone());
             Some(with_scanner_details(
                 record_with_derived_confidence!(
-                    format!("/matches/{index}"),
+                    pointer,
                     rule_id.clone(),
                     format!("Vulnerable package {package} ({rule_id})"),
                     nested_string(value, &["vulnerability", "severity"])
                         .unwrap_or_else(|| "unknown".into()),
                     location,
-                    value
-                        .as_object()
-                        .and_then(|object| string_any(object, &["asset_id"])),
+                    string_any(object, &["asset_id"]),
                     derived_confidence(ConfidenceBasisCode::AdvisoryVersionMatch),
                     EvidenceKind::PackageInventory,
                     references_from(value),

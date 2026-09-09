@@ -460,6 +460,26 @@ func TestBuildScanRequestPreservesExactTargetPortsAndRate(t *testing.T) {
 	}
 }
 
+func TestBuildScanRequestKeepsGrantTimeoutOutOfVTLifetimePreferences(t *testing.T) {
+	document := validScope(time.Now().UTC())
+	unit := scanUnit{AssetID: document.Assets[0].ID, Grant: *document.Assets[0].Grants[0].ExternalScope}
+	unit.Grant.RatePolicy.TimeoutSeconds = 15
+	request := buildScanRequest(unit, testRelays(), unit.Grant.TemplatePolicy.AllowedTemplateIDs)
+
+	preferences := make(map[string]string, len(request.ScanPreferences))
+	for _, preference := range request.ScanPreferences {
+		preferences[preference.ID] = preference.Value
+	}
+	if preferences["checks_read_timeout"] != "15" {
+		t.Fatalf("grant timeout did not remain the network read timeout: %#v", preferences)
+	}
+	for _, lifetimePreference := range []string{"plugins_timeout", "scanner_plugins_timeout"} {
+		if _, present := preferences[lifetimePreference]; present {
+			t.Fatalf("grant timeout escaped into VT lifetime preference %s: %#v", lifetimePreference, preferences)
+		}
+	}
+}
+
 func TestRunUnitCancellationStopsAndDeletesExactScan(t *testing.T) {
 	const scanID = "123e4567-e89b-12d3-a456-426614174000"
 	type observedRequest struct {

@@ -1220,8 +1220,10 @@ func buildScanRequest(unit scanUnit, relays *unitRelays, selected []string) scan
 		{ID: "open_sock_max_attempts", Value: "1"},
 		{ID: "timeout_retry", Value: "0"},
 		{ID: "optimize_test", Value: "yes"},
-		{ID: "plugins_timeout", Value: timeout},
-		{ID: "scanner_plugins_timeout", Value: timeout},
+		// Keep the grant's per-request timeout on network reads only. Greenbone's
+		// plugins_timeout preferences bound an entire VT lifetime, so reusing this
+		// value there would terminate legitimate upstream checks prematurely. The
+		// pinned scanner defaults apply instead, inside runUnit's bounded context.
 		{ID: "time_between_request", Value: strconv.Itoa(requestDelay)},
 		{ID: "unscanned_closed", Value: "yes"},
 		{ID: "unscanned_closed_udp", Value: "yes"},

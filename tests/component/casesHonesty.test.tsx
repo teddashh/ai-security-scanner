@@ -564,6 +564,40 @@ test("a beginner can create a website scan without inventing a project name", as
   expect(onCreate.mock.calls[0]?.[0].name).toBe("portal.example.test");
 });
 
+test("an internal website shortcut promises the fixed profile and the required network confirmation", async () => {
+  const onCreate = vi.fn(() => Promise.resolve(true));
+  const { container, getByLabelText } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "deployed_website",
+    selectionKey: 1,
+    onCreate,
+  });
+
+  fireEvent.change(getByLabelText(/Website or API URL/u), {
+    target: { value: "https://10.20.30.40:8443/admin" },
+  });
+  expect(container.querySelector(".inline-notice")?.textContent).toContain(
+    "The fixed Nuclei quick profile checks the displayed internal website origin https://10.20.30.40:8443; it is not limited to /admin.",
+  );
+  expect(container.querySelector(".inline-notice")?.textContent).toContain(
+    "On the next screen, you must confirm access to this exact internal network target before Start is available.",
+  );
+  fireEvent.submit(container.querySelector(".create-case-panel")!);
+
+  await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+  expect(onCreate.mock.calls[0]?.[0].knownAssets).toEqual([{
+    kind: "external_target",
+    value: "10.20.30.40",
+    internetExposure: "internal",
+    webService: {
+      protocol: "https",
+      port: 8443,
+      path: "/admin",
+    },
+  }]);
+});
+
 test("a guided source-code scan chooses and attaches its folder in one creation action", async () => {
   const onCreate = vi.fn(() => Promise.resolve(true));
   const onCreateWithWorkspace = vi.fn(() => Promise.resolve(true));

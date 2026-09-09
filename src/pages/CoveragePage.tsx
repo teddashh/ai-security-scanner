@@ -308,7 +308,7 @@ const pageCopy = {
   knownTargetsBody: bilingual("Turn the targets from your scan project into a review list.", "把掃描專案中的目標整理成可確認的清單。"),
   networkReadyTitle: bilingual("Review your network target", "確認你的網路目標"),
   networkReadyBody: bilingual("Check the exact website, IP address, or internal network below. We've already chosen a useful low-impact starting point.", "在下方確認精確的網站、IP 位址或內部網路；我們已準備好實用的低影響起始設定。"),
-  websiteQuickReadyBody: bilingual("Review the exact public website address below. The fixed Nuclei quick scan is already selected.", "在下方確認精確的公開網站來源範圍；固定的 Nuclei 快速掃描已自動選取。"),
+  websiteQuickReadyBody: bilingual("Review the exact website address below. The fixed Nuclei quick scan is already selected.", "在下方確認精確的網站來源範圍；固定的 Nuclei 快速掃描已自動選取。"),
   networkReadyAction: bilingual("Review this target", "確認這個目標"),
   otherInputsSummary: bilingual("Other ways to add scan inputs", "其他加入掃描內容的方式"),
   otherInputsBody: bilingual("Open these technical options only when the suggested path does not match what you have.", "只有建議路徑不符合現況時，才需要打開這些技術選項。"),
@@ -553,7 +553,7 @@ const pageCopy = {
   externalEyebrow: bilingual("Target confirmation", "確認掃描目標"),
   externalTitle: bilingual("Confirm {name}", "確認 {name}"),
   externalDescription: bilingual("We've chosen conservative settings. Confirm this is your website or internal system, then start.", "我們已選好保守設定；確認這是你的網站或內部系統，然後直接開始。"),
-  websiteQuickDescription: bilingual("This scan is limited to the public website address and fixed checks shown below. Confirm it, then start.", "這次掃描只會使用下方顯示的公開網站來源範圍與固定檢查。確認後即可開始。"),
+  websiteQuickDescription: bilingual("This scan is limited to the website origin and fixed checks shown below. Confirm it, then start.", "這次掃描只會使用下方顯示的網站來源範圍與固定檢查。確認後即可開始。"),
   guidedExternalDescription: bilingual("This is the exact target saved in your scan project.", "這是掃描專案中保存的精確目標。"),
   advancedScanSettings: bilingual("Advanced scan settings", "進階掃描設定"),
   advancedScanSettingsHelp: bilingual("Connection details, speed limits, and the active-test list", "連線細節、速度限制與主動測試清單"),
@@ -1061,7 +1061,6 @@ export function CoveragePage({
   const guidedLowImpactNetwork = guidedNetworkRoute && externalActivity === "low_impact_external";
   const guidedWebsiteQuickProfile = Boolean(
     assessmentIntent === "deployed_website"
-    && selectedExternalAsset?.internetExposed === true
     && selectedWebsiteService
     && externalActivity === "active_external",
   );
@@ -1287,7 +1286,7 @@ export function CoveragePage({
     setSelectedAssets((current) => {
       if (current.length > 0) return current;
       setScopeModes(
-        assessmentIntent === "deployed_website" && asset.internetExposed === true
+        assessmentIntent === "deployed_website" && Boolean(asset.declaredWebService)
           ? ["active_external"]
           : suggestedModesForAsset(requestedActivities, asset),
       );

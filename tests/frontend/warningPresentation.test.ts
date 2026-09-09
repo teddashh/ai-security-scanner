@@ -114,6 +114,63 @@ test("redaction placeholders and warnings from another build fall back unchanged
   );
 });
 
+test("repo adapter shape-loss warnings have bounded Traditional Chinese presentations", () => {
+  const cases = [
+    [
+      "Semgrep output lacked its required errors array; valid findings were preserved, but completeness cannot be established",
+      "Semgrep 輸出缺少必要的 errors 陣列；有效問題已保留，但無法確認完整性",
+    ],
+    [
+      "Semgrep reported one or more scanner errors; valid findings were preserved, but the error details remain only in the raw artifact and completeness cannot be established",
+      "Semgrep 回報一項或多項掃描器錯誤；有效問題已保留，錯誤細節只留在原始成品中，且無法確認完整性",
+    ],
+    [
+      "Semgrep finding at /results/2 lacked its check_id; the raw record was retained",
+      "/results/2 的 Semgrep 問題缺少 check_id；原始記錄已保留",
+    ],
+    [
+      "KICS output lacked its queries array; the raw artifact was retained",
+      "KICS 輸出缺少 queries 陣列；原始成品已保留",
+    ],
+    [
+      "KICS query at /queries/1 was not an object; the raw record was retained",
+      "/queries/1 的 KICS 查詢不是物件；原始記錄已保留",
+    ],
+    [
+      "KICS query at /queries/2 lacked a valid query_id; the raw record was retained",
+      "/queries/2 的 KICS 查詢缺少有效的 query_id；原始記錄已保留",
+    ],
+    [
+      "KICS query at /queries/3 lacked its files array; the raw record was retained",
+      "/queries/3 的 KICS 查詢缺少 files 陣列；原始記錄已保留",
+    ],
+    [
+      "KICS file at /queries/4/files/0 was not an object; the raw record was retained",
+      "/queries/4/files/0 的 KICS 檔案記錄不是物件；原始記錄已保留",
+    ],
+    [
+      "Trivy result at /Results/2 was not an object; the raw record was retained",
+      "/Results/2 的 Trivy 結果不是物件；原始記錄已保留",
+    ],
+    [
+      "Trivy Secrets at /Results/0/Secrets was present but not an array; the raw value was retained",
+      "/Results/0/Secrets 的 Trivy Secrets 已存在但不是陣列；原始值已保留",
+    ],
+    [
+      "Grype match at /matches/1 was not an object; the raw record was retained",
+      "/matches/1 的 Grype 配對記錄不是物件；原始記錄已保留",
+    ],
+    [
+      "Grype match at /matches/2 lacked vulnerability.id; the raw record was retained",
+      "/matches/2 的 Grype 配對記錄缺少 vulnerability.id；原始記錄已保留",
+    ],
+  ] as const;
+
+  for (const [english, zhTW] of cases) {
+    assert.equal(recognizedEngineWarningZhTW(english), zhTW);
+  }
+});
+
 test("every counted control shortfall the disclosure joins has a Chinese form", () => {
   const source = read("../../src-tauri/src/adapters/mod.rs").split("#[cfg(test)]")[0] ?? "";
   const body = (name: string): string => {

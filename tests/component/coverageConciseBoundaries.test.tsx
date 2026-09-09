@@ -1077,9 +1077,9 @@ test("public-record mode keeps the exact website and honest no-contact boundary 
     .some((button) => button.textContent?.includes("Start without contacting this system"))).toBe(true);
 }, 15_000);
 
-test("an internal deployed website never receives the public Nuclei quick profile automatically", async () => {
+test("an internal website uses the fixed Nuclei profile only after explicit private-network confirmation", async () => {
   const onStartScan = vi.fn().mockResolvedValue(true);
-  const { container, queryByText } = renderRoute({
+  const { container, getByRole, queryByText } = renderRoute({
     assessmentIntent: "deployed_website",
     requestedActivities: ["active_external_vulnerability_tests"],
     onStartScan,
@@ -1091,17 +1091,60 @@ test("an internal deployed website never receives the public Nuclei quick profil
       locator: "app.internal.test",
       identifiers: [{ namespace: "dns_name", value: "app.internal.test" }],
       internetExposed: false,
-      declaredWebService: { protocol: "https", port: 443, path: "/health" },
+      declaredWebService: { protocol: "https", port: 8443, path: "/health" },
     })],
   });
 
-  await waitFor(() => expect(container.querySelector(".scope-mode-fieldset")).not.toBeNull());
-  const activeMode = Array.from(container.querySelectorAll<HTMLLabelElement>(".scope-mode-card"))
-    .find((label) => label.textContent?.includes("Approved active website tests"))
-    ?.querySelector<HTMLInputElement>("input");
-  expect(activeMode).toBeTruthy();
-  expect(activeMode?.checked).toBe(false);
-  expect(queryByText(/Whole origin:/)).toBeNull();
-  expect(container.querySelector(".scope-confirmation-panel button[type='submit']")?.hasAttribute("disabled")).toBe(true);
+  await waitFor(() => expect(container.querySelector(".coverage-guided-boundary")?.textContent).toContain(
+    "Website to check: https://app.internal.test:8443, not only the entered page path /health.",
+  ));
+
+  expect(container.querySelector(".scope-mode-fieldset")).toBeNull();
+  expect(queryByText("Approval reference (required)")).toBeNull();
+  expect(queryByText("Exact active-test IDs (required)")).toBeNull();
+
+  const start = getByRole("button", { name: "Confirm and start scan" }) as HTMLButtonElement;
+  const privateNetworkConfirmation = getByRole("checkbox", {
+    name: /I confirm this scan may connect to the selected internal network/i,
+  }) as HTMLInputElement;
+  expect(privateNetworkConfirmation.checked).toBe(false);
+  expect(start.disabled).toBe(true);
   expect(onStartScan).not.toHaveBeenCalled();
+
+  fireEvent.click(privateNetworkConfirmation);
+  expect(privateNetworkConfirmation.checked).toBe(true);
+  expect(start.disabled).toBe(false);
+  fireEvent.click(start);
+
+  await waitFor(() => expect(onStartScan).toHaveBeenCalledTimes(1));
+  expect(onStartScan).toHaveBeenCalledWith(
+    ["asset-internal-website"],
+    ["active_external"],
+    "The user explicitly confirmed authorization to scan the exact https://app.internal.test:8443 origin with the displayed fixed quick profile.",
+    {
+      target: "app.internal.test",
+      protocol: "https",
+      ports: [8443],
+      activity: "active_external",
+      ratePolicy: {
+        requestsPerSecond: 10,
+        concurrency: 5,
+        timeoutSeconds: 10,
+      },
+      templatePolicy: {
+        revision: websiteQuickProfile.templateRevision,
+        profileId: websiteQuickProfile.profileId,
+        allowedTemplateIds: [],
+        allowHeadless: false,
+        allowOutOfBand: false,
+        allowFuzzing: false,
+        allowFileUpload: false,
+        allowDenialOfService: false,
+        allowCredentialAttacks: false,
+      },
+      assertedAuthority: "The user explicitly confirmed authorization to scan the exact https://app.internal.test:8443 origin with the displayed fixed quick profile.",
+      allowSensitiveNetworks: true,
+    },
+    ["nuclei"],
+  );
 });
