@@ -83,14 +83,15 @@ fn baseline_output(engine_id: &str) -> &'static [u8] {
 /// v2 shape with three failing controls across two resources; the Trivy and
 /// Grype fixtures each carry one exclusive vulnerability plus the one both
 /// engines report, which is the ordinary result of scanning one image twice;
-/// the kube-bench fixture is a full run of the shipped six-check snapshot
-/// benchmark against an unhardened node, three of whose checks fail; and the
+/// the kube-bench fixture is a full run of the shipped upstream 26-check CIS
+/// 1.11 node profile against an unhardened snapshot, six of whose checks fail; and the
 /// Checkov fixture carries one check that publishes a severity offline and one
 /// that does not, since almost none of them do.
 fn expected_finding_count(engine_id: &str) -> usize {
     match engine_id {
         "syft" => 0,
-        "kubescape" | "kube-bench" => 3,
+        "kubescape" => 3,
+        "kube-bench" => 6,
         "trivy" | "grype" | "checkov" => 2,
         _ => 1,
     }

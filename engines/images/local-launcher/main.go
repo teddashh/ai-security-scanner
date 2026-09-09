@@ -42,6 +42,10 @@ const (
 	profileOCIImage     = "container_image_oci_layout"
 	profileKubernetes   = "kubernetes_manifests"
 	profileNodeSnapshot = "kubernetes_node_snapshot"
+	nodeSnapshotRoot    = "/workspace/node-snapshot"
+	nodeSnapshotSchema  = "2.0.0"
+	nodeSnapshotProfile = "cis-kubernetes-node-facts"
+	nodeSnapshotBench   = "cis-1.11"
 )
 
 type invocation struct {
@@ -54,15 +58,26 @@ type invocation struct {
 }
 
 type nodeSnapshot struct {
-	SchemaVersion string             `json:"schema_version"`
-	Profile       string             `json:"profile"`
-	CapturedAt    time.Time          `json:"captured_at"`
-	Files         []nodeSnapshotFile `json:"files"`
+	SchemaVersion string                `json:"schema_version"`
+	Profile       string                `json:"profile"`
+	Benchmark     string                `json:"benchmark"`
+	CapturedAt    time.Time             `json:"captured_at"`
+	Files         []nodeSnapshotFile    `json:"files"`
+	Processes     []nodeSnapshotProcess `json:"processes"`
 }
 
 type nodeSnapshotFile struct {
-	Path   string `json:"path"`
-	SHA256 string `json:"sha256"`
+	Path       string `json:"path"`
+	SourcePath string `json:"source_path"`
+	SHA256     string `json:"sha256"`
+	Mode       string `json:"mode"`
+	Owner      string `json:"owner"`
+	Group      string `json:"group"`
+}
+
+type nodeSnapshotProcess struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
 }
 
 type localInputMarker struct {
@@ -92,8 +107,18 @@ func (writer *boundedWriter) Write(value []byte) (int, error) {
 }
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "managed local engine launcher: %v\n", err)
+	name := filepath.Base(os.Args[0])
+	var err error
+	switch name {
+	case "ps":
+		err = runSnapshotPS(nodeSnapshotRoot, os.Args[1:], os.Stdout)
+	case "stat":
+		err = runSnapshotStat(nodeSnapshotRoot, os.Args[1:], os.Stdout)
+	default:
+		err = run(os.Args[1:])
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
 		os.Exit(126)
 	}
 }
@@ -352,7 +377,7 @@ func planInvocation(engineID string, inputProfile string) (invocation, error) {
 		result.program = "/usr/local/bin/kube-bench"
 		result.outputPath = "/output/kube-bench.json"
 		result.arguments = []string{
-			"run", "--benchmark", "ai-security-scanner-snapshot", "--targets", "node",
+			"run", "--benchmark", nodeSnapshotBench, "--targets", "node",
 			"--config-dir", "/opt/ai-security-scanner/kube-bench/cfg",
 			"--config", "/opt/ai-security-scanner/kube-bench/cfg/config.yaml",
 			"--json", "--outputfile", result.outputPath,
@@ -500,58 +525,198 @@ func verifyFile(path string, expected string, maxBytes int64) error {
 }
 
 func validateNodeSnapshot(root string) error {
-	if err := validateDirectory(root, "node snapshot"); err != nil {
+	profile, err := loadNodeSnapshot(root)
+	if err != nil {
 		return err
+	}
+	for _, file := range profile.Files {
+		if err := verifyFile(filepath.Join(root, file.Path), strings.TrimPrefix(file.SHA256, "sha256:"), maxSnapshotBytes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func loadNodeSnapshot(root string) (nodeSnapshot, error) {
+	if err := validateDirectory(root, "node snapshot"); err != nil {
+		return nodeSnapshot{}, err
 	}
 	manifestPath := filepath.Join(root, "profile.json")
 	manifestInfo, err := os.Lstat(manifestPath)
 	if err != nil || !manifestInfo.Mode().IsRegular() || manifestInfo.Size() < 2 || manifestInfo.Size() > 256*1024 {
-		return errors.New("node snapshot requires a bounded regular profile.json")
+		return nodeSnapshot{}, errors.New("node snapshot requires a bounded regular profile.json")
 	}
 	payload, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return fmt.Errorf("read node snapshot profile: %w", err)
+		return nodeSnapshot{}, fmt.Errorf("read node snapshot profile: %w", err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	var profile nodeSnapshot
 	if err := decoder.Decode(&profile); err != nil {
-		return fmt.Errorf("parse node snapshot profile: %w", err)
+		return nodeSnapshot{}, fmt.Errorf("parse node snapshot profile: %w", err)
 	}
 	if err := requireJSONEOF(decoder); err != nil {
-		return fmt.Errorf("parse node snapshot profile: %w", err)
+		return nodeSnapshot{}, fmt.Errorf("parse node snapshot profile: %w", err)
 	}
-	if profile.SchemaVersion != "1.0.0" || profile.Profile != "cis-kubernetes-node-config" || profile.CapturedAt.IsZero() {
-		return errors.New("node snapshot profile identity is invalid")
+	if profile.SchemaVersion != nodeSnapshotSchema || profile.Profile != nodeSnapshotProfile ||
+		profile.Benchmark != nodeSnapshotBench || profile.CapturedAt.IsZero() {
+		return nodeSnapshot{}, errors.New("node snapshot profile identity is invalid")
 	}
-	if len(profile.Files) < 1 || len(profile.Files) > maxSnapshotFiles {
-		return errors.New("node snapshot file inventory is empty or exceeds its bound")
-	}
-	allowed := map[string]bool{
+	allowedFiles := map[string]bool{
 		"kubelet-config.yaml": true,
 		"kubelet.service":     true,
 		"kubelet.conf":        true,
 		"kube-proxy.yaml":     true,
 		"ca.crt":              true,
 	}
-	seen := map[string]bool{}
+	if len(profile.Files) != len(allowedFiles) || len(profile.Files) > maxSnapshotFiles {
+		return nodeSnapshot{}, errors.New("node snapshot must contain the complete bounded file fact set")
+	}
+	seenFiles := map[string]bool{}
 	for _, file := range profile.Files {
-		if !allowed[file.Path] || seen[file.Path] || !validSHA256(file.SHA256) {
-			return fmt.Errorf("node snapshot file inventory contains an invalid entry %q", file.Path)
+		if !allowedFiles[file.Path] || seenFiles[file.Path] || !validSHA256(file.SHA256) ||
+			!validSnapshotSourcePath(file.SourcePath) || !validSnapshotMode(file.Mode) ||
+			!validSnapshotIdentity(file.Owner) || !validSnapshotIdentity(file.Group) {
+			return nodeSnapshot{}, fmt.Errorf("node snapshot file inventory contains an invalid entry %q", file.Path)
 		}
-		seen[file.Path] = true
-		if err := verifyFile(filepath.Join(root, file.Path), strings.TrimPrefix(file.SHA256, "sha256:"), maxSnapshotBytes); err != nil {
-			return err
+		seenFiles[file.Path] = true
+	}
+	allowedProcesses := map[string]bool{"kubelet": true, "kube-proxy": true}
+	if len(profile.Processes) != len(allowedProcesses) {
+		return nodeSnapshot{}, errors.New("node snapshot must contain the complete bounded process fact set")
+	}
+	seenProcesses := map[string]bool{}
+	for _, process := range profile.Processes {
+		if !allowedProcesses[process.Name] || seenProcesses[process.Name] ||
+			!validSnapshotCommand(process.Name, process.Command) {
+			return nodeSnapshot{}, fmt.Errorf("node snapshot process inventory contains an invalid entry %q", process.Name)
 		}
+		seenProcesses[process.Name] = true
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return fmt.Errorf("enumerate node snapshot: %w", err)
+		return nodeSnapshot{}, fmt.Errorf("enumerate node snapshot: %w", err)
 	}
 	if len(entries) != len(profile.Files)+1 {
-		return errors.New("node snapshot contains files outside its immutable inventory")
+		return nodeSnapshot{}, errors.New("node snapshot contains files outside its immutable inventory")
 	}
-	return nil
+	return profile, nil
+}
+
+func validSnapshotSourcePath(value string) bool {
+	return len(value) > 1 && len(value) <= 4096 && strings.HasPrefix(value, "/") &&
+		filepath.Clean(value) == value && !strings.Contains(value, "\\") && !containsControl(value)
+}
+
+func validSnapshotMode(value string) bool {
+	if len(value) != 3 && len(value) != 4 {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '7' {
+			return false
+		}
+	}
+	return true
+}
+
+func validSnapshotIdentity(value string) bool {
+	if len(value) < 1 || len(value) > 64 {
+		return false
+	}
+	for _, character := range value {
+		if !(character >= 'a' && character <= 'z') && !(character >= 'A' && character <= 'Z') &&
+			!(character >= '0' && character <= '9') && character != '_' && character != '-' && character != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+func validSnapshotCommand(name string, value string) bool {
+	return len(value) >= len(name) && len(value) <= 8192 && strings.TrimSpace(value) == value &&
+		strings.Contains(value, name) && !containsControl(value)
+}
+
+func containsControl(value string) bool {
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+func runSnapshotStat(root string, arguments []string, output io.Writer) error {
+	if len(arguments) != 3 || arguments[0] != "-c" ||
+		(arguments[1] != "permissions=%a" && arguments[1] != "%U:%G") {
+		return errors.New("arguments do not match the bounded node snapshot stat contract")
+	}
+	profile, err := loadNodeSnapshot(root)
+	if err != nil {
+		return err
+	}
+	for _, file := range profile.Files {
+		if arguments[2] != filepath.Join(root, file.Path) {
+			continue
+		}
+		if arguments[1] == "permissions=%a" {
+			_, err = fmt.Fprintf(output, "permissions=%s\n", file.Mode)
+		} else {
+			_, err = fmt.Fprintf(output, "%s:%s\n", file.Owner, file.Group)
+		}
+		return err
+	}
+	return errors.New("stat target is outside the bounded node snapshot inventory")
+}
+
+func runSnapshotPS(root string, arguments []string, output io.Writer) error {
+	profile, err := loadNodeSnapshot(root)
+	if err != nil {
+		return err
+	}
+	processes := make(map[string]string, len(profile.Processes))
+	for _, process := range profile.Processes {
+		processes[process.Name] = rewriteSnapshotPaths(root, profile.Files, process.Command)
+	}
+	if len(arguments) == 1 && arguments[0] == "-ef" {
+		for _, name := range []string{"kubelet", "kube-proxy"} {
+			if _, err := fmt.Fprintln(output, processes[name]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if len(arguments) == 2 && arguments[0] == "-fC" {
+		command, ok := processes[arguments[1]]
+		if !ok {
+			return errors.New("process name is outside the bounded node snapshot inventory")
+		}
+		_, err = fmt.Fprintln(output, command)
+		return err
+	}
+	if len(arguments) == 5 && arguments[0] == "-C" && arguments[2] == "-o" &&
+		arguments[3] == "cmd" && arguments[4] == "--no-headers" {
+		command, ok := processes[arguments[1]]
+		if !ok {
+			return errors.New("process name is outside the bounded node snapshot inventory")
+		}
+		_, err = fmt.Fprintln(output, command)
+		return err
+	}
+	return errors.New("arguments do not match the bounded node snapshot ps contract")
+}
+
+func rewriteSnapshotPaths(root string, files []nodeSnapshotFile, command string) string {
+	sorted := append([]nodeSnapshotFile(nil), files...)
+	sort.Slice(sorted, func(left int, right int) bool {
+		return len(sorted[left].SourcePath) > len(sorted[right].SourcePath)
+	})
+	for _, file := range sorted {
+		command = strings.ReplaceAll(command, file.SourcePath, filepath.Join(root, file.Path))
+	}
+	return command
 }
 
 func validSHA256(value string) bool {

@@ -1829,23 +1829,161 @@ fn validate_copied_input_files(
         }
         WorkspaceInputProfile::ContainerImageOciLayout => validate_oci_image_layout(tree_path),
         WorkspaceInputProfile::KubernetesNodeSnapshot => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct NodeSnapshotProfile {
+                schema_version: String,
+                profile: String,
+                benchmark: String,
+                captured_at: String,
+                files: Vec<NodeSnapshotFile>,
+                processes: Vec<NodeSnapshotProcess>,
+            }
+
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct NodeSnapshotFile {
+                path: String,
+                source_path: String,
+                sha256: String,
+                mode: String,
+                owner: String,
+                group: String,
+            }
+
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct NodeSnapshotProcess {
+                name: String,
+                command: String,
+            }
+
             let profile_path = tree_path.join("node-snapshot/profile.json");
             let bytes = read_bounded_stable_file(&profile_path, 256 * 1024).map_err(|_| {
                 AppError::InvalidRequest(
                     "Kubernetes node input requires node-snapshot/profile.json".into(),
                 )
             })?;
-            let profile: Value = serde_json::from_slice(&bytes).map_err(|_| {
+            let identity: Value = serde_json::from_slice(&bytes).map_err(|_| {
                 AppError::InvalidRequest(
                     "Kubernetes node snapshot profile.json is not valid JSON".into(),
                 )
             })?;
-            if profile.get("schema_version").and_then(Value::as_str) != Some("1.0.0")
-                || profile.get("profile").and_then(Value::as_str)
-                    != Some("cis-kubernetes-node-config")
+            if identity.get("schema_version").and_then(Value::as_str) == Some("1.0.0")
+                && identity.get("profile").and_then(Value::as_str)
+                    == Some("cis-kubernetes-node-config")
+            {
+                // The catalog still pins the published schema-1 image. Keep
+                // existing snapshots runnable until a product-owner release
+                // moves the immutable image coordinate to the upstream-profile
+                // build prepared by this source tree.
+                return Ok(());
+            }
+            let profile: NodeSnapshotProfile = serde_json::from_slice(&bytes).map_err(|_| {
+                AppError::InvalidRequest(
+                    "Kubernetes node snapshot profile.json is not valid JSON".into(),
+                )
+            })?;
+            if profile.schema_version != "2.0.0"
+                || profile.profile != "cis-kubernetes-node-facts"
+                || profile.benchmark != "cis-1.11"
+                || chrono::DateTime::parse_from_rfc3339(&profile.captured_at).is_err()
             {
                 return Err(AppError::InvalidRequest(
                     "Kubernetes node snapshot profile identity is invalid".into(),
+                ));
+            }
+
+            let expected_files = BTreeSet::from([
+                "ca.crt",
+                "kube-proxy.yaml",
+                "kubelet-config.yaml",
+                "kubelet.conf",
+                "kubelet.service",
+            ]);
+            let mut observed_files = BTreeSet::new();
+            for file in &profile.files {
+                let source_path_valid = file.source_path.len() > 1
+                    && file.source_path.len() <= MAX_RELATIVE_PATH_BYTES
+                    && file.source_path.starts_with('/')
+                    && !file.source_path.contains(['\\', '\0'])
+                    && !file.source_path.chars().any(char::is_control)
+                    && !file
+                        .source_path
+                        .split('/')
+                        .skip(1)
+                        .any(|part| part.is_empty() || part == "." || part == "..");
+                let identity_valid = |value: &str| {
+                    !value.is_empty()
+                        && value.len() <= 64
+                        && value.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')
+                        })
+                };
+                let mode_valid = matches!(file.mode.len(), 3 | 4)
+                    && file.mode.bytes().all(|byte| matches!(byte, b'0'..=b'7'));
+                let digest = file.sha256.strip_prefix("sha256:");
+                let copied = state
+                    .files
+                    .iter()
+                    .find(|copied| copied.relative_path == format!("node-snapshot/{}", file.path));
+                if !expected_files.contains(file.path.as_str())
+                    || !observed_files.insert(file.path.as_str())
+                    || !source_path_valid
+                    || !mode_valid
+                    || !identity_valid(&file.owner)
+                    || !identity_valid(&file.group)
+                    || digest.is_none_or(|value| !valid_sha256(value))
+                    || copied.is_none_or(|copied| Some(copied.sha256.as_str()) != digest)
+                {
+                    return Err(AppError::InvalidRequest(
+                        "Kubernetes node snapshot file facts are incomplete or invalid".into(),
+                    ));
+                }
+            }
+            if observed_files != expected_files {
+                return Err(AppError::InvalidRequest(
+                    "Kubernetes node snapshot requires the complete bounded file fact set".into(),
+                ));
+            }
+            let expected_snapshot_paths = expected_files
+                .iter()
+                .map(|path| format!("node-snapshot/{path}"))
+                .chain(std::iter::once("node-snapshot/profile.json".into()))
+                .collect::<BTreeSet<_>>();
+            let observed_snapshot_paths = state
+                .files
+                .iter()
+                .filter(|file| file.relative_path.starts_with("node-snapshot/"))
+                .map(|file| file.relative_path.clone())
+                .collect::<BTreeSet<_>>();
+            if observed_snapshot_paths != expected_snapshot_paths {
+                return Err(AppError::InvalidRequest(
+                    "Kubernetes node snapshot contains files outside its immutable inventory"
+                        .into(),
+                ));
+            }
+
+            let expected_processes = BTreeSet::from(["kube-proxy", "kubelet"]);
+            let mut observed_processes = BTreeSet::new();
+            for process in &profile.processes {
+                if !expected_processes.contains(process.name.as_str())
+                    || !observed_processes.insert(process.name.as_str())
+                    || process.command.len() < process.name.len()
+                    || process.command.len() > 8_192
+                    || process.command.trim() != process.command
+                    || process.command.chars().any(char::is_control)
+                    || !process.command.contains(&process.name)
+                {
+                    return Err(AppError::InvalidRequest(
+                        "Kubernetes node snapshot process facts are incomplete or invalid".into(),
+                    ));
+                }
+            }
+            if observed_processes != expected_processes {
+                return Err(AppError::InvalidRequest(
+                    "Kubernetes node snapshot requires the complete bounded process fact set"
+                        .into(),
                 ));
             }
             Ok(())
@@ -2940,6 +3078,53 @@ fn sync_directory(_path: &Path) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_two_node_facts_are_accepted_only_as_a_complete_exact_inventory() {
+        let selected = tempfile::tempdir().expect("node-facts source");
+        let node = selected.path().join("node-snapshot");
+        fs::create_dir(&node).expect("node-facts directory");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../engines/images/kube-bench/testdata/node-snapshot");
+        for name in [
+            "profile.json",
+            "ca.crt",
+            "kube-proxy.yaml",
+            "kubelet-config.yaml",
+            "kubelet.conf",
+            "kubelet.service",
+        ] {
+            fs::copy(fixture.join(name), node.join(name)).expect("copy node-facts fixture");
+        }
+        let artifacts = tempfile::tempdir().expect("node-facts artifacts");
+        create_workspace_snapshot_with_profile(
+            artifacts.path(),
+            "case-node-facts",
+            "source-node-facts",
+            selected.path(),
+            WorkspaceInputProfile::KubernetesNodeSnapshot,
+            WorkspaceSnapshotLimits::default(),
+        )
+        .expect("complete schema-two node facts");
+
+        let profile_path = node.join("profile.json");
+        let mut profile: Value = serde_json::from_slice(&fs::read(&profile_path).unwrap()).unwrap();
+        profile["processes"][0]["name"] = Value::String("unapproved-process".into());
+        fs::write(&profile_path, serde_json::to_vec(&profile).unwrap()).unwrap();
+        let rejected_artifacts = tempfile::tempdir().expect("rejected node-facts artifacts");
+        assert!(
+            create_workspace_snapshot_with_profile(
+                rejected_artifacts.path(),
+                "case-invalid-node-facts",
+                "source-invalid-node-facts",
+                selected.path(),
+                WorkspaceInputProfile::KubernetesNodeSnapshot,
+                WorkspaceSnapshotLimits::default(),
+            )
+            .is_err(),
+            "an unapproved process fact was accepted"
+        );
+    }
 
     #[cfg(windows)]
     #[test]

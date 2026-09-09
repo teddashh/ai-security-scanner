@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStaticPlansNeverUseShellNetworkOrUserArguments(t *testing.T) {
@@ -220,7 +223,8 @@ func TestKubeBenchKeepsUpstreamRemediationInItsReport(t *testing.T) {
 	}
 	arguments := strings.Join(planned.arguments, "\n")
 	if !strings.Contains(arguments, "--json") ||
-		!strings.Contains(arguments, "--outputfile") {
+		!strings.Contains(arguments, "--outputfile") ||
+		!strings.Contains(arguments, "--benchmark\n"+nodeSnapshotBench) {
 		t.Fatalf("kube-bench did not retain its bounded JSON report: %#v", planned.arguments)
 	}
 }
@@ -260,18 +264,7 @@ func TestInputMarkerIsStrictAndRepositoryDefaultsOnlyWhenAbsent(t *testing.T) {
 
 func TestNodeSnapshotRejectsUninventoriedAndAlteredFiles(t *testing.T) {
 	root := t.TempDir()
-	config := filepath.Join(root, "kubelet-config.yaml")
-	if err := os.WriteFile(config, []byte("kind: KubeletConfiguration\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	digest, err := fileSHA256(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile := `{"schema_version":"1.0.0","profile":"cis-kubernetes-node-config","captured_at":"2026-08-24T12:00:00Z","files":[{"path":"kubelet-config.yaml","sha256":"sha256:` + digest + `"}]}`
-	if err := os.WriteFile(filepath.Join(root, "profile.json"), []byte(profile), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeValidNodeSnapshot(t, root)
 	if err := validateNodeSnapshot(root); err != nil {
 		t.Fatalf("valid snapshot rejected: %v", err)
 	}
@@ -284,11 +277,91 @@ func TestNodeSnapshotRejectsUninventoriedAndAlteredFiles(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "unexpected")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(config, []byte("changed"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "kubelet-config.yaml"), []byte("changed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := validateNodeSnapshot(root); err == nil {
 		t.Fatal("altered snapshot file was accepted")
+	}
+}
+
+func TestNodeSnapshotToolsReplayOnlyValidatedFacts(t *testing.T) {
+	root := t.TempDir()
+	writeValidNodeSnapshot(t, root)
+	var output bytes.Buffer
+	if err := runSnapshotStat(root, []string{"-c", "permissions=%a", filepath.Join(root, "kubelet-config.yaml")}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "permissions=600\n" {
+		t.Fatalf("unexpected stat output %q", output.String())
+	}
+	output.Reset()
+	if err := runSnapshotStat(root, []string{"-c", "%U:%G", filepath.Join(root, "ca.crt")}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "root:root\n" {
+		t.Fatalf("unexpected owner output %q", output.String())
+	}
+	output.Reset()
+	if err := runSnapshotPS(root, []string{"-fC", "kubelet"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "--client-ca-file="+filepath.Join(root, "ca.crt")) ||
+		strings.Contains(output.String(), "/etc/kubernetes/pki/ca.crt") {
+		t.Fatalf("snapshot path was not mechanically replayed: %q", output.String())
+	}
+	for _, rejected := range [][]string{{"-aux"}, {"-fC", "unapproved"}, {"-C", "kubelet", "-o", "pid"}} {
+		if err := runSnapshotPS(root, rejected, &output); err == nil {
+			t.Fatalf("ps accepted arguments %#v", rejected)
+		}
+	}
+	if err := runSnapshotStat(root, []string{"-c", "%s", filepath.Join(root, "ca.crt")}, &output); err == nil {
+		t.Fatal("stat accepted an unapproved format")
+	}
+}
+
+func writeValidNodeSnapshot(t *testing.T, root string) {
+	t.Helper()
+	contents := map[string][]byte{
+		"kubelet-config.yaml": []byte("kind: KubeletConfiguration\n"),
+		"kubelet.service":     []byte("ExecStart=/usr/bin/kubelet\n"),
+		"kubelet.conf":        []byte("kind: Config\n"),
+		"kube-proxy.yaml":     []byte("kind: KubeProxyConfiguration\n"),
+		"ca.crt":              []byte("snapshot fixture\n"),
+	}
+	sourcePaths := map[string]string{
+		"kubelet-config.yaml": "/var/lib/kubelet/config.yaml",
+		"kubelet.service":     "/etc/systemd/system/kubelet.service",
+		"kubelet.conf":        "/etc/kubernetes/kubelet.conf",
+		"kube-proxy.yaml":     "/var/lib/kube-proxy/config.yaml",
+		"ca.crt":              "/etc/kubernetes/pki/ca.crt",
+	}
+	paths := []string{"ca.crt", "kube-proxy.yaml", "kubelet-config.yaml", "kubelet.conf", "kubelet.service"}
+	profile := nodeSnapshot{
+		SchemaVersion: nodeSnapshotSchema,
+		Profile:       nodeSnapshotProfile,
+		Benchmark:     nodeSnapshotBench,
+		CapturedAt:    time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC),
+		Processes: []nodeSnapshotProcess{
+			{Name: "kubelet", Command: "/usr/bin/kubelet --client-ca-file=/etc/kubernetes/pki/ca.crt"},
+			{Name: "kube-proxy", Command: "/usr/bin/kube-proxy --config=/var/lib/kube-proxy/config.yaml"},
+		},
+	}
+	for _, path := range paths {
+		if err := os.WriteFile(filepath.Join(root, path), contents[path], 0o600); err != nil {
+			t.Fatal(err)
+		}
+		profile.Files = append(profile.Files, nodeSnapshotFile{
+			Path: path, SourcePath: sourcePaths[path], SHA256: "sha256:" + sha256Sum(contents[path]),
+			Mode: "600", Owner: "root", Group: "root",
+		})
+	}
+	payload, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "profile.json"), payload, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -27,6 +27,8 @@ RUN mkdir -p /src/kube-bench \
     && tar -xzf /tmp/kube-bench-source.tar.gz --strip-components=1 -C /src/kube-bench \
     && cd /src/kube-bench \
     && echo 'b9bb74a6b3661413e6378edc132ad2274983a24899c85828a27c29bb4fb4b980  go.sum' | sha256sum -c - \
+    && echo '276ade4e21a043f508328ce5598c15fd0f421fe60a8d7e41774439cb355bf6a7  cfg/cis-1.11/node.yaml' | sha256sum -c - \
+    && echo 'f8beefa9c5392e5c25d03e802294ad1852ac094d3bf3053903dad718f599e3b7  cfg/cis-1.11/config.yaml' | sha256sum -c - \
     && go mod verify \
     && GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=readonly -buildvcs=false -trimpath \
        -ldflags='-s -w -buildid= -X github.com/aquasecurity/kube-bench/cmd.KubeBenchVersion=v0.16.0' \
@@ -35,7 +37,7 @@ RUN mkdir -p /src/kube-bench \
 FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
 
 LABEL org.opencontainers.image.title="ai-security-scanner kube-bench engine" \
-      org.opencontainers.image.description="Pinned-source kube-bench for explicit immutable node configuration snapshots" \
+      org.opencontainers.image.description="Pinned-source kube-bench CIS 1.11 node profile over explicit immutable node-facts snapshots" \
       org.opencontainers.image.source="https://github.com/aquasecurity/kube-bench" \
       org.opencontainers.image.revision="9f133cb7509ce1dbedfc860e94474588000e25ac" \
       org.opencontainers.image.version="0.16.0-3" \
@@ -43,16 +45,20 @@ LABEL org.opencontainers.image.title="ai-security-scanner kube-bench engine" \
 
 RUN addgroup -g 65532 scanner \
     && adduser -D -H -u 65532 -G scanner scanner \
-    && mkdir -p /workspace /output /opt/ai-security-scanner/kube-bench/cfg/ai-security-scanner-snapshot \
+    && mkdir -p /workspace /output /opt/ai-security-scanner/kube-bench/cfg/cis-1.11 \
     && chown scanner:scanner /output \
-    && chmod 0555 /workspace /opt/ai-security-scanner/kube-bench /opt/ai-security-scanner/kube-bench/cfg /opt/ai-security-scanner/kube-bench/cfg/ai-security-scanner-snapshot
+    && chmod 0555 /workspace /opt/ai-security-scanner/kube-bench /opt/ai-security-scanner/kube-bench/cfg /opt/ai-security-scanner/kube-bench/cfg/cis-1.11 \
+    && rm -f /bin/ps
 
 COPY --from=build /out/kube-bench /usr/local/bin/kube-bench
 COPY --from=launcher /out/ai-security-scanner-engine-entrypoint /usr/local/bin/ai-security-scanner-engine-entrypoint
+COPY --from=launcher /out/ai-security-scanner-engine-entrypoint /usr/local/bin/ps
+COPY --from=launcher /out/ai-security-scanner-engine-entrypoint /bin/ps
+COPY --from=launcher /out/ai-security-scanner-engine-entrypoint /usr/local/bin/stat
 COPY --from=build /src/kube-bench/LICENSE /usr/share/licenses/kube-bench/LICENSE
 COPY engines/images/kube-bench/cfg/config.yaml /opt/ai-security-scanner/kube-bench/cfg/config.yaml
-COPY engines/images/kube-bench/cfg/ai-security-scanner-snapshot/config.yaml /opt/ai-security-scanner/kube-bench/cfg/ai-security-scanner-snapshot/config.yaml
-COPY engines/images/kube-bench/cfg/ai-security-scanner-snapshot/node.yaml /opt/ai-security-scanner/kube-bench/cfg/ai-security-scanner-snapshot/node.yaml
+COPY --from=build /src/kube-bench/cfg/cis-1.11/config.yaml /opt/ai-security-scanner/kube-bench/cfg/cis-1.11/config.yaml
+COPY --from=build /src/kube-bench/cfg/cis-1.11/node.yaml /opt/ai-security-scanner/kube-bench/cfg/cis-1.11/node.yaml
 COPY engines/images/kube-bench/SNAPSHOT-PROFILE.md /usr/share/doc/ai-security-scanner/kube-bench-snapshot-profile.md
 COPY LICENSE /usr/share/licenses/ai-security-scanner/LICENSE
 

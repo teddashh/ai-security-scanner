@@ -68,14 +68,14 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/kube-bench/Dockerfile",
-    "sha256": "sha256:7f6eac59b9e795a100691d640096b8399fa0eb2593f49a54b93d1ac1f01d0cf2",
+    "sha256": "sha256:5ab2502346bfc55417c5b63c45aae7366d3ee7e41f845b5b382664bb05211333",
     "reason": null
   },
   "wrapper": {
     "required": true,
     "strategy": "Accept only the reviewed immutable node-facts snapshot profile through the project-owned launcher.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:c0fca8b02946066d3ec59d152d09eb9e5e7fea0a8f05bb27ce0cbdd6e79b1668"
+    "launcher_sha256": "sha256:d2c267bda951c3dae53e2b88d6e73de7ead2ec947308d2f46ed931a2389d4651"
   },
   "command": [
     "--engine",

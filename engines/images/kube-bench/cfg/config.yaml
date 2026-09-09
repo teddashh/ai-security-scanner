@@ -1,7 +1,7 @@
 ---
 version_mapping: {}
 target_mapping:
-  ai-security-scanner-snapshot:
+  cis-1.11:
     - node
 node:
   components:
@@ -9,7 +9,7 @@ node:
     - proxy
   kubelet:
     bins:
-      - kubelet-snapshot-not-live
+      - kubelet
     confs:
       - /workspace/node-snapshot/kubelet-config.yaml
     defaultconf: /workspace/node-snapshot/kubelet-config.yaml
@@ -24,7 +24,10 @@ node:
     defaultcafile: /workspace/node-snapshot/ca.crt
   proxy:
     bins:
-      - kube-proxy-snapshot-not-live
+      - kube-proxy
     confs:
       - /workspace/node-snapshot/kube-proxy.yaml
     defaultconf: /workspace/node-snapshot/kube-proxy.yaml
+    kubeconfig:
+      - /workspace/node-snapshot/kube-proxy.yaml
+    defaultkubeconfig: /workspace/node-snapshot/kube-proxy.yaml

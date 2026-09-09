@@ -218,9 +218,11 @@ const managedLocalK8sContracts = new Map([
     immutableDockerfileInputs: [
       "go mod verify",
       "go build -mod=readonly",
+      "276ade4e21a043f508328ce5598c15fd0f421fe60a8d7e41774439cb355bf6a7  cfg/cis-1.11/node.yaml",
+      "f8beefa9c5392e5c25d03e802294ad1852ac094d3bf3053903dad718f599e3b7  cfg/cis-1.11/config.yaml",
       "COPY engines/images/kube-bench/cfg/config.yaml /opt/ai-security-scanner/kube-bench/cfg/config.yaml",
-      "COPY engines/images/kube-bench/cfg/ai-security-scanner-snapshot/config.yaml /opt/ai-security-scanner/kube-bench/cfg/ai-security-scanner-snapshot/config.yaml",
-      "COPY engines/images/kube-bench/cfg/ai-security-scanner-snapshot/node.yaml /opt/ai-security-scanner/kube-bench/cfg/ai-security-scanner-snapshot/node.yaml",
+      "COPY --from=build /src/kube-bench/cfg/cis-1.11/config.yaml /opt/ai-security-scanner/kube-bench/cfg/cis-1.11/config.yaml",
+      "COPY --from=build /src/kube-bench/cfg/cis-1.11/node.yaml /opt/ai-security-scanner/kube-bench/cfg/cis-1.11/node.yaml",
       "COPY engines/images/kube-bench/SNAPSHOT-PROFILE.md /usr/share/doc/ai-security-scanner/kube-bench-snapshot-profile.md",
     ],
   }],

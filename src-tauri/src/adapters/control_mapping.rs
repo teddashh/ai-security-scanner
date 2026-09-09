@@ -617,28 +617,35 @@ fn validate_text(label: &str, value: &str, min: usize, max: usize) -> Result<(),
 mod tests {
     use super::*;
 
-    /// The one benchmark the kube-bench image ships, and the only source of
-    /// check identifiers this product can ever observe from that engine.
-    const KUBE_BENCH_SNAPSHOT_NODE_YAML: &str = include_str!(
-        "../../../engines/images/kube-bench/cfg/ai-security-scanner-snapshot/node.yaml"
-    );
+    /// A real execution of the one upstream benchmark the kube-bench image
+    /// ships, and the only source of check identifiers this product can
+    /// observe from that engine.
+    const KUBE_BENCH_CIS_1_11_FIXTURE: &str =
+        include_str!("../../tests/fixtures/adapters/kube-bench.json");
 
     fn catalog_fixture() -> Value {
         serde_json::from_str(CATALOG_JSON).expect("embedded catalog JSON")
     }
 
-    /// Check identifiers defined by the shipped benchmark. Group headings share
-    /// the `- id:` spelling, so only three-part numeric ids are collected.
-    fn kube_bench_snapshot_check_ids() -> Vec<&'static str> {
-        KUBE_BENCH_SNAPSHOT_NODE_YAML
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix("- id: "))
-            .filter(|id| {
-                let parts = id.split('.').collect::<Vec<_>>();
-                parts.len() == 3
-                    && parts.iter().all(|part| {
-                        !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
-                    })
+    fn kube_bench_cis_1_11_check_ids() -> Vec<String> {
+        let fixture: Value = serde_json::from_str(KUBE_BENCH_CIS_1_11_FIXTURE)
+            .expect("valid kube-bench execution fixture");
+        assert_eq!(fixture["Controls"][0]["version"], "cis-1.11");
+        fixture["Controls"][0]["tests"]
+            .as_array()
+            .expect("kube-bench groups")
+            .iter()
+            .flat_map(|group| {
+                group["results"]
+                    .as_array()
+                    .expect("kube-bench results")
+                    .iter()
+            })
+            .map(|result| {
+                result["test_number"]
+                    .as_str()
+                    .expect("kube-bench check id")
+                    .to_owned()
             })
             .collect()
     }
@@ -696,11 +703,9 @@ mod tests {
     /// prefix the launcher itself puts there. Each assertion below names the
     /// upstream fact it encodes.
     ///
-    /// kube-bench and Semgrep are checked exactly rather than by shape, because
-    /// the benchmark and the rule pack this product ships are tracked files. An
-    /// exact check is the strongest form of this guard, and it is available
-    /// precisely where the reachable identifiers are decided in this repo rather
-    /// than upstream.
+    /// kube-bench and Semgrep are checked exactly rather than by shape. The
+    /// kube-bench IDs come from a real execution of the checksum-bound upstream
+    /// CIS 1.11 node profile, while Semgrep's rule pack is tracked directly.
     ///
     /// This does not cover every engine, and the gaps are real rather than
     /// oversights. Nuclei was the fifth broken entry, and no shape check would
@@ -773,17 +778,17 @@ mod tests {
                     );
                     checked += 1;
                 }
-                // This product ships one benchmark and runs only `--targets
-                // node` against it, so the reachable check ids are exactly the
-                // `- id:` lines of the tracked node.yaml. The previous value,
-                // `1.2.1`, is a control-plane check from upstream's own cfg
-                // tree, which the image never copies.
+                // This product ships upstream's checksum-bound CIS 1.11 node
+                // profile and runs only `--targets node`, so the reachable
+                // check ids are exactly those in its real execution fixture.
+                // The previous value, `1.2.1`, is a control-plane check that
+                // this path can never emit.
                 "kube-bench" => {
-                    let defined = kube_bench_snapshot_check_ids();
-                    assert!(!defined.is_empty(), "snapshot benchmark parsed as empty");
+                    let defined = kube_bench_cis_1_11_check_ids();
+                    assert_eq!(defined.len(), 26, "upstream node profile coverage drifted");
                     assert!(
                         defined.iter().any(|id| id == source_rule),
-                        "the shipped snapshot benchmark defines no check {source_rule:?}, \
+                        "the shipped upstream node benchmark defines no check {source_rule:?}, \
                          so kube-bench can never emit it; it defines {defined:?}"
                     );
                     checked += 1;

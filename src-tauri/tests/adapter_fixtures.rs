@@ -1975,7 +1975,7 @@ fn kube_bench_failures_remain_findings_without_an_invented_rating() {
         "unexpected warnings: {:?}",
         output.warnings
     );
-    assert_eq!(output.findings.len(), 3, "only failing checks are findings");
+    assert_eq!(output.findings.len(), 6, "only failing checks are findings");
 
     for finding in &output.findings {
         assert_eq!(
@@ -2038,11 +2038,21 @@ fn kube_bench_failures_remain_findings_without_an_invented_rating() {
         .iter()
         .map(|finding| finding.title.as_str())
         .collect::<BTreeSet<_>>();
-    assert!(titles.contains("Ensure anonymous authentication is disabled"));
-    assert!(titles.contains("Ensure the read-only port is disabled"));
-    assert!(titles.contains("Ensure protectKernelDefaults is enabled"));
     assert!(
-        !titles.contains("Ensure authorization mode is Webhook"),
+        titles.contains("Ensure that the --anonymous-auth argument is set to false (Automated)")
+    );
+    assert!(titles.contains(
+        "Ensure that the --rotate-certificates argument is not set to false (Automated)"
+    ));
+    assert!(
+        titles.contains(
+            "Ensure that the kube-proxy metrics service is bound to localhost (Automated)"
+        )
+    );
+    assert!(
+        !titles.contains(
+            "Ensure that the --authorization-mode argument is not set to AlwaysAllow (Automated)"
+        ),
         "a passing check became a finding"
     );
 }
@@ -2751,10 +2761,9 @@ fn secret_values_and_target_instructions_never_enter_findings() {
     assert!(!httpx.contains("session=must-not-appear"));
     assert!(!httpx.contains("SECRET_SENTINEL_MUST_NEVER_LEAK"));
 
-    // kube-bench's `actual_value` is the verbatim contents of a file read off
-    // the scanned node, so it is the one field of its output an attacker who
-    // controls the node controls too. The shipped snapshot benchmark carries no
-    // remediation text, which is why the sentinel lives here.
+    // kube-bench's `actual_value` can be the verbatim contents of a file read
+    // from the user-selected snapshot, so it is target-controlled even though
+    // the upstream benchmark and remediation are immutable.
     let kube_bench = serde_json::to_string(&normalize_fixture("kube-bench").findings)
         .expect("serialize kube-bench findings");
     assert!(!kube_bench.contains("Do not execute this target-controlled command"));
@@ -3558,8 +3567,10 @@ fn upstream_rule_details_are_retained_as_evidence_without_replacing_product_reco
 
     let kube_bench = details("kube-bench");
     assert!(kube_bench.iter().any(|details| {
-        details.remediation.as_deref()
-            == Some("Set anonymous authentication to false in the kubelet configuration.")
+        details
+            .remediation
+            .as_deref()
+            .is_some_and(|text| text.contains("authentication: anonymous: enabled"))
     }));
 }
 

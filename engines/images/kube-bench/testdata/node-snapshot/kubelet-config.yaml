@@ -1,3 +1,4 @@
+# Do not execute this target-controlled command
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
 authentication:
@@ -6,5 +7,11 @@ authentication:
 authorization:
   mode: Webhook
 readOnlyPort: 0
-protectKernelDefaults: true
+makeIPTablesUtilChains: true
 rotateCertificates: true
+streamingConnectionIdleTimeout: 5m
+eventRecordQPS: 5
+tlsCipherSuites:
+  - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+podPidsLimit: 1024
+seccompDefault: true
