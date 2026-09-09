@@ -190,10 +190,23 @@ test("guided public and combined environment cases require a useful target", () 
   assert.deepEqual(buildKnownAssets({
     ...emptyDraft,
     selectedUseCase: "internal_it_environment",
+    internalTargets: "10.0.0.0/28",
+  }), {
+    ok: false,
+    error: { kind: "missing_environment" },
+  });
+  assert.deepEqual(buildKnownAssets({
+    ...emptyDraft,
+    selectedUseCase: "internal_it_environment",
     hasLocalWorkspace: true,
+    internalTargets: "10.0.0.0/28",
   }), {
     ok: true,
-    knownAssets: [],
+    knownAssets: [{
+      kind: "external_target",
+      value: "10.0.0.0/28",
+      internetExposure: "internal",
+    }],
   });
 });
 

@@ -790,6 +790,32 @@ test("an invalid inventory-only CIDR opens its collapsed field and receives focu
   expect(document.activeElement).toBe(targetsInput);
 });
 
+test("inventory-only ranges cannot create an environment without a scan-ready asset", async () => {
+  const onCreate = vi.fn(() => Promise.resolve(true));
+  const { container, getByLabelText } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "internal_it_environment",
+    selectionKey: 1,
+    onCreate,
+  });
+
+  const hostInput = getByLabelText(/^Exact hostname or IP 1/u);
+  const targetsInput = getByLabelText(/Internal IP addresses or small network ranges/u);
+  fireEvent.change(targetsInput, { target: { value: "10.20.0.0/28" } });
+  fireEvent.submit(container.querySelector(".create-case-panel")!);
+
+  const error = await waitFor(() => {
+    const alert = container.querySelector<HTMLElement>('.form-error[role="alert"]');
+    expect(alert).toBeTruthy();
+    return alert!;
+  });
+  expect(onCreate).not.toHaveBeenCalled();
+  expect(error.textContent).toContain("Add at least one scan-ready project folder");
+  expect(error.textContent).toContain("Inventory-only ranges can be saved alongside");
+  expect(document.activeElement).toBe(hostInput);
+});
+
 test("one environment starts with one generic exact-host row and reviewed common ports", async () => {
   const onCreate = vi.fn(() => Promise.resolve(true));
   const { container, getByLabelText, getByRole, queryByRole } = renderCases({

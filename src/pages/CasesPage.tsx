@@ -218,8 +218,8 @@ const pageCopy = {
     zhTW: "CIDR 網段只會保存為盤點資料。本次執行不會連線或掃描其弱點；要檢查時，請在上方逐一加入精確主機。",
   },
   environmentAtLeastOne: {
-    en: "Add at least one project folder, website or API URL, internal system, or inventory-only range.",
-    zhTW: "請至少加入一個專案資料夾、網站或 API 網址、內部系統，或僅供盤點的網段。",
+    en: "Add at least one scan-ready project folder, website or API URL, or exact internal system. Inventory-only ranges can be saved alongside one of these items.",
+    zhTW: "請至少加入一個可掃描的專案資料夾、網站或 API 網址，或精確的內部系統。僅供盤點的網段可與其中一項一起保存。",
   },
   websitePreparedTitle: { en: "Ready: {target}", zhTW: "已準備：{target}" },
   websitePrepared: {

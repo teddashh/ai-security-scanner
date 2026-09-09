@@ -651,18 +651,6 @@ export const buildKnownAssets = (draft: CaseAssetDraft): BuildKnownAssetsResult 
   if (draft.selectedUseCase === "external_ip_or_domain" && publicTargetValues.length === 0) {
     return { ok: false, error: { kind: "missing_target", target: "public" } };
   }
-  if (
-    draft.selectedUseCase === "internal_it_environment"
-    && internalTargetValues.length === 0
-    && websiteValues.length === 0
-    && internalHosts.length === 0
-    && internalDeviceEndpoints.length === 0
-    && internalEndpointServices.length === 0
-    && !draft.hasLocalWorkspace
-  ) {
-    return { ok: false, error: { kind: "missing_environment" } };
-  }
-
   for (const [target, values] of [
     ["public", publicTargetValues],
     ["internal", internalTargetValues],
@@ -676,6 +664,17 @@ export const buildKnownAssets = (draft: CaseAssetDraft): BuildKnownAssetsResult 
         };
       }
     }
+  }
+
+  if (
+    draft.selectedUseCase === "internal_it_environment"
+    && websiteValues.length === 0
+    && internalHosts.length === 0
+    && internalDeviceEndpoints.length === 0
+    && internalEndpointServices.length === 0
+    && !draft.hasLocalWorkspace
+  ) {
+    return { ok: false, error: { kind: "missing_environment" } };
   }
 
   const preparedTargetExposure = new Map(
