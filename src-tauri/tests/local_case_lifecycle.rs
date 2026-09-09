@@ -1333,29 +1333,38 @@ fn greenbone_framework_report_vertical_preserves_relationships_ai_gating_and_inc
     );
     assert!(!ai.ledger_explanation.contains("greenbone=scanner_error"));
 
-    // The claim that must also survive the remaining framework-export defect:
+    let coverage_states = coverage["selected_run_coverage_states"]
+        .as_object()
+        .expect("selected-run coverage states");
+    assert!(!coverage_states.is_empty());
+    assert_eq!(
+        coverage_states.get("authorized_scan_incomplete"),
+        Some(&serde_json::json!(1))
+    );
     // Greenbone reported this host as dead and errored, so nothing in the
     // standardized export may count it as scanned.
     assert!(
-        coverage["selected_run_coverage_states"]
-            .as_object()
-            .expect("selected-run coverage states")
+        coverage_states
             .get("discovered_authorized_scanned")
             .is_none(),
         "a host Greenbone never evaluated must not be counted as scanned"
     );
-    // The remaining defect is in the Standard-redacted framework projection:
-    // its one selected-run coverage entry does not match the one frozen planned
-    // asset, so the exporter excludes the now-correct incomplete ledger state.
-    // These numbers pin that separate defect; revisit them when it is fixed,
-    // without weakening the no-scanned-state assertion above.
-    assert_eq!(coverage["authorized_incomplete_count"], 0);
-    assert_eq!(coverage["selected_run_coverage_ledger_available"], false);
+    assert_eq!(coverage["authorized_incomplete_count"], 1);
+    assert_eq!(coverage["selected_run_coverage_ledger_available"], true);
     assert_eq!(
         coverage["selected_run_missing_planned_asset_coverage_count"],
-        1
+        0
     );
-    assert_eq!(coverage["selected_run_unmatched_coverage_entry_count"], 1);
+    assert_eq!(coverage["selected_run_unmatched_coverage_entry_count"], 0);
+    assert!(
+        coverage["limitations"]
+            .as_array()
+            .expect("coverage limitations")
+            .iter()
+            .any(|limitation| limitation.as_str().is_some_and(|limitation| {
+                limitation.contains("authorized area(s) were only partly scanned")
+            }))
+    );
     assert!(
         coverage["limitations"]
             .as_array()

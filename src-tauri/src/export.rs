@@ -1131,7 +1131,13 @@ pub(crate) fn case_for_export(
             event.actor = "[redacted]".into();
         }
         for coverage in &mut exported.coverage {
-            coverage.scope_key = "[redacted]".into();
+            let reconstructible_from_asset_id = coverage
+                .asset_id
+                .as_ref()
+                .is_some_and(|asset_id| coverage.scope_key == format!("asset:{asset_id}"));
+            if !reconstructible_from_asset_id {
+                coverage.scope_key = "[redacted]".into();
+            }
             coverage.label = "[redacted]".into();
             coverage.explanation = "[redacted coverage detail]".into();
         }
@@ -2837,6 +2843,76 @@ mod tests {
             contains_sensitive_data: sensitive,
         });
         case
+    }
+
+    #[test]
+    fn standard_redaction_preserves_only_asset_scope_keys_reconstructible_from_asset_id() {
+        let temp = tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let mut case = fixture(&artifact_root, false);
+        let observed_at = case.scan_runs[0].created_at;
+        case.coverage = vec![
+            CoverageEntry {
+                id: "matching-asset".into(),
+                scope_key: "asset:asset-1".into(),
+                label: "private matching label".into(),
+                source_kind: SourceKind::UserDeclared,
+                asset_id: Some("asset-1".into()),
+                status: CoverageStatus::AuthorizedScanIncomplete,
+                explanation: "private matching explanation".into(),
+                last_run_id: Some("run-1".into()),
+                observed_at: Some(observed_at),
+            },
+            CoverageEntry {
+                id: "mismatched-asset".into(),
+                scope_key: "asset:asset-2".into(),
+                label: "private mismatched label".into(),
+                source_kind: SourceKind::UserDeclared,
+                asset_id: Some("asset-1".into()),
+                status: CoverageStatus::AuthorizedScanIncomplete,
+                explanation: "private mismatched explanation".into(),
+                last_run_id: Some("run-1".into()),
+                observed_at: Some(observed_at),
+            },
+            CoverageEntry {
+                id: "source-scope".into(),
+                scope_key: "source:source-1".into(),
+                label: "private source label".into(),
+                source_kind: SourceKind::Dns,
+                asset_id: None,
+                status: CoverageStatus::SourceNotConnectedUnknown,
+                explanation: "private source explanation".into(),
+                last_run_id: Some("run-1".into()),
+                observed_at: Some(observed_at),
+            },
+            CoverageEntry {
+                id: "demo-scope".into(),
+                scope_key: "dns:portal.northstar.example".into(),
+                label: "private demo label".into(),
+                source_kind: SourceKind::Dns,
+                asset_id: Some("asset-1".into()),
+                status: CoverageStatus::AuthorizedScanIncomplete,
+                explanation: "private demo explanation".into(),
+                last_run_id: Some("run-1".into()),
+                observed_at: Some(observed_at),
+            },
+        ];
+
+        let redacted = case_for_export(&case, RedactionProfile::Standard);
+        let coverage_by_id = redacted
+            .coverage
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry))
+            .collect::<BTreeMap<_, _>>();
+
+        let matching = coverage_by_id["matching-asset"];
+        assert_eq!(matching.scope_key, "asset:asset-1");
+        assert_eq!(matching.asset_id.as_deref(), Some("asset-1"));
+        assert_eq!(matching.label, "[redacted]");
+        assert_eq!(matching.explanation, "[redacted coverage detail]");
+        for id in ["mismatched-asset", "source-scope", "demo-scope"] {
+            assert_eq!(coverage_by_id[id].scope_key, "[redacted]", "entry {id}");
+        }
     }
 
     #[test]
