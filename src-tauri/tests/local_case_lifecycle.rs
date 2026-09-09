@@ -1,7 +1,8 @@
 use ai_security_scanner_lib::adapters::builtin_adapter_registry;
 use ai_security_scanner_lib::artifact_store::ArtifactStore;
 use ai_security_scanner_lib::beginner_report::{
-    BeginnerInventoryItemKind, build_beginner_master_report,
+    BeginnerInventoryItemKind, BeginnerReportSummary, CoverageDimensionStatus, ReportLifecycle,
+    build_beginner_master_report,
 };
 use ai_security_scanner_lib::case_service::{
     CaseExportFormat, CaseService, DurableExecutionReport, EngineAssetRoute,
@@ -14,14 +15,15 @@ use ai_security_scanner_lib::container_runtime::{
 use ai_security_scanner_lib::domain::{
     AiGeneratedArtifactAnswer, AssessmentActivity, AssessmentIntent, Asset, AssetKind, CaseStatus,
     CoverageStatus, CreateCaseRequest, DataClass, DeclaredAssetInput, DeclaredAssetKind,
-    DeclaredHostScanInput, DeclaredHostScanProfile, DeclaredNetworkProtocol, EngineRunStatus,
-    FindingDiffStatus, InventoryObservationKind, ScanPermission, ScopeGrant,
-    UnevaluatedTargetCause,
+    DeclaredHostScanInput, DeclaredHostScanProfile, DeclaredNetworkProtocol, DeclaredWebProtocol,
+    DeclaredWebServiceInput, EngineRunStatus, FindingDiffStatus, InventoryObservationKind,
+    ScanPermission, ScopeGrant, UnevaluatedTargetCause,
 };
-use ai_security_scanner_lib::export::ExportOptions;
+use ai_security_scanner_lib::export::{ExportOptions, RedactionProfile, ReportLocale};
 use ai_security_scanner_lib::external_scope::{
     ExternalActivity, ExternalScopeRequest, RatePolicy, TemplatePolicy, TransportProtocol,
 };
+use ai_security_scanner_lib::managed_network::GatewayDestination;
 use ai_security_scanner_lib::orchestrator::{
     EngineExecutionRequest, ExecutionReport, ExecutionStage, Orchestrator,
 };
@@ -47,6 +49,7 @@ const TRIVY_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/trivy.json");
 const GRYPE_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/grype.json");
 const KUBESCAPE_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/kubescape.json");
 const KUBE_BENCH_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/kube-bench.json");
+const NUCLEI_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/nuclei.jsonl");
 const GREENBONE_RESULT_TYPES_FIXTURE: &[u8] =
     include_bytes!("fixtures/adapters/greenbone-result-types.xml");
 
@@ -139,6 +142,60 @@ fn execute_fixture(
     orchestrator
         .execute(&request, &CancellationToken::default())
         .expect("representative scanner execution")
+}
+
+fn execute_external_fixture(
+    orchestrator: &Orchestrator<'_, FakeContainerRuntime>,
+    runtime: &FakeContainerRuntime,
+    execution: &PlannedEngineExecution,
+    output_name: &str,
+    output: Vec<u8>,
+    allowed_destinations: Vec<String>,
+    frozen_destinations: Option<&[GatewayDestination]>,
+) -> ExecutionReport {
+    runtime.set_behavior(FakeRunBehavior {
+        exit_code: Some(0),
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        output_files: BTreeMap::from([(output_name.to_owned(), output)]),
+    });
+    let network = NetworkPolicy::managed(
+        "fixture-mixed-environment-network",
+        format!("fixture-{}-policy", execution.manifest.id),
+        allowed_destinations,
+        "socks5h://172.29.0.1:1080",
+    )
+    .expect("fixture-only managed network contract");
+    let resources = ResourceLimits {
+        memory_mb: execution.manifest.estimated_memory_mb,
+        tmpfs_mb: execution.manifest.estimated_disk_mb.clamp(16, 4_096),
+        ..ResourceLimits::default()
+    };
+    let credentials = ScannerCredentialSet::default();
+    orchestrator
+        .execute(
+            &EngineExecutionRequest {
+                case_id: &execution.case_id,
+                scan_run_id: &execution.scan_run_id,
+                engine_run_id: &execution.engine_run_id,
+                manifest: &execution.manifest,
+                ai_system_applicable: execution.ai_system_applicable,
+                ai_generated_artifact_applicable: execution.ai_generated_artifact
+                    == AiGeneratedArtifactAnswer::Yes,
+                assets: &execution.assets,
+                scope_grants: &execution.scope_grants,
+                frozen_destinations,
+                naabu_launcher_plan: None,
+                expected_naabu_launcher_plan_sha256: None,
+                workspace: None,
+                network_policy: &network,
+                resource_limits: &resources,
+                credentials: &credentials,
+                attempt: execution.attempt,
+            },
+            &CancellationToken::default(),
+        )
+        .expect("fixture-backed external scanner execution")
 }
 
 fn assert_report_provenance(
@@ -712,6 +769,401 @@ fn local_case_lifecycle_preserves_scope_evidence_and_comparison_truth() {
             .collect::<BTreeSet<_>>(),
         unavailable_ids.iter().map(String::as_str).collect()
     );
+}
+
+#[test]
+fn mixed_environment_fake_runtime_reopens_one_shared_report_and_export() {
+    let temporary = tempfile::tempdir().expect("mixed-environment temporary directory");
+    let database_path = temporary.path().join("mixed-casework.db");
+    let artifact_root = temporary.path().join("mixed-artifacts");
+    let signing_key = temporary.path().join("mixed-integrity-key");
+    let storage = Storage::open(&database_path).expect("private mixed-environment storage");
+    let engines = EngineRegistry::load_builtin().expect("supported built-in engine catalog");
+    let adapters = builtin_adapter_registry().expect("built-in adapters");
+    let artifacts = ArtifactStore::open(&artifact_root).expect("private artifact store");
+    let service = CaseService::new(&storage, &engines, &adapters, &artifact_root, &signing_key);
+
+    let case = service
+        .create_case(&CreateCaseRequest {
+            title: "One fixture-backed IT environment".into(),
+            organization_name: "Example organization".into(),
+            employee_range: "1-10".into(),
+            assessment_intent: Some(AssessmentIntent::InternalItEnvironment),
+            ai_generated_artifact: AiGeneratedArtifactAnswer::No,
+            data_classes: vec![DataClass::CredentialsAndSecrets],
+            requested_activities: vec![AssessmentActivity::ActiveExternalVulnerabilityTests],
+            source_kinds: vec![],
+            not_applicable_source_kinds: vec![],
+            declared_assets: vec![
+                DeclaredAssetInput {
+                    kind: DeclaredAssetKind::ExternalTarget,
+                    value: "portal.example.test".into(),
+                    internet_exposed: Some(true),
+                    web_service: Some(DeclaredWebServiceInput {
+                        protocol: DeclaredWebProtocol::Https,
+                        port: 443,
+                        path: "/login".into(),
+                        scan_profile: None,
+                    }),
+                    network_service: None,
+                    host_scan: None,
+                },
+                DeclaredAssetInput {
+                    kind: DeclaredAssetKind::ExternalTarget,
+                    value: "203.0.113.10".into(),
+                    internet_exposed: Some(false),
+                    web_service: None,
+                    network_service: None,
+                    host_scan: Some(DeclaredHostScanInput {
+                        protocol: DeclaredNetworkProtocol::Tcp,
+                        ports: vec![443, 8443],
+                        profile: DeclaredHostScanProfile::GreenboneRemoteSafeV1,
+                    }),
+                },
+            ],
+            notes: Some(
+                "Checked-in outputs and FakeContainerRuntime only; no target contact".into(),
+            ),
+        })
+        .expect("mixed-environment case creation");
+    let website_asset_id = case
+        .assets
+        .iter()
+        .find(|asset| asset.kind == AssetKind::WebService)
+        .expect("declared website asset")
+        .id
+        .clone();
+    let host_asset_id = case
+        .assets
+        .iter()
+        .find(|asset| asset.kind == AssetKind::Host)
+        .expect("declared internal host asset")
+        .id
+        .clone();
+
+    let selected_repository = make_workspace(
+        &temporary.path().join("selected-environment-inputs"),
+        "repository",
+        "mixed-environment",
+    );
+    let repository_snapshot = create_workspace_snapshot(
+        &artifact_root,
+        &case.id,
+        "mixed-repository-source",
+        &selected_repository,
+        WorkspaceSnapshotLimits::default(),
+    )
+    .expect("immutable repository snapshot");
+    let repository_reference = repository_snapshot.reference.clone();
+    let repository_asset_id = repository_snapshot.asset.id.clone();
+    service
+        .attach_workspace_snapshot(&case.id, "Application repository", repository_snapshot)
+        .expect("attach repository to the same environment");
+
+    let nuclei_revision = format!(
+        "nuclei-templates@{}",
+        engines
+            .get("nuclei")
+            .expect("Nuclei manifest")
+            .rule_version
+            .as_deref()
+            .expect("Nuclei template revision")
+    );
+    let greenbone_revision = format!(
+        "greenbone-community-feed@{}",
+        engines
+            .get("greenbone")
+            .expect("Greenbone manifest")
+            .rule_version
+            .as_deref()
+            .expect("Greenbone feed revision")
+    );
+    let expires_at = Utc::now() + Duration::hours(1);
+    let plan = service
+        .authorize_and_persist_scan_before_execution_preflight(
+            &case.id,
+            vec![
+                ScopeApprovalRequest {
+                    asset_id: repository_asset_id.clone(),
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Fixture repository owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: Some("Read-only immutable fixture snapshot".into()),
+                    external_scope: None,
+                },
+                ScopeApprovalRequest {
+                    asset_id: website_asset_id.clone(),
+                    permissions: vec![ScanPermission::ActiveExternalTesting],
+                    confirmed_by: "Fixture website owner".into(),
+                    expires_at: Some(expires_at),
+                    authorization_reference: Some("Approved exact fixture website".into()),
+                    notes: Some("FakeContainerRuntime only; no target contact".into()),
+                    external_scope: Some(ExternalScopeRequest {
+                        target: "portal.example.test".into(),
+                        ports: BTreeSet::from([443]),
+                        protocol: TransportProtocol::Https,
+                        activity: ExternalActivity::ActiveExternal,
+                        rate_policy: RatePolicy {
+                            requests_per_second: 10,
+                            concurrency: 5,
+                            timeout_seconds: 10,
+                        },
+                        template_policy: TemplatePolicy::conservative_profile(
+                            nuclei_revision,
+                            "nuclei_web_safe_v1",
+                        ),
+                        asserted_authority: "Approved exact fixture website origin".into(),
+                        allow_sensitive_networks: false,
+                    }),
+                },
+                ScopeApprovalRequest {
+                    asset_id: host_asset_id.clone(),
+                    permissions: vec![ScanPermission::ActiveExternalTesting],
+                    confirmed_by: "Fixture host owner".into(),
+                    expires_at: Some(expires_at),
+                    authorization_reference: Some("Approved exact fixture host".into()),
+                    notes: Some("FakeContainerRuntime only; no target contact".into()),
+                    external_scope: Some(ExternalScopeRequest {
+                        target: "203.0.113.10".into(),
+                        ports: BTreeSet::from([443, 8443]),
+                        protocol: TransportProtocol::Tcp,
+                        activity: ExternalActivity::ActiveExternal,
+                        rate_policy: RatePolicy {
+                            requests_per_second: 2,
+                            concurrency: 1,
+                            timeout_seconds: 15,
+                        },
+                        template_policy: TemplatePolicy::conservative_profile(
+                            greenbone_revision,
+                            "greenbone_remote_safe_v1",
+                        ),
+                        asserted_authority: "Approved exact fixture host".into(),
+                        allow_sensitive_networks: true,
+                    }),
+                },
+            ],
+            ScanPlanRequest {
+                engine_ids: vec![],
+                engine_asset_routes: vec![
+                    EngineAssetRoute {
+                        engine_id: "gitleaks".into(),
+                        asset_ids: vec![repository_asset_id.clone()],
+                    },
+                    EngineAssetRoute {
+                        engine_id: "nuclei".into(),
+                        asset_ids: vec![website_asset_id.clone()],
+                    },
+                    EngineAssetRoute {
+                        engine_id: "greenbone".into(),
+                        asset_ids: vec![host_asset_id.clone()],
+                    },
+                ],
+            },
+        )
+        .expect("one atomic mixed-environment Start");
+    assert!(plan.not_executed.is_empty());
+    assert_eq!(plan.executable.len(), 3);
+    assert_eq!(plan.scan_run.scope_grant_snapshots.len(), 3);
+    assert_eq!(plan.scan_run.report_asset_snapshots.len(), 3);
+    assert!(plan.executable.iter().all(|execution| {
+        execution.assets.len() == 1
+            && execution.scope_grants.len() == 1
+            && execution.assets[0].id == execution.scope_grants[0].asset_id
+    }));
+
+    let repository_workspace =
+        resolve_workspace_snapshot(&artifact_root, &case.id, &repository_reference)
+            .expect("resolve backend-owned repository snapshot")
+            .tree_path;
+    let nuclei_destinations = [GatewayDestination {
+        hostname: Some("portal.example.test".into()),
+        addresses: BTreeSet::from(["203.0.113.20"
+            .parse()
+            .expect("reserved fixture website address")]),
+        ports: BTreeSet::from([443]),
+        allow_sensitive_networks: false,
+    }];
+    let runtime = FakeContainerRuntime::default();
+    let orchestrator = Orchestrator::new(&runtime, &artifacts, &adapters);
+    for execution in &plan.executable {
+        let report = match execution.manifest.id.as_str() {
+            "gitleaks" => execute_fixture(
+                &orchestrator,
+                &runtime,
+                execution,
+                &repository_workspace,
+                GITLEAKS_FIXTURE.to_vec(),
+            ),
+            "nuclei" => {
+                let output = String::from_utf8(NUCLEI_FIXTURE.to_vec())
+                    .expect("Nuclei fixture is UTF-8")
+                    .replace("service.example.test", "portal.example.test")
+                    .replace("asset-1", &website_asset_id)
+                    .into_bytes();
+                execute_external_fixture(
+                    &orchestrator,
+                    &runtime,
+                    execution,
+                    "nuclei.jsonl",
+                    output,
+                    vec!["portal.example.test:443".into()],
+                    Some(&nuclei_destinations),
+                )
+            }
+            "greenbone" => {
+                let scope_grant_id = execution.scope_grants[0].id.as_str();
+                let output = String::from_utf8(GREENBONE_RESULT_TYPES_FIXTURE.to_vec())
+                    .expect("Greenbone fixture is UTF-8")
+                    .replace("asset-1", &host_asset_id)
+                    .replace("grant-1", scope_grant_id)
+                    .into_bytes();
+                execute_external_fixture(
+                    &orchestrator,
+                    &runtime,
+                    execution,
+                    "greenbone.xml",
+                    output,
+                    vec!["203.0.113.10:443".into(), "203.0.113.10:8443".into()],
+                    None,
+                )
+            }
+            unexpected => panic!("unexpected mixed-environment engine {unexpected}"),
+        };
+        assert_eq!(report.checkpoint.stage, ExecutionStage::Completed);
+        assert_eq!(report.raw_artifacts.len(), 3);
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|finding| { finding.asset_ids == [execution.assets[0].id.clone()] })
+        );
+        service
+            .apply_execution_report(&case.id, &DurableExecutionReport::from(&report))
+            .expect("durable mixed execution reconciliation");
+    }
+
+    let completed = service.show_case(&case.id).expect("completed mixed case");
+    let completed_run = completed
+        .scan_runs
+        .iter()
+        .find(|run| run.id == plan.scan_run.id)
+        .expect("completed mixed run");
+    assert!(completed_run.completed_at.is_some());
+    assert!(completed_run.engine_runs.iter().all(|engine_run| {
+        engine_run.status == EngineRunStatus::Completed && engine_run.asset_ids.len() == 1
+    }));
+    assert_eq!(completed.status, CaseStatus::ReadyForHandoff);
+    assert_eq!(completed.raw_artifacts.len(), 9);
+
+    let report = build_beginner_master_report(&completed, &plan.scan_run.id)
+        .expect("one shared beginner report");
+    assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+    assert_eq!(report.state.lifecycle, ReportLifecycle::Final);
+    assert_eq!(report.requested.targets.len(), 3);
+    assert_eq!(report.actual.checks.len(), 3);
+    for (engine_id, asset_id, expected_status) in [
+        (
+            "gitleaks",
+            &repository_asset_id,
+            CoverageDimensionStatus::TestedComplete,
+        ),
+        (
+            "nuclei",
+            &website_asset_id,
+            CoverageDimensionStatus::TestedComplete,
+        ),
+        ("greenbone", &host_asset_id, CoverageDimensionStatus::Failed),
+    ] {
+        let check = report
+            .actual
+            .checks
+            .iter()
+            .find(|check| check.check_id == engine_id)
+            .unwrap_or_else(|| panic!("missing {engine_id} report check"));
+        assert_eq!(
+            check.target_asset_ids.as_slice(),
+            std::slice::from_ref(asset_id)
+        );
+        assert_eq!(check.status, expected_status);
+    }
+    for asset_id in [&repository_asset_id, &website_asset_id, &host_asset_id] {
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| { finding.target_asset_ids == [asset_id.clone()] })
+        );
+    }
+    assert!(report.coverage_gaps.iter().any(|gap| {
+        gap.target_asset_ids == [host_asset_id.clone()] && gap.reason.contains("did not respond")
+    }));
+    assert!(report.coverage_gaps.iter().all(|gap| {
+        !gap.target_asset_ids.contains(&repository_asset_id)
+            && !gap.target_asset_ids.contains(&website_asset_id)
+    }));
+
+    let reopened_storage = Storage::open(&database_path).expect("reopen mixed case database");
+    let reopened = reopened_storage
+        .get_case(&case.id)
+        .expect("reopen the same mixed scan project");
+    let reopened_report = build_beginner_master_report(&reopened, &plan.scan_run.id)
+        .expect("rebuild the mixed report from durable state");
+    assert_eq!(reopened_report, report);
+
+    let reopened_service = CaseService::new(
+        &reopened_storage,
+        &engines,
+        &adapters,
+        &artifact_root,
+        &signing_key,
+    );
+    let destination = temporary.path().join("mixed-environment-report.html");
+    let exported = reopened_service
+        .export_case(
+            &case.id,
+            &plan.scan_run.id,
+            CaseExportFormat::Html,
+            &destination,
+            ExportOptions {
+                redaction: RedactionProfile::None,
+                include_raw_artifacts: false,
+                locale: ReportLocale::En,
+            },
+        )
+        .expect("export reopened mixed beginner report");
+    assert!(
+        reopened_service
+            .verify_stored_export(&case.id, &exported.id)
+            .expect("verify stored mixed HTML export")
+            .valid
+    );
+    let html = fs::read_to_string(destination).expect("read mixed HTML report");
+    for expected in [
+        "Partial",
+        "Application repository",
+        "https://portal.example.test:443",
+        "203.0.113.10",
+        "Potential API key",
+        "phpMyAdmin Panel",
+        "Rated Greenbone alarm NVT",
+        "What was actually tested",
+        "What was not tested",
+        "What to do next",
+    ] {
+        assert!(
+            html.contains(expected),
+            "missing mixed report text: {expected}"
+        );
+    }
+    for secret in [
+        "SECRET_SENTINEL_MUST_NEVER_LEAK",
+        "TARGET_CONTROLLED_ERROR_SENTINEL",
+        "must-not-appear",
+    ] {
+        assert!(!html.contains(secret), "mixed report leaked {secret}");
+    }
+    assert!(!html.contains("<script"));
 }
 
 #[test]
