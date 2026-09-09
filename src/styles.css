@@ -2035,6 +2035,7 @@ button.update-control:hover:not(:disabled) {
 
 .scope-confirmation-panel__heading h3 { margin: 3px 0 0; color: var(--ink-strong); font-size: 1rem; }
 .scope-confirmation-panel__heading p:last-child { margin: 5px 0 0; color: var(--muted); font-size: 0.78rem; }
+.coverage-review-timing { margin: 0; color: var(--ink); font-size: 0.78rem; font-weight: 700; line-height: 1.5; }
 .scope-mode-fieldset { margin: 0; padding: 0; border: 0; }
 .scope-mode-fieldset legend { margin-bottom: 8px; color: var(--ink); font-size: 0.72rem; font-weight: 750; }
 .scope-mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }

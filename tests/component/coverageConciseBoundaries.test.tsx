@@ -385,6 +385,9 @@ test("guided local Start keeps the exact copy, read-only check, and unchanged-so
       "Saved copy: source-tree-copy · Read-only checks: Review the saved local copy. The original source stays unchanged.",
     );
   });
+  expect(container.querySelector(".coverage-review-timing")?.textContent).toBe(
+    "Timing target: a useful result within minutes after tools are ready. Large folders can take longer.",
+  );
   expect(container.querySelector(".scope-mode-fieldset")).toBeNull();
 
   const start = Array.from(container.querySelectorAll<HTMLButtonElement>(".scope-confirmation-panel button[type='submit']"))
@@ -517,6 +520,9 @@ test("public website flow applies the fixed Nuclei quick profile and starts with
       "Website to check: https://example.com:443, not only the entered page path /account. Nuclei identifies the technology and applies matching read-only checks from the pinned upstream template set, at max 10/s, 5 concurrent, and 10s per-request timeout. It does not sign in, submit forms, follow redirects, or exploit findings. If you are allowed to test only a specific path, do not use this quick scan.",
     );
   });
+  expect(container.querySelector(".coverage-review-timing")?.textContent).toBe(
+    "Timing target: a useful result within minutes after tools are ready. Site response time and applicable checks can make it longer.",
+  );
 
   const pageHeader = container.querySelector(".page-header");
   expect(pageHeader?.querySelector("h1")?.textContent).toBe("Review and start");
@@ -776,6 +782,9 @@ test("one IT-environment Start routes repositories and exact website origins int
     ],
   });
 
+  expect(getByText(
+    "Timing target: a first useful result within minutes after tools are ready. Added assets and deeper host checks can extend the full run.",
+  )).not.toBeNull();
   expect(getByText("1 bare host(s) or range(s) are inventory only — not scanned")).not.toBeNull();
   expect(getByText(/These legacy bare hosts or ranges will not be contacted or vulnerability-scanned in this run/i)).not.toBeNull();
   expect(getByText("10.20.0.19")).not.toBeNull();
