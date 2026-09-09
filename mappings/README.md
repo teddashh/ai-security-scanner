@@ -8,9 +8,11 @@ specific source rule is topically related to the named control. It is not a comp
 certification statement, control-effectiveness test, or substitute for expert assessment.
 
 Mappings are deliberately allowlisted by engine and exact source rule.
-Bounded prefixes are used only for the standardized `CVE-` identifier family
-and the reviewed `trufflehog:` adapter namespace, whose emitted results are
-credential findings.
+Bounded prefixes are used only for the standardized `CVE-` identifier family,
+the reviewed `trufflehog:` adapter namespace, whose emitted results are
+credential findings, and the reviewed Greenbone NVT OID arc
+`1.3.6.1.4.1.25623.`, which is the IANA Private Enterprise Number Greenbone
+assigns to every Community Feed vulnerability test.
 Unknown rules remain unmapped; the product never guesses a control from a
 finding title, severity, or target-controlled text. Inventory and discovery
 observations such as Syft, CloudQuery, Naabu, and httpx output are not mapped

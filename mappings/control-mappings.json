@@ -1,10 +1,10 @@
 {
   "schema_version": "1.1",
-  "mapping_version": "2026-09-05.4",
+  "mapping_version": "2026-09-09.1",
   "provenance": {
-    "reviewed_at": "2026-09-05",
+    "reviewed_at": "2026-09-09",
     "review_process": "source_coordinate_and_rationale_review_v1",
-    "canonical_sha256": "500358296263635b2deec0825a195d8b11541737ebf9d57bdfdca70f1d04c84d"
+    "canonical_sha256": "1c9e2b31c6ed5058baed63091ae4d9ee10c2cb19dddc09e3d1982597f6da8296"
   },
   "relationship": "related",
   "disclaimer": "These evidence-to-control references indicate topical relationships only. They do not establish implementation, effectiveness, certification, or compliance.",
@@ -320,6 +320,20 @@
       "source_rule": "4.2.1",
       "controls": ["nist-pr-aa-03", "iso-5-17"],
       "rationale": "Evidence that the kubelet accepts anonymous authentication is related to authentication enforcement and authentication information safeguards. This is the node check the shipped snapshot benchmark runs; the control-plane equivalent is not in scope for this product."
+    },
+    {
+      "engine_id": "greenbone",
+      "match_kind": "prefix",
+      "source_rule": "1.3.6.1.4.1.25623.",
+      "controls": ["nist-id-ra-01", "iso-8-8", "aidefend-h-003-010"],
+      "rationale": "A Greenbone vulnerability-test alarm on an authorized host is evidence related to technical vulnerability handling. For an AI system, AIDEFEND separates build-time dependency admission from the deployed-software remediation lifecycle; this reference points at the deployed lifecycle and does not decide remediation state."
+    },
+    {
+      "engine_id": "greenbone",
+      "match_kind": "prefix",
+      "source_rule": "CVE-",
+      "controls": ["nist-id-ra-01", "iso-8-8", "aidefend-h-003-010"],
+      "rationale": "A Greenbone vulnerability-test alarm on an authorized host is evidence related to technical vulnerability handling. For an AI system, AIDEFEND separates build-time dependency admission from the deployed-software remediation lifecycle; this reference points at the deployed lifecycle and does not decide remediation state."
     }
   ]
 }

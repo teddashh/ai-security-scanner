@@ -678,8 +678,8 @@ mod tests {
     fn embedded_catalog_is_bounded_and_only_uses_known_engines() {
         validate_catalog(ENGINES).expect("valid embedded mappings");
         let provenance = catalog_provenance().expect("embedded provenance");
-        assert_eq!(provenance.mapping_version, "2026-09-05.4");
-        assert_eq!(provenance.reviewed_at, "2026-09-05");
+        assert_eq!(provenance.mapping_version, "2026-09-09.1");
+        assert_eq!(provenance.reviewed_at, "2026-09-09");
         assert_eq!(provenance.review_process, REVIEW_PROCESS_V1);
         assert_eq!(provenance.catalog_sha256.len(), 64);
     }
@@ -792,11 +792,24 @@ mod tests {
                     assert_eq!(source_rule, "CVE-");
                     checked += 1;
                 }
+                // Greenbone names every Community Feed test under the OID arc
+                // of IANA Private Enterprise Number 25623, which is Greenbone.
+                // The launcher copies that OID verbatim, and an OID-less result
+                // falls back to the CVE the feed entry names, so these are the
+                // only two identifier families the adapter can emit.
+                "greenbone" if match_kind == "prefix" => {
+                    assert!(
+                        source_rule == "1.3.6.1.4.1.25623." || source_rule == "CVE-",
+                        "Greenbone emits an NVT OID under the 25623 arc or a CVE; \
+                         {source_rule:?} cannot match real output"
+                    );
+                    checked += 1;
+                }
                 _ => {}
             }
         }
         assert!(
-            checked >= 6,
+            checked >= 8,
             "expected the remaining engines whose identifier shape upstream fixes to be checked, saw {checked}"
         );
     }
@@ -812,10 +825,10 @@ mod tests {
         assert_eq!(overprivileged_policy.len(), 3);
         assert!(overprivileged_policy.iter().all(|item| {
             item.relationship == "related"
-                && item.mapping_version == "2026-09-05.4"
+                && item.mapping_version == "2026-09-09.1"
                 && item.mapping_provenance.as_ref().is_some_and(|provenance| {
                     provenance.catalog_sha256
-                        == "500358296263635b2deec0825a195d8b11541737ebf9d57bdfdca70f1d04c84d"
+                        == "1c9e2b31c6ed5058baed63091ae4d9ee10c2cb19dddc09e3d1982597f6da8296"
                 })
                 && !item.rationale.to_ascii_lowercase().contains("compliant")
         }));
@@ -902,7 +915,7 @@ mod tests {
             serde_json::from_str(CATALOG_JSON).expect("embedded control mapping catalog");
         // A lower bound, not the catalog's size: the pinned hash guards the
         // entry list, and this test should fail only for a missing translation.
-        assert!(parsed.entries.len() >= 18, "{}", parsed.entries.len());
+        assert!(parsed.entries.len() >= 20, "{}", parsed.entries.len());
         for entry in parsed.entries {
             assert!(
                 crate::finding_narrative::control_mapping_rationale_zh_hant(&entry.rationale)
@@ -911,6 +924,37 @@ mod tests {
                 entry.rationale
             );
         }
+    }
+
+    /// The shape census above reads the entries that exist, so it is blind to
+    /// an engine with none. Greenbone shipped that way: it produced real
+    /// vulnerability findings while every framework relationship for the
+    /// internal-host path was silently empty. Ask the producer side instead —
+    /// every engine whose results become security findings must be represented.
+    ///
+    /// The exemptions are the five engines whose output is inventory rather
+    /// than findings (`beginner_report::task_result_kind`). They are excluded
+    /// by name so that adding an engine to that list is a visible decision.
+    #[test]
+    fn every_finding_producing_engine_has_at_least_one_mapping_entry() {
+        const INVENTORY_ONLY: [&str; 5] = ["cloudquery", "steampipe", "syft", "naabu", "httpx"];
+        let catalog = catalog().expect("embedded control mapping catalog");
+        let mapped = catalog
+            .entries
+            .iter()
+            .map(|entry| entry.engine_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let unmapped = ENGINES
+            .iter()
+            .copied()
+            .filter(|engine| !INVENTORY_ONLY.contains(engine) && !mapped.contains(engine))
+            .collect::<Vec<_>>();
+        assert!(
+            unmapped.is_empty(),
+            "these engines produce security findings with no control mapping, so their \
+             findings reach the framework report with no NIST, ISO, or AIDEFEND \
+             relationship at all: {unmapped:?}"
+        );
     }
 
     #[test]

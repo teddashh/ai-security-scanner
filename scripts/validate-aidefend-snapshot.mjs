@@ -88,6 +88,8 @@ const EXPECTED_RECORDS = Object.freeze([
 const EXPECTED_MAPPING_PROJECTION = Object.freeze([
   { engine_id: "checkov", match_kind: "exact", source_rule: "CKV_AWS_18", controls: ["AID-H-003.005"] },
   { engine_id: "gitleaks", match_kind: "exact", source_rule: "generic-api-key", controls: ["AID-H-031.002"] },
+  { engine_id: "greenbone", match_kind: "prefix", source_rule: "1.3.6.1.4.1.25623.", controls: ["AID-H-003.010"] },
+  { engine_id: "greenbone", match_kind: "prefix", source_rule: "CVE-", controls: ["AID-H-003.010"] },
   { engine_id: "grype", match_kind: "prefix", source_rule: "CVE-", controls: ["AID-H-003.001", "AID-H-003.010"] },
   {
     engine_id: "kics",
