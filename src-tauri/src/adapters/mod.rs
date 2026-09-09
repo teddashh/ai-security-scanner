@@ -3467,6 +3467,11 @@ fn extract_nuclei(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<So
                 );
                 return None;
             };
+            // Upstream Nuclei uses `matcher-status: false` for a template that
+            // executed but did not match, so this execution evidence is not a finding.
+            if object.get("matcher-status") == Some(&Value::Bool(false)) {
+                return None;
+            }
             let Some(rule_id) =
                 exact_rule_string_any(object, &["template-id", "template_id", "templateID"])
             else {
@@ -6006,6 +6011,85 @@ mod tests {
                 &redact_location("https://example.test/a?token=secret")
             )
         );
+    }
+
+    #[test]
+    fn nuclei_explicit_non_match_is_not_a_finding() {
+        let parsed = ParsedArtifact::JsonLines(vec![(
+            1,
+            serde_json::json!({
+                "template-id": "executed-without-match",
+                "matcher-status": false
+            }),
+        )]);
+        let mut warnings = Vec::new();
+
+        let records = extract_nuclei(&parsed, &mut warnings);
+
+        assert!(records.is_empty());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn nuclei_explicit_match_remains_a_finding() {
+        let parsed = ParsedArtifact::JsonLines(vec![(
+            1,
+            serde_json::json!({
+                "template-id": "matched-template",
+                "matcher-status": true
+            }),
+        )]);
+        let mut warnings = Vec::new();
+
+        let records = extract_nuclei(&parsed, &mut warnings);
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].rule_id, "matched-template");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn nuclei_record_without_matcher_status_remains_a_finding() {
+        let parsed = ParsedArtifact::JsonLines(vec![(
+            1,
+            serde_json::json!({
+                "template-id": "deployed-output-shape"
+            }),
+        )]);
+        let mut warnings = Vec::new();
+
+        let records = extract_nuclei(&parsed, &mut warnings);
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].rule_id, "deployed-output-shape");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn nuclei_mixed_match_stream_only_reports_the_matching_record() {
+        let parsed = ParsedArtifact::JsonLines(vec![
+            (
+                1,
+                serde_json::json!({
+                    "template-id": "matching-template",
+                    "matcher-status": true
+                }),
+            ),
+            (
+                2,
+                serde_json::json!({
+                    "template-id": "non-matching-template",
+                    "matcher-status": false
+                }),
+            ),
+        ]);
+        let mut warnings = Vec::new();
+
+        let records = extract_nuclei(&parsed, &mut warnings);
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].rule_id, "matching-template");
+        assert!(warnings.is_empty());
     }
 
     #[test]
