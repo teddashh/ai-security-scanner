@@ -5,6 +5,7 @@ use ai_security_scanner_lib::domain::{
     AssessmentCase, Asset, AssetIdentifier, AssetKind, AwsIamPolicySource, Confidence,
     ConfidenceBasisCode, DataClass, Finding, FindingFamily, FindingStatus,
     InventoryObservationKind, OrganizationProfile, RawArtifact, Severity, SeverityBasisCode,
+    UnevaluatedTarget, UnevaluatedTargetCause,
 };
 use ai_security_scanner_lib::finding_narrative::{
     ENGLISH_ROLLBACK, expert_type_zh_hant, priority_reason_zh_hant, rollback_zh_hant,
@@ -779,6 +780,215 @@ fn greenbone_qod_bands_are_source_confidence_and_absence_is_derived() {
             .iter()
             .any(|reason| reason.contains("absence of a detection-quality score"))
     );
+}
+
+#[test]
+fn greenbone_result_types_preserve_alarms_and_normalize_unevaluated_targets() {
+    let bytes = include_bytes!("fixtures/adapters/greenbone-result-types.xml");
+    let output = normalize_bytes(
+        "greenbone",
+        bytes,
+        "greenbone-result-types.xml",
+        "application/xml",
+        "run-greenbone-result-types",
+    );
+
+    assert_eq!(output.findings.len(), 2, "{:?}", output.warnings);
+    let by_title = output
+        .findings
+        .iter()
+        .map(|finding| (finding.title.as_str(), finding))
+        .collect::<BTreeMap<_, _>>();
+    let rated = by_title["Rated Greenbone alarm NVT"];
+    assert_eq!(rated.severity, Severity::High);
+    assert_eq!(rated.severity_basis_code, None);
+
+    let unrated = by_title["Unrated Greenbone alarm NVT"];
+    assert_eq!(unrated.severity, Severity::Unknown);
+    assert_eq!(
+        unrated.severity_basis_code,
+        Some(SeverityBasisCode::UnratedVulnerabilityTestAlarm)
+    );
+    // An alarm without a rating follows the product's existing unrated path:
+    // the severity stays Unknown for human review and is never presented as a
+    // rating this product derived.
+    assert!(
+        unrated
+            .tags
+            .iter()
+            .any(|tag| tag == "severity-basis:unrated"),
+        "{:?}",
+        unrated.tags
+    );
+    assert!(
+        unrated.priority_reasons.iter().any(|reason| {
+            reason
+                == "Severity remains Unknown because Greenbone Community Edition did not assign one; human review is required."
+        }),
+        "{:?}",
+        unrated.priority_reasons
+    );
+    assert!(
+        unrated
+            .plain_language_summary
+            .contains("Severity remains Unknown and requires human review."),
+        "{}",
+        unrated.plain_language_summary
+    );
+    assert!(
+        unrated
+            .official_references
+            .iter()
+            .any(|reference| reference.ends_with("CVE-2026-1002"))
+    );
+    assert_eq!(unrated.asset_ids, vec!["asset-1".to_owned()]);
+    assert_eq!(unrated.evidence.len(), 1);
+    assert_eq!(
+        unrated.evidence[0].kind,
+        ai_security_scanner_lib::domain::EvidenceKind::ExternalValidation
+    );
+    assert_eq!(
+        unrated.evidence[0].location.as_deref(),
+        Some("203.0.113.10:8443/tcp")
+    );
+    assert!(
+        unrated.evidence[0]
+            .summary
+            .contains("203.0.113.10:8443/tcp")
+    );
+    let details = unrated.evidence[0]
+        .scanner_details
+        .as_ref()
+        .expect("unrated alarm pinned-feed details");
+    assert_eq!(
+        details.description.as_deref(),
+        Some("Unrated pinned-feed summary.")
+    );
+    assert_eq!(
+        details.remediation.as_deref(),
+        Some("Apply the unrated alarm solution.")
+    );
+
+    assert_eq!(
+        output.unevaluated_targets,
+        vec![
+            UnevaluatedTarget {
+                asset_id: "asset-1".into(),
+                cause: UnevaluatedTargetCause::TargetDidNotRespond,
+                result_count: 1,
+            },
+            UnevaluatedTarget {
+                asset_id: "asset-1".into(),
+                cause: UnevaluatedTargetCause::ScannerError,
+                result_count: 2,
+            },
+        ]
+    );
+    assert!(output.complete, "{:?}", output.warnings);
+    assert_eq!(
+        output.warnings,
+        [
+            "Greenbone reported that the host did not respond, so none of its vulnerability checks ran for that target",
+            "Greenbone reported scanner errors for the target, so some of its checks did not finish",
+        ]
+    );
+    assert!(
+        output
+            .warnings
+            .iter()
+            .all(|warning| !warning.contains("lacked a valid NVT OID")),
+        "{:?}",
+        output.warnings
+    );
+    let serialized = serde_json::to_string(&output.findings).expect("serialize findings");
+    assert!(!serialized.contains("Informational Greenbone log"));
+    assert!(!serialized.contains("Greenbone error"));
+    assert!(!serialized.contains("Greenbone dead_host"));
+    assert!(!serialized.contains("TARGET_CONTROLLED"));
+}
+
+#[test]
+fn greenbone_unevaluated_target_requires_an_authorized_asset() {
+    let xml = br#"<?xml version="1.0" encoding="UTF-8"?><get_reports_response><report><results><result id="dead"><name>Greenbone dead_host</name><host>203.0.113.10</host><port>0/tcp</port><result_type> DeAd_HoSt </result_type><severity>0.0</severity><threat>Log</threat><asset_id>not-authorized</asset_id><summary></summary><description>TARGET_CONTROLLED_UNAUTHORIZED_SENTINEL</description><solution></solution><raw_host>127.0.0.1</raw_host><raw_port>0/tcp</raw_port><relay_mapping>managed-socks5</relay_mapping><scope_grant_id>grant-1</scope_grant_id></result></results></report></get_reports_response>"#;
+    let output = normalize_bytes(
+        "greenbone",
+        xml,
+        "greenbone-unauthorized-dead-host.xml",
+        "application/xml",
+        "run-greenbone-unauthorized-dead-host",
+    );
+
+    assert!(output.findings.is_empty());
+    assert!(output.unevaluated_targets.is_empty());
+    assert!(!output.complete);
+    assert_eq!(
+        output.warnings,
+        [
+            "Greenbone reported a target it could not evaluate, but the result named no authorized asset; the raw artifact was retained"
+        ]
+    );
+    assert!(
+        output
+            .warnings
+            .iter()
+            .all(|warning| !warning.contains("TARGET_CONTROLLED")),
+        "{:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn greenbone_unsupported_result_type_is_raw_evidence_and_incomplete() {
+    let xml = br#"<?xml version="1.0" encoding="UTF-8"?><get_reports_response><report><results><result id="detail"><name>Host detail</name><host>203.0.113.10</host><port>0/tcp</port><result_type> HoSt_DeTaIl </result_type><severity>0.0</severity><threat>Log</threat><asset_id>asset-1</asset_id><summary></summary><description>Target detail</description><solution></solution><raw_host>127.0.0.1</raw_host><raw_port>0/tcp</raw_port><relay_mapping>managed-socks5</relay_mapping><scope_grant_id>grant-1</scope_grant_id></result></results></report></get_reports_response>"#;
+    let output = normalize_bytes(
+        "greenbone",
+        xml,
+        "greenbone-unsupported-result-type.xml",
+        "application/xml",
+        "run-greenbone-unsupported-result-type",
+    );
+
+    assert!(output.findings.is_empty());
+    assert!(output.unevaluated_targets.is_empty());
+    assert!(!output.complete);
+    assert_eq!(
+        output.warnings,
+        [
+            "Greenbone result carried an unsupported upstream result type and was retained only as raw evidence"
+        ]
+    );
+}
+
+#[test]
+fn greenbone_legacy_ambiguous_result_is_not_clean_but_log_stays_silent() {
+    let ambiguous = br#"<?xml version="1.0"?><get_reports_response><report><results><result id="ambiguous"><name>Legacy ambiguous result</name><host>203.0.113.10</host><port>443/tcp</port><severity>0.0</severity><threat>Unknown</threat><asset_id>asset-1</asset_id><summary>Legacy summary</summary><description>Target observation</description><solution>Legacy solution</solution><raw_host>127.0.0.1</raw_host><raw_port>30001/tcp</raw_port><relay_mapping>managed-socks5</relay_mapping><scope_grant_id>grant-1</scope_grant_id><qod><value>80</value></qod><nvt oid="1.3.6.1.4.1.25623.1.0.100005"><name>Legacy ambiguous NVT</name><family>General</family><refs></refs></nvt></result></results></report></get_reports_response>"#;
+    let ambiguous_output = normalize_bytes(
+        "greenbone",
+        ambiguous,
+        "greenbone-legacy-ambiguous.xml",
+        "application/xml",
+        "run-greenbone-legacy-ambiguous",
+    );
+    assert!(ambiguous_output.findings.is_empty());
+    assert!(!ambiguous_output.complete);
+    assert_eq!(
+        ambiguous_output.warnings,
+        [
+            "Greenbone result lacked an upstream result type and a positive severity; it was retained only as raw evidence and this run cannot be treated as a clean result"
+        ]
+    );
+
+    let log = br#"<?xml version="1.0"?><get_reports_response><report><results><result id="log"><name>Legacy log</name><host>203.0.113.10</host><port>443/tcp</port><severity>0.0</severity><threat>Log</threat><asset_id>asset-1</asset_id><summary></summary><description>Target log</description><solution></solution><raw_host>127.0.0.1</raw_host><raw_port>30001/tcp</raw_port><relay_mapping>managed-socks5</relay_mapping><scope_grant_id>grant-1</scope_grant_id><qod><value>80</value></qod><nvt oid="1.3.6.1.4.1.25623.1.0.100006"><name>Legacy log NVT</name><family>General</family><refs></refs></nvt></result></results></report></get_reports_response>"#;
+    let log_output = normalize_bytes(
+        "greenbone",
+        log,
+        "greenbone-legacy-log.xml",
+        "application/xml",
+        "run-greenbone-legacy-log",
+    );
+    assert!(log_output.findings.is_empty());
+    assert!(log_output.complete, "{:?}", log_output.warnings);
+    assert!(log_output.warnings.is_empty());
 }
 
 /// The other side of the same contract. Deriving a severity is only defensible

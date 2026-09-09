@@ -78,6 +78,62 @@ const report = (
   ...overrides,
 });
 
+const greenboneDeadHostReport = (): BeginnerMasterReport => {
+  const base = report("partial");
+  return report("partial", {
+    requested: {
+      ...base.requested,
+      targets: [{
+        assetId: "asset-dead-host",
+        label: "silent-host.example",
+        assetKind: "host",
+        labelAvailability: "recorded",
+        assetKindAvailability: "recorded",
+      }, {
+        assetId: "asset-completed-host",
+        label: "checked-host.example",
+        assetKind: "host",
+        labelAvailability: "recorded",
+        assetKindAvailability: "recorded",
+      }],
+      requestedCheckIds: ["greenbone"],
+    },
+    actual: {
+      checks: [{
+        taskId: "greenbone-dead-host",
+        checkId: "greenbone",
+        resultKind: "security_check",
+        targetAssetIds: ["asset-dead-host"],
+        status: "failed",
+        testedDimensions: [],
+      }, {
+        taskId: "greenbone-completed-host",
+        checkId: "greenbone",
+        resultKind: "security_check",
+        targetAssetIds: ["asset-completed-host"],
+        status: "tested_complete",
+        testedDimensions: [{
+          dimension: "Greenbone remote vulnerability scan",
+          value: "greenbone on asset asset-completed-host",
+          observation: "The security check completed for this target.",
+        }],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    coverageGaps: [{
+      kind: "failed",
+      taskId: "greenbone-dead-host",
+      targetAssetIds: ["asset-dead-host"],
+      dimension: "greenbone: target response",
+      reason: "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result.",
+      nextActionCode: "review_scope_and_retry",
+      nextAction: "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again.",
+    }],
+    coverageCounts: counts({ testedComplete: 1, failed: 1 }),
+  });
+};
+
 const frozenFinding = (
   overrides: Partial<BeginnerReportFinding> = {},
 ): BeginnerReportFinding => ({
@@ -596,6 +652,38 @@ test("a completed asset stays bounded while an unrun sibling task makes another 
   expect(row("ssh-bounded.example").dataset.assetResult).toBe("no_problems_completed");
   expect(row("ssh-incomplete.example").dataset.assetResult).toBe("incomplete_failed");
   expect(row("ssh-incomplete.example").textContent).toContain("Retry this check");
+});
+
+test("a Greenbone dead host is incomplete while a completed sibling stays bounded", () => {
+  const { container } = renderReport(greenboneDeadHostReport());
+  const rows = Array.from(container.querySelectorAll<HTMLElement>(".asset-result-row"));
+  const row = (label: string) => {
+    const match = rows.find((candidate) =>
+      candidate.querySelector(".asset-result-row__identity strong")?.textContent === label);
+    if (!match) throw new Error(`no asset result row for ${label}`);
+    return match;
+  };
+
+  expect(row("silent-host.example").dataset.assetResult).toBe("incomplete_failed");
+  expect(row("silent-host.example").textContent).toContain(
+    "Review the requested scope, then retry.",
+  );
+  expect(row("checked-host.example").dataset.assetResult).toBe("no_problems_completed");
+});
+
+test("a Greenbone dead-host gap gives a Traditional Chinese reader the exact cause", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderReport(greenboneDeadHostReport());
+  const gapCard = Array.from(container.querySelectorAll<HTMLElement>(".coverage-card"))
+    .find((candidate) => candidate.querySelector("h3")?.textContent === "沒有測到的內容");
+  if (!gapCard) throw new Error("the coverage-gap card did not render");
+  const gapRow = Array.from(gapCard.querySelectorAll<HTMLElement>(".detail-list > li"))
+    .find((candidate) => candidate.querySelector("strong")?.textContent === "silent-host.example");
+  if (!gapRow) throw new Error("the dead-host coverage-gap row did not render");
+
+  expect(within(gapRow).getByText(
+    /Greenbone 回報這台主機在掃描期間沒有回應，因此它的弱點檢查一項都沒有執行。這不是乾淨的結果。/u,
+  )).toBeTruthy();
 });
 
 test("an in-progress asset keeps its wait-or-cancel action on the per-asset board", () => {

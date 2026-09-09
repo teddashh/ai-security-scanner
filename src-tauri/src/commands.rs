@@ -5629,6 +5629,7 @@ fn resume_captured_execution(
                 .into(),
         ],
         unattributed: Vec::new(),
+        unevaluated_targets: Vec::new(),
         artifact_root: artifacts.root().to_path_buf(),
         output_directory: directories.output,
     };
@@ -6837,6 +6838,7 @@ fn terminal_report(
         findings: vec![],
         warnings: vec![],
         unattributed: vec![],
+        unevaluated_targets: vec![],
     }
 }
 
@@ -7203,6 +7205,7 @@ fn persist_terminal_job_state_reconciliation(
             findings: vec![],
             warnings: vec![],
             unattributed: vec![],
+            unevaluated_targets: vec![],
         };
         service.apply_execution_report(&key.case_id, &report)?;
     }

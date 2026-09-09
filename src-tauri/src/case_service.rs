@@ -597,6 +597,8 @@ pub struct DurableExecutionReport {
     pub warnings: Vec<String>,
     #[serde(default)]
     pub unattributed: Vec<crate::domain::UnattributedResults>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unevaluated_targets: Vec<crate::domain::UnevaluatedTarget>,
 }
 
 impl From<&ExecutionReport> for DurableExecutionReport {
@@ -611,6 +613,7 @@ impl From<&ExecutionReport> for DurableExecutionReport {
             observations: report.observations.clone(),
             warnings: report.warnings.clone(),
             unattributed: report.unattributed.clone(),
+            unevaluated_targets: report.unevaluated_targets.clone(),
         }
     }
 }
@@ -4189,6 +4192,7 @@ impl<'a> CaseService<'a> {
                         .chain(mapping_warning.clone())
                         .collect(),
                     unattributed: Vec::new(),
+                    unevaluated_targets: Vec::new(),
                     raw_artifact_ids: Vec::new(),
                     error_code: None,
                     error_message: None,
@@ -4701,6 +4705,7 @@ impl<'a> CaseService<'a> {
                 observations: Vec::new(),
                 warnings: Vec::new(),
                 unattributed: Vec::new(),
+                unevaluated_targets: Vec::new(),
             };
             let derived = derive_naabu_attempt_result_from_captured_report(
                 &self.artifact_root,
@@ -6439,6 +6444,7 @@ impl<'a> CaseService<'a> {
         // has to be able to clear a gap the previous attempt recorded.
         if !matches!(report.checkpoint.stage, ExecutionStage::Planned) {
             engine_run.unattributed = report.unattributed.clone();
+            engine_run.unevaluated_targets = report.unevaluated_targets.clone();
         }
         if engine_run.started_at.is_none()
             && !matches!(report.checkpoint.stage, ExecutionStage::Planned)
@@ -9337,6 +9343,7 @@ fn not_executed_run(
             .chain(mapping_warning)
             .collect(),
         unattributed: Vec::new(),
+        unevaluated_targets: Vec::new(),
         raw_artifact_ids: Vec::new(),
         error_code: Some(reason_code.into()),
         error_message: Some(explanation.into()),
@@ -16873,6 +16880,7 @@ mod tests {
 
         DurableExecutionReport {
             unattributed: Vec::new(),
+            unevaluated_targets: Vec::new(),
             checkpoint,
             runtime_preflight: Some(RuntimePreflight {
                 provider: crate::container_runtime::RuntimeProvider::Podman,
@@ -18009,6 +18017,7 @@ mod tests {
             .unwrap();
         let report = DurableExecutionReport {
             unattributed: Vec::new(),
+            unevaluated_targets: Vec::new(),
             checkpoint,
             runtime_preflight: Some(RuntimePreflight {
                 provider: crate::container_runtime::RuntimeProvider::Podman,
@@ -19231,6 +19240,7 @@ mod tests {
                     .expect("validated Naabu adapter input has one artifact");
                 Ok(crate::adapter::AdapterOutput {
                     unattributed: Vec::new(),
+                    unevaluated_targets: Vec::new(),
                     findings: Vec::new(),
                     observations: vec![crate::domain::InventoryObservation {
                         id: "progressive-naabu-service".into(),
@@ -20454,6 +20464,7 @@ mod tests {
                 &prepared.case_id,
                 &DurableExecutionReport {
                     unattributed: Vec::new(),
+                    unevaluated_targets: Vec::new(),
                     checkpoint: cancelled_checkpoint,
                     runtime_preflight: None,
                     cleanup: None,
@@ -20551,6 +20562,7 @@ mod tests {
                     findings: Vec::new(),
                     observations: Vec::new(),
                     warnings: vec!["empty input reached the adapter".into()],
+                    unevaluated_targets: Vec::new(),
                     complete: false,
                 })
             }
@@ -20716,6 +20728,7 @@ mod tests {
                     findings: Vec::new(),
                     observations: Vec::new(),
                     warnings: vec!["tampered empty input reached the adapter".into()],
+                    unevaluated_targets: Vec::new(),
                     complete: true,
                 })
             }
@@ -20945,6 +20958,7 @@ mod tests {
             .register(std::sync::Arc::new(ChangedNaabuAdapter {
                 output: crate::adapter::AdapterOutput {
                     unattributed: Vec::new(),
+                    unevaluated_targets: Vec::new(),
                     findings: Vec::new(),
                     observations: vec![retained_observation, added_observation],
                     warnings: adapted.scan_runs[0].engine_runs[0].warnings.clone(),
@@ -22068,6 +22082,7 @@ mod tests {
     ) -> DurableExecutionReport {
         DurableExecutionReport {
             unattributed: Vec::new(),
+            unevaluated_targets: Vec::new(),
             checkpoint: ExecutionCheckpoint {
                 case_id: case_id.into(),
                 scan_run_id: execution.scan_run_id.clone(),
@@ -23762,6 +23777,7 @@ mod tests {
 
             let report = DurableExecutionReport {
                 unattributed: Vec::new(),
+                unevaluated_targets: Vec::new(),
                 checkpoint: ExecutionCheckpoint {
                     case_id: case_id.clone(),
                     scan_run_id: execution.scan_run_id.clone(),
@@ -23873,6 +23889,7 @@ mod tests {
 
         let regressive = DurableExecutionReport {
             unattributed: Vec::new(),
+            unevaluated_targets: Vec::new(),
             checkpoint: ExecutionCheckpoint {
                 case_id: case_id.clone(),
                 scan_run_id: execution.scan_run_id.clone(),
@@ -23988,6 +24005,7 @@ mod tests {
                 Some(crate::container_runtime::RuntimeCommandProvenance::Compatibility);
             let report = DurableExecutionReport {
                 unattributed: Vec::new(),
+                unevaluated_targets: Vec::new(),
                 checkpoint: claimed,
                 runtime_preflight: Some(RuntimePreflight {
                     provider: crate::container_runtime::RuntimeProvider::Podman,
@@ -24083,6 +24101,7 @@ mod tests {
         completed.last_error = None;
         let report = DurableExecutionReport {
             unattributed: Vec::new(),
+            unevaluated_targets: Vec::new(),
             checkpoint: completed,
             runtime_preflight: None,
             cleanup: None,
@@ -26153,6 +26172,88 @@ mod tests {
         assert!(!scope.template_policy.allow_file_upload);
         assert!(!scope.template_policy.allow_denial_of_service);
         assert!(!scope.template_policy.allow_credential_attacks);
+    }
+
+    #[test]
+    fn greenbone_dead_host_html_export_localizes_the_coverage_reason_and_next_action() {
+        let fixture = Fixture::new();
+        let start = generic_host_start(&fixture, "10.20.0.50", &[22, 443]);
+        let plan = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &start.case_id,
+                vec![start.decision],
+                start.request,
+            )
+            .unwrap();
+        let execution = &plan.executable[0];
+        let mut case = fixture.service().show_case(&start.case_id).unwrap();
+        let finished_at = Utc::now();
+        let run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == execution.scan_run_id)
+            .unwrap();
+        run.completed_at = Some(finished_at);
+        let task = run
+            .engine_runs
+            .iter_mut()
+            .find(|task| task.id == execution.engine_run_id)
+            .unwrap();
+        task.status = EngineRunStatus::Completed;
+        task.progress_percent = 100;
+        task.phase = "completed".into();
+        task.finished_at = Some(finished_at);
+        task.exit_code = Some(0);
+        task.cleanup_removed = Some(true);
+        task.unevaluated_targets = vec![crate::domain::UnevaluatedTarget {
+            asset_id: start.asset_id,
+            cause: crate::domain::UnevaluatedTargetCause::TargetDidNotRespond,
+            result_count: 1,
+        }];
+
+        let english = String::from_utf8(
+            html_report_bytes(
+                &case,
+                &execution.scan_run_id,
+                &ExportOptions {
+                    redaction: RedactionProfile::None,
+                    include_raw_artifacts: false,
+                    locale: crate::export::ReportLocale::En,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(english.contains(
+            "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result."
+        ));
+        assert!(english.contains(
+            "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again."
+        ));
+
+        let zh_hant = String::from_utf8(
+            html_report_bytes(
+                &case,
+                &execution.scan_run_id,
+                &ExportOptions {
+                    redaction: RedactionProfile::None,
+                    include_raw_artifacts: false,
+                    locale: crate::export::ReportLocale::ZhHant,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(zh_hant.contains(
+            "Greenbone 回報這台主機在掃描期間沒有回應，因此它的弱點檢查一項都沒有執行。這不是乾淨的結果。"
+        ));
+        assert!(zh_hant.contains(
+            "請確認這台主機已開機，且本機能連到已核准的連接埠，然後再執行一次這項檢查。"
+        ));
+        assert!(
+            !zh_hant.contains("Greenbone reported that this host did not respond during the scan")
+        );
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -28588,6 +28689,7 @@ mod tests {
         stale_checkpoint.attempt = stale_checkpoint.attempt.saturating_add(1);
         let stale_report = DurableExecutionReport {
             unattributed: Vec::new(),
+            unevaluated_targets: Vec::new(),
             checkpoint: stale_checkpoint,
             runtime_preflight: None,
             cleanup: None,
@@ -34299,6 +34401,7 @@ mod tests {
             engine_admission_issues: Vec::new(),
             engine_runs: vec![EngineRun {
                 unattributed: Vec::new(),
+                unevaluated_targets: Vec::new(),
                 id: "engine-run-1".into(),
                 scan_run_id: "scan-1".into(),
                 engine_id: "cloudquery".into(),
@@ -34430,6 +34533,7 @@ mod tests {
         };
         let report = DurableExecutionReport {
             unattributed: Vec::new(),
+            unevaluated_targets: Vec::new(),
             checkpoint: ExecutionCheckpoint {
                 case_id: case.id.clone(),
                 scan_run_id: "scan-1".into(),
@@ -34474,17 +34578,62 @@ mod tests {
                 .windows(b"\"observations\"".len())
                 .any(|window| window == b"\"observations\"")
         );
+        assert!(
+            !serde_json::to_string(&pre_inventory_report)
+                .unwrap()
+                .contains("unevaluated_targets"),
+            "an empty coverage outcome must not change an existing report's byte commitment"
+        );
         let decoded_pre_inventory: DurableExecutionReport =
             serde_json::from_slice(&pre_inventory_bytes).unwrap();
         assert!(decoded_pre_inventory.observations.is_empty());
+        assert!(decoded_pre_inventory.unevaluated_targets.is_empty());
         assert_eq!(
             serde_json::to_vec(&decoded_pre_inventory).unwrap(),
             pre_inventory_bytes,
             "an older execution report must retain its byte commitment after decoding"
         );
         let prepared_engine = &case.scan_runs[0].engine_runs[0];
+        let mut legacy_engine_json = serde_json::to_value(prepared_engine).unwrap();
+        legacy_engine_json
+            .as_object_mut()
+            .unwrap()
+            .remove("unevaluated_targets");
+        let legacy_engine: EngineRun = serde_json::from_value(legacy_engine_json).unwrap();
+        assert!(legacy_engine.unevaluated_targets.is_empty());
         validate_report_payload(&case, prepared_engine, &report)
             .expect("bounded observation with exact artifact provenance is valid");
+
+        let mut coverage_case = case.clone();
+        let mut coverage_report = report.clone();
+        coverage_report.checkpoint.stage = ExecutionStage::AdaptingArtifacts;
+        coverage_report.checkpoint.cleanup_completed = false;
+        coverage_report.cleanup = None;
+        coverage_report.unevaluated_targets = vec![crate::domain::UnevaluatedTarget {
+            asset_id: "asset-1".into(),
+            cause: crate::domain::UnevaluatedTargetCause::ScannerError,
+            result_count: 2,
+        }];
+        let projection_service = fixture.service();
+        assert!(
+            projection_service
+                .apply_execution_report_to_case(&mut coverage_case, &coverage_report)
+                .unwrap()
+        );
+        assert_eq!(
+            coverage_case.scan_runs[0].engine_runs[0].unevaluated_targets,
+            coverage_report.unevaluated_targets
+        );
+        assert!(
+            projection_service
+                .apply_execution_report_to_case(&mut coverage_case, &report)
+                .unwrap()
+        );
+        assert!(
+            coverage_case.scan_runs[0].engine_runs[0]
+                .unevaluated_targets
+                .is_empty()
+        );
 
         let mut wrong_case_observation = report.clone();
         wrong_case_observation.observations[0].case_id = "another-case".into();
@@ -34644,6 +34793,7 @@ mod tests {
         });
         let completed_engine = |run_id: &str| EngineRun {
             unattributed: Vec::new(),
+            unevaluated_targets: Vec::new(),
             id: format!("engine-{run_id}"),
             scan_run_id: run_id.into(),
             engine_id: "cloudquery".into(),

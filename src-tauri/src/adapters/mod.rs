@@ -11,7 +11,7 @@ use crate::domain::{
     AwsIamAttachedTo, AwsIamPolicyFindingDetails, AwsIamPolicySource, Confidence,
     ConfidenceBasisCode, Evidence, EvidenceKind, Finding, FindingFamily, FindingStatus,
     InventoryObservation, InventoryObservationKind, RawArtifact, ScannerFindingDetails, Severity,
-    SeverityBasisCode,
+    SeverityBasisCode, UnevaluatedTarget, UnevaluatedTargetCause,
 };
 use crate::error::{AppError, AppResult};
 use quick_xml::events::{BytesRef, BytesStart, Event};
@@ -433,6 +433,7 @@ enum XmlElement {
     Nvt,
     Host,
     Port,
+    ResultType,
     Severity,
     Threat,
     Summary,
@@ -455,6 +456,7 @@ struct GreenboneXmlResult {
     nvt_name: Option<String>,
     host: Option<String>,
     port: Option<String>,
+    result_type: Option<String>,
     severity: Option<String>,
     threat: Option<String>,
     summary: Option<String>,
@@ -463,6 +465,13 @@ struct GreenboneXmlResult {
     asset_id: Option<String>,
     family: Option<String>,
     cves: Vec<String>,
+}
+
+#[derive(Debug)]
+struct GreenboneExtraction {
+    records: Vec<SourceRecord>,
+    unevaluated_targets: Vec<UnevaluatedTarget>,
+    complete: bool,
 }
 
 #[derive(Debug)]
@@ -771,8 +780,20 @@ fn normalize_artifacts(
             continue;
         }
         let warnings_before_extract = output.warnings.len();
-        let records = extract_records(adapter.profile, &parsed, &mut output.warnings);
-        if output.warnings.len() > warnings_before_extract {
+        let records = if adapter.profile == Profile::Greenbone {
+            let extraction = extract_greenbone(&parsed, &mut output.warnings, input.asset_ids);
+            output
+                .unevaluated_targets
+                .extend(extraction.unevaluated_targets);
+            if !extraction.complete {
+                output.complete = false;
+            }
+            extraction.records
+        } else {
+            extract_records(adapter.profile, &parsed, &mut output.warnings)
+        };
+        if adapter.profile != Profile::Greenbone && output.warnings.len() > warnings_before_extract
+        {
             output.complete = false;
         }
         // Deliberately after the window above, so that disclosing a shortfall
@@ -862,6 +883,20 @@ fn normalize_artifacts(
             },
         )
         .collect();
+
+    output.unevaluated_targets.sort();
+    let mut aggregated_unevaluated = Vec::<UnevaluatedTarget>::new();
+    for target in output.unevaluated_targets.drain(..) {
+        if let Some(existing) = aggregated_unevaluated.last_mut()
+            && existing.asset_id == target.asset_id
+            && existing.cause == target.cause
+        {
+            existing.result_count = existing.result_count.saturating_add(target.result_count);
+        } else {
+            aggregated_unevaluated.push(target);
+        }
+    }
+    output.unevaluated_targets = aggregated_unevaluated;
 
     if relevant_count > MAX_ARTIFACTS {
         output.complete = false;
@@ -1429,6 +1464,7 @@ fn xml_element(name: &[u8]) -> XmlElement {
         b"nvt" => XmlElement::Nvt,
         b"host" => XmlElement::Host,
         b"port" => XmlElement::Port,
+        b"result_type" => XmlElement::ResultType,
         b"severity" => XmlElement::Severity,
         b"threat" => XmlElement::Threat,
         b"summary" => XmlElement::Summary,
@@ -1448,6 +1484,7 @@ fn is_greenbone_field(stack: &[XmlElement]) -> bool {
         || stack.ends_with(&[XmlElement::Result, XmlElement::Nvt, XmlElement::Name])
         || stack.ends_with(&[XmlElement::Result, XmlElement::Host])
         || stack.ends_with(&[XmlElement::Result, XmlElement::Port])
+        || stack.ends_with(&[XmlElement::Result, XmlElement::ResultType])
         || stack.ends_with(&[XmlElement::Result, XmlElement::Severity])
         || stack.ends_with(&[XmlElement::Result, XmlElement::Threat])
         || stack.ends_with(&[XmlElement::Result, XmlElement::Summary])
@@ -1474,6 +1511,8 @@ fn apply_greenbone_text(record: &mut GreenboneXmlResult, stack: &[XmlElement], v
         &mut record.host
     } else if stack.ends_with(&[XmlElement::Result, XmlElement::Port]) {
         &mut record.port
+    } else if stack.ends_with(&[XmlElement::Result, XmlElement::ResultType]) {
+        &mut record.result_type
     } else if stack.ends_with(&[XmlElement::Result, XmlElement::Severity]) {
         &mut record.severity
     } else if stack.ends_with(&[XmlElement::Result, XmlElement::Threat]) {
@@ -2064,7 +2103,7 @@ fn extract_records(
         Profile::ScubaGear => extract_scubagear(parsed, warnings),
         Profile::Maester => extract_maester(parsed, warnings),
         Profile::Nuclei => extract_nuclei(parsed, warnings),
-        Profile::Greenbone => extract_greenbone(parsed, warnings),
+        Profile::Greenbone => unreachable!("Greenbone extraction needs authorized asset ids"),
         Profile::Semgrep => extract_semgrep(parsed, warnings),
         Profile::Gitleaks => extract_gitleaks(parsed, warnings),
         Profile::Trufflehog => extract_trufflehog(parsed, warnings),
@@ -3475,33 +3514,108 @@ fn extract_nuclei(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<So
         .collect()
 }
 
-fn extract_greenbone(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
+fn extract_greenbone(
+    parsed: &ParsedArtifact,
+    warnings: &mut Vec<String>,
+    authorized_asset_ids: &[String],
+) -> GreenboneExtraction {
     let ParsedArtifact::Xml(results) = parsed else {
         push_warning(warnings, "Greenbone expected a bounded XML report");
-        return Vec::new();
+        return GreenboneExtraction {
+            records: Vec::new(),
+            unevaluated_targets: Vec::new(),
+            complete: false,
+        };
     };
 
     let mut records = Vec::new();
+    let mut unevaluated_counts: BTreeMap<(String, UnevaluatedTargetCause), usize> = BTreeMap::new();
+    let mut complete = true;
+    let mut saw_dead_host = false;
+    let mut saw_scanner_error = false;
     for result in results.iter().take(MAX_RECORDS) {
         let numeric_severity = result
             .severity
             .as_deref()
-            .and_then(|value| value.parse::<f64>().ok());
-        let threat = result.threat.as_deref().unwrap_or("unknown");
-        if numeric_severity.is_some_and(|severity| severity <= 0.0)
-            || matches!(
-                threat.trim().to_ascii_lowercase().as_str(),
-                "log" | "false positive"
-            )
-        {
-            continue;
-        }
-        let source_severity = result
-            .severity
-            .clone()
-            .filter(|_| numeric_severity.is_some_and(|severity| severity > 0.0))
-            .or_else(|| result.threat.clone())
-            .unwrap_or_else(|| "unknown".into());
+            .and_then(|value| value.trim().parse::<f64>().ok());
+        let positive_severity = numeric_severity.is_some_and(|severity| severity > 0.0);
+        let threat = result
+            .threat
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        let result_type = result
+            .result_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_lowercase);
+        let is_unrated_alarm = match result_type.as_deref() {
+            Some("alarm") => !positive_severity,
+            Some("log") => continue,
+            Some("error") => {
+                if let Some(asset_id) = result
+                    .asset_id
+                    .as_ref()
+                    .filter(|asset_id| authorized_asset_ids.contains(asset_id))
+                {
+                    saw_scanner_error = true;
+                    let count = unevaluated_counts
+                        .entry((asset_id.clone(), UnevaluatedTargetCause::ScannerError))
+                        .or_default();
+                    *count = count.saturating_add(1);
+                } else {
+                    push_warning(
+                        warnings,
+                        "Greenbone reported a target it could not evaluate, but the result named no authorized asset; the raw artifact was retained",
+                    );
+                    complete = false;
+                }
+                continue;
+            }
+            Some("dead_host") => {
+                if let Some(asset_id) = result
+                    .asset_id
+                    .as_ref()
+                    .filter(|asset_id| authorized_asset_ids.contains(asset_id))
+                {
+                    saw_dead_host = true;
+                    let count = unevaluated_counts
+                        .entry((
+                            asset_id.clone(),
+                            UnevaluatedTargetCause::TargetDidNotRespond,
+                        ))
+                        .or_default();
+                    *count = count.saturating_add(1);
+                } else {
+                    push_warning(
+                        warnings,
+                        "Greenbone reported a target it could not evaluate, but the result named no authorized asset; the raw artifact was retained",
+                    );
+                    complete = false;
+                }
+                continue;
+            }
+            Some(_) => {
+                push_warning(
+                    warnings,
+                    "Greenbone result carried an unsupported upstream result type and was retained only as raw evidence",
+                );
+                complete = false;
+                continue;
+            }
+            None if matches!(threat.as_str(), "log" | "false positive") => continue,
+            None if positive_severity => false,
+            None => {
+                push_warning(
+                    warnings,
+                    "Greenbone result lacked an upstream result type and a positive severity; it was retained only as raw evidence and this run cannot be treated as a clean result",
+                );
+                complete = false;
+                continue;
+            }
+        };
 
         let Some(rule_id) = result
             .nvt_oid
@@ -3515,6 +3629,7 @@ fn extract_greenbone(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
                     safe_text(result.result_id.as_deref().unwrap_or(&result.pointer), 120)
                 ),
             );
+            complete = false;
             continue;
         };
 
@@ -3552,16 +3667,37 @@ fn extract_greenbone(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
             tags.push(format!("quality-of-detection:{qod}"));
         }
 
-        records.push(with_scanner_details(
+        let title = result
+            .nvt_name
+            .clone()
+            .or_else(|| result.result_name.clone())
+            .unwrap_or_else(|| format!("Greenbone NVT {rule_id}"));
+        let record = if is_unrated_alarm {
+            record_with_severity_fallback!(
+                result.pointer.clone(),
+                rule_id.clone(),
+                title,
+                String::new(),
+                DerivedSeverity {
+                    severity: Severity::Unknown,
+                    code: SeverityBasisCode::UnratedVulnerabilityTestAlarm,
+                },
+                location,
+                result.asset_id.clone(),
+                source_confidence,
+                Some(derived_confidence(
+                    ConfidenceBasisCode::MissingDetectionQualityScore,
+                )),
+                EvidenceKind::ExternalValidation,
+                references,
+                tags,
+            )
+        } else {
             record_with_confidence_fallback!(
                 result.pointer.clone(),
                 rule_id.clone(),
-                result
-                    .nvt_name
-                    .clone()
-                    .or_else(|| result.result_name.clone())
-                    .unwrap_or_else(|| format!("Greenbone NVT {rule_id}")),
-                source_severity,
+                title,
+                result.severity.clone().unwrap_or_default(),
                 location,
                 result.asset_id.clone(),
                 source_confidence,
@@ -3569,7 +3705,10 @@ fn extract_greenbone(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
                 EvidenceKind::ExternalValidation,
                 references,
                 tags,
-            ),
+            )
+        };
+        records.push(with_scanner_details(
+            record,
             // Only these two result-level fields are copied from the product
             // launcher, which writes them from the pinned feed metadata.
             // `<description>` is the target-observed result message and must
@@ -3580,7 +3719,32 @@ fn extract_greenbone(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
             None,
         ));
     }
-    records
+    if saw_dead_host {
+        push_warning(
+            warnings,
+            "Greenbone reported that the host did not respond, so none of its vulnerability checks ran for that target",
+        );
+    }
+    if saw_scanner_error {
+        push_warning(
+            warnings,
+            "Greenbone reported scanner errors for the target, so some of its checks did not finish",
+        );
+    }
+    let mut unevaluated_targets = unevaluated_counts
+        .into_iter()
+        .map(|((asset_id, cause), result_count)| UnevaluatedTarget {
+            asset_id,
+            cause,
+            result_count,
+        })
+        .collect::<Vec<_>>();
+    unevaluated_targets.sort();
+    GreenboneExtraction {
+        records,
+        unevaluated_targets,
+        complete,
+    }
 }
 
 fn extract_semgrep(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {

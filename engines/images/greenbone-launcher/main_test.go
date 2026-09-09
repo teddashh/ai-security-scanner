@@ -605,16 +605,123 @@ func TestValidateResultSeparatesAlarmClosureFromSafeSystemLogs(t *testing.T) {
 	if err := validateResult(scanResult{ID: 2, Type: "log", IPAddress: "127.0.0.1", OID: implicitOID, Protocol: "udp"}, unit, relays, map[string]struct{}{}, feed); err != nil {
 		t.Fatalf("safe implicit log rejected: %v", err)
 	}
+	if err := validateResult(scanResult{ID: 3, Type: "dead_host", IPAddress: "127.0.0.1", Message: "host did not answer"}, unit, relays, map[string]struct{}{}, feed); err != nil {
+		t.Fatalf("OID-less dead-host result rejected: %v", err)
+	}
+	if err := validateResult(scanResult{ID: 4, Type: "error", IPAddress: "127.0.0.1", Message: "scanner could not evaluate target"}, unit, relays, map[string]struct{}{}, feed); err != nil {
+		t.Fatalf("OID-less error result rejected: %v", err)
+	}
 	for name, result := range map[string]scanResult{
-		"alarm outside closure": {ID: 3, Type: "alarm", IPAddress: "127.0.0.1", OID: implicitOID, Port: 40080, Protocol: "tcp"},
-		"alarm outside ports":   {ID: 4, Type: "alarm", OID: selectedOID, Port: 22, Protocol: "tcp"},
-		"unsafe log":            {ID: 5, Type: "log", OID: unsafeOID},
-		"missing oid":           {ID: 6, Type: "host_start"},
-		"non-loopback result":   {ID: 7, Type: "log", IPAddress: "198.51.100.7", OID: implicitOID},
+		"alarm outside closure": {ID: 5, Type: "alarm", IPAddress: "127.0.0.1", OID: implicitOID, Port: 40080, Protocol: "tcp"},
+		"alarm outside ports":   {ID: 6, Type: "alarm", OID: selectedOID, Port: 22, Protocol: "tcp"},
+		"unsafe log":            {ID: 7, Type: "log", OID: unsafeOID},
+		"missing oid":           {ID: 8, Type: "host_start"},
+		"non-loopback result":   {ID: 9, Type: "log", IPAddress: "198.51.100.7", OID: implicitOID},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := validateResult(result, unit, relays, closure, feed); err == nil {
 				t.Fatal("invalid result accepted")
+			}
+		})
+	}
+}
+
+func TestResultCarriesAdapterEvidenceRetainsOnlyConsequentialOIDLessStatus(t *testing.T) {
+	if !resultCarriesAdapterEvidence(scanResult{Type: "dead_host"}) {
+		t.Fatal("OID-less dead-host result would be discarded")
+	}
+	if !resultCarriesAdapterEvidence(scanResult{Type: "error"}) {
+		t.Fatal("OID-less error result would be discarded")
+	}
+	for _, resultType := range []string{"log", "host_start", "host_end", "host_stop", "host_detail"} {
+		if resultCarriesAdapterEvidence(scanResult{Type: resultType}) {
+			t.Fatalf("OID-less %s lifecycle noise would be retained", resultType)
+		}
+	}
+	if !resultCarriesAdapterEvidence(scanResult{Type: "error", OID: selectedOID}) {
+		t.Fatal("OID-bearing upstream error would be discarded")
+	}
+}
+
+func TestWriteXMLResultPreservesUpstreamResultTypes(t *testing.T) {
+	feed := testFeed()
+	document := validScope(time.Now().UTC())
+	unit := scanUnit{AssetID: document.Assets[0].ID, Grant: *document.Assets[0].Grants[0].ExternalScope}
+
+	for index, resultType := range []string{"alarm", "log", "error", "dead_host"} {
+		t.Run(resultType, func(t *testing.T) {
+			result := scanResult{
+				ID:        index + 1,
+				Type:      resultType,
+				IPAddress: "127.0.0.1",
+				OID:       selectedOID,
+				Port:      40443,
+				Protocol:  "tcp",
+				Message:   "bounded upstream result",
+			}
+			if resultType == "dead_host" || resultType == "error" {
+				result.OID = ""
+				result.Port = 0
+				result.Protocol = ""
+			}
+			var output bytes.Buffer
+			if err := writeXMLResult(&output, index, result, unit, testRelays(), feed); err != nil {
+				t.Fatal(err)
+			}
+			encoded := output.String()
+			if !strings.Contains(encoded, "<result_type>"+resultType+"</result_type>") {
+				t.Fatalf("XML lost upstream result type %s: %s", resultType, encoded)
+			}
+			if !strings.Contains(encoded, "<host>198.51.100.7</host>") {
+				t.Fatalf("XML lost the approved target projection: %s", encoded)
+			}
+			if result.OID == "" && strings.Contains(encoded, "<nvt ") {
+				t.Fatalf("OID-less %s result invented an NVT identity: %s", resultType, encoded)
+			}
+			var decoded any
+			if err := xml.Unmarshal(output.Bytes(), &decoded); err != nil {
+				t.Fatalf("generated %s result is not XML: %v", resultType, err)
+			}
+		})
+	}
+}
+
+func TestWriteXMLResultKeepsUnratedAlarmAuthoritative(t *testing.T) {
+	document := validScope(time.Now().UTC())
+	unit := scanUnit{AssetID: document.Assets[0].ID, Grant: *document.Assets[0].Grants[0].ExternalScope}
+	result := scanResult{ID: 9, Type: "alarm", IPAddress: "127.0.0.1", OID: selectedOID, Port: 40443, Protocol: "tcp", Message: "detected"}
+
+	for _, test := range []struct {
+		name           string
+		severityVector string
+		cvssBaseVector string
+	}{
+		{name: "missing vectors"},
+		{name: "unsupported vector", severityVector: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H", cvssBaseVector: "not-a-cvss2-vector"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			feed := testFeed()
+			metadata := feed.ByOID[selectedOID]
+			metadata.Tag.SeverityVector = test.severityVector
+			metadata.Tag.CVSSBaseVector = test.cvssBaseVector
+			feed.ByOID[selectedOID] = metadata
+
+			var output bytes.Buffer
+			if err := writeXMLResult(&output, 0, result, unit, testRelays(), feed); err != nil {
+				t.Fatal(err)
+			}
+			encoded := output.String()
+			for _, expected := range []string{
+				"<result_type>alarm</result_type>",
+				"<severity>0.0</severity>",
+				"<threat>Unknown</threat>",
+			} {
+				if !strings.Contains(encoded, expected) {
+					t.Fatalf("unrated alarm lost %s: %s", expected, encoded)
+				}
+			}
+			if strings.Contains(encoded, "<threat>Log</threat>") {
+				t.Fatalf("unrated alarm was relabeled as a benign log: %s", encoded)
 			}
 		})
 	}
@@ -638,6 +745,9 @@ func TestWriteXMLResultProducesEscapedAdapterEvidence(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "<port>443/tcp</port>") || !strings.Contains(output.String(), "<raw_port>40443/tcp</raw_port>") {
 		t.Fatalf("XML lost the authorized projection or raw relay provenance: %s", output.String())
+	}
+	if !strings.Contains(output.String(), "<result_type>alarm</result_type>") {
+		t.Fatalf("XML lost the authoritative upstream alarm type: %s", output.String())
 	}
 	var decoded any
 	if err := xml.Unmarshal(output.Bytes(), &decoded); err != nil {

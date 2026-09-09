@@ -2194,6 +2194,7 @@ async fn execute_runtime(
                             .into(),
                     ],
                     unattributed: Vec::new(),
+                    unevaluated_targets: Vec::new(),
                 };
                 match service.apply_execution_report(&case_id, &durable) {
                     Ok(_) => results.push(json!({

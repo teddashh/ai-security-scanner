@@ -119,6 +119,9 @@ pub struct AdapterOutput {
     /// Beside the warnings rather than instead of them: the warning is the
     /// audit trail, this is what a reading surface composes a sentence from.
     pub unattributed: Vec<crate::domain::UnattributedResults>,
+    /// Authorized targets the engine could not fully evaluate. This is
+    /// coverage data, never a finding.
+    pub unevaluated_targets: Vec<crate::domain::UnevaluatedTarget>,
     /// False when any captured evidence could not be fully normalized. Valid
     /// findings remain usable, but the engine run must not claim completion.
     pub complete: bool,
@@ -131,6 +134,7 @@ impl Default for AdapterOutput {
             observations: Vec::new(),
             warnings: Vec::new(),
             unattributed: Vec::new(),
+            unevaluated_targets: Vec::new(),
             complete: true,
         }
     }
@@ -739,6 +743,7 @@ mod tests {
         let adapter = TestAdapter {
             output: AdapterOutput {
                 unattributed: Vec::new(),
+                unevaluated_targets: Vec::new(),
                 findings: Vec::new(),
                 observations: vec![bad_observation],
                 warnings: Vec::new(),
@@ -775,6 +780,7 @@ mod tests {
         let adapter = TestAdapter {
             output: AdapterOutput {
                 unattributed: Vec::new(),
+                unevaluated_targets: Vec::new(),
                 findings: vec![bad_finding],
                 observations: Vec::new(),
                 warnings: vec![],
@@ -817,6 +823,7 @@ mod tests {
         let adapter = TestAdapter {
             output: AdapterOutput {
                 unattributed: Vec::new(),
+                unevaluated_targets: Vec::new(),
                 findings: vec![bad_finding],
                 observations: Vec::new(),
                 warnings: vec![],
@@ -873,6 +880,7 @@ mod tests {
         let adapter = CloudsplainingTestAdapter {
             output: AdapterOutput {
                 unattributed: Vec::new(),
+                unevaluated_targets: Vec::new(),
                 findings: vec![bad_finding],
                 observations: Vec::new(),
                 warnings: vec![],
@@ -913,6 +921,7 @@ mod tests {
         let adapter = TestAdapter {
             output: AdapterOutput {
                 unattributed: Vec::new(),
+                unevaluated_targets: Vec::new(),
                 findings: vec![bad_finding],
                 observations: Vec::new(),
                 warnings: vec![],

@@ -152,6 +152,8 @@ const BASIS: Record<SeverityBasisCode, string> = {
   cloud_control_query: "本產品自有固定查詢中一項未通過的 IAM 控制項",
   cloudsplaining_iam_policy_finding:
     "Cloudsplaining 未評定嚴重程度的 IAM 政策問題",
+  unrated_vulnerability_test_alarm:
+    "Greenbone 弱點測試發出的警示，但固定版本 feed 條目沒有可解析的嚴重程度向量",
 };
 
 const CONFIDENCE_BASIS: Record<ConfidenceBasisCode, string> = {
@@ -464,6 +466,8 @@ const BASIS_ENGLISH: Record<SeverityBasisCode, string> = {
     "a failed IAM control from this product's own fixed query",
   cloudsplaining_iam_policy_finding:
     "an IAM policy finding Cloudsplaining did not rate",
+  unrated_vulnerability_test_alarm:
+    "a Greenbone vulnerability-test alarm whose pinned feed entry carries no parseable severity vector",
 };
 
 const CONFIDENCE_BASIS_ENGLISH: Record<ConfidenceBasisCode, string> = {
@@ -763,6 +767,8 @@ export const localizedCoverageDimension = (
       ["not-tested check dimension", "未檢測的檢查項目"],
       ["unfinished check dimension", "未完成的檢查項目"],
       ["vulnerability profile evidence", "弱點掃描設定檔證據"],
+      ["target response", "目標回應"],
+      ["scanner errors", "掃描器錯誤"],
     ] as const) {
       if (rest === fragment)
         return withCheck(dimension.slice(0, separator), label);
@@ -804,6 +810,22 @@ const withCheck = (check: string, label: string): string => {
  * that one, English key and Chinese sentence together.
  */
 const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
+  [
+    "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result.",
+    "Greenbone 回報這台主機在掃描期間沒有回應，因此它的弱點檢查一項都沒有執行。這不是乾淨的結果。",
+  ],
+  [
+    "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again.",
+    "請確認這台主機已開機，且本機能連到已核准的連接埠，然後再執行一次這項檢查。",
+  ],
+  [
+    "Greenbone reported one or more scanner errors for this host, so some of its checks did not finish. Findings and checks that did complete remain valid.",
+    "Greenbone 回報這台主機發生一項或多項掃描器錯誤，因此部分檢查沒有完成。已完成的檢查與問題仍然有效。",
+  ],
+  [
+    "Keep the saved results and run this check again to cover the checks that did not finish.",
+    "保留已儲存的結果，再執行一次這項檢查以涵蓋沒有完成的項目。",
+  ],
   [
     "The request-level outcome contradicts the run's durable task state and was ignored.",
     "這次請求層級的結果與本輪儲存的檢查狀態互相矛盾，因此未被採用。",

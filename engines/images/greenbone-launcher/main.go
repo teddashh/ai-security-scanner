@@ -408,10 +408,11 @@ func run(ctx context.Context, arguments []string, now time.Time) error {
 			return fmt.Errorf("grant %s scan failed: %w", unit.Grant.ID, scanErr)
 		}
 		for _, result := range results {
-			// openvasd emits host lifecycle records without an NVT identity. They
-			// carry no scanner finding or feed evidence and cannot be represented
-			// honestly in the released Greenbone adapter contract.
-			if result.OID == "" {
+			// Ordinary host lifecycle records without an NVT identity carry no
+			// scanner finding or feed evidence. A dead-host result is different:
+			// it proves that Greenbone could not evaluate this exact target, so
+			// retain its upstream result type even when it has no NVT OID.
+			if !resultCarriesAdapterEvidence(result) {
 				continue
 			}
 			if resultCount >= maxResultsPerRun {
@@ -1326,6 +1327,9 @@ func validateResult(result scanResult, unit scanUnit, relays *unitRelays, closur
 	if result.IPAddress != "" && result.IPAddress != relays.target {
 		return errors.New("openvasd result escaped the loopback relay target")
 	}
+	if (result.Type == "dead_host" || result.Type == "error") && result.OID == "" {
+		return nil
+	}
 	if result.OID == "" || !validOID(result.OID) {
 		return errors.New("openvasd returned a result without a valid NVT identity")
 	}
@@ -1347,6 +1351,10 @@ func validateResult(result scanResult, unit scanUnit, relays *unitRelays, closur
 	return nil
 }
 
+func resultCarriesAdapterEvidence(result scanResult) bool {
+	return result.OID != "" || result.Type == "dead_host" || result.Type == "error"
+}
+
 func writeXMLResult(writer io.Writer, indexNumber int, result scanResult, unit scanUnit, relays *unitRelays, feed *feedIndex) error {
 	metadata := feed.ByOID[result.OID]
 	name := metadata.Name
@@ -1356,11 +1364,17 @@ func writeXMLResult(writer io.Writer, indexNumber int, result scanResult, unit s
 	severity := 0.0
 	threat := "Log"
 	if result.Type == "alarm" {
+		// Alarm is the authoritative upstream result type. A missing, newer, or
+		// otherwise unparseable feed vector leaves severity unrated; it must not
+		// turn the vulnerability result into a benign log record.
+		threat = "Unknown"
 		severity = cvssBaseScore(metadata.Tag.SeverityVector)
 		if severity == 0 {
 			severity = cvss2BaseScore(metadata.Tag.CVSSBaseVector)
 		}
-		threat = threatForScore(severity)
+		if severity > 0 {
+			threat = threatForScore(severity)
+		}
 	}
 	qod := qodForType(metadata.Tag.QODType)
 	relayPort := result.Port
@@ -1376,6 +1390,7 @@ func writeXMLResult(writer io.Writer, indexNumber int, result scanResult, unit s
 		{"name", name},
 		{"host", unit.Grant.Target.Value},
 		{"port", fmt.Sprintf("%d/tcp", port)},
+		{"result_type", result.Type},
 		{"severity", strconv.FormatFloat(severity, 'f', 1, 64)},
 		{"threat", threat},
 		{"asset_id", unit.AssetID},
@@ -1396,6 +1411,10 @@ func writeXMLResult(writer io.Writer, indexNumber int, result scanResult, unit s
 		if _, err := fmt.Fprintf(writer, "<%s>%s</%s>", field[0], xmlEscape(field[1]), field[0]); err != nil {
 			return err
 		}
+	}
+	if result.OID == "" {
+		_, err := io.WriteString(writer, "</result>")
+		return err
 	}
 	if _, err := fmt.Fprintf(writer, "<qod><value>%d</value></qod><nvt oid=\"%s\"><name>%s</name><family>%s</family><refs>", qod, xmlEscape(result.OID), xmlEscape(name), xmlEscape(metadata.Family)); err != nil {
 		return err

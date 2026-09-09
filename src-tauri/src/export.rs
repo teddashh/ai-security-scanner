@@ -2779,6 +2779,7 @@ mod tests {
             engine_admission_issues: Vec::new(),
             engine_runs: vec![EngineRun {
                 unattributed: Vec::new(),
+                unevaluated_targets: Vec::new(),
                 id: "engine-run-1".into(),
                 scan_run_id: "run-1".into(),
                 engine_id: "engine-1".into(),

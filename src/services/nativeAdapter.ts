@@ -1342,6 +1342,7 @@ const SEVERITY_BASIS_CODES: readonly SeverityBasisCode[] = [
   "cis_kubernetes_benchmark",
   "cloud_control_query",
   "cloudsplaining_iam_policy_finding",
+  "unrated_vulnerability_test_alarm",
 ];
 
 const CONFIDENCE_BASIS_CODES: readonly ConfidenceBasisCode[] = [

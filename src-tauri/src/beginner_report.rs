@@ -11,7 +11,7 @@ use crate::domain::{
     DeclaredWebServiceScanProfile, DistributionMode, EngineRun, EngineRunStatus, EngineTaskKind,
     Finding, FindingFamily, FindingObservation, Id, InventoryObservation, InventoryObservationKind,
     LocalhostTcpObservation, LocalhostTcpOutcome, ReportAssetDisposition, ScanRequestOutcome,
-    ScanRequestOutcomeCode, ScanRun, Severity, SeverityBasisCode,
+    ScanRequestOutcomeCode, ScanRun, Severity, SeverityBasisCode, UnevaluatedTargetCause,
 };
 use crate::execution_coverage::{
     CumulativeNaabuCoverage, WorkUnitOutcome, reduce_naabu_attempt_coverage,
@@ -1623,6 +1623,72 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                 exact_complete = meaningful_completed_profile
                     && !smtp_tls_coverage_unproven
                     && exactly_completed_without_known_gap(task);
+
+                let bound_asset_ids = task.asset_ids.iter().cloned().collect::<BTreeSet<_>>();
+                let dead_host_asset_ids = task
+                    .unevaluated_targets
+                    .iter()
+                    .filter(|target| {
+                        target.cause == UnevaluatedTargetCause::TargetDidNotRespond
+                            && bound_asset_ids.contains(&target.asset_id)
+                    })
+                    .map(|target| target.asset_id.clone())
+                    .collect::<BTreeSet<_>>();
+                let scanner_error_asset_ids = task
+                    .unevaluated_targets
+                    .iter()
+                    .filter(|target| {
+                        target.cause == UnevaluatedTargetCause::ScannerError
+                            && bound_asset_ids.contains(&target.asset_id)
+                            && !dead_host_asset_ids.contains(&target.asset_id)
+                    })
+                    .map(|target| target.asset_id.clone())
+                    .collect::<BTreeSet<_>>();
+
+                for asset_id in &dead_host_asset_ids {
+                    tested_dimensions
+                        .retain(|dimension| !tested_dimension_refers_to_asset(dimension, asset_id));
+                    gaps.push(CoverageGap {
+                        unattributed: None,
+                        kind: CoverageGapKind::Failed,
+                        task_id: Some(task.id.clone()),
+                        target_asset_ids: vec![asset_id.clone()],
+                        dimension: format!("{}: target response", check_id(task)),
+                        reason: "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result."
+                            .into(),
+                        next_action_code: NextActionCode::ReviewScopeAndRetry,
+                        next_action: "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again."
+                            .into(),
+                    });
+                }
+                for asset_id in &scanner_error_asset_ids {
+                    gaps.push(CoverageGap {
+                        unattributed: None,
+                        kind: CoverageGapKind::Failed,
+                        task_id: Some(task.id.clone()),
+                        target_asset_ids: vec![asset_id.clone()],
+                        dimension: format!("{}: scanner errors", check_id(task)),
+                        reason: "Greenbone reported one or more scanner errors for this host, so some of its checks did not finish. Findings and checks that did complete remain valid."
+                            .into(),
+                        next_action_code: NextActionCode::RetryCheck,
+                        next_action: "Keep the saved results and run this check again to cover the checks that did not finish."
+                            .into(),
+                    });
+                }
+                if !dead_host_asset_ids.is_empty() || !scanner_error_asset_ids.is_empty() {
+                    status = CoverageDimensionStatus::TestedPartial;
+                    exact_complete = false;
+                    task_gap_already_projected = true;
+                }
+                if !bound_asset_ids.is_empty()
+                    && bound_asset_ids
+                        .iter()
+                        .all(|asset_id| dead_host_asset_ids.contains(asset_id))
+                {
+                    status = CoverageDimensionStatus::Failed;
+                    tested_dimensions.clear();
+                    useful_result = false;
+                }
             }
             EngineTaskKind::CatalogEngine => {
                 // Older adapters did not freeze granular executed dimensions.
@@ -1738,6 +1804,16 @@ fn untrusted_naabu_history_status(task: &EngineRun) -> CoverageDimensionStatus {
         | EngineRunStatus::Running
         | EngineRunStatus::Paused => CoverageDimensionStatus::InProgress,
     }
+}
+
+/// Tested-dimension values name their target as `... on asset {asset_id}`,
+/// sometimes followed by more words. The whole identifier must match so that
+/// `host-1` cannot stand in for `host-10`.
+fn tested_dimension_refers_to_asset(dimension: &TestedDimension, asset_id: &str) -> bool {
+    dimension.value.split(" on asset ").skip(1).any(|rest| {
+        rest.strip_prefix(asset_id)
+            .is_some_and(|tail| tail.is_empty() || tail.starts_with(' '))
+    })
 }
 
 fn append_naabu_tested_dimensions(
@@ -4078,6 +4154,7 @@ mod tests {
             engine_admission_issues: Vec::new(),
             engine_runs: vec![EngineRun {
                 unattributed: Vec::new(),
+                unevaluated_targets: Vec::new(),
                 id: "task-1".into(),
                 scan_run_id: run_id,
                 engine_id: BUILT_IN_LOCALHOST_TCP_ENGINE_ID.into(),
@@ -4131,6 +4208,7 @@ mod tests {
     fn catalog_task(id: &str, status: EngineRunStatus) -> EngineRun {
         EngineRun {
             unattributed: Vec::new(),
+            unevaluated_targets: Vec::new(),
             id: id.into(),
             scan_run_id: "run-1".into(),
             engine_id: format!("engine-{id}"),
@@ -6808,6 +6886,162 @@ mod tests {
         assert!(tested.value.contains("2 approved TCP ports"));
         assert!(tested.observation.contains("prerequisites decided"));
         assert!(tested.observation.contains("does not prove"));
+    }
+
+    #[test]
+    fn tested_dimension_asset_match_requires_the_whole_identifier() {
+        let dimension = |value: &str| TestedDimension {
+            dimension: "completed check-to-target coordinate".into(),
+            value: value.into(),
+            observation: String::new(),
+            observed_at: None,
+        };
+        assert!(tested_dimension_refers_to_asset(
+            &dimension("greenbone on asset host-1"),
+            "host-1"
+        ));
+        assert!(tested_dimension_refers_to_asset(
+            &dimension(
+                "applicability-driven upstream profile on asset host-1 across 3 approved TCP ports"
+            ),
+            "host-1"
+        ));
+        assert!(!tested_dimension_refers_to_asset(
+            &dimension("greenbone on asset host-10"),
+            "host-1"
+        ));
+        assert!(!tested_dimension_refers_to_asset(
+            &dimension("greenbone on asset host-1"),
+            "host-10"
+        ));
+    }
+
+    #[test]
+    fn greenbone_dead_host_is_failed_untested_coverage_for_that_asset() {
+        let mut case = internal_host_case();
+        case.scan_runs[0].engine_runs[0].unevaluated_targets =
+            vec![crate::domain::UnevaluatedTarget {
+                asset_id: "host-asset".into(),
+                cause: UnevaluatedTargetCause::TargetDidNotRespond,
+                result_count: 1,
+            }];
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        let check = &report.actual.checks[0];
+        assert_eq!(check.status, CoverageDimensionStatus::Failed);
+        assert!(check.tested_dimensions.is_empty());
+        let gaps = report
+            .coverage_gaps
+            .iter()
+            .filter(|gap| gap.dimension == "greenbone: target response")
+            .collect::<Vec<_>>();
+        assert_eq!(gaps.len(), 1);
+        let gap = gaps[0];
+        assert_eq!(gap.kind, CoverageGapKind::Failed);
+        assert_eq!(gap.task_id.as_deref(), Some("host"));
+        assert_eq!(gap.target_asset_ids, ["host-asset"]);
+        assert_eq!(
+            gap.reason,
+            "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result."
+        );
+        assert_eq!(gap.next_action_code, NextActionCode::ReviewScopeAndRetry);
+        assert_eq!(
+            gap.next_action,
+            "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again."
+        );
+        assert_eq!(
+            report.state.summary,
+            BeginnerReportSummary::NoChecksCompleted
+        );
+    }
+
+    #[test]
+    fn greenbone_scanner_errors_keep_completed_dimensions_and_mark_partial_coverage() {
+        let mut case = internal_host_case();
+        case.scan_runs[0].engine_runs[0].unevaluated_targets =
+            vec![crate::domain::UnevaluatedTarget {
+                asset_id: "host-asset".into(),
+                cause: UnevaluatedTargetCause::ScannerError,
+                result_count: 2,
+            }];
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        let check = &report.actual.checks[0];
+        assert_eq!(check.status, CoverageDimensionStatus::TestedPartial);
+        assert!(
+            check
+                .tested_dimensions
+                .iter()
+                .any(|dimension| dimension.dimension == "Greenbone remote vulnerability scan")
+        );
+        let gaps = report
+            .coverage_gaps
+            .iter()
+            .filter(|gap| gap.dimension == "greenbone: scanner errors")
+            .collect::<Vec<_>>();
+        assert_eq!(gaps.len(), 1);
+        let gap = gaps[0];
+        assert_eq!(gap.kind, CoverageGapKind::Failed);
+        assert_eq!(gap.task_id.as_deref(), Some("host"));
+        assert_eq!(gap.target_asset_ids, ["host-asset"]);
+        assert_eq!(
+            gap.reason,
+            "Greenbone reported one or more scanner errors for this host, so some of its checks did not finish. Findings and checks that did complete remain valid."
+        );
+        assert_eq!(gap.next_action_code, NextActionCode::RetryCheck);
+        assert_eq!(
+            gap.next_action,
+            "Keep the saved results and run this check again to cover the checks that did not finish."
+        );
+        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+    }
+
+    #[test]
+    fn greenbone_unevaluated_target_not_bound_to_the_task_is_ignored() {
+        let mut case = internal_host_case();
+        let unchanged = build_beginner_master_report(&case, "run-1").unwrap();
+        case.scan_runs[0].engine_runs[0].unevaluated_targets =
+            vec![crate::domain::UnevaluatedTarget {
+                asset_id: "unbound-asset".into(),
+                cause: UnevaluatedTargetCause::TargetDidNotRespond,
+                result_count: 1,
+            }];
+
+        assert_eq!(
+            build_beginner_master_report(&case, "run-1").unwrap(),
+            unchanged
+        );
+    }
+
+    #[test]
+    fn greenbone_dead_host_coverage_does_not_erase_a_retained_finding() {
+        let mut case = internal_host_case();
+        case.scan_runs[0].engine_runs[0].unevaluated_targets =
+            vec![crate::domain::UnevaluatedTarget {
+                asset_id: "host-asset".into(),
+                cause: UnevaluatedTargetCause::TargetDidNotRespond,
+                result_count: 1,
+            }];
+        let mut finding = frozen_finding(&case, "greenbone-alarm", 80, Severity::High);
+        finding.asset_ids = vec!["host-asset".into()];
+        finding.evidence[0].engine_run_id = Some("host".into());
+        finding.evidence[0].engine_id = GREENBONE_ENGINE_ID.into();
+        let mut retained = observation(&finding, "run-1", instant(18));
+        retained.asset_ids = vec!["host-asset".into()];
+        retained.engine_ids = vec![GREENBONE_ENGINE_ID.into()];
+        case.findings.push(finding);
+        case.finding_observations.push(retained);
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].finding_id, "greenbone-alarm");
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::Failed
+        );
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.target_asset_ids == ["host-asset"] && gap.dimension == "greenbone: target response"
+        }));
     }
 
     #[test]

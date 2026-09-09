@@ -94,6 +94,11 @@ severity, evidence, and solution. A zero-finding completion therefore means
 only that the applicability-driven scan returned no findings for the displayed
 ports; it does not mean that every VT ran or that the device is secure.
 
+A host that Greenbone reports as not responding, and scanner errors on a host,
+both appear as incomplete coverage for that host with a next action; neither is
+presented as a clean result. An alarm whose pinned feed entry has no parseable
+severity keeps `Unknown` severity for human review.
+
 Previously saved single-service HTTPS, SSH, RDP, VNC, SMTP, and Telnet records
 remain runnable with their original boundaries. They are compatibility data,
 not the new setup model, and are not silently widened.

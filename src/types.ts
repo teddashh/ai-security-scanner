@@ -1254,7 +1254,8 @@ export type SeverityBasisCode =
   | "iac_policy_check"
   | "cis_kubernetes_benchmark"
   | "cloud_control_query"
-  | "cloudsplaining_iam_policy_finding";
+  | "cloudsplaining_iam_policy_finding"
+  | "unrated_vulnerability_test_alarm";
 
 /** Why this product assigned confidence when the engine supplied none. */
 export type ConfidenceBasisCode =

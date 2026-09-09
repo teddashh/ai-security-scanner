@@ -93,11 +93,14 @@ pub fn basis_english(code: SeverityBasisCode) -> &'static str {
         SeverityBasisCode::CloudsplainingIamPolicyFinding => {
             "an IAM policy finding Cloudsplaining did not rate"
         }
+        SeverityBasisCode::UnratedVulnerabilityTestAlarm => {
+            "a Greenbone vulnerability-test alarm whose pinned feed entry carries no parseable severity vector"
+        }
     }
 }
 
 /// Every basis code, so a new one cannot be added without being translated.
-pub const ALL_SEVERITY_BASIS_CODES: [SeverityBasisCode; 8] = [
+pub const ALL_SEVERITY_BASIS_CODES: [SeverityBasisCode; 9] = [
     SeverityBasisCode::OpenPort,
     SeverityBasisCode::ReachableHttpService,
     SeverityBasisCode::SecretPatternMatch,
@@ -106,6 +109,7 @@ pub const ALL_SEVERITY_BASIS_CODES: [SeverityBasisCode; 8] = [
     SeverityBasisCode::CisKubernetesBenchmark,
     SeverityBasisCode::CloudControlQuery,
     SeverityBasisCode::CloudsplainingIamPolicyFinding,
+    SeverityBasisCode::UnratedVulnerabilityTestAlarm,
 ];
 
 /// The canonical English clause explaining why this product assigned a
@@ -208,6 +212,9 @@ fn basis(code: SeverityBasisCode) -> &'static str {
         SeverityBasisCode::CloudControlQuery => "本產品自有固定查詢中一項未通過的 IAM 控制項",
         SeverityBasisCode::CloudsplainingIamPolicyFinding => {
             "Cloudsplaining 未評定嚴重程度的 IAM 政策問題"
+        }
+        SeverityBasisCode::UnratedVulnerabilityTestAlarm => {
+            "Greenbone 弱點測試發出的警示，但固定版本 feed 條目沒有可解析的嚴重程度向量"
         }
     }
 }
@@ -600,6 +607,8 @@ pub(crate) fn recognized_coverage_dimension_zh_hant(dimension: &str) -> Option<S
             ("not-tested check dimension", "未檢測的檢查項目"),
             ("unfinished check dimension", "未完成的檢查項目"),
             ("vulnerability profile evidence", "弱點掃描設定檔證據"),
+            ("target response", "目標回應"),
+            ("scanner errors", "掃描器錯誤"),
         ] {
             if rest == fragment {
                 return Some(with_check(check, label));
@@ -1149,6 +1158,14 @@ fn strip_frame<'a>(value: &'a str, prefix: &str, suffix: &str) -> Option<&'a str
 const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
     // Why the coverage is missing.
     (
+        "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result.",
+        "Greenbone 回報這台主機在掃描期間沒有回應，因此它的弱點檢查一項都沒有執行。這不是乾淨的結果。",
+    ),
+    (
+        "Greenbone reported one or more scanner errors for this host, so some of its checks did not finish. Findings and checks that did complete remain valid.",
+        "Greenbone 回報這台主機發生一項或多項掃描器錯誤，因此部分檢查沒有完成。已完成的檢查與問題仍然有效。",
+    ),
+    (
         "The request-level outcome contradicts the run's durable task state and was ignored.",
         "這次請求層級的結果與本輪儲存的檢查狀態互相矛盾，因此未被採用。",
     ),
@@ -1500,6 +1517,14 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
     (
         "Keep the completed results while the app reconciles the check's final state.",
         "在本程式核對這項檢查的最終狀態期間，請保留已完成的結果。",
+    ),
+    (
+        "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again.",
+        "請確認這台主機已開機，且本機能連到已核准的連接埠，然後再執行一次這項檢查。",
+    ),
+    (
+        "Keep the saved results and run this check again to cover the checks that did not finish.",
+        "保留已儲存的結果，再執行一次這項檢查以涵蓋沒有完成的項目。",
     ),
     (
         "Keep saved results and retry only the unfinished work.",
@@ -2424,6 +2449,7 @@ mod tests {
             SeverityBasisCode::CisKubernetesBenchmark,
             SeverityBasisCode::CloudControlQuery,
             SeverityBasisCode::CloudsplainingIamPolicyFinding,
+            SeverityBasisCode::UnratedVulnerabilityTestAlarm,
         ];
         let summaries = bases
             .iter()

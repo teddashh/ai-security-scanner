@@ -884,6 +884,8 @@ pub struct EngineRun {
     /// this is the one looking at an empty findings list.
     #[serde(default)]
     pub unattributed: Vec<UnattributedResults>,
+    #[serde(default)]
+    pub unevaluated_targets: Vec<UnevaluatedTarget>,
     pub raw_artifact_ids: Vec<Id>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
@@ -1529,6 +1531,7 @@ pub enum SeverityBasisCode {
     CisKubernetesBenchmark,
     CloudControlQuery,
     CloudsplainingIamPolicyFinding,
+    UnratedVulnerabilityTestAlarm,
 }
 
 impl SeverityBasisCode {
@@ -1629,6 +1632,28 @@ pub struct UnattributedResults {
     pub identifier: String,
     /// How many results were discarded for this identifier.
     pub discarded_results: usize,
+}
+
+/// An authorized target an engine reported it could not evaluate, or could
+/// only partly evaluate. Carried as data (not prose) so the report can say,
+/// in the reader's language, which asset was not checked and why.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct UnevaluatedTarget {
+    pub asset_id: Id,
+    pub cause: UnevaluatedTargetCause,
+    /// Upstream result records that carried this cause (saturating count).
+    pub result_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum UnevaluatedTargetCause {
+    /// Upstream `dead_host`: the scanner reported the host did not respond,
+    /// so none of its vulnerability tests ran.
+    TargetDidNotRespond,
+    /// Upstream `error`: the scanner reported one or more errors while
+    /// evaluating this target, so some of its checks did not finish.
+    ScannerError,
 }
 
 /// being non-questionnaire, so answering a questionnaire alone cannot conjure
@@ -2193,6 +2218,9 @@ pub struct DeclaredHostScanMetadata {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+// The variant names are the persisted snake_case profile identifiers, so the
+// shared prefix is part of the stored contract rather than naming noise.
+#[allow(clippy::enum_variant_names)]
 pub enum DeclaredNetworkServiceScanProfile {
     InternalEndpointSsh,
     InternalEndpointRdpTls,
@@ -2218,9 +2246,6 @@ pub struct DeclaredNetworkServiceInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DeclaredNetworkServiceMetadata {
-// The variant names are the persisted snake_case profile identifiers, so the
-// shared prefix is part of the stored contract rather than naming noise.
-#[allow(clippy::enum_variant_names)]
     pub target: String,
     pub protocol: DeclaredNetworkProtocol,
     pub port: u16,
