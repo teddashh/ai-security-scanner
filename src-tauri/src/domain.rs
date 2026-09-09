@@ -1459,12 +1459,12 @@ pub enum FindingFamily {
     Kubernetes,
 }
 
-/// Why this product rated a finding the engine left unrated.
+/// Why a finding has no scanner-supplied severity.
 ///
 /// Present only when the engine reported no severity of its own; its absence
-/// means the rating is the engine's. Companion to the `severity-basis:derived`
-/// tag, carrying which basis rather than only that there was one, so the
-/// disclosure survives translation instead of falling back to English.
+/// means the rating is the engine's. Current missing values stay `Unknown`.
+/// Older frozen findings may retain a product-derived level beside this code,
+/// so readers use both fields when explaining provenance.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum SeverityBasisCode {

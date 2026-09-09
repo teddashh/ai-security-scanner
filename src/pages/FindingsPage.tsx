@@ -27,6 +27,7 @@ import {
   findingRollbackSentence,
   findingVerificationSentence,
   findingImpactSentence,
+  findingSeverityIsUnrated,
   findingSummarySentence,
   localizedControlMappingRationale,
   localizedExpertType,
@@ -473,6 +474,14 @@ const copy = {
     en: "This severity was assigned by this product, not by the scanner.",
     zhTW: "這個嚴重程度由本產品評定，並非來自掃描工具。",
   },
+  scannerDidNotRateSeverity: {
+    en: "Scanner did not rate severity",
+    zhTW: "掃描器未評等",
+  },
+  severityNeedsConfirmation: {
+    en: "Needs human confirmation",
+    zhTW: "待人工確認",
+  },
   asset: { en: "Asset", zhTW: "資產" },
   reviewStatus: { en: "Review status", zhTW: "處理狀態" },
   recommendedExpert: { en: "Specialist to consult", zhTW: "建議專家類型" },
@@ -831,7 +840,7 @@ const legacyCheckResultKind = (
 ): "security_check" | "inventory" | "connectivity" => {
   const normalized = checkId.trim().toLocaleLowerCase("en-US");
   if (normalized.startsWith("native localhost tcp check on ")) return "connectivity";
-  if (["cloudquery", "syft", "naabu", "httpx"].some((engine) =>
+  if (["cloudquery", "steampipe", "syft", "naabu", "httpx"].some((engine) =>
     normalized === engine || normalized.startsWith(`${engine}-`))) return "inventory";
   return "security_check";
 };
@@ -1658,6 +1667,14 @@ export function FindingsPage({
   onSelectRun,
 }: FindingsPageProps) {
   const { locale, text, formatDateTime, formatNumber } = useI18n();
+  const hasUnratedSeverity = (finding: Finding): boolean => findingSeverityIsUnrated({
+    severity: finding.severity,
+    severityBasisCode: finding.severityBasisCode,
+    priorityReasons: finding.priorityReasons,
+  });
+  const severityLabelFor = (finding: Finding): string => hasUnratedSeverity(finding)
+    ? text(copy.scannerDidNotRateSeverity)
+    : severityMeta[finding.severity].label;
   const resultRecords = useMemo(
     () => report
       ? projectReportFindings(report, canonicalFindings, locale)
@@ -2259,13 +2276,17 @@ export function FindingsPage({
               >
                 <span className="priority-card__number">{String(index + 1).padStart(2, "0")}</span>
                 <span className="priority-card__status">
-                  <StatusPill label={severityMeta[finding.severity].label} tone={severityMeta[finding.severity].tone} />
+                  <StatusPill label={severityLabelFor(finding)} tone={severityMeta[finding.severity].tone} />
+                  {hasUnratedSeverity(finding) && <StatusPill label={text(copy.severityNeedsConfirmation)} tone="warning" />}
                   <StatusPill label={confidenceMeta[finding.confidence]} tone="neutral" />
                 </span>
                 <h3>{finding.title}</h3>
                 <p className="priority-card__impact">{findingImpactSentence(locale, {
                   englishFallback: finding.impact,
+                  severity: finding.severity,
                   severityLabel: severityMeta[finding.severity].label,
+                  severityBasisCode: finding.severityBasisCode,
+                  priorityReasons: finding.priorityReasons,
                   family: finding.family,
                   contextFactors: finding.contextFactors,
                 })}</p>
@@ -2591,7 +2612,7 @@ export function FindingsPage({
                     checked={groupFindingIds.includes(finding.id)}
                     onChange={() => toggleGroupedFinding(finding.id)}
                   />
-                  <span>{finding.title}<small>{finding.assetName} · {severityMeta[finding.severity].label}</small></span>
+                  <span>{finding.title}<small>{finding.assetName} · {severityLabelFor(finding)}</small></span>
                 </label>
               ))}
             </div>
@@ -2683,8 +2704,9 @@ export function FindingsPage({
                   </span>
                   <span className="finding-row__main">
                     <span className="finding-row__top">
-                      <StatusPill label={severityMeta[finding.severity].label} tone={severityMeta[finding.severity].tone} />
-                      {finding.severityBasisCode && (
+                      <StatusPill label={severityLabelFor(finding)} tone={severityMeta[finding.severity].tone} />
+                      {hasUnratedSeverity(finding) && <StatusPill label={text(copy.severityNeedsConfirmation)} tone="warning" />}
+                      {finding.severityBasisCode && !hasUnratedSeverity(finding) && (
                         <span className="finding-row__basis" title={text(copy.ratedByProductAria)}>
                           {text(copy.ratedByProduct)}
                         </span>
@@ -2722,7 +2744,8 @@ export function FindingsPage({
             <>
               <div className="finding-detail__header">
                 <div className="tag-row">
-                  <StatusPill label={severityMeta[selected.severity].label} tone={severityMeta[selected.severity].tone} />
+                  <StatusPill label={severityLabelFor(selected)} tone={severityMeta[selected.severity].tone} />
+                  {hasUnratedSeverity(selected) && <StatusPill label={text(copy.severityNeedsConfirmation)} tone="warning" />}
                   <StatusPill label={findingConfidencePresentation(
                     locale,
                     confidenceMeta[selected.confidence],
@@ -2734,6 +2757,7 @@ export function FindingsPage({
                 <h2>{selected.title}</h2>
                 <p>{findingSummarySentence(locale, {
                   englishFallback: selected.summary,
+                  severity: selected.severity,
                   severityLabel: severityMeta[selected.severity].label,
                   severityBasisCode: selected.severityBasisCode,
                   confidenceLabel: confidenceMeta[selected.confidence],
@@ -2798,7 +2822,10 @@ export function FindingsPage({
                 <h3>{text(copy.possibleImpact)}</h3>
                 <p>{findingImpactSentence(locale, {
                   englishFallback: selected.impact,
+                  severity: selected.severity,
                   severityLabel: severityMeta[selected.severity].label,
+                  severityBasisCode: selected.severityBasisCode,
+                  priorityReasons: selected.priorityReasons,
                   family: selected.family,
                   contextFactors: selected.contextFactors,
                 })}</p>

@@ -616,6 +616,33 @@ func TestReleasedScopeFixturesMatchLauncherContract(t *testing.T) {
 	}
 }
 
+func TestSteampipeQueryIsExactUpstreamIAMUserInventory(t *testing.T) {
+	const expected = `select
+  'aws_iam_user' as resource_type,
+  account_id,
+  arn,
+  user_id,
+  name
+from aws_iam_user;
+`
+	if steampipeIAMUserInventoryQuery != expected {
+		t.Fatalf("unexpected Steampipe inventory query:\n%s", steampipeIAMUserInventoryQuery)
+	}
+
+	normalized := strings.ToLower(steampipeIAMUserInventoryQuery)
+	for _, forbidden := range []string{
+		"mfa_enabled",
+		"control_id",
+		"status",
+		"severity",
+		"case when",
+	} {
+		if strings.Contains(normalized, forbidden) {
+			t.Fatalf("Steampipe inventory query contains product-owned policy logic %q", forbidden)
+		}
+	}
+}
+
 func TestCloudQueryConfigurationIsExactLocalSourceClosure(t *testing.T) {
 	config := string(cloudQueryConfiguration())
 	tables := []string{

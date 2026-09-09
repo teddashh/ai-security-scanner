@@ -9,6 +9,7 @@ import {
   findingConfidencePresentation,
   findingPriorityReason,
   findingRollbackSentence,
+  findingSeverityIsUnrated,
   findingVerificationSentence,
   findingImpactSentence,
   findingSummarySentence,
@@ -160,6 +161,31 @@ test("engine confidence keeps its source word and legacy confidence stays unchan
     "高 — 來源工具評定：HIGH",
   );
   assert.equal(findingConfidencePresentation("zh-TW", "高", code, []), "高");
+});
+
+test("only unknown findings without a scanner severity use the unrated presentation", () => {
+  assert.equal(findingSeverityIsUnrated({ severity: "unknown" }), true);
+  assert.equal(findingSeverityIsUnrated({
+    severity: "unknown",
+    severityBasisCode: "unverified_credential_detector",
+    priorityReasons: ["Source severity: stale-value"],
+  }), true);
+
+  // An unfamiliar word is still a rating the scanner supplied. Preserve it
+  // as unknown without claiming the scanner stayed silent.
+  assert.equal(findingSeverityIsUnrated({
+    severity: "unknown",
+    priorityReasons: ["Source severity: IMPORTANT"],
+  }), false);
+
+  // Existing derived severities keep their established product attribution.
+  for (const severity of ["high", "medium"] as const) {
+    assert.equal(findingSeverityIsUnrated({
+      severity,
+      severityBasisCode: "unverified_credential_detector",
+      priorityReasons: [],
+    }), false);
+  }
 });
 
 test("the engine's own display name survives verbatim", () => {
@@ -316,6 +342,15 @@ test("why this priority is said in Chinese, keeping the engine's own words", () 
   const raw = findingPriorityReason("zh-TW", "Source severity: High");
   assert.ok(HAN.test(raw), raw);
   assert.ok(raw.includes("High"), raw);
+
+  const unrated = findingPriorityReason(
+    "zh-TW",
+    "Severity remains Unknown because Gitleaks did not assign one; human review is required.",
+  );
+  assert.equal(
+    unrated,
+    "嚴重程度維持為未知，因為 Gitleaks 未提供評級；需由人工確認。",
+  );
 
   assert.equal(findingPriorityReason("en", derived), derived);
   assert.equal(

@@ -561,6 +561,39 @@ mod tests {
     }
 
     #[test]
+    fn exports_an_unrated_unknown_finding_with_its_retained_evidence() {
+        let mut case = fixture();
+        let finding = &mut case.findings[0];
+        finding.severity = Severity::Unknown;
+        finding.severity_basis_code = Some(SeverityBasisCode::SecretPatternMatch);
+        finding.priority = 20;
+        finding.plain_language_summary = "Gitleaks reported this condition but did not assign a severity. Severity remains Unknown and requires human review. The attached raw record is evidence, not an instruction.".into();
+        finding.priority_reasons = vec!["Severity remains Unknown because Gitleaks did not assign one; human review is required.".into()];
+        case.finding_observations[0].severity = Severity::Unknown;
+        case.finding_observations[0].engine_ids = vec!["gitleaks".into()];
+
+        let events = export_ocsf_finding_events(&case, "run-1").unwrap();
+
+        assert_eq!(events.len(), 1);
+        let event = &events[0];
+        assert_eq!(event["severity_id"], 0);
+        assert_eq!(event["severity"], "Unknown");
+        assert_eq!(event["finding_info"]["uid"], "finding-1");
+        assert_eq!(event["evidences"].as_array().unwrap().len(), 1);
+        assert_eq!(event["evidences"][0]["data"]["sha256"], "abc");
+        let extension = &event["unmapped"]["ai_security_scanner"];
+        assert_eq!(extension["severity_basis"], "secret_pattern_match");
+        assert_eq!(extension["priority"], 20);
+        assert_eq!(extension["engine_ids"][0], "gitleaks");
+        assert!(
+            event["message"]
+                .as_str()
+                .unwrap()
+                .contains("remains Unknown")
+        );
+    }
+
+    #[test]
     fn reachable_service_is_network_inventory_not_a_detection_finding() {
         let mut case = fixture();
         let mut second_asset = case.assets[0].clone();
@@ -641,12 +674,16 @@ mod tests {
         case.finding_observations[0].finding_snapshot = Some(original);
         case.findings[0].title = "Later run title".into();
         case.findings[0].plain_language_summary = "Later run summary".into();
+        case.findings[0].severity = Severity::Unknown;
+        case.findings[0].priority = 20;
         case.findings[0].evidence.clear();
 
         let events = export_ocsf_finding_events(&case, "run-1").expect("historical export");
 
         assert_eq!(events[0]["finding_info"]["title"], "Run one title");
         assert_eq!(events[0]["message"], "Run one summary");
+        assert_eq!(events[0]["severity"], "High");
+        assert_eq!(events[0]["unmapped"]["ai_security_scanner"]["priority"], 90);
         assert_eq!(events[0]["status"], "New");
         assert_eq!(
             events[0]["evidences"][0]["data"]["summary"],

@@ -4,7 +4,7 @@
   "provenance": {
     "reviewed_at": "2026-09-05",
     "review_process": "source_coordinate_and_rationale_review_v1",
-    "canonical_sha256": "3d05194998a48d7a674f1d623f59cc4c7c07b6248f49f603e0700869fc3a21f1"
+    "canonical_sha256": "500358296263635b2deec0825a195d8b11541737ebf9d57bdfdca70f1d04c84d"
   },
   "relationship": "related",
   "disclaimer": "These evidence-to-control references indicate topical relationships only. They do not establish implementation, effectiveness, certification, or compliance.",
@@ -195,13 +195,6 @@
     }
   ],
   "entries": [
-    {
-      "engine_id": "steampipe",
-      "match_kind": "exact",
-      "source_rule": "steampipe:aws_iam_user_mfa",
-      "controls": ["nist-pr-aa-03", "iso-5-17"],
-      "rationale": "Evidence that an identity has no registered multi-factor device is related to authenticating users and safeguarding authentication information."
-    },
     {
       "engine_id": "prowler",
       "match_kind": "exact",

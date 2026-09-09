@@ -14856,6 +14856,7 @@ fn html_report_bytes(
             crate::export::ReportLocale::ZhHant => (
                 crate::finding_narrative::summary_zh_hant(
                     &finding.plain_language_risk,
+                    &finding.severity,
                     &severity_label,
                     finding.severity_basis_code,
                     &confidence_label,
@@ -14864,7 +14865,9 @@ fn html_report_bytes(
                 ),
                 crate::finding_narrative::impact_zh_hant(
                     &finding.possible_impact,
+                    &finding.severity,
                     &severity_label,
+                    finding.severity_basis_code,
                     finding.family,
                     &finding.context_factors,
                 ),

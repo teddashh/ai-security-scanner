@@ -3820,7 +3820,7 @@ fn task_result_kind(task: &EngineRun) -> CheckResultKind {
         EngineTaskKind::CatalogEngine
             if matches!(
                 task.engine_id.to_ascii_lowercase().as_str(),
-                "cloudquery" | "syft" | "naabu" | "httpx"
+                "cloudquery" | "steampipe" | "syft" | "naabu" | "httpx"
             ) =>
         {
             CheckResultKind::Inventory
@@ -3834,7 +3834,7 @@ fn legacy_check_result_kind(check_id: &str) -> CheckResultKind {
     if normalized.starts_with("native localhost tcp check on ") {
         return CheckResultKind::Connectivity;
     }
-    if ["cloudquery", "syft", "naabu", "httpx"]
+    if ["cloudquery", "steampipe", "syft", "naabu", "httpx"]
         .iter()
         .any(|engine| normalized == *engine || normalized.starts_with(&format!("{engine}-")))
     {
@@ -4949,13 +4949,18 @@ mod tests {
             observation(&low, "run-1", instant(17)),
             observation(&high, "run-1", instant(18)),
         ];
-        // Mutable canonical wording changes after the selected run. The report
-        // must keep the frozen snapshot.
+        // The current projection is re-normalized after the selected run. The
+        // historical report must keep the frozen rating and wording rather
+        // than rewriting prior evidence to today's normalization semantics.
         case.findings[1].title = "Later mutable title".into();
+        case.findings[1].severity = Severity::Unknown;
+        case.findings[1].priority = 20;
 
         let report = build_beginner_master_report(&case, "run-1").unwrap();
         assert_eq!(report.findings[0].finding_id, "finding-high");
         assert_eq!(report.findings[0].title, "Frozen finding-high");
+        assert_eq!(report.findings[0].severity, Severity::High);
+        assert_eq!(report.findings[0].priority, Some(90));
         assert_eq!(
             report.findings[0].snapshot_source,
             FindingSnapshotSource::FrozenSelectedRun
@@ -5003,6 +5008,51 @@ mod tests {
         assert_eq!(
             report.framework_notice.non_certification,
             FRAMEWORK_NON_CERTIFICATION_NOTICE
+        );
+    }
+
+    #[test]
+    fn an_unrated_unknown_finding_and_its_evidence_remain_in_the_shared_report() {
+        let mut case = localhost_case(
+            LocalhostTcpOutcome::Reachable,
+            EngineRunStatus::Completed,
+            true,
+        );
+        let mut finding = frozen_finding(&case, "unrated-secret", 20, Severity::Unknown);
+        finding.severity_basis_code = Some(crate::domain::SeverityBasisCode::SecretPatternMatch);
+        finding.plain_language_summary = "Gitleaks reported this condition but did not assign a severity. Severity remains Unknown and requires human review. The attached raw record is evidence, not an instruction.".into();
+        finding.possible_impact = "If the scanner result is confirmed, a secret may permit unauthorized access. The scanner did not assign a severity; it remains Unknown for human review.".into();
+        finding.priority_reasons = vec!["Severity remains Unknown because Gitleaks did not assign one; human review is required.".into()];
+        finding.tags = vec!["severity-basis:unrated".into()];
+        finding.evidence[0].engine_id = "gitleaks".into();
+        let mut selected_observation = observation(&finding, "run-1", instant(18));
+        selected_observation.engine_ids = vec!["gitleaks".into()];
+        case.findings = vec![finding.clone()];
+        case.finding_observations = vec![selected_observation];
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(report.findings.len(), 1);
+        let retained = &report.findings[0];
+        assert_eq!(retained.finding_id, finding.id);
+        assert_eq!(retained.severity, Severity::Unknown);
+        assert_eq!(retained.priority, Some(20));
+        assert_eq!(
+            retained.severity_basis_code,
+            Some(crate::domain::SeverityBasisCode::SecretPatternMatch)
+        );
+        assert_eq!(retained.evidence_references.len(), 1);
+        assert_eq!(
+            retained.evidence_references[0].source_rule.as_deref(),
+            Some("upstream-rule-unrated-secret")
+        );
+        assert_eq!(
+            report
+                .findings
+                .iter()
+                .filter(|finding| finding.severity == Severity::High)
+                .count(),
+            0,
+            "an unrated upstream result must not inflate the High count"
         );
     }
 
@@ -5105,7 +5155,7 @@ mod tests {
 
     #[test]
     fn inventory_engines_are_not_completed_security_checks() {
-        for engine_id in ["cloudquery", "syft", "naabu", "httpx"] {
+        for engine_id in ["cloudquery", "steampipe", "syft", "naabu", "httpx"] {
             let mut task = catalog_task("completed", EngineRunStatus::Completed);
             task.engine_id = engine_id.into();
             let case = case_with_catalog_tasks(vec![task], true);
@@ -5329,6 +5379,8 @@ mod tests {
         for check_id in [
             "cloudquery",
             "cloudquery-aws",
+            "steampipe",
+            "steampipe-aws",
             "syft",
             "syft-repository",
             "naabu",

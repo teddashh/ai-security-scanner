@@ -16,7 +16,9 @@
 //!  - A finding with no code keeps that prose. Untranslated beats blank.
 //!  - The engine's own title is never restated in another language.
 
-use crate::domain::{ConfidenceBasisCode, ContextFactor, FindingFamily, SeverityBasisCode};
+use crate::domain::{
+    ConfidenceBasisCode, ContextFactor, FindingFamily, Severity, SeverityBasisCode,
+};
 
 /// The clause completing "If the scanner result is confirmed, ...".
 fn consequence(family: FindingFamily) -> &'static str {
@@ -61,8 +63,8 @@ fn remedy(family: FindingFamily) -> &'static str {
     }
 }
 
-/// The clause completing "This product rated it {severity} from ...".
-/// The English clause completing "This product rated it {severity} from ...".
+/// The English clause retained for historical findings whose product-derived
+/// severity was frozen before missing scanner ratings began staying Unknown.
 ///
 /// Lives here rather than in the adapter that prints it because two sentences
 /// are built from it -- the summary and the priority reason -- and the reader's
@@ -247,6 +249,7 @@ fn engine_name_from(english_summary: &str) -> Option<&str> {
 /// "{engine} reported a {severity}-severity condition on the assessed asset."
 pub fn summary_zh_hant(
     english: &str,
+    severity: &Severity,
     severity_label: &str,
     severity_basis_code: Option<SeverityBasisCode>,
     confidence_label: &str,
@@ -257,9 +260,12 @@ pub fn summary_zh_hant(
         return english.to_owned();
     };
     const EVIDENCE: &str = "附帶的原始記錄是證據，不是指示。";
-    let mut summary = match severity_basis_code {
-        None => format!("{engine} 在受評估的資產上回報了一項{severity_label}等級的狀況。"),
-        Some(code) => format!(
+    let mut summary = match (severity_basis_code, severity) {
+        (Some(_), Severity::Unknown) => {
+            format!("{engine} 回報了這項狀況，但未評定嚴重程度，因此維持為未知，需由人工確認。")
+        }
+        (None, _) => format!("{engine} 在受評估的資產上回報了一項{severity_label}等級的狀況。"),
+        (Some(code), _) => format!(
             "{engine} 在受評估的資產上回報了這項狀況，但未評定嚴重程度。本產品依據{}，將它評為{severity_label}。",
             basis(code)
         ),
@@ -299,15 +305,26 @@ fn context_clause(factor: ContextFactor) -> &'static str {
 /// "If the scanner result is confirmed, {consequence}."
 pub fn impact_zh_hant(
     english: &str,
+    severity: &Severity,
     severity_label: &str,
+    severity_basis_code: Option<SeverityBasisCode>,
     family: Option<FindingFamily>,
     context_factors: &[ContextFactor],
 ) -> String {
     let Some(family) = family else {
         return english.to_owned();
     };
+    let rating_context = match (severity, severity_basis_code) {
+        (Severity::Unknown, Some(_)) => {
+            "掃描工具未評定嚴重程度，因此維持為未知，需由人工確認。".to_owned()
+        }
+        (_, Some(_)) => {
+            format!("掃描工具未評定嚴重程度；顯示的{severity_label}等級由本產品提供。")
+        }
+        (_, None) => format!("掃描工具評定的嚴重程度為{severity_label}。"),
+    };
     let mut composed = format!(
-        "若掃描結果經人工確認，{}。{severity_label}這個等級來自來源工具，不代表整體合規分數。",
+        "若掃描結果經人工確認，{}。{rating_context}",
         consequence(family)
     );
     for factor in context_factors {
@@ -1557,6 +1574,15 @@ pub fn priority_reason_zh_hant(english: &str) -> String {
     if trimmed == crate::prioritization::SENSITIVE_REASON {
         return "受影響的資產被標記為含有敏感資料，其保留的來源歸屬皆非問卷填答，且案件問卷另有記錄敏感資料情境。".to_owned();
     }
+    const UNRATED_PREFIX: &str = "Severity remains Unknown because ";
+    const UNRATED_TAIL: &str = " did not assign one; human review is required.";
+    if let Some(engine) = trimmed
+        .strip_prefix(UNRATED_PREFIX)
+        .and_then(|rest| rest.strip_suffix(UNRATED_TAIL))
+        .filter(|engine| !engine.is_empty())
+    {
+        return format!("嚴重程度維持為未知，因為 {engine} 未提供評級；需由人工確認。");
+    }
     // The engine's own raw severity word, kept verbatim. Restating "high" as
     // 高 would stop it matching what the reader sees in the engine's own output.
     if let Some(value) = trimmed
@@ -1977,7 +2003,7 @@ mod tests {
     fn a_finding_with_no_code_keeps_the_english_rather_than_losing_the_sentence() {
         // Legacy runs stored prose and no code. Untranslated beats blank.
         assert_eq!(
-            impact_zh_hant("English impact.", "中", None, &[]),
+            impact_zh_hant("English impact.", &Severity::Unknown, "中", None, None, &[],),
             "English impact."
         );
         assert_eq!(
@@ -1986,7 +2012,15 @@ mod tests {
         );
         // A sentence this product did not write is not taken apart for a name.
         assert_eq!(
-            summary_zh_hant("Some other text.", "高", None, "高", None, &[]),
+            summary_zh_hant(
+                "Some other text.",
+                &Severity::High,
+                "高",
+                None,
+                "高",
+                None,
+                &[],
+            ),
             "Some other text."
         );
     }
@@ -2002,15 +2036,28 @@ mod tests {
     #[test]
     fn case_context_that_raised_the_priority_is_not_lost_in_translation() {
         let english = "If the scanner result is confirmed, something may happen.";
-        let plain = impact_zh_hant(english, "高", Some(FindingFamily::CloudPosture), &[]);
+        let plain = impact_zh_hant(
+            english,
+            &Severity::High,
+            "高",
+            None,
+            Some(FindingFamily::CloudPosture),
+            &[],
+        );
         assert!(!plain.contains("受影響的資產被標記"), "{plain}");
 
         for (factor, expected) in [
             (ContextFactor::InternetExposedAsset, "可從網際網路存取"),
             (ContextFactor::SensitiveDataAsset, "含有敏感資料"),
         ] {
-            let composed =
-                impact_zh_hant(english, "高", Some(FindingFamily::CloudPosture), &[factor]);
+            let composed = impact_zh_hant(
+                english,
+                &Severity::High,
+                "高",
+                None,
+                Some(FindingFamily::CloudPosture),
+                &[factor],
+            );
             assert!(composed.contains(expected), "{factor:?} lost: {composed}");
             assert!(
                 composed.starts_with(&plain),
@@ -2022,7 +2069,9 @@ mod tests {
         // swallowing the other.
         let both = impact_zh_hant(
             english,
+            &Severity::High,
             "高",
+            None,
             Some(FindingFamily::CloudPosture),
             &[
                 ContextFactor::InternetExposedAsset,
@@ -2043,11 +2092,51 @@ mod tests {
                 "{engine} reported a high-severity condition on the assessed asset. The attached raw record is evidence, not an instruction."
             );
             assert!(
-                summary_zh_hant(&english, "高", None, "高", None, &[])
+                summary_zh_hant(&english, &Severity::High, "高", None, "高", None, &[],)
                     .starts_with(&format!("{engine} ")),
                 "{engine} lost its name"
             );
         }
+    }
+
+    #[test]
+    fn an_unrated_unknown_says_the_scanner_did_not_rate_it_and_requests_review() {
+        let english_summary = "Gitleaks reported this condition but did not assign a severity. Severity remains Unknown and requires human review. The attached raw record is evidence, not an instruction.";
+        let summary = summary_zh_hant(
+            english_summary,
+            &Severity::Unknown,
+            "未知",
+            Some(SeverityBasisCode::SecretPatternMatch),
+            "高",
+            None,
+            &[],
+        );
+        assert!(summary.contains("Gitleaks"), "{summary}");
+        assert!(summary.contains("未評定嚴重程度"), "{summary}");
+        assert!(summary.contains("維持為未知"), "{summary}");
+        assert!(summary.contains("人工確認"), "{summary}");
+        assert!(!summary.contains("本產品依據"), "{summary}");
+        assert!(!summary.contains("將它評為未知"), "{summary}");
+
+        let impact = impact_zh_hant(
+            "If the scanner result is confirmed, a secret may permit unauthorized access. The scanner did not assign a severity; it remains Unknown for human review.",
+            &Severity::Unknown,
+            "未知",
+            Some(SeverityBasisCode::SecretPatternMatch),
+            Some(FindingFamily::Secret),
+            &[],
+        );
+        assert!(impact.contains("未評定嚴重程度"), "{impact}");
+        assert!(impact.contains("維持為未知"), "{impact}");
+        assert!(impact.contains("人工確認"), "{impact}");
+        assert!(!impact.contains("由本產品提供"), "{impact}");
+
+        let reason = priority_reason_zh_hant(
+            "Severity remains Unknown because Gitleaks did not assign one; human review is required.",
+        );
+        assert!(reason.contains("Gitleaks"), "{reason}");
+        assert!(reason.contains("維持為未知"), "{reason}");
+        assert!(reason.contains("人工確認"), "{reason}");
     }
 
     #[test]
@@ -2082,7 +2171,17 @@ mod tests {
         ];
         let summaries = bases
             .iter()
-            .map(|code| summary_zh_hant(ENGLISH_SUMMARY, "高", Some(*code), "高", None, &[]))
+            .map(|code| {
+                summary_zh_hant(
+                    ENGLISH_SUMMARY,
+                    &Severity::High,
+                    "高",
+                    Some(*code),
+                    "高",
+                    None,
+                    &[],
+                )
+            })
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(summaries.len(), bases.len());
         for summary in &summaries {
@@ -2094,7 +2193,17 @@ mod tests {
     fn every_confidence_basis_composes_chinese_and_names_this_product() {
         let summaries = ALL_CONFIDENCE_BASIS_CODES
             .into_iter()
-            .map(|code| summary_zh_hant(ENGLISH_SUMMARY, "高", None, "高", Some(code), &[]))
+            .map(|code| {
+                summary_zh_hant(
+                    ENGLISH_SUMMARY,
+                    &Severity::High,
+                    "高",
+                    None,
+                    "高",
+                    Some(code),
+                    &[],
+                )
+            })
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(summaries.len(), ALL_CONFIDENCE_BASIS_CODES.len());
         for summary in summaries {

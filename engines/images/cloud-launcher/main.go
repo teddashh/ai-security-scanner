@@ -1215,16 +1215,7 @@ options "database" {
 		return fmt.Errorf("write fixed Steampipe config: %w", err)
 	}
 	queryPath := filepath.Join(temporaryRoot, "iam.sql")
-	query := `select
-  'steampipe:aws_iam_user_mfa' as control_id,
-  case when mfa_enabled then 'pass' else 'fail' end as status,
-  'IAM user should have a registered MFA device' as title,
-  'high' as severity,
-  arn as resource,
-  account_id as asset_id
-from aws_iam_user;
-`
-	if err := writeExclusive(queryPath, []byte(query), 0o600); err != nil {
+	if err := writeExclusive(queryPath, []byte(steampipeIAMUserInventoryQuery), 0o600); err != nil {
 		return fmt.Errorf("write fixed Steampipe query: %w", err)
 	}
 	return runCommandToFile(invocation{
@@ -1235,6 +1226,19 @@ from aws_iam_user;
 		Env: environment,
 	}, filepath.Join(output, "steampipe.json"))
 }
+
+// Steampipe is an upstream SQL inventory engine. Keep this query to identity
+// fields exposed directly by aws_iam_user; policy decisions such as whether an
+// IAM user's MFA state is a vulnerability belong to an applicable security
+// checker, not to this inventory path.
+const steampipeIAMUserInventoryQuery = `select
+  'aws_iam_user' as resource_type,
+  account_id,
+  arn,
+  user_id,
+  name
+from aws_iam_user;
+`
 
 func replaceEnvironmentValue(environment []string, key, value string) []string {
 	prefix := key + "="

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { assertInsideDisclosure } from "./sourceRegions.ts";
+import { assertInsideDisclosure, regionFrom } from "./sourceRegions.ts";
 
 const source = await readFile(
   new URL("../../src/pages/FindingsPage.tsx", import.meta.url),
@@ -54,4 +54,12 @@ test("problem grouping, review decisions, evidence, and navigation remain wired"
   assert.match(source, /本次選取的報告未觀察到；僅保留為案件歷史/u);
   assert.match(source, /The product does not make the change/u);
   assert.match(source, /產品不會自動執行/u);
+});
+
+test("the legacy result-kind fallback keeps every inventory engine out of clean security results", () => {
+  const fallback = regionFrom(source, "const legacyCheckResultKind", 12);
+  for (const engine of ["cloudquery", "steampipe", "syft", "naabu", "httpx"]) {
+    assert.match(fallback, new RegExp(`"${engine}"`, "u"), engine);
+  }
+  assert.match(fallback, /return "inventory"/u);
 });

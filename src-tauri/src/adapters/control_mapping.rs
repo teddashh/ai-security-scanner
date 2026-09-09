@@ -762,18 +762,6 @@ mod tests {
                     );
                     checked += 1;
                 }
-                // The Steampipe launcher's SQL selects a literal
-                // `'steampipe:<name>' as control_id`, so every Steampipe
-                // finding carries that prefix. The previous value here had no
-                // prefix and matched nothing.
-                "steampipe" => {
-                    assert!(
-                        source_rule.starts_with("steampipe:"),
-                        "the Steampipe launcher SQL prefixes every control id; \
-                         {source_rule:?} cannot match"
-                    );
-                    checked += 1;
-                }
                 // The managed AWS profile runs `--service iam`, and Prowler
                 // names every check after the service directory it lives in.
                 // The previous value was an `s3` check, unreachable here.
@@ -808,7 +796,7 @@ mod tests {
             }
         }
         assert!(
-            checked >= 7,
+            checked >= 6,
             "expected the remaining engines whose identifier shape upstream fixes to be checked, saw {checked}"
         );
     }
@@ -827,7 +815,7 @@ mod tests {
                 && item.mapping_version == "2026-09-05.4"
                 && item.mapping_provenance.as_ref().is_some_and(|provenance| {
                     provenance.catalog_sha256
-                        == "3d05194998a48d7a674f1d623f59cc4c7c07b6248f49f603e0700869fc3a21f1"
+                        == "500358296263635b2deec0825a195d8b11541737ebf9d57bdfdca70f1d04c84d"
                 })
                 && !item.rationale.to_ascii_lowercase().contains("compliant")
         }));
@@ -914,7 +902,7 @@ mod tests {
             serde_json::from_str(CATALOG_JSON).expect("embedded control mapping catalog");
         // A lower bound, not the catalog's size: the pinned hash guards the
         // entry list, and this test should fail only for a missing translation.
-        assert!(parsed.entries.len() >= 19, "{}", parsed.entries.len());
+        assert!(parsed.entries.len() >= 18, "{}", parsed.entries.len());
         for entry in parsed.entries {
             assert!(
                 crate::finding_narrative::control_mapping_rationale_zh_hant(&entry.rationale)

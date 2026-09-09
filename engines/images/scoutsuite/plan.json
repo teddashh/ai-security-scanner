@@ -80,7 +80,7 @@
     "required": true,
     "strategy": "Validate an AWS-only scope, invoke the reduced IAM JSON profile without a shell, strip the report prefix, and bound the final JSON artifact.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:13a674029d7a9099cb1083175e38a2b8dee56e521b851531a8067bfda6229f5e"
+    "launcher_sha256": "sha256:d0956c059ba8ffe5b2fcebd0debf06d3ea99d538b27be43c6666bc0c02224d30"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",

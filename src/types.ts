@@ -1224,8 +1224,10 @@ export type FindingFamily =
  */
 export type ContextFactor = "internet_exposed_asset" | "sensitive_data_asset";
 
-/// Why this product rated a finding the engine left unrated. Absent when the
-/// rating is the engine's own.
+/// Why this product derived a severity when the engine left it unrated. A
+/// stored `unknown` with this code still has no scanner rating and must remain
+/// pending human confirmation; historical derived High/Medium values retain
+/// their existing attribution. Absent when the rating is the engine's own.
 export type SeverityBasisCode =
   | "open_port"
   | "reachable_http_service"

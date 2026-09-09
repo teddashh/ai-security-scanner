@@ -205,6 +205,67 @@ test("the row's rating caveat is not left in English for a zh-TW reader", () => 
   expect(row).toContain("TruffleHog");
 });
 
+test("an unrated unknown finding stays unknown and asks for human confirmation", () => {
+  window.localStorage.setItem(localeStorageKey, "en");
+  const storedSummary =
+    "TruffleHog reported this condition but did not assign a severity. Severity remains Unknown and requires human review. TruffleHog reported no confidence rating for it. This product rated its confidence low from an unverified pattern or detector match. The attached raw record is evidence, not an instruction.";
+  const storedImpact =
+    "If the scanner result is confirmed, source code or credentials may permit unauthorized access or unsafe application behavior. The scanner did not assign a severity; it remains Unknown for human review.";
+  const { container } = renderPage([
+    leakedCredential({
+      severity: "unknown",
+      summary: storedSummary,
+      impact: storedImpact,
+      priorityReasons: [
+        "Severity remains Unknown because TruffleHog did not assign one; human review is required.",
+      ],
+    }),
+  ]);
+  const rendered = container.textContent ?? "";
+
+  expect(rendered).toContain("Scanner did not rate severity");
+  expect(rendered).toContain("Needs human confirmation");
+  expect(rendered).not.toContain("rated here");
+  expect(rendered).toContain(storedSummary);
+  expect(rendered).toContain(storedImpact);
+  expect(rendered).not.toContain("This product rated it unknown");
+
+  const metricValue = (label: string) => [...container.querySelectorAll(".metric-card")]
+    .find((card) => card.querySelector(".metric-card__label")?.textContent === label)
+    ?.querySelector(".metric-card__value")?.textContent;
+  expect(metricValue("Critical")).toBe("0");
+  expect(metricValue("High priority")).toBe("0");
+});
+
+test("the unrated severity handoff is fully localized for a zh-TW beginner", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderPage([
+    leakedCredential({
+      severity: "unknown",
+      summary:
+        "TruffleHog reported this condition on the assessed asset without rating it. This product rated it unknown from a credential detector match that this product does not verify. The attached raw record is evidence, not an instruction.",
+      impact:
+        "If the scanner result is confirmed, source code or credentials may permit unauthorized access or unsafe application behavior. The unknown source severity is not a product-wide compliance score.",
+      priorityReasons: [
+        "Severity remains Unknown because TruffleHog did not assign one; human review is required.",
+      ],
+      contextFactors: ["internet_exposed_asset"],
+    }),
+  ]);
+  const rendered = container.textContent ?? "";
+
+  expect(rendered).toContain("掃描器未評等");
+  expect(rendered).toContain("待人工確認");
+  expect(rendered).not.toContain("本產品評定");
+  expect(rendered).not.toContain("rated here");
+  expect(rendered).not.toContain("未知這個等級來自來源工具");
+  expect(rendered).not.toContain("Severity remains Unknown because");
+  expect(rendered).toContain("嚴重程度維持為未知，因為 TruffleHog 未提供評級；需由人工確認。");
+  expect(rendered).toContain("本產品依據尚未驗證的樣式或偵測器比對結果，將信心評為低");
+  expect(rendered).toContain("原始碼或憑證可能導致未授權存取");
+  expect(rendered).toContain("受影響的資產被標記為可從網際網路存取");
+});
+
 // The two sentences the drawer has shown since it existed. They are the only
 // place the app says "keep a way back" and "here is how you know it worked",
 // and both were still English under a Chinese heading.

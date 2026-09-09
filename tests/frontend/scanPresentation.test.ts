@@ -54,7 +54,7 @@ test("every currently supported catalog engine has plain-language bilingual outc
   }
 });
 
-test("Gitleaks and Trivy describe their exact plain-language outcomes", () => {
+test("Gitleaks, Trivy, and Steampipe describe their exact plain-language outcomes", () => {
   assert.deepEqual(engineOutcomeCopy.gitleaks, {
     en: "Exposed secrets in code",
     zhTW: "程式碼中暴露的秘密",
@@ -62,6 +62,10 @@ test("Gitleaks and Trivy describe their exact plain-language outcomes", () => {
   assert.deepEqual(engineOutcomeCopy.trivy, {
     en: "Known package vulnerabilities",
     zhTW: "套件中的已知弱點",
+  });
+  assert.deepEqual(engineOutcomeCopy.steampipe, {
+    en: "AWS IAM user inventory",
+    zhTW: "AWS IAM 使用者盤點",
   });
 });
 

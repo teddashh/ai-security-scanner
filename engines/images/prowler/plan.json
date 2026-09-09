@@ -149,7 +149,7 @@
     "required": true,
     "strategy": "Validate exactly one AWS account, Azure subscription, or GCP project against one complete ephemeral provider credential profile, enforce provider-specific identity and read-only permission preflights, then invoke only the matching narrow IAM profile without a shell.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:13a674029d7a9099cb1083175e38a2b8dee56e521b851531a8067bfda6229f5e"
+    "launcher_sha256": "sha256:d0956c059ba8ffe5b2fcebd0debf06d3ea99d538b27be43c6666bc0c02224d30"
   },
   "provider_execution_contracts": [
     {

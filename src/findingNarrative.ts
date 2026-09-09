@@ -2,6 +2,7 @@ import type {
   ConfidenceBasisCode,
   ContextFactor,
   FindingFamily,
+  Severity,
   SeverityBasisCode,
   UnattributedResults,
 } from "./types";
@@ -105,6 +106,32 @@ const sourceConfidence = (
     .find((reason) => reason.startsWith("Source confidence: "))
     ?.slice("Source confidence: ".length) || undefined;
 
+const sourceSeverity = (
+  priorityReasons: readonly string[],
+): string | undefined =>
+  priorityReasons
+    .map((reason) => reason.trim())
+    .find((reason) => reason.startsWith("Source severity: "))
+    ?.slice("Source severity: ".length) || undefined;
+
+/**
+ * True only when an `unknown` finding has no scanner severity to present.
+ *
+ * Current findings retain a non-empty scanner severity in the exact
+ * `Source severity: ...` priority reason. A basis code is stronger evidence
+ * that the scanner supplied no severity, including if stale mixed metadata is
+ * ever encountered. Keeping this separate from `severityBasisCode` preserves
+ * the existing presentation of historical derived High/Medium findings.
+ */
+export const findingSeverityIsUnrated = (options: {
+  severity: Severity;
+  severityBasisCode?: SeverityBasisCode;
+  priorityReasons?: readonly string[];
+}): boolean => options.severity === "unknown" && (
+  options.severityBasisCode !== undefined
+  || sourceSeverity(options.priorityReasons ?? []) === undefined
+);
+
 export const findingConfidencePresentation = (
   locale: "en" | "zh-TW",
   confidenceLabel: string,
@@ -188,6 +215,7 @@ export const findingSummarySentence = (
   locale: "en" | "zh-TW",
   options: {
     englishFallback: string;
+    severity?: Severity;
     severityLabel: string;
     severityBasisCode?: SeverityBasisCode;
     confidenceLabel?: string;
@@ -197,11 +225,18 @@ export const findingSummarySentence = (
 ): string => {
   if (locale === "en") return options.englishFallback;
   const { englishFallback, severityLabel, severityBasisCode } = options;
+  const unratedSeverity = options.severity !== undefined && findingSeverityIsUnrated({
+    severity: options.severity,
+    severityBasisCode,
+    priorityReasons: options.priorityReasons,
+  });
   const engineName = engineNameFrom(englishFallback);
   if (!engineName) return englishFallback;
   const evidence = "附帶的原始記錄是證據，不是指示。";
   let summary: string;
-  if (!severityBasisCode) {
+  if (unratedSeverity) {
+    summary = `${engineName} 回報了這項狀況，但未評定嚴重程度，因此維持為未知，需由人工確認。`;
+  } else if (!severityBasisCode) {
     summary = `${engineName} 在受評估的資產上回報了一項${severityLabel}等級的狀況。`;
   } else {
     const basis = BASIS[severityBasisCode];
@@ -249,12 +284,20 @@ export const findingImpactSentence = (
   locale: "en" | "zh-TW",
   options: {
     englishFallback: string;
+    severity?: Severity;
     severityLabel: string;
+    severityBasisCode?: SeverityBasisCode;
+    priorityReasons?: readonly string[];
     family?: FindingFamily;
     contextFactors?: readonly ContextFactor[];
   },
 ): string => {
   if (locale === "en") return options.englishFallback;
+  const unratedSeverity = options.severity !== undefined && findingSeverityIsUnrated({
+    severity: options.severity,
+    severityBasisCode: options.severityBasisCode,
+    priorityReasons: options.priorityReasons,
+  });
   const consequence = options.family ? CONSEQUENCE[options.family] : undefined;
   if (!consequence) return options.englishFallback;
   // Appended after the sentence is composed, exactly as the Rust twin does it,
@@ -263,7 +306,12 @@ export const findingImpactSentence = (
   // other's does not have, which is a difference the parity test can see and a
   // reader cannot -- and a test that fires on invisible differences gets
   // relaxed until it stops finding the visible ones.
-  const composed = `若掃描結果經人工確認，${consequence}。${options.severityLabel}這個等級來自來源工具，不代表整體合規分數。`;
+  const ratingContext = unratedSeverity
+    ? "掃描工具未評定嚴重程度，因此維持為未知，需由人工確認。"
+    : options.severityBasisCode
+      ? `掃描工具未評定嚴重程度；顯示的${options.severityLabel}等級由本產品提供。`
+      : `掃描工具評定的嚴重程度為${options.severityLabel}。`;
+  const composed = `若掃描結果經人工確認，${consequence}。${ratingContext}`;
   return (
     composed +
     (options.contextFactors ?? [])
@@ -396,6 +444,18 @@ export const findingPriorityReason = (
   if (trimmed.startsWith(SOURCE)) {
     const value = trimmed.slice(SOURCE.length);
     if (value) return `來源工具評定的嚴重程度：${value}`;
+  }
+  const UNRATED_PREFIX = "Severity remains Unknown because ";
+  const UNRATED_TAIL = " did not assign one; human review is required.";
+  if (
+    trimmed.startsWith(UNRATED_PREFIX)
+    && trimmed.endsWith(UNRATED_TAIL)
+  ) {
+    const engine = trimmed.slice(
+      UNRATED_PREFIX.length,
+      trimmed.length - UNRATED_TAIL.length,
+    );
+    if (engine) return `嚴重程度維持為未知，因為 ${engine} 未提供評級；需由人工確認。`;
   }
   const SOURCE_CONFIDENCE = "Source confidence: ";
   if (trimmed.startsWith(SOURCE_CONFIDENCE)) {

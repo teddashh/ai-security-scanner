@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { localizedDataQualityWarning } from "../../src/findingNarrative.ts";
 import {
+  localizedEngineWarning,
   recognizedEngineWarningZhTW,
   recognizedShortfallDescriptionZhTW,
 } from "../../src/engineWarningPresentation.ts";
@@ -107,11 +108,69 @@ test("every beginner-report data-quality warning has a Chinese form", () => {
 test("redaction placeholders and warnings from another build fall back unchanged", () => {
   for (const warning of ["[redacted engine warning]", "A warning from a later build."]) {
     assert.equal(recognizedEngineWarningZhTW(warning), undefined);
+    assert.equal(localizedEngineWarning(warning, "zh-TW"), warning);
   }
   assert.equal(
     localizedDataQualityWarning("[redacted data-quality warning]", "zh-TW"),
     "[redacted data-quality warning]",
   );
+});
+
+test("Steampipe inventory warnings have exact Traditional Chinese presentations", () => {
+  const pointer = "/rows/7";
+  const cases = [
+    [
+      "Steampipe output was not its supported JSON document; the raw artifact was retained, and the inventory query should be retried",
+      "Steampipe 輸出不是支援的 JSON 文件；原始成品已保留，請重試盤點查詢",
+    ],
+    [
+      "Steampipe output lacked its rows array; the raw artifact was retained, and the inventory query should be retried",
+      "Steampipe 輸出缺少 rows 陣列；原始成品已保留，請重試盤點查詢",
+    ],
+    [
+      "Steampipe rows exceeded the record safety boundary; later inventory rows remain only as raw evidence",
+      "Steampipe 資料列超過記錄安全界線；後續盤點資料列只保留為原始證據",
+    ],
+    [
+      `Steampipe inventory record at ${pointer} was not an object and was not normalized`,
+      `${pointer} 的 Steampipe 盤點記錄不是物件，因此未正規化`,
+    ],
+    [
+      `Steampipe inventory record at ${pointer} lacked its account identifier and was not normalized`,
+      `${pointer} 的 Steampipe 盤點記錄缺少帳號識別碼，因此未正規化`,
+    ],
+    [
+      `Steampipe inventory record at ${pointer} did not identify an aws_iam_user and was not normalized`,
+      `${pointer} 的 Steampipe 盤點記錄未識別為 aws_iam_user，因此未正規化`,
+    ],
+    [
+      `Steampipe inventory record at ${pointer} carried an IAM user ARN outside its declared account and was not normalized`,
+      `${pointer} 的 Steampipe 盤點記錄所含的 IAM 使用者 ARN 不屬於其宣告的帳號，因此未正規化`,
+    ],
+    [
+      `Steampipe inventory record at ${pointer} was not the supported legacy IAM-user shape and was not normalized`,
+      `${pointer} 的 Steampipe 盤點記錄不符合支援的舊版 IAM 使用者格式，因此未正規化`,
+    ],
+    [
+      `Steampipe inventory record at ${pointer} lacked its IAM user ARN or user_id and was not normalized`,
+      `${pointer} 的 Steampipe 盤點記錄未提供 IAM 使用者 ARN，也未提供 user_id，因此未正規化`,
+    ],
+  ] as const;
+
+  for (const [english, zhTW] of cases) {
+    assert.equal(recognizedEngineWarningZhTW(english), zhTW);
+  }
+
+  const engine = "Steampipe 2.1.0";
+  assert.equal(
+    recognizedEngineWarningZhTW(
+      `${engine} output is inventory evidence; no security issue was invented from inventory rows`,
+    ),
+    `${engine} 輸出是資產清冊證據；未從清冊資料列臆造安全問題`,
+  );
+
+  const laterBuildWarning = `${cases[8][0]}; later-build detail`;
+  assert.equal(localizedEngineWarning(laterBuildWarning, "zh-TW"), laterBuildWarning);
 });
 
 test("repo adapter shape-loss warnings have bounded Traditional Chinese presentations", () => {

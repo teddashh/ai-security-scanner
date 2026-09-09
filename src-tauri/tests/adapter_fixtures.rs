@@ -7,8 +7,8 @@ use ai_security_scanner_lib::domain::{
     RawArtifact, Severity, SeverityBasisCode,
 };
 use ai_security_scanner_lib::finding_narrative::{
-    ENGLISH_EXPOSURE_OBSERVATION_REASON, ENGLISH_ROLLBACK, expert_type_zh_hant,
-    priority_reason_zh_hant, rollback_zh_hant, verification_zh_hant,
+    ENGLISH_ROLLBACK, expert_type_zh_hant, priority_reason_zh_hant, rollback_zh_hant,
+    verification_zh_hant,
 };
 use ai_security_scanner_lib::registry::EngineRegistry;
 use chrono::{TimeZone, Utc};
@@ -134,7 +134,7 @@ fn normalize_bytes(
     media_type: &str,
     run_id: &str,
 ) -> AdapterOutput {
-    let assets = if matches!(engine_id, "cloudquery" | "prowler") {
+    let assets = if matches!(engine_id, "cloudquery" | "steampipe" | "prowler") {
         vec![authorized_asset(
             "asset-1",
             AssetKind::CloudAccount,
@@ -335,66 +335,56 @@ fn registry_covers_exactly_the_twenty_one_catalog_engines() {
     assert!(adapters.get("not-in-catalog").is_none());
 }
 
-/// Engines that emit no severity anywhere in their output, with the rating this
-/// product derives and the basis it has to disclose.
+/// Engines whose native result shape has no severity field. Their findings and
+/// evidence remain useful, while the absent upstream rating stays Unknown.
 ///
 /// Each of these was previously handed a hard-coded severity string, which
 /// reached the user as `source-severity:high` or `source-severity:informational`
 /// — a rating the engine never gave. Verified against the pinned checkouts: the
-/// word "severity" does not appear in gitleaks' Go sources at all;
-/// TruffleHog's JSON printer marshals a fixed struct with no such field, and
-/// kube-bench's `Check` struct has none. Naabu and HTTPx inventory no longer
-/// enters the finding severity pipeline.
-const DERIVED_SEVERITY_ENGINES: &[(&str, Severity, &str)] = &[
-    (
-        "kube-bench",
-        Severity::High,
-        "a failed CIS Kubernetes Benchmark check",
-    ),
-    (
-        "gitleaks",
-        Severity::High,
-        "a secret pattern match in scanned source",
-    ),
+/// Gitleaks' finding and TruffleHog's JSON printer have no such field, and
+/// kube-bench's native JSON `Check` struct has none.
+const UNRATED_SEVERITY_ENGINES: &[(&str, SeverityBasisCode)] = &[
+    ("kube-bench", SeverityBasisCode::CisKubernetesBenchmark),
+    ("gitleaks", SeverityBasisCode::SecretPatternMatch),
     (
         "trufflehog",
-        Severity::High,
-        "a credential detector match that this product does not verify",
-    ),
-    // Steampipe is the odd one: its output does carry a `severity` column, and
-    // reading it was still circular, because the value is a literal this
-    // product's own fixed query writes. The fixture keeps the column so this
-    // proves the adapter ignores it rather than merely never seeing it.
-    (
-        "steampipe",
-        Severity::High,
-        "a failed IAM control from this product's own fixed query",
+        SeverityBasisCode::UnverifiedCredentialDetector,
     ),
 ];
 
 #[test]
-fn engines_that_emit_no_severity_disclose_that_the_rating_is_this_products_own() {
-    for (engine_id, expected_severity, expected_basis) in DERIVED_SEVERITY_ENGINES {
+fn engines_that_emit_no_severity_keep_findings_and_evidence_without_inventing_highs() {
+    for (engine_id, expected_basis) in UNRATED_SEVERITY_ENGINES {
         let output = normalize_fixture(engine_id);
         assert!(
             !output.findings.is_empty(),
             "{engine_id} fixture produced nothing to check"
         );
         for finding in &output.findings {
-            let exposure_observation = finding
-                .severity_basis_code
-                .is_some_and(|code| code.is_exposure_observation());
             assert_eq!(
-                finding.severity, *expected_severity,
-                "{engine_id} finding {} was rated {:?}",
-                finding.id, finding.severity
+                finding.severity,
+                Severity::Unknown,
+                "{engine_id} finding {} invented {:?}",
+                finding.id,
+                finding.severity
             );
+            assert_eq!(finding.priority, 20, "{engine_id}: {}", finding.id);
+            assert_eq!(finding.severity_basis_code, Some(*expected_basis));
             assert!(
                 finding
                     .tags
                     .iter()
+                    .any(|tag| tag == "severity-basis:unrated"),
+                "{engine_id} finding {} hides the missing scanner rating: {:?}",
+                finding.id,
+                finding.tags
+            );
+            assert!(
+                !finding
+                    .tags
+                    .iter()
                     .any(|tag| tag == "severity-basis:derived"),
-                "{engine_id} finding {} hides that its rating is derived: {:?}",
+                "{engine_id} finding {} still claims a derived rating: {:?}",
                 finding.id,
                 finding.tags
             );
@@ -407,48 +397,43 @@ fn engines_that_emit_no_severity_disclose_that_the_rating_is_this_products_own()
                 finding.id,
                 finding.tags
             );
-            if exposure_observation {
-                assert_eq!(finding.priority, 0);
-                assert!(
-                    finding
-                        .priority_reasons
-                        .iter()
-                        .any(|reason| { reason == ENGLISH_EXPOSURE_OBSERVATION_REASON })
-                );
-                assert_eq!(
-                    finding
-                        .severity_basis_code
-                        .map(ai_security_scanner_lib::finding_narrative::basis_english),
-                    Some(*expected_basis)
-                );
-                assert!(
-                    finding
-                        .plain_language_summary
-                        .contains("inventory evidence")
-                );
-                assert!(
-                    finding
-                        .plain_language_summary
-                        .contains("not a vulnerability")
-                );
-            } else {
-                assert!(
-                    finding
-                        .priority_reasons
-                        .iter()
-                        .any(|reason| reason.contains(expected_basis)),
-                    "{engine_id} finding {} does not name its basis {expected_basis:?}: {:?}",
-                    finding.id,
-                    finding.priority_reasons
-                );
-                assert!(
-                    finding.plain_language_summary.contains("without rating it"),
-                    "{engine_id} finding {} reads as though the engine rated it: {}",
-                    finding.id,
-                    finding.plain_language_summary
-                );
-            }
+            assert_eq!(finding.evidence.len(), 1, "{engine_id}: {}", finding.id);
+            assert!(
+                finding
+                    .plain_language_summary
+                    .contains("did not assign a severity")
+            );
+            assert!(
+                finding
+                    .plain_language_summary
+                    .contains("Severity remains Unknown")
+            );
+            assert!(
+                !finding
+                    .plain_language_summary
+                    .contains("This product rated it unknown")
+            );
+            assert!(
+                finding
+                    .possible_impact
+                    .contains("remains Unknown for human review")
+            );
+            assert!(finding.priority_reasons.iter().any(|reason| {
+                reason == &format!(
+                    "Severity remains Unknown because {} did not assign one; human review is required.",
+                    normalize_engine_display_name(engine_id)
+                )
+            }));
         }
+        assert_eq!(
+            output
+                .findings
+                .iter()
+                .filter(|finding| finding.severity == Severity::High)
+                .count(),
+            0,
+            "{engine_id} inflated the High counter"
+        );
     }
 }
 
@@ -528,11 +513,6 @@ const DERIVED_CONFIDENCE_ENGINES: &[(&str, Confidence, ConfidenceBasisCode)] = &
     ),
     (
         "kube-bench",
-        Confidence::High,
-        ConfidenceBasisCode::DeterministicPolicyEvaluation,
-    ),
-    (
-        "steampipe",
         Confidence::High,
         ConfidenceBasisCode::DeterministicPolicyEvaluation,
     ),
@@ -806,9 +786,9 @@ fn greenbone_qod_bands_are_source_confidence_and_absence_is_derived() {
 /// keep showing what it said.
 #[test]
 fn engines_that_report_a_severity_still_present_the_engines_own_rating() {
-    let exempt = DERIVED_SEVERITY_ENGINES
+    let exempt = UNRATED_SEVERITY_ENGINES
         .iter()
-        .map(|(engine_id, _, _)| *engine_id)
+        .map(|(engine_id, _)| *engine_id)
         .chain(MIXED_SEVERITY_ENGINES.iter().copied())
         .collect::<BTreeSet<_>>();
     let mut checked = 0;
@@ -876,7 +856,7 @@ fn trufflehog_findings_say_verification_was_not_attempted_rather_than_failed() {
 
 #[test]
 fn native_fixtures_normalize_without_inventing_inventory_findings() {
-    let inventory_engines = BTreeSet::from(["cloudquery", "syft", "naabu", "httpx"]);
+    let inventory_engines = BTreeSet::from(["cloudquery", "steampipe", "syft", "naabu", "httpx"]);
     for engine_id in BUILTIN_ENGINE_IDS {
         let output = normalize_fixture(engine_id);
         assert!(
@@ -976,11 +956,9 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
                     .iter()
                     .any(|tag| tag.starts_with("source-rule:"))
             );
-            // Every finding states where its severity came from, and states it
-            // once: `source-severity:` when the engine rated it, or
-            // `severity-basis:derived` when the engine emits no severity and
-            // this product supplied one. Both at once would let a derived
-            // rating be read as the engine's own.
+            // Every finding states exactly once whether the scanner supplied a
+            // rating, this product derived one, or the scanner left it unrated
+            // and the canonical value therefore remains Unknown.
             let reported = finding
                 .tags
                 .iter()
@@ -991,10 +969,15 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
                 .iter()
                 .filter(|tag| tag.as_str() == "severity-basis:derived")
                 .count();
+            let unrated = finding
+                .tags
+                .iter()
+                .filter(|tag| tag.as_str() == "severity-basis:unrated")
+                .count();
             assert_eq!(
-                reported + derived,
+                reported + derived + unrated,
                 1,
-                "{engine_id} finding {} has {reported} source-severity and {derived} derived tags",
+                "{engine_id} finding {} has {reported} source, {derived} derived, and {unrated} unrated severity tags",
                 finding.id
             );
             let reported_confidence = finding
@@ -1025,7 +1008,7 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
 
 #[test]
 fn inventory_fixtures_preserve_typed_upstream_facts_and_exact_provenance() {
-    for engine_id in ["cloudquery", "syft", "naabu", "httpx"] {
+    for engine_id in ["cloudquery", "steampipe", "syft", "naabu", "httpx"] {
         let output = normalize_fixture(engine_id);
         assert!(output.complete, "{engine_id}: {:?}", output.warnings);
         assert!(output.findings.is_empty(), "{engine_id}");
@@ -1061,6 +1044,27 @@ fn inventory_fixtures_preserve_typed_upstream_facts_and_exact_provenance() {
     let cloudquery_json = serde_json::to_string(&cloudquery.observations).unwrap();
     assert!(!cloudquery_json.contains("SECRET_SENTINEL_MUST_NEVER_LEAK"));
     assert!(!cloudquery_json.contains("MUST_NOT_BE_USED"));
+
+    let steampipe = normalize_fixture("steampipe");
+    assert_eq!(steampipe.observations.len(), 2);
+    assert!(steampipe.observations.iter().any(|observation| matches!(
+        &observation.kind,
+        InventoryObservationKind::CloudResource {
+            resource_type,
+            native_id: Some(native_id),
+            display_name: None,
+        } if resource_type == "aws_iam_user"
+            && native_id == "arn:aws:iam::123456789012:user/deploy-bot"
+    )));
+    let steampipe_json = serde_json::to_string(&steampipe.observations).unwrap();
+    for policy_value in [
+        "steampipe:aws_iam_user_mfa",
+        "IAM user should have a registered MFA device",
+        "status",
+        "severity",
+    ] {
+        assert!(!steampipe_json.contains(policy_value), "{steampipe_json}");
+    }
 
     let syft = normalize_fixture("syft");
     assert!(matches!(
@@ -1120,6 +1124,123 @@ fn inventory_fixtures_preserve_typed_upstream_facts_and_exact_provenance() {
 }
 
 #[test]
+fn steampipe_current_and_pinned_legacy_rows_are_iam_user_inventory_not_findings() {
+    let legacy = normalize_fixture("steampipe");
+    assert!(legacy.complete, "{:?}", legacy.warnings);
+    assert!(legacy.findings.is_empty());
+    assert_eq!(legacy.observations.len(), 2);
+    assert!(legacy.observations.iter().all(|observation| matches!(
+        &observation.kind,
+        InventoryObservationKind::CloudResource {
+            resource_type,
+            native_id: Some(native_id),
+            display_name: None,
+        } if resource_type == "aws_iam_user"
+            && native_id.starts_with("arn:aws:iam::123456789012:user/")
+    )));
+
+    let current = normalize_bytes(
+        "steampipe",
+        br#"{"rows":[{"resource_type":"aws_iam_user","account_id":"123456789012","arn":"arn:aws:iam::123456789012:user/deploy-bot","user_id":"AIDAEXAMPLE","name":"deploy-bot","status":"fail","control_id":"MUST_NOT_BECOME_A_FINDING","severity":"critical","mfa_enabled":false}]}"#,
+        "steampipe.json",
+        "application/json",
+        "run-steampipe-current",
+    );
+    assert!(current.complete, "{:?}", current.warnings);
+    assert!(current.findings.is_empty());
+    assert_eq!(current.observations.len(), 1);
+    assert!(matches!(
+        &current.observations[0].kind,
+        InventoryObservationKind::CloudResource {
+            resource_type,
+            native_id: Some(native_id),
+            display_name: Some(display_name),
+        } if resource_type == "aws_iam_user"
+            && native_id == "arn:aws:iam::123456789012:user/deploy-bot"
+            && display_name == "deploy-bot"
+    ));
+    let serialized = serde_json::to_string(&current.observations).unwrap();
+    for policy_value in ["MUST_NOT_BECOME_A_FINDING", "critical", "mfa_enabled"] {
+        assert!(!serialized.contains(policy_value), "{serialized}");
+    }
+}
+
+#[test]
+fn steampipe_inventory_fails_closed_per_row_without_erasing_valid_siblings() {
+    let partial = normalize_bytes(
+        "steampipe",
+        br#"{"rows":[{"resource_type":"aws_iam_user","account_id":"123456789012","user_id":"AIDAEXAMPLE","name":"valid"},42,{"resource_type":"aws_iam_user","account_id":"123456789012","name":"missing-identity"},{"asset_id":"123456789012","resource":"not-an-iam-user","control_id":"steampipe:aws_iam_user_mfa","status":"fail"}]}"#,
+        "steampipe.json",
+        "application/json",
+        "run-steampipe-partial",
+    );
+    assert!(!partial.complete);
+    assert!(partial.findings.is_empty());
+    assert_eq!(partial.observations.len(), 1);
+    assert!(
+        partial
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("not an object"))
+    );
+    assert!(
+        partial
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("lacked its IAM user ARN or user_id"))
+    );
+    assert!(
+        partial
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("supported legacy IAM-user shape"))
+    );
+
+    let wrong_account = normalize_bytes(
+        "steampipe",
+        br#"{"rows":[{"resource_type":"aws_iam_user","account_id":"999999999999","arn":"arn:aws:iam::999999999999:user/elsewhere","user_id":"AIDAELSEWHERE","name":"elsewhere"}]}"#,
+        "steampipe.json",
+        "application/json",
+        "run-steampipe-wrong-account",
+    );
+    assert!(!wrong_account.complete);
+    assert!(wrong_account.findings.is_empty());
+    assert!(wrong_account.observations.is_empty());
+    assert_eq!(wrong_account.unattributed.len(), 1);
+    assert_eq!(wrong_account.unattributed[0].identifier, "999999999999");
+    assert!(
+        wrong_account
+            .warnings
+            .iter()
+            .any(|warning| { warning.contains("no exact authorized provider identifier match") })
+    );
+}
+
+#[test]
+fn malformed_steampipe_rows_cannot_hide_a_record_boundary_overflow() {
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "rows": vec![serde_json::Value::Null; 10_001]
+    }))
+    .unwrap();
+    let output = normalize_bytes(
+        "steampipe",
+        &bytes,
+        "steampipe.json",
+        "application/json",
+        "run-steampipe-overflow",
+    );
+    assert!(!output.complete);
+    assert!(output.findings.is_empty());
+    assert!(output.observations.is_empty());
+    assert!(
+        output
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("record safety boundary"))
+    );
+}
+
+#[test]
 fn inventory_schema_and_asset_boundaries_fail_closed_but_known_empty_shapes_complete() {
     for (engine_id, bytes, filename, media_type) in [
         (
@@ -1135,6 +1256,12 @@ fn inventory_schema_and_asset_boundaries_fail_closed_but_known_empty_shapes_comp
             "application/x-ndjson",
         ),
         ("syft", br#"{}"#.as_slice(), "syft.json", "application/json"),
+        (
+            "steampipe",
+            br#"{}"#.as_slice(),
+            "steampipe.json",
+            "application/json",
+        ),
     ] {
         let output = normalize_bytes(engine_id, bytes, filename, media_type, "run-invalid");
         assert!(!output.complete, "{engine_id}");
@@ -1160,6 +1287,12 @@ fn inventory_schema_and_asset_boundaries_fail_closed_but_known_empty_shapes_comp
             "syft",
             br#"{"artifacts":[]}"#.as_slice(),
             "syft.json",
+            "application/json",
+        ),
+        (
+            "steampipe",
+            br#"{"columns":[],"rows":[]}"#.as_slice(),
+            "steampipe.json",
             "application/json",
         ),
     ] {
@@ -1401,17 +1534,17 @@ fn checkov_all_framework_output_contains_malformed_rows_without_losing_valid_fin
 /// `BaseCheck` hardcodes `severity = None`, and the values that fill it come
 /// from platform metadata that `--skip-download` switches off; exactly one of
 /// the 256 shipped graph-check YAMLs declares a severity locally. So a rating
-/// has to be derived for almost everything, and the exceptions have to survive
-/// that — including a rating this product does not recognize, which spec §9.2
-/// requires be shown as unknown and needing review rather than replaced.
+/// Missing/null stays Unknown, while every explicit upstream value survives —
+/// including a word this product cannot map, which remains traceable.
 #[test]
-fn checkov_derives_a_rating_only_where_the_check_carries_none() {
+fn checkov_preserves_explicit_ratings_and_keeps_missing_ones_unknown() {
     let bytes = br#"{
       "check_type": "terraform",
       "results": {
         "failed_checks": [
           {"check_id":"absent", "check_name":"No rating key", "file_path":"absent.tf"},
           {"check_id":"null", "check_name":"Null rating", "file_path":"null.tf", "severity":null},
+          {"check_id":"medium", "check_name":"Upstream medium", "file_path":"medium.tf", "severity":"MEDIUM"},
           {"check_id":"custom", "check_name":"Custom rating", "file_path":"custom.tf", "severity":"vendor-special"},
           {"check_id":"info", "check_name":"Information only", "file_path":"info.tf", "severity":"informational"}
         ]
@@ -1437,17 +1570,24 @@ fn checkov_derives_a_rating_only_where_the_check_carries_none() {
         .collect::<BTreeMap<_, _>>();
 
     // An absent key and an explicit null are the same statement: the check
-    // carries no rating. Both are derived, and both say so.
+    // carries no rating. Both remain Unknown, and both say so.
     for title in ["No rating key", "Null rating"] {
         let finding = by_title[title];
-        assert_eq!(finding.severity, Severity::Medium, "{title}");
+        assert_eq!(finding.severity, Severity::Unknown, "{title}");
+        assert_eq!(finding.priority, 20, "{title}");
         assert!(
             finding
                 .tags
                 .iter()
-                .any(|tag| tag == "severity-basis:derived"),
+                .any(|tag| tag == "severity-basis:unrated"),
             "{title}: {:?}",
             finding.tags
+        );
+        assert!(
+            !finding
+                .tags
+                .iter()
+                .any(|tag| tag == "severity-basis:derived")
         );
         assert!(
             !finding
@@ -1457,10 +1597,28 @@ fn checkov_derives_a_rating_only_where_the_check_carries_none() {
             "{title}: {:?}",
             finding.tags
         );
+        assert_eq!(finding.evidence.len(), 1, "{title}");
+        assert!(
+            finding
+                .plain_language_summary
+                .contains("Severity remains Unknown")
+        );
+        assert!(
+            !finding
+                .plain_language_summary
+                .contains("This product rated it unknown")
+        );
     }
 
     // Checkov did rate these, so its words stand — including the one this
     // product cannot map, which must not be quietly upgraded to the derivation.
+    assert_eq!(by_title["Upstream medium"].severity, Severity::Medium);
+    assert!(
+        by_title["Upstream medium"]
+            .tags
+            .iter()
+            .any(|tag| tag == "source-severity:medium")
+    );
     assert_eq!(by_title["Custom rating"].severity, Severity::Unknown);
     assert!(
         by_title["Custom rating"]
@@ -1474,28 +1632,32 @@ fn checkov_derives_a_rating_only_where_the_check_carries_none() {
         by_title["Information only"].severity,
         Severity::Informational
     );
-    for title in ["Custom rating", "Information only"] {
+    for title in ["Upstream medium", "Custom rating", "Information only"] {
         assert!(
             !by_title[title]
                 .tags
                 .iter()
-                .any(|tag| tag == "severity-basis:derived"),
+                .any(|tag| tag.starts_with("severity-basis:")),
             "{title} lost the rating Checkov gave it: {:?}",
             by_title[title].tags
         );
     }
+    assert_eq!(
+        by_title
+            .values()
+            .filter(|finding| finding.severity == Severity::High)
+            .count(),
+        0,
+        "missing Checkov ratings inflated the High counter"
+    );
 }
 
 /// kube-bench's `Check` struct has no severity field and `check/` overrides no
 /// `MarshalJSON`, so nothing this adapter could read would ever be populated.
-/// Treating that as "the engine said unknown" sank the whole engine to priority
-/// 20, below Low, and read to the user as a rating kube-bench had given.
-///
-/// The severity is therefore derived, and the finding has to say so: a derived
-/// rating that is indistinguishable from a reported one is the failure this
-/// replaces, not a fix for it.
+/// A failed benchmark check is still a finding with direct evidence, but its
+/// absent native-JSON rating remains Unknown instead of being promoted to High.
 #[test]
-fn kube_bench_failures_are_rated_from_the_benchmark_and_labelled_as_derived() {
+fn kube_bench_failures_remain_findings_without_an_invented_rating() {
     let output = normalize_fixture("kube-bench");
     assert!(
         output.complete,
@@ -1504,41 +1666,28 @@ fn kube_bench_failures_are_rated_from_the_benchmark_and_labelled_as_derived() {
     );
     assert_eq!(output.findings.len(), 3, "only failing checks are findings");
 
-    // Read the priority an unrated finding actually gets rather than restating
-    // the table, so this still fails if the table changes underneath it.
-    let unrated_priority = normalize_bytes(
-        "checkov",
-        br#"{"results":{"failed_checks":[{"check_id":"missing","check_name":"Missing rating","file_path":"missing.tf"}]}}"#,
-        "checkov-unrated.json",
-        "application/json",
-        "run-unrated",
-    )
-    .findings
-    .first()
-    .expect("one unrated finding")
-    .priority;
-
     for finding in &output.findings {
         assert_eq!(
             finding.severity,
-            Severity::High,
-            "{} was not rated",
+            Severity::Unknown,
+            "{} invented a rating",
             finding.title
         );
-        assert!(
-            finding.priority > unrated_priority,
-            "{} sorted at {}, no better than an unrated finding at {unrated_priority}",
-            finding.title,
-            finding.priority
-        );
+        assert_eq!(finding.priority, 20, "{}", finding.title);
         assert!(
             finding
                 .tags
                 .iter()
-                .any(|tag| tag == "severity-basis:derived"),
-            "{} does not disclose that its severity is derived: {:?}",
+                .any(|tag| tag == "severity-basis:unrated"),
+            "{} does not disclose that the scanner left severity unrated: {:?}",
             finding.title,
             finding.tags
+        );
+        assert!(
+            !finding
+                .tags
+                .iter()
+                .any(|tag| tag == "severity-basis:derived")
         );
         assert!(
             !finding
@@ -1549,21 +1698,29 @@ fn kube_bench_failures_are_rated_from_the_benchmark_and_labelled_as_derived() {
             finding.title,
             finding.tags
         );
+        assert!(finding.priority_reasons.iter().any(|reason| reason
+            == "Severity remains Unknown because kube-bench did not assign one; human review is required."));
         assert!(
-            finding.priority_reasons.iter().any(|reason| {
-                reason.contains("Severity derived from a failed CIS Kubernetes Benchmark check")
-            }),
-            "{} does not explain the derivation: {:?}",
-            finding.title,
-            finding.priority_reasons
+            finding
+                .plain_language_summary
+                .contains("did not assign a severity")
         );
         assert!(
-            finding.plain_language_summary.contains("without rating it"),
-            "{} reads as though kube-bench rated it: {}",
-            finding.title,
-            finding.plain_language_summary
+            finding
+                .possible_impact
+                .contains("remains Unknown for human review")
         );
+        assert_eq!(finding.evidence.len(), 1);
     }
+    assert_eq!(
+        output
+            .findings
+            .iter()
+            .filter(|finding| finding.severity == Severity::High)
+            .count(),
+        0,
+        "kube-bench inflated the High counter"
+    );
 
     let titles = output
         .findings
@@ -2073,7 +2230,6 @@ fn controls_the_engine_could_not_evaluate_keep_their_findings_but_withhold_compl
 #[test]
 fn versioned_control_references_are_allowlisted_relationships_not_assurance_claims() {
     let mapped_engines = [
-        "steampipe",
         "prowler",
         "scoutsuite",
         "cloudsplaining",
@@ -3826,10 +3982,11 @@ fn the_action_a_finding_asks_for_matches_the_kind_of_problem_it_reports() {
             )
         })
         .collect::<BTreeSet<_>>();
-    // One per family that produces findings, which is all nine: CloudQuery and
-    // Syft emit no findings but share a family with engines that do. Pinned
-    // exactly, so merging two families is a decision someone has to make here
-    // rather than a number that quietly drifts down.
+    // One per family that produces findings, which is all nine: CloudQuery,
+    // Steampipe, and Syft emit only inventory but share families with engines
+    // that do produce findings. Pinned exactly, so merging two families is a
+    // decision someone has to make here rather than a number that quietly
+    // drifts down.
     assert_eq!(
         distinct.len(),
         9,
@@ -3870,15 +4027,19 @@ fn the_codes_a_localized_client_reads_agree_with_the_english_they_replace() {
                 action_by_family.entry(family).or_default().insert(action);
             }
 
-            // Exactly the findings tagged as derived carry a basis code, so a
-            // client can trust one to explain the other.
+            // A basis code accompanies either an explicitly product-derived
+            // rating or an upstream omission retained as Unknown.
             let tagged_derived = finding
                 .tags
                 .iter()
                 .any(|tag| tag == "severity-basis:derived");
+            let tagged_unrated = finding
+                .tags
+                .iter()
+                .any(|tag| tag == "severity-basis:unrated");
             assert_eq!(
                 finding.severity_basis_code.is_some(),
-                tagged_derived,
+                tagged_derived || tagged_unrated,
                 "{engine_id} finding {} disagrees with its own severity-basis tag",
                 finding.id
             );
@@ -3894,6 +4055,22 @@ fn the_codes_a_localized_client_reads_agree_with_the_english_they_replace() {
                         finding
                             .plain_language_summary
                             .contains("not a vulnerability")
+                    );
+                } else if tagged_unrated {
+                    assert_eq!(finding.severity, Severity::Unknown, "{engine_id}");
+                    assert!(
+                        finding
+                            .plain_language_summary
+                            .contains("did not assign a severity"),
+                        "{engine_id} hides the missing scanner rating: {}",
+                        finding.plain_language_summary
+                    );
+                    assert!(
+                        !finding
+                            .plain_language_summary
+                            .contains("This product rated it unknown"),
+                        "{engine_id} invents a product rating: {}",
+                        finding.plain_language_summary
                     );
                 } else {
                     assert!(
@@ -3924,12 +4101,12 @@ fn the_codes_a_localized_client_reads_agree_with_the_english_they_replace() {
          from the sentence: {action_by_family:#?}"
     );
 
-    // Every basis this product can derive is reachable from a shipped fixture.
-    // A code no fixture produces is a translation nobody has ever seen render.
+    // Every current finding basis is reachable from a shipped fixture. A code
+    // no fixture produces is a translation nobody has ever seen render.
     assert_eq!(
         seen_basis.len(),
-        5,
-        "only {} of the five finding severity bases are exercised: {seen_basis:?}",
+        4,
+        "only {} of the four current finding severity bases are exercised: {seen_basis:?}",
         seen_basis.len()
     );
 }
@@ -4059,6 +4236,7 @@ fn the_safety_and_verification_sentences_are_the_ones_the_translator_knows() {
 fn every_priority_reason_the_engines_write_is_one_the_reader_can_read() {
     let mut reasons_seen = 0_usize;
     let mut derived_seen = 0_usize;
+    let mut unrated_seen = 0_usize;
     for engine_id in BUILTIN_ENGINE_IDS {
         for finding in normalize_fixture(engine_id).findings {
             assert!(
@@ -4086,15 +4264,34 @@ fn every_priority_reason_the_engines_write_is_one_the_reader_can_read() {
                         "{engine_id} lost its own name {engine_name}: {translated}"
                     );
                 }
+                if let Some(engine_name) = reason
+                    .strip_prefix("Severity remains Unknown because ")
+                    .and_then(|rest| {
+                        rest.strip_suffix(" did not assign one; human review is required.")
+                    })
+                {
+                    unrated_seen += 1;
+                    assert!(
+                        translated.contains(engine_name),
+                        "{engine_id} lost its own name {engine_name}: {translated}"
+                    );
+                    assert!(translated.contains("人工確認"), "{translated}");
+                }
             }
         }
     }
     assert!(reasons_seen >= 38, "only {reasons_seen} reasons exercised");
-    // The five finding engines that publish no severity of their own. Naabu
-    // and HTTPx now emit typed inventory observations instead.
+    // No current adapter invents a rated severity when upstream left it absent.
+    // Historical frozen findings can still retain their older derived rating.
+    assert_eq!(
+        derived_seen, 0,
+        "unexpected current derived-severity reason"
+    );
+    // Gitleaks, TruffleHog, kube-bench and the unrated Checkov fixture row all
+    // preserve the finding while leaving severity Unknown.
     assert!(
-        derived_seen >= 5,
-        "only {derived_seen} derived-severity reasons exercised"
+        unrated_seen >= 4,
+        "only {unrated_seen} unrated-severity reasons exercised"
     );
 }
 

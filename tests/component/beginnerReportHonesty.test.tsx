@@ -466,6 +466,39 @@ test.each(["syft", "cloudquery"])(
   },
 );
 
+test("a legacy Steampipe-only report without resultKind remains inventory, not a clean security result", () => {
+  const base = report("complete");
+  const value = report("complete", {
+    actual: {
+      checks: [{
+        taskId: "steampipe-task",
+        checkId: "steampipe-aws",
+        targetAssetIds: ["asset-1"],
+        status: "tested_complete",
+        testedDimensions: [{
+          dimension: "cloud resource inventory",
+          value: "steampipe",
+          observation: "Inventory completed.",
+        }],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    requested: { ...base.requested, requestedCheckIds: ["steampipe"] },
+  });
+
+  const { container } = renderReport(value, [], [catalogRun("steampipe")]);
+  const row = container.querySelector<HTMLElement>(".asset-result-row");
+  expect(row?.dataset.assetResult).toBe("not_tested");
+  expect(container.querySelector(".page-header")?.textContent).toContain(
+    "Inventory or connectivity only — no security check ran",
+  );
+  expect(container.textContent).toContain(
+    "Inventory and connectivity observations are not a no-problems security result.",
+  );
+  expect(container.textContent).not.toContain("completed security check reported no problems");
+});
+
 test("mixed Syft and Trivy work counts only Trivy as a completed security check", () => {
   const value = report("complete", {
     actual: {

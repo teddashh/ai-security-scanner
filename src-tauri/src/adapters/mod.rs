@@ -117,9 +117,9 @@ struct SourceRecord {
     title: String,
     severity: Severity,
     source_severity: String,
-    /// Present only when the engine reports no severity and this product
-    /// derived one. It names what the derivation used, so the user is never
-    /// shown a rating the engine did not give.
+    /// Present only when the engine reports no severity. It retains the kind
+    /// of result that lacked a rating so every report surface can distinguish
+    /// an upstream rating from an Unknown value that still needs review.
     severity_basis: Option<SeverityBasisCode>,
     location: String,
     asset_hint: Option<String>,
@@ -143,13 +143,12 @@ struct InventoryRecord {
     kind: InventoryObservationKind,
 }
 
-/// A severity this product assigned because the engine emits none at all.
+/// The canonical severity and provenance used when an engine emits none.
 ///
-/// Reading a severity field an engine never populates silently buries its whole
-/// output at `Unknown`, which sorts below Low. Inventing a source severity
-/// instead is worse: it tells the user the engine rated the finding when it did
-/// not. This carries both the level and the basis so the finding can be
-/// prioritized honestly and the derivation stays visible.
+/// The value remains `Unknown` for upstream results that carry no rating. The
+/// basis keeps that absence explicit without presenting a product opinion as
+/// scanner output. Historical findings may still carry an older product-owned
+/// level beside the same basis and must remain readable as frozen evidence.
 struct DerivedSeverity {
     severity: Severity,
     /// Which basis. The sentence is derived from this by [`basis_text`] rather
@@ -708,7 +707,11 @@ fn normalize_artifacts(
         };
         if matches!(
             adapter.profile,
-            Profile::CloudQuery | Profile::Naabu | Profile::Httpx | Profile::Syft
+            Profile::CloudQuery
+                | Profile::Steampipe
+                | Profile::Naabu
+                | Profile::Httpx
+                | Profile::Syft
         ) {
             let warnings_before_extract = output.warnings.len();
             let records =
@@ -859,7 +862,10 @@ fn normalize_artifacts(
         );
     }
 
-    if matches!(adapter.profile, Profile::CloudQuery | Profile::Syft) {
+    if matches!(
+        adapter.profile,
+        Profile::CloudQuery | Profile::Steampipe | Profile::Syft
+    ) {
         push_warning(
             &mut output.warnings,
             format!(
@@ -1618,11 +1624,163 @@ fn extract_inventory_records(
 ) -> Vec<InventoryRecord> {
     match profile {
         Profile::CloudQuery => extract_cloudquery_inventory(parsed, artifact, warnings),
+        Profile::Steampipe => extract_steampipe_inventory(parsed, warnings),
         Profile::Naabu => extract_naabu_inventory(parsed, warnings),
         Profile::Httpx => extract_httpx_inventory(parsed, warnings),
         Profile::Syft => extract_syft_inventory(parsed, warnings),
         _ => Vec::new(),
     }
+}
+
+fn extract_steampipe_inventory(
+    parsed: &ParsedArtifact,
+    warnings: &mut Vec<String>,
+) -> Vec<InventoryRecord> {
+    let ParsedArtifact::Json(Value::Object(document)) = parsed else {
+        push_warning(
+            warnings,
+            "Steampipe output was not its supported JSON document; the raw artifact was retained, and the inventory query should be retried",
+        );
+        return Vec::new();
+    };
+    let Some(rows) = document.get("rows").and_then(Value::as_array) else {
+        push_warning(
+            warnings,
+            "Steampipe output lacked its rows array; the raw artifact was retained, and the inventory query should be retried",
+        );
+        return Vec::new();
+    };
+    if rows.len() > MAX_RECORDS {
+        push_warning(
+            warnings,
+            "Steampipe rows exceeded the record safety boundary; later inventory rows remain only as raw evidence",
+        );
+    }
+
+    rows.iter()
+        .take(MAX_RECORDS)
+        .enumerate()
+        .filter_map(|(index, row)| {
+            let pointer = format!("/rows/{index}");
+            let Some(object) = row.as_object() else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Steampipe inventory record at {pointer} was not an object and was not normalized"
+                    ),
+                );
+                return None;
+            };
+
+            let Some(account_id) = inventory_string_any(object, &["account_id", "asset_id"])
+            else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Steampipe inventory record at {pointer} lacked its account identifier and was not normalized"
+                    ),
+                );
+                return None;
+            };
+            let legacy = match object.get("resource_type") {
+                None => true,
+                Some(Value::String(resource_type)) if resource_type.trim() == "aws_iam_user" => {
+                    false
+                }
+                Some(_) => {
+                    push_warning(
+                        warnings,
+                        format!(
+                            "Steampipe inventory record at {pointer} did not identify an aws_iam_user and was not normalized"
+                        ),
+                    );
+                    return None;
+                }
+            };
+
+            let arn = inventory_string_any(object, &["arn"]);
+            let legacy_resource = inventory_string_any(object, &["resource"]);
+            let user_id = inventory_string_any(object, &["user_id"]);
+            if arn
+                .as_deref()
+                .is_some_and(|arn| !steampipe_iam_user_arn_matches_account(arn, &account_id))
+            {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Steampipe inventory record at {pointer} carried an IAM user ARN outside its declared account and was not normalized"
+                    ),
+                );
+                return None;
+            }
+            if legacy {
+                let exact_legacy_control = object
+                    .get("control_id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    == Some("steampipe:aws_iam_user_mfa");
+                let account_bound_resource = legacy_resource.as_deref().is_some_and(|resource| {
+                    steampipe_iam_user_arn_matches_account(resource, &account_id)
+                });
+                if !account_bound_resource || !exact_legacy_control {
+                    push_warning(
+                        warnings,
+                        format!(
+                            "Steampipe inventory record at {pointer} was not the supported legacy IAM-user shape and was not normalized"
+                        ),
+                    );
+                    return None;
+                }
+            }
+            let native_id = if legacy {
+                legacy_resource
+            } else {
+                arn.or(user_id)
+            };
+            let Some(native_id) = native_id else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Steampipe inventory record at {pointer} lacked its IAM user ARN or user_id and was not normalized"
+                    ),
+                );
+                return None;
+            };
+            let display_name = (!legacy)
+                .then(|| inventory_string_any(object, &["name"]))
+                .flatten();
+
+            Some(InventoryRecord {
+                pointer,
+                asset_hint: Some(account_id),
+                asset_provider: Some("aws".into()),
+                kind: InventoryObservationKind::CloudResource {
+                    resource_type: "aws_iam_user".into(),
+                    native_id: Some(native_id),
+                    display_name,
+                },
+            })
+        })
+        .collect()
+}
+
+fn steampipe_iam_user_arn_matches_account(arn: &str, account_id: &str) -> bool {
+    let mut parts = arn.splitn(6, ':');
+    matches!(
+        (
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+        ),
+        (Some("arn"), Some(partition), Some("iam"), Some(""), Some(account), Some(resource))
+            if matches!(partition, "aws" | "aws-cn" | "aws-us-gov" | "aws-iso" | "aws-iso-b")
+                && account == account_id
+                && resource.starts_with("user/")
+                && resource.len() > "user/".len()
+    )
 }
 
 fn cloudquery_resource_type(relative_path: &str) -> Option<&'static str> {
@@ -1884,7 +2042,7 @@ fn extract_records(
 ) -> Vec<SourceRecord> {
     if matches!(
         profile,
-        Profile::CloudQuery | Profile::Naabu | Profile::Httpx | Profile::Syft
+        Profile::CloudQuery | Profile::Steampipe | Profile::Naabu | Profile::Httpx | Profile::Syft
     ) {
         return Vec::new();
     }
@@ -1906,8 +2064,11 @@ fn extract_records(
         Profile::Grype => extract_grype(parsed, warnings),
         Profile::Kubescape => extract_kubescape(parsed, warnings),
         Profile::KubeBench => extract_kube_bench(parsed, warnings),
-        Profile::Steampipe => extract_steampipe(parsed, warnings),
-        Profile::CloudQuery | Profile::Naabu | Profile::Httpx | Profile::Syft => Vec::new(),
+        Profile::CloudQuery
+        | Profile::Steampipe
+        | Profile::Naabu
+        | Profile::Httpx
+        | Profile::Syft => Vec::new(),
     }
 }
 
@@ -2830,12 +2991,11 @@ fn extract_gitleaks(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<
                 rule_id.clone(),
                 string_any(object, &["Description", "description"])
                     .unwrap_or_else(|| format!("Potential secret detected by {rule_id}")),
-                // The word "severity" does not occur anywhere in gitleaks'
-                // source. Neither `report.Finding` nor the rule config has such
-                // a field, and its SARIF writer emits no `level` either. The
-                // rating is this product's, from what a match means.
+                // The word "severity" does not occur anywhere in Gitleaks'
+                // finding shape. Preserve the match as a finding, but leave its
+                // absent upstream rating Unknown for human review.
                 DerivedSeverity {
-                    severity: Severity::High,
+                    severity: Severity::Unknown,
                     code: SeverityBasisCode::SecretPatternMatch,
                 },
                 location,
@@ -2970,7 +3130,7 @@ fn extract_trufflehog(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                 // detector runs its check. Reading that field would grade every
                 // secret on a test that was never performed.
                 DerivedSeverity {
-                    severity: Severity::High,
+                    severity: Severity::Unknown,
                     code: SeverityBasisCode::UnverifiedCredentialDetector,
                 },
                 location,
@@ -3136,11 +3296,10 @@ fn extract_checkov_framework(
                 // exactly one declares a severity locally, so this is populated
                 // for CKV2_AWS_34 and null for every other check.
                 string_any(check, &["severity"]).unwrap_or_default(),
-                // Rating the rest flat is the most that can be justified: the
-                // pack gives no per-check weight offline, and the alternative
-                // sinks a whole engine's output below Low as unknown.
+                // A missing/null source field stays Unknown. An explicit
+                // Checkov severity still wins in `record_from_draft`.
                 DerivedSeverity {
-                    severity: Severity::Medium,
+                    severity: Severity::Unknown,
                     code: SeverityBasisCode::IacPolicyCheck,
                 },
                 source_coordinate_location(&path, line, None, resource.as_deref()),
@@ -3680,13 +3839,11 @@ fn extract_kube_bench(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                         rule_id.clone(),
                         string_any(object, &["test_desc", "desc"])
                             .unwrap_or_else(|| format!("kube-bench control {rule_id}")),
-                        // kube-bench's `Check` struct carries no severity field, so
-                        // there is nothing to read here and every finding would
-                        // otherwise sort below Low as Unknown. Upstream's own ASFF
-                        // exporter reaches the same conclusion and labels every
-                        // failed check High for exactly this reason.
+                        // kube-bench's native JSON `Check` carries no severity
+                        // field. Its failure and evidence remain intact while the
+                        // absent upstream rating stays Unknown for human review.
                         DerivedSeverity {
-                            severity: Severity::High,
+                            severity: Severity::Unknown,
                             code: SeverityBasisCode::CisKubernetesBenchmark,
                         },
                         string_any(object, &["resource", "node_type"])
@@ -3706,61 +3863,6 @@ fn extract_kube_bench(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                     return records;
                 }
             }
-        }
-    }
-    records
-}
-
-fn extract_steampipe(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
-    let mut records = Vec::new();
-    for (pointer, value) in json_rows(parsed, warnings) {
-        let rows = value.get("rows").and_then(Value::as_array);
-        let owned;
-        let values: &[Value] = if let Some(rows) = rows {
-            rows
-        } else {
-            owned = vec![value.clone()];
-            &owned
-        };
-        for (index, row) in values.iter().enumerate() {
-            let Some(object) = row.as_object() else {
-                continue;
-            };
-            let Some(status) = string_any(object, &["status", "result", "state"]) else {
-                continue;
-            };
-            if !is_failure(&status) {
-                continue;
-            }
-            let Some(rule_id) = exact_rule_string_any(object, &["control_id", "reason", "id"])
-            else {
-                continue;
-            };
-            records.push(record_with_derived_severity_and_confidence!(
-                format!("{pointer}rows/{index}"),
-                rule_id.clone(),
-                string_any(object, &["title", "reason"])
-                    .unwrap_or_else(|| format!("Steampipe control {rule_id}")),
-                // The `severity` column exists, and reading it was still a
-                // misattribution: Steampipe answers whatever SQL it is given and
-                // has no severity of its own, and the value in that column is a
-                // literal this product wrote — `'high' as severity` in the fixed
-                // query at engines/images/cloud-launcher/main.go. Presenting our
-                // own constant back as the engine's rating is circular, so the
-                // column is deliberately not read. Removing it from the query
-                // needs an engine-image rebuild and is not done here.
-                DerivedSeverity {
-                    severity: Severity::High,
-                    code: SeverityBasisCode::CloudControlQuery,
-                },
-                string_any(object, &["resource", "resource_id", "title"])
-                    .unwrap_or_else(|| "cloud-resource".into()),
-                string_any(object, &["asset_id"]),
-                derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
-                EvidenceKind::Configuration,
-                references_from(row),
-                vec![],
-            ));
         }
     }
     records
@@ -3840,6 +3942,8 @@ fn merge_finding(
     let severity_basis = record.severity_basis;
     let confidence_basis = record.confidence_basis;
     let exposure_observation = severity_basis.is_some_and(|code| code.is_exposure_observation());
+    let scanner_severity_unrated =
+        matches!(severity, Severity::Unknown) && severity_basis.is_some() && !exposure_observation;
     let priority = if exposure_observation {
         0
     } else {
@@ -3849,11 +3953,12 @@ fn merge_finding(
         format!("engine:{}", adapter.id),
         format!("source-rule:{}", safe_tag(&rule_id)),
     ];
-    // Exactly one of these, so every finding says where its severity came from
-    // and a derived rating can never be mistaken for the engine's own.
-    match &severity_basis {
-        Some(_) => tags.push("severity-basis:derived".into()),
-        None => tags.push(format!(
+    // Exactly one of these records whether the scanner supplied a rating, this
+    // product supplied one, or the missing value stayed honestly Unknown.
+    match (&severity_basis, scanner_severity_unrated) {
+        (Some(_), true) => tags.push("severity-basis:unrated".into()),
+        (Some(_), false) => tags.push("severity-basis:derived".into()),
+        (None, _) => tags.push(format!(
             "source-severity:{}",
             safe_tag(&record.source_severity)
         )),
@@ -3879,7 +3984,7 @@ fn merge_finding(
     let impact = if exposure_observation {
         "This observation only establishes that a service responded within the tested scope. It does not establish a vulnerability or a need to change the service.".into()
     } else {
-        impact_for(adapter.profile, &severity)
+        impact_for(adapter.profile, &severity, severity_basis)
     };
     let plain_language_summary = if exposure_observation {
         format!(
@@ -3889,14 +3994,18 @@ fn merge_finding(
     } else {
         format!(
             "{} {} The attached raw record is evidence, not an instruction.",
-            match &severity_basis {
-                Some(code) => format!(
+            match (&severity_basis, scanner_severity_unrated) {
+                (Some(_), true) => format!(
+                    "{} reported this condition but did not assign a severity. Severity remains Unknown and requires human review.",
+                    input.manifest.display_name,
+                ),
+                (Some(code), false) => format!(
                     "{} reported this condition on the assessed asset without rating it. This product rated it {} from {}.",
                     input.manifest.display_name,
                     severity_label(&severity),
                     basis_text(*code)
                 ),
-                None => format!(
+                (None, _) => format!(
                     "{} reported {} {}-severity condition on the assessed asset.",
                     input.manifest.display_name,
                     severity_article(&severity),
@@ -3926,13 +4035,17 @@ fn merge_finding(
         ]
     } else {
         vec![
-            match &severity_basis {
-                Some(code) => format!(
+            match (&severity_basis, scanner_severity_unrated) {
+                (Some(_), true) => format!(
+                    "Severity remains Unknown because {} did not assign one; human review is required.",
+                    input.manifest.display_name
+                ),
+                (Some(code), false) => format!(
                     "Severity derived from {}; {} reports no severity of its own.",
                     basis_text(*code),
                     input.manifest.display_name
                 ),
-                None => format!(
+                (None, _) => format!(
                     "Source severity: {}",
                     safe_text(&record.source_severity, 80)
                 ),
@@ -4025,9 +4138,9 @@ fn record_from_draft(draft: RecordDraft) -> SourceRecord {
     });
     let reported_severity = safe_text(&draft.source_severity, 80);
     let (severity, source_severity, severity_basis) = match draft.derived_severity {
-        // The engine reported nothing, so the source severity stays empty rather
-        // than borrowing the derived level. Nothing downstream may present the
-        // derived rating as the engine's own.
+        // The engine reported nothing, so the source severity stays empty. The
+        // canonical fallback and its basis remain separate; current upstream
+        // omissions use Unknown rather than inventing a scanner rating.
         Some(derived) if reported_severity.is_empty() => {
             (derived.severity, String::new(), Some(derived.code))
         }
@@ -4439,7 +4552,11 @@ fn severity_article(severity: &Severity) -> &'static str {
     }
 }
 
-fn impact_for(profile: Profile, severity: &Severity) -> String {
+fn impact_for(
+    profile: Profile,
+    severity: &Severity,
+    severity_basis: Option<SeverityBasisCode>,
+) -> String {
     let consequence = match profile {
         Profile::CloudQuery | Profile::Steampipe | Profile::Prowler | Profile::ScoutSuite => {
             "cloud resources or data may be exposed, changed, or used beyond the organization's intent"
@@ -4466,10 +4583,20 @@ fn impact_for(profile: Profile, severity: &Severity) -> String {
             "the Kubernetes cluster or workload may have reduced isolation or administrative protection"
         }
     };
-    format!(
-        "If the scanner result is confirmed, {consequence}. The {} source severity is not a product-wide compliance score.",
-        severity_label(severity)
-    )
+    let rating_context = match (severity, severity_basis) {
+        (Severity::Unknown, Some(_)) => {
+            "The scanner did not assign a severity; it remains Unknown for human review.".into()
+        }
+        (_, Some(_)) => format!(
+            "The scanner did not assign a severity; the {} rating shown was supplied by this product.",
+            severity_label(severity)
+        ),
+        (_, None) => format!(
+            "The scanner supplied the {} severity.",
+            severity_label(severity)
+        ),
+    };
+    format!("If the scanner result is confirmed, {consequence}. {rating_context}")
 }
 
 /// The family whose sentences this profile's findings are composed from.

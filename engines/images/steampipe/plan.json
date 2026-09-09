@@ -75,13 +75,13 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/steampipe/Dockerfile",
-    "sha256": "sha256:e231bb53bc9e2e3e011399ba0c2a6ed03d066e3e064b1be50c47987fae8c7a82"
+    "sha256": "sha256:d6ea6882a25a8f8b875fb025b8358321a70981138934383a44777d97d12b6d3e"
   },
   "wrapper": {
     "required": true,
     "strategy": "Copy the preseeded executable closure to one case-owned transient directory, write a fixed AWS IAM query/config, capture bounded JSON without a shell, and remove all runtime database state on exit.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:13a674029d7a9099cb1083175e38a2b8dee56e521b851531a8067bfda6229f5e"
+    "launcher_sha256": "sha256:d0956c059ba8ffe5b2fcebd0debf06d3ea99d538b27be43c6666bc0c02224d30"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",

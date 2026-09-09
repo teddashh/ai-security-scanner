@@ -35,7 +35,7 @@ export type CatalogEngineId = typeof catalogEngineIds[number];
  */
 export const engineOutcomeCopy = {
   cloudquery: { en: "Cloud assets and services", zhTW: "雲端資產與服務" },
-  steampipe: { en: "Cloud inventory and exposure", zhTW: "雲端盤點與暴露狀況" },
+  steampipe: { en: "AWS IAM user inventory", zhTW: "AWS IAM 使用者盤點" },
   prowler: { en: "Cloud account security settings", zhTW: "雲端帳號安全設定" },
   scoutsuite: { en: "Cloud configuration risks", zhTW: "雲端設定風險" },
   cloudsplaining: { en: "Excessive cloud permissions", zhTW: "過大的雲端權限" },

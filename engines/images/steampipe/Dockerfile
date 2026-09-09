@@ -105,7 +105,7 @@ LABEL org.opencontainers.image.title="ai-security-scanner Steampipe engine" \
       io.ai-security-scanner.aws-plugin.revision="6e79b2dece502bc198310b39bd54bc95d2842c99" \
       io.ai-security-scanner.database.digest="sha256:84264ef41853178707bccb091f5450c22e835f8a98f9961592c75690321093d9" \
       io.ai-security-scanner.fdw.digest="sha256:62b654db44ca6f7f6894e8f53e5dcad9530d356253273ebf05f92109d5ca7457" \
-      io.ai-security-scanner.profile="aws-iam-us-east-1-mfa"
+      io.ai-security-scanner.profile="aws-iam-user-inventory-us-east-1"
 
 COPY --chmod=0444 engines/images/steampipe/passwd /etc/passwd
 COPY --chmod=0444 engines/images/steampipe/group /etc/group

@@ -66,7 +66,7 @@ The source and license below identify the pinned engine family. Exact release, s
 | Capability | Upstream engine / source | Pinned license record | Integration and exact released scope |
 |---|---|---|---|
 | AWS inventory | [CloudQuery](https://github.com/cloudquery/cloudquery) | MPL-2.0 | Managed OCI image using the public CLI, AWS source plugin, file destination, and a fixed seven-table IAM inventory. |
-| AWS inventory/query | [Steampipe](https://github.com/turbot/steampipe) | AGPL-3.0-only | Managed OCI image with independently pinned AWS plugin/FDW components and fixed IAM queries. |
+| AWS IAM user inventory | [Steampipe](https://github.com/turbot/steampipe) | AGPL-3.0-only | Managed OCI image with independently pinned AWS plugin/FDW components that queries `aws_iam_user`. Returned rows are normalized as inventory; policy-shaped status, control, severity, and MFA columns are ignored rather than presented as vulnerability or configuration findings. |
 | Cloud configuration | [Prowler](https://github.com/prowler-cloud/prowler) | Apache-2.0 | Managed OCI image with narrow, exact-asset IAM profiles for AWS, Azure, and GCP. The Azure static-token and GCP exact-project paths currently depend on six hash-bound downstream runtime patches and are an explicit upstream-first exception, not native Prowler 5.39.1 behavior. |
 | AWS configuration | [ScoutSuite](https://github.com/nccgroup/ScoutSuite) | GPL-2.0-only | Managed OCI image built from pinned source; the current profile is a reduced AWS IAM assessment, not full ScoutSuite coverage. |
 | AWS IAM | [Cloudsplaining](https://github.com/salesforce/cloudsplaining) | BSD-3-Clause | Managed OCI image over bounded IAM evidence for excessive-permission analysis. |
