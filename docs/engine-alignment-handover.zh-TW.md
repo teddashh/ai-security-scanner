@@ -2,7 +2,7 @@
 
 狀態日期：2026-09-09
 
-最後完成的產品程式 checkpoint：`63097f3`
+最後完成的產品程式 checkpoint：`601da4b`
 
 這份文件是目前唯一的開發交接摘要，已直接取代舊的歷史版。產品決策以[產品規格](product-spec.md)為準，能力現況以[產品檢視](product-audit.md)為準。
 
@@ -35,6 +35,10 @@ Scanner 應盡量保留上游行為、規則、識別碼、severity、證據與 
 - `63097f3` 完成 Maester `Investigate` 的端到端 manual-review 路徑（見下節）。
   原本未提交的兩個 PowerShell wrapper 檔案已連同 adapter、保存、報告、
   Standard redaction、中英文呈現與測試一起提交，不再是工作樹中的草稿。
+- `601da4b` 完成 Nuclei step 2：launcher 直接擷取上游 StandardWriter 的
+  `-jsonl -matcher-status` stdout，adapter 將 error-free non-match 保存成逐資產的
+  typed execution evidence；零 finding 現在可以誠實成為 tested，而 silent skip、
+  scanner error、舊版 match-only 輸出仍 fail closed。細節與部署邊界見下節。
 
 ## 已在 main 上成立的產品能力
 
@@ -76,81 +80,56 @@ Scanner 出現在目錄中不代表每個引擎的完整使用者路徑都已完
 的 checksum，沒有變更 image tag、digest 或發布狀態。何時提高不可變版本並發布
 新 image，仍是產品負責人的發布決定；在那之前，真實 Maester 掃描不會獲得新語意。
 
-## Nuclei 假乾淨：step 1 已修（`4309127`），step 2 未做
+## Nuclei 假乾淨：step 1 與 step 2 都已完成（`4309127`、`601da4b`）
 
-上游的實際行為比先前記錄的更嚴重，已在 pinned 副本逐行確認：
+根因沒有改變：pinned Nuclei 的 automatic scan 會在 technology detection 沒找到 tag、
+Wappalyzer HTTP 請求失敗，或 `LoadTemplatesWithTags` 失敗時，以 exit code 0 放棄目標，
+沒有任何 security template 執行。原本的 `-jsonl-export` 只保存 match，真正零 finding
+與這些 silent skip 都留下相同的空串流。
 
-`.upstreams/projectdiscovery/nuclei/pkg/protocols/common/automaticscan/automaticscan.go`
-有三條路徑會放棄該目標並且**不回傳錯誤**——第 173 行 `len(finalTags) == 0`
-（technology detection 沒找到 tag，等於一個 template 都沒跑）、第 182 行
-`LoadTemplatesWithTags` 失敗、以及 `getTagsUsingWappalyzer` 在 HTTP 請求失敗時回
-`nil` 而落入第一條。三條都以 exit code 0 結束。
+`4309127` 先採 fail-closed 的 step 1：空 artifact 不再代表 clean，且 finding 暫時被當成
+逐資產執行證據。`59c97bf` 又先釘住 `matcher-status: false` 絕不會變成 finding。
+`601da4b` 現已完成真正的 step 2，並刪除 finding-as-completion 例外：
 
-**更正**：先前這份文件（以及 `4309127` 的 commit message）把輸出檔的建立機制寫成
-`pkg/output/file_output_writer.go:19` 的 `O_CREATE`＋`internal/runner/runner.go:288`
-的 `runner.New()`。那條路徑屬於 `-o`，**不是我們實際使用的旗標**。
-`engines/images/external-launcher/main.go` 的 `nucleiInvocation` 用的是
-`-jsonl-export`，走 `pkg/reporting/exporters/jsonl/jsonl.go`：檔案是在
-`WriteRows()` 內以 `O_WRONLY|O_CREATE|O_TRUNC` **延遲**建立，而 `WriteRows()`
-由 `Close()` 呼叫，且即使 rows 為空也會先開檔。
+- launcher 改用 `-jsonl -matcher-status`，並把 Nuclei StandardWriter 的 stdout 直接寫進
+  exclusive `0600` 暫存 evidence file。沒有採用 `-o`：pinned StandardWriter 對 stdout
+  逐筆補 newline，但 `-o` 的 JSON file writer 不補，會把多筆 JSON 黏在一起。
+  launcher 同時移除環境中的 `DISABLE_STDOUT`，其他環境值不變；既有的
+  `validateEvidenceObject`、逐 grant target/template allowlist 與 `normalizeEvidence`
+  仍在 stdout 之後驗證每筆紀錄並注入確切 `asset_id`。
+- automatic technology-detection phase 呼叫 `ExecuteWithResults`，不會走
+  `StandardWriter.WriteFailure`；只有最後的 applicable security-template phase 才會產生
+  `matcher-status:false`。因此一筆有界、已對上授權資產、且 `error` 為空的 non-match
+  可以證明至少一個適用 security template 已完成。帶 scanner error 的 false record
+  不算證據；match 仍完整保存為 finding，但單靠 match 也不再當完成證據，因為它可能
+  來自 detection phase。
+- adapter 將 qualifying non-match 依資產彙總成
+  `EngineRun.security_template_executions`；它是 positive typed coverage evidence，不是
+  finding。沒有這種證據的每個資產都得到
+  `UnevaluatedTargetCause::NoSecurityTemplateExecutionEvidence`。這兩條資料會經過
+  `ExecutionReport`、`DurableExecutionReport` 保存，重開後仍維持相同語意。
+- coverage ledger 與 beginner report 現在只讀 typed positive evidence。零 finding 加上
+  qualifying non-match 會顯示 tested；無 tag、載入失敗、連線失敗、空串流、舊版
+  match-only case，以及只有 finding 而沒有 execution evidence 的 case，都保留 finding
+  但不會被宣稱 tested。多資產 run 逐資產判斷，已證明的 sibling 不受另一資產缺口影響。
+- 舊 case／report 缺少新欄位時 serde 會安全讀成空值，因此不會因為更新 reader 就把
+  歷史資料升格為 clean。Nuclei 仍不在 mapping-independent zero-byte adapter-resume
+  例外內，因為空串流現在會產生一個有語意的 typed coverage outcome。
 
-結論不變、而且更明確：上面三條 silent skip 都是正常結束流程，因此都會走到
-`Close()` 並產生一個空檔；真正乾淨的掃描同樣產生一個空檔。兩者逐位元組相同。
-修正的是機制敘述——接手 step 2 的人若照舊敘述去看 `file_output_writer.go`
-會找錯檔案。
+這個證據刻意只做足以支持結論的保守推論：若最後階段所有適用 template 都命中、因而
+沒有任何 false record，finding 仍保留，但 coverage 會維持「無法證明已檢測」。這比把
+technology-detection match 誤當成 security-template completion 安全。
 
-`4309127` 完成 step 1：
+容量也已離線核對，沒有接觸目標：將 pinned HTTP tree 全部 11,240 個 template 的 metadata
+模擬成 non-match JSON 約 10.89 MiB；實際安全 profile 是 4,674 個 template，低於 adapter
+的 16 MiB artifact 與 10,000-record 邊界。
 
-- Nuclei 從 `is_complete_empty_json_lines` 與 `is_mapping_independent_empty_json_lines`
-  兩個名單移除，空 artifact 因此讓 normalization 變成 incomplete。
-- 單靠 adapter 層無法處理多資產 run，所以 completed Nuclei task 另外要求**逐資產**
-  有一筆 normalized record，且其 observation、finding snapshot 與 evidence 全部綁到
-  這次 run、這個 engine run 與該資產（`coverage::selected_run_has_nuclei_record`）。
-  沒有證據的資產失去 tested dimension 並得到 `Unavailable` coverage gap；同一個 run
-  中有證據的 sibling 資產保留 tested 狀態。
-- `case_service.rs` 中「verified zero-byte JSONL」的 resume 訊息改成不再宣稱空串流
-  等於完整結果。副作用：release identity 有漂移時，zero-byte Nuclei 串流不再能繞過
-  release 相容性做 adapter-only resume，會被擋成 `resume_release_incompatible`。
-
-**這一步刻意保守，代價要講清楚**：在有上游執行證據之前，真正乾淨的網站也會顯示為
-「無法確認已檢測」，因為零 finding 無法區分兩者。這是有意識的取捨，不是遺漏。
-
-### step 2 的關鍵發現：`-matcher-status` 對現在的輸出通道無效
-
-原本記錄的候選做法「打開 `-matcher-status -jsonl`」需要修正一個前提。已逐行確認：
-
-- `pkg/output/output.go:210`：`MatcherStatus` 的 JSON tag 是 `matcher-status`，
-  沒有 `omitempty`，所以該 writer 的輸出一定帶這個欄位。
-- `pkg/output/output.go:555-611`：`StandardWriter.WriteFailure` 在沒有
-  `-matcher-status` 時直接 `return nil`；打開後會為**每個執行過但未命中**的
-  template 寫出一筆帶完整 `template-id`、`MatcherStatus: false` 的紀錄。
-- 但 `pkg/protocols/common/helpers/writer/writer.go:13-18` 的 `WriteResult`
-  在 `!data.HasOperatorResult()` 時直接 return，**只有命中的結果**才會呼叫
-  `issuesClient.CreateIssue`，也就是餵給 reporting exporters 的那條路。
-  `WriteFailure`（`pkg/tmplexec/exec.go:143`）只寫進 `output.Writer`（`-o`），
-  完全不經過 reporting exporter。
-
-**所以：`-matcher-status` 產生的未命中紀錄只會進 `-o`，不會進 `-jsonl-export`。**
-在現行 launcher 只加這個旗標，我們讀到的 artifact 一個字都不會變。step 2 若要走
-這條路，必須把輸出通道從 `-jsonl-export` 換成 `-o` 搭配 `-jsonl`，這會同時牽動
-launcher 的 `validateEvidenceObject`、`normalizeEvidence` 與 adapter 的紀錄形狀，
-不是加一個旗標而已。
-
-`-stats-json` 已確認不可用：`automaticscan.go:188` 在 automatic scan 最後階段
-把 `execOptions.Progress` 換成 `testutils.MockProgressClient{}`，逐 template 的
-完成統計不會產生。
-
-另外兩點對 step 2 有利：`-omit-template` 已在現行 invocation 中，且
-`output.go:614-620` 的 `encodeTemplate` 只對 custom template 生效，官方 pinned
-template 一律回傳空字串，所以未命中紀錄不會夾帶 template 原始碼；launcher 的
-`maxEvidenceBytes` 為 512 MiB、`maxEvidenceLineBytes` 為 16 MiB，容量不是限制。
-
-step 2 建議的架構（尚未實作）：拿到逐 template 執行證據後，改用
-`EngineRun.unevaluated_targets` 表達「這個網站沒有任何 template 執行證據」，
-沿用 `0937fb3` 已修好且已測試的那條路徑，然後刪掉 `coverage.rs` 目前那個
-「以 finding 當完成證據」的 Nuclei 例外，讓 coverage 回到「finding 數量永遠不是
-完成證據」。新增 cause variant 時，`coverage.rs` 的 exhaustive `match` 會強制
-明確處理，不會無聲退回 scanned。
+部署邊界仍需明說：catalog 目前仍固定舊的 Nuclei image
+`3.11.1-5@sha256:2bd1e15a…7488`，其 launcher 仍使用 `-jsonl-export`，不會產生新的
+non-match evidence。`601da4b` 只更新 httpx、naabu、nuclei 三份共用 launcher build-plan
+checksum，沒有變更 image tag、digest 或發布狀態。在產品負責人決定提高不可變版本並發布
+新 image 前，實際 Nuclei 掃描會保留 finding，但所有網站都會因沒有 typed execution
+evidence 而顯示無法證明 tested；host adapter 無法從舊 image 的 match-only 輸出補造證據。
 
 ## coverage ledger 與標準化報告：兩個缺陷都已修（`0937fb3`、`3aa018e`）
 
@@ -194,25 +173,26 @@ npm run typecheck && npm run test:frontend && npm run test:component
 node --test tests/ci/*.test.mjs
 ```
 
-本機沒有 Go；Greenbone launcher 的 `gofmt` 與測試用 `engines/images/greenbone/Dockerfile` 固定的 Go image 離線執行：
+本機沒有 Go；launcher 的 `gofmt` 與測試用固定的 Go image 離線執行。Nuclei step 2 使用：
 
 ```bash
 docker run --rm --network none \
-  -v "$PWD/engines/images/greenbone-launcher:/src:ro" \
+  -v "$PWD/engines/images/external-launcher:/src:ro" \
   -w /tmp/work \
   golang:1.26.0-alpine@sha256:d4c4845f5d60c6a974c6000ce58ae079328d03ab7f721a0734277e69905473e5 \
   sh -c 'cp -R /src/. . && test -z "$(gofmt -d main.go main_test.go)" && go test ./...'
 ```
 
+`601da4b` 的 Rust 1,583 項、frontend 568 項、component 237 項、CI contract 32 項與
+engine contract 8 項全部通過；TypeScript、clippy、format、diff check 與上述 Go 測試
+也通過。所有 Nuclei 行為測試都只讀 checked-in fixture 或執行無網路的本機程序。
+
 ## 後續順序
 
-1. Nuclei step 2：以真正的上游 outcome record 證明「確實執行但零 finding」，同時修
-   `extract_nuclei` 讓未命中的執行紀錄不會變成 finding。在此之前乾淨網站會顯示為
-   無法確認已檢測。
-2. 移除進階 cloud／Kubernetes 路徑中產品自訂的窄 subsets，改由上游 profile 與使用者
+1. 移除進階 cloud／Kubernetes 路徑中產品自訂的窄 subsets，改由上游 profile 與使用者
    選定資產驅動。
-3. 補齊 Trivy JAR 掃描所需的固定 Java vulnerability DB。
-4. 用受控自有 fixture 走一次完整 mixed IT flow，包含第一次以新語意真實執行 Greenbone，
+2. 補齊 Trivy JAR 掃描所需的固定 Java vulnerability DB。
+3. 用受控自有 fixture 走一次完整 mixed IT flow，包含第一次以新語意真實執行 Greenbone，
    量測從加入資產到第一個有用結果所需時間，優先修掉阻礙新手的步驟。
 
 ## 交接判準
