@@ -5796,7 +5796,7 @@ impl<'a> CaseService<'a> {
                     .as_ref()
                     .is_some_and(captured_checkpoint_is_adapter_only)
                 {
-                    "its captured adapter input is not verified zero-byte JSONL"
+                    "its captured adapter input does not prove a mapping-independent complete result"
                 } else {
                     "continuing it would execute a scanner or runtime under a different release identity"
                 };
@@ -5821,7 +5821,7 @@ impl<'a> CaseService<'a> {
             }
             let captured_compatibility_warning = allow_captured_only_drift.then(|| {
                 format!(
-                    "The frozen release identity differs from the installed release ({release_differences}). Resume was allowed only because this engine's adapter input is verified zero-byte JSONL; its frozen values remain unchanged, no finding or control reference can be remapped, and no scanner or runtime will be re-executed for this engine."
+                    "The frozen release identity differs from the installed release ({release_differences}). Resume was allowed only because this engine's adapter input is verified, contract-complete zero-byte JSONL; its frozen values remain unchanged, no finding or control reference can be remapped, and no scanner or runtime will be re-executed for this engine."
                 )
             });
             let relevant_grants = frozen_effective_grants
@@ -9556,10 +9556,11 @@ fn captured_checkpoint_is_adapter_only(checkpoint: &ExecutionCheckpoint) -> bool
 
 /// Mapping-catalog and execution-deadline drift are semantically irrelevant
 /// only when a resume cannot execute a scanner/runtime and every exact adapter
-/// input is a verified zero-byte JSONL stream. Backend-owned stdout/stderr
-/// captures remain hashed evidence but are not adapter inputs. This deliberately
-/// does not authorize nonempty, malformed, document-shaped, missing, duplicated,
-/// or tampered evidence; those require the exact historical release identity.
+/// input is a verified zero-byte JSONL stream whose engine contract proves that
+/// stream is complete. Backend-owned stdout/stderr captures remain hashed
+/// evidence but are not adapter inputs. This deliberately does not authorize
+/// Nuclei, nonempty, malformed, document-shaped, missing, duplicated, or
+/// tampered evidence; those require the exact historical release identity.
 fn captured_empty_json_lines_make_release_drift_irrelevant(
     case: &AssessmentCase,
     engine_run: &EngineRun,
@@ -32243,7 +32244,11 @@ mod tests {
                 .to_string()
                 .contains("scan_preflight:resume_release_incompatible")
         );
-        assert!(error.to_string().contains("not verified zero-byte JSONL"));
+        assert!(
+            error
+                .to_string()
+                .contains("does not prove a mapping-independent complete result")
+        );
         assert!(error.to_string().contains("Start a new scan"));
 
         let tampered = Fixture::new();

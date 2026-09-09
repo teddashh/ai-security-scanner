@@ -2557,8 +2557,8 @@ fn malformed_jsonl_is_contained_while_valid_records_survive() {
 }
 
 #[test]
-fn empty_released_jsonl_streams_are_complete_zero_finding_results() {
-    for engine_id in ["naabu", "httpx", "nuclei", "trufflehog"] {
+fn provably_complete_empty_released_jsonl_streams_are_zero_finding_results() {
+    for engine_id in ["naabu", "httpx", "trufflehog"] {
         for bytes in [b"".as_slice(), b"\r\n\t".as_slice()] {
             let filename = format!("{engine_id}.jsonl");
             let output = normalize_bytes(
@@ -2576,6 +2576,29 @@ fn empty_released_jsonl_streams_are_complete_zero_finding_results() {
             assert!(output.findings.is_empty());
             assert!(output.warnings.is_empty());
         }
+    }
+}
+
+#[test]
+fn empty_nuclei_jsonl_is_incomplete_without_template_execution_evidence() {
+    for bytes in [b"".as_slice(), b"\r\n\t".as_slice()] {
+        let output = normalize_bytes(
+            "nuclei",
+            bytes,
+            "nuclei.jsonl",
+            "application/x-ndjson",
+            "run-empty",
+        );
+        assert!(!output.complete);
+        assert!(output.findings.is_empty());
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("neither valid bounded JSON nor JSONL")),
+            "warnings: {:?}",
+            output.warnings
+        );
     }
 }
 

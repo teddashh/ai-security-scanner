@@ -924,19 +924,15 @@ fn normalize_artifacts(
     Ok(output)
 }
 
-/// The released Naabu, HTTPx, Nuclei, and TruffleHog contracts are JSON streams
-/// containing one object per observation. A clean scan therefore produces a
-/// real, hashed output artifact with zero bytes (or only line-ending
-/// whitespace). Treat only those exact JSONL contracts as complete zero-record
-/// streams; document-shaped adapters keep their schema-specific empty checks.
+/// The released Naabu, HTTPx, and TruffleHog contracts can prove a complete
+/// zero-record result with a real, hashed output artifact containing zero bytes
+/// (or only line-ending whitespace). Nuclei automatic mode cannot: it can exit
+/// successfully before any applicable template runs and leave the same empty
+/// artifact. Document-shaped adapters keep their schema-specific empty checks.
 fn is_complete_empty_json_lines(profile: Profile, artifact: &RawArtifact, bytes: &[u8]) -> bool {
     if !matches!(
         profile,
-        Profile::CloudQuery
-            | Profile::Naabu
-            | Profile::Httpx
-            | Profile::Nuclei
-            | Profile::Trufflehog
+        Profile::CloudQuery | Profile::Naabu | Profile::Httpx | Profile::Trufflehog
     ) || bytes.iter().any(|byte| !byte.is_ascii_whitespace())
     {
         return false;
@@ -953,17 +949,19 @@ fn is_complete_empty_json_lines(profile: Profile, artifact: &RawArtifact, bytes:
             .eq_ignore_ascii_case("application/x-ndjson")
 }
 
-/// Mapping catalogs cannot affect a released JSONL engine when its exact
-/// adapter input is a verified zero-byte stream: there are no source records
-/// from which a finding or control reference could be produced. This is kept
-/// deliberately narrower than normal adapter parsing (which also accepts
-/// whitespace-only streams) so cross-version resume planning can prove the
-/// exception from durable metadata plus the artifact hash alone.
+/// Mapping catalogs cannot affect a released JSONL engine whose contract can
+/// prove a complete result from a verified zero-byte stream: there are no
+/// source records from which a finding or control reference could be produced.
+/// Nuclei is excluded because automatic mode can create the same empty stream
+/// without executing a template. This remains narrower than normal adapter
+/// parsing (which also accepts whitespace-only streams) so cross-version resume
+/// planning can prove the exception from durable metadata plus the artifact
+/// hash alone.
 pub(crate) fn is_mapping_independent_empty_json_lines(
     engine_id: &str,
     artifact: &RawArtifact,
 ) -> bool {
-    matches!(engine_id, "naabu" | "httpx" | "nuclei" | "trufflehog")
+    matches!(engine_id, "naabu" | "httpx" | "trufflehog")
         && artifact.byte_length == 0
         && (Path::new(&artifact.relative_path)
             .extension()
@@ -5829,6 +5827,31 @@ fn push_priority_warning(warnings: &mut Vec<String>, warning: impl AsRef<str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_provably_complete_zero_byte_jsonl_engines_ignore_mapping_drift() {
+        let artifact = RawArtifact {
+            id: "empty-output".into(),
+            case_id: "case-1".into(),
+            run_id: "run-1".into(),
+            engine_run_id: "engine-run-1".into(),
+            relative_path: "output/results.jsonl".into(),
+            media_type: "application/x-ndjson".into(),
+            sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into(),
+            byte_length: 0,
+            created_at: chrono::Utc::now(),
+            contains_sensitive_data: false,
+        };
+
+        for engine_id in ["naabu", "httpx", "trufflehog"] {
+            assert!(is_mapping_independent_empty_json_lines(
+                engine_id, &artifact
+            ));
+        }
+        assert!(!is_mapping_independent_empty_json_lines(
+            "nuclei", &artifact
+        ));
+    }
 
     fn draft_with_rule(rule_id: &str) -> RecordDraft {
         RecordDraft {

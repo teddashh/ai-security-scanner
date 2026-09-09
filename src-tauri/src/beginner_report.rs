@@ -1562,7 +1562,21 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                 }
             }
             EngineTaskKind::CatalogEngine if task.status == EngineRunStatus::Completed => {
+                let unproven_nuclei_asset_ids = task
+                    .asset_ids
+                    .iter()
+                    .filter(|asset_id| {
+                        task.engine_id == NUCLEI_ENGINE_ID
+                            && !crate::coverage::selected_run_has_nuclei_record(
+                                case, run, task, asset_id,
+                            )
+                    })
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
                 for asset_id in &task.asset_ids {
+                    if unproven_nuclei_asset_ids.contains(asset_id) {
+                        continue;
+                    }
                     tested_dimensions.push(TestedDimension {
                         dimension: "completed check-to-target coordinate".into(),
                         value: format!("{} on asset {asset_id}", task.engine_id),
@@ -1572,7 +1586,7 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                     });
                 }
                 append_internal_device_tls_dimensions(run, task, &mut tested_dimensions);
-                append_nuclei_website_dimensions(run, task, &mut tested_dimensions);
+                append_nuclei_website_dimensions(case, run, task, &mut tested_dimensions);
                 append_internal_host_greenbone_dimensions(run, task, &mut tested_dimensions);
                 append_internal_endpoint_ssh_dimensions(run, task, &mut tested_dimensions);
                 append_internal_endpoint_rdp_tls_dimensions(run, task, &mut tested_dimensions);
@@ -1623,6 +1637,30 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                 exact_complete = meaningful_completed_profile
                     && !smtp_tls_coverage_unproven
                     && exactly_completed_without_known_gap(task);
+
+                for asset_id in &unproven_nuclei_asset_ids {
+                    gaps.push(CoverageGap {
+                        unattributed: None,
+                        kind: CoverageGapKind::Unavailable,
+                        task_id: Some(task.id.clone()),
+                        target_asset_ids: vec![asset_id.clone()],
+                        dimension: format!("{}: website execution evidence", check_id(task)),
+                        reason: "No upstream template result was recorded for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template."
+                            .into(),
+                        next_action_code: NextActionCode::RetryCheck,
+                        next_action: "Keep the saved results and run this check again to cover the checks that did not finish."
+                            .into(),
+                    });
+                }
+                if !unproven_nuclei_asset_ids.is_empty() {
+                    status = if unproven_nuclei_asset_ids.len() == task.asset_ids.len() {
+                        CoverageDimensionStatus::NotTested
+                    } else {
+                        CoverageDimensionStatus::TestedPartial
+                    };
+                    exact_complete = false;
+                    task_gap_already_projected = true;
+                }
 
                 let bound_asset_ids = task.asset_ids.iter().cloned().collect::<BTreeSet<_>>();
                 let dead_host_asset_ids = task
@@ -2755,6 +2793,7 @@ fn exact_frozen_nuclei_website_scope<'a>(
 }
 
 fn append_nuclei_website_dimensions(
+    case: &AssessmentCase,
     run: &ScanRun,
     task: &EngineRun,
     dimensions: &mut Vec<TestedDimension>,
@@ -2763,7 +2802,9 @@ fn append_nuclei_website_dimensions(
         return;
     }
     for asset_id in &task.asset_ids {
-        if exact_frozen_nuclei_website_scope(run, asset_id).is_none() {
+        if exact_frozen_nuclei_website_scope(run, asset_id).is_none()
+            || !crate::coverage::selected_run_has_nuclei_record(case, run, task, asset_id)
+        {
             continue;
         }
         dimensions.push(TestedDimension {
@@ -5755,6 +5796,25 @@ mod tests {
         }
     }
 
+    fn add_nuclei_record(
+        case: &mut AssessmentCase,
+        finding_id: &str,
+        asset_id: &str,
+        engine_run_id: &str,
+    ) {
+        let mut finding = frozen_finding(case, finding_id, 70, Severity::Medium);
+        finding.asset_ids = vec![asset_id.into()];
+        finding.evidence[0].engine_run_id = Some(engine_run_id.into());
+        finding.evidence[0].engine_id = NUCLEI_ENGINE_ID.into();
+        finding.evidence[0].kind = EvidenceKind::ExternalValidation;
+        finding.evidence[0].source_rule = Some("upstream-nuclei-template".into());
+        let mut retained = observation(&finding, "run-1", instant(18));
+        retained.asset_ids = vec![asset_id.into()];
+        retained.engine_ids = vec![NUCLEI_ENGINE_ID.into()];
+        case.findings.push(finding);
+        case.finding_observations.push(retained);
+    }
+
     fn internal_device_case(profile: DeclaredWebServiceScanProfile) -> AssessmentCase {
         let profile_name = match profile {
             DeclaredWebServiceScanProfile::InternalDeviceHttps => "internal_device_https",
@@ -7045,10 +7105,42 @@ mod tests {
     }
 
     #[test]
-    fn completed_nuclei_automatic_profile_names_the_meaningful_upstream_scan() {
+    fn completed_nuclei_without_a_record_is_visible_as_unproven_not_tested_coverage() {
         let case = nuclei_website_case();
         let report = build_beginner_master_report(&case, "run-1").unwrap();
 
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::NotTested
+        );
+        assert!(report.actual.checks[0].tested_dimensions.iter().all(
+            |dimension| dimension.dimension != "Nuclei upstream website scan"
+                && !tested_dimension_refers_to_asset(dimension, "website-asset")
+        ));
+        let gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension == "nuclei: website execution evidence")
+            .expect("missing Nuclei execution evidence must remain visible");
+        assert_eq!(gap.kind, CoverageGapKind::Unavailable);
+        assert_eq!(gap.target_asset_ids, ["website-asset"]);
+        assert!(gap.reason.contains("cannot be shown as tested"));
+        assert!(gap.reason.contains("may not have responded"));
+        assert!(gap.reason.contains("may not have selected"));
+        assert_eq!(
+            report.state.summary,
+            BeginnerReportSummary::NoChecksCompleted
+        );
+    }
+
+    #[test]
+    fn completed_nuclei_record_keeps_the_tested_dimension_and_finding() {
+        let mut case = nuclei_website_case();
+        add_nuclei_record(&mut case, "nuclei-result", "website-asset", "host");
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].finding_id, "nuclei-result");
         assert_eq!(
             report.actual.checks[0].status,
             CoverageDimensionStatus::TestedComplete
@@ -7061,6 +7153,64 @@ mod tests {
         assert!(tested.value.contains("technology-aware upstream profile"));
         assert!(tested.observation.contains("technology detection selected"));
         assert!(tested.observation.contains("does not prove"));
+        assert!(
+            report
+                .coverage_gaps
+                .iter()
+                .all(|gap| { gap.dimension != "nuclei: website execution evidence" })
+        );
+    }
+
+    #[test]
+    fn completed_nuclei_multi_asset_run_keeps_only_the_record_backed_website_tested() {
+        let mut case = nuclei_website_case();
+        let mut sibling = case.assets[0].clone();
+        sibling.id = "website-sibling".into();
+        sibling.name = "https://sibling.example.test:443".into();
+        sibling.identifiers[0].value = "https://sibling.example.test:443".into();
+        case.assets.push(sibling.clone());
+
+        let run = &mut case.scan_runs[0];
+        run.report_asset_snapshots.push(ReportAssetSnapshot {
+            asset: sibling,
+            disposition: ReportAssetDisposition::RequestedForScan,
+        });
+        let mut sibling_grant = run.scope_grant_snapshots[0].clone();
+        sibling_grant.id = "grant-sibling".into();
+        sibling_grant.asset_id = "website-sibling".into();
+        let sibling_scope = sibling_grant
+            .external_scope
+            .as_mut()
+            .expect("sibling website scope");
+        sibling_scope.id = "external-sibling-grant".into();
+        sibling_scope.asset_id = "website-sibling".into();
+        sibling_scope.target = CanonicalTarget::Hostname("sibling.example.test".into());
+        run.scope_grant_ids.push("grant-sibling".into());
+        run.scope_grant_snapshots.push(sibling_grant);
+        run.engine_runs[0].asset_ids.push("website-sibling".into());
+        add_nuclei_record(&mut case, "nuclei-result", "website-asset", "host");
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        let check = &report.actual.checks[0];
+        assert_eq!(check.status, CoverageDimensionStatus::TestedPartial);
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].target_asset_ids, ["website-asset"]);
+        assert!(check.tested_dimensions.iter().any(|dimension| {
+            dimension.dimension == "Nuclei upstream website scan"
+                && dimension.value.ends_with("for asset website-asset")
+        }));
+        assert!(check.tested_dimensions.iter().all(|dimension| {
+            !tested_dimension_refers_to_asset(dimension, "website-sibling")
+                && !dimension.value.ends_with("for asset website-sibling")
+        }));
+        let gaps = report
+            .coverage_gaps
+            .iter()
+            .filter(|gap| gap.dimension == "nuclei: website execution evidence")
+            .collect::<Vec<_>>();
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].target_asset_ids, ["website-sibling"]);
+        assert_eq!(gaps[0].kind, CoverageGapKind::Unavailable);
     }
 
     #[test]

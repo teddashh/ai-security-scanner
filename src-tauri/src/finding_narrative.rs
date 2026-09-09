@@ -607,6 +607,7 @@ pub(crate) fn recognized_coverage_dimension_zh_hant(dimension: &str) -> Option<S
             ("not-tested check dimension", "未檢測的檢查項目"),
             ("unfinished check dimension", "未完成的檢查項目"),
             ("vulnerability profile evidence", "弱點掃描設定檔證據"),
+            ("website execution evidence", "網站執行證據"),
             ("target response", "目標回應"),
             ("scanner errors", "掃描器錯誤"),
         ] {
@@ -1161,6 +1162,10 @@ fn strip_frame<'a>(value: &'a str, prefix: &str, suffix: &str) -> Option<&'a str
 /// exercises its path rather than passing silently in English.
 const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
     // Why the coverage is missing.
+    (
+        "No upstream template result was recorded for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template.",
+        "這個網站沒有記錄到任何上游模板結果，因此無法將這次掃描顯示為已檢測。網站可能沒有回應，或上游技術偵測可能沒有選出任何適用的模板。",
+    ),
     (
         "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result.",
         "Greenbone 回報這台主機在掃描期間沒有回應，因此它的弱點檢查一項都沒有執行。這不是乾淨的結果。",
