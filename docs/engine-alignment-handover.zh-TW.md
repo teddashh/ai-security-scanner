@@ -322,6 +322,20 @@ concurrency、per-request timeout、environment asset boundaries 與 read-only s
 rendered coverage test 分別走過 source-code、public website 與 mixed IT Review，確認 timing line 與
 既有 exact target／limit copy 同時存在。這沒有建立 numeric ETA 或改變 runtime policy。
 
+## Progress 會延續 timing target，並在有結果時更新狀態（`4ad0759`）
+
+primary path 進入執行畫面後，不再一律退回「目前無可靠預估」。Progress 現在使用 case 已保存的
+assessment intent，在 active run 的 elapsed time 旁延續 environment、website 或 source-code 的
+同一個 timing target；不從 scanner name 或目前 engine 猜使用者路徑。若該 run 已保存 durable
+security finding，這行會改成「目前已有可用的資安結果；其餘檢查可能需要更久」，並與既有的
+`View results` 動作一致。這不會把 reachability inventory 當成資安結果，也不會宣稱整輪完成。
+
+沒有 maintained timing target 的 advanced path 仍顯示 estimate unavailable；exact product-owned
+localhost TCP connection utility 也不會借用 internal-environment 的資安 timing target。rendered
+component tests 鎖住三條 primary path、English／Traditional Chinese 已有結果狀態、advanced fallback
+與 localhost boundary。這只改變 product-owned presentation，沒有改動 scanner timeout、scope、
+rate 或執行契約。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -370,6 +384,9 @@ build 全部通過；build 只有既有的大型 chunk 提示。
 
 `282d3fb` 新增後，相同的 frontend 568 項、component 238 項、TypeScript typecheck 與 production
 frontend build 再次全部通過；build 仍只有既有的大型 chunk 提示。
+
+`4ad0759` 新增後，frontend 568 項、component 242 項、TypeScript typecheck 與 production frontend
+build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
 
 ## 後續順序
 
