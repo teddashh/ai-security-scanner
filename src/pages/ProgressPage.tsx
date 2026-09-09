@@ -44,6 +44,8 @@ import {
 import { isSecurityFinding } from "../findingClassification";
 import type { UseCaseId } from "../useCases";
 import type {
+  Asset,
+  BeginnerRequestedTarget,
   EngineRun,
   EngineRunStatus,
   ExecutionStage,
@@ -59,6 +61,8 @@ import { localizedEngineWarning } from "../engineWarningPresentation.ts";
 interface ProgressPageProps {
   caseId?: string;
   assessmentIntent?: UseCaseId;
+  assets: Asset[];
+  requestedTargets?: BeginnerRequestedTarget[];
   runs: ScanRun[];
   findings: Finding[];
   selectedRunId?: string;
@@ -338,6 +342,8 @@ const copy = {
   },
   downloadTechnicalLog: { en: "Download redacted technical log", zhTW: "下載已遮蔽的技術紀錄" },
   activeScanTools: { en: "Current or next scan tool", zhTW: "目前或下一個掃描工具" },
+  activeScanAsset: { en: "Asset in current or next check", zhTW: "目前或下一項檢查的資產" },
+  activeScanAssets: { en: "Assets in current or next check", zhTW: "目前或下一項檢查的資產" },
   noRunActivityTitle: { en: "Event log before the scan starts", zhTW: "掃描前事件紀錄" },
   noRunActivityDescription: {
     en: "Readiness checks appear here before any target is contacted.",
@@ -689,6 +695,14 @@ const terminalRunStatuses = new Set<ScanRun["status"]>([
   "cancelled",
 ]);
 const activeRunStatuses = new Set<ScanRun["status"]>(["queued", "running", "paused"]);
+const currentOrNextEngineRuns = (run: ScanRun): EngineRun[] => {
+  if (!activeRunStatuses.has(run.status)) return [];
+  const running = run.engineRuns.filter((engine) => engine.status === "running");
+  if (running.length > 0) return running;
+  const paused = run.engineRuns.filter((engine) => engine.status === "paused");
+  if (paused.length > 0) return paused;
+  return run.engineRuns.filter((engine) => engine.status === "pending").slice(0, 1);
+};
 const primaryTimingTargets: Partial<Record<UseCaseId, BilingualText>> = {
   internal_it_environment: {
     en: "Timing target: a first useful result within minutes after tools are ready. Added assets and deeper host checks can extend the full run.",
@@ -719,6 +733,8 @@ const engineIcon = (engine: EngineRun) => {
 export function ProgressPage({
   caseId,
   assessmentIntent,
+  assets,
+  requestedTargets,
   runs,
   findings,
   selectedRunId: controlledSelectedRunId,
@@ -855,6 +871,19 @@ export function ProgressPage({
     () => selectedRun ? buildScanActivity(selectedRun, activityClock) : undefined,
     [activityClock, selectedRun],
   );
+  const activeAssetNames = useMemo(() => {
+    if (!selectedRun) return [];
+    const assetNames = new Map(assets.map((asset) => [asset.id, asset.name]));
+    for (const target of requestedTargets ?? []) {
+      if (target.label) assetNames.set(target.assetId, target.label);
+    }
+    return [...new Set(
+      currentOrNextEngineRuns(selectedRun)
+        .flatMap((engine) => engine.assetIds)
+        .map((assetId) => assetNames.get(assetId))
+        .filter((name): name is string => Boolean(name)),
+    )];
+  }, [assets, requestedTargets, selectedRun]);
   const elapsedMilliseconds = selectedRun
     ? Math.max(0, Date.parse(selectedRun.finishedAt ?? activityClock.toISOString()) - Date.parse(selectedRun.startedAt))
     : 0;
@@ -1338,6 +1367,11 @@ export function ProgressPage({
               <span>{text(copy.lastProgress)} · {showDateTime(activity.lastProgressAt)}</span>
               {activity.activeCheckNames.length > 0 && (
                 <span>{text(copy.activeScanTools)} · {activity.activeCheckNames.join(locale === "zh-TW" ? "、" : ", ")}</span>
+              )}
+              {activeAssetNames.length > 0 && (
+                <span>
+                  {text(activeAssetNames.length === 1 ? copy.activeScanAsset : copy.activeScanAssets)} · {activeAssetNames.join(locale === "zh-TW" ? "、" : ", ")}
+                </span>
               )}
             </div>
           </div>

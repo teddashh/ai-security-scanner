@@ -7,7 +7,14 @@ import {
   BUILT_IN_LOCALHOST_QUICK_SCAN_ENGINE_ID,
   LOCALHOST_QUICK_SCAN_TIMEOUT_MS,
 } from "../../src/localhostQuickScan";
-import type { EngineRun, EngineRunStatus, Finding, ScanRun } from "../../src/types";
+import type {
+  Asset,
+  BeginnerRequestedTarget,
+  EngineRun,
+  EngineRunStatus,
+  Finding,
+  ScanRun,
+} from "../../src/types";
 import type { UseCaseId } from "../../src/useCases";
 
 // The progress view is read while a scan is still the user's live picture of
@@ -85,16 +92,32 @@ const finding = (overrides: Partial<Finding> = {}): Finding => ({
   ...overrides,
 });
 
+const asset = (id = "asset-1", name = "selected-project"): Asset => ({
+  id,
+  name,
+  type: "repository",
+  platform: "code",
+  locator: name,
+  coverageState: "authorized_incomplete",
+  authorizationState: "authorized",
+  allowedModes: ["local_artifact"],
+  findingCount: 0,
+});
+
 const renderProgress = (
   value: ScanRun,
   findings: Finding[] = [],
   assessmentIntent?: UseCaseId,
+  assets: Asset[] = [asset()],
+  requestedTargets?: BeginnerRequestedTarget[],
 ) =>
   render(
     <I18nProvider>
       <ProgressPage
         caseId="case-1"
         assessmentIntent={assessmentIntent}
+        assets={assets}
+        requestedTargets={requestedTargets}
         runs={[value]}
         findings={findings}
         selectedRunId={value.id}
@@ -284,6 +307,9 @@ test("the live results action is clear in Traditional Chinese", () => {
   expect(container.querySelector(".run-overview__timing")?.textContent).toContain(
     "目前已有可用的資安結果；其餘檢查可能需要更久。",
   );
+  expect(container.querySelector(".scan-activity__current")?.textContent).toContain(
+    "目前或下一項檢查的資產 · selected-project",
+  );
 });
 
 test("an active scan with no durable finding does not offer results yet", () => {
@@ -297,6 +323,45 @@ test("an active scan with no durable finding does not offer results yet", () => 
   expect(container.querySelector(".run-overview__timing")?.textContent).toContain(
     "Timing target: a useful result within minutes after tools are ready. Large folders can take longer.",
   );
+});
+
+test("live activity names the saved assets in the current check", () => {
+  const requestedTargets: BeginnerRequestedTarget[] = [
+    {
+      assetId: "asset-1",
+      label: "frozen-project",
+      assetKind: "repository",
+      labelAvailability: "recorded",
+      assetKindAvailability: "recorded",
+    },
+    {
+      assetId: "asset-2",
+      label: "https://example.invalid",
+      assetKind: "service",
+      labelAvailability: "recorded",
+      assetKindAvailability: "recorded",
+    },
+  ];
+  const { container } = renderProgress(
+    run([
+      engine("active-check", "running", {
+        assetIds: ["asset-1", "asset-2", "missing-private-id"],
+      }),
+      engine("next-check", "pending", { assetIds: ["asset-3"] }),
+    ], "running"),
+    [],
+    "internal_it_environment",
+    [asset("asset-1", "current-project-name"), asset("asset-2", "current-website-name"), asset("asset-3", "later-asset")],
+    requestedTargets,
+  );
+
+  const current = container.querySelector(".scan-activity__current")?.textContent;
+  expect(current).toContain(
+    "Assets in current or next check · frozen-project, https://example.invalid",
+  );
+  expect(current).not.toContain("current-project-name");
+  expect(current).not.toContain("later-asset");
+  expect(current).not.toContain("missing-private-id");
 });
 
 const primaryTimingCases: Array<[UseCaseId, string]> = [

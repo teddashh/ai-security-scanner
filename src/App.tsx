@@ -2460,6 +2460,8 @@ export default function App() {
           <ProgressPage
             caseId={currentCaseId}
             assessmentIntent={workspace.case.assessmentIntent}
+            assets={workspace.assets}
+            requestedTargets={currentBeginnerReport?.requested.targets}
             runs={workspace.runs}
             findings={workspace.findings}
             selectedRunId={currentRun?.id}
