@@ -2,7 +2,7 @@
 
 狀態日期：2026-09-09
 
-最後完成的產品程式 checkpoint：`879394d`
+最後完成的產品程式 checkpoint：`63097f3`
 
 這份文件是目前唯一的開發交接摘要，已直接取代舊的歷史版。產品決策以[產品規格](product-spec.md)為準，能力現況以[產品檢視](product-audit.md)為準。
 
@@ -26,17 +26,15 @@ Scanner 應盡量保留上游行為、規則、識別碼、severity、證據與 
 - `0937fb3` 修好 coverage ledger 把未評估主機記成「已完成」的缺陷。`assess_asset_coverage` 現在會讀 `unevaluated_targets`：completed run 只要指名該資產，就在既有 explanation 框架內加一條 `{engine_id}={cause}` incomplete reason，不再產生 scanned 狀態。cause 排序用 exhaustive `match`，日後新增 cause 會編譯失敗而不是無聲退回 scanned。
 - `3aa018e` 修好標準化報告永遠丟失整份 coverage ledger 的缺陷。Standard redaction 會把每筆 coverage 的 `scope_key` 改成 `[redacted]`，而 framework exporter 只在 `scope_key == "asset:{asset_id}"` 時才把 coverage entry 對上 planned asset；`ExportOptions::default()` 就是 Standard，因此每一份預設 framework report 的 `selected_run_coverage_ledger_available` 恆為 false、coverage state map 恆為空、`authorized_incomplete_count` 恆為 0，「authorized area(s) were only partly scanned」那句限制也永遠不會出現。現在只在 `scope_key` 恰好能由同一筆保留下來的 `asset_id` 還原時才保留該欄位，其餘（source-scoped、demo 形狀、對不上的 id）仍然遮蔽，`label` 與 `explanation` 不變。exporter 的比對條件沒有放寬。這同時解答了 `879394d` 當時未查明的 unmatched coverage entry 異常：那不是 planned-asset 計算錯誤，就是這條遮蔽。
 - `4309127` 修好 Nuclei 假乾淨（見下節）。
-- 本機工作樹刻意保留兩個尚未提交的 Maester 程式檔案；請先閱讀 diff，不要用 `git reset --hard` 或 `git checkout --` 丟掉：
-  - `engines/images/maester/run-maester.ps1`
-  - `engines/images/maester/run-maester.Tests.ps1`
-
-接手先執行：
-
-```bash
-git status --short --branch
-git diff --check
-git diff -- engines/images/maester
-```
+- `4932ea7` 更正 Nuclei step 2 的輸出機制說明：`-matcher-status`
+  的 non-match 記錄只進入 `-o` 背後的 StandardWriter，不會進入現行
+  `-jsonl-export` 的 reporting exporter，所以 step 2 不能只加一個旗標。
+- `59c97bf` 先在 adapter 端釘住 `matcher-status: false` 一定不會變成 finding。
+  這對目前部署的 `-jsonl-export` 輸出是 no-op，但避免 step 2 切換輸出
+  通道時把「已執行但未命中」的 template 誤報為漏洞。
+- `63097f3` 完成 Maester `Investigate` 的端到端 manual-review 路徑（見下節）。
+  原本未提交的兩個 PowerShell wrapper 檔案已連同 adapter、保存、報告、
+  Standard redaction、中英文呈現與測試一起提交，不再是工作樹中的草稿。
 
 ## 已在 main 上成立的產品能力
 
@@ -54,13 +52,29 @@ git diff -- engines/images/maester
 
 Scanner 出現在目錄中不代表每個引擎的完整使用者路徑都已完成；應以實際上游執行、normalized result 與最終報告三層皆可驗證為準。Greenbone 的新語意目前以 launcher Go 測試、adapter fixture、報告單元測試、HTML 匯出測試與 component render 測試驗證；本輪沒有對任何真實主機執行 Greenbone，第一次真實執行留給後續的 mixed IT flow 走查。
 
-## 尚未提交的工作
+## Maester `Investigate`：manual-review 路徑已完成（`63097f3`）
 
-### Maester：wrapper 已修，報告層尚未接完
+- PowerShell wrapper 保留上游 `Investigate` verdict，不再改寫成 `Failed`，並將
+  `ResultDetail.TestResult` 清理、限制為 4096 個字元後放入 `ReviewDetail`。
+  `Failed` 仍是 finding，`Passed` 仍是 pass；其他非終局狀態沒有被偽造成結果。
+- Rust adapter 將每一筆 `Investigate` 建立為有界、綁定已授權資產的
+  `ManualReviewControl`，獨立傳過 execution report、durable report 與 `EngineRun`。
+  它不進 finding，不宣稱 pass，也不把已完成的 Maester run 改成 incomplete。
+- beginner report 每個 control 顯示一筆「需人工檢視」項目、上游 detail 與明確的
+  人工判定下一步；asset coverage ledger 仍是
+  `DiscoveredAuthorizedScanned`。UI 與 HTML 會將這區標為「需要留意的內容」，
+  不再把它誤稱「未測試」。
+- 無遮蔽報告保留上游 detail；Standard 匯出保留 manual-review 項目的存在，
+  但遮蔽 rule id、title 與 detail。舊 case／report 缺少新欄位時會安全地解讀為空。
+- wrapper Pester 為 51/51；Rust 完整 suite、frontend 568 項、component 237 項、
+  TypeScript、clippy、engine admission 與 CI contract 都通過。曾故意關閉
+  adapter 的 `Investigate` 路徑做 non-vacuity 檢查，新測試如預期失敗，復原後通過。
 
-PowerShell wrapper 已把上游 `Investigate` 與 `Failed` 分開，並保留經清理、限制長度的 `ResultDetail.TestResult` 為 `ReviewDetail`。Pester 上次結果為 51/51。
-
-不要把 `Investigate` 當成 vulnerability failure，也不要當成 pass。下一步應在 host adapter／共用報告中把它呈現為「需要人工確認」的 coverage item，附上上游 detail；完成端到端測試後再與 wrapper 一起提交。
+部署邊界仍需據實說明：目前 catalog 固定的 Maester image
+`2.0.0-6@sha256:60913086…e3c0b` 是舊 wrapper，仍會在容器內把 `Investigate`
+寫成 `Failed`；host 端無法從這種已改寫的輸出還原原意。`63097f3` 只更新建置來源
+的 checksum，沒有變更 image tag、digest 或發布狀態。何時提高不可變版本並發布
+新 image，仍是產品負責人的發布決定；在那之前，真實 Maester 掃描不會獲得新語意。
 
 ## Nuclei 假乾淨：step 1 已修（`4309127`），step 2 未做
 
@@ -195,11 +209,10 @@ docker run --rm --network none \
 1. Nuclei step 2：以真正的上游 outcome record 證明「確實執行但零 finding」，同時修
    `extract_nuclei` 讓未命中的執行紀錄不會變成 finding。在此之前乾淨網站會顯示為
    無法確認已檢測。
-2. 把 Maester `Investigate` 接成 manual-review coverage item，與 wrapper 一起提交。
-3. 移除進階 cloud／Kubernetes 路徑中產品自訂的窄 subsets，改由上游 profile 與使用者
+2. 移除進階 cloud／Kubernetes 路徑中產品自訂的窄 subsets，改由上游 profile 與使用者
    選定資產驅動。
-4. 補齊 Trivy JAR 掃描所需的固定 Java vulnerability DB。
-5. 用受控自有 fixture 走一次完整 mixed IT flow，包含第一次以新語意真實執行 Greenbone，
+3. 補齊 Trivy JAR 掃描所需的固定 Java vulnerability DB。
+4. 用受控自有 fixture 走一次完整 mixed IT flow，包含第一次以新語意真實執行 Greenbone，
    量測從加入資產到第一個有用結果所需時間，優先修掉阻礙新手的步驟。
 
 ## 交接判準
@@ -209,7 +222,7 @@ docker run --rm --network none \
 ```text
 使用者選定資產
   → 適用的上游 scanner 真正執行
-  → finding／inventory／incomplete outcome 保留原意
+  → finding／inventory／manual-review／incomplete outcome 保留原意
   → sibling 結果不因單點失敗消失
   → 共用報告按資產說明結果、限制與下一步
   → 保存後重開及匯出仍維持相同語意
