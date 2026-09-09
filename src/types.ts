@@ -788,7 +788,8 @@ export type BeginnerCoverageGapKind =
   | "excluded"
   | "truncated"
   | "unavailable"
-  | "unattributed";
+  | "unattributed"
+  | "manual_review";
 export type BeginnerNextActionCode =
   | "review_finding"
   | "retry_check"
@@ -797,6 +798,7 @@ export type BeginnerNextActionCode =
   | "wait_or_cancel"
   | "start_expected_service_and_retry"
   | "review_coverage"
+  | "review_manual_control"
   | "preserve_visible_limitation"
   | "no_action_unless_scope_changes"
   | "add_asset_identifier";
@@ -1057,7 +1059,8 @@ export interface BeginnerMasterReport {
     | "excluded"
     | "truncated"
     | "unavailable"
-    | "unattributed",
+    | "unattributed"
+    | "manualReview",
     number
   >;
   /** Absent only for reports created before typed inventory was projected. */

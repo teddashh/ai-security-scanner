@@ -21,6 +21,7 @@ BeforeAll {
             [string]$Title = "Fixture test $Id",
             [AllowNull()][object]$Severity = '',
             [AllowNull()][object]$HelpUrl = "https://maester.dev/docs/tests/$Id/",
+            [AllowNull()][object]$ResultDetail = $null,
             [switch]$OmitSeverity
         )
         $test = [ordered]@{
@@ -37,7 +38,7 @@ BeforeAll {
             ErrorRecord = @()
             Block = 'Entra'
             Duration = '00:00:00.0100000'
-            ResultDetail = $null
+            ResultDetail = $ResultDetail
         }
         if ($OmitSeverity) { $test.Remove('Severity') }
         return $test
@@ -100,7 +101,9 @@ Describe 'ConvertTo-ManagedMaesterDocument verdicts' {
         $everyVerdict = New-MaesterReport -Tests @(
             (New-MaesterTest -Id 'MT.1001' -Result 'Passed' -Severity 'High')
             (New-MaesterTest -Id 'MT.1002' -Result 'Failed' -Severity 'Critical')
-            (New-MaesterTest -Id 'MT.1003' -Result 'Investigate' -Severity 'Medium')
+            (New-MaesterTest -Id 'MT.1003' -Result 'Investigate' -Severity 'Medium' -ResultDetail @{
+                TestResult = 'Manual review required for this control.'
+            })
             (New-MaesterTest -Id 'MT.1004' -Result 'Skipped' -Severity 'Low')
             (New-MaesterTest -Id 'MT.1005' -Result 'NotRun')
             (New-MaesterTest -Id 'MT.1006' -Result 'Error' -Severity 'High')
@@ -113,10 +116,17 @@ Describe 'ConvertTo-ManagedMaesterDocument verdicts' {
         @($document.Results | ForEach-Object { $_.Id }) | Should -Be @('MT.1001', 'MT.1002', 'MT.1003')
     }
 
-    It 'maps Passed to Pass and both Failed and Investigate to Failed, keeping the source verdict' {
+    It 'maps Passed to Pass and preserves Failed and Investigate as distinct source verdicts' {
         $rows = @($document.Results)
-        @($rows | ForEach-Object { $_.Result }) | Should -Be @('Pass', 'Failed', 'Failed')
+        @($rows | ForEach-Object { $_.Result }) | Should -Be @('Pass', 'Failed', 'Investigate')
         @($rows | ForEach-Object { $_.SourceResult }) | Should -Be @('Passed', 'Failed', 'Investigate')
+    }
+
+    It 'carries the upstream manual-review detail only for Investigate rows' {
+        $rows = @($document.Results)
+        $rows[0].ReviewDetail | Should -Be ''
+        $rows[1].ReviewDetail | Should -Be ''
+        $rows[2].ReviewDetail | Should -Be 'Manual review required for this control.'
     }
 
     It 'drops Skipped, NotRun, Error, and Inconclusive tests from results' {
@@ -250,6 +260,29 @@ Describe 'ConvertTo-ManagedMaesterDocument text safety' {
         $report = New-MaesterReport -Tests @((New-MaesterTest -Id 'MT.3002' -Result 'Passed' -HelpUrl $null))
         (ConvertTo-Document -Report $report).Results[0].HelpUrl | Should -Be ''
     }
+
+    It 'cleans and bounds the Investigate review detail from ResultDetail.TestResult' {
+        $report = New-MaesterReport -Tests @(
+            (New-MaesterTest -Id 'MT.3003' -Result 'Investigate' -ResultDetail @{
+                TestDescription = 'Not copied into the managed row.'
+                TestResult = ("<b>Manual</b> review &amp; confirm`taccess`u{7} " + ('R' * 5000))
+            })
+        )
+        $detail = (ConvertTo-Document -Report $report).Results[0].ReviewDetail
+        $detail | Should -Match '^Manual review & confirm access R+$'
+        $detail | Should -Not -Match '[<>\x00-\x1F\x7F]'
+        $detail.Length | Should -Be 4096
+    }
+
+    It 'uses an empty review detail when an Investigate row has no ResultDetail.TestResult' {
+        $report = New-MaesterReport -Tests @(
+            (New-MaesterTest -Id 'MT.3004' -Result 'Investigate')
+            (New-MaesterTest -Id 'MT.3005' -Result 'Investigate' -ResultDetail @{ TestDescription = 'Description only' })
+        )
+        $rows = @((ConvertTo-Document -Report $report).Results)
+        $rows[0].ReviewDetail | Should -Be ''
+        $rows[1].ReviewDetail | Should -Be ''
+    }
 }
 
 Describe 'ConvertTo-ManagedMaesterDocument envelope' {
@@ -261,7 +294,7 @@ Describe 'ConvertTo-ManagedMaesterDocument envelope' {
         @($envelope.Keys) | Should -Be @('schema_version', 'Engine', 'Product', 'asset_id', 'Provenance', 'Diagnostics', 'Results')
         @($envelope.Provenance.Keys) | Should -Be @('engine_version', 'source_revision', 'profile', 'test_path', 'excluded_tags', 'include_long_running', 'include_preview', 'telemetry', 'version_check', 'raw_report')
         @($envelope.Diagnostics.Keys) | Should -Be @('passes', 'failures', 'investigate', 'errors', 'skipped', 'not_run', 'total', 'normalized_results')
-        @($envelope.Results[0].Keys) | Should -Be @('Id', 'Title', 'Result', 'SourceResult', 'SourceSeverity', 'Severity', 'Service', 'asset_id', 'HelpUrl')
+        @($envelope.Results[0].Keys) | Should -Be @('Id', 'Title', 'Result', 'SourceResult', 'ReviewDetail', 'SourceSeverity', 'Severity', 'Service', 'asset_id', 'HelpUrl')
     }
 
     It 'binds the document and every row to the scoped asset' {

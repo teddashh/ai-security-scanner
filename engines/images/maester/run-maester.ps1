@@ -92,10 +92,20 @@ function ConvertTo-ManagedMaesterDocument {
         $result = switch ($sourceResult) {
             'Passed' { 'Pass'; break }
             'Failed' { 'Failed'; break }
-            'Investigate' { 'Failed'; break }
+            'Investigate' { 'Investigate'; break }
             default { $null }
         }
         if ($null -eq $result) { continue }
+        $reviewDetailValue = $null
+        if ($sourceResult -eq 'Investigate') {
+            $resultDetailProperty = $test.PSObject.Properties['ResultDetail']
+            if ($null -ne $resultDetailProperty -and $null -ne $resultDetailProperty.Value) {
+                $testResultProperty = $resultDetailProperty.Value.PSObject.Properties['TestResult']
+                if ($null -ne $testResultProperty) {
+                    $reviewDetailValue = $testResultProperty.Value
+                }
+            }
+        }
         $sourceSeverityProperty = $test.PSObject.Properties['Severity']
         $sourceSeverityValue = if ($null -eq $sourceSeverityProperty) { $null } else { $sourceSeverityProperty.Value }
         $sourceSeverity = ConvertTo-SafeText -Value $sourceSeverityValue -MaximumLength 32
@@ -112,6 +122,7 @@ function ConvertTo-ManagedMaesterDocument {
             Title = ConvertTo-SafeText -Value $test.Title
             Result = $result
             SourceResult = $sourceResult
+            ReviewDetail = ConvertTo-SafeText -Value $reviewDetailValue
             SourceSeverity = $sourceSeverity
             Severity = $severity
             Service = 'Microsoft Entra ID'

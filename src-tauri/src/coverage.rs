@@ -806,8 +806,8 @@ mod tests {
     use super::*;
     use crate::domain::{
         AssetIdentifier, BUILT_IN_LOCALHOST_TCP_TIMEOUT_MS, Confidence, Evidence, EvidenceKind,
-        Finding, FindingObservation, FindingStatus, LocalhostTcpObservation, OrganizationProfile,
-        Severity, UnevaluatedTarget,
+        Finding, FindingObservation, FindingStatus, LocalhostTcpObservation, ManualReviewControl,
+        OrganizationProfile, Severity, UnevaluatedTarget,
     };
     use crate::registry::EngineRegistry;
 
@@ -819,6 +819,7 @@ mod tests {
         EngineRun {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            manual_review_controls: Vec::new(),
             id: "localhost-run".into(),
             scan_run_id: "scan-run".into(),
             engine_id: "built-in-localhost-tcp".into(),
@@ -939,6 +940,7 @@ mod tests {
             warnings: Vec::new(),
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            manual_review_controls: Vec::new(),
             raw_artifact_ids: Vec::new(),
             error_code: None,
             error_message: None,
@@ -1159,6 +1161,57 @@ mod tests {
             assessment.status,
             CoverageStatus::DiscoveredAuthorizedScanned
         );
+    }
+
+    #[test]
+    fn completed_maester_manual_review_remains_completed_coverage() {
+        let (mut case, mut asset, _, as_of) = greenbone_coverage_fixture();
+        asset.kind = AssetKind::Tenant;
+        asset.provider = Some("microsoft365".into());
+        asset.identifiers.clear();
+        case.assets[0] = asset.clone();
+
+        let inventory = ScopeGrant {
+            id: "inventory-grant".into(),
+            asset_id: asset.id.clone(),
+            permission: ScanPermission::InventoryRead,
+            confirmed_by: "fixture owner".into(),
+            confirmed_at: as_of - chrono::Duration::minutes(1),
+            expires_at: Some(as_of + chrono::Duration::hours(1)),
+            authorization_reference: Some("fixture authorization".into()),
+            notes: None,
+            external_scope: None,
+        };
+        let configuration = ScopeGrant {
+            id: "configuration-grant".into(),
+            permission: ScanPermission::ConfigurationRead,
+            ..inventory.clone()
+        };
+        case.scope_grants = vec![inventory.clone(), configuration.clone()];
+        let run = &mut case.scan_runs[0];
+        run.scope_grant_ids = vec![inventory.id.clone(), configuration.id.clone()];
+        run.scope_grant_snapshots = vec![inventory, configuration];
+        let engine_run = &mut run.engine_runs[0];
+        engine_run.id = "maester-run".into();
+        engine_run.engine_id = "maester".into();
+        engine_run.manual_review_controls = vec![ManualReviewControl {
+            asset_id: asset.id.clone(),
+            rule_id: "MT.1003".into(),
+            title: "Needs a human verdict".into(),
+            detail: None,
+        }];
+        let manifest = EngineRegistry::load_builtin()
+            .expect("built-in engine catalog")
+            .get("maester")
+            .expect("Maester manifest")
+            .clone();
+
+        let assessment = assess_asset_coverage(&case, &asset, &[manifest], as_of);
+        assert_eq!(
+            assessment.status,
+            CoverageStatus::DiscoveredAuthorizedScanned
+        );
+        assert!(assessment.explanation.contains("completed"));
     }
 
     #[test]

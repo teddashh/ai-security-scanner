@@ -627,6 +627,14 @@ export const localizedCoverageDimension = (
   if (locale === "en") return dimension;
   const lower = dimension.toLocaleLowerCase("en");
 
+  const manualReviewSeparator = ": manual review for ";
+  const manualReviewAt = dimension.indexOf(manualReviewSeparator);
+  if (manualReviewAt > 0) {
+    const check = dimension.slice(0, manualReviewAt);
+    const control = dimension.slice(manualReviewAt + manualReviewSeparator.length);
+    if (control) return `${check}：需人工檢視的控制項 ${control}`;
+  }
+
   // Fixed names, in the order the more specific one has to be tried first:
   // "completed planned work units" is a substring of the partly-completed one.
   for (const [needle, label] of [
@@ -811,6 +819,10 @@ const withCheck = (check: string, label: string): string => {
  * that one, English key and Chinese sentence together.
  */
 const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
+  [
+    "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.",
+    "Maester 已評估這項控制措施，但未回傳通過或失敗的判定。這項控制措施需要人工檢視，且不是漏洞問題。",
+  ],
   [
     "No upstream template result was recorded for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template.",
     "這個網站沒有記錄到任何上游模板結果，因此無法將這次掃描顯示為已檢測。網站可能沒有回應，或上游技術偵測可能沒有選出任何適用的模板。",
@@ -1216,6 +1228,10 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
     "請保留目前可用的結果。等這些檢查的內建掃描工具資訊恢復之後，本程式可以在之後的掃描中納入它們。",
   ],
   [
+    "Review the upstream detail and record a human decision for this control.",
+    "請檢視上游詳細資料，並為這項控制措施記錄人工判定。",
+  ],
+  [
     "No action is needed unless this area should be included in a future scan.",
     "除非之後的掃描要納入這個範圍，否則不需要採取任何行動。",
   ],
@@ -1235,6 +1251,12 @@ export const coverageGapProse = (
 ): string => {
   if (locale === "en") return english;
   const trimmed = english.trim();
+  const reviewBase = "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.";
+  const reviewDetailPrefix = `${reviewBase} Upstream detail: `;
+  if (trimmed.startsWith(reviewDetailPrefix) && trimmed.length > reviewDetailPrefix.length) {
+    const base = lookupProse(reviewBase);
+    if (base) return `${base} 上游詳細資料：${trimmed.slice(reviewDetailPrefix.length)}`;
+  }
   // Six reasons gain a diagnostic code when the task recorded one. It is the
   // scanner's own code and stays verbatim; only the sentence around it moves.
   const withCode = /^(.*\.) Diagnostic code: (.+)\.$/u.exec(trimmed);

@@ -410,6 +410,7 @@ export interface NativeBeginnerMasterReport {
     truncated: number;
     unavailable: number;
     unattributed?: number;
+    manual_review?: number;
   };
   inventory?: NativeBeginnerInventory | null;
   findings: Array<{
@@ -2576,6 +2577,8 @@ export const adaptBeginnerMasterReport = (
     // honest reading: that build could not have discarded anything for a
     // reason it did not know about.
     unattributed: report.coverage_counts.unattributed ?? 0,
+    // Older saved reports predate typed Maester review items.
+    manualReview: report.coverage_counts.manual_review ?? 0,
   },
   inventory: report.inventory ? {
     total: report.inventory.total,

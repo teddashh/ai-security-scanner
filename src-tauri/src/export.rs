@@ -1170,6 +1170,16 @@ pub(crate) fn case_for_export(
                 // carries an identifier read straight out of the scanned
                 // artifact, and nothing has vetted it.
                 engine_run.unattributed.clear();
+                for control in &mut engine_run.manual_review_controls {
+                    // All three values come directly from the scanner. Their
+                    // existence is useful coverage information, but Standard
+                    // exports must not carry arbitrary tenant-specific text.
+                    control.rule_id = "[redacted control id]".into();
+                    control.title = "[redacted manual-review control]".into();
+                    if control.detail.is_some() {
+                        control.detail = Some("[redacted manual-review detail]".into());
+                    }
+                }
             }
         }
         for finding in &mut exported.findings {
@@ -1371,6 +1381,11 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
         if gap.kind == crate::beginner_report::CoverageGapKind::Excluded {
             gap.dimension = "Excluded coverage area".into();
             gap.reason = "[redacted coverage detail]".into();
+        } else if gap.kind == crate::beginner_report::CoverageGapKind::ManualReview {
+            gap.dimension = "Maester: manual review for [redacted control]".into();
+            gap.reason = "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.".into();
+            gap.next_action =
+                "Review the upstream detail and record a human decision for this control.".into();
         } else if let Some(unattributed) = &mut gap.unattributed {
             // The identifier names the reader's cloud tenancy and appears in
             // all three prose fields. `redact_known_literals` cannot reach it:
@@ -1510,6 +1525,12 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
             step.reason = format!(
                 "{count} result(s) were reported for an identifier no authorized asset carries, so none of them are in this report. The identifier is withheld from this redacted export."
             );
+            continue;
+        }
+        if step.code == crate::beginner_report::NextActionCode::ReviewManualControl {
+            step.action =
+                "Review the upstream detail and record a human decision for this control.".into();
+            step.reason = "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.".into();
             continue;
         }
         if let Some(finding_id) = step.finding_id.as_deref()
@@ -2786,6 +2807,7 @@ mod tests {
             engine_runs: vec![EngineRun {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                manual_review_controls: Vec::new(),
                 id: "engine-run-1".into(),
                 scan_run_id: "run-1".into(),
                 engine_id: "engine-1".into(),
@@ -5214,6 +5236,65 @@ mod tests {
                 .unwrap()
                 .contains(UNREGISTERED),
             "standard-redacted case bundle leaked an unregistered cloud identifier"
+        );
+    }
+
+    #[test]
+    fn standard_exports_keep_manual_review_visible_without_upstream_private_text() {
+        const PRIVATE_DETAIL: &str = "UNREGISTERED_MAESTER_REVIEW_DETAIL_4B77";
+        let temp = tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let mut case = fixture(&artifact_root, true);
+        let engine_run = &mut case.scan_runs[0].engine_runs[0];
+        engine_run.engine_id = "maester".into();
+        engine_run.manual_review_controls = vec![ManualReviewControl {
+            asset_id: "asset-1".into(),
+            rule_id: "PRIVATE-MT.1003".into(),
+            title: "Private tenant-specific control title".into(),
+            detail: Some(PRIVATE_DETAIL.into()),
+        }];
+
+        assert_eq!(
+            serde_json::to_string(&case)
+                .unwrap()
+                .matches(PRIVATE_DETAIL)
+                .count(),
+            1,
+            "the sentinel must exist only in untrusted upstream review detail"
+        );
+        let unredacted =
+            beginner_report_for_export(&case, "run-1", RedactionProfile::None).unwrap();
+        assert!(
+            serde_json::to_string(&unredacted)
+                .unwrap()
+                .contains(PRIVATE_DETAIL)
+        );
+
+        let standard =
+            beginner_report_for_export(&case, "run-1", RedactionProfile::Standard).unwrap();
+        let standard_json = serde_json::to_string(&standard).unwrap();
+        assert!(!standard_json.contains(PRIVATE_DETAIL));
+        assert_eq!(standard.coverage_counts.manual_review, 1);
+        let gap = standard
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.kind == crate::beginner_report::CoverageGapKind::ManualReview)
+            .expect("redaction erased the manual-review coverage item");
+        assert_eq!(
+            gap.dimension,
+            "Maester: manual review for [redacted control]"
+        );
+        assert!(!gap.reason.contains("Upstream detail:"));
+
+        let bundle = case_for_export(&case, RedactionProfile::Standard);
+        let bundle_json = serde_json::to_string(&bundle).unwrap();
+        assert!(!bundle_json.contains(PRIVATE_DETAIL));
+        let bundled_control = &bundle.scan_runs[0].engine_runs[0].manual_review_controls[0];
+        assert_eq!(bundled_control.rule_id, "[redacted control id]");
+        assert_eq!(bundled_control.title, "[redacted manual-review control]");
+        assert_eq!(
+            bundled_control.detail.as_deref(),
+            Some("[redacted manual-review detail]")
         );
     }
 

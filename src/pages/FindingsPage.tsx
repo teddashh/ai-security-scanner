@@ -126,6 +126,10 @@ const copy = {
     en: "{completed} completed · {gaps} gaps",
     zhTW: "完成 {completed} 項 · {gaps} 個缺口",
   },
+  scopeAttentionSummary: {
+    en: "{completed} completed · {gaps} limits or review items",
+    zhTW: "完成 {completed} 項 · {gaps} 個限制或檢視項目",
+  },
   reportBoundary: {
     en: "NIST and ISO references and AIDEFEND's independent, unofficial mapping are context only—not an audit, certification, compliance decision, or automatic fix.",
     zhTW: "NIST、ISO 參考與 AIDEFEND 的獨立非官方對照只提供脈絡；不等同稽核、認證、合規判定或自動修復。",
@@ -614,11 +618,14 @@ const copy = {
   truncatedCount: { en: "Reduced by limits", zhTW: "受限制而縮減" },
   unavailableCount: { en: "Detail unavailable", zhTW: "資料不足" },
   unattributedCount: { en: "Not linked to your asset", zhTW: "未連結到你的資產" },
+  manualReviewCount: { en: "Manual review", zhTW: "需人工檢視" },
   coverageGaps: { en: "Recorded coverage gaps", zhTW: "已記錄的涵蓋缺口" },
+  coverageAttention: { en: "Coverage limits and manual review", zhTW: "涵蓋限制與人工檢視" },
   reportFindings: { en: "Problems found", zhTW: "發現的問題" },
   askedTitle: { en: "What you asked to scan", zhTW: "你要求掃描的內容" },
   testedTitle: { en: "What was actually tested", zhTW: "實際完成的測試" },
   gapsTitle: { en: "What was not tested", zhTW: "沒有測到的內容" },
+  attentionTitle: { en: "What needs attention", zhTW: "需要留意的內容" },
   nextTitle: { en: "What to do next", zhTW: "接下來怎麼做" },
   moreItems: { en: "+{count} more", zhTW: "另 {count} 項" },
   noRequestedTarget: {
@@ -712,6 +719,10 @@ const copy = {
   actionWait: { en: "Let it finish, or cancel and keep the partial report.", zhTW: "等待完成，或取消並保留部分報告。" },
   actionStartService: { en: "Start the expected local service, then retry.", zhTW: "先啟動預期的本機服務，再重試。" },
   actionReviewCoverage: { en: "Review the coverage gap before relying on the result.", zhTW: "採用結果前，先檢視涵蓋缺口。" },
+  actionReviewManualControl: {
+    en: "Review the upstream detail and record a human decision for this control.",
+    zhTW: "請檢視上游詳細資料，並為這項控制措施記錄人工判定。",
+  },
   // The check ran and produced results and none could be tied to anything the
   // reader authorized. The sentences naming the identifier live in
   // findingNarrative.ts beside every other pair this product writes; these two
@@ -795,6 +806,7 @@ const nextActionCopy = (code: BeginnerNextActionCode) => {
     case "wait_or_cancel": return copy.actionWait;
     case "start_expected_service_and_retry": return copy.actionStartService;
     case "review_coverage": return copy.actionReviewCoverage;
+    case "review_manual_control": return copy.actionReviewManualControl;
     case "preserve_visible_limitation": return copy.actionPreserve;
     // Interpolated by the caller, which has the identifier. The generic form
     // is the fallback when a report predates the structured payload.
@@ -909,7 +921,9 @@ function AssetResultBoard({ report }: { report: BeginnerMasterReport }) {
 
     const actionGap = status === "incomplete_failed"
       ? firstIncompleteGap ?? unfinishedRequestedGap
-      : firstApplicableGap;
+      : status === "no_problems_completed"
+        ? gaps.find((gap) => gap.kind === "manual_review")
+        : firstApplicableGap;
     const recordedNextAction = actionGap
       ? text(nextActionCopy(actionGap.nextActionCode))
       : undefined;
@@ -938,7 +952,7 @@ function AssetResultBoard({ report }: { report: BeginnerMasterReport }) {
                 : copy.assetNoProblemSummaryMany,
               { count: formatNumber(completedSecurityChecks.length) },
             ),
-            action: text(copy.assetNoProblemAction),
+            action: recordedNextAction ?? text(copy.assetNoProblemAction),
           };
         case "incomplete_failed":
           return {
@@ -1143,6 +1157,9 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
     : nonSecurityOnly
       ? { label: copy.reportNonSecurityOnly, tone: "neutral" as const }
     : reportSummaryPresentation(report.state.summary);
+  const hasManualReview = report.coverageCounts.manualReview > 0;
+  const coverageItemsLabel = hasManualReview ? copy.coverageAttention : copy.coverageGaps;
+  const coverageItemsTitle = hasManualReview ? copy.attentionTitle : copy.gapsTitle;
   const noRecordedGapDetail = localhostSummary?.exclusions ?? copy.noGap;
   const testedChecks = report.actual.checks.filter((check) =>
     check.status === "tested_complete"
@@ -1336,6 +1353,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
     [copy.excludedCount, report.coverageCounts.excluded],
     [copy.truncatedCount, report.coverageCounts.truncated],
     [copy.unattributedCount, report.coverageCounts.unattributed],
+    [copy.manualReviewCount, report.coverageCounts.manualReview],
     [copy.unavailableCount, report.coverageCounts.unavailable],
   ] as const;
 
@@ -1364,7 +1382,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
           <dd>{testedSummary}</dd>
         </div>
         <div className={report.coverageGaps.length > 0 ? "report-outcome-strip__warning" : undefined}>
-          <dt>{text(copy.gapsTitle)} <span>{formatNumber(report.coverageGaps.length)}</span></dt>
+          <dt>{text(coverageItemsTitle)} <span>{formatNumber(report.coverageGaps.length)}</span></dt>
           <dd>{gapSummary}</dd>
         </div>
         <div>
@@ -1389,7 +1407,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
 
       <details className="page-secondary-feature report-scope-disclosure">
         <summary>
-          {text(copy.scopeLimitations)} · {text(copy.scopeSummary, {
+          {text(copy.scopeLimitations)} · {text(hasManualReview ? copy.scopeAttentionSummary : copy.scopeSummary, {
             completed: formatNumber(report.coverageCounts.testedComplete),
             gaps: formatNumber(report.coverageGaps.length),
           })}
@@ -1411,9 +1429,9 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
           tone={report.coverageCounts.testedComplete > 0 ? "accent" : "default"}
         />
         <MetricCard
-          label={text(copy.coverageGaps)}
+          label={text(coverageItemsLabel)}
           value={formatNumber(report.coverageGaps.length)}
-          detail={report.coverageGaps.length > 0 ? text(copy.gapsTitle) : text(noRecordedGapDetail)}
+          detail={report.coverageGaps.length > 0 ? text(coverageItemsTitle) : text(noRecordedGapDetail)}
           icon="warning"
           tone={report.coverageGaps.length > 0 ? "warning" : "default"}
         />
@@ -1426,7 +1444,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         />
       </div>
 
-      <div className="report-count-breakdown" aria-label={text(copy.coverageGaps)}>
+      <div className="report-count-breakdown" aria-label={text(coverageItemsLabel)}>
         {countBreakdown.map(([label, count]) => (
           <span key={label.en}><strong>{formatNumber(count)}</strong> {text(label)}</span>
         ))}
@@ -1531,7 +1549,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         </article>
 
         <article className="coverage-card">
-          <h3>{text(copy.gapsTitle)}</h3>
+          <h3>{text(coverageItemsTitle)}</h3>
           {report.coverageGaps.length > 0 ? (
             <ul className="detail-list">
               {report.coverageGaps.map((gap, index) => {

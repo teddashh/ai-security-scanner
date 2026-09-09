@@ -414,6 +414,9 @@ pub enum CoverageGapKind {
     Unavailable,
     /// Results were produced but could not be tied to an authorized asset.
     Unattributed,
+    /// The check ran, but upstream requires a person to supply the verdict.
+    /// This is visible coverage data, not incomplete execution or a finding.
+    ManualReview,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -429,6 +432,10 @@ pub struct CoverageCounts {
     pub unavailable: usize,
     /// Results produced but tied to no authorized asset.
     pub unattributed: usize,
+    /// Controls evaluated by upstream whose verdict still requires a person.
+    /// These remain part of completed coverage and are not findings.
+    #[serde(default)]
+    pub manual_review: usize,
 }
 
 /// Stable UI/export semantic. English prose beside this value is display
@@ -443,6 +450,7 @@ pub enum NextActionCode {
     WaitOrCancel,
     StartExpectedServiceAndRetry,
     ReviewCoverage,
+    ReviewManualControl,
     PreserveVisibleLimitation,
     NoActionUnlessScopeChanges,
     AddAssetIdentifier,
@@ -707,6 +715,7 @@ pub fn build_beginner_master_report(
     append_request_outcome_gaps(run, !contradictory_request_outcome, &mut coverage_gaps);
     append_engine_admission_gaps(run, &mut coverage_gaps);
     append_unattributed_gaps(run, &mut coverage_gaps);
+    append_manual_review_gaps(run, &mut coverage_gaps);
     append_case_exclusions(case, run, &mut coverage_gaps);
     append_internal_device_profile_gaps(case, run, &mut coverage_gaps);
     append_internal_endpoint_profile_gaps(case, run, &mut coverage_gaps);
@@ -803,7 +812,9 @@ pub fn build_beginner_master_report(
             .engine_runs
             .iter()
             .all(|task| actual_projection.exact_complete_task_ids.contains(&task.id))
-        && coverage_gaps.is_empty()
+        && coverage_gaps
+            .iter()
+            .all(|gap| gap.kind == CoverageGapKind::ManualReview)
     {
         BeginnerReportSummary::Complete
     } else {
@@ -2374,6 +2385,36 @@ fn append_unattributed_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
     }
 }
 
+/// One visible coverage item per Maester control whose upstream verdict is
+/// `Investigate`. The check ran, so this does not make execution incomplete;
+/// the missing human verdict is still material and must not disappear.
+fn append_manual_review_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
+    const REASON: &str = "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.";
+    for task in &run.engine_runs {
+        for control in &task.manual_review_controls {
+            let reason = control.detail.as_ref().map_or_else(
+                || REASON.to_owned(),
+                |detail| format!("{REASON} Upstream detail: {detail}"),
+            );
+            gaps.push(CoverageGap {
+                kind: CoverageGapKind::ManualReview,
+                task_id: Some(task.id.clone()),
+                target_asset_ids: vec![control.asset_id.clone()],
+                dimension: format!(
+                    "{}: manual review for {} — {}",
+                    task.engine_id, control.rule_id, control.title
+                ),
+                reason,
+                next_action_code: NextActionCode::ReviewManualControl,
+                next_action:
+                    "Review the upstream detail and record a human decision for this control."
+                        .into(),
+                unattributed: None,
+            });
+        }
+    }
+}
+
 /// Fails a debug build if this file writes a sentence no reader in Traditional
 /// Chinese can be shown.
 ///
@@ -3790,6 +3831,9 @@ fn coverage_counts(actual: &ActualCoverage, gaps: &[CoverageGap]) -> CoverageCou
             // it "unavailable" describes the wrong thing; the results exist and
             // nothing here claims them.
             CoverageGapKind::Unattributed => counts.unattributed += 1,
+            // The check already contributes its tested-complete count. Keep a
+            // separate visible count without inflating an incomplete state.
+            CoverageGapKind::ManualReview => counts.manual_review += 1,
         }
     }
     counts
@@ -4032,6 +4076,7 @@ fn gap_rank(kind: CoverageGapKind) -> u8 {
         // Above Excluded: this one is actionable and the reader is the only
         // person who can resolve it.
         CoverageGapKind::Unattributed => 3,
+        CoverageGapKind::ManualReview => 3,
     }
 }
 
@@ -4097,9 +4142,10 @@ mod tests {
         BUILT_IN_LOCALHOST_TCP_ASSET_IDENTIFIER_NAMESPACE,
         BUILT_IN_LOCALHOST_TCP_AUTHORIZATION_REFERENCE, BUILT_IN_LOCALHOST_TCP_ENGINE_ID,
         CaseStatus, ControlReference, CoverageEntry, CoverageStatus, DataClass, EngineRun,
-        Evidence, EvidenceKind, FindingGroup, FindingStatus, NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
-        NAABU_ATTEMPT_RESULT_SCHEMA_VERSION, NaabuAttemptRequest, NaabuAttemptResult,
-        OrganizationProfile, RawArtifact, ReportAssetSnapshot, ScopeGrant, SourceKind, new_id,
+        Evidence, EvidenceKind, FindingGroup, FindingStatus, ManualReviewControl,
+        NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION, NAABU_ATTEMPT_RESULT_SCHEMA_VERSION,
+        NaabuAttemptRequest, NaabuAttemptResult, OrganizationProfile, RawArtifact,
+        ReportAssetSnapshot, ScopeGrant, SourceKind, new_id,
     };
     use crate::execution_coverage::{
         ExecutionCoverageSummary, FinalArtifactIdentity, LAUNCHER_V2_JOURNAL_SCHEMA_VERSION,
@@ -4196,6 +4242,7 @@ mod tests {
             engine_runs: vec![EngineRun {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                manual_review_controls: Vec::new(),
                 id: "task-1".into(),
                 scan_run_id: run_id,
                 engine_id: BUILT_IN_LOCALHOST_TCP_ENGINE_ID.into(),
@@ -4250,6 +4297,7 @@ mod tests {
         EngineRun {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            manual_review_controls: Vec::new(),
             id: id.into(),
             scan_run_id: "run-1".into(),
             engine_id: format!("engine-{id}"),
@@ -5319,6 +5367,82 @@ mod tests {
         );
         assert!(!run_is_non_security_only(&case.scan_runs[0]));
         assert!(!report.state.explanation.contains("only inventory"));
+    }
+
+    #[test]
+    fn maester_manual_review_is_visible_without_becoming_a_finding_or_new_incomplete_state() {
+        let mut task = catalog_task("maester", EngineRunStatus::Completed);
+        task.engine_id = "maester".into();
+        task.progress_percent = 100;
+        task.phase = "completed".into();
+        task.exit_code = Some(0);
+        task.error_message = None;
+        let baseline_case = case_with_catalog_tasks(vec![task.clone()], true);
+        let baseline = build_beginner_master_report(&baseline_case, "run-1").unwrap();
+        task.manual_review_controls = vec![ManualReviewControl {
+            asset_id: "asset-1".into(),
+            rule_id: "MT.1003".into(),
+            title: "Legacy multifactor authentication methods need review".into(),
+            detail: Some(
+                "Confirm whether the remaining legacy methods are assigned to active users.".into(),
+            ),
+        }];
+        let case = case_with_catalog_tasks(vec![task], true);
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(
+            report.state.summary, baseline.state.summary,
+            "manual review must not change the run's existing completion state"
+        );
+        assert_eq!(report.findings.len(), 0);
+        assert_eq!(report.actual.checks.len(), 1);
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::TestedComplete
+        );
+        assert_eq!(report.coverage_counts.tested_complete, 1);
+        assert_eq!(report.coverage_counts.manual_review, 1);
+        assert_eq!(
+            report.coverage_counts.not_tested,
+            baseline.coverage_counts.not_tested
+        );
+        assert_eq!(
+            report.coverage_counts.failed,
+            baseline.coverage_counts.failed
+        );
+        assert_eq!(
+            report.coverage_counts.unavailable,
+            baseline.coverage_counts.unavailable
+        );
+        assert_eq!(
+            report.coverage_gaps.len(),
+            baseline.coverage_gaps.len() + 1,
+            "the review item must add only its own visible row"
+        );
+        let gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.kind == CoverageGapKind::ManualReview)
+            .expect("manual-review control disappeared from the beginner report");
+        assert_eq!(gap.target_asset_ids, ["asset-1"]);
+        assert!(gap.dimension.contains("MT.1003"));
+        assert!(gap.reason.contains("remaining legacy methods"));
+        assert_eq!(gap.next_action_code, NextActionCode::ReviewManualControl);
+        assert!(
+            report
+                .next_steps
+                .iter()
+                .any(|step| step.task_id.as_deref() == Some("maester")
+                    && step.action.contains("record a human decision"))
+        );
+
+        let reopened: AssessmentCase =
+            serde_json::from_slice(&serde_json::to_vec(&case).unwrap()).unwrap();
+        assert_eq!(
+            build_beginner_master_report(&reopened, "run-1").unwrap(),
+            report,
+            "reopening the case must preserve the manual-review coverage item"
+        );
     }
 
     #[test]

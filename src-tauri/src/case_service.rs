@@ -599,6 +599,8 @@ pub struct DurableExecutionReport {
     pub unattributed: Vec<crate::domain::UnattributedResults>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unevaluated_targets: Vec<crate::domain::UnevaluatedTarget>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub manual_review_controls: Vec<crate::domain::ManualReviewControl>,
 }
 
 impl From<&ExecutionReport> for DurableExecutionReport {
@@ -614,6 +616,7 @@ impl From<&ExecutionReport> for DurableExecutionReport {
             warnings: report.warnings.clone(),
             unattributed: report.unattributed.clone(),
             unevaluated_targets: report.unevaluated_targets.clone(),
+            manual_review_controls: report.manual_review_controls.clone(),
         }
     }
 }
@@ -4193,6 +4196,7 @@ impl<'a> CaseService<'a> {
                         .collect(),
                     unattributed: Vec::new(),
                     unevaluated_targets: Vec::new(),
+                    manual_review_controls: Vec::new(),
                     raw_artifact_ids: Vec::new(),
                     error_code: None,
                     error_message: None,
@@ -4706,6 +4710,7 @@ impl<'a> CaseService<'a> {
                 warnings: Vec::new(),
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                manual_review_controls: Vec::new(),
             };
             let derived = derive_naabu_attempt_result_from_captured_report(
                 &self.artifact_root,
@@ -6445,6 +6450,7 @@ impl<'a> CaseService<'a> {
         if !matches!(report.checkpoint.stage, ExecutionStage::Planned) {
             engine_run.unattributed = report.unattributed.clone();
             engine_run.unevaluated_targets = report.unevaluated_targets.clone();
+            engine_run.manual_review_controls = report.manual_review_controls.clone();
         }
         if engine_run.started_at.is_none()
             && !matches!(report.checkpoint.stage, ExecutionStage::Planned)
@@ -9344,6 +9350,7 @@ fn not_executed_run(
             .collect(),
         unattributed: Vec::new(),
         unevaluated_targets: Vec::new(),
+        manual_review_controls: Vec::new(),
         raw_artifact_ids: Vec::new(),
         error_code: Some(reason_code.into()),
         error_message: Some(explanation.into()),
@@ -9896,9 +9903,11 @@ fn validate_report_payload(
     engine_run: &EngineRun,
     report: &DurableExecutionReport,
 ) -> AppResult<()> {
-    if checkpoint_has_no_contact_resources(&report.checkpoint) && !report.observations.is_empty() {
+    if checkpoint_has_no_contact_resources(&report.checkpoint)
+        && (!report.observations.is_empty() || !report.manual_review_controls.is_empty())
+    {
         return Err(AppError::NotAuthorized(
-            "a resource-free execution report cannot contain inventory observations".into(),
+            "a resource-free execution report cannot contain inventory observations or manual-review controls".into(),
         ));
     }
     if report.warnings.len() > 256 {
@@ -9984,6 +9993,11 @@ fn validate_report_payload(
         &report.raw_artifacts,
         &report.observations,
     )?;
+    validate_manual_review_controls(
+        engine_run,
+        &report.checkpoint.engine_id,
+        &report.manual_review_controls,
+    )?;
     let allowed_assets = engine_run.asset_ids.iter().collect::<BTreeSet<_>>();
     for finding in &report.findings {
         if finding.case_id != case.id
@@ -10029,6 +10043,63 @@ fn validate_report_payload(
             {
                 return Err(AppError::NotAuthorized(
                     "finding evidence provenance does not match the execution report".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_manual_review_controls(
+    engine_run: &EngineRun,
+    engine_id: &str,
+    controls: &[crate::domain::ManualReviewControl],
+) -> AppResult<()> {
+    const MAX_MANUAL_REVIEW_CONTROLS: usize = 10_000;
+    if controls.len() > MAX_MANUAL_REVIEW_CONTROLS {
+        return Err(AppError::Runtime(
+            "adapter output contains too many manual-review controls".into(),
+        ));
+    }
+    if !controls.is_empty() && engine_id != "maester" {
+        return Err(AppError::NotAuthorized(
+            "only a Maester execution report can contain manual-review controls".into(),
+        ));
+    }
+
+    let allowed_assets = engine_run.asset_ids.iter().collect::<BTreeSet<_>>();
+    let mut unique = BTreeSet::new();
+    for control in controls {
+        if !allowed_assets.contains(&control.asset_id)
+            || control.rule_id.trim().is_empty()
+            || control.title.trim().is_empty()
+        {
+            return Err(AppError::NotAuthorized(
+                "manual-review control is outside the planned assets or has no identity".into(),
+            ));
+        }
+        if !unique.insert(control) {
+            return Err(AppError::Runtime(
+                "execution report contains duplicate manual-review controls".into(),
+            ));
+        }
+        validate_report_text("manual-review rule ID", &control.rule_id, 512)?;
+        validate_report_text("manual-review title", &control.title, 512)?;
+        if control.rule_id.chars().any(char::is_control)
+            || control.title.chars().any(char::is_control)
+        {
+            return Err(AppError::Runtime(
+                "manual-review control identity contains control characters".into(),
+            ));
+        }
+        if let Some(detail) = &control.detail {
+            if detail.trim().is_empty() {
+                return Err(AppError::Runtime("manual-review detail is empty".into()));
+            }
+            validate_report_text("manual-review detail", detail, 4_096)?;
+            if detail.chars().any(char::is_control) {
+                return Err(AppError::Runtime(
+                    "manual-review detail contains control characters".into(),
                 ));
             }
         }
@@ -13446,6 +13517,7 @@ impl HtmlReportCatalog {
             CoverageGapKind::Unattributed => {
                 self.text("Not linked to your asset", "未連結到你的資產")
             }
+            CoverageGapKind::ManualReview => self.text("Manual review", "人工檢視"),
         }
     }
 
@@ -13657,6 +13729,12 @@ fn html_gap_next_action(gap: &CoverageGap, catalog: HtmlReportCatalog) -> String
                 "採用結果前，先檢視涵蓋缺口。",
             )
             .to_owned(),
+        NextActionCode::ReviewManualControl => catalog
+            .text(
+                "Review the upstream detail and record a human decision for this control.",
+                "請檢視上游詳細資料，並為這項控制措施記錄人工判定。",
+            )
+            .to_owned(),
         NextActionCode::PreserveVisibleLimitation => catalog
             .text(
                 "Keep this limitation visible when sharing the report.",
@@ -13790,6 +13868,10 @@ fn html_asset_result_section(
                 .iter()
                 .copied()
                 .find(|gap| gap.kind != CoverageGapKind::Excluded),
+            HtmlAssetResultStatus::NoProblemsInCompletedChecks => gaps
+                .iter()
+                .copied()
+                .find(|gap| gap.kind == CoverageGapKind::ManualReview),
             _ => None,
         };
         let (class_name, status_label, summary, mut action) = match status {
@@ -13834,12 +13916,17 @@ fn html_asset_result_section(
                         catalog.format_number(completed_security_checks)
                     ),
                 },
-                catalog
-                    .text(
-                        "Review the stated limits before relying on this result.",
-                        "採用這項結果前，先確認明列的測試限制。",
-                    )
-                    .to_owned(),
+                preferred_gap.map_or_else(
+                    || {
+                        catalog
+                            .text(
+                                "Review the stated limits before relying on this result.",
+                                "採用這項結果前，先確認明列的測試限制。",
+                            )
+                            .to_owned()
+                    },
+                    |gap| html_gap_next_action(gap, catalog),
+                ),
             ),
             HtmlAssetResultStatus::IncompleteOrFailed => (
                 "incomplete-failed",
@@ -14940,6 +15027,16 @@ fn html_report_bytes(
         ));
     }
     let report_counts = &report.coverage_counts;
+    let coverage_items_label = if report_counts.manual_review > 0 {
+        catalog.text("Coverage limits and manual review", "涵蓋限制與人工檢視")
+    } else {
+        catalog.text("Coverage gaps", "涵蓋缺口")
+    };
+    let coverage_items_title = if report_counts.manual_review > 0 {
+        catalog.text("What needs attention", "需要留意的內容")
+    } else {
+        catalog.text("What was not tested", "未測試的內容")
+    };
 
     let actual_window = catalog.format_time_range(
         &display_time(report.actual.observed_from.as_ref()),
@@ -15704,7 +15801,7 @@ fn html_report_bytes(
         catalog.format_number(report_counts.timed_out),
         catalog.text("Not tested", "未測試"),
         catalog.format_number(report_counts.not_tested),
-        catalog.text("Coverage gaps", "涵蓋缺口"),
+        coverage_items_label,
         catalog.format_number(report.coverage_gaps.len()),
         catalog.text("Problems found", "發現的問題"),
         catalog.format_number(problem_count),
@@ -15740,7 +15837,7 @@ fn html_report_bytes(
         html_escape(&actual_window),
         tested_items,
         network_scope_section,
-        catalog.text("What was not tested", "未測試的內容"),
+        coverage_items_title,
         gap_items,
         catalog.text("What to do next", "下一步怎麼做"),
         next_step_items,
@@ -16882,6 +16979,7 @@ mod tests {
         DurableExecutionReport {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            manual_review_controls: Vec::new(),
             checkpoint,
             runtime_preflight: Some(RuntimePreflight {
                 provider: crate::container_runtime::RuntimeProvider::Podman,
@@ -18019,6 +18117,7 @@ mod tests {
         let report = DurableExecutionReport {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            manual_review_controls: Vec::new(),
             checkpoint,
             runtime_preflight: Some(RuntimePreflight {
                 provider: crate::container_runtime::RuntimeProvider::Podman,
@@ -19242,6 +19341,7 @@ mod tests {
                 Ok(crate::adapter::AdapterOutput {
                     unattributed: Vec::new(),
                     unevaluated_targets: Vec::new(),
+                    manual_review_controls: Vec::new(),
                     findings: Vec::new(),
                     observations: vec![crate::domain::InventoryObservation {
                         id: "progressive-naabu-service".into(),
@@ -20466,6 +20566,7 @@ mod tests {
                 &DurableExecutionReport {
                     unattributed: Vec::new(),
                     unevaluated_targets: Vec::new(),
+                    manual_review_controls: Vec::new(),
                     checkpoint: cancelled_checkpoint,
                     runtime_preflight: None,
                     cleanup: None,
@@ -20564,6 +20665,7 @@ mod tests {
                     observations: Vec::new(),
                     warnings: vec!["empty input reached the adapter".into()],
                     unevaluated_targets: Vec::new(),
+                    manual_review_controls: Vec::new(),
                     complete: false,
                 })
             }
@@ -20730,6 +20832,7 @@ mod tests {
                     observations: Vec::new(),
                     warnings: vec!["tampered empty input reached the adapter".into()],
                     unevaluated_targets: Vec::new(),
+                    manual_review_controls: Vec::new(),
                     complete: true,
                 })
             }
@@ -20960,6 +21063,7 @@ mod tests {
                 output: crate::adapter::AdapterOutput {
                     unattributed: Vec::new(),
                     unevaluated_targets: Vec::new(),
+                    manual_review_controls: Vec::new(),
                     findings: Vec::new(),
                     observations: vec![retained_observation, added_observation],
                     warnings: adapted.scan_runs[0].engine_runs[0].warnings.clone(),
@@ -22084,6 +22188,7 @@ mod tests {
         DurableExecutionReport {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            manual_review_controls: Vec::new(),
             checkpoint: ExecutionCheckpoint {
                 case_id: case_id.into(),
                 scan_run_id: execution.scan_run_id.clone(),
@@ -23779,6 +23884,7 @@ mod tests {
             let report = DurableExecutionReport {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                manual_review_controls: Vec::new(),
                 checkpoint: ExecutionCheckpoint {
                     case_id: case_id.clone(),
                     scan_run_id: execution.scan_run_id.clone(),
@@ -23891,6 +23997,7 @@ mod tests {
         let regressive = DurableExecutionReport {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            manual_review_controls: Vec::new(),
             checkpoint: ExecutionCheckpoint {
                 case_id: case_id.clone(),
                 scan_run_id: execution.scan_run_id.clone(),
@@ -24007,6 +24114,7 @@ mod tests {
             let report = DurableExecutionReport {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                manual_review_controls: Vec::new(),
                 checkpoint: claimed,
                 runtime_preflight: Some(RuntimePreflight {
                     provider: crate::container_runtime::RuntimeProvider::Podman,
@@ -24103,6 +24211,7 @@ mod tests {
         let report = DurableExecutionReport {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            manual_review_controls: Vec::new(),
             checkpoint: completed,
             runtime_preflight: None,
             cleanup: None,
@@ -28691,6 +28800,7 @@ mod tests {
         let stale_report = DurableExecutionReport {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            manual_review_controls: Vec::new(),
             checkpoint: stale_checkpoint,
             runtime_preflight: None,
             cleanup: None,
@@ -34407,6 +34517,7 @@ mod tests {
             engine_runs: vec![EngineRun {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                manual_review_controls: Vec::new(),
                 id: "engine-run-1".into(),
                 scan_run_id: "scan-1".into(),
                 engine_id: "cloudquery".into(),
@@ -34539,6 +34650,7 @@ mod tests {
         let report = DurableExecutionReport {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            manual_review_controls: Vec::new(),
             checkpoint: ExecutionCheckpoint {
                 case_id: case.id.clone(),
                 scan_run_id: "scan-1".into(),
@@ -34589,10 +34701,17 @@ mod tests {
                 .contains("unevaluated_targets"),
             "an empty coverage outcome must not change an existing report's byte commitment"
         );
+        assert!(
+            !serde_json::to_string(&pre_inventory_report)
+                .unwrap()
+                .contains("manual_review_controls"),
+            "an empty manual-review outcome must not change an older report's byte commitment"
+        );
         let decoded_pre_inventory: DurableExecutionReport =
             serde_json::from_slice(&pre_inventory_bytes).unwrap();
         assert!(decoded_pre_inventory.observations.is_empty());
         assert!(decoded_pre_inventory.unevaluated_targets.is_empty());
+        assert!(decoded_pre_inventory.manual_review_controls.is_empty());
         assert_eq!(
             serde_json::to_vec(&decoded_pre_inventory).unwrap(),
             pre_inventory_bytes,
@@ -34604,10 +34723,65 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("unevaluated_targets");
+        legacy_engine_json
+            .as_object_mut()
+            .unwrap()
+            .remove("manual_review_controls");
         let legacy_engine: EngineRun = serde_json::from_value(legacy_engine_json).unwrap();
         assert!(legacy_engine.unevaluated_targets.is_empty());
+        assert!(legacy_engine.manual_review_controls.is_empty());
         validate_report_payload(&case, prepared_engine, &report)
             .expect("bounded observation with exact artifact provenance is valid");
+
+        let manual_control = crate::domain::ManualReviewControl {
+            asset_id: "asset-1".into(),
+            rule_id: "MT.1003".into(),
+            title: "Legacy methods need review".into(),
+            detail: Some("Compare the tenant configuration with its exception record.".into()),
+        };
+        let mut wrong_engine_review = report.clone();
+        wrong_engine_review.manual_review_controls = vec![manual_control.clone()];
+        assert!(matches!(
+            validate_report_payload(&case, prepared_engine, &wrong_engine_review),
+            Err(AppError::NotAuthorized(_))
+        ));
+
+        let mut manual_case = case.clone();
+        manual_case.scan_runs[0].engine_runs[0].engine_id = "maester".into();
+        let mut manual_report = report.clone();
+        manual_report.checkpoint.engine_id = "maester".into();
+        manual_report.findings.clear();
+        manual_report.observations.clear();
+        manual_report.manual_review_controls = vec![manual_control.clone()];
+        let manual_engine = &manual_case.scan_runs[0].engine_runs[0];
+        validate_report_payload(&manual_case, manual_engine, &manual_report)
+            .expect("a bounded Maester manual-review control is valid");
+
+        let mut duplicate_review = manual_report.clone();
+        duplicate_review
+            .manual_review_controls
+            .push(manual_control.clone());
+        assert!(matches!(
+            validate_report_payload(&manual_case, manual_engine, &duplicate_review),
+            Err(AppError::Runtime(_))
+        ));
+        let mut oversized_review = manual_report.clone();
+        oversized_review.manual_review_controls[0].detail = Some("x".repeat(4_097));
+        assert!(matches!(
+            validate_report_payload(&manual_case, manual_engine, &oversized_review),
+            Err(AppError::Runtime(_))
+        ));
+
+        let manual_projection_service = fixture.service();
+        assert!(
+            manual_projection_service
+                .apply_execution_report_to_case(&mut manual_case, &manual_report)
+                .unwrap()
+        );
+        assert_eq!(
+            manual_case.scan_runs[0].engine_runs[0].manual_review_controls,
+            [manual_control]
+        );
 
         let mut coverage_case = case.clone();
         let mut coverage_report = report.clone();
@@ -34799,6 +34973,7 @@ mod tests {
         let completed_engine = |run_id: &str| EngineRun {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            manual_review_controls: Vec::new(),
             id: format!("engine-{run_id}"),
             scan_run_id: run_id.into(),
             engine_id: "cloudquery".into(),

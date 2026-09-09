@@ -35,6 +35,7 @@ const counts = (
   truncated: 0,
   unavailable: 0,
   unattributed: 0,
+  manualReview: 0,
   ...overrides,
 });
 
@@ -2248,6 +2249,45 @@ const unattributedGap = {
     "Add 123456789012 as an aws identifier on the asset you authorized, then scan again.",
   unattributed: { provider: "aws", identifier: "123456789012", discardedResults: 42 },
 };
+
+test("a completed Maester review item is visible without being labelled untested", () => {
+  const base = report("complete");
+  const manualReviewGap = {
+    kind: "manual_review" as const,
+    taskId: "task-maester",
+    targetAssetIds: ["asset-1"],
+    dimension: "maester: manual review for MT.1003 — Legacy methods need review",
+    reason:
+      "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding. Upstream detail: Confirm the tenant exception.",
+    nextActionCode: "review_manual_control" as const,
+    nextAction: "Review the upstream detail and record a human decision for this control.",
+  };
+  const { container } = renderReport(report("complete", {
+    actual: {
+      ...base.actual,
+      checks: [{
+        taskId: "task-maester",
+        checkId: "maester",
+        resultKind: "security_check",
+        targetAssetIds: ["asset-1"],
+        status: "tested_complete",
+        testedDimensions: [],
+      }],
+    },
+    coverageGaps: [manualReviewGap],
+    coverageCounts: counts({ testedComplete: 1, manualReview: 1 }),
+  }));
+  const rendered = container.textContent ?? "";
+
+  expect(rendered).toContain("Coverage limits and manual review");
+  expect(rendered).toContain("What needs attention");
+  expect(rendered).toContain("Manual review");
+  expect(rendered).toContain("Confirm the tenant exception");
+  expect(rendered).not.toContain("What was not tested");
+  const assetRow = container.querySelector<HTMLElement>(".asset-result-row");
+  expect(assetRow?.dataset.assetResult).toBe("no_problems_completed");
+  expect(assetRow?.textContent).toContain("record a human decision");
+});
 
 test("an empty findings list caused by a missing identifier names that identifier", () => {
   const { container } = renderReport(

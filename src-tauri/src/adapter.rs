@@ -122,6 +122,9 @@ pub struct AdapterOutput {
     /// Authorized targets the engine could not fully evaluate. This is
     /// coverage data, never a finding.
     pub unevaluated_targets: Vec<crate::domain::UnevaluatedTarget>,
+    /// Controls the engine evaluated but left for human review. This is
+    /// coverage data, never a finding or pass.
+    pub manual_review_controls: Vec<crate::domain::ManualReviewControl>,
     /// False when any captured evidence could not be fully normalized. Valid
     /// findings remain usable, but the engine run must not claim completion.
     pub complete: bool,
@@ -135,6 +138,7 @@ impl Default for AdapterOutput {
             warnings: Vec::new(),
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            manual_review_controls: Vec::new(),
             complete: true,
         }
     }
@@ -373,6 +377,53 @@ pub fn validate_adapter_output(
                     finding.fingerprint
                 )));
             }
+        }
+    }
+
+    if output.manual_review_controls.len() > 10_000 {
+        return Err(AppError::Runtime(
+            "adapter produced too many manual-review controls".into(),
+        ));
+    }
+    if !output.manual_review_controls.is_empty() && input.manifest.id != "maester" {
+        return Err(AppError::Runtime(
+            "only the Maester adapter may emit manual-review controls".into(),
+        ));
+    }
+    let mut manual_review_controls = BTreeSet::new();
+    for control in &output.manual_review_controls {
+        if !allowed_assets.contains(control.asset_id.as_str()) {
+            return Err(AppError::Runtime(format!(
+                "manual-review control {} references an asset outside the authorized run",
+                control.rule_id
+            )));
+        }
+        if !manual_review_controls.insert(control) {
+            return Err(AppError::Runtime(
+                "adapter manual-review controls must be unique".into(),
+            ));
+        }
+        for (label, value, limit) in [
+            ("rule ID", control.rule_id.as_str(), 512),
+            ("title", control.title.as_str(), 512),
+        ] {
+            if value.trim().is_empty()
+                || value.chars().count() > limit
+                || value.chars().any(char::is_control)
+            {
+                return Err(AppError::Runtime(format!(
+                    "manual-review control has an invalid {label}"
+                )));
+            }
+        }
+        if control.detail.as_deref().is_some_and(|detail| {
+            detail.trim().is_empty()
+                || detail.chars().count() > 4_096
+                || detail.chars().any(char::is_control)
+        }) {
+            return Err(AppError::Runtime(
+                "manual-review control has invalid upstream detail".into(),
+            ));
         }
     }
 
@@ -728,6 +779,47 @@ mod tests {
     }
 
     #[test]
+    fn manual_review_controls_are_reserved_for_bounded_maester_output() {
+        let manifest = manifest();
+        let artifact = artifact();
+        let adapter = TestAdapter {
+            output: AdapterOutput {
+                unattributed: Vec::new(),
+                unevaluated_targets: Vec::new(),
+                manual_review_controls: vec![crate::domain::ManualReviewControl {
+                    asset_id: "asset-1".into(),
+                    rule_id: "MT.1003".into(),
+                    title: "Needs review".into(),
+                    detail: Some("Check the tenant exception.".into()),
+                }],
+                findings: Vec::new(),
+                observations: Vec::new(),
+                warnings: Vec::new(),
+                complete: true,
+            },
+        };
+        let artifacts = vec![artifact];
+        let assets = vec!["asset-1".into()];
+        let asset_identifier_map = AdapterAssetIdentifierMap::default();
+        let input = AdapterInput {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
+            asset_ids: &assets,
+            asset_identifier_map: &asset_identifier_map,
+            artifact_root: Path::new("/tmp"),
+            raw_artifacts: &artifacts,
+        };
+
+        let error = validate_adapter_output(&input, &adapter, &adapter.output)
+            .expect_err("a non-Maester adapter must not invent manual-review controls");
+        assert!(error.to_string().contains("only the Maester adapter"));
+    }
+
+    #[test]
     fn inventory_observations_must_be_bounded_control_clean_and_run_bound() {
         let manifest = manifest();
         let artifact = artifact();
@@ -744,6 +836,7 @@ mod tests {
             output: AdapterOutput {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                manual_review_controls: Vec::new(),
                 findings: Vec::new(),
                 observations: vec![bad_observation],
                 warnings: Vec::new(),
@@ -781,6 +874,7 @@ mod tests {
             output: AdapterOutput {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                manual_review_controls: Vec::new(),
                 findings: vec![bad_finding],
                 observations: Vec::new(),
                 warnings: vec![],
@@ -824,6 +918,7 @@ mod tests {
             output: AdapterOutput {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                manual_review_controls: Vec::new(),
                 findings: vec![bad_finding],
                 observations: Vec::new(),
                 warnings: vec![],
@@ -881,6 +976,7 @@ mod tests {
             output: AdapterOutput {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                manual_review_controls: Vec::new(),
                 findings: vec![bad_finding],
                 observations: Vec::new(),
                 warnings: vec![],
@@ -922,6 +1018,7 @@ mod tests {
             output: AdapterOutput {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                manual_review_controls: Vec::new(),
                 findings: vec![bad_finding],
                 observations: Vec::new(),
                 warnings: vec![],

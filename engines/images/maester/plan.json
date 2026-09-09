@@ -111,7 +111,7 @@
     "launcher_sha256": "sha256:9db814b18999c58a9ebe2c62aa5e7fc33606e2f96547cb2141b4d1cbb76b9222",
     "script": {
       "path": "engines/images/maester/run-maester.ps1",
-      "sha256": "sha256:7c4d42f9af833c738d6ca221c38b1ecc3d24d3de887609035e39d6b5c6512626"
+      "sha256": "sha256:031dd580d06d1beef4f916877ac7d90a4d3aa180a31925785c19d74ef0745511"
     }
   },
   "managed_runtime": {

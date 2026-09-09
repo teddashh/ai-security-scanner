@@ -419,6 +419,7 @@ fn engine_run(run_id: &str, asset_id: &str, status: EngineRunStatus) -> EngineRu
     EngineRun {
         unattributed: Vec::new(),
         unevaluated_targets: Vec::new(),
+        manual_review_controls: Vec::new(),
         id: format!("engine-{asset_id}"),
         scan_run_id: run_id.into(),
         engine_id: "inventory".into(),

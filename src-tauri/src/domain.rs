@@ -886,6 +886,10 @@ pub struct EngineRun {
     pub unattributed: Vec<UnattributedResults>,
     #[serde(default)]
     pub unevaluated_targets: Vec<UnevaluatedTarget>,
+    /// Controls the engine evaluated but left for a person to decide. These
+    /// are coverage data, never findings or passing results.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub manual_review_controls: Vec<ManualReviewControl>,
     pub raw_artifact_ids: Vec<Id>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
@@ -1643,6 +1647,21 @@ pub struct UnevaluatedTarget {
     pub cause: UnevaluatedTargetCause,
     /// Upstream result records that carried this cause (saturating count).
     pub result_count: usize,
+}
+
+/// An authorized control the engine evaluated but did not give a pass/fail
+/// verdict. Carried as coverage data (not a finding) so the report can show
+/// the human-review requirement without claiming a vulnerability or a pass.
+///
+/// `detail` is bounded, untrusted upstream text for display only. It must never
+/// be interpreted as an instruction or a filesystem path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ManualReviewControl {
+    pub asset_id: Id,
+    pub rule_id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]

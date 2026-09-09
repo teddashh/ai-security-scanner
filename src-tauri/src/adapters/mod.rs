@@ -10,8 +10,8 @@ use crate::adapter::{AdapterInput, AdapterOutput, AdapterRegistry, EngineAdapter
 use crate::domain::{
     AwsIamAttachedTo, AwsIamPolicyFindingDetails, AwsIamPolicySource, Confidence,
     ConfidenceBasisCode, Evidence, EvidenceKind, Finding, FindingFamily, FindingStatus,
-    InventoryObservation, InventoryObservationKind, RawArtifact, ScannerFindingDetails, Severity,
-    SeverityBasisCode, UnevaluatedTarget, UnevaluatedTargetCause,
+    InventoryObservation, InventoryObservationKind, ManualReviewControl, RawArtifact,
+    ScannerFindingDetails, Severity, SeverityBasisCode, UnevaluatedTarget, UnevaluatedTargetCause,
 };
 use crate::error::{AppError, AppResult};
 use quick_xml::events::{BytesRef, BytesStart, Event};
@@ -67,6 +67,7 @@ const MAX_WARNINGS: usize = 256;
 const MAX_UNMATCHED_IDENTIFIERS: usize = 32;
 const MAX_SHORT_TEXT: usize = 512;
 const MAX_LONG_TEXT: usize = 2_048;
+const MAX_MANUAL_REVIEW_DETAIL: usize = 4_096;
 const MAX_XML_DEPTH: usize = 64;
 const MAX_XML_EVENTS: usize = 200_000;
 const MAX_XML_ATTRIBUTES: usize = 256;
@@ -475,6 +476,20 @@ struct GreenboneExtraction {
 }
 
 #[derive(Debug)]
+struct ManualReviewCandidate {
+    rule_id: String,
+    title: String,
+    detail: Option<String>,
+    asset_hint: Option<String>,
+}
+
+#[derive(Debug)]
+struct M365Extraction {
+    records: Vec<SourceRecord>,
+    manual_review_candidates: Vec<ManualReviewCandidate>,
+}
+
+#[derive(Debug)]
 enum ParsedArtifact {
     Json(Value),
     JsonLines(Vec<(usize, Value)>),
@@ -789,6 +804,42 @@ fn normalize_artifacts(
                 output.complete = false;
             }
             extraction.records
+        } else if adapter.profile == Profile::Maester {
+            let extraction = extract_maester(&parsed, &mut output.warnings);
+            for candidate in extraction.manual_review_candidates {
+                if processed_records >= MAX_RECORDS {
+                    output.complete = false;
+                    push_warning(
+                        &mut output.warnings,
+                        "adapter record limit reached; remaining raw records were retained but not normalized",
+                    );
+                    break;
+                }
+                processed_records += 1;
+                let warnings_before_resolution = output.warnings.len();
+                let asset_id = resolve_asset_coordinates(
+                    &candidate.rule_id,
+                    candidate.asset_hint.as_deref(),
+                    None,
+                    input.asset_ids,
+                    input.asset_identifier_map,
+                    &mut output.warnings,
+                    &mut unmatched_identifiers,
+                );
+                if output.warnings.len() > warnings_before_resolution {
+                    output.complete = false;
+                }
+                let Some(asset_id) = asset_id else {
+                    continue;
+                };
+                output.manual_review_controls.push(ManualReviewControl {
+                    asset_id,
+                    rule_id: candidate.rule_id,
+                    title: candidate.title,
+                    detail: candidate.detail,
+                });
+            }
+            extraction.records
         } else {
             extract_records(adapter.profile, &parsed, &mut output.warnings)
         };
@@ -897,6 +948,8 @@ fn normalize_artifacts(
         }
     }
     output.unevaluated_targets = aggregated_unevaluated;
+    output.manual_review_controls.sort();
+    output.manual_review_controls.dedup();
 
     if relevant_count > MAX_ARTIFACTS {
         output.complete = false;
@@ -2099,7 +2152,7 @@ fn extract_records(
         Profile::ScoutSuite => extract_scoutsuite(parsed, warnings),
         Profile::Cloudsplaining => extract_cloudsplaining(parsed, warnings),
         Profile::ScubaGear => extract_scubagear(parsed, warnings),
-        Profile::Maester => extract_maester(parsed, warnings),
+        Profile::Maester => extract_maester(parsed, warnings).records,
         Profile::Nuclei => extract_nuclei(parsed, warnings),
         Profile::Greenbone => unreachable!("Greenbone extraction needs authorized asset ids"),
         Profile::Semgrep => extract_semgrep(parsed, warnings),
@@ -3099,9 +3152,10 @@ fn extract_scubagear(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
         &["SourceCriticality", "Criticality"],
         "source-criticality",
     )
+    .records
 }
 
-fn extract_maester(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
+fn extract_maester(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> M365Extraction {
     extract_m365(
         parsed,
         warnings,
@@ -3305,7 +3359,8 @@ fn extract_m365(
     status_keys: &[&str],
     source_rating_keys: &[&str],
     source_rating_tag: &str,
-) -> Vec<SourceRecord> {
+) -> M365Extraction {
+    let capture_investigate = engine == "Maester";
     let mut candidates = Vec::new();
     // Whether the candidates came from a wrapper's declared `Results` list. Every
     // member of such a list is a control the wrapper says it normalized, so one
@@ -3329,7 +3384,10 @@ fn extract_m365(
                             "{engine} adapter was given a document declaring engine {declared}; nothing was normalized from it"
                         ),
                     );
-                    return Vec::new();
+                    return M365Extraction {
+                        records: Vec::new(),
+                        manual_review_candidates: Vec::new(),
+                    };
                 }
                 // Checking the envelope only when it happens to be present would
                 // let a malformed or future-schema document skip every check
@@ -3348,7 +3406,10 @@ fn extract_m365(
                     warnings,
                     format!("{engine} document declared no Results list and was not normalized"),
                 );
-                return Vec::new();
+                return M365Extraction {
+                    records: Vec::new(),
+                    manual_review_candidates: Vec::new(),
+                };
             };
             // The wrapper counts what it wrote. A disagreement means results were
             // lost between writing and reading, which no rule-level check sees.
@@ -3382,6 +3443,7 @@ fn extract_m365(
     }
     let mut seen = BTreeSet::new();
     let mut records = Vec::new();
+    let mut manual_review_candidates = Vec::new();
     for (pointer, value) in candidates {
         let Some(object) = value.as_object() else {
             if declared_envelope {
@@ -3405,18 +3467,48 @@ fn extract_m365(
             }
             continue;
         };
-        if !is_failure(&status) {
+        let is_manual_review = capture_investigate && status.eq_ignore_ascii_case("investigate");
+        if !is_manual_review && !is_failure(&status) {
             continue;
         }
         let Some(rule_id) = exact_rule_string_any(object, rule_keys) else {
             push_warning(
                 warnings,
-                format!("{engine} failed result at {pointer} lacked a rule id"),
+                format!("{engine} evaluated result at {pointer} lacked a rule id"),
             );
             continue;
         };
+        let display_rule_id = safe_text(&rule_id, MAX_SHORT_TEXT);
+        if display_rule_id.is_empty() {
+            push_warning(
+                warnings,
+                format!("{engine} evaluated result at {pointer} lacked a usable rule id"),
+            );
+            continue;
+        }
         let dedup = format!("{rule_id}:{pointer}");
         if !seen.insert(dedup) {
+            continue;
+        }
+        if is_manual_review {
+            let detail = object
+                .get("ReviewDetail")
+                .and_then(Value::as_str)
+                .map(|detail| safe_text(detail, MAX_MANUAL_REVIEW_DETAIL))
+                .filter(|detail| !detail.is_empty());
+            let title = string_any(object, &["Name", "Title", "Requirement", "Description"])
+                .map(|title| safe_text(&title, MAX_SHORT_TEXT))
+                .filter(|title| !title.is_empty())
+                .unwrap_or_else(|| format!("{engine} control {display_rule_id}"));
+            manual_review_candidates.push(ManualReviewCandidate {
+                rule_id: display_rule_id,
+                title,
+                detail,
+                asset_hint: string_any(object, &["asset_id", "AssetId"]),
+            });
+            if records.len().saturating_add(manual_review_candidates.len()) >= MAX_RECORDS {
+                break;
+            }
             continue;
         }
         let source_rating = string_any(object, source_rating_keys);
@@ -3453,7 +3545,10 @@ fn extract_m365(
             break;
         }
     }
-    records
+    M365Extraction {
+        records,
+        manual_review_candidates,
+    }
 }
 
 fn extract_nuclei(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
@@ -5127,14 +5222,32 @@ fn resolve_asset(
     warnings: &mut Vec<String>,
     unmatched_identifiers: &mut BTreeMap<(String, String), usize>,
 ) -> Option<String> {
-    if let Some(hint) = &record.asset_hint {
-        if record.asset_provider.is_none() && allowed_assets.iter().any(|asset| asset == hint) {
-            return Some(hint.clone());
+    resolve_asset_coordinates(
+        &record.rule_id,
+        record.asset_hint.as_deref(),
+        record.asset_provider.as_deref(),
+        allowed_assets,
+        asset_identifier_map,
+        warnings,
+        unmatched_identifiers,
+    )
+}
+
+fn resolve_asset_coordinates(
+    rule_id: &str,
+    asset_hint: Option<&str>,
+    asset_provider: Option<&str>,
+    allowed_assets: &[String],
+    asset_identifier_map: &crate::adapter::AdapterAssetIdentifierMap,
+    warnings: &mut Vec<String>,
+    unmatched_identifiers: &mut BTreeMap<(String, String), usize>,
+) -> Option<String> {
+    if let Some(hint) = asset_hint {
+        if asset_provider.is_none() && allowed_assets.iter().any(|asset| asset == hint) {
+            return Some(hint.to_owned());
         }
 
-        if let Some(candidates) =
-            asset_identifier_map.candidates(record.asset_provider.as_deref(), hint)
-        {
+        if let Some(candidates) = asset_identifier_map.candidates(asset_provider, hint) {
             let authorized = candidates
                 .iter()
                 .filter(|candidate| allowed_assets.iter().any(|asset| asset == *candidate))
@@ -5147,7 +5260,7 @@ fn resolve_asset(
                     warnings,
                     format!(
                         "record {} matched an ambiguous native asset identifier and was not normalized",
-                        safe_text(&record.rule_id, 120)
+                        safe_text(rule_id, 120)
                     ),
                 );
                 return None;
@@ -5157,12 +5270,12 @@ fn resolve_asset(
         // A provider-qualified OCSF account is authoritative. Falling back to
         // the only selected asset would silently misattribute a provider or
         // account mismatch.
-        if let Some(provider) = &record.asset_provider {
+        if let Some(provider) = asset_provider {
             push_warning(
                 warnings,
                 format!(
                     "record {} had no exact authorized provider identifier match and was not normalized",
-                    safe_text(&record.rule_id, 120)
+                    safe_text(rule_id, 120)
                 ),
             );
             // Bounded because both halves come from the scanned artifact.
@@ -5187,7 +5300,7 @@ fn resolve_asset(
         warnings,
         format!(
             "record {} could not be mapped unambiguously to an authorized asset and was not normalized",
-            safe_text(&record.rule_id, 120)
+            safe_text(rule_id, 120)
         ),
     );
     None

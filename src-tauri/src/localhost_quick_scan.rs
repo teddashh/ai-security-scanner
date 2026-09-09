@@ -188,6 +188,7 @@ pub fn prepare_localhost_quick_scan(
         warnings: Vec::new(),
         unattributed: Vec::new(),
         unevaluated_targets: Vec::new(),
+        manual_review_controls: Vec::new(),
         raw_artifact_ids: Vec::new(),
         error_code: None,
         error_message: None,

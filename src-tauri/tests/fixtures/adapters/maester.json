@@ -26,12 +26,12 @@
   "Diagnostics": {
     "passes": 1,
     "failures": 1,
-    "investigate": 0,
+    "investigate": 1,
     "errors": 0,
     "skipped": 7,
     "not_run": 0,
-    "total": 2,
-    "normalized_results": 2
+    "total": 3,
+    "normalized_results": 3
   },
   "Results": [
     {
@@ -55,6 +55,18 @@
       "Service": "Microsoft Entra ID",
       "asset_id": "asset-1",
       "HelpUrl": "https://maester.dev/docs/tests/MT.1002"
+    },
+    {
+      "Id": "MT.1003",
+      "Title": "Legacy multifactor authentication methods need review",
+      "Result": "Investigate",
+      "SourceResult": "Investigate",
+      "SourceSeverity": "Medium",
+      "Severity": "medium",
+      "Service": "Microsoft Entra ID",
+      "asset_id": "asset-1",
+      "ReviewDetail": "Confirm whether the remaining legacy methods are assigned to active users.",
+      "HelpUrl": "https://maester.dev/docs/tests/MT.1003"
     }
   ]
 }

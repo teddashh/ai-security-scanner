@@ -1217,6 +1217,107 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
 }
 
 #[test]
+fn maester_fixture_keeps_investigate_as_manual_review_not_a_finding() {
+    let output = normalize_fixture("maester");
+    assert!(
+        output.complete,
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+    assert_eq!(output.findings.len(), 1, "only Failed is a finding");
+    assert_eq!(
+        output.findings[0].evidence[0].source_rule.as_deref(),
+        Some("MT.1001")
+    );
+    assert_eq!(output.manual_review_controls.len(), 1);
+    let review = &output.manual_review_controls[0];
+    assert_eq!(review.asset_id, "asset-1");
+    assert_eq!(review.rule_id, "MT.1003");
+    assert_eq!(
+        review.title,
+        "Legacy multifactor authentication methods need review"
+    );
+    assert_eq!(
+        review.detail.as_deref(),
+        Some("Confirm whether the remaining legacy methods are assigned to active users.")
+    );
+}
+
+#[test]
+fn maester_failed_and_investigate_verdicts_take_separate_typed_paths() {
+    let document = serde_json::json!({
+        "Engine": "Maester",
+        "Diagnostics": {
+            "passes": 0, "failures": 1, "investigate": 1, "errors": 0,
+            "skipped": 0, "not_run": 0, "total": 2, "normalized_results": 2
+        },
+        "Results": [
+            { "Id": "MT.FAIL", "Title": "Confirmed failure", "Result": "Failed",
+              "Severity": "high", "asset_id": "asset-1" },
+            { "Id": "MT.REVIEW", "Title": "Needs a person", "Result": "Investigate",
+              "ReviewDetail": "Compare this setting with the tenant's exception record.",
+              "asset_id": "asset-1" }
+        ]
+    });
+    let bytes = serde_json::to_vec(&document).unwrap();
+    let output = normalize_bytes(
+        "maester",
+        &bytes,
+        "attempt-1/output/maester.json",
+        "application/json",
+        "run-maester-verdicts",
+    );
+
+    assert!(
+        output.complete,
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+    assert_eq!(output.findings.len(), 1);
+    assert_eq!(output.manual_review_controls.len(), 1);
+    assert_eq!(output.manual_review_controls[0].rule_id, "MT.REVIEW");
+    assert!(
+        output
+            .findings
+            .iter()
+            .all(|finding| finding.title != "Needs a person"),
+        "an Investigate verdict was promoted to a vulnerability finding"
+    );
+}
+
+#[test]
+fn maester_investigate_without_review_detail_remains_visible() {
+    let document = serde_json::json!({
+        "Engine": "Maester",
+        "Diagnostics": {
+            "passes": 0, "failures": 0, "investigate": 1, "errors": 0,
+            "skipped": 0, "not_run": 0, "total": 1, "normalized_results": 1
+        },
+        "Results": [
+            { "Id": "MT.REVIEW", "Title": "Needs a person", "Result": "Investigate",
+              "ReviewDetail": "", "asset_id": "asset-1" }
+        ]
+    });
+    let bytes = serde_json::to_vec(&document).unwrap();
+    let output = normalize_bytes(
+        "maester",
+        &bytes,
+        "attempt-1/output/maester.json",
+        "application/json",
+        "run-maester-empty-detail",
+    );
+
+    assert!(
+        output.complete,
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+    assert!(output.findings.is_empty());
+    assert_eq!(output.manual_review_controls.len(), 1);
+    assert_eq!(output.manual_review_controls[0].detail, None);
+}
+
+#[test]
 fn inventory_fixtures_preserve_typed_upstream_facts_and_exact_provenance() {
     for engine_id in ["cloudquery", "steampipe", "syft", "naabu", "httpx"] {
         let output = normalize_fixture(engine_id);

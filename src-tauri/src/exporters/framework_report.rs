@@ -1538,6 +1538,7 @@ mod tests {
             engine_runs: vec![EngineRun {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                manual_review_controls: Vec::new(),
                 id: "engine-run-1".into(),
                 scan_run_id: "run-1".into(),
                 engine_id: "semgrep".into(),

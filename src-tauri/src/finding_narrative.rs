@@ -453,6 +453,13 @@ pub fn coverage_dimension_zh_hant(dimension: &str) -> String {
 pub(crate) fn recognized_coverage_dimension_zh_hant(dimension: &str) -> Option<String> {
     let lower = dimension.to_lowercase();
 
+    if let Some((check, control)) = dimension.split_once(": manual review for ")
+        && !check.is_empty()
+        && !control.is_empty()
+    {
+        return Some(format!("{check}：需人工檢視的控制項 {control}"));
+    }
+
     // Fixed names, in the order the more specific one has to be tried first:
     // "completed planned work units" is a substring of the partly-completed one.
     for (needle, label) in [
@@ -1163,6 +1170,10 @@ fn strip_frame<'a>(value: &'a str, prefix: &str, suffix: &str) -> Option<&'a str
 const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
     // Why the coverage is missing.
     (
+        "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.",
+        "Maester 已評估這項控制措施，但未回傳通過或失敗的判定。這項控制措施需要人工檢視，且不是漏洞問題。",
+    ),
+    (
         "No upstream template result was recorded for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template.",
         "這個網站沒有記錄到任何上游模板結果，因此無法將這次掃描顯示為已檢測。網站可能沒有回應，或上游技術偵測可能沒有選出任何適用的模板。",
     ),
@@ -1572,6 +1583,10 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "請保留目前可用的結果。等這些檢查的內建掃描工具資訊恢復之後，本程式可以在之後的掃描中納入它們。",
     ),
     (
+        "Review the upstream detail and record a human decision for this control.",
+        "請檢視上游詳細資料，並為這項控制措施記錄人工判定。",
+    ),
+    (
         "No action is needed unless this area should be included in a future scan.",
         "除非之後的掃描要納入這個範圍，否則不需要採取任何行動。",
     ),
@@ -1581,6 +1596,13 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
 /// product did not author it.
 pub fn coverage_gap_prose_zh_hant(english: &str) -> Option<String> {
     let trimmed = english.trim();
+    const REVIEW_BASE: &str = "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.";
+    if let Some(detail) = trimmed.strip_prefix(&format!("{REVIEW_BASE} Upstream detail: "))
+        && !detail.is_empty()
+    {
+        let base = lookup(REVIEW_BASE)?;
+        return Some(format!("{base} 上游詳細資料：{detail}"));
+    }
     // Six reasons gain a diagnostic code when the task recorded one. It is the
     // scanner's own code and stays verbatim; only the sentence around it moves.
     if let Some((head, code)) = trimmed
