@@ -64,7 +64,7 @@
     "required": true,
     "strategy": "Invoke the pinned source build through the project-owned launcher against explicit local manifests and embedded framework artifacts.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:d2c267bda951c3dae53e2b88d6e73de7ead2ec947308d2f46ed931a2389d4651"
+    "launcher_sha256": "sha256:e5b1c32b528c339a2be857211a8f7879f677d1a11377fd3893f3f8508d504a66"
   },
   "command": [
     "--engine",

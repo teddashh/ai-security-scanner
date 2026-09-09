@@ -13,11 +13,23 @@ if (!new Set(["all", "semgrep", "trivy", "grype"]).has(requested) || process.arg
   throw new Error("usage: prepare-offline-engine-data.mjs [all|semgrep|trivy|grype]");
 }
 
-const trivy = {
+const trivyDatabase = {
+  repository: "aquasecurity/trivy-db",
   manifest: "sha256:a61aa42edc534843230ca24ef72ef322a2da18d717c3de4b6277f4aac43926a1",
   layer: "sha256:8cf3aaad2dde16ff1529445dab19c2e2a9adc457dbe8d2b02fdbce06b0f638dc",
   size: 114273436,
+  mediaType: "application/vnd.aquasec.trivy.db.layer.v1.tar+gzip",
+  title: "db.tar.gz",
   output: resolve(root, ".engine-cache/offline/trivy/db.tar.gz"),
+};
+const trivyJavaDatabase = {
+  repository: "aquasecurity/trivy-java-db",
+  manifest: "sha256:0a8596207372125cf30d5625d2ecbd05a5656d6b4463a455d85fac2c84778829",
+  layer: "sha256:9077545235eeea3da457263c10255e7d1bf0a748f21f4f9ef5e49135c79a4de4",
+  size: 963142179,
+  mediaType: "application/vnd.aquasec.trivy.javadb.layer.v1.tar+gzip",
+  title: "javadb.tar.gz",
+  output: resolve(root, ".engine-cache/offline/trivy/java-db.tar.gz"),
 };
 const grype = {
   url: "https://grype.anchore.io/databases/v6/vulnerability-db_v6.1.9_2026-08-24T00:17:18Z_1787552533.tar.zst",
@@ -57,8 +69,8 @@ async function fetchChecked(url, output, expectedDigest, expectedSize, headers =
   }
 }
 
-async function prepareTrivy() {
-  const tokenResponse = await fetch("https://ghcr.io/token?service=ghcr.io&scope=repository%3Aaquasecurity%2Ftrivy-db%3Apull", {
+async function prepareTrivyArtifact(artifact) {
+  const tokenResponse = await fetch(`https://ghcr.io/token?service=ghcr.io&scope=repository%3A${encodeURIComponent(artifact.repository)}%3Apull`, {
     signal: AbortSignal.timeout(30_000),
   });
   if (!tokenResponse.ok) throw new Error("could not obtain anonymous Trivy DB pull token");
@@ -70,25 +82,40 @@ async function prepareTrivy() {
     Accept: "application/vnd.oci.image.manifest.v1+json",
     Authorization: `Bearer ${tokenDocument.token}`,
   };
-  const manifestURL = `https://ghcr.io/v2/aquasecurity/trivy-db/manifests/${trivy.manifest}`;
+  const manifestURL = `https://ghcr.io/v2/${artifact.repository}/manifests/${artifact.manifest}`;
   const manifestResponse = await fetch(manifestURL, { headers, signal: AbortSignal.timeout(30_000) });
   if (!manifestResponse.ok) throw new Error("could not read the immutable Trivy DB OCI manifest");
   const returnedDigest = manifestResponse.headers.get("docker-content-digest");
   const manifest = await manifestResponse.json();
-  if (returnedDigest !== trivy.manifest || manifest.schemaVersion !== 2 || manifest.layers?.length !== 1) {
+  if (
+    returnedDigest !== artifact.manifest ||
+    manifest.schemaVersion !== 2 ||
+    manifest.artifactType !== "application/vnd.aquasec.trivy.config.v1+json" ||
+    manifest.layers?.length !== 1
+  ) {
     throw new Error("Trivy DB OCI manifest does not match its release contract");
   }
   const layer = manifest.layers[0];
-  if (layer.digest !== trivy.layer || layer.size !== trivy.size || layer.annotations?.["org.opencontainers.image.title"] !== "db.tar.gz") {
+  if (
+    layer.digest !== artifact.layer ||
+    layer.size !== artifact.size ||
+    layer.mediaType !== artifact.mediaType ||
+    layer.annotations?.["org.opencontainers.image.title"] !== artifact.title
+  ) {
     throw new Error("Trivy DB OCI layer does not match its release contract");
   }
   await fetchChecked(
-    `https://ghcr.io/v2/aquasecurity/trivy-db/blobs/${trivy.layer}`,
-    trivy.output,
-    trivy.layer,
-    trivy.size,
+    `https://ghcr.io/v2/${artifact.repository}/blobs/${artifact.layer}`,
+    artifact.output,
+    artifact.layer,
+    artifact.size,
     { Authorization: `Bearer ${tokenDocument.token}` },
   );
+}
+
+async function prepareTrivy() {
+  await prepareTrivyArtifact(trivyDatabase);
+  await prepareTrivyArtifact(trivyJavaDatabase);
 }
 
 async function prepareSemgrepSubmodules() {

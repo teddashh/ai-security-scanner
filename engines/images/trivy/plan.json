@@ -54,17 +54,37 @@
       ]
     ]
   },
+  "offline_data": {
+    "standard_vulnerability_database": {
+      "repository": "ghcr.io/aquasecurity/trivy-db",
+      "manifest": "sha256:a61aa42edc534843230ca24ef72ef322a2da18d717c3de4b6277f4aac43926a1",
+      "layer": "sha256:8cf3aaad2dde16ff1529445dab19c2e2a9adc457dbe8d2b02fdbce06b0f638dc",
+      "updated_at": "2026-08-24T06:55:32.451220873Z"
+    },
+    "java_index_database": {
+      "repository": "ghcr.io/aquasecurity/trivy-java-db",
+      "manifest": "sha256:0a8596207372125cf30d5625d2ecbd05a5656d6b4463a455d85fac2c84778829",
+      "layer": "sha256:9077545235eeea3da457263c10255e7d1bf0a748f21f4f9ef5e49135c79a4de4",
+      "layer_media_type": "application/vnd.aquasec.trivy.javadb.layer.v1.tar+gzip",
+      "layer_size": 963142179,
+      "updated_at": "2026-09-09T01:11:59.619689416Z",
+      "files": {
+        "trivy-java.db": "sha256:7eaa54234967d2dc36f5c60d51c614bdd40997ddadcd13b3815eb8baeb7dc5cb",
+        "metadata.json": "sha256:856f573fa061b68555b24a06cdd24ab99f9d6a0cd3129a10a620236ffa507d58"
+      }
+    }
+  },
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/trivy/Dockerfile",
-    "sha256": "sha256:52db7ce97d23401fa8db1a43986028be39ad71acbba8571192315985edd01b45",
+    "sha256": "sha256:72f184e243f0213a0e16b3cd7c530fdef7eea5b0b6b7f8bc362e2ef9f320fd9a",
     "reason": null
   },
   "wrapper": {
     "required": true,
-    "strategy": "Invoke the pinned source build with fixed library-package profiles for repository and IaC working trees and an OS-package profile for single-image OCI layouts; the checksum-verified standard database is embedded while the Java database and every update path remain disabled.",
+    "strategy": "Invoke the pinned source build with its non-overlapping filesystem lockfile and rootfs individual-package analyzer profiles for repository and IaC working trees, plus an OS-package profile for single-image OCI layouts; checksum-verified standard vulnerability and Java index databases are embedded while every update path remains disabled.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:d2c267bda951c3dae53e2b88d6e73de7ead2ec947308d2f46ed931a2389d4651"
+    "launcher_sha256": "sha256:e5b1c32b528c339a2be857211a8f7879f677d1a11377fd3893f3f8508d504a66"
   },
   "analysis_profile": {
     "scanner": "vulnerability",
@@ -79,17 +99,17 @@
     },
     "included": [
       "Recognized language-package manifests in repository and IaC working trees, including supported Java manifests such as pom.xml",
+      "Individual package archives and binaries in repository and IaC working trees supported by Trivy's upstream rootfs analyzer profile, including JARs identified with the embedded Java index database",
       "Recognized operating-system packages in validated single-image OCI layouts"
     ],
     "excluded": [
-      "Dependencies discoverable only from JAR archive contents",
       "Operating-system packages in repository and IaC working trees",
       "Language packages in single-image OCI layouts",
       "IaC misconfiguration",
       "Secrets",
       "Licenses"
     ],
-    "java_database_embedded": false,
+    "java_database_embedded": true,
     "complementary_container_engine": "grype"
   },
   "command": [

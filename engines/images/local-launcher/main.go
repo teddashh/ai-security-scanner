@@ -154,26 +154,40 @@ func run(arguments []string) error {
 	if err := validateEngineInputProfile(*engineID, inputProfile); err != nil {
 		return err
 	}
-	if err := verifyEngineInputs(*engineID, *workspace); err != nil {
+	if err := verifyEngineInputs(*engineID, inputProfile, *workspace); err != nil {
 		return err
 	}
 
-	planned, err := planInvocation(*engineID, inputProfile)
+	planned, err := planInvocations(*engineID, inputProfile)
 	if err != nil {
 		return err
 	}
-	if err := ensureOutputAbsent(planned.outputPath); err != nil {
-		return err
+	for _, item := range planned {
+		if err := ensureOutputAbsent(item.outputPath); err != nil {
+			return err
+		}
 	}
-	if err := execute(planned); err != nil {
-		_ = os.Remove(planned.outputPath)
-		return err
+	for _, item := range planned {
+		if err := execute(item); err != nil {
+			removePlannedOutputs(planned)
+			return err
+		}
+		if err := validateEvidence(item.outputPath, *engineID == "trufflehog"); err != nil {
+			removePlannedOutputs(planned)
+			return err
+		}
+		if err := os.Chmod(item.outputPath, 0o600); err != nil {
+			removePlannedOutputs(planned)
+			return err
+		}
 	}
-	if err := validateEvidence(planned.outputPath, *engineID == "trufflehog"); err != nil {
-		_ = os.Remove(planned.outputPath)
-		return err
+	return nil
+}
+
+func removePlannedOutputs(planned []invocation) {
+	for _, item := range planned {
+		_ = os.Remove(item.outputPath)
 	}
-	return os.Chmod(planned.outputPath, 0o600)
 }
 
 func supportedEngine(engineID string) bool {
@@ -389,7 +403,38 @@ func planInvocation(engineID string, inputProfile string) (invocation, error) {
 	return result, nil
 }
 
-func verifyEngineInputs(engineID string, workspace string) error {
+func planInvocations(engineID string, inputProfile string) ([]invocation, error) {
+	primary, err := planInvocation(engineID, inputProfile)
+	if err != nil {
+		return nil, err
+	}
+	planned := []invocation{primary}
+	if engineID != "trivy" || (inputProfile != profileRepository && inputProfile != profileIaC) {
+		return planned, nil
+	}
+
+	// Trivy deliberately disables individual-package analyzers such as JARs in
+	// filesystem mode, while rootfs deliberately disables lockfile analyzers.
+	// Run both upstream-native, non-overlapping profiles for working trees so
+	// neither detector family is silently lost or recreated in this wrapper.
+	individualPackages := invocation{
+		program:     "/usr/local/bin/trivy",
+		environment: append([]string(nil), primary.environment...),
+		outputPath:  "/output/trivy-individual-packages.json",
+		timeout:     time.Hour,
+		arguments: []string{
+			"rootfs", "--cache-dir", "/opt/ai-security-scanner/trivy-cache",
+			"--cache-backend", "memory",
+			"--skip-db-update", "--skip-java-db-update", "--offline-scan",
+			"--pkg-types", "library", "--skip-version-check", "--disable-telemetry",
+			"--skip-vex-repo-update", "--scanners", "vuln",
+			"--format", "json", "--output", "/output/trivy-individual-packages.json", "/workspace",
+		},
+	}
+	return append(planned, individualPackages), nil
+}
+
+func verifyEngineInputs(engineID string, inputProfile string, workspace string) error {
 	switch engineID {
 	case "semgrep":
 		return verifySemgrepRulePack(
@@ -402,7 +447,16 @@ func verifyEngineInputs(engineID string, workspace string) error {
 		if err := verifyFile("/opt/ai-security-scanner/trivy-cache/db/trivy.db", trivyDBSHA256, maxImmutableBytes); err != nil {
 			return err
 		}
-		return verifyFile("/opt/ai-security-scanner/trivy-cache/db/metadata.json", trivyMetadataSHA256, 64*1024)
+		if err := verifyFile("/opt/ai-security-scanner/trivy-cache/db/metadata.json", trivyMetadataSHA256, 64*1024); err != nil {
+			return err
+		}
+		if inputProfile == profileOCIImage {
+			return nil
+		}
+		if err := verifyFile("/opt/ai-security-scanner/trivy-cache/java-db/trivy-java.db", trivyJavaDBSHA256, maxImmutableBytes); err != nil {
+			return err
+		}
+		return verifyFile("/opt/ai-security-scanner/trivy-cache/java-db/metadata.json", trivyJavaMetadataSHA256, 64*1024)
 	case "grype":
 		return verifyFile("/opt/ai-security-scanner/grype-db/6/vulnerability.db", grypeDBSHA256, maxImmutableBytes)
 	case "kubescape":
@@ -852,6 +906,8 @@ const (
 	semgrepRuleFileCount      = 1603
 	trivyDBSHA256             = "e58db9fad4ce26f9ad77f4116f7a3b52527eb3a75718484903d930d110dee431"
 	trivyMetadataSHA256       = "b253a6f5e90d91bf0e0e4b6f07a6f26cb9169155d0af68309728d9d853ded143"
+	trivyJavaDBSHA256         = "7eaa54234967d2dc36f5c60d51c614bdd40997ddadcd13b3815eb8baeb7dc5cb"
+	trivyJavaMetadataSHA256   = "856f573fa061b68555b24a06cdd24ab99f9d6a0cd3129a10a620236ffa507d58"
 	grypeDBSHA256             = "db6f590412955f6b58cec12bfa4b712b2626eef9a030bffd8f32b9ebce074ff8"
 	kubescapeNSASHA256        = "7f7d7bbc6908b9872fd71751dc8d5dd5f543cdd6a684a24d1fb15b686e8344db"
 	kubescapeControlsSHA256   = "df4e2431e8f560961ce56aa06e022caf9b2f82f98752de78df1cd0706b42cf3a"

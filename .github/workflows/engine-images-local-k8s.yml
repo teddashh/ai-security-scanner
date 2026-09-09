@@ -297,6 +297,34 @@ jobs:
               )
             ' "${library_output}/trivy.json" >/dev/null
 
+            jar_workspace="$(mktemp -d)"
+            base64 --decode \
+              engines/images/local-launcher/testdata/trivy-java-db-test.jar.base64 \
+              > "${jar_workspace}/unidentified.jar"
+            test "$(sha256sum "${jar_workspace}/unidentified.jar" | cut -d ' ' -f1)" = \
+              "a5c71902c4d26153f1256491362dc94e6598e70e3ba06f19ee02b1dfcd392470"
+            jar_output="$(mktemp -d)"
+            docker run --platform linux/amd64 --rm \
+              --read-only --network none --cap-drop ALL \
+              --security-opt no-new-privileges:true \
+              --user "$(id -u):$(id -g)" \
+              --pids-limit 512 --memory 4g --cpus 2 \
+              --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777,size=1024m \
+              --mount "type=bind,src=${jar_workspace},dst=/workspace,readonly" \
+              --mount "type=bind,src=${jar_output},dst=/output" \
+              "${IMAGE}@${DIGEST}" \
+              --engine trivy --workspace /workspace --output /output
+            jq -e '
+              any((.Results // [])[];
+                .Class == "lang-pkgs" and
+                any((.Vulnerabilities // [])[];
+                  .VulnerabilityID == "CVE-2024-23672" and
+                  .PkgName == "org.apache.tomcat.embed:tomcat-embed-websocket" and
+                  .InstalledVersion == "9.0.65"
+                )
+              )
+            ' "${jar_output}/trivy-individual-packages.json" >/dev/null
+
           elif [ "${ENGINE}" = grype ]; then
             jq -e \
               --arg imageID "sha256:8a67958da88c75f5703031bee7c99cf1e6bd2db77cbf70a2e1532bc64219c1bd" \
@@ -309,9 +337,10 @@ jobs:
           if [ "${ENGINE}" = trivy ]; then
             cp "${output}/${OUTPUT_FILE}" "${smoke_evidence}/trivy-oci.json"
             cp "${library_output}/trivy.json" "${smoke_evidence}/trivy-library.json"
+            cp "${jar_output}/trivy-individual-packages.json" "${smoke_evidence}/trivy-jar.json"
             (
               cd "${smoke_evidence}"
-              sha256sum trivy-oci.json trivy-library.json > SHA256SUMS.txt
+              sha256sum trivy-jar.json trivy-library.json trivy-oci.json > SHA256SUMS.txt
             )
           else
             cp "${output}/${OUTPUT_FILE}" "${smoke_evidence}/${OUTPUT_FILE}"

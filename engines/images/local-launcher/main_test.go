@@ -20,25 +20,27 @@ func TestStaticPlansNeverUseShellNetworkOrUserArguments(t *testing.T) {
 		"kubescape": profileKubernetes, "kube-bench": profileNodeSnapshot,
 	}
 	for engineID, inputProfile := range cases {
-		planned, err := planInvocation(engineID, inputProfile)
+		planned, err := planInvocations(engineID, inputProfile)
 		if err != nil {
 			t.Fatalf("plan %s: %v", engineID, err)
 		}
-		if !strings.HasPrefix(planned.program, "/usr/local/bin/") {
-			t.Fatalf("%s program is not an absolute managed binary: %s", engineID, planned.program)
-		}
-		for _, token := range append([]string{planned.program}, planned.arguments...) {
-			if strings.ContainsAny(token, "\x00\r\n") || strings.Contains(token, "$(") || strings.Contains(token, "${") {
-				t.Fatalf("%s contains dynamic token %q", engineID, token)
+		for _, item := range planned {
+			if !strings.HasPrefix(item.program, "/usr/local/bin/") {
+				t.Fatalf("%s program is not an absolute managed binary: %s", engineID, item.program)
 			}
-			if token == "sh" || token == "bash" || strings.HasSuffix(token, "/sh") || strings.HasSuffix(token, "/bash") {
-				t.Fatalf("%s invokes a shell", engineID)
+			for _, token := range append([]string{item.program}, item.arguments...) {
+				if strings.ContainsAny(token, "\x00\r\n") || strings.Contains(token, "$(") || strings.Contains(token, "${") {
+					t.Fatalf("%s contains dynamic token %q", engineID, token)
+				}
+				if token == "sh" || token == "bash" || strings.HasSuffix(token, "/sh") || strings.HasSuffix(token, "/bash") {
+					t.Fatalf("%s invokes a shell", engineID)
+				}
 			}
-		}
-		for _, variable := range planned.environment {
-			upper := strings.ToUpper(variable)
-			if strings.Contains(upper, "TOKEN=") || strings.Contains(upper, "PASSWORD=") || strings.Contains(upper, "PROXY=") {
-				t.Fatalf("%s child environment exposes network or credential variable %q", engineID, variable)
+			for _, variable := range item.environment {
+				upper := strings.ToUpper(variable)
+				if strings.Contains(upper, "TOKEN=") || strings.Contains(upper, "PASSWORD=") || strings.Contains(upper, "PROXY=") {
+					t.Fatalf("%s child environment exposes network or credential variable %q", engineID, variable)
+				}
 			}
 		}
 	}
@@ -193,11 +195,14 @@ func TestGrypeRepositoryUsesTheUpstreamDirectoryCataloger(t *testing.T) {
 
 func TestTrivyFilesystemProfilesUseLibraryPackagesAndKeepTheImmutableDatabaseReadOnly(t *testing.T) {
 	for _, profile := range []string{profileRepository, profileIaC} {
-		planned, err := planInvocation("trivy", profile)
+		planned, err := planInvocations("trivy", profile)
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := []string{
+		if len(planned) != 2 {
+			t.Fatalf("Trivy profile %s planned %d invocations; expected lockfile and individual-package passes", profile, len(planned))
+		}
+		wantFilesystem := []string{
 			"filesystem", "--cache-dir", "/opt/ai-security-scanner/trivy-cache",
 			"--cache-backend", "memory",
 			"--skip-db-update", "--skip-java-db-update", "--offline-scan",
@@ -205,9 +210,30 @@ func TestTrivyFilesystemProfilesUseLibraryPackagesAndKeepTheImmutableDatabaseRea
 			"--skip-vex-repo-update", "--scanners", "vuln",
 			"--format", "json", "--output", "/output/trivy.json", "/workspace",
 		}
-		if !reflect.DeepEqual(planned.arguments, want) {
-			t.Fatalf("Trivy profile %s boundary drifted:\n got: %#v\nwant: %#v", profile, planned.arguments, want)
+		if !reflect.DeepEqual(planned[0].arguments, wantFilesystem) {
+			t.Fatalf("Trivy profile %s filesystem boundary drifted:\n got: %#v\nwant: %#v", profile, planned[0].arguments, wantFilesystem)
 		}
+		wantIndividualPackages := []string{
+			"rootfs", "--cache-dir", "/opt/ai-security-scanner/trivy-cache",
+			"--cache-backend", "memory",
+			"--skip-db-update", "--skip-java-db-update", "--offline-scan",
+			"--pkg-types", "library", "--skip-version-check", "--disable-telemetry",
+			"--skip-vex-repo-update", "--scanners", "vuln",
+			"--format", "json", "--output", "/output/trivy-individual-packages.json", "/workspace",
+		}
+		if !reflect.DeepEqual(planned[1].arguments, wantIndividualPackages) {
+			t.Fatalf("Trivy profile %s individual-package boundary drifted:\n got: %#v\nwant: %#v", profile, planned[1].arguments, wantIndividualPackages)
+		}
+	}
+}
+
+func TestTrivyOCIProfileDoesNotAddAWorkingTreePackagePass(t *testing.T) {
+	planned, err := planInvocations("trivy", profileOCIImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(planned) != 1 || planned[0].arguments[0] != "image" {
+		t.Fatalf("Trivy OCI boundary added an unintended working-tree pass: %#v", planned)
 	}
 }
 

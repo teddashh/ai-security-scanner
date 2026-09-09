@@ -10,11 +10,21 @@ const sourcePath = resolve(
   root,
   "engines/images/local-launcher/testdata/oci-layout-source/spring-core-2.5.6.SEC03.jar.base64",
 );
+const javaIndexFixturePath = resolve(
+  root,
+  "engines/images/local-launcher/testdata/trivy-java-db-test.jar.base64",
+);
 const blobRoot = resolve(fixtureRoot, "blobs/sha256");
 const expectedJarSHA256 = "b9883ae1fd6b53762b285cfeb1e59bb52313855893fd3cd1ff1eafea26faa41e";
+const expectedJavaIndexFixtureSHA256 = "a5c71902c4d26153f1256491362dc94e6598e70e3ba06f19ee02b1dfcd392470";
+const expectedJavaIndexFixtureSHA1 = "bd70dfeb39cc83c6934be24fa377b21e541dbe76";
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function sha1(bytes) {
+  return createHash("sha1").update(bytes).digest("hex");
 }
 
 function writeString(buffer, offset, length, value) {
@@ -60,6 +70,15 @@ const encodedJar = (await readFile(sourcePath, "utf8")).replace(/\s+/gu, "");
 const jar = Buffer.from(encodedJar, "base64");
 if (jar.length !== 1105 || sha256(jar) !== expectedJarSHA256) {
   throw new Error("pinned OCI fixture JAR does not match its source digest");
+}
+const encodedJavaIndexFixture = (await readFile(javaIndexFixturePath, "utf8")).replace(/\s+/gu, "");
+const javaIndexFixture = Buffer.from(encodedJavaIndexFixture, "base64");
+if (
+  javaIndexFixture.length !== 277275 ||
+  sha256(javaIndexFixture) !== expectedJavaIndexFixtureSHA256 ||
+  sha1(javaIndexFixture) !== expectedJavaIndexFixtureSHA1
+) {
+  throw new Error("pinned Trivy Java-index fixture does not match its upstream digests");
 }
 
 const layer = Buffer.concat([
