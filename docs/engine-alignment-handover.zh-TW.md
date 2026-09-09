@@ -1,36 +1,123 @@
-# 引擎接線與結果對齊 — 歷史摘要
+# ai-security-scanner 開發交接
 
-狀態：`f21e6fc..0392aea` 與其後相關修正的歷史工程紀錄（2026-09-05 至 2026-09-06）
+狀態日期：2026-09-09
 
-目前產品方向以[產品規格](product-spec.md)為準，現況與後續工作以[產品檢視](product-audit.md)為準。本文不決定 roadmap，也不建立版本、發布、簽署、qualification 或合規工作。
+最後完成的產品程式 checkpoint：`9823a68546b9e05e00a93bb14e444b22f57b639a`
 
-## 這段工作留下的價值
+這份文件是目前唯一的開發交接摘要，已直接取代舊的歷史版。產品決策以[產品規格](product-spec.md)為準，能力現況以[產品檢視](product-audit.md)為準。
 
-真正的「接上 scanner」不是 adapter 存在或程序以 0 結束，而是上游真實輸出能完整成為可追溯、可理解的 finding。這段工作修正了幾個重複出現的問題：
+## 產品目標
 
-- ScoutSuite、Cloudsplaining、Kubescape、kube-bench、Checkov 等輸出形狀或欄位解析不完整，可能讓真實結果消失。
-- 產品替 Gitleaks、TruffleHog、Naabu、httpx 等引擎寫入它們沒有提供的 severity，卻讓讀者以為是上游判定。
-- M365 wrapper 的 unknown、details 或 dropped records 沒有完整傳到結果層，可能讀成乾淨結果。
-- 缺少資產識別座標的 findings 會被丟棄，且相關警告可能被大量逐筆訊息淹沒。
-- 不同引擎指出同一 CVE 時，需要共用報告層分組呈現，但不得假裝成獨立雙重確認。
-- finding、coverage gap 與 HTML 報告的產品散文需要雙語；引擎名稱、rule ID、原始 severity 與證據則保留原樣。
+讓一位 IT 使用者在同一條簡短流程加入多個 repository、內部設備或 endpoint，以及網站，快速完成真正有意義的安全掃描，然後在一份報告中看懂：掃了什麼、發現什麼、先處理什麼、原因、下一步，以及哪些項目沒有測到。
 
-詳細 commit、原始輸出與舊狀態仍可從 Git 歷史查閱，不在這份現行摘要重複維護。
+Scanner 應盡量保留上游行為、規則、識別碼、severity、證據與 remediation。產品 adapter 只負責型別轉換、授權範圍、資源限制、執行與正規化；跨引擎整理、去重、解釋、排序與報告呈現放在共用報告層。SonicWall、WatchGuard 只是內部資產例子，不應建立品牌專用的偵測替身。
 
-## 現行整合原則
+版本、發布時機、打包、簽署與合規尺度由產品負責人決定，不是這份交接的待辦。
 
-1. 優先使用上游支援的 CLI、API、規則、severity、identifier 與 remediation。
-2. Adapter 只處理已授權輸入、執行安全與資源界線、取消、輸出擷取和結構轉換。
-3. 不在 wrapper 內重寫偵測邏輯或各自創作使用者敘事。
-4. 共用報告層負責一致術語、優先順序、去重、在地化與下一步，同時保留所有上游 provenance。
-5. Unknown、dropped、truncated、not tested 與 unavailable 都要保持原意，不能變成 pass 或零問題。
+## 接手時的 Git 狀態
 
-目前各引擎的真實能力與限制，請直接看[引擎目錄](engine-catalog.md)與[引擎維護方式](engine-maintenance.md)。
+- `9823a68546b9e05e00a93bb14e444b22f57b639a` 已推到 `origin/main`，包含最近完成的 Cloudsplaining、Syft 與共用報告語意修正，可直接依賴。這份交接文件可能位於其後的純文件 commit。
+- 本機工作樹刻意保留四個尚未提交的產品程式檔案；請先閱讀 diff，不要用 `git reset --hard` 或 `git checkout --` 丟掉：
+  - `engines/images/greenbone-launcher/main.go`
+  - `engines/images/greenbone-launcher/main_test.go`
+  - `engines/images/maester/run-maester.ps1`
+  - `engines/images/maester/run-maester.Tests.ps1`
 
-## 驗證方式
+接手先執行：
 
-以風險相稱的方式驗證受影響路徑：使用代表性的上游輸出、執行 adapter、檢查 normalized record，再渲染使用者看到的報告。若變更影響主要掃描路徑，應盡可能走過目標選擇、實際 scanner、Results 與保存後重開；source regex 與固定 test count 不能取代這條路徑。
+```bash
+git status --short --branch
+git diff --check
+git diff -- engines/images/greenbone-launcher engines/images/maester
+```
 
-## 使用界線
+## 已在 main 上成立的產品能力
 
-這是歷史技術教訓，不是下一輪工作清單。任何引擎更新應從目前上游、目前 adapter 與目前產品路徑重新判斷；版本、發布、映像 publication、簽署與合規工作只有在產品負責人明確要求時才開始。
+- 「IT environment」主路徑可在同一個 project 中接受多個 repository、完整網站 URL 與精確內部 host，按資產型別只執行適用的 scanner。
+- Repository 路徑已接上 Gitleaks、TruffleHog、Semgrep、Trivy、Grype、Checkov 與 KICS 等上游安全檢查。
+- 網站路徑以 Nuclei 上游 automatic scan 與固定的安全模板池執行；每個網站是獨立 engine run，單一網站失敗不應抹掉其他網站結果。
+- 內部資產路徑使用 Greenbone Community Feed 與通用的上游檢查，不包含 SonicWall、WatchGuard 或其他廠牌的自製規則。
+- 混合掃描結果會進入同一份報告，依資產呈現 finding、已完成檢查、未完成範圍與上游 provenance；一個 scanner 失敗不會刪除已完成的 sibling 結果。
+- Cloudsplaining finding 已保留 policy source、policy name、finding、actions、action completeness 與 attached principals，並在共用報告中產生與實際 policy 來源相符的下一步。
+- Inventory、service discovery 與 connectivity 仍可作為證據，但不會被宣稱為 vulnerability finding 或成功的安全掃描。
+
+Scanner 出現在目錄中不代表每個引擎的完整使用者路徑都已完成；應以實際上游執行、normalized result 與最終報告三層皆可驗證為準。
+
+## 尚未提交的工作
+
+### Greenbone：先完成這條主路徑
+
+Launcher 的進度已在上述兩個 Go 檔案中：
+
+- 保留上游 `<result_type>`：`alarm`、`log`、`error`、`dead_host`。
+- OID-less `error` 與 `dead_host` 會保留，因為它們代表目標未被完整評估。
+- OID-less lifecycle／一般 log noise 仍會丟棄，避免把程序訊息當成 finding。
+- 無法從 feed vector 評級的 `alarm` 保持 `Unknown`，不再降成 benign `Log`。
+- OID-less 狀態不會虛構 NVT identity。
+
+Go 測試與 `gofmt` 已通過；本機沒有 Go，因此上次使用固定 digest 的 Go container 並關閉網路執行：
+
+```bash
+docker run --rm --network none \
+  -v "$PWD/engines/images/greenbone-launcher:/src:ro" \
+  -w /tmp/work \
+  golang:1.26.0-alpine@sha256:d4c030d2e2a1d35965dc3e55a874fc4c97fd9528f33f2c9da7527a237e172490 \
+  sh -c 'cp -R /src/. . && test -z "$(gofmt -d main.go main_test.go)" && go test ./...'
+```
+
+剩餘工作是把這個語意接到 Rust adapter 與共用報告：
+
+1. 只有 `alarm` 產生 vulnerability finding。
+2. `error`／`dead_host` 形成該資產的 incomplete coverage 與可行下一步，同時保留其他資產或引擎的結果。
+3. `log` 不產生 finding；legacy XML 沒有 `result_type` 時採保守判斷，不能把模糊的零分紀錄當成 clean proof。
+4. 未評級 alarm 使用誠實的 `Unknown` severity 與相應 basis；補齊英文、繁中、native DTO 和報告測試。
+5. 完成 focused Rust、frontend 與 rendered report 驗證後，將 Greenbone 這一組獨立 commit／push。
+
+### Maester：wrapper 已修，報告層尚未接完
+
+PowerShell wrapper 已把上游 `Investigate` 與 `Failed` 分開，並保留經清理、限制長度的 `ResultDetail.TestResult` 為 `ReviewDetail`。Pester 上次結果為 51/51。
+
+不要把 `Investigate` 當成 vulnerability failure，也不要當成 pass。下一步應在 host adapter／共用報告中把它呈現為「需要人工確認」的 coverage item，附上上游 detail；完成端到端測試後再與 wrapper 一起提交。
+
+## 已確認的最高優先缺陷：Nuclei 空輸出可能顯示假乾淨
+
+目前 Nuclei automatic scan 可能在 technology detection、tag 選擇或 applicable template 載入失敗時以 exit code 0 結束，但沒有產生 JSONL。現行 launcher 對缺少 temporary output 直接接受，Rust adapter 又允許 Nuclei 的空 JSONL 成為 complete；最後 UI 可能顯示「已完成、未發現問題」。這會直接誤導新手，優先度高於介面微調。
+
+相關位置：
+
+- `.upstreams/projectdiscovery/nuclei/pkg/protocols/common/automaticscan/automaticscan.go`
+- `engines/images/external-launcher/main.go` 的 Nuclei invocation、`runCommand` 與 `normalizeEvidence`
+- `src-tauri/src/adapters/mod.rs` 的 complete-empty JSONL 判斷
+- `src-tauri/tests/adapter_fixtures.rs` 的 empty released JSONL 測試
+- `src-tauri/src/orchestrator.rs` 的 adapter completion 狀態
+- `src-tauri/src/beginner_report.rs` 的 Nuclei tested dimension
+- `src/pages/FindingsPage.tsx` 的逐資產狀態判斷
+
+建議分兩步修：
+
+1. 立即停止假乾淨：Nuclei temporary output 缺少或為空時標成 incomplete，從可證明 complete 的 empty-stream 例外與相應測試中移除 Nuclei；報告說明缺少執行證據。
+2. 再以真實上游 outcome record 建立「確實執行但零 finding」的完成證據。`-matcher-status -jsonl` 可作為待實測候選；先用固定 fixture 驗證 automatic mode 的實際輸出，不能只根據 exit code 推定完成。不要直接依賴 `-stats-json`，automatic scan 的最後階段使用 mock progress client，未證明能提供所需的逐次完成證據。
+
+## 後續順序
+
+1. 接完 Greenbone launcher → Rust adapter → 共用報告，驗證 alarm、unrated alarm、error、dead host、log 與 mixed sibling preservation。
+2. 修正 Nuclei 空／缺失輸出的假乾淨路徑，再補上可證明 genuine zero-finding completion 的上游證據。
+3. 把 Maester `Investigate` 接成 manual-review coverage item。
+4. 移除進階 cloud／Kubernetes 路徑中產品自訂的窄 subsets，改由上游 profile 與使用者選定資產驅動。
+5. 補齊 Trivy JAR 掃描所需的固定 Java vulnerability DB。
+6. 用受控自有 fixture 走一次完整 mixed IT flow，量測從加入資產到第一個有用結果所需時間，優先修掉阻礙新手的步驟。
+
+## 交接判準
+
+每個 scanner 的工作只有在以下鏈路都成立時才算完成：
+
+```text
+使用者選定資產
+  → 適用的上游 scanner 真正執行
+  → finding／inventory／incomplete outcome 保留原意
+  → sibling 結果不因單點失敗消失
+  → 共用報告按資產說明結果、限制與下一步
+  → 保存後重開及匯出仍維持相同語意
+```
+
+本輪開發沒有接觸任何外部或未授權目標，也沒有更動發布、版本、installer、簽署或合規設定。
