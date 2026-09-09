@@ -350,6 +350,21 @@ rendered component test 同時鎖住 run-bound label 優先順序、兩個 activ
 unknown ID 的排除，以及 Traditional Chinese label。shareable diagnostic 仍不包含 target name、path
 或 asset ID。
 
+## Progress first layer 分開完成、剩餘與需要處理的工作（`083040c`）
+
+先前 run overview 只有「已完整檢查 X／Y 個目標」，而完整 scanner-state ledger 收在 technical
+details；新手無法直接看出還有多少工作或多少項已停止。現在 overview 以兩行 compact bilingual
+summary 分開顯示 assets 的 fully checked／remaining／need attention，以及 checks 的
+completed／remaining／need attention。check counts 直接使用 durable `EngineRun.status`；asset 完成數
+保留 backend `coveredAssetCount`，部分、失敗、未執行或取消的 engine 所綁定資產會計入 attention。
+
+active／queued／paused run 中其餘未涵蓋資產才算 remaining。run 一旦 terminal，所有未完整涵蓋資產
+都轉成 attention，即使舊資料沒有留下可對應的 engine asset ID，也不會繼續顯示成正在執行。
+exact localhost connection utility 不套用這個 security-scan summary，仍使用自己的 connection
+outcome presentation。rendered tests 鎖住一個 completed、一個 active、一個 failed 的 mixed run，
+以及 terminal cancellation 含一個無法歸因 asset 的 conservative count；static localization test
+同時鎖住兩種語言與 asset／check 用詞。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -403,6 +418,9 @@ frontend build 再次全部通過；build 仍只有既有的大型 chunk 提示�
 build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
 
 `00dc9a1` 新增後，frontend 568 項、component 243 項、TypeScript typecheck 與 production frontend
+build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
+
+`083040c` 新增後，frontend 568 項、component 245 項、TypeScript typecheck 與 production frontend
 build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
 
 ## 後續順序

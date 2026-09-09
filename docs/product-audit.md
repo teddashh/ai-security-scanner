@@ -58,7 +58,11 @@ Advanced paths without a maintained target and the localhost connection utility
 keep the no-estimate presentation. The live activity card also names the saved
 asset or assets bound to the current check. It prefers the run-bound report label
 when recorded, does not show a queued sibling while another check is running,
-and never substitutes an unknown technical asset ID for a missing label.
+and never substitutes an unknown technical asset ID for a missing label. A
+compact first-layer summary separates fully checked, remaining, and
+attention-needed assets, alongside completed, remaining, and attention-needed
+checks. When a run is terminal, uncovered assets move to attention rather than
+continuing to look active.
 
 ## What the common paths actually run
 
@@ -203,8 +207,9 @@ The high-value remaining gaps are:
    unmeasured minutes-level timing target visible without inventing a numeric
    ETA, `282d3fb` carries it through Review, and `4ad0759` preserves it during
    active Progress without treating the full run as complete. `00dc9a1` also
-   surfaces the current check's saved asset labels; the full sequence still needs
-   observation in a controlled installed-desktop walkthrough.
+   surfaces the current check's saved asset labels, and `083040c` adds explicit
+   asset/check completion, remaining, and attention counts; the full sequence
+   still needs observation in a controlled installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
    AWS cloud paths do not hide a comparable product-authored security subset:
