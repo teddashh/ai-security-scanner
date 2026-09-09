@@ -42,6 +42,7 @@ import {
   hasActiveScanWork,
 } from "../freshScanSelection";
 import { isSecurityFinding } from "../findingClassification";
+import type { UseCaseId } from "../useCases";
 import type {
   EngineRun,
   EngineRunStatus,
@@ -57,6 +58,7 @@ import { localizedEngineWarning } from "../engineWarningPresentation.ts";
 
 interface ProgressPageProps {
   caseId?: string;
+  assessmentIntent?: UseCaseId;
   runs: ScanRun[];
   findings: Finding[];
   selectedRunId?: string;
@@ -467,6 +469,10 @@ const copy = {
   elapsedUnderMinute: { en: "under 1 min", zhTW: "未滿 1 分鐘" },
   elapsedMinutes: { en: "{count} min", zhTW: "{count} 分鐘" },
   estimateUnavailable: { en: "Estimate unavailable", zhTW: "目前無可靠預估" },
+  usefulSecurityResultAvailable: {
+    en: "A useful security result is available now; remaining checks may take longer.",
+    zhTW: "目前已有可用的資安結果；其餘檢查可能需要更久。",
+  },
   lastSaved: { en: "Last saved {time}", zhTW: "最後保存 {time}" },
   overallProgress: { en: "Overall scan progress", zhTW: "整體掃描進度" },
   scanTechnicalDetails: { en: "Scan details and versions", zhTW: "掃描細節與版本" },
@@ -683,6 +689,20 @@ const terminalRunStatuses = new Set<ScanRun["status"]>([
   "cancelled",
 ]);
 const activeRunStatuses = new Set<ScanRun["status"]>(["queued", "running", "paused"]);
+const primaryTimingTargets: Partial<Record<UseCaseId, BilingualText>> = {
+  internal_it_environment: {
+    en: "Timing target: a first useful result within minutes after tools are ready. Added assets and deeper host checks can extend the full run.",
+    zhTW: "時間目標：工具就緒後幾分鐘內提供第一個有用結果；加入更多資產或較深入的主機檢查會延長完整執行時間。",
+  },
+  deployed_website: {
+    en: "Timing target: a useful result within minutes after tools are ready. Site response time and applicable checks can make it longer.",
+    zhTW: "時間目標：工具就緒後幾分鐘內提供有用結果；網站回應速度與適用檢查可能延長時間。",
+  },
+  source_code: {
+    en: "Timing target: a useful result within minutes after tools are ready. Large folders can take longer.",
+    zhTW: "時間目標：工具就緒後幾分鐘內提供有用結果；大型資料夾可能需要更久。",
+  },
+};
 
 const isExecutionStage = (phase: string): phase is ExecutionStage =>
   Object.prototype.hasOwnProperty.call(executionStageMeta, phase);
@@ -698,6 +718,7 @@ const engineIcon = (engine: EngineRun) => {
 
 export function ProgressPage({
   caseId,
+  assessmentIntent,
   runs,
   findings,
   selectedRunId: controlledSelectedRunId,
@@ -841,6 +862,16 @@ export function ProgressPage({
   const elapsedLabel = elapsedMinutes < 1
     ? text(copy.elapsedUnderMinute)
     : text(copy.elapsedMinutes, { count: formatNumber(elapsedMinutes) });
+  const primaryTimingTarget = assessmentIntent
+    ? primaryTimingTargets[assessmentIntent]
+    : undefined;
+  const activeTimingStatus = activity?.active
+    ? activeRunHasDurableSecurityFindings
+      ? text(copy.usefulSecurityResultAvailable)
+      : primaryTimingTarget && !exactLocalhostQuickScan
+        ? text(primaryTimingTarget)
+        : text(copy.estimateUnavailable)
+    : undefined;
   const stateCounts = useMemo(
     () => Object.fromEntries(
       engineStates.map((state) => [state, selectedRun?.engineRuns.filter((engine) => engine.status === state).length ?? 0]),
@@ -1239,7 +1270,7 @@ export function ProgressPage({
               </p>
               <p className="run-overview__timing">
                 {text(copy.elapsed, { time: elapsedLabel })}
-                {activity?.active ? ` · ${text(copy.estimateUnavailable)}` : ""}
+                {activeTimingStatus ? ` · ${activeTimingStatus}` : ""}
                 {` · ${text(copy.lastSaved, { time: showDateTime(activity?.lastProgressAt ?? selectedRun.finishedAt ?? selectedRun.startedAt) })}`}
               </p>
               <ProgressBar value={selectedRun.progress} label={text(copy.overallProgress)} tone={selectedRun.status === "failed" ? "danger" : selectedRun.status === "partial" ? "warning" : "accent"} />

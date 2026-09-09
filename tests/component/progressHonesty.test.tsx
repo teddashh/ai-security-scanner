@@ -3,7 +3,12 @@ import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { ProgressPage } from "../../src/pages/ProgressPage";
 import { I18nProvider, localeStorageKey } from "../../src/i18n";
+import {
+  BUILT_IN_LOCALHOST_QUICK_SCAN_ENGINE_ID,
+  LOCALHOST_QUICK_SCAN_TIMEOUT_MS,
+} from "../../src/localhostQuickScan";
 import type { EngineRun, EngineRunStatus, Finding, ScanRun } from "../../src/types";
+import type { UseCaseId } from "../../src/useCases";
 
 // The progress view is read while a scan is still the user's live picture of
 // what happened. Two of its states are easy to lose on the way to the screen:
@@ -80,11 +85,16 @@ const finding = (overrides: Partial<Finding> = {}): Finding => ({
   ...overrides,
 });
 
-const renderProgress = (value: ScanRun, findings: Finding[] = []) =>
+const renderProgress = (
+  value: ScanRun,
+  findings: Finding[] = [],
+  assessmentIntent?: UseCaseId,
+) =>
   render(
     <I18nProvider>
       <ProgressPage
         caseId="case-1"
+        assessmentIntent={assessmentIntent}
         runs={[value]}
         findings={findings}
         selectedRunId={value.id}
@@ -249,11 +259,15 @@ test("an active scan exposes durable security findings without waiting for the r
   const { container } = renderProgress(
     run([engine("semgrep", "running", { findingCount: 2 })], "running"),
     [finding()],
+    "source_code",
   );
 
   const results = container.querySelector<HTMLAnchorElement>('a[href="#findings"]');
   expect(results?.textContent).toContain("View results");
   expect(results?.className).toContain("button--primary");
+  expect(container.querySelector(".run-overview__timing")?.textContent).toContain(
+    "A useful security result is available now; remaining checks may take longer.",
+  );
 });
 
 test("the live results action is clear in Traditional Chinese", () => {
@@ -261,19 +275,68 @@ test("the live results action is clear in Traditional Chinese", () => {
   const { container } = renderProgress(
     run([engine("semgrep", "running", { findingCount: 1 })], "running"),
     [finding()],
+    "source_code",
   );
 
   const results = container.querySelector<HTMLAnchorElement>('a[href="#findings"]');
   expect(results?.textContent).toContain("查看結果");
   expect(results?.className).toContain("button--primary");
+  expect(container.querySelector(".run-overview__timing")?.textContent).toContain(
+    "目前已有可用的資安結果；其餘檢查可能需要更久。",
+  );
 });
 
 test("an active scan with no durable finding does not offer results yet", () => {
   const { container } = renderProgress(
     run([engine("semgrep", "running", { findingCount: 0 })], "running"),
+    [],
+    "source_code",
   );
 
   expect(container.querySelector('a[href="#findings"]')).toBeNull();
+  expect(container.querySelector(".run-overview__timing")?.textContent).toContain(
+    "Timing target: a useful result within minutes after tools are ready. Large folders can take longer.",
+  );
+});
+
+const primaryTimingCases: Array<[UseCaseId, string]> = [
+  [
+    "internal_it_environment",
+    "Timing target: a first useful result within minutes after tools are ready. Added assets and deeper host checks can extend the full run.",
+  ],
+  [
+    "deployed_website",
+    "Timing target: a useful result within minutes after tools are ready. Site response time and applicable checks can make it longer.",
+  ],
+  [
+    "source_code",
+    "Timing target: a useful result within minutes after tools are ready. Large folders can take longer.",
+  ],
+];
+
+test.each(primaryTimingCases)(
+  "an active %s scan carries its first-result target into progress",
+  (assessmentIntent, expectedTiming) => {
+    const { container } = renderProgress(
+      run([engine("active-check", "running")], "running"),
+      [],
+      assessmentIntent,
+    );
+
+    expect(container.querySelector(".run-overview__timing")?.textContent).toContain(expectedTiming);
+  },
+);
+
+test("an advanced active scan does not invent a timing target", () => {
+  const { container } = renderProgress(
+    run([engine("cloud-check", "running")], "running"),
+    [],
+    "cloud_account",
+  );
+
+  const timing = container.querySelector(".run-overview__timing")?.textContent;
+  expect(timing).toContain("Estimate unavailable");
+  expect(timing).not.toContain("within minutes");
 });
 
 test("reachable-service inventory does not unlock security results", () => {
@@ -294,22 +357,25 @@ test("reachable-service inventory does not unlock security results", () => {
 test("the localhost connection utility never unlocks security results", () => {
   const { container } = renderProgress(
     run([
-      engine("builtin-localhost-tcp", "running", {
+      engine(BUILT_IN_LOCALHOST_QUICK_SCAN_ENGINE_ID, "running", {
         category: "built_in_localhost_tcp",
         taskKind: {
           kind: "built_in_localhost_tcp",
           port: 9001,
-          timeoutMs: 1_500,
+          timeoutMs: LOCALHOST_QUICK_SCAN_TIMEOUT_MS,
           payloadBytes: 0,
         },
-        // Defensive fixture: even malformed legacy data cannot turn a
-        // connectivity observation into a security finding.
         findingCount: 1,
       }),
     ], "running"),
+    [],
+    "internal_it_environment",
   );
 
   expect(container.querySelector('a[href="#findings"]')).toBeNull();
+  const timing = container.querySelector(".run-overview__timing")?.textContent;
+  expect(timing).toContain("Estimate unavailable");
+  expect(timing).not.toContain("within minutes");
 });
 
 test("a terminal scan keeps the results entry even when it found no problems", () => {
