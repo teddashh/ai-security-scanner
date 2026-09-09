@@ -55,7 +55,10 @@ website, or local-folder plan before Start. Progress keeps that same target next
 to elapsed time until a durable security finding is available, then says that a
 useful security result can already be opened while remaining checks continue.
 Advanced paths without a maintained target and the localhost connection utility
-keep the no-estimate presentation.
+keep the no-estimate presentation. The live activity card also names the saved
+asset or assets bound to the current check. It prefers the run-bound report label
+when recorded, does not show a queued sibling while another check is running,
+and never substitutes an unknown technical asset ID for a missing label.
 
 ## What the common paths actually run
 
@@ -199,7 +202,8 @@ The high-value remaining gaps are:
    organization-size guess was removed in `77c54fc`. `a94131a` makes the
    unmeasured minutes-level timing target visible without inventing a numeric
    ETA, `282d3fb` carries it through Review, and `4ad0759` preserves it during
-   active Progress without treating the full run as complete; this still needs
+   active Progress without treating the full run as complete. `00dc9a1` also
+   surfaces the current check's saved asset labels; the full sequence still needs
    observation in a controlled installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced

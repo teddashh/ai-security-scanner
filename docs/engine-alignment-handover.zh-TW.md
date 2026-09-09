@@ -336,6 +336,20 @@ component tests 鎖住三條 primary path、English／Traditional Chinese 已有
 與 localhost boundary。這只改變 product-owned presentation，沒有改動 scanner timeout、scope、
 rate 或執行契約。
 
+## Progress 會指出目前 check 綁定的資產（`00dc9a1`）
+
+Progress 的 activity first layer 先前只顯示 current／next scan tool，沒有滿足 product spec 所寫的
+「which asset is being checked」。現在 active、paused 或 queued run 會列出 current／next engine
+run 綁定且有可讀名稱的資產。若 live／frozen beginner report 已保存 target label，畫面優先採用該
+run-bound label；否則才使用目前 workspace 的 saved asset name。正在執行的 engine 存在時，不會把
+pending sibling 的資產混成目前工作；多 engine 共用的資產名稱也只顯示一次。
+
+這個 presentation 不會把 raw scanner message、warning 或 technical asset ID 當成資產名稱。無法在
+report 或 workspace 解出名稱的 ID 會留在 technical／durable record，而不洩漏到 first layer。
+rendered component test 同時鎖住 run-bound label 優先順序、兩個 active assets、pending sibling 與
+unknown ID 的排除，以及 Traditional Chinese label。shareable diagnostic 仍不包含 target name、path
+或 asset ID。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -386,6 +400,9 @@ build 全部通過；build 只有既有的大型 chunk 提示。
 frontend build 再次全部通過；build 仍只有既有的大型 chunk 提示。
 
 `4ad0759` 新增後，frontend 568 項、component 242 項、TypeScript typecheck 與 production frontend
+build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
+
+`00dc9a1` 新增後，frontend 568 項、component 243 項、TypeScript typecheck 與 production frontend
 build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
 
 ## 後續順序
