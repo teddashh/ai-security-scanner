@@ -1178,6 +1178,24 @@ export interface ScannerFindingDetails {
   remediation?: string;
   installedVersion?: string;
   fixedVersion?: string;
+  /** Bounded, untrusted AWS IAM policy context retained from Cloudsplaining. */
+  awsIamPolicy?: AwsIamPolicyFindingDetails;
+}
+
+export type AwsIamPolicySource = "aws_managed" | "customer_managed" | "inline";
+
+export interface AwsIamPolicyFindingDetails {
+  policySource: AwsIamPolicySource;
+  policyName: string;
+  findingIdentity: string;
+  actions: string[];
+  actionsComplete: boolean;
+  attachedTo: {
+    roles: string[];
+    groups: string[];
+    users: string[];
+    complete: boolean;
+  };
 }
 
 export interface ControlReference {
@@ -1276,6 +1294,8 @@ export interface Finding {
    * these have to be put back or the reason disappears.
    */
   contextFactors?: ContextFactor[];
+  /** Report-ready view of Cloudsplaining's frozen structured evidence. */
+  awsIamPolicy?: AwsIamPolicyFindingDetails;
   expertType: string;
   severity: Severity;
   confidence: Confidence;

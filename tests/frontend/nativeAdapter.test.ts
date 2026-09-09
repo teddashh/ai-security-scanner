@@ -266,7 +266,7 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
       recommended_expert_type: "IT administrator",
       evidence_references: [{
         evidence_id: "evidence-1",
-        engine_id: "native.localhost_tcp",
+        engine_id: "cloudsplaining",
         details_frozen: true,
         source_rule: "upstream-rule-42",
         scanner_details: {
@@ -274,6 +274,19 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
           remediation: "Scanner remediation",
           installed_version: "1.0.0",
           fixed_version: "1.0.1",
+          aws_iam_policy: {
+            policy_source: "customer_managed",
+            policy_name: "BillingReadPolicy",
+            finding_identity: "PrivilegeEscalation",
+            actions: ["iam:PassRole", "sts:AssumeRole"],
+            actions_complete: true,
+            attached_to: {
+              roles: ["ApplicationRole"],
+              groups: ["BillingOperators"],
+              users: [],
+              complete: false,
+            },
+          },
         },
         summary: "Frozen evidence summary",
         kind: "observation",
@@ -283,6 +296,28 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
         artifact_sha256: "a".repeat(64),
         observed_at: "2026-08-30T12:00:03Z",
         location: "src/config.ts:42",
+      }, {
+        evidence_id: "evidence-malformed-iam",
+        engine_id: "cloudsplaining",
+        details_frozen: true,
+        source_rule: "PrivilegeEscalation",
+        scanner_details: {
+          description: "Sibling frozen description",
+          aws_iam_policy: {
+            policy_source: "aws_managed",
+            policy_name: "AdministratorAccess",
+            finding_identity: "PrivilegeEscalation",
+            actions: ["iam:PassRole"],
+            attached_to: {
+              roles: [42],
+              groups: [],
+              users: [],
+              complete: true,
+            },
+          },
+        },
+        artifact_sha256: "b".repeat(64),
+        observed_at: "2026-08-30T12:00:03Z",
       }],
       official_references: ["https://example.test/frozen-rule"],
       framework_references: [],
@@ -338,7 +373,7 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
   assert.equal(report.findings[0]?.evidenceReferences[0]?.sourceRule, "upstream-rule-42");
   assert.deepEqual(report.findings[0]?.evidenceReferences[0], {
     evidenceId: "evidence-1",
-    engineId: "native.localhost_tcp",
+    engineId: "cloudsplaining",
     detailsFrozen: true,
     sourceRule: "upstream-rule-42",
     scannerDetails: {
@@ -346,6 +381,19 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
       remediation: "Scanner remediation",
       installedVersion: "1.0.0",
       fixedVersion: "1.0.1",
+      awsIamPolicy: {
+        policySource: "customer_managed",
+        policyName: "BillingReadPolicy",
+        findingIdentity: "PrivilegeEscalation",
+        actions: ["iam:PassRole", "sts:AssumeRole"],
+        actionsComplete: true,
+        attachedTo: {
+          roles: ["ApplicationRole"],
+          groups: ["BillingOperators"],
+          users: [],
+          complete: false,
+        },
+      },
     },
     summary: "Frozen evidence summary",
     kind: "observation",
@@ -357,6 +405,14 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
     location: "src/config.ts:42",
   });
   assert.deepEqual(report.findings[0]?.officialReferences, ["https://example.test/frozen-rule"]);
+  assert.equal(
+    report.findings[0]?.evidenceReferences[1]?.scannerDetails?.description,
+    "Sibling frozen description",
+  );
+  assert.equal(
+    report.findings[0]?.evidenceReferences[1]?.scannerDetails?.awsIamPolicy,
+    undefined,
+  );
   assert.equal(report.nextSteps[0]?.taskId, "task-1");
 });
 
@@ -1566,7 +1622,7 @@ test("native findings keep unknown severity distinct from informational", () => 
   );
 });
 
-test("canonical evidence retains scanner-authored detail for exact-ID legacy report fallback", () => {
+test("canonical evidence retains scanner-authored detail and typed AWS IAM context", () => {
   const workspace = adaptNativeCase(platformCaseFixture({
     findings: [{
       id: "finding-scanner-detail",
@@ -1587,14 +1643,27 @@ test("canonical evidence retains scanner-authored detail for exact-ID legacy rep
         finding_id: "finding-scanner-detail",
         run_id: "run-1",
         engine_run_id: "task-1",
-        kind: "package_inventory",
-        engine_id: "trivy",
-        source_rule: "CVE-2026-12345",
+        kind: "configuration",
+        engine_id: "cloudsplaining",
+        source_rule: "DataExfiltration",
         scanner_details: {
           description: "Scanner description",
           remediation: "Scanner remediation",
           installed_version: "1.0.0",
           fixed_version: "1.0.1",
+          aws_iam_policy: {
+            policy_source: "inline",
+            policy_name: "DeploymentInlinePolicy",
+            finding_identity: "DataExfiltration",
+            actions: ["s3:GetObject"],
+            actions_complete: true,
+            attached_to: {
+              roles: ["DeploymentRole"],
+              groups: [],
+              users: ["release-user"],
+              complete: true,
+            },
+          },
         },
         observed_at: "2026-09-04T12:00:00Z",
         summary: "Evidence summary",
@@ -1619,8 +1688,134 @@ test("canonical evidence retains scanner-authored detail for exact-ID legacy rep
     remediation: "Scanner remediation",
     installedVersion: "1.0.0",
     fixedVersion: "1.0.1",
+    awsIamPolicy: {
+      policySource: "inline",
+      policyName: "DeploymentInlinePolicy",
+      findingIdentity: "DataExfiltration",
+      actions: ["s3:GetObject"],
+      actionsComplete: true,
+      attachedTo: {
+        roles: ["DeploymentRole"],
+        groups: [],
+        users: ["release-user"],
+        complete: true,
+      },
+    },
+  });
+  assert.deepEqual(workspace.findings[0]?.awsIamPolicy, {
+    policySource: "inline",
+    policyName: "DeploymentInlinePolicy",
+    findingIdentity: "DataExfiltration",
+    actions: ["s3:GetObject"],
+    actionsComplete: true,
+    attachedTo: {
+      roles: ["DeploymentRole"],
+      groups: [],
+      users: ["release-user"],
+      complete: true,
+    },
   });
   assert.equal(workspace.findings[0]?.recommendation, "Use the product recommendation.");
+});
+
+test("native AWS IAM detail mapping drops malformed context without dropping sibling evidence", () => {
+  const workspace = adaptNativeCase(platformCaseFixture({
+    findings: [{
+      id: "finding-malformed-iam-detail",
+      case_id: "case-platforms-1",
+      first_seen_run_id: "run-1",
+      last_seen_run_id: "run-1",
+      fingerprint: "fingerprint-malformed-iam-detail",
+      title: "Malformed IAM detail",
+      plain_language_summary: "Review this scanner observation.",
+      possible_impact: "Impact",
+      severity: "high",
+      confidence: "medium",
+      priority: 50,
+      priority_reasons: [],
+      asset_ids: ["repository-asset"],
+      evidence: [{
+        id: "evidence-malformed-iam-detail",
+        finding_id: "finding-malformed-iam-detail",
+        run_id: "run-1",
+        engine_run_id: "task-1",
+        kind: "configuration",
+        engine_id: "cloudsplaining",
+        source_rule: "PrivilegeEscalation",
+        scanner_details: {
+          description: "The scanner description remains useful.",
+          aws_iam_policy: {
+            policy_source: "product_guessed",
+            policy_name: "UnsafePolicy",
+            finding_identity: "PrivilegeEscalation",
+            actions: ["iam:PassRole"],
+            attached_to: {
+              roles: ["ApplicationRole"],
+              groups: [],
+              users: [],
+              complete: true,
+            },
+          },
+        },
+        observed_at: "2026-09-04T12:00:00Z",
+        summary: "Evidence summary",
+        artifact_id: "artifact-1",
+        artifact_sha256: "a".repeat(64),
+        pointer: "/CustomerManagedPolicies/UnsafePolicy/PrivilegeEscalation/0",
+        redacted: false,
+      }, {
+        id: "evidence-non-cloud-iam-detail",
+        finding_id: "finding-malformed-iam-detail",
+        run_id: "run-1",
+        engine_run_id: "task-1",
+        kind: "configuration",
+        engine_id: "trivy",
+        source_rule: "CVE-2026-12345",
+        scanner_details: {
+          description: "The non-cloud scanner description remains useful.",
+          aws_iam_policy: {
+            policy_source: "aws_managed",
+            policy_name: "MustNotDriveNarrative",
+            finding_identity: "CreateAccessKey",
+            actions: ["iam:CreateAccessKey"],
+            actions_complete: true,
+            attached_to: {
+              roles: ["BuildRole"],
+              groups: [],
+              users: [],
+              complete: true,
+            },
+          },
+        },
+        observed_at: "2026-09-04T12:00:00Z",
+        summary: "Non-cloud evidence summary",
+        artifact_id: "artifact-1",
+        artifact_sha256: "b".repeat(64),
+        pointer: "/Results/0",
+        redacted: false,
+      }],
+      control_references: [],
+      recommendation: "Use the product recommendation.",
+      verification_guidance: "Rerun the check.",
+      rollback_considerations: null,
+      official_references: [],
+      recommended_expert_type: "Cloud identity specialist",
+      status: "unreviewed",
+      tags: [],
+    }],
+  }));
+
+  assert.equal(workspace.findings[0]?.awsIamPolicy, undefined);
+  assert.equal(
+    workspace.findings[0]?.evidence[0]?.scannerDetails?.description,
+    "The scanner description remains useful.",
+  );
+  assert.equal(workspace.findings[0]?.evidence[0]?.scannerDetails?.awsIamPolicy, undefined);
+  assert.equal(
+    workspace.findings[0]?.evidence[1]?.scannerDetails?.description,
+    "The non-cloud scanner description remains useful.",
+  );
+  assert.equal(workspace.findings[0]?.evidence[1]?.scannerDetails?.awsIamPolicy, undefined);
 });
 
 test("draft full cases with no assets or applicable sources use the assessment route fallback", () => {

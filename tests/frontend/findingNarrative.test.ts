@@ -15,7 +15,12 @@ import {
   findingSummarySentence,
   localizedExpertType,
 } from "../../src/findingNarrative.ts";
-import type { ConfidenceBasisCode, FindingFamily, SeverityBasisCode } from "../../src/types.ts";
+import type {
+  AwsIamPolicyFindingDetails,
+  ConfidenceBasisCode,
+  FindingFamily,
+  SeverityBasisCode,
+} from "../../src/types.ts";
 
 const HAN = /\p{Script=Han}/u;
 const LATIN_SENTENCE = /[A-Za-z]{4,}\s+[A-Za-z]{4,}/u;
@@ -112,6 +117,57 @@ test("a leaked credential is told to revoke first, not to adjust permissions", (
   assert.ok(action.includes("撤銷"), action);
   assert.ok(action.includes("輪替"), action);
   assert.ok(action.includes("機密外洩應變專家"), action);
+});
+
+test("Cloudsplaining actions tell a Chinese reader how each upstream policy source can be changed", () => {
+  const details = (
+    policySource: AwsIamPolicyFindingDetails["policySource"],
+    complete = true,
+  ): AwsIamPolicyFindingDetails => ({
+    policySource,
+    policyName: "BillingReadPolicy",
+    findingIdentity: "PrivilegeEscalation",
+    actions: ["iam:PassRole"],
+    actionsComplete: true,
+    attachedTo: {
+      roles: ["ApplicationRole"],
+      groups: ["BillingOperators"],
+      users: ["break-glass-user"],
+      complete,
+    },
+  });
+
+  const action = (awsIamPolicy: AwsIamPolicyFindingDetails) => findingActionSentence("zh-TW", {
+    englishFallback: "ENGLISH_IAM_FALLBACK_MUST_NOT_RENDER",
+    expertType: "Cloud identity specialist",
+    family: "cloud_identity",
+    awsIamPolicy,
+  });
+
+  const awsManaged = action(details("aws_managed", false));
+  assert.match(awsManaged, /核准以下處理：在角色 ApplicationRole、群組 BillingOperators、使用者 break-glass-user上/u);
+  assert.match(awsManaged, /將 AWS 受管政策 BillingReadPolicy 改為權限較小的政策/u);
+  assert.match(awsManaged, /AWS 受管政策無法由此帳戶直接編輯/u);
+  assert.match(awsManaged, /保留的附加清單不完整；變更政策前請先核對目前的 IAM 附加關係/u);
+  assert.doesNotMatch(awsManaged, /ENGLISH_IAM_FALLBACK/u);
+
+  const unknownAttachments = details("aws_managed", false);
+  unknownAttachments.attachedTo.roles = [];
+  unknownAttachments.attachedTo.groups = [];
+  unknownAttachments.attachedTo.users = [];
+  const unknownAttachmentAction = action(unknownAttachments);
+  assert.match(unknownAttachmentAction, /先確認目前有哪些角色、群組與使用者附加/u);
+  assert.doesNotMatch(unknownAttachmentAction, /維持未附加狀態/u);
+
+  const customerManaged = action(details("customer_managed"));
+  assert.match(customerManaged, /縮小客戶受管政策 BillingReadPolicy 的權限/u);
+  assert.match(customerManaged, /ApplicationRole/u);
+  assert.doesNotMatch(customerManaged, /無法由此帳戶直接編輯|附加清單不完整/u);
+
+  const inline = action(details("inline"));
+  assert.match(inline, /直接在角色 ApplicationRole、群組 BillingOperators、使用者 break-glass-user上/u);
+  assert.match(inline, /縮小內嵌政策 BillingReadPolicy 的權限/u);
+  assert.doesNotMatch(inline, /AWS 受管政策無法由此帳戶直接編輯|附加清單不完整/u);
 });
 
 test("every severity basis this product can derive has Chinese", () => {

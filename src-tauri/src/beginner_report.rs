@@ -4943,6 +4943,7 @@ mod tests {
             remediation: Some("Frozen scanner remediation".into()),
             installed_version: Some("1.0.0".into()),
             fixed_version: Some("1.0.1".into()),
+            aws_iam_policy: None,
         });
         case.findings = vec![low.clone(), high.clone()];
         case.finding_observations = vec![
@@ -4988,6 +4989,7 @@ mod tests {
                 remediation: Some("Frozen scanner remediation".into()),
                 installed_version: Some("1.0.0".into()),
                 fixed_version: Some("1.0.1".into()),
+                aws_iam_policy: None,
             })
         );
         assert_eq!(evidence.kind, Some(EvidenceKind::Observation));

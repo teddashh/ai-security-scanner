@@ -1264,6 +1264,35 @@ pub(crate) fn beginner_report_for_export(
 
 fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &AssessmentCase) {
     let replacements = standard_redaction_replacements(case);
+    let iam_context_by_finding = report
+        .findings
+        .iter()
+        .map(|finding| {
+            let is_cloudsplaining = finding
+                .evidence_references
+                .iter()
+                .any(|reference| reference.engine_id == "cloudsplaining");
+            (
+                finding.finding_id.clone(),
+                (
+                    is_cloudsplaining,
+                    finding
+                        .evidence_references
+                        .iter()
+                        .filter(|reference| {
+                            reference.details_frozen && reference.engine_id == "cloudsplaining"
+                        })
+                        .find_map(|reference| {
+                            reference
+                                .scanner_details
+                                .as_ref()
+                                .and_then(|details| details.aws_iam_policy.clone())
+                                .map(|details| (reference.source_rule.clone(), details))
+                        }),
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     report.project_title = "Redacted assessment case".into();
     redact_known_literals(&mut report.state.explanation, &replacements);
 
@@ -1360,6 +1389,15 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
     }
 
     for finding in &mut report.findings {
+        let (is_cloudsplaining, iam_context) = iam_context_by_finding
+            .get(&finding.finding_id)
+            .map(|(is_cloudsplaining, context)| (*is_cloudsplaining, context.as_ref()))
+            .unwrap_or((false, None));
+        if let Some((source_rule, iam)) = iam_context {
+            finding.title = redacted_aws_iam_finding_title(source_rule.as_deref(), iam);
+        } else if is_cloudsplaining {
+            redact_legacy_cloudsplaining_prose(&mut finding.title, &mut finding.next_step);
+        }
         for value in [
             &mut finding.title,
             &mut finding.plain_language_risk,
@@ -1385,6 +1423,20 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
             if let Some(details) = &mut reference.scanner_details {
                 redact_scanner_finding_details(details, &replacements);
             }
+        }
+        if let Some(iam) = finding.evidence_references.iter().find_map(|reference| {
+            if reference.engine_id != "cloudsplaining" {
+                return None;
+            }
+            reference
+                .scanner_details
+                .as_ref()
+                .and_then(|details| details.aws_iam_policy.as_ref())
+        }) {
+            finding.next_step = crate::finding_narrative::aws_iam_policy_action_english(
+                &finding.recommended_expert_type,
+                iam,
+            );
         }
         if let Some(references) = &mut finding.official_references {
             for reference in references {
@@ -1419,6 +1471,25 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
         group.rationale = "[redacted grouping rationale]".into();
         group.actor = "[redacted]".into();
     }
+    let redacted_finding_steps = report
+        .findings
+        .iter()
+        .map(|finding| {
+            (
+                finding.finding_id.as_str(),
+                (
+                    finding.next_step.as_str(),
+                    crate::beginner_report::finding_step_reason(
+                        &finding.title,
+                        &finding.severity,
+                        &finding.confidence,
+                        finding.confidence_basis_code,
+                        &finding.priority_reasons,
+                    ),
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     for step in &mut report.next_steps {
         // Same unreachable-by-replacement problem as the coverage gap this
         // step is derived from: the identifier is registered on no asset, so
@@ -1434,6 +1505,12 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
                 "{count} result(s) were reported for an identifier no authorized asset carries, so none of them are in this report. The identifier is withheld from this redacted export."
             );
             continue;
+        }
+        if let Some(finding_id) = step.finding_id.as_deref() {
+            if let Some((action, reason)) = redacted_finding_steps.get(finding_id) {
+                step.action = (*action).to_owned();
+                step.reason = reason.clone();
+            }
         }
         redact_known_literals(&mut step.action, &replacements);
         redact_known_literals(&mut step.reason, &replacements);
@@ -1525,6 +1602,26 @@ fn redact_data_source(source: &mut DataSource, index: usize) {
 }
 
 fn redact_finding(finding: &mut Finding, replacements: &[(String, String)]) {
+    let is_cloudsplaining = finding
+        .evidence
+        .iter()
+        .any(|evidence| evidence.engine_id == "cloudsplaining");
+    let iam_context = finding
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.engine_id == "cloudsplaining")
+        .find_map(|evidence| {
+            evidence
+                .scanner_details
+                .as_ref()
+                .and_then(|details| details.aws_iam_policy.clone())
+                .map(|details| (evidence.source_rule.clone(), details))
+        });
+    if let Some((source_rule, iam)) = &iam_context {
+        finding.title = redacted_aws_iam_finding_title(source_rule.as_deref(), iam);
+    } else if is_cloudsplaining {
+        redact_legacy_cloudsplaining_prose(&mut finding.title, &mut finding.recommendation);
+    }
     redact_known_literals(&mut finding.title, replacements);
     redact_known_literals(&mut finding.plain_language_summary, replacements);
     redact_known_literals(&mut finding.possible_impact, replacements);
@@ -1554,6 +1651,41 @@ fn redact_finding(finding: &mut Finding, replacements: &[(String, String)]) {
         evidence.pointer = None;
         evidence.redacted = true;
     }
+    if let Some(iam) = finding.evidence.iter().find_map(|evidence| {
+        if evidence.engine_id != "cloudsplaining" {
+            return None;
+        }
+        evidence
+            .scanner_details
+            .as_ref()
+            .and_then(|details| details.aws_iam_policy.as_ref())
+    }) {
+        finding.recommendation = crate::finding_narrative::aws_iam_policy_action_english(
+            &finding.recommended_expert_type,
+            iam,
+        );
+    }
+}
+
+fn redacted_aws_iam_finding_title(
+    source_rule: Option<&str>,
+    iam: &crate::domain::AwsIamPolicyFindingDetails,
+) -> String {
+    format!(
+        "{}: {} in policy [redacted IAM policy]",
+        source_rule.unwrap_or("AWS IAM policy finding"),
+        iam.finding_identity
+    )
+}
+
+fn redact_legacy_cloudsplaining_prose(title: &mut String, action: &mut String) {
+    // Saved reports from before typed IAM evidence may embed a policy name in
+    // both fields, but there is no trustworthy delimiter or schema from which
+    // to extract it. Replace the whole legacy prose instead of guessing at a
+    // title format and risking disclosure from a Standard export.
+    *title = "Cloudsplaining IAM policy finding (details redacted)".into();
+    *action =
+        "Open the unredacted export to review the affected IAM policy and its next step.".into();
 }
 
 fn redact_scanner_finding_details(
@@ -1571,6 +1703,18 @@ fn redact_scanner_finding_details(
     }
     if let Some(fixed_version) = &mut details.fixed_version {
         redact_known_literals(fixed_version, replacements);
+    }
+    if let Some(iam) = &mut details.aws_iam_policy {
+        iam.policy_name = "[redacted IAM policy]".into();
+        for role in &mut iam.attached_to.roles {
+            *role = "[redacted IAM role]".into();
+        }
+        for group in &mut iam.attached_to.groups {
+            *group = "[redacted IAM group]".into();
+        }
+        for user in &mut iam.attached_to.users {
+            *user = "[redacted IAM user]".into();
+        }
     }
 }
 
@@ -2042,6 +2186,17 @@ fn validate_evidence_references(case: &AssessmentCase) -> AppResult<()> {
             {
                 return Err(AppError::InvalidRequest(format!(
                     "evidence {} does not match its finding, artifact, scan run, or engine run provenance",
+                    evidence.id
+                )));
+            }
+            if evidence.engine_id != "cloudsplaining"
+                && evidence
+                    .scanner_details
+                    .as_ref()
+                    .is_some_and(|details| details.aws_iam_policy.is_some())
+            {
+                return Err(AppError::InvalidRequest(format!(
+                    "evidence {} attached AWS IAM policy context to a non-Cloudsplaining result",
                     evidence.id
                 )));
             }
@@ -2681,6 +2836,218 @@ mod tests {
             contains_sensitive_data: sensitive,
         });
         case
+    }
+
+    #[test]
+    fn standard_redaction_rebuilds_cloudsplaining_prose_without_short_name_leaks() {
+        let temp = tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let mut case = fixture(&artifact_root, false);
+        let observed_at = case.scan_runs[0].created_at;
+        case.assets[0].kind = AssetKind::CloudAccount;
+        case.assets[0].provider = Some("aws".into());
+        case.scan_runs[0].engine_runs[0].engine_id = "cloudsplaining".into();
+
+        let iam = AwsIamPolicyFindingDetails {
+            policy_source: AwsIamPolicySource::CustomerManaged,
+            // These intentionally fall below the generic replacement pass's
+            // embedded-literal threshold. Structured redaction must not leak
+            // them or corrupt every letter `a` in ordinary report prose.
+            policy_name: "a".into(),
+            finding_identity: "s3:GetObject".into(),
+            actions: vec!["s3:GetObject".into()],
+            actions_complete: true,
+            attached_to: AwsIamAttachedTo {
+                roles: vec!["IT".into()],
+                groups: vec![],
+                users: vec![],
+                complete: true,
+            },
+        };
+        let finding = Finding {
+            id: "finding-cloudsplaining".into(),
+            case_id: case.id.clone(),
+            first_seen_run_id: "run-1".into(),
+            last_seen_run_id: "run-1".into(),
+            fingerprint: "cloudsplaining:short-redaction".into(),
+            title: "DataExfiltration: s3:GetObject in policy a".into(),
+            plain_language_summary: "Cloudsplaining reported this condition on the assessed asset. The attached raw record is evidence, not an instruction.".into(),
+            possible_impact: "If confirmed, access may expose stored data.".into(),
+            severity: Severity::Medium,
+            severity_basis_code: None,
+            confidence: Confidence::High,
+            confidence_basis_code: Some(
+                crate::domain::ConfidenceBasisCode::DeterministicPolicyEvaluation,
+            ),
+            context_factors: Vec::new(),
+            priority: 60,
+            priority_reasons: vec!["Source severity: medium".into()],
+            asset_ids: vec!["asset-1".into()],
+            evidence: vec![Evidence {
+                id: "evidence-cloudsplaining".into(),
+                finding_id: "finding-cloudsplaining".into(),
+                run_id: "run-1".into(),
+                engine_run_id: Some("engine-run-1".into()),
+                kind: EvidenceKind::Configuration,
+                engine_id: "cloudsplaining".into(),
+                scanner_details: Some(ScannerFindingDetails {
+                    description: Some("Upstream policy description".into()),
+                    remediation: None,
+                    installed_version: None,
+                    fixed_version: None,
+                    aws_iam_policy: Some(iam.clone()),
+                }),
+                source_rule: Some("DataExfiltration".into()),
+                result_pointer_sha256: Some("b".repeat(64)),
+                observed_at,
+                summary: "Cloudsplaining policy evidence".into(),
+                location: Some("arn:aws:iam::123456789012:policy/a :: s3:GetObject".into()),
+                artifact_id: "artifact-1".into(),
+                artifact_sha256: case.raw_artifacts[0].sha256.clone(),
+                pointer: Some("/customer_managed_policies/a/DataExfiltration/findings/0".into()),
+                redacted: false,
+            }],
+            control_references: Vec::new(),
+            recommendation: crate::finding_narrative::aws_iam_policy_action_english(
+                "Cloud identity specialist",
+                &iam,
+            ),
+            verification_guidance: "Rerun Cloudsplaining and confirm DataExfiltration is no longer reported.".into(),
+            rollback_considerations: Some(crate::finding_narrative::ENGLISH_ROLLBACK.into()),
+            official_references: Vec::new(),
+            recommended_expert_type: "Cloud identity specialist".into(),
+            status: FindingStatus::Unreviewed,
+            tags: vec!["engine:cloudsplaining".into()],
+            family: Some(FindingFamily::CloudIdentity),
+        };
+        case.findings.push(finding.clone());
+        case.finding_observations.push(FindingObservation {
+            id: "observation-cloudsplaining".into(),
+            run_id: "run-1".into(),
+            finding_id: finding.id.clone(),
+            fingerprint: finding.fingerprint.clone(),
+            asset_ids: finding.asset_ids.clone(),
+            engine_ids: vec!["cloudsplaining".into()],
+            severity: finding.severity.clone(),
+            confidence: finding.confidence.clone(),
+            evidence_hashes: vec![case.raw_artifacts[0].sha256.clone()],
+            observed_at,
+            finding_snapshot: Some(finding),
+        });
+
+        let unredacted = case_for_export(&case, RedactionProfile::None);
+        assert!(unredacted.findings[0].title.ends_with("policy a"));
+        assert!(unredacted.findings[0].recommendation.contains("role IT"));
+
+        let redacted = case_for_export(&case, RedactionProfile::Standard);
+        let redacted_finding = &redacted.findings[0];
+        assert_eq!(
+            redacted_finding.title,
+            "DataExfiltration: s3:GetObject in policy [redacted IAM policy]"
+        );
+        assert!(
+            redacted_finding
+                .recommendation
+                .starts_with("Have the recommended specialist")
+        );
+        assert!(
+            redacted_finding
+                .recommendation
+                .contains("customer-managed policy [redacted IAM policy]")
+        );
+        assert!(
+            redacted_finding
+                .recommendation
+                .contains("role [redacted IAM role]")
+        );
+        let redacted_iam = redacted_finding.evidence[0]
+            .scanner_details
+            .as_ref()
+            .and_then(|details| details.aws_iam_policy.as_ref())
+            .expect("typed IAM context remains available");
+        assert_eq!(redacted_iam.policy_name, "[redacted IAM policy]");
+        assert_eq!(redacted_iam.attached_to.roles, ["[redacted IAM role]"]);
+
+        let report = beginner_report_for_export(&case, "run-1", RedactionProfile::Standard)
+            .expect("standard beginner report");
+        let report_finding = &report.findings[0];
+        assert_eq!(
+            report_finding.title,
+            "DataExfiltration: s3:GetObject in policy [redacted IAM policy]"
+        );
+        assert!(
+            report_finding
+                .next_step
+                .contains("customer-managed policy [redacted IAM policy]")
+        );
+        let step = report
+            .next_steps
+            .iter()
+            .find(|step| step.finding_id.as_deref() == Some("finding-cloudsplaining"))
+            .expect("finding-derived next step");
+        assert_eq!(step.action, report_finding.next_step);
+        assert!(step.reason.starts_with(&report_finding.title));
+        assert!(!step.reason.contains("policy a"));
+
+        const LEGACY_POLICY_SENTINEL: &str = "LEGACY_IAM_POLICY_SENTINEL_65d3f1";
+        let mut legacy_case = case.clone();
+        for finding in &mut legacy_case.findings {
+            finding.title =
+                format!("DataExfiltration: s3:GetObject in policy {LEGACY_POLICY_SENTINEL}");
+            finding.recommendation =
+                format!("Review policy {LEGACY_POLICY_SENTINEL} before approving this change.");
+            for evidence in &mut finding.evidence {
+                if let Some(details) = &mut evidence.scanner_details {
+                    details.aws_iam_policy = None;
+                }
+            }
+        }
+        for observation in &mut legacy_case.finding_observations {
+            let Some(snapshot) = &mut observation.finding_snapshot else {
+                continue;
+            };
+            snapshot.title =
+                format!("DataExfiltration: s3:GetObject in policy {LEGACY_POLICY_SENTINEL}");
+            snapshot.recommendation =
+                format!("Review policy {LEGACY_POLICY_SENTINEL} before approving this change.");
+            for evidence in &mut snapshot.evidence {
+                if let Some(details) = &mut evidence.scanner_details {
+                    details.aws_iam_policy = None;
+                }
+            }
+        }
+
+        let redacted_legacy_case = case_for_export(&legacy_case, RedactionProfile::Standard);
+        assert_eq!(
+            redacted_legacy_case.findings[0].title,
+            "Cloudsplaining IAM policy finding (details redacted)"
+        );
+        assert_eq!(
+            redacted_legacy_case.findings[0].recommendation,
+            "Open the unredacted export to review the affected IAM policy and its next step."
+        );
+        assert!(
+            !serde_json::to_string(&redacted_legacy_case)
+                .unwrap()
+                .contains(LEGACY_POLICY_SENTINEL)
+        );
+
+        let redacted_legacy_report =
+            beginner_report_for_export(&legacy_case, "run-1", RedactionProfile::Standard)
+                .expect("standard legacy beginner report");
+        assert_eq!(
+            redacted_legacy_report.findings[0].title,
+            "Cloudsplaining IAM policy finding (details redacted)"
+        );
+        assert_eq!(
+            redacted_legacy_report.findings[0].next_step,
+            "Open the unredacted export to review the affected IAM policy and its next step."
+        );
+        assert!(
+            !serde_json::to_string(&redacted_legacy_report)
+                .unwrap()
+                .contains(LEGACY_POLICY_SENTINEL)
+        );
     }
 
     const LEGACY_CURRENT_FINDING_CONTEXT_SENTINEL: &str =
@@ -3444,6 +3811,32 @@ mod tests {
         });
 
         validate_evidence_references(&case).unwrap();
+        case.findings[0].evidence[0].scanner_details = Some(ScannerFindingDetails {
+            description: None,
+            remediation: None,
+            installed_version: None,
+            fixed_version: None,
+            aws_iam_policy: Some(AwsIamPolicyFindingDetails {
+                policy_source: AwsIamPolicySource::CustomerManaged,
+                policy_name: "must-not-drive-a-non-cloud-result".into(),
+                finding_identity: "s3:GetObject".into(),
+                actions: vec!["s3:GetObject".into()],
+                actions_complete: true,
+                attached_to: AwsIamAttachedTo {
+                    roles: vec!["WrongEngineRole".into()],
+                    groups: vec![],
+                    users: vec![],
+                    complete: true,
+                },
+            }),
+        });
+        assert!(
+            validate_evidence_references(&case)
+                .unwrap_err()
+                .to_string()
+                .contains("non-Cloudsplaining")
+        );
+        case.findings[0].evidence[0].scanner_details = None;
         let canonical_evidence = case.findings[0].evidence.clone();
         case.findings[0].evidence.clear();
         assert!(
@@ -4241,6 +4634,7 @@ mod tests {
                     remediation: Some(ARBITRARY_SCANNER_REMEDIATION.into()),
                     installed_version: Some(format!("installed on {PLAN_HOSTNAME}")),
                     fixed_version: Some(format!("fixed for {PLAN_ADDRESS_ONE}")),
+                    aws_iam_policy: None,
                 }),
                 source_rule: None,
                 result_pointer_sha256: None,

@@ -393,6 +393,52 @@ fn oscal_evidence(evidence: &Evidence) -> Value {
         if let Some(fixed_version) = &details.fixed_version {
             props.push(property("scanner-provided-fixed-version", fixed_version));
         }
+        if evidence.engine_id == "cloudsplaining"
+            && let Some(iam) = &details.aws_iam_policy
+        {
+            let source = match iam.policy_source {
+                crate::domain::AwsIamPolicySource::AwsManaged => "aws_managed",
+                crate::domain::AwsIamPolicySource::CustomerManaged => "customer_managed",
+                crate::domain::AwsIamPolicySource::Inline => "inline",
+            };
+            props.push(property("scanner-provided-aws-iam-policy-source", source));
+            props.push(property(
+                "scanner-provided-aws-iam-policy-name",
+                &iam.policy_name,
+            ));
+            props.push(property(
+                "scanner-provided-aws-iam-finding-identity",
+                &iam.finding_identity,
+            ));
+            for action in &iam.actions {
+                props.push(property("scanner-provided-aws-iam-action", action));
+            }
+            props.push(property(
+                "scanner-provided-aws-iam-actions-complete",
+                if iam.actions_complete {
+                    "true"
+                } else {
+                    "false"
+                },
+            ));
+            for role in &iam.attached_to.roles {
+                props.push(property("scanner-provided-aws-iam-attached-role", role));
+            }
+            for group in &iam.attached_to.groups {
+                props.push(property("scanner-provided-aws-iam-attached-group", group));
+            }
+            for user in &iam.attached_to.users {
+                props.push(property("scanner-provided-aws-iam-attached-user", user));
+            }
+            props.push(property(
+                "scanner-provided-aws-iam-attachments-complete",
+                if iam.attached_to.complete {
+                    "true"
+                } else {
+                    "false"
+                },
+            ));
+        }
     }
     json!({
         "description": evidence.summary,
@@ -633,14 +679,27 @@ mod tests {
             run_id: "run-1".into(),
             engine_run_id: Some("engine-run-1".into()),
             kind: EvidenceKind::Configuration,
-            engine_id: "unfamiliar-scanner".into(),
+            engine_id: "cloudsplaining".into(),
             scanner_details: Some(ScannerFindingDetails {
                 description: Some("Upstream scanner explanation".into()),
                 remediation: Some("Upstream scanner remediation".into()),
                 installed_version: Some("1.2.3".into()),
                 fixed_version: Some("1.2.4".into()),
+                aws_iam_policy: Some(AwsIamPolicyFindingDetails {
+                    policy_source: AwsIamPolicySource::CustomerManaged,
+                    policy_name: "NarrowMe".into(),
+                    finding_identity: "s3:GetObject".into(),
+                    actions: vec!["s3:GetObject".into()],
+                    actions_complete: true,
+                    attached_to: AwsIamAttachedTo {
+                        roles: vec!["ReadRole".into()],
+                        groups: vec![],
+                        users: vec!["Analyst".into()],
+                        complete: false,
+                    },
+                }),
             }),
-            source_rule: Some("UPSTREAM-RULE-42".into()),
+            source_rule: Some("DataExfiltration".into()),
             result_pointer_sha256: Some("def".into()),
             observed_at: case.finding_observations[0].observed_at,
             summary: "Upstream evidence summary".into(),
@@ -664,8 +723,8 @@ mod tests {
 
         assert_eq!(relevant["description"], "Upstream evidence summary");
         assert!(has("evidence-kind", "configuration"));
-        assert!(has("source-engine-id", "unfamiliar-scanner"));
-        assert!(has("source-rule-id", "UPSTREAM-RULE-42"));
+        assert!(has("source-engine-id", "cloudsplaining"));
+        assert!(has("source-rule-id", "DataExfiltration"));
         assert!(has("result-pointer-sha-256", "def"));
         assert!(has("evidence-location", "config/policy.json:4"));
         assert!(has("result-pointer", "/results/0"));
@@ -680,12 +739,37 @@ mod tests {
         ));
         assert!(has("scanner-provided-installed-version", "1.2.3"));
         assert!(has("scanner-provided-fixed-version", "1.2.4"));
+        assert!(has(
+            "scanner-provided-aws-iam-policy-source",
+            "customer_managed"
+        ));
+        assert!(has("scanner-provided-aws-iam-policy-name", "NarrowMe"));
+        assert!(has(
+            "scanner-provided-aws-iam-finding-identity",
+            "s3:GetObject"
+        ));
+        assert!(has("scanner-provided-aws-iam-action", "s3:GetObject"));
+        assert!(has("scanner-provided-aws-iam-actions-complete", "true"));
+        assert!(has("scanner-provided-aws-iam-attached-role", "ReadRole"));
+        assert!(has("scanner-provided-aws-iam-attached-user", "Analyst"));
+        assert!(has(
+            "scanner-provided-aws-iam-attachments-complete",
+            "false"
+        ));
         for name in [
             "scanner-provided-details-trust",
             "scanner-provided-description",
             "scanner-provided-remediation",
             "scanner-provided-installed-version",
             "scanner-provided-fixed-version",
+            "scanner-provided-aws-iam-policy-source",
+            "scanner-provided-aws-iam-policy-name",
+            "scanner-provided-aws-iam-finding-identity",
+            "scanner-provided-aws-iam-action",
+            "scanner-provided-aws-iam-actions-complete",
+            "scanner-provided-aws-iam-attached-role",
+            "scanner-provided-aws-iam-attached-user",
+            "scanner-provided-aws-iam-attachments-complete",
         ] {
             assert!(props.iter().any(|property| {
                 property["name"] == name && property["ns"] == OSCAL_PROPERTY_NAMESPACE

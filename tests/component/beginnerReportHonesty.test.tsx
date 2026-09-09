@@ -1482,6 +1482,132 @@ test("scanner HTML descriptions remain complete visible text and never become ac
   expect(description!.innerHTML).toContain("&lt;a href=");
 });
 
+test.each([
+  {
+    locale: "en",
+    heading: "AWS IAM policy context",
+    sourceLabel: "Policy source",
+    source: "AWS-managed",
+    policyLabel: "Policy",
+    findingLabel: "Upstream finding",
+    actionsLabel: "Retained actions",
+    actionsIncomplete: "The action list was shortened or sanitized for display. Open the raw evidence for the complete upstream list.",
+    more: "+2 more",
+    rolesLabel: "Attached roles",
+    groupsLabel: "Attached groups",
+    usersLabel: "Attached users",
+    incomplete: "The retained attachment list is incomplete. Confirm the current IAM attachments before changing this policy.",
+  },
+  {
+    locale: "zh-TW",
+    heading: "AWS IAM 政策脈絡",
+    sourceLabel: "政策來源",
+    source: "AWS 受管",
+    policyLabel: "政策",
+    findingLabel: "上游問題",
+    actionsLabel: "已保留的動作",
+    actionsIncomplete: "動作清單為了顯示而經過縮減或清理；完整上游清單請查看原始證據。",
+    more: "另有 2 項",
+    rolesLabel: "附加的角色",
+    groupsLabel: "附加的群組",
+    usersLabel: "附加的使用者",
+    incomplete: "保留的附加清單不完整；變更此政策前請先核對目前的 IAM 附加關係。",
+  },
+])("Cloudsplaining policy evidence is readable and inert in $locale", ({
+  locale,
+  heading,
+  sourceLabel,
+  source,
+  policyLabel,
+  findingLabel,
+  actionsLabel,
+  actionsIncomplete,
+  more,
+  rolesLabel,
+  groupsLabel,
+  usersLabel,
+  incomplete,
+}) => {
+  window.localStorage.setItem(localeStorageKey, locale);
+  const policyName = '<img src=x onerror="window.__policyExecuted=true">AdministratorAccess';
+  const findingIdentity = '<script>window.__findingExecuted=true</script>PrivilegeEscalation';
+  const upstreamAction = '<svg onload="window.__actionExecuted=true">iam:PassRole</svg>';
+  const role = '<a href="javascript:window.__roleExecuted=true">ApplicationRole</a>';
+  const group = "<button>BillingOperators</button>";
+  const user = "<iframe srcdoc='<script>window.__userExecuted=true</script>'>release-user</iframe>";
+  const { container } = renderReport(report("partial", {
+    findings: [frozenFinding({
+      nextStep:
+        "Have the recommended specialist (Cloud identity specialist) review the affected policy and source evidence, then replace the AWS-managed policy with a narrower policy.",
+      recommendedExpertType: "Cloud identity specialist",
+      family: "cloud_identity",
+      evidenceReferences: [{
+        evidenceId: "evidence-cloudsplaining-policy",
+        engineId: "cloudsplaining",
+        detailsFrozen: true,
+        sourceRule: "PrivilegeEscalation",
+        scannerDetails: {
+          awsIamPolicy: {
+            policySource: "aws_managed",
+            policyName,
+            findingIdentity,
+            actions: [
+              upstreamAction,
+              "iam:Visible1",
+              "iam:Visible2",
+              "iam:Visible3",
+              "iam:Visible4",
+              "iam:Visible5",
+              "iam:Hidden6",
+              "iam:Hidden7",
+            ],
+            actionsComplete: false,
+            attachedTo: {
+              roles: [role],
+              groups: [group],
+              users: [user],
+              complete: false,
+            },
+          },
+        },
+        artifactSha256: "a".repeat(64),
+        observedAt: "2026-09-04T12:00:00Z",
+      }],
+    })],
+  }));
+
+  openFirstFinding(container);
+  const context = Array.from(
+    container.querySelectorAll<HTMLElement>(".scanner-evidence-description"),
+  ).find((candidate) => candidate.querySelector("strong")?.textContent === heading);
+  expect(context).not.toBeUndefined();
+  for (const expected of [
+    heading,
+    sourceLabel,
+    source,
+    policyLabel,
+    policyName,
+    findingLabel,
+    findingIdentity,
+    actionsLabel,
+    upstreamAction,
+    actionsIncomplete,
+    more,
+    rolesLabel,
+    role,
+    groupsLabel,
+    group,
+    usersLabel,
+    user,
+    incomplete,
+  ]) {
+    expect(context!.textContent).toContain(expected);
+  }
+  expect(context!.querySelector("img, script, svg, a, button, iframe")).toBeNull();
+  expect(context!.textContent).not.toContain("iam:Hidden6");
+  expect(context!.textContent).not.toContain("iam:Hidden7");
+});
+
 test("selected-run evidence details and references do not drift to the current canonical finding", () => {
   const { container } = renderReport(
     report("partial", {

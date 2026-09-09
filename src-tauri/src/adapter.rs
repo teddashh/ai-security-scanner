@@ -273,6 +273,7 @@ pub fn validate_adapter_output(
                     && details.remediation.is_none()
                     && details.installed_version.is_none()
                     && details.fixed_version.is_none()
+                    && details.aws_iam_policy.is_none()
                 {
                     return Err(AppError::Runtime(format!(
                         "finding {} has an empty scanner-provided detail record",
@@ -298,6 +299,55 @@ pub fn validate_adapter_output(
                             "finding {} has invalid scanner-provided {label}",
                             finding.fingerprint
                         )));
+                    }
+                }
+                if let Some(iam) = &details.aws_iam_policy {
+                    if evidence.engine_id != "cloudsplaining" {
+                        return Err(AppError::Runtime(format!(
+                            "finding {} attached AWS IAM policy evidence to a non-Cloudsplaining result",
+                            finding.fingerprint
+                        )));
+                    }
+                    for (label, value) in [
+                        ("policy name", iam.policy_name.as_str()),
+                        ("finding identity", iam.finding_identity.as_str()),
+                    ] {
+                        if value.is_empty()
+                            || value.chars().count() > 512
+                            || value.chars().any(char::is_control)
+                        {
+                            return Err(AppError::Runtime(format!(
+                                "finding {} has invalid scanner-provided AWS IAM {label}",
+                                finding.fingerprint
+                            )));
+                        }
+                    }
+                    if iam.actions.len() > 32
+                        || iam.attached_to.roles.len() > 32
+                        || iam.attached_to.groups.len() > 32
+                        || iam.attached_to.users.len() > 32
+                    {
+                        return Err(AppError::Runtime(format!(
+                            "finding {} exceeded the AWS IAM policy evidence list boundary",
+                            finding.fingerprint
+                        )));
+                    }
+                    for value in iam
+                        .actions
+                        .iter()
+                        .chain(&iam.attached_to.roles)
+                        .chain(&iam.attached_to.groups)
+                        .chain(&iam.attached_to.users)
+                    {
+                        if value.is_empty()
+                            || value.chars().count() > 512
+                            || value.chars().any(char::is_control)
+                        {
+                            return Err(AppError::Runtime(format!(
+                                "finding {} has invalid scanner-provided AWS IAM policy context",
+                                finding.fingerprint
+                            )));
+                        }
                     }
                 }
             }
@@ -458,9 +508,27 @@ mod tests {
         output: AdapterOutput,
     }
 
+    struct CloudsplainingTestAdapter {
+        output: AdapterOutput,
+    }
+
     impl EngineAdapter for TestAdapter {
         fn engine_id(&self) -> &str {
             "scanner"
+        }
+
+        fn adapter_version(&self) -> &str {
+            "1"
+        }
+
+        fn normalize(&self, _input: &AdapterInput<'_>) -> AppResult<AdapterOutput> {
+            Ok(self.output.clone())
+        }
+    }
+
+    impl EngineAdapter for CloudsplainingTestAdapter {
+        fn engine_id(&self) -> &str {
+            "cloudsplaining"
         }
 
         fn adapter_version(&self) -> &str {
@@ -744,6 +812,7 @@ mod tests {
             remediation: None,
             installed_version: None,
             fixed_version: None,
+            aws_iam_policy: None,
         });
         let adapter = TestAdapter {
             output: AdapterOutput {
@@ -773,6 +842,66 @@ mod tests {
         let error = validate_adapter_output(&input, &adapter, &adapter.output)
             .expect_err("control characters in scanner text must be rejected");
         assert!(error.to_string().contains("scanner-provided description"));
+    }
+
+    #[test]
+    fn aws_iam_policy_context_is_bounded_untrusted_cloudsplaining_evidence() {
+        let mut manifest = manifest();
+        manifest.id = "cloudsplaining".into();
+        let artifact = artifact();
+        let mut bad_finding = finding(&artifact);
+        bad_finding.evidence[0].engine_id = "cloudsplaining".into();
+        bad_finding.evidence[0].scanner_details = Some(crate::domain::ScannerFindingDetails {
+            description: None,
+            remediation: None,
+            installed_version: None,
+            fixed_version: None,
+            aws_iam_policy: Some(crate::domain::AwsIamPolicyFindingDetails {
+                policy_source: crate::domain::AwsIamPolicySource::CustomerManaged,
+                policy_name: "Policy".into(),
+                finding_identity: "Action".into(),
+                actions: vec!["iam:GetObject\nunsafe".into()],
+                actions_complete: false,
+                attached_to: crate::domain::AwsIamAttachedTo {
+                    roles: vec![],
+                    groups: vec![],
+                    users: vec![],
+                    complete: true,
+                },
+            }),
+        });
+        let adapter = CloudsplainingTestAdapter {
+            output: AdapterOutput {
+                unattributed: Vec::new(),
+                findings: vec![bad_finding],
+                observations: Vec::new(),
+                warnings: vec![],
+                complete: true,
+            },
+        };
+        let artifacts = vec![artifact];
+        let assets = vec!["asset-1".into()];
+        let asset_identifier_map = AdapterAssetIdentifierMap::default();
+        let input = AdapterInput {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
+            asset_ids: &assets,
+            asset_identifier_map: &asset_identifier_map,
+            artifact_root: Path::new("/tmp"),
+            raw_artifacts: &artifacts,
+        };
+
+        let error = validate_adapter_output(&input, &adapter, &adapter.output)
+            .expect_err("control characters in IAM context must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid scanner-provided AWS IAM policy context")
+        );
     }
 
     #[test]

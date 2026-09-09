@@ -2,9 +2,9 @@ use ai_security_scanner_lib::adapter::{AdapterAssetIdentifierMap, AdapterInput, 
 use ai_security_scanner_lib::adapters::{BUILTIN_ENGINE_IDS, builtin_adapter_registry};
 use ai_security_scanner_lib::correlation::correlation_report;
 use ai_security_scanner_lib::domain::{
-    AssessmentCase, Asset, AssetIdentifier, AssetKind, Confidence, ConfidenceBasisCode, DataClass,
-    Finding, FindingFamily, FindingStatus, InventoryObservationKind, OrganizationProfile,
-    RawArtifact, Severity, SeverityBasisCode,
+    AssessmentCase, Asset, AssetIdentifier, AssetKind, AwsIamPolicySource, Confidence,
+    ConfidenceBasisCode, DataClass, Finding, FindingFamily, FindingStatus,
+    InventoryObservationKind, OrganizationProfile, RawArtifact, Severity, SeverityBasisCode,
 };
 use ai_security_scanner_lib::finding_narrative::{
     ENGLISH_ROLLBACK, expert_type_zh_hant, priority_reason_zh_hant, rollback_zh_hant,
@@ -3662,12 +3662,24 @@ fn cloudsplaining_risks_are_read_from_policies_not_the_document_root() {
     );
 
     // Whether the account owner can edit the policy changes the remediation,
-    // so the distinction has to survive normalization.
+    // so it survives as typed evidence rather than an opaque display tag.
     let sources = output
         .findings
         .iter()
-        .flat_map(|finding| &finding.tags)
-        .filter_map(|tag| tag.strip_prefix("policy-source:"))
+        .filter_map(|finding| {
+            finding
+                .evidence
+                .first()?
+                .scanner_details
+                .as_ref()?
+                .aws_iam_policy
+                .as_ref()
+        })
+        .map(|details| match details.policy_source {
+            AwsIamPolicySource::AwsManaged => "aws-managed",
+            AwsIamPolicySource::CustomerManaged => "customer-managed",
+            AwsIamPolicySource::Inline => "inline",
+        })
         .collect::<BTreeSet<_>>();
     assert_eq!(
         sources,
@@ -3692,6 +3704,29 @@ fn cloudsplaining_risks_are_read_from_policies_not_the_document_root() {
         "the report identifies the category rating as upstream-provided"
     );
     let evidence = create_key.evidence.first().expect("raw result evidence");
+    let iam = evidence
+        .scanner_details
+        .as_ref()
+        .and_then(|details| details.aws_iam_policy.as_ref())
+        .expect("typed Cloudsplaining policy context");
+    assert_eq!(iam.policy_source, AwsIamPolicySource::AwsManaged);
+    assert_eq!(iam.policy_name, "IAMFullAccess");
+    assert_eq!(iam.finding_identity, "CreateAccessKey");
+    assert_eq!(iam.actions, ["iam:createaccesskey"]);
+    assert!(iam.actions_complete);
+    assert_eq!(iam.attached_to.groups, ["AdminGroup"]);
+    assert!(iam.attached_to.complete);
+    assert!(
+        create_key
+            .recommendation
+            .contains("replace AWS-managed policy IAMFullAccess")
+            && create_key.recommendation.contains("group AdminGroup")
+            && create_key
+                .recommendation
+                .contains("AWS-managed policies cannot be edited"),
+        "the shared report gives the action that fits AWS-owned policy evidence: {}",
+        create_key.recommendation
+    );
     assert_eq!(
         evidence.location.as_deref(),
         Some("arn:aws:iam::aws:policy/IAMFullAccess :: CreateAccessKey")
@@ -3724,6 +3759,432 @@ fn cloudsplaining_risks_are_read_from_policies_not_the_document_root() {
             .any(|reference| reference.contains("docs.aws.amazon.com/service-authorization")),
         "the upstream action link survives normalization"
     );
+
+    let customer_managed = output
+        .findings
+        .iter()
+        .find(|finding| {
+            finding.title == "ResourceExposure: s3:PutObjectAcl in policy InsecurePolicy"
+        })
+        .expect("customer-managed finding");
+    let customer_context = customer_managed.evidence[0]
+        .scanner_details
+        .as_ref()
+        .and_then(|details| details.aws_iam_policy.as_ref())
+        .expect("customer-managed context");
+    assert_eq!(
+        customer_context.policy_source,
+        AwsIamPolicySource::CustomerManaged
+    );
+    assert_eq!(customer_context.attached_to.users, ["ExampleUser"]);
+    assert!(
+        customer_managed
+            .recommendation
+            .contains("narrow customer-managed policy InsecurePolicy")
+    );
+
+    let inline = output
+        .findings
+        .iter()
+        .find(|finding| {
+            finding.title == "DataExfiltration: s3:GetObject in policy InlinePolicyForAdminGroup"
+        })
+        .expect("inline-policy finding");
+    let inline_context = inline.evidence[0]
+        .scanner_details
+        .as_ref()
+        .and_then(|details| details.aws_iam_policy.as_ref())
+        .expect("inline-policy context");
+    assert_eq!(inline_context.policy_source, AwsIamPolicySource::Inline);
+    assert_eq!(inline_context.attached_to.groups, ["AdminGroup"]);
+    assert!(inline.recommendation.contains("narrow inline policy"));
+    assert!(
+        output
+            .findings
+            .iter()
+            .all(|finding| finding.tags.iter().all(|tag| {
+                !tag.starts_with("policy-source:")
+                    && !tag.starts_with("upstream-finding:")
+                    && !tag.starts_with("upstream-action:")
+            }))
+    );
+}
+
+#[test]
+fn cloudsplaining_keeps_bounded_principal_context_and_marks_incomplete_attribution() {
+    let mut document: serde_json::Value =
+        serde_json::from_slice(fixture("cloudsplaining").0).expect("Cloudsplaining fixture JSON");
+    let roles = (0..33)
+        .map(|index| serde_json::Value::String(format!("Role{index:02}")))
+        .collect::<Vec<_>>();
+    let attached = &mut document["customer_managed_policies"]["InsecurePolicy"]["AttachedTo"];
+    attached["roles"] = serde_json::Value::Array(roles);
+    attached["groups"] = serde_json::json!("not-an-array");
+    attached["users"] = serde_json::json!(["User\nName", null]);
+
+    let bytes = serde_json::to_vec(&document).expect("attachment-drifted fixture JSON");
+    let output = normalize_bytes(
+        "cloudsplaining",
+        &bytes,
+        "cloudsplaining.json",
+        "application/json",
+        "run-attachment-context",
+    );
+
+    assert!(
+        !output.complete,
+        "incomplete attribution must remain visible"
+    );
+    let finding = output
+        .findings
+        .iter()
+        .find(|finding| finding.title.contains("policy InsecurePolicy"))
+        .expect("valid sibling finding survives attachment drift");
+    let context = finding.evidence[0]
+        .scanner_details
+        .as_ref()
+        .and_then(|details| details.aws_iam_policy.as_ref())
+        .expect("bounded policy context");
+    assert_eq!(context.attached_to.roles.len(), 32);
+    assert!(context.attached_to.groups.is_empty());
+    assert_eq!(context.attached_to.users, ["User Name"]);
+    assert!(!context.attached_to.complete);
+    assert!(
+        finding
+            .recommendation
+            .contains("confirm the current IAM attachments before changing the policy")
+    );
+    for expected in ["AttachedTo.roles", "AttachedTo.groups", "AttachedTo.users"] {
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(expected)),
+            "missing bounded-attribution warning for {expected}: {:?}",
+            output.warnings
+        );
+    }
+}
+
+#[test]
+fn cloudsplaining_uses_the_next_nonempty_upstream_policy_identity() {
+    let mut document: serde_json::Value =
+        serde_json::from_slice(fixture("cloudsplaining").0).expect("Cloudsplaining fixture JSON");
+    document["customer_managed_policies"]["InsecurePolicy"]["Arn"] = serde_json::json!("   ");
+
+    let bytes = serde_json::to_vec(&document).expect("identity-fallback fixture JSON");
+    let output = normalize_bytes(
+        "cloudsplaining",
+        &bytes,
+        "cloudsplaining.json",
+        "application/json",
+        "run-policy-identity-fallback",
+    );
+
+    assert!(
+        output.complete,
+        "an empty optional ARN must not hide the valid PolicyId: {:?}",
+        output.warnings
+    );
+    let finding = output
+        .findings
+        .iter()
+        .find(|finding| finding.title.contains("policy InsecurePolicy"))
+        .expect("customer-managed finding survives the empty ARN");
+    assert!(
+        finding.evidence[0]
+            .location
+            .as_deref()
+            .is_some_and(|location| location.starts_with("InsecurePolicy ::")),
+        "the exact nonempty PolicyId remains the evidence location"
+    );
+}
+
+#[test]
+fn cloudsplaining_marks_a_bounded_action_list_without_hiding_the_finding() {
+    let mut document: serde_json::Value =
+        serde_json::from_slice(fixture("cloudsplaining").0).expect("Cloudsplaining fixture JSON");
+    document["aws_managed_policies"]["ANPAI7XKCFMBPM3QQRRVQ"]["PrivilegeEscalation"]["findings"]
+        [0]["actions"] = serde_json::Value::Array(
+        (0..33)
+            .map(|index| serde_json::Value::String(format!("iam:Action{index:02}")))
+            .collect(),
+    );
+
+    let bytes = serde_json::to_vec(&document).expect("large-action fixture JSON");
+    let output = normalize_bytes(
+        "cloudsplaining",
+        &bytes,
+        "cloudsplaining.json",
+        "application/json",
+        "run-action-context",
+    );
+
+    assert!(!output.complete, "bounded action context must be disclosed");
+    let finding = output
+        .findings
+        .iter()
+        .find(|finding| {
+            finding.title == "PrivilegeEscalation: CreateAccessKey in policy IAMFullAccess"
+        })
+        .expect("finding with bounded actions survives");
+    let context = finding.evidence[0]
+        .scanner_details
+        .as_ref()
+        .and_then(|details| details.aws_iam_policy.as_ref())
+        .expect("typed policy context");
+    assert_eq!(context.actions.len(), 32);
+    assert!(!context.actions_complete);
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("finding actions")
+            && warning.contains("complete list stays in raw evidence")
+    }));
+}
+
+#[test]
+fn cloudsplaining_does_not_require_attachment_metadata_for_a_policy_with_no_findings() {
+    let mut document: serde_json::Value =
+        serde_json::from_slice(fixture("cloudsplaining").0).expect("Cloudsplaining fixture JSON");
+    let mut clean_policy = document["customer_managed_policies"]["InsecurePolicy"].clone();
+    clean_policy["PolicyName"] = serde_json::json!("CleanPolicy");
+    clean_policy["PolicyId"] = serde_json::json!("clean-policy");
+    clean_policy["Arn"] = serde_json::json!("arn:aws:iam::012345678901:policy/CleanPolicy");
+    clean_policy
+        .as_object_mut()
+        .expect("policy object")
+        .remove("AttachedTo");
+    for risk in [
+        "PrivilegeEscalation",
+        "DataExfiltration",
+        "ResourceExposure",
+        "ServiceWildcard",
+        "CredentialsExposure",
+        "InfrastructureModification",
+    ] {
+        clean_policy[risk]["findings"] = serde_json::json!([]);
+    }
+    document["customer_managed_policies"]
+        .as_object_mut()
+        .expect("policy section")
+        .insert("CleanPolicy".into(), clean_policy);
+
+    let bytes = serde_json::to_vec(&document).expect("clean policy fixture JSON");
+    let output = normalize_bytes(
+        "cloudsplaining",
+        &bytes,
+        "cloudsplaining.json",
+        "application/json",
+        "run-clean-policy",
+    );
+
+    assert!(
+        output.complete,
+        "unused attachment metadata must not make a clean policy partial: {:?}",
+        output.warnings
+    );
+    assert_eq!(output.findings.len(), 18);
+    assert!(
+        output.warnings.iter().all(|warning| {
+            !(warning.contains("CleanPolicy") && warning.contains("AttachedTo"))
+        })
+    );
+}
+
+#[test]
+fn cloudsplaining_unrenderable_identity_does_not_consume_a_valid_finding_quota() {
+    let mut findings = (0..257)
+        .map(|_| serde_json::Value::String("\u{0007}".into()))
+        .collect::<Vec<_>>();
+    findings.extend(
+        (0..=10_000).map(|index| serde_json::Value::String(format!("s3:ReadableAction{index:05}"))),
+    );
+    let empty_category = |severity: &str| {
+        serde_json::json!({
+            "severity": severity,
+            "description": "Pinned upstream category description",
+            "findings": []
+        })
+    };
+    let mut document = serde_json::json!({
+        "customer_managed_policies": {},
+        "inline_policies": {},
+        "aws_managed_policies": {
+            "quota-policy": {
+                "PolicyName": "QuotaPolicy",
+                "PolicyId": "quota-policy",
+                "AttachedTo": {"roles": ["ReviewRole"], "groups": [], "users": []},
+                "PrivilegeEscalation": {
+                    "severity": "high",
+                    "description": "Pinned upstream category description",
+                    "findings": [],
+                    "links": {}
+                },
+                "DataExfiltration": empty_category("medium"),
+                "ResourceExposure": {
+                    "severity": "high",
+                    "description": "Pinned upstream category description",
+                    "findings": findings
+                },
+                "ServiceWildcard": empty_category("medium"),
+                "CredentialsExposure": empty_category("high"),
+                "InfrastructureModification": empty_category("low"),
+                "is_excluded": false
+            }
+        },
+        "groups": [],
+        "users": [],
+        "roles": [],
+        "exclusions": {"policies": [], "roles": [], "users": [], "groups": []},
+        "links": {}
+    });
+    for kind in ["roles", "groups", "users"] {
+        document["aws_managed_policies"]["quota-policy"]["AttachedTo"][kind] =
+            serde_json::Value::Array(
+                (0..32)
+                    .map(|index| {
+                        serde_json::Value::String(format!("{kind}-{index:02}-{}", "x".repeat(480)))
+                    })
+                    .collect(),
+            );
+    }
+    let bytes = serde_json::to_vec(&document).expect("quota fixture JSON");
+    let output = normalize_bytes(
+        "cloudsplaining",
+        &bytes,
+        "cloudsplaining.json",
+        "application/json",
+        "run-display-quota",
+    );
+
+    assert!(!output.complete, "the discarded malformed row is disclosed");
+    assert_eq!(output.findings.len(), 10_000);
+    assert!(
+        output
+            .findings
+            .iter()
+            .any(|finding| finding.title.contains("s3:ReadableAction09999"))
+    );
+    let repeated_principal_cost = output
+        .findings
+        .iter()
+        .filter_map(|finding| finding.evidence[0].scanner_details.as_ref())
+        .filter_map(|details| details.aws_iam_policy.as_ref())
+        .flat_map(|iam| {
+            iam.attached_to
+                .roles
+                .iter()
+                .chain(&iam.attached_to.groups)
+                .chain(&iam.attached_to.users)
+        })
+        .fold(0_usize, |total, principal| {
+            total + std::mem::size_of::<String>() + principal.len()
+        });
+    assert!(repeated_principal_cost <= 2 * 1024 * 1024);
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("principal context exceeded the bounded report budget")
+    }));
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("reported 10001 valid policy findings")
+            && warning.contains("retained 10000")
+            && warning.contains("1 remain only in raw evidence")
+    }));
+}
+
+#[test]
+fn cloudsplaining_preserves_high_priority_principals_before_low_priority_context() {
+    let empty_category = |severity: &str| {
+        serde_json::json!({
+            "severity": severity,
+            "description": "Pinned upstream category description",
+            "findings": []
+        })
+    };
+    let long_principals = (0..32)
+        .map(|index| format!("LowPriorityPrincipal{index:02}-{}", "x".repeat(470)))
+        .collect::<Vec<_>>();
+    let document = serde_json::json!({
+        "customer_managed_policies": {
+            "low-policy": {
+                "PolicyName": "LowPolicy",
+                "PolicyId": "low-policy",
+                "AttachedTo": {
+                    "roles": long_principals.clone(),
+                    "groups": long_principals.clone(),
+                    "users": long_principals
+                },
+                "PrivilegeEscalation": {
+                    "severity": "high",
+                    "description": "Pinned upstream category description",
+                    "findings": [],
+                    "links": {}
+                },
+                "DataExfiltration": empty_category("medium"),
+                "ResourceExposure": empty_category("high"),
+                "ServiceWildcard": empty_category("medium"),
+                "CredentialsExposure": empty_category("high"),
+                "InfrastructureModification": {
+                    "severity": "low",
+                    "description": "Pinned upstream category description",
+                    "findings": (0..50).map(|index| format!("ec2:LowAction{index:02}")).collect::<Vec<_>>()
+                },
+                "is_excluded": false
+            }
+        },
+        "inline_policies": {},
+        "aws_managed_policies": {
+            "high-policy": {
+                "PolicyName": "HighPolicy",
+                "PolicyId": "high-policy",
+                "AttachedTo": {"roles": ["HighPriorityOwner"], "groups": [], "users": []},
+                "PrivilegeEscalation": {
+                    "severity": "high",
+                    "description": "Pinned upstream category description",
+                    "findings": [],
+                    "links": {}
+                },
+                "DataExfiltration": empty_category("medium"),
+                "ResourceExposure": empty_category("high"),
+                "ServiceWildcard": empty_category("medium"),
+                "CredentialsExposure": {
+                    "severity": "high",
+                    "description": "Pinned upstream category description",
+                    "findings": ["iam:CreateAccessKey"]
+                },
+                "InfrastructureModification": empty_category("low"),
+                "is_excluded": false
+            }
+        },
+        "groups": [],
+        "users": [],
+        "roles": [],
+        "exclusions": {"policies": [], "roles": [], "users": [], "groups": []},
+        "links": {}
+    });
+
+    let bytes = serde_json::to_vec(&document).expect("priority-context fixture JSON");
+    let output = normalize_bytes(
+        "cloudsplaining",
+        &bytes,
+        "cloudsplaining.json",
+        "application/json",
+        "run-principal-priority",
+    );
+
+    let high = output
+        .findings
+        .iter()
+        .find(|finding| finding.title.contains("policy HighPolicy"))
+        .expect("high-priority policy finding");
+    let iam = high.evidence[0]
+        .scanner_details
+        .as_ref()
+        .and_then(|details| details.aws_iam_policy.as_ref())
+        .expect("typed high-priority context");
+    assert_eq!(iam.attached_to.roles, ["HighPriorityOwner"]);
+    assert!(iam.attached_to.complete);
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("principal context exceeded the bounded report budget")
+    }));
 }
 
 #[test]
@@ -4102,10 +4563,12 @@ fn cloudsplaining_exact_long_identities_do_not_collapse_or_miss_links() {
         "run-long-identities",
     );
     assert!(
-        output.complete,
-        "unexpected warnings: {:?}",
-        output.warnings
+        !output.complete,
+        "presentation truncation must stay visible even though exact identity is retained for fingerprints and link lookup"
     );
+    assert!(output.warnings.iter().any(|warning| {
+        warning.contains("finding identity") && warning.contains("presentation boundary")
+    }));
     let mut escalations = output
         .findings
         .iter()
@@ -4604,8 +5067,18 @@ fn the_codes_a_localized_client_reads_agree_with_the_english_they_replace() {
                 .is_some_and(|code| code.is_exposure_observation());
 
             // The action clause is composed from the family, so two findings
-            // sharing a family must share it and two families must not.
-            if !exposure_observation {
+            // sharing a family must share it and two families must not. Typed
+            // Cloudsplaining evidence is deliberately more specific: the
+            // correct action changes for AWS-managed, customer-managed, and
+            // inline policies, and the localized client reads that same typed
+            // coordinate instead of recovering the family from this clause.
+            let has_typed_iam_context = finding.evidence.iter().any(|evidence| {
+                evidence
+                    .scanner_details
+                    .as_ref()
+                    .is_some_and(|details| details.aws_iam_policy.is_some())
+            });
+            if !exposure_observation && !has_typed_iam_context {
                 let action = finding
                     .recommendation
                     .rsplit_once("then plan and approve ")

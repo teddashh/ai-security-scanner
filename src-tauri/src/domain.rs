@@ -1236,6 +1236,55 @@ pub enum EvidenceKind {
     RawToolOutput,
 }
 
+/// Where AWS says an IAM policy is managed.
+///
+/// This is scanner-reported context, not a product verdict. Keeping it typed
+/// matters because an AWS-managed policy must be replaced or detached while a
+/// customer-managed or inline policy can be narrowed by the account owner.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AwsIamPolicySource {
+    AwsManaged,
+    CustomerManaged,
+    Inline,
+}
+
+/// Bounded principal names from Cloudsplaining's upstream `AttachedTo` field.
+///
+/// `complete` is false when the upstream field was missing, malformed, or
+/// exceeded the adapter's presentation bound. The raw artifact remains the
+/// authoritative full record in that case.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AwsIamAttachedTo {
+    #[serde(default)]
+    pub roles: Vec<String>,
+    #[serde(default)]
+    pub groups: Vec<String>,
+    #[serde(default)]
+    pub users: Vec<String>,
+    #[serde(default)]
+    pub complete: bool,
+}
+
+/// Exact, bounded AWS IAM policy context retained from one scanner result.
+///
+/// The shared report layer uses `policy_source` to give the user the right
+/// kind of next action. It never changes the scanner's finding, rating, or
+/// attachment relationship.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AwsIamPolicyFindingDetails {
+    pub policy_source: AwsIamPolicySource,
+    pub policy_name: String,
+    pub finding_identity: String,
+    #[serde(default)]
+    pub actions: Vec<String>,
+    /// False when actions were sanitized or exceeded the bounded report view.
+    /// The raw artifact remains the complete upstream record.
+    #[serde(default)]
+    pub actions_complete: bool,
+    pub attached_to: AwsIamAttachedTo,
+}
+
 /// Bounded fields reported by the scanner for one exact result.
 ///
 /// These strings are retained as untrusted evidence. They are not product
@@ -1260,6 +1309,10 @@ pub struct ScannerFindingDetails {
     /// scanner, without product-side version inference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fixed_version: Option<String>,
+    /// Cloudsplaining's bounded upstream policy and principal context. The
+    /// strings remain untrusted evidence and are never executed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_iam_policy: Option<AwsIamPolicyFindingDetails>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

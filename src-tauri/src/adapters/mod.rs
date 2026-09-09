@@ -8,7 +8,8 @@ mod control_mapping;
 
 use crate::adapter::{AdapterInput, AdapterOutput, AdapterRegistry, EngineAdapter};
 use crate::domain::{
-    Confidence, ConfidenceBasisCode, Evidence, EvidenceKind, Finding, FindingFamily, FindingStatus,
+    AwsIamAttachedTo, AwsIamPolicyFindingDetails, AwsIamPolicySource, Confidence,
+    ConfidenceBasisCode, Evidence, EvidenceKind, Finding, FindingFamily, FindingStatus,
     InventoryObservation, InventoryObservationKind, RawArtifact, ScannerFindingDetails, Severity,
     SeverityBasisCode,
 };
@@ -1552,6 +1553,7 @@ fn with_scanner_details(
         remediation: bounded_scanner_detail(remediation, MAX_LONG_TEXT),
         installed_version: bounded_scanner_detail(installed_version, MAX_SHORT_TEXT),
         fixed_version: bounded_scanner_detail(fixed_version, MAX_SHORT_TEXT),
+        aws_iam_policy: None,
     };
     if details.description.is_some()
         || details.remediation.is_some()
@@ -2261,14 +2263,28 @@ fn scoutsuite_rule_key(pointer: &str) -> Option<String> {
 }
 
 /// Where Cloudsplaining files policies in `iam-findings-<account>.json`, paired
-/// with the tag that tells a reader whether the account owner can edit the
-/// policy at all. An AWS-managed policy is fixed by detaching it, not by
-/// rewriting it, so the distinction changes the remediation.
-const CLOUDSPLAINING_POLICY_SECTIONS: [(&str, &str); 3] = [
-    ("customer_managed_policies", "customer-managed"),
-    ("inline_policies", "inline"),
-    ("aws_managed_policies", "aws-managed"),
+/// with the typed upstream fact that tells the report whether the account can
+/// edit the policy. It is evidence, not an opaque tag or a scanner verdict.
+const CLOUDSPLAINING_POLICY_SECTIONS: [(&str, AwsIamPolicySource); 3] = [
+    (
+        "customer_managed_policies",
+        AwsIamPolicySource::CustomerManaged,
+    ),
+    ("inline_policies", AwsIamPolicySource::Inline),
+    ("aws_managed_policies", AwsIamPolicySource::AwsManaged),
 ];
+
+/// A single policy may be attached throughout a large account. Keep enough
+/// names for a useful handoff without letting untrusted output make the report
+/// unbounded; the raw artifact retains everything beyond this per-kind limit.
+const MAX_CLOUDSPLAINING_PRINCIPALS_PER_KIND: usize = 32;
+const MAX_CLOUDSPLAINING_ACTIONS_PER_FINDING: usize = 32;
+/// `AttachedTo` appears once per upstream policy but the canonical schema puts
+/// actionable context beside each finding. Bound the aggregate string data
+/// copied into those records so one policy with many findings cannot multiply
+/// a small input into hundreds of megabytes of report state. The complete
+/// upstream attachment object remains available in raw evidence.
+const MAX_CLOUDSPLAINING_REPEATED_PRINCIPAL_BYTES: usize = 2 * 1024 * 1024;
 
 /// The category keys Cloudsplaining 0.9.1 writes into every policy object.
 ///
@@ -2300,6 +2316,13 @@ const CLOUDSPLAINING_SEVERITY_ORDER: [Severity; 6] = [
 struct CloudsplainingEntry<'a> {
     exact_identity: &'a str,
     actions: &'a [Value],
+}
+
+struct CloudsplainingPolicyIdentity<'a> {
+    exact: &'a str,
+    name: String,
+    location: String,
+    sanitized: bool,
 }
 
 fn cloudsplaining_entry<'a>(risk: &str, value: &'a Value) -> Option<CloudsplainingEntry<'a>> {
@@ -2340,6 +2363,15 @@ fn cloudsplaining_source_severity(category: &Map<String, Value>) -> Option<&str>
         .filter(|severity| !severity.is_empty())
 }
 
+/// The exact source value remains available for identity and link lookup while
+/// this bounded form is safe to persist and render. Both Cloudsplaining passes
+/// call this helper so an unusable entry can never consume a report quota.
+fn cloudsplaining_bounded_display(exact: &str) -> Option<(String, bool)> {
+    let bounded = bounded_scanner_detail(Some(exact.to_owned()), MAX_SHORT_TEXT)?;
+    let changed = bounded != exact;
+    Some((bounded, changed))
+}
+
 fn cloudsplaining_severity_slot(severity: &Severity) -> usize {
     CLOUDSPLAINING_SEVERITY_ORDER
         .iter()
@@ -2352,9 +2384,36 @@ fn cloudsplaining_exact_string_any<'a>(
     keys: &[&str],
 ) -> Option<&'a str> {
     keys.iter()
-        .find_map(|key| object.get(*key).and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter_map(|key| {
+            object
+                .get(*key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .next()
+}
+
+fn cloudsplaining_policy_identity<'a>(
+    policy_key: &'a str,
+    policy: &'a Map<String, Value>,
+) -> Option<CloudsplainingPolicyIdentity<'a>> {
+    let exact = cloudsplaining_exact_string_any(policy, &["Arn", "PolicyId", "PolicyName"])
+        .unwrap_or_else(|| policy_key.trim());
+    if exact.is_empty() {
+        return None;
+    }
+    let raw_name = cloudsplaining_exact_string_any(policy, &["PolicyName", "PolicyId"])
+        .or_else(|| (!policy_key.trim().is_empty()).then(|| policy_key.trim()))
+        .unwrap_or(exact);
+    let name = bounded_scanner_detail(Some(raw_name.to_owned()), MAX_SHORT_TEXT)?;
+    let location = bounded_scanner_detail(Some(exact.to_owned()), MAX_SHORT_TEXT)?;
+    Some(CloudsplainingPolicyIdentity {
+        exact,
+        sanitized: name != raw_name || location != exact,
+        name,
+        location,
+    })
 }
 
 fn cloudsplaining_fingerprint_identity(
@@ -2378,6 +2437,116 @@ fn cloudsplaining_fingerprint_identity(
         "cloudsplaining-instance:sha256:{}",
         hex::encode(hasher.finalize())
     )
+}
+
+fn cloudsplaining_attached_to(
+    policy: &Map<String, Value>,
+    policy_pointer: &str,
+    warnings: &mut Vec<String>,
+) -> AwsIamAttachedTo {
+    let Some(attached) = policy.get("AttachedTo").and_then(Value::as_object) else {
+        push_warning(
+            warnings,
+            format!(
+                "Cloudsplaining policy at {policy_pointer} lacked its required AttachedTo object; findings were preserved without complete principal attribution"
+            ),
+        );
+        return AwsIamAttachedTo {
+            roles: Vec::new(),
+            groups: Vec::new(),
+            users: Vec::new(),
+            complete: false,
+        };
+    };
+
+    let mut complete = true;
+    let mut read = |kind: &str| {
+        let Some(values) = attached.get(kind).and_then(Value::as_array) else {
+            complete = false;
+            push_warning(
+                warnings,
+                format!(
+                    "Cloudsplaining AttachedTo.{kind} at {policy_pointer}/AttachedTo was not an array; valid principal names were preserved"
+                ),
+            );
+            return Vec::new();
+        };
+        let mut retained = Vec::new();
+        let mut incomplete = values.len() > MAX_CLOUDSPLAINING_PRINCIPALS_PER_KIND;
+        for value in values {
+            let Some(exact) = value
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                incomplete = true;
+                continue;
+            };
+            let Some(bounded) = bounded_scanner_detail(Some(exact.to_owned()), MAX_SHORT_TEXT)
+            else {
+                incomplete = true;
+                continue;
+            };
+            if bounded != exact {
+                incomplete = true;
+            }
+            if retained.len() < MAX_CLOUDSPLAINING_PRINCIPALS_PER_KIND {
+                retained.push(bounded);
+            }
+        }
+        if incomplete {
+            complete = false;
+            push_warning(
+                warnings,
+                format!(
+                    "Cloudsplaining AttachedTo.{kind} at {policy_pointer}/AttachedTo contained invalid, overlong, or excess entries; bounded valid names were preserved and the remainder stays in raw evidence"
+                ),
+            );
+        }
+        retained
+    };
+
+    let roles = read("roles");
+    let groups = read("groups");
+    let users = read("users");
+    AwsIamAttachedTo {
+        roles,
+        groups,
+        users,
+        complete,
+    }
+}
+
+fn cloudsplaining_repeated_principal_cost(attached_to: &AwsIamAttachedTo) -> usize {
+    attached_to
+        .roles
+        .iter()
+        .chain(&attached_to.groups)
+        .chain(&attached_to.users)
+        .fold(0_usize, |total, principal| {
+            total
+                .saturating_add(std::mem::size_of::<String>())
+                .saturating_add(principal.len())
+        })
+}
+
+fn with_aws_iam_policy_details(
+    mut record: SourceRecord,
+    details: AwsIamPolicyFindingDetails,
+) -> SourceRecord {
+    match &mut record.scanner_details {
+        Some(scanner_details) => scanner_details.aws_iam_policy = Some(details),
+        None => {
+            record.scanner_details = Some(ScannerFindingDetails {
+                description: None,
+                remediation: None,
+                installed_version: None,
+                fixed_version: None,
+                aws_iam_policy: Some(details),
+            });
+        }
+    }
+    record
 }
 
 /// Read Cloudsplaining's IAM findings document.
@@ -2474,6 +2643,23 @@ fn extract_cloudsplaining(
                     continue;
                 }
             }
+            let Some(identity) = cloudsplaining_policy_identity(policy_key, policy) else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Cloudsplaining policy at {policy_pointer} had no bounded nonempty identity or name and was retained only as raw evidence"
+                    ),
+                );
+                continue;
+            };
+            if identity.sanitized {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Cloudsplaining policy identity at {policy_pointer} contained control characters or exceeded its presentation boundary; a bounded display value was preserved"
+                    ),
+                );
+            }
             for risk in CLOUDSPLAINING_RISKS {
                 let category_pointer = format!("{policy_pointer}/{risk}");
                 let category = match policy.get(risk) {
@@ -2562,6 +2748,25 @@ fn extract_cloudsplaining(
                         );
                         continue;
                     };
+                    let Some((_, identity_sanitized)) =
+                        cloudsplaining_bounded_display(entry.exact_identity)
+                    else {
+                        push_warning(
+                            warnings,
+                            format!(
+                                "Cloudsplaining finding at {entry_pointer} had no bounded nonempty identity and was retained only as raw evidence"
+                            ),
+                        );
+                        continue;
+                    };
+                    if identity_sanitized {
+                        push_warning(
+                            warnings,
+                            format!(
+                                "Cloudsplaining finding identity at {entry_pointer} contained control characters or exceeded its presentation boundary; a bounded display value was preserved"
+                            ),
+                        );
+                    }
                     if risk == "PrivilegeEscalation"
                         && !category_links.is_some_and(|links| {
                             links
@@ -2621,7 +2826,7 @@ fn extract_cloudsplaining(
     if total_findings > MAX_RECORDS {
         let retained_findings = MAX_RECORDS;
         let omitted_findings = total_findings - MAX_RECORDS;
-        push_warning(
+        push_priority_warning(
             warnings,
             format!(
                 "Cloudsplaining reported {total_findings} valid policy findings; the bounded report retained {retained_findings} in Critical, High, Medium, Unknown, Low, then Informational order, and {omitted_findings} remain only in raw evidence"
@@ -2630,143 +2835,217 @@ fn extract_cloudsplaining(
     }
 
     // Second pass: create at most MAX_RECORDS records using the quotas above.
-    // The pass still spans all three sections; source document order matters
-    // only among entries with the same severity.
+    // Walk severity first so both finding admission and the repeated-principal
+    // context budget preserve the most important results before lower-rated
+    // ones. Source document order matters only within one severity.
     let mut emitted = [0_usize; 6];
     let mut records = Vec::with_capacity(total_findings.min(MAX_RECORDS));
-    for (section, policy_source) in CLOUDSPLAINING_POLICY_SECTIONS {
-        let Some(policies) = root.get(section).and_then(Value::as_object) else {
-            continue;
-        };
-        for (policy_key, policy) in policies {
-            let Some(policy) = policy.as_object() else {
+    let mut repeated_principal_bytes = 0_usize;
+    let mut repeated_principal_limit_warned = false;
+    let mut attached_to_by_policy = BTreeMap::<String, AwsIamAttachedTo>::new();
+    for admission_slot in 0..CLOUDSPLAINING_SEVERITY_ORDER.len() {
+        for (section, policy_source) in CLOUDSPLAINING_POLICY_SECTIONS {
+            let Some(policies) = root.get(section).and_then(Value::as_object) else {
                 continue;
             };
-            if policy.get("is_excluded").and_then(Value::as_bool) != Some(false) {
-                continue;
-            }
-            let exact_policy_identity =
-                cloudsplaining_exact_string_any(policy, &["Arn", "PolicyId", "PolicyName"])
-                    .unwrap_or_else(|| policy_key.trim());
-            let policy_name = safe_text(
-                cloudsplaining_exact_string_any(policy, &["PolicyName", "PolicyId"])
-                    .unwrap_or_else(|| policy_key.trim()),
-                MAX_SHORT_TEXT,
-            );
-            let policy_location = safe_text(exact_policy_identity, MAX_SHORT_TEXT);
-            let escaped_policy = policy_key.replace('~', "~0").replace('/', "~1");
-            let policy_pointer = format!("/{section}/{escaped_policy}");
-
-            for risk in CLOUDSPLAINING_RISKS {
-                let Some(category) = policy.get(risk).and_then(Value::as_object) else {
+            for (policy_key, policy) in policies {
+                let Some(policy) = policy.as_object() else {
                     continue;
                 };
-                let Some(entries) = category.get("findings").and_then(Value::as_array) else {
-                    continue;
-                };
-                let source_severity = cloudsplaining_source_severity(category);
-                let severity = source_severity
-                    .map(parse_severity)
-                    .unwrap_or(Severity::Unknown);
-                let slot = cloudsplaining_severity_slot(&severity);
-                if emitted[slot] >= severity_quotas[slot] {
+                if policy.get("is_excluded").and_then(Value::as_bool) != Some(false) {
                     continue;
                 }
-                let category_pointer = format!("{policy_pointer}/{risk}");
-                let description = bounded_scanner_detail(
-                    category
-                        .get("description")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                    MAX_LONG_TEXT,
-                );
-                let category_links = category.get("links").and_then(Value::as_object);
-
-                for (entry_index, value) in entries.iter().enumerate() {
-                    if emitted[slot] >= severity_quotas[slot] {
-                        break;
-                    }
-                    let Some(entry) = cloudsplaining_entry(risk, value) else {
+                let escaped_policy = policy_key.replace('~', "~0").replace('/', "~1");
+                let policy_pointer = format!("/{section}/{escaped_policy}");
+                let Some(policy_identity) = cloudsplaining_policy_identity(policy_key, policy)
+                else {
+                    continue;
+                };
+                let exact_policy_identity = policy_identity.exact;
+                let policy_name = policy_identity.name;
+                let policy_location = policy_identity.location;
+                for risk in CLOUDSPLAINING_RISKS {
+                    let Some(category) = policy.get(risk).and_then(Value::as_object) else {
                         continue;
                     };
-                    emitted[slot] += 1;
-                    let entry_pointer = format!("{category_pointer}/findings/{entry_index}");
-                    let display_identity = safe_text(entry.exact_identity, MAX_SHORT_TEXT);
-                    let mut references = Vec::new();
-                    if risk == "PrivilegeEscalation"
-                        && let Some(link) = category_links
-                            .and_then(|links| links.get(entry.exact_identity))
+                    let Some(entries) = category.get("findings").and_then(Value::as_array) else {
+                        continue;
+                    };
+                    let source_severity = cloudsplaining_source_severity(category);
+                    let severity = source_severity
+                        .map(parse_severity)
+                        .unwrap_or(Severity::Unknown);
+                    let slot = cloudsplaining_severity_slot(&severity);
+                    if slot != admission_slot || emitted[slot] >= severity_quotas[slot] {
+                        continue;
+                    }
+                    let category_pointer = format!("{policy_pointer}/{risk}");
+                    let description = bounded_scanner_detail(
+                        category
+                            .get("description")
                             .and_then(Value::as_str)
-                            .map(str::trim)
-                            .filter(|link| !link.is_empty())
-                    {
-                        references.push(link.to_owned());
-                    }
-                    if let Some(links) = root_links {
-                        references.extend(
-                            entry
-                                .actions
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .filter_map(|action| {
-                                    links
-                                        .get(action.trim())
-                                        .and_then(Value::as_str)
-                                        .map(str::trim)
-                                        .filter(|link| !link.is_empty())
-                                        .map(str::to_owned)
-                                })
-                                .take(12_usize.saturating_sub(references.len())),
-                        );
-                    }
-                    references.sort();
-                    references.dedup();
+                            .map(str::to_owned),
+                        MAX_LONG_TEXT,
+                    );
+                    let category_links = category.get("links").and_then(Value::as_object);
 
-                    let mut tags = vec![
-                        format!("policy-source:{policy_source}"),
-                        format!("upstream-finding:{}", safe_tag(&display_identity)),
-                    ];
-                    tags.extend(
-                        entry
+                    for (entry_index, value) in entries.iter().enumerate() {
+                        if emitted[slot] >= severity_quotas[slot] {
+                            break;
+                        }
+                        let Some(entry) = cloudsplaining_entry(risk, value) else {
+                            continue;
+                        };
+                        let entry_pointer = format!("{category_pointer}/findings/{entry_index}");
+                        let Some((display_identity, _)) =
+                            cloudsplaining_bounded_display(entry.exact_identity)
+                        else {
+                            continue;
+                        };
+                        // Increment only after the same display-admissibility check
+                        // used by the counting pass. Otherwise a malformed early
+                        // identity could hide a valid later finding of this rating.
+                        emitted[slot] += 1;
+                        let mut references = Vec::new();
+                        if risk == "PrivilegeEscalation"
+                            && let Some(link) = category_links
+                                .and_then(|links| links.get(entry.exact_identity))
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .filter(|link| !link.is_empty())
+                        {
+                            references.push(link.to_owned());
+                        }
+                        if let Some(links) = root_links {
+                            references.extend(
+                                entry
+                                    .actions
+                                    .iter()
+                                    .filter_map(Value::as_str)
+                                    .filter_map(|action| {
+                                        links
+                                            .get(action.trim())
+                                            .and_then(Value::as_str)
+                                            .map(str::trim)
+                                            .filter(|link| !link.is_empty())
+                                            .map(str::to_owned)
+                                    })
+                                    .take(12_usize.saturating_sub(references.len())),
+                            );
+                        }
+                        references.sort();
+                        references.dedup();
+
+                        let mut actions = Vec::new();
+                        let mut actions_complete =
+                            entry.actions.len() <= MAX_CLOUDSPLAINING_ACTIONS_PER_FINDING;
+                        for exact in entry
                             .actions
                             .iter()
                             .filter_map(Value::as_str)
-                            .take(8)
-                            .map(|action| format!("upstream-action:{}", safe_tag(action))),
-                    );
-                    let mut record = with_scanner_details(
-                        record_with_severity_fallback_and_derived_confidence!(
-                            entry_pointer,
-                            risk.to_owned(),
-                            format!("{risk}: {display_identity} in policy {policy_name}"),
-                            source_severity.unwrap_or_default().to_owned(),
-                            DerivedSeverity {
-                                severity: Severity::Unknown,
-                                code: SeverityBasisCode::CloudsplainingIamPolicyFinding,
+                            .map(str::trim)
+                        {
+                            if actions.len() >= MAX_CLOUDSPLAINING_ACTIONS_PER_FINDING {
+                                actions_complete = false;
+                                continue;
+                            }
+                            let Some((bounded, changed)) = cloudsplaining_bounded_display(exact)
+                            else {
+                                actions_complete = false;
+                                continue;
+                            };
+                            actions_complete &= !changed;
+                            actions.push(bounded);
+                        }
+                        if !actions_complete {
+                            push_warning(
+                                warnings,
+                                format!(
+                                    "Cloudsplaining finding actions at {entry_pointer} contained sanitized or excess values; bounded valid actions were preserved and the complete list stays in raw evidence"
+                                ),
+                            );
+                        }
+                        // Attachment metadata is parsed only when this policy has
+                        // an admitted finding. Cache it across severity passes so
+                        // malformed metadata is disclosed once and clean policies
+                        // with no findings do not become Partial.
+                        let policy_attached_to = attached_to_by_policy
+                            .entry(policy_pointer.clone())
+                            .or_insert_with(|| {
+                                cloudsplaining_attached_to(policy, &policy_pointer, warnings)
+                            });
+                        let principal_cost =
+                            cloudsplaining_repeated_principal_cost(policy_attached_to);
+                        let attached_to = if principal_cost == 0
+                            || repeated_principal_bytes
+                                .checked_add(principal_cost)
+                                .is_some_and(|total| {
+                                    total <= MAX_CLOUDSPLAINING_REPEATED_PRINCIPAL_BYTES
+                                }) {
+                            repeated_principal_bytes =
+                                repeated_principal_bytes.saturating_add(principal_cost);
+                            policy_attached_to.clone()
+                        } else {
+                            if !repeated_principal_limit_warned {
+                                push_priority_warning(
+                                    warnings,
+                                    "Cloudsplaining principal context exceeded the bounded report budget; later findings retain policy and action details, while their complete AttachedTo values stay in raw evidence",
+                                );
+                                repeated_principal_limit_warned = true;
+                            }
+                            AwsIamAttachedTo {
+                                roles: Vec::new(),
+                                groups: Vec::new(),
+                                users: Vec::new(),
+                                complete: false,
+                            }
+                        };
+                        let mut record = with_aws_iam_policy_details(
+                            with_scanner_details(
+                                record_with_severity_fallback_and_derived_confidence!(
+                                    entry_pointer,
+                                    risk.to_owned(),
+                                    format!("{risk}: {display_identity} in policy {policy_name}"),
+                                    source_severity.unwrap_or_default().to_owned(),
+                                    DerivedSeverity {
+                                        severity: Severity::Unknown,
+                                        code: SeverityBasisCode::CloudsplainingIamPolicyFinding,
+                                    },
+                                    format!("{policy_location} :: {display_identity}"),
+                                    // The document has no canonical top-level account
+                                    // identifier shared by every policy (AWS-managed
+                                    // ARNs carry no customer account). A policy ARN is
+                                    // the finding location, not an authorized asset ID.
+                                    None,
+                                    derived_confidence(
+                                        ConfidenceBasisCode::DeterministicPolicyEvaluation
+                                    ),
+                                    EvidenceKind::Configuration,
+                                    references,
+                                    vec![],
+                                ),
+                                description.clone(),
+                                None,
+                                None,
+                                None,
+                            ),
+                            AwsIamPolicyFindingDetails {
+                                policy_source,
+                                policy_name: policy_name.clone(),
+                                finding_identity: display_identity.clone(),
+                                actions,
+                                actions_complete,
+                                attached_to,
                             },
-                            format!("{policy_location} :: {display_identity}"),
-                            // The document has no canonical top-level account
-                            // identifier shared by every policy (AWS-managed
-                            // ARNs carry no customer account). A policy ARN is
-                            // the finding location, not an authorized asset ID.
-                            None,
-                            derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
-                            EvidenceKind::Configuration,
-                            references,
-                            tags,
-                        ),
-                        description.clone(),
-                        None,
-                        None,
-                        None,
-                    );
-                    record.fingerprint_identity = Some(cloudsplaining_fingerprint_identity(
-                        section,
-                        risk,
-                        exact_policy_identity,
-                        entry.exact_identity,
-                    ));
-                    records.push(record);
+                        );
+                        record.fingerprint_identity = Some(cloudsplaining_fingerprint_identity(
+                            section,
+                            risk,
+                            exact_policy_identity,
+                            entry.exact_identity,
+                        ));
+                        records.push(record);
+                    }
                 }
             }
         }
@@ -4303,6 +4582,10 @@ fn merge_finding(
     record: SourceRecord,
     asset_id: String,
 ) {
+    let aws_iam_policy = record
+        .scanner_details
+        .as_ref()
+        .and_then(|details| details.aws_iam_policy.clone());
     let rule_id = record.rule_id.clone();
     let location = redact_location(&record.location);
     let fingerprint_identity = record
@@ -4498,6 +4781,8 @@ fn merge_finding(
     let recommendation = if exposure_observation {
         "Confirm that the reachable service is expected. To look for weaknesses, run an applicable security check against that service; do not treat reachability alone as something to fix."
             .into()
+    } else if let Some(details) = aws_iam_policy.as_ref() {
+        crate::finding_narrative::aws_iam_policy_action_english(adapter.expert_type, details)
     } else {
         format!(
             "Have the recommended specialist ({}) review the affected asset and the source rule's official guidance, then plan and approve {}.",
@@ -5366,6 +5651,16 @@ fn push_warning(warnings: &mut Vec<String>, warning: impl AsRef<str>) {
     if warnings.len() < MAX_WARNINGS {
         warnings.push(safe_text(warning.as_ref(), MAX_SHORT_TEXT));
     }
+}
+
+/// Keep one report-honesty summary visible even when per-row diagnostics have
+/// already filled the bounded warning list. Priority warnings are themselves
+/// bounded and displace only the least prominent trailing diagnostic.
+fn push_priority_warning(warnings: &mut Vec<String>, warning: impl AsRef<str>) {
+    while warnings.len() >= MAX_WARNINGS {
+        warnings.pop();
+    }
+    warnings.insert(0, safe_text(warning.as_ref(), MAX_SHORT_TEXT));
 }
 
 #[cfg(test)]

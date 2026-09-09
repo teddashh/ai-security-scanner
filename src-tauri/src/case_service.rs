@@ -14044,6 +14044,98 @@ fn html_evidence_reference(
                     html_escape(fixed_version),
                 ));
             }
+            if reference.engine_id == "cloudsplaining"
+                && let Some(iam) = &details.aws_iam_policy
+            {
+                let source = match catalog.locale {
+                    crate::export::ReportLocale::En => {
+                        crate::finding_narrative::aws_iam_policy_source_label_english(
+                            iam.policy_source,
+                        )
+                    }
+                    crate::export::ReportLocale::ZhHant => {
+                        crate::finding_narrative::aws_iam_policy_source_label_zh_hant(
+                            iam.policy_source,
+                        )
+                    }
+                };
+                let value = |items: &[String]| {
+                    if items.is_empty() {
+                        unavailable.to_owned()
+                    } else {
+                        let mut preview = items
+                            .iter()
+                            .take(6)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(" · ");
+                        let omitted = items.len().saturating_sub(6);
+                        if omitted > 0 {
+                            preview.push_str(&catalog.text(
+                                &format!(" · +{omitted} more"),
+                                &format!(" · 另有 {omitted} 項"),
+                            ));
+                        }
+                        preview
+                    }
+                };
+                let action_label = if iam.actions_complete {
+                    catalog.text("Reported actions", "回報的動作")
+                } else {
+                    catalog.text("Retained actions", "已保留的動作")
+                };
+                for (label_en, label_zh, value) in [
+                    ("Policy source", "政策來源", source.to_owned()),
+                    ("Policy", "政策", iam.policy_name.clone()),
+                    (
+                        "Upstream finding",
+                        "上游問題",
+                        iam.finding_identity.clone(),
+                    ),
+                    (action_label, action_label, value(&iam.actions)),
+                    (
+                        "Attached roles",
+                        "附加的角色",
+                        value(&iam.attached_to.roles),
+                    ),
+                    (
+                        "Attached groups",
+                        "附加的群組",
+                        value(&iam.attached_to.groups),
+                    ),
+                    (
+                        "Attached users",
+                        "附加的使用者",
+                        value(&iam.attached_to.users),
+                    ),
+                ] {
+                    rows.push_str(&format!(
+                        "<dt>{}</dt><dd>{}</dd>",
+                        catalog.text(label_en, label_zh),
+                        html_escape(&value),
+                    ));
+                }
+                if !iam.actions_complete {
+                    rows.push_str(&format!(
+                        "<dt>{}</dt><dd>{}</dd>",
+                        catalog.text("Action detail", "動作資訊"),
+                        catalog.text(
+                            "The action list was shortened or sanitized for display. Open the raw evidence for the complete upstream list.",
+                            "動作清單為了顯示而經過縮減或清理；完整上游清單請查看原始證據。",
+                        ),
+                    ));
+                }
+                if !iam.attached_to.complete {
+                    rows.push_str(&format!(
+                        "<dt>{}</dt><dd>{}</dd>",
+                        catalog.text("Attachment detail", "附加資訊"),
+                        catalog.text(
+                            "The retained attachment list is incomplete. Confirm the current IAM attachments before changing this policy.",
+                            "保留的附加清單不完整；變更此政策前請先核對目前的 IAM 附加關係。",
+                        ),
+                    ));
+                }
+            }
             if rows.is_empty() {
                 format!(
                     "<p><em>{}</em></p>",
@@ -14100,6 +14192,21 @@ fn html_evidence_reference(
         html_escape(location),
         scanner_details,
     )
+}
+
+fn beginner_aws_iam_policy(
+    finding: &crate::beginner_report::BeginnerFinding,
+) -> Option<&crate::domain::AwsIamPolicyFindingDetails> {
+    finding
+        .evidence_references
+        .iter()
+        .filter(|reference| reference.details_frozen && reference.engine_id == "cloudsplaining")
+        .find_map(|reference| {
+            reference
+                .scanner_details
+                .as_ref()
+                .and_then(|details| details.aws_iam_policy.as_ref())
+        })
 }
 
 fn html_official_references(
@@ -14735,6 +14842,12 @@ fn html_report_bytes(
         .next_steps
         .iter()
         .map(|step| {
+            let derived_from = step.finding_id.as_deref().and_then(|finding_id| {
+                report
+                    .findings
+                    .iter()
+                    .find(|finding| finding.finding_id == finding_id)
+            });
             // A finding-derived step's action is that finding's own
             // recommendation, so it needs the same composition the finding
             // itself gets; a gap-derived step carries no family and keeps its
@@ -14748,6 +14861,7 @@ fn html_report_bytes(
                         &step.action,
                         step.recommended_expert_type.as_deref().unwrap_or_default(),
                         step.family,
+                        derived_from.and_then(beginner_aws_iam_policy),
                     ),
                     step.recommended_expert_type.as_ref().map(|expert| {
                         crate::finding_narrative::expert_type_zh_hant(expert).to_owned()
@@ -14758,12 +14872,6 @@ fn html_report_bytes(
             // its action alone. The unattributed one is composed from its
             // payload instead: it is the first thing a beginner reads and the
             // only place the identifier they must add is spelled out.
-            let derived_from = step.finding_id.as_deref().and_then(|finding_id| {
-                report
-                    .findings
-                    .iter()
-                    .find(|finding| finding.finding_id == finding_id)
-            });
             let (action, reason) = match (catalog.locale, step.unattributed.as_ref(), derived_from)
             {
                 (crate::export::ReportLocale::ZhHant, Some(unattributed), _) => {
@@ -14875,6 +14983,7 @@ fn html_report_bytes(
                     &finding.next_step,
                     &finding.recommended_expert_type,
                     finding.family,
+                    beginner_aws_iam_policy(finding),
                 ),
                 crate::finding_narrative::expert_type_zh_hant(&finding.recommended_expert_type)
                     .to_owned(),
@@ -29180,6 +29289,79 @@ mod tests {
     }
 
     #[test]
+    fn non_cloud_evidence_cannot_drive_iam_report_copy_or_html() {
+        const POLICY_SENTINEL: &str = "WRONG_ENGINE_POLICY_SENTINEL_78c1";
+        const PRINCIPAL_SENTINEL: &str = "WRONG_ENGINE_ROLE_SENTINEL_21af";
+        let reference = crate::beginner_report::FindingEvidenceReference {
+            evidence_id: "evidence-wrong-engine-iam".into(),
+            engine_id: "gitleaks".into(),
+            details_frozen: true,
+            source_rule: Some("generic-api-key".into()),
+            scanner_details: Some(crate::domain::ScannerFindingDetails {
+                description: Some("ordinary scanner detail".into()),
+                remediation: None,
+                installed_version: None,
+                fixed_version: None,
+                aws_iam_policy: Some(crate::domain::AwsIamPolicyFindingDetails {
+                    policy_source: crate::domain::AwsIamPolicySource::CustomerManaged,
+                    policy_name: POLICY_SENTINEL.into(),
+                    finding_identity: "s3:GetObject".into(),
+                    actions: vec!["s3:GetObject".into()],
+                    actions_complete: true,
+                    attached_to: crate::domain::AwsIamAttachedTo {
+                        roles: vec![PRINCIPAL_SENTINEL.into()],
+                        groups: vec![],
+                        users: vec![],
+                        complete: true,
+                    },
+                }),
+            }),
+            summary: Some("summary".into()),
+            kind: Some(EvidenceKind::SourceCode),
+            engine_run_id: Some("engine-run-1".into()),
+            artifact_id: Some("artifact-1".into()),
+            redacted: Some(false),
+            artifact_sha256: "a".repeat(64),
+            observed_at: chrono::Utc::now(),
+            location: None,
+        };
+        let html = html_evidence_reference(
+            &reference,
+            HtmlReportCatalog::new(crate::export::ReportLocale::En),
+        );
+        assert!(html.contains("ordinary scanner detail"));
+        assert!(!html.contains(POLICY_SENTINEL));
+        assert!(!html.contains(PRINCIPAL_SENTINEL));
+
+        let finding = crate::beginner_report::BeginnerFinding {
+            finding_id: "finding-wrong-engine-iam".into(),
+            fingerprint: "gitleaks:wrong-engine-iam".into(),
+            snapshot_source: crate::beginner_report::FindingSnapshotSource::FrozenSelectedRun,
+            title: "Secret pattern".into(),
+            plain_language_risk: "Risk".into(),
+            possible_impact: "Impact".into(),
+            severity: Severity::High,
+            confidence: Confidence::Low,
+            priority: Some(50),
+            priority_reasons: vec![],
+            target_asset_ids: vec!["asset-1".into()],
+            next_step: "Review the secret".into(),
+            recommended_expert_type: "Secrets-response specialist".into(),
+            evidence_references: vec![reference],
+            official_references: Some(vec![]),
+            framework_references: vec![],
+            family: None,
+            severity_basis_code: None,
+            confidence_basis_code: None,
+            observation_details: vec![],
+            context_factors: vec![],
+            rollback_considerations: None,
+            verification_guidance: None,
+        };
+        assert!(beginner_aws_iam_policy(&finding).is_none());
+    }
+
+    #[test]
     fn html_report_projects_master_report_timing_findings_and_redacted_technical_details() {
         const RAW_SCANNER_SENTINEL: &str = "RAW_SCANNER_MESSAGE_MUST_NOT_APPEAR";
         const MUTABLE_CANONICAL_SENTINEL: &str = "MUTABLE_CANONICAL_TITLE_MUST_NOT_APPEAR";
@@ -29313,6 +29495,7 @@ mod tests {
                     remediation: Some("Run <script>alert('unsafe')</script> manually".into()),
                     installed_version: Some("installed<1.2.3>".into()),
                     fixed_version: Some("1.2.4&later".into()),
+                    aws_iam_policy: None,
                 }),
                 source_rule: Some("generic-api-key".into()),
                 result_pointer_sha256: None,
@@ -29366,6 +29549,7 @@ mod tests {
                 remediation: Some(NEWER_EVIDENCE_SENTINEL.into()),
                 installed_version: Some(NEWER_EVIDENCE_SENTINEL.into()),
                 fixed_version: Some(NEWER_EVIDENCE_SENTINEL.into()),
+                aws_iam_policy: None,
             });
         mutable_canonical.official_references = vec![NEWER_EVIDENCE_SENTINEL.into()];
         case.findings.push(mutable_canonical);
@@ -29898,6 +30082,7 @@ mod tests {
                 remediation: Some(sentinel.into()),
                 installed_version: Some(sentinel.into()),
                 fixed_version: Some(sentinel.into()),
+                aws_iam_policy: None,
             }),
             summary: Some(sentinel.into()),
             kind: Some(EvidenceKind::Configuration),

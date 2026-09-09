@@ -3,6 +3,7 @@ import type {
   AssessmentCase,
   AssessmentActivity,
   AiGeneratedArtifactAnswer,
+  AwsIamPolicyFindingDetails,
   Asset,
   AssetType,
   BeginnerInventoryItem,
@@ -51,6 +52,7 @@ import type {
   ScanRequestOutcome,
   ScopeGrant,
   ScopeMode,
+  ScannerFindingDetails,
   Severity,
   SourceKind,
   SourceCapabilityProvider,
@@ -518,6 +520,19 @@ interface NativeScannerFindingDetails {
   remediation?: string | null;
   installed_version?: string | null;
   fixed_version?: string | null;
+  aws_iam_policy?: {
+    policy_source?: unknown;
+    policy_name?: unknown;
+    finding_identity?: unknown;
+    actions?: unknown;
+    actions_complete?: unknown;
+    attached_to?: {
+      roles?: unknown;
+      groups?: unknown;
+      users?: unknown;
+      complete?: unknown;
+    } | null;
+  } | null;
 }
 
 interface NativeControlReference {
@@ -1352,6 +1367,62 @@ const mapConfidenceBasisCode = (
   value: string | null | undefined,
 ): ConfidenceBasisCode | undefined => CONFIDENCE_BASIS_CODES.find((code) => code === value);
 
+const mapAwsIamPolicyDetails = (
+  value: NativeScannerFindingDetails["aws_iam_policy"],
+): AwsIamPolicyFindingDetails | undefined => {
+  if (!value) return undefined;
+  const source = value.policy_source;
+  if (source !== "aws_managed" && source !== "customer_managed" && source !== "inline") return undefined;
+  const validText = (item: unknown): item is string => typeof item === "string"
+    && item.length > 0
+    && [...item].length <= 512
+    && !/[\u0000-\u001f\u007f-\u009f]/u.test(item);
+  if (!validText(value.policy_name) || !validText(value.finding_identity)) return undefined;
+  const attached = value.attached_to;
+  if (!attached || typeof attached !== "object") return undefined;
+  const strings = (values: unknown): string[] | undefined => {
+    if (!Array.isArray(values) || values.length > 32 || values.some((item) => !validText(item))) {
+      return undefined;
+    }
+    return [...values] as string[];
+  };
+  const actions = strings(value.actions);
+  const roles = strings(attached.roles);
+  const groups = strings(attached.groups);
+  const users = strings(attached.users);
+  if (!actions || !roles || !groups || !users) return undefined;
+  return {
+    policySource: source,
+    policyName: value.policy_name,
+    findingIdentity: value.finding_identity,
+    actions,
+    actionsComplete: value.actions_complete === true,
+    attachedTo: {
+      roles,
+      groups,
+      users,
+      complete: attached.complete === true,
+    },
+  };
+};
+
+const mapScannerFindingDetails = (
+  details: NativeScannerFindingDetails | null | undefined,
+  engineId: string,
+): ScannerFindingDetails | undefined => {
+  if (!details) return undefined;
+  const mapped: ScannerFindingDetails = {
+    description: details.description ?? undefined,
+    remediation: details.remediation ?? undefined,
+    installedVersion: details.installed_version ?? undefined,
+    fixedVersion: details.fixed_version ?? undefined,
+  };
+  const awsIamPolicy = engineId === "cloudsplaining"
+    ? mapAwsIamPolicyDetails(details.aws_iam_policy)
+    : undefined;
+  return awsIamPolicy ? { ...mapped, awsIamPolicy } : mapped;
+};
+
 const CONTEXT_FACTORS: readonly ContextFactor[] = ["internet_exposed_asset", "sensitive_data_asset"];
 
 /**
@@ -1925,6 +1996,10 @@ export const adaptNativeCase = (
           || tag.startsWith("http-status:"))
         : undefined,
       contextFactors: mapContextFactors(finding.context_factors),
+      awsIamPolicy: finding.evidence
+        .filter((evidence) => evidence.engine_id === "cloudsplaining")
+        .map((evidence) => mapAwsIamPolicyDetails(evidence.scanner_details?.aws_iam_policy))
+        .find((details): details is AwsIamPolicyFindingDetails => details !== undefined),
       expertType: finding.recommended_expert_type,
       severity: mapSeverity(finding.severity),
       confidence: mapConfidence(finding.confidence),
@@ -1935,12 +2010,7 @@ export const adaptNativeCase = (
         id: evidence.id,
         sourceEngine: evidence.engine_id,
         sourceRule: evidence.source_rule ?? undefined,
-        scannerDetails: evidence.scanner_details ? {
-          description: evidence.scanner_details.description ?? undefined,
-          remediation: evidence.scanner_details.remediation ?? undefined,
-          installedVersion: evidence.scanner_details.installed_version ?? undefined,
-          fixedVersion: evidence.scanner_details.fixed_version ?? undefined,
-        } : undefined,
+        scannerDetails: mapScannerFindingDetails(evidence.scanner_details, evidence.engine_id),
         observedAt: evidence.observed_at,
         summary: evidence.summary,
         location: evidence.location ?? undefined,
@@ -2552,12 +2622,7 @@ export const adaptBeginnerMasterReport = (
       engineId: evidence.engine_id,
       detailsFrozen: evidence.details_frozen ?? false,
       sourceRule: evidence.source_rule ?? undefined,
-      scannerDetails: evidence.scanner_details ? {
-        description: evidence.scanner_details.description ?? undefined,
-        remediation: evidence.scanner_details.remediation ?? undefined,
-        installedVersion: evidence.scanner_details.installed_version ?? undefined,
-        fixedVersion: evidence.scanner_details.fixed_version ?? undefined,
-      } : undefined,
+      scannerDetails: mapScannerFindingDetails(evidence.scanner_details, evidence.engine_id),
       summary: evidence.summary ?? undefined,
       kind: evidence.kind ?? undefined,
       engineRunId: evidence.engine_run_id ?? undefined,

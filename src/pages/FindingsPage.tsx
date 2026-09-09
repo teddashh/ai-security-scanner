@@ -18,6 +18,7 @@ import {
 import { projectVisibleFindingGroups } from "../findingGroupPresentation";
 import { isExposureObservation, isSecurityFinding } from "../findingClassification";
 import {
+  awsIamPolicySourceLabel,
   engineNameFrom,
   findingActionSentence,
   findingConfidencePresentation,
@@ -531,6 +532,24 @@ const copy = {
   evidenceKind: { en: "Type", zhTW: "種類" },
   sourceRule: { en: "Source rule", zhTW: "來源規則" },
   scannerDescription: { en: "Scanner-provided description", zhTW: "掃描器提供的說明" },
+  iamPolicyContext: { en: "AWS IAM policy context", zhTW: "AWS IAM 政策脈絡" },
+  iamPolicySource: { en: "Policy source", zhTW: "政策來源" },
+  iamPolicyName: { en: "Policy", zhTW: "政策" },
+  iamFindingIdentity: { en: "Upstream finding", zhTW: "上游問題" },
+  iamActions: { en: "Reported actions", zhTW: "回報的動作" },
+  iamRetainedActions: { en: "Retained actions", zhTW: "已保留的動作" },
+  iamActionsIncomplete: {
+    en: "The action list was shortened or sanitized for display. Open the raw evidence for the complete upstream list.",
+    zhTW: "動作清單為了顯示而經過縮減或清理；完整上游清單請查看原始證據。",
+  },
+  iamAdditionalValues: { en: "+{count} more", zhTW: "另有 {count} 項" },
+  iamAttachedRoles: { en: "Attached roles", zhTW: "附加的角色" },
+  iamAttachedGroups: { en: "Attached groups", zhTW: "附加的群組" },
+  iamAttachedUsers: { en: "Attached users", zhTW: "附加的使用者" },
+  iamAttachmentsIncomplete: {
+    en: "The retained attachment list is incomplete. Confirm the current IAM attachments before changing this policy.",
+    zhTW: "保留的附加清單不完整；變更此政策前請先核對目前的 IAM 附加關係。",
+  },
   installedVersion: { en: "Observed version", zhTW: "觀察到的版本" },
   fixedVersion: { en: "Scanner-reported fixed version", zhTW: "掃描器回報的修正版" },
   scannerRemediation: {
@@ -1059,6 +1078,9 @@ const projectReportFindings = (
       confidenceBasisCode: frozen.confidenceBasisCode,
       observationDetails: frozen.observationDetails,
       contextFactors: frozen.contextFactors,
+      awsIamPolicy: evidence
+        .map((item) => item.scannerDetails?.awsIamPolicy)
+        .find((details) => details !== undefined),
       priority: frozen.priority ?? report.findings.length - index,
       priorityReasons: [...frozen.priorityReasons],
       // Workflow is intentionally current user state; scan facts above remain
@@ -1775,6 +1797,14 @@ export function FindingsPage({
   }, [collationLocale, control, expertType, ordered, query, selectedAssetId, severity, workflow]);
 
   const selected = findings.find((finding) => finding.id === selectedId);
+  const iamValuePreview = (values: string[]): string => {
+    if (values.length === 0) return text(copy.notReported);
+    const visible = values.slice(0, 6).join(" · ");
+    const omitted = values.length - 6;
+    return omitted > 0
+      ? `${visible} · ${text(copy.iamAdditionalValues, { count: formatNumber(omitted) })}`
+      : visible;
+  };
   const selectedEvents = workflowEvents
     .filter((event) => event.findingId === selectedId)
     .sort((left, right) => right.decidedAt.localeCompare(left.decidedAt));
@@ -2301,6 +2331,7 @@ export function FindingsPage({
                       englishFallback: finding.recommendation,
                       expertType: finding.expertType,
                       family: finding.family,
+                      awsIamPolicy: finding.awsIamPolicy,
                     })}
                   </span>
                   <span>
@@ -2844,6 +2875,7 @@ export function FindingsPage({
                   englishFallback: selected.recommendation,
                   expertType: selected.expertType,
                   family: selected.family,
+                  awsIamPolicy: selected.awsIamPolicy,
                 })}</p>
                 {selected.rollbackConsiderations && (
                   <p>
@@ -2875,6 +2907,26 @@ export function FindingsPage({
                           <div className="scanner-evidence-description">
                             <strong>{text(copy.scannerDescription)}</strong>
                             <p>{evidence.scannerDetails.description}</p>
+                          </div>
+                        )}
+                        {evidence.scannerDetails?.awsIamPolicy && (
+                          <div className="scanner-evidence-description">
+                            <strong>{text(copy.iamPolicyContext)}</strong>
+                            <dl className="evidence-provenance">
+                              <div><dt>{text(copy.iamPolicySource)}</dt><dd>{awsIamPolicySourceLabel(evidence.scannerDetails.awsIamPolicy.policySource, locale)}</dd></div>
+                              <div><dt>{text(copy.iamPolicyName)}</dt><dd><code>{evidence.scannerDetails.awsIamPolicy.policyName}</code></dd></div>
+                              <div><dt>{text(copy.iamFindingIdentity)}</dt><dd><code>{evidence.scannerDetails.awsIamPolicy.findingIdentity}</code></dd></div>
+                              <div><dt>{text(evidence.scannerDetails.awsIamPolicy.actionsComplete ? copy.iamActions : copy.iamRetainedActions)}</dt><dd>{iamValuePreview(evidence.scannerDetails.awsIamPolicy.actions)}</dd></div>
+                              <div><dt>{text(copy.iamAttachedRoles)}</dt><dd>{iamValuePreview(evidence.scannerDetails.awsIamPolicy.attachedTo.roles)}</dd></div>
+                              <div><dt>{text(copy.iamAttachedGroups)}</dt><dd>{iamValuePreview(evidence.scannerDetails.awsIamPolicy.attachedTo.groups)}</dd></div>
+                              <div><dt>{text(copy.iamAttachedUsers)}</dt><dd>{iamValuePreview(evidence.scannerDetails.awsIamPolicy.attachedTo.users)}</dd></div>
+                            </dl>
+                            {!evidence.scannerDetails.awsIamPolicy.actionsComplete && (
+                              <small>{text(copy.iamActionsIncomplete)}</small>
+                            )}
+                            {!evidence.scannerDetails.awsIamPolicy.attachedTo.complete && (
+                              <small>{text(copy.iamAttachmentsIncomplete)}</small>
+                            )}
                           </div>
                         )}
                         {(evidence.scannerDetails?.installedVersion || evidence.scannerDetails?.fixedVersion) && (

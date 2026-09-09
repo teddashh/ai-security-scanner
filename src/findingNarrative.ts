@@ -1,4 +1,5 @@
 import type {
+  AwsIamPolicyFindingDetails,
   ConfidenceBasisCode,
   ContextFactor,
   FindingFamily,
@@ -66,6 +67,77 @@ const REMEDY: Record<FindingFamily, string> = {
   vulnerable_component:
     "將受影響的元件升級到已修正的版本，或記錄目前無法升級的原因",
   kubernetes: "調整這項檢查所指出的工作負載或叢集設定",
+};
+
+const IAM_PRINCIPAL_PREVIEW_LIMIT = 6;
+
+const iamPrincipalLabels = (
+  details: AwsIamPolicyFindingDetails,
+  locale: "en" | "zh-TW",
+): string[] => {
+  const [role, group, user] = locale === "en"
+    ? ["role", "group", "user"]
+    : ["角色", "群組", "使用者"];
+  return [
+    ...details.attachedTo.roles.map((name) => `${role} ${name}`),
+    ...details.attachedTo.groups.map((name) => `${group} ${name}`),
+    ...details.attachedTo.users.map((name) => `${user} ${name}`),
+  ];
+};
+
+const iamPrincipalSummary = (
+  details: AwsIamPolicyFindingDetails,
+  locale: "en" | "zh-TW",
+): string | undefined => {
+  const labels = iamPrincipalLabels(details, locale);
+  if (labels.length === 0) return undefined;
+  const retained = labels
+    .slice(0, IAM_PRINCIPAL_PREVIEW_LIMIT)
+    .join(locale === "en" ? ", " : "、");
+  const omitted = Math.max(0, labels.length - IAM_PRINCIPAL_PREVIEW_LIMIT);
+  if (omitted === 0) return retained;
+  return locale === "en"
+    ? `${retained}, and ${omitted} more principal(s)`
+    : `${retained}，以及另外 ${omitted} 個主體`;
+};
+
+export const awsIamPolicySourceLabel = (
+  source: AwsIamPolicyFindingDetails["policySource"],
+  locale: "en" | "zh-TW",
+): string => {
+  if (source === "aws_managed") return locale === "en" ? "AWS-managed" : "AWS 受管";
+  if (source === "customer_managed") return locale === "en" ? "Customer-managed" : "客戶受管";
+  return locale === "en" ? "Inline" : "內嵌";
+};
+
+const awsIamPolicyActionZhTW = (
+  expertType: string,
+  details: AwsIamPolicyFindingDetails,
+): string => {
+  const principals = iamPrincipalSummary(details, "zh-TW");
+  const attachmentsComplete = details.attachedTo.complete;
+  let action: string;
+  if (details.policySource === "aws_managed") {
+    action = principals
+      ? `在${principals}上將 AWS 受管政策 ${details.policyName} 改為權限較小的政策；若不需要則解除附加。AWS 受管政策無法由此帳戶直接編輯`
+      : attachmentsComplete
+        ? `確認 AWS 受管政策 ${details.policyName} 維持未附加狀態；之後如有需要，應選用權限較小的政策。AWS 受管政策無法由此帳戶直接編輯`
+        : `先確認目前有哪些角色、群組與使用者附加了 AWS 受管政策 ${details.policyName}，再改用權限較小的政策；若不需要則解除附加。AWS 受管政策無法由此帳戶直接編輯`;
+  } else if (details.policySource === "customer_managed") {
+    action = principals
+      ? `縮小客戶受管政策 ${details.policyName} 的權限，並確認${principals}只保留工作所需權限`
+      : attachmentsComplete
+        ? `在客戶受管政策 ${details.policyName} 再次附加或使用前縮小其權限`
+        : `先確認客戶受管政策 ${details.policyName} 目前附加到哪些 IAM 主體，再縮小政策權限，並確認每個主體只保留工作所需權限`;
+  } else {
+    action = principals
+      ? `直接在${principals}上縮小內嵌政策 ${details.policyName} 的權限`
+      : `確認內嵌政策 ${details.policyName} 所屬的 IAM 主體，並在再次使用前於該處縮小權限`;
+  }
+  const incomplete = details.attachedTo.complete
+    ? ""
+    : "保留的附加清單不完整；變更政策前請先核對目前的 IAM 附加關係。";
+  return `請由建議的專業人員（${localizedExpertType(expertType, "zh-TW")}）檢視受影響的政策與來源證據，再規劃並核准以下處理：${action}。${incomplete}`;
 };
 
 /** The clause completing "This product rated it {severity} from ...". */
@@ -1569,9 +1641,13 @@ export const findingActionSentence = (
     englishFallback: string;
     expertType: string;
     family?: FindingFamily;
+    awsIamPolicy?: AwsIamPolicyFindingDetails;
   },
 ): string => {
   if (locale === "en") return options.englishFallback;
+  if (options.awsIamPolicy) {
+    return awsIamPolicyActionZhTW(options.expertType, options.awsIamPolicy);
+  }
   const remedy = options.family ? REMEDY[options.family] : undefined;
   if (!remedy) return options.englishFallback;
   const expert = localizedExpertType(options.expertType, locale);

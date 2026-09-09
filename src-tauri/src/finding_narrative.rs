@@ -17,7 +17,8 @@
 //!  - The engine's own title is never restated in another language.
 
 use crate::domain::{
-    ConfidenceBasisCode, ContextFactor, FindingFamily, Severity, SeverityBasisCode,
+    AwsIamPolicyFindingDetails, AwsIamPolicySource, ConfidenceBasisCode, ContextFactor,
+    FindingFamily, Severity, SeverityBasisCode,
 };
 
 /// The clause completing "If the scanner result is confirmed, ...".
@@ -1676,7 +1677,191 @@ pub fn verification_zh_hant(english: &str) -> String {
 }
 
 /// "Have the recommended specialist (...) review ... then plan and approve ..."
-pub fn action_zh_hant(english: &str, expert_type: &str, family: Option<FindingFamily>) -> String {
+const IAM_PRINCIPAL_PREVIEW_LIMIT: usize = 6;
+
+pub fn aws_iam_policy_source_label_english(source: AwsIamPolicySource) -> &'static str {
+    match source {
+        AwsIamPolicySource::AwsManaged => "AWS-managed",
+        AwsIamPolicySource::CustomerManaged => "Customer-managed",
+        AwsIamPolicySource::Inline => "Inline",
+    }
+}
+
+pub fn aws_iam_policy_source_label_zh_hant(source: AwsIamPolicySource) -> &'static str {
+    match source {
+        AwsIamPolicySource::AwsManaged => "AWS 受管",
+        AwsIamPolicySource::CustomerManaged => "客戶受管",
+        AwsIamPolicySource::Inline => "內嵌",
+    }
+}
+
+fn iam_principal_labels(details: &AwsIamPolicyFindingDetails, locale: &str) -> Vec<String> {
+    let labels = if locale == "zh-Hant" {
+        ("角色", "群組", "使用者")
+    } else {
+        ("role", "group", "user")
+    };
+    details
+        .attached_to
+        .roles
+        .iter()
+        .map(|name| format!("{} {name}", labels.0))
+        .chain(
+            details
+                .attached_to
+                .groups
+                .iter()
+                .map(|name| format!("{} {name}", labels.1)),
+        )
+        .chain(
+            details
+                .attached_to
+                .users
+                .iter()
+                .map(|name| format!("{} {name}", labels.2)),
+        )
+        .collect()
+}
+
+fn iam_principal_summary(details: &AwsIamPolicyFindingDetails, locale: &str) -> Option<String> {
+    let labels = iam_principal_labels(details, locale);
+    if labels.is_empty() {
+        return None;
+    }
+    let retained = labels
+        .iter()
+        .take(IAM_PRINCIPAL_PREVIEW_LIMIT)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(if locale == "zh-Hant" { "、" } else { ", " });
+    let omitted = labels.len().saturating_sub(IAM_PRINCIPAL_PREVIEW_LIMIT);
+    if omitted == 0 {
+        Some(retained)
+    } else if locale == "zh-Hant" {
+        Some(format!("{retained}，以及另外 {omitted} 個主體"))
+    } else {
+        Some(format!("{retained}, and {omitted} more principal(s)"))
+    }
+}
+
+/// Product-owned English next action for bounded Cloudsplaining evidence.
+/// The source engine still owns the finding, rating, and attached-principal
+/// facts; this function only tells a beginner what kind of manual change fits
+/// the policy source.
+pub fn aws_iam_policy_action_english(
+    expert_type: &str,
+    details: &AwsIamPolicyFindingDetails,
+) -> String {
+    let principals = iam_principal_summary(details, "en");
+    let action = match (
+        details.policy_source,
+        principals.as_deref(),
+        details.attached_to.complete,
+    ) {
+        (AwsIamPolicySource::AwsManaged, Some(principals), _) => format!(
+            "replace AWS-managed policy {} with a narrower policy on {principals}, or detach it where it is not needed; AWS-managed policies cannot be edited by this account",
+            details.policy_name
+        ),
+        (AwsIamPolicySource::AwsManaged, None, true) => format!(
+            "confirm that AWS-managed policy {} remains detached and choose a narrower policy before attaching it; AWS-managed policies cannot be edited by this account",
+            details.policy_name
+        ),
+        (AwsIamPolicySource::AwsManaged, None, false) => format!(
+            "identify the current roles, groups, and users attached to AWS-managed policy {}, then replace it with a narrower policy or detach it where it is not needed; AWS-managed policies cannot be edited by this account",
+            details.policy_name
+        ),
+        (AwsIamPolicySource::CustomerManaged, Some(principals), _) => format!(
+            "narrow customer-managed policy {} and verify that {principals} retain only the permissions they need",
+            details.policy_name
+        ),
+        (AwsIamPolicySource::CustomerManaged, None, true) => format!(
+            "narrow customer-managed policy {} before it is attached or reused",
+            details.policy_name
+        ),
+        (AwsIamPolicySource::CustomerManaged, None, false) => format!(
+            "identify the current attachments to customer-managed policy {}, then narrow it and verify that each principal retains only the permissions it needs",
+            details.policy_name
+        ),
+        (AwsIamPolicySource::Inline, Some(principals), _) => format!(
+            "narrow inline policy {} directly on {principals}",
+            details.policy_name
+        ),
+        (AwsIamPolicySource::Inline, None, _) => format!(
+            "review where inline policy {} is owned and narrow it there before reuse",
+            details.policy_name
+        ),
+    };
+    let incomplete = (!details.attached_to.complete).then_some(
+        " The retained attachment list is incomplete; confirm the current IAM attachments before changing the policy.",
+    );
+    format!(
+        "Have the recommended specialist ({expert_type}) review the affected policy and source evidence, then plan and approve this action: {action}.{}",
+        incomplete.unwrap_or_default()
+    )
+}
+
+fn aws_iam_policy_action_zh_hant(
+    expert_type: &str,
+    details: &AwsIamPolicyFindingDetails,
+) -> String {
+    let principals = iam_principal_summary(details, "zh-Hant");
+    let action = match (
+        details.policy_source,
+        principals.as_deref(),
+        details.attached_to.complete,
+    ) {
+        (AwsIamPolicySource::AwsManaged, Some(principals), _) => format!(
+            "在{principals}上將 AWS 受管政策 {} 改為權限較小的政策；若不需要則解除附加。AWS 受管政策無法由此帳戶直接編輯",
+            details.policy_name
+        ),
+        (AwsIamPolicySource::AwsManaged, None, true) => format!(
+            "確認 AWS 受管政策 {} 維持未附加狀態；之後如有需要，應選用權限較小的政策。AWS 受管政策無法由此帳戶直接編輯",
+            details.policy_name
+        ),
+        (AwsIamPolicySource::AwsManaged, None, false) => format!(
+            "先確認目前有哪些角色、群組與使用者附加了 AWS 受管政策 {}，再改用權限較小的政策；若不需要則解除附加。AWS 受管政策無法由此帳戶直接編輯",
+            details.policy_name
+        ),
+        (AwsIamPolicySource::CustomerManaged, Some(principals), _) => format!(
+            "縮小客戶受管政策 {} 的權限，並確認{principals}只保留工作所需權限",
+            details.policy_name
+        ),
+        (AwsIamPolicySource::CustomerManaged, None, true) => format!(
+            "在客戶受管政策 {} 再次附加或使用前縮小其權限",
+            details.policy_name
+        ),
+        (AwsIamPolicySource::CustomerManaged, None, false) => format!(
+            "先確認客戶受管政策 {} 目前附加到哪些 IAM 主體，再縮小政策權限，並確認每個主體只保留工作所需權限",
+            details.policy_name
+        ),
+        (AwsIamPolicySource::Inline, Some(principals), _) => format!(
+            "直接在{principals}上縮小內嵌政策 {} 的權限",
+            details.policy_name
+        ),
+        (AwsIamPolicySource::Inline, None, _) => format!(
+            "確認內嵌政策 {} 所屬的 IAM 主體，並在再次使用前於該處縮小權限",
+            details.policy_name
+        ),
+    };
+    let incomplete = (!details.attached_to.complete)
+        .then_some("保留的附加清單不完整；變更政策前請先核對目前的 IAM 附加關係。");
+    format!(
+        "請由建議的專業人員（{}）檢視受影響的政策與來源證據，再規劃並核准以下處理：{}。{}",
+        expert_type_zh_hant(expert_type),
+        action,
+        incomplete.unwrap_or_default()
+    )
+}
+
+pub fn action_zh_hant(
+    english: &str,
+    expert_type: &str,
+    family: Option<FindingFamily>,
+    aws_iam_policy: Option<&AwsIamPolicyFindingDetails>,
+) -> String {
+    if let Some(details) = aws_iam_policy {
+        return aws_iam_policy_action_zh_hant(expert_type, details);
+    }
     let Some(family) = family else {
         return english.to_owned();
     };
@@ -2014,7 +2199,7 @@ mod tests {
             "English impact."
         );
         assert_eq!(
-            action_zh_hant("English action.", "Container security engineer", None),
+            action_zh_hant("English action.", "Container security engineer", None, None,),
             "English action."
         );
         // A sentence this product did not write is not taken apart for a name.
@@ -2030,6 +2215,62 @@ mod tests {
             ),
             "Some other text."
         );
+    }
+
+    #[test]
+    fn aws_iam_policy_actions_follow_the_upstream_policy_source_and_attachments() {
+        let details = AwsIamPolicyFindingDetails {
+            policy_source: AwsIamPolicySource::AwsManaged,
+            policy_name: "IAMFullAccess".into(),
+            finding_identity: "CreateAccessKey".into(),
+            actions: vec!["iam:createaccesskey".into()],
+            actions_complete: true,
+            attached_to: crate::domain::AwsIamAttachedTo {
+                roles: vec!["BuildRole".into()],
+                groups: vec![],
+                users: vec!["Operator".into()],
+                complete: false,
+            },
+        };
+
+        let english = aws_iam_policy_action_english("Cloud security engineer", &details);
+        assert!(english.contains("replace AWS-managed policy IAMFullAccess"));
+        assert!(english.contains("role BuildRole"));
+        assert!(english.contains("user Operator"));
+        assert!(english.contains("cannot be edited by this account"));
+        assert!(english.contains("attachment list is incomplete"));
+
+        let chinese = action_zh_hant(
+            "unused English fallback",
+            "Cloud security engineer",
+            Some(FindingFamily::CloudIdentity),
+            Some(&details),
+        );
+        assert!(chinese.contains("AWS 受管政策 IAMFullAccess"));
+        assert!(chinese.contains("角色 BuildRole"));
+        assert!(chinese.contains("使用者 Operator"));
+        assert!(chinese.contains("無法由此帳戶直接編輯"));
+        assert!(chinese.contains("附加清單不完整"));
+
+        let mut unknown_attachments = details.clone();
+        unknown_attachments.attached_to.roles.clear();
+        unknown_attachments.attached_to.users.clear();
+        let unknown_action =
+            aws_iam_policy_action_english("Cloud security engineer", &unknown_attachments);
+        assert!(unknown_action.contains("identify the current roles, groups, and users"));
+        assert!(!unknown_action.contains("remains detached"));
+
+        let mut customer_managed = details.clone();
+        customer_managed.policy_source = AwsIamPolicySource::CustomerManaged;
+        let customer_action =
+            aws_iam_policy_action_english("Cloud security engineer", &customer_managed);
+        assert!(customer_action.contains("narrow customer-managed policy IAMFullAccess"));
+        assert!(!customer_action.contains("cannot be edited by this account"));
+
+        let mut inline = details;
+        inline.policy_source = AwsIamPolicySource::Inline;
+        let inline_action = aws_iam_policy_action_english("Cloud security engineer", &inline);
+        assert!(inline_action.contains("narrow inline policy IAMFullAccess directly on"));
     }
 
     /// The case context this product added must survive being said in Chinese.
@@ -2163,7 +2404,14 @@ mod tests {
         // are given the same instruction in the shared report.
         let actions = families
             .iter()
-            .map(|family| action_zh_hant("English.", "Secrets-response specialist", Some(*family)))
+            .map(|family| {
+                action_zh_hant(
+                    "English.",
+                    "Secrets-response specialist",
+                    Some(*family),
+                    None,
+                )
+            })
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(actions.len(), families.len());
 

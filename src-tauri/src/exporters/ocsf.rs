@@ -370,7 +370,11 @@ fn evidence_value(evidence: &Evidence) -> Value {
                         "description": details.description,
                         "remediation": details.remediation,
                         "installed_version": details.installed_version,
-                        "fixed_version": details.fixed_version
+                        "fixed_version": details.fixed_version,
+                        "aws_iam_policy": details
+                            .aws_iam_policy
+                            .as_ref()
+                            .filter(|_| evidence.engine_id == "cloudsplaining")
                     }
                 }),
             );
@@ -654,14 +658,27 @@ mod tests {
             run_id: "run-1".into(),
             engine_run_id: None,
             kind: EvidenceKind::Configuration,
-            engine_id: "unfamiliar-scanner".into(),
+            engine_id: "cloudsplaining".into(),
             scanner_details: Some(ScannerFindingDetails {
                 description: Some("Upstream scanner explanation".into()),
                 remediation: Some("Upstream scanner remediation".into()),
                 installed_version: Some("1.2.3".into()),
                 fixed_version: Some("1.2.4".into()),
+                aws_iam_policy: Some(AwsIamPolicyFindingDetails {
+                    policy_source: AwsIamPolicySource::AwsManaged,
+                    policy_name: "IAMFullAccess".into(),
+                    finding_identity: "CreateAccessKey".into(),
+                    actions: vec!["iam:createaccesskey".into()],
+                    actions_complete: true,
+                    attached_to: AwsIamAttachedTo {
+                        roles: vec!["BuildRole".into()],
+                        groups: vec!["AdminGroup".into()],
+                        users: vec![],
+                        complete: true,
+                    },
+                }),
             }),
-            source_rule: Some("UPSTREAM-RULE-42".into()),
+            source_rule: Some("PrivilegeEscalation".into()),
             result_pointer_sha256: Some("def".into()),
             observed_at: Utc.with_ymd_and_hms(2026, 8, 24, 12, 0, 0).unwrap(),
             summary: "Run one evidence".into(),
@@ -691,11 +708,11 @@ mod tests {
         );
         assert_eq!(
             events[0]["evidences"][0]["data"]["engine_id"],
-            "unfamiliar-scanner"
+            "cloudsplaining"
         );
         assert_eq!(
             events[0]["evidences"][0]["data"]["source_rule"],
-            "UPSTREAM-RULE-42"
+            "PrivilegeEscalation"
         );
         assert_eq!(
             events[0]["evidences"][0]["data"]["result_pointer_sha256"],
@@ -718,6 +735,27 @@ mod tests {
         );
         assert_eq!(scanner_details["installed_version"], "1.2.3");
         assert_eq!(scanner_details["fixed_version"], "1.2.4");
+        assert_eq!(
+            scanner_details["aws_iam_policy"]["policy_source"],
+            "aws_managed"
+        );
+        assert_eq!(
+            scanner_details["aws_iam_policy"]["policy_name"],
+            "IAMFullAccess"
+        );
+        assert_eq!(
+            scanner_details["aws_iam_policy"]["finding_identity"],
+            "CreateAccessKey"
+        );
+        assert_eq!(
+            scanner_details["aws_iam_policy"]["actions"],
+            json!(["iam:createaccesskey"])
+        );
+        assert_eq!(scanner_details["aws_iam_policy"]["actions_complete"], true);
+        assert_eq!(
+            scanner_details["aws_iam_policy"]["attached_to"]["roles"],
+            json!(["BuildRole"])
+        );
         assert_eq!(
             events[0]["unmapped"]["ai_security_scanner"]["recommendation"],
             "Ask the cloud owner to review access."
