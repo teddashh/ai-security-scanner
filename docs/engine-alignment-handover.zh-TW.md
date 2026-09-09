@@ -275,6 +275,19 @@ scan control 只屬於 desktop process。本輪沒有安裝 runtime／system pac
 一個確切自有 website 與 internal host 提供當輪 scope confirmation；不能把測試 fixture 的 grant
 當成操作授權。
 
+## mixed IT setup 不再建立沒有可執行檢查的專案（`d2599a1`）
+
+先前 combined environment 表單把僅供盤點的 CIDR 當成「至少一項環境資產」，因此新手可以只加入
+一個明確標示不會掃描的網段、建立專案，然後才在下一頁發現沒有 scan-ready asset。現在至少要有
+一個 repository folder、website／API origin 或 exact internal host；inventory-only range 仍可與其中
+任一可掃描資產一起保存，也仍會在共同報告中標示為 not tested。
+
+這個邊界沒有犧牲具體輸入回饋：若 inventory-only CIDR 本身格式錯誤，表單會先打開原本收合的欄位、
+顯示該 CIDR 的精確錯誤並把焦點放回該欄位；格式有效但沒有可掃描資產時，才顯示 bilingual
+scan-ready 說明並把焦點移到第一個 exact-host 欄位。unit test 同時鎖住「單獨 inventory 不成立」與
+「搭配 repository snapshot 時仍完整保存」，rendered component test 則鎖住錯誤文案、未建立 case
+與 focus 行為。本輪只調整 setup validation／presentation，沒有執行 scanner 或接觸 target。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -311,6 +324,9 @@ no-network smoke 也通過。執行只讀 repository／JAR／OCI fixtures，沒�
 `coverageConciseBoundaries` 18 項 component tests 都通過。新增 vertical 本身以 temporary
 case database、private artifact directory、checked-in outputs 與 `FakeContainerRuntime` 執行，
 沒有 DNS lookup、socket、container runtime 或 target contact。
+
+`d2599a1` 新增後，frontend 568 項、component 238 項、TypeScript typecheck 與 production frontend
+build 全部通過。production build 只有既有的大型 chunk 提示，沒有 build failure。
 
 ## 後續順序
 

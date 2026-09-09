@@ -26,7 +26,7 @@ dashboards.
 | Step | Primary behavior |
 | --- | --- |
 | Choose | **Scan my IT environment** is the combined path. Website-only and project-folder choices remain shortcuts into the same project model. |
-| Add targets | Add repeatable folders, URLs, and exact internal hosts. Internal hosts start with common TCP ports; Advanced may replace them with up to 64 exact ports. No vendor, model, scanner, or rule selection is required. |
+| Add targets | Add repeatable folders, URLs, and exact internal hosts. At least one of these scan-ready assets is required; inventory-only ranges may accompany it but cannot create a resultless project by themselves. Internal hosts start with common TCP ports; Advanced may replace them with up to 64 exact ports. No vendor, model, scanner, or rule selection is required. |
 | Review | Show every target, the applicable security-check category, exact network boundary, important limits, and one Start action. |
 | Run | Repository tools receive private read-only snapshots, Nuclei receives only selected website origins, and Greenbone receives only selected internal hosts and ports. |
 | Read | Every selected asset is shown as problems found, no problems in completed checks, incomplete or failed, or not tested. Findings lead with impact and next action; upstream evidence remains available. |
@@ -34,7 +34,10 @@ dashboards.
 
 Inventory and connectivity remain supporting facts. An open port, responding
 HTTP service, successful process, or prepared runtime is not presented as a
-vulnerability scan.
+vulnerability scan. A valid inventory CIDR is retained when a scan-ready asset
+is also selected, while an inventory-only submission stays in setup with a
+plain-language prompt focused on the first exact-host field. Malformed CIDRs
+still receive their specific validation error before that scan-readiness check.
 
 ## What the common paths actually run
 
@@ -173,7 +176,9 @@ The high-value remaining gaps are:
    orchestrator/adapters, partial sibling preservation, durable reopen, and
    shared HTML export; it does not count as a real scanner or installed-UI run.
 2. Measure time to first useful finding and remove any remaining beginner input
-   that does not change target scope or result quality.
+   that does not change target scope or result quality. The known
+   inventory-only creation dead end was removed in `d2599a1`; this still needs
+   observation in a controlled installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
    AWS cloud paths do not hide a comparable product-authored security subset:
