@@ -2,7 +2,7 @@
 
 狀態日期：2026-09-09
 
-最後完成的產品程式 checkpoint：`369a6b97273c11bc2d770fa8d73de84ea4cefb20`
+最後完成的產品程式 checkpoint：`d90c264`
 
 這份文件是目前唯一的開發交接摘要，已直接取代舊的歷史版。產品決策以[產品規格](product-spec.md)為準，能力現況以[產品檢視](product-audit.md)為準。
 
@@ -18,6 +18,7 @@ Scanner 應盡量保留上游行為、規則、識別碼、severity、證據與 
 
 - `369a6b97273c11bc2d770fa8d73de84ea4cefb20` 已推到 `origin/main`，把 Greenbone launcher 的結果語意（`alarm`、unrated alarm、`error`、`dead_host`、`log`）接到 Rust adapter 與共用報告，並包含先前完成的 Cloudsplaining、Syft 與共用報告語意修正，可直接依賴。這份交接文件位於其後的純文件 commit。
 - `15b27e5bdce659a9cb1429ce980c14b727530423` 修正了讓 `main` 的 CI 在最近幾次 push 都失敗的三個非產品問題：README 契約測試仍檢查 `ef1c653` 之前的固定 13 檢查／19 次 GET 描述、CI classifier 沒有把 `engines/images/greenbone-launcher/main.go` 排入讀取它的 frontend lane，以及 clippy 1.98 的七個既有 lint。之後的 CI 應以綠燈為基準；再變紅時先看新變更。
+- `d90c264` 把 `engines/images/greenbone/plan.json` 的 `wrapper.launcher_sha256` 綁到目前的 launcher 原始碼，這是 engine admission 契約要求、每次 launcher 變更都要跟著做的一行更新，不涉及版本或發布。
 - push 後，`Publish managed Greenbone engine image` workflow 在 publication guard 停止：不可變的 managed image 版本標籤 `23.50.21-feed202608240615-1` 已綁定到較早的 source commit，`ef1c653` 之後每次改到 launcher 的 push 都同樣停在這裡。是否提高 managed image 版本並發布新 launcher 是產品負責人的發布決策，本輪沒有更動。在新 image 發布前，實際掃描仍使用舊 launcher 的輸出（沒有 `<result_type>`），Rust adapter 會走 legacy 保守路徑，行為與本輪之前相同；新語意目前只在 fixture 與測試中被執行。
 - 本機工作樹刻意保留兩個尚未提交的 Maester 程式檔案；請先閱讀 diff，不要用 `git reset --hard` 或 `git checkout --` 丟掉：
   - `engines/images/maester/run-maester.ps1`
