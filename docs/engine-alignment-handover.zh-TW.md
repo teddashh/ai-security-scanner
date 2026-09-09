@@ -72,10 +72,18 @@ PowerShell wrapper 已把上游 `Investigate` 與 `Failed` 分開，並保留經
 `LoadTemplatesWithTags` 失敗、以及 `getTagsUsingWappalyzer` 在 HTTP 請求失敗時回
 `nil` 而落入第一條。三條都以 exit code 0 結束。
 
-同時 `pkg/output/file_output_writer.go:19` 以 `os.O_APPEND|os.O_CREATE|os.O_WRONLY`
-開檔，而 `internal/runner/runner.go:288` 在 `New()` 建構這個 writer，遠早於第 706
-行的 template 載入。**所以輸出檔會被提早建立**：檔案存在且為空，和真正乾淨的掃描
-完全一樣。連不上的網站與確實乾淨的網站產生逐位元組相同的產品輸出。
+**更正**：先前這份文件（以及 `4309127` 的 commit message）把輸出檔的建立機制寫成
+`pkg/output/file_output_writer.go:19` 的 `O_CREATE`＋`internal/runner/runner.go:288`
+的 `runner.New()`。那條路徑屬於 `-o`，**不是我們實際使用的旗標**。
+`engines/images/external-launcher/main.go` 的 `nucleiInvocation` 用的是
+`-jsonl-export`，走 `pkg/reporting/exporters/jsonl/jsonl.go`：檔案是在
+`WriteRows()` 內以 `O_WRONLY|O_CREATE|O_TRUNC` **延遲**建立，而 `WriteRows()`
+由 `Close()` 呼叫，且即使 rows 為空也會先開檔。
+
+結論不變、而且更明確：上面三條 silent skip 都是正常結束流程，因此都會走到
+`Close()` 並產生一個空檔；真正乾淨的掃描同樣產生一個空檔。兩者逐位元組相同。
+修正的是機制敘述——接手 step 2 的人若照舊敘述去看 `file_output_writer.go`
+會找錯檔案。
 
 `4309127` 完成 step 1：
 
@@ -93,11 +101,42 @@ PowerShell wrapper 已把上游 `Investigate` 與 `Failed` 分開，並保留經
 **這一步刻意保守，代價要講清楚**：在有上游執行證據之前，真正乾淨的網站也會顯示為
 「無法確認已檢測」，因為零 finding 無法區分兩者。這是有意識的取捨，不是遺漏。
 
-step 2 仍未做：需要真正的上游 outcome record 才能證明「確實執行但零 finding」。
-不能只把 `-matcher-status` 打開就算數——`adapters/mod.rs` 的 `extract_nuclei` 只看
-`template-id` 是否存在，不看 match status，因此未命中的執行紀錄會直接變成 finding。
-step 2 必須同時改 extractor，並先用固定 fixture 驗證 automatic mode 的實際輸出。
-不要依賴 `-stats-json`，automatic scan 最後階段使用 mock progress client。
+### step 2 的關鍵發現：`-matcher-status` 對現在的輸出通道無效
+
+原本記錄的候選做法「打開 `-matcher-status -jsonl`」需要修正一個前提。已逐行確認：
+
+- `pkg/output/output.go:210`：`MatcherStatus` 的 JSON tag 是 `matcher-status`，
+  沒有 `omitempty`，所以該 writer 的輸出一定帶這個欄位。
+- `pkg/output/output.go:555-611`：`StandardWriter.WriteFailure` 在沒有
+  `-matcher-status` 時直接 `return nil`；打開後會為**每個執行過但未命中**的
+  template 寫出一筆帶完整 `template-id`、`MatcherStatus: false` 的紀錄。
+- 但 `pkg/protocols/common/helpers/writer/writer.go:13-18` 的 `WriteResult`
+  在 `!data.HasOperatorResult()` 時直接 return，**只有命中的結果**才會呼叫
+  `issuesClient.CreateIssue`，也就是餵給 reporting exporters 的那條路。
+  `WriteFailure`（`pkg/tmplexec/exec.go:143`）只寫進 `output.Writer`（`-o`），
+  完全不經過 reporting exporter。
+
+**所以：`-matcher-status` 產生的未命中紀錄只會進 `-o`，不會進 `-jsonl-export`。**
+在現行 launcher 只加這個旗標，我們讀到的 artifact 一個字都不會變。step 2 若要走
+這條路，必須把輸出通道從 `-jsonl-export` 換成 `-o` 搭配 `-jsonl`，這會同時牽動
+launcher 的 `validateEvidenceObject`、`normalizeEvidence` 與 adapter 的紀錄形狀，
+不是加一個旗標而已。
+
+`-stats-json` 已確認不可用：`automaticscan.go:188` 在 automatic scan 最後階段
+把 `execOptions.Progress` 換成 `testutils.MockProgressClient{}`，逐 template 的
+完成統計不會產生。
+
+另外兩點對 step 2 有利：`-omit-template` 已在現行 invocation 中，且
+`output.go:614-620` 的 `encodeTemplate` 只對 custom template 生效，官方 pinned
+template 一律回傳空字串，所以未命中紀錄不會夾帶 template 原始碼；launcher 的
+`maxEvidenceBytes` 為 512 MiB、`maxEvidenceLineBytes` 為 16 MiB，容量不是限制。
+
+step 2 建議的架構（尚未實作）：拿到逐 template 執行證據後，改用
+`EngineRun.unevaluated_targets` 表達「這個網站沒有任何 template 執行證據」，
+沿用 `0937fb3` 已修好且已測試的那條路徑，然後刪掉 `coverage.rs` 目前那個
+「以 finding 當完成證據」的 Nuclei 例外，讓 coverage 回到「finding 數量永遠不是
+完成證據」。新增 cause variant 時，`coverage.rs` 的 exhaustive `match` 會強制
+明確處理，不會無聲退回 scanned。
 
 ## coverage ledger 與標準化報告：兩個缺陷都已修（`0937fb3`、`3aa018e`）
 
