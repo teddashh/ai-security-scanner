@@ -250,6 +250,31 @@ endpoint closure，不能以「補齊 detector」名義進行。GCP Prowler 的�
 `686e427` 沒有提高 tag、改 digest、發布 image 或切換 runtime。何時建立新的 immutable image
 coordinate 並啟用它，是產品負責人的發布決定；在那之前不得宣稱 JAR coverage 已部署。
 
+## mixed IT 共用報告 lifecycle 已有不接觸目標的整合證據（`2e8c3aa`）
+
+新增的 `local_case_lifecycle` 整合測試把一份 immutable repository snapshot、一個
+`.example.test` HTTPS origin 與一個 TEST-NET internal host 放進同一個
+`InternalItEnvironment` case。一次 atomic Start 同時保存三份 exact grant 與 disjoint route：
+Gitleaks 只讀 repository、Nuclei 只收 website、Greenbone 只收 host 的 443／8443。測試再以
+checked-in upstream-shaped outputs 與 in-process `FakeContainerRuntime` 走過真正的 orchestrator、
+adapter、durable reconciliation 與 beginner report；Nuclei 的 frozen hostname／address snapshot
+也必須通過 managed-network scope contract。
+
+這條 vertical 刻意讓 Greenbone 回報 `dead_host`／scanner error，同時保留已完成的 Greenbone
+alarms。最後一份共用報告必須把 host 顯示成 failed coverage，但不能抹掉 repository、website
+或 host 已保存的 findings；三個資產與三個 checks 都必須留在 run-frozen report。資料庫重開後
+重建的 report 必須逐欄相同，HTML export 也必須可驗證、含三個資產與主要結果，而且不能洩漏
+secret／target-controlled fixture 欄位。這補上了先前「前端 route 測試」與「各自 backend
+vertical」之間缺少的一條完整 shared-report lifecycle。
+
+這仍不是 installed-desktop 或真實 scanner 證據。本機 read-only preflight 顯示 Docker
+compatibility service 可用，但 release-managed runtime payload 尚未安裝；Linux host 也缺少
+desktop feature 所需的 GTK／WebKit system libraries。CLI 的 scan start 本來就拒絕執行，因為
+scan control 只屬於 desktop process。本輪沒有安裝 runtime／system packages、建立真實 target
+授權或接觸任何 target。若要完成 installed walkthrough，需要使用者先明確授權所需安裝，並為
+一個確切自有 website 與 internal host 提供當輪 scope confirmation；不能把測試 fixture 的 grant
+當成操作授權。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -282,12 +307,19 @@ clippy、format、engine admission、line-ending、fixture reproduction 與 32 �
 Trivy 離線資料 materialization、image build、embedded label／notice 核對，以及上述三條真實
 no-network smoke 也通過。執行只讀 repository／JAR／OCI fixtures，沒有接觸任何掃描目標。
 
+`2e8c3aa` 新增後，完整 Rust CLI suite、`clippy -D warnings`、format／diff check 與
+`coverageConciseBoundaries` 18 項 component tests 都通過。新增 vertical 本身以 temporary
+case database、private artifact directory、checked-in outputs 與 `FakeContainerRuntime` 執行，
+沒有 DNS lookup、socket、container runtime 或 target contact。
+
 ## 後續順序
 
-1. 用受控自有 fixture 走一次完整 mixed IT flow，涵蓋 repository、內部 host 與 website 的
-   setup、progress、共同報告、保存重開與 readable export，量測從加入資產到第一個有用結果
-   的時間，優先修掉阻礙新手的步驟。任何真實 network target 都必須先有 exact authorization；
-   若要驗證新 Greenbone result-type 語意，還需要產品負責人先決定對應 immutable image 切換。
+1. 在使用者明確允許安裝缺少的 managed runtime／desktop dependencies，並對確切自有 target
+   提供當輪 authorization 後，用 installed desktop 走一次真實 mixed IT flow，涵蓋 repository、
+   內部 host 與 website 的 setup、progress、共同報告、保存重開與 readable export。量測從加入
+   資產到第一個有用結果的時間，優先修掉阻礙新手的步驟。`2e8c3aa` 已證明不接觸目標的結構
+   lifecycle，但不能代替真實 scanner 或 installed UI 證據；若要驗證新 Greenbone result-type
+   語意，還需要產品負責人先決定對應 immutable image 切換。
 2. Cloud 稽核目前唯一確定仍窄於 upstream service 的 GCP Prowler profile 會改變權限與 endpoint
    closure。只有在產品負責人明確決定新資產／權限／endpoint 後才繼續；ScoutSuite 已是完整
    upstream IAM service，CloudQuery 與 Steampipe 是 inventory，不列為 detector subset 待辦。

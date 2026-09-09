@@ -166,7 +166,12 @@ stated scope visible.
 The high-value remaining gaps are:
 
 1. Exercise a controlled installed-desktop mixed scan with repositories,
-   internal hosts, and websites through progress, reopen, and readable export.
+   internal hosts, and websites through progress, reopen, and readable export,
+   after the user explicitly authorizes any missing runtime installation and
+   provides exact authorization for owned network targets. A headless
+   fixture-backed integration now proves the atomic three-way routing,
+   orchestrator/adapters, partial sibling preservation, durable reopen, and
+   shared HTML export; it does not count as a real scanner or installed-UI run.
 2. Measure time to first useful finding and remove any remaining beginner input
    that does not change target scope or result quality.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
