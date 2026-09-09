@@ -23,6 +23,9 @@ Scanner 應盡量保留上游行為、規則、識別碼、severity、證據與 
 - `837ad7f` 修好自 `d8fe70b` 起就無法編譯的 desktop 建置。`d8fe70b` 為 `ExecutionReport` 與 `DurableExecutionReport` 加了 `observations`，但沒有一併更新 `commands.rs`；該檔在 `#[cfg(feature = "desktop")]` 之下，本機所有 gate 與多數 CI 走的 `cli` lane 都不會編譯它，因此三處 initializer 一直缺欄位，`cargo check --features desktop` 以 E0063 失敗。真正該攔下它的 CI 執行，都被同一個 ref 上較晚的 push 在 Desktop lane 跑完前取消掉了。本機沒有 GTK／webkit，無法在本地驗證 desktop feature，只能靠 CI 的 Desktop Linux lane；`837ad7f` 的該 lane 已綠。
 - `879394d` 補上第一個從真實 scanner 輸出一路走到 `MasterFrameworkReport` 的整合測試。在此之前 exporter 的每一個測試都是在 `framework_report.rs` 內手工組 `AssessmentCase`，mapping catalog、adapter 與 exporter 各自有覆蓋，中間那條路徑沒有。新測試以 checked-in 的 Greenbone result-types XML 經 `FakeContainerRuntime` → `apply_execution_report` → `export_case(FrameworkReport)`，驗證三個座標、每條關聯都回得到 fixture finding 與其 evidence／artifact、mapping identity 是現行 catalog 而非未驗證的歷史版本，且匯出位元組通過 checked-in schema。AI 適用性以同一條路徑跑兩次驗證。沒有接觸任何目標：`FakeContainerRuntime` 只有記憶體狀態，fixture 位址是 RFC 5737 文件用範圍。
 - push 後，`Publish managed Greenbone engine image` workflow 在 publication guard 停止：不可變的 managed image 版本標籤 `23.50.21-feed202608240615-1` 已綁定到較早的 source commit，`ef1c653` 之後每次改到 launcher 的 push 都同樣停在這裡。是否提高 managed image 版本並發布新 launcher 是產品負責人的發布決策，本輪沒有更動。在新 image 發布前，實際掃描仍使用舊 launcher 的輸出（沒有 `<result_type>`），Rust adapter 會走 legacy 保守路徑，行為與本輪之前相同；新語意目前只在 fixture 與測試中被執行。
+- `0937fb3` 修好 coverage ledger 把未評估主機記成「已完成」的缺陷。`assess_asset_coverage` 現在會讀 `unevaluated_targets`：completed run 只要指名該資產，就在既有 explanation 框架內加一條 `{engine_id}={cause}` incomplete reason，不再產生 scanned 狀態。cause 排序用 exhaustive `match`，日後新增 cause 會編譯失敗而不是無聲退回 scanned。
+- `3aa018e` 修好標準化報告永遠丟失整份 coverage ledger 的缺陷。Standard redaction 會把每筆 coverage 的 `scope_key` 改成 `[redacted]`，而 framework exporter 只在 `scope_key == "asset:{asset_id}"` 時才把 coverage entry 對上 planned asset；`ExportOptions::default()` 就是 Standard，因此每一份預設 framework report 的 `selected_run_coverage_ledger_available` 恆為 false、coverage state map 恆為空、`authorized_incomplete_count` 恆為 0，「authorized area(s) were only partly scanned」那句限制也永遠不會出現。現在只在 `scope_key` 恰好能由同一筆保留下來的 `asset_id` 還原時才保留該欄位，其餘（source-scoped、demo 形狀、對不上的 id）仍然遮蔽，`label` 與 `explanation` 不變。exporter 的比對條件沒有放寬。這同時解答了 `879394d` 當時未查明的 unmatched coverage entry 異常：那不是 planned-asset 計算錯誤，就是這條遮蔽。
+- `4309127` 修好 Nuclei 假乾淨（見下節）。
 - 本機工作樹刻意保留兩個尚未提交的 Maester 程式檔案；請先閱讀 diff，不要用 `git reset --hard` 或 `git checkout --` 丟掉：
   - `engines/images/maester/run-maester.ps1`
   - `engines/images/maester/run-maester.Tests.ps1`
@@ -59,49 +62,72 @@ PowerShell wrapper 已把上游 `Investigate` 與 `Failed` 分開，並保留經
 
 不要把 `Investigate` 當成 vulnerability failure，也不要當成 pass。下一步應在 host adapter／共用報告中把它呈現為「需要人工確認」的 coverage item，附上上游 detail；完成端到端測試後再與 wrapper 一起提交。
 
-## 已確認的最高優先缺陷：Nuclei 空輸出可能顯示假乾淨
+## Nuclei 假乾淨：step 1 已修（`4309127`），step 2 未做
 
-目前 Nuclei automatic scan 可能在 technology detection、tag 選擇或 applicable template 載入失敗時以 exit code 0 結束，但沒有產生 JSONL。現行 launcher 對缺少 temporary output 直接接受，Rust adapter 又允許 Nuclei 的空 JSONL 成為 complete；最後 UI 可能顯示「已完成、未發現問題」。這會直接誤導新手，優先度高於介面微調。
+上游的實際行為比先前記錄的更嚴重，已在 pinned 副本逐行確認：
 
-相關位置：
+`.upstreams/projectdiscovery/nuclei/pkg/protocols/common/automaticscan/automaticscan.go`
+有三條路徑會放棄該目標並且**不回傳錯誤**——第 173 行 `len(finalTags) == 0`
+（technology detection 沒找到 tag，等於一個 template 都沒跑）、第 182 行
+`LoadTemplatesWithTags` 失敗、以及 `getTagsUsingWappalyzer` 在 HTTP 請求失敗時回
+`nil` 而落入第一條。三條都以 exit code 0 結束。
 
-- `.upstreams/projectdiscovery/nuclei/pkg/protocols/common/automaticscan/automaticscan.go`
-- `engines/images/external-launcher/main.go` 的 Nuclei invocation、`runCommand` 與 `normalizeEvidence`
-- `src-tauri/src/adapters/mod.rs` 的 complete-empty JSONL 判斷
-- `src-tauri/tests/adapter_fixtures.rs` 的 empty released JSONL 測試
-- `src-tauri/src/orchestrator.rs` 的 adapter completion 狀態
-- `src-tauri/src/beginner_report.rs` 的 Nuclei tested dimension
-- `src/pages/FindingsPage.tsx` 的逐資產狀態判斷
+同時 `pkg/output/file_output_writer.go:19` 以 `os.O_APPEND|os.O_CREATE|os.O_WRONLY`
+開檔，而 `internal/runner/runner.go:288` 在 `New()` 建構這個 writer，遠早於第 706
+行的 template 載入。**所以輸出檔會被提早建立**：檔案存在且為空，和真正乾淨的掃描
+完全一樣。連不上的網站與確實乾淨的網站產生逐位元組相同的產品輸出。
 
-建議分兩步修：
+`4309127` 完成 step 1：
 
-1. 立即停止假乾淨：Nuclei temporary output 缺少或為空時標成 incomplete，從可證明 complete 的 empty-stream 例外與相應測試中移除 Nuclei；報告說明缺少執行證據。
-2. 再以真實上游 outcome record 建立「確實執行但零 finding」的完成證據。`-matcher-status -jsonl` 可作為待實測候選；先用固定 fixture 驗證 automatic mode 的實際輸出，不能只根據 exit code 推定完成。不要直接依賴 `-stats-json`，automatic scan 的最後階段使用 mock progress client，未證明能提供所需的逐次完成證據。
+- Nuclei 從 `is_complete_empty_json_lines` 與 `is_mapping_independent_empty_json_lines`
+  兩個名單移除，空 artifact 因此讓 normalization 變成 incomplete。
+- 單靠 adapter 層無法處理多資產 run，所以 completed Nuclei task 另外要求**逐資產**
+  有一筆 normalized record，且其 observation、finding snapshot 與 evidence 全部綁到
+  這次 run、這個 engine run 與該資產（`coverage::selected_run_has_nuclei_record`）。
+  沒有證據的資產失去 tested dimension 並得到 `Unavailable` coverage gap；同一個 run
+  中有證據的 sibling 資產保留 tested 狀態。
+- `case_service.rs` 中「verified zero-byte JSONL」的 resume 訊息改成不再宣稱空串流
+  等於完整結果。副作用：release identity 有漂移時，zero-byte Nuclei 串流不再能繞過
+  release 相容性做 adapter-only resume，會被擋成 `resume_release_incompatible`。
 
-## 已確認的第二個缺陷：coverage ledger 把未評估的主機記成「已完成」
+**這一步刻意保守，代價要講清楚**：在有上游執行證據之前，真正乾淨的網站也會顯示為
+「無法確認已檢測」，因為零 finding 無法區分兩者。這是有意識的取捨，不是遺漏。
 
-`src-tauri/src/coverage.rs` 的 `assess_asset_coverage` 只依 engine run 狀態、manifest 相容性與凍結授權判斷 `DiscoveredAuthorizedScanned`；整個檔案對 `unevaluated_targets` 只有一處測試 fixture 的欄位初始化，判斷邏輯完全沒有讀它。
+step 2 仍未做：需要真正的上游 outcome record 才能證明「確實執行但零 finding」。
+不能只把 `-matcher-status` 打開就算數——`adapters/mod.rs` 的 `extract_nuclei` 只看
+`template-id` 是否存在，不看 match status，因此未命中的執行紀錄會直接變成 finding。
+step 2 必須同時改 extractor，並先用固定 fixture 驗證 automatic mode 的實際輸出。
+不要依賴 `-stats-json`，automatic scan 最後階段使用 mock progress client。
 
-因此 Greenbone 在 `dead_host`（主機整段沒有回應、一條 vulnerability test 都沒跑）或 `error` 之下仍以 `Completed` 結束時，該資產的 ledger 會是：
+## coverage ledger 與標準化報告：兩個缺陷都已修（`0937fb3`、`3aa018e`）
 
-```text
-status:      DiscoveredAuthorizedScanned
-explanation: All 1 compatible engine run(s) planned for this asset completed. …
-```
-
-所有讀 `case.coverage` 的地方都會照抄：`src/pages/CoveragePage.tsx` 把 `discovered_authorized_scanned` 顯示為「已完成／Finished」與「這些項目的已選檢查都已完成」，簽章 case bundle 存的是同一個狀態，`exporters/framework_report.rs` 的 `coverage_summary` 也因此得到 `authorized_incomplete_count: 0`。
-
-Beginner master report 本身是正確的：`src-tauri/src/beginner_report.rs` 約 1627–1690 行已依 `unevaluated_targets` 清掉該資產的 tested dimension 並產生 failed／partial 的 coverage gap。缺的是 ledger 這一層，修法應照抄 beginner report 的界定方式（只採計 `asset_id` 落在該 engine run 綁定資產內的紀錄，同一資產 `TargetDidNotRespond` 優先於 `ScannerError`），並沿用既有的
+原本 `assess_asset_coverage` 只看 engine run 狀態、manifest 相容性與凍結授權，整個
+檔案對 `unevaluated_targets` 只有一處測試 fixture 的欄位初始化，判斷邏輯完全沒讀它。
+因此 Greenbone 在 `dead_host` 或 `error` 下仍以 `Completed` 結束時，該資產的 ledger
+會是 `DiscoveredAuthorizedScanned` 與「All 1 compatible engine run(s) ... completed」，
+`CoveragePage.tsx` 照抄成「已完成／Finished」。beginner master report 本身一直是對的
+（`beginner_report.rs` 約 1627–1690 行），缺的是 ledger 這一層。`0937fb3` 依 beginner
+report 的界定方式修好：只採計 `asset_id` 落在該 engine run 綁定資產內的紀錄，同一資產
+`TargetDidNotRespond` 優先於 `ScannerError`，並沿用既有的
 
 ```text
 The authorized scan is incomplete: {reasons}. Only completed compatible catalog-engine runs or exact completed built-in tasks can produce scanned coverage.
 ```
 
-框架與 `{engine_id}={cause}` token 形狀。`finding_narrative.rs` 的 `coverage_record_detail_zh_hant` 會原樣帶過 token，所以留在框架內就不需要新增中英對照，`debug_assert_coverage_details_are_translatable` 也會在離開框架時直接失敗。
+框架與 `{engine_id}={cause}` token 形狀。`finding_narrative.rs` 的
+`coverage_record_detail_zh_hant` 會原樣帶過 token，所以留在框架內就不需要新增中英對照。
 
-這條缺陷牴觸 `CLAUDE.md` 明列的界線：絕不隱藏未完成的涵蓋範圍。優先度與 Nuclei 假乾淨相同。
+`879394d` 當時記為「尚未查明」的第二個問題——單一資產案件卻出現
+`selected_run_matched_coverage_entry_count: 0`、`selected_run_unmatched_coverage_entry_count: 1`、
+`selected_run_coverage_ledger_available: false`——已查明並修好。原因不在 planned asset
+計算，而是 Standard redaction 把 `scope_key` 改成 `[redacted]`，而 exporter 用
+`asset:{asset_id}` 比對。詳見 `3aa018e`。
 
-同一條路徑上還有第二個尚未查明的問題：以 `DeclaredAssetKind::ExternalTarget` 加 `DeclaredHostScanInput` 建立的內部主機案件，其 `MasterFrameworkReport` coverage 出現 `selected_run_planned_asset_count: 1`、`selected_run_matched_coverage_entry_count: 0`、`selected_run_unmatched_coverage_entry_count: 1`、`selected_run_coverage_ledger_available: false`。案件只有一個資產（`normalize_declared_assets` 每個 input 只產生一個 `DiscoveredAsset`），卻有一筆綁到該 run 的 coverage entry 對不上唯一的 frozen planned asset。目前正是這個對不上把「已掃描」擋在匯出之外；修好上面的 ledger 之前，先查清楚這裡是缺陷還是刻意設計。`879394d` 的測試把這兩個數字釘住並在註解中標明是現況而非期望值。
+這裡有一個值得記住的教訓：`879394d` 當時釘住「沒有任何 coverage state 把這台主機算成
+scanned」的斷言，其實是**空洞通過**的——因為整個 map 是空的，它對一份什麼都沒說的報告
+一樣會通過。修好 redaction 後才補上「map 非空且含 `authorized_scan_incomplete`」。
+與 desktop build 在 `cfg` 之下壞掉數個 commit 沒被發現是同一種形狀：看起來像證據，
+其實沒有執行到。
 
 ## 驗證方式
 
@@ -127,11 +153,15 @@ docker run --rm --network none \
 
 ## 後續順序
 
-1. 修正 Nuclei 空／缺失輸出的假乾淨路徑，再補上可證明 genuine zero-finding completion 的上游證據。
+1. Nuclei step 2：以真正的上游 outcome record 證明「確實執行但零 finding」，同時修
+   `extract_nuclei` 讓未命中的執行紀錄不會變成 finding。在此之前乾淨網站會顯示為
+   無法確認已檢測。
 2. 把 Maester `Investigate` 接成 manual-review coverage item，與 wrapper 一起提交。
-3. 移除進階 cloud／Kubernetes 路徑中產品自訂的窄 subsets，改由上游 profile 與使用者選定資產驅動。
+3. 移除進階 cloud／Kubernetes 路徑中產品自訂的窄 subsets，改由上游 profile 與使用者
+   選定資產驅動。
 4. 補齊 Trivy JAR 掃描所需的固定 Java vulnerability DB。
-5. 用受控自有 fixture 走一次完整 mixed IT flow，包含第一次以新語意真實執行 Greenbone，量測從加入資產到第一個有用結果所需時間，優先修掉阻礙新手的步驟。
+5. 用受控自有 fixture 走一次完整 mixed IT flow，包含第一次以新語意真實執行 Greenbone，
+   量測從加入資產到第一個有用結果所需時間，優先修掉阻礙新手的步驟。
 
 ## 交接判準
 
