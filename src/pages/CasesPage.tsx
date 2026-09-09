@@ -531,6 +531,7 @@ const runStatusKeys: Record<ScanRun["status"], StaticTranslationKey> = {
 };
 
 const companySizeCopy: Record<CompanySize, BilingualText> = {
+  unknown: { en: "Not provided", zhTW: "未提供" },
   solo: { en: "Just me", zhTW: "個人／1 人" },
   small: { en: "2–49 people", zhTW: "小型／2–49 人" },
   medium: { en: "50–249 people", zhTW: "中型／50–249 人" },
@@ -678,7 +679,7 @@ export function CasesPage({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [name, setName] = useState("");
   const [organizationName, setOrganizationName] = useState("");
-  const [companySize, setCompanySize] = useState<CompanySize>("small");
+  const [companySize, setCompanySize] = useState<CompanySize>("unknown");
   const [platforms, setPlatforms] = useState<CloudPlatform[]>(["aws"]);
   const [dataClasses, setDataClasses] = useState<DataClass[]>(["none"]);
   const [requestedActivities, setRequestedActivities] = useState<AssessmentActivity[]>(["configuration_assessment"]);
@@ -1066,7 +1067,7 @@ export function CasesPage({
     setAdvancedOpen(false);
     setName("");
     setOrganizationName("");
-    setCompanySize("small");
+    setCompanySize("unknown");
     setPlatforms(["aws"]);
     setDataClasses(["none"]);
     setRequestedActivities(["configuration_assessment"]);

@@ -548,7 +548,10 @@ test("a beginner can create a website scan without inventing a project name", as
   });
 
   const projectName = getByLabelText("Scan project name (optional)");
+  const organizationSize = getByLabelText("Organization size");
   expect(projectName.hasAttribute("required")).toBe(false);
+  expect((organizationSize as HTMLSelectElement).value).toBe("unknown");
+  expect(organizationSize.textContent).toContain("Not provided");
   fireEvent.change(getByLabelText(/Website or API URL/u), {
     target: { value: "https://portal.example.test/login" },
   });
@@ -562,6 +565,7 @@ test("a beginner can create a website scan without inventing a project name", as
 
   await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
   expect(onCreate.mock.calls[0]?.[0].name).toBe("portal.example.test");
+  expect(onCreate.mock.calls[0]?.[0].companySize).toBe("unknown");
 });
 
 test("an internal website shortcut promises the fixed profile and the required network confirmation", async () => {

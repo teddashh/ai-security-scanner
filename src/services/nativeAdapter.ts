@@ -1029,6 +1029,7 @@ const phaseMap: Record<string, CasePhase> = {
 const mapPhase = (status: string): CasePhase => phaseMap[status] ?? "needs_attention";
 
 const mapCompanySize = (value: string): CompanySize => {
+  if (!value.trim() || /not provided|unknown|unspecified|not sure/i.test(value)) return "unknown";
   if (/250|500|1000|large/i.test(value)) return "large";
   if (/50|100|249|medium/i.test(value)) return "medium";
   if (/^1$|solo/i.test(value)) return "solo";

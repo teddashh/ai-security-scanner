@@ -25,7 +25,7 @@ export type CloudPlatform =
   | "container"
   | "kubernetes";
 
-export type CompanySize = "solo" | "small" | "medium" | "large";
+export type CompanySize = "unknown" | "solo" | "small" | "medium" | "large";
 export type DataClass = "pii" | "phi" | "payment" | "credentials" | "none";
 
 export type AssessmentActivity =

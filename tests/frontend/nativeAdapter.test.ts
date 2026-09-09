@@ -1082,6 +1082,11 @@ test("case summaries display only applicable source platforms and preserve real 
 
   assert.deepEqual(snapshot.cases[0]?.platforms, ["code", "container", "kubernetes"]);
   assert.equal(snapshot.cases[0]?.aiGeneratedArtifact, "yes");
+
+  const withoutOrganizationSize = adaptNativeSnapshot(snapshotFixture([summaryFixture({
+    employee_range: "Not provided",
+  })]), []);
+  assert.equal(withoutOrganizationSize.cases[0]?.companySize, "unknown");
 });
 
 test("native snapshot preserves beginner-safe diagnostics for unreadable saved projects", () => {

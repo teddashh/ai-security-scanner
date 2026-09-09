@@ -223,7 +223,7 @@ test("native case creation sends the closed internal-device profile in snake cas
     assessmentIntent: "internal_it_environment",
     aiGeneratedArtifact: "no",
     organizationName: "Example",
-    companySize: "small",
+    companySize: "unknown",
     dataClasses: ["none"],
     requestedActivities: ["active_external_vulnerability_tests"],
     platforms: ["external"],
@@ -241,6 +241,10 @@ test("native case creation sends the closed internal-device profile in snake cas
   }), /test-only stop/u);
 
   assert.equal(invocations[0]?.command, COMMANDS.createCase);
+  assert.equal(
+    (invocations[0]?.args as { request: { employee_range: string } }).request.employee_range,
+    "Not provided",
+  );
   assert.deepEqual(
     (invocations[0]?.args as {
       request: { declared_assets: Array<{ web_service: unknown }> };

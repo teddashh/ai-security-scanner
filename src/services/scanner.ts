@@ -277,6 +277,7 @@ const actionResult = async (
 };
 
 const employeeRanges: Record<CreateCaseInput["companySize"], string> = {
+  unknown: "Not provided",
   solo: "1",
   small: "2-49",
   medium: "50-249",
