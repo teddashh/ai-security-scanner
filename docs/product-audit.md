@@ -49,7 +49,9 @@ a useful result is aimed for within minutes after local tools are ready. The
 same first-layer line prevents that target from becoming a full-run promise by
 naming the relevant extension—additional assets and host depth, website
 response and applicable checks, or a large project folder. Numeric ETAs remain
-unset until a controlled installed run supplies measurements.
+unset until a controlled installed run supplies measurements. The focused
+Review panel repeats the applicable timing target beside the exact environment,
+website, or local-folder plan before Start.
 
 ## What the common paths actually run
 
@@ -192,8 +194,8 @@ The high-value remaining gaps are:
    inventory-only creation dead end was removed in `d2599a1`, and the hidden
    organization-size guess was removed in `77c54fc`. `a94131a` makes the
    unmeasured minutes-level timing target visible without inventing a numeric
-   ETA; this still needs observation in a controlled installed-desktop
-   walkthrough.
+   ETA, and `282d3fb` carries it through Review; this still needs observation in
+   a controlled installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
    AWS cloud paths do not hide a comparable product-authored security subset:

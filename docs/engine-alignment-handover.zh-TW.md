@@ -311,6 +311,17 @@ rendered component test 在 English 與 Traditional Chinese 都核對三張 prim
 都有 tools-ready caveat，並各自保留延長因素。這沒有改變任何 timeout、rate、engine plan 或 target
 scope。
 
+## Review 在 Start 前保留同一個 timing target（`282d3fb`）
+
+Home 的概略時間不再在 setup 後消失。combined environment、website quick profile 與 local-folder
+focused Review 都會在 exact plan 旁顯示同一個 minutes-level timing target 與各自的延長因素，讓
+使用者在按 Start 前仍能分辨「第一個有用結果」和「完整 run 結束」。既有 website request rate、
+concurrency、per-request timeout、environment asset boundaries 與 read-only snapshot boundary 都
+保留原樣；CIDR 的計算式 minimum／conservative ceiling warning 也仍是另一個更精確的安全提示。
+
+rendered coverage test 分別走過 source-code、public website 與 mixed IT Review，確認 timing line 與
+既有 exact target／limit copy 同時存在。這沒有建立 numeric ETA 或改變 runtime policy。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -356,6 +367,9 @@ frontend build 再次全部通過；build 仍只有既有的大型 chunk 提示�
 
 `a94131a` 新增後，frontend 568 項、component 238 項、TypeScript typecheck 與 production frontend
 build 全部通過；build 只有既有的大型 chunk 提示。
+
+`282d3fb` 新增後，相同的 frontend 568 項、component 238 項、TypeScript typecheck 與 production
+frontend build 再次全部通過；build 仍只有既有的大型 chunk 提示。
 
 ## 後續順序
 
