@@ -158,11 +158,12 @@ type scanUnit struct {
 }
 
 type invocation struct {
-	Program string
-	Args    []string
-	Env     []string
-	Expiry  time.Time
-	Timeout time.Duration
+	Program    string
+	Args       []string
+	Env        []string
+	StdoutPath string
+	Expiry     time.Time
+	Timeout    time.Duration
 }
 
 type launcherV2Options struct {
@@ -1866,7 +1867,7 @@ func nucleiInvocation(unit scanUnit, proxy, output string, environment []string,
 		"-retries", "0",
 		"-response-size-read", strconv.Itoa(4 * 1024 * 1024),
 		"-response-size-save", strconv.Itoa(1024 * 1024),
-		"-jsonl-export", output,
+		"-jsonl", "-matcher-status",
 		"-no-httpx", "-no-interactsh", "-disable-redirects",
 		"-no-stdin", "-disable-update-check",
 		"-omit-raw", "-omit-template", "-silent", "-no-color",
@@ -1884,12 +1885,29 @@ func nucleiInvocation(unit scanUnit, proxy, output string, environment []string,
 	return invocation{
 		Program: "/usr/local/bin/nuclei",
 		Args:    arguments,
-		Env:     environment, Expiry: unit.Grant.ExpiresAt,
+		// Matcher-status non-match records are written by Nuclei's standard
+		// writer, not its reporting exporters. Capture that writer's JSONL
+		// stdout directly: the pinned writer always terminates stdout records
+		// with newlines, while its -o file writer does not.
+		Env:        withoutEnvironmentVariable(environment, "DISABLE_STDOUT"),
+		StdoutPath: output,
+		Expiry:     unit.Grant.ExpiresAt,
 		// Every admitted template is independently verified to declare at most
 		// twenty read-only requests. Use that upper bound for the child deadline;
 		// the reviewed engine ceiling remains the final cap.
 		Timeout: totalTimeout,
 	}, nil
+}
+
+func withoutEnvironmentVariable(environment []string, name string) []string {
+	prefix := name + "="
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		if !strings.HasPrefix(entry, prefix) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 // Nuclei's upstream automatic scanner always prepends its configured template
@@ -1951,7 +1969,17 @@ func runCommand(plan invocation) error {
 	command := exec.CommandContext(commandContext, plan.Program, plan.Args...)
 	command.Env = plan.Env
 	command.Stdin = nil
-	command.Stdout = io.Discard
+	var stdout *os.File
+	if plan.StdoutPath == "" {
+		command.Stdout = io.Discard
+	} else {
+		var err error
+		stdout, err = os.OpenFile(plan.StdoutPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return fmt.Errorf("create exclusive scanner stdout evidence: %w", err)
+		}
+		command.Stdout = stdout
+	}
 	stderr := &boundedBuffer{remaining: 64 * 1024}
 	command.Stderr = stderr
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -1962,11 +1990,17 @@ func runCommand(plan invocation) error {
 		return syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
 	}
 	command.WaitDelay = 2 * time.Second
-	if err := command.Run(); err != nil {
+	runErr := command.Run()
+	if stdout != nil {
+		if closeErr := stdout.Close(); runErr == nil && closeErr != nil {
+			return fmt.Errorf("close scanner stdout evidence: %w", closeErr)
+		}
+	}
+	if runErr != nil {
 		if errors.Is(commandContext.Err(), context.DeadlineExceeded) {
 			return errScannerTimedOut
 		}
-		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+		if errors.Is(runErr, exec.ErrNotFound) || errors.Is(runErr, os.ErrNotExist) {
 			return errors.New("scanner executable is unavailable")
 		}
 		return fmt.Errorf("scanner exited unsuccessfully%s", sanitizedStderr(stderr.String()))

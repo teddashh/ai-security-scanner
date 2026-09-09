@@ -2,10 +2,8 @@
 //!
 //! Coverage is derived from source connectivity, discovered assets, explicit
 //! effective grants, compatible planned engine runs, and their execution
-//! status. Finding counts are not completion evidence. The one narrow exception
-//! is Nuclei automatic mode: its current contract has no execution ledger, so a
-//! normalized record with exact run/asset provenance is the only positive proof
-//! that at least one upstream template ran.
+//! status. Finding counts are never completion evidence. Template scanners must
+//! retain their own typed per-target execution proof instead.
 
 use crate::domain::{
     AssessmentCase, Asset, AssetKind, BUILT_IN_LOCALHOST_TCP_ASSET_IDENTIFIER_NAMESPACE,
@@ -386,14 +384,15 @@ pub fn assess_asset_coverage(
             .min_by_key(|cause| match cause {
                 UnevaluatedTargetCause::TargetDidNotRespond => 0,
                 UnevaluatedTargetCause::ScannerError => 1,
+                UnevaluatedTargetCause::NoSecurityTemplateExecutionEvidence => 2,
             })
         {
             incomplete_reasons.push(format!("{}={}", engine_run.engine_id, enum_key(&cause)));
         } else if engine_run.engine_id == NUCLEI_ENGINE_ID
-            && !selected_run_has_nuclei_record(case, run, engine_run, &asset.id)
+            && !engine_run_has_security_template_execution(engine_run, &asset.id)
         {
             incomplete_reasons.push(format!(
-                "{}=upstream_template_result_missing",
+                "{}=no_security_template_execution_evidence",
                 engine_run.engine_id
             ));
         } else if let Some(input) = engine_run.knowledge_input.as_ref()
@@ -464,52 +463,17 @@ pub fn assess_asset_coverage(
     }
 }
 
-/// Whether the selected run retained a normalized Nuclei record for this exact
-/// task and asset. A legacy canonical finding is accepted only when its exact
-/// evidence still matches the selected observation; an observation from another
-/// run or a record attributed only to a sibling asset is not execution proof.
-pub(crate) fn selected_run_has_nuclei_record(
-    case: &AssessmentCase,
-    run: &ScanRun,
+/// Whether this exact task and asset retained positive, non-finding proof that
+/// at least one applicable upstream security template completed.
+pub(crate) fn engine_run_has_security_template_execution(
     engine_run: &EngineRun,
     asset_id: &str,
 ) -> bool {
-    if case.id != run.case_id || engine_run.engine_id != NUCLEI_ENGINE_ID {
-        return false;
-    }
-    case.finding_observations.iter().any(|observation| {
-        observation.run_id == run.id
-            && observation.asset_ids.iter().any(|id| id == asset_id)
-            && observation
-                .engine_ids
-                .iter()
-                .any(|engine_id| engine_id == NUCLEI_ENGINE_ID)
-            && observation
-                .finding_snapshot
-                .as_ref()
-                .or_else(|| {
-                    case.findings.iter().find(|finding| {
-                        finding.id == observation.finding_id
-                            && finding.fingerprint == observation.fingerprint
-                    })
-                })
-                .is_some_and(|snapshot| {
-                    snapshot.id == observation.finding_id
-                        && snapshot.fingerprint == observation.fingerprint
-                        && snapshot.case_id == case.id
-                        && snapshot.asset_ids.iter().any(|id| id == asset_id)
-                        && snapshot.evidence.iter().any(|evidence| {
-                            evidence.finding_id == snapshot.id
-                                && evidence.run_id == run.id
-                                && evidence.engine_run_id.as_deref() == Some(engine_run.id.as_str())
-                                && evidence.engine_id == NUCLEI_ENGINE_ID
-                                && observation
-                                    .evidence_hashes
-                                    .iter()
-                                    .any(|hash| hash == &evidence.artifact_sha256)
-                        })
-                })
-    })
+    engine_run.engine_id == NUCLEI_ENGINE_ID
+        && engine_run
+            .security_template_executions
+            .iter()
+            .any(|execution| execution.asset_id == asset_id && execution.result_count > 0)
 }
 
 fn assess_built_in_localhost_tcp_binding(
@@ -805,9 +769,8 @@ fn enum_key<T: Serialize>(value: &T) -> String {
 mod tests {
     use super::*;
     use crate::domain::{
-        AssetIdentifier, BUILT_IN_LOCALHOST_TCP_TIMEOUT_MS, Confidence, Evidence, EvidenceKind,
-        Finding, FindingObservation, FindingStatus, LocalhostTcpObservation, ManualReviewControl,
-        OrganizationProfile, Severity, UnevaluatedTarget,
+        AssetIdentifier, BUILT_IN_LOCALHOST_TCP_TIMEOUT_MS, LocalhostTcpObservation,
+        ManualReviewControl, OrganizationProfile, SecurityTemplateExecution, UnevaluatedTarget,
     };
     use crate::registry::EngineRegistry;
 
@@ -819,6 +782,7 @@ mod tests {
         EngineRun {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            security_template_executions: Vec::new(),
             manual_review_controls: Vec::new(),
             id: "localhost-run".into(),
             scan_run_id: "scan-run".into(),
@@ -940,6 +904,7 @@ mod tests {
             warnings: Vec::new(),
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            security_template_executions: Vec::new(),
             manual_review_controls: Vec::new(),
             raw_artifact_ids: Vec::new(),
             error_code: None,
@@ -992,7 +957,7 @@ mod tests {
         assess_asset_coverage(&case, &asset, &[manifest], as_of)
     }
 
-    fn nuclei_coverage_fixture(with_record: bool) -> AssetCoverageAssessment {
+    fn nuclei_coverage_fixture(with_execution_evidence: bool) -> AssetCoverageAssessment {
         let (mut case, mut asset, _, as_of) = greenbone_coverage_fixture();
         asset.kind = AssetKind::WebService;
         asset.name = "https://example.test:443".into();
@@ -1005,67 +970,11 @@ mod tests {
         engine_run.engine_id = NUCLEI_ENGINE_ID.into();
         engine_run.id = "nuclei-run".into();
 
-        if with_record {
-            let evidence_hash = "a".repeat(64);
-            let finding = Finding {
-                id: "nuclei-finding".into(),
-                case_id: case.id.clone(),
-                first_seen_run_id: "scan-run".into(),
-                last_seen_run_id: "scan-run".into(),
-                fingerprint: "nuclei-fingerprint".into(),
-                title: "Pinned Nuclei result".into(),
-                plain_language_summary: "Pinned Nuclei result".into(),
-                possible_impact: "Review the upstream result.".into(),
-                severity: Severity::Medium,
-                confidence: Confidence::High,
-                priority: 50,
-                priority_reasons: Vec::new(),
-                asset_ids: vec![asset.id.clone()],
-                evidence: vec![Evidence {
-                    id: "nuclei-evidence".into(),
-                    finding_id: "nuclei-finding".into(),
-                    run_id: "scan-run".into(),
-                    engine_run_id: Some("nuclei-run".into()),
-                    kind: EvidenceKind::ExternalValidation,
-                    engine_id: NUCLEI_ENGINE_ID.into(),
-                    scanner_details: None,
-                    source_rule: Some("template-id".into()),
-                    result_pointer_sha256: None,
-                    observed_at: as_of,
-                    summary: "Nuclei template matched.".into(),
-                    location: Some("https://example.test:443/".into()),
-                    artifact_id: "nuclei-artifact".into(),
-                    artifact_sha256: evidence_hash.clone(),
-                    pointer: Some("/records/1".into()),
-                    redacted: true,
-                }],
-                control_references: Vec::new(),
-                recommendation: "Review the upstream result.".into(),
-                verification_guidance: "Run the check again after review.".into(),
-                rollback_considerations: None,
-                official_references: Vec::new(),
-                recommended_expert_type: "Application security engineer".into(),
-                status: FindingStatus::Unreviewed,
-                tags: Vec::new(),
-                family: None,
-                severity_basis_code: None,
-                confidence_basis_code: None,
-                context_factors: Vec::new(),
-            };
-            case.finding_observations.push(FindingObservation {
-                id: "nuclei-observation".into(),
-                run_id: "scan-run".into(),
-                finding_id: finding.id.clone(),
-                fingerprint: finding.fingerprint.clone(),
-                asset_ids: vec![asset.id.clone()],
-                engine_ids: vec![NUCLEI_ENGINE_ID.into()],
-                severity: finding.severity.clone(),
-                confidence: finding.confidence.clone(),
-                evidence_hashes: vec![evidence_hash],
-                observed_at: as_of,
-                finding_snapshot: Some(finding.clone()),
-            });
-            case.findings.push(finding);
+        if with_execution_evidence {
+            engine_run.security_template_executions = vec![SecurityTemplateExecution {
+                asset_id: asset.id.clone(),
+                result_count: 1,
+            }];
         }
 
         let manifest = EngineRegistry::load_builtin()
@@ -1215,19 +1124,19 @@ mod tests {
     }
 
     #[test]
-    fn completed_nuclei_without_a_record_is_authorized_scan_incomplete() {
+    fn completed_nuclei_without_template_execution_evidence_is_incomplete() {
         let assessment = nuclei_coverage_fixture(false);
 
         assert_eq!(assessment.status, CoverageStatus::AuthorizedScanIncomplete);
         assert!(
             assessment
                 .explanation
-                .contains("nuclei=upstream_template_result_missing")
+                .contains("nuclei=no_security_template_execution_evidence")
         );
     }
 
     #[test]
-    fn completed_nuclei_with_an_exact_record_is_scanned() {
+    fn completed_nuclei_with_typed_template_execution_evidence_is_scanned() {
         let assessment = nuclei_coverage_fixture(true);
 
         assert_eq!(

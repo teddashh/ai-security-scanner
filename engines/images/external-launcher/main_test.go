@@ -610,7 +610,7 @@ func TestNucleiAutomaticProfileHasNoFullTreeFallback(t *testing.T) {
 	temporaryRoot := t.TempDir()
 	plan, err := nucleiInvocation(
 		unit, "socks5://172.30.0.1:1080", filepath.Join(t.TempDir(), "result.jsonl"),
-		nil, temporaryRoot, 7, []string{first, second},
+		[]string{"DISABLE_STDOUT=1", "HOME=/tmp/private"}, temporaryRoot, 7, []string{first, second},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -618,6 +618,7 @@ func TestNucleiAutomaticProfileHasNoFullTreeFallback(t *testing.T) {
 	joined := " " + strings.Join(plan.Args, " ") + " "
 	for _, required := range []string{
 		" -automatic-scan ", " -update-template-dir ", " -template-id ",
+		" -jsonl ", " -matcher-status ",
 		" -response-size-read 4194304 ", " -payload-concurrency 1 ", " -max-time ",
 	} {
 		if !strings.Contains(joined, required) {
@@ -650,6 +651,18 @@ func TestNucleiAutomaticProfileHasNoFullTreeFallback(t *testing.T) {
 	if !ok || string(mustReadFile(t, templatesPath)) != first+"\n"+second+"\n" {
 		t.Fatal("automatic scan did not retain its exact validated path filter")
 	}
+	if plan.StdoutPath == "" {
+		t.Fatal("Nuclei standard-writer JSONL is not captured as scanner evidence")
+	}
+	if strings.Contains(joined, " -jsonl-export ") || strings.Contains(joined, " -output ") {
+		t.Fatalf("Nuclei invocation still uses a result-only or newline-unsafe file writer: %s", joined)
+	}
+	if containsString(plan.Env, "DISABLE_STDOUT=1") {
+		t.Fatal("Nuclei standard-writer output was disabled")
+	}
+	if !containsString(plan.Env, "HOME=/tmp/private") {
+		t.Fatal("filtering the Nuclei stdout override removed unrelated environment")
+	}
 
 	unit.Grant.TemplatePolicy.ProfileID = nil
 	legacy, err := nucleiInvocation(
@@ -661,6 +674,27 @@ func TestNucleiAutomaticProfileHasNoFullTreeFallback(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(legacy.Args, " "), "automatic-scan") {
 		t.Fatal("legacy explicit-template mode was silently changed to automatic scan")
+	}
+}
+
+func TestRunCommandCapturesStdoutWithoutOverwritingEvidence(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "stdout.jsonl")
+	plan := invocation{
+		Program:    "/bin/sh",
+		Args:       []string{"-c", `printf '%s\n' '{"matcher-status":false}'`},
+		Env:        []string{"PATH=/usr/bin:/bin"},
+		StdoutPath: output,
+		Expiry:     time.Now().UTC().Add(time.Minute),
+		Timeout:    time.Second,
+	}
+	if err := runCommand(plan); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(mustReadFile(t, output)); got != "{\"matcher-status\":false}\n" {
+		t.Fatalf("captured stdout differs: %q", got)
+	}
+	if err := runCommand(plan); err == nil || !strings.Contains(err.Error(), "exclusive scanner stdout evidence") {
+		t.Fatalf("existing evidence was overwritten or returned the wrong error: %v", err)
 	}
 }
 

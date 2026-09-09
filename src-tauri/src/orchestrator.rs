@@ -201,6 +201,7 @@ pub struct ExecutionReport {
     /// Identifiers the adapter could not attribute to an authorized asset.
     pub unattributed: Vec<crate::domain::UnattributedResults>,
     pub unevaluated_targets: Vec<crate::domain::UnevaluatedTarget>,
+    pub security_template_executions: Vec<crate::domain::SecurityTemplateExecution>,
     pub manual_review_controls: Vec<crate::domain::ManualReviewControl>,
     pub artifact_root: PathBuf,
     pub output_directory: PathBuf,
@@ -223,6 +224,7 @@ impl ExecutionReport {
             warnings: Vec::new(),
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            security_template_executions: Vec::new(),
             manual_review_controls: Vec::new(),
             artifact_root,
             output_directory,
@@ -890,6 +892,7 @@ fn adapt_captured_artifacts(
             report.warnings.extend(output.warnings);
             report.unattributed = output.unattributed;
             report.unevaluated_targets = output.unevaluated_targets;
+            report.security_template_executions = output.security_template_executions;
             report.manual_review_controls = output.manual_review_controls;
             if output.complete {
                 report.checkpoint.stage = ExecutionStage::Completed;
@@ -904,6 +907,7 @@ fn adapt_captured_artifacts(
             report.findings.clear();
             report.observations.clear();
             report.unevaluated_targets.clear();
+            report.security_template_executions.clear();
             report.manual_review_controls.clear();
             report.warnings.push(format!(
                 "scanner output was captured, but no verified adapter is registered for {} version {}",
@@ -916,6 +920,7 @@ fn adapt_captured_artifacts(
             report.findings.clear();
             report.observations.clear();
             report.unevaluated_targets.clear();
+            report.security_template_executions.clear();
             report.manual_review_controls.clear();
             report.warnings.push(format!(
                 "scanner output was captured, but adapter {} version {} failed validation",
@@ -1737,6 +1742,7 @@ mod tests {
             Ok(AdapterOutput {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                security_template_executions: Vec::new(),
                 manual_review_controls: Vec::new(),
                 findings: Vec::new(),
                 observations: vec![crate::domain::InventoryObservation {

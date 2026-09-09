@@ -886,6 +886,12 @@ pub struct EngineRun {
     pub unattributed: Vec<UnattributedResults>,
     #[serde(default)]
     pub unevaluated_targets: Vec<UnevaluatedTarget>,
+    /// Per-target proof that at least one applicable upstream security
+    /// template completed. Kept separate from findings so a zero-match result
+    /// can prove execution without inventing an issue, and legacy empty values
+    /// never imply that a check ran.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security_template_executions: Vec<SecurityTemplateExecution>,
     /// Controls the engine evaluated but left for a person to decide. These
     /// are coverage data, never findings or passing results.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1649,6 +1655,18 @@ pub struct UnevaluatedTarget {
     pub result_count: usize,
 }
 
+/// Bounded aggregate of genuine upstream per-template result records for one
+/// authorized target. Exact template IDs remain in the raw artifact; this
+/// durable projection only proves that the target had at least one completed
+/// applicable security-template execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SecurityTemplateExecution {
+    pub asset_id: Id,
+    /// Number of qualifying upstream per-template result records, saturating
+    /// during normalization. A stored value must always be greater than zero.
+    pub result_count: usize,
+}
+
 /// An authorized control the engine evaluated but did not give a pass/fail
 /// verdict. Carried as coverage data (not a finding) so the report can show
 /// the human-review requirement without claiming a vulnerability or a pass.
@@ -1673,6 +1691,10 @@ pub enum UnevaluatedTargetCause {
     /// Upstream `error`: the scanner reported one or more errors while
     /// evaluating this target, so some of its checks did not finish.
     ScannerError,
+    /// No upstream result proved that an applicable security template reached
+    /// a completed evaluation for this target. Technology discovery and a
+    /// successful process exit are not security-check execution evidence.
+    NoSecurityTemplateExecutionEvidence,
 }
 
 /// being non-questionnaire, so answering a questionnaire alone cannot conjure

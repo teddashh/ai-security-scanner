@@ -824,8 +824,8 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
     "Maester 已評估這項控制措施，但未回傳通過或失敗的判定。這項控制措施需要人工檢視，且不是漏洞問題。",
   ],
   [
-    "No upstream template result was recorded for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template.",
-    "這個網站沒有記錄到任何上游模板結果，因此無法將這次掃描顯示為已檢測。網站可能沒有回應，或上游技術偵測可能沒有選出任何適用的模板。",
+    "No completed upstream security-template execution record was retained for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template.",
+    "這個網站沒有保留任何已完成的上游安全模板執行記錄，因此無法將這次掃描顯示為已檢測。網站可能沒有回應，或上游技術偵測可能沒有選出任何適用的模板。",
   ],
   [
     "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result.",

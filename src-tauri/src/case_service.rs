@@ -600,6 +600,8 @@ pub struct DurableExecutionReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unevaluated_targets: Vec<crate::domain::UnevaluatedTarget>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security_template_executions: Vec<crate::domain::SecurityTemplateExecution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub manual_review_controls: Vec<crate::domain::ManualReviewControl>,
 }
 
@@ -616,6 +618,7 @@ impl From<&ExecutionReport> for DurableExecutionReport {
             warnings: report.warnings.clone(),
             unattributed: report.unattributed.clone(),
             unevaluated_targets: report.unevaluated_targets.clone(),
+            security_template_executions: report.security_template_executions.clone(),
             manual_review_controls: report.manual_review_controls.clone(),
         }
     }
@@ -4196,6 +4199,7 @@ impl<'a> CaseService<'a> {
                         .collect(),
                     unattributed: Vec::new(),
                     unevaluated_targets: Vec::new(),
+                    security_template_executions: Vec::new(),
                     manual_review_controls: Vec::new(),
                     raw_artifact_ids: Vec::new(),
                     error_code: None,
@@ -4710,6 +4714,7 @@ impl<'a> CaseService<'a> {
                 warnings: Vec::new(),
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                security_template_executions: Vec::new(),
                 manual_review_controls: Vec::new(),
             };
             let derived = derive_naabu_attempt_result_from_captured_report(
@@ -6450,6 +6455,7 @@ impl<'a> CaseService<'a> {
         if !matches!(report.checkpoint.stage, ExecutionStage::Planned) {
             engine_run.unattributed = report.unattributed.clone();
             engine_run.unevaluated_targets = report.unevaluated_targets.clone();
+            engine_run.security_template_executions = report.security_template_executions.clone();
             engine_run.manual_review_controls = report.manual_review_controls.clone();
         }
         if engine_run.started_at.is_none()
@@ -9350,6 +9356,7 @@ fn not_executed_run(
             .collect(),
         unattributed: Vec::new(),
         unevaluated_targets: Vec::new(),
+        security_template_executions: Vec::new(),
         manual_review_controls: Vec::new(),
         raw_artifact_ids: Vec::new(),
         error_code: Some(reason_code.into()),
@@ -9904,10 +9911,12 @@ fn validate_report_payload(
     report: &DurableExecutionReport,
 ) -> AppResult<()> {
     if checkpoint_has_no_contact_resources(&report.checkpoint)
-        && (!report.observations.is_empty() || !report.manual_review_controls.is_empty())
+        && (!report.observations.is_empty()
+            || !report.security_template_executions.is_empty()
+            || !report.manual_review_controls.is_empty())
     {
         return Err(AppError::NotAuthorized(
-            "a resource-free execution report cannot contain inventory observations or manual-review controls".into(),
+            "a resource-free execution report cannot contain inventory, security-template execution, or manual-review evidence".into(),
         ));
     }
     if report.warnings.len() > 256 {
@@ -9993,6 +10002,12 @@ fn validate_report_payload(
         &report.raw_artifacts,
         &report.observations,
     )?;
+    validate_security_template_executions(
+        engine_run,
+        &report.checkpoint.engine_id,
+        &report.security_template_executions,
+        &report.unevaluated_targets,
+    )?;
     validate_manual_review_controls(
         engine_run,
         &report.checkpoint.engine_id,
@@ -10045,6 +10060,59 @@ fn validate_report_payload(
                     "finding evidence provenance does not match the execution report".into(),
                 ));
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_security_template_executions(
+    engine_run: &EngineRun,
+    engine_id: &str,
+    executions: &[crate::domain::SecurityTemplateExecution],
+    unevaluated_targets: &[crate::domain::UnevaluatedTarget],
+) -> AppResult<()> {
+    if executions.len() > engine_run.asset_ids.len() {
+        return Err(AppError::Runtime(
+            "execution report contains too many security-template aggregates".into(),
+        ));
+    }
+    if !executions.is_empty() && engine_id != "nuclei" {
+        return Err(AppError::NotAuthorized(
+            "only a Nuclei execution report can contain security-template execution evidence"
+                .into(),
+        ));
+    }
+    if unevaluated_targets.iter().any(|target| {
+        target.cause == crate::domain::UnevaluatedTargetCause::NoSecurityTemplateExecutionEvidence
+            && engine_id != "nuclei"
+    }) {
+        return Err(AppError::NotAuthorized(
+            "only a Nuclei execution report can contain a missing security-template outcome".into(),
+        ));
+    }
+
+    let allowed_assets = engine_run.asset_ids.iter().collect::<BTreeSet<_>>();
+    let mut unique_assets = BTreeSet::new();
+    for execution in executions {
+        if !allowed_assets.contains(&execution.asset_id) || execution.result_count == 0 {
+            return Err(AppError::NotAuthorized(
+                "security-template execution evidence is outside the planned assets or has no upstream result"
+                    .into(),
+            ));
+        }
+        if !unique_assets.insert(execution.asset_id.as_str()) {
+            return Err(AppError::Runtime(
+                "execution report contains duplicate security-template aggregates".into(),
+            ));
+        }
+        if unevaluated_targets.iter().any(|target| {
+            target.asset_id == execution.asset_id
+                && target.cause
+                    == crate::domain::UnevaluatedTargetCause::NoSecurityTemplateExecutionEvidence
+        }) {
+            return Err(AppError::Runtime(
+                "execution report contradicts its security-template coverage outcome".into(),
+            ));
         }
     }
     Ok(())
@@ -16979,6 +17047,7 @@ mod tests {
         DurableExecutionReport {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            security_template_executions: Vec::new(),
             manual_review_controls: Vec::new(),
             checkpoint,
             runtime_preflight: Some(RuntimePreflight {
@@ -18117,6 +18186,7 @@ mod tests {
         let report = DurableExecutionReport {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            security_template_executions: Vec::new(),
             manual_review_controls: Vec::new(),
             checkpoint,
             runtime_preflight: Some(RuntimePreflight {
@@ -19341,6 +19411,7 @@ mod tests {
                 Ok(crate::adapter::AdapterOutput {
                     unattributed: Vec::new(),
                     unevaluated_targets: Vec::new(),
+                    security_template_executions: Vec::new(),
                     manual_review_controls: Vec::new(),
                     findings: Vec::new(),
                     observations: vec![crate::domain::InventoryObservation {
@@ -20566,6 +20637,7 @@ mod tests {
                 &DurableExecutionReport {
                     unattributed: Vec::new(),
                     unevaluated_targets: Vec::new(),
+                    security_template_executions: Vec::new(),
                     manual_review_controls: Vec::new(),
                     checkpoint: cancelled_checkpoint,
                     runtime_preflight: None,
@@ -20665,6 +20737,7 @@ mod tests {
                     observations: Vec::new(),
                     warnings: vec!["empty input reached the adapter".into()],
                     unevaluated_targets: Vec::new(),
+                    security_template_executions: Vec::new(),
                     manual_review_controls: Vec::new(),
                     complete: false,
                 })
@@ -20832,6 +20905,7 @@ mod tests {
                     observations: Vec::new(),
                     warnings: vec!["tampered empty input reached the adapter".into()],
                     unevaluated_targets: Vec::new(),
+                    security_template_executions: Vec::new(),
                     manual_review_controls: Vec::new(),
                     complete: true,
                 })
@@ -21063,6 +21137,7 @@ mod tests {
                 output: crate::adapter::AdapterOutput {
                     unattributed: Vec::new(),
                     unevaluated_targets: Vec::new(),
+                    security_template_executions: Vec::new(),
                     manual_review_controls: Vec::new(),
                     findings: Vec::new(),
                     observations: vec![retained_observation, added_observation],
@@ -22188,6 +22263,7 @@ mod tests {
         DurableExecutionReport {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            security_template_executions: Vec::new(),
             manual_review_controls: Vec::new(),
             checkpoint: ExecutionCheckpoint {
                 case_id: case_id.into(),
@@ -23884,6 +23960,7 @@ mod tests {
             let report = DurableExecutionReport {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                security_template_executions: Vec::new(),
                 manual_review_controls: Vec::new(),
                 checkpoint: ExecutionCheckpoint {
                     case_id: case_id.clone(),
@@ -23997,6 +24074,7 @@ mod tests {
         let regressive = DurableExecutionReport {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            security_template_executions: Vec::new(),
             manual_review_controls: Vec::new(),
             checkpoint: ExecutionCheckpoint {
                 case_id: case_id.clone(),
@@ -24114,6 +24192,7 @@ mod tests {
             let report = DurableExecutionReport {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                security_template_executions: Vec::new(),
                 manual_review_controls: Vec::new(),
                 checkpoint: claimed,
                 runtime_preflight: Some(RuntimePreflight {
@@ -24211,6 +24290,7 @@ mod tests {
         let report = DurableExecutionReport {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            security_template_executions: Vec::new(),
             manual_review_controls: Vec::new(),
             checkpoint: completed,
             runtime_preflight: None,
@@ -28800,6 +28880,7 @@ mod tests {
         let stale_report = DurableExecutionReport {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            security_template_executions: Vec::new(),
             manual_review_controls: Vec::new(),
             checkpoint: stale_checkpoint,
             runtime_preflight: None,
@@ -34517,6 +34598,7 @@ mod tests {
             engine_runs: vec![EngineRun {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                security_template_executions: Vec::new(),
                 manual_review_controls: Vec::new(),
                 id: "engine-run-1".into(),
                 scan_run_id: "scan-1".into(),
@@ -34650,6 +34732,7 @@ mod tests {
         let report = DurableExecutionReport {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            security_template_executions: Vec::new(),
             manual_review_controls: Vec::new(),
             checkpoint: ExecutionCheckpoint {
                 case_id: case.id.clone(),
@@ -34704,6 +34787,12 @@ mod tests {
         assert!(
             !serde_json::to_string(&pre_inventory_report)
                 .unwrap()
+                .contains("security_template_executions"),
+            "empty security-template evidence must not change an older report's byte commitment"
+        );
+        assert!(
+            !serde_json::to_string(&pre_inventory_report)
+                .unwrap()
                 .contains("manual_review_controls"),
             "an empty manual-review outcome must not change an older report's byte commitment"
         );
@@ -34711,6 +34800,11 @@ mod tests {
             serde_json::from_slice(&pre_inventory_bytes).unwrap();
         assert!(decoded_pre_inventory.observations.is_empty());
         assert!(decoded_pre_inventory.unevaluated_targets.is_empty());
+        assert!(
+            decoded_pre_inventory
+                .security_template_executions
+                .is_empty()
+        );
         assert!(decoded_pre_inventory.manual_review_controls.is_empty());
         assert_eq!(
             serde_json::to_vec(&decoded_pre_inventory).unwrap(),
@@ -34726,9 +34820,14 @@ mod tests {
         legacy_engine_json
             .as_object_mut()
             .unwrap()
+            .remove("security_template_executions");
+        legacy_engine_json
+            .as_object_mut()
+            .unwrap()
             .remove("manual_review_controls");
         let legacy_engine: EngineRun = serde_json::from_value(legacy_engine_json).unwrap();
         assert!(legacy_engine.unevaluated_targets.is_empty());
+        assert!(legacy_engine.security_template_executions.is_empty());
         assert!(legacy_engine.manual_review_controls.is_empty());
         validate_report_payload(&case, prepared_engine, &report)
             .expect("bounded observation with exact artifact provenance is valid");
@@ -34973,6 +35072,7 @@ mod tests {
         let completed_engine = |run_id: &str| EngineRun {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            security_template_executions: Vec::new(),
             manual_review_controls: Vec::new(),
             id: format!("engine-{run_id}"),
             scan_run_id: run_id.into(),

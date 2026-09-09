@@ -11,7 +11,8 @@ use crate::domain::{
     AwsIamAttachedTo, AwsIamPolicyFindingDetails, AwsIamPolicySource, Confidence,
     ConfidenceBasisCode, Evidence, EvidenceKind, Finding, FindingFamily, FindingStatus,
     InventoryObservation, InventoryObservationKind, ManualReviewControl, RawArtifact,
-    ScannerFindingDetails, Severity, SeverityBasisCode, UnevaluatedTarget, UnevaluatedTargetCause,
+    ScannerFindingDetails, SecurityTemplateExecution, Severity, SeverityBasisCode,
+    UnevaluatedTarget, UnevaluatedTargetCause,
 };
 use crate::error::{AppError, AppResult};
 use quick_xml::events::{BytesRef, BytesStart, Event};
@@ -490,6 +491,12 @@ struct M365Extraction {
 }
 
 #[derive(Debug)]
+struct NucleiExtraction {
+    records: Vec<SourceRecord>,
+    execution_counts: BTreeMap<String, usize>,
+}
+
+#[derive(Debug)]
 enum ParsedArtifact {
     Json(Value),
     JsonLines(Vec<(usize, Value)>),
@@ -677,6 +684,7 @@ fn normalize_artifacts(
     let mut observations: BTreeMap<String, InventoryObservation> = BTreeMap::new();
     let mut processed_bytes = 0_u64;
     let mut processed_records = 0_usize;
+    let mut nuclei_execution_counts = BTreeMap::<String, usize>::new();
     // Provider-qualified identifiers the engine reported on that no authorized
     // asset claims. Counted per identifier rather than per record: the
     // per-record warnings name the rule that was dropped, which is the symptom.
@@ -702,6 +710,15 @@ fn normalize_artifacts(
             &mut output.warnings,
             format!("{} produced no raw artifacts to normalize", adapter.id),
         );
+        if adapter.profile == Profile::Nuclei {
+            output
+                .unevaluated_targets
+                .extend(input.asset_ids.iter().map(|asset_id| UnevaluatedTarget {
+                    asset_id: asset_id.clone(),
+                    cause: UnevaluatedTargetCause::NoSecurityTemplateExecutionEvidence,
+                    result_count: 0,
+                }));
+        }
         return Ok(output);
     }
 
@@ -840,6 +857,24 @@ fn normalize_artifacts(
                 });
             }
             extraction.records
+        } else if adapter.profile == Profile::Nuclei {
+            let extraction = extract_nuclei(&parsed, &mut output.warnings);
+            for (asset_hint, result_count) in extraction.execution_counts {
+                if input
+                    .asset_ids
+                    .iter()
+                    .any(|asset_id| asset_id == &asset_hint)
+                {
+                    let count = nuclei_execution_counts.entry(asset_hint).or_default();
+                    *count = count.saturating_add(result_count);
+                } else {
+                    push_warning(
+                        &mut output.warnings,
+                        "Nuclei execution evidence named an asset outside this engine task and was not counted",
+                    );
+                }
+            }
+            extraction.records
         } else {
             extract_records(adapter.profile, &parsed, &mut output.warnings)
         };
@@ -935,6 +970,26 @@ fn normalize_artifacts(
         )
         .collect();
 
+    if adapter.profile == Profile::Nuclei {
+        for asset_id in input.asset_ids {
+            if let Some(result_count) = nuclei_execution_counts.get(asset_id) {
+                output
+                    .security_template_executions
+                    .push(SecurityTemplateExecution {
+                        asset_id: asset_id.clone(),
+                        result_count: *result_count,
+                    });
+            } else {
+                output.unevaluated_targets.push(UnevaluatedTarget {
+                    asset_id: asset_id.clone(),
+                    cause: UnevaluatedTargetCause::NoSecurityTemplateExecutionEvidence,
+                    result_count: 0,
+                });
+            }
+        }
+        output.security_template_executions.sort();
+    }
+
     output.unevaluated_targets.sort();
     let mut aggregated_unevaluated = Vec::<UnevaluatedTarget>::new();
     for target in output.unevaluated_targets.drain(..) {
@@ -979,13 +1034,17 @@ fn normalize_artifacts(
 
 /// The released Naabu, HTTPx, and TruffleHog contracts can prove a complete
 /// zero-record result with a real, hashed output artifact containing zero bytes
-/// (or only line-ending whitespace). Nuclei automatic mode cannot: it can exit
-/// successfully before any applicable template runs and leave the same empty
-/// artifact. Document-shaped adapters keep their schema-specific empty checks.
+/// (or only line-ending whitespace). A Nuclei empty stream is also valid input,
+/// but it produces a typed missing-execution outcome rather than a clean scan.
+/// Document-shaped adapters keep their schema-specific empty checks.
 fn is_complete_empty_json_lines(profile: Profile, artifact: &RawArtifact, bytes: &[u8]) -> bool {
     if !matches!(
         profile,
-        Profile::CloudQuery | Profile::Naabu | Profile::Httpx | Profile::Trufflehog
+        Profile::CloudQuery
+            | Profile::Naabu
+            | Profile::Httpx
+            | Profile::Nuclei
+            | Profile::Trufflehog
     ) || bytes.iter().any(|byte| !byte.is_ascii_whitespace())
     {
         return false;
@@ -1005,8 +1064,9 @@ fn is_complete_empty_json_lines(profile: Profile, artifact: &RawArtifact, bytes:
 /// Mapping catalogs cannot affect a released JSONL engine whose contract can
 /// prove a complete result from a verified zero-byte stream: there are no
 /// source records from which a finding or control reference could be produced.
-/// Nuclei is excluded because automatic mode can create the same empty stream
-/// without executing a template. This remains narrower than normal adapter
+/// Nuclei stays excluded: adapting its empty stream now creates a typed
+/// coverage outcome, so adapter drift can change durable meaning even though
+/// no finding can be remapped. This remains narrower than normal adapter
 /// parsing (which also accepts whitespace-only streams) so cross-version resume
 /// planning can prove the exception from durable metadata plus the artifact
 /// hash alone.
@@ -2153,7 +2213,7 @@ fn extract_records(
         Profile::Cloudsplaining => extract_cloudsplaining(parsed, warnings),
         Profile::ScubaGear => extract_scubagear(parsed, warnings),
         Profile::Maester => extract_maester(parsed, warnings).records,
-        Profile::Nuclei => extract_nuclei(parsed, warnings),
+        Profile::Nuclei => extract_nuclei(parsed, warnings).records,
         Profile::Greenbone => unreachable!("Greenbone extraction needs authorized asset ids"),
         Profile::Semgrep => extract_semgrep(parsed, warnings),
         Profile::Gitleaks => extract_gitleaks(parsed, warnings),
@@ -3551,65 +3611,111 @@ fn extract_m365(
     }
 }
 
-fn extract_nuclei(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
-    json_rows(parsed, warnings)
-        .into_iter()
-        .filter_map(|(pointer, value)| {
-            let Some(object) = value.as_object() else {
-                push_warning(
-                    warnings,
-                    format!("Nuclei record at {pointer} was not an object; retry with the supported pinned JSONL output"),
-                );
-                return None;
-            };
-            // Upstream Nuclei uses `matcher-status: false` for a template that
-            // executed but did not match, so this execution evidence is not a finding.
-            if object.get("matcher-status") == Some(&Value::Bool(false)) {
-                return None;
-            }
-            let Some(rule_id) =
-                exact_rule_string_any(object, &["template-id", "template_id", "templateID"])
-            else {
-                push_warning(
-                    warnings,
-                    format!("Nuclei record at {pointer} lacked its template id; the raw record was retained, and the scan should be retried with the supported pinned JSONL output"),
-                );
-                return None;
-            };
-            let title = nested_string(value, &["info", "name"])
-                .unwrap_or_else(|| format!("Nuclei template {rule_id}"));
-            let severity = nested_string(value, &["info", "severity"])
-                .or_else(|| string_any(object, &["severity"]))
-                .unwrap_or_else(|| "unknown".into());
-            let target = string_any(object, &["matched-at", "matched_at", "host", "url"])
-                .unwrap_or_else(|| "authorized-target".into());
-            let mut tags = nested_strings(value, &["info", "tags"])
-                .into_iter()
-                .map(|tag| format!("template-tag:{}", safe_tag(&tag)))
-                .collect::<Vec<_>>();
-            if let Some(matcher) = string_any(object, &["matcher-name", "matcher_name"]) {
-                tags.push(format!("matcher:{}", safe_tag(&matcher)));
-            }
-            Some(with_scanner_details(
-                record_with_derived_confidence!(
-                    pointer,
-                    rule_id,
-                    title,
-                    severity,
-                    redact_location(&target),
-                    string_any(object, &["asset_id"]),
-                    derived_confidence(ConfidenceBasisCode::TemplateMatcher),
-                    EvidenceKind::ExternalValidation,
-                    references_from(value),
-                    tags,
+fn extract_nuclei(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> NucleiExtraction {
+    let mut records = Vec::new();
+    let mut execution_counts = BTreeMap::<String, usize>::new();
+    for (pointer, value) in json_rows(parsed, warnings) {
+        let Some(object) = value.as_object() else {
+            push_warning(
+                warnings,
+                format!(
+                    "Nuclei record at {pointer} was not an object; retry with the supported pinned JSONL output"
                 ),
-                nested_string(value, &["info", "description"]),
-                nested_string(value, &["info", "remediation"]),
-                None,
-                None,
-            ))
-        })
-        .collect()
+            );
+            continue;
+        };
+        // Upstream Nuclei uses `matcher-status: false` for a template that
+        // executed but did not match. Automatic technology detection writes
+        // matches directly and never writes failures, so an error-free false
+        // record proves that the final applicable security-template phase ran.
+        if object.get("matcher-status") == Some(&Value::Bool(false)) {
+            let has_error = object.get("error").is_some_and(|error| match error {
+                Value::Null => false,
+                Value::String(value) => !value.trim().is_empty(),
+                _ => true,
+            });
+            if has_error {
+                continue;
+            }
+            let template_id =
+                exact_rule_string_any(object, &["template-id", "template_id", "templateID"])
+                    .and_then(|value| exact_mapping_source_rule(&value));
+            let asset_hint = exact_rule_string_any(object, &["asset_id"])
+                .and_then(|value| exact_mapping_source_rule(&value));
+            if template_id.is_none() || asset_hint.is_none() {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Nuclei non-match at {pointer} lacked a bounded template or normalized asset id; it was not accepted as execution evidence"
+                    ),
+                );
+                continue;
+            }
+            let count = execution_counts
+                .entry(asset_hint.expect("checked above"))
+                .or_default();
+            *count = count.saturating_add(1);
+            continue;
+        }
+        if object.contains_key("matcher-status")
+            && object.get("matcher-status") != Some(&Value::Bool(true))
+        {
+            push_warning(
+                warnings,
+                format!(
+                    "Nuclei record at {pointer} had a malformed matcher status and was not normalized"
+                ),
+            );
+            continue;
+        }
+        let Some(rule_id) =
+            exact_rule_string_any(object, &["template-id", "template_id", "templateID"])
+        else {
+            push_warning(
+                warnings,
+                format!(
+                    "Nuclei record at {pointer} lacked its template id; the raw record was retained, and the scan should be retried with the supported pinned JSONL output"
+                ),
+            );
+            continue;
+        };
+        let title = nested_string(value, &["info", "name"])
+            .unwrap_or_else(|| format!("Nuclei template {rule_id}"));
+        let severity = nested_string(value, &["info", "severity"])
+            .or_else(|| string_any(object, &["severity"]))
+            .unwrap_or_else(|| "unknown".into());
+        let target = string_any(object, &["matched-at", "matched_at", "host", "url"])
+            .unwrap_or_else(|| "authorized-target".into());
+        let mut tags = nested_strings(value, &["info", "tags"])
+            .into_iter()
+            .map(|tag| format!("template-tag:{}", safe_tag(&tag)))
+            .collect::<Vec<_>>();
+        if let Some(matcher) = string_any(object, &["matcher-name", "matcher_name"]) {
+            tags.push(format!("matcher:{}", safe_tag(&matcher)));
+        }
+        records.push(with_scanner_details(
+            record_with_derived_confidence!(
+                pointer,
+                rule_id,
+                title,
+                severity,
+                redact_location(&target),
+                string_any(object, &["asset_id"]),
+                derived_confidence(ConfidenceBasisCode::TemplateMatcher),
+                EvidenceKind::ExternalValidation,
+                references_from(value),
+                tags,
+            ),
+            nested_string(value, &["info", "description"]),
+            nested_string(value, &["info", "remediation"]),
+            None,
+            None,
+        ));
+    }
+    NucleiExtraction {
+        records,
+        execution_counts,
+    }
 }
 
 fn extract_greenbone(
@@ -6132,14 +6238,16 @@ mod tests {
             1,
             serde_json::json!({
                 "template-id": "executed-without-match",
-                "matcher-status": false
+                "matcher-status": false,
+                "asset_id": "asset-1"
             }),
         )]);
         let mut warnings = Vec::new();
 
-        let records = extract_nuclei(&parsed, &mut warnings);
+        let extraction = extract_nuclei(&parsed, &mut warnings);
 
-        assert!(records.is_empty());
+        assert!(extraction.records.is_empty());
+        assert_eq!(extraction.execution_counts.get("asset-1"), Some(&1));
         assert!(warnings.is_empty());
     }
 
@@ -6154,7 +6262,7 @@ mod tests {
         )]);
         let mut warnings = Vec::new();
 
-        let records = extract_nuclei(&parsed, &mut warnings);
+        let records = extract_nuclei(&parsed, &mut warnings).records;
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].rule_id, "matched-template");
@@ -6171,7 +6279,7 @@ mod tests {
         )]);
         let mut warnings = Vec::new();
 
-        let records = extract_nuclei(&parsed, &mut warnings);
+        let records = extract_nuclei(&parsed, &mut warnings).records;
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].rule_id, "deployed-output-shape");
@@ -6192,16 +6300,38 @@ mod tests {
                 2,
                 serde_json::json!({
                     "template-id": "non-matching-template",
-                    "matcher-status": false
+                    "matcher-status": false,
+                    "asset_id": "asset-1"
                 }),
             ),
         ]);
         let mut warnings = Vec::new();
 
-        let records = extract_nuclei(&parsed, &mut warnings);
+        let extraction = extract_nuclei(&parsed, &mut warnings);
 
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].rule_id, "matching-template");
+        assert_eq!(extraction.records.len(), 1);
+        assert_eq!(extraction.records[0].rule_id, "matching-template");
+        assert_eq!(extraction.execution_counts.get("asset-1"), Some(&1));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn nuclei_error_non_match_is_not_execution_proof_or_a_finding() {
+        let parsed = ParsedArtifact::JsonLines(vec![(
+            1,
+            serde_json::json!({
+                "template-id": "request-failed",
+                "matcher-status": false,
+                "error": "connection failed",
+                "asset_id": "asset-1"
+            }),
+        )]);
+        let mut warnings = Vec::new();
+
+        let extraction = extract_nuclei(&parsed, &mut warnings);
+
+        assert!(extraction.records.is_empty());
+        assert!(extraction.execution_counts.is_empty());
         assert!(warnings.is_empty());
     }
 

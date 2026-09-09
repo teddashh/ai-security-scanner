@@ -1578,8 +1578,8 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                     .iter()
                     .filter(|asset_id| {
                         task.engine_id == NUCLEI_ENGINE_ID
-                            && !crate::coverage::selected_run_has_nuclei_record(
-                                case, run, task, asset_id,
+                            && !crate::coverage::engine_run_has_security_template_execution(
+                                task, asset_id,
                             )
                     })
                     .cloned()
@@ -1597,7 +1597,7 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                     });
                 }
                 append_internal_device_tls_dimensions(run, task, &mut tested_dimensions);
-                append_nuclei_website_dimensions(case, run, task, &mut tested_dimensions);
+                append_nuclei_website_dimensions(run, task, &mut tested_dimensions);
                 append_internal_host_greenbone_dimensions(run, task, &mut tested_dimensions);
                 append_internal_endpoint_ssh_dimensions(run, task, &mut tested_dimensions);
                 append_internal_endpoint_rdp_tls_dimensions(run, task, &mut tested_dimensions);
@@ -1656,7 +1656,7 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                         task_id: Some(task.id.clone()),
                         target_asset_ids: vec![asset_id.clone()],
                         dimension: format!("{}: website execution evidence", check_id(task)),
-                        reason: "No upstream template result was recorded for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template."
+                        reason: "No completed upstream security-template execution record was retained for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template."
                             .into(),
                         next_action_code: NextActionCode::RetryCheck,
                         next_action: "Keep the saved results and run this check again to cover the checks that did not finish."
@@ -2834,7 +2834,6 @@ fn exact_frozen_nuclei_website_scope<'a>(
 }
 
 fn append_nuclei_website_dimensions(
-    case: &AssessmentCase,
     run: &ScanRun,
     task: &EngineRun,
     dimensions: &mut Vec<TestedDimension>,
@@ -2844,7 +2843,7 @@ fn append_nuclei_website_dimensions(
     }
     for asset_id in &task.asset_ids {
         if exact_frozen_nuclei_website_scope(run, asset_id).is_none()
-            || !crate::coverage::selected_run_has_nuclei_record(case, run, task, asset_id)
+            || !crate::coverage::engine_run_has_security_template_execution(task, asset_id)
         {
             continue;
         }
@@ -4145,7 +4144,7 @@ mod tests {
         Evidence, EvidenceKind, FindingGroup, FindingStatus, ManualReviewControl,
         NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION, NAABU_ATTEMPT_RESULT_SCHEMA_VERSION,
         NaabuAttemptRequest, NaabuAttemptResult, OrganizationProfile, RawArtifact,
-        ReportAssetSnapshot, ScopeGrant, SourceKind, new_id,
+        ReportAssetSnapshot, ScopeGrant, SecurityTemplateExecution, SourceKind, new_id,
     };
     use crate::execution_coverage::{
         ExecutionCoverageSummary, FinalArtifactIdentity, LAUNCHER_V2_JOURNAL_SCHEMA_VERSION,
@@ -4242,6 +4241,7 @@ mod tests {
             engine_runs: vec![EngineRun {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                security_template_executions: Vec::new(),
                 manual_review_controls: Vec::new(),
                 id: "task-1".into(),
                 scan_run_id: run_id,
@@ -4297,6 +4297,7 @@ mod tests {
         EngineRun {
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            security_template_executions: Vec::new(),
             manual_review_controls: Vec::new(),
             id: id.into(),
             scan_run_id: "run-1".into(),
@@ -5937,6 +5938,22 @@ mod tests {
         retained.engine_ids = vec![NUCLEI_ENGINE_ID.into()];
         case.findings.push(finding);
         case.finding_observations.push(retained);
+        let task = case.scan_runs[0]
+            .engine_runs
+            .iter_mut()
+            .find(|task| task.id == engine_run_id)
+            .expect("Nuclei task");
+        if !task
+            .security_template_executions
+            .iter()
+            .any(|execution| execution.asset_id == asset_id)
+        {
+            task.security_template_executions
+                .push(SecurityTemplateExecution {
+                    asset_id: asset_id.into(),
+                    result_count: 1,
+                });
+        }
     }
 
     fn internal_device_case(profile: DeclaredWebServiceScanProfile) -> AssessmentCase {
@@ -7283,6 +7300,61 @@ mod tests {
                 .iter()
                 .all(|gap| { gap.dimension != "nuclei: website execution evidence" })
         );
+    }
+
+    #[test]
+    fn completed_nuclei_non_match_evidence_is_a_clean_tested_result() {
+        let mut case = nuclei_website_case();
+        case.scan_runs[0].engine_runs[0]
+            .security_template_executions
+            .push(SecurityTemplateExecution {
+                asset_id: "website-asset".into(),
+                result_count: 7,
+            });
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        assert!(report.findings.is_empty());
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::TestedComplete
+        );
+        assert!(
+            report.actual.checks[0]
+                .tested_dimensions
+                .iter()
+                .any(|dimension| {
+                    dimension.dimension == "Nuclei upstream website scan"
+                        && dimension.value.ends_with("for asset website-asset")
+                })
+        );
+        assert!(
+            report
+                .coverage_gaps
+                .iter()
+                .all(|gap| gap.dimension != "nuclei: website execution evidence")
+        );
+    }
+
+    #[test]
+    fn completed_nuclei_finding_without_execution_evidence_stays_unproven() {
+        let mut case = nuclei_website_case();
+        add_nuclei_record(&mut case, "nuclei-result", "website-asset", "host");
+        case.scan_runs[0].engine_runs[0]
+            .security_template_executions
+            .clear();
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::NotTested
+        );
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.dimension == "nuclei: website execution evidence"
+                && gap.target_asset_ids == ["website-asset"]
+        }));
     }
 
     #[test]

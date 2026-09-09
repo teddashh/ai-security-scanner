@@ -69,7 +69,7 @@
     "required": true,
     "strategy": "Validate each FrozenExternalScope grant and invoke one bounded URL probe per exact grant port without accepting arbitrary scanner arguments.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:71ce6a39436420570285a2016a18f1fbc0ed05c76e53d3f72587e2196d1befa2"
+    "launcher_sha256": "sha256:c93e90835cc37e860fabbb1406fae6f32dbf9d713c4f44f2c4a6e976feb18a1f"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",

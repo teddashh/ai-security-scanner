@@ -2681,7 +2681,7 @@ fn provably_complete_empty_released_jsonl_streams_are_zero_finding_results() {
 }
 
 #[test]
-fn empty_nuclei_jsonl_is_incomplete_without_template_execution_evidence() {
+fn empty_nuclei_jsonl_is_normalized_to_a_missing_template_execution_outcome() {
     for bytes in [b"".as_slice(), b"\r\n\t".as_slice()] {
         let output = normalize_bytes(
             "nuclei",
@@ -2690,17 +2690,38 @@ fn empty_nuclei_jsonl_is_incomplete_without_template_execution_evidence() {
             "application/x-ndjson",
             "run-empty",
         );
-        assert!(!output.complete);
+        assert!(output.complete, "warnings: {:?}", output.warnings);
         assert!(output.findings.is_empty());
-        assert!(
-            output
-                .warnings
-                .iter()
-                .any(|warning| warning.contains("neither valid bounded JSON nor JSONL")),
-            "warnings: {:?}",
-            output.warnings
+        assert!(output.security_template_executions.is_empty());
+        assert_eq!(
+            output.unevaluated_targets,
+            [UnevaluatedTarget {
+                asset_id: "asset-1".into(),
+                cause: UnevaluatedTargetCause::NoSecurityTemplateExecutionEvidence,
+                result_count: 0,
+            }]
         );
+        assert!(output.warnings.is_empty());
     }
+}
+
+#[test]
+fn nuclei_non_match_is_positive_execution_evidence_without_becoming_a_finding() {
+    let output = normalize_bytes(
+        "nuclei",
+        br#"{"template-id":"clean-template","matcher-status":false,"url":"https://service.example.test/","asset_id":"asset-1"}
+"#,
+        "nuclei.jsonl",
+        "application/x-ndjson",
+        "run-clean",
+    );
+
+    assert!(output.complete, "warnings: {:?}", output.warnings);
+    assert!(output.findings.is_empty());
+    assert!(output.unevaluated_targets.is_empty());
+    assert_eq!(output.security_template_executions.len(), 1);
+    assert_eq!(output.security_template_executions[0].asset_id, "asset-1");
+    assert_eq!(output.security_template_executions[0].result_count, 1);
 }
 
 #[test]

@@ -122,6 +122,9 @@ pub struct AdapterOutput {
     /// Authorized targets the engine could not fully evaluate. This is
     /// coverage data, never a finding.
     pub unevaluated_targets: Vec<crate::domain::UnevaluatedTarget>,
+    /// Authorized targets with genuine upstream per-template execution
+    /// records. This is positive coverage evidence, never a finding.
+    pub security_template_executions: Vec<crate::domain::SecurityTemplateExecution>,
     /// Controls the engine evaluated but left for human review. This is
     /// coverage data, never a finding or pass.
     pub manual_review_controls: Vec<crate::domain::ManualReviewControl>,
@@ -138,6 +141,7 @@ impl Default for AdapterOutput {
             warnings: Vec::new(),
             unattributed: Vec::new(),
             unevaluated_targets: Vec::new(),
+            security_template_executions: Vec::new(),
             manual_review_controls: Vec::new(),
             complete: true,
         }
@@ -378,6 +382,49 @@ pub fn validate_adapter_output(
                 )));
             }
         }
+    }
+
+    if output.security_template_executions.len() > input.asset_ids.len() {
+        return Err(AppError::Runtime(
+            "adapter produced too many security-template execution aggregates".into(),
+        ));
+    }
+    if !output.security_template_executions.is_empty() && input.manifest.id != "nuclei" {
+        return Err(AppError::Runtime(
+            "only the Nuclei adapter may emit security-template execution evidence".into(),
+        ));
+    }
+    let mut security_template_assets = BTreeSet::new();
+    for execution in &output.security_template_executions {
+        if !allowed_assets.contains(execution.asset_id.as_str()) || execution.result_count == 0 {
+            return Err(AppError::Runtime(
+                "security-template execution evidence is outside the authorized run or has no upstream result"
+                    .into(),
+            ));
+        }
+        if !security_template_assets.insert(execution.asset_id.as_str()) {
+            return Err(AppError::Runtime(
+                "security-template execution evidence must be unique per asset".into(),
+            ));
+        }
+        if output.unevaluated_targets.iter().any(|target| {
+            target.asset_id == execution.asset_id
+                && target.cause
+                    == crate::domain::UnevaluatedTargetCause::NoSecurityTemplateExecutionEvidence
+        }) {
+            return Err(AppError::Runtime(
+                "an asset cannot have both security-template execution proof and a missing-proof outcome"
+                    .into(),
+            ));
+        }
+    }
+    if output.unevaluated_targets.iter().any(|target| {
+        target.cause == crate::domain::UnevaluatedTargetCause::NoSecurityTemplateExecutionEvidence
+            && input.manifest.id != "nuclei"
+    }) {
+        return Err(AppError::Runtime(
+            "only the Nuclei adapter may emit a missing security-template execution outcome".into(),
+        ));
     }
 
     if output.manual_review_controls.len() > 10_000 {
@@ -786,6 +833,7 @@ mod tests {
             output: AdapterOutput {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                security_template_executions: Vec::new(),
                 manual_review_controls: vec![crate::domain::ManualReviewControl {
                     asset_id: "asset-1".into(),
                     rule_id: "MT.1003".into(),
@@ -836,6 +884,7 @@ mod tests {
             output: AdapterOutput {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                security_template_executions: Vec::new(),
                 manual_review_controls: Vec::new(),
                 findings: Vec::new(),
                 observations: vec![bad_observation],
@@ -874,6 +923,7 @@ mod tests {
             output: AdapterOutput {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                security_template_executions: Vec::new(),
                 manual_review_controls: Vec::new(),
                 findings: vec![bad_finding],
                 observations: Vec::new(),
@@ -918,6 +968,7 @@ mod tests {
             output: AdapterOutput {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                security_template_executions: Vec::new(),
                 manual_review_controls: Vec::new(),
                 findings: vec![bad_finding],
                 observations: Vec::new(),
@@ -976,6 +1027,7 @@ mod tests {
             output: AdapterOutput {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                security_template_executions: Vec::new(),
                 manual_review_controls: Vec::new(),
                 findings: vec![bad_finding],
                 observations: Vec::new(),
@@ -1018,6 +1070,7 @@ mod tests {
             output: AdapterOutput {
                 unattributed: Vec::new(),
                 unevaluated_targets: Vec::new(),
+                security_template_executions: Vec::new(),
                 manual_review_controls: Vec::new(),
                 findings: vec![bad_finding],
                 observations: Vec::new(),
