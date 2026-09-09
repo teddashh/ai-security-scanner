@@ -10,7 +10,7 @@ use crate::domain::{
     BUILT_IN_LOCALHOST_TCP_AUTHORIZATION_REFERENCE, BUILT_IN_LOCALHOST_TCP_ENGINE_ID,
     CoverageEntry, CoverageStatus, DataSource, EngineManifest, EngineRun, EngineRunStatus,
     EngineTaskKind, Id, LocalhostTcpOutcome, ScanPermission, ScanRun, ScopeGrant,
-    SourceConnectionStatus, SourceKind,
+    SourceConnectionStatus, SourceKind, UnevaluatedTargetCause,
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
@@ -370,6 +370,21 @@ pub fn assess_asset_coverage(
                 engine_run.engine_id,
                 enum_key(&engine_run.status)
             ));
+        } else if let Some(cause) = engine_run
+            .unevaluated_targets
+            .iter()
+            .filter(|target| target.asset_id == asset.id)
+            .map(|target| target.cause)
+            // Any cause means the scanner did not evaluate this asset, so this
+            // run cannot contribute a scanned result. The rank only chooses
+            // which cause the explanation names, and it is an exhaustive match
+            // so a newly added cause cannot silently fall back to scanned.
+            .min_by_key(|cause| match cause {
+                UnevaluatedTargetCause::TargetDidNotRespond => 0,
+                UnevaluatedTargetCause::ScannerError => 1,
+            })
+        {
+            incomplete_reasons.push(format!("{}={}", engine_run.engine_id, enum_key(&cause)));
         } else if let Some(input) = engine_run.knowledge_input.as_ref()
             && let (Some(knowledge_date), Some(support_until)) = (
                 input.knowledge_date.as_deref(),
@@ -730,7 +745,11 @@ fn enum_key<T: Serialize>(value: &T) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{BUILT_IN_LOCALHOST_TCP_TIMEOUT_MS, LocalhostTcpObservation};
+    use crate::domain::{
+        AssetIdentifier, BUILT_IN_LOCALHOST_TCP_TIMEOUT_MS, LocalhostTcpObservation,
+        OrganizationProfile, UnevaluatedTarget,
+    };
+    use crate::registry::EngineRegistry;
 
     fn built_in_localhost_run(
         status: EngineRunStatus,
@@ -788,6 +807,129 @@ mod tests {
         }
     }
 
+    fn greenbone_coverage_fixture() -> (AssessmentCase, Asset, EngineManifest, DateTime<Utc>) {
+        let as_of = Utc::now();
+        let asset = Asset {
+            id: "authorized-host".into(),
+            kind: AssetKind::Host,
+            name: "203.0.113.10".into(),
+            provider: None,
+            region: None,
+            identifiers: vec![AssetIdentifier {
+                namespace: "ip_address".into(),
+                value: "203.0.113.10".into(),
+            }],
+            discovered_from: Vec::new(),
+            candidate: false,
+            owner_confirmed: true,
+            internet_exposed: Some(false),
+            contains_sensitive_data: None,
+            metadata: BTreeMap::new(),
+        };
+        let grant = ScopeGrant {
+            id: "grant-1".into(),
+            asset_id: asset.id.clone(),
+            permission: ScanPermission::ActiveExternalTesting,
+            confirmed_by: "fixture owner".into(),
+            confirmed_at: as_of - chrono::Duration::minutes(1),
+            expires_at: Some(as_of + chrono::Duration::hours(1)),
+            authorization_reference: Some("fixture authorization".into()),
+            notes: None,
+            external_scope: None,
+        };
+        let engine_run = EngineRun {
+            id: "greenbone-run".into(),
+            scan_run_id: "scan-run".into(),
+            engine_id: "greenbone".into(),
+            task_kind: EngineTaskKind::CatalogEngine,
+            localhost_tcp_observation: None,
+            asset_ids: vec![asset.id.clone()],
+            status: EngineRunStatus::Completed,
+            progress_percent: 100,
+            phase: "completed".into(),
+            started_at: Some(as_of),
+            finished_at: Some(as_of),
+            resume_token: None,
+            last_execution_report_sha256: None,
+            engine_version: None,
+            image_digest: None,
+            rule_version: None,
+            adapter_version: "fixture".into(),
+            manifest_schema_version: None,
+            source_revision: None,
+            repository_url: None,
+            distribution_mode: None,
+            image_repository: None,
+            command_sha256: None,
+            execution_timeout_seconds: None,
+            knowledge_input: None,
+            scope_contract_sha256: None,
+            naabu_work_plan: None,
+            naabu_attempt_requests: Vec::new(),
+            naabu_attempt_results: Vec::new(),
+            mapping_version: None,
+            mapping_provenance: None,
+            fingerprint_schema_version: None,
+            runtime_provider: None,
+            runtime_version: None,
+            runtime_security_options: None,
+            exit_code: Some(0),
+            cleanup_removed: None,
+            cleanup_detail: None,
+            warnings: Vec::new(),
+            unattributed: Vec::new(),
+            unevaluated_targets: Vec::new(),
+            raw_artifact_ids: Vec::new(),
+            error_code: None,
+            error_message: None,
+        };
+        let run = ScanRun {
+            id: "scan-run".into(),
+            case_id: "case-1".into(),
+            sequence: 1,
+            created_at: as_of,
+            completed_at: Some(as_of),
+            request_outcome: None,
+            report_asset_snapshots: Vec::new(),
+            knowledge_cutoff: as_of,
+            ai_system_applicable: false,
+            ai_system_applicability: Default::default(),
+            ai_generated_artifact: Default::default(),
+            verification_baseline_run_id: None,
+            scope_grant_ids: vec![grant.id.clone()],
+            scope_grant_snapshots: vec![grant.clone()],
+            engine_admission_issues: Vec::new(),
+            engine_runs: vec![engine_run],
+        };
+        let mut case = AssessmentCase::new(
+            "coverage fixture".into(),
+            OrganizationProfile {
+                organization_name: "fixture".into(),
+                employee_range: "1-10".into(),
+                data_classes: Vec::new(),
+                notes: None,
+            },
+        );
+        case.id = "case-1".into();
+        case.assets.push(asset.clone());
+        case.scope_grants.push(grant);
+        case.scan_runs.push(run);
+        let manifest = EngineRegistry::load_builtin()
+            .expect("built-in engine catalog")
+            .get("greenbone")
+            .expect("Greenbone manifest")
+            .clone();
+        (case, asset, manifest, as_of)
+    }
+
+    fn assess_greenbone_fixture(
+        unevaluated_targets: Vec<UnevaluatedTarget>,
+    ) -> AssetCoverageAssessment {
+        let (mut case, asset, manifest, as_of) = greenbone_coverage_fixture();
+        case.scan_runs[0].engine_runs[0].unevaluated_targets = unevaluated_targets;
+        assess_asset_coverage(&case, &asset, &[manifest], as_of)
+    }
+
     #[test]
     fn every_non_completed_status_is_non_green() {
         for status in [
@@ -815,6 +957,64 @@ mod tests {
         assert!(coverage_status_is_green(
             &CoverageStatus::DiscoveredAuthorizedScanned
         ));
+    }
+
+    #[test]
+    fn completed_greenbone_dead_host_is_authorized_scan_incomplete() {
+        let assessment = assess_greenbone_fixture(vec![UnevaluatedTarget {
+            asset_id: "authorized-host".into(),
+            cause: UnevaluatedTargetCause::TargetDidNotRespond,
+            result_count: 1,
+        }]);
+
+        assert!(
+            assessment
+                .explanation
+                .contains("greenbone=target_did_not_respond"),
+            "expected the incomplete reason to name target_did_not_respond: {}",
+            assessment.explanation
+        );
+        assert_eq!(assessment.status, CoverageStatus::AuthorizedScanIncomplete);
+    }
+
+    #[test]
+    fn completed_greenbone_scanner_error_is_authorized_scan_incomplete() {
+        let assessment = assess_greenbone_fixture(vec![UnevaluatedTarget {
+            asset_id: "authorized-host".into(),
+            cause: UnevaluatedTargetCause::ScannerError,
+            result_count: 1,
+        }]);
+
+        assert!(
+            assessment.explanation.contains("greenbone=scanner_error"),
+            "expected the incomplete reason to name scanner_error: {}",
+            assessment.explanation
+        );
+        assert_eq!(assessment.status, CoverageStatus::AuthorizedScanIncomplete);
+    }
+
+    #[test]
+    fn completed_greenbone_unevaluated_different_asset_does_not_change_coverage() {
+        let assessment = assess_greenbone_fixture(vec![UnevaluatedTarget {
+            asset_id: "different-host".into(),
+            cause: UnevaluatedTargetCause::TargetDidNotRespond,
+            result_count: 1,
+        }]);
+
+        assert_eq!(
+            assessment.status,
+            CoverageStatus::DiscoveredAuthorizedScanned
+        );
+    }
+
+    #[test]
+    fn completed_greenbone_without_unevaluated_targets_remains_scanned() {
+        let assessment = assess_greenbone_fixture(Vec::new());
+
+        assert_eq!(
+            assessment.status,
+            CoverageStatus::DiscoveredAuthorizedScanned
+        );
     }
 
     #[test]

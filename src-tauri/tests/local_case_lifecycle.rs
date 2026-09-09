@@ -956,6 +956,8 @@ struct GreenboneFrameworkVertical {
     finding_ids: BTreeSet<String>,
     evidence_ids: BTreeSet<String>,
     artifact_ids: BTreeSet<String>,
+    ledger_status: CoverageStatus,
+    ledger_explanation: String,
 }
 
 fn execute_greenbone_framework_vertical(ai_system_applicable: bool) -> GreenboneFrameworkVertical {
@@ -1137,9 +1139,17 @@ fn execute_greenbone_framework_vertical(ai_system_applicable: bool) -> Greenbone
         .iter()
         .map(|artifact| artifact.id.clone())
         .collect::<BTreeSet<_>>();
-    service
+    let applied = service
         .apply_execution_report(&case.id, &DurableExecutionReport::from(&execution_report))
         .expect("durable Greenbone execution reconciliation");
+    let ledger_entry = applied
+        .case
+        .coverage
+        .iter()
+        .find(|entry| entry.asset_id.as_deref() == Some(asset_id.as_str()))
+        .expect("coverage entry for the authorized host");
+    let ledger_status = ledger_entry.status.clone();
+    let ledger_explanation = ledger_entry.explanation.clone();
 
     let destination = temporary.path().join(if ai_system_applicable {
         "ai-framework-report.json"
@@ -1169,6 +1179,8 @@ fn execute_greenbone_framework_vertical(ai_system_applicable: bool) -> Greenbone
         finding_ids,
         evidence_ids,
         artifact_ids,
+        ledger_status,
+        ledger_explanation,
     }
 }
 
@@ -1311,9 +1323,19 @@ fn greenbone_framework_report_vertical_preserves_relationships_ai_gating_and_inc
         coverage["selected_run_coverage_has_unknown_or_incomplete_entries"],
         true
     );
-    // The claim that has to survive both open defects below: Greenbone reported
-    // this host as dead and errored, so nothing in the standardized export may
-    // count it as scanned. Whatever the ledger records, this stays true.
+    // The coverage-ledger defect is fixed: the dead-host cause takes precedence
+    // over the scanner-error cause for this asset and keeps the completed task
+    // inside the ledger's existing incomplete-explanation frame.
+    assert_eq!(ai.ledger_status, CoverageStatus::AuthorizedScanIncomplete);
+    assert!(
+        ai.ledger_explanation
+            .contains("greenbone=target_did_not_respond")
+    );
+    assert!(!ai.ledger_explanation.contains("greenbone=scanner_error"));
+
+    // The claim that must also survive the remaining framework-export defect:
+    // Greenbone reported this host as dead and errored, so nothing in the
+    // standardized export may count it as scanned.
     assert!(
         coverage["selected_run_coverage_states"]
             .as_object()
@@ -1322,16 +1344,11 @@ fn greenbone_framework_report_vertical_preserves_relationships_ai_gating_and_inc
             .is_none(),
         "a host Greenbone never evaluated must not be counted as scanned"
     );
-    // Present behaviour, not desired behaviour, pinned so any change is visible.
-    // Two defects meet here:
-    //   1. `coverage.rs::assess_asset_coverage` never reads
-    //      `unevaluated_targets`, so `authorized_incomplete_count` stays 0 even
-    //      though this run reported both a dead host and a scanner error; and
-    //   2. the one coverage-ledger entry bound to this run does not match the
-    //      one frozen planned asset, so the exporter excludes it entirely and
-    //      reports no ledger at all.
-    // Only the second currently keeps a scanned state out of the export. When
-    // either is fixed, revisit these numbers -- not the assertion above.
+    // The remaining defect is in the Standard-redacted framework projection:
+    // its one selected-run coverage entry does not match the one frozen planned
+    // asset, so the exporter excludes the now-correct incomplete ledger state.
+    // These numbers pin that separate defect; revisit them when it is fixed,
+    // without weakening the no-scanned-state assertion above.
     assert_eq!(coverage["authorized_incomplete_count"], 0);
     assert_eq!(coverage["selected_run_coverage_ledger_available"], false);
     assert_eq!(
