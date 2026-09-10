@@ -122,6 +122,11 @@ test("shared status copy and legacy date helpers follow the active locale", () =
   assert.equal(i18n.runStatusMeta.queued.label, "Queued");
   assert.equal(i18n.translate("en", "status.workflow.pendingVerification"), "Fix reported; verification pending");
   assert.equal(i18n.translate("en", "status.case.verificationDue"), "Fix verification pending");
+  assert.equal(i18n.translate("en", "status.coverage.unauthorized.label"), "Authorization required");
+  assert.equal(i18n.translate("en", "status.stage.failed.label"), "Stopped with an error");
+  assert.equal(i18n.translate("en", "runtime.phase.start.detail"), "Starting the advanced local scan workspace.");
+  assert.equal(i18n.translate("en", "runtime.phase.verify.label"), "Verifying advanced local scan tools");
+  assert.equal(i18n.translate("en", "runtime.phase.failed.label"), "Advanced local scan-tool setup failed");
   assert.equal(i18n.runStatusMeta.no_checks_completed.label, "No checks completed");
   assert.equal(i18n.runStatusMeta.no_checks_completed.tone, "warning");
   assert.equal(i18n.translate("en", "status.stage.capturing.description"), "Recording scanner output.");
@@ -134,6 +139,11 @@ test("shared status copy and legacy date helpers follow the active locale", () =
   assert.equal(i18n.runStatusMeta.queued.label, "已排入佇列");
   assert.equal(i18n.translate("zh-TW", "status.workflow.pendingVerification"), "已回報修復，待驗證");
   assert.equal(i18n.translate("zh-TW", "status.case.verificationDue"), "待驗證修復");
+  assert.equal(i18n.translate("zh-TW", "status.coverage.unauthorized.label"), "需要授權");
+  assert.equal(i18n.translate("zh-TW", "status.stage.failed.label"), "因錯誤停止");
+  assert.equal(i18n.translate("zh-TW", "runtime.phase.start.detail"), "正在啟動進階本機掃描工作區。");
+  assert.equal(i18n.translate("zh-TW", "runtime.phase.verify.label"), "正在驗證進階本機掃描工具");
+  assert.equal(i18n.translate("zh-TW", "runtime.phase.failed.label"), "進階本機掃描工具設定失敗");
   assert.equal(i18n.runStatusMeta.no_checks_completed.label, "沒有完成任何檢查");
   assert.equal(i18n.translate("zh-TW", "status.stage.capturing.description"), "正在記錄掃描器輸出。");
   assert.equal(i18n.translate("zh-TW", "shell.data.refreshErrorDetail"), "請重新整理已保存的掃描。");

@@ -216,7 +216,7 @@ test("permanent deletion stays disabled until the exact phrase is typed", () => 
   expect(deleteButton.disabled).toBe(false);
 });
 
-test("a folder that was never there says no deletion command was sent", () => {
+test("an absent evidence folder is stated directly", () => {
   // Reporting this as a removal would credit the app with an action it did not
   // take, and would tell a user their evidence was destroyed when it may simply
   // have been somewhere else.
@@ -231,7 +231,8 @@ test("a folder that was never there says no deletion command was sent", () => {
 
   const panel = container.querySelector(".artifact-cleanup-panel")!;
   expect(panel.querySelector("h2")?.textContent).toBe("The case evidence folder is already absent");
-  expect(panel.textContent).toContain("no evidence-deletion command is needed or sent");
+  expect(panel.textContent).toContain("The backend confirmed that this exact case evidence folder is absent");
+  expect(panel.textContent).not.toMatch(/command is needed or sent/iu);
   expect(panel.textContent).not.toContain("was permanently removed");
   // Nothing exists to delete, so no deletion control is offered.
   expect(container.querySelector(".button--danger")).toBeNull();

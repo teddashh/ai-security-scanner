@@ -167,9 +167,11 @@ test("a collapsed source setup keeps unresolved temporary-cloud cleanup visible 
 
   const setup = container.querySelector<HTMLDetailsElement>(".coverage-source-setup")!;
   expect(setup.open).toBe(false);
-  await waitFor(() => expect(setup.querySelector("summary")?.textContent).toBe("Temporary cloud cleanup needs attention"));
-  const attentionTitle = getByText("Temporary cloud access needs cleanup");
-  expect(attentionTitle.closest("[role='alert']")).not.toBeNull();
+  await waitFor(() => expect(setup.querySelector("summary")?.textContent).toBe("Temporary cloud cleanup required"));
+  const attention = container.querySelector<HTMLElement>("[role='alert']");
+  expect(attention?.textContent).toContain("Temporary cloud cleanup required");
+  expect(attention?.textContent).toContain("Open the recorded cleanup");
+  expect(attention?.textContent).not.toMatch(/before closing the app/iu);
 
   fireEvent.click(getByRole("button", { name: "Review cleanup" }));
   expect(setup.open).toBe(true);
@@ -207,7 +209,7 @@ test("an unresolved cleanup record remains actionable when its provider source i
   });
 
   const setup = container.querySelector<HTMLDetailsElement>(".coverage-source-setup")!;
-  await waitFor(() => expect(setup.querySelector("summary")?.textContent).toBe("Temporary cloud cleanup needs attention"));
+  await waitFor(() => expect(setup.querySelector("summary")?.textContent).toBe("Temporary cloud cleanup required"));
   fireEvent.click(getByRole("button", { name: "Review cleanup" }));
 
   expect(getByText("Use Add an inventory file above to add the matching cloud account. Then return here to reconnect and remove only its recorded temporary resources.")).not.toBeNull();
@@ -230,7 +232,7 @@ test("a failed cleanup lookup remains actionable without a provider source and o
   });
 
   const setup = container.querySelector<HTMLDetailsElement>(".coverage-source-setup")!;
-  await waitFor(() => expect(setup.querySelector("summary")?.textContent).toBe("Temporary cloud cleanup needs attention"));
+  await waitFor(() => expect(setup.querySelector("summary")?.textContent).toBe("Temporary cloud cleanup required"));
   fireEvent.click(getByRole("button", { name: "Review cleanup" }));
   expect(getByText("Use Add an inventory file above to add the matching cloud account. Then return here to reconnect and remove only its recorded temporary resources.")).not.toBeNull();
   const cleanupError = getByText("Temporary-access cleanup status unavailable. Check again.").closest<HTMLElement>("[role='alert']")!;

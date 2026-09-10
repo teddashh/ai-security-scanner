@@ -419,8 +419,8 @@ const pageCopy = {
     zhTW: "保留證據不會恢復案件紀錄。只有輸入下方完整片語並確認精確路徑後，才會另外刪除證據。",
   },
   cleanupAbsent: {
-    en: "The backend confirmed that this exact case folder does not exist, so no evidence-deletion command is needed or sent.",
-    zhTW: "後端確認這個精確案件目錄不存在，因此不需要、也不會送出證據刪除命令。",
+    en: "The backend confirmed that this exact case evidence folder is absent.",
+    zhTW: "後端確認這個精確案件證據目錄不存在。",
   },
   cleanupType: { en: "Type `DELETE {id}`", zhTW: "輸入 `DELETE {id}`" },
   keepEvidence: { en: "Keep evidence", zhTW: "保留證據" },
