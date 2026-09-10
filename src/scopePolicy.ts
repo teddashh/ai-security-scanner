@@ -2,7 +2,7 @@ import type { AssessmentActivity, Asset, ScopeMode } from "./types";
 
 export const permittedModes = (asset: Pick<Asset, "platform" | "localInputProfile">): ScopeMode[] => {
   if (asset.localInputProfile) return ["local_artifact"];
-  if (asset.platform === "external") return ["public_data", "low_impact_external", "active_external"];
+  if (asset.platform === "external") return ["low_impact_external", "active_external"];
   if (["code", "container"].includes(asset.platform)) return ["local_artifact"];
   if (asset.platform === "kubernetes") return ["inventory", "configuration"];
   return ["inventory", "configuration"];

@@ -211,7 +211,6 @@ test("a readiness fix opens the exact cloud, workspace, or read-only source step
 
 test("guided network, website quick profile, local, and signed-in cloud setup combine confirmation and Start", () => {
   assert.ok(source.includes("conciseGuidedConsent = guidedLowImpactNetwork || guidedWebsiteQuickProfile || guidedLocalConsent || guidedCloudConsent"));
-  assert.ok(source.includes("simpleGuidedConsent = passivePublicConsent || conciseGuidedConsent"));
   assert.ok(source.includes("pageCopy.confirmAndStart"));
   assert.ok(source.includes("pageCopy.scanSignedInCloud"));
   assert.ok(source.includes("pageCopy.guidedCloudConfirmation"));
@@ -228,25 +227,36 @@ test("guided network, website quick profile, local, and signed-in cloud setup co
   assert.ok(source.includes("這會保存精確目標與限制並開始掃描"));
 });
 
-test("public-record review starts without an ownership or approval ceremony", () => {
-  assert.match(source, /passivePublicConsent = externalActivity === "passive_public_discovery"/u);
+test("new scan setup does not expose the no-engine public-record permission", () => {
+  assert.doesNotMatch(source, /passivePublicConsent|simpleGuidedConsent/u);
+  for (const retiredSurface of [
+    "publicRecordsGrantDescription",
+    "publicRecordsBoundaryHelp",
+    "publicRecordsStart",
+    "publicRecordsConfirmation",
+    "No check in this version reads public records",
+  ]) assert.ok(!source.includes(retiredSurface), retiredSurface);
   assert.match(source, /requiresAuthorizationReference = externalActivity === "active_external"/u);
-  assert.match(source, /!simpleGuidedConsent && \([\s\S]*ownershipConfirmed/u);
-  assert.match(source, /passivePublicConsent[\s\S]*pageCopy\.publicRecordsConfirmation/u);
-  assert.match(source, /passivePublicConsent[\s\S]*pageCopy\.publicRecordsStart/u);
+  assert.match(source, /!conciseGuidedConsent && \([\s\S]*ownershipConfirmed/u);
   assert.match(source, /isDirectExternal && selectedExternalAsset && limits/u);
-  // The not-contacted promise is the part this mode actually keeps, and the
-  // part worth pinning. The wording beside it used to offer a "review" of
-  // public records that no shipped engine can perform; whether the copy may
-  // claim one is derived from the engine catalog in
-  // `publicRecordsScopePromise.test.ts` rather than fixed here, so that
-  // constraint lifts on its own if such an engine is ever added.
+});
+
+test("network authorization guidance states requirements without transferring the decision", () => {
   for (const phrase of [
-    "Start without contacting this system",
-    "開始掃描，不連線這個系統",
-    "The selected system will not be contacted.",
-    "不會連線到所選系統",
+    "Scan authorization must cover every selected item before Start.",
+    "開始前，掃描授權必須涵蓋每一個已選項目。",
+    "System-owner approval for access from this computer is required.",
+    "從這台電腦存取必須取得系統負責人核准",
+    "Required record: ticket, contract, or approver confirming this scan.",
+    "必要紀錄：確認本次掃描的工單、合約或核准人。",
   ]) assert.ok(source.includes(phrase), phrase);
+
+  for (const retiredInstruction of [
+    "If you are unsure, ask the system owner before continuing.",
+    "Turn this on only when the system owner approved access from this computer.",
+    "Never enter a password, key, or token here.",
+    "Choose public-record review or a light connection check",
+  ]) assert.ok(!source.includes(retiredInstruction), retiredInstruction);
 });
 
 test("the desktop submits authorization and Start through one native command", () => {
@@ -276,7 +286,7 @@ test("the desktop submits authorization and Start through one native command", (
 test("cloud sign-in leads to one exact read-only scan confirmation instead of another ownership form", () => {
   assert.match(source, /guidedCloudRoute[\s\S]*hasExactGuidedCloudConsent\(selectedScopeAssets, providerConnection\)/u);
   assert.match(source, /asset\.platform === "external" \|\| selectedIncludesExternal \|\| guidedCloudRoute/u);
-  assert.match(source, /!simpleGuidedConsent && \([\s\S]*ownershipConfirmed/u);
+  assert.match(source, /!conciseGuidedConsent && \([\s\S]*ownershipConfirmed/u);
   assert.match(source, /guidedCloudConsent \? \([\s\S]*pageCopy\.changeScanType/u);
   for (const [english, traditionalChinese] of [
     ["Signed-in account: {account}", "已登入帳號：{account}"],

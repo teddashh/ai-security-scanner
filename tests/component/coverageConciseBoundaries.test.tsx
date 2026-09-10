@@ -1103,7 +1103,7 @@ test("a scan waiting for its tools keeps the reviewed website request immutable"
   expect(editInputs?.disabled).toBe(true);
 });
 
-test("public-record mode keeps the exact website and honest no-contact boundary visible", async () => {
+test("external setup omits the public-record mode when no shipped scanner can run it", async () => {
   const { container } = renderRoute({
     assessmentIntent: "external_ip_or_domain",
     requestedActivities: [],
@@ -1121,23 +1121,11 @@ test("public-record mode keeps the exact website and honest no-contact boundary 
   });
 
   await waitFor(() => expect(container.querySelector(".scope-mode-fieldset")).not.toBeNull());
-  const publicRecordsMode = Array.from(container.querySelectorAll<HTMLLabelElement>(".scope-mode-card"))
-    .find((label) => label.textContent?.includes("Use public records"))
-    ?.querySelector<HTMLInputElement>("input");
-  expect(publicRecordsMode).toBeTruthy();
-  fireEvent.click(publicRecordsMode!);
-
   expect(container.querySelector(".page-header h1")?.textContent).toBe("Set up scan");
-  expect(container.querySelector("#coverage-step-1")).not.toBeNull();
-  expect(container.querySelector("#coverage-step-2")).not.toBeNull();
-  expect(container.querySelector(".scope-confirmation-panel__assets")?.textContent).toContain("example.com");
   expect(container.querySelector(".asset-review-list")?.textContent).toContain("example.com");
   expect(container.querySelector(".asset-review-list input")?.getAttribute("aria-label")).toBe("Choose example.com");
-  expect(container.querySelector(".form-actions p")?.textContent).toContain(
-    "This saves the boundary and starts a scan. The selected system will not be contacted. No check in this version reads public records, so this permission on its own adds nothing to what is tested.",
-  );
-  expect(Array.from(container.querySelectorAll<HTMLButtonElement>(".scope-confirmation-panel button[type='submit']"))
-    .some((button) => button.textContent?.includes("Start without contacting this system"))).toBe(true);
+  expect(container.textContent).not.toContain("Use public records");
+  expect(container.textContent).not.toContain("No check in this version reads public records");
 }, 15_000);
 
 test("an internal website uses the fixed Nuclei profile only after explicit private-network confirmation", async () => {

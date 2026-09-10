@@ -218,16 +218,14 @@ const scopeModeLabels: Record<ScopeMode, { label: BilingualText; detail: Bilingu
   inventory: { label: bilingual("Read-only inventory", "唯讀盤點"), detail: bilingual("Read the names of the selected items only", "只讀取已選項目的名稱") },
   configuration: { label: bilingual("Review settings", "檢查設定"), detail: bilingual("Read configuration or an attached snapshot without making changes", "唯讀檢查設定或已附加快照") },
   local_artifact: { label: bilingual("Review the saved local copy", "檢查本機副本"), detail: bilingual("Check the prepared copy without changing your project", "檢查準備好的副本，不會修改你的專案") },
-  public_data: { label: bilingual("Use public records", "使用公開資料"), detail: bilingual("Use saved DNS, certificate, and similar public records only", "只使用 DNS、憑證等既有公開資料") },
+  public_data: { label: bilingual("Public records", "公開資料"), detail: bilingual("Saved DNS, certificate, and similar public records only", "既有 DNS、憑證等公開資料") },
   low_impact_external: { label: bilingual("Low-impact connection checks", "低影響連線檢查"), detail: bilingual("Send limited requests only to the confirmed target", "只對已確認目標發出受限連線") },
   active_external: { label: bilingual("Approved active website tests", "已核准的主動網站測試"), detail: bilingual("Use only with written approval and a specific test list", "只在取得書面核准與指定測試清單時使用") },
-  passive: { label: bilingual("Use public records", "使用公開資料"), detail: bilingual("Legacy-case name for the public-records mode", "相容舊案件的公開資料模式") },
+  passive: { label: bilingual("Public records", "公開資料"), detail: bilingual("Saved DNS, certificate, and similar public records only", "既有 DNS、憑證等公開資料") },
   active: { label: bilingual("Approved active website tests", "已核准的主動網站測試"), detail: bilingual("Use only with written approval and a specific test list", "只在取得書面核准與指定測試清單時使用") },
 };
 
 const externalActivities: Partial<Record<ScopeMode, ExternalActivity>> = {
-  public_data: "passive_public_discovery",
-  passive: "passive_public_discovery",
   low_impact_external: "low_impact_external",
   active_external: "active_external",
   active: "active_external",
@@ -556,7 +554,7 @@ const pageCopy = {
 
   externalEyebrow: bilingual("Target confirmation", "確認掃描目標"),
   externalTitle: bilingual("Confirm {name}", "確認 {name}"),
-  externalDescription: bilingual("Conservative settings are selected. Confirm this is your website or internal system, then start.", "保守設定已選取；確認這是你的網站或內部系統，然後直接開始。"),
+  externalDescription: bilingual("Conservative settings are selected. Confirm authorization, then start.", "保守設定已選取；確認授權後即可開始。"),
   websiteQuickDescription: bilingual("This scan is limited to the website origin and fixed checks shown below. Confirm it, then start.", "這次掃描只會使用下方顯示的網站來源範圍與固定檢查。確認後即可開始。"),
   guidedExternalDescription: bilingual("This is the exact target saved in your scan project.", "這是掃描專案中保存的精確目標。"),
   advancedScanSettings: bilingual("Advanced scan settings", "進階掃描設定"),
@@ -615,7 +613,7 @@ const pageCopy = {
   templateInvalid: bilingual("Wildcard * is not accepted.", "不可使用萬用字元 *。"),
   prohibitedIntro: bilingual("The following capabilities always remain off:", "以下能力固定保持關閉："),
   sensitiveTitle: bilingual("I confirm this scan may connect to the selected internal network", "我確認這次掃描可以連線到所選內部網路"),
-  sensitiveBody: bilingual("Turn this on only when the system owner approved access from this computer. Most public websites leave it off.", "只有系統負責人已核准從這台電腦存取時才開啟；一般公開網站不需要。"),
+  sensitiveBody: bilingual("System-owner approval for access from this computer is required. Public websites leave this off.", "從這台電腦存取必須取得系統負責人核准；公開網站不需開啟。"),
   sensitiveTechnicalTitle: bilingual("Exact internal-network behavior", "內部網路的精確行為"),
   sensitiveTechnicalBody: bilingual("This permits only the selected target to resolve to approved private, loopback, or link-local networks. Metadata endpoints remain blocked, and no additional target is added.", "只允許所選目標解析到已核准的 private、loopback 或 link-local 網段；metadata endpoints 仍保持阻擋，也不會加入其他目標。"),
   publicBoundaryTitle: bilingual("Exact public-target boundary", "公開目標的精確界線"),
@@ -624,32 +622,15 @@ const pageCopy = {
   ownershipTitle: bilingual("I confirm that I am allowed to scan every selected item", "我確認自己有權掃描每一個已選項目"),
   externalOwnershipTitle: bilingual("I confirm this is my website or a system I am allowed to scan", "我確認這是我的網站，或是我有權掃描的系統"),
   internalOwnershipTitle: bilingual("I confirm this is an internal system I am allowed to scan", "我確認這是我有權掃描的內部系統"),
-  ownershipBody: bilingual("If you are unsure, ask the system owner before continuing.", "如果不確定，請先向系統負責人確認。"),
+  ownershipBody: bilingual("Scan authorization must cover every selected item before Start.", "開始前，掃描授權必須涵蓋每一個已選項目。"),
   authorityRequired: bilingual("Approval reference (required)", "核准紀錄（必填）"),
   scopeNote: bilingual("Note (optional)", "備註（選填）"),
   authorityPlaceholder: bilingual("Example: ticket or contract number and approver", "例如：工單／合約編號與核准人"),
   notePlaceholder: bilingual("Example: internal approval for this read-only review", "例如：本次唯讀檢查的內部核准紀錄"),
-  authorityHelp: bilingual("Add the ticket, contract, or approver that confirms this scan. Never enter a password, key, or token here.", "填入可證明這次掃描已核准的工單、合約或核准人；不要放入密碼、金鑰或 token。"),
-  noteHelp: bilingual("Never enter a secret or credential here.", "不要在這裡填入秘密值或憑證。"),
+  authorityHelp: bilingual("Required record: ticket, contract, or approver confirming this scan. Passwords, keys, and tokens are not accepted.", "必要紀錄：確認本次掃描的工單、合約或核准人。不接受密碼、金鑰或 token。"),
+  noteHelp: bilingual("Field requirement: no secret values or credentials.", "欄位規格：不得包含秘密值或憑證。"),
   activeAuthorityLength: bilingual("An active-test permission reference needs at least 8 characters.", "主動測試的授權參考至少需要 8 個字元。"),
   grantBoundaryHelp: bilingual("This saves the exact target and limits, then starts the scan. Unavailable checks will be listed without stopping the others.", "這會保存精確目標與限制並開始掃描；無法執行的檢查會列出，不會阻止其他檢查。"),
-  // These three used to describe a public-record review that no shipped check
-  // performs. The mode records a `passive_external_discovery` grant, and engine
-  // selection requires a manifest to declare the grant's own permission
-  // (`compatible_authorized_assets` in case_service.rs) -- no entry in
-  // engines/catalog.json declares it. DNS and certificate records enter a
-  // project through an imported saved response instead: both connectors are
-  // `live_discovery: false`. What the mode does establish is real and worth
-  // saying plainly, which is the boundary.
-  publicRecordsGrantDescription: bilingual(
-    "Record that this system must not be contacted, and that only public records already saved in this project may be used. No check in this version reads public records during a scan, so this permission adds nothing to what is tested.",
-    "記錄不會連線到這個系統，而且只使用專案裡已保存的公開紀錄。這個版本沒有任何檢查會在掃描時讀取公開紀錄，因此這項授權不會增加實際測試的內容。",
-  ),
-  publicRecordsBoundaryHelp: bilingual(
-    "This saves the boundary and starts a scan. The selected system will not be contacted. No check in this version reads public records, so this permission on its own adds nothing to what is tested.",
-    "這會保存界線並開始掃描，不會連線到所選系統。這個版本沒有任何檢查會讀取公開紀錄，因此這項授權本身不會增加實際測試的內容。",
-  ),
-  publicRecordsStart: bilingual("Start without contacting this system", "開始掃描，不連線這個系統"),
   startScan: bilingual("Start scan", "開始掃描"),
   confirmAndStart: bilingual("Confirm and start scan", "確認並開始掃描"),
   scanSignedInCloud: bilingual("Scan this signed-in account", "掃描這個已登入帳號"),
@@ -660,7 +641,6 @@ const pageCopy = {
   websiteQuickConfirmation: bilingual("The user explicitly confirmed authorization to scan the exact {origin} origin with the displayed fixed quick profile.", "使用者已明確確認獲准以畫面所列固定快速設定掃描精確的 {origin} 網站來源範圍。"),
   guidedLocalConfirmation: bilingual("The user explicitly selected this saved local copy and confirmed the recommended read-only checks.", "使用者已明確選擇這份已保存的本機副本，並確認建議的唯讀檢查。"),
   guidedCloudConfirmation: bilingual("The user signed in through the provider and explicitly added this exact account with the displayed read-only checks.", "使用者已透過雲端服務商登入，並明確以畫面所列唯讀檢查加入這個精確帳號。"),
-  publicRecordsConfirmation: bilingual("Public records only; the selected system itself will not be contacted.", "只查看公開紀錄；不會直接連線到所選系統。"),
   advancedLocalInputSummary: bilingual("Use a different kind of local input", "改用其他本機輸入類型"),
   advancedLocalInputHelp: bilingual("Use this control to attach a different project or export type.", "使用這個選項附加其他專案或匯出類型。"),
 
@@ -761,20 +741,20 @@ const nextStepForAsset = (asset: Asset): BilingualText => {
   }
   if (asset.platform === "external" && asset.internetExposed === false) {
     return bilingual(
-      "Confirm this is your internal system, then use the recommended low-impact settings.",
-      "確認這是你的內部系統，再使用建議的低影響設定。",
+      "Confirm authorization for this exact internal system, then use the recommended low-impact settings.",
+      "確認這個精確內部系統的授權，再使用建議的低影響設定。",
     );
   }
   if (asset.platform === "external" && asset.type === "ip") {
     return bilingual(
-      "Choose public-record review or a light connection check for this IP address.",
-      "為這個 IP 選擇公開資料盤點，或低影響連線檢查。",
+      "Use the recommended low-impact connection check for this IP address.",
+      "對這個 IP 使用建議的低影響連線檢查。",
     );
   }
   if (asset.platform === "external") {
     return bilingual(
-      "Confirm this is your website, then use the recommended scan settings.",
-      "確認這是你的網站，再使用建議的掃描設定。",
+      "Confirm authorization for this exact website, then use the recommended scan settings.",
+      "確認這個精確網站的授權，再使用建議的掃描設定。",
     );
   }
   if (asset.platform === "code") {
@@ -1077,9 +1057,7 @@ export function CoveragePage({
   );
   const guidedCloudConsent = guidedCloudRoute
     && hasExactGuidedCloudConsent(selectedScopeAssets, providerConnection);
-  const passivePublicConsent = externalActivity === "passive_public_discovery";
   const conciseGuidedConsent = guidedLowImpactNetwork || guidedWebsiteQuickProfile || guidedLocalConsent || guidedCloudConsent;
-  const simpleGuidedConsent = passivePublicConsent || conciseGuidedConsent;
   // The cloud consent boundary is owned by the mounted provider panel. Keep
   // that panel visible instead of creating an unmount/reconnect loop.
   const focusedGuidedReview = (guidedLowImpactNetwork || guidedWebsiteQuickProfile || guidedLocalConsent)
@@ -1091,17 +1069,15 @@ export function CoveragePage({
     ? websiteQuickOrigin(externalTarget, selectedWebsiteService.protocol, selectedWebsiteService.port)
     : undefined;
   const effectiveScopeConfirmation = scopeConfirmation.trim()
-    || (passivePublicConsent
-      ? text(pageCopy.publicRecordsConfirmation)
-      : guidedWebsiteQuickProfile
-        ? text(pageCopy.websiteQuickConfirmation, { origin: quickProfileOrigin ?? "" })
-        : guidedLowImpactNetwork
-          ? text(pageCopy.guidedNetworkConfirmation)
-          : guidedLocalConsent
-            ? text(pageCopy.guidedLocalConfirmation)
-            : guidedCloudConsent
-              ? text(pageCopy.guidedCloudConfirmation)
-              : text(pageCopy.defaultScopeNote));
+    || (guidedWebsiteQuickProfile
+      ? text(pageCopy.websiteQuickConfirmation, { origin: quickProfileOrigin ?? "" })
+      : guidedLowImpactNetwork
+        ? text(pageCopy.guidedNetworkConfirmation)
+        : guidedLocalConsent
+          ? text(pageCopy.guidedLocalConfirmation)
+          : guidedCloudConsent
+            ? text(pageCopy.guidedCloudConfirmation)
+            : text(pageCopy.defaultScopeNote));
   const effectiveAllowSensitiveNetworks = allowSensitiveNetworks
     || Boolean(guidedLowImpactNetwork && selectedExternalAsset?.internetExposed === false);
   const limits = externalActivity ? rateLimits[externalActivity] : undefined;
@@ -1351,7 +1327,7 @@ export function CoveragePage({
   };
 
   const startScan = async () => {
-    if (selectedAssets.length === 0 || scopeModes.length === 0 || (!simpleGuidedConsent && !ownershipConfirmed)) return;
+    if (selectedAssets.length === 0 || scopeModes.length === 0 || (!conciseGuidedConsent && !ownershipConfirmed)) return;
     if (requiresAuthorizationReference && !scopeConfirmation.trim()) return;
     if (!externalScopeReady) return;
     const externalScope: ExternalScopeRequest | undefined = externalActivity && parsedPorts ? {
@@ -1699,7 +1675,6 @@ export function CoveragePage({
         {availableScopeModes.map((mode) => {
           const unavailableExternalMode = Boolean(
             externalActivities[mode]
-            && mode !== "public_data"
             && selectedExternalAsset?.internetExposed === undefined,
           );
           return (
@@ -2580,7 +2555,7 @@ export function CoveragePage({
               </div>
             )}
 
-            {!simpleGuidedConsent && (
+            {!conciseGuidedConsent && (
               <>
                 <label className="toggle-row">
                   <input type="checkbox" disabled={busy} checked={ownershipConfirmed} onChange={(event) => setOwnershipConfirmed(event.target.checked)} />
@@ -2601,17 +2576,15 @@ export function CoveragePage({
             )}
 
             <div className="form-actions">
-              {!conciseGuidedConsent && <p><Icon name={passivePublicConsent ? "search" : "lock"} size={16} /> {text(passivePublicConsent ? pageCopy.publicRecordsBoundaryHelp : pageCopy.grantBoundaryHelp)}</p>}
-              <button className="button button--primary" type="submit" disabled={busy || availableScopeModes.length === 0 || scopeModes.length === 0 || (!simpleGuidedConsent && !ownershipConfirmed) || (requiresAuthorizationReference && !scopeConfirmation.trim()) || !externalScopeReady}>
-                <Icon name={passivePublicConsent ? "search" : "lock"} size={16} />{runtimeSetupNotice
+              {!conciseGuidedConsent && <p><Icon name="lock" size={16} /> {text(pageCopy.grantBoundaryHelp)}</p>}
+              <button className="button button--primary" type="submit" disabled={busy || availableScopeModes.length === 0 || scopeModes.length === 0 || (!conciseGuidedConsent && !ownershipConfirmed) || (requiresAuthorizationReference && !scopeConfirmation.trim()) || !externalScopeReady}>
+                <Icon name="lock" size={16} />{runtimeSetupNotice
                   ? text(pageCopy.preparingScanTools)
                   : busy
                   ? text(pageCopy.startingScan)
-                  : text(passivePublicConsent
-                    ? pageCopy.publicRecordsStart
-                    : guidedCloudConsent
+                  : text(guidedCloudConsent
                     ? pageCopy.scanSignedInCloud
-                    : simpleGuidedConsent
+                    : conciseGuidedConsent
                       ? pageCopy.confirmAndStart
                       : pageCopy.startScan)}
               </button>

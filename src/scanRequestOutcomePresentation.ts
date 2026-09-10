@@ -25,18 +25,18 @@ const summaries: Record<ScanRequestOutcome["code"], { reason: BilingualText; nex
   },
   no_ownership_confirmed_targets: {
     reason: {
-      en: "None of the selected targets was confirmed as yours.",
-      zhTW: "所選目標都還沒有確認為你所控制。",
+      en: "The selected targets have no recorded scan authorization.",
+      zhTW: "所選目標沒有已記錄的掃描授權。",
     },
     nextStep: {
-      en: "Open Scan setup, confirm the target you control, then start a new scan.",
-      zhTW: "請打開「掃描設定」，確認你所控制的目標，再開始新的掃描。",
+      en: "Open Scan setup, record authorization for each exact target, then start a new scan.",
+      zhTW: "打開「掃描設定」，記錄每個精確目標的授權，再開始新的掃描。",
     },
   },
   no_applicable_checks: {
     reason: {
-      en: "No available check matched what you selected.",
-      zhTW: "目前沒有可用的檢查符合你選擇的內容。",
+      en: "No available check matched the selected items.",
+      zhTW: "沒有可用檢查符合已選項目。",
     },
     nextStep: {
       en: "Review the selected target and scan type, then choose the matching check.",

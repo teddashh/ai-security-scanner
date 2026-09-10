@@ -80,6 +80,13 @@ test("external activity is suggested only for an explicitly internet-exposed ass
   );
 });
 
+test("external targets offer only modes backed by runnable network checks", () => {
+  assert.deepEqual(permittedModes({ platform: "external" }), [
+    "low_impact_external",
+    "active_external",
+  ]);
+});
+
 test("an explicitly internal target receives the guided low-impact suggestion", () => {
   assert.deepEqual(
     suggestedModesForAsset(["low_impact_external_checks"], {
