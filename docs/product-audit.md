@@ -283,6 +283,13 @@ official provider page, and names read-only expiry without explaining absent
 product features or promising discarded intermediate files. Required Windows
 restart guidance is one ordered action sequence.
 
+Managed-runtime phases now name the exact operation: starting, verifying,
+failed, or authorization required. They no longer use first-run delay copy,
+"almost ready," or generic attention labels. Temporary-cloud cleanup is a
+recorded required action without an artificial close-the-app deadline, and an
+absent evidence folder is reported as the confirmed outcome without explaining
+an unsent deletion command.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -337,8 +344,10 @@ The high-value remaining gaps are:
    requirements and current states without second-person obligation or waiting
    language. `0a9e96a` removes the remaining Start, Windows restart, and cloud
    connection mechanism explanations while retaining the exact network,
-   credential, and administrator-approval boundaries. The full sequence still
-   needs observation in a controlled
+   credential, and administrator-approval boundaries. `cb60dbe` replaces the
+   remaining runtime delay and generic-attention labels with exact setup phases,
+   authorization state, cleanup action, and evidence-folder outcome. The full
+   sequence still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced

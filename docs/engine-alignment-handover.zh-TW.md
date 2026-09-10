@@ -469,6 +469,12 @@ app／role 的必要條件、官方頁面的管理員核准，以及唯讀存取
 OAuth、表單不會收到密碼、檔案之後丟棄等機制辯護。Windows restart 則直接列出重啟、重開專案、
 繼續設定、確認目標與 Start 的順序。
 
+## Runtime 階段與 cleanup 結果精確化（`cb60dbe`）
+
+Managed runtime 的啟動、驗證、失敗與授權需求改成精確狀態，不再顯示第一次可能需要一點時間、快準備
+好了或需要注意等模糊文字。暫時雲端 cleanup 直接顯示 required action，不再要求在關閉程式前處理；
+案件證據目錄不存在時只顯示 backend 已確認的結果，不再解釋沒有送出刪除命令。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -599,6 +605,10 @@ direct-copy contract 均通過。Rust 程式碼未變更，本輪沒有執行 sc
 `0a9e96a` 新增後，frontend 575 項、component 254 項、TypeScript typecheck、production frontend
 build 與 diff check 全部通過；Start 與 provider setup 的 unit／rendered contracts 及 runtime-deferred
 scan tests 均通過。Rust 程式碼未變更，本輪沒有執行 scanner、刪除 RAM disk 資料或接觸任何 target。
+
+`cb60dbe` 新增後，frontend 575 項、component 254 項、TypeScript typecheck、production frontend
+build 與 diff check 全部通過；shared i18n contract、Cases 與 Coverage rendered tests 均通過。Rust
+程式碼未變更，本輪沒有執行 scanner、刪除 RAM disk 資料或接觸任何 target。
 
 ## 後續順序
 
