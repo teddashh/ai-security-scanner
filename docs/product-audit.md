@@ -309,6 +309,14 @@ name the exact-host action. Missing-source and zero-item states are distinct
 direct outcomes, and inventory or connectivity Results state the completed
 work and the applicable security-scan action without interpretation warnings.
 
+Saved inventory, infrastructure-code, container, and Kubernetes inputs now
+state their accepted form as direct requirements instead of preflight commands
+or user-directed cautions. Labels carry the same credential-free requirement,
+and secondary input guidance is one sentence. A missing or contradictory
+localhost TCP observation now presents one outcome—no reachability result—and
+one retry action; implementation-state vocabulary remains out of the first
+layer while the exact connection boundary stays visible.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -373,7 +381,9 @@ The high-value remaining gaps are:
    report next actions, and adds a cross-page direct-copy regression contract.
    `3386446` compresses website scope, inventory-source, local-input, and
    connectivity-result boundaries while preserving exact authorization and
-   not-tested meaning.
+   not-tested meaning. `9b7697c` converts saved-input cautions into direct input
+   requirements and removes implementation-state explanations from the
+   localhost TCP first layer.
    The full sequence still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond

@@ -633,6 +633,12 @@ range、缺少來源、來源回傳 0 項，以及 connectivity-only Results 都
 Rust 程式碼未變更，沿用 `8da9b5a` 已通過的 1,590 項完整 Rust CLI workspace 基線。本輪沒有
 執行 scanner、刪除 RAM disk 資料或接觸任何 target。
 
+`9b7697c` 新增後，frontend 579 項、component 258 項、TypeScript typecheck、production frontend
+build 與 diff check 全部通過；盤點檔、基礎設施程式碼、container 與 Kubernetes 的第一層改為直接
+輸入規格，localhost TCP 缺少或矛盾的保存狀態只顯示「沒有連線可達結果」與重新檢查動作，不顯示
+內部資料缺陷解釋。Rust 程式碼未變更，沿用 `8da9b5a` 已通過的 1,590 項完整 Rust CLI workspace
+基線。本輪沒有執行 scanner、刪除 RAM disk 資料或接觸任何 target。
+
 ## 後續順序
 
 1. 在使用者明確允許安裝缺少的 managed runtime／desktop dependencies，並對確切自有 target
