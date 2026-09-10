@@ -1,3 +1,5 @@
+import type { PageId, ScanRun } from "./types";
+
 export interface PageTransitionFocusTarget {
   focus: (options?: FocusOptions) => void;
 }
@@ -9,6 +11,20 @@ export interface PageTransitionMainContent extends PageTransitionFocusTarget {
 export interface PageTransitionViewport {
   scrollTo: (options: ScrollToOptions) => void;
 }
+
+const activeRunStatuses = new Set<ScanRun["status"]>(["queued", "running", "paused"]);
+
+/** Active work has one destination; Results and Export are terminal-run pages. */
+export const pageForSelectedRunLifecycle = (
+  requestedPage: PageId,
+  selectedRun: Pick<ScanRun, "status"> | undefined,
+): PageId => (
+  (requestedPage === "findings" || requestedPage === "export")
+  && selectedRun
+  && activeRunStatuses.has(selectedRun.status)
+    ? "progress"
+    : requestedPage
+);
 
 /**
  * Restores the beginning of a newly rendered page for sighted and keyboard users.

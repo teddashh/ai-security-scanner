@@ -144,7 +144,7 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-test("an active run stays in Progress and creates no export preview", () => {
+test("an active run creates neither an export surface nor a preview", () => {
   const activeRun = {
     ...run(CHOSEN),
     status: "running" as const,
@@ -156,11 +156,9 @@ test("an active run stays in Progress and creates no export preview", () => {
     runs: [activeRun, run(NEWEST)],
   });
 
-  expect(container.textContent).toContain("Scan in progress");
-  expect(container.textContent).toContain("Export opens after this scan finishes.");
-  expect(container.querySelector('a[href="#progress"]')?.textContent).toContain("View scan progress");
+  expect(container.textContent).toBe("");
+  expect(container.querySelector(".page")).toBeNull();
   expect(container.querySelector(".export-layout")).toBeNull();
-  expect(container.textContent).not.toContain("Interim export");
   expect(onPreview).not.toHaveBeenCalled();
   expect(onExport).not.toHaveBeenCalled();
 });

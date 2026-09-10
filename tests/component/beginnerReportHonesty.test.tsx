@@ -327,7 +327,7 @@ test("a partial run is distinguished from a complete one", () => {
   expect(partialPill.textContent).not.toEqual(completePill.textContent);
 });
 
-test("an active run stays in progress instead of exposing a half-finished report", () => {
+test("an active run creates no report surface", () => {
   const base = report("partial");
   const activeRun = catalogRun("trivy");
   activeRun.status = "running";
@@ -361,11 +361,8 @@ test("an active run stays in progress instead of exposing a half-finished report
 
   expect(container.querySelector(".asset-result-board")).toBeNull();
   expect(container.querySelector("section[aria-labelledby='beginner-master-report-title']")).toBeNull();
-  expect(container.textContent).toContain("Scan in progress");
-  expect(container.textContent).toContain("Continue in Scan progress.");
-  expect(container.textContent).toContain("Scan progress");
-  expect(container.textContent).not.toContain("interim");
-  expect(container.textContent).not.toContain("Still updating");
+  expect(container.textContent).toBe("");
+  expect(container.querySelector(".page")).toBeNull();
 
   unmount();
   window.localStorage.setItem(localeStorageKey, "zh-TW");
@@ -385,10 +382,8 @@ test("an active run stays in progress instead of exposing a half-finished report
     },
     coverageCounts: counts({ testedComplete: 1 }),
   }), [], [activeRun]);
-  expect(zh.container.textContent).toContain("掃描進行中");
-  expect(zh.container.textContent).toContain("請回到「掃描進度」繼續。");
-  expect(zh.container.textContent).not.toContain("暫時報告");
-  expect(zh.container.textContent).not.toContain("仍在更新");
+  expect(zh.container.textContent).toBe("");
+  expect(zh.container.querySelector(".page")).toBeNull();
 });
 
 test("the first layer gives every requested asset one evidence-derived result status", () => {

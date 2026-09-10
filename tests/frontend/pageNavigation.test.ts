@@ -4,12 +4,28 @@ import test from "node:test";
 
 import {
   completePageTransition,
+  pageForSelectedRunLifecycle,
   type PageTransitionFocusTarget,
   type PageTransitionMainContent,
 } from "../../src/pageNavigation.ts";
 
 const source = async (path: string): Promise<string> =>
   readFile(new URL(path, import.meta.url), "utf8");
+
+test("active report and export routes resolve directly to Progress", () => {
+  for (const status of ["queued", "running", "paused"] as const) {
+    assert.equal(pageForSelectedRunLifecycle("findings", { status }), "progress");
+    assert.equal(pageForSelectedRunLifecycle("export", { status }), "progress");
+  }
+
+  for (const status of ["completed", "no_checks_completed", "partial", "failed", "cancelled"] as const) {
+    assert.equal(pageForSelectedRunLifecycle("findings", { status }), "findings");
+    assert.equal(pageForSelectedRunLifecycle("export", { status }), "export");
+  }
+
+  assert.equal(pageForSelectedRunLifecycle("findings", undefined), "findings");
+  assert.equal(pageForSelectedRunLifecycle("coverage", { status: "running" }), "coverage");
+});
 
 test("a real page transition focuses the new heading and scrolls to the viewport origin once", () => {
   const focusOptions: FocusOptions[] = [];

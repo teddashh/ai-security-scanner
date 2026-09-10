@@ -52,9 +52,6 @@ const copy = {
   preparing: { en: "Preparing…", zhTW: "準備中…" },
   exportDemo: { en: "Download {format} demo file", zhTW: "下載「{format}」展示檔" },
   createExport: { en: "Save {format}", zhTW: "儲存「{format}」" },
-  activeTitle: { en: "Scan in progress", zhTW: "掃描進行中" },
-  activeBody: { en: "Export opens after this scan finishes.", zhTW: "本輪掃描完成後即可匯出。" },
-  openProgress: { en: "View scan progress", zhTW: "查看掃描進度" },
   connectionOnlyTitle: {
     en: "Connection test only — no vulnerability scan ran",
     zhTW: "這只是連線測試，沒有執行漏洞掃描",
@@ -518,20 +515,7 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
   };
 
   if (activeRun) {
-    return (
-      <div className="page">
-        <PageHeader
-          eyebrow={text(copy.eyebrow)}
-          title={text(copy.activeTitle)}
-          description={text(copy.activeBody)}
-          actions={(
-            <a className="button button--primary" href="#progress">
-              <Icon name="progress" size={17} />{text(copy.openProgress)}
-            </a>
-          )}
-        />
-      </div>
-    );
+    return null;
   }
 
   return (

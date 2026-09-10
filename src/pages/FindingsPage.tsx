@@ -214,9 +214,6 @@ const copy = {
   inventoryTlsObserved: { en: "TLS observed", zhTW: "觀察到 TLS" },
   inventoryNativeId: { en: "Native ID", zhTW: "原生識別碼" },
   emptyNoRunTitle: { en: "No scan results", zhTW: "沒有掃描結果" },
-  activePageEyebrow: { en: "SCAN IN PROGRESS", zhTW: "掃描進行中" },
-  activePageTitle: { en: "Scan in progress", zhTW: "掃描進行中" },
-  activePageDescription: { en: "Continue in Scan progress.", zhTW: "請回到「掃描進度」繼續。" },
   emptyIncompleteTitle: {
     en: "Scan needs attention",
     zhTW: "掃描需要處理",
@@ -1892,20 +1889,7 @@ export function FindingsPage({
     ? unavailableRunBoundReportCopy
     : unavailableSelectedRunCopy;
   if (activeRun) {
-    return (
-      <div className="page">
-        <PageHeader
-          eyebrow={text(copy.activePageEyebrow)}
-          title={text(copy.activePageTitle)}
-          description={text(copy.activePageDescription)}
-          actions={(
-            <button className="button button--primary" type="button" onClick={onOpenProgress}>
-              <Icon name="progress" size={16} />{text(copy.openProgress)}
-            </button>
-          )}
-        />
-      </div>
-    );
+    return null;
   }
   const nonSecurityOnly = Boolean(report?.actual.checks.length
     && report.actual.checks.every((check) => checkResultKind(check) !== "security_check"));

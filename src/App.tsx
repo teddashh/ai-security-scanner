@@ -36,6 +36,7 @@ import {
   selectVerificationBaselineRunId,
 } from "./caseScopedUiState";
 import { isExactBuiltInLocalhostQuickScanRun } from "./localhostQuickScan";
+import { pageForSelectedRunLifecycle } from "./pageNavigation";
 import {
   cloneRuntimeDeferredScanInput,
   shouldPrepareRuntimeBeforeScanAction,
@@ -2183,6 +2184,11 @@ export default function App() {
   const currentBeginnerReport = currentRun
     ? workspace?.beginnerReports?.find((report) => report.runId === currentRun.id)
     : undefined;
+  const displayedPage = pageForSelectedRunLifecycle(page, currentRun);
+
+  useEffect(() => {
+    if (displayedPage !== page) navigate(displayedPage);
+  }, [displayedPage, page]);
 
   // Correlation is a pure function of the case's findings and its active
   // groups, so recomputing on any other workspace change would be wasted work.
@@ -2256,7 +2262,7 @@ export default function App() {
       );
     }
 
-    if (page === "start") {
+    if (displayedPage === "start") {
       return (
         <StartPage
           locale={locale}
@@ -2295,7 +2301,7 @@ export default function App() {
       );
     }
 
-    if (page === "cases") {
+    if (displayedPage === "cases") {
       return (
         <CasesPage
           cases={snapshot?.cases ?? []}
@@ -2344,7 +2350,7 @@ export default function App() {
       );
     }
 
-    if (page === "settings") {
+    if (displayedPage === "settings") {
       return (
         <SettingsPage
           locale={locale}
@@ -2375,7 +2381,7 @@ export default function App() {
       );
     }
 
-    switch (page) {
+    switch (displayedPage) {
       case "coverage":
         return (
           <CoveragePage
@@ -2592,7 +2598,7 @@ export default function App() {
   return (
     <>
       <AppShell
-        page={page}
+        page={displayedPage}
         mode={mode}
         cases={snapshot?.cases ?? []}
         selectedCase={selectedCase}

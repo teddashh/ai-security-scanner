@@ -484,28 +484,35 @@ test("export preview, export, and both verification paths remain wired", async (
   assert.match(verification, /mappingVersionDriftOnlyForFinding \? mappingDiffSummary/u);
 });
 
-test("active scans stay in Progress instead of opening defensive interim surfaces", async () => {
-  const findings = await readPage("FindingsPage.tsx");
+test("active report routes resolve to Progress without transitional report copy", async () => {
+  const [app, navigation, findings, exportPage] = await Promise.all([
+    readFile(new URL("../../src/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../src/pageNavigation.ts", import.meta.url), "utf8"),
+    readPage("FindingsPage.tsx"),
+    readPage("ExportPage.tsx"),
+  ]);
   for (const phrase of [
     "Scan in progress",
     "掃描進行中",
     "Continue in Scan progress.",
     "請回到「掃描進度」繼續。",
-  ]) assert.ok(findings.includes(phrase), phrase);
+  ]) assert.ok(!findings.includes(phrase), phrase);
   assert.match(findings, /activeRunStatuses\.has\(latestRun\.status\)/u);
-  assert.match(findings, /activeRun[\s\S]*onOpenProgress/u);
-  assert.doesNotMatch(findings, /interim results|暫時結果|Still updating|仍在更新/u);
+  assert.match(findings, /if \(activeRun\) \{[\s\S]*return null;/u);
 
-  const exportPage = await readPage("ExportPage.tsx");
   for (const phrase of [
     "Scan in progress",
     "掃描進行中",
     "Export opens after this scan finishes.",
     "本輪掃描完成後即可匯出。",
-  ]) assert.ok(exportPage.includes(phrase), phrase);
+  ]) assert.ok(!exportPage.includes(phrase), phrase);
   assert.match(exportPage, /workspaceExportRevision/u);
-  assert.match(exportPage, /if \(activeRun\)[\s\S]*href="#progress"/u);
-  assert.doesNotMatch(exportPage, /Interim export|暫時報告|createInterimExport/u);
+  assert.match(exportPage, /if \(activeRun\) \{[\s\S]*return null;/u);
+  assert.match(navigation, /requestedPage === "findings" \|\| requestedPage === "export"/u);
+  assert.match(app, /const displayedPage = pageForSelectedRunLifecycle\(page, currentRun\);/u);
+  assert.match(app, /if \(displayedPage !== page\) navigate\(displayedPage\);/u);
+  assert.match(app, /switch \(displayedPage\)/u);
+  assert.match(app, /<AppShell[\s\S]*page=\{displayedPage\}/u);
 });
 
 test("setup prerequisites and missing-source states use direct product language", async () => {
