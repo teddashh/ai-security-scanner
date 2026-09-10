@@ -1140,7 +1140,7 @@ fn mixed_environment_fake_runtime_reopens_one_shared_report_and_export() {
     );
     let html = fs::read_to_string(destination).expect("read mixed HTML report");
     for expected in [
-        "Partial",
+        "Completed with gaps",
         "Application repository",
         "https://portal.example.test:443",
         "203.0.113.10",

@@ -333,8 +333,8 @@ const pageCopy = {
   },
   dataTypes: { en: "Data this case may involve", zhTW: "這個案件可能涉及哪些資料" },
   dataTypesHelp: {
-    en: "This helps the app explain impact, but only where a scan independently finds a matching asset. Your answer on its own never raises a result's priority.",
-    zhTW: "這會幫助產品說明影響，但只有在掃描獨立發現對應資產時才會生效；僅憑你的回答不會提高任何結果的優先順序。",
+    en: "Used to explain impact when a scan finds a matching asset.",
+    zhTW: "掃描發現對應資產時，這項資料會用來說明影響。",
   },
   creating: { en: "Creating…", zhTW: "建立中…" },
   preparingLocalSnapshot: { en: "Preparing a private scan copy…", zhTW: "正在建立私密掃描副本…" },

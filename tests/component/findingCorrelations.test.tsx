@@ -121,8 +121,8 @@ test("agreement between two engines is disclosed as not independently confirmed"
   renderPage(report());
 
   const article = within(correlationSection()!).getByText("CVE-2024-3094 in xz-utils").closest("article")!;
-  expect(article.textContent).toContain("Not double-checked");
-  expect(article.textContent).toContain("agreement is not two independent confirmations");
+  expect(article.textContent).toContain("Shared vulnerability data source");
+  expect(article.textContent).toContain("independent confirmation is not established");
 });
 
 test("accepting a suggestion asks to group exactly its members and nothing more", () => {
@@ -136,8 +136,7 @@ test("accepting a suggestion asks to group exactly its members and nothing more"
   const input = onGroupFindings.mock.calls[0][0] as { title: string; findingIds: string[]; rationale: string };
   expect(input.findingIds).toEqual(["finding-trivy", "finding-grype"]);
   expect(input.title).toBe("CVE-2024-3094 in xz-utils");
-  // The recorded rationale must say the grouping changes presentation only.
-  expect(input.rationale).toContain("Presentation only");
+  expect(input.rationale).toBe("Grouped by the same vulnerability ID, package, and asset.");
 });
 
 test("findings that share an identifier but cannot be compared are disclosed, not omitted", () => {

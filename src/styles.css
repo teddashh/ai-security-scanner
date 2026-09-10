@@ -2964,13 +2964,6 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
   background: #f2f9f4;
 }
 
-.detail-section--advice > small {
-  display: block;
-  margin-top: 10px;
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
 .evidence-list,
 .control-list {
   display: flex;

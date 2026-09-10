@@ -194,7 +194,7 @@ const finalResultDetail = (
         : undefined;
   const result = {
     completed: { en: "completed with a saved result", zhTW: "已完成並保存結果" },
-    partial: { en: "ended with partial results", zhTW: "已結束並保存部分結果" },
+    partial: { en: "ended with coverage gaps", zhTW: "已結束，但有涵蓋缺口" },
     failed: { en: "ended with a saved failure", zhTW: "已結束並保存失敗狀態" },
     not_executed: { en: "ended without running this check", zhTW: "已結束且沒有執行這項檢查" },
   } as const;

@@ -102,7 +102,8 @@ test("every beginner-report data-quality warning has a Chinese form", () => {
   const authored = new Set(calls(source, ["data_quality_warnings.push", "warnings.push"]).map(sample));
   const warnings = [...authored].filter((value) =>
     value.startsWith("This run") || value.startsWith("The selected run") ||
-    value.startsWith("One check") || value.startsWith("Finding "));
+    value.startsWith("One check") || value.startsWith("Saved run") ||
+    value.startsWith("Finding "));
   assert.ok(warnings.length >= 6, `producer extractor found only ${warnings.length} data-quality warnings`);
   const untranslated = warnings.filter((warning) => localizedDataQualityWarning(warning, "zh-TW") === warning);
   assert.deepEqual(untranslated, [], `data-quality warnings without Chinese:\n${untranslated.join("\n")}`);
@@ -339,7 +340,7 @@ test("a translated disclosure keeps the engine's counts and translates its prose
   );
   assert.equal(
     translated,
-    "ScubaGear 未評估範圍內的所有控制措施（20 保留供人工審查、5 無法評估）；這些控制措施未列於問題中，本輪也無法確認其狀態",
+    "ScubaGear 未評估範圍內的所有控制措施（20 未回傳自動判定、5 無法評估）；這些控制措施未列於問題中，本輪也無法確認其狀態",
   );
   assert.equal(
     recognizedEngineWarningZhTW(

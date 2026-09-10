@@ -415,7 +415,7 @@ const copy = {
     progress_saved: { en: "Progress recorded at {percent}%", zhTW: "已記錄 {percent}% 的進度" },
     checks_completed: { en: "{count} checks completed", zhTW: "{count} 項檢查已完成" },
     checks_failed: { en: "{count} checks stopped before completion", zhTW: "{count} 項檢查在完成前停止" },
-    checks_partly_completed: { en: "{count} checks saved partial results", zhTW: "{count} 項檢查已保存部分結果" },
+    checks_partly_completed: { en: "{count} checks ended with unfinished work", zhTW: "{count} 項檢查結束時仍有未完成工作" },
     checks_cancelled: { en: "{count} checks were cancelled", zhTW: "{count} 項檢查已取消" },
     checks_not_started: { en: "{count} planned checks did not start", zhTW: "{count} 項預定檢查沒有開始" },
     gateway_preparation_failed: {
@@ -431,7 +431,7 @@ const copy = {
     check_attempts_started: { en: "1 check attempt began", zhTW: "1 項檢查開始嘗試" },
     checks_completed: { en: "1 check completed", zhTW: "1 項檢查已完成" },
     checks_failed: { en: "1 check stopped before completion", zhTW: "1 項檢查在完成前停止" },
-    checks_partly_completed: { en: "1 check saved partial results", zhTW: "1 項檢查已保存部分結果" },
+    checks_partly_completed: { en: "1 check ended with unfinished work", zhTW: "1 項檢查結束時仍有未完成工作" },
     checks_cancelled: { en: "1 check was cancelled", zhTW: "1 項檢查已取消" },
     checks_not_started: { en: "1 planned check did not start", zhTW: "1 項預定檢查沒有開始" },
   },
@@ -492,12 +492,11 @@ const copy = {
   caseSnapshot: { en: "Case snapshot {date}", zhTW: "案件快照 {date}" },
   supportUntil: { en: " · Earliest supported through {date}", zhTW: " · 最早支援至 {date}" },
   legacySupport: { en: " · Support date not recorded in this older case", zhTW: " · 舊版案件未記錄支援日期" },
-  noGuarantee: { en: ". This is not an ongoing guarantee of safety.", zhTW: "。這不是持續安全保證。" },
   metricsAria: { en: "Scan outcome summary", zhTW: "掃描結果摘要" },
   completed: { en: "Completed", zhTW: "已完成" },
   completedDetail: { en: "Results are ready to review", zhTW: "結果已準備好，可以查看" },
   partial: { en: "Needs attention", zhTW: "需要處理" },
-  partialDetail: { en: "Some results arrived, but a check did not finish", zhTW: "已有部分結果，但仍有檢查尚未完成" },
+  partialDetail: { en: "A check ended before completing all work", zhTW: "有檢查在完成全部工作前結束" },
   failedCancelled: { en: "Stopped", zhTW: "已停止" },
   failedCancelledDetail: { en: "A check stopped early or was cancelled", zhTW: "有檢查提早停止或已被取消" },
   notRun: { en: "Not run", zhTW: "未執行" },
@@ -508,8 +507,8 @@ const copy = {
   terminalCount: { en: "Final outcomes: {done} of {total}", zhTW: "{done}／{total} 個已有明確最終結果" },
   incompleteTitle: { en: "This run did not cover everything", zhTW: "這一輪沒有完整涵蓋" },
   incompleteBody: {
-    en: "Some checks did not finish. You can still review the results that arrived, then open a check below to see what needs attention.",
-    zhTW: "有些檢查沒有完成。你仍可先查看已收到的結果，再打開下方檢查項目，看看需要處理什麼。",
+    en: "Some checks did not finish. Open each affected check below and complete or retry it.",
+    zhTW: "有些檢查沒有完成。請打開下方受影響的檢查並完成或重試。",
   },
   workEyebrow: { en: "CHECKS", zhTW: "檢查項目" },
   workTitle: { en: "Checks", zhTW: "檢查項目" },
@@ -1426,7 +1425,6 @@ export function ProgressPage({
           {supportDeadlines.length
             ? text(copy.supportUntil, { date: showPlainDate(supportDeadlines[0]!) })
             : text(copy.legacySupport)}
-          {text(copy.noGuarantee)}
         </p>
         <div className="engine-state-ledger" aria-label={text(copy.ledgerAria)}>
           <span>{text(copy.scannerStates)}</span>

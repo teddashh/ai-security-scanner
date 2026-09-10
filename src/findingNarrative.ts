@@ -22,9 +22,9 @@ import type {
  * the same sentence rather than translate the finished one. Two consequences
  * are deliberate:
  *
- *  - English returns the backend's own prose untouched. It is the canonical
- *    wording, it is what the exports carry, and re-deriving it here would let
- *    the two drift apart silently.
+ *  - English and Chinese are composed from the same structured fields. Legacy
+ *    stored prose is normalized so an older case follows the current report
+ *    contract too.
  *  - A finding with no code — stored before the codes were carried, or produced
  *    by a build that knows a family this one does not — falls back to that same
  *    English prose. Untranslated is worse than translated and better than blank.
@@ -33,7 +33,7 @@ import type {
  * it back in another language would be this product speaking for it.
  */
 
-/** The clause completing "If the scanner result is confirmed, ...". */
+/** The direct possible impact for each finding family. */
 const CONSEQUENCE: Record<FindingFamily, string> = {
   cloud_posture: "雲端資源或資料可能遭到未預期的存取、變更或使用",
   cloud_identity: "某個身分可能擁有超出其角色所需的操作權限",
@@ -46,8 +46,20 @@ const CONSEQUENCE: Record<FindingFamily, string> = {
   kubernetes: "Kubernetes 叢集或工作負載的隔離或管理保護可能不足",
 };
 
+const CONSEQUENCE_ENGLISH: Record<FindingFamily, string> = {
+  cloud_posture: "Cloud resources or data may be exposed, changed, or used beyond the organization's intent",
+  cloud_identity: "An identity may be able to perform broader actions than its role requires",
+  microsoft365: "Microsoft 365 identities, messages, files, or administrative settings may have weaker protection",
+  network_exposure: "An internet-reachable service may expose unexpected functionality or a known weakness",
+  source_code: "Source code or credentials may permit unauthorized access or unsafe application behavior",
+  secret: "Source code or credentials may permit unauthorized access or unsafe application behavior",
+  infrastructure_as_code: "Deployed infrastructure may inherit the reported insecure configuration",
+  vulnerable_component: "A container or software component may expose the workload to a known weakness",
+  kubernetes: "The Kubernetes cluster or workload may have reduced isolation or administrative protection",
+};
+
 /**
- * The clause completing "...then plan and approve ...".
+ * The direct recommended action for each finding family.
  *
  * `secret` departs from `source_code` even though they share a consequence. A
  * leaked credential stays valid until it is revoked, so sending the reader to a
@@ -67,6 +79,18 @@ const REMEDY: Record<FindingFamily, string> = {
   vulnerable_component:
     "將受影響的元件升級到已修正的版本，或記錄目前無法升級的原因",
   kubernetes: "調整這項檢查所指出的工作負載或叢集設定",
+};
+
+const REMEDY_ENGLISH: Record<FindingFamily, string> = {
+  cloud_posture: "Apply least privilege to the affected resource's configuration or policy",
+  cloud_identity: "Replace the affected policy with a narrower policy that grants only the actions the identity's role requires",
+  microsoft365: "Correct the Microsoft 365 tenant setting named by this control",
+  network_exposure: "Document why this service must remain reachable, or remove or restrict the exposure",
+  source_code: "Change the code to remove the reported unsafe pattern",
+  secret: "Revoke and rotate the exposed credential, then remove it from the source and every retained history entry",
+  infrastructure_as_code: "Correct the infrastructure-as-code template so redeployment does not restore the insecure setting",
+  vulnerable_component: "Upgrade the affected component to a fixed version; if none is available, record the blocker and track the fix",
+  kubernetes: "Correct the workload or cluster setting named by this check",
 };
 
 const IAM_PRINCIPAL_PREVIEW_LIMIT = 6;
@@ -110,10 +134,7 @@ export const awsIamPolicySourceLabel = (
   return locale === "en" ? "Inline" : "內嵌";
 };
 
-const awsIamPolicyActionZhTW = (
-  expertType: string,
-  details: AwsIamPolicyFindingDetails,
-): string => {
+const awsIamPolicyActionZhTW = (details: AwsIamPolicyFindingDetails): string => {
   const principals = iamPrincipalSummary(details, "zh-TW");
   const attachmentsComplete = details.attachedTo.complete;
   let action: string;
@@ -136,8 +157,34 @@ const awsIamPolicyActionZhTW = (
   }
   const incomplete = details.attachedTo.complete
     ? ""
-    : "保留的附加清單不完整；變更政策前請先核對目前的 IAM 附加關係。";
-  return `請由建議的專業人員（${localizedExpertType(expertType, "zh-TW")}）檢視受影響的政策與來源證據，再規劃並核准以下處理：${action}。${incomplete}`;
+    : "請先核對目前的 IAM 附加關係。";
+  return `${action}。${incomplete}`;
+};
+
+const awsIamPolicyActionEnglish = (details: AwsIamPolicyFindingDetails): string => {
+  const principals = iamPrincipalSummary(details, "en");
+  let action: string;
+  if (details.policySource === "aws_managed") {
+    action = principals
+      ? `Replace AWS-managed policy ${details.policyName} with a narrower policy on ${principals}, or detach it where it is not needed; AWS-managed policies cannot be edited by this account`
+      : details.attachedTo.complete
+        ? `Keep AWS-managed policy ${details.policyName} detached and choose a narrower policy before attaching it; AWS-managed policies cannot be edited by this account`
+        : `Identify the roles, groups, and users attached to AWS-managed policy ${details.policyName}, then replace it with a narrower policy or detach it where it is not needed; AWS-managed policies cannot be edited by this account`;
+  } else if (details.policySource === "customer_managed") {
+    action = principals
+      ? `Narrow customer-managed policy ${details.policyName} and verify that ${principals} retain only the permissions they need`
+      : details.attachedTo.complete
+        ? `Narrow customer-managed policy ${details.policyName} before it is attached or reused`
+        : `Identify the current attachments to customer-managed policy ${details.policyName}, then narrow it and verify that each principal retains only the permissions it needs`;
+  } else {
+    action = principals
+      ? `Narrow inline policy ${details.policyName} directly on ${principals}`
+      : `Identify where inline policy ${details.policyName} is owned and narrow it there before reuse`;
+  }
+  const incomplete = details.attachedTo.complete
+    ? ""
+    : " Confirm the current IAM attachments first.";
+  return `${action}.${incomplete}`;
 };
 
 /** The clause completing "This product rated it {severity} from ...". */
@@ -145,7 +192,7 @@ const BASIS: Record<SeverityBasisCode, string> = {
   open_port: "開放連接埠的觀察結果，而非缺陷",
   reachable_http_service: "可連線 HTTP 服務的觀察結果，而非缺陷",
   secret_pattern_match: "掃描到的原始碼中符合機密資料的樣式",
-  unverified_credential_detector: "憑證偵測器的比對結果，本產品並未加以驗證",
+  unverified_credential_detector: "憑證偵測器的比對結果",
   iac_policy_check:
     "一項未通過的基礎架構即程式碼政策檢查；因為 Checkov 離線執行時不提供各別檢查的嚴重程度，所以一律採用相同等級",
   cis_kubernetes_benchmark: "一項未通過的 CIS Kubernetes Benchmark 檢查",
@@ -159,7 +206,7 @@ const BASIS: Record<SeverityBasisCode, string> = {
 const CONFIDENCE_BASIS: Record<ConfidenceBasisCode, string> = {
   deterministic_policy_evaluation: "確定性的政策或設定評估結果",
   advisory_version_match: "已安裝版本符合已發布公告的受影響範圍",
-  unverified_pattern_or_detector_match: "尚未驗證的樣式或偵測器比對結果",
+  unverified_pattern_or_detector_match: "樣式或偵測器比對結果",
   observed_response: "本產品直接觀察到的回應",
   template_matcher: "範本比對器在受評估目標上觸發",
   missing_detection_quality_score: "引擎結果中未提供偵測品質分數",
@@ -299,8 +346,14 @@ export const findingSummarySentence = (
     priorityReasons?: readonly string[];
   },
 ): string => {
-  if (locale === "en") return options.englishFallback;
-  const { englishFallback, severityLabel, severityBasisCode } = options;
+  const englishFallback = options.englishFallback
+    .replace(" The attached raw record is evidence, not an instruction.", "")
+    .replace("Severity remains Unknown and requires human review.", "Severity is Unknown.")
+    .replace("a credential detector match that this product does not verify", "a credential detector match")
+    .replace("an unverified credential detector match", "a credential detector match")
+    .replace("an unverified pattern or detector match", "a pattern or detector match");
+  if (locale === "en") return englishFallback;
+  const { severityLabel, severityBasisCode } = options;
   const unratedSeverity = options.severity !== undefined && findingSeverityIsUnrated({
     severity: options.severity,
     severityBasisCode,
@@ -308,10 +361,9 @@ export const findingSummarySentence = (
   });
   const engineName = engineNameFrom(englishFallback);
   if (!engineName) return englishFallback;
-  const evidence = "附帶的原始記錄是證據，不是指示。";
   let summary: string;
   if (unratedSeverity) {
-    summary = `${engineName} 回報了這項狀況，但未評定嚴重程度，因此維持為未知，需由人工確認。`;
+    summary = `${engineName} 回報了這項狀況，但未評定嚴重程度。嚴重程度為未知。`;
   } else if (!severityBasisCode) {
     summary = `${engineName} 在受評估的資產上回報了一項${severityLabel}等級的狀況。`;
   } else {
@@ -320,23 +372,15 @@ export const findingSummarySentence = (
     summary = `${engineName} 在受評估的資產上回報了這項狀況，但未評定嚴重程度。本產品依據${basis}，將它評為${severityLabel}。`;
   }
   const confidenceLabel = options.confidenceLabel;
-  if (!confidenceLabel) return summary + evidence;
+  if (!confidenceLabel) return summary;
   if (options.confidenceBasisCode) {
     const basis = CONFIDENCE_BASIS[options.confidenceBasisCode];
     if (!basis) return englishFallback;
-    return (
-      summary +
-      `${engineName} 本身不提供信心評定。本產品依據${basis}，將信心評為${confidenceLabel}。` +
-      evidence
-    );
+    return summary + `${engineName} 本身不提供信心評定。本產品依據${basis}，將信心評為${confidenceLabel}。`;
   }
   const source = sourceConfidence(options.priorityReasons ?? []);
-  if (!source) return summary + evidence;
-  return (
-    summary +
-    `${engineName} 對這項問題的信心評定為 ${source}；本產品將它對應為${confidenceLabel}信心。` +
-    evidence
-  );
+  if (!source) return summary;
+  return summary + `${engineName} 對這項問題的信心評定為 ${source}；本產品將它對應為${confidenceLabel}信心。`;
 };
 
 /**
@@ -350,12 +394,36 @@ export const findingSummarySentence = (
  */
 const CONTEXT: Record<ContextFactor, string> = {
   internet_exposed_asset:
-    "受影響的資產被標記為可從網際網路存取，且其保留的來源歸屬皆非問卷填答，這可能擴大可被觸及的攻擊面；該屬性的欄位層級來源並未保留，因此仍需人工確認。",
+    "受影響的資產可從網際網路存取，因此可被觸及的攻擊面較大。",
   sensitive_data_asset:
-    "受影響的資產被標記為含有敏感資料，且其保留的來源歸屬皆非問卷填答，同時案件問卷另有記錄敏感資料情境。這可能提高確認暴露後的影響程度，但資料類別的欄位層級來源並未保留，且兩項記錄本身都不構成資料外洩的證明。",
+    "受影響的資產含有敏感資料，因此問題造成的影響可能更高。",
 };
 
-/** "If the scanner result is confirmed, {consequence}." */
+const CONTEXT_ENGLISH: Record<ContextFactor, string> = {
+  internet_exposed_asset:
+    " The affected asset is internet-accessible, increasing the reachable attack surface.",
+  sensitive_data_asset:
+    " The affected asset contains sensitive data, increasing the potential impact.",
+};
+
+const directLegacyImpact = (english: string): string => {
+  let normalized = english.trim()
+    .replace(/^If the scanner result is confirmed, /u, "")
+    .replace(/ The (?:critical|high|medium|low|informational|unknown) source severity is not a product-wide compliance score\.$/u, "")
+    .replace(/ The scanner did not assign a severity; it remains Unknown for human review\.$/u, "")
+    .replace(
+      " The affected asset is marked internet-exposed and has only retained non-questionnaire source attribution, which may increase the reachable attack surface; field-level provenance for that attribute is not retained, so it still requires human confirmation.",
+      " The affected asset is internet-accessible, increasing the reachable attack surface.",
+    )
+    .replace(
+      " The affected asset is marked as containing sensitive data and has only retained non-questionnaire source attribution, while the case questionnaire separately records sensitive-data context. This may increase the impact of a confirmed exposure, but field-level data-class provenance is not retained and neither entry is itself proof of data exposure.",
+      " The affected asset contains sensitive data, increasing the potential impact.",
+    );
+  if (normalized) normalized = normalized[0]!.toLocaleUpperCase("en") + normalized.slice(1);
+  return normalized;
+};
+
+/** The direct possible impact and case context. */
 export const findingImpactSentence = (
   locale: "en" | "zh-TW",
   options: {
@@ -368,32 +436,15 @@ export const findingImpactSentence = (
     contextFactors?: readonly ContextFactor[];
   },
 ): string => {
-  if (locale === "en") return options.englishFallback;
-  const unratedSeverity = options.severity !== undefined && findingSeverityIsUnrated({
-    severity: options.severity,
-    severityBasisCode: options.severityBasisCode,
-    priorityReasons: options.priorityReasons,
-  });
-  const consequence = options.family ? CONSEQUENCE[options.family] : undefined;
-  if (!consequence) return options.englishFallback;
-  // Appended after the sentence is composed, exactly as the Rust twin does it,
-  // so the two files hold the same literal. Interpolating the clauses into the
-  // template instead would leave one side's sentence ending in a hole that the
-  // other's does not have, which is a difference the parity test can see and a
-  // reader cannot -- and a test that fires on invisible differences gets
-  // relaxed until it stops finding the visible ones.
-  const ratingContext = unratedSeverity
-    ? "掃描工具未評定嚴重程度，因此維持為未知，需由人工確認。"
-    : options.severityBasisCode
-      ? `掃描工具未評定嚴重程度；顯示的${options.severityLabel}等級由本產品提供。`
-      : `掃描工具評定的嚴重程度為${options.severityLabel}。`;
-  const composed = `若掃描結果經人工確認，${consequence}。${ratingContext}`;
-  return (
-    composed +
-    (options.contextFactors ?? [])
-      .map((factor) => CONTEXT[factor] ?? "")
-      .join("")
-  );
+  const consequence = options.family
+    ? (locale === "en" ? CONSEQUENCE_ENGLISH[options.family] : CONSEQUENCE[options.family])
+    : undefined;
+  if (!consequence) return directLegacyImpact(options.englishFallback);
+  const context = locale === "en" ? CONTEXT_ENGLISH : CONTEXT;
+  const ending = locale === "en" ? "." : "。";
+  return `${consequence}${ending}${(options.contextFactors ?? [])
+    .map((factor) => context[factor] ?? "")
+    .join("")}`;
 };
 
 /**
@@ -405,19 +456,22 @@ export const findingImpactSentence = (
  * A Rust test pins this string to the one the adapters actually write.
  */
 export const ENGLISH_ROLLBACK =
-  "Before any manual change, preserve the current approved configuration and document a tested restoration path; this product does not execute remediation.";
+  "Capture the current configuration and test its restoration path before making the change.";
 
-/** "Before any manual change, preserve ... does not execute remediation." */
+/** "Before any manual change, preserve ... and document a tested restoration path." */
 export const findingRollbackSentence = (
   locale: "en" | "zh-TW",
   english: string,
 ): string => {
-  if (locale === "en" || english.trim() !== ENGLISH_ROLLBACK) return english;
-  return "進行任何人工變更前，請先保留目前已核准的設定，並記錄一條經過測試的還原路徑；本產品不會代為執行修復。";
+  const normalized = english.trim() === "Before any manual change, preserve the current approved configuration and document a tested restoration path."
+    ? ENGLISH_ROLLBACK
+    : english;
+  if (locale === "en" || normalized.trim() !== ENGLISH_ROLLBACK) return normalized;
+  return "變更前先保存目前設定，並測試還原路徑。";
 };
 
 /**
- * "After an approved manual change, rerun {engine} ... source rule {rule} is no
+ * "Rerun {engine} with the same scope after the change and confirm source rule {rule} is no
  * longer reported."
  *
  * Read back off the sentence for the same reason `engineNameFrom` is: the
@@ -429,19 +483,24 @@ export const findingVerificationSentence = (
   locale: "en" | "zh-TW",
   english: string,
 ): string => {
-  if (locale === "en") return english;
-  const RERUN = "After an approved manual change, rerun ";
-  const SCOPE = " with the same authorized scope and confirm that source rule ";
+  const LEGACY_RERUN = "After an approved manual change, rerun ";
+  const LEGACY_SCOPE = " with the same authorized scope and confirm that source rule ";
+  const RERUN = "Rerun ";
+  const SCOPE = " with the same scope after the change and confirm that source rule ";
   const TAIL = " is no longer reported.";
   const trimmed = english.trim();
-  if (!trimmed.startsWith(RERUN) || !trimmed.endsWith(TAIL)) return english;
-  const middle = trimmed.slice(RERUN.length, trimmed.length - TAIL.length);
-  const at = middle.indexOf(SCOPE);
+  const legacy = trimmed.startsWith(LEGACY_RERUN);
+  const prefix = legacy ? LEGACY_RERUN : RERUN;
+  const scope = legacy ? LEGACY_SCOPE : SCOPE;
+  if (!trimmed.startsWith(prefix) || !trimmed.endsWith(TAIL)) return english;
+  const middle = trimmed.slice(prefix.length, trimmed.length - TAIL.length);
+  const at = middle.indexOf(scope);
   if (at < 0) return english;
   const engine = middle.slice(0, at);
-  const rule = middle.slice(at + SCOPE.length);
+  const rule = middle.slice(at + scope.length);
   if (!engine || !rule) return english;
-  return `在核准的人工變更完成後，請以相同的授權範圍重新執行 ${engine}，並確認來源規則 ${rule} 不再被回報。`;
+  if (locale === "en") return `Rerun ${engine} with the same scope after the change and confirm that source rule ${rule} is no longer reported.`;
+  return `變更後以相同範圍重新執行 ${engine}，並確認來源規則 ${rule} 不再被回報。`;
 };
 
 /**
@@ -458,7 +517,7 @@ const BASIS_ENGLISH: Record<SeverityBasisCode, string> = {
     "a reachable HTTP service observation rather than a defect",
   secret_pattern_match: "a secret pattern match in scanned source",
   unverified_credential_detector:
-    "a credential detector match that this product does not verify",
+    "a credential detector match",
   iac_policy_check:
     "a failed infrastructure-as-code policy check, rated flat because Checkov publishes no per-check severity offline",
   cis_kubernetes_benchmark: "a failed CIS Kubernetes Benchmark check",
@@ -476,7 +535,7 @@ const CONFIDENCE_BASIS_ENGLISH: Record<ConfidenceBasisCode, string> = {
   advisory_version_match:
     "an installed-version match against a published advisory range",
   unverified_pattern_or_detector_match:
-    "an unverified pattern or detector match",
+    "a pattern or detector match",
   observed_response: "a response this product observed directly",
   template_matcher: "a template matcher firing on the assessed target",
   missing_detection_quality_score:
@@ -485,14 +544,21 @@ const CONFIDENCE_BASIS_ENGLISH: Record<ConfidenceBasisCode, string> = {
 
 /** The one priority reason every adapter finding carries. */
 export const ENGLISH_EVIDENCE_REASON =
-  "Direct scanner evidence is attached and still requires human review.";
+  "Direct scanner evidence is attached.";
+export const isEvidenceOnlyPriorityReason = (reason: string): boolean =>
+  reason.trim() === ENGLISH_EVIDENCE_REASON
+  || reason.trim() === "Direct scanner evidence is attached and still requires human review.";
 export const ENGLISH_EXPOSURE_OBSERVATION_REASON =
   "Classified as a reachable-service inventory observation, not a vulnerability.";
 
 /** The two reasons `apply_case_context` pushes when the case raises a finding. */
 const ENGLISH_INTERNET_REASON =
-  "An affected asset is marked internet-exposed, and all retained source attribution for that asset is non-questionnaire.";
+  "The affected asset is internet-accessible.";
 const ENGLISH_SENSITIVE_REASON =
+  "The affected asset contains sensitive data, increasing the potential impact.";
+const LEGACY_ENGLISH_INTERNET_REASON =
+  "An affected asset is marked internet-exposed, and all retained source attribution for that asset is non-questionnaire.";
+const LEGACY_ENGLISH_SENSITIVE_REASON =
   "An affected asset is marked sensitive, all retained source attribution for that asset is non-questionnaire, and the case questionnaire separately records sensitive-data context.";
 
 /**
@@ -508,16 +574,34 @@ export const findingPriorityReason = (
   locale: "en" | "zh-TW",
   english: string,
 ): string => {
-  if (locale === "en") return english;
-  const trimmed = english.trim();
+  const UNRATED_PREFIX = "Severity remains Unknown because ";
+  const UNRATED_TAIL = " did not assign one; human review is required.";
+  const CURRENT_UNRATED_PREFIX = "Severity is Unknown because ";
+  const CURRENT_UNRATED_TAIL = " did not provide a rating.";
+  const original = english.trim();
+  const legacyEngine = original.startsWith(UNRATED_PREFIX) && original.endsWith(UNRATED_TAIL)
+    ? original.slice(UNRATED_PREFIX.length, original.length - UNRATED_TAIL.length)
+    : undefined;
+  const normalized = legacyEngine
+    ? `${CURRENT_UNRATED_PREFIX}${legacyEngine}${CURRENT_UNRATED_TAIL}`
+    : original === LEGACY_ENGLISH_INTERNET_REASON
+      ? ENGLISH_INTERNET_REASON
+      : original === LEGACY_ENGLISH_SENSITIVE_REASON
+        ? ENGLISH_SENSITIVE_REASON
+        : english
+          .replace("a credential detector match that this product does not verify", "a credential detector match")
+          .replace("an unverified credential detector match", "a credential detector match")
+          .replace("an unverified pattern or detector match", "a pattern or detector match");
+  const trimmed = normalized.trim();
+  if (locale === "en") return normalized;
   if (trimmed === ENGLISH_EVIDENCE_REASON)
-    return "已附上掃描工具的直接證據，仍需人工檢視。";
+    return "已附上掃描工具的直接證據。";
   if (trimmed === ENGLISH_EXPOSURE_OBSERVATION_REASON)
     return "這是可連線服務的盤點觀察，不是漏洞。";
-  if (trimmed === ENGLISH_INTERNET_REASON)
-    return "受影響的資產被標記為可從網際網路存取，且其保留的來源歸屬皆非問卷填答。";
-  if (trimmed === ENGLISH_SENSITIVE_REASON)
-    return "受影響的資產被標記為含有敏感資料，其保留的來源歸屬皆非問卷填答，且案件問卷另有記錄敏感資料情境。";
+  if (trimmed === ENGLISH_INTERNET_REASON || trimmed === LEGACY_ENGLISH_INTERNET_REASON)
+    return "受影響的資產可從網際網路存取。";
+  if (trimmed === ENGLISH_SENSITIVE_REASON || trimmed === LEGACY_ENGLISH_SENSITIVE_REASON)
+    return "受影響的資產含有敏感資料，因此問題造成的影響可能更高。";
   // The engine's own raw severity word, kept verbatim. Restating "high" as 高
   // would stop it matching what the reader sees in the engine's own output.
   const SOURCE = "Source severity: ";
@@ -525,17 +609,15 @@ export const findingPriorityReason = (
     const value = trimmed.slice(SOURCE.length);
     if (value) return `來源工具評定的嚴重程度：${value}`;
   }
-  const UNRATED_PREFIX = "Severity remains Unknown because ";
-  const UNRATED_TAIL = " did not assign one; human review is required.";
   if (
-    trimmed.startsWith(UNRATED_PREFIX)
-    && trimmed.endsWith(UNRATED_TAIL)
+    legacyEngine
+    || (trimmed.startsWith(CURRENT_UNRATED_PREFIX) && trimmed.endsWith(CURRENT_UNRATED_TAIL))
   ) {
-    const engine = trimmed.slice(
-      UNRATED_PREFIX.length,
-      trimmed.length - UNRATED_TAIL.length,
+    const engine = legacyEngine ?? trimmed.slice(
+      CURRENT_UNRATED_PREFIX.length,
+      trimmed.length - CURRENT_UNRATED_TAIL.length,
     );
-    if (engine) return `嚴重程度維持為未知，因為 ${engine} 未提供評級；需由人工確認。`;
+    if (engine) return `嚴重程度為未知，因為 ${engine} 未提供評級。`;
   }
   const SOURCE_CONFIDENCE = "Source confidence: ";
   if (trimmed.startsWith(SOURCE_CONFIDENCE)) {
@@ -585,7 +667,7 @@ export const findingPriorityReason = (
  * English, for the same reason every other pair in this file is: the provider
  * and the identifier are the engine's own strings, have to read identically in
  * both languages, and the identifier is the thing the reader copies onto their
- * asset. English returns the backend's stored prose untouched.
+ * asset. Legacy English wording is normalized before it is displayed.
  */
 export const findingUnattributedGap = (
   locale: "en" | "zh-TW",
@@ -627,12 +709,13 @@ export const localizedCoverageDimension = (
   if (locale === "en") return dimension;
   const lower = dimension.toLocaleLowerCase("en");
 
-  const manualReviewSeparator = ": manual review for ";
-  const manualReviewAt = dimension.indexOf(manualReviewSeparator);
-  if (manualReviewAt > 0) {
-    const check = dimension.slice(0, manualReviewAt);
-    const control = dimension.slice(manualReviewAt + manualReviewSeparator.length);
-    if (control) return `${check}：需人工檢視的控制項 ${control}`;
+  const noVerdictSeparators = [": no verdict for ", ": manual review for "];
+  const noVerdictSeparator = noVerdictSeparators.find((separator) => dimension.includes(separator));
+  const noVerdictAt = noVerdictSeparator ? dimension.indexOf(noVerdictSeparator) : -1;
+  if (noVerdictSeparator && noVerdictAt > 0) {
+    const check = dimension.slice(0, noVerdictAt);
+    const control = dimension.slice(noVerdictAt + noVerdictSeparator.length);
+    if (control) return `${check}：未回傳判定的控制項 ${control}`;
   }
 
   // Fixed names, in the order the more specific one has to be tried first:
@@ -820,8 +903,8 @@ const withCheck = (check: string, label: string): string => {
  */
 const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
   [
-    "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.",
-    "Maester 已評估這項控制措施，但未回傳通過或失敗的判定。這項控制措施需要人工檢視，且不是漏洞問題。",
+    "Maester evaluated this control but did not return a pass or fail verdict.",
+    "Maester 已評估這項控制措施，但未回傳通過或失敗的判定。",
   ],
   [
     "No completed upstream security-template execution record was retained for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template.",
@@ -840,8 +923,8 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
     "Greenbone 回報這台主機發生一項或多項掃描器錯誤，因此部分檢查沒有完成。已完成的檢查與問題仍然有效。",
   ],
   [
-    "Keep the saved results and run this check again to cover the checks that did not finish.",
-    "保留已儲存的結果，再執行一次這項檢查以涵蓋沒有完成的項目。",
+    "Retry this check to complete the missing work.",
+    "重新執行這項檢查以完成缺少的工作。",
   ],
   [
     "The request-level outcome contradicts the run's durable task state and was ignored.",
@@ -928,8 +1011,8 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
     "這項檢查沒有啟動，因此不代表通過。",
   ],
   [
-    "This check is still changing and has not recorded a complete result.",
-    "這項檢查仍在變動中，尚未記錄完整的結果。",
+    "This check has no terminal outcome.",
+    "這項檢查沒有終止結果。",
   ],
   [
     "The packaged check list could not be loaded. Available checks may still run, but checks from that list are not tested.",
@@ -1080,52 +1163,60 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
     "請改選其他可用的檢查，或新增相容的目標來源。",
   ],
   [
-    "Keep this limitation visible; do not interpret missing historical detail as completed coverage.",
-    "請保留這項限制的說明；不要把缺少的歷史細節解讀為已完成的涵蓋。",
+    "Open the saved scope details.",
+    "查看已保存的範圍細節。",
   ],
   [
-    "Keep this limitation visible; do not interpret a completed process as completed SSH vulnerability coverage.",
-    "請保留這項限制；不要把程序完成解讀為已完成 SSH 弱點涵蓋。",
+    "Run this SSH profile again to create a complete coverage record.",
+    "重新執行此 SSH 設定檔以建立完整涵蓋記錄。",
   ],
   [
-    "Keep this limitation visible; do not interpret a completed process as completed RDP transport security coverage.",
-    "請保留這項限制；不要把程序完成解讀為已完成 RDP 傳輸安全性涵蓋。",
+    "Run this RDP profile again to create a complete coverage record.",
+    "重新執行此 RDP 設定檔以建立完整涵蓋記錄。",
   ],
   [
-    "Keep this limitation visible; do not interpret a completed process as completed VNC transport security coverage.",
-    "請保留這項限制；不要把程序完成解讀為已完成 VNC 傳輸安全性涵蓋。",
+    "Run this VNC profile again to create a complete coverage record.",
+    "重新執行此 VNC 設定檔以建立完整涵蓋記錄。",
   ],
   [
-    "Keep this limitation visible; do not interpret a completed process as completed SMTP security coverage.",
-    "請保留這項限制；不要把程序完成解讀為已完成 SMTP 安全性涵蓋。",
+    "Run this SMTP profile again to create a complete coverage record.",
+    "重新執行此 SMTP 設定檔以建立完整涵蓋記錄。",
   ],
   [
-    "Keep this limitation visible; do not interpret a completed process as completed Telnet security coverage.",
-    "請保留這項限制；不要把程序完成解讀為已完成 Telnet 安全性涵蓋。",
+    "Run this Telnet profile again to create a complete coverage record.",
+    "重新執行此 Telnet 設定檔以建立完整涵蓋記錄。",
   ],
   [
-    "Keep this limitation visible; use an approved endpoint inventory or local snapshot when those host-level checks are needed.",
-    "請保留這項限制；需要主機層級檢查時，請使用已核准的端點盤點資料或本機快照。",
+    "Run the HTTPS management-service profile again to create a complete coverage record.",
+    "重新執行 HTTPS 管理服務設定檔以建立完整涵蓋記錄。",
   ],
   [
-    "Keep this limitation visible; choose a separately approved host or RDP-authentication assessment when those checks are needed.",
-    "請保留這項限制；需要這些檢查時，請另外選擇經核准的主機或 RDP 驗證評估。",
+    "Choose a supported device product and firmware vulnerability check.",
+    "選擇支援的設備產品與韌體弱點檢查。",
   ],
   [
-    "Keep this limitation visible; use an approved endpoint inventory or a separate authorized VNC assessment when those checks are needed.",
-    "請保留這項限制；需要這些檢查時，請使用已核准的端點盤點資料，或另行進行已授權的 VNC 評估。",
+    "Use an approved endpoint inventory or local snapshot for host-level checks.",
+    "使用已核准的端點盤點資料或本機快照進行主機層級檢查。",
   ],
   [
-    "Keep this limitation visible; use a separately approved mail-server assessment or endpoint inventory when those checks are needed.",
-    "請保留這項限制；需要這些檢查時，請另行進行已核准的郵件伺服器評估，或使用已核准的端點盤點資料。",
+    "Run a separately approved host or RDP-authentication assessment for those checks.",
+    "另行執行經核准的主機或 RDP 驗證評估。",
   ],
   [
-    "Keep this limitation visible; use a separately approved TLS assessment when complete SMTP TLS coverage is needed.",
-    "請保留這項限制；若需要完整的 SMTP TLS 涵蓋，請另行進行已核准的 TLS 評估。",
+    "Use an approved endpoint inventory or run a separate authorized VNC assessment.",
+    "使用已核准的端點盤點資料，或另行執行已授權的 VNC 評估。",
   ],
   [
-    "Keep this limitation visible; use a separately approved authentication assessment or endpoint inventory when those checks are needed.",
-    "請保留這項限制；需要這些檢查時，請另行進行已核准的驗證評估，或使用已核准的端點盤點資料。",
+    "Run a separately approved mail-server assessment or use endpoint inventory.",
+    "另行執行經核准的郵件伺服器評估，或使用端點盤點資料。",
+  ],
+  [
+    "Run a separately approved TLS assessment for complete SMTP TLS coverage.",
+    "另行執行經核准的 TLS 評估以取得完整 SMTP TLS 涵蓋。",
+  ],
+  [
+    "Run a separately approved authentication assessment or use endpoint inventory.",
+    "另行執行經核准的驗證評估，或使用端點盤點資料。",
   ],
   [
     "Choose a supported exact asset profile and run it when vulnerability coverage is needed.",
@@ -1136,100 +1227,84 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
     "需要檢測此資產弱點時，請加入支援的精確服務設定。",
   ],
   [
-    "Keep the saved results, then retry this scan if you need an internally consistent coverage record.",
-    "請保留已儲存的結果；如果你需要前後一致的涵蓋記錄，再重新執行這次掃描。",
+    "Retry this scan to create a consistent coverage record.",
+    "重新執行掃描以建立一致的涵蓋記錄。",
   ],
   [
-    "Use the retained severity, confidence, and evidence for review; rerun to create a fully frozen report.",
-    "請以保留下來的嚴重程度、把握度與證據進行檢視；若要產生完全凍結的報告，請重新掃描。",
+    "Rerun the scan to create a fully frozen result.",
+    "重新執行掃描以建立完全凍結的結果。",
   ],
   [
-    "Keep the saved evidence and other results. Retry this check to create a new consistent coverage record.",
-    "請保留已儲存的證據與其他結果。重新執行這項檢查，以建立新的一致涵蓋記錄。",
+    "Retry this check to create a consistent coverage record.",
+    "重新執行這項檢查以建立一致的涵蓋記錄。",
   ],
   [
-    "Keep the saved results and retry only the unfinished work.",
-    "請保留已儲存的結果，只重新執行尚未完成的部分。",
+    "Retry only the unfinished work.",
+    "只重新執行尚未完成的工作。",
   ],
   [
-    "Keep other saved results and retry only the failed work.",
-    "請保留其他已儲存的結果，只重新執行失敗的部分。",
+    "Retry only the failed work.",
+    "只重新執行失敗的工作。",
   ],
   [
-    "Keep other saved results and retry only the timed-out work.",
-    "請保留其他已儲存的結果，只重新執行逾時的部分。",
+    "Retry only the timed-out work.",
+    "只重新執行逾時的工作。",
   ],
   [
     "Start only the cancelled work again when you want to finish it.",
     "想要完成時，只需重新啟動被取消的那部分工作。",
   ],
   [
-    "Let the current check continue or cancel it; saved partial results remain available.",
-    "可以讓目前的檢查繼續，或是取消它；已儲存的部分結果仍然可以使用。",
+    "Open Progress and finish or cancel this check.",
+    "前往進度頁完成或取消這項檢查。",
   ],
   [
     "Retry only the work that has not yet produced a tested outcome.",
     "只需重新執行尚未產生檢測結果的那部分工作。",
   ],
   [
-    "Keep the saved results. The app should retry result processing automatically; keep this limitation visible until it succeeds.",
-    "請保留已儲存的結果。本程式應該會自動重試結果處理；在成功之前，請保留這項限制的說明。",
+    "No action is required; result processing retries automatically.",
+    "無需操作；結果處理會自動重試。",
   ],
   [
-    "Keep the completed results. The app should reconcile the timed-out check before treating the run as final.",
-    "請保留已完成的結果。本程式應該先核對這項逾時的檢查，才能把本輪視為最終結果。",
+    "Retry this check to create a consistent terminal record.",
+    "重新執行這項檢查以建立一致的終止記錄。",
   ],
   [
-    "Keep the completed results. The app should reconcile the stopped check before treating the run as final.",
-    "請保留已完成的結果。本程式應該先核對這項中止的檢查，才能把本輪視為最終結果。",
+    "Retry only the unfinished work.",
+    "只重新執行尚未完成的工作。",
   ],
   [
-    "Keep the completed results. The app should reconcile the cancelled check before treating the run as final.",
-    "請保留已完成的結果。本程式應該先核對這項被取消的檢查，才能把本輪視為最終結果。",
+    "Retry this check to complete the unfinished dimensions.",
+    "重新執行這項檢查以完成尚未完成的項目。",
   ],
   [
-    "Keep the completed results while the app reconciles the check's final state.",
-    "在本程式核對這項檢查的最終狀態期間，請保留已完成的結果。",
+    "Retry once; if it times out again, verify reachability from Scan setup.",
+    "重試一次；若再次逾時，請到掃描設定確認連線。",
   ],
   [
-    "Keep saved results and retry only the unfinished work.",
-    "請保留已儲存的結果，只重新執行尚未完成的部分。",
+    "Retry this check.",
+    "重新執行這項檢查。",
   ],
   [
-    "Keep saved results and start only the unfinished work again when you are ready.",
-    "請保留已儲存的結果；準備好之後，只需重新啟動尚未完成的部分。",
-  ],
-  [
-    "Review the saved results, then retry this check to cover the unfinished dimensions.",
-    "請先檢視已儲存的結果，再重新執行這項檢查，以涵蓋尚未完成的項目。",
-  ],
-  [
-    "Retry once; if it times out again, review reachability or ask a network specialist.",
-    "請重試一次；如果再次逾時，請檢查連線是否可達，或詢問網路專業人員。",
-  ],
-  [
-    "Keep the saved results from other checks and retry this check.",
-    "請保留其他檢查已儲存的結果，並重新執行這項檢查。",
-  ],
-  [
-    "Start this check again when you want to finish the missing coverage.",
-    "想要補齊缺少的涵蓋範圍時，請重新執行這項檢查。",
+    "Retry this check to complete the missing coverage.",
+    "重新執行這項檢查以完成缺少的涵蓋範圍。",
   ],
   [
     "Review the target and try this check again.",
     "請檢視目標設定，然後重新執行這項檢查。",
   ],
   [
-    "Let it continue or cancel it; the partial report remains available.",
-    "可以讓它繼續，或是取消它；這份部分完成的報告仍然可以使用。",
+    "Open Progress and finish or cancel this check.",
+    "前往進度頁完成或取消這項檢查。",
   ],
   [
-    "Keep the available results. The app can include these checks in a later run after their packaged scanner information is restored.",
-    "請保留目前可用的結果。等這些檢查的內建掃描工具資訊恢復之後，本程式可以在之後的掃描中納入它們。",
+    "Restore the packaged scanner information, then run the missing checks.",
+    "恢復內建掃描工具資訊，然後執行缺少的檢查。",
   ],
   [
-    "Review the upstream detail and record a human decision for this control.",
-    "請檢視上游詳細資料，並為這項控制措施記錄人工判定。",
+    "Open the upstream detail and set this control's status.",
+    "開啟上游詳細資料，並設定這項控制措施的狀態。",
   ],
   [
     "No action is needed unless this area should be included in a future scan.",
@@ -1240,8 +1315,8 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
 /**
  * One sentence of a coverage row, in the reader's language.
  *
- * English returns the stored prose. It is what the backend wrote, and it is
- * more specific than anything derivable from the gap's kind: the same
+ * English uses the stored detail after normalizing superseded product wording.
+ * It is more specific than anything derivable from the gap's kind: the same
  * `not_tested` kind is written for a check that saved partial work, one that
  * never started, and one still running.
  */
@@ -1249,9 +1324,16 @@ export const coverageGapProse = (
   locale: "en" | "zh-TW",
   english: string,
 ): string => {
-  if (locale === "en") return english;
-  const trimmed = english.trim();
-  const reviewBase = "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.";
+  const legacyReviewBase = "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.";
+  const reviewBase = "Maester evaluated this control but did not return a pass or fail verdict.";
+  const normalized = english
+    .replace(legacyReviewBase, reviewBase)
+    .replace(
+      "Review the upstream detail and record a human decision for this control.",
+      "Open the upstream detail and set this control's status.",
+    );
+  if (locale === "en") return normalized;
+  const trimmed = normalized.trim();
   const reviewDetailPrefix = `${reviewBase} Upstream detail: `;
   if (trimmed.startsWith(reviewDetailPrefix) && trimmed.length > reviewDetailPrefix.length) {
     const base = lookupProse(reviewBase);
@@ -1263,9 +1345,9 @@ export const coverageGapProse = (
   if (withCode) {
     const base = lookupProse(withCode[1] ?? "");
     if (base) return `${base}診斷代碼：${withCode[2]}。`;
-    return english;
+    return normalized;
   }
-  return lookupProse(trimmed) ?? english;
+  return lookupProse(trimmed) ?? normalized;
 };
 
 const lookupProse = (english: string): string | undefined =>
@@ -1650,8 +1732,8 @@ const DATA_QUALITY_WARNING_PROSE: ReadonlyArray<readonly [string, string]> = [
     "所選掃描輪次儲存的專案識別碼與此專案不符。報告仍只限於專案內所選的記錄。",
   ],
   [
-    "This run has a saved completion time while at least one check is still active. The report follows the check state and remains live instead of presenting a final result.",
-    "本輪已儲存完成時間，但至少一項檢查仍在進行。報告依循檢查狀態，維持進行中，而不會呈現為最終結果。",
+    "Saved run state is inconsistent: it has a completion time while at least one check has no terminal outcome.",
+    "已保存的掃描狀態不一致：已有完成時間，但至少一項檢查沒有終止結果。",
   ],
   [
     "One check's saved coverage history could not be reconciled. Retained findings and evidence remain available, but that check is not counted complete.",
@@ -1687,24 +1769,30 @@ export const localizedDataQualityWarning = (
 ): string =>
   locale === "en" ? warning : (translateDataQualityWarning(warning) ?? warning);
 
-/** "Have the recommended specialist ({expert}) review ... then plan and approve {remedy}." */
+/** The direct recommended action for the finding family. */
 export const findingActionSentence = (
   locale: "en" | "zh-TW",
   options: {
     englishFallback: string;
-    expertType: string;
     family?: FindingFamily;
     awsIamPolicy?: AwsIamPolicyFindingDetails;
   },
 ): string => {
-  if (locale === "en") return options.englishFallback;
   if (options.awsIamPolicy) {
-    return awsIamPolicyActionZhTW(options.expertType, options.awsIamPolicy);
+    return locale === "zh-TW"
+      ? awsIamPolicyActionZhTW(options.awsIamPolicy)
+      : awsIamPolicyActionEnglish(options.awsIamPolicy);
   }
   const remedy = options.family ? REMEDY[options.family] : undefined;
-  if (!remedy) return options.englishFallback;
-  const expert = localizedExpertType(options.expertType, locale);
-  return `請由建議的專業人員（${expert}）檢視受影響的資產與來源規則的官方說明，再規劃並核准${remedy}。`;
+  if (!remedy || !options.family) {
+    const marker = ", then plan and approve ";
+    const at = options.englishFallback.lastIndexOf(marker);
+    if (at < 0) return options.englishFallback;
+    const direct = options.englishFallback.slice(at + marker.length).trim();
+    return direct ? direct[0]!.toLocaleUpperCase("en") + direct.slice(1) : options.englishFallback;
+  }
+  if (locale === "en") return `${REMEDY_ENGLISH[options.family]}.`;
+  return `${remedy}。`;
 };
 
 /** Appends the identifier a composed name carries, when it has one. */

@@ -1368,7 +1368,7 @@ mod tests {
             "What was actually tested",
             "What was not tested",
             "What to do next",
-            "do not establish certification",
+            "This report is not an audit, certification",
             "Content-Security-Policy",
         ] {
             assert!(

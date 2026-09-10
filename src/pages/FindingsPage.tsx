@@ -28,6 +28,7 @@ import {
   findingRollbackSentence,
   findingVerificationSentence,
   findingImpactSentence,
+  isEvidenceOnlyPriorityReason,
   findingSeverityIsUnrated,
   findingSummarySentence,
   localizedControlMappingRationale,
@@ -127,15 +128,15 @@ const copy = {
     zhTW: "完成 {completed} 項 · {gaps} 個缺口",
   },
   scopeAttentionSummary: {
-    en: "{completed} completed · {gaps} limits or review items",
-    zhTW: "完成 {completed} 項 · {gaps} 個限制或檢視項目",
+    en: "{completed} completed · {gaps} gaps or checks without verdicts",
+    zhTW: "完成 {completed} 項 · {gaps} 個缺口或未回傳判定的檢查",
   },
   reportBoundary: {
-    en: "NIST and ISO references and AIDEFEND's independent, unofficial mapping are context only—not an audit, certification, compliance decision, or automatic fix.",
-    zhTW: "NIST、ISO 參考與 AIDEFEND 的獨立非官方對照只提供脈絡；不等同稽核、認證、合規判定或自動修復。",
+    en: "NIST and ISO references and AIDEFEND's independent, unofficial mapping are navigation only. This report is not an audit, certification, compliance decision, security guarantee, or automatic remediation.",
+    zhTW: "NIST、ISO 參考與 AIDEFEND 的獨立非官方對照只供導航。本報告不是稽核、認證、合規判定、資安保證或自動修復。",
   },
   relatedGroups: { en: "Related findings & groups", zhTW: "相關問題與群組" },
-  reviewHistory: { en: "Review status & history", zhTW: "處理狀態與歷程" },
+  reviewHistory: { en: "Resolution status & history", zhTW: "解決狀態與歷程" },
   emptyHeaderTitle: { en: "Problem list", zhTW: "問題清單" },
   emptyHeaderDescription: {
     en: "Your scan results and recommended next steps will appear here.",
@@ -249,11 +250,8 @@ const copy = {
   openExport: { en: "Save or share report", zhTW: "保存或分享報告" },
   summaryAria: { en: "Problem summary", zhTW: "問題摘要" },
   critical: { en: "Critical", zhTW: "嚴重" },
-  criticalDetail: { en: "Ask the appropriate specialist to confirm these first", zhTW: "優先請對應專家確認" },
   high: { en: "High priority", zhTW: "高風險" },
-  highDetail: { en: "Plan these into the next round of work", zhTW: "排進下一輪處理工作" },
-  needsReview: { en: "Needs human review", zhTW: "待人工確認" },
-  needsReviewDetail: { en: "Confirm these before your team acts", zhTW: "團隊採取行動前先確認" },
+  needsReview: { en: "Open problems", zhTW: "待處理問題" },
   affectedAssets: { en: "Affected assets", zhTW: "受影響資產" },
   completeListCount: { en: "Problems in the complete list: {count}", zhTW: "完整清單共 {count} 項" },
   correlationEyebrow: { en: "SAME ISSUE, DIFFERENT TOOLS", zhTW: "同一問題，不同工具" },
@@ -262,8 +260,8 @@ const copy = {
     zhTW: "這些看起來是同一個問題被重複回報",
   },
   correlationDescription: {
-    en: "Two tools named the same published vulnerability on the same package and the same asset. Combining them is a presentation choice you make; nothing is combined until you choose it, and no problem is ever deleted.",
-    zhTW: "有兩個工具在同一資產、同一套件上指出同一個已公開的弱點編號。是否合併呈現由你決定；在你選擇之前不會合併，也不會刪除任何問題。",
+    en: "Two tools reported the same vulnerability ID for the same package and asset.",
+    zhTW: "兩個工具在同一資產、同一套件上回報了相同的弱點編號。",
   },
   correlationMatch: {
     en: "{vulnerability} in {package}",
@@ -280,21 +278,21 @@ const copy = {
   // Spec 9.3: agreement between tools is not independent confirmation unless
   // the evidence sources are demonstrably independent, which is not recorded.
   correlationNotEstablished: {
-    en: "Not double-checked: these tools may both rely on the same public vulnerability database, so agreement is not two independent confirmations.",
-    zhTW: "不算互相驗證：這些工具可能都引用同一個公開弱點資料庫，因此一致並不等於兩次獨立確認。",
+    en: "Shared vulnerability data source; independent confirmation is not established.",
+    zhTW: "共用弱點資料來源；未形成獨立確認。",
   },
   correlationAccept: { en: "Combine these for handoff", zhTW: "合併呈現以利交接" },
   correlationAcceptedRationale: {
-    en: "Accepted the product's suggestion that these findings describe one issue: the same published vulnerability identifier on the same package and asset, reported by different tools. Presentation only; every original problem and its evidence stay separate.",
-    zhTW: "採納產品建議：這些問題屬於同一件事——不同工具在同一資產、同一套件上回報了同一個已公開弱點編號。僅改變呈現方式；每項原始問題與證據仍分開保留。",
+    en: "Grouped by the same vulnerability ID, package, and asset.",
+    zhTW: "依相同弱點編號、套件與資產分組。",
   },
   correlationUnverifiableTitle: {
     en: "Shared an identifier, but could not be compared: {count}",
     zhTW: "有相同編號但無法比對：{count} 組",
   },
   correlationUnverifiableDescription: {
-    en: "These carry the same vulnerability identifier, but at least one of them does not record both the affected package and the affected asset. The product does not guess, so they are listed separately below.",
-    zhTW: "這些帶有相同的弱點編號，但其中至少一項沒有同時記錄受影響的套件與資產。產品不會用猜的，因此它們在下方仍分開列出。",
+    en: "These share a vulnerability identifier, but at least one record is missing the affected package or asset, so they are listed separately.",
+    zhTW: "這些項目共用同一弱點編號，但至少一筆記錄缺少受影響套件或資產，因此分開列出。",
   },
   correlationUnverifiableItem: {
     en: "{vulnerability} — problems sharing this identifier: {count}; the package or asset needed to compare them is missing",
@@ -307,13 +305,13 @@ const copy = {
   reversibleLinks: { en: "TEAM HANDOFF", zhTW: "團隊交接" },
   groupsTitle: { en: "Organize related issues for the right team", zhTW: "把相關問題整理給同一個團隊" },
   groupsDescription: {
-    en: "These accepted groups reduce repetition for handoff. Every original problem and evidence record stays separate and can still be opened below.",
-    zhTW: "這些已接受的群組可減少交接時的重複內容；每項原始問題與證據仍分開保留，也都能在下方開啟。",
+    en: "Accepted groups reduce repetition during handoff.",
+    zhTW: "已接受的群組可減少交接時的重複內容。",
   },
   manageGroups: { en: "Create, remove, or review groups", zhTW: "建立、移除或檢視群組" },
   manageGroupsDescription: {
-    en: "Grouping changes presentation only. It never deletes a problem, changes evidence, or turns matching scanner output into independent confirmation.",
-    zhTW: "群組只會改變呈現方式；不會刪除問題、改寫證據，也不會把相似的掃描器輸出說成獨立確認。",
+    en: "Create or remove handoff groups.",
+    zhTW: "建立或移除交接群組。",
   },
   caseHistoryMembers: {
     en: "Other members kept in case history: {count}",
@@ -327,11 +325,11 @@ const copy = {
   createdBy: { en: "Created by {actor}", zhTW: "建立者：{actor}" },
   technicalGroupDetails: { en: "Technical group details", zhTW: "群組技術細節" },
   groupId: { en: "Group ID", zhTW: "群組 ID" },
-  removeGroup: { en: "Remove the group only; keep every problem", zhTW: "只移除群組（保留全部問題）" },
+  removeGroup: { en: "Remove group", zhTW: "移除群組" },
   groupHistory: { en: "Permanent group history ({count})", zhTW: "不可變群組歷程（{count} 筆）" },
   groupHistoryDescription: {
-    en: "Creating and removing groups only appends events. Removing a group never deletes the original problems, evidence, or earlier events.",
-    zhTW: "建立與移除都只追加事件；移除群組不會刪除原始問題、證據或先前事件。",
+    en: "Group changes are recorded here.",
+    zhTW: "群組變更記錄於此。",
   },
   groupCreated: { en: "Group created", zhTW: "建立群組" },
   groupRemoved: { en: "Group removed", zhTW: "移除群組" },
@@ -386,8 +384,8 @@ const copy = {
     zhTW: "先檢視這個資產最高優先的問題。",
   },
   assetProblemIncomplete: {
-    en: "Some checks are also incomplete; keep that limit visible.",
-    zhTW: "另有檢查尚未完成；請保留這項限制。",
+    en: "Some checks are incomplete. Finish or retry them from Progress.",
+    zhTW: "另有檢查尚未完成；請到進度頁完成或重試。",
   },
   assetNoProblemSummaryOne: {
     en: "1 completed security check reported no problems.",
@@ -398,16 +396,16 @@ const copy = {
     zhTW: "{count} 項已完成的資安檢查未回報問題。",
   },
   assetNoProblemAction: {
-    en: "Review the stated limits before relying on this result.",
-    zhTW: "採用這項結果前，先確認明列的測試限制。",
+    en: "Open the completed-check scope and any missing checks.",
+    zhTW: "查看已完成檢查的範圍與缺少的檢查。",
   },
   assetIncompleteSummary: {
     en: "At least one requested check did not produce a complete result.",
     zhTW: "至少一項要求的檢查沒有產生完整結果。",
   },
   assetIncompleteAction: {
-    en: "Keep completed results, then finish or retry this asset's remaining checks.",
-    zhTW: "保留已完成的結果，再完成或重試這個資產的其餘檢查。",
+    en: "Finish or retry this asset's remaining checks from Progress.",
+    zhTW: "到進度頁完成或重試這個資產的其餘檢查。",
   },
   assetNotTestedSummary: {
     en: "No completed security check is recorded for this asset.",
@@ -423,16 +421,10 @@ const copy = {
   nextActionNow: { en: "Next action", zhTW: "下一步" },
   verifyFix: { en: "Verify the fix", zhTW: "確認修復" },
   verifyFallback: {
-    en: "After an approved change, rerun the same check and confirm this problem is no longer reported.",
-    zhTW: "完成核准的變更後，以相同範圍重跑同一項檢查，確認不再回報這個問題。",
+    en: "After the change, rerun the same check and confirm this problem is no longer reported.",
+    zhTW: "完成變更後，以相同範圍重跑同一項檢查，確認不再回報這個問題。",
   },
   reviewEvidence: { en: "Open evidence and details", zhTW: "開啟證據與詳細資料" },
-  boundaryTitle: { en: "This is not an audit conclusion or an executable fix", zhTW: "這不是稽核結論，也不是可執行修復" },
-  boundaryBody: {
-    en: "This page records observations, possible impact, human decisions, and the kind of specialist to consult. Authorized people evaluate and perform any environment change outside this product.",
-    zhTW: "畫面只保存觀察、可能影響、人工決定與建議找哪類專家。任何環境變更都在產品之外由具權限的人員評估及執行。",
-  },
-  howToRead: { en: "How to read these results", zhTW: "如何解讀這些結果" },
   allProblems: { en: "EXPLORE RESULTS", zhTW: "查看所有結果" },
   completeList: { en: "Browse every issue", zhTW: "瀏覽所有問題" },
   searchAria: { en: "Search problems, evidence, or source details", zhTW: "搜尋問題、證據或來源細節" },
@@ -464,14 +456,6 @@ const copy = {
     en: "This severity was assigned by this product, not by the scanner.",
     zhTW: "這個嚴重程度由本產品評定，並非來自掃描工具。",
   },
-  scannerDidNotRateSeverity: {
-    en: "Scanner did not rate severity",
-    zhTW: "掃描器未評等",
-  },
-  severityNeedsConfirmation: {
-    en: "Needs human confirmation",
-    zhTW: "待人工確認",
-  },
   asset: { en: "Asset", zhTW: "資產" },
   reviewStatus: { en: "Review status", zhTW: "處理狀態" },
   recommendedExpert: { en: "Specialist to consult", zhTW: "建議專家類型" },
@@ -479,39 +463,34 @@ const copy = {
   evidenceConfidence: { en: "Evidence confidence", zhTW: "證據信心" },
   relatedAssets: { en: "Related assets", zhTW: "關聯資產" },
   assetCount: { en: "Assets: {count}", zhTW: "{count} 個" },
-  decisionHistory: { en: "Human review history", zhTW: "人工處理歷程" },
   decisionCount: { en: "Decisions: {count}", zhTW: "{count} 筆決定" },
   decisionBoundary: {
-    en: "This records a review status only. It does not change source evidence or perform a fix. ‘Verified resolved’ requires comparable verification evidence.",
-    zhTW: "這裡只記錄處理狀態；不會修改原始證據，也不會執行修復。「已驗證解決」必須已有可比較的複驗證據。",
+    en: "Save the review status here. Use ‘Verified resolved’ after comparable verification evidence is available.",
+    zhTW: "在此保存處理狀態；取得可比較的複驗證據後，再使用「已驗證解決」。",
   },
   newStatus: { en: "New status", zhTW: "新狀態" },
-  decidedBy: { en: "Decision made by", zhTW: "決定者" },
+  decidedBy: { en: "Updated by", zhTW: "更新者" },
   decidedByPlaceholder: { en: "Name, team, or traceable identifier", zhTW: "姓名、團隊或可追溯識別" },
   reason: { en: "Reason", zhTW: "理由" },
   reasonPlaceholder: {
-    en: "Record the basis for the decision. This never overwrites scan evidence.",
-    zhTW: "記錄判斷依據；不會覆寫掃描證據。",
+    en: "Record the basis for the decision.",
+    zhTW: "記錄判斷依據。",
   },
   falsePositiveExpiry: { en: "False-positive expiration (optional)", zhTW: "誤判到期日（選填）" },
-  saveDecision: { en: "Save review decision", zhTW: "保存處理決定" },
-  noDecisions: { en: "No human review decision has been recorded.", zhTW: "尚未記錄人工處理決定。" },
-  decisionActor: { en: "Decision made by {actor}", zhTW: "決定者：{actor}" },
+  saveDecision: { en: "Save status", zhTW: "保存狀態" },
+  noDecisions: { en: "No status change has been recorded.", zhTW: "尚未記錄狀態變更。" },
+  decisionActor: { en: "Updated by {actor}", zhTW: "更新者：{actor}" },
   expires: { en: "expires {date}", zhTW: "到期：{date}" },
   neverExpires: { en: "no expiration", zhTW: "不到期" },
   possibleImpact: { en: "Possible impact", zhTW: "可能影響" },
   whyPriority: { en: "Why this appears first", zhTW: "為何優先顯示" },
-  recommendation: { en: "Suggested next step", zhTW: "建議處理方向" },
+  recommendation: { en: "Recommended next step", zhTW: "建議下一步" },
   beforeChanging: { en: "Before making a change:", zhTW: "變更前考量：" },
-  recommendationBoundary: {
-    en: "This is guidance for a person to evaluate. The product does not make the change or guarantee its result.",
-    zhTW: "這是交給人員評估的方向；產品不會自動執行，也不對變更結果背書。",
-  },
   verification: { en: "How to verify later", zhTW: "複驗指引" },
   scanEvidence: { en: "Scan evidence", zhTW: "掃描證據" },
   noEvidence: {
-    en: "This problem has no evidence record to check. Ask a specialist to confirm whether the data is complete.",
-    zhTW: "這筆問題沒有可核對的證據；請交由專家確認資料完整性。",
+    en: "No scan evidence was retained for this problem.",
+    zhTW: "這個問題未保留掃描證據。",
   },
   frozenEvidenceSummaryUnavailable: {
     en: "The selected run did not retain an evidence summary.",
@@ -542,12 +521,8 @@ const copy = {
   installedVersion: { en: "Observed version", zhTW: "觀察到的版本" },
   fixedVersion: { en: "Scanner-reported fixed version", zhTW: "掃描器回報的修正版" },
   scannerRemediation: {
-    en: "Scanner-provided remediation — review before acting",
-    zhTW: "掃描器提供的修復資訊——採取行動前請先審查",
-  },
-  scannerRemediationBoundary: {
-    en: "This is untrusted scanner evidence, not the product's recommended next step. Have an authorized person review and approve any change; this product does not execute it.",
-    zhTW: "這是未受信任的掃描器證據，不是產品建議的下一步。任何變更都必須由獲授權的人員審查並核准；本產品不會自動執行。",
+    en: "Scanner-provided remediation",
+    zhTW: "掃描器提供的修復資訊",
   },
   scanRun: { en: "Scan run", zhTW: "掃描輪次" },
   engineRun: { en: "Scanner job", zhTW: "掃描器工作" },
@@ -561,7 +536,6 @@ const copy = {
   redacted: { en: "Redacted", zhTW: "已遮罩" },
   notMarkedRedacted: { en: "Not marked as redacted", zhTW: "未標示遮罩" },
   controlsTitle: { en: "Related framework references", zhTW: "相關控制項（導航）" },
-  notCompliance: { en: "Not a compliance decision", zhTW: "非合規判定" },
   noControls: { en: "No framework reference is mapped to this problem.", zhTW: "這筆問題沒有控制項映射。" },
   relatedOnly: { en: "Relationship only", zhTW: "僅表示相關性" },
   viewSameControl: { en: "View problems with the same reference", zhTW: "查看同座標問題" },
@@ -585,7 +559,7 @@ const copy = {
   reportConnectionOnly: { en: "Connection result only", zhTW: "僅連線結果" },
   reportInventoryOnly: { en: "Service inventory only", zhTW: "僅完成服務盤點" },
   reportNonSecurityOnly: { en: "Inventory or connectivity only", zhTW: "僅完成盤點或連線工作" },
-  reportPartial: { en: "Partial results", zhTW: "部分結果" },
+  reportPartial: { en: "Completed with gaps", zhTW: "已完成，但有涵蓋缺口" },
   reportNoChecks: { en: "No checks completed", zhTW: "沒有完成任何檢查" },
   reportRun: { en: "Report run", zhTW: "報告輪次" },
   reportRunUnavailable: { en: "Previously selected scan unavailable", zhTW: "先前選擇的掃描已無法使用" },
@@ -601,9 +575,9 @@ const copy = {
   truncatedCount: { en: "Reduced by limits", zhTW: "受限制而縮減" },
   unavailableCount: { en: "Detail unavailable", zhTW: "資料不足" },
   unattributedCount: { en: "Not linked to your asset", zhTW: "未連結到你的資產" },
-  manualReviewCount: { en: "Manual review", zhTW: "需人工檢視" },
+  manualReviewCount: { en: "No automated verdict", zhTW: "未回傳自動判定" },
   coverageGaps: { en: "Recorded coverage gaps", zhTW: "已記錄的涵蓋缺口" },
-  coverageAttention: { en: "Coverage limits and manual review", zhTW: "涵蓋限制與人工檢視" },
+  coverageAttention: { en: "Coverage gaps and checks without verdicts", zhTW: "涵蓋缺口與未回傳判定的檢查" },
   reportFindings: { en: "Problems found", zhTW: "發現的問題" },
   askedTitle: { en: "What you asked to scan", zhTW: "你要求掃描的內容" },
   testedTitle: { en: "What was actually tested", zhTW: "實際完成的測試" },
@@ -660,12 +634,12 @@ const copy = {
     zhTW: "已記錄 {count} 項排除；無法取得精確細節。",
   },
   noGap: {
-    en: "No gap was recorded within the requested checks. This does not mean broader security testing was performed.",
-    zhTW: "要求的檢查內沒有記錄到缺口；這不代表已完成更廣泛的資安測試。",
+    en: "No gap was recorded within the requested checks.",
+    zhTW: "要求的檢查內沒有記錄到缺口。",
   },
   noNextStep: {
-    en: "Review the saved results and stated limits. Run broader checks if you need broader assurance.",
-    zhTW: "請檢視已保存的結果與明列限制；若需要更廣泛的確認，請執行更深入的檢查。",
+    en: "No additional action is listed for this scan.",
+    zhTW: "這次掃描沒有列出其他動作。",
   },
   stage: { en: "Scan depth", zhTW: "掃描深度" },
   stageConnection: { en: "Connection test (not a vulnerability scan)", zhTW: "連線測試（不是漏洞掃描）" },
@@ -696,15 +670,15 @@ const copy = {
   testedStatusNotTested: { en: "Not tested", zhTW: "未測試" },
   testedStatusInProgress: { en: "In progress", zhTW: "進行中" },
   actionReviewFinding: { en: "Review the problem and its evidence.", zhTW: "檢視這個問題與相關證據。" },
-  actionRetry: { en: "Retry this check; saved results will remain.", zhTW: "重試這項檢查；已保存的結果會保留。" },
+  actionRetry: { en: "Retry this check.", zhTW: "重新執行這項檢查。" },
   actionScope: { en: "Review the requested scope, then retry.", zhTW: "確認要求的範圍後再重試。" },
   actionCompatible: { en: "Choose an available check for this target.", zhTW: "為這個目標選擇可用的檢查。" },
-  actionWait: { en: "Let it finish, or cancel and keep the partial report.", zhTW: "等待完成，或取消並保留部分報告。" },
+  actionWait: { en: "Open Progress and finish or cancel this check.", zhTW: "前往進度頁完成或取消這項檢查。" },
   actionStartService: { en: "Start the expected local service, then retry.", zhTW: "先啟動預期的本機服務，再重試。" },
-  actionReviewCoverage: { en: "Review the coverage gap before relying on the result.", zhTW: "採用結果前，先檢視涵蓋缺口。" },
+  actionReviewCoverage: { en: "Open the coverage gap and complete the missing check.", zhTW: "查看涵蓋缺口並完成缺少的檢查。" },
   actionReviewManualControl: {
-    en: "Review the upstream detail and record a human decision for this control.",
-    zhTW: "請檢視上游詳細資料，並為這項控制措施記錄人工判定。",
+    en: "Open the upstream detail and set this control's status.",
+    zhTW: "開啟上游詳細資料，並設定這項控制措施的狀態。",
   },
   // The check ran and produced results and none could be tied to anything the
   // reader authorized. The sentences naming the identifier live in
@@ -715,23 +689,11 @@ const copy = {
     en: "Add the identifier the check reported on to the asset you authorized, then scan again.",
     zhTW: "請將這項檢查所回報的識別碼，新增到你已授權的資產上，然後重新掃描。",
   },
-  actionPreserve: { en: "Keep this limitation visible when sharing the report.", zhTW: "分享報告時，請保留這項限制。" },
-  actionNoChange: { en: "No action is needed unless you change the scope.", zhTW: "除非要更改範圍，否則不需處理。" },
-  frameworkNotice: {
-    en: "NIST, ISO 27001, and AIDEFEND references are navigation aids—not certification, compliance, endorsement, or a pass/fail result.",
-    zhTW: "NIST、ISO 27001 與 AIDEFEND 僅供對照，不代表認證、合規、背書或通過／不通過。",
-  },
-  // The backend writes this as a second, separate sentence
-  // (`FrameworkNotice::aidefend_mapping_status`) because the three catalogues do
-  // not have the same standing: NIST and ISO are official, AIDEFEND is not. The
-  // notice above lists all three in one breath, which reads as though they do.
-  // Kept as frontend copy rather than rendering the backend field, which is an
-  // English-only constant.
-  aidefendMappingNotice: {
-    en: "AIDEFEND references are an independent, unofficial mapping unless the framework owner states otherwise.",
-    zhTW: "除非該框架擁有者另有說明，AIDEFEND 的對照屬於獨立、非官方的對照。",
-  },
-  reportTechnicalDetails: { en: "Technical details", zhTW: "技術細節" },
+  actionPreserve: { en: "Open the saved scope details.", zhTW: "查看已保存的範圍細節。" },
+  actionNoChange: { en: "No action needed.", zhTW: "無需處理。" },
+  reportEndMatter: { en: "Report terms and technical record", zhTW: "報告條款與技術紀錄" },
+  reportTerms: { en: "Report terms", zhTW: "報告條款" },
+  reportTechnicalDetails: { en: "Technical record", zhTW: "技術紀錄" },
   taskStatus: { en: "Status", zhTW: "狀態" },
   taskProgress: { en: "Progress", zhTW: "進度" },
   taskEvidence: { en: "Evidence hashes", zhTW: "證據雜湊" },
@@ -1378,12 +1340,6 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         {actualTestedSummary} · {text(copy.firstLayerTime)}: {observedTimeSummary} · {exclusionsSummary}
       </p>
 
-      {report.dataQualityWarnings.length > 0 && (
-        <p className="report-data-warning-count" role="note">
-          <strong>{text(copy.dataWarnings, { count: formatNumber(report.dataQualityWarnings.length) })}</strong>
-        </p>
-      )}
-
       <details className="page-secondary-feature report-scope-disclosure">
         <summary>
           {text(copy.scopeLimitations)} · {text(hasManualReview ? copy.scopeAttentionSummary : copy.scopeSummary, {
@@ -1603,57 +1559,60 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         </ol>
       ) : <p>{text(copy.noNextStep)}</p>}
 
-      <details className="page-technical-details">
-        <summary>{text(copy.reportTechnicalDetails)}</summary>
+      </details>
+    </section>
+  );
+}
+
+function ReportEndMatter({ report, run }: { report: BeginnerMasterReport; run?: ScanRun }) {
+  const { locale, text, formatDateTime, formatNumber } = useI18n();
+  const engineByTaskId = new Map(run?.engineRuns.map((engine) => [engine.id, engine]) ?? []);
+
+  return (
+    <footer className="report-end-matter">
+      <details className="page-technical-details page-technical-details--guide">
+        <summary>{text(copy.reportEndMatter)}</summary>
+        <section>
+          <h3>{text(copy.reportTerms)}</h3>
+          <p>{text(copy.reportBoundary)}</p>
+        </section>
         {report.dataQualityWarnings.length > 0 && (
-          <InlineNotice tone="warning" title={text(copy.dataWarnings, { count: formatNumber(report.dataQualityWarnings.length) })}>
-            {/*
-              * The count used to be followed by `copy.gapUnavailable` -- a
-              * coverage-gap sentence about a run not retaining enough detail --
-              * while the warnings themselves were dropped. The backend writes a
-              * distinct plain-language explanation for each one (a run's stored
-              * project id not matching, a saved completion time beside a still
-              * active check, a coverage history that could not be reconciled),
-              * and that substituted sentence is false for most of them. They are
-              * rendered as written, inside this technical disclosure, the same
-              * way every other raw backend string on this surface is.
-              */}
+          <section>
+            <h3>{text(copy.dataWarnings, { count: formatNumber(report.dataQualityWarnings.length) })}</h3>
             <ul className="data-quality-warnings">
               {report.dataQualityWarnings.map((warning) => (
                 <li key={warning}>{localizedDataQualityWarning(warning, locale)}</li>
               ))}
             </ul>
-          </InlineNotice>
+          </section>
         )}
-        <div className="evidence-list">
-          {report.technicalDetails.tasks.map((task) => {
-            const check = report.actual.checks.find((item) => item.taskId === task.taskId);
-            const engine = engineByTaskId.get(task.taskId);
-            return (
-              <article key={task.taskId} className="evidence-item">
-                <div>
-                  <strong>{check ? localizedCheckName(check.checkId, locale, engine) : text(copy.coverageDetail)}</strong>
-                  <span>{engineStatusMeta[task.status].label}</span>
-                </div>
-                <dl>
-                  <div><dt>{text(copy.taskProgress)}</dt><dd>{formatNumber(task.progressPercent)}%</dd></div>
-                  <div><dt>{text(copy.taskStatus)}</dt><dd>{engineStatusMeta[task.status].label}</dd></div>
-                  <div><dt>{text(copy.taskErrorCode)}</dt><dd><code>{task.errorCode ?? text(copy.taskNoError)}</code></dd></div>
-                  <div><dt>{text(copy.taskEvidence)}</dt><dd>{formatNumber(task.evidenceSha256.length)}</dd></div>
-                  {task.startedAt && <div><dt>{text(copy.firstObserved)}</dt><dd>{formatDateTime(task.startedAt)}</dd></div>}
-                  {task.finishedAt && <div><dt>{text(copy.lastObserved)}</dt><dd>{formatDateTime(task.finishedAt)}</dd></div>}
-                </dl>
-              </article>
-            );
-          })}
-        </div>
+        <section>
+          <h3>{text(copy.reportTechnicalDetails)}</h3>
+          <div className="evidence-list">
+            {report.technicalDetails.tasks.map((task) => {
+              const check = report.actual.checks.find((item) => item.taskId === task.taskId);
+              const engine = engineByTaskId.get(task.taskId);
+              return (
+                <article key={task.taskId} className="evidence-item">
+                  <div>
+                    <strong>{check ? localizedCheckName(check.checkId, locale, engine) : text(copy.coverageDetail)}</strong>
+                    <span>{engineStatusMeta[task.status].label}</span>
+                  </div>
+                  <dl>
+                    <div><dt>{text(copy.taskProgress)}</dt><dd>{formatNumber(task.progressPercent)}%</dd></div>
+                    <div><dt>{text(copy.taskStatus)}</dt><dd>{engineStatusMeta[task.status].label}</dd></div>
+                    <div><dt>{text(copy.taskErrorCode)}</dt><dd><code>{task.errorCode ?? text(copy.taskNoError)}</code></dd></div>
+                    <div><dt>{text(copy.taskEvidence)}</dt><dd>{formatNumber(task.evidenceSha256.length)}</dd></div>
+                    {task.startedAt && <div><dt>{text(copy.firstObserved)}</dt><dd>{formatDateTime(task.startedAt)}</dd></div>}
+                    {task.finishedAt && <div><dt>{text(copy.lastObserved)}</dt><dd>{formatDateTime(task.finishedAt)}</dd></div>}
+                  </dl>
+                </article>
+              );
+            })}
+          </div>
+        </section>
       </details>
-      </details>
-
-      <InlineNotice tone="info" title={text(copy.notCompliance)}>
-        <p>{text(copy.reportBoundary)}</p>
-      </InlineNotice>
-    </section>
+    </footer>
   );
 }
 
@@ -1691,9 +1650,7 @@ export function FindingsPage({
     severityBasisCode: finding.severityBasisCode,
     priorityReasons: finding.priorityReasons,
   });
-  const severityLabelFor = (finding: Finding): string => hasUnratedSeverity(finding)
-    ? text(copy.scannerDidNotRateSeverity)
-    : severityMeta[finding.severity].label;
+  const severityLabelFor = (finding: Finding): string => severityMeta[finding.severity].label;
   const resultRecords = useMemo(
     () => report
       ? projectReportFindings(report, canonicalFindings, locale)
@@ -2195,6 +2152,7 @@ export function FindingsPage({
             </div>
           }
         />
+        {report && <ReportEndMatter report={report} run={latestRun} />}
       </div>
     );
   }
@@ -2291,7 +2249,6 @@ export function FindingsPage({
                 <span className="priority-card__number">{String(index + 1).padStart(2, "0")}</span>
                 <span className="priority-card__status">
                   <StatusPill label={severityLabelFor(finding)} tone={severityMeta[finding.severity].tone} />
-                  {hasUnratedSeverity(finding) && <StatusPill label={text(copy.severityNeedsConfirmation)} tone="warning" />}
                   <StatusPill label={confidenceMeta[finding.confidence]} tone="neutral" />
                 </span>
                 <h3>{finding.title}</h3>
@@ -2313,7 +2270,6 @@ export function FindingsPage({
                     <strong>{text(copy.nextActionNow)}</strong>
                     {findingActionSentence(locale, {
                       englishFallback: finding.recommendation,
-                      expertType: finding.expertType,
                       family: finding.family,
                       awsIamPolicy: finding.awsIamPolicy,
                     })}
@@ -2639,12 +2595,6 @@ export function FindingsPage({
       </details>
       </details>
 
-      <details className="page-technical-details page-technical-details--guide">
-        <summary>{text(copy.howToRead)}</summary>
-        <strong>{text(copy.boundaryTitle)}</strong>
-        <p>{text(copy.boundaryBody)}</p>
-      </details>
-
       <section id="finding-browser" className={`finding-browser${selected ? "" : " finding-browser--list-only"}`}>
         <div className="finding-browser__list">
           <div className="section-heading section-heading--row finding-toolbar-heading">
@@ -2720,7 +2670,6 @@ export function FindingsPage({
                   <span className="finding-row__main">
                     <span className="finding-row__top">
                       <StatusPill label={severityLabelFor(finding)} tone={severityMeta[finding.severity].tone} />
-                      {hasUnratedSeverity(finding) && <StatusPill label={text(copy.severityNeedsConfirmation)} tone="warning" />}
                       {finding.severityBasisCode && !hasUnratedSeverity(finding) && (
                         <span className="finding-row__basis" title={text(copy.ratedByProductAria)}>
                           {text(copy.ratedByProduct)}
@@ -2760,7 +2709,6 @@ export function FindingsPage({
               <div className="finding-detail__header">
                 <div className="tag-row">
                   <StatusPill label={severityLabelFor(selected)} tone={severityMeta[selected.severity].tone} />
-                  {hasUnratedSeverity(selected) && <StatusPill label={text(copy.severityNeedsConfirmation)} tone="warning" />}
                   <StatusPill label={findingConfidencePresentation(
                     locale,
                     confidenceMeta[selected.confidence],
@@ -2846,10 +2794,12 @@ export function FindingsPage({
                 })}</p>
               </section>
 
-              {(selected.priorityReasons?.length ?? 0) > 0 && (
+              {(selected.priorityReasons?.some((reason) => !isEvidenceOnlyPriorityReason(reason)) ?? false) && (
                 <section className="detail-section">
                   <h3>{text(copy.whyPriority)}</h3>
-                  <ul className="detail-list">{selected.priorityReasons?.map((reason) => <li key={reason}>{findingPriorityReason(locale, reason)}</li>)}</ul>
+                  <ul className="detail-list">{selected.priorityReasons
+                    ?.filter((reason) => !isEvidenceOnlyPriorityReason(reason))
+                    .map((reason) => <li key={reason}>{findingPriorityReason(locale, reason)}</li>)}</ul>
                 </section>
               )}
 
@@ -2857,7 +2807,6 @@ export function FindingsPage({
                 <h3>{text(copy.recommendation)}</h3>
                 <p>{findingActionSentence(locale, {
                   englishFallback: selected.recommendation,
-                  expertType: selected.expertType,
                   family: selected.family,
                   awsIamPolicy: selected.awsIamPolicy,
                 })}</p>
@@ -2867,7 +2816,6 @@ export function FindingsPage({
                     {findingRollbackSentence(locale, selected.rollbackConsiderations)}
                   </p>
                 )}
-                <small>{text(copy.recommendationBoundary)}</small>
               </section>
 
               {selected.verificationGuidance && (
@@ -2927,7 +2875,6 @@ export function FindingsPage({
                           <div className="scanner-evidence-remediation">
                             <strong>{text(copy.scannerRemediation)}</strong>
                             <p>{evidence.scannerDetails.remediation}</p>
-                            <small>{text(copy.scannerRemediationBoundary)}</small>
                           </div>
                         )}
                         <details className="page-technical-details">
@@ -2950,7 +2897,7 @@ export function FindingsPage({
               </section>
 
               <section className="detail-section">
-                <div className="detail-section__heading"><h3>{text(copy.controlsTitle)}</h3><span>{text(copy.notCompliance)}</span></div>
+                <h3>{text(copy.controlsTitle)}</h3>
                 {selected.controls.length === 0 ? <p>{text(copy.noControls)}</p> : (
                   <div className="control-list">
                     {selected.controls.map((item) => {
@@ -2996,6 +2943,7 @@ export function FindingsPage({
           )}
         </section>
       </section>
+      {report && <ReportEndMatter report={report} run={latestRun} />}
     </div>
   );
 }

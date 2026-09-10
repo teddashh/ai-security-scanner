@@ -702,7 +702,7 @@ pub fn build_beginner_master_report(
     }
     if run.completed_at.is_some() && run.engine_runs.iter().any(task_is_active) {
         data_quality_warnings.push(
-            "This run has a saved completion time while at least one check is still active. The report follows the check state and remains live instead of presenting a final result."
+            "Saved run state is inconsistent: it has a completion time while at least one check has no terminal outcome."
                 .into(),
         );
     }
@@ -738,8 +738,7 @@ pub fn build_beginner_master_report(
             dimension: unavailable.dimension.clone(),
             reason: unavailable.explanation.clone(),
             next_action_code: NextActionCode::PreserveVisibleLimitation,
-            next_action: "Keep this limitation visible; do not interpret missing historical detail as completed coverage."
-                .into(),
+            next_action: "Open the saved scope details.".into(),
         });
     }
     if contradictory_request_outcome {
@@ -756,7 +755,7 @@ pub fn build_beginner_master_report(
             reason: "The request-level outcome contradicts the run's durable task state and was ignored."
                 .into(),
             next_action_code: NextActionCode::RetryCheck,
-            next_action: "Keep the saved results, then retry this scan if you need an internally consistent coverage record."
+            next_action: "Retry this scan to create a consistent coverage record."
                 .into(),
         });
     }
@@ -780,7 +779,7 @@ pub fn build_beginner_master_report(
             reason: "At least one legacy finding observation did not retain its full run-specific presentation snapshot."
                 .into(),
             next_action_code: NextActionCode::PreserveVisibleLimitation,
-            next_action: "Use the retained severity, confidence, and evidence for review; rerun to create a fully frozen report."
+            next_action: "Rerun the scan to create a fully frozen result."
                 .into(),
         });
     }
@@ -1561,7 +1560,7 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                             dimension: format!("{} saved work-unit coverage", check_id(task)),
                             reason: explanation.into(),
                             next_action_code: NextActionCode::RetryCheck,
-                            next_action: "Keep the saved evidence and other results. Retry this check to create a new consistent coverage record."
+                            next_action: "Retry this check to create a consistent coverage record."
                                 .into(),
                         });
                         data_quality_warnings.push(
@@ -1659,7 +1658,7 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                         reason: "No completed upstream security-template execution record was retained for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template."
                             .into(),
                         next_action_code: NextActionCode::RetryCheck,
-                        next_action: "Keep the saved results and run this check again to cover the checks that did not finish."
+                        next_action: "Retry this check to complete the missing work."
                             .into(),
                     });
                 }
@@ -1720,7 +1719,7 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                         reason: "Greenbone reported one or more scanner errors for this host, so some of its checks did not finish. Findings and checks that did complete remain valid."
                             .into(),
                         next_action_code: NextActionCode::RetryCheck,
-                        next_action: "Keep the saved results and run this check again to cover the checks that did not finish."
+                        next_action: "Retry this check to complete the missing work."
                             .into(),
                     });
                 }
@@ -2039,7 +2038,7 @@ fn append_naabu_coverage_gaps(
             "Usable results were saved for these work units, but their remaining planned operations were not tested complete."
                 .into(),
             NextActionCode::RetryCheck,
-            "Keep the saved results and retry only the unfinished work.",
+            "Retry only the unfinished work.",
         );
     }
     if summary.failed > 0 {
@@ -2048,7 +2047,7 @@ fn append_naabu_coverage_gaps(
             format!("{} failed work units ({})", check_id(task), summary.failed),
             "These planned work units stopped before establishing completed coverage.".into(),
             NextActionCode::RetryCheck,
-            "Keep other saved results and retry only the failed work.",
+            "Retry only the failed work.",
         );
     }
     if summary.timed_out > 0 {
@@ -2062,7 +2061,7 @@ fn append_naabu_coverage_gaps(
             "These planned work units reached their bounded time limit before completed coverage was recorded."
                 .into(),
             NextActionCode::RetryCheck,
-            "Keep other saved results and retry only the timed-out work.",
+            "Retry only the timed-out work.",
         );
     }
     if summary.cancelled > 0 {
@@ -2094,7 +2093,7 @@ fn append_naabu_coverage_gaps(
                 NextActionCode::RetryCheck
             },
             if task_is_active(task) {
-                "Let the current check continue or cancel it; saved partial results remain available."
+                "Open Progress and finish or cancel this check."
             } else {
                 "Retry only the work that has not yet produced a tested outcome."
             },
@@ -2107,7 +2106,7 @@ fn append_naabu_coverage_gaps(
             "At least one validated scanner result has not been fully processed into findings. Tested coverage remains saved, but the finding list may be incomplete."
                 .into(),
             NextActionCode::PreserveVisibleLimitation,
-            "Keep the saved results. The app should retry result processing automatically; keep this limitation visible until it succeeds.",
+            "No action is required; result processing retries automatically.",
         );
     }
 
@@ -2116,19 +2115,19 @@ fn append_naabu_coverage_gaps(
             (
                 CoverageGapKind::TimedOut,
                 NextActionCode::RetryCheck,
-                "Keep the completed results. The app should reconcile the timed-out check before treating the run as final.",
+                "Retry this check to create a consistent terminal record.",
             )
         } else if task.status == EngineRunStatus::Failed {
             (
                 CoverageGapKind::Failed,
                 NextActionCode::RetryCheck,
-                "Keep the completed results. The app should reconcile the stopped check before treating the run as final.",
+                "Retry this check to create a consistent terminal record.",
             )
         } else if task.status == EngineRunStatus::Cancelled {
             (
                 CoverageGapKind::Cancelled,
                 NextActionCode::RetryCheck,
-                "Keep the completed results. The app should reconcile the cancelled check before treating the run as final.",
+                "Retry this check to create a consistent terminal record.",
             )
         } else {
             (
@@ -2138,7 +2137,11 @@ fn append_naabu_coverage_gaps(
                 } else {
                     NextActionCode::PreserveVisibleLimitation
                 },
-                "Keep the completed results while the app reconciles the check's final state.",
+                if task_is_active(task) {
+                    "Open Progress and finish or cancel this check."
+                } else {
+                    "Open the saved scope details."
+                },
             )
         };
         push(
@@ -2166,7 +2169,7 @@ fn append_naabu_coverage_gaps(
                 }
                 .into(),
                 NextActionCode::RetryCheck,
-                "Keep saved results and retry only the unfinished work.",
+                "Retry only the unfinished work.",
             );
         } else if task.status == EngineRunStatus::Failed && summary.failed == 0 {
             push(
@@ -2179,7 +2182,7 @@ fn append_naabu_coverage_gaps(
                 }
                 .into(),
                 NextActionCode::RetryCheck,
-                "Keep saved results and retry only the unfinished work.",
+                "Retry only the unfinished work.",
             );
         } else if task.status == EngineRunStatus::Cancelled && summary.cancelled == 0 {
             push(
@@ -2192,7 +2195,7 @@ fn append_naabu_coverage_gaps(
                 }
                 .into(),
                 NextActionCode::RetryCheck,
-                "Keep saved results and start only the unfinished work again when you are ready.",
+                "Retry only the unfinished work.",
             );
         }
     }
@@ -2206,28 +2209,28 @@ fn append_task_gap(task: &EngineRun, status: CoverageDimensionStatus, gaps: &mut
             "remaining requested dimensions",
             "This check produced some durable work but did not complete every planned dimension.",
             NextActionCode::RetryCheck,
-            "Review the saved results, then retry this check to cover the unfinished dimensions.",
+            "Retry this check to complete the unfinished dimensions.",
         ),
         CoverageDimensionStatus::TimedOut => (
             CoverageGapKind::TimedOut,
             "timed-out check dimension",
             "The bounded check reached its time limit, so it cannot be treated as tested complete.",
             NextActionCode::RetryCheck,
-            "Retry once; if it times out again, review reachability or ask a network specialist.",
+            "Retry once; if it times out again, verify reachability from Scan setup.",
         ),
         CoverageDimensionStatus::Failed => (
             CoverageGapKind::Failed,
             "failed check dimension",
             "This check stopped before it could establish completed coverage.",
             NextActionCode::RetryCheck,
-            "Keep the saved results from other checks and retry this check.",
+            "Retry this check.",
         ),
         CoverageDimensionStatus::Cancelled => (
             CoverageGapKind::Cancelled,
             "cancelled check dimension",
             "This check was cancelled before completed coverage was recorded.",
             NextActionCode::RetryCheck,
-            "Start this check again when you want to finish the missing coverage.",
+            "Retry this check to complete the missing coverage.",
         ),
         CoverageDimensionStatus::NotTested => (
             CoverageGapKind::NotTested,
@@ -2239,9 +2242,9 @@ fn append_task_gap(task: &EngineRun, status: CoverageDimensionStatus, gaps: &mut
         CoverageDimensionStatus::InProgress => (
             CoverageGapKind::NotTested,
             "unfinished check dimension",
-            "This check is still changing and has not recorded a complete result.",
+            "This check has no terminal outcome.",
             NextActionCode::WaitOrCancel,
-            "Let it continue or cancel it; the partial report remains available.",
+            "Open Progress and finish or cancel this check.",
         ),
     };
     gaps.push(CoverageGap {
@@ -2343,7 +2346,7 @@ fn append_engine_admission_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
             )
         },
         next_action_code: NextActionCode::PreserveVisibleLimitation,
-        next_action: "Keep the available results. The app can include these checks in a later run after their packaged scanner information is restored."
+        next_action: "Restore the packaged scanner information, then run the missing checks."
             .into(),
     });
 }
@@ -2386,10 +2389,11 @@ fn append_unattributed_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
 }
 
 /// One visible coverage item per Maester control whose upstream verdict is
-/// `Investigate`. The check ran, so this does not make execution incomplete;
-/// the missing human verdict is still material and must not disappear.
+/// `Investigate`. The check ran, but the missing verdict remains a coverage
+/// gap and must not disappear.
 fn append_manual_review_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
-    const REASON: &str = "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.";
+    const REASON: &str =
+        "Maester evaluated this control but did not return a pass or fail verdict.";
     for task in &run.engine_runs {
         for control in &task.manual_review_controls {
             let reason = control.detail.as_ref().map_or_else(
@@ -2401,14 +2405,12 @@ fn append_manual_review_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
                 task_id: Some(task.id.clone()),
                 target_asset_ids: vec![control.asset_id.clone()],
                 dimension: format!(
-                    "{}: manual review for {} — {}",
+                    "{}: no verdict for {} — {}",
                     task.engine_id, control.rule_id, control.title
                 ),
                 reason,
                 next_action_code: NextActionCode::ReviewManualControl,
-                next_action:
-                    "Review the upstream detail and record a human decision for this control."
-                        .into(),
+                next_action: "Open the upstream detail and set this control's status.".into(),
                 unattributed: None,
             });
         }
@@ -3089,27 +3091,27 @@ fn append_internal_endpoint_profile_gaps(
                         DeclaredNetworkServiceScanProfile::InternalEndpointSsh => (
                             "SSH endpoint scan-profile coverage",
                             "This run does not retain the exact fixed SSH profile for this asset. Current project metadata is not used to claim historical SSH vulnerability coverage.",
-                            "Keep this limitation visible; do not interpret a completed process as completed SSH vulnerability coverage.",
+                            "Run this SSH profile again to create a complete coverage record.",
                         ),
                         DeclaredNetworkServiceScanProfile::InternalEndpointRdpTls => (
                             "RDP transport endpoint scan-profile coverage",
                             "This run does not retain the exact fixed RDP transport profile for this asset. Current project metadata is not used to claim historical RDP transport security coverage.",
-                            "Keep this limitation visible; do not interpret a completed process as completed RDP transport security coverage.",
+                            "Run this RDP profile again to create a complete coverage record.",
                         ),
                         DeclaredNetworkServiceScanProfile::InternalEndpointVnc => (
                             "VNC transport endpoint scan-profile coverage",
                             "This run does not retain the exact fixed VNC transport profile for this asset. Current project metadata is not used to claim historical VNC transport security coverage.",
-                            "Keep this limitation visible; do not interpret a completed process as completed VNC transport security coverage.",
+                            "Run this VNC profile again to create a complete coverage record.",
                         ),
                         DeclaredNetworkServiceScanProfile::InternalEndpointSmtp => (
                             "SMTP endpoint scan-profile coverage",
                             "This run does not retain the exact fixed SMTP profile for this asset. Current project metadata is not used to claim historical SMTP security coverage.",
-                            "Keep this limitation visible; do not interpret a completed process as completed SMTP security coverage.",
+                            "Run this SMTP profile again to create a complete coverage record.",
                         ),
                         DeclaredNetworkServiceScanProfile::InternalEndpointTelnet => (
                             "Telnet endpoint scan-profile coverage",
                             "This run does not retain the exact fixed Telnet profile for this asset. Current project metadata is not used to claim historical Telnet security coverage.",
-                            "Keep this limitation visible; do not interpret a completed process as completed Telnet security coverage.",
+                            "Run this Telnet profile again to create a complete coverage record.",
                         ),
                     };
                     gaps.push(CoverageGap {
@@ -3140,7 +3142,7 @@ fn append_internal_endpoint_profile_gaps(
                     reason: "This run does not retain selected-run finding evidence for every SMTP TLS check. Task completion shows that the fixed profile was attempted, but it does not prove that TLS was available or that every TLS check ran; one finding proves only its own source OID."
                         .into(),
                     next_action_code: NextActionCode::PreserveVisibleLimitation,
-                    next_action: "Keep this limitation visible; use a separately approved TLS assessment when complete SMTP TLS coverage is needed."
+                    next_action: "Run a separately approved TLS assessment for complete SMTP TLS coverage."
                         .into(),
                 });
             }
@@ -3148,27 +3150,27 @@ fn append_internal_endpoint_profile_gaps(
                 Some(DeclaredNetworkServiceScanProfile::InternalEndpointSsh) => (
                     "endpoint operating-system, package, application, and local-configuration coverage",
                     "The unauthenticated SSH service profile does not inspect operating-system patch level, installed packages or applications, or local host configuration.",
-                    "Keep this limitation visible; use an approved endpoint inventory or local snapshot when those host-level checks are needed.",
+                    "Use an approved endpoint inventory or local snapshot for host-level checks.",
                 ),
                 Some(DeclaredNetworkServiceScanProfile::InternalEndpointRdpTls) => (
                     "RDP implementation, authentication/NLA, and endpoint host coverage",
                     "The unauthenticated RDP transport profile checks one legacy RDP 5.2-or-earlier fixed-private-key issue, but does not inspect broader or current RDP implementation CVEs, authentication or Network Level Authentication (NLA), Windows patch level, installed packages or applications, or local host configuration.",
-                    "Keep this limitation visible; choose a separately approved host or RDP-authentication assessment when those checks are needed.",
+                    "Run a separately approved host or RDP-authentication assessment for those checks.",
                 ),
                 Some(DeclaredNetworkServiceScanProfile::InternalEndpointVnc) => (
                     "VNC implementation, authentication, and endpoint host coverage",
                     "The unauthenticated VNC transport profile checks whether the VNC connection is encrypted. It does not inspect VNC implementation CVEs, authentication strength, operating-system patch level, installed packages or applications, or local host configuration. No login or desktop session was attempted.",
-                    "Keep this limitation visible; use an approved endpoint inventory or a separate authorized VNC assessment when those checks are needed.",
+                    "Use an approved endpoint inventory or run a separate authorized VNC assessment.",
                 ),
                 Some(DeclaredNetworkServiceScanProfile::InternalEndpointSmtp) => (
                     "SMTP server behavior, implementation, and endpoint host coverage",
                     "The unauthenticated SMTP profile reads the banner, issues EHLO, negotiates STARTTLS when offered, and checks advertised AUTH for an unencrypted cleartext-login risk. Its TLS checks apply only when TLS can be negotiated. It does not send credentials or mail, test relay or delivery, authentication enforcement or bypass, anti-spam behavior, general mail-server implementation CVEs, operating-system patches, installed software, or local configuration.",
-                    "Keep this limitation visible; use a separately approved mail-server assessment or endpoint inventory when those checks are needed.",
+                    "Run a separately approved mail-server assessment or use endpoint inventory.",
                 ),
                 Some(DeclaredNetworkServiceScanProfile::InternalEndpointTelnet) => (
                     "Telnet authentication, implementation, and endpoint host coverage",
                     "The unauthenticated Telnet profile observes whether a login or password prompt is offered without TLS. It sends no username or password and does not log in; it does not test default credentials, authentication bypass, Telnet implementation CVEs, operating-system patches, installed software, or local configuration.",
-                    "Keep this limitation visible; use a separately approved authentication assessment or endpoint inventory when those checks are needed.",
+                    "Run a separately approved authentication assessment or use endpoint inventory.",
                 ),
                 None => unreachable!("the missing profile returned above"),
             };
@@ -3229,7 +3231,7 @@ fn append_internal_device_profile_gaps(
                         reason: "This run does not retain one exact frozen HTTPS management-service profile for this asset. Current project metadata is not used to claim historical TLS coverage."
                             .into(),
                         next_action_code: NextActionCode::PreserveVisibleLimitation,
-                        next_action: "Keep this limitation visible; do not interpret missing historical detail as completed coverage."
+                        next_action: "Run the HTTPS management-service profile again to create a complete coverage record."
                             .into(),
                     });
                 }
@@ -3249,7 +3251,7 @@ fn append_internal_device_profile_gaps(
                 dimension: dimension.into(),
                 reason: reason.into(),
                 next_action_code: NextActionCode::PreserveVisibleLimitation,
-                next_action: "Keep this limitation visible; do not interpret missing historical detail as completed coverage."
+                next_action: "Choose a supported device product and firmware vulnerability check."
                     .into(),
             });
         }
@@ -3457,6 +3459,14 @@ fn project_finding(
             .severity_basis_code
             .is_some_and(|code| code.is_exposure_observation())
     });
+    let aws_iam_policy = details.and_then(|finding| {
+        finding.evidence.iter().find_map(|evidence| {
+            evidence
+                .scanner_details
+                .as_ref()
+                .and_then(|details| details.aws_iam_policy.as_ref())
+        })
+    });
     BeginnerFinding {
         finding_id: observation.finding_id.clone(),
         fingerprint: observation.fingerprint.clone(),
@@ -3468,7 +3478,9 @@ fn project_finding(
             crate::finding_narrative::EXPOSURE_OBSERVATION_RISK.into()
         } else {
             details
-                .map(|finding| finding.plain_language_summary.clone())
+                .map(|finding| {
+                    crate::finding_narrative::summary_english(&finding.plain_language_summary)
+                })
                 .unwrap_or_else(|| {
                     "A retained observation exists, but this older run did not save its full plain-language description."
                         .into()
@@ -3478,7 +3490,13 @@ fn project_finding(
             crate::finding_narrative::EXPOSURE_OBSERVATION_IMPACT.into()
         } else {
             details
-                .map(|finding| finding.possible_impact.clone())
+                .map(|finding| {
+                    crate::finding_narrative::impact_english(
+                        &finding.possible_impact,
+                        finding.family,
+                        &finding.context_factors,
+                    )
+                })
                 .unwrap_or_else(|| "The historical impact description is unavailable.".into())
         },
         severity: observation.severity.clone(),
@@ -3492,7 +3510,16 @@ fn project_finding(
             Vec::new()
         } else {
             details
-                .map(|finding| finding.priority_reasons.clone())
+                .map(|finding| {
+                    finding
+                        .priority_reasons
+                        .iter()
+                        .filter(|reason| {
+                            !crate::finding_narrative::is_evidence_only_priority_reason(reason)
+                        })
+                        .map(|reason| crate::finding_narrative::priority_reason_english(reason))
+                        .collect()
+                })
                 .unwrap_or_default()
         },
         target_asset_ids: observation.asset_ids.clone(),
@@ -3500,11 +3527,14 @@ fn project_finding(
             crate::finding_narrative::EXPOSURE_OBSERVATION_NEXT_STEP.into()
         } else {
             details
-                .map(|finding| finding.recommendation.clone())
-                .unwrap_or_else(|| {
-                    "Ask a security professional to review the retained observation and evidence."
-                        .into()
+                .map(|finding| {
+                    crate::finding_narrative::action_english(
+                        &finding.recommendation,
+                        finding.family,
+                        aws_iam_policy,
+                    )
                 })
+                .unwrap_or_else(|| "Review the retained observation and evidence.".into())
         },
         recommended_expert_type: if exposure_observation {
             crate::finding_narrative::EXPOSURE_OBSERVATION_OWNER.into()
@@ -3534,13 +3564,20 @@ fn project_finding(
         rollback_considerations: if exposure_observation {
             None
         } else {
-            details.and_then(|finding| finding.rollback_considerations.clone())
+            details.and_then(|finding| {
+                finding
+                    .rollback_considerations
+                    .as_ref()
+                    .map(|text| crate::finding_narrative::rollback_english(text))
+            })
         },
         verification_guidance: if exposure_observation {
             Some(crate::finding_narrative::EXPOSURE_OBSERVATION_VERIFICATION.into())
         } else {
             details
-                .map(|finding| finding.verification_guidance.clone())
+                .map(|finding| {
+                    crate::finding_narrative::verification_english(&finding.verification_guidance)
+                })
                 .filter(|guidance| !guidance.trim().is_empty())
         },
     }
@@ -4037,14 +4074,14 @@ fn non_security_only_explanation(run: &ScanRun, lifecycle: ReportLifecycle) -> S
 fn state_explanation(summary: BeginnerReportSummary, lifecycle: ReportLifecycle) -> &'static str {
     match (summary, lifecycle) {
         (BeginnerReportSummary::Complete, ReportLifecycle::Final) => {
-            "Every exact requested dimension retained by this run has a completed durable outcome. Review the displayed coverage before deciding whether to scan more."
+            "Every requested dimension retained by this run has a final outcome."
         }
         (BeginnerReportSummary::NoChecksCompleted, _) => {
-            "The request finished without any check contacting a target. Nothing untested is presented as passed."
+            "The scan ended before any security check completed. Open the coverage gaps and retry."
         }
         (BeginnerReportSummary::Partial, ReportLifecycle::Live) => "Scan in progress.",
         (BeginnerReportSummary::Partial, ReportLifecycle::Final) => {
-            "Useful saved results are available, but one or more requested or historical coverage dimensions are incomplete or unavailable."
+            "The scan completed with one or more coverage gaps. Completed sibling checks are included."
         }
         (BeginnerReportSummary::Complete, ReportLifecycle::Live) => "Scan in progress.",
     }
@@ -4974,7 +5011,7 @@ mod tests {
             CoverageDimensionStatus::InProgress
         );
         assert!(report.data_quality_warnings.iter().any(|warning| {
-            warning.contains("saved completion time") && warning.contains("remains live")
+            warning.contains("completion time") && warning.contains("no terminal outcome")
         }));
     }
 
@@ -5426,7 +5463,7 @@ mod tests {
                 .next_steps
                 .iter()
                 .any(|step| step.task_id.as_deref() == Some("maester")
-                    && step.action.contains("record a human decision"))
+                    && step.action.contains("set this control's status"))
         );
 
         let reopened: AssessmentCase =
@@ -7184,7 +7221,7 @@ mod tests {
         assert_eq!(gap.next_action_code, NextActionCode::RetryCheck);
         assert_eq!(
             gap.next_action,
-            "Keep the saved results and run this check again to cover the checks that did not finish."
+            "Retry this check to complete the missing work."
         );
         assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
     }

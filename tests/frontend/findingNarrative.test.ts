@@ -56,26 +56,25 @@ const ENGLISH_ACTION =
 const ENGLISH_SUMMARY =
   "Trivy reported a medium-severity condition on the assessed asset. The attached raw record is evidence, not an instruction.";
 
-test("English is the backend's own prose, returned untouched", () => {
-  // Re-deriving it here would let the rendered wording and the exported
-  // wording drift apart with nothing to notice.
+test("English findings use direct report-layer impact and action wording", () => {
   for (const family of FAMILIES) {
-    assert.equal(
-      findingImpactSentence("en", { englishFallback: ENGLISH_IMPACT, severityLabel: "Medium", family }),
-      ENGLISH_IMPACT,
-    );
-    assert.equal(
-      findingActionSentence("en", {
-        englishFallback: ENGLISH_ACTION,
-        expertType: "Container security engineer",
-        family,
-      }),
-      ENGLISH_ACTION,
-    );
+    const impact = findingImpactSentence("en", {
+      englishFallback: ENGLISH_IMPACT,
+      severityLabel: "Medium",
+      family,
+    });
+    const action = findingActionSentence("en", {
+      englishFallback: ENGLISH_ACTION,
+      family,
+    });
+    assert.doesNotMatch(impact, /If the scanner result is confirmed|compliance score/u);
+    assert.doesNotMatch(action, /Have the recommended specialist|plan and approve/u);
+    assert.match(impact, /\.$/u);
+    assert.match(action, /\.$/u);
   }
   assert.equal(
     findingSummarySentence("en", { englishFallback: ENGLISH_SUMMARY, severityLabel: "Medium" }),
-    ENGLISH_SUMMARY,
+    "Trivy reported a medium-severity condition on the assessed asset.",
   );
 });
 
@@ -93,7 +92,6 @@ test("every family a finding can carry has Chinese for both sentences it compose
     });
     const action = findingActionSentence("zh-TW", {
       englishFallback: ENGLISH_ACTION,
-      expertType: "Container security engineer",
       family,
     });
     assert.ok(HAN.test(impact), `${family} impact is not Chinese: ${impact}`);
@@ -112,12 +110,11 @@ test("a leaked credential is told to revoke first, not to adjust permissions", (
   // until it is revoked, so anything else first leaves it valid that long.
   const action = findingActionSentence("zh-TW", {
     englishFallback: ENGLISH_ACTION,
-    expertType: "Secrets-response specialist",
     family: "secret",
   });
   assert.ok(action.includes("撤銷"), action);
   assert.ok(action.includes("輪替"), action);
-  assert.ok(action.includes("機密外洩應變專家"), action);
+  assert.doesNotMatch(action, /人工確認|專業人員|規劃並核准/u);
 });
 
 test("Cloudsplaining actions tell a Chinese reader how each upstream policy source can be changed", () => {
@@ -140,16 +137,15 @@ test("Cloudsplaining actions tell a Chinese reader how each upstream policy sour
 
   const action = (awsIamPolicy: AwsIamPolicyFindingDetails) => findingActionSentence("zh-TW", {
     englishFallback: "ENGLISH_IAM_FALLBACK_MUST_NOT_RENDER",
-    expertType: "Cloud identity specialist",
     family: "cloud_identity",
     awsIamPolicy,
   });
 
   const awsManaged = action(details("aws_managed", false));
-  assert.match(awsManaged, /核准以下處理：在角色 ApplicationRole、群組 BillingOperators、使用者 break-glass-user上/u);
+  assert.match(awsManaged, /^在角色 ApplicationRole、群組 BillingOperators、使用者 break-glass-user上/u);
   assert.match(awsManaged, /將 AWS 受管政策 BillingReadPolicy 改為權限較小的政策/u);
   assert.match(awsManaged, /AWS 受管政策無法由此帳戶直接編輯/u);
-  assert.match(awsManaged, /保留的附加清單不完整；變更政策前請先核對目前的 IAM 附加關係/u);
+  assert.match(awsManaged, /請先核對目前的 IAM 附加關係/u);
   assert.doesNotMatch(awsManaged, /ENGLISH_IAM_FALLBACK/u);
 
   const unknownAttachments = details("aws_managed", false);
@@ -258,19 +254,18 @@ test("the engine's own display name survives verbatim", () => {
   }
 });
 
-test("a finding with no code keeps the English rather than losing the sentence", () => {
+test("a finding with no code keeps its substance and drops superseded defensive wording", () => {
   // Cases written before the codes existed, and any family a newer backend
-  // adds. Untranslated beats blank, and beats a guess.
+  // adds. The stored substance remains even when no localized family exists.
   assert.equal(
     findingImpactSentence("zh-TW", { englishFallback: ENGLISH_IMPACT, severityLabel: "中" }),
-    ENGLISH_IMPACT,
+    "A container or software component may expose the workload to a known weakness.",
   );
   assert.equal(
     findingActionSentence("zh-TW", {
       englishFallback: ENGLISH_ACTION,
-      expertType: "Container security engineer",
     }),
-    ENGLISH_ACTION,
+    "An upgrade to a fixed version of the affected component, or a recorded reason it cannot be upgraded yet.",
   );
   assert.equal(
     findingImpactSentence("zh-TW", {
@@ -278,7 +273,7 @@ test("a finding with no code keeps the English rather than losing the sentence",
       severityLabel: "中",
       family: "quantum_posture" as FindingFamily,
     }),
-    ENGLISH_IMPACT,
+    "A container or software component may expose the workload to a known weakness.",
   );
   // A sentence this product did not write is not taken apart for a name.
   const foreign = "Some other text entirely.";
@@ -349,7 +344,7 @@ test("case context that raised the priority survives being said in Chinese", () 
     assert.ok(composed.startsWith(base), `${factor} rewrote the base sentence`);
   }
 
-  // English stays the backend's own prose, appendices and all.
+  // English uses the same direct composition as the exported report.
   assert.equal(
     findingImpactSentence("en", {
       englishFallback,
@@ -357,7 +352,7 @@ test("case context that raised the priority survives being said in Chinese", () 
       family: "cloud_posture",
       contextFactors: ["internet_exposed_asset"],
     }),
-    englishFallback,
+    "Cloud resources or data may be exposed, changed, or used beyond the organization's intent. The affected asset is internet-accessible, increasing the reachable attack surface.",
   );
 });
 
@@ -381,7 +376,10 @@ test("the verification sentence keeps the engine name and rule id verbatim", () 
   // Both are the engine's own strings and have to read identically either way.
   assert.ok(zh.includes("kube-bench"), zh);
   assert.ok(zh.includes("4.2.1"), zh);
-  assert.equal(findingVerificationSentence("en", english), english);
+  assert.equal(
+    findingVerificationSentence("en", english),
+    "Rerun kube-bench with the same scope after the change and confirm that source rule 4.2.1 is no longer reported.",
+  );
   // Not this shape -> returned untouched rather than half-rewritten.
   const foreign = "Re-run the responsible engine.";
   assert.equal(findingVerificationSentence("zh-TW", foreign), foreign);
@@ -407,7 +405,7 @@ test("why this priority is said in Chinese, keeping the engine's own words", () 
   );
   assert.equal(
     unrated,
-    "嚴重程度維持為未知，因為 Gitleaks 未提供評級；需由人工確認。",
+    "嚴重程度為未知，因為 Gitleaks 未提供評級。",
   );
 
   assert.equal(findingPriorityReason("en", derived), derived);

@@ -489,7 +489,7 @@ test("the report the findings list is built from carries severity and codes the 
       priority: 15,
       priority_reasons: [
         "Confidence derived from a response this product observed directly; naabu reports no confidence of its own.",
-        "Direct scanner evidence is attached and still requires human review.",
+        "Direct scanner evidence is attached.",
       ],
       target_asset_ids: ["asset-1"],
       next_step: "Have the recommended specialist (Network security engineer) review it.",

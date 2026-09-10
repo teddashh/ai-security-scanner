@@ -125,7 +125,7 @@ pub struct AdapterOutput {
     /// Authorized targets with genuine upstream per-template execution
     /// records. This is positive coverage evidence, never a finding.
     pub security_template_executions: Vec<crate::domain::SecurityTemplateExecution>,
-    /// Controls the engine evaluated but left for human review. This is
+    /// Controls the engine evaluated without returning a pass/fail verdict. This is
     /// coverage data, never a finding or pass.
     pub manual_review_controls: Vec<crate::domain::ManualReviewControl>,
     /// False when any captured evidence could not be fully normalized. Valid

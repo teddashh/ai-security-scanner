@@ -70,7 +70,8 @@ const FIXED_ENGINE_WARNINGS: ReadonlyArray<readonly [string, string]> = [
   ["Greenbone XML element exceeded the attribute limit", "Greenbone XML 元素超過屬性限制"],
   ["Greenbone XML contained a malformed attribute", "Greenbone XML 含有格式錯誤的屬性"],
   ["Greenbone XML attribute could not be decoded safely", "無法安全解碼 Greenbone XML 屬性"],
-  ["This check finished with partial results after each unfinished item received at most one automatic retry. Saved findings remain available, and the report shows every remaining coverage gap. Start a new scan if you want to try those items again.", "每個未完成項目最多自動重試一次後，此檢查以部分結果結束。已儲存的問題仍可使用，報告也會顯示所有剩餘的涵蓋缺口。若要再次嘗試這些項目，請開始新的掃描。"],
+  ["This check finished with partial results after each unfinished item received at most one automatic retry. Saved findings remain available, and the report shows every remaining coverage gap. Start a new scan if you want to try those items again.", "每個未完成項目自動重試一次後，這項檢查仍有涵蓋缺口。請開始新的掃描以重試剩餘項目。"],
+  ["This check completed with coverage gaps after one automatic retry per unfinished item. Start a new scan to retry the remaining items.", "每個未完成項目自動重試一次後，這項檢查仍有涵蓋缺口。請開始新的掃描以重試剩餘項目。"],
   ["This check is not available in the installed version. No new target contact was made during this resume attempt. Start a new scan after updating the app; other checks can continue.", "已安裝的版本無法使用此檢查。本次繼續嘗試未接觸新目標。更新應用程式後請開始新的掃描；其他檢查可以繼續。"],
   ["Saved scanner results remain intact, but this installed result reader cannot safely continue organizing them. Existing findings remain available; start a new scan for a fresh result.", "已儲存的掃描器結果完整無缺，但已安裝的結果讀取器無法安全繼續整理。既有問題仍可使用；請開始新的掃描以取得新結果。"],
   ["Saved results remain available, but a later scan state won the continuation race. Start a new scan to fill the remaining coverage gap.", "已儲存的結果仍可使用，但較新的掃描狀態已取代本次繼續。請開始新的掃描以補足剩餘涵蓋缺口。"],
@@ -88,7 +89,8 @@ const FIXED_ENGINE_WARNINGS: ReadonlyArray<readonly [string, string]> = [
  * than kept verbatim; only the count in front of each one is the engine's.
  */
 const SHORTFALL_DESCRIPTIONS: ReadonlyArray<readonly [string, string]> = [
-  ["reserved for manual review", "保留供人工審查"],
+  ["left without an automated verdict", "未回傳自動判定"],
+  ["reserved for manual review", "未回傳自動判定"],
   ["omitted by configuration", "依設定略過"],
   ["could not be evaluated", "無法評估"],
   ["skipped", "已略過"],
@@ -238,5 +240,13 @@ export const recognizedEngineWarningZhTW = (warning: string): string | undefined
   return undefined;
 };
 
-export const localizedEngineWarning = (warning: string, locale: "en" | "zh-TW"): string =>
-  locale === "en" ? warning : recognizedEngineWarningZhTW(warning) ?? warning;
+export const localizedEngineWarning = (warning: string, locale: "en" | "zh-TW"): string => {
+  const normalizedWarning = warning.replaceAll(
+    "reserved for manual review",
+    "left without an automated verdict",
+  );
+  const normalized = normalizedWarning === "This check finished with partial results after each unfinished item received at most one automatic retry. Saved findings remain available, and the report shows every remaining coverage gap. Start a new scan if you want to try those items again."
+    ? "This check completed with coverage gaps after one automatic retry per unfinished item. Start a new scan to retry the remaining items."
+    : normalizedWarning;
+  return locale === "en" ? normalized : recognizedEngineWarningZhTW(normalized) ?? normalized;
+};

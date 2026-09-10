@@ -386,7 +386,7 @@ pub fn build_demo_case() -> AssessmentCase {
         plain_language_summary:
             "Prowler reported a critical-severity condition on the assessed asset.".into(),
         possible_impact:
-            "If the scanner result is confirmed, cloud resources or data may be accessed, changed, or used unexpectedly.".into(),
+            "Cloud resources or data may be accessed, changed, or used unexpectedly.".into(),
         severity: Severity::Critical,
         confidence: Confidence::High,
         priority: 96,
@@ -436,8 +436,8 @@ pub fn build_demo_case() -> AssessmentCase {
             },
         ],
         recommendation: "Have a cloud security engineer review the synthetic bucket policy, Block Public Access settings, and demo dependencies. Do not apply an automatic fix.".into(),
-        verification_guidance: "After an approved manual change, rerun Prowler with the same authorized scope and confirm that source rule s3_public_access is no longer reported.".into(),
-        rollback_considerations: Some("Before any manual change, preserve the current approved configuration and document a tested restoration path; this product does not execute remediation.".into()),
+        verification_guidance: "Rerun Prowler with the same scope after the change and confirm that source rule s3_public_access is no longer reported.".into(),
+        rollback_considerations: Some("Capture the current configuration and test its restoration path before making the change.".into()),
         official_references: vec!["https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html".into()],
         recommended_expert_type: "Cloud security engineer".into(),
         status: FindingStatus::ExpertReviewRequested,
@@ -480,13 +480,13 @@ pub fn build_demo_case() -> AssessmentCase {
         title: "The synthetic public site's HSTS status remains unconfirmed".into(),
         plain_language_summary:
             "httpx reported an informational-severity condition on the assessed asset.".into(),
-        possible_impact: "If the scanner result is confirmed, an internet-reachable service may expose unexpected functionality or a known weakness.".into(),
+        possible_impact: "An internet-reachable service may expose unexpected functionality or a known weakness.".into(),
         severity: Severity::Informational,
         confidence: Confidence::Medium,
         priority: 58,
         priority_reasons: vec![
             "An affected asset is marked internet-exposed, and all retained source attribution for that asset is non-questionnaire.".into(),
-            "Direct scanner evidence is attached and still requires human review.".into(),
+            "Direct scanner evidence is attached.".into(),
         ],
         asset_ids: vec![domain_id],
         evidence: vec![Evidence {
@@ -512,7 +512,7 @@ pub fn build_demo_case() -> AssessmentCase {
         // carries no control relationship either.
         control_references: Vec::new(),
         recommendation: "Have a network or system administrator review the synthetic reverse-proxy and CDN TLS/HSTS settings.".into(),
-        verification_guidance: "After an approved manual change, rerun httpx with the same authorized scope and confirm that source rule hsts is no longer reported.".into(),
+        verification_guidance: "Rerun httpx with the same scope after the change and confirm that source rule hsts is no longer reported.".into(),
         rollback_considerations: None,
         official_references: vec![
             "https://developer.mozilla.org/docs/Web/HTTP/Headers/Strict-Transport-Security".into(),

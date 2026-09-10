@@ -321,7 +321,7 @@ test("a partial run is distinguished from a complete one", () => {
   const partialPill = statePill(partial);
   const completePill = statePill(complete);
 
-  expect(partialPill.textContent).toContain("Partial results");
+  expect(partialPill.textContent).toContain("Completed with gaps");
   expect(partialPill.className).not.toContain("status-pill--positive");
   expect(completePill.textContent).toContain("Requested checks complete");
   expect(partialPill.textContent).not.toEqual(completePill.textContent);
@@ -493,7 +493,7 @@ test("the first layer gives every requested asset one evidence-derived result st
       dimension: "authenticated administration",
       reason: "The completed profile deliberately excluded signed-in checks.",
       nextActionCode: "preserve_visible_limitation",
-      nextAction: "Keep this limitation visible.",
+      nextAction: "Open the saved scope details.",
     }, {
       kind: "failed",
       taskId: "task-device-failed",
@@ -534,12 +534,12 @@ test("the first layer gives every requested asset one evidence-derived result st
 
   expect(row("team-a/api").dataset.assetResult).toBe("problems_found");
   expect(row("team-a/api").textContent).toContain("1 problem was found.");
-  expect(row("team-a/api").textContent).toContain("Some checks are also incomplete");
+  expect(row("team-a/api").textContent).toContain("Some checks are incomplete");
   // One frozen finding can apply to more than one target; each target must get credit for it.
   expect(row("team-b/api").dataset.assetResult).toBe("problems_found");
   expect(row("https://portal.example").dataset.assetResult).toBe("no_problems_completed");
   expect(row("https://portal.example").textContent).toContain("1 completed security check reported no problems");
-  expect(row("https://portal.example").textContent).toContain("Review the stated limits");
+  expect(row("https://portal.example").textContent).toContain("Open the completed-check scope");
   expect(row("Branch gateway").dataset.assetResult).toBe("incomplete_failed");
   expect(row("Branch gateway").textContent).toContain("Retry this check");
   expect(row("Branch gateway").textContent).not.toContain("Keep this limitation visible");
@@ -693,7 +693,7 @@ test("a completed asset stays bounded while an unrun sibling task makes another 
       dimension: "host operating-system checks",
       reason: "The completed SSH service profile did not inspect the host operating system.",
       nextActionCode: "preserve_visible_limitation",
-      nextAction: "Keep this limitation visible.",
+      nextAction: "Open the saved scope details.",
     }, {
       kind: "not_tested",
       taskId: "task-never-ran",
@@ -769,16 +769,16 @@ test("an in-progress asset keeps its wait-or-cancel action on the per-asset boar
       taskId: "task-running",
       targetAssetIds: ["asset-1"],
       dimension: "unfinished check dimension",
-      reason: "This check is still changing and has not recorded a complete result.",
+      reason: "This check has no terminal outcome.",
       nextActionCode: "wait_or_cancel",
-      nextAction: "Let it continue or cancel it; the partial report remains available.",
+      nextAction: "Open Progress and finish or cancel this check.",
     }],
     coverageCounts: counts({ notTested: 1 }),
   }));
 
   const row = container.querySelector<HTMLElement>(".asset-result-row");
   expect(row?.dataset.assetResult).toBe("incomplete_failed");
-  expect(row?.textContent).toContain("Let it finish, or cancel and keep the partial report");
+  expect(row?.textContent).toContain("Open Progress and finish or cancel this check");
 });
 
 test("the asset result board gives a Traditional Chinese beginner the same bounded statuses and action", () => {
@@ -1062,11 +1062,11 @@ test("a generic completed coordinate uses display labels without leaking backend
   expect(technicalScope?.textContent).toContain(rawCoordinate);
 });
 
-test("an absent coverage gap is scoped to the requested checks rather than implying broad security coverage", () => {
+test("an absent coverage gap is stated once within the requested-check scope", () => {
   const { container } = renderReport(report("complete"));
 
-  // Zero is a claim about this run's requested checks, never about broader
-  // security coverage. Both the label and detail keep that boundary visible.
+  // Zero is a claim about this run's requested checks. The asset states and
+  // report terms carry the rest without repeating a defensive paragraph here.
   //
   // The claim is made in two places and each is asserted separately: a
   // page-wide text match passes while either one still says it, which would
@@ -1077,7 +1077,7 @@ test("an absent coverage gap is scoped to the requested checks rather than imply
   if (!metric) throw new Error("the coverage-gap metric card did not render");
   expect(metric.querySelector(".metric-card__value")?.textContent).toBe("0");
   expect(metric.querySelector(".metric-card__detail")?.textContent).toBe(
-    "No gap was recorded within the requested checks. This does not mean broader security testing was performed.",
+    "No gap was recorded within the requested checks.",
   );
 
   const gapsCard = Array.from(container.querySelectorAll<HTMLElement>(".coverage-card")).find(
@@ -1085,7 +1085,7 @@ test("an absent coverage gap is scoped to the requested checks rather than imply
   );
   if (!gapsCard) throw new Error("the coverage-gap card did not render");
   expect(gapsCard.textContent).toContain(
-    "No gap was recorded within the requested checks. This does not mean broader security testing was performed.",
+    "No gap was recorded within the requested checks.",
   );
 });
 
@@ -1140,7 +1140,7 @@ test("a mixed run does not apply localhost-only exclusions to the whole report",
     "Connection test only — no vulnerability scan ran",
   );
   expect(section.textContent).toContain(
-    "No gap was recorded within the requested checks. This does not mean broader security testing was performed.",
+    "No gap was recorded within the requested checks.",
   );
   expect(section.textContent).not.toContain(
     "Not checked: vulnerabilities, protocol behavior, website or API content, other ports, or other hosts.",
@@ -1169,9 +1169,9 @@ test("two gaps of the same kind give the reader two different reasons", () => {
           kind: "not_tested",
           targetAssetIds: ["asset-1"],
           dimension: "trivy: unfinished check dimension",
-          reason: "This check is still changing and has not recorded a complete result.",
+          reason: "This check has no terminal outcome.",
           nextActionCode: "wait_or_cancel",
-          nextAction: "Let it continue or cancel it; the partial report remains available.",
+          nextAction: "Open Progress and finish or cancel this check.",
         },
       ],
     }),
@@ -1183,7 +1183,7 @@ test("two gaps of the same kind give the reader two different reasons", () => {
   const disclosure = section!.querySelector<HTMLElement>(".report-scope-disclosure");
   expect(within(disclosure!).getByText(/This check did not start, so it is not a pass\./u)).toBeTruthy();
   expect(
-    within(disclosure!).getByText(/This check is still changing and has not recorded a complete result\./u),
+    within(disclosure!).getByText(/This check has no terminal outcome\./u),
   ).toBeTruthy();
   expect(within(disclosure!).getByText(/Review the target and try this check again\./u)).toBeTruthy();
 });
@@ -1315,7 +1315,7 @@ test("reachable-service inventory is not counted or triaged as a vulnerability",
   expect(container.textContent).not.toContain(observation.possibleImpact);
   expect(container.textContent).not.toContain(observation.nextStep);
   expect(container.textContent).toContain(
-    "Review the saved results and stated limits. Run broader checks if you need broader assurance.",
+    "No additional action is listed for this scan.",
   );
   const nextActionsHeading = Array.from(container.querySelectorAll("h3"))
     .find((heading) => heading.textContent === "What to do next");
@@ -1485,7 +1485,7 @@ test("what the run could not establish is shown with its own dimension", () => {
           dimension: "automatic scope reductions or truncations",
           reason: "This run did not retain an exact reduction record.",
           nextActionCode: "preserve_visible_limitation",
-          nextAction: "Keep this limitation visible.",
+          nextAction: "Open the saved scope details.",
         },
         {
           kind: "unavailable",
@@ -1493,7 +1493,7 @@ test("what the run could not establish is shown with its own dimension", () => {
           dimension: "requested scan stage",
           reason: "The requested stage was not retained.",
           nextActionCode: "preserve_visible_limitation",
-          nextAction: "Keep this limitation visible.",
+          nextAction: "Open the saved scope details.",
         },
       ],
     }),
@@ -1508,7 +1508,7 @@ test("what the run could not establish is shown with its own dimension", () => {
   expect(container.textContent).not.toContain("No gap was recorded within the requested checks.");
 });
 
-test("saved-data limitations are surfaced, not held in the model", () => {
+test("saved-data limitations stay in the closed report-end technical record", () => {
   const warning = "One task's saved evidence index could not be read.";
   const { container } = renderReport(
     report("partial", {
@@ -1516,15 +1516,17 @@ test("saved-data limitations are surfaced, not held in the model", () => {
     }),
   );
 
-  const firstLayerCount = container.querySelector<HTMLElement>(".report-data-warning-count");
-  expect(firstLayerCount).not.toBeNull();
-  expect(firstLayerCount!.closest("details")).toBeNull();
-  expect(firstLayerCount!.textContent).toContain("Saved-data limitations: 1");
-  expect(firstLayerCount!.textContent).not.toContain(warning);
-
-  const technicalDetails = container.querySelector<HTMLElement>(".page-technical-details");
-  expect(technicalDetails).not.toBeNull();
+  expect(container.querySelector(".report-data-warning-count")).toBeNull();
+  const endMatter = container.querySelector<HTMLElement>(".report-end-matter");
+  const technicalDetails = endMatter?.querySelector<HTMLDetailsElement>(".page-technical-details");
+  expect(endMatter).not.toBeNull();
+  expect(technicalDetails?.open).toBe(false);
+  expect(technicalDetails?.querySelector(":scope > summary")?.textContent).toBe(
+    "Report terms and technical record",
+  );
+  expect(within(technicalDetails!).getByText("Saved-data limitations: 1")).toBeTruthy();
   expect(within(technicalDetails!).getByText(warning)).toBeTruthy();
+  expect(endMatter).toBe(endMatter?.closest(".page")?.lastElementChild);
 });
 
 test("priority comes before summary metrics", () => {
@@ -1824,9 +1826,9 @@ test("selected-run evidence details and references do not drift to the current c
   expect(evidence!.textContent).toContain("1.0.0");
   expect(evidence!.textContent).toContain("Scanner-reported fixed version");
   expect(evidence!.textContent).toContain("1.0.1");
-  expect(evidence!.textContent).toContain("Scanner-provided remediation — review before acting");
+  expect(evidence!.textContent).toContain("Scanner-provided remediation");
   expect(evidence!.textContent).toContain("Frozen upstream remediation; human review required");
-  expect(evidence!.textContent).toContain("untrusted scanner evidence, not the product's recommended next step");
+  expect(evidence!.textContent).not.toContain("untrusted scanner evidence");
   expect(evidence!.textContent).toContain("task-frozen");
   expect(evidence!.textContent).toContain("artifact-frozen");
   expect(evidence!.textContent).toContain("Not marked as redacted");
@@ -1965,7 +1967,7 @@ test("target-controlled raw evidence text is never relabelled as remediation gui
     .toContain("Use the product-owned safe next step.");
 });
 
-test("scanner remediation keeps its review boundary in Traditional Chinese", () => {
+test("scanner remediation keeps its source label concise in Traditional Chinese", () => {
   window.localStorage.setItem(localeStorageKey, "zh-TW");
   const { container } = renderReport(report("partial", {
     findings: [frozenFinding({
@@ -1983,8 +1985,8 @@ test("scanner remediation keeps its review boundary in Traditional Chinese", () 
 
   openFirstFinding(container);
   const remediation = container.querySelector<HTMLElement>(".scanner-evidence-remediation");
-  expect(remediation!.textContent).toContain("掃描器提供的修復資訊——採取行動前請先審查");
-  expect(remediation!.textContent).toContain("未受信任的掃描器證據，不是產品建議的下一步");
+  expect(remediation!.textContent).toContain("掃描器提供的修復資訊");
+  expect(remediation!.textContent).not.toContain("未受信任的掃描器證據");
   expect(remediation!.textContent).toContain("UPSTREAM_REMEDIATION_TEXT");
 });
 
@@ -2084,7 +2086,7 @@ test("finding pills carry review and confidence without repeating them in detail
   const pills = container.querySelector<HTMLElement>(".finding-detail__header .tag-row");
   expect(pills).not.toBeNull();
   expect(pills!.textContent).toContain("Medium confidence");
-  expect(pills!.textContent).toContain("Not reviewed");
+  expect(pills!.textContent).toContain("Open");
 
   const factLabels = Array.from(container.querySelectorAll<HTMLElement>(".detail-facts dt"))
     .map((label) => label.textContent);
@@ -2248,11 +2250,12 @@ test("AIDEFEND is not presented as carrying the same standing as NIST and ISO", 
   // three in one breath.
   const { container } = renderReport(report("partial"));
 
-  const notice = Array.from(container.querySelectorAll<HTMLElement>(".inline-notice"))
-    .find((candidate) => candidate.textContent?.includes("AIDEFEND"));
-  expect(notice).toBeTruthy();
-  expect(notice!.textContent).toContain("not an audit, certification, compliance decision, or automatic fix");
-  expect(notice!.textContent).toContain("independent, unofficial mapping");
+  const endMatter = container.querySelector<HTMLElement>(".report-end-matter");
+  const details = endMatter?.querySelector<HTMLDetailsElement>("details");
+  expect(details?.open).toBe(false);
+  expect(details!.textContent).toContain("not an audit, certification, compliance decision, security guarantee, or automatic remediation");
+  expect(details!.textContent).toContain("independent, unofficial mapping");
+  expect(endMatter).toBe(endMatter?.closest(".page")?.lastElementChild);
 });
 
 test("each saved-data limitation is shown, not replaced by a coverage sentence", () => {
@@ -2264,12 +2267,11 @@ test("each saved-data limitation is shown, not replaced by a coverage sentence",
   // of those causes.
   const warnings = [
     "The selected run's stored project identifier does not match this project. The report remains limited to the selected in-project record.",
-    "This run has a saved completion time while at least one check is still active. The report follows the check state and remains live instead of presenting a final result.",
+    "Saved run state is inconsistent: it has a completion time while at least one check has no terminal outcome.",
   ];
   const { container } = renderReport(report("partial", { dataQualityWarnings: warnings }));
 
-  const notice = Array.from(container.querySelectorAll<HTMLElement>(".inline-notice"))
-    .find((candidate) => candidate.textContent?.includes("Saved-data limitations"));
+  const notice = container.querySelector<HTMLElement>(".report-end-matter");
   expect(notice).toBeTruthy();
   expect(notice!.textContent).toContain("Saved-data limitations: 2");
 
@@ -2291,9 +2293,9 @@ test("a report with no saved-data limitation shows no such notice", () => {
   // count would be the only thing distinguishing a clean report.
   const { container } = renderReport(report("partial"));
 
-  const notice = Array.from(container.querySelectorAll<HTMLElement>(".inline-notice"))
-    .find((candidate) => candidate.textContent?.includes("Saved-data limitations"));
-  expect(notice).toBeUndefined();
+  const endMatter = container.querySelector<HTMLElement>(".report-end-matter");
+  expect(endMatter).not.toBeNull();
+  expect(endMatter!.textContent).not.toContain("Saved-data limitations");
 });
 
 // The check ran, produced results, and none of them could be tied to anything
@@ -2320,11 +2322,11 @@ test("a completed Maester review item is visible without being labelled untested
     kind: "manual_review" as const,
     taskId: "task-maester",
     targetAssetIds: ["asset-1"],
-    dimension: "maester: manual review for MT.1003 — Legacy methods need review",
+    dimension: "maester: no verdict for MT.1003 — Legacy methods need review",
     reason:
-      "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding. Upstream detail: Confirm the tenant exception.",
+      "Maester evaluated this control but did not return a pass or fail verdict. Upstream detail: Confirm the tenant exception.",
     nextActionCode: "review_manual_control" as const,
-    nextAction: "Review the upstream detail and record a human decision for this control.",
+    nextAction: "Open the upstream detail and set this control's status.",
   };
   const { container } = renderReport(report("complete", {
     actual: {
@@ -2343,14 +2345,14 @@ test("a completed Maester review item is visible without being labelled untested
   }));
   const rendered = container.textContent ?? "";
 
-  expect(rendered).toContain("Coverage limits and manual review");
+  expect(rendered).toContain("Coverage gaps and checks without verdicts");
   expect(rendered).toContain("What needs attention");
-  expect(rendered).toContain("Manual review");
+  expect(rendered).toContain("No automated verdict");
   expect(rendered).toContain("Confirm the tenant exception");
   expect(rendered).not.toContain("What was not tested");
   const assetRow = container.querySelector<HTMLElement>(".asset-result-row");
   expect(assetRow?.dataset.assetResult).toBe("no_problems_completed");
-  expect(assetRow?.textContent).toContain("record a human decision");
+  expect(assetRow?.textContent).toContain("set this control's status");
 });
 
 test("an empty findings list caused by a missing identifier names that identifier", () => {

@@ -90,7 +90,7 @@ test("a zh-TW reader is not handed English paragraphs under Chinese headings", (
 
   // The same three things the English said, said in Chinese.
   expect(rendered).toContain("本產品依據憑證偵測器的比對結果");
-  expect(rendered).toContain("本產品依據尚未驗證的樣式或偵測器比對結果，將信心評為低");
+  expect(rendered).toContain("本產品依據樣式或偵測器比對結果，將信心評為低");
   expect(rendered).toContain("原始碼或憑證可能導致未授權存取");
   // A leaked credential is told to revoke and rotate before anything else.
   expect(rendered).toContain("先撤銷並輪替這組已外洩的憑證");
@@ -103,14 +103,17 @@ test("a zh-TW reader is not handed English paragraphs under Chinese headings", (
   expect(rendered).toContain("Potential AWS secret detected");
 });
 
-test("an English reader still gets the backend's own wording, unchanged", () => {
+test("an English reader gets direct report-layer wording", () => {
   window.localStorage.setItem(localeStorageKey, "en");
   const { container } = renderPage([leakedCredential()]);
   const rendered = container.textContent ?? "";
 
-  for (const english of [ENGLISH_SUMMARY, ENGLISH_IMPACT, ENGLISH_ACTION]) {
-    expect(rendered).toContain(english);
-  }
+  expect(rendered).toContain("TruffleHog reported this condition on the assessed asset without rating it. This product rated it high from a credential detector match.");
+  expect(rendered).toContain("Source code or credentials may permit unauthorized access or unsafe application behavior.");
+  expect(rendered).toContain("Revoke and rotate the exposed credential, then remove it from the source and every retained history entry.");
+  expect(rendered).not.toContain("evidence, not an instruction");
+  expect(rendered).not.toContain("If the scanner result is confirmed");
+  expect(rendered).not.toContain("Have the recommended specialist");
 });
 
 test("a zh-TW reader sees the engine's own confidence word as the source", () => {
@@ -130,10 +133,10 @@ test("a zh-TW reader sees the engine's own confidence word as the source", () =>
 
   expect(rendered).toContain("Semgrep 對這項問題的信心評定為 HIGH");
   expect(rendered).toContain("來源工具評定：HIGH");
-  expect(rendered).not.toContain("本產品依據尚未驗證的樣式或偵測器比對結果評定");
+  expect(rendered).not.toContain("本產品依據樣式或偵測器比對結果評定");
 });
 
-test("a finding stored before the codes existed keeps its English rather than losing it", () => {
+test("a finding stored before the codes existed keeps its substance without legacy caveats", () => {
   window.localStorage.setItem(localeStorageKey, "zh-TW");
   const { container } = renderPage([
     leakedCredential({
@@ -145,10 +148,17 @@ test("a finding stored before the codes existed keeps its English rather than lo
   ]);
   const rendered = container.textContent ?? "";
 
-  // Untranslated beats blank, and beats a guess about which family it was.
-  expect(rendered).toContain(ENGLISH_IMPACT);
-  expect(rendered).toContain(ENGLISH_ACTION);
-  expect(rendered).not.toContain("本產品依據尚未驗證的樣式或偵測器比對結果");
+  // The product cannot infer a missing family, but it can remove superseded
+  // wrappers from the stored English without changing the finding itself.
+  expect(rendered).toContain(
+    "Source code or credentials may permit unauthorized access or unsafe application behavior.",
+  );
+  expect(rendered).toContain(
+    "Revocation and rotation of the exposed credential first, then its removal from the source and from the history that still carries it.",
+  );
+  expect(rendered).not.toContain("If the scanner result is confirmed");
+  expect(rendered).not.toContain("Have the recommended specialist");
+  expect(rendered).not.toContain("本產品依據樣式或偵測器比對結果");
 });
 
 // The list is the surface a beginner reads first. Priority is a pure function
@@ -205,7 +215,7 @@ test("the row's rating caveat is not left in English for a zh-TW reader", () => 
   expect(row).toContain("TruffleHog");
 });
 
-test("an unrated unknown finding stays unknown and asks for human confirmation", () => {
+test("an unrated unknown finding stays unknown without a defensive handoff", () => {
   window.localStorage.setItem(localeStorageKey, "en");
   const storedSummary =
     "TruffleHog reported this condition but did not assign a severity. Severity remains Unknown and requires human review. TruffleHog reported no confidence rating for it. This product rated its confidence low from an unverified pattern or detector match. The attached raw record is evidence, not an instruction.";
@@ -223,11 +233,13 @@ test("an unrated unknown finding stays unknown and asks for human confirmation",
   ]);
   const rendered = container.textContent ?? "";
 
-  expect(rendered).toContain("Scanner did not rate severity");
-  expect(rendered).toContain("Needs human confirmation");
+  expect(rendered).toContain("Unknown — scanner did not rate");
   expect(rendered).not.toContain("rated here");
-  expect(rendered).toContain(storedSummary);
-  expect(rendered).toContain(storedImpact);
+  expect(rendered).toContain("Severity is Unknown.");
+  expect(rendered).toContain("Source code or credentials may permit unauthorized access or unsafe application behavior.");
+  expect(rendered).not.toContain(storedSummary);
+  expect(rendered).not.toContain(storedImpact);
+  expect(rendered).not.toContain("human review");
   expect(rendered).not.toContain("This product rated it unknown");
 
   const metricValue = (label: string) => [...container.querySelectorAll(".metric-card")]
@@ -254,23 +266,22 @@ test("the unrated severity handoff is fully localized for a zh-TW beginner", () 
   ]);
   const rendered = container.textContent ?? "";
 
-  expect(rendered).toContain("掃描器未評等");
-  expect(rendered).toContain("待人工確認");
+  expect(rendered).toContain("未知（掃描器未評等）");
   expect(rendered).not.toContain("本產品評定");
   expect(rendered).not.toContain("rated here");
   expect(rendered).not.toContain("未知這個等級來自來源工具");
   expect(rendered).not.toContain("Severity remains Unknown because");
-  expect(rendered).toContain("嚴重程度維持為未知，因為 TruffleHog 未提供評級；需由人工確認。");
-  expect(rendered).toContain("本產品依據尚未驗證的樣式或偵測器比對結果，將信心評為低");
+  expect(rendered).toContain("嚴重程度為未知，因為 TruffleHog 未提供評級。");
+  expect(rendered).toContain("本產品依據樣式或偵測器比對結果，將信心評為低");
   expect(rendered).toContain("原始碼或憑證可能導致未授權存取");
-  expect(rendered).toContain("受影響的資產被標記為可從網際網路存取");
+  expect(rendered).toContain("受影響的資產可從網際網路存取");
 });
 
 // The two sentences the drawer has shown since it existed. They are the only
 // place the app says "keep a way back" and "here is how you know it worked",
 // and both were still English under a Chinese heading.
 const ENGLISH_ROLLBACK_TEXT =
-  "Before any manual change, preserve the current approved configuration and document a tested restoration path; this product does not execute remediation.";
+  "Before any manual change, preserve the current approved configuration and document a tested restoration path.";
 const ENGLISH_VERIFICATION =
   "After an approved manual change, rerun TruffleHog with the same authorized scope and confirm that source rule aws-access-key is no longer reported.";
 
@@ -286,7 +297,8 @@ test("the safety and verification advice is not left in English for a zh-TW read
 
   expect(rendered).not.toContain(ENGLISH_ROLLBACK_TEXT);
   expect(rendered).not.toContain(ENGLISH_VERIFICATION);
-  expect(rendered).toContain("本產品不會代為執行修復");
+  expect(rendered).toContain("測試還原路徑");
+  expect(rendered).not.toContain("本產品不會代為執行修復");
   expect(rendered).toContain("並確認來源規則 aws-access-key 不再被回報");
   // The engine name and the rule id are the engine's own strings and read the
   // same either way. Restating them in Chinese would make the reader hunt for
@@ -309,7 +321,7 @@ test("why this priority is not a Chinese heading over an English list", () => {
   window.localStorage.setItem(localeStorageKey, "zh-TW");
   const derived =
     "Severity derived from a credential detector match that this product does not verify; TruffleHog reports no severity of its own.";
-  const evidence = "Direct scanner evidence is attached and still requires human review.";
+  const evidence = "Direct scanner evidence is attached.";
   const { container } = renderPage([
     leakedCredential({ priorityReasons: [derived, evidence] }),
   ]);
@@ -318,7 +330,7 @@ test("why this priority is not a Chinese heading over an English list", () => {
   expect(rendered).not.toContain(derived);
   expect(rendered).not.toContain(evidence);
   expect(rendered).toContain("嚴重程度是由憑證偵測器的比對結果");
-  expect(rendered).toContain("已附上掃描工具的直接證據");
+  expect(rendered).not.toContain("已附上掃描工具的直接證據");
   expect(rendered).toContain("TruffleHog");
 });
 

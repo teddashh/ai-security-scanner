@@ -1218,7 +1218,7 @@ impl ScanRun {
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
     /// The source did not provide a recognized impact rating. This is not an
-    /// informational or low-severity assertion and requires human review.
+    /// informational or low-severity assertion and remains explicitly unknown.
     Unknown,
     Informational,
     Low,

@@ -168,14 +168,14 @@ const LEGACY_DELETION_OBLIGATION_DIRECTORY: &str = ".case-deletion-obligations";
 const MAX_LEGACY_DELETION_OBLIGATION_BYTES: u64 = 64 * 1024;
 const NAABU_CANCELLED_AFTER_PARTIAL_PHASE: &str = "cancelled_after_partial_results";
 const NAABU_CANCELLED_AFTER_PARTIAL_CODE: &str = "cancelled_after_partial_results";
-const NAABU_CANCELLED_AFTER_PARTIAL_MESSAGE: &str = "You stopped this scan after the current batch was saved. Saved results remain available; the remaining planned work was not tested.";
+const NAABU_CANCELLED_AFTER_PARTIAL_MESSAGE: &str = "The scan stopped after the current batch. Remaining planned work was not tested; start a new scan to finish it.";
 const MAX_NAABU_AUTOMATIC_ATTEMPTS_PER_UNIT: usize = 2;
 const _: () = assert!(
     MAX_NAABU_ATTEMPT_REQUESTS
         >= crate::naabu_work_plan::MAX_NAABU_WORK_UNITS * MAX_NAABU_AUTOMATIC_ATTEMPTS_PER_UNIT
 );
 const NAABU_AUTOMATIC_RETRY_EXHAUSTED_CODE: &str = "coverage_incomplete_after_bounded_retries";
-const NAABU_AUTOMATIC_RETRY_EXHAUSTED_MESSAGE: &str = "This check finished with partial results after each unfinished item received at most one automatic retry. Saved findings remain available, and the report shows every remaining coverage gap. Start a new scan if you want to try those items again.";
+const NAABU_AUTOMATIC_RETRY_EXHAUSTED_MESSAGE: &str = "This check completed with coverage gaps after one automatic retry per unfinished item. Start a new scan to retry the remaining items.";
 const MAX_ARTIFACT_DELETION_OBLIGATIONS: usize = 10_000;
 const UNSIGNED_SCHEMA_NOTICE: &str = "This schema export is unsigned. The stored SHA-256 digest can detect later byte changes but does not establish correctness, completeness, authorship, audit status, or forensic validity.";
 
@@ -13587,7 +13587,7 @@ impl HtmlReportCatalog {
             CoverageGapKind::Unattributed => {
                 self.text("Not linked to your asset", "未連結到你的資產")
             }
-            CoverageGapKind::ManualReview => self.text("Manual review", "人工檢視"),
+            CoverageGapKind::ManualReview => self.text("No automated verdict", "未回傳自動判定"),
         }
     }
 
@@ -13783,8 +13783,8 @@ fn html_gap_next_action(gap: &CoverageGap, catalog: HtmlReportCatalog) -> String
             .to_owned(),
         NextActionCode::WaitOrCancel => catalog
             .text(
-                "Let it finish, or cancel and keep the partial report.",
-                "等待完成，或取消並保留部分報告。",
+                "Open Progress and finish or cancel this check.",
+                "前往進度頁完成或取消這項檢查。",
             )
             .to_owned(),
         NextActionCode::StartExpectedServiceAndRetry => catalog
@@ -13795,20 +13795,20 @@ fn html_gap_next_action(gap: &CoverageGap, catalog: HtmlReportCatalog) -> String
             .to_owned(),
         NextActionCode::ReviewCoverage => catalog
             .text(
-                "Review the coverage gap before relying on the result.",
-                "採用結果前，先檢視涵蓋缺口。",
+                "Open the coverage gap and complete the missing check.",
+                "查看涵蓋缺口並完成缺少的檢查。",
             )
             .to_owned(),
         NextActionCode::ReviewManualControl => catalog
             .text(
-                "Review the upstream detail and record a human decision for this control.",
-                "請檢視上游詳細資料，並為這項控制措施記錄人工判定。",
+                "Open the upstream detail and set this control's status.",
+                "開啟上游詳細資料，並設定這項控制措施的狀態。",
             )
             .to_owned(),
         NextActionCode::PreserveVisibleLimitation => catalog
             .text(
-                "Keep this limitation visible when sharing the report.",
-                "分享報告時，請保留這項限制。",
+                "Open the saved scope details.",
+                "查看已保存的範圍細節。",
             )
             .to_owned(),
         NextActionCode::NoActionUnlessScopeChanges => catalog
@@ -13952,10 +13952,9 @@ fn html_asset_result_section(
                     crate::export::ReportLocale::En if finding_count == 1 => {
                         "1 problem was found.".to_owned()
                     }
-                    crate::export::ReportLocale::En => format!(
-                        "Problems found: {}.",
-                        catalog.format_number(finding_count)
-                    ),
+                    crate::export::ReportLocale::En => {
+                        format!("Problems found: {}.", catalog.format_number(finding_count))
+                    }
                     crate::export::ReportLocale::ZhHant => {
                         format!("發現 {} 個問題。", catalog.format_number(finding_count))
                     }
@@ -13969,10 +13968,7 @@ fn html_asset_result_section(
             ),
             HtmlAssetResultStatus::NoProblemsInCompletedChecks => (
                 "no-problems-completed",
-                catalog.text(
-                    "No problems in completed checks",
-                    "已完成檢查未發現問題",
-                ),
+                catalog.text("No problems in completed checks", "已完成檢查未發現問題"),
                 match catalog.locale {
                     crate::export::ReportLocale::En if completed_security_checks == 1 => {
                         "1 completed security check reported no problems.".to_owned()
@@ -13990,8 +13986,8 @@ fn html_asset_result_section(
                     || {
                         catalog
                             .text(
-                                "Review the stated limits before relying on this result.",
-                                "採用這項結果前，先確認明列的測試限制。",
+                                "Open the completed-check scope and any missing checks.",
+                                "查看已完成檢查的範圍與缺少的檢查。",
                             )
                             .to_owned()
                     },
@@ -14011,8 +14007,8 @@ fn html_asset_result_section(
                     || {
                         catalog
                             .text(
-                                "Keep completed results, then finish or retry this asset's remaining checks.",
-                                "保留已完成的結果，再完成或重試這個資產的其餘檢查。",
+                                "Finish or retry this asset's remaining checks from Progress.",
+                                "到進度頁完成或重試這個資產的其餘檢查。",
                             )
                             .to_owned()
                     },
@@ -14044,8 +14040,8 @@ fn html_asset_result_section(
         if status == HtmlAssetResultStatus::ProblemsFound && has_incomplete_evidence {
             action.push(' ');
             action.push_str(catalog.text(
-                "Some checks are also incomplete; keep that limit visible.",
-                "另有檢查尚未完成；請保留這項限制。",
+                "Some checks are incomplete. Finish or retry them from Progress.",
+                "另有檢查尚未完成；請到進度頁完成或重試。",
             ));
         }
         let target_label = labels
@@ -14170,8 +14166,8 @@ fn html_evidence_reference(
                 rows.push_str(&format!(
                     "<dt>{}</dt><dd>{}</dd>",
                     catalog.text(
-                        "Scanner-provided description (untrusted)",
-                        "掃描工具提供的說明（不受信任）"
+                        "Scanner-provided description",
+                        "掃描工具提供的說明"
                     ),
                     html_escape(description),
                 ));
@@ -14180,8 +14176,8 @@ fn html_evidence_reference(
                 rows.push_str(&format!(
                     "<dt>{}</dt><dd>{}</dd>",
                     catalog.text(
-                        "Scanner-provided remediation (untrusted; human review required; does not replace the product recommendation)",
-                        "掃描工具提供的修復資訊（不受信任；必須由人工審查；不取代本產品的建議）"
+                        "Scanner-provided remediation",
+                        "掃描工具提供的修復資訊"
                     ),
                     html_escape(remediation),
                 ));
@@ -14310,8 +14306,8 @@ fn html_evidence_reference(
                 format!(
                     "<p><strong>{}</strong></p><dl>{rows}</dl>",
                     catalog.text(
-                        "Scanner-provided details are untrusted evidence. Review them as text; this product never executes them.",
-                        "掃描工具提供的細節是不受信任的證據。請僅以文字檢視；本產品絕不執行其中內容。"
+                        "Scanner-provided details",
+                        "掃描工具提供的詳細資料"
                     )
                 )
             }
@@ -14620,8 +14616,8 @@ fn html_typed_inventory_section(
         ),
         catalog.text("Inventory observations", "盤點觀察"),
         catalog.text(
-            "Inventory records are not vulnerability findings, remediation recommendations, or proof of a clean security result. They describe what scanners observed in this selected run and should be reviewed before planning any change.",
-            "盤點紀錄不是漏洞問題、修復建議，也不能證明資安結果安全無虞。這些紀錄描述掃描工具在本輪觀察到的內容；規劃任何變更前仍須人工檢視。",
+            "Inventory observations are separate from vulnerability findings and remediation priorities.",
+            "盤點觀察與漏洞問題及修復優先順序分開呈現。",
         ),
         catalog.text("Total", "總數"),
         catalog.format_number(report.inventory.total),
@@ -14681,7 +14677,9 @@ fn html_report_bytes(
     } else {
         match report.state.summary {
             BeginnerReportSummary::Complete => catalog.text("Complete", "完整"),
-            BeginnerReportSummary::Partial => catalog.text("Partial results", "部分結果"),
+            BeginnerReportSummary::Partial => {
+                catalog.text("Completed with gaps", "已完成，但有涵蓋缺口")
+            }
             BeginnerReportSummary::NoChecksCompleted => {
                 catalog.text("No checks completed", "沒有已完成的檢查")
             }
@@ -14929,7 +14927,13 @@ fn html_report_bytes(
                     crate::finding_narrative::coverage_gap_prose_zh_hant(&gap.next_action)
                         .unwrap_or_else(|| gap.next_action.clone()),
                 ),
-                _ => (
+                (crate::export::ReportLocale::En, None) => (
+                    gap.dimension
+                        .replace(": manual review for ", ": no verdict for "),
+                    crate::finding_narrative::coverage_gap_prose_english(&gap.reason),
+                    crate::finding_narrative::coverage_gap_prose_english(&gap.next_action),
+                ),
+                (crate::export::ReportLocale::En, Some(_)) => (
                     gap.dimension.clone(),
                     gap.reason.clone(),
                     gap.next_action.clone(),
@@ -14977,9 +14981,19 @@ fn html_report_bytes(
             // itself gets; a gap-derived step carries no family and keeps its
             // stored text.
             let (action, expert) = match catalog.locale {
-                crate::export::ReportLocale::En => {
-                    (step.action.clone(), step.recommended_expert_type.clone())
-                }
+                crate::export::ReportLocale::En => (
+                    derived_from.map_or_else(
+                        || step.action.clone(),
+                        |finding| {
+                            crate::finding_narrative::action_english(
+                                &step.action,
+                                step.family,
+                                beginner_aws_iam_policy(finding),
+                            )
+                        },
+                    ),
+                    step.recommended_expert_type.clone(),
+                ),
                 crate::export::ReportLocale::ZhHant => (
                     crate::finding_narrative::action_zh_hant(
                         &step.action,
@@ -15035,6 +15049,10 @@ fn html_report_bytes(
                     crate::finding_narrative::coverage_gap_prose_zh_hant(&step.reason)
                         .unwrap_or_else(|| step.reason.clone()),
                 ),
+                (crate::export::ReportLocale::En, None, None) => (
+                    crate::finding_narrative::coverage_gap_prose_english(&action),
+                    crate::finding_narrative::coverage_gap_prose_english(&step.reason),
+                ),
                 _ => (action, step.reason.clone()),
             };
             format!(
@@ -15060,7 +15078,10 @@ fn html_report_bytes(
     }
     let report_counts = &report.coverage_counts;
     let coverage_items_label = if report_counts.manual_review > 0 {
-        catalog.text("Coverage limits and manual review", "涵蓋限制與人工檢視")
+        catalog.text(
+            "Coverage gaps and checks without verdicts",
+            "涵蓋缺口與未回傳判定的檢查",
+        )
     } else {
         catalog.text("Coverage gaps", "涵蓋缺口")
     };
@@ -15085,14 +15106,22 @@ fn html_report_bytes(
             .unwrap_or_else(|| catalog.text("not retained", "未保留").into());
         // The three sentences this product wrote about the finding. Composed
         // for the reader's language rather than printed as stored English under
-        // a translated heading; English returns the stored prose untouched.
+        // a translated heading; legacy wording is normalized in both locales.
         let severity_label = catalog.identifier(&enum_key(&finding.severity));
         let confidence_label = catalog.identifier(&enum_key(&finding.confidence));
         let (plain_language_risk, possible_impact, next_step, expert_type) = match catalog.locale {
             crate::export::ReportLocale::En => (
-                finding.plain_language_risk.clone(),
-                finding.possible_impact.clone(),
-                finding.next_step.clone(),
+                crate::finding_narrative::summary_english(&finding.plain_language_risk),
+                crate::finding_narrative::impact_english(
+                    &finding.possible_impact,
+                    finding.family,
+                    &finding.context_factors,
+                ),
+                crate::finding_narrative::action_english(
+                    &finding.next_step,
+                    finding.family,
+                    beginner_aws_iam_policy(finding),
+                ),
                 finding.recommended_expert_type.clone(),
             ),
             crate::export::ReportLocale::ZhHant => (
@@ -15146,7 +15175,9 @@ fn html_report_bytes(
             .rollback_considerations
             .as_ref()
             .map(|english| match catalog.locale {
-                crate::export::ReportLocale::En => english.clone(),
+                crate::export::ReportLocale::En => {
+                    crate::finding_narrative::rollback_english(english)
+                }
                 crate::export::ReportLocale::ZhHant => {
                     crate::finding_narrative::rollback_zh_hant(english)
                 }
@@ -15156,7 +15187,9 @@ fn html_report_bytes(
                 .verification_guidance
                 .as_ref()
                 .map(|english| match catalog.locale {
-                    crate::export::ReportLocale::En => english.clone(),
+                    crate::export::ReportLocale::En => {
+                        crate::finding_narrative::verification_english(english)
+                    }
                     crate::export::ReportLocale::ZhHant => {
                         crate::finding_narrative::verification_zh_hant(english)
                     }
@@ -15186,8 +15219,12 @@ fn html_report_bytes(
         let mut priority_reasons = finding
             .priority_reasons
             .iter()
+            .filter(|reason| !crate::finding_narrative::is_evidence_only_priority_reason(reason))
             .map(|reason| match catalog.locale {
-                crate::export::ReportLocale::En => format!("<li>{}</li>", html_escape(reason)),
+                crate::export::ReportLocale::En => format!(
+                    "<li>{}</li>",
+                    html_escape(&crate::finding_narrative::priority_reason_english(reason))
+                ),
                 crate::export::ReportLocale::ZhHant => format!(
                     "<li>{}</li>",
                     html_escape(&crate::finding_narrative::priority_reason_zh_hant(reason))
@@ -15392,8 +15429,8 @@ fn html_report_bytes(
     }
     if findings.is_empty() {
         findings.push_str(catalog.text(
-            "<p>No vulnerability finding was retained for this run. This does not by itself establish successful coverage.</p>",
-            "<p>本輪未保留任何漏洞問題。這一點本身不能證明涵蓋完整或掃描成功。</p>",
+            "<p>No vulnerability finding was retained for this run.</p>",
+            "<p>本輪未保留任何漏洞問題。</p>",
         ));
     }
     let observation_section = if observations.is_empty() {
@@ -15408,8 +15445,8 @@ fn html_report_bytes(
                 "觀察到的服務（不是漏洞）"
             ),
             catalog.text(
-                "These records are kept separate from problems and remediation priorities. Confirm that each service is expected; run an applicable security check if you need to look for weaknesses.",
-                "這些紀錄與問題及修復優先順序分開呈現。請確認各項服務符合預期；若要找弱點，請執行適用的資安檢查。",
+                "These records are separate from security problems. Confirm each expected service and run an applicable security check to look for weaknesses.",
+                "這些紀錄與資安問題分開呈現。確認各項預期服務，並執行適用的資安檢查以尋找弱點。",
             ),
             observations,
         )
@@ -15797,7 +15834,6 @@ fn html_report_bytes(
         ".asset-result--incomplete-failed{border-left-color:#b54708}.asset-result--not-tested{border-left-color:#475467}",
         "details.technical{margin-top:2rem;border-top:1px solid #ccd1d1;padding-top:1rem}",
         "@media(max-width:760px){body{padding:1rem}.report-grid,.asset-result{grid-template-columns:1fr}table{display:block;overflow-x:auto}}",
-        ".notice{background:#fff4d6;border-left:5px solid #b9770e;padding:1rem}",
         ".pill{border:1px solid currentColor;border-radius:1rem;padding:.1rem .5rem}</style></head><body>"
     ));
     document.push_str(&format!(
@@ -15848,8 +15884,6 @@ fn html_report_bytes(
             "<p><strong>{}:</strong> {}</p><ul>{}</ul>{}</div>",
             "<div class=\"report-card\"><h2>{}</h2><ul>{}</ul></div></section>",
             "<section><h2>{}</h2><ol>{}</ol></section>",
-            "<section class=\"notice\"><strong>{}:</strong> {}",
-            "<br><strong>{}:</strong> {}</section>",
             "<h2>{}</h2>",
             "<p>{}</p>{}{}"
         ),
@@ -15871,20 +15905,10 @@ fn html_report_bytes(
         gap_items,
         catalog.text("What to do next", "下一步怎麼做"),
         next_step_items,
-        catalog.text("Framework references", "框架參照"),
-        html_escape(catalog.text(
-            "Framework references are informational mappings and do not establish certification or compliance.",
-            "框架參照僅供資訊對照，不代表取得認證或符合規範。",
-        )),
-        catalog.text("AIDEFEND mapping", "AIDEFEND 對照"),
-        html_escape(catalog.text(
-            "AIDEFEND references are an independent, unofficial mapping unless the framework owner states otherwise.",
-            "除非框架擁有者另有聲明，AIDEFEND 參照屬於獨立、非官方的對照。",
-        )),
         catalog.text("Problems found", "發現的問題"),
         catalog.text(
-            "Problems follow the master report order. Severity describes possible impact; confidence describes evidence strength. Priority is the report's retained triage value, not a compliance score.",
-            "問題依主要報告順序排列。嚴重程度描述可能影響；信心程度描述證據強度；優先順序是報告保存的分流值，不是合規分數。",
+            "Problems follow the report order. Severity describes possible impact, confidence describes evidence strength, and priority sets the recommended review order.",
+            "問題依報告順序排列。嚴重程度描述可能影響，信心程度描述證據強度，優先順序則是建議的檢視次序。",
         ),
         findings,
         observation_section,
@@ -15934,9 +15958,14 @@ fn html_report_bytes(
     ));
     document.push_str(&format!(
         concat!(
-            "<footer><p>{}: {}. {} ",
+            "<footer><h2>{}</h2><p>{}</p><p>{}: {}. {} ",
             "{}</p></footer>",
             "</body></html>"
+        ),
+        catalog.text("Report terms", "報告條款"),
+        catalog.text(
+            "Framework references are informational navigation. AIDEFEND references are an independent, unofficial mapping unless the framework owner states otherwise. This report is not an audit, certification, compliance decision, security guarantee, or automatic remediation.",
+            "框架參照只供資訊導航。除非框架擁有者另有聲明，AIDEFEND 參照屬於獨立、非官方的對照。本報告不是稽核、認證、合規判定、資安保證或自動修復。",
         ),
         catalog.text("Redaction profile", "遮蔽設定"),
         html_escape(catalog.text(
@@ -21857,7 +21886,7 @@ mod tests {
             "What was actually tested",
             "What was not tested",
             "What to do next",
-            "do not establish certification",
+            "This report is not an audit, certification",
             "Content-Security-Policy",
         ] {
             assert!(
@@ -30014,9 +30043,9 @@ mod tests {
             "Frozen selected-run secret exposure".into(),
             "Finding details unavailable for this legacy run".into(),
             "Severity: High".into(),
-            "Confidence: Low — this product&#39;s rating from an unverified pattern or detector match".into(),
+            "Confidence: Low — this product&#39;s rating from a pattern or detector match".into(),
             "Priority: 73".into(),
-            "then plan and approve revocation and rotation of the exposed credential first.".into(),
+            "Revoke and rotate the exposed credential, then remove it from the source and every retained history entry.".into(),
             evidence_sha256.clone(),
             "AIDEFEND 2026.1 / ADF-APP-01".into(),
             "map-2026-08".into(),
@@ -30036,10 +30065,10 @@ mod tests {
             "Redacted</dt><dd>Yes".into(),
             "Evidence location".into(),
             "src/&lt;secret&gt;&amp;token.txt".into(),
-            "Scanner-provided details are untrusted evidence".into(),
-            "Scanner-provided description (untrusted)".into(),
+            "Scanner-provided details".into(),
+            "Scanner-provided description".into(),
             "Scanner description &lt;img src=&quot;https://remote.invalid/x&quot;&gt;".into(),
-            "Scanner-provided remediation (untrusted; human review required; does not replace the product recommendation)".into(),
+            "Scanner-provided remediation".into(),
             "Run &lt;script&gt;alert(&#39;unsafe&#39;)&lt;/script&gt; manually".into(),
             "Scanner-provided installed version".into(),
             "installed&lt;1.2.3&gt;".into(),
@@ -30058,7 +30087,7 @@ mod tests {
         assert!(html.contains(&format!("Observed: {}", readable_report_time(&finished))));
         for inventory_text in [
             "Inventory observations",
-            "Inventory records are not vulnerability findings, remediation recommendations, or proof of a clean security result.",
+            "Inventory observations are separate from vulnerability findings and remediation priorities.",
             "Total:</strong> 4",
             "Services:</strong> 1",
             "Software components:</strong> 2",
@@ -30109,16 +30138,15 @@ mod tests {
         assert!(!html.contains("EXPOSURE_REMEDIATION_MUST_NOT_APPEAR_AS_A_PRIORITY"));
         for english_block in [
             "Before changing anything",
-            "Before any manual change, preserve",
+            "Capture the current configuration and test its restoration path",
             "How to confirm the fix",
-            "After an approved manual change, rerun",
+            "Rerun Gitleaks with the same scope after the change",
             "Why this priority",
             "Severity derived from a secret pattern match in scanned source",
-            "Direct scanner evidence is attached",
             "No authorized asset carries that identifier",
             // A finding-derived next step names the finding and its ratings in
             // words chosen for the reader, not in `Debug` output.
-            "Frozen selected-run secret exposure — High severity, Low confidence — this product&#39;s rating from an unverified pattern or detector match",
+            "Frozen selected-run secret exposure — High severity, Low confidence — this product&#39;s rating from a pattern or detector match",
         ] {
             assert!(
                 html.contains(english_block),
@@ -30133,9 +30161,8 @@ mod tests {
         assert!(!html.contains("href=\"https://docs.example"));
 
         // The zh-Hant report translated its headings and printed the finding's
-        // own three sentences as stored English underneath them: 可能影響 over
-        // "If the scanner result is confirmed, ...". They are composed from the
-        // codes the finding carries.
+        // own three sentences as stored English underneath them. They are
+        // composed from the codes the finding carries.
         let zh_html = String::from_utf8(
             html_report_bytes(
                 &case,
@@ -30162,17 +30189,16 @@ mod tests {
             // report the expert is actually handed printed neither, so the two
             // surfaces disagreed about what the finding asks a person to do.
             "變更前考量",
-            "本產品不會代為執行修復",
+            "測試還原路徑",
             "如何確認已修正",
             "並確認來源規則 generic-api-key 不再被回報",
             // Why this priority. Stored as bare prose with no per-entry code,
             // so a reader was given a Chinese heading over an English list.
             "嚴重程度是由掃描到的原始碼中符合機密資料的樣式推導而來",
             "Gitleaks 本身不提供嚴重程度",
-            "本產品依據尚未驗證的樣式或偵測器比對結果，將信心評為低",
-            "信心是由尚未驗證的樣式或偵測器比對結果推導而來",
+            "本產品依據樣式或偵測器比對結果，將信心評為低",
+            "信心是由樣式或偵測器比對結果推導而來",
             "Gitleaks 本身不提供信心評定",
-            "已附上掃描工具的直接證據，仍需人工檢視。",
             // Why the findings list is short, and the one thing that fixes it.
             "未連結到你的資產",
             "你已授權的資產都沒有登記這個識別碼",
@@ -30190,7 +30216,7 @@ mod tests {
             "本輪記錄了完成的掃描工具與資產對應關係",
             "本輪沒有保留精確的縮減記錄",
             "至少有一筆舊版的問題觀察結果",
-            "請保留這項限制的說明；不要把缺少的歷史細節解讀為已完成的涵蓋。",
+            "查看已保存的範圍細節。",
             // The limits the run was executed under, the dimension each check
             // actually tested, and why a finding-derived next step is listed.
             // All three were printed as stored English under translated
@@ -30199,7 +30225,7 @@ mod tests {
             "3600 秒",
             "完成的目標檢查",
             "這項已保存的工作已針對這個目標完成。這份案件記錄沒有凍結更細部的執行範圍。",
-            "Frozen selected-run secret exposure — 嚴重程度：高；信心程度：低 — 本產品依據尚未驗證的樣式或偵測器比對結果評定",
+            "Frozen selected-run secret exposure — 嚴重程度：高；信心程度：低 — 本產品依據樣式或偵測器比對結果評定",
             "某個身分未登記多重要素驗證裝置的證據，與驗證使用者及保護驗證資訊有關。",
             "<br>關係: 相關",
             "來源規則",
@@ -30212,16 +30238,16 @@ mod tests {
             "已遮蔽</dt><dd>是",
             "證據位置",
             "src/&lt;secret&gt;&amp;token.txt",
-            "掃描工具提供的細節是不受信任的證據",
-            "掃描工具提供的說明（不受信任）",
+            "掃描工具提供的詳細資料",
+            "掃描工具提供的說明",
             "Scanner description &lt;img src=&quot;https://remote.invalid/x&quot;&gt;",
-            "掃描工具提供的修復資訊（不受信任；必須由人工審查；不取代本產品的建議）",
+            "掃描工具提供的修復資訊",
             "Run &lt;script&gt;alert(&#39;unsafe&#39;)&lt;/script&gt; manually",
             "掃描工具提供的已安裝版本",
             "掃描工具提供的修正版版本",
             "掃描工具官方參照",
             "盤點觀察",
-            "盤點紀錄不是漏洞問題、修復建議，也不能證明資安結果安全無虞",
+            "盤點觀察與漏洞問題及修復優先順序分開呈現",
             "總數:</strong> 4",
             "服務:</strong> 1",
             "軟體元件:</strong> 2",
@@ -30290,7 +30316,7 @@ mod tests {
             "run-frozen target label or type",
             "The run records the completed engine/asset coordinate",
             "This run did not retain an exact reduction record",
-            "Keep this limitation visible",
+            "Open the saved scope details",
             "Execution Timeout",
             "3600 seconds",
             "Check-to-target Coordinate",
@@ -30420,7 +30446,7 @@ mod tests {
             reason: "The completed SSH service profile did not inspect the host operating system."
                 .into(),
             next_action_code: NextActionCode::PreserveVisibleLimitation,
-            next_action: "Keep this limitation visible.".into(),
+            next_action: "Open the saved scope details.".into(),
             unattributed: None,
         }];
 
@@ -30456,14 +30482,14 @@ mod tests {
             unattributed: None,
         });
         let prioritized_html = html_asset_result_section(&report, &labels, catalog);
-        assert!(prioritized_html.contains("Review the coverage gap before relying on the result."));
+        assert!(prioritized_html.contains("Open the coverage gap and complete the missing check."));
         assert!(!prioritized_html.contains("Retry this check; saved results will remain."));
 
         let zh_catalog = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
         let zh_labels = readable_target_labels(&report, zh_catalog);
         let zh_html = html_asset_result_section(&report, &zh_labels, zh_catalog);
         assert!(zh_html.contains("伺服器或工作站"));
-        assert!(zh_html.contains("採用結果前，先檢視涵蓋缺口。"));
+        assert!(zh_html.contains("查看涵蓋缺口並完成缺少的檢查。"));
     }
 
     #[test]
@@ -30601,7 +30627,14 @@ mod tests {
         )));
         assert!(html.contains("<html lang=\"en\">"));
         assert!(html.contains("What was actually tested"));
-        assert!(html.contains("Framework references are informational mappings"));
+        assert!(html.contains("Framework references are informational navigation"));
+        let terms_position = html
+            .rfind("<footer><h2>Report terms</h2>")
+            .expect("report terms stay in the footer");
+        let problems_position = html
+            .find("<h2>Problems found</h2>")
+            .expect("actionable problems render before report terms");
+        assert!(problems_position < terms_position);
         assert!(html.contains("Which assets need attention"));
         assert!(html.contains("asset-result--not-tested"));
         assert!(html.contains("No completed security check is recorded for this asset."));
@@ -30654,7 +30687,7 @@ mod tests {
             "這個資產沒有已完成的資安檢查紀錄。",
             "實際測試的內容",
             "已完成",
-            "框架參照僅供資訊對照，不代表取得認證或符合規範。",
+            "框架參照只供資訊導航。",
             "AIDEFEND 參照屬於獨立、非官方的對照",
             "2026年09月01日 12:34:56 UTC",
         ] {
@@ -30666,7 +30699,7 @@ mod tests {
         for english_only in [
             "<html lang=\"en\">",
             "What was actually tested",
-            "Framework references are informational mappings",
+            "Framework references are informational navigation",
         ] {
             assert!(
                 !zh_html.contains(english_only),

@@ -9,10 +9,13 @@ use crate::domain::{AssessmentCase, Asset, ContextFactor, DataClass, Finding, So
 use std::collections::BTreeSet;
 
 const CONTEXT_VERSION_TAG: &str = "context-priority:v1";
-pub(crate) const INTERNET_REASON: &str = "An affected asset is marked internet-exposed, and all retained source attribution for that asset is non-questionnaire.";
-pub(crate) const SENSITIVE_REASON: &str = "An affected asset is marked sensitive, all retained source attribution for that asset is non-questionnaire, and the case questionnaire separately records sensitive-data context.";
-const INTERNET_IMPACT: &str = " The affected asset is marked internet-exposed and has only retained non-questionnaire source attribution, which may increase the reachable attack surface; field-level provenance for that attribute is not retained, so it still requires human confirmation.";
-const SENSITIVE_IMPACT: &str = " The affected asset is marked as containing sensitive data and has only retained non-questionnaire source attribution, while the case questionnaire separately records sensitive-data context. This may increase the impact of a confirmed exposure, but field-level data-class provenance is not retained and neither entry is itself proof of data exposure.";
+pub(crate) const INTERNET_REASON: &str = "The affected asset is internet-accessible.";
+pub(crate) const SENSITIVE_REASON: &str =
+    "The affected asset contains sensitive data, increasing the potential impact.";
+const INTERNET_IMPACT: &str =
+    " The affected asset is internet-accessible, increasing the reachable attack surface.";
+const SENSITIVE_IMPACT: &str =
+    " The affected asset contains sensitive data, increasing the potential impact.";
 
 /// Adds bounded, explainable case-context factors without changing severity,
 /// confidence, fingerprints, evidence, workflow status, or any authorization.
@@ -220,7 +223,7 @@ mod tests {
         assert!(
             finding
                 .possible_impact
-                .contains("neither entry is itself proof")
+                .contains("contains sensitive data, increasing the potential impact")
         );
         assert!(finding.tags.contains(&CONTEXT_VERSION_TAG.into()));
 
@@ -324,7 +327,11 @@ mod tests {
         assert_eq!(finding.severity, original_severity);
         assert_eq!(finding.confidence, original_confidence);
         assert!(finding.priority_reasons.contains(&INTERNET_REASON.into()));
-        assert!(finding.possible_impact.contains("field-level provenance"));
+        assert!(
+            finding
+                .possible_impact
+                .contains("internet-accessible, increasing the reachable attack surface")
+        );
         assert!(finding.tags.contains(&CONTEXT_VERSION_TAG.into()));
     }
 
@@ -345,7 +352,7 @@ mod tests {
         assert!(
             finding
                 .possible_impact
-                .contains("field-level data-class provenance")
+                .contains("contains sensitive data, increasing the potential impact")
         );
         assert!(finding.tags.contains(&CONTEXT_VERSION_TAG.into()));
     }

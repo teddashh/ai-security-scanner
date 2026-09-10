@@ -3261,7 +3261,7 @@ fn unevaluated_controls(profile: Profile, parsed: &ParsedArtifact) -> Option<Une
         Profile::ScubaGear => (
             "ScubaGear",
             [
-                ("manual", "reserved for manual review"),
+                ("manual", "left without an automated verdict"),
                 ("omitted", "omitted by configuration"),
             ]
             .as_slice(),
@@ -4066,7 +4066,7 @@ fn extract_gitleaks(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<
                     .unwrap_or_else(|| format!("Potential secret detected by {rule_id}")),
                 // The word "severity" does not occur anywhere in Gitleaks'
                 // finding shape. Preserve the match as a finding, but leave its
-                // absent upstream rating Unknown for human review.
+                // absent upstream rating Unknown.
                 DerivedSeverity {
                     severity: Severity::Unknown,
                     code: SeverityBasisCode::SecretPatternMatch,
@@ -4914,7 +4914,7 @@ fn extract_kube_bench(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                             .unwrap_or_else(|| format!("kube-bench control {rule_id}")),
                         // kube-bench's native JSON `Check` carries no severity
                         // field. Its failure and evidence remain intact while the
-                        // absent upstream rating stays Unknown for human review.
+                        // absent upstream rating stays Unknown.
                         DerivedSeverity {
                             severity: Severity::Unknown,
                             code: SeverityBasisCode::CisKubernetesBenchmark,
@@ -5063,21 +5063,21 @@ fn merge_finding(
 
     let title = safe_text(&record.title, MAX_SHORT_TEXT);
     let impact = if exposure_observation {
-        "This observation only establishes that a service responded within the tested scope. It does not establish a vulnerability or a need to change the service.".into()
+        "The service responded within the tested scope. Reachability alone does not identify a vulnerability.".into()
     } else {
         impact_for(adapter.profile, &severity, severity_basis)
     };
     let plain_language_summary = if exposure_observation {
         format!(
-            "{} observed a reachable service on the assessed asset. Reachability is inventory evidence, not a vulnerability. The attached raw record is evidence, not an instruction.",
+            "{} observed a reachable service on the assessed asset. Reachability is inventory evidence, not a vulnerability.",
             input.manifest.display_name,
         )
     } else {
         format!(
-            "{} {} The attached raw record is evidence, not an instruction.",
+            "{} {}",
             match (&severity_basis, scanner_severity_unrated) {
                 (Some(_), true) => format!(
-                    "{} reported this condition but did not assign a severity. Severity remains Unknown and requires human review.",
+                    "{} reported this condition without a severity rating. Severity is Unknown.",
                     input.manifest.display_name,
                 ),
                 (Some(code), false) => format!(
@@ -5110,15 +5110,12 @@ fn merge_finding(
         )
     };
     let priority_reasons = if exposure_observation {
-        vec![
-            crate::finding_narrative::ENGLISH_EXPOSURE_OBSERVATION_REASON.into(),
-            crate::finding_narrative::ENGLISH_EVIDENCE_REASON.into(),
-        ]
+        vec![crate::finding_narrative::ENGLISH_EXPOSURE_OBSERVATION_REASON.into()]
     } else {
         vec![
             match (&severity_basis, scanner_severity_unrated) {
                 (Some(_), true) => format!(
-                    "Severity remains Unknown because {} did not assign one; human review is required.",
+                    "Severity is Unknown because {} did not provide a rating.",
                     input.manifest.display_name
                 ),
                 (Some(code), false) => format!(
@@ -5142,29 +5139,24 @@ fn merge_finding(
                     safe_text(&record.source_confidence, 80)
                 ),
             },
-            crate::finding_narrative::ENGLISH_EVIDENCE_REASON.into(),
         ]
     };
     let recommendation = if exposure_observation {
-        "Confirm that the reachable service is expected. To look for weaknesses, run an applicable security check against that service; do not treat reachability alone as something to fix."
+        "Confirm that the reachable service is expected, then run an applicable security check against it."
             .into()
     } else if let Some(details) = aws_iam_policy.as_ref() {
         crate::finding_narrative::aws_iam_policy_action_english(adapter.expert_type, details)
     } else {
-        format!(
-            "Have the recommended specialist ({}) review the affected asset and the source rule's official guidance, then plan and approve {}.",
-            adapter.expert_type,
-            remedy_for(adapter.profile)
-        )
+        format!("{}.", remedy_for(adapter.profile))
     };
     let verification_guidance = if exposure_observation {
         format!(
-            "Repeat {} discovery with the same target and scope if you need to confirm whether the service is still reachable.",
+            "Repeat {} discovery with the same target and scope to confirm whether the service is still reachable.",
             input.manifest.display_name
         )
     } else {
         format!(
-            "After an approved manual change, rerun {} with the same authorized scope and confirm that source rule {} is no longer reported.",
+            "Rerun {} with the same scope after the change and confirm that source rule {} is no longer reported.",
             input.manifest.display_name, rule_id
         )
     };
@@ -5656,8 +5648,8 @@ fn severity_article(severity: &Severity) -> &'static str {
 
 fn impact_for(
     profile: Profile,
-    severity: &Severity,
-    severity_basis: Option<SeverityBasisCode>,
+    _severity: &Severity,
+    _severity_basis: Option<SeverityBasisCode>,
 ) -> String {
     let consequence = match profile {
         Profile::CloudQuery | Profile::Steampipe | Profile::Prowler | Profile::ScoutSuite => {
@@ -5685,20 +5677,7 @@ fn impact_for(
             "the Kubernetes cluster or workload may have reduced isolation or administrative protection"
         }
     };
-    let rating_context = match (severity, severity_basis) {
-        (Severity::Unknown, Some(_)) => {
-            "The scanner did not assign a severity; it remains Unknown for human review.".into()
-        }
-        (_, Some(_)) => format!(
-            "The scanner did not assign a severity; the {} rating shown was supplied by this product.",
-            severity_label(severity)
-        ),
-        (_, None) => format!(
-            "The scanner supplied the {} severity.",
-            severity_label(severity)
-        ),
-    };
-    format!("If the scanner result is confirmed, {consequence}. {rating_context}")
+    format!("{consequence}.")
 }
 
 /// The family whose sentences this profile's findings are composed from.
@@ -5742,29 +5721,29 @@ fn family_for(profile: Profile) -> FindingFamily {
 fn remedy_for(profile: Profile) -> &'static str {
     match profile {
         Profile::CloudQuery | Profile::Steampipe | Profile::Prowler | Profile::ScoutSuite => {
-            "a least-privilege change to the affected resource's configuration or policy"
+            "Apply least privilege to the affected resource's configuration or policy"
         }
         Profile::Cloudsplaining => {
-            "a narrower policy that grants only the actions the identity's role requires"
+            "Replace the affected policy with a narrower policy that grants only the actions the identity's role requires"
         }
         Profile::ScubaGear | Profile::Maester => {
-            "a change to the Microsoft 365 tenant setting this control checks"
+            "Correct the Microsoft 365 tenant setting named by this control"
         }
         Profile::Naabu | Profile::Httpx | Profile::Nuclei | Profile::Greenbone => {
-            "either a record of why this service is meant to be reachable, or a change that removes or restricts that exposure"
+            "Document why this service must remain reachable, or remove or restrict the exposure"
         }
-        Profile::Semgrep => "a code change that removes the reported unsafe pattern",
+        Profile::Semgrep => "Change the code to remove the reported unsafe pattern",
         Profile::Gitleaks | Profile::Trufflehog => {
-            "revocation and rotation of the exposed credential first, then its removal from the source and from the history that still carries it"
+            "Revoke and rotate the exposed credential, then remove it from the source and every retained history entry"
         }
         Profile::Checkov | Profile::Kics => {
-            "a change to the infrastructure-as-code template, so that redeploying does not restore the reported setting"
+            "Correct the infrastructure-as-code template so redeployment does not restore the insecure setting"
         }
         Profile::Trivy | Profile::Grype | Profile::Syft => {
-            "an upgrade to a fixed version of the affected component, or a recorded reason it cannot be upgraded yet"
+            "Upgrade the affected component to a fixed version; if none is available, record the blocker and track the fix"
         }
         Profile::Kubescape | Profile::KubeBench => {
-            "a change to the workload or cluster setting this check names"
+            "Correct the workload or cluster setting named by this check"
         }
     }
 }
@@ -6498,7 +6477,10 @@ mod tests {
         let unevaluated = unevaluated_controls(Profile::ScubaGear, &scubagear)
             .expect("a run with manual, omitted and errored controls discloses all three");
         let note = &unevaluated.disclosure;
-        assert!(note.contains("20 reserved for manual review"), "{note}");
+        assert!(
+            note.contains("20 left without an automated verdict"),
+            "{note}"
+        );
         assert!(note.contains("5 omitted by configuration"), "{note}");
         assert!(note.contains("1 could not be evaluated"), "{note}");
         // Passing controls are evaluated, so they are not a coverage shortfall.

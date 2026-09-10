@@ -194,7 +194,7 @@ test("RDP transport coverage and its explicit limits are readable in both langua
   const limit =
     "The unauthenticated RDP transport profile checks one legacy RDP 5.2-or-earlier fixed-private-key issue, but does not inspect broader or current RDP implementation CVEs, authentication or Network Level Authentication (NLA), Windows patch level, installed packages or applications, or local host configuration.";
   const nextAction =
-    "Keep this limitation visible; choose a separately approved host or RDP-authentication assessment when those checks are needed.";
+    "Run a separately approved host or RDP-authentication assessment for those checks.";
 
   assert.equal(
     localizedCoverageDimension("RDP transport security checks", "zh-TW"),
@@ -223,7 +223,7 @@ test("VNC transport coverage and its explicit limits are readable in both langua
   const limit =
     "The unauthenticated VNC transport profile checks whether the VNC connection is encrypted. It does not inspect VNC implementation CVEs, authentication strength, operating-system patch level, installed packages or applications, or local host configuration. No login or desktop session was attempted.";
   const nextAction =
-    "Keep this limitation visible; use an approved endpoint inventory or a separate authorized VNC assessment when those checks are needed.";
+    "Use an approved endpoint inventory or run a separate authorized VNC assessment.";
 
   assert.equal(
     localizedCoverageDimension("VNC transport security check", "zh-TW"),
@@ -251,7 +251,7 @@ test("SMTP coverage and its explicit mail-server limits are readable in both lan
   const limit =
     "The unauthenticated SMTP profile reads the banner, issues EHLO, negotiates STARTTLS when offered, and checks advertised AUTH for an unencrypted cleartext-login risk. Its TLS checks apply only when TLS can be negotiated. It does not send credentials or mail, test relay or delivery, authentication enforcement or bypass, anti-spam behavior, general mail-server implementation CVEs, operating-system patches, installed software, or local configuration.";
   const nextAction =
-    "Keep this limitation visible; use a separately approved mail-server assessment or endpoint inventory when those checks are needed.";
+    "Run a separately approved mail-server assessment or use endpoint inventory.";
 
   assert.equal(
     localizedCoverageDimension("SMTP cleartext-login and TLS security checks", "zh-TW"),
@@ -280,7 +280,7 @@ test("Telnet coverage and its explicit authentication limits are readable in bot
   const limit =
     "The unauthenticated Telnet profile observes whether a login or password prompt is offered without TLS. It sends no username or password and does not log in; it does not test default credentials, authentication bypass, Telnet implementation CVEs, operating-system patches, installed software, or local configuration.";
   const nextAction =
-    "Keep this limitation visible; use a separately approved authentication assessment or endpoint inventory when those checks are needed.";
+    "Run a separately approved authentication assessment or use endpoint inventory.";
 
   assert.equal(
     localizedCoverageDimension("Telnet cleartext-login security check", "zh-TW"),

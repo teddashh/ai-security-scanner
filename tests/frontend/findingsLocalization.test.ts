@@ -46,14 +46,16 @@ test("problem grouping, review decisions, evidence, and navigation remain wired"
     /visibleFindingGroups\.length > 0[\s\S]*aria-labelledby="finding-groups-title"[\s\S]*visibleFindingIds[\s\S]*finding-browser/u,
     "accepted groups should be visible before the complete finding browser without replacing its members",
   );
-  assert.match(source, /Every original problem and evidence record stays separate/u);
-  assert.match(source, /每項原始問題與證據仍分開保留/u);
-  assert.match(source, /matching scanner output into independent confirmation/u);
-  assert.match(source, /相似的掃描器輸出說成獨立確認/u);
+  assert.match(source, /Accepted groups reduce repetition during handoff/u);
+  assert.match(source, /已接受的群組可減少交接時的重複內容/u);
+  assert.match(source, /Shared vulnerability data source; independent confirmation is not established/u);
+  assert.match(source, /共用弱點資料來源；未形成獨立確認/u);
   assert.match(source, /Not observed in this selected report; kept as case history/u);
   assert.match(source, /本次選取的報告未觀察到；僅保留為案件歷史/u);
-  assert.match(source, /The product does not make the change/u);
-  assert.match(source, /產品不會自動執行/u);
+  assert.match(source, /Report terms and technical record/u);
+  assert.match(source, /報告條款與技術紀錄/u);
+  assert.doesNotMatch(source, /guidance for a person to evaluate/u);
+  assert.doesNotMatch(source, /交給人員評估的方向/u);
 });
 
 test("the legacy result-kind fallback keeps every inventory engine out of clean security results", () => {

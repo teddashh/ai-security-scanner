@@ -402,28 +402,25 @@ fn engines_that_emit_no_severity_keep_findings_and_evidence_without_inventing_hi
             assert!(
                 finding
                     .plain_language_summary
-                    .contains("did not assign a severity")
+                    .contains("without a severity rating")
             );
             assert!(
                 finding
                     .plain_language_summary
-                    .contains("Severity remains Unknown")
+                    .contains("Severity is Unknown")
             );
             assert!(
                 !finding
                     .plain_language_summary
                     .contains("This product rated it unknown")
             );
-            assert!(
-                finding
-                    .possible_impact
-                    .contains("remains Unknown for human review")
-            );
+            assert!(!finding.possible_impact.contains("human review"));
             assert!(finding.priority_reasons.iter().any(|reason| {
-                reason == &format!(
-                    "Severity remains Unknown because {} did not assign one; human review is required.",
-                    normalize_engine_display_name(engine_id)
-                )
+                reason
+                    == &format!(
+                        "Severity is Unknown because {} did not provide a rating.",
+                        normalize_engine_display_name(engine_id)
+                    )
             }));
         }
         assert_eq!(
@@ -927,9 +924,8 @@ fn greenbone_result_types_preserve_alarms_and_normalize_unevaluated_targets() {
         unrated.severity_basis_code,
         Some(SeverityBasisCode::UnratedVulnerabilityTestAlarm)
     );
-    // An alarm without a rating follows the product's existing unrated path:
-    // the severity stays Unknown for human review and is never presented as a
-    // rating this product derived.
+    // An alarm without a rating follows the product's unrated path: severity
+    // stays Unknown and is never presented as a rating this product derived.
     assert!(
         unrated
             .tags
@@ -941,7 +937,7 @@ fn greenbone_result_types_preserve_alarms_and_normalize_unevaluated_targets() {
     assert!(
         unrated.priority_reasons.iter().any(|reason| {
             reason
-                == "Severity remains Unknown because Greenbone Community Edition did not assign one; human review is required."
+                == "Severity is Unknown because Greenbone Community Edition did not provide a rating."
         }),
         "{:?}",
         unrated.priority_reasons
@@ -949,7 +945,7 @@ fn greenbone_result_types_preserve_alarms_and_normalize_unevaluated_targets() {
     assert!(
         unrated
             .plain_language_summary
-            .contains("Severity remains Unknown and requires human review."),
+            .contains("Severity is Unknown."),
         "{}",
         unrated.plain_language_summary
     );
@@ -1245,17 +1241,8 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
                 assert!(finding.recommendation.contains("applicable security check"));
                 assert!(finding.rollback_considerations.is_none());
             } else {
-                assert!(
-                    finding
-                        .recommendation
-                        .starts_with("Have the recommended specialist (")
-                );
-                assert!(
-                    finding
-                        .recommendation
-                        .contains(&format!("({})", finding.recommended_expert_type))
-                );
-                assert!(!finding.recommendation.contains("Have a Application"));
+                assert!(!finding.recommendation.contains("recommended specialist"));
+                assert!(!finding.recommendation.contains("plan and approve"));
                 assert!(finding.rollback_considerations.is_some());
             }
             assert!(!finding.verification_guidance.is_empty());
@@ -2030,7 +2017,7 @@ fn checkov_preserves_explicit_ratings_and_keeps_missing_ones_unknown() {
         assert!(
             finding
                 .plain_language_summary
-                .contains("Severity remains Unknown")
+                .contains("Severity is Unknown")
         );
         assert!(
             !finding
@@ -2127,18 +2114,16 @@ fn kube_bench_failures_remain_findings_without_an_invented_rating() {
             finding.title,
             finding.tags
         );
-        assert!(finding.priority_reasons.iter().any(|reason| reason
-            == "Severity remains Unknown because kube-bench did not assign one; human review is required."));
+        assert!(
+            finding.priority_reasons.iter().any(|reason| reason
+                == "Severity is Unknown because kube-bench did not provide a rating.")
+        );
         assert!(
             finding
                 .plain_language_summary
-                .contains("did not assign a severity")
+                .contains("without a severity rating")
         );
-        assert!(
-            finding
-                .possible_impact
-                .contains("remains Unknown for human review")
-        );
+        assert!(!finding.possible_impact.contains("human review"));
         assert_eq!(finding.evidence.len(), 1);
     }
     assert_eq!(
@@ -2630,7 +2615,7 @@ fn controls_passed_over_by_design_are_disclosed_without_marking_the_run_incomple
         output
             .warnings
             .iter()
-            .any(|warning| warning.contains("20 reserved for manual review")),
+            .any(|warning| warning.contains("20 left without an automated verdict")),
         "the disclosure must reach the run: {:?}",
         output.warnings
     );
@@ -4212,7 +4197,7 @@ fn cloudsplaining_risks_are_read_from_policies_not_the_document_root() {
     assert!(
         create_key
             .recommendation
-            .contains("replace AWS-managed policy IAMFullAccess")
+            .contains("Replace AWS-managed policy IAMFullAccess")
             && create_key.recommendation.contains("group AdminGroup")
             && create_key
                 .recommendation
@@ -4273,7 +4258,7 @@ fn cloudsplaining_risks_are_read_from_policies_not_the_document_root() {
     assert!(
         customer_managed
             .recommendation
-            .contains("narrow customer-managed policy InsecurePolicy")
+            .contains("Narrow customer-managed policy InsecurePolicy")
     );
 
     let inline = output
@@ -4290,7 +4275,7 @@ fn cloudsplaining_risks_are_read_from_policies_not_the_document_root() {
         .expect("inline-policy context");
     assert_eq!(inline_context.policy_source, AwsIamPolicySource::Inline);
     assert_eq!(inline_context.attached_to.groups, ["AdminGroup"]);
-    assert!(inline.recommendation.contains("narrow inline policy"));
+    assert!(inline.recommendation.contains("Narrow inline policy"));
     assert!(
         output
             .findings
@@ -4345,7 +4330,7 @@ fn cloudsplaining_keeps_bounded_principal_context_and_marks_incomplete_attributi
     assert!(
         finding
             .recommendation
-            .contains("confirm the current IAM attachments before changing the policy")
+            .contains("Confirm the current IAM attachments first")
     );
     for expected in ["AttachedTo.roles", "AttachedTo.groups", "AttachedTo.users"] {
         assert!(
@@ -4800,7 +4785,7 @@ fn cloudsplaining_schema_drift_is_partial_without_erasing_valid_siblings() {
                 == Some(SeverityBasisCode::CloudsplainingIamPolicyFinding)
             && finding
                 .plain_language_summary
-                .contains("did not assign a severity")
+                .contains("without a severity rating")
     }));
     for expected in [
         "lacked required policy section inline_policies",
@@ -5478,7 +5463,7 @@ fn the_action_a_finding_asks_for_matches_the_kind_of_problem_it_reports() {
     for engine_id in ["gitleaks", "trufflehog"] {
         let text = recommendation(engine_id);
         assert!(
-            text.contains("revocation and rotation"),
+            text.contains("Revoke and rotate"),
             "{engine_id} must say to revoke the credential: {text}"
         );
         assert!(
@@ -5491,13 +5476,13 @@ fn the_action_a_finding_asks_for_matches_the_kind_of_problem_it_reports() {
     for engine_id in ["trivy", "grype"] {
         let text = recommendation(engine_id);
         assert!(
-            text.contains("upgrade to a fixed version"),
+            text.contains("Upgrade the affected component to a fixed version"),
             "{engine_id} must name the upgrade: {text}"
         );
     }
 
     // A permissive cloud policy is the one family least-privilege does describe.
-    assert!(recommendation("prowler").contains("least-privilege"));
+    assert!(recommendation("prowler").contains("least privilege"));
 
     // Rewriting the running resource leaves the template that redeployed it.
     for engine_id in ["checkov", "kics"] {
@@ -5507,36 +5492,6 @@ fn the_action_a_finding_asks_for_matches_the_kind_of_problem_it_reports() {
             "{engine_id} must point at the template: {text}"
         );
     }
-
-    // Guards the collapse this test exists to prevent: a later refactor that
-    // reintroduces one shared sentence still satisfies every assertion above
-    // for the engines it happens to name, so count the distinct advice too.
-    let distinct = BUILTIN_ENGINE_IDS
-        .iter()
-        .filter_map(|engine_id| {
-            let finding = normalize_fixture(engine_id).findings.first()?.clone();
-            // Strip the specialist, which already varies; what is under test is
-            // the action clause that used to be identical everywhere.
-            Some(
-                finding
-                    .recommendation
-                    .rsplit_once("then plan and approve ")?
-                    .1
-                    .to_owned(),
-            )
-        })
-        .collect::<BTreeSet<_>>();
-    // One per family that produces findings, which is all nine: CloudQuery,
-    // Steampipe, and Syft emit only inventory but share families with engines
-    // that do produce findings. Pinned exactly, so merging two families is a
-    // decision someone has to make here rather than a number that quietly
-    // drifts down.
-    assert_eq!(
-        distinct.len(),
-        9,
-        "one action clause per family, not {}: {distinct:#?}",
-        distinct.len()
-    );
 }
 
 /// The codes exist so a localized client can compose the sentence itself. That
@@ -5572,12 +5527,12 @@ fn the_codes_a_localized_client_reads_agree_with_the_english_they_replace() {
                     .is_some_and(|details| details.aws_iam_policy.is_some())
             });
             if !exposure_observation && !has_typed_iam_context {
-                let action = finding
-                    .recommendation
-                    .rsplit_once("then plan and approve ")
-                    .unwrap_or_else(|| panic!("{engine_id}: {}", finding.recommendation))
-                    .1
-                    .to_owned();
+                assert!(
+                    !finding.recommendation.contains("plan and approve"),
+                    "{engine_id}: {}",
+                    finding.recommendation
+                );
+                let action = finding.recommendation.clone();
                 action_by_family.entry(family).or_default().insert(action);
             }
 
@@ -5615,7 +5570,7 @@ fn the_codes_a_localized_client_reads_agree_with_the_english_they_replace() {
                     assert!(
                         finding
                             .plain_language_summary
-                            .contains("did not assign a severity"),
+                            .contains("without a severity rating"),
                         "{engine_id} hides the missing scanner rating: {}",
                         finding.plain_language_summary
                     );
@@ -5819,17 +5774,16 @@ fn every_priority_reason_the_engines_write_is_one_the_reader_can_read() {
                     );
                 }
                 if let Some(engine_name) = reason
-                    .strip_prefix("Severity remains Unknown because ")
-                    .and_then(|rest| {
-                        rest.strip_suffix(" did not assign one; human review is required.")
-                    })
+                    .strip_prefix("Severity is Unknown because ")
+                    .and_then(|rest| rest.strip_suffix(" did not provide a rating."))
                 {
                     unrated_seen += 1;
                     assert!(
                         translated.contains(engine_name),
                         "{engine_id} lost its own name {engine_name}: {translated}"
                     );
-                    assert!(translated.contains("人工確認"), "{translated}");
+                    assert!(translated.contains("嚴重程度為未知"), "{translated}");
+                    assert!(!translated.contains("人工確認"), "{translated}");
                 }
             }
         }

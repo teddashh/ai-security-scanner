@@ -3054,7 +3054,7 @@ mod tests {
         assert!(
             redacted_finding
                 .recommendation
-                .starts_with("Have the recommended specialist")
+                .starts_with("Narrow customer-managed policy")
         );
         assert!(
             redacted_finding
