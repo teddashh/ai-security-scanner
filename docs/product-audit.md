@@ -324,6 +324,13 @@ work. Historical `public_data` and `passive` grants remain readable. Network
 authorization copy now states the exact approval and credential-free field
 requirements without delegating the product decision to the reader.
 
+Progress and per-check recovery now name the current record, saved checkpoint,
+required new scan, or automatic setup directly. They no longer tell the reader
+what will appear next, defer a different-release action until the current run
+ends, wait for a provider limit to reset, or explain an internal connection stop
+before giving the retry action. The shared cross-page contract rejects those
+phrases in both product languages.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -392,7 +399,8 @@ The high-value remaining gaps are:
    requirements and removes implementation-state explanations from the
    localhost TCP first layer. `18f8d67` removes the selectable public-record
    permission until a released scanner can perform it and converts the related
-   authorization guidance into direct requirements.
+   authorization guidance into direct requirements. `e174156` removes the
+   remaining delayed and mechanism-first Progress and per-check recovery copy.
    The full sequence still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond

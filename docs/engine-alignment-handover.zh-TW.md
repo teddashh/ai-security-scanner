@@ -646,6 +646,13 @@ permission，也移除用來解釋零檢查路徑的但書牆。舊案件的 `pu
 `8da9b5a` 已通過的 1,590 項完整 Rust CLI workspace 基線。本輪沒有執行 scanner、刪除 RAM disk
 資料或接觸任何 target。
 
+`e174156` 新增後，frontend 581 項、component 258 項、TypeScript typecheck、production frontend
+build 與 diff check 全部通過；Progress 與各項檢查的 recovery 只顯示目前紀錄、保存檢查點、必要的
+新掃描或自動設定，不再使用「這輪結束後」「接著會顯示」「等速率上限重設」或先解釋內部連線停止
+再提供重試的句型。跨頁面英／繁中 contract 已阻止這些句型回流。Rust 程式碼未變更，沿用
+`8da9b5a` 已通過的 1,590 項完整 Rust CLI workspace 基線。本輪沒有執行 scanner、刪除 RAM disk
+資料或接觸任何 target。
+
 ## 後續順序
 
 1. 在使用者明確允許安裝缺少的 managed runtime／desktop dependencies，並對確切自有 target
