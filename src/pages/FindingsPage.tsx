@@ -217,6 +217,10 @@ const copy = {
     en: "The scan is still running; no problems have arrived yet",
     zhTW: "掃描仍在執行，目前還沒有收到問題",
   },
+  emptyActiveCompletedTitle: {
+    en: "Completed checks have reported no problems so far; the scan is still running",
+    zhTW: "已完成的檢查目前沒有回報問題；掃描仍在執行",
+  },
   emptyIncompleteTitle: {
     en: "This run produced no saved problems, but the scan did not finish",
     zhTW: "本輪沒有正式問題紀錄，但掃描未完整完成",
@@ -236,6 +240,10 @@ const copy = {
   emptyActiveDescription: {
     en: "This is an interim view, not a clean result. Keep Scan progress open until every check has a final outcome.",
     zhTW: "這只是暫時畫面，不代表沒有問題。請查看「掃描進度」，直到每項檢查都有最終結果。",
+  },
+  emptyActiveCompletedDescription: {
+    en: "This is a useful result for the completed security checks only—not a clean result for the whole scan. More checks may still report problems; keep Scan progress open until every check has a final outcome.",
+    zhTW: "這項結果只適用於已完成的資安檢查，不代表整輪掃描沒有問題。其餘檢查仍可能回報問題；請查看「掃描進度」，直到每項檢查都有最終結果。",
   },
   activeTitle: { en: "These are interim results", zhTW: "這些是暫時結果" },
   activeDescription: {
@@ -1935,6 +1943,15 @@ export function FindingsPage({
     && latestRun.status !== "completed"
     ? latestRun
     : undefined;
+  // Progress only unlocks a zero-finding live report after a durable, explicitly
+  // typed security check completes. Preserve that same evidence boundary here:
+  // legacy or inventory-only work must not receive the stronger interim copy.
+  const hasCompletedLiveSecurityResult = Boolean(
+    activeRun
+    && report?.runId === activeRun.id
+    && report.actual.checks.some((check) =>
+      check.resultKind === "security_check" && check.status === "tested_complete"),
+  );
   const latestRequestOutcomeSummary = scanRequestOutcomeBeginnerSummary(latestRun?.requestOutcome);
   const reportRunPicker = runs.length > 1 || (runs.length > 0 && !latestRun) ? (
     <label className="select-filter">
@@ -2143,7 +2160,9 @@ export function FindingsPage({
           : nonSecurityOnly
             ? text(copy.nonSecurityEmptyTitle)
           : latestRunIsActive
-            ? text(copy.emptyActiveTitle)
+            ? text(hasCompletedLiveSecurityResult
+              ? copy.emptyActiveCompletedTitle
+              : copy.emptyActiveTitle)
             : incompleteRun
               ? text(copy.emptyIncompleteTitle)
               : unknownSources > 0
@@ -2162,7 +2181,9 @@ export function FindingsPage({
           : nonSecurityOnly
             ? text(copy.nonSecurityEmptyDescription)
           : latestRunIsActive
-            ? text(copy.emptyActiveDescription)
+            ? text(hasCompletedLiveSecurityResult
+              ? copy.emptyActiveCompletedDescription
+              : copy.emptyActiveDescription)
             : incompleteRun
               ? text(copy.emptyIncompleteDescription)
               : unknownSources > 0
