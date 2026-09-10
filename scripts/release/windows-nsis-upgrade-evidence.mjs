@@ -12,21 +12,22 @@ import {
 } from "./lib.mjs";
 
 export const PRIOR_WINDOWS_NSIS = Object.freeze({
-  version: "0.1.7",
-  tag: "v0.1.7",
-  file: "ai-security-scanner_0.1.7_x64-setup.exe",
-  bytes: 38_730_365,
-  sha256: "4d2057ca4c008b46dc0195a792075e4b4b377c1909a7795b29efc30f9ae48b1a",
-  url: "https://github.com/teddashh/ai-security-scanner/releases/download/v0.1.7/ai-security-scanner_0.1.7_x64-setup.exe",
-  runtimeManifestSha256: "8b2257ace33ecb14bb0995044a4e6d2b4e71b314741601122801fbb59e7de13f",
+  version: "0.1.9",
+  tag: "v0.1.9",
+  file: "ai-security-scanner_0.1.9_x64-setup.exe",
+  bytes: 40_186_968,
+  sha256: "f7b5374fff07fca98af06931b2dc0ebc52abc2b3ac5a70a6602001d03a1a065e",
+  url: "https://github.com/teddashh/ai-security-scanner/releases/download/v0.1.9/ai-security-scanner_0.1.9_x64-setup.exe",
+  runtimeManifestSha256: "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a",
   machineImageSha256: "e2b6cbcadd8b41b708fecb58a246a20d737dee0ef26872a3f75b575f77eba968",
 });
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 const PLATFORM = "windows-x86_64";
 const INSTALLER_TYPE = "nsis";
 const RUNNER = "windows-2025";
 const BEGINNER_REPORT_FILE = "beginner-report.html";
+const CANDIDATE_VERSION = "0.1.10";
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -140,7 +141,10 @@ async function identity(args) {
   const version = requireString(args, "version");
   const tag = requireString(args, "tag");
   const commit = requireString(args, "commit");
-  assert(isSemver(version) && version === "0.1.8" && tag === `v${version}`, "candidate is not the bounded v0.1.7 to v0.1.8 upgrade");
+  assert(
+    isSemver(version) && version === CANDIDATE_VERSION && tag === `v${version}`,
+    `candidate is not the bounded v${PRIOR_WINDOWS_NSIS.version} to v${CANDIDATE_VERSION} upgrade`,
+  );
   assert(/^[0-9a-f]{40}$/u.test(commit), "candidate commit is not a full lowercase Git object ID");
   return {
     artifactDirectory,
@@ -154,7 +158,7 @@ async function identity(args) {
 function validateObservations(observations, currentVersion, currentInstaller) {
   exactKeys(observations, [
     "schemaVersion", "scenario", "platform", "runner", "priorRelease", "candidate",
-    "fixtureScope", "installation", "dataPreservation", "managedRuntimeFilesystemSentinel", "cleanup",
+    "fixtureScope", "installation", "dataPreservation", "managedRuntimeState", "cleanup",
   ], "Windows NSIS upgrade observations");
   assert(observations.schemaVersion === SCHEMA_VERSION, "Windows NSIS upgrade observation schema is unsupported");
   assert(
@@ -280,17 +284,11 @@ function validateObservations(observations, currentVersion, currentInstaller) {
   yes(uninstall.allNonLeaseProductDataPreserved, "app-only uninstall non-lease product-data preservation");
   assert(uninstall.beforeFileCount === uninstall.afterFileCount && uninstall.beforeBytes === uninstall.afterBytes && uninstall.beforeDigest === uninstall.afterDigest, "app-only uninstall changed non-lease product data");
 
-  const runtime = observations.managedRuntimeFilesystemSentinel;
+  const runtime = observations.managedRuntimeState;
   exactKeys(runtime, [
-    "priorProviderNamespace", "priorVersionDirectory", "priorVersionPayloadDirectoryAbsentBeforeUpgrade",
-    "priorVersionPayloadDirectoryAbsentAfterInstaller", "providerHomeSentinelPreserved", "registeredWslStateExercised",
-  ], "managed-runtime filesystem sentinel");
-  assert(runtime.priorProviderNamespace === PRIOR_WINDOWS_NSIS.runtimeManifestSha256.slice(0, 16), "managed-runtime namespace is not N-1");
-  assert(runtime.priorVersionDirectory === "podman-machine-5.8.2-8b2257ace33ecb14", "managed-runtime versions directory is incorrect");
-  for (const field of [
-    "priorVersionPayloadDirectoryAbsentBeforeUpgrade", "priorVersionPayloadDirectoryAbsentAfterInstaller", "providerHomeSentinelPreserved",
-  ]) yes(runtime[field], `managed runtime ${field}`);
-  assert(runtime.registeredWslStateExercised === false, "normal upgrade fixture must not claim registered WSL coverage");
+    "absentBeforeUpgrade", "absentAfterUpgradeAndReinstall", "absentAfterAppOnlyUninstall",
+  ], "managed-runtime state");
+  for (const field of Object.keys(runtime)) yes(runtime[field], `managed runtime ${field}`);
 
   exactKeys(observations.cleanup, [
     "uninstallerInvoked", "productRegistryRemovedByUninstaller",

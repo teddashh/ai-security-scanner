@@ -8,6 +8,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $priorVersion = "0.1.7"
+$candidateVersion = "0.1.10"
 $priorInstallerName = "ai-security-scanner_0.1.7_x64-setup.exe"
 $priorInstallerBytes = 38730365
 $priorInstallerSha256 = "4d2057ca4c008b46dc0195a792075e4b4b377c1909a7795b29efc30f9ae48b1a"
@@ -42,8 +43,8 @@ $sentinelLifecycleRequiredPhases = @(
   "before_app_only_uninstall"
 )
 
-if ($CurrentVersion -cne "0.1.8") {
-  throw "The bounded v0.1.7 ghost-isolation data-preservation fixture applies only to candidate 0.1.8."
+if ($CurrentVersion -cne $candidateVersion) {
+  throw "The bounded v0.1.7 ghost-isolation data-preservation fixture applies only to candidate $candidateVersion."
 }
 
 if ($null -eq ("GhostQualificationNativeMethods" -as [type])) {
@@ -2342,7 +2343,7 @@ $installerManifest = Read-BoundedJsonFile (Join-Path $artifactRoot "installers-w
 $candidateRecords = @($installerManifest.installers | Where-Object { $_.bundleType -ceq "nsis" })
 if ($installerManifest.version -cne $CurrentVersion -or $candidateRecords.Count -ne 1 -or
     [IO.Path]::GetFileName([string]$candidateRecords[0].file) -cne [string]$candidateRecords[0].file) {
-  throw "Candidate artifact does not contain one flat NSIS installer for 0.1.8."
+  throw "Candidate artifact does not contain one flat NSIS installer for the requested version."
 }
 $candidateInstallerPath = (Resolve-Path -LiteralPath (Join-Path $artifactRoot $candidateRecords[0].file)).Path
 if (-not [String]::Equals([IO.Path]::GetDirectoryName($candidateInstallerPath), $artifactRoot, [StringComparison]::OrdinalIgnoreCase)) {
@@ -2359,7 +2360,7 @@ $candidateRuntimeEvidencePath = Join-Path $artifactRoot "managed-runtime-windows
 $candidateRuntimeEvidence = Read-BoundedJsonFile $candidateRuntimeEvidencePath "Candidate managed-runtime manifest" (1024 * 1024)
 $candidateRuntimeManifestSha256 = Get-LowerSha256 $candidateRuntimeEvidencePath (1024 * 1024)
 if ($candidateRuntimeManifestSha256 -cne $candidateRuntimeManifestExpectedSha256) {
-  throw "Candidate managed-runtime evidence differs from the reviewed v0.1.8 Windows identity."
+  throw "Candidate managed-runtime evidence differs from the reviewed Windows identity."
 }
 $candidateProviderNamespace = $candidateRuntimeManifestSha256.Substring(0, 16)
 $candidateTargets = @($candidateRuntimeEvidence.targets | Where-Object {

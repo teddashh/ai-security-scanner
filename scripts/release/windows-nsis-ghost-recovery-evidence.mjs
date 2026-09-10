@@ -24,6 +24,7 @@ const OLD_VERSION_DIRECTORY = "podman-machine-5.8.2-8b2257ace33ecb14";
 const GENERATION_SELECTION_SCHEMA = "ai-security-scanner.managed-wsl-generation-selection/v1";
 const CANDIDATE_RUNTIME_MANIFEST_SHA256 =
   "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a";
+const CANDIDATE_VERSION = "0.1.10";
 const SELF_TEST_SOURCE_COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const SENTINEL_LIFECYCLE_SCHEMA_VERSION = 1;
 const SENTINEL_PHASES = Object.freeze([
@@ -417,7 +418,7 @@ async function candidateIdentity(
   const runtimeManifestSha256 = await sha256File(runtimeFile);
   assert(
     runtimeManifestSha256 === expectedRuntimeManifestSha256,
-    "candidate runtime manifest differs from the reviewed v0.1.8 identity",
+    "candidate runtime manifest differs from the reviewed Windows identity",
   );
   return {
     installer,
@@ -822,7 +823,10 @@ async function identityFromArgs(args) {
   const version = requireString(args, "version");
   const tag = requireString(args, "tag");
   const commit = requireString(args, "commit");
-  assert(isSemver(version) && version === "0.1.8" && tag === `v${version}`, "candidate version/tag is not the bounded 0.1.8 isolation fixture");
+  assert(
+    isSemver(version) && version === CANDIDATE_VERSION && tag === `v${version}`,
+    `candidate version/tag is not the bounded ${CANDIDATE_VERSION} isolation fixture`,
+  );
   assert(/^[0-9a-f]{40}$/u.test(commit), "candidate commit is not a full lowercase Git object ID");
   const testOnlyRuntimeManifestSha256 = args.get("test-only-runtime-manifest-sha256");
   let expectedRuntimeManifestSha256 = CANDIDATE_RUNTIME_MANIFEST_SHA256;

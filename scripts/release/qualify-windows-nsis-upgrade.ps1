@@ -7,13 +7,14 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$priorVersion = "0.1.7"
-$priorTag = "v0.1.7"
-$priorInstallerName = "ai-security-scanner_0.1.7_x64-setup.exe"
-$priorInstallerBytes = 38730365
-$priorInstallerSha256 = "4d2057ca4c008b46dc0195a792075e4b4b377c1909a7795b29efc30f9ae48b1a"
-$priorInstallerUrl = "https://github.com/teddashh/ai-security-scanner/releases/download/v0.1.7/ai-security-scanner_0.1.7_x64-setup.exe"
-$priorRuntimeManifestSha256 = "8b2257ace33ecb14bb0995044a4e6d2b4e71b314741601122801fbb59e7de13f"
+$candidateVersion = "0.1.10"
+$priorVersion = "0.1.9"
+$priorTag = "v0.1.9"
+$priorInstallerName = "ai-security-scanner_0.1.9_x64-setup.exe"
+$priorInstallerBytes = 40186968
+$priorInstallerSha256 = "f7b5374fff07fca98af06931b2dc0ebc52abc2b3ac5a70a6602001d03a1a065e"
+$priorInstallerUrl = "https://github.com/teddashh/ai-security-scanner/releases/download/v0.1.9/ai-security-scanner_0.1.9_x64-setup.exe"
+$priorRuntimeManifestSha256 = "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a"
 $priorMachineImageSha256 = "e2b6cbcadd8b41b708fecb58a246a20d737dee0ef26872a3f75b575f77eba968"
 $maximumPriorDownloadBytes = 64 * 1024 * 1024
 $maximumDataSnapshotBytes = 512 * 1024 * 1024
@@ -386,7 +387,6 @@ function Invoke-ExactProcess(
   [bool]$CaptureOutput = $false,
   [object]$ExpectedExecutableProof = $null,
   [switch]$AllowRestartRequired,
-  [switch]$AllowRetainedState,
   [string]$RawFinalNsisUninstallDirectory = ""
 ) {
   if ($TimeoutMilliseconds -lt 1000 -or $TimeoutMilliseconds -gt 900000) {
@@ -498,8 +498,7 @@ function Invoke-ExactProcess(
       }
     }
     if ($process.ExitCode -ne 0 -and
-        (-not $AllowRestartRequired -or $process.ExitCode -ne 3010) -and
-        (-not $AllowRetainedState -or $process.ExitCode -ne 10)) {
+        (-not $AllowRestartRequired -or $process.ExitCode -ne 3010)) {
       $boundedError = if ($stderr.Length -gt 2048) { $stderr.Substring(0, 2048) + " (truncated)" } else { $stderr }
       throw "$Label failed with status $($process.ExitCode): $boundedError"
     }
@@ -513,8 +512,7 @@ function Invoke-BoundedCopiedNsisUninstaller(
   [string]$SourceUninstaller,
   [string]$InstallDirectory,
   [string]$WorkRoot,
-  [string]$Label,
-  [switch]$AllowRetainedState
+  [string]$Label
 ) {
   $copyName = "bounded-nsis-uninstaller-copy.exe"
   $copyPath = Assert-ExactChildPath $WorkRoot (
@@ -539,7 +537,7 @@ function Invoke-BoundedCopiedNsisUninstaller(
       throw "$Label execution copy differs from its verified source."
     }
 
-    $result = Invoke-ExactProcess $copyPath @("/S") 180000 $Label -ExpectedExecutableProof $copyProof -AllowRetainedState:$AllowRetainedState -RawFinalNsisUninstallDirectory $InstallDirectory
+    $result = Invoke-ExactProcess $copyPath @("/S") 180000 $Label -ExpectedExecutableProof $copyProof -RawFinalNsisUninstallDirectory $InstallDirectory
   } finally {
     if (Test-ExactChildEntryExists $WorkRoot $copyName) {
       $copyAfter = Get-NoFollowFileSha256Proof $copyPath "$Label execution copy cleanup" (512 * 1024 * 1024)
@@ -819,8 +817,8 @@ foreach ($freshPath in @(
 if (@(Get-CurrentUserUninstallEntries).Count -ne 0) {
   throw "Windows NSIS upgrade data-preservation fixture requires no existing current-user product registration."
 }
-if ($CurrentVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$' -or $CurrentVersion -eq $priorVersion) {
-  throw "Current release version is malformed or not newer than the pinned N-1 fixture."
+if ($CurrentVersion -cne $candidateVersion) {
+  throw "The bounded v$priorVersion N-1 data-preservation fixture applies only to candidate $candidateVersion."
 }
 
 $manifestPath = Join-Path $artifactRoot "installers-windows-x86_64.json"
@@ -900,20 +898,9 @@ try {
     throw "Existing local export identity fixture bytes differ from the reviewed 32-byte fixture."
   }
 
-  $providerNamespace = $priorRuntimeManifestSha256.Substring(0, 16)
-  $providerHome = Join-Path $dataDirectory "managed-runtime\provider-home\$providerNamespace"
-  $providerWslStorage = Join-Path $providerHome "data\containers\podman\machine\wsl\wsldist"
-  New-Item -ItemType Directory -Path $providerWslStorage -Force | Out-Null
-  $providerSentinel = Join-Path $providerWslStorage "nsis-upgrade-ghost-sentinel.json"
-  [IO.File]::WriteAllText(
-    $providerSentinel,
-    '{"schema":"ai-security-scanner.release-qualification/managed-runtime-ghost-v1","registered_wsl":false}',
-    [Text.UTF8Encoding]::new($false)
-  )
-  $priorVersionDirectoryName = "podman-machine-5.8.2-$providerNamespace"
-  $priorVersionDirectory = Join-Path $dataDirectory "managed-runtime\versions\$priorVersionDirectoryName"
-  if (Test-Path -LiteralPath $priorVersionDirectory) {
-    throw "Normal upgrade fixture unexpectedly contains the exact N-1 versions payload directory."
+  $managedRuntimeDirectory = Join-Path $dataDirectory "managed-runtime"
+  if (Test-Path -LiteralPath $managedRuntimeDirectory) {
+    throw "Normal N-1 upgrade fixture unexpectedly contains managed runtime state."
   }
 
   $beforeSnapshot = Get-PrivateDataSnapshot $dataDirectory
@@ -966,11 +953,10 @@ try {
     throw "Candidate NSIS installer changed private application data during upgrade."
   }
   if (-not (Test-Path -LiteralPath $sentinelPath -PathType Leaf) -or
-      -not (Test-Path -LiteralPath $providerSentinel -PathType Leaf) -or
       -not (Test-Path -LiteralPath $registrySentinelPath -PathType Container) -or
       (Get-ItemPropertyValue -LiteralPath $registrySentinelPath -Name "value") -cne "synthetic-non-sensitive" -or
-      (Test-Path -LiteralPath $priorVersionDirectory)) {
-    throw "NSIS upgrade did not preserve the bounded data, registry, and absent N-1 payload fixture."
+      (Test-Path -LiteralPath $managedRuntimeDirectory)) {
+    throw "NSIS upgrade did not preserve the bounded data, registry, and absent managed-runtime state."
   }
   $candidateCase = Invoke-CliJson $candidateCli @(
     "--json", "--data-dir", $dataDirectory, "case", "show", $caseId
@@ -1003,10 +989,6 @@ try {
   $sentinelBeforeUninstall = Get-NoFollowFileSha256Proof $sentinelPath (
     "Data-preservation sentinel before app-only uninstall"
   ) (64 * 1024)
-  $providerSentinelBeforeUninstall = Get-NoFollowFileSha256Proof $providerSentinel (
-    "Managed-runtime sentinel before app-only uninstall"
-  ) (64 * 1024)
-
   # `_?=` makes NSIS synchronous but also disables its own temporary self-copy.
   # Run a byte-verified copy outside $INSTDIR so the original uninstaller can be
   # deleted and its exact postconditions can complete before this fixture moves
@@ -1015,9 +997,9 @@ try {
     $installDirectory
   ) $workRoot (
     "Candidate NSIS uninstall"
-  ) -AllowRetainedState
-  if ([int]$uninstallResult.exitCode -ne 10) {
-    throw "Candidate NSIS uninstall did not report its expected preserved legacy runtime state."
+  )
+  if ([int]$uninstallResult.exitCode -ne 0) {
+    throw "Candidate NSIS uninstall did not complete the normal app-only path."
   }
   if (Test-Path -LiteralPath $installDirectory) {
     throw "Candidate NSIS uninstall retained the exact application installation directory."
@@ -1045,12 +1027,9 @@ try {
   Assert-SameFileProof $sentinelBeforeUninstall $sentinelAfterUninstall (
     "App-only uninstall data-preservation sentinel"
   )
-  $providerSentinelAfterUninstall = Get-NoFollowFileSha256Proof $providerSentinel (
-    "Managed-runtime sentinel after app-only uninstall"
-  ) (64 * 1024)
-  Assert-SameFileProof $providerSentinelBeforeUninstall $providerSentinelAfterUninstall (
-    "App-only uninstall managed-runtime sentinel"
-  )
+  if (Test-Path -LiteralPath $managedRuntimeDirectory) {
+    throw "Normal app-only uninstall fixture unexpectedly created managed runtime state."
+  }
   $existingExportIdentityAfterUninstall = Get-NoFollowFileSha256Proof $existingExportIdentityPath (
     "Existing local export identity after app-only NSIS uninstall"
   ) (64 * 1024)
@@ -1075,7 +1054,7 @@ try {
   }
 
   $observations = [ordered]@{
-    schemaVersion = 7
+    schemaVersion = 8
     scenario = "automated_n_minus_one_nsis_data_preservation_fixture"
     platform = "windows-x86_64"
     runner = "windows-2025"
@@ -1152,13 +1131,10 @@ try {
         allNonLeaseProductDataPreserved = $true
       }
     }
-    managedRuntimeFilesystemSentinel = [ordered]@{
-      priorProviderNamespace = $providerNamespace
-      priorVersionDirectory = $priorVersionDirectoryName
-      priorVersionPayloadDirectoryAbsentBeforeUpgrade = $true
-      priorVersionPayloadDirectoryAbsentAfterInstaller = $true
-      providerHomeSentinelPreserved = $true
-      registeredWslStateExercised = $false
+    managedRuntimeState = [ordered]@{
+      absentBeforeUpgrade = $true
+      absentAfterUpgradeAndReinstall = $true
+      absentAfterAppOnlyUninstall = $true
     }
     cleanup = [ordered]@{
       uninstallerInvoked = $true
@@ -1185,7 +1161,7 @@ try {
       try {
         Invoke-BoundedCopiedNsisUninstaller $activeUninstaller $installDirectory $workRoot (
           "Failure-path NSIS uninstall"
-        ) -AllowRetainedState | Out-Null
+        ) | Out-Null
       } catch {
         $cleanupFailures.Add("NSIS uninstall: $($_.Exception.Message)")
       }

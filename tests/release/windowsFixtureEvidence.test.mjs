@@ -43,7 +43,41 @@ function finalizedManifest() {
   };
 }
 
-test("Windows preservation fixtures run verified NSIS copies and prove retained-state app removal", async () => {
+test("Windows preservation fixtures bind the 0.1.10 candidate and its true N-1 release", async () => {
+  const upgradeFixture = await readFile(
+    new URL("../../scripts/release/qualify-windows-nsis-upgrade.ps1", import.meta.url),
+    "utf8",
+  );
+  const upgradeEvidence = await readFile(
+    new URL("../../scripts/release/windows-nsis-upgrade-evidence.mjs", import.meta.url),
+    "utf8",
+  );
+  const ghostFixture = await readFile(
+    new URL("../../scripts/release/qualify-windows-nsis-ghost-recovery.ps1", import.meta.url),
+    "utf8",
+  );
+  const ghostEvidence = await readFile(
+    new URL("../../scripts/release/windows-nsis-ghost-recovery-evidence.mjs", import.meta.url),
+    "utf8",
+  );
+
+  for (const source of [upgradeFixture, upgradeEvidence, ghostFixture, ghostEvidence]) {
+    assert.match(source, /candidateVersion|CANDIDATE_VERSION/u);
+    assert.match(source, /0\.1\.10/u);
+  }
+  for (const source of [upgradeFixture, upgradeEvidence]) {
+    assert.match(source, /0\.1\.9/u);
+    assert.match(source, /f7b5374fff07fca98af06931b2dc0ebc52abc2b3ac5a70a6602001d03a1a065e/u);
+    assert.doesNotMatch(source, /ai-security-scanner_0\.1\.7_x64-setup\.exe/u);
+    assert.doesNotMatch(source, /managed-runtime-ghost|providerHomeSentinel|providerSentinel/u);
+  }
+  assert.match(upgradeFixture, /\$uninstallResult\.exitCode -ne 0/u);
+  assert.doesNotMatch(upgradeFixture, /AllowRetainedState/u);
+  assert.match(ghostFixture, /\$uninstallResult\.exitCode -ne 10/u);
+  assert.match(ghostFixture, /AllowRetainedState/u);
+});
+
+test("Windows preservation fixtures require exact NSIS uninstall outcomes and prove app removal", async () => {
   for (const [relative, label] of [
     ["../../scripts/release/qualify-windows-nsis-upgrade.ps1", "N-1 NSIS qualification"],
     [
@@ -57,22 +91,24 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
       ? '  if (@(Get-CurrentUserUninstallEntries).Count -ne 0) {\n    throw "Candidate NSIS uninstall left its current-user product registration behind."\n  }\n'
       : '  if (@(Get-ProductRegistryEntries).Count -ne 0) {\n    throw "Candidate NSIS uninstaller left the product registry entry."\n  }\n';
     const isGhostFixture = source.includes("Get-ProductRegistryEntries");
+    const validatorOptions = {
+      allowsRetainedState: isGhostFixture,
+      provesAppOnlyDataPreservation: true,
+    };
     const afterSnapshotAssignment = isGhostFixture
       ? "  $appOnlyUninstallSnapshotAfter = Get-NonLeasePrivateDataSnapshot $dataDirectory\n"
       : "  $appOnlyUninstallSnapshotAfter = Get-PrivateDataSnapshot $dataDirectory -ExcludeProcessLease\n";
     assert.notEqual(source.indexOf(registryRemovalProof), -1);
     assert.notEqual(source.indexOf(afterSnapshotAssignment), -1);
     assert.doesNotThrow(() =>
-      validateSynchronousNsisQualificationFixture(source, label, {
-        allowsRetainedState: true,
-      }),
+      validateSynchronousNsisQualificationFixture(source, label, validatorOptions),
     );
     assert.throws(
       () =>
         validateSynchronousNsisQualificationFixture(
           source.replace("      Remove-Item -LiteralPath $copyPath -Force\n", ""),
           label,
-          { allowsRetainedState: true },
+          validatorOptions,
         ),
       /missing copied-uninstaller invariant|one copied-uninstaller helper/u,
     );
@@ -84,7 +120,7 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
             '$startInfo.ArgumentList.Add("_?=$rawNsisDirectory")',
           ),
           label,
-          { allowsRetainedState: true },
+          validatorOptions,
         ),
       /missing copied-uninstaller invariant|raw NSIS tail|invokes an installed NSIS/u,
     );
@@ -96,18 +132,21 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
             "",
           ),
           label,
-          { allowsRetainedState: true },
+          validatorOptions,
         ),
       /independently proving application removal/u,
     );
+    const exactExitCheck = isGhostFixture
+      ? "$uninstallResult.exitCode -ne 10"
+      : "$uninstallResult.exitCode -ne 0";
     assert.throws(
       () =>
         validateSynchronousNsisQualificationFixture(
-          source.replace("$uninstallResult.exitCode -ne 10", "$uninstallResult.exitCode -notin @(0, 10)"),
+          source.replace(exactExitCheck, "$uninstallResult.exitCode -notin @(0, 10)"),
           label,
-          { allowsRetainedState: true },
+          validatorOptions,
         ),
-      /independently proving application removal/u,
+      /exact (?:retained-state exit class|exit class)/u,
     );
     if (isGhostFixture) {
       for (const proofField of [
@@ -119,7 +158,7 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
             validateSynchronousNsisQualificationFixture(
               source.replace(proofField, ""),
               label,
-              { allowsRetainedState: true },
+              validatorOptions,
             ),
           /complete empty-file identity/u,
         );
@@ -129,7 +168,7 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
           validateSynchronousNsisQualificationFixture(
             source.replace("      Start-Sleep -Milliseconds 500\n", ""),
             label,
-            { allowsRetainedState: true },
+            validatorOptions,
           ),
         /quiesce only its two stopped fixtures/u,
       );
@@ -141,7 +180,7 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
               "$_.Exception.NativeErrorCode -notin @(32, 33)",
             ),
             label,
-            { allowsRetainedState: true },
+            validatorOptions,
           ),
         /quiesce only its two stopped fixtures/u,
       );
@@ -155,7 +194,7 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
               "",
             ),
             label,
-            { allowsRetainedState: true },
+            validatorOptions,
           ),
         /quiesce only its two stopped fixtures/u,
       );
@@ -164,7 +203,7 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
           validateSynchronousNsisQualificationFixture(
             source.replace("$runningBefore.Count -ne 0", "$runningBefore.Count -gt 2"),
             label,
-            { allowsRetainedState: true },
+            validatorOptions,
           ),
         /quiesce only its two stopped fixtures/u,
       );
@@ -176,7 +215,7 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
               "[string]$actual.Name -cne $name",
             ),
             label,
-            { allowsRetainedState: true },
+            validatorOptions,
           ),
         /quiesce only its two stopped fixtures/u,
       );
@@ -188,7 +227,7 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
               'foreach ($identityField in @("sizeBytes", "volumeSerialNumber", "fileIndex", "numberOfLinks", "attributes"))',
             ),
             label,
-            { allowsRetainedState: true },
+            validatorOptions,
           ),
         /quiesce only its two stopped fixtures/u,
       );
@@ -198,7 +237,7 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
         validateSynchronousNsisQualificationFixture(
           source.replace(registryRemovalProof, ""),
           label,
-          { allowsRetainedState: true },
+          validatorOptions,
         ),
       /independently proving application removal/u,
     );
@@ -207,7 +246,7 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
         validateSynchronousNsisQualificationFixture(
           source.replace(afterSnapshotAssignment, ""),
           label,
-          { allowsRetainedState: true },
+          validatorOptions,
         ),
       /independently proving application removal/u,
     );

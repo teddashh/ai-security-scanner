@@ -1507,7 +1507,7 @@ export function validateWindowsQualificationLifecycle(source) {
 export function validateSynchronousNsisQualificationFixture(
   source,
   label,
-  { allowsRetainedState = false } = {},
+  { allowsRetainedState = false, provesAppOnlyDataPreservation = false } = {},
 ) {
   source = source.replaceAll(/\r\n?/gu, "\n");
   for (const required of [
@@ -1551,7 +1551,18 @@ export function validateSynchronousNsisQualificationFixture(
       source.includes("[switch]$AllowRetainedState") &&
       source.includes("$process.ExitCode -ne 10") &&
         source.split("-AllowRetainedState").length === 4 &&
-        source.includes("$uninstallResult.exitCode -ne 10") &&
+        source.includes("$uninstallResult.exitCode -ne 10"),
+      `${label} must accept and require the exact retained-state exit class`,
+    );
+  } else {
+    assert(
+      !source.includes("AllowRetainedState"),
+      `${label} must keep uninstallation strict`,
+    );
+  }
+  if (provesAppOnlyDataPreservation) {
+    assert(
+      (allowsRetainedState || source.includes("$uninstallResult.exitCode -ne 0")) &&
         source.includes("retained the exact application installation directory") &&
         source.includes("retained a product application binary") &&
         source.includes(
@@ -1583,7 +1594,7 @@ export function validateSynchronousNsisQualificationFixture(
         source.includes(
           "$appOnlyUninstallSnapshotAfter.totalBytes -ne $appOnlyUninstallSnapshotBefore.totalBytes",
         ),
-      `${label} must accept retained-state status only while independently proving application removal and exact report identity`,
+      `${label} must require its exact exit class while independently proving application removal and exact report identity`,
     );
     if (source.includes("Get-ProductRegistryEntries")) {
       const emptyProofStart = source.indexOf("function Get-NoFollowEmptyFileProof(");
@@ -1635,11 +1646,6 @@ export function validateSynchronousNsisQualificationFixture(
         `${label} must prove that the current product added only its exact empty root process lease`,
       );
     }
-  } else {
-    assert(
-      !source.includes("AllowRetainedState"),
-      `${label} must keep fresh-install uninstallation strict`,
-    );
   }
 }
 
