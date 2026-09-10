@@ -111,8 +111,8 @@ const copy = {
   startingAction: { en: "Starting scan…", zhTW: "正在開始掃描…" },
   startingActivityTitle: { en: "Preparing the new scan", zhTW: "正在準備新的掃描" },
   startingActivityDescription: {
-    en: "Creating the scan entry. Per-tool progress appears next.",
-    zhTW: "正在建立掃描紀錄；接著會顯示各工具進度。",
+    en: "Creating the scan record.",
+    zhTW: "正在建立掃描紀錄。",
   },
   startingNewTitle: { en: "Starting a new scan…", zhTW: "正在開始新的掃描…" },
   startingNewDescription: {
@@ -141,12 +141,12 @@ const copy = {
     zhTW: "這些檢查由不同版本建立；請開始新的掃描，以目前版本執行。",
   },
   releaseIncompatibleActiveBody: {
-    en: "Compatible checks can continue here. After this scan ends, start a new scan for checks created by a different release.",
-    zhTW: "相容的檢查可在這裡繼續；這次掃描結束後，請為不同版本建立的檢查開始新的掃描。",
+    en: "Compatible checks continue in this run. Different-release checks require a new scan.",
+    zhTW: "相容的檢查繼續在這一輪執行；不同版本的檢查需要新的掃描。",
   },
   releaseIncompatibleNotReadyBody: {
-    en: "Complete the readiness step below, then start a new scan for these checks.",
-    zhTW: "完成下方的準備步驟，再為這些檢查開始新的掃描。",
+    en: "Readiness step required below. Different-release checks require a new scan.",
+    zhTW: "需要完成下方的準備步驟；不同版本的檢查需要新的掃描。",
   },
   checkingReady: { en: "Checking what is ready…", zhTW: "正在確認可以執行的檢查…" },
   readinessUnavailableTitle: { en: "Scan readiness unavailable", zhTW: "掃描準備狀態無法取得" },
@@ -326,14 +326,14 @@ const copy = {
   activityEyebrow: { en: "SCAN ACTIVITY", zhTW: "掃描動態" },
   activityTitle: { en: "See exactly where your scan is", zhTW: "清楚看見掃描進行到哪裡" },
   activityDescription: {
-    en: "This timeline updates whenever the app saves a new scan step.",
-    zhTW: "每當程式保存新的掃描步驟，這裡就會更新。",
+    en: "Saved scan steps in time order.",
+    zhTW: "依時間順序排列的已保存掃描步驟。",
   },
   currentActivity: { en: "What is happening now", zhTW: "現在正在做什麼" },
   lastProgress: { en: "Last progress update", zhTW: "最後一次進度更新" },
   delayedProgress: {
-    en: "Last saved progress: {count} minutes ago. Each tool stops at its built-in limit.",
-    zhTW: "最後保存進度：{count} 分鐘前。每個工具會在內建時限停止。",
+    en: "Last saved progress: {count} minutes ago.",
+    zhTW: "最後保存進度：{count} 分鐘前。",
   },
   activityLog: { en: "Event log", zhTW: "事件紀錄" },
   activityLogDescription: {

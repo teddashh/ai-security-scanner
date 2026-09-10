@@ -124,7 +124,7 @@ test("known setup failures lead to the matching automatic next step", () => {
   }));
   assert.match(target.en, /scan setup/u);
   assert.match(target.zhTW, /掃描設定/u);
-  assert.match(tools.en, /prepare.*automatically/u);
+  assert.match(tools.en, /setup is automatic/u);
   assert.match(tools.zhTW, /自動準備/u);
 });
 
@@ -135,8 +135,8 @@ test("provider rate limits use a direct status and next action", () => {
   }));
 
   assert.deepEqual(action, {
-    en: "Provider rate limit reached. Continue this scan after the limit resets.",
-    zhTW: "雲端服務已達速率上限；上限重設後繼續這次掃描。",
+    en: "Provider rate limit reached. Continue this scan from its saved checkpoint.",
+    zhTW: "雲端服務已達速率上限；從已保存的檢查點繼續這次掃描。",
   });
   assert.doesNotMatch(`${action.en}${action.zhTW}`, /wait|稍等|later|稍後/iu);
 });
@@ -247,7 +247,7 @@ test("bounded retry exhaustion and cancellation never promise an impossible resu
   assert.doesNotMatch(`${cancelled.en}${cancelled.zhTW}`, /continue this scan|繼續掃描/iu);
 });
 
-test("a gateway preparation failure says automatic rebuild and retry, never resume saved progress", () => {
+test("a gateway preparation failure gives direct automatic setup and retry", () => {
   const failed = engine({
     status: "failed",
     phase: "failed",
@@ -267,9 +267,8 @@ test("a gateway preparation failure says automatic rebuild and retry, never resu
   const nextStep = engineNextStepFor(failed);
   const recovery = engineRecoveryLabelFor(failed);
 
-  assert.match(nextStep.en, /private scan connection/u);
-  assert.match(nextStep.en, /rebuild.*automatically/iu);
-  assert.match(nextStep.zhTW, /專用掃描連線/u);
+  assert.match(nextStep.en, /private connection setup is automatic/u);
+  assert.match(nextStep.zhTW, /專用連線會自動準備/u);
   assert.match(recovery.en, /from the beginning/u);
   assert.match(recovery.zhTW, /從頭重試/u);
   assert.doesNotMatch(`${nextStep.en}${recovery.en}`, /continue from saved|last saved point/u);
@@ -279,7 +278,7 @@ test("typed skipped reasons choose a specific bilingual next step without render
   const cases = [
     [["no_compatible_authorized_assets"], /scan setup/u, /掃描設定/u],
     [["provider_source_required"], /cloud setup/u, /雲端設定/u],
-    [["runtime_image_unavailable"], /prepare.*automatically/u, /自動準備/u],
+    [["runtime_image_unavailable"], /setup is automatic/u, /自動準備/u],
     [["engine_release_unavailable"], /Update the app/u, /更新應用程式/u],
   ] as const;
   for (const [codes, english, traditionalChinese] of cases) {
@@ -290,6 +289,6 @@ test("typed skipped reasons choose a specific bilingual next step without render
   }
 
   const mixed = skippedChecksNextStepFor(["no_compatible_authorized_assets", "runtime_image_unavailable"]);
-  assert.match(mixed.en, /Finish the target or cloud step/u);
+  assert.match(mixed.en, /Finish the displayed target or cloud step/u);
   assert.match(mixed.zhTW, /完成畫面上的目標或雲端步驟/u);
 });

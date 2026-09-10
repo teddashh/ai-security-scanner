@@ -113,8 +113,8 @@ test("fresh-start feedback is visible, bilingual, and does not invent a scan rec
   for (const phrase of [
     "Starting your scan…",
     "正在開始掃描…",
-    "Creating the scan entry. Per-tool progress appears next.",
-    "正在建立掃描紀錄；接著會顯示各工具進度。",
+    "Creating the scan record.",
+    "正在建立掃描紀錄。",
     "Starting a new scan…",
     "正在開始新的掃描…",
   ]) assert.ok(progress.includes(phrase), phrase);
@@ -139,13 +139,13 @@ test("release-incompatible saved checks offer a direct fresh-scan path", async (
     "部分已保存的檢查需要新的掃描",
     "These checks were created by a different app release. Start a new scan to run them with this release.",
     "這些檢查由不同版本建立；請開始新的掃描，以目前版本執行。",
-    "Compatible checks can continue here.",
-    "相容的檢查可在這裡繼續",
-    "Complete the readiness step below",
-    "完成下方的準備步驟",
+    "Compatible checks continue in this run.",
+    "相容的檢查繼續在這一輪執行",
+    "Readiness step required below.",
+    "需要完成下方的準備步驟",
   ]) assert.ok(progress.includes(phrase), phrase);
 
-  assert.doesNotMatch(progress, /Nothing from the earlier scan|先前掃描的內容不會重新執行/u);
+  assert.doesNotMatch(progress, /Nothing from the earlier scan|先前掃描的內容不會重新執行|After this scan ends|這次掃描結束後/u);
 
   assert.match(
     progress,

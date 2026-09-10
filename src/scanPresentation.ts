@@ -96,20 +96,20 @@ const nextStepCopy = {
     zhTW: "請開啟停止前擷取的結果；開始新的掃描以檢查剩餘項目。",
   },
   interrupted: {
-    en: "Continue the original scan to pick up where the app stopped.",
-    zhTW: "繼續原本的掃描，就能從程式停止的位置接著執行。",
+    en: "Continue the original scan from its saved checkpoint.",
+    zhTW: "從已保存的檢查點繼續原本的掃描。",
   },
   providerBusy: {
-    en: "Provider rate limit reached. Continue this scan after the limit resets.",
-    zhTW: "雲端服務已達速率上限；上限重設後繼續這次掃描。",
+    en: "Provider rate limit reached. Continue this scan from its saved checkpoint.",
+    zhTW: "雲端服務已達速率上限；從已保存的檢查點繼續這次掃描。",
   },
   targetSetup: {
     en: "Return to scan setup, choose the intended target, and confirm it once.",
     zhTW: "回到掃描設定，選擇正確目標並確認一次。",
   },
   toolSetup: {
-    en: "Try this check again. The app will prepare a fresh private scan environment automatically.",
-    zhTW: "請再試一次；程式會自動準備新的專用掃描環境。",
+    en: "Retry this check; scan-tool setup is automatic.",
+    zhTW: "重試這項檢查；掃描工具會自動準備。",
   },
   executionStoppedWithResults: {
     en: "Open the completed results and diagnostic log, then retry this check.",
@@ -132,8 +132,8 @@ const nextStepCopy = {
     zhTW: "請回到雲端設定，重新連接或檢查所選帳號。",
   },
   gatewayPreparation: {
-    en: "The private scan connection stopped before this check began. Try the check again and the app will rebuild the connection automatically.",
-    zhTW: "專用掃描連線在這項檢查開始前就停止了。請再試一次，程式會自動重建連線。",
+    en: "Retry this check; private connection setup is automatic.",
+    zhTW: "重試這項檢查；專用連線會自動準備。",
   },
   unavailableInRelease: {
     en: "Update the app, then retry these checks.",
@@ -152,8 +152,8 @@ const nextStepCopy = {
     zhTW: "請開始新的掃描取得新結果。",
   },
   mixedSkippedSetup: {
-    en: "Finish the target or cloud step shown, then try the unfinished checks again. The app prepares its scan tools automatically.",
-    zhTW: "請完成畫面上的目標或雲端步驟，再重試未完成的檢查；程式會自動準備掃描工具。",
+    en: "Finish the displayed target or cloud step, then retry the unfinished checks.",
+    zhTW: "完成畫面上的目標或雲端步驟，再重試未完成的檢查。",
   },
   skippedUnknown: {
     en: "Open the technical records for the skipped checks, finish the indicated setup, then start a new scan.",

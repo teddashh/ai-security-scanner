@@ -553,11 +553,11 @@ test("primary product copy has no delayed or repeat-failure disclaimers", async 
 
   assert.doesNotMatch(
     inspected,
-    /if it (?:stops|fails) again|for support|when ready|when you are ready|when you want|not the complete set|next person knows|not checked yet|no (?:scan projects|scan results|checks|observation|reports saved) yet/iu,
+    /if it (?:stops|fails) again|for support|when ready|when you are ready|when you want|not the complete set|next person knows|not checked yet|no (?:scan projects|scan results|checks|observation|reports saved) yet|after this scan ends|per-tool progress appears next|after the limit resets|where the app stopped|will rebuild the connection|if you are unsure, ask the system owner|no check in this version reads public records/iu,
   );
   assert.doesNotMatch(
     inspected,
-    /若再次(?:停止|失敗)|以便排查|準備好(?:時|後)|之後仍可再|稍後逐項授權|讓接手者一看就懂|並非完整結果|還沒有掃描專案|尚無觀察結果|尚未產生掃描結果/u,
+    /若再次(?:停止|失敗)|以便排查|準備好(?:時|後)|之後仍可再|稍後逐項授權|讓接手者一看就懂|並非完整結果|還沒有掃描專案|尚無觀察結果|尚未產生掃描結果|這次掃描結束後|接著會顯示各工具進度|上限重設後|從程式停止的位置|自動重建連線|如果不確定，請先向系統負責人確認/u,
   );
 });
 
