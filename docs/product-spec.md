@@ -266,6 +266,8 @@ External framework references, when the product team wants them, are optional co
 
 Errors say what could not happen, what work was preserved, whether the user must act, and one recommended next step. Technical detail is optional.
 
+Structured CLI responses state outcomes as typed fields. Status, planning, discovery, grouping, deletion, engine retrieval, and cleanup commands do not append defensive notice paragraphs that repeat or qualify those fields.
+
 Events are refresh hints, not truth. Startup, focus, resume, and periodic refresh reconcile durable state. Cases, targets, runs, findings, reports, and export history survive restart. One damaged case is isolated; demo data never substitutes for failed native data.
 
 Safety rules are concise:

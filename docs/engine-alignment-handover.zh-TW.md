@@ -2,7 +2,7 @@
 
 狀態日期：2026-09-10
 
-最後完成的產品程式 checkpoint：`b8bf318`
+最後完成的產品程式 checkpoint：`cbd6481`
 
 這份文件是目前唯一的開發交接摘要，已直接取代舊的歷史版。產品決策以[產品規格](product-spec.md)為準，能力現況以[產品檢視](product-audit.md)為準。
 
@@ -50,6 +50,9 @@ Scanner 應盡量保留上游行為、規則、識別碼、severity、證據與 
   直接顯示 Unknown；有未完成涵蓋的終止輪次標為「已完成，但有涵蓋缺口」。正式條款與
   技術工作紀錄只在報告末端出現一次，HTML 匯出同序；舊案件進入權威報告模型時也會
   正規化掉舊式人工審查、規劃核准、證據但書與責任轉移文字。
+- `cbd6481` 把相同規則延伸到支援的 CLI。`doctor`、來源探索、scope、finding 群組、
+  scan plan／status、engine retrieval、case deletion 與 runtime cleanup 直接回傳結構化狀態，
+  不再附加重複解釋、未執行聲明或責任轉移 notice；既有 `live_discovery` 欄位仍保留。
 
 ## 已在 main 上成立的產品能力
 
@@ -428,6 +431,10 @@ scanner 或接觸 target。
 32 項、TypeScript typecheck、production frontend build、clippy、format 與 diff check 全部通過；
 build 只有既有的大型 chunk 提示。本輪只處理本機程式碼與 checked-in fixtures，沒有執行 scanner
 或接觸 target。
+
+`cbd6481` 新增後，完整 Rust CLI suite 1,588 項、CLI binary 35 項、clippy、format 與 diff check
+全部通過；重建後的實際 `doctor --json` 輸出已確認沒有頂層 defensive notice。本輪沒有執行
+scanner 或接觸 target。
 
 ## 後續順序
 

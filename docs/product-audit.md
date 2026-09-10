@@ -194,6 +194,11 @@ Formal report terms and technical task records appear once, at the report end,
 and HTML export uses the same ordering. Stored findings from older runs are
 normalized into this contract when the authoritative report is built.
 
+The supported CLI now follows the same rule. `doctor` reports runtime, engine,
+cleanup, and checkpoint state directly. Planning, discovery, grouping, deletion,
+engine retrieval, and cleanup responses use structured outcome fields instead of
+appending defensive notice paragraphs.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
