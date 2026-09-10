@@ -139,6 +139,32 @@ const RELEASE_COPY = new Map([
       ],
     },
   ],
+  [
+    "0.1.10",
+    {
+      updaterNotes:
+        "A focused IT-environment scan, direct progress states, terminal unified reports, and concise English and Traditional Chinese guidance.",
+      releaseNotes: [
+        "> **One scan. One report. Clear next actions.**",
+        "",
+        "ai-security-scanner 0.1.10 centers the desktop experience on three direct starting points:",
+        "one IT environment, one website, or one project folder.",
+        "",
+        "An IT-environment scan can combine repositories, websites, and exact approved internal",
+        "systems. Applicable upstream scanners receive only their assigned assets, while completed",
+        "sibling outcomes stay together in one terminal report.",
+        "",
+        "Progress now presents current work, confirmed problem counts, completed checks, remaining",
+        "checks, and attention-needed assets. Results lead with affected assets, priority, impact,",
+        "next actions, verification guidance, and per-asset coverage. Technical evidence remains",
+        "available on demand, and readable HTML follows the same report order.",
+        "",
+        "The English and Traditional Chinese documentation now follows the complete path from",
+        "installation and target selection through scanning, results, export, and release operations.",
+        "",
+      ],
+    },
+  ],
 ]);
 
 function releaseCopyFor(version) {
