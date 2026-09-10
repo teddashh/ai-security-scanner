@@ -9,6 +9,7 @@ import {
 } from "../../src/localhostQuickScan";
 import type {
   Asset,
+  BeginnerMasterReport,
   BeginnerRequestedTarget,
   EngineRun,
   EngineRunStatus,
@@ -109,12 +110,85 @@ const asset = (id = "asset-1", name = "selected-project"): Asset => ({
   findingCount: 0,
 });
 
+const beginnerReport = (
+  overrides: Partial<BeginnerMasterReport> = {},
+): BeginnerMasterReport => ({
+  schemaVersion: "1.0.0",
+  caseId: "case-1",
+  runId: "run-1",
+  projectTitle: "Selected project",
+  state: {
+    summary: "partial",
+    lifecycle: "live",
+    lastDurableUpdate: "2026-09-04T12:02:00Z",
+    explanation: "Recorded from durable task state.",
+  },
+  requested: {
+    targets: [{
+      assetId: "asset-1",
+      label: "selected-project",
+      assetKind: "repository",
+      labelAvailability: "recorded",
+      assetKindAvailability: "recorded",
+    }],
+    stage: { value: "deep", availability: "recorded", explanation: "Recorded with the run." },
+    limits: [],
+    requestedCheckIds: [],
+    automaticReductions: [],
+    reductionsAvailability: "recorded",
+    unavailableDimensions: [],
+  },
+  actual: { checks: [], networkScopes: [], unavailableDimensions: [] },
+  coverageGaps: [],
+  coverageCounts: {
+    testedComplete: 0,
+    testedPartial: 0,
+    failed: 0,
+    timedOut: 0,
+    cancelled: 0,
+    notTested: 0,
+    excluded: 0,
+    truncated: 0,
+    unavailable: 0,
+    unattributed: 0,
+    manualReview: 0,
+  },
+  findings: [],
+  nextSteps: [],
+  technicalDetails: { collapsedByDefault: true, tasks: [] },
+  frameworkNotice: { nonCertification: "Not a certification.", aidefendMappingStatus: "Mapped." },
+  dataQualityWarnings: [],
+  ...overrides,
+});
+
+const reportWithCompletedCheck = (
+  resultKind?: "security_check" | "inventory" | "connectivity",
+  runId = "run-1",
+): BeginnerMasterReport => {
+  const base = beginnerReport();
+  return beginnerReport({
+    runId,
+    actual: {
+      ...base.actual,
+      checks: [{
+        taskId: "completed-task",
+        checkId: "completed-check",
+        ...(resultKind ? { resultKind } : {}),
+        targetAssetIds: ["asset-1"],
+        status: "tested_complete",
+        testedDimensions: [],
+      }],
+    },
+    coverageCounts: { ...base.coverageCounts, testedComplete: 1 },
+  });
+};
+
 const renderProgress = (
   value: ScanRun,
   findings: Finding[] = [],
   assessmentIntent?: UseCaseId,
   assets: Asset[] = [asset()],
-  requestedTargets?: BeginnerRequestedTarget[],
+  report?: BeginnerMasterReport,
 ) =>
   render(
     <I18nProvider>
@@ -122,7 +196,7 @@ const renderProgress = (
         caseId="case-1"
         assessmentIntent={assessmentIntent}
         assets={assets}
-        requestedTargets={requestedTargets}
+        report={report}
         runs={[value]}
         findings={findings}
         selectedRunId={value.id}
@@ -330,6 +404,63 @@ test("an active scan with no durable finding does not offer results yet", () => 
   );
 });
 
+test("a completed security check unlocks its no-problem result while sibling work continues", () => {
+  const { container } = renderProgress(
+    run([
+      engine("semgrep", "completed", { progress: 100, findingCount: 0 }),
+      engine("trivy", "running", { findingCount: 0 }),
+    ], "running"),
+    [],
+    "source_code",
+    [asset()],
+    reportWithCompletedCheck("security_check"),
+  );
+
+  const results = container.querySelector<HTMLAnchorElement>('a[href="#findings"]');
+  expect(results?.textContent).toContain("View results");
+  expect(results?.className).toContain("button--primary");
+  expect(container.querySelector(".run-overview__timing")?.textContent).toContain(
+    "A useful security result is available now; remaining checks may take longer.",
+  );
+});
+
+test.each([
+  ["inventory", "inventory"],
+  ["connectivity", "connectivity"],
+  ["legacy untyped", undefined],
+] as const)(
+  "a completed %s check alone does not unlock security results",
+  (_label, resultKind) => {
+    const { container } = renderProgress(
+      run([
+        engine("completed-check", "completed", { progress: 100 }),
+        engine("security-check", "running"),
+      ], "running"),
+      [],
+      "source_code",
+      [asset()],
+      reportWithCompletedCheck(resultKind),
+    );
+
+    expect(container.querySelector('a[href="#findings"]')).toBeNull();
+    expect(container.querySelector(".run-overview__timing")?.textContent).toContain(
+      "Timing target: a useful result within minutes after tools are ready.",
+    );
+  },
+);
+
+test("a completed check from another report cannot unlock the selected active run", () => {
+  const { container } = renderProgress(
+    run([engine("semgrep", "running")], "running"),
+    [],
+    "source_code",
+    [asset()],
+    reportWithCompletedCheck("security_check", "another-run"),
+  );
+
+  expect(container.querySelector('a[href="#findings"]')).toBeNull();
+});
+
 test("live activity names the saved assets in the current check", () => {
   const requestedTargets: BeginnerRequestedTarget[] = [
     {
@@ -347,6 +478,7 @@ test("live activity names the saved assets in the current check", () => {
       assetKindAvailability: "recorded",
     },
   ];
+  const baseReport = beginnerReport();
   const { container } = renderProgress(
     run([
       engine("active-check", "running", {
@@ -357,7 +489,7 @@ test("live activity names the saved assets in the current check", () => {
     [],
     "internal_it_environment",
     [asset("asset-1", "current-project-name"), asset("asset-2", "current-website-name"), asset("asset-3", "later-asset")],
-    requestedTargets,
+    beginnerReport({ requested: { ...baseReport.requested, targets: requestedTargets } }),
   );
 
   const current = container.querySelector(".scan-activity__current")?.textContent;

@@ -2461,7 +2461,7 @@ export default function App() {
             caseId={currentCaseId}
             assessmentIntent={workspace.case.assessmentIntent}
             assets={workspace.assets}
-            requestedTargets={currentBeginnerReport?.requested.targets}
+            report={currentBeginnerReport}
             runs={workspace.runs}
             findings={workspace.findings}
             selectedRunId={currentRun?.id}

@@ -45,7 +45,7 @@ import { isSecurityFinding } from "../findingClassification";
 import type { UseCaseId } from "../useCases";
 import type {
   Asset,
-  BeginnerRequestedTarget,
+  BeginnerMasterReport,
   EngineRun,
   EngineRunStatus,
   ExecutionStage,
@@ -62,7 +62,7 @@ interface ProgressPageProps {
   caseId?: string;
   assessmentIntent?: UseCaseId;
   assets: Asset[];
-  requestedTargets?: BeginnerRequestedTarget[];
+  report?: BeginnerMasterReport;
   runs: ScanRun[];
   findings: Finding[];
   selectedRunId?: string;
@@ -743,7 +743,7 @@ export function ProgressPage({
   caseId,
   assessmentIntent,
   assets,
-  requestedTargets,
+  report,
   runs,
   findings,
   selectedRunId: controlledSelectedRunId,
@@ -792,15 +792,28 @@ export function ProgressPage({
       || finding.evidence.some((evidence) => evidence.runId === selectedRun.id)
     )).length
     : 0;
-  const activeRunHasDurableSecurityFindings = Boolean(
+  const selectedRunReport = report?.runId === selectedRun?.id ? report : undefined;
+  const reportHasDurableSecurityFinding = Boolean(
+    selectedRunReport?.findings.some((finding) => isSecurityFinding(finding)),
+  );
+  const reportHasCompletedSecurityCheck = Boolean(
+    selectedRunReport?.actual.checks.some((check) =>
+      check.resultKind === "security_check" && check.status === "tested_complete"
+    ),
+  );
+  const activeRunHasUsefulSecurityResult = Boolean(
     selectedRun
     && activeRunStatuses.has(selectedRun.status)
-    && durableSecurityFindingCount > 0,
+    && (
+      durableSecurityFindingCount > 0
+      || reportHasDurableSecurityFinding
+      || reportHasCompletedSecurityCheck
+    ),
   );
   const showResultsAction = Boolean(
     selectedRun && (
       terminalRunStatuses.has(selectedRun.status)
-      || activeRunHasDurableSecurityFindings
+      || activeRunHasUsefulSecurityResult
     ),
   );
   const scanWorkActive = hasActiveScanWork(runs);
@@ -883,7 +896,7 @@ export function ProgressPage({
   const activeAssetNames = useMemo(() => {
     if (!selectedRun) return [];
     const assetNames = new Map(assets.map((asset) => [asset.id, asset.name]));
-    for (const target of requestedTargets ?? []) {
+    for (const target of selectedRunReport?.requested.targets ?? []) {
       if (target.label) assetNames.set(target.assetId, target.label);
     }
     return [...new Set(
@@ -892,7 +905,7 @@ export function ProgressPage({
         .map((assetId) => assetNames.get(assetId))
         .filter((name): name is string => Boolean(name)),
     )];
-  }, [assets, requestedTargets, selectedRun]);
+  }, [assets, selectedRun, selectedRunReport]);
   const elapsedMilliseconds = selectedRun
     ? Math.max(0, Date.parse(selectedRun.finishedAt ?? activityClock.toISOString()) - Date.parse(selectedRun.startedAt))
     : 0;
@@ -904,7 +917,7 @@ export function ProgressPage({
     ? primaryTimingTargets[assessmentIntent]
     : undefined;
   const activeTimingStatus = activity?.active
-    ? activeRunHasDurableSecurityFindings
+    ? activeRunHasUsefulSecurityResult
       ? text(copy.usefulSecurityResultAvailable)
       : primaryTimingTarget && !exactLocalhostQuickScan
         ? text(primaryTimingTarget)
@@ -1176,7 +1189,7 @@ export function ProgressPage({
             )}
             {showResultsAction && (
               <a
-                className={`button ${activeRunHasDurableSecurityFindings ? "button--primary" : "button--secondary"}`}
+                className={`button ${activeRunHasUsefulSecurityResult ? "button--primary" : "button--secondary"}`}
                 href="#findings"
               >
                 <Icon name="findings" size={17} />{text(copy.viewResults)}
