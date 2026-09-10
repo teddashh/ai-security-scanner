@@ -165,7 +165,7 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
     cards: {
       deployed_website: {
         title: "A website or API that is already online",
-        summary: "Let Nuclei identify a website's technology and run the matching upstream vulnerability and exposure checks.",
+        summary: "Find website vulnerabilities and exposed services within one selected website origin.",
         want:
           "An exact website or API URL, including the hostname and the service you want reviewed.",
         prepare:
@@ -189,7 +189,7 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
       },
       internal_it_environment: {
         title: "Your repositories, internal systems, and websites",
-        summary: "Check selected code, websites, and exact internal hosts together, with inventory-only ranges kept visible as not tested.",
+        summary: "Check selected code, websites, and exact internal hosts together in one result organized by asset.",
         want:
           "The exact repository folders, website or API URLs, and hostname or IP for each internal system you want checked.",
         prepare:
@@ -292,7 +292,7 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
     cards: {
       deployed_website: {
         title: "已經架好的網站或 API",
-        summary: "讓 Nuclei 辨識網站的技術，並執行適用的上游弱點與暴露檢查。",
+        summary: "在一個所選網站來源範圍內找出弱點與暴露服務。",
         want: "一個精確的網站或 API 網址，包含要檢查的主機名稱與服務。",
         prepare: "網址，以及可測試整個 scheme://host:port 網站來源範圍的許可；如果只獲准特定路徑，請勿使用此快速設定。",
         productDoes: "對精確獲准的網站來源範圍執行固定版本的 Nuclei 上游自動網站設定，每秒最多 10 次且同時最多 5 次。",
@@ -308,7 +308,7 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
       },
       internal_it_environment: {
         title: "公司的 repo、內部系統與網站",
-        summary: "把指定的程式碼、網站與精確內部主機放進同一次掃描；僅供盤點的網段會在同一份報告明列為未測試。",
+        summary: "把指定程式碼、網站與精確內部主機一起檢查，再依資產查看同一份結果。",
         want: "精確的 repo 資料夾、網站或 API 網址，以及每個要檢查之內部系統的主機名稱或 IP。",
         prepare: "本機專案資料夾、完整網站或 API 網址、精確內部主機名稱或 IP，以及每個網路目標的檢查許可。系統會自動選用常用連接埠，也可在「進階」中修改。",
         productDoes: "對每項已可掃描的資產執行適用的上游程式碼與弱點檢查，保留各目標限制，再把完成結果與明確的未測試盤點整合成一份有優先順序的報告。",

@@ -89,7 +89,7 @@ The IT-environment path is additive rather than wizard-heavy:
 
 Adding ten assets must not create ten copies of the same form. Repeated targets use compact rows, shared safe defaults, and per-target overrides only where the execution boundary differs.
 
-The quick profile aims to show durable security-relevant progress within minutes. The UI shows an honest time range. Longer inventory and deeper checks continue in Progress; the unified report opens when the run reaches a terminal outcome.
+The quick profile uses one concise timing target from Home through Review and active Progress: a useful result within minutes after local tools are ready. Scanner names, scope boundaries, and other technical detail appear only where they change the user's action or in collapsed detail. The unified report opens when the run reaches a terminal outcome.
 
 If tools need preparation, the product explains download size, expected wait, and any operating-system action in ordinary language. Preparation runs in the background, resumes after interruption, and never hides saved reports.
 After preparation succeeds in the same uninterrupted UI context, the product

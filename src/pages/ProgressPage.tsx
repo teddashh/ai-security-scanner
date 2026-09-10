@@ -4,6 +4,7 @@ import { Icon } from "../components/Icon";
 import { EmptyState, InlineNotice, PageHeader, ProgressBar } from "../components/Shared";
 import { StatusPill } from "../components/StatusPill";
 import { useI18n, type BilingualText } from "../i18n";
+import { primaryScanTiming } from "../primaryScanTiming";
 import { engineStatusMeta, executionStageMeta, runStatusMeta } from "../lib";
 import {
   isExactBuiltInLocalhostQuickScanRun,
@@ -708,18 +709,9 @@ const currentOrNextEngineRuns = (run: ScanRun): EngineRun[] => {
   return run.engineRuns.filter((engine) => engine.status === "pending").slice(0, 1);
 };
 const primaryTimingTargets: Partial<Record<UseCaseId, BilingualText>> = {
-  internal_it_environment: {
-    en: "Timing target: a first useful result within minutes after tools are ready. Added assets and deeper host checks can extend the full run.",
-    zhTW: "時間目標：工具就緒後幾分鐘內提供第一個有用結果；加入更多資產或較深入的主機檢查會延長完整執行時間。",
-  },
-  deployed_website: {
-    en: "Timing target: a useful result within minutes after tools are ready. Site response time and applicable checks can make it longer.",
-    zhTW: "時間目標：工具就緒後幾分鐘內提供有用結果；網站回應速度與適用檢查可能延長時間。",
-  },
-  source_code: {
-    en: "Timing target: a useful result within minutes after tools are ready. Large folders can take longer.",
-    zhTW: "時間目標：工具就緒後幾分鐘內提供有用結果；大型資料夾可能需要更久。",
-  },
+  internal_it_environment: primaryScanTiming,
+  deployed_website: primaryScanTiming,
+  source_code: primaryScanTiming,
 };
 
 const isExecutionStage = (phase: string): phase is ExecutionStage =>

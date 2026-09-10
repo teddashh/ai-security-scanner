@@ -478,7 +478,7 @@ test("local snapshot preparation explains the wait and locks inputs that would c
 
   expect(container.querySelector(".create-case-panel")?.getAttribute("aria-busy")).toBe("true");
   expect(container.textContent).toContain("Preparing your private scan copy");
-  expect(container.textContent).toContain("Large folders can take a few minutes");
+  expect(container.textContent).toContain("The private scan copy is being prepared automatically.");
   expect((getByRole("button", { name: /Close setup/u }) as HTMLButtonElement).disabled).toBe(true);
   expect(container.querySelector<HTMLFieldSetElement>(".create-case-panel__locked-fields")?.disabled).toBe(true);
   expect((getByRole("button", { name: /Preparing a private scan copy/u }) as HTMLButtonElement).disabled).toBe(true);

@@ -366,7 +366,7 @@ test("an active scan keeps durable security findings in progress until the run f
 
   expect(container.querySelector('a[href="#findings"]')).toBeNull();
   expect(container.querySelector(".run-overview__timing")?.textContent).toContain(
-    "Timing target: a useful result within minutes after tools are ready. Large folders can take longer.",
+    "Timing target: a useful result within minutes after tools are ready.",
   );
 });
 
@@ -380,7 +380,7 @@ test("Traditional Chinese progress stays focused while a scan is active", () => 
 
   expect(container.querySelector('a[href="#findings"]')).toBeNull();
   expect(container.querySelector(".run-overview__timing")?.textContent).toContain(
-    "時間目標：工具就緒後幾分鐘內提供有用結果；大型資料夾可能需要更久。",
+    "時間目標：工具就緒後幾分鐘內提供有用結果。",
   );
   expect(container.querySelector(".scan-activity__current")?.textContent).toContain(
     "目前或下一項檢查的資產 · selected-project",
@@ -396,7 +396,7 @@ test("an active scan with no durable finding does not offer results yet", () => 
 
   expect(container.querySelector('a[href="#findings"]')).toBeNull();
   expect(container.querySelector(".run-overview__timing")?.textContent).toContain(
-    "Timing target: a useful result within minutes after tools are ready. Large folders can take longer.",
+    "Timing target: a useful result within minutes after tools are ready.",
   );
 });
 
@@ -414,7 +414,7 @@ test("a completed security check does not open a half-finished report while sibl
 
   expect(container.querySelector('a[href="#findings"]')).toBeNull();
   expect(container.querySelector(".run-overview__timing")?.textContent).toContain(
-    "Timing target: a useful result within minutes after tools are ready. Large folders can take longer.",
+    "Timing target: a useful result within minutes after tools are ready.",
   );
 });
 
@@ -528,18 +528,9 @@ test("terminal uncovered work needs attention instead of appearing to remain act
 });
 
 const primaryTimingCases: Array<[UseCaseId, string]> = [
-  [
-    "internal_it_environment",
-    "Timing target: a first useful result within minutes after tools are ready. Added assets and deeper host checks can extend the full run.",
-  ],
-  [
-    "deployed_website",
-    "Timing target: a useful result within minutes after tools are ready. Site response time and applicable checks can make it longer.",
-  ],
-  [
-    "source_code",
-    "Timing target: a useful result within minutes after tools are ready. Large folders can take longer.",
-  ],
+  ["internal_it_environment", "Timing target: a useful result within minutes after tools are ready."],
+  ["deployed_website", "Timing target: a useful result within minutes after tools are ready."],
+  ["source_code", "Timing target: a useful result within minutes after tools are ready."],
 ];
 
 test.each(primaryTimingCases)(

@@ -340,8 +340,8 @@ const pageCopy = {
   preparingLocalSnapshot: { en: "Preparing a private scan copy…", zhTW: "正在建立私密掃描副本…" },
   preparingLocalSnapshotTitle: { en: "Preparing your private scan copy", zhTW: "正在建立你的私密掃描副本" },
   preparingLocalSnapshotBody: {
-    en: "Large folders can take a few minutes. You may open another page; this saved project will remain available when the copy is ready.",
-    zhTW: "大型資料夾可能需要幾分鐘。你可以先前往其他頁面；副本準備完成後，這個已保存的專案仍會留在「我的掃描」。",
+    en: "The private scan copy is being prepared automatically.",
+    zhTW: "系統正在自動準備私密掃描副本。",
   },
   createLocal: { en: "Create scan project", zhTW: "建立掃描專案" },
   reviewEnvironment: { en: "Review scan", zhTW: "檢查掃描內容" },

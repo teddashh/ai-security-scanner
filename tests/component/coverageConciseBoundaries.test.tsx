@@ -386,7 +386,7 @@ test("guided local Start keeps the exact copy, read-only check, and unchanged-so
     );
   });
   expect(container.querySelector(".coverage-review-timing")?.textContent).toBe(
-    "Timing target: a useful result within minutes after tools are ready. Large folders can take longer.",
+    "Timing target: a useful result within minutes after tools are ready.",
   );
   expect(container.querySelector(".scope-mode-fieldset")).toBeNull();
 
@@ -521,7 +521,7 @@ test("public website flow applies the fixed Nuclei quick profile and starts with
     );
   });
   expect(container.querySelector(".coverage-review-timing")?.textContent).toBe(
-    "Timing target: a useful result within minutes after tools are ready. Site response time and applicable checks can make it longer.",
+    "Timing target: a useful result within minutes after tools are ready.",
   );
 
   const pageHeader = container.querySelector(".page-header");
@@ -783,7 +783,7 @@ test("one IT-environment Start routes repositories and exact website origins int
   });
 
   expect(getByText(
-    "Timing target: a first useful result within minutes after tools are ready. Added assets and deeper host checks can extend the full run.",
+    "Timing target: a useful result within minutes after tools are ready.",
   )).not.toBeNull();
   expect(getByText("1 bare host(s) or range(s) are inventory only — not scanned")).not.toBeNull();
   expect(getByText(/These legacy bare hosts or ranges will not be contacted or vulnerability-scanned in this run/i)).not.toBeNull();

@@ -122,6 +122,9 @@ test("the first screen leads with a combined environment scan plus the website a
   const { container, getByRole, queryByRole, queryByText } = renderStart({ onOpenExistingCase });
 
   expect(getByRole("heading", { level: 1, name: "Security checks" })).toBeTruthy();
+  const heroDescription = container.querySelector(".start-page__hero-description")?.textContent ?? "";
+  expect(heroDescription).toContain("Get one prioritized result organized by asset.");
+  expect(heroDescription).not.toMatch(/Nuclei|Greenbone|not tested/u);
   const primaryActions = Array.from(container.querySelectorAll<HTMLButtonElement>(".start-page__choices > .use-case-grid .use-case-card__action"));
   expect(primaryActions.map((button) => button.textContent?.trim())).toEqual([
     "Scan my environment",
@@ -132,21 +135,21 @@ test("the first screen leads with a combined environment scan plus the website a
     ".start-page__choices > .use-case-grid .use-case-card__timing",
   )).map((timing) => timing.textContent ?? "");
   expect(primaryTimings).toHaveLength(3);
-  expect(primaryTimings.every((timing) => timing.includes("within minutes after tools are ready"))).toBe(true);
-  expect(primaryTimings.join(" ")).toContain("extend the full run");
-  expect(primaryTimings.join(" ")).toContain("site response time");
-  expect(primaryTimings.join(" ")).toContain("large folders can take longer");
+  expect(primaryTimings).toEqual(Array(3).fill(
+    "Timing target: a useful result within minutes after tools are ready.",
+  ));
   const environmentCard = Array.from(container.querySelectorAll<HTMLElement>(".use-case-card"))
     .find((card) => card.textContent?.includes("Scan my environment"));
   expect(environmentCard?.textContent).toContain("Company IT environment");
-  expect(environmentCard?.textContent).toContain("repositories, websites or APIs, and exact internal hosts");
-  expect(environmentCard?.textContent).toContain("Greenbone discovers services on the chosen ports");
-  expect(environmentCard?.textContent).toContain("not tested");
+  expect(environmentCard?.textContent).toContain("repositories, websites or APIs, and exact internal hosts together");
+  expect(environmentCard?.textContent).not.toContain("Greenbone");
+  expect(environmentCard?.textContent).not.toContain("not tested");
   const websiteCard = Array.from(container.querySelectorAll<HTMLElement>(".use-case-card"))
     .find((card) => card.textContent?.includes("Check a website"));
   expect(websiteCard?.textContent).toContain(
-    "Let Nuclei identify the website technology and run matching upstream vulnerability and exposure checks against the displayed website origin.",
+    "Find website vulnerabilities and exposed services within the selected website origin.",
   );
+  expect(websiteCard?.textContent).not.toContain("Nuclei");
   expect(websiteCard?.textContent).not.toContain("basic exposure signals");
   expect(container.querySelector(".start-page__choices > .use-case-grid")?.textContent)
     .toContain("Code or AI project");
@@ -196,21 +199,18 @@ test("the Traditional Chinese boundary statement carries the same commitments", 
   expect(boundaryText(container)).toContain("最長等待 3 秒");
 });
 
-test("the Traditional Chinese first layer names the upstream website and internal-host paths", () => {
+test("the Traditional Chinese first layer stays outcome-led", () => {
   const { container } = renderStart({ locale: "zh-TW" });
   const primaryLayer = container.querySelector(".start-page__choices > .use-case-grid");
 
-  expect(primaryLayer?.textContent).toContain("辨識網站技術");
-  expect(primaryLayer?.textContent).toContain("精確內部主機");
-  expect(primaryLayer?.textContent).toContain("Greenbone 會探索所選連接埠的服務");
-  expect(primaryLayer?.textContent).toContain("僅供盤點的網段仍會明列為未測試");
+  expect(primaryLayer?.textContent).toContain("找出弱點與暴露服務");
+  expect(primaryLayer?.textContent).toContain("內部主機一起檢查");
+  expect(primaryLayer?.textContent).not.toContain("Greenbone");
+  expect(primaryLayer?.textContent).not.toContain("未測試");
   expect(primaryLayer?.textContent).toContain("程式碼或 AI 專案");
   expect(primaryLayer?.textContent).toContain("檢查程式碼或 AI 專案");
   const timings = Array.from(primaryLayer?.querySelectorAll<HTMLElement>(".use-case-card__timing") ?? [])
     .map((timing) => timing.textContent ?? "");
   expect(timings).toHaveLength(3);
-  expect(timings.every((timing) => timing.includes("工具就緒後幾分鐘內"))).toBe(true);
-  expect(timings.join(" ")).toContain("完整執行時間");
-  expect(timings.join(" ")).toContain("網站回應速度");
-  expect(timings.join(" ")).toContain("大型資料夾可能需要更久");
+  expect(timings).toEqual(Array(3).fill("時間目標：工具就緒後幾分鐘內提供有用結果。"));
 });

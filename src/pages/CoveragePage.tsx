@@ -26,6 +26,7 @@ import {
   type ProviderConnectionBoundary,
 } from "../components/ProviderAuthorizationPanel";
 import { useI18n, type BilingualText } from "../i18n";
+import { primaryScanTiming } from "../primaryScanTiming";
 import type { CoverageSetupFocus } from "../scanReadiness";
 import { isScopeEligible, permittedModes, suggestedModesForAsset } from "../scopePolicy";
 import type { UseCaseId } from "../useCases";
@@ -412,18 +413,9 @@ const pageCopy = {
     "Choose the scan-ready items below. Each scanner receives only the assets it can check, and all completed results go into one report. Inventory-only ranges are not contacted or scanned.",
     "選擇下方已可掃描的項目。每個掃描器只會收到它能檢查的資產，所有完成結果會整合成一份報告。僅供盤點的網段不會被連線或掃描。",
   ),
-  environmentTiming: bilingual(
-    "Timing target: a first useful result within minutes after tools are ready. Added assets and deeper host checks can extend the full run.",
-    "時間目標：工具就緒後幾分鐘內提供第一個有用結果；加入更多資產或較深入的主機檢查會延長完整執行時間。",
-  ),
-  websiteTiming: bilingual(
-    "Timing target: a useful result within minutes after tools are ready. Site response time and applicable checks can make it longer.",
-    "時間目標：工具就緒後幾分鐘內提供有用結果；網站回應速度與適用檢查可能延長時間。",
-  ),
-  localTiming: bilingual(
-    "Timing target: a useful result within minutes after tools are ready. Large folders can take longer.",
-    "時間目標：工具就緒後幾分鐘內提供有用結果；大型資料夾可能需要更久。",
-  ),
+  environmentTiming: primaryScanTiming,
+  websiteTiming: primaryScanTiming,
+  localTiming: primaryScanTiming,
   environmentRepositoriesTitle: bilingual("Project folders", "開發案資料夾"),
   environmentRepositoriesBody: bilingual(
     "Read-only checks for risky code, exposed secrets, vulnerable dependencies, and unsafe configuration when applicable.",
