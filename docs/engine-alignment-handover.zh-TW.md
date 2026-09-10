@@ -424,6 +424,13 @@ cancellation、Windows WSL servicing timeout／cooldown 及 managed-egress clean
 狀態，不再要求等待後重按，也不再解釋保留資料或程式接下來會做什麼。雲端交接請求不使用
 `me`／`our`；Clipboard API 失敗時由程式執行第二條 copy path，完成後移除輔助 DOM 並恢復原焦點。
 
+## Setup 終態與失敗文案收斂（`0396db3`）
+
+進階本機工具取消狀態已在 assistant、sidebar 與應用程式通知統一為「已取消／尚未就緒」；停止
+操作不再承諾保留下載，也不再以暫停、等待或稍後再試解釋目前狀態。真正可用的「繼續設定」仍
+保留為操作。專案建立失敗、桌面服務不可用、技術錯誤 fallback 與 adapter conversion 進度也改成
+精確結果或正在執行的工作；英／繁中及 rendered component 契約同步鎖定。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -526,6 +533,11 @@ disk 資料或接觸任何 target。
 contract 32 項、TypeScript typecheck、production frontend build、`clippy -D warnings`、format
 與 diff check 全部通過；build 只有既有的大型 chunk 提示。本輪沒有執行 scanner、刪除 RAM
 disk 資料或接觸任何 target。
+
+`0396db3` 新增後，frontend 573 項、component 253 項、CI contract 32 項、TypeScript typecheck、
+production frontend build 與 diff check 全部通過；build 只有既有的大型 chunk 提示。Rust 程式碼
+未變更，沿用上一個已通過的 1,590 項完整 Rust CLI workspace 基線。本輪沒有執行 scanner、刪除
+RAM disk 資料或接觸任何 target。
 
 ## 後續順序
 

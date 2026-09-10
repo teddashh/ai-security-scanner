@@ -242,6 +242,14 @@ than assistant-voiced. Request and device-code copy use the browser clipboard
 first and a bounded document-copy fallback second; a failed copy no longer
 assigns a manual workaround to the beginner.
 
+Advanced local-tool cancellation is now one terminal **Cancelled** state across
+the assistant, sidebar, and application notification. Stop actions no longer
+promise retained downloads, and cancelled states report tool readiness directly
+while keeping the available Continue action. Project-creation failures,
+desktop-service absence, and technical fallbacks also use compact outcome-first
+copy. Active adapter conversion remains in Progress and states the work being
+performed instead of presenting saved output as a report-like holding state.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -285,8 +293,10 @@ The high-value remaining gaps are:
    coverage gaps, cleanup reconciliation, deletion, export, platform setup, and
    adapter warnings while normalizing superseded saved prose. `1da9bd5` removes
    the remaining wait-and-repeat cancellation/setup copy and adds an automatic
-   clipboard fallback for cloud handoff requests and device codes. The full
-   sequence still needs observation in a controlled
+   clipboard fallback for cloud handoff requests and device codes. `0396db3`
+   completes the visible setup-cancellation, project-creation,
+   desktop-service, and adapter-conversion copy alignment. The full sequence
+   still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
