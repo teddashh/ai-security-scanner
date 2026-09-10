@@ -6,6 +6,7 @@ RUN apk add --no-cache build-base
 
 WORKDIR /source
 COPY Cargo.toml Cargo.lock ./
+COPY vendor/glib-0.18.5 vendor/glib-0.18.5
 COPY src-tauri/Cargo.toml src-tauri/build.rs src-tauri/
 COPY src-tauri/src src-tauri/src
 COPY mappings/control-mappings.json mappings/control-mappings.json

@@ -6,6 +6,10 @@ const workflow = readFileSync(
     new URL("../../.github/workflows/managed-egress-gateway-image.yml", import.meta.url),
     "utf8",
   ).replace(/\r\n?/gu, "\n");
+const dockerfile = readFileSync(
+    new URL("../../engines/images/egress-gateway/Dockerfile", import.meta.url),
+    "utf8",
+  ).replace(/\r\n?/gu, "\n");
 
 test("managed egress gateway publication is explicit and immutable", () => {
   const triggerBlock = workflow.match(/^on:\n([\s\S]*?)^permissions:/mu)?.[1];
@@ -34,4 +38,14 @@ test("managed egress gateway publication is explicit and immutable", () => {
   );
   assert.ok(buildIndex < evidenceIndex, "signed evidence must follow the candidate build");
   assert.ok(evidenceIndex < promotionIndex, "promotion must follow signed evidence");
+});
+
+test("managed egress gateway build includes the patched Cargo source", () => {
+  const vendoredSourceIndex = dockerfile.indexOf(
+    "COPY vendor/glib-0.18.5 vendor/glib-0.18.5",
+  );
+  const cargoBuildIndex = dockerfile.indexOf("cargo build --locked --release");
+
+  assert.ok(vendoredSourceIndex >= 0, "the build context must include the vendored glib source");
+  assert.ok(vendoredSourceIndex < cargoBuildIndex, "the patched Cargo source must exist before cargo build");
 });
