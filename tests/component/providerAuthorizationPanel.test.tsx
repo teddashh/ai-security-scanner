@@ -218,10 +218,13 @@ test("the unconnected first layer is limited to account, state, CTA, and one saf
   expect(firstLayer).not.toContain("clientId");
   expect(firstLayer).not.toContain("Ask IT for the setup file");
 
-  expect(setupSection().textContent).toContain("Your IT team prepares this once for your organization");
   expect(setupSection().textContent).toContain(
-    "Shared OAuth registration is not provided",
+    "IT or a cloud administrator prepares this connection file once for the organization",
   );
+  expect(setupSection().textContent).toContain(
+    "Connection requires the organization's public cloud app or role details",
+  );
+  expect(setupSection().textContent).not.toMatch(/Shared OAuth registration is not provided/iu);
 });
 
 test("temporary access distinguishes reviewed IAM setup from read-only scanner activity", () => {

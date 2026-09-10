@@ -151,17 +151,16 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
     description:
       "Pick the closest match. The app brings the right tools together and guides you from setup to a prioritized fix list.",
     choiceTitle: "Choose one place to start",
-    choiceDescription:
-      "You can add other types of checks to the same case later. This choice only makes the next setup screen shorter.",
+    choiceDescription: "Start with one. Add other checks from Scan setup.",
     wantLabel: "What you want to check",
     prepareLabel: "What to prepare",
     productDoesLabel: "What the product does",
     productDoesNotLabel: "What it does not do",
     chooseAction: "Set up this check",
     existingCaseAction: "Open my scans",
-    scopeNoticeTitle: "You stay in control",
+    scopeNoticeTitle: "Network scan boundary",
     scopeNotice:
-      "Before a network check runs, you review the exact target, scan type, and limits. Technical controls are available whenever you need them.",
+      "A network check starts only after review of its exact target, scan type, and limits. Advanced limits are in Scan setup.",
     cards: {
       deployed_website: {
         title: "A website or API that is already online",
@@ -279,16 +278,16 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
     description:
       "選一個最接近的情況，產品會整合適合的工具，從設定一路帶你走到有優先順序的改善清單。",
     choiceTitle: "先選一個地方開始",
-    choiceDescription: "之後仍可在同一案件加入其他檢查；這個選擇只會讓下一個設定畫面更短。",
+    choiceDescription: "先從一項開始；其他檢查可從「掃描設定」加入。",
     wantLabel: "你想檢查什麼",
     prepareLabel: "需要準備什麼",
     productDoesLabel: "產品會做什麼",
     productDoesNotLabel: "不會做什麼",
     chooseAction: "設定這項檢查",
     existingCaseAction: "開啟我的掃描",
-    scopeNoticeTitle: "掃描前由你確認",
+    scopeNoticeTitle: "網路掃描邊界",
     scopeNotice:
-      "執行網路檢查前，你會確認目標、檢查方式與限制；需要時也能打開完整技術控制。",
+      "網路檢查只會在確認精確目標、檢查類型與限制後開始；進階限制位於「掃描設定」。",
     cards: {
       deployed_website: {
         title: "已經架好的網站或 API",

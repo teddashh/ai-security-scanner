@@ -110,6 +110,15 @@ test("the start page leads with outcomes and keeps technical guidance progressiv
   assert.ok(startPageSource.includes('className="start-page__scan-limits"'));
   assert.ok(startPageSource.includes('className="start-page__more-use-cases"'));
   assert.ok(startPageSource.includes('className="start-page__scope-note"'));
+  assert.equal(startPageCopy.en.choiceDescription, "Start with one. Add other checks from Scan setup.");
+  assert.equal(startPageCopy.en.scopeNoticeTitle, "Network scan boundary");
+  assert.match(startPageCopy.en.scopeNotice, /starts only after review of its exact target, scan type, and limits/u);
+  assert.equal(startPageCopy["zh-TW"].choiceDescription, "先從一項開始；其他檢查可從「掃描設定」加入。");
+  assert.equal(startPageCopy["zh-TW"].scopeNoticeTitle, "網路掃描邊界");
+  assert.doesNotMatch(
+    `${startPageCopy.en.choiceDescription} ${startPageCopy.en.scopeNotice}`,
+    /only makes the next setup screen shorter|You stay in control/iu,
+  );
 });
 
 test("cloud onboarding names every released provider path", () => {

@@ -2411,8 +2411,8 @@ export default function App() {
                     }
                     : runtimeSetup?.nextAction === "restart_windows"
                       ? {
-                        en: "Your scan project and choices are saved. After the restart, reopen this project, continue tool setup, review the selected target, and press Start.",
-                        zhTW: "掃描專案與選擇都已保存。重新啟動後，請再次開啟這個專案、繼續工具設定，確認已選目標後按下「開始」。",
+                        en: "Restart Windows. Reopen this project, continue tool setup, review the selected target, then press Start.",
+                        zhTW: "重新啟動 Windows。再次開啟這個專案、繼續工具設定、確認已選目標，然後按下「開始」。",
                       }
                       : {
                         en: "Progress appears below. When setup finishes, review the selected target and press Start.",

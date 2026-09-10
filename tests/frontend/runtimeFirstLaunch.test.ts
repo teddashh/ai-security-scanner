@@ -271,6 +271,8 @@ test("App prepares before start_scan and consumes one matching completion", () =
   assert.match(app, /busy=\{busyAction === "connect-source"[\s\S]*\|\| coverageRuntimePreparing\}/u);
   assert.doesNotMatch(app, /scanActionRuntimeBlocker|shouldPrepareRuntimeAfterScanAction/u);
   assert.match(app, /runtimeSetupNotice=\{\([\s\S]*coverageRuntimePreparing[\s\S]*Preparing the tools this scan needs[\s\S]*will start automatically[\s\S]*<RuntimeSetupAssistant/u);
+  assert.match(app, /Restart Windows\. Reopen this project, continue tool setup, review the selected target, then press Start\./u);
+  assert.doesNotMatch(app, /Your scan project and choices are saved/u);
 });
 
 test("App has no passive setup effect and preserves explicit setup actions", () => {

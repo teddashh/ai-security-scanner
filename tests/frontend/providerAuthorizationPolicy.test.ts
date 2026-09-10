@@ -111,8 +111,10 @@ test("provider sign-in leads with the setup-file journey and keeps manual entry 
   assert.match(panelSource, /type="file"/u);
   assert.match(panelSource, /className="provider-manual-details"/u);
   assert.match(panelSource, /manualSummary/u);
-  assert.match(panelSource, /Your IT team prepares this once for your organization/u);
-  assert.match(panelSource, /Shared OAuth registration is not provided/u);
+  assert.match(panelSource, /IT or a cloud administrator prepares this connection file once for the organization/u);
+  assert.match(panelSource, /Connection requires the organization's public cloud app or role details/u);
+  assert.match(panelSource, /Administrator approval occurs on the official provider page/u);
+  assert.doesNotMatch(panelSource, /Shared OAuth registration is not provided|This form never receives|then discarded/u);
   assert.doesNotMatch(panelSource, /IT \/ admin advanced setup/u);
   assert.doesNotMatch(panelSource, /product-owned OAuth|shared OAuth client/u);
 
