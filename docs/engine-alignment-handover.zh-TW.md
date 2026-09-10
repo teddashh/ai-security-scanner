@@ -675,6 +675,13 @@ cloud scope 直接列出資料來源，Progress 直接標示準備事件與各�
 已通過的 1,590 項完整 Rust CLI workspace 基線。本輪沒有執行 scanner、刪除 RAM disk 資料或
 接觸任何 target。
 
+`c0c999d` 新增後，frontend 584 項、component 259 項、CI contract 32 項、TypeScript typecheck、
+production frontend build 與 diff check 全部通過；`completed`、`no_checks_completed`、`partial`、
+`failed` 與 `cancelled` 統一視為可查看的終態 Results，Cases 與重新開啟案件都不再把
+`no_checks_completed` 送回 Setup。複驗基準仍只接受有可比較工作結果的終態，因此不包含
+`no_checks_completed`。Rust 程式碼未變更，沿用 `8da9b5a` 已通過的 1,590 項完整 Rust CLI
+workspace 基線。本輪沒有執行 scanner、刪除 RAM disk 資料或接觸任何 target。
+
 ## 後續順序
 
 1. 在使用者明確允許安裝缺少的 managed runtime／desktop dependencies，並對確切自有 target

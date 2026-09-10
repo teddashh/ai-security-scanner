@@ -350,6 +350,12 @@ fields directly, and verification setup names its four comparison outcomes.
 Unknown asset authorization also states the missing project permission without
 suggesting that time alone changes it.
 
+Run lifecycle eligibility now distinguishes terminal results from useful
+verification baselines. Completed, no-checks-completed, partial, failed, and
+cancelled runs remain visible through Results and Export. A no-checks-completed
+run opens its recorded outcome from Cases but is excluded from verification
+baseline choices because it has no completed scanner result to compare.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -426,6 +432,8 @@ The high-value remaining gaps are:
    result, selection, file-content, location, and provenance facts. `57fa5eb`
    replaces the remaining update, provider-scope, Progress, authorization, and
    verification forecasts with present product facts.
+   `c0c999d` keeps no-checks-completed outcomes visible as terminal Results while
+   excluding them from verification baselines that require completed work.
    The full sequence still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
