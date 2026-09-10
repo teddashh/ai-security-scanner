@@ -365,6 +365,21 @@ outcome presentation。rendered tests 鎖住一個 completed、一個 active、�
 以及 terminal cancellation 含一個無法歸因 asset 的 conservative count；static localization test
 同時鎖住兩種語言與 asset／check 用詞。
 
+## zero-finding 的完成 security check 不再等待 sibling run 結束（`24fddc4`）
+
+Progress 原本只有 active run 已保存 security finding 時才顯示 primary `View results`。因此一項真正的
+security check 已 `tested_complete`、結果是零 findings，但另一個獨立 check 仍在執行時，live
+beginner report 明明已有 product spec 定義的有用 no-problem result，使用者卻不能開啟。現在 App
+把 selected run 的 durable beginner report 傳入 Progress；只有 report `runId` 與 selected run 完全
+相同，而且 `actual.checks` 有明確 `resultKind: security_check` 與 `status: tested_complete`，才把這個
+active result 解鎖並顯示「已有可用的資安結果；其餘檢查可能需要更久」。
+
+既有 durable security finding 路徑仍保留。`inventory`、`connectivity`、缺少 `resultKind` 的 legacy
+check，以及另一個 run 的 report 都 fail closed，不能單獨解鎖 Results；exact localhost utility 也不會
+因此變成資安結果。run-bound report 同時繼續提供 active asset label，避免新增第二套 snapshot
+coordinate。rendered tests 鎖住 zero-finding security completion、三個非資安／不明分類、cross-run
+report 與既有 finding path；navigation contract 也改為要求 typed completed security result。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -421,6 +436,9 @@ build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有�
 build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
 
 `083040c` 新增後，frontend 568 項、component 245 項、TypeScript typecheck 與 production frontend
+build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
+
+`24fddc4` 新增後，frontend 568 項、component 250 項、TypeScript typecheck 與 production frontend
 build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
 
 ## 後續順序
