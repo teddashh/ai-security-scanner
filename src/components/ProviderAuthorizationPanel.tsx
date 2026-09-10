@@ -75,12 +75,12 @@ const copy = {
   eyebrow: { en: "CLOUD SCAN", zhTW: "掃描雲端" },
   title: { en: "Prepare {provider} sign-in", zhTW: "準備登入 {provider}" },
   intro: {
-    en: "{provider} scanner access is read-only and expires automatically. It does not approve or start a scan or change cloud workloads.",
-    zhTW: "{provider} 掃描存取只有讀取權限，並會自動到期；不會授權或開始掃描，也不會變更雲端工作負載。",
+    en: "{provider} scanner access is read-only and expires automatically. Starting a scan remains a separate step.",
+    zhTW: "{provider} 掃描存取只有讀取權限，並會自動到期；開始掃描是另一個獨立步驟。",
   },
   introBootstrap: {
-    en: "{provider} scanner access is read-only and expires automatically; it does not approve or start a scan or change cloud workloads. Temporary-access setup may create only the dedicated IAM resources you review and confirm separately.",
-    zhTW: "{provider} 掃描存取只有讀取權限，並會自動到期；不會授權或開始掃描，也不會變更雲端工作負載。暫時存取設定只有在你另行檢視並確認後，才可能建立專用的 IAM 資源。",
+    en: "{provider} scanner access is read-only and expires automatically. The next step lists its dedicated IAM resources before creation.",
+    zhTW: "{provider} 掃描存取只有讀取權限，並會自動到期；下一步會在建立前列出專用 IAM 資源。",
   },
   statusActive: { en: "Connected until {expires}", zhTW: "已連接至 {expires}" },
   statusMissing: { en: "Not connected", zhTW: "尚未連接" },
@@ -132,8 +132,8 @@ const copy = {
   },
   requestExactDetails: { en: "See the JSON template for IT", zhTW: "查看給 IT 的 JSON 範本" },
   registrationNote: {
-    en: "Your organization must supply its own public cloud app or role details. ai-security-scanner does not provide a shared OAuth registration.",
-    zhTW: "你的組織必須提供自己的雲端公開應用程式或角色資料；ai-security-scanner 不提供共用 OAuth 註冊。",
+    en: "Use your organization's public cloud app or role details. Shared OAuth registration is not provided.",
+    zhTW: "使用組織自己的雲端公開應用程式或角色資料；本產品不提供共用 OAuth 註冊。",
   },
   importTitle: { en: "Import the setup file", zhTW: "匯入設定檔" },
   importBody: {
@@ -158,8 +158,8 @@ const copy = {
   continueWaiting: { en: "Import the setup file first", zhTW: "請先匯入設定檔" },
   manualSummary: { en: "Enter details manually", zhTW: "手動輸入資料" },
   manualIntro: {
-    en: "If IT cannot send a file, enter the same non-secret details here.",
-    zhTW: "如果 IT 無法提供檔案，也可以在這裡手動輸入相同的非機密資料。",
+    en: "Alternatively, enter the same non-secret details here.",
+    zhTW: "也可以在這裡手動輸入相同的非機密資料。",
   },
   setupFileErrors: {
     missing: { en: "Choose a setup JSON file to continue.", zhTW: "請選擇設定 JSON 檔案。" },
@@ -199,8 +199,8 @@ const copy = {
   },
   capabilityDetails: { en: "Product capability details", zhTW: "產品能力詳細資料" },
   capabilityTitle: { en: "What this installed product can inspect", zhTW: "目前安裝版本可檢查的項目" },
-  capabilityDisclaimerTitle: { en: "Installed inspection capabilities", zhTW: "已安裝的檢查能力" },
-  capabilityDisclaimer: {
+  capabilityStatusTitle: { en: "Installed inspection capabilities", zhTW: "已安裝的檢查能力" },
+  capabilityStatus: {
     en: "Declared capabilities for this installed product version. Selected-scan evidence and coverage appear in Results.",
     zhTW: "目前安裝版本宣告的能力；所選掃描的證據與涵蓋範圍顯示在「結果」。",
   },
@@ -257,31 +257,31 @@ const copy = {
   technicalCheckouts: { en: "Maximum bounded credential checkouts", zhTW: "短期憑證最多可取用次數" },
   technicalFields: { en: "Non-secret request fields", zhTW: "非秘密請求欄位" },
   technicalBoundary: {
-    en: "The backend binds access to this exact scan project, source, provider profile, engine set, expiry, and checkout limit. It cannot be reused for another scan project or source.",
-    zhTW: "後端會把存取綁定到這個掃描專案、來源、服務商設定檔、引擎集合、到期時間與取用上限，不能跨掃描專案或來源重用。",
+    en: "Access is bound to this exact scan project, source, provider profile, engine set, expiry, and checkout limit.",
+    zhTW: "存取只綁定到這個掃描專案、來源、服務商設定檔、引擎集合、到期時間與取用上限。",
   },
   protocolDevice: { en: "Provider-hosted device authorization", zhTW: "雲端服務商官方的裝置授權流程" },
   protocolPkce: { en: "Provider-hosted browser sign-in with a local PKCE callback", zhTW: "雲端服務商官方瀏覽器登入與本機 PKCE 回呼" },
   errorTechnical: { en: "Show technical error details", zhTW: "查看技術錯誤細節" },
   errors: {
-    status: { en: "We could not check whether this account is already connected. Try again in a moment.", zhTW: "目前無法確認這個帳號是否已連接，請稍後再試。" },
-    cleanupList: { en: "We could not check whether an earlier temporary setup still needs cleanup.", zhTW: "目前無法確認先前的暫時存取是否仍需清理。" },
-    subscribe: { en: "Live setup updates stopped. Retry setup.", zhTW: "即時設定進度已停止；請重試設定。" },
-    poll: { en: "The provider did not finish verifying read-only access. Check the official sign-in page and try again.", zhTW: "雲端服務商尚未完成唯讀存取驗證；請檢查官方登入頁後再試一次。" },
-    begin: { en: "We could not start the official provider sign-in. Check the account details and try again.", zhTW: "目前無法開始雲端服務商的官方登入；請確認帳號資料後再試一次。" },
-    revoke: { en: "We could not disconnect this read-only access. Try again before closing the app.", zhTW: "目前無法中斷這份唯讀存取；請在關閉程式前再試一次。" },
-    plan: { en: "We could not prepare the temporary read-only setup. Check the account details and try again.", zhTW: "目前無法準備暫時唯讀存取；請確認帳號資料後再試一次。" },
+    status: { en: "Account connection status unavailable. Try again.", zhTW: "帳號連線狀態無法取得；請重試。" },
+    cleanupList: { en: "Temporary-access cleanup status unavailable. Check again.", zhTW: "暫時存取清理狀態無法取得；請重新檢查。" },
+    subscribe: { en: "Setup status unavailable. Retry setup.", zhTW: "設定狀態無法取得；請重試設定。" },
+    poll: { en: "Read-only access verification is incomplete. Finish the official sign-in, then try again.", zhTW: "唯讀存取驗證未完成；請完成官方登入後再試一次。" },
+    begin: { en: "Official provider sign-in did not start. Check the account details and try again.", zhTW: "雲端服務商官方登入未啟動；請確認帳號資料後再試一次。" },
+    revoke: { en: "Read-only access disconnect failed. Try again before closing the app.", zhTW: "唯讀存取中斷失敗；請在關閉程式前再試一次。" },
+    plan: { en: "Temporary read-only setup preparation failed. Check the account details and try again.", zhTW: "暫時唯讀存取準備失敗；請確認帳號資料後再試一次。" },
     execute: { en: "Temporary setup did not finish. Open cleanup status, then retry setup.", zhTW: "暫時存取設定未完成；請查看清理狀態後重試設定。" },
     cleanup: { en: "Cleanup did not finish. Retry the recorded cleanup.", zhTW: "清理未完成；請重試已記錄的清理。" },
-    untrustedUrl: { en: "The sign-in link was not an approved provider website, so nothing was opened.", zhTW: "登入連結不是核准的雲端服務商官方網站，因此沒有開啟任何頁面。" },
+    untrustedUrl: { en: "Sign-in link rejected: unapproved provider website.", zhTW: "登入連結已拒絕：不是核准的雲端服務商網站。" },
     openUrl: { en: "Open the provider's official page again.", zhTW: "請重新開啟雲端服務商的官方頁面。" },
   },
   notices: {
-    authorized: { en: "Read-only access was verified. It stays only in this desktop session and expires automatically.", zhTW: "唯讀存取已驗證；它只留在這次桌面程式工作階段，並會自動到期。" },
+    authorized: { en: "Read-only access verified. Session-only. Expires automatically.", zhTW: "唯讀存取已驗證；僅限本次工作階段，並會自動到期。" },
     cancelled: { en: "Sign-in cancelled.", zhTW: "登入已取消。" },
     revoked: { en: "Read-only access disconnected.", zhTW: "唯讀存取已中斷。" },
-    bootstrapped: { en: "Temporary read-only access was created and verified. Its exact cleanup record is ready.", zhTW: "暫時唯讀存取已建立並驗證；精確清理紀錄也已備妥。" },
-    cleaned: { en: "Cleanup ran only for resources recorded by this temporary setup. Any credential still expiring remains tracked.", zhTW: "清理只處理這次暫時設定所記錄的資源；尚在到期中的憑證仍會持續追蹤。" },
+    bootstrapped: { en: "Temporary read-only access verified. Cleanup record ready.", zhTW: "暫時唯讀存取已驗證；清理紀錄已備妥。" },
+    cleaned: { en: "Recorded temporary resources cleaned. Expiring credentials remain tracked.", zhTW: "已清理記錄中的暫時資源；到期中的憑證仍在追蹤。" },
   },
   promptEyebrow: { en: "Official provider sign-in", zhTW: "雲端服務商官方登入" },
   promptTitle: { en: "Finish sign-in in your browser", zhTW: "請在瀏覽器完成登入" },
@@ -305,7 +305,7 @@ const copy = {
   },
   backendSafety: { en: "Provider safety note", zhTW: "雲端服務商安全提示" },
   cancel: { en: "Cancel this sign-in", zhTW: "取消本次登入" },
-  unsafePromptTitle: { en: "The provider link could not be verified", zhTW: "無法驗證雲端服務商連結" },
+  unsafePromptTitle: { en: "Provider link rejected", zhTW: "雲端服務商連結已拒絕" },
   unsafePromptBody: { en: "Cancel this attempt and start again.", zhTW: "請取消這次嘗試後重新開始。" },
   planEyebrow: { en: "Temporary read-only setup", zhTW: "暫時唯讀設定" },
   planTitle: { en: "Confirm the dedicated read-only access", zhTW: "確認要建立的專用唯讀存取" },
@@ -1781,8 +1781,8 @@ export function ProviderAuthorizationPanel({
               <small>{text(copy.capabilityVersion, { version: capabilityView.definitionVersion })}</small>
             </div>
           </div>
-          <InlineNotice tone="warning" title={text(copy.capabilityDisclaimerTitle)}>
-            <p>{text(copy.capabilityDisclaimer)}</p>
+          <InlineNotice tone="warning" title={text(copy.capabilityStatusTitle)}>
+            <p>{text(copy.capabilityStatus)}</p>
           </InlineNotice>
           <div className="provider-capability__scope">
             <strong>{text(copy.capabilityScope)}</strong>

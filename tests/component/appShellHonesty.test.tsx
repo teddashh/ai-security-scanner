@@ -133,16 +133,16 @@ test("a view the app could not refresh says so instead of looking current", () =
     (banner) => banner.getAttribute("role") === "alert",
   );
   expect(alert).toBeTruthy();
-  expect(alert!.textContent).toContain("Saved scans couldn't be refreshed");
-  expect(alert!.textContent).toContain("Showing the last saved information");
+  expect(alert!.textContent).toContain("Saved-scan refresh failed");
+  expect(alert!.textContent).toContain("Last saved information remains visible");
 });
 
 test("a project that failed to open gives a direct retry", () => {
   const { container } = renderShell({ caseSelectionUnavailable: true });
 
   const text = banners(container).join(" ");
-  expect(text).toContain("That scan project couldn't be opened");
-  expect(text).toContain("Try the selection again when the desktop service is ready");
+  expect(text).toContain("Scan project unavailable");
+  expect(text).toContain("Open the selected scan again");
 });
 
 test("recovery reports each project's outcome rather than one reassuring summary", () => {
@@ -283,8 +283,8 @@ test("one recovery banner composes every concurrent truth and relevant retry act
   const banner = container.querySelector<HTMLElement>(".data-status-banner")!;
   expect(banner.getAttribute("role")).toBe("alert");
   expect(banner.textContent).toContain("need recovery");
-  expect(banner.textContent).toContain("Saved scans couldn't be refreshed");
-  expect(banner.textContent).toContain("That scan project couldn't be opened");
+  expect(banner.textContent).toContain("Saved-scan refresh failed");
+  expect(banner.textContent).toContain("Scan project unavailable");
   expect(banner.querySelectorAll(".data-status-banner__fact")).toHaveLength(3);
   expect(banner.querySelectorAll(".data-status-banner__actions .button")).toHaveLength(2);
 

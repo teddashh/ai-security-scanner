@@ -100,7 +100,7 @@ test("a follow-up scan that stopped early is disclosed even when the comparison 
 
   const notice = container.querySelector(".inline-notice--warning");
   expect(notice).not.toBeNull();
-  expect(notice!.textContent).toContain("This verification could not compare everything");
+  expect(notice!.textContent).toContain("Verification comparison incomplete");
   expect(notice!.textContent).toContain("are not counted as fixed");
   // The after-fix run's own state is shown rather than left to the notice alone.
   expect(container.querySelector(".comparison-run--current")!.textContent).toContain("Partly completed");
@@ -192,10 +192,10 @@ test("an item that could not be compared is not counted among those not seen aga
     return card.querySelector(".metric-card__value")!.textContent ?? "";
   };
   expect(cardValue("No longer observed")).toBe("1");
-  expect(cardValue("Could not verify")).toBe("2");
+  expect(cardValue("Verification incomplete")).toBe("2");
 
   const row = diffRow(container, "Finding b");
-  expect(within(row).getByText("Could not verify")).toBeTruthy();
+  expect(within(row).getByText("Verification incomplete")).toBeTruthy();
   expect(row.textContent).toContain("Comparison is unavailable for this item");
   expect(row.textContent).toContain("complete its next action");
 });

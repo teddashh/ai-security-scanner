@@ -30,7 +30,7 @@ const copy = {
   eyebrow: { en: "CHECK FIXES", zhTW: "確認修復" },
   beforeTitle: { en: "See whether the fix worked", zhTW: "看看修復有沒有成功" },
   beforeDescription: {
-    en: "Choose a scan from before the change. We will check again and show what disappeared, what remains, and what is new.",
+    en: "Choose a scan from before the change. The recheck shows what disappeared, what remains, and what is new.",
     zhTW: "選擇修復前的掃描，我們會再次檢查，告訴你哪些消失了、哪些還在，以及有哪些新問題。",
   },
   resultTitle: { en: "See whether the fix worked", zhTW: "看看修復有沒有成功" },
@@ -69,7 +69,7 @@ const copy = {
     zhTW: "先完成至少一輪掃描；做完修復後，再回到這裡比較。",
   },
   selectedDescription: {
-    en: "We will first confirm the scanner tools, then compare the new check with {run} from {date}.",
+    en: "Scanner readiness is checked first, then the new result is compared with {run} from {date}.",
     zhTW: "我們會先確認掃描工具，再把新的檢查與 {date} 的 {run} 比較。",
   },
   handleActiveFirst: { en: "Handle the unfinished scan first", zhTW: "先處理未完成的掃描" },
@@ -89,18 +89,18 @@ const copy = {
     zhTW: "比較條件有變更，或某個掃描工具／目標檢查未完成",
   },
   mappingUnverifiableDetail: {
-    en: "Findings that could not be classified because control mappings changed",
-    zhTW: "因控制對照版本變更而無法分類的問題",
+    en: "Control mapping changed; finding classification incomplete",
+    zhTW: "控制對照已變更；問題分類未完成",
   },
   resolvedCautionTitle: { en: "No longer observed in this recheck", zhTW: "本次複驗未再觀察到" },
   resolvedCautionBody: {
     en: "The same completed check no longer found this problem. Review the new evidence, then close it.",
     zhTW: "相同檢查已完成，且沒有再找到這個問題；查看新證據後即可關閉。",
   },
-  incompleteTitle: { en: "This verification could not compare everything", zhTW: "這次複驗沒有辦法比較所有項目" },
+  incompleteTitle: { en: "Verification comparison incomplete", zhTW: "複驗比對未完成" },
   incompleteBody: {
-    en: "Some scanner/target comparisons were incomplete or used different comparison inputs. Affected findings stay under Could not verify and are not counted as fixed.",
-    zhTW: "部分掃描工具／目標的比較未完成，或使用了不同的比較條件；受影響的問題會保留在「無法確認」，不會算成已修復。",
+    en: "Some scanner/target comparisons were incomplete or used different comparison inputs. Affected findings stay under Verification incomplete and are not counted as fixed.",
+    zhTW: "部分掃描工具／目標的比較未完成，或使用了不同的比較條件；受影響的問題會保留在「驗證未完成」，不會算成已修復。",
   },
   issueCount: {
     en: "Scanner/target comparisons needing attention: {count}",

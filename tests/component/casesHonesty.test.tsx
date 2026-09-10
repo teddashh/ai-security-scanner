@@ -708,7 +708,7 @@ test("browser local setup is an honest preview and never claims to read a folder
     onCreateWithWorkspace,
   });
 
-  expect(container.textContent).toContain("Browser preview cannot read a local folder");
+  expect(container.textContent).toContain("Desktop app required for local folders");
   expect(container.textContent).toContain("Create a preview project to see the review steps");
   expect(getByRole<HTMLButtonElement>("button", { name: /Choose the infrastructure-code folder/u }).disabled).toBe(true);
   fireEvent.click(getByRole("button", { name: "Create preview project" }));

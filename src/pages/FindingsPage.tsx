@@ -287,8 +287,8 @@ const copy = {
     zhTW: "依相同弱點編號、套件與資產分組。",
   },
   correlationUnverifiableTitle: {
-    en: "Shared an identifier, but could not be compared: {count}",
-    zhTW: "有相同編號但無法比對：{count} 組",
+    en: "Identifier match without comparison: {count}",
+    zhTW: "編號相同但未完成比對：{count} 組",
   },
   correlationUnverifiableDescription: {
     en: "These share a vulnerability identifier, but at least one record is missing the affected package or asset, so they are listed separately.",
@@ -531,7 +531,7 @@ const copy = {
   evidencePointer: { en: "Internal evidence pointer", zhTW: "內部證據指標" },
   sensitiveValues: { en: "Sensitive values", zhTW: "敏感值" },
   notReported: { en: "Not reported", zhTW: "未回報" },
-  legacyEngineRun: { en: "Not recorded by this older case; cannot be inferred", zhTW: "舊版案件未記錄，無法推定" },
+  legacyEngineRun: { en: "Not recorded by this older case", zhTW: "舊版案件未記錄" },
   noPointer: { en: "No internal pointer", zhTW: "無內部位置資訊" },
   redacted: { en: "Redacted", zhTW: "已遮罩" },
   notMarkedRedacted: { en: "Not marked as redacted", zhTW: "未標示遮罩" },

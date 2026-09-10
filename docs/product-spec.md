@@ -220,7 +220,7 @@ Runtime availability affects only dependent checks. Existing projects, results, 
 
 ## 6. Unified professional report
 
-Every run produces one durable report model. Its terminal projection is used by Results, reopen, preview, and readable export; any live projection is internal progress state, not a user-facing report or export. A combined IT-environment run is one report, not separate reports that the user must mentally merge. Every requested repository, website, internal system, legacy service endpoint, or inventory-only item has one asset row derived from its own findings, completed checks, and coverage gaps. It is professional because it is consistent, evidence-based, prioritized, concise, and actionable—not because it mirrors an external framework.
+Every terminal run produces one durable report model used by Results, reopen, preview, and readable export. An active run produces Progress state, not a report. A combined IT-environment run is one report, not separate reports that the user must mentally merge. Every requested repository, website, internal system, legacy service endpoint, or inventory-only item has one asset row derived from its own findings, completed checks, and coverage gaps. It is professional because it is consistent, evidence-based, prioritized, concise, and actionable—not because it mirrors an external framework.
 
 ### 6.1 First layer
 

@@ -75,8 +75,8 @@ const copy = {
   },
   previewErrorTitle: { en: "The exact export preview is unavailable", zhTW: "目前無法取得精確匯出預覽" },
   previewErrorBody: {
-    en: "No file has been created. Try again before exporting so you can review the exact contents first.",
-    zhTW: "目前沒有建立任何檔案。請先重試，取得精確內容預覽後再匯出。",
+    en: "Retry preview before exporting.",
+    zhTW: "請在匯出前重新取得預覽。",
   },
   runUnavailableTitle: { en: "Choose a saved scan before exporting", zhTW: "請先選擇一筆已保存的掃描" },
   runUnavailableBody: {
@@ -114,16 +114,16 @@ const copy = {
   scopeDemo: { en: "Selected-run demo sample", zhTW: "所選掃描輪次展示範例" },
   scopeUnavailable: { en: "No saved scan selected", zhTW: "尚未選擇已保存的掃描" },
   integritySignedDecision: {
-    en: "Locally signed for integrity only; not proof of completeness or correctness",
-    zhTW: "本機簽章只驗證檔案完整性；不能證明掃描完整或結果正確",
+    en: "Integrity: locally signed",
+    zhTW: "完整性：本機簽署",
   },
   integrityUnsignedDecision: {
-    en: "Unsigned: SHA-256 detects changes but does not prove author, completeness, or correctness",
-    zhTW: "未簽章：SHA-256 可偵測檔案變更，但不能證明作者、掃描完整或結果正確",
+    en: "Integrity: SHA-256 recorded in this scan project",
+    zhTW: "完整性：SHA-256 已記錄在這個掃描專案",
   },
   integrityDemoDecision: {
-    en: "Demo only: no cryptographic signature or verifiable digest",
-    zhTW: "僅供展示：沒有密碼學簽章或可驗證摘要",
+    en: "Demo sample: integrity record unavailable",
+    zhTW: "展示範例：不提供完整性紀錄",
   },
   // Only the case bundle is signed: `export.rs` attaches an envelope, while
   // every other format takes the `case_service.rs` path that sets
@@ -132,12 +132,12 @@ const copy = {
   // introduced by a description of a signature they do not carry. The backend's
   // own notice says so and reaches no screen.
   signatureLimit: {
-    en: "This format carries a local integrity signature, which can show the file was not changed after it was written. It cannot prove the scan was complete or correct.",
-    zhTW: "這個格式會附上本機完整性簽章，可以顯示檔案寫出後沒有被修改；但不能證明掃描完整或結果正確。",
+    en: "Integrity: locally signed. Detects changes after export.",
+    zhTW: "完整性：本機簽署，可偵測匯出後的變更。",
   },
   signatureUnsigned: {
-    en: "This format is not signed. A SHA-256 digest is kept in your project and can detect later changes to the file, but nothing in the file establishes who produced it, or that the scan was complete or correct.",
-    zhTW: "這個格式不會簽章。專案內會保存 SHA-256 摘要，可用來發現檔案之後被修改，但檔案本身無法證明是誰產出的，也不能證明掃描完整或結果正確。",
+    en: "Integrity: SHA-256 digest recorded in this scan project.",
+    zhTW: "完整性：SHA-256 摘要已記錄在這個掃描專案。",
   },
   caseBundleScopeBody: {
     en: "The bundle includes case-wide assets, grants, coverage, scan history, findings, workflow history, comparisons, and raw source files if you choose to include them. Reports select observations and evidence from the chosen scan run. For older observations without a frozen snapshot, wording may use the current finding; workflow status and asset names may also reflect the current case.",
@@ -227,8 +227,8 @@ const copy = {
     zhTW: "這個格式不會帶出資產關聯資料；只有技術案件包會包含",
   },
   contentsUnknown: { en: "Not-run, partial, failed, and unknown states", zhTW: "未執行、部分、失敗與未知狀態" },
-  contentsLimits: { en: "Not-an-audit, not-forensics, and not-a-compliance-score statement", zhTW: "非稽核、非鑑識、非合規分數聲明" },
-  localOnly: { en: "Nothing is uploaded before you export", zhTW: "匯出前不會上傳到任何服務" },
+  contentsLimits: { en: "Report terms at the end", zhTW: "報告末端的正式條款" },
+  localOnly: { en: "Before export: local only", zhTW: "匯出前：僅限本機" },
   historyEyebrow: { en: "EXPORT HISTORY", zhTW: "匯出紀錄" },
   historyTitle: { en: "Files created on this device", zhTW: "這台電腦上的匯出紀錄" },
   historyDescription: { en: "Find every report saved on this device, or verify a package someone sent you.", zhTW: "查看這台電腦儲存過的報告，也能驗證別人傳來的案件包。" },

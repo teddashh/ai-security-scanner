@@ -149,7 +149,7 @@ const copy = {
     zhTW: "完成下方的準備步驟，再為這些檢查開始新的掃描。",
   },
   checkingReady: { en: "Checking what is ready…", zhTW: "正在確認可以執行的檢查…" },
-  readinessUnavailableTitle: { en: "We could not check what is ready", zhTW: "目前無法確認掃描準備狀態" },
+  readinessUnavailableTitle: { en: "Scan readiness unavailable", zhTW: "掃描準備狀態無法取得" },
   readinessUnavailableDescription: {
     en: "Check readiness again.",
     zhTW: "請重新檢查準備狀態。",
@@ -242,7 +242,7 @@ const copy = {
     scan_already_active: { en: "A scan is already running or paused for this project.", zhTW: "這個專案已有正在執行或暫停中的掃描。" },
     no_effective_scope_grants: { en: "Choose the exact target you want to check, then confirm it once.", zhTW: "請選擇這次要檢查的確切目標，並確認一次即可。" },
     no_ownership_confirmed_targets: { en: "The target has not been confirmed yet. Return to setup and confirm it.", zhTW: "目標尚未確認；請回到設定頁確認這次要掃描的目標。" },
-    no_compatible_authorized_targets: { en: "The current input cannot be scanned yet. Finish the target step shown in setup.", zhTW: "目前的輸入還不能掃描；請完成設定頁顯示的目標步驟。" },
+    no_compatible_authorized_targets: { en: "Finish target setup for the current input.", zhTW: "請完成目前輸入的目標設定。" },
     no_runnable_authorized_targets: {
       en: "Install the newest release to get an applicable scan tool for this target.",
       zhTW: "安裝最新版本，以取得適用於這個目標的掃描工具。",
@@ -419,8 +419,8 @@ const copy = {
     checks_cancelled: { en: "{count} checks were cancelled", zhTW: "{count} 項檢查已取消" },
     checks_not_started: { en: "{count} planned checks did not start", zhTW: "{count} 項預定檢查沒有開始" },
     gateway_preparation_failed: {
-      en: "The private scan connection could not start",
-      zhTW: "專用掃描連線未能啟動",
+      en: "Private scan connection failed",
+      zhTW: "專用掃描連線失敗",
     },
     run_completed: { en: "Scan completed", zhTW: "掃描已完成" },
     run_no_checks_completed: { en: "No checks completed", zhTW: "沒有完成任何檢查" },

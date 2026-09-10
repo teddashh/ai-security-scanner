@@ -112,7 +112,7 @@ test("provider sign-in leads with the setup-file journey and keeps manual entry 
   assert.match(panelSource, /className="provider-manual-details"/u);
   assert.match(panelSource, /manualSummary/u);
   assert.match(panelSource, /Your IT team prepares this once for your organization/u);
-  assert.match(panelSource, /ai-security-scanner does not provide a shared OAuth registration/u);
+  assert.match(panelSource, /Shared OAuth registration is not provided/u);
   assert.doesNotMatch(panelSource, /IT \/ admin advanced setup/u);
   assert.doesNotMatch(panelSource, /product-owned OAuth|shared OAuth client/u);
 

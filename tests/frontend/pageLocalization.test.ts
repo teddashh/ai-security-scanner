@@ -62,7 +62,7 @@ test("non-scan actions use truthful saved-state toasts while scan execution keep
   assert.match(action, /nonExecutionActionToastCopy\[key as keyof typeof nonExecutionActionToastCopy\]/u);
   assert.match(action, /nonExecutionCopy\?\.acceptedTitle \?\? \{ en: "Local work started"/u);
   assert.match(action, /nonExecutionCopy\?\.acceptedDetail \?\? \{ en: "Open Scan progress to follow each scanner\."/u);
-  assert.match(action, /nonExecutionCopy\?\.failedTitle \?\? \{ en: "The local work could not finish"/u);
+  assert.match(action, /nonExecutionCopy\?\.failedTitle \?\? \{ en: "Local action failed"/u);
 });
 
 test("all progress controls remain wired while raw scanner status stays in details", async () => {
@@ -352,8 +352,8 @@ test("readiness errors remain retryable and runtime setup receives focus", async
   assert.match(start, /id="start-page-runtime-setup"[\s\S]*tabIndex=\{-1\}/u);
   assert.match(start, /getElementById\("start-page-runtime-setup"\)[\s\S]*\.focus\([\s\S]*\.scrollIntoView\(/u);
   for (const copy of [
-    "We could not check what is ready",
-    "目前無法確認掃描準備狀態",
+    "Scan readiness unavailable",
+    "掃描準備狀態無法取得",
     "Check readiness again.",
     "請重新檢查準備狀態。",
   ]) assert.ok(progress.includes(copy), copy);
@@ -412,8 +412,8 @@ test("progress has a bilingual event log before and during every scan route", as
     "項檢查在完成前停止",
     "Scan stopped",
     "掃描已停止",
-    "The private scan connection could not start",
-    "專用掃描連線未能啟動",
+    "Private scan connection failed",
+    "專用掃描連線失敗",
   ]) assert.ok(progress.includes(copy), copy);
   assert.doesNotMatch(progress, /checks have finished|Scan finished/u);
 });
@@ -472,8 +472,8 @@ test("export preview, export, and both verification paths remain wired", async (
   assertInsideDisclosure(verification, "page-technical-details", "displayTechnicalDetail(issue.detail)");
   assertInsideDisclosure(verification, "page-technical-details", "verificationDiffExplanation(locale, item)");
   assert.doesNotMatch(verification, /<p>\{item\.explanation\}<\/p>/u);
-  assert.match(verification, /Affected findings stay under Could not verify and are not counted as fixed/u);
-  assert.match(verification, /受影響的問題會保留在「無法確認」，不會算成已修復/u);
+  assert.match(verification, /Affected findings stay under Verification incomplete and are not counted as fixed/u);
+  assert.match(verification, /受影響的問題會保留在「驗證未完成」，不會算成已修復/u);
   assert.match(verification, /isOnlyMappingVersionDrift\(completenessIssues\)/u);
   assert.match(verification, /Affected checks completed in both scans with different control-mapping catalog versions/u);
   assert.match(verification, /Affected scan tools: \{count\}/u);

@@ -311,8 +311,8 @@ test("guided cloud discovery is one explicit continuation after sign-in", () => 
 
   for (const [english, traditionalChinese] of [
     ["Continue: find cloud assets", "繼續：尋找雲端資產"],
-    ["It does not approve or start a scan", "不會授權或開始掃描"],
-    ["Temporary-access setup may create only the dedicated IAM resources", "暫時存取設定只有在你另行檢視並確認後"],
+    ["Starting a scan remains a separate step", "開始掃描是另一個獨立步驟"],
+    ["The next step lists its dedicated IAM resources before creation", "下一步會在建立前列出專用 IAM 資源"],
   ]) {
     assert.ok(providerPanelSource.includes(english), english);
     assert.ok(providerPanelSource.includes(traditionalChinese), traditionalChinese);

@@ -331,14 +331,12 @@ test("the recommended format says plainly that it is not signed", async () => {
   expect(decision.closest("details")).toBeNull();
   expect(decision.textContent).toContain("Sensitive identifiers hidden. Source files excluded.");
   expect(decision.textContent).toContain("Selected-run report");
-  expect(decision.textContent).toContain("Unsigned: SHA-256 detects changes");
-  expect(decision.textContent).toContain("does not prove author, completeness, or correctness");
-  expect(decision.textContent).not.toContain("Locally signed");
+  expect(decision.textContent).toContain("Integrity: SHA-256 recorded in this scan project");
+  expect(decision.textContent).not.toContain("Integrity: locally signed");
 
   const packageDetails = container.querySelector<HTMLDetailsElement>(".export-summary--details");
   expect(packageDetails?.open).toBe(false);
-  expect(detailNotes(container)).toContain("This format is not signed");
-  expect(detailNotes(container)).toContain("SHA-256 digest is kept in your project");
+  expect(detailNotes(container)).toContain("Integrity: SHA-256 digest recorded in this scan project");
 });
 
 test("the case bundle is the one format that describes a signature", async () => {
@@ -351,13 +349,12 @@ test("the case bundle is the one format that describes a signature", async () =>
   await waitFor(() => expect(decisionSummary(container).textContent).toContain("Case-wide records; reports use the selected run"));
 
   const decision = decisionSummary(container);
-  expect(decision.textContent).toContain("Locally signed for integrity only");
-  expect(decision.textContent).toContain("not proof of completeness or correctness");
-  expect(decision.textContent).not.toContain("Unsigned:");
+  expect(decision.textContent).toContain("Integrity: locally signed");
+  expect(decision.textContent).not.toContain("SHA-256 recorded");
   expect(container.querySelector(".export-bundle-scope")).toBeNull();
   expect(detailNotes(container)).toContain("case-wide assets, grants, coverage, scan history");
-  expect(detailNotes(container)).toContain("carries a local integrity signature");
-  expect(detailNotes(container)).not.toContain("This format is not signed");
+  expect(detailNotes(container)).toContain("Integrity: locally signed. Detects changes after export.");
+  expect(detailNotes(container)).not.toContain("SHA-256 digest recorded");
 });
 
 test("the demo decision does not claim a verifiable digest", async () => {
@@ -365,8 +362,8 @@ test("the demo decision does not claim a verifiable digest", async () => {
 
   await waitFor(() => expect(decisionSummary(container).textContent).toContain("Selected-run demo sample"));
   const decision = decisionSummary(container);
-  expect(decision.textContent).toContain("Demo only: no cryptographic signature or verifiable digest");
-  expect(decision.textContent).not.toContain("SHA-256 detects changes");
+  expect(decision.textContent).toContain("Demo sample: integrity record unavailable");
+  expect(decision.textContent).not.toContain("SHA-256 recorded");
   expect(detailNotes(container)).toBe("");
   expect(container.textContent).toContain("This downloads a sample report");
   expect(container.textContent).toContain("Browser demo export: one selected-run JSON sample");

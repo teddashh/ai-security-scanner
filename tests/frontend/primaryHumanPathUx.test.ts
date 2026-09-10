@@ -32,7 +32,7 @@ test("guided local and environment creation attach chosen snapshots and preserve
   assert.match(action, /if \(!attached\.data\.accepted\)[\s\S]*loadSnapshot\(returnToReview \? caseId : undefined, true\)[\s\S]*if \(returnToReview\)[\s\S]*navigate\("coverage"\)/u);
   assert.doesNotMatch(action, /await loadSnapshot\(caseId, true\);\s*setSelectedUseCase\(undefined\);\s*navigate\("coverage"\)/u);
   assert.match(action, /Scan project created; some folders were not added/u);
-  assert.match(action, /folder\(s\) could not be copied\. Add them again in Scan setup\./u);
+  assert.match(action, /folder\(s\) not copied\. Add them again in Scan setup\./u);
   assert.match(action, /The private snapshots are attached\. Review the exact checks, then press Start\./u);
   assert.doesNotMatch(action, /startScan|onStartScan/u);
 });

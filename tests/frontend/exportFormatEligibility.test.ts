@@ -139,8 +139,8 @@ test("the export decision line exposes disclosure, scope, and honest integrity b
 
   assert.match(source, /<span className="export-sharing-consequence">\{text\(sharingConsequence\)\}<\/span>/u);
   assert.match(source, /\{" · "\}\{text\(scopeConsequence\)\}\{" · "\}\{text\(integrityConsequence\)\}/u);
-  assert.match(source, /Unsigned: SHA-256 detects changes but does not prove author, completeness, or correctness/u);
-  assert.match(source, /Locally signed for integrity only; not proof of completeness or correctness/u);
-  assert.match(source, /Demo only: no cryptographic signature or verifiable digest/u);
+  assert.match(source, /Integrity: SHA-256 recorded in this scan project/u);
+  assert.match(source, /Integrity: locally signed/u);
+  assert.match(source, /Demo sample: integrity record unavailable/u);
   assert.match(source, /<div className="export-actions">[\s\S]*aria-describedby="export-preview-status"/u);
 });

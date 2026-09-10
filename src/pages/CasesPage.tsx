@@ -111,7 +111,7 @@ const pageCopy = {
   newCaseEyebrow: { en: "New scan", zhTW: "新的檢查" },
   newCaseTitle: { en: "New scan", zhTW: "新掃描" },
   newCaseDescription: {
-    en: "Add the target. You can leave the project name blank and we’ll create one from it.",
+    en: "Add the target. A project name is generated when this field is blank.",
     zhTW: "加入目標即可；專案名稱可以留白，我們會依目標自動建立。",
   },
   changeUseCase: { en: "Choose a different scan", zhTW: "改選其他檢查方式" },
@@ -126,7 +126,7 @@ const pageCopy = {
     zhTW: "這個專案有程式碼是由 AI 產生，或經 AI 大幅修改嗎？",
   },
   aiGeneratedHelp: {
-    en: "This helps us show the right AI-code guidance. It does not change the scan.",
+    en: "Sets the AI-code guidance. Scan scope stays the same.",
     zhTW: "這能讓結果顯示合適的 AI 程式碼建議，不會改變掃描內容。",
   },
   aiGeneratedYes: {
@@ -158,7 +158,7 @@ const pageCopy = {
     en: "Open the local folder picker again.",
     zhTW: "請重新開啟本機資料夾選擇器。",
   },
-  browserLocalTitle: { en: "Browser preview cannot read a local folder", zhTW: "瀏覽器預覽不會讀取本機資料夾" },
+  browserLocalTitle: { en: "Desktop app required for local folders", zhTW: "本機資料夾需要桌面程式" },
   browserLocalBody: {
     en: "Create a preview project to see the review steps. Use the desktop app for a local scan.",
     zhTW: "建立預覽專案以查看檢查步驟；本機掃描請使用桌面程式。",
@@ -251,7 +251,7 @@ const pageCopy = {
     en: "Reading this computer's network settings.",
     zhTW: "正在讀取這台電腦的網路設定。",
   },
-  localNetworkFoundTitle: { en: "We found a likely local network", zhTW: "找到一個可能的區域網路" },
+  localNetworkFoundTitle: { en: "Likely local network found", zhTW: "找到一個可能的區域網路" },
   localNetworkFoundBody: {
     en: "Add {target} to the target list?",
     zhTW: "要將 {target} 加入目標清單嗎？",
@@ -275,8 +275,8 @@ const pageCopy = {
   },
   localNetworkUnsupportedTitle: { en: "Enter your local network", zhTW: "請輸入你的區域網路" },
   localNetworkUnsupportedBody: {
-    en: "This version can't fill the network for you. Enter an internal IP address or small range below.",
-    zhTW: "這個版本無法替你帶入網段；請在下方輸入內部 IP 或小型網段。",
+    en: "Enter an internal IP address or small range below.",
+    zhTW: "請在下方輸入內部 IP 或小型網段。",
   },
   repositories: { en: "Source project or repository", zhTW: "程式碼專案或儲存庫" },
   repositoriesPlaceholder: { en: "Local project name or read-only repository coordinate", zhTW: "本機專案名稱或唯讀程式碼儲存庫位置" },
@@ -304,7 +304,7 @@ const pageCopy = {
   },
   cloudChoice: { en: "Which cloud do you want to check first?", zhTW: "想先檢查哪一個雲端服務？" },
   cloudChoiceHelp: {
-    en: "Pick one now. We'll open its official sign-in next, and you can add another source later.",
+    en: "Pick one now. Its official sign-in opens next; additional sources can be added later.",
     zhTW: "先選一個；下一步會開啟官方登入，之後仍可再加入其他來源。",
   },
   moreSummary: { en: "Optional project details", zhTW: "選填專案資訊" },
@@ -364,7 +364,7 @@ const pageCopy = {
   verificationEyebrow: { en: "Check fixes", zhTW: "確認修復" },
   verificationTitle: { en: "Choose the earlier run to compare", zhTW: "選擇要比較的先前掃描" },
   verificationDescription: {
-    en: "Pick the scan from before the fix. We'll run the same checks again and show what changed.",
+    en: "Pick the scan from before the fix. The same checks run again and show what changed.",
     zhTW: "選擇修復前的掃描；我們會再次執行相同檢查，直接顯示前後差異。",
   },
   viewDifference: { en: "View differences", zhTW: "查看差異" },

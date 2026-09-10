@@ -31,8 +31,8 @@ test("native verification failures use danger copy without rendering native erro
   const copy = app.slice(copyStart, copyEnd);
   assert.match(copy, /native_failed:[\s\S]*tone: "danger"/u);
   assert.match(copy, /demo_unavailable:[\s\S]*tone: "info"/u);
-  assert.match(copy, /Do not trust or share this package/u);
-  assert.match(copy, /請勿信任或分享這份案件包/u);
+  assert.match(copy, /Package rejected\. Use a newly exported case package\./u);
+  assert.match(copy, /案件包已拒絕；請使用重新匯出的案件包/u);
 
   const verifyStart = app.indexOf("const verifyExport = async");
   const verifyEnd = app.indexOf("const verifyReceivedExport", verifyStart);

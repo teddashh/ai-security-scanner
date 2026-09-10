@@ -201,10 +201,10 @@ test("the unconnected first layer is limited to account, state, CTA, and one saf
   expect(firstLayer).toContain("Account to scan");
   expect(firstLayer).toContain("Microsoft 365 · Microsoft 365");
   expect(firstLayer).toContain("Microsoft 365 scanner access is read-only and expires automatically");
-  expect(firstLayer).toContain("It does not approve or start a scan or change cloud workloads");
+  expect(firstLayer).toContain("Starting a scan remains a separate step");
   expect(firstLayer).toContain("Open the connection guide");
   expect(firstLayer).toContain("Product capability details");
-  expect(firstLayer.match(/does not approve or start a scan/gu)).toHaveLength(1);
+  expect(firstLayer.match(/Starting a scan remains a separate step/gu)).toHaveLength(1);
   expect(firstLayer).not.toContain("may create");
 
   expect(firstLayer).not.toContain("Choose a connection method");
@@ -220,7 +220,7 @@ test("the unconnected first layer is limited to account, state, CTA, and one saf
 
   expect(setupSection().textContent).toContain("Your IT team prepares this once for your organization");
   expect(setupSection().textContent).toContain(
-    "ai-security-scanner does not provide a shared OAuth registration",
+    "Shared OAuth registration is not provided",
   );
 });
 
@@ -235,10 +235,7 @@ test("temporary access distinguishes reviewed IAM setup from read-only scanner a
 
   const firstLayer = textBeforeAnyDisclosureIsOpened(panel());
   expect(firstLayer).toContain("scanner access is read-only and expires automatically");
-  expect(firstLayer).toContain("it does not approve or start a scan or change cloud workloads");
-  expect(firstLayer).toContain(
-    "Temporary-access setup may create only the dedicated IAM resources you review and confirm separately",
-  );
+  expect(firstLayer).toContain("The next step lists its dedicated IAM resources before creation");
   expect(firstLayer).not.toContain("does not change cloud resources");
 });
 
@@ -298,7 +295,7 @@ test("the connected first layer keeps exact account, permission state, expiry, a
   expect(firstLayer).toContain("Continue: find cloud assets");
   expect(firstLayer).toContain("Disconnect account");
   expect(firstLayer).toContain("Microsoft 365 scanner access is read-only and expires automatically");
-  expect(firstLayer.match(/does not approve or start a scan/gu)).toHaveLength(1);
+  expect(firstLayer.match(/Starting a scan remains a separate step/gu)).toHaveLength(1);
   expect(firstLayer).not.toContain("Cloud scan connected");
   expect(firstLayer).not.toContain("Sign-in is ready");
   expect(firstLayer).not.toContain("What this installed product can inspect");
@@ -313,7 +310,7 @@ test("the Traditional Chinese first layer keeps the same concise safety boundary
   expect(firstLayer).toContain("尚未連接");
   expect(firstLayer).toContain("要掃描的帳號");
   expect(firstLayer).toContain("掃描存取只有讀取權限，並會自動到期");
-  expect(firstLayer).toContain("不會授權或開始掃描，也不會變更雲端工作負載");
+  expect(firstLayer).toContain("開始掃描是另一個獨立步驟");
   expect(firstLayer).toContain("開啟連線指南");
   expect(firstLayer).toContain("產品能力詳細資料");
   expect(firstLayer).not.toContain("目前安裝版本可檢查的項目");

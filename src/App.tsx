@@ -174,14 +174,14 @@ const caseExportVerificationCopy = {
     tone: "danger",
     title: { en: "Integrity check failed", zhTW: "完整性檢查失敗" },
     detail: {
-      en: "Do not trust or share this package. Choose it again, or ask the sender for a new case package.",
-      zhTW: "請勿信任或分享這份案件包；請重新選擇，或請寄件者提供新的案件包。",
+      en: "Package rejected. Use a newly exported case package.",
+      zhTW: "案件包已拒絕；請使用重新匯出的案件包。",
     },
   },
   demo_unavailable: {
     tone: "info",
-    title: { en: "This demo file cannot be verified", zhTW: "這份展示檔無法驗證" },
-    detail: { en: "No real case package was changed.", zhTW: "沒有更動任何真實案件包。" },
+    title: { en: "Demo verification unavailable", zhTW: "展示檔不提供驗證" },
+    detail: { en: "Signed integrity record: unavailable for demo files.", zhTW: "簽署完整性紀錄：展示檔不提供。" },
   },
 } as const satisfies Record<CaseExportVerificationResult["outcome"], {
   tone: ToastMessage["tone"];
@@ -566,10 +566,10 @@ export default function App() {
       if (!quiet) {
         pushToast({
           tone: "danger",
-          title: text({ en: "Scan projects could not be loaded", zhTW: "目前無法讀取掃描專案" }),
+          title: text({ en: "Scan projects unavailable", zhTW: "掃描專案無法取得" }),
           detail: text({
-            en: "Keep the app open and try again.",
-            zhTW: "請讓程式保持開啟並再試一次。",
+            en: "Try again.",
+            zhTW: "請重試。",
           }),
         });
       }
@@ -1030,10 +1030,10 @@ export default function App() {
       recordTechnicalError("cancel managed runtime setup", error);
       pushToast({
         tone: "danger",
-        title: text({ en: "Setup could not be stopped yet", zhTW: "目前無法停止設定" }),
+        title: text({ en: "Setup stop request failed", zhTW: "停止設定要求失敗" }),
         detail: text({
-          en: "Try the stop button again in a moment.",
-          zhTW: "請稍後再按一次停止。",
+          en: "Press Stop again.",
+          zhTW: "請再按一次停止。",
         }),
       });
     }
@@ -1222,7 +1222,7 @@ export default function App() {
       setCaseSelectionUnavailableId(caseId);
       pushToast({
         tone: "danger",
-        title: text({ en: "This scan project could not be opened", zhTW: "目前無法開啟這個掃描專案" }),
+        title: text({ en: "Scan project unavailable", zhTW: "掃描專案無法取得" }),
         detail: text({
           en: "Try opening it again.",
           zhTW: "請再開啟一次。",
@@ -1269,10 +1269,10 @@ export default function App() {
         recordTechnicalError("retry scan readiness", error);
         pushToast({
           tone: "warning",
-          title: text({ en: "Could not check yet", zhTW: "目前仍無法完成檢查" }),
+          title: text({ en: "Readiness check incomplete", zhTW: "準備狀態檢查未完成" }),
           detail: text({
-            en: "Check readiness again in a moment.",
-            zhTW: "請稍後重新檢查準備狀態。",
+            en: "Check readiness again.",
+            zhTW: "請重新檢查準備狀態。",
           }),
         });
       }
@@ -1412,12 +1412,12 @@ export default function App() {
             })
           : returnToReview
             ? text({
-              en: `${failedWorkspaceCount} folder(s) could not be copied. Add them again in Scan setup.`,
-              zhTW: `有 ${failedWorkspaceCount} 個資料夾無法複製；請在掃描設定重新加入。`,
+              en: `${failedWorkspaceCount} folder(s) not copied. Add them again in Scan setup.`,
+              zhTW: `有 ${failedWorkspaceCount} 個資料夾未複製；請在掃描設定重新加入。`,
             })
             : text({
-              en: `${failedWorkspaceCount} folder(s) could not be copied. Open My scans to review the saved project and add the missing folder again.`,
-              zhTW: `有 ${failedWorkspaceCount} 個資料夾無法複製。請開啟「我的掃描」檢查已保存的專案，再重新加入缺少的資料夾。`,
+              en: `${failedWorkspaceCount} folder(s) not copied. Open My scans to review the saved project and add the missing folder again.`,
+              zhTW: `有 ${failedWorkspaceCount} 個資料夾未複製。請開啟「我的掃描」檢查已保存的專案，再重新加入缺少的資料夾。`,
             }),
       });
       return failedWorkspaceCount === 0;
@@ -1473,7 +1473,7 @@ export default function App() {
       recordTechnicalError("seed demo case", error);
       pushToast({
         tone: "danger",
-        title: text({ en: "The example project could not be opened", zhTW: "目前無法開啟範例專案" }),
+        title: text({ en: "Example project unavailable", zhTW: "範例專案無法取得" }),
         detail: text({ en: "Try again.", zhTW: "請再試一次。" }),
       });
     } finally {
@@ -1702,7 +1702,7 @@ export default function App() {
       recordTechnicalError(`run action ${key}`, error);
       pushToast({
         tone: "danger",
-        title: text(nonExecutionCopy?.failedTitle ?? { en: "The local work could not finish", zhTW: "本機工作未能完成" }),
+        title: text(nonExecutionCopy?.failedTitle ?? { en: "Local action failed", zhTW: "本機操作失敗" }),
         detail: text(nonExecutionCopy?.failedDetail ?? { en: "Check the current step before trying again.", zhTW: "請確認目前步驟後再試一次。" }),
       });
       return false;
@@ -1717,8 +1717,8 @@ export default function App() {
     pushToast({
       tone: "info",
       title: text({
-        en: "This connection test cannot be paused or resumed",
-        zhTW: "這項連線測試不能暫停或續跑",
+        en: "This connection test runs once",
+        zhTW: "這項連線測試會執行一次",
       }),
       detail: text({
         en: "Its connection attempt has a three-second maximum. Let it finish, or cancel it and start a new check later.",
@@ -1872,7 +1872,7 @@ export default function App() {
                 en: "The case record was removed, and no evidence folder remains.",
                 zhTW: "案件紀錄已移除，而且沒有留下證據資料夾。",
               })
-          : text({ en: "No case data was changed.", zhTW: "案件資料沒有被更動。" }),
+          : text({ en: "Check the confirmation and retry deletion.", zhTW: "請確認刪除文字後重試。" }),
       });
       if (result.data.accepted) {
         setArtifactCleanupPlan(result.data.artifacts.exists ? result.data.artifacts : undefined);
@@ -2091,7 +2091,7 @@ export default function App() {
           pushToast({
             tone: "info",
             title: text({ en: "Export cancelled", zhTW: "已取消匯出" }),
-            detail: text({ en: "No file was created or written.", zhTW: "沒有建立或寫出任何檔案。" }),
+            detail: text({ en: "Return to Share results to export.", zhTW: "請回到「分享結果」重新匯出。" }),
           });
         }
         return;
@@ -2160,10 +2160,10 @@ export default function App() {
       recordTechnicalError("verify case export", error);
       pushToast({
         tone: "danger",
-        title: text({ en: "The file could not be verified", zhTW: "目前無法驗證這個檔案" }),
+        title: text({ en: "File verification failed", zhTW: "檔案驗證失敗" }),
         detail: text({
-          en: "Choose it again, or ask the sender for a new case package.",
-          zhTW: "請重新選擇，或請寄件者提供新的案件包。",
+          en: "Try verification again. If it fails again, use a newly exported case package.",
+          zhTW: "請重新驗證；若再次失敗，請使用重新匯出的案件包。",
         }),
       });
     } finally {

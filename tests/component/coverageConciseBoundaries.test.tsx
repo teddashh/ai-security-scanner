@@ -231,14 +231,14 @@ test("a failed cleanup lookup remains actionable without a provider source and o
   await waitFor(() => expect(setup.querySelector("summary")?.textContent).toBe("Temporary cloud cleanup needs attention"));
   fireEvent.click(getByRole("button", { name: "Review cleanup" }));
   expect(getByText("Use Add an inventory file above to add the matching cloud account. Then return here to reconnect and remove only its recorded temporary resources.")).not.toBeNull();
-  const cleanupError = getByText("We could not check whether an earlier temporary setup still needs cleanup.").closest<HTMLElement>("[role='alert']")!;
+  const cleanupError = getByText("Temporary-access cleanup status unavailable. Check again.").closest<HTMLElement>("[role='alert']")!;
   expect(cleanupError).not.toBeNull();
   const cleanupRegion = getByRole("region", { name: "Temporary-access cleanup" });
   await waitFor(() => expect(document.activeElement).toBe(cleanupRegion));
 
   fireEvent.click(within(cleanupError).getByRole("button", { name: "Check cleanup again" }));
   await waitFor(() => expect(cleanupLookup).toHaveBeenCalledTimes(2));
-  await waitFor(() => expect(queryByText("We could not check whether an earlier temporary setup still needs cleanup.")).toBeNull());
+  await waitFor(() => expect(queryByText("Temporary-access cleanup status unavailable. Check again.")).toBeNull());
   expect(setup.querySelector("summary")?.textContent).toBe("Add or change source");
 });
 

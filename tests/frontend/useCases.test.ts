@@ -193,7 +193,7 @@ test("guided public and combined environment fields expose useful field errors",
 
 test("internal network detection stays an explicit inventory-only bilingual suggestion", () => {
   for (const phrase of [
-    "We found a likely local network",
+    "Likely local network found",
     "找到一個可能的區域網路",
     "Enter the exact internal IP address or range below.",
     "請在下方輸入精確的內部 IP 或網段",

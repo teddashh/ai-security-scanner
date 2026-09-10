@@ -152,7 +152,7 @@ test("findings that share an identifier but cannot be compared are disclosed, no
 
   const section = correlationSection();
   expect(section).not.toBeNull();
-  expect(section!.textContent).toContain("Shared an identifier, but could not be compared: 1");
+  expect(section!.textContent).toContain("Identifier match without comparison: 1");
   expect(section!.textContent).toContain("CVE-2024-9999 — problems sharing this identifier: 2");
 });
 
