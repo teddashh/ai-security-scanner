@@ -206,6 +206,13 @@ non-events, saved-state reassurance, implementation language, or responsibility
 transfer. Required authorization and exact scope boundaries remain concise and
 specific.
 
+Report production now has one lifecycle value: **Final**. The report builder
+rejects queued, preparing, running, or paused work; desktop snapshots include
+reports only for terminal runs; every export path applies the same boundary.
+Active work is represented only by Progress. Result, coverage, verification,
+setup, and export copy state the recorded outcome and next action directly, and
+older stored defensive prose is normalized before presentation.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -238,8 +245,11 @@ The high-value remaining gaps are:
    report direct, moves formal terms to the end, and normalizes superseded stored
    narrative. `cbd6481` applies the direct-response contract to the CLI, and
    `502b70a` applies it to active Progress, setup, authorization, lifecycle,
-   coverage, and application guidance. The full sequence still needs observation
-   in a controlled installed-desktop walkthrough.
+   coverage, and application guidance. `acac84a` removes the live-report state
+   from the Rust and TypeScript contracts, gates report construction and export
+   on terminal work, and applies direct result wording throughout the shared
+   report surfaces. The full sequence still needs observation in a controlled
+   installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
    AWS cloud paths do not hide a comparable product-authored security subset:

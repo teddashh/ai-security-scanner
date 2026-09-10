@@ -365,6 +365,18 @@ run 才顯示 per-asset result、finding、coverage gap 與儲存選項。HTML �
 evidence 維持 collapsed technical detail。這項產品規則已同步寫入 `docs/product-spec.md`、AGENTS、
 CLAUDE、CONTRIBUTING，以及 Codex／Claude 的 ai-security-scanner skill。
 
+## 報告資料模型只保留終態（`acac84a`）
+
+Rust 與 TypeScript 的 beginner report lifecycle 現在都只能表示 `final`。report builder 遇到
+queued、preparing、running 或 paused 工作會回傳 `RunInProgress`；desktop snapshot 只投影終態
+run；HTML、JSON、framework、OCSF、OSCAL 與 case bundle 共用相同 terminal gate。進行中的工作
+只能從 Progress 查看，不會產生可預覽、可保存或可匯出的報告。
+
+Results、Coverage、Verification、Export、runtime setup、provider authorization、demo 與 scan
+lifecycle 文案已統一成「目前結果＋下一個動作」。缺少報告、結果處理、runtime ownership、catalog
+差異及 historical coverage 都直接顯示狀態與 recovery action；舊 case 中的防禦性句子會先正規化，
+不會再送到畫面或新匯出檔。正式條款仍只出現在報告末端，技術證據仍留在收合細節。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -443,6 +455,11 @@ scanner 或接觸 target。
 `502b70a` 新增後，frontend 569 項、component 252 項、CI contract 32 項、TypeScript typecheck、
 production frontend build、完整 Rust CLI suite、`clippy -D warnings`、format 與 diff check 全部
 通過；build 只有既有的大型 chunk 提示。
+
+`acac84a` 新增後，完整 Rust CLI workspace 1,588 項、frontend 569 項、component 252 項、CI
+contract 32 項、TypeScript typecheck、production frontend build、`clippy -D warnings`、format
+與 diff check 全部通過；build 只有既有的大型 chunk 提示。本輪沒有執行 scanner、刪除 RAM disk
+資料或接觸任何 target。
 
 ## 後續順序
 
