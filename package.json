@@ -3,8 +3,8 @@
   "private": true,
   "version": "0.1.10",
   "release": {
-    "channel": "stable",
-    "target": "0.1.10"
+    "channel": "prerelease",
+    "target": "0.2.0"
   },
   "description": "One guided desktop app for security checks across websites, networks, code, IaC, cloud, containers, and Kubernetes.",
   "license": "Apache-2.0",

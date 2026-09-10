@@ -1155,8 +1155,8 @@ async function main() {
       "utf8",
     );
     if (
-      !publicPrereleaseNotes.includes("Windows pre-release testing notice") ||
-      !publicPrereleaseNotes.includes("public testing pre-release, not a stable deployment") ||
+      !publicPrereleaseNotes.includes("Windows package record") ||
+      !publicPrereleaseNotes.includes("unsigned Windows installers for public testing") ||
       !publicPrereleaseNotes.includes("Authenticode not verified") ||
       !publicPrereleaseNotes.includes("exact-candidate beginner path not observed") ||
       !publicPrereleaseNotes.includes("installed-app lifecycle not observed") ||
@@ -1165,6 +1165,12 @@ async function main() {
       !publicPrereleaseNotes.includes("- NSIS:")
     ) {
       throw new Error("public Windows prerelease did not disclose its exact testing limitations");
+    }
+    if (
+      publicPrereleaseNotes.indexOf("Windows package record") <
+      publicPrereleaseNotes.indexOf("Artifacts offered by this finalized set")
+    ) {
+      throw new Error("Windows package record interrupted the release outcome");
     }
 
     const scopedWindowsInput = path.join(temporary, "windows-only-input");

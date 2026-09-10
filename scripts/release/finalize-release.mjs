@@ -1016,13 +1016,11 @@ async function scopedFinalizeMain() {
     finalized.distribution.platforms
       .find(({ platform }) => platform === "windows-x86_64")
       ?.installers.filter(({ availability }) => availability === "offered");
-  const windowsPrereleaseNotice = offeredWindowsPrereleaseInstallers?.length > 0
+  const windowsPrereleaseRecord = offeredWindowsPrereleaseInstallers?.length > 0
     ? [
-        "## Windows pre-release testing notice",
+        "## Windows package record",
         "",
-        "> This is a public testing pre-release, not a stable deployment. The Windows installers",
-        "> are intentionally available so this build can be tested now. Windows may show an",
-        "> Unknown publisher warning.",
+        "This prerelease includes unsigned Windows installers for public testing. Windows may show an Unknown publisher warning.",
         "",
         ...offeredWindowsPrereleaseInstallers.map(({ installerType, artifact }) => {
           const limitations = [];
@@ -1046,7 +1044,6 @@ async function scopedFinalizeMain() {
     "",
     `Source: \`${commit}\``,
     "",
-    ...windowsPrereleaseNotice,
     ...releaseCopyFor(version).releaseNotes,
     "Artifacts offered by this finalized set:",
     ...offeredLines,
@@ -1059,6 +1056,7 @@ async function scopedFinalizeMain() {
     "provenance requirements, and known limitations are recorded independently for every offered artifact",
     "in release-metadata.json. An absent platform never implies that it passed.",
     "",
+    ...windowsPrereleaseRecord,
   ].join("\n"));
 
   const beforeIndex = (await regularFiles(output))
