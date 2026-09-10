@@ -1,8 +1,10 @@
 # Managed local runtime
 
-Direction: [product-spec.md](product-spec.md) controls product priorities and user-visible behavior. This document describes managed-runtime implementation and safety boundaries only; it cannot create a roadmap, acceptance program, or standing work. Versioning, release timing, packaging, signing, and compliance work begins only when the product owner explicitly requests it.
+Status: current runtime architecture
 
-Runtime implementation may strengthen isolation at an exact component, process, directory, or deletion boundary. It must not hide the application shell, require a beginner to administer WSL, or stop independent work.
+Product behavior: [Product specification](product-spec.md)
+
+The managed runtime executes containerized scanners without turning runtime administration into a user task. Its component, process, directory, ownership, and deletion boundaries isolate disposable scan infrastructure from cases, evidence, reports, and unrelated system state.
 
 ## Product-facing runtime contract
 
@@ -26,7 +28,7 @@ The official Windows install flow owns prerequisite detection and preparation:
 3. The installer records restart-required and durable resume state before it exits. It never restarts Windows without the operating system/user decision.
 4. After restart or relaunch, the application opens the main shell and resumes creation of the private runtime automatically.
 
-Servicing failure, cancellation, or timeout does not roll back otherwise valid application binaries and does not replace the product with a manual setup journey. It makes only runtime-dependent tasks temporarily unavailable, preserves the requested run/task, and offers **Retry**. Projects and reports remain available.
+Servicing failure, cancellation, or timeout marks dependent tasks unavailable and offers **Retry**. The installed application, projects, reports, and independent tasks remain available.
 
 The installer never exposes a generic elevation helper and the desktop never asks a beginner to open Terminal, type `wsl` commands, identify a distribution, or decide which runtime object is safe to remove.
 
@@ -204,7 +206,7 @@ When runtime payload preparation is in scope, its vendor step:
 
 Manifest schema and management-contract revisions identify how bytes are interpreted. Source and binary identities change only through the lock file, with every affected URL, size, SHA-256, source revision, helper identity, and machine image updated together. These integrity controls govern only whether the exact payload may execute; they do not create product priorities or authorize packaging or publication work.
 
-## Maintainer verification
+## Verification
 
 Verify runtime changes in proportion to the risk changed. Relevant checks include:
 
@@ -215,4 +217,4 @@ Verify runtime changes in proportion to the risk changed. Relevant checks includ
 - task-scoped degradation when a runtime, gateway, or engine is unavailable;
 - real execution of the affected engine path when runtime behavior changes.
 
-Modeled and fixture tests support these checks. Product usability is established by the rendered beginner path and a meaningful security scan, not by a runtime diagnostic alone.
+Platform qualification installs the packaged runtime on a fresh runner and records the supported lifecycle, container execution, gateway, cleanup, and application-startup outcomes.

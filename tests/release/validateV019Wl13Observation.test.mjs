@@ -352,38 +352,20 @@ test("WL-13 command reports a missing bundled validator module without leaking a
   assert.equal(result.stderr.includes(" at "), false);
 });
 
-test("WL-13 handoff freezes the portable runtime and lane-only output without a passing record", async () => {
+test("WL-13 history records the bounded technical observation without reviving its operator bundle", async () => {
   const handoff = await readFile(
     path.join(PROJECT_ROOT, "docs", "release", "v0.1.9-windows-wl13-handoff.zh-TW.md"),
     "utf8",
   );
   for (const required of [
-    "5c95572f54220adbd170d9bfb5af3159c56708ef",
-    "f7b5374fff07fca98af06931b2dc0ebc52abc2b3ac5a70a6602001d03a1a065e",
-    "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a",
-    "bd47e26b6c8024eb3461176637d7fce3e8370561",
-    "de31dceede3f1aafcdc222d9c91f68913d69e077baa3a663577d62ac0354973a",
-    "node-v24.15.0-win-x64.zip",
-    "cc5149eabd53779ce1e7bdc5401643622d0c7e6800ade18928a767e940bb0e62",
-    "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
-    "private-diagnostic/wl-13/windows-localhost-fixture-receipt.json",
-    RECORD_RELATIVE_PATH,
-    "validate-v019-wl13-observation.mjs",
-    "v0.1.9-windows-external-candidate-identity.json",
-    "managed-runtime-windows-x86_64.manifest.json",
-    "SHA256SUMS.txt",
-    "release-assets.json",
-    "START-HERE.zh-TW.md",
-    "BUNDLE-SHA256SUMS.txt",
-    "windows-external-qualification-plan.zh-TW.md",
-    "manifest 覆蓋它自身以外的每一份 regular payload file",
-    "C:\\assm-v019-wl13",
-    "不可逐字貼給模型",
-    "不得把 HTML、Technical details、raw target evidence、畫面內容或 logs 放進模型",
-    "不要從本文件複製一份假 passing JSON",
+    "loopback fixture",
+    "技術測試工具",
+    "127.0.0.1:9001",
+    "lifecycle plumbing",
+    "沒有執行新的 scan",
   ]) {
     assert.match(handoff, new RegExp(required.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
   }
-  assert.doesNotMatch(handoff, /candidate-handoff\.json/u);
-  assert.doesNotMatch(handoff, /"evidenceType"\s*:\s*"windows-installed-app-lifecycle"/u);
+  assert.doesNotMatch(handoff, /START-HERE|BUNDLE-SHA256SUMS|不可逐字貼給模型/u);
+  assert.doesNotMatch(handoff, /candidate-handoff\.json|"evidenceType"\s*:\s*"windows-installed-app-lifecycle"/u);
 });

@@ -1,12 +1,12 @@
 # ai-security-scanner architecture
 
-Status: implementation architecture
+Status: current technical architecture
 
-Last updated: 2026-09-06
+Last updated: 2026-09-10
 
-Direction: [product-spec.md](product-spec.md) controls product priorities and user-visible behavior. This document describes implementation boundaries only; it cannot create a roadmap, acceptance program, or standing work. Versioning, release timing, packaging, signing, and compliance work begins only when the product owner explicitly requests it.
+Product behavior: [Product specification](product-spec.md)
 
-This document describes the target architecture. Component names and interfaces are requirements or proposed contracts until corresponding code and tests exist; they are not implementation claims.
+This document defines the component, data, execution, and trust boundaries used to implement the desktop product. Current capability and activation status are recorded in the [product review](product-audit.md) and machine-readable [engine catalog](../engines/catalog.json).
 
 ## 1. Architectural goals
 
@@ -88,9 +88,9 @@ The managed provider may use a legally redistributable container stack or platfo
 
 Every third-party engine executes out of process through an adapter. It receives only the inputs, read-only credentials, mounts, target allowlist, and network destinations declared in its manifest and approved scan contract.
 
-## 4. Suggested repository boundaries
+## 4. Repository boundaries
 
-The implementation should preserve these logical boundaries even if the final package layout differs:
+The repository preserves these logical boundaries across workspace crates and modules:
 
 ```text
 src/                         React application
@@ -701,18 +701,17 @@ If those conditions fail, the result is `unverifiable`, not `resolved`.
 
 Differences caused by an engine, ruleset, mapping, or adapter update are labeled separately from observed environment changes wherever the evidence permits.
 
-### Optional signed application update path
+### Signed application update path
 
-When the product owner requests application-update distribution, the existing Tauri path uses
-signed updater artifacts and one fixed HTTPS endpoint. The public key is compiled into the
+The Tauri update path uses signed updater artifacts and one fixed HTTPS endpoint. The public key is compiled into the
 application; private material stays outside the product. The client validates the selected
 current-platform payload, URL, signature, and digest before applying it.
 
 Invalid material blocks only that requested update. The installed application, projects, reports,
 unsigned exports, and admitted scanners remain usable. Case validity is independent of update
-availability, and historical runs keep their captured provenance. Updater signatures are not
-represented as Apple notarization, Apple Developer ID, or Windows Authenticode. Which platforms or
-channels are distributed remains a product-owner decision, not an architecture prerequisite.
+availability, and historical runs keep their captured provenance. Updater signatures are distinct
+from Apple notarization, Apple Developer ID, and Windows Authenticode. Release metadata records the
+distributed platforms and channel.
 
 ## 17. Demo data
 
@@ -724,7 +723,7 @@ Claude/Codex skills call documented application or maintenance commands. They ma
 
 The durable scope grant is produced inside the canonical combined Start interaction. Skills cannot supply the user's public/internal assertion, widen an existing contract, or enable a deeper/active activity on the user's behalf.
 
-## 19. Implementation evidence
+## 19. Verification
 
 Architecture changes are verified in proportion to the behavior and risk they change. Evidence should show that:
 
@@ -740,4 +739,4 @@ Architecture changes are verified in proportion to the behavior and risk they ch
 - exports disclose omissions and distinguish package integrity from scan correctness;
 - re-verification does not mark an unrun check as resolved, and demo data cannot be confused with a real result.
 
-Rendered beginner-path tests and real engine execution carry the most product value. Unit, schema, and security-boundary tests support those outcomes; none independently chooses product priority or authorizes version, release, signing, packaging, or compliance work.
+Rendered beginner-path tests and real engine execution provide product evidence. Unit, schema, and security-boundary tests protect the contracts underneath that path.

@@ -1,12 +1,12 @@
 # ai-security-scanner threat model
 
-Status: design-time threat model
+Status: current technical threat model
 
-Last updated: 2026-09-03
+Last updated: 2026-09-10
 
-Direction: [product-spec.md](product-spec.md) controls product priorities and user-visible behavior. This document identifies technical threats and security controls only; it cannot create a roadmap, acceptance program, or standing work. Versioning, release timing, packaging, signing, and compliance work begins only when the product owner explicitly requests it. Concrete scope, credential, destructive-action, evidence-integrity, and untrusted-code boundaries remain mandatory for the operation they protect.
+Product behavior: [Product specification](product-spec.md)
 
-This document defines threats and required controls for the intended product. It does not assert that the controls are implemented or that the product has passed a security review. Risk acceptance requires an explicit repository decision; silence is not acceptance.
+This document defines the product's protected assets, threats, trust boundaries, and required controls. Implementation status is recorded in code, tests, the [product review](product-audit.md), and exact release evidence. Risk acceptance is an explicit product decision.
 
 ## 1. Scope
 

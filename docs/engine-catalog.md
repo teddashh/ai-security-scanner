@@ -1,8 +1,12 @@
 # ai-security-scanner engine catalog
 
-Status: current source catalog companion. The machine-readable [`engines/catalog.json`](../engines/catalog.json) is authoritative for exact versions, source revisions, image digests, runnable state, provider applicability, knowledge dates, and license dispositions. Product direction comes from the [product specification](product-spec.md); this catalog does not set roadmap, version, publication, or compliance priorities.
+Status: current source catalog companion
 
-Last updated: 2026-09-08
+Last updated: 2026-09-10
+
+Exact artifact facts: [`engines/catalog.json`](../engines/catalog.json)
+
+Product behavior: [Product specification](product-spec.md)
 
 This document answers two questions: what each upstream engine actually checks, and what the product adapter is allowed to do around it. An engine being present does not mean every product path performs a vulnerability scan.
 

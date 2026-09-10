@@ -17,6 +17,8 @@ const CURRENT_PRODUCT_DOCUMENTS = [
   ".codex/skills/ai-security-scanner/SKILL.md",
   ".claude/skills/ai-security-scanner/SKILL.md",
   "mappings/README.md",
+  "docs/README.md",
+  "docs/README.zh-TW.md",
   "docs/architecture.md",
   "docs/engine-catalog.md",
   "docs/engine-maintenance.md",
@@ -24,6 +26,14 @@ const CURRENT_PRODUCT_DOCUMENTS = [
   "docs/product-audit.md",
   "docs/product-spec.md",
   "docs/provider-authorization.md",
+  "docs/getting-started.md",
+  "docs/getting-started.zh-TW.md",
+  "docs/scanning-scope.md",
+  "docs/scanning-scope.zh-TW.md",
+  "docs/results-and-exports.md",
+  "docs/results-and-exports.zh-TW.md",
+  "docs/releasing.md",
+  "docs/releasing.zh-TW.md",
   "docs/release/README.md",
   "docs/release/engine-image-supply-chain.md",
   "docs/research/vibescan-evaluation.md",
@@ -90,7 +100,7 @@ test("Codex, Claude, contributors, and the operator skill use the same prioritie
   );
 });
 
-test("beginner-facing documentation leads to real scans and labels TCP as connectivity", async () => {
+test("beginner documentation leads with the three scan paths and one report", async () => {
   const english = await load("README.md");
   const chinese = await load("README.zh-TW.md");
 
@@ -99,20 +109,30 @@ test("beginner-facing documentation leads to real scans and labels TCP as connec
     assert.match(content, /project|專案/iu);
     assert.match(content, /report|報告/iu);
     assert.match(content, /TCP/u);
-    assert.match(content, /not a vulnerability scan|不是漏洞掃描|不是弱點掃描|不等於弱點掃描/iu);
     assert.match(content, /Nuclei/u);
-    // The website path is upstream-driven: Nuclei's technology detection
-    // selects read-only templates from the pinned snapshot, so the README
-    // describes that boundary instead of a hand-picked check count or a fixed
-    // request budget.
+    assert.match(content, /read-only|唯讀/u);
+    assert.match(content, /internal system|內部系統/iu);
+    assert.match(content, /Start scan|開始掃描/u);
+    assert.match(content, /scanning-scope(?:\.zh-TW)?\.md/u);
+  }
+  assert.match(english, /One report for every selected asset/u);
+  assert.match(chinese, /所有資產集中在一份報告/u);
+});
+
+test("scope documentation keeps exact website and connectivity boundaries in technical detail", async () => {
+  const english = await load("docs/scanning-scope.md");
+  const chinese = await load("docs/scanning-scope.zh-TW.md");
+
+  for (const content of [english, chinese]) {
+    assert.match(content, /scheme:\/\/host:port/u);
+    assert.match(content, /Nuclei/u);
     assert.match(content, /read-only|唯讀/u);
     assert.match(content, /follow redirects|跟隨重新導向/u);
-    assert.match(content, /does not replace a penetration test|不能取代滲透測試/u);
-    assert.match(content, /does not mean all [\d,]+ templates ran|不代表 [\d,]+ 個模板全部執行/u);
-    assert.match(content, /scheme:\/\/host:port/u);
+    assert.match(content, /127\.0\.0\.1:9001/u);
+    assert.match(content, /not a vulnerability scan|不是弱點掃描/u);
   }
-  assert.match(english, /entire `scheme:\/\/host:port` origin, not only the path/u);
-  assert.match(chinese, /整個 `scheme:\/\/host:port` 網站來源範圍，不只是在網址中輸入的路徑/u);
+  assert.match(english, /other paths on the same origin/u);
+  assert.match(chinese, /同一 origin 內的其他 path/u);
 });
 
 test("release records and optional mappings do not choose the roadmap", async () => {

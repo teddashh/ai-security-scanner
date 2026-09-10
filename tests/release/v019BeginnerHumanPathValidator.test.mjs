@@ -211,28 +211,22 @@ test("v0.1.9 beginner validator rejects command-line path or identity overrides"
   failedSummary(runValidator(root, ["--dir", "somewhere-else"]), "ARGUMENT_OVERRIDE_REJECTED");
 });
 
-test("v0.1.9 beginner handoff freezes the two-payload observer contract without shipping a passing record", async () => {
+test("v0.1.9 beginner history records the uncompleted observation without reviving its operator plan", async () => {
   const handoff = await readFile(
     path.join(projectRoot, "docs", "release", "v0.1.9-windows-beginner-handoff.zh-TW.md"),
     "utf8",
   );
   for (const required of [
-    "Clean BEGINNER guest payload",
-    "Observer payload",
-    "5c95572f54220adbd170d9bfb5af3159c56708ef",
-    "34096606710",
-    "10010021177",
-    "sha256:758e86e59ef2f033847f67009173196d320a2e04d5e9c0f1e2369fb3a3b238fb",
-    "f7b5374fff07fca98af06931b2dc0ebc52abc2b3ac5a70a6602001d03a1a065e",
-    "請安裝 ai-security-scanner，並用它檢查這台電腦的 127.0.0.1:9001。",
-    "Participant 一啟動 installer，Codex／facilitator 立即切換為 observe-only",
-    "validate-v019-beginner-human-path.mjs",
-    "v0.1.9-windows-external-candidate-identity.json",
+    "當時規劃的新手觀察沒有執行完成",
+    "127.0.0.1:9001",
+    "不是漏洞",
+    "網站或本機專案實際流程",
+    "當時沒有完成新手參與者觀察",
   ]) {
     assert.match(handoff, new RegExp(required.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
   }
-  assert.doesNotMatch(handoff, /"evidenceType"\s*:\s*"beginner-human-path"/u);
-  assert.doesNotMatch(handoff, /CANDIDATE_HANDOFF_|REQUESTED_LANE|V0\.1\.9_RELEASE_URL/u);
+  assert.doesNotMatch(handoff, /Clean BEGINNER guest payload|Observer payload|facilitator 立即切換/u);
+  assert.doesNotMatch(handoff, /"evidenceType"\s*:\s*"beginner-human-path"|CANDIDATE_HANDOFF_|REQUESTED_LANE/u);
 
   const identity = JSON.parse(await readFile(
     path.join(projectRoot, "docs", "release", "v0.1.9-windows-external-candidate-identity.json"),

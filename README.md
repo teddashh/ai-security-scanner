@@ -1,85 +1,70 @@
 # ai-security-scanner
 
-[繁體中文](README.zh-TW.md)
+[繁體中文](README.zh-TW.md) · [Documentation](docs/README.md) · [Releases](https://github.com/teddashh/ai-security-scanner/releases)
 
-## Find security problems without learning a collection of tools
+One desktop app for security checks across repositories, websites, and internal systems. Select the assets, start one scan, and receive one prioritized report with findings, affected assets, evidence, and next actions.
 
-`ai-security-scanner` is a desktop scanner for developers, small teams, and IT owners who want useful findings and clear next steps.
+## Start here
 
-Choose the repositories, internal systems, endpoints, and websites you own or are allowed to assess. The app runs the applicable checks and keeps the results in one report that shows which assets need attention.
+Download the installer for your operating system from [GitHub Releases](https://github.com/teddashh/ai-security-scanner/releases):
 
-## What should I scan first?
+| Platform | Installer |
+| --- | --- |
+| Windows x86-64 | NSIS `.exe` or `.msi` |
+| macOS | Universal `.dmg` |
+| Linux x86-64 | Debian `.deb` |
 
-### Scan one IT environment
+Open the app and choose one path:
 
-Use one compact setup to add multiple repository folders, complete website or API URLs, and approved internal systems. For each internal system, enter one exact hostname or IP address. Common TCP ports are ready by default; an optional Advanced control lets you replace them with up to 64 exact ports. Review one plan and press Start once.
+- **Scan my IT environment** combines multiple project folders, websites, and approved internal systems in one run.
+- **Check a website** scans one exact web origin with a reviewed Nuclei profile.
+- **Check a project folder** scans a read-only local snapshot for secrets, vulnerable dependencies, risky code, and unsafe configuration.
 
-Internal systems are not divided into vendor-specific paths. The app passes the exact approved host and ports to a pinned Greenbone Community Feed profile. Greenbone detects the exposed products and services, applies the upstream remote checks whose prerequisites match, and returns the findings. Network appliances, servers, workstations, and other TCP-speaking systems all use this same upstream-driven path.
+Review the exact assets and network boundaries, then select **Start scan**. Results open when the run finishes.
 
-The default profile does not use credentials, expand to neighboring hosts, try default passwords, run denial-of-service checks, or perform local authenticated patch inspection. A completed zero-finding run means Greenbone returned no findings from its applicability-driven checks on the displayed ports. It does not mean that every feed test ran or that the whole device is secure.
+## One report for every selected asset
 
-When you need to check only one item, use a quick shortcut into the same project model:
+The report leads with:
 
-- **Website or API.** Enter one exact public `http://` or `https://` URL. Nuclei identifies the website technology and selects matching read-only vulnerability and exposure checks from 4,674 eligible templates in the pinned upstream snapshot. The profile is limited to 10 requests per second, 5 concurrent requests, and a 10-second per-request timeout.
+- assets with confirmed problems;
+- the highest-priority findings and their impact;
+- the smallest practical next action and a way to verify the fix;
+- completed checks and untested work for each asset;
+- original scanner identifiers, severity, evidence, and remediation in technical details.
 
-  The scan boundary is the entire `scheme://host:port` origin, not only the path entered in the URL. The path is retained as context while applicable upstream templates may request other paths on that origin. Do not use this quick profile if you are authorized to test only a specific path. It does not sign in, submit forms or request bodies, follow redirects, use out-of-band callbacks, or run exploit-oriented checks, and it does not replace a penetration test. Because Nuclei selects templates from detected technology, completion does not mean all 4,674 templates ran.
+Completed results remain available when an independent check fails. Reports can be reopened, compared with later runs, and exported as readable HTML or structured data.
 
-- **Local code or AI project.** Choose a project folder. The app scans a private read-only snapshot for applicable risky code patterns, exposed secrets, vulnerable dependencies, and configuration problems.
+## What runs
 
-  Common secret-bearing files such as `.env`, private keys, and `*.tfvars` remain available to the secret scanners even when ignored by Git; ignored dependency, build, and cache directories stay excluded. The app does not upload or modify the project, push changes, or test detected credentials against live services.
+| Selected asset | Security checks |
+| --- | --- |
+| Project folder | Gitleaks, TruffleHog, Semgrep, Trivy, Grype, Checkov, and KICS inspect an isolated read-only snapshot when applicable. |
+| Website or API | Nuclei detects the site's technology and selects matching read-only checks from the pinned upstream template snapshot. |
+| Internal system | Greenbone detects exposed services on the approved host and ports, then applies matching remote checks from the pinned Community Feed. |
+| Infrastructure, cloud, container, or Kubernetes source | The applicable upstream profile runs against the exact selected source and scope. |
 
-- **Infrastructure artifact or container image.** Choose infrastructure-as-code files, Kubernetes manifests, or an exported container image. The app checks the exact selected artifact for applicable configuration, package, and known-vulnerability issues.
+Inventory and the localhost TCP utility are supporting tools. They describe assets or connectivity; security findings come from the applicable security checks.
 
-  It does not deploy infrastructure or run the container image. Live cloud and cluster checks are separate advanced paths with their own scope.
-
-Supported cloud accounts, infrastructure artifacts, and other specialist sources remain available when you need them.
-
-## Inventory and connectivity are not vulnerability scans
-
-The collapsed **Test local service connection at 127.0.0.1:9001** utility makes one payload-free TCP connection attempt. It tells you only whether that exact port accepted, refused, or timed out. It is a connectivity check, not a vulnerability scan.
-
-That shortcut does not check vulnerabilities, HTTP behavior, other ports, or the rest of the computer. Asset inventory, an open port, or a responding service can help select a later check, but none is a vulnerability result. Likewise, “reachable,” “closed,” and “no findings” never mean “secure.” The report names the checks that actually ran.
-
-## Start in three steps
-
-1. **Install the app.** Download a desktop installer from [GitHub Releases](https://github.com/teddashh/ai-security-scanner/releases).
-2. **Build the scan project.** Add the repositories, websites, and exact approved internal hosts you want to check—or use a single-target shortcut. Review the exact assets and ports, then press Start once.
-3. **Use the unified report.** Every selected asset is shown as problems found, no problems in completed checks, incomplete or failed, or not tested. Start with the assets that need attention and keep every stated limit with the result.
-
-For the most useful first result, select real assets you understand and run their applicable security checks. Use the collapsed localhost utility only when you specifically need a port-connectivity check.
-
-## How to read the result
-
-Every report answers these practical questions:
-
-- **What did I ask to scan?** The selected target and limits.
-- **What was actually tested?** The checks and target dimensions that completed.
-- **What was not tested?** Failed, unavailable, excluded, timed-out, or cancelled work.
-- **Which assets have problems?** Prioritized findings with severity, confidence, and affected item.
-- **What should I do next?** A bounded action and the type of expert to involve when needed.
-
-A report may be complete, partial, or contain no completed checks. Completed work is kept even if another check fails. Projects and reports can be reopened, compared with later scans, and exported as readable HTML or structured data.
+Exact scan boundaries and profile behavior are documented in [Scanning scope](docs/scanning-scope.md).
 
 ## Data and authorization
 
-Projects, findings, and evidence stay on your device unless you deliberately connect an external source or export them. The app does not automatically remediate a target.
+Cases, findings, and evidence stay on the device until an external source is connected or a report is exported. Local folders are copied into bounded read-only snapshots. Network scanners contact only the targets and ports confirmed on Review.
 
-Only scan systems you own or are authorized to assess. Case data relies on your operating-system account and disk protection; the app does not add its own encryption at rest.
+Use network scanning only for assets you own or are authorized to assess. The app does not apply remediation automatically.
 
-## Browser preview
+## Documentation
 
-The browser preview is only for exploring the interface. It uses clearly labeled sample data and never runs a scanner or contacts a target.
-
-```sh
-npm ci
-npm run dev
-```
-
-Open the local address printed by Vite. Node.js 24 or newer is required.
+- [Getting started](docs/getting-started.md)
+- [Scanning scope](docs/scanning-scope.md)
+- [Results and exports](docs/results-and-exports.md)
+- [Documentation index](docs/README.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
 
 ## Development
 
-Source development requires Node.js 24 or newer, Rust 1.98, and Tauri's platform dependencies for desktop builds.
+Development requires Node.js 24 or newer, Rust 1.98, and the platform dependencies required by Tauri.
 
 ```sh
 npm ci
@@ -87,10 +72,12 @@ npm run typecheck
 npm run test:frontend
 npm run test:component
 npm run build
-cargo test --workspace --no-default-features --features cli
+cargo test --locked --workspace --no-default-features --features cli
 npm run tauri dev
 ```
 
+`npm run dev` opens a browser preview with sample data. Desktop scanning runs through the Tauri application.
+
 ## License
 
-Project-owned source is licensed under [Apache-2.0](LICENSE). Third-party tools and data retain their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).
+Project-owned source is licensed under [Apache-2.0](LICENSE). Third-party engines and data retain their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).

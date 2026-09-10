@@ -16,9 +16,6 @@ import {
 import { WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY } from "../../scripts/release/windows-installed-lifecycle-evidence.mjs";
 
 const RECEIPT_FILENAME = "windows-localhost-fixture-receipt.json";
-const DOCUMENTED_POWERSHELL_INVOCATION =
-  "& '<absolute-runtime-directory>\\node.exe' '<absolute-version-pinned-checkout>\\scripts\\release\\windows-localhost-fixture.mjs' --receipt '<absolute-existing-directory>\\windows-localhost-fixture-receipt.json'";
-
 test("Windows localhost fixture contract pins one immutable endpoint and response fingerprint", () => {
   assert.equal(Object.isFrozen(WINDOWS_LOCALHOST_FIXTURE_CONTRACT), true);
   assert.deepEqual(WINDOWS_LOCALHOST_FIXTURE_CONTRACT, {
@@ -77,7 +74,7 @@ test("Windows localhost fixture pins and validates one portable Windows Node run
   }
 });
 
-test("both qualification plans document the same unambiguous absolute PowerShell invocation", async () => {
+test("the historical glossaries keep the localhost fixture out of the current qualification path", async () => {
   const fixtureBytes = await readFile(new URL("../../scripts/release/windows-localhost-fixture.mjs", import.meta.url));
   assert.equal(
     createHash("sha256").update(fixtureBytes).digest("hex"),
@@ -88,9 +85,10 @@ test("both qualification plans document the same unambiguous absolute PowerShell
     "windows-external-qualification-plan.zh-TW.md",
   ]) {
     const document = await readFile(new URL(`../../docs/release/${filename}`, import.meta.url), "utf8");
-    assert.equal(document.includes(DOCUMENTED_POWERSHELL_INVOCATION), true, filename);
-    assert.equal(document.includes(WINDOWS_LOCALHOST_FIXTURE_SCRIPT_POLICY.sha256), true, filename);
-    assert.equal(document.includes(".<runtime-directory>\\node.exe"), false, filename);
+    assert.match(document, /127\.0\.0\.1:9001/u, filename);
+    assert.match(document, /not a current test plan|不是目前測試計畫/u, filename);
+    assert.match(document, /performs no security check|沒有執行任何安全檢查/u, filename);
+    assert.doesNotMatch(document, /absolute-runtime-directory|windows-localhost-fixture\.mjs/u, filename);
   }
 });
 

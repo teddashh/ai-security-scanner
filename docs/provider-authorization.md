@@ -1,12 +1,14 @@
 # Provider-native authorization and isolated bootstrap
 
-Direction: [product-spec.md](product-spec.md) controls product priorities and user-visible behavior. This document describes the Advanced provider-authorization feature and its security boundaries only; it cannot create a roadmap, acceptance program, or standing work. Versioning, release timing, packaging, signing, and compliance work begins only when the product owner explicitly requests it.
+Status: current Advanced cloud architecture
+
+Product behavior: [Product specification](product-spec.md)
 
 Product integration rule: cloud is reached through **Settings → Advanced** or an explicitly selected cloud target. Missing, expired, rejected, or interrupted provider authorization marks only the exact cloud target-stage-engine task `not_tested`/`failed`; the run is persisted first, independent tasks continue, and the beginner master report names the coverage gap. Provider setup is not a fifth primary destination and cannot gate New scan, Projects, Report, or Settings.
 
 `ai-security-scanner` supports AWS, Azure, Google Cloud, and Microsoft 365 without accepting a provider password, long-lived access key, refresh token, application secret, or administrator credential through the frontend. The preferred path uses the provider's public-client protocol. The optional bootstrap path runs in the separately packaged `ai-security-scanner-bootstrap-broker` process when a dedicated read-only identity must be created.
 
-This feature does not ship sample OAuth client IDs. Azure, Microsoft 365, and Google deployments must register their own public client. Values such as all-zero UUIDs, example Google client IDs, and unknown JSON fields are rejected.
+Azure, Microsoft 365, and Google deployments register their own public client. The product rejects placeholder identifiers and unknown configuration fields.
 
 ## Advanced connection setup file
 
@@ -159,7 +161,7 @@ The native application exposes these Tauri commands and matching methods in `src
 - `cleanup_provider_bootstrap`: reauthenticates in the isolated broker and updates every exact cleanup item durably.
 - `list_provider_bootstrap_cleanup`: returns only operation/provider/case/schema/status/count/timestamp summaries; resource IDs, endpoints, and credentials remain backend-only. The CLI exposes the same projection through `bootstrap cleanup-list CASE_ID` and `bootstrap cleanup-show CASE_ID OPERATION_ID`.
 
-The Advanced provider panel exposes both paths without accepting a password or client secret. The current implementation still places this panel in the shared Coverage journey; that is a tracked product gap and not the target information architecture. The target panel binds the selected case source to a fixed engine set and provider-specific bounded checkout ceiling, shows only the non-secret user code or PKCE authorization URL, polls at the provider-supplied interval, and makes revocation visible. Provider links are opened by the operating-system browser through Tauri's opener capability. Both the frontend validator and the Tauri permission scope restrict those links to the AWS, Microsoft, and Google provider hosts used by these flows.
+The Advanced provider panel exposes both paths without accepting a password or client secret. It binds the selected case source to a fixed engine set and provider-specific bounded checkout ceiling, shows only the non-secret user code or PKCE authorization URL, polls at the provider-supplied interval, and makes revocation visible. Provider links open in the operating-system browser through Tauri's opener capability. The frontend validator and Tauri permission scope restrict those links to the AWS, Microsoft, and Google provider hosts used by these flows.
 
 The Advanced bootstrap disclosure first shows the immutable operation list, provider endpoint hosts, embedded template hash, expiry, and cleanup obligations. Only a separate confirmation starts the isolated process. That confirmation authorizes one exact provider mutation; it does not govern unrelated scans or development work.
 
@@ -195,6 +197,6 @@ Cleanup order removes Azure/Microsoft assignments before service principals and 
 
 Changing an administrator password is not cleanup by itself. Existing sessions, refresh tokens, application credentials, grants, roles, and provider identities must be handled as separate exact obligations.
 
-## Feature verification
+## Verification
 
-Verify provider authorization in proportion to the account and credential risk changed. Tests should demonstrate that administrative material never reaches engines or persistence, provider mutations stay within the disclosed operation, cleanup remains exact and recoverable, expired capabilities do not become authorization, and unavailable cloud access leaves unrelated local work plus an honest partial report available. These checks protect real external accounts; they do not choose the product roadmap or substitute for testing the rendered beginner scan and report path.
+Verification demonstrates that administrative material never reaches engines or persistence, provider mutations stay within the displayed operation, cleanup remains exact and recoverable, expired capabilities do not become authorization, and unavailable cloud access leaves unrelated local work plus its recorded result available.

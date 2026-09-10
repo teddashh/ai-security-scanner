@@ -1,6 +1,6 @@
 # Engine maintenance procedure
 
-This procedure keeps each scanner close to its upstream project while preserving safe product operation and a consistent professional report. The [product specification](product-spec.md) controls priorities; this maintenance reference cannot create version, publication, or compliance work. The machine-readable catalog owns exact artifact facts, and [engine-catalog.md](engine-catalog.md) owns the public capability description.
+This procedure keeps each scanner close to its upstream project while preserving safe product operation and one professional report. The machine-readable catalog owns exact artifact facts, [engine-catalog.md](engine-catalog.md) owns the public capability description, and the [product specification](product-spec.md) owns product behavior.
 
 ## 1. Default decision: update upstream, not a private detector
 
@@ -11,7 +11,7 @@ For every change, classify it before implementation:
 3. **Report-layer update:** shared normalization, localization, deduplication, prioritization, or product-authored guidance after upstream results have been preserved.
 4. **Detector behavior change:** a change to what the scanner detects, how it assigns its native severity, or what remediation it emits. This belongs upstream and must not be implemented casually in a wrapper.
 
-Choose an upstream-supported CLI/API/configuration first. If it cannot express the required capability, prefer contributing upstream or selecting another upstream engine. A downstream detector patch is a temporary exception only when a concrete user-critical capability has no safe upstream alternative.
+Choose an upstream-supported CLI/API/configuration first. If it cannot express the required capability, contribute upstream or select another upstream engine. A downstream detector patch is a narrow, hash-bound exception with a defined removal condition.
 
 ## 2. Thin-adapter boundary
 

@@ -1,6 +1,8 @@
 # Evidence-to-control mappings
 
-Direction: [product-spec.md](../docs/product-spec.md) controls product priorities and the professional report. This document describes an optional report-reference layer only; it cannot create a roadmap, acceptance program, or standing work. Versioning, release timing, packaging, signing, and compliance work begins only when the product owner explicitly requests it. NIST, ISO 27001, and AIDEFEND relationships are never scan prerequisites, coverage proof, or pass/fail results.
+Status: optional report-reference layer
+
+Product behavior: [Product specification](../docs/product-spec.md)
 
 `control-mappings.json` is the versioned, checked-in catalog used to add
 control references to normalized findings. A reference means only that the

@@ -1,16 +1,14 @@
 # Third-party inventory for ai-security-scanner
 
-Status: current source and artifact inventory; generated evidence is artifact-specific
+Status: current source and artifact inventory
 
-Last updated: 2026-09-06
+Last updated: 2026-09-10
 
-This is an artifact and license inventory, not a product specification or roadmap. The [product specification](docs/product-spec.md) controls user-visible behavior and priorities. Update source and license facts when an engine relationship changes. Distribution work begins only when the product owner explicitly requests it.
+Exact engine artifacts: [`engines/catalog.json`](engines/catalog.json)
 
-`ai-security-scanner` orchestrates independent upstream projects. This file explains their current artifact relationships and also retains research projects that are not product dependencies. [`engines/catalog.json`](engines/catalog.json) is authoritative for the exact engine source, artifact digest, runnable state, blockers, and license disposition. The managed-runtime manifest is authoritative for platform-specific runtime files. This narrative cannot make a missing artifact runnable or prove that an external artifact exists.
+`ai-security-scanner` orchestrates independent upstream projects. This file records their source, artifact, license, notice, and distribution relationships, including research projects that are not product dependencies. Platform runtime files are recorded by the managed-runtime manifest.
 
-The applicable terms are those attached to each exact source revision and distributed artifact, including its dependencies, images, plugins, rules, templates, feeds, and databases. When the product owner requests distribution, the artifact workflow generates locked dependency notices, engine notices, managed-runtime component inventories, and SPDX/CycloneDX SBOMs from the resolved bytes. This source inventory is not a substitute for that artifact-specific evidence or for legal advice.
-
-The `ai-security-scanner` repository currently carries the Apache License 2.0 in the root `LICENSE` file. That license covers this project's own work only and does not replace, relicense, or override any third-party terms recorded here.
+Release automation generates locked dependency notices, engine notices, managed-runtime inventories, and SPDX/CycloneDX SBOMs from the resolved release bytes. The root Apache License 2.0 covers project-owned work; each third-party source and artifact retains its own terms.
 
 ## Disposition labels
 
