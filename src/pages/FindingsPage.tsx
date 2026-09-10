@@ -222,8 +222,8 @@ const copy = {
     zhTW: "掃描需要處理",
   },
   emptyUnknownTitle: {
-    en: "No problems are shown, but some sources still need data",
-    zhTW: "目前沒有顯示問題，但有些來源還需要資料",
+    en: "No problems shown; source data missing",
+    zhTW: "沒有顯示問題；缺少來源資料",
   },
   emptyCompletedTitle: {
     en: "No problems were observed in the work that completed",
@@ -238,8 +238,8 @@ const copy = {
     zhTW: "請到「掃描進度」重試未完成的檢查。",
   },
   emptyUnknownDescription: {
-    en: "Sources still needing usable information: {count}. Open Scan setup to connect or check them.",
-    zhTW: "還有 {count} 個來源沒有提供可用資訊。打開掃描設定即可連接或確認。",
+    en: "Sources without usable information: {count}. Open Scan setup to connect or check them.",
+    zhTW: "沒有可用資訊的來源：{count} 個。打開掃描設定即可連接或確認。",
   },
   emptyCompletedDescription: {
     en: "The completed checks recorded no issues in their tested scope. Sources included: {count}. Open Scan setup to review exactly what was included.",

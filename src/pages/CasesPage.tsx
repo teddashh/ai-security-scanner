@@ -227,7 +227,7 @@ const pageCopy = {
     zhTW: "頁面路徑 {path} 只會保留作為參考。Nuclei 會以適用的上游模板檢查畫面所列網站來源範圍 {origin}，不會限制於 {path}。如果只獲准測試特定路徑，請勿使用此快速掃描。",
   },
   websitePreparedInternal: {
-    en: "The page path {path} is kept for reference. The fixed Nuclei quick profile checks the displayed internal website origin {origin}; it is not limited to {path}. On the next screen, you must confirm access to this exact internal network target before Start is available. If you are allowed to test only a specific path, do not use this quick scan.",
+    en: "The page path {path} is kept for reference. The fixed Nuclei quick profile checks the displayed internal website origin {origin}; it is not limited to {path}. Start requires explicit access confirmation for this exact internal network target on the next screen. If authorization covers only a specific path, do not use this quick scan.",
     zhTW: "頁面路徑 {path} 只會保留作為參考。固定的 Nuclei 快速設定會檢查畫面所列的內部網站來源範圍 {origin}，不會限制於 {path}。在下一頁明確確認可存取這個精確的內部網路目標後，才能開始掃描。如果只獲准測試特定路徑，請勿使用此快速掃描。",
   },
   websiteQueryRemoved: {
@@ -237,8 +237,8 @@ const pageCopy = {
   publicTargets: { en: "Public domains, IP addresses, or small network ranges", zhTW: "公開網域、IP 或小型網段" },
   publicTargetsPlaceholder: { en: "example.com\n203.0.113.10\n203.0.113.0/28", zhTW: "example.com\n203.0.113.10\n203.0.113.0/28" },
   publicTargetsHelp: {
-    en: "Enter one hostname, IP address, or CIDR range per line—without a protocol, path, port, or sign-in details. You can review the list before anything runs.",
-    zhTW: "每行輸入一個主機名稱、IP 或 CIDR 網段；不要加入通訊協定、路徑、連接埠或登入資訊。開始前仍可檢查與調整清單。",
+    en: "Enter one hostname, IP address, or CIDR range per line—without a protocol, path, port, or sign-in details. Review the list before Start.",
+    zhTW: "每行輸入一個主機名稱、IP 或 CIDR 網段；不要加入通訊協定、路徑、連接埠或登入資訊。開始前請檢查清單。",
   },
   internalTargets: { en: "Internal IP addresses or small network ranges", zhTW: "內部 IP 或小型網段" },
   internalTargetsPlaceholder: { en: "10.20.0.8\n10.20.1.0/28", zhTW: "10.20.0.8\n10.20.1.0/28" },
@@ -263,12 +263,12 @@ const pageCopy = {
     en: "Enter an internal IP address or a small network range below.",
     zhTW: "請在下方輸入一個內部 IP 或小型網段。",
   },
-  localNetworkAmbiguousTitle: { en: "Choose the exact network yourself", zhTW: "請自行指定正確網路" },
+  localNetworkAmbiguousTitle: { en: "Exact local network required", zhTW: "需要精確的區域網路" },
   localNetworkAmbiguousBody: {
     en: "Enter the exact internal IP address or range below.",
     zhTW: "請在下方輸入精確的內部 IP 或網段。",
   },
-  localNetworkUnavailableTitle: { en: "Enter the local network manually", zhTW: "請手動輸入區域網路" },
+  localNetworkUnavailableTitle: { en: "Local network detection unavailable", zhTW: "無法偵測區域網路" },
   localNetworkUnavailableBody: {
     en: "Enter the internal IP address or small network range below.",
     zhTW: "請在下方輸入內部 IP 或小型網段。",
@@ -326,10 +326,10 @@ const pageCopy = {
     en: "Choose the kind of answers you want. You can fine-tune the actual scan before it runs.",
     zhTW: "選擇你想得到哪類答案；正式開始前仍可微調掃描內容。",
   },
-  activeWarningTitle: { en: "Active testing is not authorized yet", zhTW: "選擇主動測試不等於已授權" },
+  activeWarningTitle: { en: "Active testing requires separate authorization", zhTW: "主動測試需要另行授權" },
   activeWarning: {
-    en: "Before active testing, you must separately confirm ownership, exact targets and ports, rate and time limits, and a traceable written authorization reference.",
-    zhTW: "開始主動測試前，仍須另外確認所有權、精確目標與連接埠、速度與時間限制，以及可追溯的書面授權。",
+    en: "Required before active testing: confirmed ownership, exact targets and ports, rate and time limits, and a traceable written authorization reference.",
+    zhTW: "開始主動測試前必須確認：所有權、精確目標與連接埠、速度與時間限制，以及可追溯的書面授權。",
   },
   dataTypes: { en: "Data this case may involve", zhTW: "這個案件可能涉及哪些資料" },
   dataTypesHelp: {
@@ -371,7 +371,7 @@ const pageCopy = {
   baseline: { en: "Finished baseline run", zhTW: "已結束的基準掃描" },
   baselineSelected: { en: "This earlier scan is ready for comparison.", zhTW: "已選好先前掃描，可以開始比較。" },
   baselineChoose: { en: "Choose a finished run.", zhTW: "請選擇一個已結束的掃描。" },
-  activeRun: { en: "{label} is still active. Resume or cancel it first.", zhTW: "{label} 尚未結束，請先續跑或取消。" },
+  activeRun: { en: "{label} is active. Available actions: Resume or Cancel.", zhTW: "{label} 尚未結束。可用操作：續跑或取消。" },
   verificationOutcome: {
     en: "When the new scan finishes, the case will show resolved, still present, new, and unverifiable results.",
     zhTW: "新掃描完成後，案件會列出已解決、仍存在、新增與無法確認的結果。",
@@ -384,8 +384,8 @@ const pageCopy = {
     zhTW: "資料來源狀態：未連接。開啟掃描設定並連接資料來源。",
   },
   unknownZeroDetails: {
-    en: "Candidate list status: waiting for a connected source.",
-    zhTW: "候選清單狀態：等待連接資料來源。",
+    en: "Candidate list status: no connected source.",
+    zhTW: "候選清單狀態：沒有已連接的資料來源。",
   },
   connectedZeroTitle: { en: "No systems were found this time", zhTW: "這次沒有找到系統" },
   connectedZero: {
@@ -403,8 +403,8 @@ const pageCopy = {
     zhTW: "請打開「掃描進度」，從中斷處繼續，或取消未完成的工作。",
   },
   interruptedDetails: {
-    en: "Run {id} kept a restart checkpoint. The app will not reconnect automatically.",
-    zhTW: "掃描輪次 {id} 已保留接續點；應用程式不會自動重新連線。",
+    en: "Run {id} restart checkpoint recorded.",
+    zhTW: "掃描輪次 {id} 已記錄重新啟動接續點。",
   },
   cleanupEyebrow: { en: "Separate step: local evidence cleanup", zhTW: "獨立步驟：清理本機證據" },
   cleanupRemovedTitle: { en: "Case evidence was permanently removed", zhTW: "案件證據已永久移除" },

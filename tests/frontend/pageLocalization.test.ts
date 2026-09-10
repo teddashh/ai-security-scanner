@@ -507,6 +507,31 @@ test("active scans stay in Progress instead of opening defensive interim surface
   assert.doesNotMatch(exportPage, /Interim export|暫時報告|createInterimExport/u);
 });
 
+test("setup prerequisites and missing-source states use direct product language", async () => {
+  const cases = await readPage("CasesPage.tsx");
+  const coverage = await readPage("CoveragePage.tsx");
+  const findings = await readPage("FindingsPage.tsx");
+  const provider = await readFile(
+    new URL("../../src/components/ProviderAuthorizationPanel.tsx", import.meta.url),
+    "utf8",
+  );
+
+  for (const phrase of [
+    "Start requires explicit access confirmation for this exact internal network target",
+    "Active testing requires separate authorization",
+    "Candidate list status: no connected source",
+    "Sources without data: {count}",
+    "No problems shown; source data missing",
+    "Cleanup records requiring action",
+    "Temporary access expiry pending",
+  ]) assert.ok(`${cases}\n${coverage}\n${findings}\n${provider}`.includes(phrase), phrase);
+
+  assert.doesNotMatch(cases, /you must confirm access|you must separately confirm|waiting for a connected source/iu);
+  assert.doesNotMatch(coverage, /Sources still needing data|source is still missing/iu);
+  assert.doesNotMatch(findings, /sources still need data|Sources still needing usable information/iu);
+  assert.doesNotMatch(provider, /may need your attention|Earlier setup work still has|Waiting for temporary access to expire/iu);
+});
+
 test("count copy stays grammatical when exactly one item is shown", async () => {
   const findings = await readPage("FindingsPage.tsx");
   const progress = await readPage("ProgressPage.tsx");

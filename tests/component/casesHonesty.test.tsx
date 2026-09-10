@@ -115,6 +115,8 @@ test("zero systems with an unresolved source is not reported as having found not
   const rendered = notices(container);
   expect(rendered.some((notice) => notice.includes("Add a source to start finding your systems"))).toBe(true);
   expect(rendered.some((notice) => notice.includes("Source status: not connected"))).toBe(true);
+  expect(rendered.some((notice) => notice.includes("Candidate list status: no connected source"))).toBe(true);
+  expect(rendered.join(" ")).not.toMatch(/waiting for a connected source/iu);
   expect(rendered.some((notice) => notice.includes("No systems were found this time"))).toBe(false);
 });
 
@@ -349,7 +351,7 @@ test("the browser preview does not offer deletion for immutable built-in demo pr
   expect(container.querySelector(".case-delete-confirmation")).toBeNull();
 });
 
-test("work interrupted by a restart is counted and does not claim it will resume itself", () => {
+test("work interrupted by a restart is counted and names its saved checkpoint", () => {
   const latestRun = run({
     id: "run-interrupted",
     status: "partial",
@@ -397,7 +399,8 @@ test("work interrupted by a restart is counted and does not claim it will resume
   const interrupted = rendered.find((notice) => notice.includes("Checks paused when the app restarted"));
   expect(interrupted).toBeTruthy();
   expect(interrupted).toContain("Checks paused when the app restarted: 2");
-  expect(interrupted).toContain("will not reconnect automatically");
+  expect(interrupted).toContain("Run run-interrupted restart checkpoint recorded");
+  expect(interrupted).not.toContain("will not reconnect automatically");
 });
 
 test("a run that failed is offered as a baseline without being called completed", () => {
@@ -584,8 +587,9 @@ test("an internal website shortcut promises the fixed profile and the required n
     "The fixed Nuclei quick profile checks the displayed internal website origin https://10.20.30.40:8443; it is not limited to /admin.",
   );
   expect(container.querySelector(".inline-notice")?.textContent).toContain(
-    "On the next screen, you must confirm access to this exact internal network target before Start is available.",
+    "Start requires explicit access confirmation for this exact internal network target on the next screen.",
   );
+  expect(container.querySelector(".inline-notice")?.textContent).not.toMatch(/you must/iu);
   fireEvent.submit(container.querySelector(".create-case-panel")!);
 
   await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));

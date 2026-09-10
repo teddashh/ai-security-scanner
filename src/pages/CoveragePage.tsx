@@ -382,7 +382,7 @@ const pageCopy = {
   incompleteAssets: bilingual("Needs attention", "需要處理"),
   pendingAssets: bilingual("Not set up yet", "尚未設定"),
   metricsLabel: bilingual("What the product can currently see", "產品目前看得到的摘要"),
-  unknownTitle: bilingual("Sources still needing data: {count}", "{count} 個來源還需要資料"),
+  unknownTitle: bilingual("Sources without data: {count}", "沒有資料的來源：{count} 個"),
   unknownBody: bilingual("Connect or import these sources to see what they contain.", "連接或匯入這些來源，就能查看其中內容。"),
   noneTitle: bilingual("Connected sources finding no items: {count}", "{count} 個已連接來源沒有找到項目"),
   noneBody: bilingual("Source connected. Items added: 0.", "來源已連接；加入項目：0。"),
@@ -664,7 +664,7 @@ const pageCopy = {
   advancedLocalInputSummary: bilingual("Use a different kind of local input", "改用其他本機輸入類型"),
   advancedLocalInputHelp: bilingual("The route you chose is already selected. Change this only when you meant to attach a different kind of project or export.", "你選擇的路線已經設定完成；只有要改附加其他類型的專案或匯出檔時才需要變更。"),
 
-  emptyUnknownTitle: bilingual("No items yet because a source is still missing", "尚未看到項目，因為還缺少資料來源"),
+  emptyUnknownTitle: bilingual("No items: source missing", "沒有項目：缺少資料來源"),
   emptyUnknownBody: bilingual("At least one needed input is missing. Do not interpret the empty list as proof that the environment has no assets.", "至少一個需要的輸入尚未連接；不能把空清單解讀為環境沒有資產。"),
   emptyNoneTitle: bilingual("The connected sources found no items this time", "已連接的來源這次沒有找到項目"),
   emptyNoneBody: bilingual("The inputs were available and returned zero items. This is different from having no input and therefore no visibility.", "輸入確實可用且回傳零項；這與缺少輸入、因此無法看見的未知狀態不同。"),

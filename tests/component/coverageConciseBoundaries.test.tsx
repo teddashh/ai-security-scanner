@@ -146,12 +146,12 @@ test("a collapsed source setup keeps unresolved temporary-cloud cleanup visible 
     provider: "aws",
     caseId: "case-1",
     schemaVersion: "1.0.0",
-    status: "pending",
+    status: "waiting_for_credential_expiry",
     totalItems: 1,
-    pendingItems: 1,
+    pendingItems: 0,
     inProgressItems: 0,
     retryableItems: 0,
-    waitingItems: 0,
+    waitingItems: 1,
     completedItems: 0,
     createdAt: "2026-09-07T12:00:00Z",
   };
@@ -174,7 +174,9 @@ test("a collapsed source setup keeps unresolved temporary-cloud cleanup visible 
   fireEvent.click(getByRole("button", { name: "Review cleanup" }));
   expect(setup.open).toBe(true);
   expect(container.querySelector<HTMLElement>(".coverage-provider-slot")?.hidden).toBe(false);
-  expect(getByRole("heading", { name: "Earlier setup work still has a cleanup record" })).not.toBeNull();
+  expect(getByRole("heading", { name: "Cleanup records requiring action" })).not.toBeNull();
+  expect(getByText(/AWS · Temporary access expiry pending/u)).not.toBeNull();
+  expect(container.textContent).not.toMatch(/waiting for temporary access to expire/iu);
   expect(getByRole("button", { name: "Reconnect and continue cleanup" })).not.toBeNull();
   const cleanupRegion = getByRole("region", { name: "Temporary-access cleanup" });
   await waitFor(() => expect(document.activeElement).toBe(cleanupRegion));
@@ -209,7 +211,7 @@ test("an unresolved cleanup record remains actionable when its provider source i
   fireEvent.click(getByRole("button", { name: "Review cleanup" }));
 
   expect(getByText("Use Add an inventory file above to add the matching cloud account. Then return here to reconnect and remove only its recorded temporary resources.")).not.toBeNull();
-  expect(getByRole("heading", { name: "Earlier setup work still has a cleanup record" })).not.toBeNull();
+  expect(getByRole("heading", { name: "Cleanup records requiring action" })).not.toBeNull();
   expect((getByRole("button", { name: "Select the AWS source first" }) as HTMLButtonElement).disabled).toBe(true);
   const cleanupRegion = getByRole("region", { name: "Temporary-access cleanup" });
   await waitFor(() => expect(document.activeElement).toBe(cleanupRegion));
@@ -324,7 +326,7 @@ test("review uses compact summary chips and keeps missing-source truth visible",
   expect(step?.querySelector(".coverage-summary-row")?.textContent).toContain("Items found1");
   expect(step?.querySelector(".coverage-summary-row")?.textContent).toContain("Items fully checked1");
   expect(step?.querySelector(".coverage-summary-row")?.textContent).not.toContain("Checks completed");
-  expect(queryByText("Sources still needing data: 1")).not.toBeNull();
+  expect(queryByText("Sources without data: 1")).not.toBeNull();
   expect(container.querySelector(".page-header p")).toBeNull();
 });
 
