@@ -2,7 +2,7 @@
 
 狀態日期：2026-09-10
 
-最後完成的產品程式 checkpoint：`8b6024b`
+最後完成的產品程式 checkpoint：`1da9bd5`
 
 這份文件是目前唯一的開發交接摘要，已直接取代舊的歷史版。產品決策以[產品規格](product-spec.md)為準，能力現況以[產品檢視](product-audit.md)為準。
 
@@ -71,6 +71,9 @@ Scanner 應盡量保留上游行為、規則、識別碼、severity、證據與 
   case deletion、export failure、platform setup 與 adapter warning 的直接化。Nuclei、Greenbone、
   packaged check、unsupported profile 與零 finding 的舊保存句子會在顯示及匯出前正規化；英／繁中
   保持同一結果，產品撰寫的中文不再使用 AI 第一人稱。掃描、授權、清理與 durable state 語意不變。
+- `1da9bd5` 移除取消、案件刪除 blocker 與 Windows setup 中剩餘的等待後重做、保留安撫及程序
+  自述。雲端 IT request 改為中性句子；請求與 device code 複製在 Clipboard API 失敗時會自動走
+  有界的 document-copy fallback，兩條路徑都失敗時只呈現精確結果，不把 workaround 丟給新手。
 
 ## 已在 main 上成立的產品能力
 
@@ -414,6 +417,13 @@ deletion、export、platform 與 adapter warning 已統一為「精確狀態＋�
 presentation layer 正規化後再顯示或匯出；英／繁中對應由 parity 與 presentation tests 鎖定。
 掃描範圍、target binding、認證、清理判定與 durable outcome 沒有改變。
 
+## 取消、setup 與雲端交接收斂（`1da9bd5`）
+
+取消中的 result state、active scan／provider discovery 案件刪除 blocker、managed runtime
+cancellation、Windows WSL servicing timeout／cooldown 及 managed-egress cleanup 都改成單一目前
+狀態，不再要求等待後重按，也不再解釋保留資料或程式接下來會做什麼。雲端交接請求不使用
+`me`／`our`；Clipboard API 失敗時由程式執行第二條 copy path，完成後移除輔助 DOM 並恢復原焦點。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -508,6 +518,11 @@ contract 32 項、TypeScript typecheck、production frontend build、`clippy -D 
 disk 資料或接觸任何 target。
 
 `8b6024b` 新增後，完整 Rust CLI workspace 1,590 項、frontend 571 項、component 252 項、CI
+contract 32 項、TypeScript typecheck、production frontend build、`clippy -D warnings`、format
+與 diff check 全部通過；build 只有既有的大型 chunk 提示。本輪沒有執行 scanner、刪除 RAM
+disk 資料或接觸任何 target。
+
+`1da9bd5` 新增後，完整 Rust CLI workspace 1,590 項、frontend 572 項、component 253 項、CI
 contract 32 項、TypeScript typecheck、production frontend build、`clippy -D warnings`、format
 與 diff check 全部通過；build 只有既有的大型 chunk 提示。本輪沒有執行 scanner、刪除 RAM
 disk 資料或接觸任何 target。
