@@ -144,7 +144,7 @@ test("a durable stop request remains non-terminal until the connection has stopp
   assert.ok(stopping);
   assert.equal(stopping.outcome, "cancelling");
   assert.match(stopping.title.en, /Stopping/u);
-  assert.match(stopping.outcomeLabel.en, /no observation yet/u);
+  assert.equal(stopping.outcomeLabel.en, "Stopping; no observation");
   assert.equal(stopping.nextStep.en, "Stopping the current connection attempt (maximum three seconds).");
   assert.equal(stopping.nextStep.zhTW, "正在停止目前的連線嘗試（最長三秒）。");
   assert.doesNotMatch(stopping.nextStep.en, /will show|only after/u);

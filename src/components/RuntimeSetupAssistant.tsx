@@ -84,7 +84,7 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     idleTitle: "This scan needs additional local tools",
     idleDescription: "Select Prepare scan tools to begin.",
     demoTitle: "Explore a scan with sample results",
-    demoDescription: "Open the desktop app when you are ready to scan a real website, cloud account, network, or codebase.",
+    demoDescription: "Open the desktop app to scan a real website, cloud account, network, or codebase.",
     progressTitle: "Preparing the local scan tools you requested",
     progressDescription: "Downloading and preparing the tools needed for this scan.",
     staleTitle: "Stopping advanced local scan-tool setup",

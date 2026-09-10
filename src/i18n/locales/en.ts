@@ -9,7 +9,7 @@ export const en = {
   "shell.closeNavigation": "Close navigation",
   "shell.brandSubtitle": "simple security scans",
   "shell.currentCase": "My scans",
-  "shell.noCases": "No scan projects yet",
+  "shell.noCases": "No scan projects",
   "shell.privacy.title": "Local by default",
   "shell.privacy.detail": "Data may leave this device when you connect a source or export results.",
   "shell.demo.selectedTitle": "Preview only",

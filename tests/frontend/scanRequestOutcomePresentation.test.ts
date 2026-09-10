@@ -44,6 +44,7 @@ test("every no-checks code has stable bilingual first-layer guidance", () => {
     assert.doesNotMatch(summary.description.en, /No target was contacted|not a result with zero problems/u);
     assert.ok(summary.nextStep.en);
     assert.ok(summary.nextStep.zhTW);
+    assert.doesNotMatch(`${summary.nextStep.en} ${summary.nextStep.zhTW}`, /only if|只有在/u);
   }
 });
 

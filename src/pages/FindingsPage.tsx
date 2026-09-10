@@ -213,7 +213,7 @@ const copy = {
   inventoryHttpStatus: { en: "HTTP status", zhTW: "HTTP 狀態" },
   inventoryTlsObserved: { en: "TLS observed", zhTW: "觀察到 TLS" },
   inventoryNativeId: { en: "Native ID", zhTW: "原生識別碼" },
-  emptyNoRunTitle: { en: "No scan results yet", zhTW: "尚未產生掃描結果" },
+  emptyNoRunTitle: { en: "No scan results", zhTW: "沒有掃描結果" },
   activePageEyebrow: { en: "SCAN IN PROGRESS", zhTW: "掃描進行中" },
   activePageTitle: { en: "Scan in progress", zhTW: "掃描進行中" },
   activePageDescription: { en: "Continue in Scan progress.", zhTW: "請回到「掃描進度」繼續。" },
@@ -291,16 +291,16 @@ const copy = {
     zhTW: "編號相同但未完成比對：{count} 組",
   },
   correlationUnverifiableDescription: {
-    en: "These share a vulnerability identifier, but at least one record is missing the affected package or asset, so they are listed separately.",
-    zhTW: "這些項目共用同一弱點編號，但至少一筆記錄缺少受影響套件或資產，因此分開列出。",
+    en: "Listed separately: at least one record is missing the affected package or asset.",
+    zhTW: "分開列出：至少一筆記錄缺少受影響套件或資產。",
   },
   correlationUnverifiableItem: {
     en: "{vulnerability} — problems sharing this identifier: {count}; the package or asset needed to compare them is missing",
     zhTW: "{vulnerability}——共用此編號的問題：{count} 項；缺少比對所需的套件或資產",
   },
   correlationTruncated: {
-    en: "Further suggestions not shown: {count}. The list is capped, so this page is not the complete set.",
-    zhTW: "另有 {count} 項建議未顯示。清單有數量上限，因此此頁並非完整結果。",
+    en: "Additional grouping suggestions omitted: {count}. Every finding remains listed below.",
+    zhTW: "另有 {count} 項分組建議未顯示；所有問題仍逐項列於下方。",
   },
   reversibleLinks: { en: "TEAM HANDOFF", zhTW: "團隊交接" },
   groupsTitle: { en: "Organize related issues for the right team", zhTW: "把相關問題整理給同一個團隊" },
@@ -342,8 +342,8 @@ const copy = {
   },
   groupReason: { en: "Why these belong together", zhTW: "關聯理由" },
   groupReasonPlaceholder: {
-    en: "Add a short note so the next person knows why these should be handled together.",
-    zhTW: "簡單說明為什麼這些問題適合一起處理，讓接手者一看就懂。",
+    en: "Describe why these problems should be handled together.",
+    zhTW: "說明為什麼這些問題適合一起處理。",
   },
   chooseTwo: { en: "Choose at least two ungrouped problems", zhTW: "選擇至少兩項尚未分組的問題" },
   createGroup: { en: "Create reversible group", zhTW: "建立可逆群組" },
@@ -376,7 +376,7 @@ const copy = {
     zhTW: "已完成檢查未發現問題",
   },
   assetStatusIncomplete: { en: "Incomplete or failed", zhTW: "未完成或失敗" },
-  assetStatusNotTested: { en: "Not tested", zhTW: "尚未測試" },
+  assetStatusNotTested: { en: "Not tested", zhTW: "未測試" },
   assetProblemCountOne: { en: "1 problem was found.", zhTW: "發現 1 個問題。" },
   assetProblemCountMany: { en: "Problems found: {count}.", zhTW: "發現 {count} 個問題。" },
   assetProblemAction: {
@@ -486,7 +486,7 @@ const copy = {
   whyPriority: { en: "Why this appears first", zhTW: "為何優先顯示" },
   recommendation: { en: "Recommended next step", zhTW: "建議下一步" },
   beforeChanging: { en: "Before making a change:", zhTW: "變更前考量：" },
-  verification: { en: "How to verify later", zhTW: "複驗指引" },
+  verification: { en: "How to verify the fix", zhTW: "修復確認方式" },
   scanEvidence: { en: "Scan evidence", zhTW: "掃描證據" },
   noEvidence: {
     en: "No scan evidence was retained for this problem.",

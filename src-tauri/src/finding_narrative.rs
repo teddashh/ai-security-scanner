@@ -1568,8 +1568,8 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "已完成檢查時間：無法取得。缺少結束時間與受限觀察時間。",
     ),
     (
-        "If you expected an app on this port, start it and run the check again.",
-        "如果你預期這個連接埠上有服務在執行，請先啟動它，再重新執行檢查。",
+        "Start the expected service, then run this check again.",
+        "啟動預定的服務，再重新執行這項檢查。",
     ),
     (
         "The port refused the bounded TCP connection at the recorded time; this is not a security pass or failure.",
@@ -1669,8 +1669,8 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "需要弱點涵蓋時，請為資產選擇支援的精確掃描設定檔並執行。",
     ),
     (
-        "Add a supported exact service profile when you want this asset vulnerability-tested.",
-        "需要檢測此資產弱點時，請加入支援的精確服務設定。",
+        "Add a supported exact service profile, then run this asset's vulnerability check.",
+        "加入支援的精確服務設定，再執行這項資產的弱點檢查。",
     ),
     (
         "Retry this scan to create a consistent coverage record.",
@@ -1690,17 +1690,14 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
     ),
     ("Retry only the failed work.", "只重新執行失敗的工作。"),
     ("Retry only the timed-out work.", "只重新執行逾時的工作。"),
-    (
-        "Start only the cancelled work again when you want to finish it.",
-        "想要完成時，只需重新啟動被取消的那部分工作。",
-    ),
+    ("Restart the cancelled work.", "重新啟動已取消的工作。"),
     (
         "Open Progress and finish or cancel this check.",
         "前往進度頁完成或取消這項檢查。",
     ),
     (
-        "Retry only the work that has not yet produced a tested outcome.",
-        "只需重新執行尚未產生檢測結果的那部分工作。",
+        "Retry the work without a tested outcome.",
+        "重試未產生檢測結果的工作。",
     ),
     (
         "Start a new scan for a fresh result.",
@@ -1727,8 +1724,8 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "重新執行這項檢查以完成尚未完成的項目。",
     ),
     (
-        "Retry once; if it times out again, verify reachability from Scan setup.",
-        "重試一次；若再次逾時，請到掃描設定確認連線。",
+        "Confirm reachability in Scan setup, then retry the timed-out work.",
+        "到「掃描設定」確認連線，再重試逾時的工作。",
     ),
     ("Retry this check.", "重新執行這項檢查。"),
     (

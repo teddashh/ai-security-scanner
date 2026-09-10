@@ -11,7 +11,7 @@ export const zhTW = {
   "shell.closeNavigation": "關閉導覽",
   "shell.brandSubtitle": "簡單做資安掃描",
   "shell.currentCase": "我的掃描",
-  "shell.noCases": "還沒有掃描專案",
+  "shell.noCases": "沒有掃描專案",
   "shell.privacy.title": "預設儲存在本機",
   "shell.privacy.detail": "連接資料來源或匯出結果時，資料可能會離開這台裝置。",
   "shell.demo.selectedTitle": "僅供預覽",

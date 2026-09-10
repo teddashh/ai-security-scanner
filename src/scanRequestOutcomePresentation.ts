@@ -39,8 +39,8 @@ const summaries: Record<ScanRequestOutcome["code"], { reason: BilingualText; nex
       zhTW: "目前沒有可用的檢查符合你選擇的內容。",
     },
     nextStep: {
-      en: "Review the selected target and scan type. Choose a different check only if it matches what you actually want to test.",
-      zhTW: "請查看所選目標與掃描類型；只有在符合真正想測的內容時，才改選其他檢查。",
+      en: "Review the selected target and scan type, then choose the matching check.",
+      zhTW: "請檢查所選目標與掃描類型，再選擇相符的檢查。",
     },
   },
 };

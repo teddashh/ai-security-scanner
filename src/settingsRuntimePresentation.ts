@@ -40,8 +40,8 @@ const presentations: Record<SettingsRuntimeState, SettingsRuntimePresentation> =
     state: "unchecked",
     icon: "clock",
     status: {
-      en: "Local scan tools have not been checked yet.",
-      zhTW: "尚未檢查本機掃描工具。",
+      en: "Local scan-tool status not checked.",
+      zhTW: "本機掃描工具狀態未檢查。",
     },
   },
 };

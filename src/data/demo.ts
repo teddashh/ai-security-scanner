@@ -1350,7 +1350,7 @@ const storedWorkspace = (storedCase: StoredDemoCase): CaseWorkspace => {
     : "掃描專案中輸入的已知項目";
   const coverageDetail = locale === "en"
     ? "Saved from project setup. Permission status: unconfirmed. Scan status: not started."
-    : "由專案設定保存。尚未確認掃描權限，也尚未執行掃描。";
+    : "由專案設定保存。掃描權限：未確認。掃描狀態：未開始。";
   const sources: ConnectedSource[] = knownAssets.length > 0
     ? [{
         id: sourceId,

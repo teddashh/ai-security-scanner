@@ -322,7 +322,7 @@ test("guided cloud discovery is one explicit continuation after sign-in", () => 
 test("the first layer uses plain-language scan choices in both locales", () => {
   for (const [english, traditionalChinese] of [
     ["Items found", "找到的項目"],
-    ["Not set up yet", "尚未設定"],
+    ["Setup required", "需要設定"],
     ["Recommended settings are ready", "建議設定已準備好"],
     ["I confirm this is my website or a system I am allowed to scan", "我確認這是我的網站，或是我有權掃描的系統"],
     ["I confirm this scan may connect to the selected internal network", "我確認這次掃描可以連線到所選內部網路"],
@@ -449,12 +449,12 @@ test("guided selection status is honest and does not keep prompting after auto-s
 
 test("saved permission without a scan attempt is shown as ready instead of failed", () => {
   for (const phrase of [
-    "Permission is saved. Start this item when ready.",
-    "掃描許可已儲存；準備好後即可開始這個項目。",
+    "Permission saved. Start this item.",
+    "掃描許可已儲存；開始這個項目。",
     "Permission is saved. Start the scan from Scan progress.",
     "掃描許可已儲存；請到「掃描進度」開始掃描。",
-    "Not scanned yet",
-    "尚未開始掃描",
+    "Not scanned",
+    "未掃描",
   ]) assert.ok(source.includes(phrase), phrase);
   assert.match(source, /state === "authorized_incomplete" && scanAttempted === false/u);
   assert.match(source, /asset\.coverageState === "authorized_incomplete" && asset\.scanAttempted !== false/u);

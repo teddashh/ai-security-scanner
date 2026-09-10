@@ -42,8 +42,8 @@ export function SettingsPage({
     },
     unchecked: {
       status: {
-        en: "Scan tools not checked yet",
-        zhTW: "尚未檢查掃描工具",
+        en: "Scan-tool status not checked",
+        zhTW: "掃描工具狀態未檢查",
       },
       action: { en: "Choose a scan", zhTW: "選擇掃描" },
     },

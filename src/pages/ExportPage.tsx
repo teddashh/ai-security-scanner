@@ -234,7 +234,7 @@ const copy = {
   historyDescription: { en: "Find every report saved on this device, or verify a package someone sent you.", zhTW: "查看這台電腦儲存過的報告，也能驗證別人傳來的案件包。" },
   fileCount: { en: "Files: {count}", zhTW: "{count} 份" },
   verifyReceived: { en: "Check a file someone sent you", zhTW: "檢查別人傳來的檔案" },
-  noExportsTitle: { en: "No reports saved yet", zhTW: "還沒有儲存任何報告" },
+  noExportsTitle: { en: "No saved reports", zhTW: "沒有已儲存的報告" },
   noExportsDescription: { en: "When you save one, it goes only to the location you choose on this device.", zhTW: "儲存報告後，檔案只會放在你選擇的本機位置。" },
   legacyUnknownFormat: { en: "Older record: file type unknown", zhTW: "舊版紀錄：檔案類型未知" },
   savedReport: { en: "Saved security report", zhTW: "已儲存的資安報告" },

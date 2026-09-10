@@ -98,7 +98,7 @@ const copy = {
   readinessDetails: { en: "Readiness details", zhTW: "準備狀態細節" },
   activityHistory: { en: "Activity history ({count})", zhTW: "活動記錄（{count}）" },
   runHistorySummary: { en: "Run history ({count})", zhTW: "掃描歷程（{count}）" },
-  emptyTitle: { en: "This case has not been scanned yet", zhTW: "這個案件還沒有開始掃描" },
+  emptyTitle: { en: "No scans for this project", zhTW: "這個專案沒有掃描" },
   emptyDescription: {
     en: "Start the scan to follow every check here.",
     zhTW: "開始掃描後，即可在這裡查看每項檢查。",
@@ -198,8 +198,8 @@ const copy = {
   },
   providerCheckTitle: { en: "Check cloud readiness again", zhTW: "重新檢查雲端準備狀態" },
   providerCheckDescription: {
-    en: "Cloud readiness check incomplete.",
-    zhTW: "雲端準備狀態檢查尚未完成。",
+    en: "Cloud readiness check stopped.",
+    zhTW: "雲端準備狀態檢查已停止。",
   },
   workspaceSnapshotTitle: { en: "Choose the local files again", zhTW: "請重新選擇本機檔案" },
   workspaceSnapshotDescription: {
@@ -233,15 +233,15 @@ const copy = {
   },
   executionCheckTitle: { en: "Check readiness again", zhTW: "重新檢查準備狀態" },
   executionCheckDescription: {
-    en: "Selected-input and scan-tool readiness incomplete.",
-    zhTW: "所選輸入與掃描工具的準備檢查尚未完成。",
+    en: "Final readiness check stopped.",
+    zhTW: "最後的準備狀態檢查已停止。",
   },
   readiness: {
     demo_case: { en: "Create or open a real scan project before starting.", zhTW: "請先建立或開啟真正的掃描專案。" },
     archived_case: { en: "This scan project is archived. Choose an active project to continue.", zhTW: "這個掃描專案已封存；請選擇仍在使用的專案。" },
     scan_already_active: { en: "A scan is already running or paused for this project.", zhTW: "這個專案已有正在執行或暫停中的掃描。" },
     no_effective_scope_grants: { en: "Choose the exact target you want to check, then confirm it once.", zhTW: "請選擇這次要檢查的確切目標，並確認一次即可。" },
-    no_ownership_confirmed_targets: { en: "The target has not been confirmed yet. Return to setup and confirm it.", zhTW: "目標尚未確認；請回到設定頁確認這次要掃描的目標。" },
+    no_ownership_confirmed_targets: { en: "Target confirmation required. Return to setup and confirm it.", zhTW: "需要確認目標；請回到設定頁確認這次要掃描的目標。" },
     no_compatible_authorized_targets: { en: "Finish target setup for the current input.", zhTW: "請完成目前輸入的目標設定。" },
     no_runnable_authorized_targets: {
       en: "Install the newest release to get an applicable scan tool for this target.",
@@ -272,8 +272,8 @@ const copy = {
       zhTW: "已連接的雲端帳號與這次掃描目標不一致；請先檢查目標。",
     },
     provider_preflight_unavailable: {
-      en: "Cloud readiness check incomplete. Check again.",
-      zhTW: "雲端準備狀態檢查尚未完成；請重新檢查。",
+      en: "Cloud readiness check stopped. Check again.",
+      zhTW: "雲端準備狀態檢查已停止；請重新檢查。",
     },
     workspace_snapshot_unavailable: {
       en: "The saved local copy is missing or changed. Choose the local project again before scanning.",
@@ -296,8 +296,8 @@ const copy = {
       zhTW: "續跑所需的已保存結果或證據已遺失或變更；請開始新的掃描。",
     },
     execution_preflight_unavailable: {
-      en: "Final readiness check incomplete. Check again.",
-      zhTW: "最後的準備狀態檢查尚未完成；請重新檢查。",
+      en: "Final readiness check stopped. Check again.",
+      zhTW: "最後的準備狀態檢查已停止；請重新檢查。",
     },
   } satisfies Record<ScanReadinessBlocker, BilingualText>,
   blockedTitle: { en: "Scan did not start", zhTW: "掃描沒有開始" },
@@ -518,7 +518,7 @@ const copy = {
   },
   workCount: { en: "{count} checks", zhTW: "{count} 項檢查" },
   workCountOne: { en: "1 check", zhTW: "1 項檢查" },
-  noWorkTitle: { en: "No checks are ready yet", zhTW: "目前還沒有可執行的檢查" },
+  noWorkTitle: { en: "No checks ready", zhTW: "沒有可執行的檢查" },
   noWorkDescription: {
     en: "Return to scan setup, choose the assets, and start a new scan.",
     zhTW: "回到掃描設定，選擇資產並開始新的掃描。",
@@ -543,7 +543,7 @@ const copy = {
   authorizationUnknown: { en: "Not recorded in this older run", zhTW: "這個舊輪次未記錄" },
   runtimeScope: { en: "Scanner runtime scope", zhTW: "掃描執行環境範圍" },
   runtimeScopeCreated: { en: "Created", zhTW: "已建立" },
-  runtimeScopeNotReached: { en: "Not reached", zhTW: "尚未進行到這一步" },
+  runtimeScopeNotReached: { en: "Not reached", zhTW: "未進行到這一步" },
   cleanup: { en: "Cleanup", zhTW: "環境清理" },
   cleanupDone: { en: "Done", zhTW: "完成" },
   cleanupPending: { en: "Pending", zhTW: "待處理" },
@@ -592,7 +592,7 @@ const copy = {
   currentlySupported: { en: "within stated support date", zhTW: "仍在宣告支援日期內" },
   runtime: { en: "Runtime", zhTW: "執行環境" },
   unknownVersion: { en: "version not reported", zhTW: "版本未回報" },
-  notRunYet: { en: "Not run", zhTW: "尚未執行" },
+  notRunYet: { en: "Not run", zhTW: "未執行" },
   runtimeSecurity: { en: "Runtime security options", zhTW: "執行環境安全選項" },
   exitCode: { en: "Exit code", zhTW: "結束代碼" },
   cleanupResult: { en: "Cleanup result", zhTW: "清理結果" },

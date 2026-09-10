@@ -2065,7 +2065,7 @@ fn append_naabu_coverage_gaps(
             "These planned work units were cancelled before completed coverage was recorded."
                 .into(),
             NextActionCode::RetryCheck,
-            "Start only the cancelled work again when you want to finish it.",
+            "Restart the cancelled work.",
         );
     }
     if summary.not_tested > 0 {
@@ -2085,7 +2085,7 @@ fn append_naabu_coverage_gaps(
             if task_is_active(task) {
                 "Open Progress and finish or cancel this check."
             } else {
-                "Retry only the work that has not yet produced a tested outcome."
+                "Retry the work without a tested outcome."
             },
         );
     }
@@ -2205,7 +2205,7 @@ fn append_task_gap(task: &EngineRun, status: CoverageDimensionStatus, gaps: &mut
             "timed-out check dimension",
             "The bounded check reached its time limit, so it cannot be treated as tested complete.",
             NextActionCode::RetryCheck,
-            "Retry once; if it times out again, verify reachability from Scan setup.",
+            "Confirm reachability in Scan setup, then retry the timed-out work.",
         ),
         CoverageDimensionStatus::Failed => (
             CoverageGapKind::Failed,
@@ -3182,11 +3182,13 @@ fn append_report_asset_snapshot_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>)
             task_id: None,
             target_asset_ids: vec![snapshot.asset.id.clone()],
             dimension: "supported vulnerability profile".into(),
-            reason: "Supported service-specific vulnerability profile unavailable. Outcome: not tested."
-                .into(),
+            reason:
+                "Supported service-specific vulnerability profile unavailable. Outcome: not tested."
+                    .into(),
             next_action_code: NextActionCode::ChooseCompatibleCheck,
-            next_action: "Add a supported exact service profile when you want this asset vulnerability-tested."
-                .into(),
+            next_action:
+                "Add a supported exact service profile, then run this asset's vulnerability check."
+                    .into(),
         });
     }
 }
@@ -3670,7 +3672,7 @@ fn project_next_steps(
         let (code, action, reason) = if actual.checks.iter().any(is_closed_localhost_check) {
             (
                 NextActionCode::StartExpectedServiceAndRetry,
-                "If you expected an app on this port, start it and run the check again.",
+                "Start the expected service, then run this check again.",
                 "The port refused the bounded TCP connection at the recorded time; this is not a security pass or failure.",
             )
         } else {
@@ -4446,7 +4448,10 @@ mod tests {
                 .observation
                 .contains("refused")
         );
-        assert!(report.next_steps[0].action.contains("expected an app"));
+        assert_eq!(
+            report.next_steps[0].action,
+            "Start the expected service, then run this check again."
+        );
         assert!(
             serde_json::to_string(&report)
                 .unwrap()

@@ -210,6 +210,18 @@ test("post-start failures preserve results and cleanup guidance", () => {
   assert.doesNotMatch(cleanup.en, /scan-tool setup/u);
 });
 
+test("an unclassified stopped check gives one direct retry path", () => {
+  const action = engineNextStepFor(engine({
+    status: "failed",
+    phase: "failed",
+    errorCode: "unclassified_failure",
+  }));
+
+  assert.equal(action.en, "Retry this check. Its diagnostic log is available under Technical details.");
+  assert.equal(action.zhTW, "請重試這項檢查；診斷紀錄位於「技術細節」。");
+  assert.doesNotMatch(`${action.en} ${action.zhTW}`, /if it stops again|for support|若再次停止|以便排查/iu);
+});
+
 test("bounded retry exhaustion and cancellation never promise an impossible resume", () => {
   const exhausted = engineNextStepFor(engine({
     status: "partial",

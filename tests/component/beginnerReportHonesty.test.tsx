@@ -797,7 +797,7 @@ test("the asset result board gives a Traditional Chinese beginner the same bound
 
   const board = container.querySelector<HTMLElement>(".asset-result-board");
   expect(board?.textContent).toContain("哪些資產需要處理");
-  expect(board?.textContent).toContain("尚未測試");
+  expect(board?.textContent).toContain("未測試");
   expect(board?.textContent).toContain("這個資產沒有已完成的資安檢查紀錄");
   expect(board?.textContent).toContain("為這個目標選擇可用的檢查");
   expect(board?.textContent).not.toContain("No compatible check ran");

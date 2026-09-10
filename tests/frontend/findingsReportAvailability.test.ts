@@ -9,10 +9,9 @@ import {
 test("a missing durable run-bound report gives one direct recovery path", () => {
   assert.equal(unavailableRunBoundReportCopy.title.en, "Master report unavailable for this scan");
   assert.equal(unavailableRunBoundReportCopy.title.zhTW, "這次掃描沒有主要報告");
-  assert.match(unavailableRunBoundReportCopy.body.en, /Start a new scan to create one/u);
-  assert.match(unavailableRunBoundReportCopy.body.zhTW, /開始新的掃描以建立主要報告/u);
-  assert.match(unavailableRunBoundReportCopy.body.en, /Review scanner status or Export/u);
-  assert.match(unavailableRunBoundReportCopy.body.zhTW, /「查看掃描器狀態」或「匯出」/u);
+  assert.equal(unavailableRunBoundReportCopy.body.en, "Open Review scanner status, then start a new scan to create the report.");
+  assert.equal(unavailableRunBoundReportCopy.body.zhTW, "請開啟「查看掃描器狀態」，再開始新的掃描以建立主要報告。");
+  assert.doesNotMatch(unavailableRunBoundReportCopy.body.en, /or Export/u);
   assert.doesNotMatch(unavailableRunBoundReportCopy.body.en, /available below/u);
   assert.doesNotMatch(unavailableRunBoundReportCopy.body.zhTW, /下方仍會保留/u);
   assert.doesNotMatch(unavailableRunBoundReportCopy.body.en, /showing the older result view/u);

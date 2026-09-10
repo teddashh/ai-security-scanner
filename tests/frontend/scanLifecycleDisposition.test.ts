@@ -258,7 +258,7 @@ test("lifecycle toast copy is bilingual, bounded, and honest for every dispositi
   const requested = scanLifecycleToastPresentation(dispositions[0]!);
   assert.equal(
     requested.detail.en,
-    "Stopping this check. If a connection attempt already started, it will end within its 3-second limit.",
+    "Stopping this check. Active connection attempts end within 3 seconds.",
   );
   const unconfirmed = scanLifecycleToastPresentation(dispositions[3]!);
   assert.equal(unconfirmed.tone, "warning");

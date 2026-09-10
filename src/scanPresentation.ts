@@ -160,12 +160,12 @@ const nextStepCopy = {
     zhTW: "請展開未執行檢查的技術紀錄，完成其中指出的設定，再開始新的掃描。",
   },
   retry: {
-    en: "Try this check again. If it stops again, download the diagnostic log for support.",
-    zhTW: "請再試一次；若再次停止，請下載診斷紀錄以便排查。",
+    en: "Retry this check. Its diagnostic log is available under Technical details.",
+    zhTW: "請重試這項檢查；診斷紀錄位於「技術細節」。",
   },
   cancelled: {
-    en: "Start a new scan when you want to run this check again.",
-    zhTW: "想再次執行這項檢查時，開始新的掃描即可。",
+    en: "Start a new scan to run this check again.",
+    zhTW: "開始新的掃描，再次執行這項檢查。",
   },
 } as const satisfies Record<string, BilingualText>;
 

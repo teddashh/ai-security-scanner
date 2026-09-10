@@ -156,10 +156,12 @@ test("findings that share an identifier but cannot be compared are disclosed, no
   expect(section!.textContent).toContain("CVE-2024-9999 — problems sharing this identifier: 2");
 });
 
-test("a capped suggestion list says so instead of reading as the complete set", () => {
+test("a capped suggestion list says that findings remain individually available", () => {
   renderPage(report({ truncatedSuggestions: 7 }));
 
-  expect(correlationSection()!.textContent).toContain("Further suggestions not shown: 7");
+  expect(correlationSection()!.textContent).toContain("Additional grouping suggestions omitted: 7");
+  expect(correlationSection()!.textContent).toContain("Every finding remains listed below");
+  expect(correlationSection()!.textContent).not.toContain("not the complete set");
 });
 
 test("no panel appears while the suggestion read has not returned", () => {

@@ -304,8 +304,8 @@ const pageCopy = {
   },
   cloudChoice: { en: "Which cloud do you want to check first?", zhTW: "想先檢查哪一個雲端服務？" },
   cloudChoiceHelp: {
-    en: "Pick one now. Its official sign-in opens next; additional sources can be added later.",
-    zhTW: "先選一個；下一步會開啟官方登入，之後仍可再加入其他來源。",
+    en: "Pick one source. Its official sign-in opens next.",
+    zhTW: "選擇一個來源；下一步會開啟官方登入。",
   },
   moreSummary: { en: "Optional project details", zhTW: "選填專案資訊" },
   moreSummaryHint: {
@@ -440,7 +440,7 @@ const pageCopy = {
   allCasesEyebrow: { en: "All scans", zhTW: "所有掃描" },
   allCasesTitle: { en: "Scan projects on this device", zhTW: "這台電腦上的掃描專案" },
   caseCount: { en: "Projects: {count}", zhTW: "{count} 個專案" },
-  noCases: { en: "No scan projects yet", zhTW: "還沒有掃描專案" },
+  noCases: { en: "No scan projects", zhTW: "沒有掃描專案" },
   noCasesHelp: {
     en: "Start with a website, IP address, internal system, code project, cloud account, container, or Kubernetes.",
     zhTW: "從網站、IP、內部系統、程式碼、雲端帳號、容器或 Kubernetes 開始。",
@@ -563,7 +563,7 @@ const activityCopy: Record<AssessmentActivity, { label: BilingualText; detail: B
   },
   low_impact_external_checks: {
     label: { en: "Low-impact network checks", zhTW: "低影響網路檢查" },
-    detail: { en: "Make limited connections only to targets you authorize later", zhTW: "只對你稍後逐項授權的目標發出有限連線" },
+    detail: { en: "Limited connections to individually authorized targets", zhTW: "僅對逐項授權的目標發出有限連線" },
   },
   active_external_vulnerability_tests: {
     label: { en: "Active vulnerability tests", zhTW: "主動弱點測試" },

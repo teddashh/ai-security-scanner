@@ -9,8 +9,8 @@ export const unavailableRunBoundReportCopy: {
     zhTW: "這次掃描沒有主要報告",
   },
   body: {
-    en: "Start a new scan to create one. Open Review scanner status or Export for this saved run.",
-    zhTW: "請開始新的掃描以建立主要報告；這筆掃描可在「查看掃描器狀態」或「匯出」開啟。",
+    en: "Open Review scanner status, then start a new scan to create the report.",
+    zhTW: "請開啟「查看掃描器狀態」，再開始新的掃描以建立主要報告。",
   },
 };
 

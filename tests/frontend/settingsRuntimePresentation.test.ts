@@ -35,8 +35,8 @@ test("settings presents undefined runtime truth as not yet checked", () => {
 
   assert.equal(presentation.state, "unchecked");
   assert.equal(presentation.icon, "clock");
-  assert.match(presentation.status.en, /have not been checked yet/u);
-  assert.match(presentation.status.zhTW, /尚未檢查/u);
+  assert.equal(presentation.status.en, "Local scan-tool status not checked.");
+  assert.equal(presentation.status.zhTW, "本機掃描工具狀態未檢查。");
   assert.doesNotMatch(presentation.status.en, /unavailable|could not|failed/u);
   assert.doesNotMatch(presentation.status.zhTW, /無法使用|失敗/u);
 });

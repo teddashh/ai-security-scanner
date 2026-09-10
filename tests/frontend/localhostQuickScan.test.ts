@@ -226,7 +226,7 @@ test("pause refusal and typed cancellation feedback never claim that active cont
 
   assert.match(app, /scanLifecycleToastPresentation\(lifecycleDisposition\)/u);
   assert.match(app, /deriveScanLifecycleDisposition\([\s\S]*selectedWorkspace/u);
-  assert.match(lifecycle, /Stopping this check\. If a connection attempt already started, it will end within its 3-second limit\./u);
+  assert.match(lifecycle, /Stopping this check\. Active connection attempts end within 3 seconds\./u);
   assert.match(app, /const refuseUnsupportedLocalhostPauseOrResume = \(runId: string\)/u);
   assert.match(app, /isExactBuiltInLocalhostQuickScanRun\(run\)/u);
   assert.match(app, /key === "pause-scan" \|\| key === "resume-scan"[\s\S]*refuseUnsupportedLocalhostPauseOrResume\(runId\)/u);

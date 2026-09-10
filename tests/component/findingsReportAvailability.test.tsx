@@ -124,7 +124,7 @@ test("a missing durable run-bound report suppresses cross-run findings and keeps
   const { container } = renderPage(true, [savedRun]);
   expect(container.querySelectorAll(".finding-row")).toHaveLength(0);
   expect(container.textContent).toContain("Master report unavailable for this scan");
-  expect(container.textContent).toContain("Start a new scan to create one");
+  expect(container.textContent).toContain("Open Review scanner status, then start a new scan");
   expect(container.textContent).toContain("Review scanner status");
   expect(container.textContent).toContain("Save or share report");
   expect(container.textContent).not.toContain("available below");

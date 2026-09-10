@@ -289,8 +289,8 @@ const scanStartIssueCopy = {
     zhTW: "已連接的雲端帳號與這次掃描目標不一致；請先檢查目標。",
   },
   provider_preflight_unavailable: {
-    en: "Cloud readiness check incomplete. Check again.",
-    zhTW: "雲端準備狀態檢查未完成；請重新檢查。",
+    en: "Cloud readiness check stopped. Check again.",
+    zhTW: "雲端準備狀態檢查已停止；請重新檢查。",
   },
   workspace_snapshot_unavailable: {
     en: "The saved local copy is missing or changed. Choose the local project again before scanning.",
@@ -321,8 +321,8 @@ const scanStartIssueCopy = {
     zhTW: "這項已保存的檢查已無法對應原本的目標計畫；請開始新的掃描。",
   },
   execution_preflight_unavailable: {
-    en: "Final readiness check incomplete. Check again.",
-    zhTW: "最後的準備狀態檢查未完成；請重新檢查。",
+    en: "Final readiness check stopped. Check again.",
+    zhTW: "最後的準備狀態檢查已停止；請重新檢查。",
   },
 } as const satisfies Partial<Record<ScanReadinessBlocker | "resume_release_incompatible" | "resume_work_plan_invalid", BilingualText>>;
 
@@ -976,8 +976,8 @@ export default function App() {
               zhTW: "掃描工具狀態：尚未就緒。",
             })
             : text({
-              en: "Try setup again. Open Technical details if it stops again.",
-              zhTW: "請再試一次；若再次停止，可查看「技術細節」。",
+              en: "Retry setup. Diagnostic details are under Technical details.",
+              zhTW: "請重試設定；診斷內容位於「技術細節」。",
             }),
       });
     } catch (error) {
@@ -1269,7 +1269,7 @@ export default function App() {
         recordTechnicalError("retry scan readiness", error);
         pushToast({
           tone: "warning",
-          title: text({ en: "Readiness check incomplete", zhTW: "準備狀態檢查未完成" }),
+          title: text({ en: "Readiness check stopped", zhTW: "準備狀態檢查已停止" }),
           detail: text({
             en: "Check readiness again.",
             zhTW: "請重新檢查準備狀態。",
@@ -1407,8 +1407,8 @@ export default function App() {
               zhTW: "私密快照已附加；請檢查確切掃描項目後按下「開始」。",
             })
             : text({
-              en: "The private snapshots are attached. Open My scans when ready to review and start them.",
-              zhTW: "私密快照已附加。準備好時請開啟「我的掃描」，檢查後再開始。",
+              en: "The private snapshots are attached. Open My scans to review and start them.",
+              zhTW: "私密快照已附加；請開啟「我的掃描」，檢查後開始。",
             })
           : returnToReview
             ? text({
@@ -1432,7 +1432,7 @@ export default function App() {
       }
       pushToast({
         tone: "warning",
-        title: text({ en: "Scan project created; review is unavailable", zhTW: "掃描專案已建立；目前無法開啟檢查畫面" }),
+        title: text({ en: "Scan project created", zhTW: "掃描專案已建立" }),
         detail: returnToReview
           ? text({
             en: "Reopen the project from My scans.",
@@ -2162,8 +2162,8 @@ export default function App() {
         tone: "danger",
         title: text({ en: "File verification failed", zhTW: "檔案驗證失敗" }),
         detail: text({
-          en: "Try verification again. If it fails again, use a newly exported case package.",
-          zhTW: "請重新驗證；若再次失敗，請使用重新匯出的案件包。",
+          en: "Retry verification with a newly exported case package.",
+          zhTW: "請使用重新匯出的案件包再次驗證。",
         }),
       });
     } finally {

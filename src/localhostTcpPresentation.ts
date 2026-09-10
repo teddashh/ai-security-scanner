@@ -137,13 +137,13 @@ const summaryForOutcome = (
     case "in_progress":
       return {
         title: {
-          en: `The port ${port} check has no observation yet`,
-          zhTW: `連接埠 ${port} 的檢查尚無觀察結果`,
+          en: `The port ${port} check has no observation`,
+          zhTW: `連接埠 ${port} 的檢查沒有觀察結果`,
         },
-        outcomeLabel: { en: "No observation yet", zhTW: "尚無觀察結果" },
+        outcomeLabel: { en: "No observation", zhTW: "沒有觀察結果" },
         nextStep: {
-          en: "The app will continue this connection check.",
-          zhTW: "應用程式會繼續這項連線檢查。",
+          en: "Connection check running.",
+          zhTW: "連線檢查執行中。",
         },
       };
     case "cancelling":
@@ -152,7 +152,7 @@ const summaryForOutcome = (
           en: `Stopping the port ${port} connection check`,
           zhTW: `正在停止連接埠 ${port} 的連線檢查`,
         },
-        outcomeLabel: { en: "Stopping; no observation yet", zhTW: "正在停止；尚無觀察結果" },
+        outcomeLabel: { en: "Stopping; no observation", zhTW: "正在停止；沒有觀察結果" },
         nextStep: {
           en: "Stopping the current connection attempt (maximum three seconds).",
           zhTW: "正在停止目前的連線嘗試（最長三秒）。",
@@ -166,8 +166,8 @@ const summaryForOutcome = (
         },
         outcomeLabel: { en: "Cancelled; no observation", zhTW: "已取消；沒有觀察結果" },
         nextStep: {
-          en: "Start this one check again when you want an observation.",
-          zhTW: "需要觀察結果時，再開始這一項檢查即可。",
+          en: "Start this check again for a new observation.",
+          zhTW: "重新開始這項檢查以取得新的觀察結果。",
         },
       };
     case "failed":

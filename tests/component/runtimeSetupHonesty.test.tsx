@@ -236,7 +236,7 @@ test("a build that cannot prepare local checks does not offer to", () => {
 
   expect(container.querySelector(".runtime-assistant--demo")).not.toBeNull();
   expect(container.querySelectorAll("button")).toHaveLength(0);
-  expect(container.textContent).toContain("Open the desktop app when you are ready");
+  expect(container.textContent).toContain("Open the desktop app to scan a real website");
   expect(container.textContent).not.toContain("preparation");
 });
 

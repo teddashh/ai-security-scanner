@@ -230,8 +230,8 @@ export const scanLifecycleToastPresentation = (
           tone: "info",
           title: { en: "Stopping this check", zhTW: "正在停止這項檢查" },
           detail: {
-            en: "Stopping this check. If a connection attempt already started, it will end within its 3-second limit.",
-            zhTW: "正在停止這項檢查。如果連線嘗試已經開始，它會在 3 秒的時間上限內結束。",
+            en: "Stopping this check. Active connection attempts end within 3 seconds.",
+            zhTW: "正在停止這項檢查；作用中的連線嘗試會在 3 秒內結束。",
           },
         }
       : {

@@ -176,8 +176,9 @@ test("cloud readiness failures use distinct plain-language fixes without exposin
   const ambiguousStart = progress.indexOf("provider_source_ambiguous:", capabilityStart);
   assert.match(progress.slice(capabilityStart, ambiguousStart), /reconnectCloud/u);
   assert.doesNotMatch(progress.slice(ambiguousStart), /action: copy\.reconnectCloud/u);
-  assert.match(progress, /Cloud readiness check incomplete/u);
-  assert.match(progress, /雲端準備狀態檢查尚未完成/u);
+  assert.match(progress, /Cloud readiness check stopped/u);
+  assert.match(progress, /雲端準備狀態檢查已停止/u);
+  assert.doesNotMatch(progress, /Cloud readiness check incomplete/u);
   assert.doesNotMatch(progress, /No scan started|掃描尚未開始/u);
   assert.doesNotMatch(progress, /readiness\.(?:message|detail|error)/u);
 });
@@ -207,7 +208,7 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
     ["Choose the local files again", "請重新選擇本機檔案"],
     ["Reconnect the saved data source", "請重新連接已保存的資料來源"],
     ["Restore one installed scan component", "恢復一項安裝元件"],
-    ["Selected-input and scan-tool readiness incomplete", "所選輸入與掃描工具的準備檢查尚未完成"],
+    ["Final readiness check stopped", "最後的準備狀態檢查已停止"],
     ["Open the saved results", "開啟已保存的結果"],
   ] as const) {
     assert.ok(progress.includes(english), english);
@@ -220,7 +221,7 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
     ["Installed scan component missing or changed", "隨附的掃描元件已遺失或變更"],
     ["Required installed scan component missing or out of date", "必要的隨附掃描元件已遺失或過期"],
     ["The saved read-only data source is missing or changed", "已保存的唯讀資料來源已遺失或有變更"],
-    ["Final readiness check incomplete", "最後的準備狀態檢查未完成"],
+    ["Final readiness check stopped", "最後的準備狀態檢查已停止"],
     ["Saved results needed to continue are missing or changed", "續跑所需的已保存結果已遺失或有變更"],
     ["This saved check no longer matches its original target plan", "這項已保存的檢查已無法對應原本的目標計畫"],
   ] as const) {
@@ -431,7 +432,7 @@ test("pre-scanner failures separate frozen authorization from runtime scope and 
     "Scanner runtime scope",
     "掃描執行環境範圍",
     "Not reached",
-    "尚未進行到這一步",
+    "未進行到這一步",
     "Retry stopped checks",
     "重試已停止的檢查",
   ]) assert.ok(progress.includes(copy), copy);
@@ -530,6 +531,34 @@ test("setup prerequisites and missing-source states use direct product language"
   assert.doesNotMatch(coverage, /Sources still needing data|source is still missing/iu);
   assert.doesNotMatch(findings, /sources still need data|Sources still needing usable information/iu);
   assert.doesNotMatch(provider, /may need your attention|Earlier setup work still has|Waiting for temporary access to expire/iu);
+});
+
+test("primary product copy has no delayed or repeat-failure disclaimers", async () => {
+  const inspected = (await Promise.all([
+    "../../src/App.tsx",
+    "../../src/localhostTcpPresentation.ts",
+    "../../src/scanLifecycleDisposition.ts",
+    "../../src/scanPresentation.ts",
+    "../../src/scanRequestOutcomePresentation.ts",
+    "../../src/settingsRuntimePresentation.ts",
+    "../../src/components/ProviderAuthorizationPanel.tsx",
+    "../../src/components/RuntimeSetupAssistant.tsx",
+    "../../src/pages/CasesPage.tsx",
+    "../../src/pages/CoveragePage.tsx",
+    "../../src/pages/ExportPage.tsx",
+    "../../src/pages/FindingsPage.tsx",
+    "../../src/pages/ProgressPage.tsx",
+    "../../src/pages/SettingsPage.tsx",
+  ].map((path) => readFile(new URL(path, import.meta.url), "utf8")))).join("\n");
+
+  assert.doesNotMatch(
+    inspected,
+    /if it (?:stops|fails) again|for support|when ready|when you are ready|when you want|not the complete set|next person knows|not checked yet|no (?:scan projects|scan results|checks|observation|reports saved) yet/iu,
+  );
+  assert.doesNotMatch(
+    inspected,
+    /若再次(?:停止|失敗)|以便排查|準備好(?:時|後)|之後仍可再|稍後逐項授權|讓接手者一看就懂|並非完整結果|還沒有掃描專案|尚無觀察結果|尚未產生掃描結果/u,
+  );
 });
 
 test("count copy stays grammatical when exactly one item is shown", async () => {
