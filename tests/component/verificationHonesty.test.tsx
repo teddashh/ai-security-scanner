@@ -49,7 +49,7 @@ const summary = (overrides: Partial<VerificationSummary> = {}): VerificationSumm
 });
 
 const renderVerification = (
-  verification: VerificationSummary,
+  verification: VerificationSummary | undefined,
   runs: ScanRun[],
   findings: Finding[] = [],
 ) =>
@@ -85,6 +85,24 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
+});
+
+test.each([
+  ["running", "active-run is running. Open Scan progress."],
+  ["paused", "active-run is paused. Open Scan progress to Continue or Cancel."],
+] as const)("an active %s scan returns verification to Progress directly", (status, expected) => {
+  const { container } = renderVerification(
+    undefined,
+    [run("run-before", "completed"), run("active-run", status)],
+  );
+
+  const notice = container.querySelector<HTMLElement>(".inline-notice--warning");
+  expect(notice?.textContent).toContain("Another scan is active");
+  expect(notice?.textContent).toContain(expected);
+  expect(notice?.textContent).not.toMatch(/still running|before checking the fix/iu);
+  expect(container.textContent).toContain(
+    "The new scan repeats the same approved scope. The comparison binds the earlier and new run IDs.",
+  );
 });
 
 test("a follow-up scan that stopped early is disclosed even when the comparison calls itself complete", () => {

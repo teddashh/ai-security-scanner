@@ -165,7 +165,7 @@ export const zhTW = {
   "status.stage.awaitingAdapter.label": "正在完成結果",
   "status.stage.awaitingAdapter.description": "正在將已保存的掃描器輸出轉換為結果。",
   "status.stage.cleanupPending.label": "正在收尾",
-  "status.stage.cleanupPending.description": "結果已保存，本機工具正在清理工作區。",
+  "status.stage.cleanupPending.description": "正在清理本機掃描工作區。",
   "status.stage.completed.label": "已完成",
   "status.stage.completed.description": "結果已保存，本機工作區也已清理完成。",
   "status.stage.cancelled.label": "已停止",

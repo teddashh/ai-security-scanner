@@ -163,7 +163,7 @@ export const en = {
   "status.stage.awaitingAdapter.label": "Finishing the results",
   "status.stage.awaitingAdapter.description": "Converting saved scanner output into results.",
   "status.stage.cleanupPending.label": "Wrapping up",
-  "status.stage.cleanupPending.description": "Results are saved while the local tools clean up.",
+  "status.stage.cleanupPending.description": "Cleaning the local scan workspace.",
   "status.stage.completed.label": "Complete",
   "status.stage.completed.description": "Results are saved and the local workspace is clean.",
   "status.stage.cancelled.label": "Stopped",
