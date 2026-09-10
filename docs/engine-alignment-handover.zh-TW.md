@@ -438,6 +438,21 @@ Progress 的引擎技術警告統一經過英／繁中產品顯示層。Adapter 
 artifact／valid findings 已保留、未臆造 finding、使用者停止掃描等辯護句，也不把 adapter、pinned
 reporter 或 result reader 等實作細節當成使用者操作。Producer census 逐條驗證目前所有警告形狀。
 
+## Setup、shell 與 localhost 狀態收斂（`6d545d9`）
+
+Settings 不再解釋重試沿用進度、暫停保留下載或繼續後恢復下載；只說明 setup 會下載工具，以及真正
+需要 Windows restart 時會顯示下一步。Shell refresh、localhost quick start、unsupported pause、
+cancelling 與 setup finished-but-not-ready 都直接顯示目前狀態與可用操作。Capture stage 只說正在記錄
+掃描器輸出，不把保存中的資料描述成報告，也不加入未發生事項或之後再試的說明。
+
+## 佇列、執行與待驗證狀態直接化（`b691aaf`）
+
+Pending engine 與 queued run 統一顯示 `Queued／已排入佇列`；Progress activity 直接顯示
+`Next check queued` 或 `Scan tool running`，不再說正在等待工具回報。Paused check 的下一步直接是
+`Continue scan／繼續掃描`。續跑通知、重新啟動接續點、cleanup checkpoint，以及 finding／case 的
+fix verification 狀態也改用 queued 或 pending 語意。Core presentation、shared locale 與 rendered
+Progress tests 同時鎖住英／繁中結果及禁用的等待式舊文案。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -550,6 +565,15 @@ RAM disk 資料或接觸任何 target。
 build 與 diff check 全部通過；producer census 涵蓋目前 70 種以上的 product-authored engine-warning
 形狀，Progress rendered case 也通過。Rust 程式碼未變更，本輪沒有執行 scanner、刪除 RAM disk
 資料或接觸任何 target。
+
+`6d545d9` 新增後，frontend 573 項、component 253 項、TypeScript typecheck、production frontend
+build 與 diff check 全部通過；相關 setup、shell、capture 與 localhost 舊文案搜尋結果為零。
+
+`b691aaf` 新增後，frontend 574 項、component 254 項、TypeScript typecheck、production frontend
+build 與 diff check 全部通過；rendered Progress test 驗證 queued 與 running 畫面，shared locale、
+per-check next step 及 resume lifecycle tests 驗證英／繁中直接狀態。Rust 程式碼未變更，沿用已通過的
+1,590 項完整 Rust CLI workspace 基線。本輪沒有執行 scanner、刪除 RAM disk 資料或接觸任何
+target。
 
 ## 後續順序
 

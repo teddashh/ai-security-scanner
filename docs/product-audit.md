@@ -257,6 +257,16 @@ incomplete results, unavailable references, and valid next actions without
 retention reassurance, human blame, or adapter/reporter implementation terms.
 The warning-producer census enforces this contract for every current shape.
 
+Setup, shell refresh, localhost connection checks, and scan capture now use the
+same status-first contract. Setup no longer explains retry, pause, continued
+downloads, or future availability; shell and localhost failures name the
+available action directly; active capture states only name the work underway.
+Queued checks are now labeled **Queued**, running checks **Scan tool running**,
+and fix follow-up **Verification pending**. Paused checks name the Continue
+action without a readiness qualifier. The shared status vocabulary, Progress
+overview, per-check row, and lifecycle acknowledgement use the same English and
+Traditional Chinese wording.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -303,8 +313,11 @@ The high-value remaining gaps are:
    clipboard fallback for cloud handoff requests and device codes. `0396db3`
    completes the visible setup-cancellation, project-creation,
    desktop-service, and adapter-conversion copy alignment. `048df2c` applies the
-   same direct presentation contract to every censused engine warning. The full
-   sequence still needs observation in a controlled
+   same direct presentation contract to every censused engine warning.
+   `6d545d9` removes the remaining setup, shell, capture, and localhost
+   wait-state explanations, and `b691aaf` gives queued, running, paused, and
+   pending-verification work one direct shared vocabulary. The full sequence
+   still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
