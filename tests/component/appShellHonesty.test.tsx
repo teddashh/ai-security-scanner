@@ -259,11 +259,11 @@ test("active runtime setup keeps exact stage and progress visible while mechanic
   const details = container.querySelector<HTMLDetailsElement>(".runtime-setup__details");
   expect(details).not.toBeNull();
   expect(details!.open).toBe(false);
-  expect(details!.textContent).toContain("download can be cancelled and resumed without starting over");
+  expect(details!.textContent).toContain("Downloading the advanced scan-tool package");
   expect(details!.textContent).toContain("Continuing from 10 bytes already downloaded");
   expect(details!.textContent).not.toContain("40 bytes / 100 bytes");
   expect(container.querySelectorAll(".runtime-setup > .button")).toHaveLength(1);
-  expect(getByRole("button", { name: "Pause setup and keep download progress" })).toBeTruthy();
+  expect(getByRole("button", { name: "Stop setup" })).toBeTruthy();
 });
 
 test("one recovery banner composes every concurrent truth and relevant retry action", () => {

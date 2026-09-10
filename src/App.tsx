@@ -134,7 +134,7 @@ const pageFromHash = (): PageId => {
 const recordTechnicalError = (context: string, error: unknown): void => {
   console.error(
     `[ai-security-scanner] ${context}`,
-    displaySafeTechnicalDetail(error) ?? "No display-safe technical detail was available.",
+    displaySafeTechnicalDetail(error) ?? "Technical detail unavailable.",
   );
 };
 
@@ -953,7 +953,7 @@ export default function App() {
           : nonRetryable
             ? text({ en: "An advanced local scan tool is unavailable in this app version", zhTW: "這個程式版本無法使用一項進階本機掃描工具" })
             : cancelled
-            ? text({ en: "Advanced local scan-tool setup paused", zhTW: "進階本機掃描工具設定已暫停" })
+            ? text({ en: "Advanced local scan-tool setup cancelled", zhTW: "進階本機掃描工具設定已取消" })
             : text({ en: "Advanced local scan-tool setup stopped", zhTW: "進階本機掃描工具設定已停止" }),
         detail: completed
           ? completedAndReady
@@ -972,8 +972,8 @@ export default function App() {
             })
           : cancelled
             ? text({
-              en: "Continue setup from the saved download.",
-              zhTW: "可從已保存的下載進度繼續設定。",
+              en: "Scan-tool status: not ready.",
+              zhTW: "掃描工具狀態：尚未就緒。",
             })
             : text({
               en: "Try setup again. Open Technical details if it stops again.",
@@ -1336,7 +1336,7 @@ export default function App() {
       recordTechnicalError("create case", error);
       pushToast({
         tone: "danger",
-        title: text({ en: "The scan project was not created", zhTW: "掃描專案沒有建立成功" }),
+        title: text({ en: "Scan project creation failed", zhTW: "掃描專案建立失敗" }),
         detail: text({ en: "Review the highlighted fields and try again.", zhTW: "請檢查畫面標示的欄位後再試一次。" }),
       });
       return false;
@@ -1366,8 +1366,8 @@ export default function App() {
       recordTechnicalError("create local scan project", error);
       pushToast({
         tone: "danger",
-        title: text({ en: "The scan project was not created", zhTW: "掃描專案沒有建立成功" }),
-        detail: text({ en: "No folder was copied. Check the current choices and try again.", zhTW: "沒有複製任何資料夾；請檢查目前選項後再試一次。" }),
+        title: text({ en: "Scan project creation failed", zhTW: "掃描專案建立失敗" }),
+        detail: text({ en: "Check the selected folder and try again.", zhTW: "請檢查所選資料夾後再試一次。" }),
       });
       setBusyAction(undefined);
       return false;

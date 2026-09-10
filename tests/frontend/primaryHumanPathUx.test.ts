@@ -49,6 +49,30 @@ test("project creation opens Review only while the user remains on the requestin
   assert.doesNotMatch(action, /await loadSnapshot\(result\.data\.id, true\);\s*setSelectedUseCase\(undefined\);\s*navigate\("coverage"\)/u);
 });
 
+test("project creation and desktop-service failures use direct outcomes", async () => {
+  const [app, scanner] = await Promise.all([
+    readSource("App.tsx"),
+    readSource("services/scanner.ts"),
+  ]);
+
+  for (const phrase of [
+    "Scan project creation failed",
+    "掃描專案建立失敗",
+    "Check the selected folder and try again",
+    "請檢查所選資料夾後再試一次",
+    "Technical detail unavailable",
+  ]) assert.ok(app.includes(phrase), phrase);
+  for (const phrase of [
+    "Desktop service unavailable. Restart ai-security-scanner.",
+    "桌面服務無法使用；請重新啟動 ai-security-scanner。",
+    "Operation failed.",
+    "操作失敗。",
+  ]) assert.ok(scanner.includes(phrase), phrase);
+
+  assert.doesNotMatch(app, /The scan project was not created|No folder was copied|No display-safe technical detail/u);
+  assert.doesNotMatch(scanner, /desktop service is starting|Keep the app open|桌面服務正在啟動|請讓程式保持開啟|Unknown error/iu);
+});
+
 test("the two primary report formats form a named radio group and the save action names the selection", async () => {
   const source = await readSource("pages/ExportPage.tsx");
 

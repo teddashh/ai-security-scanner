@@ -197,4 +197,13 @@ test("every managed-runtime warning stays concise and action-led", () => {
     assert.doesNotMatch(chinese, /保存.*結果|不受影響/u, `${key} should avoid defensive reassurance`);
     assert.doesNotMatch(chinese, /localhost|TCP/u, `${key} should not advertise an unrelated connection utility`);
   }
+
+  assert.equal(
+    i18n.translate("en", "runtime.phase.cancelled.detail"),
+    "Scan-tool status: not ready.",
+  );
+  assert.equal(
+    i18n.translate("zh-TW", "runtime.phase.cancelled.detail"),
+    "掃描工具狀態：尚未就緒。",
+  );
 });

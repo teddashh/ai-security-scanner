@@ -159,8 +159,8 @@ const isNativeSurface = (): boolean => Boolean(packagedTauriPlatform) || hasLive
 const invoke = async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
   if (!hasLiveTauriBridge()) {
     throw new Error(serviceText(
-      "The desktop service is starting. Keep the app open and try again.",
-      "桌面服務正在啟動；請讓程式保持開啟並再試一次。",
+      "Desktop service unavailable. Restart ai-security-scanner.",
+      "桌面服務無法使用；請重新啟動 ai-security-scanner。",
     ));
   }
   return tauriInvoke<T>(command, args);
@@ -172,7 +172,7 @@ const errorMessage = (error: unknown): string => {
   try {
     return JSON.stringify(error);
   } catch {
-    return "Unknown error";
+    return serviceText("Operation failed.", "操作失敗。");
   }
 };
 

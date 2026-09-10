@@ -202,7 +202,7 @@ test("technical details expose only a bounded failure category", () => {
   assert.doesNotMatch(source, /displaySafeTechnicalDetail\(status\?\.detail\)|<code>\{status\?\.detail\}<\/code>/u);
 });
 
-test("cancelled setup offers an honest continuation", () => {
+test("cancelled setup presents a direct terminal state and continuation action", () => {
   const state = resolveRuntimeSetupPresentation({
     mode: "native",
     runtimeAvailable: false,
@@ -211,13 +211,21 @@ test("cancelled setup offers an honest continuation", () => {
   assert.equal(state.setupCancelled, true);
   assert.equal(state.setupFailed, false);
   for (const phrase of [
-    "Advanced local scan-tool setup paused",
-    "Continue setup from the saved download",
+    "Advanced local scan-tool setup cancelled",
+    "Scan-tool status: not ready",
     "Continue advanced scan setup",
-    "進階本機掃描工具設定已暫停",
-    "可從已保存的下載進度繼續設定",
+    "進階本機掃描工具設定已取消",
+    "掃描工具狀態：尚未就緒",
     "繼續進階掃描設定",
   ]) assert.ok(source.includes(phrase), phrase);
+  for (const phrase of [
+    "Advanced local scan-tool setup cancelled",
+    "Scan-tool status: not ready",
+    "進階本機掃描工具設定已取消",
+    "掃描工具狀態：尚未就緒",
+  ]) assert.ok(appSource.includes(phrase), phrase);
+  assert.doesNotMatch(source, /paused|saved download|download was kept|設定已暫停|已保存的下載|下載進度已保留/iu);
+  assert.doesNotMatch(appSource, /setup paused|saved download|設定已暫停|已保存的下載/iu);
   assert.match(source, /setupCancelled \? text\.continue : text\.start/u);
 });
 
@@ -309,9 +317,9 @@ test("backend stale state is visible without the UI inventing a terminal failure
   assert.equal(state.setupFailed, false);
   for (const phrase of [
     "Stopping advanced local scan-tool setup",
-    "Retry opens after the stop completes",
+    "Current setup step is stopping",
     "正在停止進階本機掃描工具設定",
-    "停止完成後即可重試",
+    "目前設定步驟正在停止",
   ]) assert.ok(source.includes(phrase), phrase);
 });
 

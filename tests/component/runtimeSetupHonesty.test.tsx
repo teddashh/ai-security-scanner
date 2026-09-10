@@ -4,29 +4,9 @@ import { afterEach, expect, test, vi } from "vitest";
 import { RuntimeSetupAssistant } from "../../src/components/RuntimeSetupAssistant";
 import type { ManagedRuntimeSetupStatus } from "../../src/types";
 
-// This panel is the app's account of why a check it advertised cannot run. Its
-// claims are unusually load-bearing because the user reads them *instead of* a
-// result: there is nothing on screen to calibrate against, so whatever the panel
-// says about the consequences is all they get.
-//
-// Three kinds of claim are pinned below.
-//
-//   - What the report will say. Two sentences here promise something about a
-//     document the user has not opened yet -- that an unrunnable check is
-//     marked not tested, and that a coverage gap is named. Those cross a
-//     boundary this component cannot see over.
-//   - What has and has not happened to their data. "The download was kept",
-//     "your scan projects are unchanged", "no saved scan was changed".
-//   - What the app is still offering. An affordance is a claim too: a Retry
-//     button beside a failure that can never succeed says the failure is
-//     temporary. Absence of a button is therefore an assertion, and is tested
-//     as one -- always against a sibling case where the button must appear, so
-//     a component that simply never renders buttons cannot pass.
-//
-// `resolveRuntimeSetupPresentation` is already covered as a pure function in
-// tests/frontend/runtimeSetupAssistant.test.ts. What was not covered is whether
-// the nine-branch title/description cascade and the four-branch action cascade
-// actually resolve to those strings, which only rendering can show.
+// Rendered checks pin the setup lifecycle, available action, and concise copy
+// presented for each state. Pure presentation-state coverage lives in the
+// matching frontend test.
 
 const setupStatus = (
   overrides: Partial<ManagedRuntimeSetupStatus> = {},
@@ -153,7 +133,7 @@ test("a Windows restart requirement replaces the generic failure", () => {
     }),
   });
 
-  expect(heading(container)).toBe("Advanced local scan-tool setup is waiting for a Windows restart");
+  expect(heading(container)).toBe("Windows restart required for advanced local scan tools");
   expect(explanation(container)).toContain("Restart Windows, reopen ai-security-scanner");
   expect(explanation(container)).not.toContain("localhost");
   expect(actionButtons(container)[0]?.textContent).toContain("Continue after restarting Windows");
@@ -165,7 +145,7 @@ test("a stale attempt shows the stop state and opens Retry only after stopping",
   });
 
   expect(heading(container)).toBe("Stopping advanced local scan-tool setup");
-  expect(explanation(container)).toContain("Retry opens after the stop completes");
+  expect(explanation(container)).toContain("Current setup step is stopping");
   expect(explanation(container)).not.toContain("localhost");
 
   const buttons = actionButtons(container);
@@ -173,14 +153,13 @@ test("a stale attempt shows the stop state and opens Retry only after stopping",
   expect(buttons[0].textContent).not.toContain("Try");
 });
 
-test("stopping promises the download is kept, and the paused state confirms it was", () => {
-  // Two separate strings written at different times, and the second is the only
-  // evidence the user ever gets for the first.
+test("stopping and cancelled setup use direct lifecycle states", () => {
   const running = renderAssistant({
     status: setupStatus({ phase: "download", active: true, canCancel: true }),
   });
   const stopButton = actionButtons(running.container)[0];
-  expect(stopButton.textContent).toContain("Stop advanced scan setup and keep the download");
+  expect(stopButton.textContent).toContain("Stop advanced scan setup");
+  expect(stopButton.textContent).not.toContain("keep");
   fireEvent.click(stopButton);
   expect(running.onCancel).toHaveBeenCalledTimes(1);
   expect(running.onSetup).not.toHaveBeenCalled();
@@ -188,11 +167,11 @@ test("stopping promises the download is kept, and the paused state confirms it w
   cleanup();
 
   const { container } = renderAssistant({ status: setupStatus({ phase: "cancelled" }) });
-  expect(heading(container)).toBe("Advanced local scan-tool setup paused");
-  expect(explanation(container)).toContain("Continue setup from the saved download");
+  expect(heading(container)).toBe("Advanced local scan-tool setup cancelled");
+  expect(explanation(container)).toContain("Scan-tool status: not ready");
   expect(explanation(container)).not.toContain("localhost");
-  // "Continue" and "Try again" are different claims about what was kept.
   expect(actionButtons(container)[0].textContent).toContain("Continue advanced scan setup");
+  expect(container.textContent).not.toMatch(/paused|saved download|download was kept/iu);
   expect(container.querySelector(".runtime-assistant__technical")).toBeNull();
 });
 
