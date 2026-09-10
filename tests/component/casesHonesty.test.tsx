@@ -462,6 +462,20 @@ test("the selected project opens the useful next step instead of always returnin
   expect(onContinue).toHaveBeenCalledTimes(1);
 });
 
+test("a no-checks terminal outcome opens Results without becoming a verification baseline", () => {
+  const onOpenResults = vi.fn();
+  const noChecksRun = run({ status: "no_checks_completed", progress: 100 });
+  const { container, getByRole } = renderCases({
+    latestRun: noChecksRun,
+    runs: [noChecksRun],
+    onOpenResults,
+  });
+
+  fireEvent.click(getByRole("button", { name: /View results/u }));
+  expect(onOpenResults).toHaveBeenCalledTimes(1);
+  expect(container.querySelector(".verification-baseline-panel")).toBeNull();
+});
+
 test("a project row opens that project instead of silently changing a distant hero", () => {
   const onOpenCase = vi.fn();
   const { container } = renderCases({ onOpenCase });

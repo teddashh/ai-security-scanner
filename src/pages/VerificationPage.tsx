@@ -6,6 +6,7 @@ import { StatusPill } from "../components/StatusPill";
 import { useI18n } from "../i18n";
 import { diffMeta, runStatusMeta, severityMeta } from "../lib";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
+import { isVerificationBaselineRun } from "../runLifecycle.ts";
 import type { DiffState, Finding, ScanRun, VerificationSummary } from "../types";
 import {
   affectedEngineCount,
@@ -185,7 +186,7 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
   );
 
   const activeRun = runs.find((run) => run.status === "running" || run.status === "queued" || run.status === "paused");
-  const terminalRuns = runs.filter((run) => ["completed", "partial", "failed", "cancelled"].includes(run.status));
+  const terminalRuns = runs.filter(isVerificationBaselineRun);
   const selectedBaselineRun = terminalRuns.find((run) => run.id === baselineRunId);
   const showRunDate = (run: ScanRun): string => formatDateTime(run.finishedAt ?? run.startedAt);
   const baselinePicker = terminalRuns.length > 0 ? (

@@ -37,6 +37,7 @@ import {
 } from "./caseScopedUiState";
 import { isExactBuiltInLocalhostQuickScanRun } from "./localhostQuickScan";
 import { pageForSelectedRunLifecycle } from "./pageNavigation";
+import { isTerminalResultRun, isVerificationBaselineRun } from "./runLifecycle.ts";
 import {
   cloneRuntimeDeferredScanInput,
   shouldPrepareRuntimeBeforeScanAction,
@@ -326,9 +327,6 @@ const scanStartIssueCopy = {
     zhTW: "最後的準備狀態檢查已停止；請重新檢查。",
   },
 } as const satisfies Partial<Record<ScanReadinessBlocker | "resume_release_incompatible" | "resume_work_plan_invalid", BilingualText>>;
-
-const isTerminalRun = (run: ScanRun): boolean =>
-  ["completed", "partial", "failed", "cancelled"].includes(run.status);
 
 const ACTIVE_SCAN_REFRESH_INTERVAL_MS = 5_000;
 const RUNTIME_TRUTH_REFRESH_INTERVAL_MS = 10_000;
@@ -1253,8 +1251,8 @@ export default function App() {
     const interruptedRun = workspace.runs.find((run) => run.engineRuns.some(
       (engine) => engine.phase === "interrupted_restart" || engine.errorCode === "desktop_process_restarted",
     ));
-    const terminalRun = workspace.runs.find((run) => ["completed", "partial", "failed", "cancelled"].includes(run.status));
-    navigate(activeRun || interruptedRun ? "progress" : terminalRun ? "findings" : "coverage");
+    const terminalResultRun = workspace.runs.find(isTerminalResultRun);
+    navigate(activeRun || interruptedRun ? "progress" : terminalResultRun ? "findings" : "coverage");
   };
 
   const retryScanReadiness = async (caseId: string) => {
@@ -2035,7 +2033,7 @@ export default function App() {
     [snapshot, workspace],
   );
   const terminalRuns = useMemo(
-    () => workspace?.runs.filter(isTerminalRun) ?? [],
+    () => workspace?.runs.filter(isVerificationBaselineRun) ?? [],
     [workspace?.runs],
   );
 

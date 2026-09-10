@@ -30,6 +30,7 @@ import {
   type InternalHostPortsError,
 } from "../internalHostProfile";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
+import { isTerminalResultRun, isVerificationBaselineRun } from "../runLifecycle.ts";
 import { scannerService } from "../services/scanner";
 import type {
   AiGeneratedArtifactAnswer,
@@ -751,9 +752,10 @@ export function CasesPage({
     (engine) => engine.phase === "interrupted_restart" || engine.errorCode === "desktop_process_restarted",
   ).length ?? 0;
   const incompleteEngineCount = latestRun?.engineRuns.filter((engine) => engine.status !== "completed").length ?? 0;
-  const terminalRuns = runs.filter((run) => ["completed", "partial", "failed", "cancelled"].includes(run.status));
+  const terminalResultRuns = runs.filter(isTerminalResultRun);
+  const verificationBaselineRuns = runs.filter(isVerificationBaselineRun);
   const activeRun = runs.find((run) => ["queued", "running", "paused"].includes(run.status));
-  const selectedVerificationBaseline = terminalRuns.find((run) => run.id === verificationBaselineRunId);
+  const selectedVerificationBaseline = verificationBaselineRuns.find((run) => run.id === verificationBaselineRunId);
   const additionalPlatforms = selectedDefinition
     ? platformIds.filter((platform) => !selectedDefinition.suggestedPlatforms.includes(platform))
     : platformIds;
@@ -1789,7 +1791,7 @@ export function CasesPage({
             type="button"
             onClick={interruptedEngineCount > 0 || activeRun
               ? onOpenProgress
-              : terminalRuns.length > 0
+              : terminalResultRuns.length > 0
                 ? onOpenResults
                 : onContinue}
           >
@@ -1797,7 +1799,7 @@ export function CasesPage({
               ? pageCopy.handleInterrupted
               : activeRun
                 ? pageCopy.viewProgress
-                : terminalRuns.length > 0
+                : terminalResultRuns.length > 0
                   ? pageCopy.viewResults
                   : pageCopy.viewCoverage)}
             <Icon name="arrow" size={17} />
@@ -1805,7 +1807,7 @@ export function CasesPage({
         </section>
       )}
 
-      {selectedCase && terminalRuns.length > 0 && (
+      {selectedCase && verificationBaselineRuns.length > 0 && (
         <details className="section-block page-secondary-feature verification-baseline-panel">
           <summary>
             <span><strong>{text(pageCopy.verificationEyebrow)}</strong><small>{text(pageCopy.verificationTitle)}</small></span>
@@ -1818,7 +1820,7 @@ export function CasesPage({
           <label className="field">
             <span>{text(pageCopy.baseline)}</span>
             <select value={verificationBaselineRunId ?? ""} onChange={(event) => onSelectVerificationBaseline(event.target.value)}>
-              {terminalRuns.map((run) => (
+              {verificationBaselineRuns.map((run) => (
                 <option key={run.id} value={run.id}>
                   {scanRunIdentityPresentation(run, locale)} · {t(runStatusKeys[run.status])} · {formatDateTime(run.finishedAt ?? run.startedAt)}
                 </option>
