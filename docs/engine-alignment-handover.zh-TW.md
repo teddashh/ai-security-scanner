@@ -453,6 +453,14 @@ Pending engine 與 queued run 統一顯示 `Queued／已排入佇列`；Progress
 fix verification 狀態也改用 queued 或 pending 語意。Core presentation、shared locale 與 rendered
 Progress tests 同時鎖住英／繁中結果及禁用的等待式舊文案。
 
+## Setup 必要條件與缺少資料狀態直接化（`ed5c831`）
+
+內部網站與主動測試的授權邊界維持不變，但畫面改由產品直接陳述 Start 的必要確認與授權欄位，不再
+寫成「你必須」。未連接來源直接顯示 `no connected source`；Coverage 與 Results 統一顯示缺少資料
+的來源數。Cloud cleanup 直接顯示需要處理的清理紀錄與 `temporary access expiry pending`，不再要求
+等待或把 setup 狀態寫成可能需要使用者注意。重新啟動接續點只陳述已記錄的 checkpoint，不再加入
+不會自動重連的實作說明。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -574,6 +582,11 @@ build 與 diff check 全部通過；rendered Progress test 驗證 queued 與 run
 per-check next step 及 resume lifecycle tests 驗證英／繁中直接狀態。Rust 程式碼未變更，沿用已通過的
 1,590 項完整 Rust CLI workspace 基線。本輪沒有執行 scanner、刪除 RAM disk 資料或接觸任何
 target。
+
+`ed5c831` 新增後，frontend 575 項、component 254 項、TypeScript typecheck、production frontend
+build 與 diff check 全部通過；Cases、Coverage 與 provider cleanup 的 rendered tests，以及跨頁面
+direct-copy contract 均通過。Rust 程式碼未變更，本輪沒有執行 scanner、刪除 RAM disk 資料或接觸
+任何 target。
 
 ## 後續順序
 

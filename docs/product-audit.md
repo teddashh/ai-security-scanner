@@ -267,6 +267,14 @@ action without a readiness qualifier. The shared status vocabulary, Progress
 overview, per-check row, and lifecycle acknowledgement use the same English and
 Traditional Chinese wording.
 
+Target authorization and missing-source states are also product-stated
+conditions rather than instructions that transfer ownership of the workflow.
+Internal website setup says Start requires explicit confirmation for the exact
+network target; active testing lists its required authorization fields; missing
+inventory sources report **No connected source**. Cloud cleanup reports an open
+record or pending credential expiry directly. Coverage and Results use the same
+compact missing-data vocabulary without wait-state phrasing.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -316,8 +324,10 @@ The high-value remaining gaps are:
    same direct presentation contract to every censused engine warning.
    `6d545d9` removes the remaining setup, shell, capture, and localhost
    wait-state explanations, and `b691aaf` gives queued, running, paused, and
-   pending-verification work one direct shared vocabulary. The full sequence
-   still needs observation in a controlled
+   pending-verification work one direct shared vocabulary. `ed5c831` states
+   target authorization, source availability, and cloud cleanup as product
+   requirements and current states without second-person obligation or waiting
+   language. The full sequence still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
