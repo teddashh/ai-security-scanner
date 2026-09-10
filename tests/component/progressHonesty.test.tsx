@@ -313,6 +313,19 @@ test("no engine state is rendered without a label", () => {
   expect(labels).toEqual([]);
 });
 
+test("queued work is named directly in the progress overview and check row", () => {
+  const { container } = renderProgress(
+    run([engine("queued-check", "pending", { phase: "planned" })], "queued"),
+  );
+
+  const activity = container.querySelector<HTMLElement>(".scan-activity__current");
+  const queuedCheck = engineRow(container, "queued-check");
+  expect(activity?.textContent).toContain("Next check queued");
+  expect(queuedCheck.querySelector(".status-pill")?.textContent).toBe("Queued");
+  expect(queuedCheck.textContent).toContain("This check is queued.");
+  expect(`${activity?.textContent} ${queuedCheck.textContent}`).not.toMatch(/waiting|still needed/iu);
+});
+
 test("collapsing every check into one shared failure still states how many stopped", () => {
   // When two or more checks all fail identically before binding scope, the page
   // replaces the whole engine list with one aggregate row. That is honest only
@@ -366,6 +379,8 @@ test("an active scan keeps durable security findings in progress until the run f
   );
 
   expect(container.querySelector('a[href="#findings"]')).toBeNull();
+  expect(container.querySelector(".scan-activity__current")?.textContent).toContain("Scan tool running");
+  expect(container.querySelector(".scan-activity__current")?.textContent).not.toMatch(/waiting.*report back/iu);
   expect(container.querySelector(".run-overview__timing")?.textContent).toContain(
     "Timing target: a useful result within minutes after tools are ready.",
   );

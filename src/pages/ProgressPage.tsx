@@ -359,8 +359,8 @@ const copy = {
   nextStepCode: { en: "Next-step code", zhTW: "下一步代碼" },
   activityStates: {
     waiting_to_start: {
-      title: { en: "Waiting for the next check to start", zhTW: "正在等待下一項檢查開始" },
-      body: { en: "The scan is queued. A check will start as soon as its local scan tool is available.", zhTW: "掃描已排入佇列；本機掃描工具可用後，就會開始下一項檢查。" },
+      title: { en: "Next check queued", zhTW: "下一項檢查已排入佇列" },
+      body: { en: "The scan is queued for an available local scan tool.", zhTW: "掃描已排入本機掃描工具的執行佇列。" },
     },
     checking_readiness: {
       title: { en: "Checking the saved target and scan tool", zhTW: "正在確認已保存的目標與掃描工具" },
@@ -371,8 +371,8 @@ const copy = {
       body: { en: "The private scan environment is getting the verified tool ready.", zhTW: "專用掃描環境正在準備已驗證的工具。" },
     },
     scanner_working: {
-      title: { en: "Waiting for the scan tool to report back", zhTW: "正在等待掃描工具回報" },
-      body: { en: "The check is running. The next update appears when progress is saved.", zhTW: "檢查正在執行；保存新進度時會顯示下一次更新。" },
+      title: { en: "Scan tool running", zhTW: "掃描工具執行中" },
+      body: { en: "The check is running.", zhTW: "檢查正在執行。" },
     },
     preparing_results: {
       title: { en: "Saving and organizing the results", zhTW: "正在保存並整理結果" },
@@ -454,8 +454,8 @@ const copy = {
     zhTW: "應用程式關閉時，掃描已暫停",
   },
   interruptedBody: {
-    en: "Checks waiting: {count}. Continue or cancel this scan.",
-    zhTW: "有 {count} 項檢查正在等待；請繼續或取消這次掃描。",
+    en: "Checks queued: {count}. Available actions: Continue or Cancel.",
+    zhTW: "已排入佇列的檢查：{count} 項。可用操作：繼續或取消。",
   },
   resumeOriginal: { en: "Continue the original scope", zhTW: "繼續原本的範圍" },
   cancelKeepRecord: { en: "Cancel and keep the record", zhTW: "取消並保留紀錄" },
@@ -532,7 +532,7 @@ const copy = {
   checkProgress: { en: "Check progress", zhTW: "檢查進度" },
   currentStep: { en: "Current step: ", zhTW: "目前步驟：" },
   interruptedPhase: { en: "Stopped when the desktop app restarted", zhTW: "桌面程式重新啟動時中斷" },
-  queuedResumePhase: { en: "Waiting to continue", zhTW: "等待繼續執行" },
+  queuedResumePhase: { en: "Queued to continue", zhTW: "已排入續跑佇列" },
   unknownPhase: { en: "Scanner-reported step", zhTW: "掃描工具回報的步驟" },
   checkpoint: { en: "Saved restart point", zhTW: "已保存的接續點" },
   attempt: { en: "Attempt", zhTW: "嘗試次數" },
@@ -546,7 +546,7 @@ const copy = {
   runtimeScopeNotReached: { en: "Not reached", zhTW: "尚未進行到這一步" },
   cleanup: { en: "Cleanup", zhTW: "環境清理" },
   cleanupDone: { en: "Done", zhTW: "完成" },
-  cleanupPending: { en: "Still needed", zhTW: "仍待處理" },
+  cleanupPending: { en: "Pending", zhTW: "待處理" },
   legacyFindingUnknown: { en: "Problem count unavailable", zhTW: "目前無法取得問題數量" },
   findingCount: { en: "Saved results: {count}", zhTW: "{count} 筆已保存結果" },
   targets: { en: "Targets", zhTW: "目標數" },

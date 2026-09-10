@@ -193,7 +193,12 @@ test("result-won dispositions preserve reachable, closed, timed-out, and failed 
 });
 
 test("resume disposition never calls a retained terminal result queued", () => {
-  assert.equal(deriveResumeLifecycleDisposition(workspace(run("queued")), "run-1").outcome, "queued");
+  const queued = deriveResumeLifecycleDisposition(workspace(run("queued")), "run-1");
+  assert.equal(queued.outcome, "queued");
+  assert.deepEqual(scanLifecycleToastPresentation(queued).detail, {
+    en: "Scan progress now shows whether this check is queued or running.",
+    zhTW: "掃描進度現在會顯示這項檢查已排入佇列或正在執行。",
+  });
   assert.equal(deriveResumeLifecycleDisposition(workspace(run("running")), "run-1").outcome, "queued");
   assert.equal(deriveResumeLifecycleDisposition(workspace(run("paused", [engine({ status: "paused" })])), "run-1").outcome, "unconfirmed");
 

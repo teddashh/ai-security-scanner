@@ -139,7 +139,7 @@ export const en = {
   "status.coverage.notApplicable.short": "Skipped",
   "status.coverage.notApplicable.description": "This item was left out of this scan; it was not checked.",
 
-  "status.engine.pending": "Waiting",
+  "status.engine.pending": "Queued",
   "status.engine.running": "Running",
   "status.engine.paused": "Paused",
   "status.engine.completed": "Completed",
@@ -171,7 +171,7 @@ export const en = {
   "status.stage.failed.label": "Needs attention",
   "status.stage.failed.description": "This attempt stopped before it completed. Follow the next step shown for this check.",
 
-  "status.run.queued": "Waiting",
+  "status.run.queued": "Queued",
   "status.run.running": "Scanning",
   "status.run.paused": "Paused",
   "status.run.completed": "Completed",
@@ -197,7 +197,7 @@ export const en = {
   "status.workflow.assigned": "Assigned to an owner",
   "status.workflow.falsePositive": "Confirmed false positive",
   "status.workflow.remediationReported": "Fix reported",
-  "status.workflow.pendingVerification": "Fixed; waiting for verification",
+  "status.workflow.pendingVerification": "Fix reported; verification pending",
   "status.workflow.resolved": "Verified as resolved",
 
   "status.diff.resolved.label": "No longer observed",
@@ -219,7 +219,7 @@ export const en = {
   "status.case.verifying": "Checking fixes",
   "status.case.archived": "Archived",
   "status.case.complete": "First scan completed",
-  "status.case.verificationDue": "Waiting to check fixes",
+  "status.case.verificationDue": "Fix verification pending",
 
   "platform.aws": "AWS",
   "platform.azure": "Azure",

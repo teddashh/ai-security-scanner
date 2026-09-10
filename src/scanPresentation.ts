@@ -64,16 +64,16 @@ const fallbackOutcome: BilingualText = {
 
 const nextStepCopy = {
   waiting: {
-    en: "This check is waiting for its turn.",
-    zhTW: "這項檢查正在等待執行。",
+    en: "This check is queued.",
+    zhTW: "這項檢查已排入佇列。",
   },
   running: {
     en: "This check is running now.",
     zhTW: "這項檢查正在執行。",
   },
   paused: {
-    en: "Continue this scan when you are ready.",
-    zhTW: "準備好後，繼續這次掃描即可。",
+    en: "Select Continue scan.",
+    zhTW: "請選擇「繼續掃描」。",
   },
   completedWithFindings: {
     en: "Review the problems found and start with the highest priority.",

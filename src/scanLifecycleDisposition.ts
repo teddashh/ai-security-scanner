@@ -259,7 +259,7 @@ export const scanLifecycleToastPresentation = (
       title: { en: "Continue request accepted", zhTW: "已接受繼續要求" },
       detail: {
         en: "Scan progress now shows whether this check is queued or running.",
-        zhTW: "掃描進度現在會顯示這項檢查正在等待或執行中。",
+        zhTW: "掃描進度現在會顯示這項檢查已排入佇列或正在執行。",
       },
     };
   }

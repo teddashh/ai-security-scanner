@@ -88,6 +88,23 @@ test("every check state provides an actionable bilingual next step without raw e
   }
 });
 
+test("queued and paused checks state their status or available action directly", () => {
+  assert.deepEqual(
+    engineNextStepFor(engine({ status: "pending", phase: "planned" })),
+    {
+      en: "This check is queued.",
+      zhTW: "這項檢查已排入佇列。",
+    },
+  );
+  assert.deepEqual(
+    engineNextStepFor(engine({ status: "paused", phase: "paused" })),
+    {
+      en: "Select Continue scan.",
+      zhTW: "請選擇「繼續掃描」。",
+    },
+  );
+});
+
 test("known setup failures lead to the matching automatic next step", () => {
   const target = engineNextStepFor(engine({ status: "not_executed", errorCode: "no_compatible_authorized_assets" }));
   const tools = engineNextStepFor(engine({

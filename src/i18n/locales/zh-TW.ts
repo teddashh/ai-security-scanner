@@ -141,7 +141,7 @@ export const zhTW = {
   "status.coverage.notApplicable.short": "已略過",
   "status.coverage.notApplicable.description": "這個項目沒有納入本次掃描，因此尚未檢查。",
 
-  "status.engine.pending": "等待中",
+  "status.engine.pending": "已排入佇列",
   "status.engine.running": "執行中",
   "status.engine.paused": "已暫停",
   "status.engine.completed": "已完成",
@@ -173,7 +173,7 @@ export const zhTW = {
   "status.stage.failed.label": "需要處理",
   "status.stage.failed.description": "這次嘗試在完成前停止了；請依照這項檢查顯示的下一步處理。",
 
-  "status.run.queued": "等待中",
+  "status.run.queued": "已排入佇列",
   "status.run.running": "掃描中",
   "status.run.paused": "已暫停",
   "status.run.completed": "已完成",
@@ -199,7 +199,7 @@ export const zhTW = {
   "status.workflow.assigned": "已交給負責人",
   "status.workflow.falsePositive": "確認為誤報",
   "status.workflow.remediationReported": "已回報修復",
-  "status.workflow.pendingVerification": "已修復，等待確認",
+  "status.workflow.pendingVerification": "已回報修復，待驗證",
   "status.workflow.resolved": "已確認解決",
 
   "status.diff.resolved.label": "這次沒有再看到",
@@ -221,7 +221,7 @@ export const zhTW = {
   "status.case.verifying": "正在確認修復",
   "status.case.archived": "已封存",
   "status.case.complete": "第一次掃描完成",
-  "status.case.verificationDue": "等待確認修復",
+  "status.case.verificationDue": "待驗證修復",
 
   "platform.aws": "AWS",
   "platform.azure": "Azure",
