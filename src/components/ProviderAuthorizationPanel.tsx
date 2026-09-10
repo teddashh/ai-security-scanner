@@ -207,8 +207,8 @@ const copy = {
   capabilityVersion: { en: "Capability definition {version}", zhTW: "能力定義版本 {version}" },
   capabilityScope: { en: "Verified connected source scope", zhTW: "已驗證的連線來源範圍" },
   capabilityScopeUnknown: {
-    en: "The exact source scope will appear after provider verification.",
-    zhTW: "完成雲端服務商驗證後，才會顯示明確來源範圍。",
+    en: "Provider verification records the exact source scope.",
+    zhTW: "精確來源範圍由雲端服務商驗證記錄。",
   },
   capabilityProfiles: { en: "Installed profiles", zhTW: "安裝的設定檔" },
   capabilityNoProfile: { en: "No released profile", zhTW: "沒有已發布的設定檔" },

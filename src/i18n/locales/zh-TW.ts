@@ -110,7 +110,7 @@ export const zhTW = {
   "update.installing": "正在驗證並安裝…",
   "update.restarting": "即將重新啟動…",
   "update.available": "更新至 {version}",
-  "update.availableHelp": "準備好後即可安裝更新。",
+  "update.availableHelp": "安裝程序會重新啟動 ai-security-scanner。",
   "update.error": "更新檢查失敗 · 再試一次",
   "update.errorHelp": "按下此按鈕重新執行簽署更新檢查。",
   "update.checking": "正在檢查更新…",

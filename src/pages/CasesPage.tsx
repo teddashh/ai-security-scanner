@@ -373,8 +373,8 @@ const pageCopy = {
   baselineChoose: { en: "Choose a finished run.", zhTW: "請選擇一個已結束的掃描。" },
   activeRun: { en: "{label} is active. Available actions: Resume or Cancel.", zhTW: "{label} 尚未結束。可用操作：續跑或取消。" },
   verificationOutcome: {
-    en: "When the new scan finishes, the case will show resolved, still present, new, and unverifiable results.",
-    zhTW: "新掃描完成後，案件會列出已解決、仍存在、新增與無法確認的結果。",
+    en: "Comparison outcomes: resolved, still present, new, and unverifiable.",
+    zhTW: "比較結果：已解決、仍存在、新增與無法確認。",
   },
   handleActiveFirst: { en: "Handle the active run first", zhTW: "先處理未結束的掃描" },
   startVerification: { en: "Start a new check from this baseline", zhTW: "以這次結果開始複驗" },

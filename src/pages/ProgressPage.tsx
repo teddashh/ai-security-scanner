@@ -346,8 +346,8 @@ const copy = {
   activeScanAssets: { en: "Assets in current or next check", zhTW: "目前或下一項檢查的資產" },
   noRunActivityTitle: { en: "Event log before the scan starts", zhTW: "掃描前事件紀錄" },
   noRunActivityDescription: {
-    en: "Readiness checks appear here.",
-    zhTW: "準備狀態檢查會顯示在這裡。",
+    en: "Readiness-check events for this scan.",
+    zhTW: "這次掃描的準備狀態檢查事件。",
   },
   readinessChecked: { en: "Readiness checked", zhTW: "已檢查掃描準備狀態" },
   scanNotStartedEvent: { en: "Scan did not start", zhTW: "掃描沒有開始" },
@@ -513,8 +513,8 @@ const copy = {
   workEyebrow: { en: "CHECKS", zhTW: "檢查項目" },
   workTitle: { en: "Checks", zhTW: "檢查項目" },
   workDescription: {
-    en: "Each check shows its result, current step, and next action.",
-    zhTW: "每項檢查都會顯示結果、目前進度與下一步。",
+    en: "Result, current step, and next action for each check.",
+    zhTW: "每項檢查的結果、目前進度與下一步。",
   },
   workCount: { en: "{count} checks", zhTW: "{count} 項檢查" },
   workCountOne: { en: "1 check", zhTW: "1 項檢查" },
