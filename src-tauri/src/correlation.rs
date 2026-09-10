@@ -264,10 +264,9 @@ fn partition_members(
                 engine_ids.len(),
                 engine_ids.join(", ")
             ),
-            uncertainty: "Grouping these is a presentation choice. It does not mean the engines \
-                          confirmed each other independently, and it does not remove any finding: \
-                          every member keeps its own evidence and stays separately addressable."
-                .into(),
+            uncertainty:
+                "Presentation-only grouping. Each member retains separate evidence and remediation."
+                    .into(),
             corroboration: CorroborationStatus::NotEstablished,
             finding_ids,
             engine_ids,

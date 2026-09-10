@@ -222,8 +222,8 @@ const demoRuntimeSetupStatus = (): ManagedRuntimeSetupStatus => ({
   canCancel: false,
   canRetry: true,
   detail: serviceText(
-    "Demo mode does not download or start a scan environment.",
-    "展示模式不會下載或啟動掃描環境。",
+    "Open the desktop app to prepare the scan tools.",
+    "請開啟桌面版準備掃描工具。",
   ),
 });
 
@@ -450,8 +450,8 @@ export const scannerService = {
     if (!isNativeSurface()) return demoResult({
       accepted: false,
       message: serviceText(
-        "Demo mode does not install or start a scan environment.",
-        "展示模式不會安裝或啟動掃描環境。",
+        "Open the desktop app to prepare the scan tools.",
+        "請開啟桌面版準備掃描工具。",
       ),
     });
     const response = await invoke<{ accepted: boolean; message: string }>(COMMANDS.setupManagedRuntime);
@@ -657,14 +657,14 @@ export const scannerService = {
       COMMANDS.startDiscovery,
       { caseId },
       serviceText("The case is now finding assets.", "案件已開始尋找資產。"),
-      serviceText("Demo mode does not connect to or inventory a real data source.", "展示模式不會連接或盤點任何真實資料來源。"),
+      serviceText("Open the desktop app to inventory this source.", "請開啟桌面版盤點這個來源。"),
     );
   },
 
   async cancelDiscovery(caseId: string): Promise<ServiceResult<boolean>> {
     if (!isNativeSurface()) return demoResult(false, serviceText(
-      "Demo mode has no real inventory work to cancel.",
-      "展示模式沒有執行中的真實盤點工作。",
+      "Open the desktop app to manage inventory work.",
+      "請開啟桌面版管理盤點工作。",
     ));
     return nativeResult(await invoke<boolean>(COMMANDS.cancelDiscovery, { caseId }));
   },
@@ -685,12 +685,12 @@ export const scannerService = {
       COMMANDS.connectSourceSnapshot,
       { ...input },
       serviceText(
-        "The source snapshot was copied into the local case. It did not grant permission or start a scan.",
-        "來源快照已複製進本機案件；尚未授權或啟動掃描。",
+        "The source snapshot was copied into the local case. Review its scan scope next.",
+        "來源快照已複製進本機案件；下一步請檢查掃描範圍。",
       ),
       serviceText(
-        "Demo mode does not read, copy, or parse the file you selected.",
-        "展示模式不會讀取、複製或解析你選擇的檔案。",
+        "Open the desktop app to add this source snapshot.",
+        "請開啟桌面版加入這份來源快照。",
       ),
     );
   },
@@ -713,12 +713,12 @@ export const scannerService = {
       COMMANDS.attachWorkspaceSnapshot,
       { ...input },
       serviceText(
-        "The selected local input was attached to the case as a bounded snapshot. This did not grant ownership or scan permission.",
-        "選定的本機輸入已用有限範圍的快照附加到案件；這不會授予所有權或掃描權限。",
+        "The bounded local snapshot is ready. Review its included checks next.",
+        "有限範圍的本機快照已準備完成；下一步請檢查包含的掃描項目。",
       ),
       serviceText(
-        "Demo mode does not read or copy the folder you selected.",
-        "展示模式不會讀取或複製你選擇的資料夾。",
+        "Open the desktop app to add this folder.",
+        "請開啟桌面版加入這個資料夾。",
       ),
     );
   },
@@ -735,8 +735,8 @@ export const scannerService = {
         "已記錄選定目標與權限範圍。",
       ),
       serviceText(
-        "Demo mode only shows the permission flow and does not create real scan permission.",
-        "展示模式只呈現權限流程，不會建立真實掃描授權。",
+        "Open the desktop app to save this scan permission.",
+        "請開啟桌面版儲存這項掃描許可。",
       ),
     );
   },
@@ -765,12 +765,12 @@ export const scannerService = {
         })),
       },
       serviceText(
-        "Your exact target, limits, and scan were saved together. Unavailable checks will be listed in the report while the others continue.",
-        "精確目標、限制與掃描已一起保存；無法執行的檢查會列在報告中，其餘檢查會繼續。",
+        "The scan started with the saved targets and limits. Progress lists each check.",
+        "掃描已使用保存的目標與限制開始；進度頁會列出每項檢查。",
       ),
       serviceText(
-        "Demo mode does not start a container or contact a target.",
-        "展示模式不會啟動容器，也不會接觸任何目標。",
+        "Open the desktop app to run this scan.",
+        "請開啟桌面版執行這次掃描。",
       ),
       true,
     );
@@ -793,8 +793,8 @@ export const scannerService = {
       return demoResult({
         accepted: false,
         message: serviceText(
-          "Browser demo mode did not contact this computer or start a real scan.",
-          "瀏覽器展示模式沒有連線這台電腦，也沒有開始真實掃描。",
+          "Open the desktop app to run this local connection test.",
+          "請開啟桌面版執行這項本機連線測試。",
         ),
       });
     }
@@ -830,12 +830,12 @@ export const scannerService = {
         },
       },
       serviceText(
-        "The decision was added to the finding history. Original evidence was not changed.",
-        "這項決定已加入問題歷程；原始證據沒有變更。",
+        "The finding status was added to its history.",
+        "問題狀態已加入歷程。",
       ),
       serviceText(
-        "Demo mode does not save a real finding decision.",
-        "展示模式不會保存真實的問題處理決定。",
+        "Open the desktop app to save this finding status.",
+        "請開啟桌面版儲存這項問題狀態。",
       ),
     );
   },
@@ -853,12 +853,12 @@ export const scannerService = {
         },
       },
       serviceText(
-        "The related findings were grouped for presentation. Every fingerprint, evidence item, and original artifact remains separate.",
-        "相關問題已建立可移除的呈現群組；每筆指紋、證據與原始檔案仍分開保留。",
+        "The related findings were grouped for presentation.",
+        "相關問題已建立呈現群組。",
       ),
       serviceText(
-        "Demo mode only shows the group and does not rewrite demo findings.",
-        "展示模式只呈現群組，不會改寫展示問題。",
+        "Open the desktop app to save this finding group.",
+        "請開啟桌面版儲存這個問題群組。",
       ),
     );
   },
@@ -875,10 +875,10 @@ export const scannerService = {
         },
       },
       serviceText(
-        "The presentation group was removed. Every finding and the group history remain available.",
-        "呈現群組已移除；所有問題與群組歷程仍保留。",
+        "The presentation group was removed.",
+        "呈現群組已移除。",
       ),
-      serviceText("Demo mode does not change demo groups.", "展示模式不會變更展示群組。"),
+      serviceText("Open the desktop app to remove this finding group.", "請開啟桌面版移除這個問題群組。"),
     );
   },
 
@@ -910,7 +910,7 @@ export const scannerService = {
       COMMANDS.pauseScan,
       { caseId, runId },
       serviceText("The selected scan was paused.", "選定的掃描已暫停。"),
-      serviceText("Demo mode has no real scan to pause.", "展示模式沒有可暫停的真實掃描。"),
+      serviceText("Open the desktop app to pause this scan.", "請開啟桌面版暫停這次掃描。"),
       true,
     );
   },
@@ -920,7 +920,7 @@ export const scannerService = {
       COMMANDS.resumeScan,
       { caseId, runId },
       serviceText("The latest saved scan state was returned.", "已傳回最新保存的掃描狀態。"),
-      serviceText("Demo mode has no real scan to resume.", "展示模式沒有可繼續的真實掃描。"),
+      serviceText("Open the desktop app to continue this scan.", "請開啟桌面版繼續這次掃描。"),
       true,
     );
   },
@@ -933,7 +933,7 @@ export const scannerService = {
         "The latest saved scan state was returned.",
         "已傳回最新保存的掃描狀態。",
       ),
-      serviceText("Demo mode has no real scan to cancel.", "展示模式沒有可取消的真實掃描。"),
+      serviceText("Open the desktop app to stop this scan.", "請開啟桌面版停止這次掃描。"),
       true,
     );
   },
@@ -944,8 +944,8 @@ export const scannerService = {
       { caseId, baselineRunId },
       serviceText("The follow-up scan was created.", "後續確認掃描已建立。"),
       serviceText(
-        "Demo mode does not run a follow-up scan; every comparison shown is marked sample data.",
-        "展示模式不會執行後續確認掃描；目前差異都已標成樣本資料。",
+        "Open the desktop app to run this follow-up scan.",
+        "請開啟桌面版執行這次後續確認掃描。",
       ),
       true,
     );
@@ -956,10 +956,10 @@ export const scannerService = {
       COMMANDS.archiveCase,
       { caseId },
       serviceText(
-        "The case was archived. Its local data remains available, and no new work will be added.",
-        "案件已封存；本機資料仍保留，而且不會再加入新工作。",
+        "The scan project was archived.",
+        "掃描專案已封存。",
       ),
-      serviceText("Demo mode does not change local case status.", "展示模式不會變更本機案件狀態。"),
+      serviceText("Open the desktop app to archive this scan project.", "請開啟桌面版封存這個掃描專案。"),
     );
   },
 
@@ -970,8 +970,8 @@ export const scannerService = {
         accepted: deleted,
         message: deleted
           ? serviceText(
-            "The browser-saved preview project was removed. The preview creates no evidence files.",
-            "已移除瀏覽器儲存的預覽專案；預覽模式不會建立證據檔案。",
+            "The browser-saved preview project was removed.",
+            "已移除瀏覽器儲存的預覽專案。",
           )
           : serviceText(
             "Only browser-created preview projects can be deleted here, after confirming the exact name.",

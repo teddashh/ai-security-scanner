@@ -64,12 +64,12 @@ const fallbackOutcome: BilingualText = {
 
 const nextStepCopy = {
   waiting: {
-    en: "No action is needed yet. This check is waiting for its turn.",
-    zhTW: "目前不需要處理；這項檢查正在等待執行。",
+    en: "This check is waiting for its turn.",
+    zhTW: "這項檢查正在等待執行。",
   },
   running: {
-    en: "No action is needed while this check is running.",
-    zhTW: "這項檢查執行期間不需要操作。",
+    en: "This check is running now.",
+    zhTW: "這項檢查正在執行。",
   },
   paused: {
     en: "Continue this scan when you are ready.",
@@ -80,20 +80,20 @@ const nextStepCopy = {
     zhTW: "查看找到的問題，先處理優先順序最高的項目。",
   },
   completedClear: {
-    en: "No action is needed here. Keep reviewing the other checks.",
-    zhTW: "這一項目前不需要處理；請繼續查看其他檢查。",
+    en: "Continue with the other checks.",
+    zhTW: "請繼續查看其他檢查。",
   },
   partial: {
-    en: "Review the results already saved, then continue this scan to finish the check.",
-    zhTW: "先查看已保存的結果，再繼續掃描以完成這項檢查。",
+    en: "Open the completed results, then continue this scan to finish the check.",
+    zhTW: "請開啟已完成結果，再繼續掃描以完成這項檢查。",
   },
   boundedRetriesComplete: {
-    en: "Review the saved results and what was not tested. If you want to try the unfinished items again, start a new scan.",
-    zhTW: "查看已保存的結果與未測試項目；如果想再次嘗試未完成項目，請開始新的掃描。",
+    en: "Open the completed results and untested items. Start a new scan to retry the remaining work.",
+    zhTW: "請開啟已完成結果與未測試項目；開始新的掃描以重試剩餘工作。",
   },
   cancelledWithResults: {
-    en: "Review the results saved before you stopped the scan. Start a new scan whenever you want to check the remaining items.",
-    zhTW: "查看停止掃描前已保存的結果；想檢查剩餘項目時，再開始新的掃描。",
+    en: "Open the results captured before the stop. Start a new scan for the remaining items.",
+    zhTW: "請開啟停止前擷取的結果；開始新的掃描以檢查剩餘項目。",
   },
   interrupted: {
     en: "Continue the original scan to pick up where the app stopped.",
@@ -112,8 +112,8 @@ const nextStepCopy = {
     zhTW: "請再試一次；程式會自動準備新的專用掃描環境。",
   },
   executionStoppedWithResults: {
-    en: "Review the results already saved, download the diagnostic log, then retry this check.",
-    zhTW: "先查看已保存的結果並下載診斷紀錄，再重試這項檢查。",
+    en: "Open the completed results and diagnostic log, then retry this check.",
+    zhTW: "請開啟已完成結果與診斷紀錄，再重試這項檢查。",
   },
   executionStopped: {
     en: "This check began but did not finish. Download the diagnostic log, then retry it.",
@@ -124,8 +124,8 @@ const nextStepCopy = {
     zhTW: "這項檢查已停止；請下載診斷紀錄後重試。",
   },
   cleanupPending: {
-    en: "Review the saved results and cleanup status, then retry after cleanup finishes.",
-    zhTW: "請查看已保存的結果與清理狀態，待清理完成後再重試。",
+    en: "Finish cleanup, then retry this check.",
+    zhTW: "完成清理後，再重試這項檢查。",
   },
   providerSetup: {
     en: "Return to cloud setup and reconnect or review the selected account.",
@@ -136,8 +136,8 @@ const nextStepCopy = {
     zhTW: "專用掃描連線在這項檢查開始前就停止了。請再試一次，程式會自動重建連線。",
   },
   unavailableInRelease: {
-    en: "These checks are not available in this version. Review completed results and update the app before trying again.",
-    zhTW: "這些檢查在目前版本無法使用；請先查看已完成的結果，更新程式後再試。",
+    en: "Update the app, then retry these checks.",
+    zhTW: "請更新應用程式，再重試這些檢查。",
   },
   releaseIncompatible: {
     en: "Start a new scan to run this check with the installed release.",

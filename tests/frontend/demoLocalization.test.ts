@@ -45,7 +45,7 @@ test("the built-in demo remains fully available in Traditional Chinese", () => {
   demo.setActiveLocale("zh-TW");
   const strings = collectStrings(demo.getDemoSnapshot());
   assert.ok(strings.some((value) => value === "Northstar 初步安全健檢"));
-  assert.match(demo.getDemoNotice(), /展示資料/u);
+  assert.equal(demo.getDemoNotice(), "合成範例資料，只供預覽。");
 });
 
 test("English presentation never treats text from a browser-created project as a translation key", () => {

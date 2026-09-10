@@ -142,8 +142,8 @@ const summaryForOutcome = (
         },
         outcomeLabel: { en: "No observation yet", zhTW: "尚無觀察結果" },
         nextStep: {
-          en: "No action is needed while the app continues or waits to continue this task.",
-          zhTW: "程式繼續處理或等待繼續這項工作時，不需要操作。",
+          en: "The app will continue this connection check.",
+          zhTW: "應用程式會繼續這項連線檢查。",
         },
       };
     case "cancelling":

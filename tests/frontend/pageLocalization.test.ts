@@ -475,9 +475,10 @@ test("export preview, export, and both verification paths remain wired", async (
   assert.match(verification, /Affected findings stay under Could not verify and are not counted as fixed/u);
   assert.match(verification, /受影響的問題會保留在「無法確認」，不會算成已修復/u);
   assert.match(verification, /isOnlyMappingVersionDrift\(completenessIssues\)/u);
-  assert.match(verification, /The affected checks completed in both scans, but they used different control-mapping catalog versions/u);
-  assert.match(verification, /Affected scanner engines: \{count\}\. This is an engine count, not a security-finding count\./u);
-  assert.match(verification, /Technical scanner\/target comparison limitations recorded: \{count\}\. This is not a security-finding count\./u);
+  assert.match(verification, /Affected checks completed in both scans with different control-mapping catalog versions/u);
+  assert.match(verification, /Affected scan tools: \{count\}/u);
+  assert.match(verification, /Scanner\/target comparisons needing attention: \{count\}/u);
+  assert.doesNotMatch(verification, /not a security-finding count/u);
   assert.doesNotMatch(verification, /\{count\} technical scanner\/target comparison limitations were recorded/u);
   assert.match(verification, /mappingVersionDriftOnlyForFinding \? mappingDiffSummary/u);
 });

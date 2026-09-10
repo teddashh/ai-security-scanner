@@ -55,10 +55,10 @@ test("coverage source selection receives and labels installed-product capability
   assert.match(source, /<ProviderAuthorizationPanel[\s\S]*engineManifests=\{engineManifests\}/u);
   assert.match(providerPanelSource, /projectSourceCapabilityView\(\{ provider, source: selectedSource, manifests: engineManifests \}\)/u);
   for (const phrase of [
-    "This is the declared capability of the product version installed now.",
-    "it is not evidence or selected-run coverage",
-    "這裡顯示目前安裝產品版本所宣告的能力",
-    "也不是證據或本次執行的涵蓋結果",
+    "Declared capabilities for this installed product version.",
+    "Selected-scan evidence and coverage appear in Results.",
+    "目前安裝版本宣告的能力",
+    "所選掃描的證據與涵蓋範圍顯示在「結果」",
   ]) assert.ok(providerPanelSource.includes(phrase), phrase);
 
   for (const retiredBroadClaim of [
@@ -89,8 +89,8 @@ test("technical detail is progressive and a website service remains a preset, no
   assert.ok(source.includes("selectedExternalAsset.declaredWebService"));
   assert.match(source, /setExternalProtocol\(service\.protocol\)/);
   assert.match(source, /setExternalPorts\(String\(service\.port\)\)/);
-  assert.ok(source.includes("path is context, not permission"));
-  assert.ok(source.includes("路徑只是提示，不是許可"));
+  assert.ok(source.includes("the path remains context"));
+  assert.ok(source.includes("路徑保留為背景資訊"));
   assert.match(source, /internetExposed === false && effectiveAllowSensitiveNetworks/);
   assert.match(source, /internetExposed === undefined/);
 

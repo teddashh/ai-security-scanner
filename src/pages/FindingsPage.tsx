@@ -690,7 +690,7 @@ const copy = {
     zhTW: "請將這項檢查所回報的識別碼，新增到你已授權的資產上，然後重新掃描。",
   },
   actionPreserve: { en: "Open the saved scope details.", zhTW: "查看已保存的範圍細節。" },
-  actionNoChange: { en: "No action needed.", zhTW: "無需處理。" },
+  actionNoChange: { en: "No action for the current scope.", zhTW: "目前範圍不需處理。" },
   reportEndMatter: { en: "Report terms and technical record", zhTW: "報告條款與技術紀錄" },
   reportTerms: { en: "Report terms", zhTW: "報告條款" },
   reportTechnicalDetails: { en: "Technical record", zhTW: "技術紀錄" },

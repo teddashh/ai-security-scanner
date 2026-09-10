@@ -18,12 +18,12 @@ import {
 } from "../caseForm";
 
 const DEMO_NOTICE =
-  "目前顯示的是內建展示資料，尚未連接本機掃描核心；任何結果都不是實際掃描或安全判定。";
+  "合成範例資料，只供預覽。";
 
 export { DEMO_NOTICE };
 
 export const getDemoNotice = (): string => getActiveLocale() === "en"
-  ? "This is built-in demo data. The local scan service is not connected, and nothing shown here is a real scan or security conclusion."
+  ? "Synthetic sample data for preview."
   : DEMO_NOTICE;
 
 const demoEnglishTranslations: Record<string, string> = {
@@ -48,14 +48,14 @@ const demoEnglishTranslations: Record<string, string> = {
   "Web／平台安全": "Web / platform security",
   "主動弱點測試": "Active vulnerability testing",
   "候選資產": "Candidate assets",
-  "兩項觀察都會影響高權限帳號遭濫用的可能性；群組只方便交接，不會合併或刪除原始 finding。": "Both observations affect the chance of privileged-account abuse. This group is only for handoff and does not merge or delete the original findings.",
+  "高權限帳號濫用的相關觀察；原始問題各自保留證據與改善措施。": "Related privileged-account abuse observations. Each original finding retains its evidence and remediation.",
   "公開 DNS 與憑證紀錄": "Public DNS and certificate records",
   "公開服務仍接受過時 TLS 設定": "A public service still accepts outdated TLS settings",
   "初步健檢 #2": "Initial review #2",
   "原規則 0.0.0.0/0 已移除；本次證據顯示只允許應用子網。": "The original 0.0.0.0/0 rule was removed; current evidence allows only the application subnet.",
   "可能降低傳輸保護強度，並增加舊式攻擊或相容性降級風險。": "This may weaken transport protection and increase exposure to older attacks or downgrade behavior.",
   "同一身分在本次 credential report 仍顯示 MFA inactive。": "The current credential report still shows MFA inactive for the same identity.",
-  "問卷明確記錄此案件不使用 Azure；這是適用性聲明，不是掃描成功。": "The questionnaire says Azure is not used in this case. That is an applicability statement, not a successful scan.",
+  "Azure 適用性：案件問卷記錄為不使用。": "Azure applicability: recorded as not used in the case questionnaire.",
   "外部攻擊面": "Public websites and IP addresses",
   "外部檢查觀察到較弱的加密套件仍可協商。": "The external check observed that a weaker cipher suite can still be negotiated.",
   "客戶匯出儲存桶可能允許公開讀取": "A customer-export bucket may allow public reads",
@@ -66,10 +66,10 @@ const demoEnglishTranslations: Record<string, string> = {
   "尚未連接資料來源": "No data source connected",
   "尚未連接資料來源的展示案件。": "A demo case with no connected data source.",
   "展示 CVE：系統套件已有 fixed version。": "Demo CVE: a fixed version is available for this system package.",
-  "展示公開資料政策，不會發出真實請求。": "Demo public-data policy; no real request is sent.",
-  "展示案件尚未連接任何資料來源；目前沒有實際掃描結果。": "This demo case has no connected source and no real scan results.",
+  "合成預覽用公開資料政策。": "Synthetic public-data policy for preview.",
+  "展示案件資料來源：未連接。掃描狀態：未開始。": "Demo source: not connected. Scan status: not started.",
   "展示案件建立器": "Demo case builder",
-  "展示目標，不會發出真實網路請求。": "Demo target; no real network request is sent.",
+  "合成預覽目標。": "Synthetic preview target.",
   "展示資料": "Demo data",
   "展示資料：外部端點回傳可列舉內容的 HTTP 回應。": "Demo data: an external endpoint returned an HTTP response with listable content.",
   "展示資料：弱式 cipher suite 可協商。": "Demo data: a weak cipher suite can be negotiated.",
@@ -86,13 +86,12 @@ const demoEnglishTranslations: Record<string, string> = {
   "找到 4 個候選網域，其中 2 個尚未確認主動測試範圍。": "Found four candidate domains; active-testing scope is not confirmed for two of them.",
   "掃描權杖於驗證期間過期，本次無法確認匿名存取設定。": "The scan token expired during verification, so anonymous-access settings could not be confirmed.",
   "新映像與更新後的弱點資料庫首次觀察到此項問題。": "This problem was first observed with the new image and updated vulnerability database.",
-  "未連接 GCP 資料來源；此處不是通過或無資產。": "No GCP data source is connected. This is not a pass and does not mean there are no assets.",
+  "GCP 資料來源：未連接。": "GCP source: not connected.",
   "本機使用者": "Local user",
-  "本次 token 過期，無法與基準證據作有效比較。": "The token expired, so this run cannot be reliably compared with the baseline evidence.",
+  "基準比較：無法完成，token 已過期。": "Baseline comparison: unavailable because the token expired.",
   "機密": "Secrets",
   "產品團隊": "Product team",
   "用來展示資產盤點、涵蓋清冊、finding 與複驗差異的本機案件。": "A local demo case showing asset inventory, coverage, findings, and before-and-after verification.",
-  "目前顯示的是內建展示資料，尚未連接本機掃描核心；任何結果都不是實際掃描或安全判定。": "This is built-in demo data. The local scan service is not connected, and nothing shown here is a real scan or security conclusion.",
   "相同檢查已不再觀察到有效 root access key。": "The same check no longer observes an active root access key.",
   "程式碼": "Source code",
   "第二辦公室盤點": "Second-office inventory",
@@ -102,17 +101,17 @@ const demoEnglishTranslations: Record<string, string> = {
   "若權限確實有效，未授權人員可能取得含個人資料的匯出檔案。": "If the permission is effective, an unauthorized person may access exports containing personal data.",
   "若金鑰仍有效，取得 repository 的人可能存取雲端資源。": "If the key is still active, anyone with repository access may be able to reach cloud resources.",
   "設定與外部觀測證據仍存在，尚未看到有效修正。": "Configuration and external-observation evidence remain; no effective fix has been observed.",
-  "請 AWS 與資料治理專家先確認實際 bucket policy、使用情境與相依服務，再規劃收斂公開權限。": "Ask AWS and data-governance owners to confirm the effective bucket policy, use case, and dependent services before reducing public access.",
+  "確認實際 bucket policy、使用情境與相依服務，再收斂公開權限。": "Confirm the effective bucket policy, use case, and dependent services, then reduce public access.",
   "確認身分用途與登入方式，優先處理可互動登入的高權限帳號。": "Confirm the identity's purpose and sign-in method, prioritizing privileged accounts that allow interactive sign-in.",
-  "請 Kubernetes 管理者更新短效唯讀權杖後，從 Kubescape 工作續跑。": "Ask a Kubernetes owner to renew the short-lived read-only token, then resume the Kubescape work.",
-  "請 M365 身分管理者核對登入記錄與現行例外，再規劃逐步阻擋。": "Ask an M365 identity owner to review sign-in logs and current exceptions before planning a staged block.",
-  "請 Web／平台工程師先確認客戶端相容性，再停用弱式套件並重新驗證。": "Ask a web or platform engineer to confirm client compatibility before disabling weak cipher suites and verifying again.",
-  "請容器維護者更新基底映像、重新建置，並由本案件複驗相同 image digest。": "Ask the container owner to update the base image, rebuild it, and use this case to verify the new fixed digest.",
-  "請應用與雲端管理者先驗證並撤銷該金鑰，再處理 Git 歷史與秘密管理流程。": "Ask application and cloud owners to validate and revoke the key before addressing Git history and secret-management practices.",
+  "更新短效唯讀權杖，再續跑 Kubescape 工作。": "Renew the short-lived read-only token, then resume the Kubescape work.",
+  "核對登入記錄與現行例外，再逐步阻擋舊式驗證。": "Review sign-in logs and current exceptions, then stage the legacy-authentication block.",
+  "確認客戶端相容性，停用弱式套件，再重新驗證。": "Confirm client compatibility, disable weak cipher suites, then verify again.",
+  "更新基底映像並重新建置，再由本案件複驗新的 fixed image digest。": "Update the base image and rebuild, then use this case to verify the new fixed image digest.",
+  "驗證並撤銷該金鑰，再清理 Git 歷史並更新秘密管理流程。": "Validate and revoke the key, then clean Git history and update secret-management practices.",
   "資料來源可用，但此案件未發現 Terraform state。": "The data source was available, but no Terraform state was found for this case.",
   "資料團隊": "Data team",
   "資料庫安全群組不再對外開放": "Database security group is no longer public",
-  "這不是已確認的弱點，也不能當成通過；需要恢復唯讀權限後完成檢查。": "This is not a confirmed vulnerability or a pass. Restore read-only access to finish the check.",
+  "檢查狀態：未完成。恢復唯讀權限後完成檢查。": "Check status: incomplete. Restore read-only access to finish the check.",
   "部分帳號仍可能使用舊式驗證": "Some accounts may still use legacy authentication",
   "雲端盤點": "Cloud inventory",
   "雲端設定": "Cloud configuration",
@@ -296,7 +295,7 @@ const demoWorkspace: CaseWorkspace = {
       sourceKind: "azure_tenant",
       state: "not_applicable",
       assetCount: 0,
-      detail: "問卷明確記錄此案件不使用 Azure；這是適用性聲明，不是掃描成功。",
+      detail: "Azure 適用性：案件問卷記錄為不使用。",
     },
     {
       id: "coverage-gcp",
@@ -305,7 +304,7 @@ const demoWorkspace: CaseWorkspace = {
       sourceKind: "gcp_organization",
       state: "source_unavailable_unknown",
       assetCount: 0,
-      detail: "未連接 GCP 資料來源；此處不是通過或無資產。",
+      detail: "GCP 資料來源：未連接。",
     },
     {
       id: "coverage-billing",
@@ -448,7 +447,7 @@ const demoWorkspace: CaseWorkspace = {
       state: "authorized",
       confirmedAt: "2026-08-23T20:10:00-04:00",
       confirmedBy: "本機使用者",
-      note: "展示目標，不會發出真實網路請求。",
+      note: "合成預覽目標。",
       externalScope: {
         id: "external-scope-demo-web",
         caseId: sampleCase.id,
@@ -483,7 +482,7 @@ const demoWorkspace: CaseWorkspace = {
       state: "authorized",
       confirmedAt: "2026-08-23T20:09:00-04:00",
       confirmedBy: "本機使用者",
-      note: "展示公開資料政策，不會發出真實請求。",
+      note: "合成預覽用公開資料政策。",
       externalScope: {
         id: "external-scope-demo-web-public",
         caseId: sampleCase.id,
@@ -738,7 +737,7 @@ const demoWorkspace: CaseWorkspace = {
       title: "客戶匯出儲存桶可能允許公開讀取",
       summary: "雲端設定顯示公開存取保護未完整啟用，外部檢查亦觀察到可存取回應。",
       impact: "若權限確實有效，未授權人員可能取得含個人資料的匯出檔案。",
-      recommendation: "請 AWS 與資料治理專家先確認實際 bucket policy、使用情境與相依服務，再規劃收斂公開權限。",
+      recommendation: "確認實際 bucket policy、使用情境與相依服務，再收斂公開權限。",
       expertType: "AWS 雲端安全／資料治理",
       severity: "critical",
       confidence: "high",
@@ -825,7 +824,7 @@ const demoWorkspace: CaseWorkspace = {
       title: "Git 歷史中疑似包含仍有效的雲端金鑰",
       summary: "Gitleaks 在歷史 commit 中識別出符合雲端 access key 格式的字串。",
       impact: "若金鑰仍有效，取得 repository 的人可能存取雲端資源。",
-      recommendation: "請應用與雲端管理者先驗證並撤銷該金鑰，再處理 Git 歷史與秘密管理流程。",
+      recommendation: "驗證並撤銷該金鑰，再清理 Git 歷史並更新秘密管理流程。",
       expertType: "應用安全／雲端 IAM",
       severity: "high",
       confidence: "medium",
@@ -862,7 +861,7 @@ const demoWorkspace: CaseWorkspace = {
       title: "部分帳號仍可能使用舊式驗證",
       summary: "M365 設定未能證明所有使用者均由 Conditional Access 阻擋 legacy authentication。",
       impact: "舊式驗證可能繞過現代 MFA 與條件式存取保護。",
-      recommendation: "請 M365 身分管理者核對登入記錄與現行例外，再規劃逐步阻擋。",
+      recommendation: "核對登入記錄與現行例外，再逐步阻擋舊式驗證。",
       expertType: "Microsoft 365／Entra ID",
       severity: "high",
       confidence: "medium",
@@ -899,7 +898,7 @@ const demoWorkspace: CaseWorkspace = {
       title: "公開服務仍接受過時 TLS 設定",
       summary: "外部檢查觀察到較弱的加密套件仍可協商。",
       impact: "可能降低傳輸保護強度，並增加舊式攻擊或相容性降級風險。",
-      recommendation: "請 Web／平台工程師先確認客戶端相容性，再停用弱式套件並重新驗證。",
+      recommendation: "確認客戶端相容性，停用弱式套件，再重新驗證。",
       expertType: "Web／平台安全",
       severity: "medium",
       confidence: "high",
@@ -936,7 +935,7 @@ const demoWorkspace: CaseWorkspace = {
       title: "容器映像包含高風險系統套件弱點",
       summary: "Trivy 在基底映像中識別出有修補版本可用的高風險套件。",
       impact: "若服務可達且弱點路徑成立，可能造成未授權程式執行或資料暴露。",
-      recommendation: "請容器維護者更新基底映像、重新建置，並由本案件複驗相同 image digest。",
+      recommendation: "更新基底映像並重新建置，再由本案件複驗新的 fixed image digest。",
       expertType: "容器／DevSecOps",
       severity: "high",
       confidence: "high",
@@ -972,8 +971,8 @@ const demoWorkspace: CaseWorkspace = {
       assetName: "prod-eks",
       title: "Kubernetes API 驗證範圍未完成",
       summary: "掃描權杖於驗證期間過期，本次無法確認匿名存取設定。",
-      impact: "這不是已確認的弱點，也不能當成通過；需要恢復唯讀權限後完成檢查。",
-      recommendation: "請 Kubernetes 管理者更新短效唯讀權杖後，從 Kubescape 工作續跑。",
+      impact: "檢查狀態：未完成。恢復唯讀權限後完成檢查。",
+      recommendation: "更新短效唯讀權杖，再續跑 Kubescape 工作。",
       expertType: "Kubernetes 平台安全",
       severity: "info",
       confidence: "low",
@@ -1008,7 +1007,7 @@ const demoWorkspace: CaseWorkspace = {
       caseId: sampleCase.id,
       title: "高權限身分保護需要一起檢視",
       findingIds: ["finding-mfa-admin", "finding-m365-legacy"],
-      rationale: "兩項觀察都會影響高權限帳號遭濫用的可能性；群組只方便交接，不會合併或刪除原始 finding。",
+      rationale: "高權限帳號濫用的相關觀察；原始問題各自保留證據與改善措施。",
       groupedBy: "展示案件建立器",
       createdAt: "2026-08-24T02:45:00-04:00",
     },
@@ -1021,7 +1020,7 @@ const demoWorkspace: CaseWorkspace = {
       action: "created",
       title: "高權限身分保護需要一起檢視",
       findingIds: ["finding-mfa-admin", "finding-m365-legacy"],
-      rationale: "兩項觀察都會影響高權限帳號遭濫用的可能性；群組只方便交接，不會合併或刪除原始 finding。",
+      rationale: "高權限帳號濫用的相關觀察；原始問題各自保留證據與改善措施。",
       actor: "展示案件建立器",
       occurredAt: "2026-08-24T02:45:00-04:00",
     },
@@ -1106,7 +1105,7 @@ const demoWorkspace: CaseWorkspace = {
         assetName: "prod-eks",
         state: "unverifiable",
         beforeSeverity: "medium",
-        explanation: "本次 token 過期，無法與基準證據作有效比較。",
+        explanation: "基準比較：無法完成，token 已過期。",
         evidenceChanged: false,
       },
     ],
@@ -1124,7 +1123,7 @@ const blankWorkspace = (assessmentCase: AssessmentCase): CaseWorkspace => ({
       sourceKind: "aws_organization",
       state: "source_unavailable_unknown",
       assetCount: 0,
-      detail: "展示案件尚未連接任何資料來源；目前沒有實際掃描結果。",
+      detail: "展示案件資料來源：未連接。掃描狀態：未開始。",
     },
   ],
   assets: [],
@@ -1350,7 +1349,7 @@ const storedWorkspace = (storedCase: StoredDemoCase): CaseWorkspace => {
     ? "Known assets entered in the scan project"
     : "掃描專案中輸入的已知項目";
   const coverageDetail = locale === "en"
-    ? "Saved from project setup. Permission is not confirmed and no scan has run."
+    ? "Saved from project setup. Permission status: unconfirmed. Scan status: not started."
     : "由專案設定保存。尚未確認掃描權限，也尚未執行掃描。";
   const sources: ConnectedSource[] = knownAssets.length > 0
     ? [{

@@ -769,7 +769,7 @@ export interface EngineAdmissionIssue {
 }
 
 export type BeginnerReportSummary = "complete" | "partial" | "no_checks_completed";
-export type BeginnerReportLifecycle = "live" | "final";
+export type BeginnerReportLifecycle = "final";
 export type BeginnerReportDataAvailability = "recorded" | "current_case_fallback" | "unavailable";
 export type BeginnerReportStage = "connection_diagnostic" | "quick_discovery" | "inventory" | "deep";
 export type BeginnerCoverageStatus =
@@ -1564,7 +1564,7 @@ export interface CaseWorkspace {
   findingGroupEvents: FindingGroupEvent[];
   workflowEvents: FindingWorkflowEvent[];
   exports: CaseExport[];
-  /** One backend-derived report per durable run; no frontend lifecycle is inferred here. */
+  /** One backend-derived report per terminal run. */
   beginnerReports?: BeginnerMasterReport[];
   verification?: VerificationSummary;
 }

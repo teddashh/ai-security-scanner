@@ -639,11 +639,11 @@ impl ManagedRuntimeSetupFailureReason {
 
     fn packaged_runtime_admission_detail(self) -> Option<&'static str> {
         match self {
-            Self::PackagedRuntimeMissing => Some(
-                "The scan tools included with this installation are unavailable. Independent checks and saved reports remain available.",
-            ),
+            Self::PackagedRuntimeMissing => {
+                Some("The installed scan tools are unavailable. Install the latest app version.")
+            }
             Self::PackagedRuntimeVerificationFailed => Some(
-                "The scan tools included with this installation did not pass verification and were not used. Independent checks and saved reports remain available.",
+                "The installed scan tools failed verification. Install the latest app version.",
             ),
             _ => None,
         }
@@ -833,8 +833,7 @@ impl ManagedRuntimeSetupController {
             && !status.can_retry
         {
             return Err(AppError::NotAvailable(
-                "verified scan tools are unavailable; independent checks and saved reports remain available"
-                    .into(),
+                "verified scan tools are unavailable; install the latest app version".into(),
             ));
         }
         if self.prerequisite_repair_active.load(Ordering::Acquire) {
@@ -3236,8 +3235,7 @@ impl ManagedRuntimeManager {
             .unwrap_or_else(|_error| ManagedRuntimePrerequisiteRepairResult {
                 outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
                 restart_required: false,
-                detail: "ai-security-scanner could not finish the automatic Windows setup. You can retry; your projects and saved results remain available."
-                    .into(),
+                detail: "Automatic Windows setup stopped. Try automatic preparation again.".into(),
             });
         controller.finish_prerequisite_repair(operation_id, Some(&repair));
         Ok(Some((action, repair)))
@@ -9892,19 +9890,19 @@ impl WindowsWslPrerequisiteFailure {
                 unreachable!("packaged-runtime failures returned above")
             }
             ManagedRuntimeSetupFailureReason::WslNotInstalled => format!(
-                "Windows has not installed the component needed by the local scan tools.{status} Retry automatic preparation; ai-security-scanner will use the fixed Windows setup action and the standard Windows approval prompt when required. Saved work and checks that do not need this local tool remain available."
+                "Windows has not installed the component needed by the local scan tools.{status} Retry automatic preparation; ai-security-scanner will use the fixed Windows setup action and the standard Windows approval prompt."
             ),
             ManagedRuntimeSetupFailureReason::WslOptionalFeatureDisabled => format!(
-                "Windows has not finished enabling the components needed by the local scan tools.{status} Retry automatic preparation; ai-security-scanner will use the fixed Windows setup action and ask for a restart only when Windows requires it. Saved work and unaffected checks remain available."
+                "Windows has not enabled the components needed by the local scan tools.{status} Retry automatic preparation; restart Windows when requested."
             ),
             ManagedRuntimeSetupFailureReason::WslUpdateRequired => format!(
-                "A Windows component used by the local scan tools needs an update.{status} Retry automatic preparation; ai-security-scanner will use the fixed Windows update action and the standard Windows approval prompt when required. Saved work and unaffected checks remain available."
+                "A Windows component used by the local scan tools needs an update.{status} Retry automatic preparation; ai-security-scanner will use the fixed Windows update action and the standard Windows approval prompt."
             ),
             ManagedRuntimeSetupFailureReason::RestartRequired => format!(
-                "Windows must restart to finish preparing the local scan tools.{status} Restart Windows and reopen ai-security-scanner; automatic preparation will continue with saved work unchanged."
+                "Windows must restart to finish preparing the local scan tools.{status} Restart Windows and reopen ai-security-scanner; automatic preparation will continue."
             ),
             ManagedRuntimeSetupFailureReason::WslCommandFailed => format!(
-                "Windows could not confirm that the local scan tools are ready.{status} ai-security-scanner left Windows settings and saved work unchanged. Try automatic preparation again; checks that do not need this local tool can continue. If the problem continues, export the redacted diagnostic log."
+                "Windows could not confirm that the local scan tools are ready.{status} Try automatic preparation again. If the problem continues, export the redacted diagnostic log."
             ),
         }
     }
@@ -19874,7 +19872,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("projects and saved results remain available")
+                .contains("Try automatic preparation again")
         );
         assert!(!error.to_string().contains("injected"));
         let setup = controller.status().expect("retryable failed setup");
@@ -20133,7 +20131,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("projects and saved results remain available")
+                .contains("Try automatic preparation again")
         );
         assert_eq!(
             repairer.actions(),
@@ -20184,7 +20182,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("projects and saved results remain available")
+                .contains("Try automatic preparation again")
         );
         assert_eq!(
             repairer.actions(),

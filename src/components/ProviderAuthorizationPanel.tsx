@@ -199,10 +199,10 @@ const copy = {
   },
   capabilityDetails: { en: "Product capability details", zhTW: "產品能力詳細資料" },
   capabilityTitle: { en: "What this installed product can inspect", zhTW: "目前安裝版本可檢查的項目" },
-  capabilityDisclaimerTitle: { en: "Capability is not scan evidence", zhTW: "產品能力不等於掃描證據" },
+  capabilityDisclaimerTitle: { en: "Installed inspection capabilities", zhTW: "已安裝的檢查能力" },
   capabilityDisclaimer: {
-    en: "This is the declared capability of the product version installed now. It does not mean an engine was selected or ran, and it is not evidence or selected-run coverage.",
-    zhTW: "這裡顯示目前安裝產品版本所宣告的能力；不代表已選取或執行任何引擎，也不是證據或本次執行的涵蓋結果。",
+    en: "Declared capabilities for this installed product version. Selected-scan evidence and coverage appear in Results.",
+    zhTW: "目前安裝版本宣告的能力；所選掃描的證據與涵蓋範圍顯示在「結果」。",
   },
   capabilityVersion: { en: "Capability definition {version}", zhTW: "能力定義版本 {version}" },
   capabilityScope: { en: "Verified connected source scope", zhTW: "已驗證的連線來源範圍" },

@@ -134,7 +134,7 @@ export const en = {
   "status.coverage.none.description": "We checked this source and it reported no items this time.",
   "status.coverage.unknown.label": "Connect a source to check",
   "status.coverage.unknown.short": "Unknown",
-  "status.coverage.unknown.description": "We cannot see this area yet because no source is connected.",
+  "status.coverage.unknown.description": "Connect a source to see this area.",
   "status.coverage.notApplicable.label": "Skipped for this scan",
   "status.coverage.notApplicable.short": "Skipped",
   "status.coverage.notApplicable.description": "This item was left out of this scan; it was not checked.",
@@ -167,7 +167,7 @@ export const en = {
   "status.stage.completed.label": "Complete",
   "status.stage.completed.description": "Results are saved and the local workspace is clean.",
   "status.stage.cancelled.label": "Stopped",
-  "status.stage.cancelled.description": "The scan stopped, and saved progress is still available.",
+  "status.stage.cancelled.description": "The scan stopped.",
   "status.stage.failed.label": "Needs attention",
   "status.stage.failed.description": "This attempt stopped before it completed. Follow the next step shown for this check.",
 

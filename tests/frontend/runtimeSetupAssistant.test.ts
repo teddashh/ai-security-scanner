@@ -308,10 +308,10 @@ test("backend stale state is visible without the UI inventing a terminal failure
   assert.equal(state.setupActive, true);
   assert.equal(state.setupFailed, false);
   for (const phrase of [
-    "Advanced local scan-tool setup is taking longer than expected",
-    "Stopping this setup attempt",
-    "進階本機掃描工具設定時間超過預期",
-    "正在停止這次設定",
+    "Stopping advanced local scan-tool setup",
+    "Retry opens after the stop completes",
+    "正在停止進階本機掃描工具設定",
+    "停止完成後即可重試",
   ]) assert.ok(source.includes(phrase), phrase);
 });
 

@@ -92,10 +92,10 @@ const copy = {
     en: "Findings that could not be classified because control mappings changed",
     zhTW: "因控制對照版本變更而無法分類的問題",
   },
-  resolvedCautionTitle: { en: "Not observed does not mean permanently safe", zhTW: "這次沒看到，不代表永久安全" },
+  resolvedCautionTitle: { en: "No longer observed in this recheck", zhTW: "本次複驗未再觀察到" },
   resolvedCautionBody: {
-    en: "A clean recheck is encouraging, but it covers only the checks that ran this time. Review the evidence before closing the work.",
-    zhTW: "複驗沒有再看到問題是好消息，但只代表這次實際完成的檢查。關閉工作前，請再確認證據。",
+    en: "The same completed check no longer found this problem. Review the new evidence, then close it.",
+    zhTW: "相同檢查已完成，且沒有再找到這個問題；查看新證據後即可關閉。",
   },
   incompleteTitle: { en: "This verification could not compare everything", zhTW: "這次複驗沒有辦法比較所有項目" },
   incompleteBody: {
@@ -103,17 +103,17 @@ const copy = {
     zhTW: "部分掃描工具／目標的比較未完成，或使用了不同的比較條件；受影響的問題會保留在「無法確認」，不會算成已修復。",
   },
   issueCount: {
-    en: "Technical scanner/target comparison limitations recorded: {count}. This is not a security-finding count.",
-    zhTW: "已記錄 {count} 個掃描工具／目標的技術比較限制；這不是資安問題數量。",
+    en: "Scanner/target comparisons needing attention: {count}",
+    zhTW: "需要處理的掃描工具／目標比較：{count}",
   },
   mappingTitle: { en: "Scanner mappings changed between these scans", zhTW: "兩次掃描使用的對照映射版本不同" },
   mappingBody: {
-    en: "The affected checks completed in both scans, but they used different control-mapping catalog versions. The app therefore cannot reliably classify affected findings as fixed, still present, or new.",
-    zhTW: "受影響的檢查在兩次掃描中都已完成，但使用了不同版本的控制對照目錄，因此系統無法可靠地把受影響的問題判定為已修復、仍存在或新出現。",
+    en: "Affected checks completed in both scans with different control-mapping catalog versions. Comparison classification is unavailable for these findings.",
+    zhTW: "受影響的檢查在兩次掃描中都已完成，但控制對照目錄版本不同；這些問題目前沒有比較分類。",
   },
   mappingEngineCount: {
-    en: "Affected scanner engines: {count}. This is an engine count, not a security-finding count.",
-    zhTW: "受影響的掃描引擎：{count}。這是引擎數量，不是資安問題數量。",
+    en: "Affected scan tools: {count}",
+    zhTW: "受影響的掃描工具：{count}",
   },
   technicalIssues: { en: "Technical comparison issues", zhTW: "無法比較的技術細節" },
   issueCode: { en: "Issue code", zhTW: "問題代碼" },
@@ -132,8 +132,8 @@ const copy = {
   all: { en: "All", zhTW: "全部" },
   emptyFilterTitle: { en: "No items match this filter", zhTW: "這個篩選沒有項目" },
   emptyFilterDescription: {
-    en: "Try another outcome. An empty filter does not mean there is no risk or that every fix is complete.",
-    zhTW: "請切換其他結果；空白篩選不代表沒有風險，也不代表所有修復都完成。",
+    en: "Choose another outcome to see its items.",
+    zhTW: "請選擇其他結果查看項目。",
   },
   evidenceChanged: { en: "Evidence changed", zhTW: "證據已改變" },
   technicalExplanation: { en: "Scanner comparison detail", zhTW: "掃描工具的比較細節" },
@@ -153,26 +153,26 @@ const states: DiffState[] = ["resolved", "persistent", "new", "unverifiable"];
 
 const stateSummaryCopy = {
   resolved: {
-    en: "The same check did not observe this problem this time. Review the evidence before closing the work.",
-    zhTW: "相同檢查這次沒有再觀察到這個問題；關閉工作前仍請確認證據。",
+    en: "The same completed check no longer found this problem. Review the new evidence, then close it.",
+    zhTW: "相同檢查已完成，且沒有再找到這個問題；查看新證據後即可關閉。",
   },
   persistent: {
-    en: "The same problem is still present. Review its latest evidence and continue the fix.",
-    zhTW: "相同問題仍然存在；請查看最新證據並繼續修復。",
+    en: "The same problem is still present. Continue its recommended fix, then check again.",
+    zhTW: "相同問題仍然存在；請繼續執行建議修復，完成後再次檢查。",
   },
   new: {
-    en: "This problem appeared in the new scan. Review the evidence before deciding how to handle it.",
-    zhTW: "這個問題出現在新的掃描中；請先查看證據，再決定如何處理。",
+    en: "The new scan found this problem. Open its evidence and follow the next action.",
+    zhTW: "新的掃描找到這個問題；請開啟證據並執行下一步。",
   },
   unverifiable: {
-    en: "The app could not make a trustworthy comparison. Review the recorded comparison reason before deciding whether to run again.",
-    zhTW: "系統無法做出可信的比較；請先查看記錄的比較原因，再決定是否重新掃描。",
+    en: "Comparison is unavailable for this item. Open the recorded reason and complete its next action.",
+    zhTW: "這個項目目前無法比較；請開啟記錄原因並完成下一步。",
   },
 } as const satisfies Record<DiffState, { en: string; zhTW: string }>;
 
 const mappingDiffSummary = {
-  en: "This check completed in both scans, but the control-mapping catalog version changed. The app cannot reliably classify this finding as fixed, still present, or new.",
-  zhTW: "這項檢查在兩次掃描中都已完成，但控制對照目錄版本有變更，因此系統無法可靠地把這個問題判定為已修復、仍存在或新出現。",
+  en: "This check completed in both scans with different control-mapping catalog versions. Comparison classification is unavailable for this finding.",
+  zhTW: "這項檢查在兩次掃描中都已完成，但控制對照目錄版本不同；這個問題目前沒有比較分類。",
 } as const;
 
 export function VerificationPage({ verification, runs, findings, baselineRunId, busy, onSelectBaseline, onStartRescan, onOpenFinding }: VerificationPageProps) {

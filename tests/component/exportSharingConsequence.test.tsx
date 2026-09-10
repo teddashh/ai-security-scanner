@@ -369,7 +369,7 @@ test("the demo decision does not claim a verifiable digest", async () => {
   expect(decision.textContent).not.toContain("SHA-256 detects changes");
   expect(detailNotes(container)).toBe("");
   expect(container.textContent).toContain("This downloads a sample report");
-  expect(container.textContent).toContain("It does not contain results from a real scan");
+  expect(container.textContent).toContain("Browser demo export: one selected-run JSON sample");
 });
 
 test("a format that cannot carry asset relationships says so instead of showing a check", async () => {
@@ -394,11 +394,7 @@ test("the case bundle still lists asset relationships as included", async () => 
   expect(assetRelationsLine(container).textContent).not.toContain("not carried by this format");
 });
 
-test("the advanced-format note names the two formats it is greying out", async () => {
-  // This note is shown exactly when `runSupportsFindingOnlyExport` is false,
-  // and that predicate is `Boolean(run)` -- so it appears only in the state
-  // where OCSF and OSCAL are the two disabled cards directly beneath it. It
-  // used to open with "Every format remains available."
+test("the advanced-format note names the formats that need a saved scan", async () => {
   const onPreview = vi.fn(() => Promise.resolve(undefined));
   const { container } = render(
     <I18nProvider>
@@ -416,7 +412,8 @@ test("the advanced-format note names the two formats it is greying out", async (
   );
 
   const note = container.querySelector<HTMLElement>(".page-secondary-feature__intro");
-  expect(note?.textContent).toContain("OCSF and OSCAL are unavailable until a saved scan is selected");
+  expect(note?.textContent).toContain("OCSF and OSCAL require a saved scan for their coverage manifest");
+  expect(note?.textContent).toContain("Available now: HTML, JSON, framework report, and case bundle");
   expect(note?.textContent).not.toContain("Every format remains available");
 
   // The claim and the controls have to agree: those two cards really are the

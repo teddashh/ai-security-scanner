@@ -231,7 +231,7 @@ test("scanner work that did not finish or never ran is disclosed before saving",
 
   const notRun = disclosureFor(container, "Scanner jobs not run");
   expect(notRun.querySelector("strong")?.textContent).toBe("1");
-  expect(notRun.textContent).toContain("never rewritten as passed");
+  expect(notRun.textContent).toContain("Exported fields: recorded reason and not-run status");
 
   const completed = disclosureFor(container, "Completed scanner jobs");
   expect(completed.querySelector("strong")?.textContent).toBe("0");
@@ -244,7 +244,7 @@ test("completed scanner work remains visible when every omission counter is zero
 
   const completed = disclosureFor(container, "Completed scanner jobs");
   expect(completed.querySelector("strong")?.textContent).toBe("1");
-  expect(completed.textContent).toContain("does not mean broader security coverage");
+  expect(completed.textContent).toContain("Broader coverage appears separately below");
 });
 
 test("a clean run is allowed to read as clean", async () => {

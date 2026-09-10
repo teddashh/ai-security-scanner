@@ -119,7 +119,7 @@ const beginnerReport = (
   projectTitle: "Selected project",
   state: {
     summary: "partial",
-    lifecycle: "live",
+    lifecycle: "final",
     lastDurableUpdate: "2026-09-04T12:02:00Z",
     explanation: "Recorded from durable task state.",
   },

@@ -171,12 +171,12 @@ test("post-start failures preserve results and cleanup guidance", () => {
     findingCount: 2,
     checkpoint: { attempt: 1, stage: "failed", artifactCount: 1, cleanupCompleted: true, scopeBound: true },
   }));
-  assert.match(withResults.en, /Review the results already saved/u);
-  assert.match(withResults.zhTW, /查看已保存的結果/u);
+  assert.match(withResults.en, /Open the completed results/u);
+  assert.match(withResults.zhTW, /開啟已完成結果/u);
 
   const cleanup = engineNextStepFor(engine({ status: "failed", errorCode: "runtime_cleanup_pending" }));
-  assert.match(cleanup.en, /cleanup status/u);
-  assert.match(cleanup.zhTW, /清理狀態/u);
+  assert.match(cleanup.en, /Finish cleanup/u);
+  assert.match(cleanup.zhTW, /完成清理/u);
   assert.doesNotMatch(cleanup.en, /scan-tool setup/u);
 });
 
@@ -187,9 +187,9 @@ test("bounded retry exhaustion and cancellation never promise an impossible resu
     errorCode: "coverage_incomplete_after_bounded_retries",
     resumable: false,
   }));
-  assert.match(exhausted.en, /saved results.*not tested/u);
-  assert.match(exhausted.en, /start a new scan/u);
-  assert.match(exhausted.zhTW, /已保存的結果與未測試項目/u);
+  assert.match(exhausted.en, /completed results and untested items/u);
+  assert.match(exhausted.en, /Start a new scan/u);
+  assert.match(exhausted.zhTW, /已完成結果與未測試項目/u);
   assert.doesNotMatch(`${exhausted.en}${exhausted.zhTW}`, /continue this scan|繼續掃描/iu);
 
   const cancelled = engineNextStepFor(engine({
@@ -199,9 +199,9 @@ test("bounded retry exhaustion and cancellation never promise an impossible resu
     rawArtifactCount: 1,
     resumable: false,
   }));
-  assert.match(cancelled.en, /results saved before you stopped/u);
+  assert.match(cancelled.en, /results captured before the stop/u);
   assert.match(cancelled.en, /remaining items/u);
-  assert.match(cancelled.zhTW, /停止掃描前已保存的結果/u);
+  assert.match(cancelled.zhTW, /停止前擷取的結果/u);
   assert.doesNotMatch(`${cancelled.en}${cancelled.zhTW}`, /continue this scan|繼續掃描/iu);
 });
 
@@ -238,7 +238,7 @@ test("typed skipped reasons choose a specific bilingual next step without render
     [["no_compatible_authorized_assets"], /scan setup/u, /掃描設定/u],
     [["provider_source_required"], /cloud setup/u, /雲端設定/u],
     [["runtime_image_unavailable"], /prepare.*automatically/u, /自動準備/u],
-    [["engine_release_unavailable"], /not available in this version/u, /目前版本無法使用/u],
+    [["engine_release_unavailable"], /Update the app/u, /更新應用程式/u],
   ] as const;
   for (const [codes, english, traditionalChinese] of cases) {
     const action = skippedChecksNextStepFor(codes);

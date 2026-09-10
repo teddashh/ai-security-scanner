@@ -159,16 +159,13 @@ test("a Windows restart requirement replaces the generic failure", () => {
   expect(actionButtons(container)[0]?.textContent).toContain("Continue after restarting Windows");
 });
 
-test("a slow attempt says Retry comes later, and does not show a Retry now", () => {
-  // The copy makes a promise about sequence: the app is stopping this attempt
-  // and "will offer Retry when it has stopped". A Retry button rendered
-  // alongside it would mean the sentence describes a state the UI is not in.
+test("a stale attempt shows the stop state and opens Retry only after stopping", () => {
   const { container } = renderAssistant({
     status: setupStatus({ phase: "start", active: true, stale: true, canCancel: true }),
   });
 
-  expect(heading(container)).toBe("Advanced local scan-tool setup is taking longer than expected");
-  expect(explanation(container)).toContain("Retry appears when it has stopped");
+  expect(heading(container)).toBe("Stopping advanced local scan-tool setup");
+  expect(explanation(container)).toContain("Retry opens after the stop completes");
   expect(explanation(container)).not.toContain("localhost");
 
   const buttons = actionButtons(container);

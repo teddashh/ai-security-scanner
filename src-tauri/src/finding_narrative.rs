@@ -904,8 +904,8 @@ fn with_identifier(label: &str, identifier: &str) -> String {
 /// stored English rather than claiming to understand prose from another build.
 const TESTED_OBSERVATION_PROSE: &[(&str, &str)] = &[
     (
-        "Nuclei completed the pinned upstream automatic web profile on the displayed origin. Upstream technology detection selected applicable read-only templates; completion does not prove that every eligible template executed.",
-        "Nuclei 已對畫面所列網站來源範圍完成固定版本的上游自動網站設定。上游技術偵測會選擇適用的唯讀模板；完成不代表每個合格模板都實際執行。",
+        "Nuclei completed the pinned upstream automatic web profile on the displayed origin. Applied checks: templates selected by upstream technology detection. Eligible-template execution completeness: unavailable.",
+        "Nuclei 已對畫面所列網站來源範圍完成固定版本的上游自動網站設定。套用的檢查：由上游技術偵測選取的模板。合格模板執行完整度：無法取得。",
     ),
     (
         "The port accepted the bounded TCP connection.",
@@ -932,8 +932,8 @@ const TESTED_OBSERVATION_PROSE: &[(&str, &str)] = &[
         "已完成的 Greenbone 工作保留了凍結的允許清單，其中包含此設定檔的 TLS 協定、加密套件與憑證弱點檢查。",
     ),
     (
-        "Greenbone completed the frozen remote-safe profile on the displayed host and ports. Its upstream service and product prerequisites decided which feed checks applied; the result API does not prove that every scheduled VT executed.",
-        "Greenbone 已對畫面所列主機與連接埠完成凍結的遠端安全掃描設定。哪些 feed 檢查適用，由上游的服務與產品先決條件決定；結果 API 不能證明每個排程的 VT 都實際執行。",
+        "Greenbone completed the frozen remote-safe profile on the displayed host and ports. Applied checks: feed checks selected by upstream service and product prerequisites. Scheduled-VT execution completeness: unavailable.",
+        "Greenbone 已對畫面所列主機與連接埠完成凍結的遠端安全掃描設定。套用的檢查：由上游服務與產品先決條件選取的 feed 檢查。排程 VT 執行完整度：無法取得。",
     ),
     (
         "The completed Greenbone task retained the exact reviewed SSH profile for deprecated protocol, known or static host key, and weak MAC, encryption, host-key, key-size, or key-exchange choices.",
@@ -952,12 +952,12 @@ const TESTED_OBSERVATION_PROSE: &[(&str, &str)] = &[
         "已完成的 Greenbone 工作保留了精確且經過檢視的 SMTP 設定檔：一項透過 banner、EHLO、STARTTLS 與服務宣告 AUTH 檢查未加密明文登入風險的檢查，加上十項在可協商 TLS 時適用的 TLS 檢查。本輪未送出帳號或密碼，也沒有寄信。",
     ),
     (
-        "The completed Greenbone task retained and attempted the exact SMTP profile: one check reads the banner, sends EHLO, tries STARTTLS when offered, and reviews advertised AUTH for cleartext-login risk; ten more checks depend on TLS being available. Task completion alone does not prove those TLS checks ran. No credentials or mail were sent.",
-        "已完成的 Greenbone 工作保留並嘗試執行精確的 SMTP 設定檔：其中一項檢查會讀取 banner、送出 EHLO、在服務提供時嘗試 STARTTLS，並檢視服務宣告的 AUTH 是否有明文登入風險；另有十項檢查必須在 TLS 可用時才能執行。工作完成本身不能證明這些 TLS 檢查實際執行。本輪未送出帳號或密碼，也沒有寄信。",
+        "The completed Greenbone task retained and attempted the exact SMTP profile: one check reads the banner, sends EHLO, tries STARTTLS when offered, and reviews advertised AUTH for cleartext-login risk; ten more checks depend on TLS. TLS-check execution: evidenced by selected-run source OIDs. Credentials and mail: not sent.",
+        "已完成的 Greenbone 工作保留並嘗試執行精確的 SMTP 設定檔：其中一項檢查會讀取 banner、送出 EHLO、在服務提供時嘗試 STARTTLS，並檢視服務宣告的 AUTH 是否有明文登入風險；另有十項檢查依賴 TLS。TLS 檢查執行情況：由所選輪次的來源 OID 提供證據。帳密與郵件：未送出。",
     ),
     (
-        "Only the exact TLS source OIDs present in this selected run's finding evidence are counted here. A finding for one OID does not prove that another TLS check ran.",
-        "此處只計入所選本輪 finding 證據中明確記載的 TLS 來源 OID。某一個 OID 有 finding，不能證明另一項 TLS 檢查也已執行。",
+        "Counted coverage: exact TLS source OIDs in selected-run finding evidence. Each OID evidences only its own check.",
+        "計入的涵蓋範圍：所選輪次問題證據中的精確 TLS 來源 OID。每個 OID 只證明自己的檢查。",
     ),
     (
         "The completed Greenbone task retained the exact reviewed Telnet profile, which observes whether a login or password prompt is offered without TLS. No username or password was sent and no login was attempted.",
@@ -968,8 +968,8 @@ const TESTED_OBSERVATION_PROSE: &[(&str, &str)] = &[
         "這些已凍結的特定工作單元，在所有已儲存的嘗試中都有通過驗證的完成結果。完成的網路檢查只回報連線是否可達；不代表安全性檢查通過。",
     ),
     (
-        "These work units produced usable saved results but did not finish every planned operation.",
-        "這些工作單元產生了已儲存的可用結果，但沒有完成每一項計畫中的操作。",
+        "Work-unit status: Partial. Planned operations remain unfinished.",
+        "工作單元狀態：部分完成；仍有計畫中的操作未完成。",
     ),
 ];
 
@@ -977,9 +977,22 @@ const TESTED_OBSERVATION_PROSE: &[(&str, &str)] = &[
 /// build did not author the stored sentence.
 pub fn tested_observation_zh_hant(english: &str) -> Option<String> {
     let trimmed = english.trim();
+    let normalized = if trimmed.contains("produced usable saved results") {
+        "Work-unit status: Partial. Planned operations remain unfinished."
+    } else if trimmed.contains("completion does not prove that every eligible template executed") {
+        "Nuclei completed the pinned upstream automatic web profile on the displayed origin. Applied checks: templates selected by upstream technology detection. Eligible-template execution completeness: unavailable."
+    } else if trimmed.contains("result API does not prove that every scheduled VT executed") {
+        "Greenbone completed the frozen remote-safe profile on the displayed host and ports. Applied checks: feed checks selected by upstream service and product prerequisites. Scheduled-VT execution completeness: unavailable."
+    } else if trimmed.contains("Task completion alone does not prove those TLS checks ran") {
+        "The completed Greenbone task retained and attempted the exact SMTP profile: one check reads the banner, sends EHLO, tries STARTTLS when offered, and reviews advertised AUTH for cleartext-login risk; ten more checks depend on TLS. TLS-check execution: evidenced by selected-run source OIDs. Credentials and mail: not sent."
+    } else if trimmed.contains("A finding for one OID does not prove that another TLS check ran") {
+        "Counted coverage: exact TLS source OIDs in selected-run finding evidence. Each OID evidences only its own check."
+    } else {
+        trimmed
+    };
     TESTED_OBSERVATION_PROSE
         .iter()
-        .find(|(candidate, _)| *candidate == trimmed)
+        .find(|(candidate, _)| *candidate == normalized)
         .map(|(_, chinese)| (*chinese).to_owned())
 }
 
@@ -1236,24 +1249,57 @@ pub fn coverage_record_detail_zh_hant(english: &str) -> Option<String> {
 pub fn data_quality_warning_zh_hant(english: &str) -> Option<String> {
     let fixed = [
         (
-            "This run contains a request-level outcome beside non-terminal or planned check data. The report ignored that outcome and did not treat it as ‘no checks completed’.",
-            "本輪在尚未結束或仍有已規劃檢查資料的同時，含有請求層級的結果。報告已忽略該結果，且未將其視為「未完成任何檢查」。",
+            "This run has inconsistent request and check data.",
+            "本輪的請求與檢查資料不一致。",
         ),
         (
-            "The selected run's stored project identifier does not match this project. The report remains limited to the selected in-project record.",
-            "所選掃描輪次儲存的專案識別碼與此專案不符。報告仍只限於專案內所選的記錄。",
+            "The selected run has an inconsistent project identity. Report data: selected in-project record.",
+            "所選掃描輪次的專案識別資料不一致；報告資料：專案內所選記錄。",
         ),
         (
-            "Saved run state is inconsistent: it has a completion time while at least one check has no terminal outcome.",
-            "已保存的掃描狀態不一致：已有完成時間，但至少一項檢查沒有終止結果。",
-        ),
-        (
-            "One check's saved coverage history could not be reconciled. Retained findings and evidence remain available, but that check is not counted complete.",
-            "有一項檢查已儲存的涵蓋歷程無法核對。保留的問題與證據仍可使用，但該檢查不會計為完成。",
+            "One check has incomplete coverage history.",
+            "有一項檢查的涵蓋歷程未完成。",
         ),
     ];
-    if let Some((_, chinese)) = fixed.iter().find(|(candidate, _)| *candidate == english) {
+    let normalized = match english {
+        "This run contains a request-level outcome beside non-terminal or planned check data. The report ignored that outcome and did not treat it as ‘no checks completed’." => {
+            "This run has inconsistent request and check data."
+        }
+        "The selected run's stored project identifier does not match this project. The report remains limited to the selected in-project record." => {
+            "The selected run has an inconsistent project identity. Report data: selected in-project record."
+        }
+        _ => english,
+    };
+    let normalized = if normalized.contains("saved coverage history could not be reconciled")
+        || english.contains("Coverage history reconciliation failed for one check")
+        || english.contains("One check has an incomplete coverage history record")
+    {
+        "One check has incomplete coverage history."
+    } else {
+        normalized
+    };
+    if let Some((_, chinese)) = fixed.iter().find(|(candidate, _)| *candidate == normalized) {
         return Some((*chinese).to_owned());
+    }
+    if let Some(finding_id) = strip_frame(
+        normalized,
+        "Finding ",
+        " selected-run presentation snapshot: unavailable. Display wording: current canonical text.",
+    ) && !finding_id.is_empty()
+    {
+        return Some(format!(
+            "問題 {finding_id} 所選輪次呈現快照：無法取得；顯示文字：目前正式版本。"
+        ));
+    }
+    if let Some(finding_id) = strip_frame(
+        normalized,
+        "Finding ",
+        " presentation detail: unavailable. Retained run observation: available.",
+    ) && !finding_id.is_empty()
+    {
+        return Some(format!(
+            "問題 {finding_id} 呈現細節：無法取得；保留的輪次觀察：可用。"
+        ));
     }
     if let Some(finding_id) = strip_frame(
         english,
@@ -1262,7 +1308,7 @@ pub fn data_quality_warning_zh_hant(english: &str) -> Option<String> {
     ) && !finding_id.is_empty()
     {
         return Some(format!(
-            "問題 {finding_id} 沒有所選輪次的呈現快照；目前的正式措辭已標示為舊版備援。"
+            "問題 {finding_id} 所選輪次呈現快照：無法取得；顯示文字：目前正式版本。"
         ));
     }
     if let Some(finding_id) = strip_frame(
@@ -1272,7 +1318,7 @@ pub fn data_quality_warning_zh_hant(english: &str) -> Option<String> {
     ) && !finding_id.is_empty()
     {
         return Some(format!(
-            "問題 {finding_id} 只有保留的輪次觀察記錄；無法取得呈現細節。"
+            "問題 {finding_id} 呈現細節：無法取得；保留的輪次觀察：可用。"
         ));
     }
     None
@@ -1342,8 +1388,8 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "至少有一筆舊版的問題觀察結果，沒有保留該輪完整的顯示資料。",
     ),
     (
-        "The saved work-unit coverage for this check is internally inconsistent. The report did not guess which planned units were tested.",
-        "這項檢查儲存的工作單元涵蓋記錄本身互相矛盾。報告不會臆測哪些計畫中的單元已經被檢測。",
+        "Saved work-unit coverage is inconsistent; tested units are unknown.",
+        "已保存的工作單元涵蓋記錄不一致；已檢測單元為未知。",
     ),
     (
         "Usable results were saved for these work units, but their remaining planned operations were not tested complete.",
@@ -1366,8 +1412,8 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "這些已凍結的工作單元，在任何一次已儲存的嘗試中都沒有通過驗證的檢測結果。",
     ),
     (
-        "At least one validated scanner result has not been fully processed into findings. Tested coverage remains saved, but the finding list may be incomplete.",
-        "至少有一筆通過驗證的掃描結果尚未完全轉換成問題項目。已檢測的涵蓋範圍仍然保留，但問題清單可能不完整。",
+        "Result processing status: incomplete.",
+        "結果處理狀態：未完成。",
     ),
     (
         "Every planned work unit has completed evidence, but the check itself has not recorded a completed final state.",
@@ -1442,8 +1488,8 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "沒有保留本輪的精確限制。目前的專案設定不會拿來代替當時要求的限制。",
     ),
     (
-        "This run did not freeze a quick-discovery, inventory, or deep-stage selection. The report does not infer one from engine names or current project settings.",
-        "本輪沒有凍結快速探索、清點或深度掃描的階段選擇。報告不會從掃描工具名稱或目前的專案設定推測階段。",
+        "Recorded stage selection: unavailable. Current project settings: excluded from this historical record.",
+        "已記錄的階段選擇：無法取得。目前專案設定：不納入此歷史記錄。",
     ),
     (
         "At least one readable frozen network plan includes full inventory, but another network check has no valid saved plan. Inventory is the highest known stage, not a complete run-wide record.",
@@ -1494,8 +1540,8 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "本輪沒有為此資產保留精確固定的 SMTP 設定檔。目前的專案資料不會用來宣稱當時已完成 SMTP 安全性涵蓋。",
     ),
     (
-        "This run does not retain selected-run finding evidence for every SMTP TLS check. Task completion shows that the fixed profile was attempted, but it does not prove that TLS was available or that every TLS check ran; one finding proves only its own source OID.",
-        "本輪沒有為每一項 SMTP TLS 檢查保留所選本輪的 finding 證據。工作完成只表示已嘗試固定設定檔，不能證明 TLS 可用，也不能證明每一項 TLS 檢查都已執行；一筆 finding 只能證明它自己的來源 OID。",
+        "Selected-run SMTP TLS evidence: incomplete. Fixed profile status: attempted. TLS availability and per-check execution: shown only by each finding's source OID.",
+        "所選輪次的 SMTP TLS 證據：未完成。固定設定檔狀態：已嘗試。TLS 可用性與各項檢查的執行情況：只由各問題的來源 OID 顯示。",
     ),
     (
         "The unauthenticated SMTP profile reads the banner, issues EHLO, negotiates STARTTLS when offered, and checks advertised AUTH for an unencrypted cleartext-login risk. Its TLS checks apply only when TLS can be negotiated. It does not send credentials or mail, test relay or delivery, authentication enforcement or bypass, anti-spam behavior, general mail-server implementation CVEs, operating-system patches, installed software, or local configuration.",
@@ -1518,12 +1564,9 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "此資產已加入 IT 環境，但本輪沒有適用的服務專屬弱點掃描設定，因此沒有連線，也沒有進行測試。",
     ),
     (
-        "The task says completed but has neither a finish time nor a bounded native observation time. The report does not invent when it was tested.",
-        "這項工作標示為已完成，卻既沒有結束時間，也沒有內建檢查的觀察時間。報告不會臆造檢測的時間。",
+        "Completed-check time: unavailable. Finish and bounded observation times are absent.",
+        "已完成檢查時間：無法取得。缺少結束時間與受限觀察時間。",
     ),
-    // The one step a report with nothing else to say still offers.
-    ("Scan continues automatically.", "掃描會自動繼續。"),
-    ("Current checks are in progress.", "目前的檢查正在進行中。"),
     (
         "If you expected an app on this port, start it and run the check again.",
         "如果你預期這個連接埠上有服務在執行，請先啟動它，再重新執行檢查。",
@@ -1660,8 +1703,8 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "只需重新執行尚未產生檢測結果的那部分工作。",
     ),
     (
-        "No action is required; result processing retries automatically.",
-        "無需操作；結果處理會自動重試。",
+        "Start a new scan for a fresh result.",
+        "開始新的掃描以取得新結果。",
     ),
     (
         "Retry this check to create a consistent terminal record.",
@@ -1708,10 +1751,7 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "Open the upstream detail and set this control's status.",
         "開啟上游詳細資料，並設定這項控制措施的狀態。",
     ),
-    (
-        "No action is needed unless this area should be included in a future scan.",
-        "除非之後的掃描要納入這個範圍，否則不需要採取任何行動。",
-    ),
+    ("No action for the current scope.", "目前範圍不需處理。"),
 ];
 
 /// One sentence of a coverage row, in Traditional Chinese, or `None` when this
@@ -1724,6 +1764,53 @@ pub fn coverage_gap_prose_zh_hant(english: &str) -> Option<String> {
         "Review the upstream detail and record a human decision for this control.",
         "Open the upstream detail and set this control's status.",
     );
+    let normalized = if normalized
+        .contains("saved work-unit coverage for this check is internally inconsistent")
+    {
+        "Saved work-unit coverage is inconsistent; tested units are unknown.".to_owned()
+    } else {
+        normalized
+    };
+    let normalized = if normalized
+        .contains("does not retain selected-run finding evidence for every SMTP TLS check")
+    {
+        "Selected-run SMTP TLS evidence: incomplete. Fixed profile status: attempted. TLS availability and per-check execution: shown only by each finding's source OID."
+            .to_owned()
+    } else {
+        normalized
+    };
+    let normalized = if normalized
+        .contains("did not freeze a quick-discovery, inventory, or deep-stage selection")
+    {
+        "Recorded stage selection: unavailable. Current project settings: excluded from this historical record."
+            .to_owned()
+    } else {
+        normalized
+    };
+    let normalized =
+        if normalized.contains("neither a finish time nor a bounded native observation time") {
+            "Completed-check time: unavailable. Finish and bounded observation times are absent."
+                .to_owned()
+        } else {
+            normalized
+        };
+    let normalized = if normalized.contains("validated scanner result has not been fully processed")
+    {
+        "Result processing status: incomplete.".to_owned()
+    } else {
+        normalized
+    };
+    let normalized = if normalized.contains("result processing retries automatically") {
+        "Start a new scan for a fresh result.".to_owned()
+    } else {
+        normalized
+    };
+    let normalized =
+        if normalized.contains("No action is needed unless this area should be included") {
+            "No action for the current scope.".to_owned()
+        } else {
+            normalized
+        };
     let trimmed = normalized.trim();
     if let Some(detail) = trimmed.strip_prefix(&format!("{REVIEW_BASE} Upstream detail: "))
         && !detail.is_empty()
@@ -1746,7 +1833,7 @@ pub fn coverage_gap_prose_zh_hant(english: &str) -> Option<String> {
 }
 
 pub fn coverage_gap_prose_english(english: &str) -> String {
-    english
+    let normalized = english
         .replace(
             "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.",
             "Maester evaluated this control but did not return a pass or fail verdict.",
@@ -1754,7 +1841,30 @@ pub fn coverage_gap_prose_english(english: &str) -> String {
         .replace(
             "Review the upstream detail and record a human decision for this control.",
             "Open the upstream detail and set this control's status.",
-        )
+        );
+    if normalized.contains("saved work-unit coverage for this check is internally inconsistent") {
+        "Saved work-unit coverage is inconsistent; tested units are unknown.".into()
+    } else if normalized
+        .contains("does not retain selected-run finding evidence for every SMTP TLS check")
+    {
+        "Selected-run SMTP TLS evidence: incomplete. Fixed profile status: attempted. TLS availability and per-check execution: shown only by each finding's source OID."
+            .into()
+    } else if normalized
+        .contains("did not freeze a quick-discovery, inventory, or deep-stage selection")
+    {
+        "Recorded stage selection: unavailable. Current project settings: excluded from this historical record."
+            .into()
+    } else if normalized.contains("neither a finish time nor a bounded native observation time") {
+        "Completed-check time: unavailable. Finish and bounded observation times are absent.".into()
+    } else if normalized.contains("validated scanner result has not been fully processed") {
+        "Result processing status: incomplete.".into()
+    } else if normalized.contains("result processing retries automatically") {
+        "Start a new scan for a fresh result.".into()
+    } else if normalized.contains("No action is needed unless this area should be included") {
+        "No action for the current scope.".into()
+    } else {
+        normalized
+    }
 }
 
 fn lookup(english: &str) -> Option<String> {
@@ -2152,13 +2262,13 @@ mod tests {
             data_quality_warning_zh_hant(
                 "The selected run's stored project identifier does not match this project. The report remains limited to the selected in-project record."
             ),
-            Some("所選掃描輪次儲存的專案識別碼與此專案不符。報告仍只限於專案內所選的記錄。".into())
+            Some("所選掃描輪次的專案識別資料不一致；報告資料：專案內所選記錄。".into())
         );
         assert_eq!(
             data_quality_warning_zh_hant(
                 "Finding finding-user-value has only its retained run observation; presentation detail is unavailable."
             ),
-            Some("問題 finding-user-value 只有保留的輪次觀察記錄；無法取得呈現細節。".into())
+            Some("問題 finding-user-value 呈現細節：無法取得；保留的輪次觀察：可用。".into())
         );
         assert_eq!(
             data_quality_warning_zh_hant("[redacted data-quality warning]"),

@@ -98,13 +98,20 @@ test("every censused product-authored engine-warning sentence has a Chinese shap
 });
 
 test("every beginner-report data-quality warning has a Chinese form", () => {
-  const source = read("../../src-tauri/src/beginner_report.rs").split("#[cfg(test)]")[0] ?? "";
+  const source = (read("../../src-tauri/src/beginner_report.rs").split("#[cfg(test)]")[0] ?? "")
+    .replaceAll(/data_quality_warnings\s*\.\s*push/gu, "data_quality_warnings.push");
   const authored = new Set(calls(source, ["data_quality_warnings.push", "warnings.push"]).map(sample));
   const warnings = [...authored].filter((value) =>
     value.startsWith("This run") || value.startsWith("The selected run") ||
     value.startsWith("One check") || value.startsWith("Saved run") ||
     value.startsWith("Finding "));
-  assert.ok(warnings.length >= 6, `producer extractor found only ${warnings.length} data-quality warnings`);
+  assert.deepEqual(warnings.sort(), [
+    "Finding retained-value presentation detail: unavailable. Retained run observation: available.",
+    "Finding retained-value selected-run presentation snapshot: unavailable. Display wording: current canonical text.",
+    "One check has incomplete coverage history.",
+    "The selected run has an inconsistent project identity. Report data: selected in-project record.",
+    "This run has inconsistent request and check data.",
+  ]);
   const untranslated = warnings.filter((warning) => localizedDataQualityWarning(warning, "zh-TW") === warning);
   assert.deepEqual(untranslated, [], `data-quality warnings without Chinese:\n${untranslated.join("\n")}`);
 });

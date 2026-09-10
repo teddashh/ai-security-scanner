@@ -659,7 +659,7 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                 report.checkpoint.cleanup_completed = true;
                 report.cleanup = Some(cleanup);
             }
-            Err(AppError::NotAuthorized(problem)) => {
+            Err(AppError::NotAuthorized(_problem)) => {
                 // A same-name object whose exact ownership labels cannot be
                 // proven belongs outside this attempt's cleanup authority.
                 // Preserve it, close this attempt's cleanup obligation, and
@@ -669,12 +669,10 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                 report.checkpoint.cleanup_completed = true;
                 report.cleanup = Some(CleanupOutcome {
                     removed: false,
-                    detail: format!(
-                        "No runtime object was changed because exact product ownership could not be proven: {problem}"
-                    ),
+                    detail: "Runtime object unchanged. Ownership status: unverified.".into(),
                 });
                 report.warnings.push(
-                    "An existing runtime object could not be proven to belong to this scan, so it was preserved. A retry uses a new isolated attempt."
+                    "Runtime object ownership is unavailable. Retry uses a new isolated attempt."
                         .into(),
                 );
                 // The same ownership ambiguity also means this attempt's
@@ -683,7 +681,7 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                 // available for diagnosis, while the attempt ends truthfully
                 // and a new isolated attempt can continue.
                 report.fail(
-                    "Runtime ownership could not be proven after launch. Raw output was preserved, but this attempt's results were not trusted; retry uses a new isolated attempt.",
+                    "Runtime ownership status: unverified after launch. Attempt status: failed. Retry: new isolated attempt.",
                 );
             }
             Err(error) => {
@@ -732,10 +730,9 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                     .as_ref()
                     .is_ok_and(|outcome| outcome.cancelled || outcome.exit_code != Some(0))
             {
-                report.warnings.push(
-                    "This scan batch stopped after saving output. The app will keep only journal-verified results; unfinished work remains not tested."
-                        .into(),
-                );
+                report
+                    .warnings
+                    .push("Scan batch stopped. Unfinished work: not tested.".into());
             }
             report.checkpoint.stage = ExecutionStage::CapturedAwaitingAdapter;
             report.checkpoint.last_error = None;
@@ -3032,10 +3029,12 @@ mod tests {
                 .all(|digest| { digest.as_deref() == Some(expected_launcher_digest.as_str()) })
         );
         assert!(report.checkpoint.last_error.is_none());
-        assert!(report.warnings.iter().any(|warning| {
-            warning.contains("journal-verified results")
-                && warning.contains("unfinished work remains not tested")
-        }));
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning == "Scan batch stopped. Unfinished work: not tested.")
+        );
 
         let observed = runtime
             .observed()
@@ -3280,10 +3279,12 @@ mod tests {
         assert!(report.checkpoint.cleanup_completed);
         assert!(report.checkpoint.last_error.is_none());
         assert!(report.findings.is_empty());
-        assert!(report.warnings.iter().any(|warning| {
-            warning.contains("journal-verified results")
-                && warning.contains("unfinished work remains not tested")
-        }));
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning == "Scan batch stopped. Unfinished work: not tested.")
+        );
         assert!(report.raw_artifacts.iter().any(|artifact| {
             artifact
                 .relative_path
@@ -3762,10 +3763,11 @@ mod tests {
             );
             assert!(report.findings.is_empty());
             assert!(report.cleanup.as_ref().is_some_and(|cleanup| {
-                !cleanup.removed && cleanup.detail.contains("ownership could not be proven")
+                !cleanup.removed && cleanup.detail.contains("Ownership status: unverified")
             }));
             assert!(report.warnings.iter().any(|warning| {
-                warning.contains("was preserved") && warning.contains("new isolated attempt")
+                warning.contains("ownership is unavailable")
+                    && warning.contains("new isolated attempt")
             }));
             assert_eq!(
                 runtime.calls().last(),

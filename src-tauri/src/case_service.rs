@@ -2556,7 +2556,7 @@ impl<'a> CaseService<'a> {
                     || !latest_result.normalization_complete
                 {
                     return Err(AppError::NotAvailable(
-                        "The saved scan batch is not fully organized; its existing result remains available without inventing a cancellation outcome."
+                        "Result processing is incomplete. Wait for it to finish, then cancel again."
                             .into(),
                     ));
                 }
@@ -2585,7 +2585,7 @@ impl<'a> CaseService<'a> {
                     && engine_run.error_message.is_none();
                 if !already_cancelled && !clean_continuation {
                     return Err(AppError::NotAvailable(
-                        "A later scan state won the cancellation race. Existing results were preserved and were not overwritten."
+                        "A newer scan state replaced this cancellation request. Refresh Scan progress."
                             .into(),
                     ));
                 }
@@ -2603,8 +2603,7 @@ impl<'a> CaseService<'a> {
             engine_run.phase = "cancelled_before_dispatch".into();
             engine_run.finished_at = Some(now);
             engine_run.error_code = Some("cancelled_before_dispatch".into());
-            engine_run.error_message =
-                Some("The scan was cancelled before this attempt performed target contact.".into());
+            engine_run.error_message = Some("Cancelled before dispatch.".into());
             engine_run.resume_token = Some(token);
             changed = true;
         }
@@ -2724,7 +2723,7 @@ impl<'a> CaseService<'a> {
                 || !latest_result.normalization_complete
             {
                 return Err(AppError::NotAvailable(
-                    "The saved scan batch is not fully organized; it remains available but cannot auto-continue."
+                    "Result processing is incomplete. Start a new scan for the remaining work."
                         .into(),
                 ));
             }
@@ -2734,8 +2733,7 @@ impl<'a> CaseService<'a> {
                 || engine_run.error_message.is_some()
             {
                 return Err(AppError::NotAvailable(
-                    "The saved scan batch is no longer in the exact clean continuation state; its results remain available and no later user action was overridden."
-                        .into(),
+                    "A newer scan state replaced this continuation. Refresh Scan progress.".into(),
                 ));
             }
             let checkpoint = exact_engine_checkpoint(
@@ -2874,7 +2872,8 @@ impl<'a> CaseService<'a> {
             .ok_or_else(|| AppError::InvalidRequest("engine run not found".into()))?;
         let manifest = self.engines.get(NAABU_ENGINE_ID).ok_or_else(|| {
             AppError::NotAvailable(
-                "The saved result reader is unavailable. Existing results remain intact.".into(),
+                "The installed result reader is unavailable. Install the latest app version."
+                    .into(),
             )
         })?;
         validate_naabu_adapter_compatibility(engine_run, manifest)?;
@@ -2916,7 +2915,7 @@ impl<'a> CaseService<'a> {
             let engine_run = &run.engine_runs[engine_index];
             let manifest = self.engines.get(NAABU_ENGINE_ID).ok_or_else(|| {
                 AppError::NotAvailable(
-                    "The saved result reader is unavailable. Existing results remain intact."
+                    "The installed result reader is unavailable. Install the latest app version."
                         .into(),
                 )
             })?;
@@ -2996,9 +2995,9 @@ impl<'a> CaseService<'a> {
         }
 
         let explanation = if adapter_error {
-            "Saved scanner output is intact, but the app could not safely finish organizing every result. Existing findings remain available; start a new scan to use the current result reader."
+            "Result processing stopped. Start a new scan with the current result reader."
         } else {
-            "Some saved scanner output could not be fully organized. Existing findings remain available, and this check is clearly marked partial."
+            "Result processing is incomplete. This check is Partial."
         };
         let cumulative_progress = {
             let engine_run = &case.scan_runs[run_index].engine_runs[engine_index];
@@ -3231,7 +3230,7 @@ impl<'a> CaseService<'a> {
             }
             if output.warnings.len() < 256 {
                 output.warnings.push(
-                    "Framework relationships were omitted because the run's frozen mapping identity does not match the available mapping. Scanner findings remain usable."
+                    "Framework relationships are unavailable because the saved mapping identity differs from the installed mapping."
                         .into(),
                 );
             }
@@ -4929,10 +4928,10 @@ impl<'a> CaseService<'a> {
             })
             .unwrap_or_default();
         let explanation = bounded_cleanup_explanation(&format!(
-            "{problem} Existing runtime state was preserved because exact product ownership could not be proven. This interrupted attempt is closed; a new isolated scan can still be started.{earlier}"
+            "{problem} Runtime cleanup status: unresolved because exact product ownership is unavailable. Start a new isolated scan.{earlier}"
         ));
-        let warning = "Automatic cleanup was skipped because the interrupted checkpoint could not prove exact runtime ownership. Existing runtime state was preserved."
-            .to_owned();
+        let warning =
+            "Automatic cleanup stopped: exact runtime ownership is unavailable.".to_owned();
         engine_run.status = EngineRunStatus::Failed;
         engine_run.phase = "interrupted_restart_cleanup_identity_unavailable".into();
         engine_run.finished_at.get_or_insert_with(Utc::now);
@@ -5124,10 +5123,10 @@ impl<'a> CaseService<'a> {
             ));
         }
         let explanation = bounded_cleanup_explanation(&format!(
-            "{problem} Existing runtime state was preserved because exact product ownership could not be proven. This saved attempt remains partial; a new isolated scan can still be started."
+            "{problem} Runtime cleanup status: unresolved because exact product ownership is unavailable. Scanner outcome: Partial. Start a new isolated scan."
         ));
-        let warning = "Automatic cleanup was skipped because exact runtime ownership could not be proven. Existing runtime state was preserved; a new isolated scan can still be started."
-            .to_owned();
+        let warning =
+            "Automatic cleanup stopped: exact runtime ownership is unavailable.".to_owned();
         engine_run.status = EngineRunStatus::PartiallyCompleted;
         engine_run.phase = "cleanup_identity_unavailable".into();
         engine_run.finished_at.get_or_insert_with(Utc::now);
@@ -5215,7 +5214,7 @@ impl<'a> CaseService<'a> {
                         | EngineRunStatus::Cancelled
                 ) && engine_run.resume_token.is_some())
         };
-        let invalid_plan_explanation = "This saved check could not be safely matched to its original target plan. Its existing data was preserved, and no new target contact was made during this resume attempt. Start a new scan for this check; other checks can continue.";
+        let invalid_plan_explanation = "This saved check no longer matches its original target plan. Start a new scan for this check.";
         let invalid_plan_indices = {
             let run = &case.scan_runs[run_index];
             let mut invalid = Vec::new();
@@ -5362,7 +5361,7 @@ impl<'a> CaseService<'a> {
                     // bytes for diagnosis, mutate no runtime object, and make
                     // this historical attempt terminal so Resume cannot loop.
                     let explanation = bounded_cleanup_explanation(&format!(
-                        "{invalid_plan_explanation} Existing runtime state was preserved because its exact ownership could not be proven; a new isolated scan can still be started."
+                        "{invalid_plan_explanation} Runtime cleanup status: unresolved because exact ownership is unavailable."
                     ));
                     engine_run.status = EngineRunStatus::PartiallyCompleted;
                     engine_run.phase = "cleanup_identity_unavailable".into();
@@ -5436,7 +5435,7 @@ impl<'a> CaseService<'a> {
                     phase: "resume_engine_unavailable",
                     error_code: "manifest_unavailable".into(),
                     clear_resume_token: true,
-                    explanation: "This check is not available in the installed version. No new target contact was made during this resume attempt. Start a new scan after updating the app; other checks can continue.".into(),
+                    explanation: "The installed version does not include this check. Update the app, then start a new scan.".into(),
                 });
                 continue;
             };
@@ -5526,8 +5525,7 @@ impl<'a> CaseService<'a> {
                 ));
                 naabu_request = Some(request);
                 legacy_request_migration_warning = Some(
-                    "An older scan request was preserved without running. This version created a new bounded scan batch and will continue from there."
-                        .into(),
+                    "A new bounded scan batch replaced the older request and will continue.".into(),
                 );
             }
             if is_launcher_v2_adapter_only {
@@ -5569,7 +5567,7 @@ impl<'a> CaseService<'a> {
                             phase: "results_partial",
                             error_code: "normalization_incomplete".into(),
                             clear_resume_token: false,
-                            explanation: "Saved scanner results remain intact, but this installed result reader cannot safely continue organizing them. Existing findings remain available; start a new scan for a fresh result.".into(),
+                            explanation: "The installed result reader cannot continue processing this check. Start a new scan for a fresh result.".into(),
                         });
                         continue;
                     }
@@ -5654,7 +5652,7 @@ impl<'a> CaseService<'a> {
                         phase: "results_partial",
                         error_code: "continuation_state_changed".into(),
                         clear_resume_token: false,
-                        explanation: "Saved results remain available, but a later scan state won the continuation race. Start a new scan to fill the remaining coverage gap.".into(),
+                        explanation: "A newer scan state replaced this continuation. Start a new scan for the remaining coverage.".into(),
                     });
                     continue;
                 }
@@ -5712,7 +5710,7 @@ impl<'a> CaseService<'a> {
                     phase: "results_partial",
                     error_code: "legacy_request_requires_new_scan".into(),
                     clear_resume_token: false,
-                    explanation: "The older scan request and any saved results remain available, but this version will not send that request to the network. Start a new scan to use the current bounded network path; other checks can continue.".into(),
+                    explanation: "This version cannot run the older request. Start a new scan with the current bounded network path.".into(),
                 });
                 continue;
             }
@@ -5722,7 +5720,7 @@ impl<'a> CaseService<'a> {
                     phase: "resume_engine_unavailable",
                     error_code: reason_code,
                     clear_resume_token: true,
-                    explanation: "This check is not available in the installed version. No new target contact was made during this resume attempt. Start a new scan after updating the app; other checks can continue.".into(),
+                    explanation: "The installed version does not include this check. Update the app, then start a new scan.".into(),
                 });
                 continue;
             }
@@ -5755,7 +5753,8 @@ impl<'a> CaseService<'a> {
                     phase: "resume_scope_unavailable",
                     error_code: "resume_scope_unavailable".into(),
                     clear_resume_token: false,
-                    explanation: "This check needs renewed target access before it can contact anything again. Its saved results remain available, and other checks can continue.".into(),
+                    explanation: "Reconnect target access for this check, then continue the scan."
+                        .into(),
                 });
                 continue;
             }
@@ -5808,7 +5807,7 @@ impl<'a> CaseService<'a> {
                     .as_ref()
                     .is_some_and(captured_checkpoint_is_adapter_only)
                 {
-                    "its captured adapter input does not prove a mapping-independent complete result"
+                    "its captured adapter input is insufficient for a mapping-independent complete result"
                 } else {
                     "continuing it would execute a scanner or runtime under a different release identity"
                 };
@@ -5818,7 +5817,7 @@ impl<'a> CaseService<'a> {
                     error_code: "resume_release_incompatible".into(),
                     clear_resume_token: false,
                     explanation: format!(
-                        "Engine {} was not resumed: its frozen release identity differs from the installed release ({release_differences}), and {reason}. Start a new scan to use the installed release; the historical evidence and findings remain unchanged.",
+                        "Engine {} uses different release settings ({release_differences}), and {reason}. Start a new scan with the installed release.",
                         engine_run.engine_id
                     ),
                 });
@@ -5833,7 +5832,7 @@ impl<'a> CaseService<'a> {
             }
             let captured_compatibility_warning = allow_captured_only_drift.then(|| {
                 format!(
-                    "The frozen release identity differs from the installed release ({release_differences}). Resume was allowed only because this engine's adapter input is verified, contract-complete zero-byte JSONL; its frozen values remain unchanged, no finding or control reference can be remapped, and no scanner or runtime will be re-executed for this engine."
+                    "Release settings differ ({release_differences}). Verified empty JSONL result processing continued without scanner execution or mapping changes."
                 )
             });
             let relevant_grants = frozen_effective_grants
@@ -5858,7 +5857,7 @@ impl<'a> CaseService<'a> {
                     phase: "resume_scope_changed",
                     error_code: "resume_scope_changed".into(),
                     clear_resume_token: false,
-                    explanation: "This check's saved target access no longer matches the original scan. Its prior results remain available; start a new scan for that target while other checks continue.".into(),
+                    explanation: "Saved target access differs from the original scan. Reconnect that target, then start a new scan.".into(),
                 });
                 continue;
             }
@@ -6192,7 +6191,7 @@ impl<'a> CaseService<'a> {
                 }
             }
             Err(reason) => {
-                let warning = "The scanner output was saved, but this attempt's tested coverage could not be verified. No unverified work was counted as tested; retry this check to continue.";
+                let warning = "Coverage verification failed for this attempt. Retry this check.";
                 let engine_run = case
                     .scan_runs
                     .iter_mut()
@@ -9524,7 +9523,7 @@ fn stale_knowledge_warning(manifest: &EngineManifest, as_of: DateTime<Utc>) -> O
     })
 }
 
-const CONTROL_MAPPING_UNAVAILABLE_WARNING: &str = "Framework mapping was unavailable while this run was planned. Scanner findings still run and remain reportable, but NIST, ISO 27001, and AIDEFEND relationships are not available for this run.";
+const CONTROL_MAPPING_UNAVAILABLE_WARNING: &str = "Framework relationships are unavailable for this run because mapping was unavailable during planning.";
 
 fn optional_control_mapping_identity() -> (
     Option<String>,
@@ -11153,7 +11152,7 @@ fn update_run_and_case_status(case: &mut AssessmentCase, run_index: usize, now: 
 fn terminalize_untrusted_interrupted_checkpoint(engine_run: &mut EngineRun, problem: &str) {
     const IDENTITY_UNAVAILABLE: &str = "runtime_cleanup_identity_unavailable";
     let explanation = format!(
-        "{problem} This attempt was stopped after the app restarted. Existing runtime state was left unchanged because the product could not prove what belonged to this check; a new isolated scan can still be started."
+        "{problem} Restart recovery stopped because exact runtime ownership is unavailable. Runtime cleanup status: unresolved. Start a new isolated scan."
     );
     let prior_error_code = engine_run.error_code.take().and_then(|code| {
         let bounded = code
@@ -11220,7 +11219,7 @@ fn bounded_cleanup_explanation(explanation: &str) -> String {
 
 fn cleanup_reconciled_partial_message(previous: Option<&str>) -> String {
     const HISTORY: &str = "Earlier saved context: ";
-    const RESOLUTION: &str = "Exact product-owned runtime cleanup is complete. The saved scanner outcome remains partial; cleanup completion does not prove that the scanner completed.";
+    const RESOLUTION: &str = "Runtime cleanup: complete. Scanner outcome: Partial.";
     let suffix = format!("; {RESOLUTION}");
     match previous.filter(|message| !message.trim().is_empty()) {
         Some(previous) => {
@@ -11861,7 +11860,7 @@ fn validate_naabu_adapter_compatibility(
         || engine_run.fingerprint_schema_version.as_deref() != Some(FINGERPRINT_SCHEMA_VERSION)
     {
         return Err(AppError::NotAvailable(
-            "The captured Naabu evidence needs the exact saved adapter and fingerprint schema. Findings were not invented, and the raw result remains available."
+            "Captured Naabu evidence is incompatible with the installed adapter or fingerprint schema. Start a new scan."
                 .into(),
         ));
     }
@@ -13765,8 +13764,8 @@ fn html_gap_next_action(gap: &CoverageGap, catalog: HtmlReportCatalog) -> String
             .to_owned(),
         NextActionCode::RetryCheck => catalog
             .text(
-                "Retry this check; saved results will remain.",
-                "重試這項檢查；已保存的結果會保留。",
+                "Retry this check.",
+                "重試這項檢查。",
             )
             .to_owned(),
         NextActionCode::ReviewScopeAndRetry => catalog
@@ -13813,8 +13812,8 @@ fn html_gap_next_action(gap: &CoverageGap, catalog: HtmlReportCatalog) -> String
             .to_owned(),
         NextActionCode::NoActionUnlessScopeChanges => catalog
             .text(
-                "No action is needed unless you change the scope.",
-                "除非要更改範圍，否則不需處理。",
+                "No action for the current scope.",
+                "目前範圍不需處理。",
             )
             .to_owned(),
         NextActionCode::AddAssetIdentifier => match (catalog.locale, gap.unattributed.as_ref()) {
@@ -18192,17 +18191,10 @@ mod tests {
                 detail: "removed exact verified container".into(),
             }),
             exit_code: Some(126),
-            raw_artifacts: vec![
-                journal_raw,
-                final_raw,
-                unreferenced_final_raw.clone(),
-            ],
+            raw_artifacts: vec![journal_raw, final_raw, unreferenced_final_raw.clone()],
             findings: Vec::new(),
             observations: Vec::new(),
-            warnings: vec![
-                "This scan batch stopped after saving output. The app will keep only journal-verified results; unfinished work remains not tested."
-                    .into(),
-            ],
+            warnings: vec!["Scan batch stopped. Unfinished work: not tested.".into()],
         };
 
         let applied = fixture
@@ -18316,10 +18308,9 @@ mod tests {
         journal.sha256 = sha256_bytes(malformed);
         journal.byte_length = malformed.len() as u64;
         report.exit_code = Some(126);
-        report.warnings.push(
-            "This scan batch stopped after saving output. The app will keep only journal-verified results; unfinished work remains not tested."
-                .into(),
-        );
+        report
+            .warnings
+            .push("Scan batch stopped. Unfinished work: not tested.".into());
         let service = fixture.service();
         let events_before = fixture
             .storage
@@ -18344,9 +18335,8 @@ mod tests {
             .unwrap();
         assert!(engine_run.naabu_attempt_results.is_empty());
         assert!(engine_run.warnings.iter().any(|warning| {
-            warning.contains("scanner output was saved")
-                && warning.contains("No unverified work was counted as tested")
-                && warning.contains("retry this check")
+            warning.contains("Coverage verification failed for this attempt")
+                && warning.contains("Retry this check")
         }));
         assert_eq!(
             engine_run.raw_artifact_ids.len(),
@@ -18454,8 +18444,8 @@ mod tests {
             .unwrap();
         assert!(engine_run.naabu_attempt_results.is_empty());
         assert!(engine_run.warnings.iter().any(|warning| {
-            warning.contains("scanner output was saved")
-                && warning.contains("No unverified work was counted as tested")
+            warning.contains("Coverage verification failed for this attempt")
+                && warning.contains("Retry this check")
         }));
         assert_eq!(engine_run.raw_artifact_ids.len(), 1);
         assert_eq!(applied.case.raw_artifacts.len(), 1);
@@ -21536,10 +21526,12 @@ mod tests {
             "one invalid durable history must produce one canonical coverage gap"
         );
         assert_eq!(report.coverage_counts.unavailable, 1);
-        assert!(report.data_quality_warnings.iter().any(|warning| {
-            warning.contains("saved coverage history could not be reconciled")
-                && warning.contains("not counted complete")
-        }));
+        assert!(
+            report
+                .data_quality_warnings
+                .iter()
+                .any(|warning| warning == "One check has incomplete coverage history.")
+        );
     }
 
     #[test]
@@ -21947,6 +21939,7 @@ mod tests {
             .identity
             .schema_version = u32::MAX;
         run.engine_runs.insert(0, corrupt_first);
+        close_run_without_execution_for_report_fixture(&mut case, &execution.scan_run_id);
 
         let report = build_beginner_master_report(&case, &execution.scan_run_id).unwrap();
         assert_eq!(
@@ -22830,6 +22823,29 @@ mod tests {
         created.id
     }
 
+    fn close_run_without_execution_for_report_fixture(case: &mut AssessmentCase, run_id: &str) {
+        let finished_at = Utc::now();
+        let run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == run_id)
+            .expect("report fixture run");
+        for task in &mut run.engine_runs {
+            if matches!(
+                task.status,
+                EngineRunStatus::Queued
+                    | EngineRunStatus::Preparing
+                    | EngineRunStatus::Running
+                    | EngineRunStatus::Paused
+            ) {
+                task.status = EngineRunStatus::NotExecuted;
+                task.phase = "not_executed".into();
+                task.finished_at = Some(finished_at);
+            }
+        }
+        run.completed_at = Some(finished_at);
+    }
+
     fn repository_case_with_completed_baseline(fixture: &Fixture) -> (Id, Id) {
         let case_id = repository_case_ready_for_execution(fixture);
         let service = fixture.service();
@@ -23005,7 +23021,7 @@ mod tests {
                 .last_error
                 .as_deref()
                 .unwrap()
-                .contains("does not prove that the scanner completed")
+                .contains("Scanner outcome: Partial")
         );
         assert_eq!(
             reconciled
@@ -23216,7 +23232,8 @@ mod tests {
                 .as_deref(),
             Some("gitleaks")
         );
-        let stored = fixture.service().show_case(&created.id).unwrap();
+        let mut stored = fixture.service().show_case(&created.id).unwrap();
+        close_run_without_execution_for_report_fixture(&mut stored, &plan.scan_run.id);
         let report = build_beginner_master_report(&stored, &plan.scan_run.id).unwrap();
         let admission_gap = report
             .coverage_gaps
@@ -23262,7 +23279,8 @@ mod tests {
 
         assert!(!plan.executable.is_empty());
         assert!(plan.scan_run.engine_admission_issues.is_empty());
-        let stored = fixture.service().show_case(&created.id).unwrap();
+        let mut stored = fixture.service().show_case(&created.id).unwrap();
+        close_run_without_execution_for_report_fixture(&mut stored, &plan.scan_run.id);
         let report = build_beginner_master_report(&stored, &plan.scan_run.id).unwrap();
         assert!(
             report
@@ -30051,7 +30069,7 @@ mod tests {
             "map-2026-08".into(),
             "Redacted diagnostic log".into(),
             "Availability:</strong> Unavailable".into(),
-            "No run-bound redacted diagnostic log is retained in the case model.".into(),
+            "Run-bound diagnostic log: unavailable. Redacted diagnostic export: separate.".into(),
             "Source rule".into(),
             "generic-api-key".into(),
             "Evidence summary".into(),
@@ -30422,10 +30440,11 @@ mod tests {
             9001,
         )
         .unwrap();
-        let case = fixture
+        let mut case = fixture
             .storage
             .get_case(&prepared.prepared.case_id)
             .unwrap();
+        close_run_without_execution_for_report_fixture(&mut case, &prepared.prepared.scan_run_id);
         let mut report =
             build_beginner_master_report(&case, &prepared.prepared.scan_run_id).unwrap();
         let target = report.requested.targets.first_mut().unwrap();
@@ -30468,7 +30487,7 @@ mod tests {
         });
         let incomplete_html = html_asset_result_section(&report, &labels, catalog);
         assert!(incomplete_html.contains("asset-result--incomplete-failed"));
-        assert!(incomplete_html.contains("Retry this check; saved results will remain."));
+        assert!(incomplete_html.contains("Retry this check."));
         assert!(!incomplete_html.contains("Keep this limitation visible when sharing"));
 
         report.coverage_gaps.push(CoverageGap {
@@ -30483,7 +30502,7 @@ mod tests {
         });
         let prioritized_html = html_asset_result_section(&report, &labels, catalog);
         assert!(prioritized_html.contains("Open the coverage gap and complete the missing check."));
-        assert!(!prioritized_html.contains("Retry this check; saved results will remain."));
+        assert!(!prioritized_html.contains("Retry this check."));
 
         let zh_catalog = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
         let zh_labels = readable_target_labels(&report, zh_catalog);
@@ -30501,10 +30520,11 @@ mod tests {
             9001,
         )
         .unwrap();
-        let case = fixture
+        let mut case = fixture
             .storage
             .get_case(&prepared.prepared.case_id)
             .unwrap();
+        close_run_without_execution_for_report_fixture(&mut case, &prepared.prepared.scan_run_id);
         let mut report =
             build_beginner_master_report(&case, &prepared.prepared.scan_run_id).unwrap();
         let inventory = report.actual.checks.first_mut().unwrap();
@@ -30670,11 +30690,7 @@ mod tests {
 
         assert_eq!(zh_preview.locale, crate::export::ReportLocale::ZhHant);
         assert!(!zh_preview.include_raw_evidence);
-        assert!(
-            zh_html.contains(
-                "所選掃描輪次儲存的專案識別碼與此專案不符。報告仍只限於專案內所選的記錄。"
-            )
-        );
+        assert!(zh_html.contains("所選掃描輪次的專案識別資料不一致；報告資料：專案內所選記錄。"));
         assert!(
             !zh_html.contains(
                 "The selected run's stored project identifier does not match this project."
@@ -32409,8 +32425,8 @@ mod tests {
         assert_eq!(engine_run.mapping_version.as_deref(), Some("2026-08-26.1"));
         assert_eq!(engine_run.execution_timeout_seconds, None);
         assert!(engine_run.warnings.iter().any(|warning| {
-            warning.contains("no finding or control reference can be remapped")
-                && warning.contains("no scanner or runtime will be re-executed")
+            warning.contains("Verified empty JSONL result processing continued")
+                && warning.contains("without scanner execution or mapping changes")
         }));
     }
 
@@ -32434,7 +32450,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("does not prove a mapping-independent complete result")
+                .contains("is insufficient for a mapping-independent complete result")
         );
         assert!(error.to_string().contains("Start a new scan"));
 
@@ -32763,8 +32779,8 @@ mod tests {
         assert_eq!(engine_run.execution_timeout_seconds, Some(7_200));
         assert!(engine_run.warnings.iter().any(|warning| {
             warning.contains("execution deadline 7200 seconds versus 14461 seconds")
-                && warning.contains("frozen values remain unchanged")
-                && warning.contains("no scanner or runtime will be re-executed")
+                && warning.contains("Verified empty JSONL result processing continued")
+                && warning.contains("without scanner execution or mapping changes")
         }));
     }
 
@@ -33338,7 +33354,7 @@ mod tests {
         assert_eq!(engine.cleanup_removed, Some(false));
         assert!(engine.cleanup_detail.as_deref().is_some_and(|detail| {
             detail.contains("missing outside a proven pre-scan phase")
-                && detail.contains("Existing runtime state was left unchanged")
+                && detail.contains("Runtime cleanup status: unresolved")
         }));
         assert!(recovered.scan_runs[0].completed_at.is_some());
         assert_eq!(service.recover_interrupted_scans().unwrap(), 0);

@@ -1,6 +1,6 @@
 use crate::beginner_report::{
     BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerInventoryItem, BeginnerInventoryItemKind,
-    BeginnerMasterReport, ReportLifecycle, TechnicalExecution, build_beginner_master_report,
+    BeginnerMasterReport, BeginnerReportError, TechnicalExecution, build_beginner_master_report,
 };
 use crate::domain::{
     AssessmentCase, CaseExport, DataSource, EngineTaskKind, Finding, InventoryObservation,
@@ -1271,11 +1271,12 @@ pub(crate) fn beginner_report_for_export(
     run_id: &str,
     redaction: RedactionProfile,
 ) -> AppResult<BeginnerMasterReport> {
-    let mut report = build_beginner_master_report(case, run_id)
-        .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
-    if report.state.lifecycle != ReportLifecycle::Final {
-        return Err(AppError::NotAvailable("scan is in progress".into()));
-    }
+    let mut report = build_beginner_master_report(case, run_id).map_err(|error| match error {
+        BeginnerReportError::RunInProgress { .. } => {
+            AppError::NotAvailable("scan is in progress".into())
+        }
+        other => AppError::InvalidRequest(other.to_string()),
+    })?;
     if redaction == RedactionProfile::Standard {
         let mut alias_case = case.clone();
         sort_case(&mut alias_case);
@@ -1389,9 +1390,9 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
             gap.reason = "[redacted coverage detail]".into();
         } else if gap.kind == crate::beginner_report::CoverageGapKind::ManualReview {
             gap.dimension = "Maester: manual review for [redacted control]".into();
-            gap.reason = "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.".into();
-            gap.next_action =
-                "Review the upstream detail and record a human decision for this control.".into();
+            gap.reason =
+                "Maester evaluated this control but did not return a pass or fail verdict.".into();
+            gap.next_action = "Open the upstream detail and set this control's status.".into();
         } else if let Some(unattributed) = &mut gap.unattributed {
             // The identifier names the reader's cloud tenancy and appears in
             // all three prose fields. `redact_known_literals` cannot reach it:
@@ -1534,9 +1535,9 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
             continue;
         }
         if step.code == crate::beginner_report::NextActionCode::ReviewManualControl {
-            step.action =
-                "Review the upstream detail and record a human decision for this control.".into();
-            step.reason = "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.".into();
+            step.action = "Open the upstream detail and set this control's status.".into();
+            step.reason =
+                "Maester evaluated this control but did not return a pass or fail verdict.".into();
             continue;
         }
         if let Some(finding_id) = step.finding_id.as_deref()
@@ -3233,14 +3234,14 @@ mod tests {
             external_scope: Some(external_scope),
         }];
 
-        let live = build_beginner_master_report(&case, "run-1").unwrap();
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
         let exported = beginner_report_for_export(&case, "run-1", RedactionProfile::None).unwrap();
-        assert_eq!(exported, live);
-        let limitation = live
+        assert_eq!(exported, report);
+        let limitation = report
             .coverage_gaps
             .iter()
             .find(|gap| gap.dimension == "device product and firmware vulnerability coverage")
-            .expect("live report keeps the device-profile limitation");
+            .expect("terminal report keeps the device-profile limitation");
         assert_eq!(limitation.target_asset_ids, vec!["asset-1"]);
         assert!(limitation.reason.contains("no device product or firmware"));
 
@@ -3248,7 +3249,7 @@ mod tests {
             serde_json::from_slice(&serde_json::to_vec(&case).unwrap()).unwrap();
         assert_eq!(
             beginner_report_for_export(&reopened, "run-1", RedactionProfile::None).unwrap(),
-            live
+            report
         );
         let redacted =
             beginner_report_for_export(&reopened, "run-1", RedactionProfile::Standard).unwrap();

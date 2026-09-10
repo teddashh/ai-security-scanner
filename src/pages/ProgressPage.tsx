@@ -332,8 +332,8 @@ const copy = {
   currentActivity: { en: "What is happening now", zhTW: "現在正在做什麼" },
   lastProgress: { en: "Last progress update", zhTW: "最後一次進度更新" },
   delayedProgress: {
-    en: "No new progress saved for {count} minutes. The timeline shows the last confirmed step; every tool stops at its built-in limit.",
-    zhTW: "已有 {count} 分鐘沒有保存新進度。時間軸顯示最後確認的步驟；每個工具會在內建時限停止。",
+    en: "Last saved progress: {count} minutes ago. Each tool stops at its built-in limit.",
+    zhTW: "最後保存進度：{count} 分鐘前。每個工具會在內建時限停止。",
   },
   activityLog: { en: "Event log", zhTW: "事件紀錄" },
   activityLogDescription: {

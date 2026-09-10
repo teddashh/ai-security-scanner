@@ -123,8 +123,8 @@ test("the finding browser keeps native list semantics, a non-complementary detai
 test("a missing durable run-bound report suppresses cross-run findings and keeps its scoped notice", () => {
   const { container } = renderPage(true, [savedRun]);
   expect(container.querySelectorAll(".finding-row")).toHaveLength(0);
-  expect(container.textContent).toContain("This scan has no durable master report");
-  expect(container.textContent).toContain("exact saved run remains available from the Review scanner status view and can still be exported");
+  expect(container.textContent).toContain("Master report unavailable for this scan");
+  expect(container.textContent).toContain("Start a new scan to create one");
   expect(container.textContent).toContain("Review scanner status");
   expect(container.textContent).toContain("Save or share report");
   expect(container.textContent).not.toContain("available below");
@@ -136,8 +136,8 @@ test("a stale selected run fails closed without offering Progress or Export for 
 
   expect(container.querySelectorAll(".finding-row")).toHaveLength(0);
   expect(container.textContent).toContain("This selected scan is no longer available");
-  expect(container.textContent).toContain("will not substitute a different scan run");
-  expect(container.textContent).not.toContain("exact saved run remains available");
+  expect(container.textContent).toContain("Refresh this project in My scans");
+  expect(container.textContent).not.toContain("will not substitute");
   expect(container.textContent).not.toContain("Review scanner status");
   expect(container.textContent).not.toContain("Save or share report");
   expect(container.textContent).not.toContain("Canonical sample finding");

@@ -212,7 +212,8 @@ test("the scanner service adapts the queued localhost workspace without loading 
   assert.match(action, /The local connection test was saved\. Progress will show when the connection begins\./u);
   assert.match(action, /本機連線測試已儲存；開始連線時會顯示在進度頁。/u);
   assert.doesNotMatch(action, /saved and started|已儲存並開始|target was contacted/iu);
-  assert.match(action, /Browser demo mode did not contact this computer or start a real scan\./u);
+  assert.match(action, /Open the desktop app to run this local connection test\./u);
+  assert.doesNotMatch(action, /did not contact|start a real scan/u);
   assert.doesNotMatch(action, /getNativeManifests|actionResult/u);
 });
 

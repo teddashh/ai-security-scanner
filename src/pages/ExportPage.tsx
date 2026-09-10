@@ -65,13 +65,13 @@ const copy = {
   },
   demoTitle: { en: "This downloads a sample report", zhTW: "這次會下載一份範例報告" },
   demoBody: {
-    en: "The browser demo downloads one selected-run JSON sample. It does not contain results from a real scan.",
-    zhTW: "瀏覽器展示模式只會下載一份所選掃描輪次的 JSON 範例；內容不是來自真實掃描。",
+    en: "Browser demo export: one selected-run JSON sample.",
+    zhTW: "瀏覽器展示匯出：一份所選掃描輪次的 JSON 範例。",
   },
   demoDetails: { en: "About sample reports", zhTW: "關於範例報告" },
   demoTechnical: {
-    en: "The file is marked DEMO_ONLY_NOT_A_SCAN. Demo mode does not serialize HTML, OCSF, OSCAL, framework, or case-bundle formats; it includes no source files, redaction transform, coverage companion, or local signature.",
-    zhTW: "檔案會標示 DEMO_ONLY_NOT_A_SCAN。展示模式不會產生 HTML、OCSF、OSCAL、框架或案件包格式，也不含來源檔案、遮罩轉換、涵蓋附檔或本機簽章。",
+    en: "Marker: DEMO_ONLY_NOT_A_SCAN. Format: JSON. Excludes source files, redaction transforms, coverage companions, and local signatures.",
+    zhTW: "標記：DEMO_ONLY_NOT_A_SCAN。格式：JSON。不含來源檔案、遮罩轉換、涵蓋附檔與本機簽章。",
   },
   previewErrorTitle: { en: "The exact export preview is unavailable", zhTW: "目前無法取得精確匯出預覽" },
   previewErrorBody: {
@@ -152,34 +152,30 @@ const copy = {
   unknownSources: { en: "Sources with no visibility", zhTW: "看不到的資料來源" },
   unknownSourcesSome: { en: "There is no source visibility; this is not zero assets.", zhTW: "目前沒有來源視野；這不代表資產數量是零。" },
   unknownSourcesNone: {
-    en: "No source is marked unknown, but this alone does not prove the inventory is complete.",
-    zhTW: "目前沒有來源標成未知，但這一點本身不能證明資產清單完整。",
+    en: "Sources marked unknown: 0. Inventory completeness: unverified by this count.",
+    zhTW: "標記為未知的來源：0。資產清單完整度：此數量無法驗證。",
   },
   connectedNone: { en: "Connected sources that found nothing", zhTW: "已連接但沒有找到資產的來源" },
-  connectedNoneDetail: { en: "This means only that the saved source snapshot returned zero items.", zhTW: "這只表示保存的來源快照回傳零項。" },
+  connectedNoneDetail: { en: "Saved source snapshot result: zero items.", zhTW: "已保存來源快照結果：零項。" },
   completedWork: { en: "Completed scanner jobs", zhTW: "已完成的掃描工作" },
   completedWorkDetail: {
-    en: "These selected-run jobs reached a completed state. This does not mean broader security coverage was performed.",
-    zhTW: "這些本輪工作已到達完成狀態；這不代表已執行更廣泛的資安涵蓋。",
+    en: "Completed jobs in the selected scan. Broader coverage appears separately below.",
+    zhTW: "所選掃描中已完成的工作；更廣泛的涵蓋範圍另列於下方。",
   },
   incompleteWork: { en: "Scanner work not fully completed", zhTW: "沒有完整完成的掃描工作" },
   incompleteWorkDetail: { en: "Includes partly completed, failed, or cancelled scanner jobs.", zhTW: "包含部分完成、失敗或取消的掃描工作。" },
   notRun: { en: "Scanner jobs not run", zhTW: "未執行的掃描工作" },
-  notRunDetail: { en: "Their reasons are exported and are never rewritten as passed.", zhTW: "原因會一起匯出，永遠不會被改寫成通過。" },
+  notRunDetail: { en: "Exported fields: recorded reason and not-run status.", zhTW: "匯出欄位：已記錄原因與未執行狀態。" },
   formatTitle: { en: "Choose a format", zhTW: "選擇格式" },
   advancedFormats: { en: "More formats", zhTW: "更多格式" },
   advancedFormatsHint: {
     en: "For specialist or standards-based workflows.",
     zhTW: "供專家交接或標準格式工作流程使用。",
   },
-  // Shown exactly when `runSupportsFindingOnlyExport` is false, and that
-  // predicate is `Boolean(run)` -- so the only state that reaches this sentence
-  // is the one where OCSF and OSCAL are the two cards being greyed out beneath
-  // it. It read "Every format remains available", written for older semantics
-  // where an unfinished run blocked these two.
+  // OCSF and OSCAL need a selected run; the case-level formats stay available.
   advancedFormatsNeedRun: {
-    en: "OCSF and OSCAL are unavailable until a saved scan is selected, because the backend pairs both with a coverage manifest built from that run. The other formats are not affected.",
-    zhTW: "在選擇已保存的掃描之前，OCSF 與 OSCAL 無法使用，因為後端會為這兩種格式附上依該輪次產生的涵蓋說明檔。其他格式不受影響。",
+    en: "OCSF and OSCAL require a saved scan for their coverage manifest. Available now: HTML, JSON, framework report, and case bundle.",
+    zhTW: "OCSF 與 OSCAL 的涵蓋說明檔需要一筆已保存掃描。目前可用：HTML、JSON、框架報告與案件包。",
   },
   includeRaw: { en: "Include original scanner files", zhTW: "附上掃描器原始檔" },
   // Every artifact the desktop app captures is marked sensitive

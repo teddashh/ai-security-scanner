@@ -57,29 +57,27 @@ const FIXED_ENGINE_WARNINGS: ReadonlyArray<readonly [string, string]> = [
   ["Steampipe output was not its supported JSON document; the raw artifact was retained, and the inventory query should be retried", "Steampipe 輸出不是支援的 JSON 文件；原始成品已保留，請重試盤點查詢"],
   ["Steampipe output lacked its rows array; the raw artifact was retained, and the inventory query should be retried", "Steampipe 輸出缺少 rows 陣列；原始成品已保留，請重試盤點查詢"],
   ["Steampipe rows exceeded the record safety boundary; later inventory rows remain only as raw evidence", "Steampipe 資料列超過記錄安全界線；後續盤點資料列只保留為原始證據"],
-  ["An existing runtime object could not be proven to belong to this scan, so it was preserved. A retry uses a new isolated attempt.", "無法證明既有執行階段物件屬於本次掃描，因此予以保留。重試時會使用新的隔離嘗試。"],
-  ["This scan batch stopped after saving output. The app will keep only journal-verified results; unfinished work remains not tested.", "這批掃描在儲存輸出後停止。應用程式只會保留經日誌驗證的結果；未完成的工作仍視為未檢測。"],
-  ["You stopped this scan after the current batch was saved. Saved results remain available; the remaining planned work was not tested.", "你在目前批次儲存後停止了這次掃描。已儲存的結果仍可使用；其餘規劃的工作未經檢測。"],
-  ["Framework relationships were omitted because the run's frozen mapping identity does not match the available mapping. Scanner findings remain usable.", "由於本輪凍結的對照識別資料與可用對照不符，已省略框架關聯。掃描器問題仍可使用。"],
-  ["Saved scanner output is intact, but the app could not safely finish organizing every result. Existing findings remain available; start a new scan to use the current result reader.", "已儲存的掃描器輸出完整無缺，但應用程式無法安全完成所有結果的整理。既有問題仍可使用；請開始新的掃描以使用目前的結果讀取器。"],
-  ["Some saved scanner output could not be fully organized. Existing findings remain available, and this check is clearly marked partial.", "部分已儲存的掃描器輸出無法完整整理。既有問題仍可使用，且此檢查已明確標示為部分完成。"],
-  ["Automatic cleanup was skipped because the interrupted checkpoint could not prove exact runtime ownership. Existing runtime state was preserved.", "由於中斷的檢查點無法證明確切的執行階段所有權，已略過自動清理。既有執行階段狀態已保留。"],
-  ["Automatic cleanup was skipped because exact runtime ownership could not be proven. Existing runtime state was preserved; a new isolated scan can still be started.", "由於無法證明確切的執行階段所有權，已略過自動清理。既有執行階段狀態已保留；仍可開始新的隔離掃描。"],
-  ["This saved check could not be safely matched to its original target plan. Its existing data was preserved, and no new target contact was made during this resume attempt. Start a new scan for this check; other checks can continue.", "無法將這項已儲存的檢查安全對應至原始目標計畫。既有資料已保留，本次繼續嘗試也未接觸新目標。請為此檢查開始新的掃描；其他檢查可以繼續。"],
-  ["The scanner output was saved, but this attempt's tested coverage could not be verified. No unverified work was counted as tested; retry this check to continue.", "掃描器輸出已儲存，但無法驗證本次嘗試的已檢測涵蓋。未驗證的工作不會計為已檢測；請重試此檢查以繼續。"],
+  ["Runtime object ownership is unavailable. Retry uses a new isolated attempt.", "無法確認執行階段物件的所有權；重試會使用新的隔離嘗試。"],
+  ["Scan batch stopped. Unfinished work: not tested.", "掃描批次已停止；未完成工作：未檢測。"],
+  ["You stopped this scan. Remaining planned work: not tested.", "你已停止這次掃描；其餘規劃工作：未檢測。"],
+  ["Framework relationships are unavailable because the saved mapping identity differs from the installed mapping.", "已保存的對照識別資料與已安裝對照不同，因此無法使用框架關聯。"],
+  ["Result processing stopped. Start a new scan with the current result reader.", "結果處理已停止；請使用目前的結果讀取器開始新的掃描。"],
+  ["Result processing is incomplete. This check is Partial.", "結果處理未完成；這項檢查為部分完成。"],
+  ["Automatic cleanup stopped: exact runtime ownership is unavailable.", "自動清理已停止：無法確認執行階段的確切所有權。"],
+  ["This saved check no longer matches its original target plan. Start a new scan for this check.", "這項已保存的檢查已不符合原始目標計畫；請為此檢查開始新的掃描。"],
+  ["Coverage verification failed for this attempt. Retry this check.", "本次嘗試的涵蓋驗證失敗；請重試這項檢查。"],
   ["Greenbone XML element exceeded the attribute limit", "Greenbone XML 元素超過屬性限制"],
   ["Greenbone XML contained a malformed attribute", "Greenbone XML 含有格式錯誤的屬性"],
   ["Greenbone XML attribute could not be decoded safely", "無法安全解碼 Greenbone XML 屬性"],
-  ["This check finished with partial results after each unfinished item received at most one automatic retry. Saved findings remain available, and the report shows every remaining coverage gap. Start a new scan if you want to try those items again.", "每個未完成項目自動重試一次後，這項檢查仍有涵蓋缺口。請開始新的掃描以重試剩餘項目。"],
   ["This check completed with coverage gaps after one automatic retry per unfinished item. Start a new scan to retry the remaining items.", "每個未完成項目自動重試一次後，這項檢查仍有涵蓋缺口。請開始新的掃描以重試剩餘項目。"],
-  ["This check is not available in the installed version. No new target contact was made during this resume attempt. Start a new scan after updating the app; other checks can continue.", "已安裝的版本無法使用此檢查。本次繼續嘗試未接觸新目標。更新應用程式後請開始新的掃描；其他檢查可以繼續。"],
-  ["Saved scanner results remain intact, but this installed result reader cannot safely continue organizing them. Existing findings remain available; start a new scan for a fresh result.", "已儲存的掃描器結果完整無缺，但已安裝的結果讀取器無法安全繼續整理。既有問題仍可使用；請開始新的掃描以取得新結果。"],
-  ["Saved results remain available, but a later scan state won the continuation race. Start a new scan to fill the remaining coverage gap.", "已儲存的結果仍可使用，但較新的掃描狀態已取代本次繼續。請開始新的掃描以補足剩餘涵蓋缺口。"],
-  ["The older scan request and any saved results remain available, but this version will not send that request to the network. Start a new scan to use the current bounded network path; other checks can continue.", "舊版掃描請求與所有已儲存結果仍可使用，但此版本不會將該請求傳送到網路。請開始新的掃描以使用目前有界的網路路徑；其他檢查可以繼續。"],
-  ["This check needs renewed target access before it can contact anything again. Its saved results remain available, and other checks can continue.", "此檢查必須重新取得目標存取權才能再次接觸任何項目。已儲存的結果仍可使用，其他檢查也可以繼續。"],
-  ["This check's saved target access no longer matches the original scan. Its prior results remain available; start a new scan for that target while other checks continue.", "此檢查已儲存的目標存取權已不再符合原始掃描。先前結果仍可使用；請為該目標開始新的掃描，其他檢查可以繼續。"],
-  ["An older scan request was preserved without running. This version created a new bounded scan batch and will continue from there.", "舊版掃描請求已保留且未執行。此版本建立了新的有界掃描批次，並會從該處繼續。"],
-  ["Framework mapping was unavailable while this run was planned. Scanner findings still run and remain reportable, but NIST, ISO 27001, and AIDEFEND relationships are not available for this run.", "規劃本輪時無法使用框架對照。掃描器問題仍會執行且可供報告，但本輪無法使用 NIST、ISO 27001 與 AIDEFEND 關聯。"],
+  ["The installed version does not include this check. Update the app, then start a new scan.", "已安裝版本不包含這項檢查；請更新應用程式後開始新的掃描。"],
+  ["The installed result reader cannot continue processing this check. Start a new scan for a fresh result.", "已安裝的結果讀取器無法繼續處理這項檢查；請開始新的掃描。"],
+  ["A newer scan state replaced this continuation. Start a new scan for the remaining coverage.", "較新的掃描狀態已取代本次續跑；請為剩餘涵蓋開始新的掃描。"],
+  ["This version cannot run the older request. Start a new scan with the current bounded network path.", "目前版本無法執行舊版請求；請使用目前有界的網路路徑開始新的掃描。"],
+  ["Reconnect target access for this check, then continue the scan.", "請重新連接這項檢查的目標存取權，再繼續掃描。"],
+  ["Saved target access differs from the original scan. Reconnect that target, then start a new scan.", "已保存的目標存取權與原始掃描不同；請重新連接該目標後開始新的掃描。"],
+  ["A new bounded scan batch replaced the older request and will continue.", "新的有界掃描批次已取代舊版請求，並會繼續執行。"],
+  ["Framework relationships are unavailable for this run because mapping was unavailable during planning.", "規劃時無法取得對照，因此本輪沒有框架關聯。"],
 ];
 
 /**
@@ -117,8 +115,83 @@ const frame = (value: string, expression: RegExp, render: (...values: string[]) 
   return match ? render(...match.slice(1)) : undefined;
 };
 
+const normalizeLegacyEngineWarning = (warning: string): string => {
+  const normalized = warning.replaceAll(
+    "reserved for manual review",
+    "left without an automated verdict",
+  );
+  if (normalized.startsWith("An existing runtime object could not be proven")) {
+    return "Runtime object ownership is unavailable. Retry uses a new isolated attempt.";
+  }
+  if (normalized.startsWith("This scan batch stopped after saving output.")) {
+    return "Scan batch stopped. Unfinished work: not tested.";
+  }
+  if (normalized.startsWith("You stopped this scan after the current batch was saved.")) {
+    return "You stopped this scan. Remaining planned work: not tested.";
+  }
+  if (normalized.startsWith("Framework relationships were omitted because")) {
+    return "Framework relationships are unavailable because the saved mapping identity differs from the installed mapping.";
+  }
+  if (normalized.includes("start a new scan to use the current result reader")) {
+    return "Result processing stopped. Start a new scan with the current result reader.";
+  }
+  if (normalized.includes("clearly marked partial")) {
+    return "Result processing is incomplete. This check is Partial.";
+  }
+  if (normalized.startsWith("Automatic cleanup was skipped because")) {
+    return "Automatic cleanup stopped: exact runtime ownership is unavailable.";
+  }
+  if (normalized.startsWith("This saved check could not be safely matched")) {
+    return "This saved check no longer matches its original target plan. Start a new scan for this check.";
+  }
+  if (normalized.includes("tested coverage could not be verified")) {
+    return "Coverage verification failed for this attempt. Retry this check.";
+  }
+  if (normalized.startsWith("This check finished with partial results after each unfinished item")) {
+    return "This check completed with coverage gaps after one automatic retry per unfinished item. Start a new scan to retry the remaining items.";
+  }
+  if (normalized.startsWith("This check is not available in the installed version.")) {
+    return "The installed version does not include this check. Update the app, then start a new scan.";
+  }
+  if (normalized.includes("installed result reader cannot safely continue")) {
+    return "The installed result reader cannot continue processing this check. Start a new scan for a fresh result.";
+  }
+  if (normalized.includes("continuation race")) {
+    return "A newer scan state replaced this continuation. Start a new scan for the remaining coverage.";
+  }
+  if (normalized.includes("current bounded network path")) {
+    return "This version cannot run the older request. Start a new scan with the current bounded network path.";
+  }
+  if (normalized.startsWith("This check needs renewed target access")) {
+    return "Reconnect target access for this check, then continue the scan.";
+  }
+  if (normalized.includes("saved target access no longer matches")) {
+    return "Saved target access differs from the original scan. Reconnect that target, then start a new scan.";
+  }
+  if (normalized.startsWith("An older scan request was preserved")) {
+    return "A new bounded scan batch replaced the older request and will continue.";
+  }
+  if (normalized.startsWith("Framework mapping was unavailable while this run was planned.")) {
+    return "Framework relationships are unavailable for this run because mapping was unavailable during planning.";
+  }
+  const releaseMismatch = normalized.match(
+    /^Engine (.+) was not resumed: its frozen release identity differs from the installed release \((.+)\), and (.+)\. Start a new scan/u,
+  );
+  if (releaseMismatch) {
+    return `Engine ${releaseMismatch[1]} uses different release settings (${releaseMismatch[2]}), and ${releaseMismatch[3]}. Start a new scan with the installed release.`;
+  }
+  const capturedOnly = normalized.match(
+    /^The frozen release identity differs from the installed release \((.+)\)\. Resume was allowed only because/u,
+  );
+  if (capturedOnly) {
+    return `Release settings differ (${capturedOnly[1]}). Verified empty JSONL result processing continued without scanner execution or mapping changes.`;
+  }
+  return normalized;
+};
+
 export const recognizedEngineWarningZhTW = (warning: string): string | undefined => {
-  const fixed = FIXED_ENGINE_WARNINGS.find(([english]) => english === warning)?.[1];
+  const normalized = normalizeLegacyEngineWarning(warning);
+  const fixed = FIXED_ENGINE_WARNINGS.find(([english]) => english === normalized)?.[1];
   if (fixed) return fixed;
   const rules: ReadonlyArray<readonly [RegExp, (...values: string[]) => string]> = [
     [/^(.+) produced no raw artifacts to normalize$/u, (engine) => `${engine} 未產生可正規化的原始成品`],
@@ -230,23 +303,17 @@ export const recognizedEngineWarningZhTW = (warning: string): string | undefined
     [/^Earlier saved error classification was preserved for diagnosis: (.+)\.$/u, (code) => `已保留先前儲存的錯誤分類供診斷：${code}。`],
     [/^the tenant's ScubaGear configuration disputes the result of (.+) (.+); they are reported on ScubaGear's own determination and tagged tenant-disputed rather than suppressed$/u, (count) => `租用戶的 ScubaGear 設定對 ${count} 個控制措施的結果有異議；系統依 ScubaGear 本身的判定回報，並標記為租用戶異議，而不是隱藏`],
     [/^Engine (.+) uses knowledge dated (.+) whose declared support ended (.+)\. Execution retains this explicit stale-knowledge warning; its results must not be presented as current knowledge\.$/u, (engine, date, ended) => `掃描工具 ${engine} 使用日期為 ${date}、宣告支援已於 ${ended} 結束的知識。執行記錄保留這項明確的過時知識警告；其結果不得呈現為目前知識。`],
-    [/^Engine (.+) was not resumed: its frozen release identity differs from the installed release \((.+)\), and (.+)\. Start a new scan to use the installed release; the historical evidence and findings remain unchanged\.$/u, (engine, differences, reason) => `掃描工具 ${engine} 未繼續：其凍結的發行識別資料與已安裝版本不同（${differences}），且${reason}。請開始新的掃描以使用已安裝版本；歷史證據與問題維持不變。`],
-    [/^The frozen release identity differs from the installed release \((.+)\)\. Resume was allowed only because this engine's adapter input is verified zero-byte JSONL; its frozen values remain unchanged, no finding or control reference can be remapped, and no scanner or runtime will be re-executed for this engine\.$/u, (differences) => `凍結的發行識別資料與已安裝版本不同（${differences}）。僅因這個掃描工具的轉接器輸入已驗證為零位元組 JSONL，才允許繼續；凍結值維持不變，問題或控制參照都不得重新對照，也不會為此工具重新執行掃描器或執行階段。`],
+    [/^Engine (.+) uses different release settings \((.+)\), and (.+)\. Start a new scan with the installed release\.$/u, (engine, differences, reason) => `掃描工具 ${engine} 使用不同的版本設定（${differences}），且${reason}。請使用已安裝版本開始新的掃描。`],
+    [/^Release settings differ \((.+)\)\. Verified empty JSONL result processing continued without scanner execution or mapping changes\.$/u, (differences) => `版本設定不同（${differences}）。已驗證的空白 JSONL 結果已繼續處理，沒有重新執行掃描器或變更對照。`],
   ];
   for (const [expression, render] of rules) {
-    const translated = frame(warning, expression, render);
+    const translated = frame(normalized, expression, render);
     if (translated) return translated;
   }
   return undefined;
 };
 
 export const localizedEngineWarning = (warning: string, locale: "en" | "zh-TW"): string => {
-  const normalizedWarning = warning.replaceAll(
-    "reserved for manual review",
-    "left without an automated verdict",
-  );
-  const normalized = normalizedWarning === "This check finished with partial results after each unfinished item received at most one automatic retry. Saved findings remain available, and the report shows every remaining coverage gap. Start a new scan if you want to try those items again."
-    ? "This check completed with coverage gaps after one automatic retry per unfinished item. Start a new scan to retry the remaining items."
-    : normalizedWarning;
+  const normalized = normalizeLegacyEngineWarning(warning);
   return locale === "en" ? normalized : recognizedEngineWarningZhTW(normalized) ?? normalized;
 };

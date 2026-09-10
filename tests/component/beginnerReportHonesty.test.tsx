@@ -335,7 +335,7 @@ test("an active run stays in progress instead of exposing a half-finished report
   activeRun.finishedAt = undefined;
 
   const { container, unmount } = renderReport(report("partial", {
-    state: { ...base.state, lifecycle: "live" },
+    state: { ...base.state, lifecycle: "final" },
     requested: { ...base.requested, requestedCheckIds: ["trivy", "semgrep"] },
     actual: {
       checks: [{
@@ -370,7 +370,7 @@ test("an active run stays in progress instead of exposing a half-finished report
   unmount();
   window.localStorage.setItem(localeStorageKey, "zh-TW");
   const zh = renderReport(report("partial", {
-    state: { ...base.state, lifecycle: "live" },
+    state: { ...base.state, lifecycle: "final" },
     actual: {
       checks: [{
         taskId: "trivy-task",
@@ -2259,15 +2259,9 @@ test("AIDEFEND is not presented as carrying the same standing as NIST and ISO", 
 });
 
 test("each saved-data limitation is shown, not replaced by a coverage sentence", () => {
-  // The backend writes a distinct plain-language explanation per warning: a run
-  // whose stored project id does not match, a saved completion time beside a
-  // still-active check, a coverage history that could not be reconciled. The
-  // page rendered the count and then one fixed sentence about a run not
-  // retaining enough detail -- which is about coverage, and false for every one
-  // of those causes.
   const warnings = [
-    "The selected run's stored project identifier does not match this project. The report remains limited to the selected in-project record.",
-    "Saved run state is inconsistent: it has a completion time while at least one check has no terminal outcome.",
+    "The selected run has an inconsistent project identity. Report data: selected in-project record.",
+    "One check has incomplete coverage history.",
   ];
   const { container } = renderReport(report("partial", { dataQualityWarnings: warnings }));
 
@@ -2282,9 +2276,9 @@ test("each saved-data limitation is shown, not replaced by a coverage sentence",
 
 test("a Traditional Chinese reader sees translated report data-quality prose", () => {
   window.localStorage.setItem(localeStorageKey, "zh-TW");
-  const english = "The selected run's stored project identifier does not match this project. The report remains limited to the selected in-project record.";
+  const english = "The selected run has an inconsistent project identity. Report data: selected in-project record.";
   const { container } = renderReport(report("partial", { dataQualityWarnings: [english] }));
-  expect(container.textContent).toContain("所選掃描輪次儲存的專案識別碼與此專案不符。報告仍只限於專案內所選的記錄。");
+  expect(container.textContent).toContain("所選掃描輪次的專案識別資料不一致；報告資料：專案內所選記錄。");
   expect(container.textContent).not.toContain(english);
 });
 

@@ -230,7 +230,6 @@ pub enum BeginnerReportSummary {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReportLifecycle {
-    Live,
     Final,
 }
 
@@ -654,6 +653,7 @@ pub struct UnavailableTechnicalValue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BeginnerReportError {
     RunNotFound { run_id: Id },
+    RunInProgress { run_id: Id },
 }
 
 impl fmt::Display for BeginnerReportError {
@@ -661,6 +661,9 @@ impl fmt::Display for BeginnerReportError {
         match self {
             Self::RunNotFound { run_id } => {
                 write!(formatter, "scan run {run_id} was not found in this project")
+            }
+            Self::RunInProgress { run_id } => {
+                write!(formatter, "scan run {run_id} is in progress")
             }
         }
     }
@@ -684,29 +687,24 @@ pub fn build_beginner_master_report(
         .ok_or_else(|| BeginnerReportError::RunNotFound {
             run_id: run_id.to_owned(),
         })?;
+    if !run_is_authoritatively_final(run) {
+        return Err(BeginnerReportError::RunInProgress {
+            run_id: run_id.to_owned(),
+        });
+    }
 
     let contradictory_request_outcome =
         run.request_outcome.is_some() && !run.is_terminal_no_checks();
     let mut data_quality_warnings = Vec::new();
     if contradictory_request_outcome {
-        data_quality_warnings.push(
-            "This run contains a request-level outcome beside non-terminal or planned check data. The report ignored that outcome and did not treat it as ‘no checks completed’."
-                .into(),
-        );
+        data_quality_warnings.push("This run has inconsistent request and check data.".into());
     }
     if run.case_id != case.id {
         data_quality_warnings.push(
-            "The selected run's stored project identifier does not match this project. The report remains limited to the selected in-project record."
+            "The selected run has an inconsistent project identity. Report data: selected in-project record."
                 .into(),
         );
     }
-    if run.completed_at.is_some() && run.engine_runs.iter().any(task_is_active) {
-        data_quality_warnings.push(
-            "Saved run state is inconsistent: it has a completion time while at least one check has no terminal outcome."
-                .into(),
-        );
-    }
-
     let requested = project_requested_coverage(case, run, !contradictory_request_outcome);
     let actual_projection = project_actual_coverage(case, run);
     let actual = actual_projection.actual;
@@ -793,20 +791,14 @@ pub fn build_beginner_master_report(
     coverage_gaps.dedup();
     debug_assert_coverage_prose_is_translatable(&coverage_gaps);
 
-    let lifecycle = if run_is_authoritatively_final(run) {
-        ReportLifecycle::Final
-    } else {
-        ReportLifecycle::Live
-    };
+    let lifecycle = ReportLifecycle::Final;
     let has_useful_tested_outcome =
         !findings.is_empty() || !actual_projection.useful_task_ids.is_empty();
-    let summary = if lifecycle == ReportLifecycle::Final
-        && ((run.is_terminal_no_checks() && !contradictory_request_outcome)
-            || !has_useful_tested_outcome)
+    let summary = if (run.is_terminal_no_checks() && !contradictory_request_outcome)
+        || !has_useful_tested_outcome
     {
         BeginnerReportSummary::NoChecksCompleted
-    } else if lifecycle == ReportLifecycle::Final
-        && !run.engine_runs.is_empty()
+    } else if !run.engine_runs.is_empty()
         && run
             .engine_runs
             .iter()
@@ -824,12 +816,12 @@ pub fn build_beginner_master_report(
         lifecycle,
         last_durable_update: selected_run_last_durable_update(case, run),
         explanation: if run_is_non_security_only(run) {
-            non_security_only_explanation(run, lifecycle)
+            non_security_only_explanation(run)
         } else {
-            state_explanation(summary, lifecycle).into()
+            state_explanation(summary).into()
         },
     };
-    let next_steps = project_next_steps(&state, &findings, &coverage_gaps, &actual);
+    let next_steps = project_next_steps(&findings, &coverage_gaps, &actual);
     let technical_details = project_technical_details(case, run);
     let coverage_counts = coverage_counts(&actual, &coverage_gaps);
     let inventory = project_inventory(case, run);
@@ -1185,7 +1177,7 @@ fn project_requested_coverage(
         RecordedStage {
             value: None,
             availability: DataAvailability::Unavailable,
-            explanation: "This run did not freeze a quick-discovery, inventory, or deep-stage selection. The report does not infer one from engine names or current project settings."
+            explanation: "Recorded stage selection: unavailable. Current project settings: excluded from this historical record."
                 .into(),
         }
     };
@@ -1551,7 +1543,8 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                     }
                     Err(_) => {
                         status = untrusted_naabu_history_status(task);
-                        let explanation = "The saved work-unit coverage for this check is internally inconsistent. The report did not guess which planned units were tested.";
+                        let explanation =
+                            "Saved work-unit coverage is inconsistent; tested units are unknown.";
                         gaps.push(CoverageGap {
                             unattributed: None,
                             kind: CoverageGapKind::Unavailable,
@@ -1563,10 +1556,8 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                             next_action: "Retry this check to create a consistent coverage record."
                                 .into(),
                         });
-                        data_quality_warnings.push(
-                            "One check's saved coverage history could not be reconciled. Retained findings and evidence remain available, but that check is not counted complete."
-                                .into(),
-                        );
+                        data_quality_warnings
+                            .push("One check has incomplete coverage history.".into());
                         task_gap_already_projected = true;
                     }
                 }
@@ -1756,8 +1747,9 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
         {
             unavailable_dimensions.push(UnavailableDimension {
                 dimension: format!("{} completed-check time", check_id(task)),
-                explanation: "The task says completed but has neither a finish time nor a bounded native observation time. The report does not invent when it was tested."
-                    .into(),
+                explanation:
+                    "Completed-check time: unavailable. Finish and bounded observation times are absent."
+                        .into(),
             });
         }
 
@@ -1883,8 +1875,7 @@ fn append_naabu_tested_dimensions(
         tested_dimensions.push(TestedDimension {
             dimension: "partly completed planned work units".into(),
             value: format!("{} of {total}", coverage.summary.tested_partial),
-            observation: "These work units produced usable saved results but did not finish every planned operation."
-                .into(),
+            observation: "Work-unit status: Partial. Planned operations remain unfinished.".into(),
             observed_at: task.finished_at,
         });
     }
@@ -2103,10 +2094,9 @@ fn append_naabu_coverage_gaps(
         push(
             CoverageGapKind::Unavailable,
             format!("{} saved result processing", check_id(task)),
-            "At least one validated scanner result has not been fully processed into findings. Tested coverage remains saved, but the finding list may be incomplete."
-                .into(),
+            "Result processing status: incomplete.".into(),
             NextActionCode::PreserveVisibleLimitation,
-            "No action is required; result processing retries automatically.",
+            "Start a new scan for a fresh result.",
         );
     }
 
@@ -2854,7 +2844,7 @@ fn append_nuclei_website_dimensions(
             value: format!(
                 "technology-aware upstream profile on exact website origin for asset {asset_id}"
             ),
-            observation: "Nuclei completed the pinned upstream automatic web profile on the displayed origin. Upstream technology detection selected applicable read-only templates; completion does not prove that every eligible template executed."
+            observation: "Nuclei completed the pinned upstream automatic web profile on the displayed origin. Applied checks: templates selected by upstream technology detection. Eligible-template execution completeness: unavailable."
                 .into(),
             observed_at: task.finished_at,
         });
@@ -2921,7 +2911,7 @@ fn append_internal_host_greenbone_dimensions(
                 "applicability-driven upstream profile on asset {asset_id} across {} approved TCP ports",
                 scope.ports.len()
             ),
-            observation: "Greenbone completed the frozen remote-safe profile on the displayed host and ports. Its upstream service and product prerequisites decided which feed checks applied; the result API does not prove that every scheduled VT executed."
+            observation: "Greenbone completed the frozen remote-safe profile on the displayed host and ports. Applied checks: feed checks selected by upstream service and product prerequisites. Scheduled-VT execution completeness: unavailable."
                 .into(),
             observed_at: task.finished_at,
         });
@@ -3022,7 +3012,7 @@ fn append_internal_endpoint_smtp_dimensions(
                 "exact {}-check upstream Greenbone SMTP profile on asset {asset_id}",
                 INTERNAL_ENDPOINT_SMTP_VULNERABILITY_OIDS.len()
             ),
-            observation: "The completed Greenbone task retained and attempted the exact SMTP profile: one check reads the banner, sends EHLO, tries STARTTLS when offered, and reviews advertised AUTH for cleartext-login risk; ten more checks depend on TLS being available. Task completion alone does not prove those TLS checks ran. No credentials or mail were sent."
+            observation: "The completed Greenbone task retained and attempted the exact SMTP profile: one check reads the banner, sends EHLO, tries STARTTLS when offered, and reviews advertised AUTH for cleartext-login risk; ten more checks depend on TLS. TLS-check execution: evidenced by selected-run source OIDs. Credentials and mail: not sent."
                 .into(),
             observed_at: task.finished_at,
         });
@@ -3035,7 +3025,7 @@ fn append_internal_endpoint_smtp_dimensions(
                     evidenced_tls_oids.len(),
                     INTERNAL_ENDPOINT_SMTP_TLS_VULNERABILITY_OIDS.len()
                 ),
-                observation: "Only the exact TLS source OIDs present in this selected run's finding evidence are counted here. A finding for one OID does not prove that another TLS check ran."
+                observation: "Counted coverage: exact TLS source OIDs in selected-run finding evidence. Each OID evidences only its own check."
                     .into(),
                 observed_at: task.finished_at,
             });
@@ -3139,7 +3129,7 @@ fn append_internal_endpoint_profile_gaps(
                     task_id: Some(task.id.clone()),
                     target_asset_ids: vec![asset_id.clone()],
                     dimension: "SMTP TLS negotiation-dependent coverage".into(),
-                    reason: "This run does not retain selected-run finding evidence for every SMTP TLS check. Task completion shows that the fixed profile was attempted, but it does not prove that TLS was available or that every TLS check ran; one finding proves only its own source OID."
+                    reason: "Selected-run SMTP TLS evidence: incomplete. Fixed profile status: attempted. TLS availability and per-check execution: shown only by each finding's source OID."
                         .into(),
                     next_action_code: NextActionCode::PreserveVisibleLimitation,
                     next_action: "Run a separately approved TLS assessment for complete SMTP TLS coverage."
@@ -3271,8 +3261,7 @@ fn append_case_exclusions(case: &AssessmentCase, run: &ScanRun, gaps: &mut Vec<C
             dimension: entry.label.clone(),
             reason: entry.explanation.clone(),
             next_action_code: NextActionCode::NoActionUnlessScopeChanges,
-            next_action:
-                "No action is needed unless this area should be included in a future scan.".into(),
+            next_action: "No action for the current scope.".into(),
         });
     }
 }
@@ -3307,7 +3296,7 @@ fn project_findings(case: &AssessmentCase, run: &ScanRun) -> (Vec<BeginnerFindin
                 (FindingSnapshotSource::FrozenSelectedRun, Some(snapshot))
             } else if let Some(current) = canonical.get(observation.finding_id.as_str()) {
                 warnings.push(format!(
-                    "Finding {} has no selected-run presentation snapshot; current canonical wording is labeled as a legacy fallback.",
+                    "Finding {} selected-run presentation snapshot: unavailable. Display wording: current canonical text.",
                     observation.finding_id
                 ));
                 (
@@ -3316,7 +3305,7 @@ fn project_findings(case: &AssessmentCase, run: &ScanRun) -> (Vec<BeginnerFindin
                 )
             } else {
                 warnings.push(format!(
-                    "Finding {} has only its retained run observation; presentation detail is unavailable.",
+                    "Finding {} presentation detail: unavailable. Retained run observation: available.",
                     observation.finding_id
                 ));
                 (FindingSnapshotSource::ObservationOnly, None)
@@ -3633,7 +3622,6 @@ fn confidence_word(confidence: &Confidence) -> &'static str {
 }
 
 fn project_next_steps(
-    state: &BeginnerReportState,
     findings: &[BeginnerFinding],
     gaps: &[CoverageGap],
     actual: &ActualCoverage,
@@ -3687,13 +3675,7 @@ fn project_next_steps(
     }
 
     if steps.is_empty() {
-        let (code, action, reason) = if state.lifecycle == ReportLifecycle::Live {
-            (
-                NextActionCode::WaitOrCancel,
-                "Scan continues automatically.",
-                "Current checks are in progress.",
-            )
-        } else if actual.checks.iter().any(is_closed_localhost_check) {
+        let (code, action, reason) = if actual.checks.iter().any(is_closed_localhost_check) {
             (
                 NextActionCode::StartExpectedServiceAndRetry,
                 "If you expected an app on this port, start it and run the check again.",
@@ -3769,8 +3751,9 @@ fn project_technical_details(case: &AssessmentCase, run: &ScanRun) -> TechnicalD
                 }
                 EngineTaskKind::BuiltInLocalhostTcp { .. } => {
                     TechnicalExecution::InvalidBuiltInTask {
-                        explanation: "The stored native task does not match the supported bounded localhost contract, so the report does not claim an endpoint observation contract."
-                            .into(),
+                        explanation:
+                            "Stored localhost task contract: unsupported. Endpoint observation: unavailable."
+                                .into(),
                     }
                 }
             };
@@ -3787,21 +3770,22 @@ fn project_technical_details(case: &AssessmentCase, run: &ScanRun) -> TechnicalD
                 cleanup_detail: UnavailableTechnicalValue {
                     availability: DataAvailability::Unavailable,
                     value: None,
-                    explanation: "The stored cleanup detail is not proven redacted; only the structured cleanup outcome is shown here."
+                    explanation: "Cleanup detail: unavailable. Structured cleanup outcome shown."
                         .into(),
                 },
                 error_code: task.error_code.clone(),
                 redacted_scanner_message: UnavailableTechnicalValue {
                     availability: DataAvailability::Unavailable,
                     value: None,
-                    explanation: "The case does not prove that its stored scanner message is redacted, so this beginner projection does not expose it. Use the separately redacted diagnostic export for scanner text."
-                        .into(),
+                    explanation:
+                        "Scanner message: available in the redacted diagnostic export.".into(),
                 },
                 redacted_diagnostic_log: UnavailableTechnicalValue {
                     availability: DataAvailability::Unavailable,
                     value: None,
-                    explanation: "No run-bound redacted diagnostic log is retained in the case model. Use the separately generated redacted diagnostic export when available."
-                        .into(),
+                    explanation:
+                        "Run-bound diagnostic log: unavailable. Redacted diagnostic export: separate."
+                            .into(),
                 },
                 evidence_sha256,
                 execution,
@@ -3909,7 +3893,7 @@ fn task_is_active(task: &EngineRun) -> bool {
     )
 }
 
-fn run_is_authoritatively_final(run: &ScanRun) -> bool {
+pub(crate) fn run_is_authoritatively_final(run: &ScanRun) -> bool {
     if run.is_terminal_no_checks() {
         return true;
     }
@@ -4048,10 +4032,7 @@ pub(crate) fn run_is_non_security_only(run: &ScanRun) -> bool {
             .all(|task| task_result_kind(task) != CheckResultKind::SecurityCheck)
 }
 
-fn non_security_only_explanation(run: &ScanRun, lifecycle: ReportLifecycle) -> String {
-    if lifecycle == ReportLifecycle::Live {
-        return "Scan in progress.".into();
-    }
+fn non_security_only_explanation(run: &ScanRun) -> String {
     let has_inventory = run
         .engine_runs
         .iter()
@@ -4071,19 +4052,17 @@ fn non_security_only_explanation(run: &ScanRun, lifecycle: ReportLifecycle) -> S
     )
 }
 
-fn state_explanation(summary: BeginnerReportSummary, lifecycle: ReportLifecycle) -> &'static str {
-    match (summary, lifecycle) {
-        (BeginnerReportSummary::Complete, ReportLifecycle::Final) => {
+fn state_explanation(summary: BeginnerReportSummary) -> &'static str {
+    match summary {
+        BeginnerReportSummary::Complete => {
             "Every requested dimension retained by this run has a final outcome."
         }
-        (BeginnerReportSummary::NoChecksCompleted, _) => {
+        BeginnerReportSummary::NoChecksCompleted => {
             "The scan ended before any security check completed. Open the coverage gaps and retry."
         }
-        (BeginnerReportSummary::Partial, ReportLifecycle::Live) => "Scan in progress.",
-        (BeginnerReportSummary::Partial, ReportLifecycle::Final) => {
+        BeginnerReportSummary::Partial => {
             "The scan completed with one or more coverage gaps. Completed sibling checks are included."
         }
-        (BeginnerReportSummary::Complete, ReportLifecycle::Live) => "Scan in progress.",
     }
 }
 
@@ -4818,34 +4797,21 @@ mod tests {
     }
 
     #[test]
-    fn active_run_is_live_partial_and_uses_selected_run_durable_time() {
+    fn active_run_has_no_beginner_report() {
         let mut task = catalog_task("active", EngineRunStatus::Running);
         task.finished_at = None;
         task.started_at = Some(instant(30));
         let case = case_with_catalog_tasks(vec![task], false);
-        let report = build_beginner_master_report(&case, "run-1").unwrap();
-
-        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
-        assert_eq!(report.state.lifecycle, ReportLifecycle::Live);
-        assert_eq!(report.state.last_durable_update, instant(30));
         assert_eq!(
-            report.actual.checks[0].status,
-            CoverageDimensionStatus::InProgress
-        );
-        assert_eq!(
-            report.requested.targets[0].label_availability,
-            DataAvailability::CurrentCaseFallback
-        );
-        assert!(
-            report
-                .coverage_gaps
-                .iter()
-                .any(|gap| gap.dimension == "run-frozen target label or type")
+            build_beginner_master_report(&case, "run-1").unwrap_err(),
+            BeginnerReportError::RunInProgress {
+                run_id: "run-1".into()
+            }
         );
     }
 
     #[test]
-    fn frozen_web_origins_keep_same_host_services_distinct_across_live_reopen() {
+    fn frozen_web_origins_keep_same_host_services_distinct_in_terminal_report() {
         let mut case = empty_case();
         case.assets = vec![
             Asset {
@@ -4915,14 +4881,12 @@ mod tests {
                 external_scope: Some(external),
             }
         };
-        let mut website_task = catalog_task("website", EngineRunStatus::Running);
+        let mut website_task = catalog_task("website", EngineRunStatus::Completed);
         website_task.engine_id = "nuclei".into();
         website_task.asset_ids = vec!["website-asset".into()];
-        website_task.finished_at = None;
-        let mut device_task = catalog_task("device", EngineRunStatus::Running);
+        let mut device_task = catalog_task("device", EngineRunStatus::Completed);
         device_task.engine_id = GREENBONE_ENGINE_ID.into();
         device_task.asset_ids = vec!["device-asset".into()];
-        device_task.finished_at = None;
         case.scan_runs.push(ScanRun {
             id: "run-1".into(),
             case_id: case.id.clone(),
@@ -4945,10 +4909,11 @@ mod tests {
             engine_runs: vec![website_task, device_task],
         });
 
-        let live = build_beginner_master_report(&case, "run-1").unwrap();
-        assert_eq!(live.state.lifecycle, ReportLifecycle::Live);
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(report.state.lifecycle, ReportLifecycle::Final);
         let target = |asset_id: &str| {
-            live.requested
+            report
+                .requested
                 .targets
                 .iter()
                 .find(|target| target.asset_id == asset_id)
@@ -4983,17 +4948,18 @@ mod tests {
             serde_json::from_slice(&serde_json::to_vec(&case).unwrap()).unwrap();
         assert_eq!(
             build_beginner_master_report(&reopened, "run-1").unwrap(),
-            live,
+            report,
             "reopening must preserve each frozen origin and web-service kind"
         );
-        assert!(matches!(
+        assert_eq!(
             crate::export::beginner_report_for_export(
                 &reopened,
                 "run-1",
                 crate::export::RedactionProfile::None,
-            ),
-            Err(crate::error::AppError::NotAvailable(_))
-        ));
+            )
+            .unwrap(),
+            report
+        );
     }
 
     #[test]
@@ -5002,17 +4968,12 @@ mod tests {
         task.finished_at = None;
         task.started_at = Some(instant(30));
         let case = case_with_catalog_tasks(vec![task], true);
-        let report = build_beginner_master_report(&case, "run-1").unwrap();
-
-        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
-        assert_eq!(report.state.lifecycle, ReportLifecycle::Live);
         assert_eq!(
-            report.actual.checks[0].status,
-            CoverageDimensionStatus::InProgress
+            build_beginner_master_report(&case, "run-1").unwrap_err(),
+            BeginnerReportError::RunInProgress {
+                run_id: "run-1".into()
+            }
         );
-        assert!(report.data_quality_warnings.iter().any(|warning| {
-            warning.contains("completion time") && warning.contains("no terminal outcome")
-        }));
     }
 
     #[test]
@@ -6822,9 +6783,13 @@ mod tests {
         assert!(
             tested
                 .observation
-                .contains("No credentials or mail were sent")
+                .contains("Credentials and mail: not sent")
         );
-        assert!(tested.observation.contains("does not prove"));
+        assert!(
+            tested
+                .observation
+                .contains("evidenced by selected-run source OIDs")
+        );
 
         let tls_gap = report
             .coverage_gaps
@@ -6837,9 +6802,9 @@ mod tests {
         assert!(
             tls_gap
                 .reason
-                .contains("does not prove that TLS was available")
+                .contains("TLS availability and per-check execution")
         );
-        assert!(tls_gap.reason.contains("only its own source OID"));
+        assert!(tls_gap.reason.contains("each finding's source OID"));
 
         let gap = report
             .coverage_gaps
@@ -6900,7 +6865,11 @@ mod tests {
             .find(|dimension| dimension.dimension == "SMTP TLS checks with selected-run evidence")
             .expect("the exact selected-run TLS finding is visible");
         assert!(evidenced.value.starts_with("1 of 10 selected TLS checks"));
-        assert!(evidenced.observation.contains("does not prove"));
+        assert!(
+            evidenced
+                .observation
+                .contains("Each OID evidences only its own check")
+        );
         assert!(
             report
                 .coverage_gaps
@@ -7114,8 +7083,16 @@ mod tests {
             .find(|dimension| dimension.dimension == "Greenbone remote vulnerability scan")
             .expect("the frozen generic Greenbone profile is meaningful coverage");
         assert!(tested.value.contains("2 approved TCP ports"));
-        assert!(tested.observation.contains("prerequisites decided"));
-        assert!(tested.observation.contains("does not prove"));
+        assert!(
+            tested
+                .observation
+                .contains("selected by upstream service and product prerequisites")
+        );
+        assert!(
+            tested
+                .observation
+                .contains("Scheduled-VT execution completeness: unavailable")
+        );
     }
 
     #[test]
@@ -7321,8 +7298,16 @@ mod tests {
             .find(|dimension| dimension.dimension == "Nuclei upstream website scan")
             .expect("the frozen automatic Nuclei profile is meaningful website coverage");
         assert!(tested.value.contains("technology-aware upstream profile"));
-        assert!(tested.observation.contains("technology detection selected"));
-        assert!(tested.observation.contains("does not prove"));
+        assert!(
+            tested
+                .observation
+                .contains("templates selected by upstream technology detection")
+        );
+        assert!(
+            tested
+                .observation
+                .contains("Eligible-template execution completeness: unavailable")
+        );
         assert!(
             report
                 .coverage_gaps
@@ -7612,7 +7597,7 @@ mod tests {
     }
 
     #[test]
-    fn run_not_found_is_the_only_construction_error() {
+    fn missing_and_active_runs_are_the_only_construction_errors() {
         let case = empty_case();
         assert_eq!(
             build_beginner_master_report(&case, "missing").unwrap_err(),

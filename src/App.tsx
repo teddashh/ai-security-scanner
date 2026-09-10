@@ -962,8 +962,8 @@ export default function App() {
               zhTW: "掃描工具已就緒。",
             })
             : text({
-              en: "Checking whether the advanced tools are ready. Select Retry if the status does not update.",
-              zhTW: "正在確認進階工具是否就緒；若狀態沒有更新，請按「再試一次」。",
+              en: "Checking whether the advanced tools are ready. Retry refreshes the status.",
+              zhTW: "正在確認進階工具是否就緒；「再試一次」會重新整理狀態。",
             })
           : nonRetryable
             ? text({
@@ -1670,7 +1670,7 @@ export default function App() {
           : nonExecutionCopy
             ? text(nonExecutionCopy.failedTitle)
           : result.mode === "demo"
-            ? text({ en: "Preview only — no scan ran", zhTW: "僅供預覽，未執行掃描" })
+            ? text({ en: "Open the desktop app", zhTW: "請開啟桌面版" })
             : text({ en: "The work did not start", zhTW: "工作尚未開始" }),
         detail: lifecycleToast
           ? text(lifecycleToast.detail)
@@ -2110,8 +2110,8 @@ export default function App() {
             { fileName: exported.fileName },
           )
           : text({
-            en: "The file is marked DEMO_ONLY_NOT_A_SCAN and is not a scan report.",
-            zhTW: "檔案已標示 DEMO_ONLY_NOT_A_SCAN，不能當成掃描報告。",
+            en: "File marker: DEMO_ONLY_NOT_A_SCAN",
+            zhTW: "檔案標記：DEMO_ONLY_NOT_A_SCAN",
           }),
       });
     } catch (error) {

@@ -138,7 +138,7 @@ pub fn run() {
             if let Some(reason) = managed_runtime_admission.failure_reason() {
                 tracing::warn!(
                     failure_reason = reason.as_str(),
-                    "packaged scan tools are unavailable; independent checks and saved reports remain available"
+                    "packaged scan tools are unavailable"
                 );
             }
             let storage = Storage::open(app_data.join("casework.db"))
@@ -155,7 +155,7 @@ pub fn run() {
                     engine_id = issue.engine_id.as_deref().unwrap_or("unidentified"),
                     issue_code = %issue.code,
                     detail = %issue.detail,
-                    "one catalog engine is unavailable; independent checks remain available"
+                    "catalog engine is unavailable"
                 );
             }
             let adapters = adapters::builtin_adapter_registry().unwrap_or_else(|error| {
@@ -189,7 +189,7 @@ pub fn run() {
                 ),
                 Err(error) => tracing::error!(
                     error = %error,
-                    "local export-integrity identity needs attention; scanning remains available"
+                    "local export-integrity identity needs repair"
                 ),
             }
             match state.case_service().recover_interrupted_scans() {
@@ -200,7 +200,7 @@ pub fn run() {
                 Ok(_) => {}
                 Err(error) => tracing::error!(
                     error = %error,
-                    "persisted scan restart classification was incomplete; the shell remains available"
+                    "persisted scan restart classification failed"
                 ),
             }
             match state.case_service().reconcile_terminal_verifications() {
@@ -211,7 +211,7 @@ pub fn run() {
                 Ok(_) => {}
                 Err(error) => tracing::error!(
                     error = %error,
-                    "terminal verification reconciliation was incomplete; the shell remains available"
+                    "terminal verification reconciliation failed"
                 ),
             }
             app.manage(state);

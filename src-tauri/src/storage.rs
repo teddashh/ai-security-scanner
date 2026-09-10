@@ -438,7 +438,7 @@ impl Storage {
                         revision,
                         document_bytes: document.len(),
                         code: "stored_case_unreadable".into(),
-                        message: "This saved project could not be opened by this version. Its original data was preserved; other projects remain available. Try again after updating the app, or share the local diagnostic code with support.".into(),
+                        message: "This app version cannot open the saved project. Update the app, then try again. Diagnostic code: stored_case_unreadable.".into(),
                         preserved: true,
                     });
                 }

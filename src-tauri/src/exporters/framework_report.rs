@@ -814,7 +814,7 @@ fn coverage_summary(
     }
     if !run.engine_admission_issues.is_empty() {
         limitations.push(format!(
-            "{} packaged scanner catalog limitation(s) were frozen with this run. Applicability for those unavailable checks remains unknown; they are not treated as tested or passed.",
+            "Packaged scanner catalog limitations: {}. Applicability: unknown. Tested or passed checks from this set: 0.",
             run.engine_admission_issues.len()
         ));
     }
@@ -835,17 +835,17 @@ fn coverage_summary(
     }
     if connected_no_asset_count > 0 {
         limitations.push(format!(
-            "{connected_no_asset_count} connected source(s) returned no assets in the saved snapshot; that does not prove the source has no assets."
+            "{connected_no_asset_count} connected source(s) returned zero assets in the saved snapshot. Inventory completeness: unverified."
         ));
     }
     if selected_run_missing_snapshot_count > 0 {
         limitations.push(format!(
-            "{selected_run_missing_snapshot_count} selected-run observation(s) have no immutable finding snapshot. Mutable current finding text and framework mappings were not used to reconstruct them."
+            "Selected-run observations without an immutable finding snapshot: {selected_run_missing_snapshot_count}. Reconstruction from mutable text or mappings: disabled."
         ));
     }
     if selected_run_observations_without_evidence_count > 0 {
         limitations.push(format!(
-            "{selected_run_observations_without_evidence_count} selected-run observation(s) have no exact evidence hash reference; their provenance remains incomplete."
+            "Selected-run observations without an exact evidence hash: {selected_run_observations_without_evidence_count}. Provenance status: incomplete."
         ));
     }
     if excluded_other_run_coverage_entry_count > 0 {
@@ -1879,7 +1879,7 @@ mod tests {
                 .selected_run_coverage_has_unknown_or_incomplete_entries
         );
         assert!(report.coverage.limitations.iter().any(|limitation| {
-            limitation.contains("packaged scanner catalog limitation")
+            limitation.contains("Packaged scanner catalog limitation")
                 && limitation.contains("Applicability")
         }));
     }

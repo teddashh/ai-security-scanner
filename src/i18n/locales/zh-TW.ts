@@ -136,7 +136,7 @@ export const zhTW = {
   "status.coverage.none.description": "已檢查這個來源，這次沒有回報任何項目。",
   "status.coverage.unknown.label": "連接來源後即可檢查",
   "status.coverage.unknown.short": "未知",
-  "status.coverage.unknown.description": "目前尚未連接來源，所以還看不到這個範圍。",
+  "status.coverage.unknown.description": "連接資料來源即可查看這個範圍。",
   "status.coverage.notApplicable.label": "這次掃描略過",
   "status.coverage.notApplicable.short": "已略過",
   "status.coverage.notApplicable.description": "這個項目沒有納入本次掃描，因此尚未檢查。",
@@ -169,7 +169,7 @@ export const zhTW = {
   "status.stage.completed.label": "已完成",
   "status.stage.completed.description": "結果已保存，本機工作區也已清理完成。",
   "status.stage.cancelled.label": "已停止",
-  "status.stage.cancelled.description": "掃描已停止，先前保存的進度仍可使用。",
+  "status.stage.cancelled.description": "掃描已停止。",
   "status.stage.failed.label": "需要處理",
   "status.stage.failed.description": "這次嘗試在完成前停止了；請依照這項檢查顯示的下一步處理。",
 

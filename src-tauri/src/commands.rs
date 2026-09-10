@@ -182,8 +182,7 @@ fn ensure_verified_managed_runtime_for_setup(state: &AppState) -> AppResult<()> 
         return Ok(());
     }
     Err(AppError::NotAvailable(
-        "verified scan tools are unavailable; independent checks and saved reports remain available"
-            .into(),
+        "verified scan tools are unavailable; install the latest app version".into(),
     ))
 }
 
@@ -890,8 +889,8 @@ fn retryable_error_after_cleanup_started(error: AppError) -> AppError {
 pub struct DesktopAppSnapshot {
     #[serde(flatten)]
     pub snapshot: AppSnapshot,
-    /// One pure, run-bound report projection per selected-case run. This is
-    /// derived from durable state and is never a second lifecycle authority.
+    /// One pure, run-bound report projection per terminal selected-case run.
+    /// Active work is represented only by the Progress data in `snapshot`.
     pub beginner_reports: Vec<crate::beginner_report::BeginnerMasterReport>,
     /// Isolated packaged-catalog problems. They never gate the shell or
     /// admitted sibling checks; default scans freeze relevant limitations so
@@ -1037,7 +1036,7 @@ fn load_readable_desktop_cases(state: &AppState) -> AppResult<ReadableDesktopCas
             revision: 0,
             document_bytes: 0,
             code: "selected_case_missing".into(),
-            message: "The previously selected project is no longer in local storage. No demo data was substituted; choose another saved project or create a new one.".into(),
+            message: "The selected project is absent from local storage. Choose another saved project or create a new one.".into(),
             preserved: false,
         });
     }
@@ -1073,6 +1072,7 @@ pub async fn get_app_snapshot(
         .map(|case| {
             case.scan_runs
                 .iter()
+                .filter(|run| crate::beginner_report::run_is_authoritatively_final(run))
                 .map(|run| {
                     crate::beginner_report::build_beginner_master_report(case, &run.id).map_err(
                         |error| {
@@ -4750,7 +4750,7 @@ fn run_scan_worker(
                                 engine_run_id = %execution.engine_run_id,
                                 execution_attempt = execution.attempt,
                                 error = %error,
-                                "result-only resume stayed partial; saved results remain available"
+                                "result-only resume stayed partial"
                             );
                             if let Ok(current) = state.case_service().show_case(&execution.case_id)
                             {
@@ -4929,7 +4929,7 @@ fn run_scan_worker(
                                     engine_run_id = %execution.engine_run_id,
                                     execution_attempt = execution.attempt,
                                     error = %error,
-                                    "scanner phase continuation stopped; saved results remain available"
+                                    "scanner phase continuation stopped"
                                 );
                                 if let Ok(current) =
                                     state.case_service().show_case(&execution.case_id)
@@ -4993,8 +4993,8 @@ fn run_scan_worker(
 }
 
 /// Changes only the in-memory worker queue. The durable run plan and every
-/// engine/asset identity remain untouched, while quick, finding-capable checks
-/// can update the beginner report before slower supplemental work finishes.
+/// engine/asset identity remain untouched, while quick finding-capable checks
+/// finish early and the unified report remains reserved for terminal results.
 fn prioritize_first_meaningful_results(executions: &mut [PlannedEngineExecution]) {
     executions.sort_by_key(|execution| beginner_execution_priority(&execution.manifest.id));
 }

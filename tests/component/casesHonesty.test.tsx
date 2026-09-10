@@ -114,7 +114,7 @@ test("zero systems with an unresolved source is not reported as having found not
 
   const rendered = notices(container);
   expect(rendered.some((notice) => notice.includes("Add a source to start finding your systems"))).toBe(true);
-  expect(rendered.some((notice) => notice.includes("does not mean the organization has no assets"))).toBe(true);
+  expect(rendered.some((notice) => notice.includes("Source status: not connected"))).toBe(true);
   expect(rendered.some((notice) => notice.includes("No systems were found this time"))).toBe(false);
 });
 
@@ -127,8 +127,7 @@ test("zero systems from a connected source states the narrow scope of that zero"
 
   const rendered = notices(container);
   expect(rendered.some((notice) => notice.includes("No systems were found this time"))).toBe(true);
-  // A zero is a statement about one snapshot at one time, not about the estate.
-  expect(rendered.some((notice) => notice.includes("applies only to the saved source snapshot"))).toBe(true);
+  expect(rendered.some((notice) => notice.includes("Latest connected-source snapshot: zero systems"))).toBe(true);
   expect(rendered.some((notice) => notice.includes("Add a source to start finding your systems"))).toBe(false);
 });
 

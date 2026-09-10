@@ -144,7 +144,7 @@ test("a Traditional Chinese reader sees a changed finding's structured explanati
   expect(row.textContent).not.toContain(englishFrame);
 });
 
-test("an item that was not seen again is never worded as fixed and keeps its caution", () => {
+test("an item that was not seen again states the exact result and next action", () => {
   const { container } = renderVerification(
     summary({ diffs: [diff({ id: "a", state: "resolved", beforeSeverity: "critical" })] }),
     bothRunsCompleted,
@@ -155,17 +155,18 @@ test("an item that was not seen again is never worded as fixed and keeps its cau
   // would be a claim about the system that no scan can support.
   expect(within(row).getByText("No longer observed")).toBeTruthy();
   expect(row.textContent).not.toMatch(/\bFixed\b|\bResolved\b|\bSafe\b/u);
-  expect(row.textContent).toContain("did not observe this problem this time");
-  expect(row.textContent).toContain("Review the evidence before closing the work");
+  expect(row.textContent).toContain("no longer found this problem");
+  expect(row.textContent).toContain("Review the new evidence, then close it");
   // The severity line resolves the absent "after" value explicitly rather than
   // leaving it blank, which would read as no severity at all.
   expect(row.textContent).toContain("After: Not observed this time");
 
-  // And the page-level caution accompanies any such count.
+  // The page-level summary repeats the result and action without a disclaimer.
   const caution = container.querySelector(".inline-notice--info");
   expect(caution).not.toBeNull();
-  expect(caution!.textContent).toContain("Not observed does not mean permanently safe");
-  expect(caution!.textContent).toContain("only the checks that ran this time");
+  expect(caution!.textContent).toContain("No longer observed in this recheck");
+  expect(caution!.textContent).toContain("Review the new evidence, then close it");
+  expect(caution!.textContent).not.toContain("does not mean");
 });
 
 test("an item that could not be compared is not counted among those not seen again", () => {
@@ -195,10 +196,11 @@ test("an item that could not be compared is not counted among those not seen aga
 
   const row = diffRow(container, "Finding b");
   expect(within(row).getByText("Could not verify")).toBeTruthy();
-  expect(row.textContent).toContain("could not make a trustworthy comparison");
+  expect(row.textContent).toContain("Comparison is unavailable for this item");
+  expect(row.textContent).toContain("complete its next action");
 });
 
-test("a recorded comparison limitation is labelled as not being a count of security problems", () => {
+test("a recorded comparison limitation names the affected comparisons directly", () => {
   // The number beside a warning is a count of scanner/target comparisons that
   // failed, not of problems found. Presented bare next to a red notice it reads
   // as "you have three issues", which inflates the apparent result of a scan.
@@ -215,8 +217,8 @@ test("a recorded comparison limitation is labelled as not being a count of secur
   );
 
   const notice = container.querySelector(".inline-notice--warning")!;
-  expect(notice.textContent).toContain("Technical scanner/target comparison limitations recorded: 2");
-  expect(notice.textContent).toContain("This is not a security-finding count");
+  expect(notice.textContent).toContain("Scanner/target comparisons needing attention: 2");
+  expect(notice.textContent).not.toContain("not a security-finding count");
 });
 
 test("a mapping-version-only limitation says the checks ran rather than implying they did not", () => {
@@ -246,15 +248,16 @@ test("a mapping-version-only limitation says the checks ran rather than implying
   expect(notice.textContent).toContain("Scanner mappings changed between these scans");
   expect(notice.textContent).toContain("completed in both scans");
   // Two distinct engines across three recorded rows.
-  expect(notice.textContent).toContain("Affected scanner engines: 2");
-  expect(notice.textContent).toContain("not a security-finding count");
+  expect(notice.textContent).toContain("Affected scan tools: 2");
+  expect(notice.textContent).not.toContain("not a security-finding count");
   expect(notice.textContent).not.toContain("comparisons were incomplete");
 
   const row = diffRow(container, "Finding a");
-  expect(row.textContent).toContain("control-mapping catalog version changed");
+  expect(row.textContent).toContain("different control-mapping catalog versions");
+  expect(row.textContent).toContain("Comparison classification is unavailable");
 });
 
-test("an outcome filter that matches nothing says an empty list is not an all-clear", () => {
+test("an outcome filter that matches nothing offers the next filter action", () => {
   const { container } = renderVerification(
     summary({ diffs: [diff({ id: "a", state: "persistent", beforeSeverity: "high", afterSeverity: "high" })] }),
     bothRunsCompleted,
@@ -267,7 +270,8 @@ test("an outcome filter that matches nothing says an empty list is not an all-cl
 
   const empty = container.querySelector(".empty-state")!;
   expect(empty.textContent).toContain("No items match this filter");
-  expect(empty.textContent).toContain("does not mean there is no risk");
+  expect(empty.textContent).toContain("Choose another outcome to see its items");
+  expect(empty.textContent).not.toContain("does not mean");
   expect(container.querySelectorAll(".diff-row").length).toBe(0);
 });
 
