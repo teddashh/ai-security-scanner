@@ -660,6 +660,13 @@ placeholder、過渡解釋或 export preview。另一輪掃描進行中時，已
 Rust 程式碼未變更，沿用 `8da9b5a` 已通過的 1,590 項完整 Rust CLI workspace 基線。本輪沒有執行
 scanner、刪除 RAM disk 資料或接觸任何 target。
 
+`d4a4532` 新增後，frontend 582 項、component 258 項、CI contract 32 項、TypeScript typecheck、
+production frontend build 與 diff check 全部通過；終態 Results 的空問題清單與問題細節欄改為直接
+指出本輪結果、下一步與選擇動作，Export 改用「檔案內容」、選定本機位置、unknown 數量與確切
+case-bundle 資料來源，不再預告資料之後出現或用辯解句說明 unknown 不等於零。Rust 程式碼未變更，
+沿用 `8da9b5a` 已通過的 1,590 項完整 Rust CLI workspace 基線。本輪沒有執行 scanner、刪除 RAM
+disk 資料或接觸任何 target。
+
 ## 後續順序
 
 1. 在使用者明確允許安裝缺少的 managed runtime／desktop dependencies，並對確切自有 target

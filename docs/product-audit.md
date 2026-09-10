@@ -337,6 +337,12 @@ active-run placeholder, completion promise, or preview; their visible surfaces
 are reserved for terminal-run content. Historical terminal runs remain directly
 selectable while a different run is active.
 
+Terminal Results and Export copy now states present outcomes and file facts.
+Empty problem views point to the selected run's outcome and next action; an
+unselected problem detail points directly to selection. Export labels selected
+file contents and saved location, records unknown counts as unknown, and states
+the exact historical fallback sources inside the case-bundle detail.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -408,7 +414,9 @@ The high-value remaining gaps are:
    authorization guidance into direct requirements. `e174156` removes the
    remaining delayed and mechanism-first Progress and per-check recovery copy.
    `fb440f7` routes active Results and Export requests directly to Progress and
-   removes their transitional placeholder pages.
+   removes their transitional placeholder pages. `d4a4532` replaces remaining
+   terminal-page forecasts and defensive unknown-count explanations with direct
+   result, selection, file-content, location, and provenance facts.
    The full sequence still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
