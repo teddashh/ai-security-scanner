@@ -1050,7 +1050,6 @@ async fn execute(cli: Cli, option_sources: GlobalOptionSources) -> AppResult<u8>
                     .count(),
                 "pending_runtime_cleanup": cleanup.pending.len(),
                 "invalid_checkpoint_records": cleanup.invalid_checkpoint_records.len(),
-                "notice": "Runtime availability and zero findings do not establish assessment coverage.",
             });
             print_value(&report, cli.json)?;
         }
@@ -1386,7 +1385,7 @@ fn execute_case(
                 &json!({
                     "database_record": case_id,
                     "artifacts": plan,
-                    "action": "No deletion was performed.",
+                    "deleted": false,
                 }),
                 json_output,
             )?;
@@ -1405,7 +1404,6 @@ fn execute_case(
                 &json!({
                     "result": result,
                     "artifact_action": "retained",
-                    "notice": "Only the exact SQLite case record and its event rows were deleted. Artifact files were not traversed or removed.",
                 }),
                 json_output,
             )?;
@@ -1419,7 +1417,7 @@ fn execute_case(
             print_value(
                 &json!({
                     "result": result,
-                    "notice": "Only the exact backend-generated case artifact directory was removed. The operation is not recoverable.",
+                    "recoverable": false,
                 }),
                 json_output,
             )?;
@@ -1508,8 +1506,10 @@ fn execute_source(
                 &json!({
                     "report": report,
                     "live_discovery": false,
+                    "discovery_source": "preserved_evidence",
+                    "credentials_used": false,
+                    "network_contacted": false,
                     "scope_granted": false,
-                    "notice": "The bounded connector parsed already-preserved evidence without using a credential. Provider-native capture requires a live in-process desktop authorization; discovered assets remain unauthorized candidates until a human records scope.",
                 }),
                 json_output,
             )?;
@@ -1572,8 +1572,11 @@ fn execute_source(
                     "artifact": reference,
                     "report": report,
                     "live_discovery": false,
+                    "storage": "private_backend_copy",
+                    "credentials_used": false,
+                    "network_contacted": false,
+                    "contents_emitted": false,
                     "scope_granted": false,
-                    "notice": "The selected file was copied into the private backend artifact store and parsed without a network request. Its contents were not printed. Discovered assets remain unauthorized candidates.",
                 }),
                 json_output,
             )?;
@@ -1635,7 +1638,7 @@ fn execute_scope(
             print_value(
                 &json!({
                     "grants": grants,
-                    "notice": "This records the supplied human authorization; the CLI did not infer ownership or widen scope.",
+                    "authorization_source": "explicit",
                 }),
                 json_output,
             )?;
@@ -1660,7 +1663,8 @@ fn execute_finding(
                 &json!({
                     "active": case.finding_groups,
                     "history": case.finding_group_events,
-                    "notice": "Groups are presentation metadata; every canonical finding and evidence record remains independent.",
+                    "group_effect": "presentation_only",
+                    "canonical_records_changed": false,
                 }),
                 json_output,
             )?;
@@ -1674,7 +1678,7 @@ fn execute_finding(
                     "suggestions": report.suggestions,
                     "unverifiable": report.unverifiable,
                     "truncatedSuggestions": report.truncated_suggestions,
-                    "notice": "Suggestions only. Nothing is grouped until you run `finding group`, and grouping never merges or deletes a finding.",
+                    "applied": false,
                 }),
                 json_output,
             )?;
@@ -1738,7 +1742,6 @@ fn execute_scan(
                 &json!({
                     "plan": plan,
                     "execution_state": "not_started",
-                    "notice": "This command persisted a credential-free plan only. It did not start a container or contact any asset. Unavailable engines are recorded as not_executed.",
                 }),
                 json_output,
             )?;
@@ -1763,7 +1766,6 @@ fn execute_scan(
                 &json!({
                     "rescan": plan,
                     "execution_state": "not_started",
-                    "notice": "This command persisted a rescan plan only. No scanner process was started.",
                 }),
                 json_output,
             )?;
@@ -1788,7 +1790,6 @@ fn execute_scan(
                     "case_status": case.status,
                     "runs": runs,
                     "coverage": case.coverage,
-                    "notice": "Engine status and finding count do not replace the coverage ledger. not_executed means no scanner result exists for that engine run.",
                 }),
                 json_output,
             )?;
@@ -1940,7 +1941,6 @@ fn execute_engine(
                     "runtime": preflight,
                     "retrieved": true,
                     "verification": "immutable sha256 digest",
-                    "notice": "Retrieval does not start the engine and does not establish scanner correctness.",
                 }),
                 json_output,
             )?;
@@ -2032,7 +2032,7 @@ async fn execute_runtime(
                         "run_id": run_id,
                         "results": [],
                         "remaining_obligations": 0,
-                        "notice": "No durable runtime cleanup obligation exists for this exact run.",
+                        "cleanup_state": "complete",
                     }),
                     json_output,
                 )?;
@@ -2240,7 +2240,6 @@ async fn execute_runtime(
                     "results": results,
                     "remaining_obligations": remaining.pending.len(),
                     "invalid_checkpoint_records": remaining.invalid_checkpoint_records,
-                    "notice": "Each obligation used its recorded runtime provenance. The exact container was reconciled first, followed by its exact managed-network identity; the durable obligation was cleared only after both succeeded.",
                 }),
                 json_output,
             )?;
