@@ -83,13 +83,13 @@ const contractDescription = (
 ): BilingualText => {
   if (["reachable", "closed", "timed_out"].includes(outcome)) {
     return {
-      en: `This saved observation came from one TCP connection attempt to 127.0.0.1:${port}, with a maximum wait of ${timeoutMs} ms and ${payloadBytes} application-data bytes sent.`,
-      zhTW: `這筆已保存的觀察結果來自對 127.0.0.1:${port} 的一次 TCP 連線嘗試，最長等待 ${timeoutMs} 毫秒，並傳送 ${payloadBytes} 個應用層資料位元組。`,
+      en: `Check boundary: 127.0.0.1:${port} · one TCP connection attempt · ${timeoutMs} ms maximum · ${payloadBytes} application-data bytes.`,
+      zhTW: `檢查界線：127.0.0.1:${port} · 一次 TCP 連線嘗試 · 最長 ${timeoutMs} 毫秒 · ${payloadBytes} 個應用層資料位元組。`,
     };
   }
   return {
-    en: `The saved task allowed only one TCP connection attempt to 127.0.0.1:${port}, a maximum wait of ${timeoutMs} ms, and ${payloadBytes} application-data bytes. No coherent TCP observation was saved.`,
-    zhTW: `已保存的工作範圍只允許對 127.0.0.1:${port} 進行一次 TCP 連線嘗試，最長等待 ${timeoutMs} 毫秒，並傳送 ${payloadBytes} 個應用層資料位元組；目前沒有保存一致且可採用的 TCP 觀察結果。`,
+    en: `Check boundary: 127.0.0.1:${port} · one TCP connection attempt · ${timeoutMs} ms maximum · ${payloadBytes} application-data bytes · reachability result unavailable.`,
+    zhTW: `檢查界線：127.0.0.1:${port} · 一次 TCP 連線嘗試 · 最長 ${timeoutMs} 毫秒 · ${payloadBytes} 個應用層資料位元組 · 無連線可達結果。`,
   };
 };
 
@@ -185,25 +185,25 @@ const summaryForOutcome = (
     case "missing":
       return {
         title: {
-          en: `The saved port ${port} check has no TCP observation`,
-          zhTW: `已保存的連接埠 ${port} 檢查沒有 TCP 觀察結果`,
+          en: `Port ${port} has no reachability result`,
+          zhTW: `連接埠 ${port} 沒有連線可達結果`,
         },
-        outcomeLabel: { en: "Observation not recorded", zhTW: "未記錄觀察結果" },
+        outcomeLabel: { en: "No reachability result", zhTW: "沒有連線可達結果" },
         nextStep: {
-          en: "Run this one check again. Do not draw a reachability conclusion from this saved record.",
-          zhTW: "請重新執行這一項檢查；不要從這筆已保存的紀錄推定連線狀態。",
+          en: "Run this check again for a reachability result.",
+          zhTW: "重新執行這項檢查以取得連線可達結果。",
         },
       };
     case "inconsistent":
       return {
         title: {
-          en: `The saved port ${port} result is incomplete`,
-          zhTW: `已保存的連接埠 ${port} 結果不完整`,
+          en: `Port ${port} has no reachability result`,
+          zhTW: `連接埠 ${port} 沒有連線可達結果`,
         },
-        outcomeLabel: { en: "Inconsistent saved result", zhTW: "已保存的結果不一致" },
+        outcomeLabel: { en: "No reachability result", zhTW: "沒有連線可達結果" },
         nextStep: {
-          en: "Run this one check again. Do not use the conflicting status and observation as a reachability result.",
-          zhTW: "請重新執行這一項檢查；不要把互相衝突的狀態與觀察紀錄當成連線結果。",
+          en: "Run this check again for a reachability result.",
+          zhTW: "重新執行這項檢查以取得連線可達結果。",
         },
       };
   }

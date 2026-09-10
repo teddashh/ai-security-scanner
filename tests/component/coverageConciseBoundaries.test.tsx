@@ -372,6 +372,18 @@ test("a host-shaped local snapshot keeps local guidance instead of external-targ
   expect(queryByText(/Confirm this is your internal system/u)).toBeNull();
 });
 
+test("guided Kubernetes setup renders the saved-input boundary as a direct requirement", () => {
+  const { container } = renderRoute({
+    assessmentIntent: "kubernetes",
+    requestedActivities: ["local_artifact_analysis"],
+    assets: [],
+  });
+
+  expect(container.textContent).toContain("Input: exported settings without live-cluster credentials");
+  expect(container.textContent).toContain("Input requirement: no kubeconfig files, tokens, or certificates");
+  expect(container.textContent).not.toMatch(/do not include kubeconfig|use exported settings/iu);
+});
+
 test("guided local Start keeps the exact copy, read-only check, and unchanged-source boundary visible", async () => {
   const onStartScan = vi.fn().mockResolvedValue(true);
   const { container } = renderRoute({

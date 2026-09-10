@@ -62,6 +62,7 @@ test("reachable, closed, and timed-out observations state the exact bounded resu
     assert.equal(summary.outcome, outcome);
     assert.match(summary.title.en, expected[outcome]);
     assert.match(summary.title.zhTW, /9001/u);
+    assert.match(summary.description.en, /^Check boundary:/u);
     assert.match(summary.description.en, /127\.0\.0\.1:9001/u);
     assert.match(summary.description.en, /3000 ms/u);
     assert.match(summary.description.en, /0 application-data bytes/u);
@@ -83,7 +84,7 @@ test("missing observations never turn completed, failed, or cancelled work into 
     const summary = localhostTcpBeginnerSummary(engine({ status, localhostTcpObservation: undefined }));
     assert.ok(summary);
     assert.equal(summary.outcome, outcome);
-    assert.match(summary.outcomeLabel.en, /no observation|not recorded/iu);
+    assert.match(summary.outcomeLabel.en, /no observation|not recorded|no reachability result/iu);
     assert.doesNotMatch(
       `${summary.title.en} ${summary.description.en} ${summary.nextStep.en}`,
       /came from one TCP connection attempt|made one TCP|connection attempt finishes/iu,
@@ -161,7 +162,7 @@ test("a durable stop request remains non-terminal until the connection has stopp
   assert.match(cancelled.outcomeLabel.en, /^Cancelled/u);
 });
 
-test("a conflicting terminal status and observation is disclosed instead of presented as reachability", () => {
+test("a conflicting terminal status and observation is not presented as reachability", () => {
   for (const mismatch of [
     engine({
       status: "partial",
@@ -175,8 +176,29 @@ test("a conflicting terminal status and observation is disclosed instead of pres
     const summary = localhostTcpBeginnerSummary(mismatch);
     assert.ok(summary);
     assert.equal(summary.outcome, "inconsistent");
+    assert.equal(summary.outcomeLabel.en, "No reachability result");
+    assert.equal(summary.nextStep.en, "Run this check again for a reachability result.");
     assert.doesNotMatch(summary.title.en, /accepted|refused|timed out/iu);
     assert.doesNotMatch(summary.description.en, /came from one TCP connection attempt/iu);
+  }
+});
+
+test("missing and conflicting saved states keep implementation defects out of first-layer copy", () => {
+  for (const summary of [
+    localhostTcpBeginnerSummary(engine({ localhostTcpObservation: undefined })),
+    localhostTcpBeginnerSummary(engine({
+      status: "partial",
+      localhostTcpObservation: { outcome: "reachable", observedAt: "2026-08-30T12:00:00Z" },
+    })),
+  ]) {
+    assert.ok(summary);
+    assert.equal(summary.title.en, "Port 9001 has no reachability result");
+    assert.equal(summary.outcomeLabel.en, "No reachability result");
+    assert.equal(summary.nextStep.en, "Run this check again for a reachability result.");
+    assert.doesNotMatch(
+      `${summary.title.en} ${summary.description.en} ${summary.outcomeLabel.en} ${summary.nextStep.en}`,
+      /incomplete|inconsistent|conflicting|coherent|do not draw|do not use/iu,
+    );
   }
 });
 

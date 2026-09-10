@@ -698,6 +698,19 @@ test("guided local creation requires an explicit folder and never starts from a 
   );
 });
 
+test("guided infrastructure setup presents the saved-input rule as a direct requirement", () => {
+  const { container } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "infrastructure_as_code",
+    selectionKey: 1,
+  });
+
+  expect(container.textContent).toContain("Deployment files must not contain secret values");
+  expect(container.textContent).toContain("Input requirement: no embedded passwords, keys, or tokens");
+  expect(container.textContent).not.toMatch(/remove secret values|before adding the folder/iu);
+});
+
 test("browser local setup is an honest preview and never claims to read a folder", async () => {
   const onCreate = vi.fn(() => Promise.resolve(true));
   const onCreateWithWorkspace = vi.fn(() => Promise.resolve(true));

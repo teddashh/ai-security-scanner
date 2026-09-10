@@ -437,6 +437,27 @@ test("each guided local route has plain-language first-layer copy in both locale
   ]) assert.ok(localInputProfileSource.includes(phrase), phrase);
 });
 
+test("saved-input cautions state direct requirements without preflight instruction copy", () => {
+  for (const phrase of [
+    "Inventory requirement: no passwords, tokens, private keys, or other secret values",
+    "盤點檔規格：不得包含密碼、token、私鑰或其他秘密值",
+    "Deployment files must not contain secret values",
+    "部署檔案不得包含秘密值",
+    "Input: exported settings without live-cluster credentials",
+    "輸入：不含正式叢集憑證的匯出設定",
+    "Input requirement: no live-cluster credentials or unrelated host files",
+    "輸入規格：不得包含正式叢集憑證或無關的主機檔案",
+  ]) assert.ok(`${source}\n${localInputProfileSource}`.includes(phrase), phrase);
+
+  for (const retiredInstruction of [
+    "Remove secret values from deployment files first",
+    "Replace embedded passwords, keys, and tokens before adding the folder",
+    "Do not include kubeconfig files, tokens, or certificates",
+    "Do not add live-cluster credentials or unrelated host files",
+    "Remove passwords, tokens, private keys, and other secrets first",
+  ]) assert.ok(!`${source}\n${localInputProfileSource}`.includes(retiredInstruction), retiredInstruction);
+});
+
 test("guided selection status is honest and does not keep prompting after auto-selection", () => {
   const authorizationLabels = source.slice(
     source.indexOf("const authorizationStateLabels"),

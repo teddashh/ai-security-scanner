@@ -167,8 +167,8 @@ const pageCopy = {
   websiteUrl: { en: "Website or API URL", zhTW: "網站或 API 網址" },
   websitePlaceholder: { en: "https://portal.example.com", zhTW: "https://portal.example.com" },
   websiteHelp: {
-    en: "Enter one complete http:// or https:// URL. Do not include a username or password.",
-    zhTW: "請輸入一個完整的 http:// 或 https:// 網址；不要放入帳號或密碼。",
+    en: "Enter one complete http:// or https:// URL without a username or password.",
+    zhTW: "輸入一個不含帳號或密碼的完整 http:// 或 https:// 網址。",
   },
   environmentRepositoriesTitle: { en: "Development projects", zhTW: "開發專案" },
   environmentRepositoriesBody: {
@@ -183,8 +183,8 @@ const pageCopy = {
     zhTW: "https://portal.example.com\nhttps://api.example.com",
   },
   environmentWebsitesHelp: {
-    en: "Enter one complete http:// or https:// website or API URL per line for the fixed Nuclei checks. Do not include sign-in details.",
-    zhTW: "每行輸入一個完整的 http:// 或 https:// 網站或 API 網址，執行固定的 Nuclei 檢查；不要放入登入資訊。",
+    en: "Enter one complete http:// or https:// website or API URL per line for the fixed Nuclei checks. Credentials are not accepted.",
+    zhTW: "每行輸入一個完整的 http:// 或 https:// 網站或 API 網址，執行固定的 Nuclei 檢查。此處不接受登入資訊。",
   },
   environmentHostsTitle: { en: "Internal systems", zhTW: "內部系統" },
   environmentHostsBody: {
