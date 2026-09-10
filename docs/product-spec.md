@@ -236,6 +236,8 @@ Without opening technical details, the user can answer:
 
 Each priority item shows severity, confidence, affected target/location, plain-language impact, next action, and verification guidance. Priority is transparent ordering, not a pseudo-precise score.
 
+Product-authored finding narrative states the result, possible impact, next action, rollback, and verification directly. The specialist type is separate routing information; it does not wrap the action in human-review, approval, or responsibility-shifting language. When an upstream scanner supplies no severity, the report says that the scanner did not rate it and keeps the severity **Unknown**.
+
 The asset summary gives every requested asset exactly one beginner-readable state: **problems found**, **no problems in completed checks**, **incomplete or failed**, or **not tested**. A finding linked to multiple assets counts for each affected asset. “No problems” applies only to completed security checks; discovery-only or connection-only work cannot earn that state.
 
 Reachability inventory such as an open port or responding HTTP service appears in a separate **Observed services — not vulnerabilities** section. It is not counted as a problem, placed in remediation priorities, or given a fix workflow merely because it shares the saved-result pipeline.
@@ -244,11 +246,13 @@ That section leads with the number of observed services, affected targets, and
 a small representative sample. The complete inventory and evidence remain
 available in a collapsed detail rather than displacing actual problems.
 
-### 6.2 No-problem and partial results
+### 6.2 No-problem and incomplete results
 
 “No problems observed” is limited to checks and scope that completed. It never means “secure.” Connection failure, missing input, scanner failure, cancellation, and untested scope are not green or passed.
 
 A terminal incomplete report preserves completed findings and places consequential missing coverage beside the relevant result, with one direct product action such as Retry, choose a folder, or narrow the target. The first layer does not repeat caveats; full scope, evidence, and formal terms remain available at the end or in collapsed detail.
+
+The readable report contains one report-end terms and technical-record disclosure after all actionable content. It is collapsed in the product UI and appears as the final section of HTML export. No legal, compliance, automation, or report-status disclaimer interrupts the first layer.
 
 ### 6.3 Evidence and one presentation system
 

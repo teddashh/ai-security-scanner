@@ -1,8 +1,8 @@
 # ai-security-scanner 開發交接
 
-狀態日期：2026-09-09
+狀態日期：2026-09-10
 
-最後完成的產品程式 checkpoint：`686e427`
+最後完成的產品程式 checkpoint：`b8bf318`
 
 這份文件是目前唯一的開發交接摘要，已直接取代舊的歷史版。產品決策以[產品規格](product-spec.md)為準，能力現況以[產品檢視](product-audit.md)為準。
 
@@ -32,7 +32,7 @@ Scanner 應盡量保留上游行為、規則、識別碼、severity、證據與 
 - `59c97bf` 先在 adapter 端釘住 `matcher-status: false` 一定不會變成 finding。
   這對目前部署的 `-jsonl-export` 輸出是 no-op，但避免 step 2 切換輸出
   通道時把「已執行但未命中」的 template 誤報為漏洞。
-- `63097f3` 完成 Maester `Investigate` 的端到端 manual-review 路徑（見下節）。
+- `63097f3` 完成 Maester `Investigate` 的端到端 no-verdict 路徑（見下節）。
   原本未提交的兩個 PowerShell wrapper 檔案已連同 adapter、保存、報告、
   Standard redaction、中英文呈現與測試一起提交，不再是工作樹中的草稿。
 - `601da4b` 完成 Nuclei step 2：launcher 直接擷取上游 StandardWriter 的
@@ -45,6 +45,11 @@ Scanner 應盡量保留上游行為、規則、識別碼、severity、證據與 
   分別處理 working-tree lockfiles 與 individual packages；真實 no-network smoke 已證明
   unidentified JAR 可經 Java index 對上套件，再由標準 vulnerability DB 產生 CVE finding。
   詳細來源、驗證與尚未發布的邊界見下節。
+- `b8bf318` 完成最終報告的直接敘述契約：掃描進行中只留在 Progress；terminal report
+  直接呈現結果、影響、動作、還原與驗證；專家類型獨立作為交接欄位；掃描器未評等時
+  直接顯示 Unknown；有未完成涵蓋的終止輪次標為「已完成，但有涵蓋缺口」。正式條款與
+  技術工作紀錄只在報告末端出現一次，HTML 匯出同序；舊案件進入權威報告模型時也會
+  正規化掉舊式人工審查、規劃核准、證據但書與責任轉移文字。
 
 ## 已在 main 上成立的產品能力
 
@@ -52,7 +57,7 @@ Scanner 應盡量保留上游行為、規則、識別碼、severity、證據與 
 - Repository 路徑已接上 Gitleaks、TruffleHog、Semgrep、Trivy、Grype、Checkov 與 KICS 等上游安全檢查。
 - 網站路徑以 Nuclei 上游 automatic scan 與固定的安全模板池執行；每個網站是獨立 engine run，單一網站失敗不應抹掉其他網站結果。
 - 內部資產路徑使用 Greenbone Community Feed 與通用的上游檢查，不包含 SonicWall、WatchGuard 或其他廠牌的自製規則。
-- Greenbone 結果語意已接通 launcher → Rust adapter → 共用報告：只有 `alarm` 產生 vulnerability finding；feed vector 無法評級的 alarm 保持 `Unknown` severity（basis `unrated_vulnerability_test_alarm`）並走既有的「未評定、需人工確認」呈現；`error` 與 `dead_host` 以結構化的 `unevaluated_targets` 保存，在報告中成為該資產的 incomplete coverage 並附下一步（dead host 為 failed、tested dimensions 清空；scanner error 為 partial、已完成項目保留）；`log` 不產生 finding；沒有 `result_type` 的 legacy XML 只接受正分 finding，模糊的零分紀錄讓該輪標成 incomplete 而不是 clean；未支援的 result type 或未指向已授權資產的紀錄同樣標成 incomplete。保存、重開與英文／繁中 HTML 匯出維持相同語意。
+- Greenbone 結果語意已接通 launcher → Rust adapter → 共用報告：只有 `alarm` 產生 vulnerability finding；feed vector 無法評級的 alarm 保持 `Unknown` severity（basis `unrated_vulnerability_test_alarm`），並直接說明上游未提供評等；`error` 與 `dead_host` 以結構化的 `unevaluated_targets` 保存，在報告中成為該資產的 incomplete coverage 並附下一步（dead host 為 failed、tested dimensions 清空；scanner error 為 partial、已完成項目保留）；`log` 不產生 finding；沒有 `result_type` 的 legacy XML 只接受正分 finding，模糊的零分紀錄讓該輪標成 incomplete 而不是 clean；未支援的 result type 或未指向已授權資產的紀錄同樣標成 incomplete。保存、重開與英文／繁中 HTML 匯出維持相同語意。
 - 混合掃描結果會進入同一份報告，依資產呈現 finding、已完成檢查、未完成範圍與上游 provenance；一個 scanner 失敗不會刪除已完成的 sibling 結果。
 - Cloudsplaining finding 已保留 policy source、policy name、finding、actions、action completeness 與 attached principals，並在共用報告中產生與實際 policy 來源相符的下一步。
 - Inventory、service discovery 與 connectivity 仍可作為證據，但不會被宣稱為 vulnerability finding 或成功的安全掃描。
@@ -62,7 +67,7 @@ Scanner 應盡量保留上游行為、規則、識別碼、severity、證據與 
 
 Scanner 出現在目錄中不代表每個引擎的完整使用者路徑都已完成；應以實際上游執行、normalized result 與最終報告三層皆可驗證為準。Greenbone 的新語意目前以 launcher Go 測試、adapter fixture、報告單元測試、HTML 匯出測試與 component render 測試驗證；本輪沒有對任何真實主機執行 Greenbone，第一次真實執行留給後續的 mixed IT flow 走查。
 
-## Maester `Investigate`：manual-review 路徑已完成（`63097f3`）
+## Maester `Investigate`：no-verdict 路徑已完成（`63097f3`、`b8bf318`）
 
 - PowerShell wrapper 保留上游 `Investigate` verdict，不再改寫成 `Failed`，並將
   `ResultDetail.TestResult` 清理、限制為 4096 個字元後放入 `ReviewDetail`。
@@ -70,11 +75,11 @@ Scanner 出現在目錄中不代表每個引擎的完整使用者路徑都已完
 - Rust adapter 將每一筆 `Investigate` 建立為有界、綁定已授權資產的
   `ManualReviewControl`，獨立傳過 execution report、durable report 與 `EngineRun`。
   它不進 finding，不宣稱 pass，也不把已完成的 Maester run 改成 incomplete。
-- beginner report 每個 control 顯示一筆「需人工檢視」項目、上游 detail 與明確的
-  人工判定下一步；asset coverage ledger 仍是
+- beginner report 每個 control 顯示一筆「未回傳自動判定」項目、上游 detail 與「開啟
+  上游詳細資料並設定狀態」的直接下一步；asset coverage ledger 仍是
   `DiscoveredAuthorizedScanned`。UI 與 HTML 會將這區標為「需要留意的內容」，
   不再把它誤稱「未測試」。
-- 無遮蔽報告保留上游 detail；Standard 匯出保留 manual-review 項目的存在，
+- 無遮蔽報告保留上游 detail；Standard 匯出保留 no-verdict 項目的存在，
   但遮蔽 rule id、title 與 detail。舊 case／report 缺少新欄位時會安全地解讀為空。
 - wrapper Pester 為 51/51；Rust 完整 suite、frontend 568 項、component 237 項、
   TypeScript、clippy、engine admission 與 CI contract 都通過。曾故意關閉
@@ -419,6 +424,11 @@ build 只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 
 diff check 與 production frontend build 全部通過；build 只有既有的大型 chunk 提示。本輪沒有執行
 scanner 或接觸 target。
 
+`b8bf318` 新增後，完整 Rust CLI suite 1,588 項、frontend 569 項、component 252 項、CI contract
+32 項、TypeScript typecheck、production frontend build、clippy、format 與 diff check 全部通過；
+build 只有既有的大型 chunk 提示。本輪只處理本機程式碼與 checked-in fixtures，沒有執行 scanner
+或接觸 target。
+
 ## 後續順序
 
 1. 在使用者明確允許安裝缺少的 managed runtime／desktop dependencies，並對確切自有 target
@@ -438,7 +448,7 @@ scanner 或接觸 target。
 ```text
 使用者選定資產
   → 適用的上游 scanner 真正執行
-  → finding／inventory／manual-review／incomplete outcome 保留原意
+  → finding／inventory／no-verdict／incomplete outcome 保留原意
   → sibling 結果不因單點失敗消失
   → 共用報告按資產說明結果、限制與下一步
   → 保存後重開及匯出仍維持相同語意

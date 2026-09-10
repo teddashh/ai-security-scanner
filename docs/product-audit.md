@@ -1,6 +1,6 @@
 # Beginner product review
 
-Reviewed: current source on 2026-09-09
+Reviewed: current source on 2026-09-10
 Product behavior: [product-spec.md](product-spec.md)
 
 This review asks whether a beginner can run useful upstream security checks and
@@ -141,7 +141,7 @@ ports; it does not mean that every VT ran or that the device is secure.
 A host that Greenbone reports as not responding, and scanner errors on a host,
 both appear as incomplete coverage for that host with a next action; neither is
 presented as a clean result. An alarm whose pinned feed entry has no parseable
-severity keeps `Unknown` severity for human review.
+severity stays `Unknown`, with the missing upstream rating stated directly.
 
 Previously saved single-service HTTPS, SSH, RDP, VNC, SMTP, and Telnet records
 remain runnable with their original boundaries. They are compatibility data,
@@ -185,6 +185,15 @@ evidence, and remediation underneath the shared explanation. Product-owned
 prioritization, deduplication, correlation, localization, and presentation stay
 in this report layer rather than scanner wrappers.
 
+Finding narrative now gives the result, possible impact, next action, rollback,
+and verification directly. Specialist type remains a separate handoff field.
+Unknown severity says the scanner did not rate the problem without handing the
+interpretation back to the reader. Results stay closed while work is active;
+terminal runs with unfinished coverage are labeled **Completed with gaps**.
+Formal report terms and technical task records appear once, at the report end,
+and HTML export uses the same ordering. Stored findings from older runs are
+normalized into this contract when the authoritative report is built.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -213,7 +222,9 @@ The high-value remaining gaps are:
    active work in Progress, opens Results and Export only for terminal runs, and
    removes live-report caveats from the primary path. `cd0adda` gives Home,
    Review, and Progress one shared concise timing target and moves scanner and
-   scope qualifications out of the primary choices. The full sequence still
+   scope qualifications out of the primary choices. `b8bf318` makes the terminal
+   report direct, moves formal terms to the end, and normalizes superseded stored
+   narrative. The full sequence still
    needs observation in a controlled installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
