@@ -461,6 +461,14 @@ Progress tests 同時鎖住英／繁中結果及禁用的等待式舊文案。
 等待或把 setup 狀態寫成可能需要使用者注意。重新啟動接續點只陳述已記錄的 checkpoint，不再加入
 不會自動重連的實作說明。
 
+## Start 與雲端連線邊界直接化（`0a9e96a`）
+
+Start 頁面直接要求先選一項，其他檢查從「掃描設定」加入；網路掃描以精確目標、檢查類型與限制作為
+開始條件，不再解釋選項只是讓下一頁變短，也不以「由你掌控」作防禦性保證。雲端連線直接列出組織
+app／role 的必要條件、官方頁面的管理員核准，以及唯讀存取與自動到期邊界；移除未提供 shared
+OAuth、表單不會收到密碼、檔案之後丟棄等機制辯護。Windows restart 則直接列出重啟、重開專案、
+繼續設定、確認目標與 Start 的順序。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -587,6 +595,10 @@ target。
 build 與 diff check 全部通過；Cases、Coverage 與 provider cleanup 的 rendered tests，以及跨頁面
 direct-copy contract 均通過。Rust 程式碼未變更，本輪沒有執行 scanner、刪除 RAM disk 資料或接觸
 任何 target。
+
+`0a9e96a` 新增後，frontend 575 項、component 254 項、TypeScript typecheck、production frontend
+build 與 diff check 全部通過；Start 與 provider setup 的 unit／rendered contracts 及 runtime-deferred
+scan tests 均通過。Rust 程式碼未變更，本輪沒有執行 scanner、刪除 RAM disk 資料或接觸任何 target。
 
 ## 後續順序
 

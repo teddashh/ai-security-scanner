@@ -275,6 +275,14 @@ inventory sources report **No connected source**. Cloud cleanup reports an open
 record or pending credential expiry directly. Coverage and Results use the same
 compact missing-data vocabulary without wait-state phrasing.
 
+Start and cloud connection guidance now separate required boundaries from
+defensive mechanism explanations. The Start page says to begin with one check
+and identifies the network scan boundary directly. Provider setup states the
+required organization app or role, performs administrator approval on the
+official provider page, and names read-only expiry without explaining absent
+product features or promising discarded intermediate files. Required Windows
+restart guidance is one ordered action sequence.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -327,7 +335,10 @@ The high-value remaining gaps are:
    pending-verification work one direct shared vocabulary. `ed5c831` states
    target authorization, source availability, and cloud cleanup as product
    requirements and current states without second-person obligation or waiting
-   language. The full sequence still needs observation in a controlled
+   language. `0a9e96a` removes the remaining Start, Windows restart, and cloud
+   connection mechanism explanations while retaining the exact network,
+   credential, and administrator-approval boundaries. The full sequence still
+   needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
