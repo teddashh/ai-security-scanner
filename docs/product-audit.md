@@ -44,19 +44,17 @@ screen. If the user does not choose an organization size, the case records
 `Not provided`; it no longer silently invents the 2–49-person band. Existing
 cases with a selected size retain their saved band.
 
-Each of the three primary Home choices now states the maintained timing target:
-a useful result is aimed for within minutes after local tools are ready. The
-same first-layer line prevents that target from becoming a full-run promise by
-naming the relevant extension—additional assets and host depth, website
-response and applicable checks, or a large project folder. Numeric ETAs remain
-unset until a controlled installed run supplies measurements. The focused
-Review panel repeats the applicable timing target beside the exact environment,
-website, or local-folder plan before Start. Progress keeps that same target next
-to elapsed time throughout active work. Durable counts and per-check outcomes
-continue updating there, while Results and every export format remain closed
-until the selected run reaches a terminal outcome. The terminal report then
-shows concise per-asset results and keeps technical evidence in collapsed
-detail.
+Each of the three primary Home choices leads with the outcome and one maintained
+timing target: a useful result within minutes after local tools are ready.
+Scanner names, inventory boundaries, and per-route timing qualifications no
+longer compete with the choice. The same single sentence appears in focused
+Review and active Progress; exact scope and engine detail remain in the later
+review or collapsed technical sections. Numeric ETAs remain unset until a
+controlled installed run supplies measurements. Durable counts and per-check
+outcomes continue updating in Progress, while Results and every export format
+remain closed until the selected run reaches a terminal outcome. The terminal
+report then shows concise per-asset results and keeps technical evidence in
+collapsed detail.
 Advanced paths without a maintained target and the localhost connection utility
 keep the no-estimate presentation. The live activity card also names the saved
 asset or assets bound to the current check. It prefers the run-bound report label
@@ -213,7 +211,9 @@ The high-value remaining gaps are:
    surfaces the current check's saved asset labels, and `083040c` adds explicit
    asset/check completion, remaining, and attention counts. `137db23` keeps all
    active work in Progress, opens Results and Export only for terminal runs, and
-   removes live-report caveats from the primary path. The full sequence still
+   removes live-report caveats from the primary path. `cd0adda` gives Home,
+   Review, and Progress one shared concise timing target and moves scanner and
+   scope qualifications out of the primary choices. The full sequence still
    needs observation in a controlled installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced

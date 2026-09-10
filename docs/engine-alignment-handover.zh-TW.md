@@ -299,42 +299,17 @@ rendered website setup test 確認收合區內的預設值與送出的 case 都�
 test 確認 wire value 是 `Not provided`；adapter test 確認重開不會再把它投影成 small。這只移除
 product-owned metadata guess，沒有增加問題、權限、目標或 scanner 執行。
 
-## Home primary cards 會先說明 minutes-level timing target（`a94131a`）
+## Home、Review、Progress 共用精簡時間目標（`cd0adda`）
 
-Home 的三個主要路徑先前只說明結果與動作，沒有呈現 product spec 要求的概略時間。現在 company
-IT environment、website 與 code／AI project card 都直接寫出「工具就緒後，目標是在幾分鐘內提供
-有用結果」，並在同一行分別說明完整執行可能因更多資產／較深入 host check、website response／
-適用 checks 或大型 folder 而更久。文案刻意使用 aim 而不是完成保證，也不在沒有 installed-run
-量測時編造 2–10 分鐘之類的數字 ETA。
+Home 的 company IT environment、website 與 code／AI project 三個主要選項現在先說結果與動作，
+不再把 scanner 名稱、inventory 條款或各路徑的延長因素塞進首層。三張卡、focused Review 與 active
+Progress 都從 `primaryScanTiming` 取得同一句：「工具就緒後幾分鐘內提供有用結果」。私密副本建立中
+也只說系統正在自動準備，不再要求使用者自行等待或切換頁面。
 
-rendered component test 在 English 與 Traditional Chinese 都核對三張 primary card 有 timing line、
-都有 tools-ready caveat，並各自保留延長因素。這沒有改變任何 timeout、rate、engine plan 或 target
-scope。
-
-## Review 在 Start 前保留同一個 timing target（`282d3fb`）
-
-Home 的概略時間不再在 setup 後消失。combined environment、website quick profile 與 local-folder
-focused Review 都會在 exact plan 旁顯示同一個 minutes-level timing target 與各自的延長因素，讓
-使用者在按 Start 前仍能分辨「第一個有用結果」和「完整 run 結束」。既有 website request rate、
-concurrency、per-request timeout、environment asset boundaries 與 read-only snapshot boundary 都
-保留原樣；CIDR 的計算式 minimum／conservative ceiling warning 也仍是另一個更精確的安全提示。
-
-rendered coverage test 分別走過 source-code、public website 與 mixed IT Review，確認 timing line 與
-既有 exact target／limit copy 同時存在。這沒有建立 numeric ETA 或改變 runtime policy。
-
-## Progress 會延續 timing target，並在有結果時更新狀態（`4ad0759`）
-
-primary path 進入執行畫面後，不再一律退回「目前無可靠預估」。Progress 現在使用 case 已保存的
-assessment intent，在 active run 的 elapsed time 旁延續 environment、website 或 source-code 的
-同一個 timing target；不從 scanner name 或目前 engine 猜使用者路徑。若該 run 已保存 durable
-security finding，這行會改成「目前已有可用的資安結果；其餘檢查可能需要更久」，並與既有的
-`View results` 動作一致。這不會把 reachability inventory 當成資安結果，也不會宣稱整輪完成。
-
-沒有 maintained timing target 的 advanced path 仍顯示 estimate unavailable；exact product-owned
-localhost TCP connection utility 也不會借用 internal-environment 的資安 timing target。rendered
-component tests 鎖住三條 primary path、English／Traditional Chinese 已有結果狀態、advanced fallback
-與 localhost boundary。這只改變 product-owned presentation，沒有改動 scanner timeout、scope、
-rate 或執行契約。
+Nuclei／Greenbone、exact origin／host、rate、concurrency、timeout、read-only snapshot 與 inventory
+邊界仍在會改變 Start 決定的 review／scope detail 中。advanced path 與 localhost connection utility
+沒有這項 security-result timing。rendered tests 鎖住兩種語言的 Home 三張卡、三種 Review、active
+Progress 與自動建立私密副本的狀態。
 
 ## Progress 會指出目前 check 綁定的資產（`00dc9a1`）
 
@@ -439,6 +414,10 @@ build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有�
 `137db23` 新增後，完整 Rust CLI suite 1,588 項、frontend 569 項、component 252 項、CI contract
 32 項、TypeScript typecheck、clippy、format、diff check 與 production frontend build 全部通過；
 build 只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
+
+`cd0adda` 新增後，frontend 569 項、component 252 項、CI contract 32 項、TypeScript typecheck、
+diff check 與 production frontend build 全部通過；build 只有既有的大型 chunk 提示。本輪沒有執行
+scanner 或接觸 target。
 
 ## 後續順序
 
