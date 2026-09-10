@@ -380,6 +380,19 @@ check，以及另一個 run 的 report 都 fail closed，不能單獨解鎖 Resu
 coordinate。rendered tests 鎖住 zero-finding security completion、三個非資安／不明分類、cross-run
 report 與既有 finding path；navigation contract 也改為要求 typed completed security result。
 
+## live zero-finding Results 清楚限定在已完成檢查（`b0bff17`）
+
+新開放的 zero-finding live result 進入 Results 後，原本只會顯示泛稱「尚未收到問題」。現在只要同一個
+active run 的 durable report 有明確 `resultKind: security_check` 且 `status: tested_complete`，空狀態
+會說明「已完成的檢查目前沒有回報問題」，並緊接著限定這項結果只適用於已完成的資安檢查、整輪掃描
+仍未完成、其餘檢查仍可能回報問題。report overview 仍顯示 `Still updating`，並保留回到 Progress 的
+動作。
+
+這項較強的 bounded claim 使用與 Progress 解鎖相同的 exact typed evidence，不採用 Results 為舊報告
+保留的 legacy engine-name fallback。缺少 `resultKind` 的完成 check 仍只顯示一般 interim copy，避免
+使用者透過手動導覽得到 Progress 不會允許的宣稱。rendered tests 同時鎖住 English／Traditional
+Chinese 文案、live lifecycle、仍在執行的 sibling security check，以及 legacy fail-closed boundary。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -439,6 +452,9 @@ build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有�
 build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
 
 `24fddc4` 新增後，frontend 568 項、component 250 項、TypeScript typecheck 與 production frontend
+build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
+
+`b0bff17` 新增後，frontend 568 項、component 252 項、TypeScript typecheck 與 production frontend
 build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
 
 ## 後續順序

@@ -57,6 +57,11 @@ security check is available, then says that a useful security result can already
 be opened while remaining checks continue. This includes a bounded no-problem
 result from a completed security check; completed inventory, connectivity, or
 legacy untyped checks cannot unlock Results by themselves.
+The zero-finding Results view now carries that same boundary: it names the
+no-problem outcome as applying only to completed security checks, keeps the
+whole scan explicitly live, and warns that sibling checks may still report
+problems. A legacy untyped completion retains the generic interim state instead
+of receiving this stronger claim.
 Advanced paths without a maintained target and the localhost connection utility
 keep the no-estimate presentation. The live activity card also names the saved
 asset or assets bound to the current check. It prefers the run-bound report label
@@ -213,8 +218,9 @@ The high-value remaining gaps are:
    surfaces the current check's saved asset labels, and `083040c` adds explicit
    asset/check completion, remaining, and attention counts. `24fddc4` makes a
    completed typed security check immediately reviewable even with zero findings
-   while sibling work continues; the full sequence still needs observation in a
-   controlled installed-desktop walkthrough.
+   while sibling work continues, and `b0bff17` bounds the destination copy to
+   completed checks while preserving the still-live whole-run warning; the full
+   sequence still needs observation in a controlled installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
    AWS cloud paths do not hide a comparable product-authored security subset:
