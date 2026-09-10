@@ -627,6 +627,12 @@ access 與 report next action 已移除「之後再做／若再次失敗／找 s
 防禦性文案；跨頁面 source-level contract 會阻止這些句型回流。本輪沒有執行 scanner、刪除
 RAM disk 資料或接觸任何 target。
 
+`3386446` 新增後，frontend 577 項、component 256 項、TypeScript typecheck、production frontend
+build 與 diff check 全部通過；website origin／reference path／path-only authorization、inventory-only
+range、缺少來源、來源回傳 0 項，以及 connectivity-only Results 都改為短而精確的狀態與下一步。
+Rust 程式碼未變更，沿用 `8da9b5a` 已通過的 1,590 項完整 Rust CLI workspace 基線。本輪沒有
+執行 scanner、刪除 RAM disk 資料或接觸任何 target。
+
 ## 後續順序
 
 1. 在使用者明確允許安裝缺少的 managed runtime／desktop dependencies，並對確切自有 target

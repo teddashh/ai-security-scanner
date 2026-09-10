@@ -303,6 +303,12 @@ suggestions while every finding remains individually listed. The shared Rust
 report layer, English and Traditional Chinese presentation, and rendered UI use
 the same direct wording; a source-level regression contract protects it.
 
+Website quick-scan review now states the exact origin, reference path, and
+path-only authorization support as three compact facts. Inventory-only ranges
+name the exact-host action. Missing-source and zero-item states are distinct
+direct outcomes, and inventory or connectivity Results state the completed
+work and the applicable security-scan action without interpretation warnings.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -365,6 +371,9 @@ The high-value remaining gaps are:
    `8da9b5a` removes the remaining delayed and repeat-failure copy from setup,
    Progress, Results, correlation, verification, settings, provider access, and
    report next actions, and adds a cross-page direct-copy regression contract.
+   `3386446` compresses website scope, inventory-source, local-input, and
+   connectivity-result boundaries while preserving exact authorization and
+   not-tested meaning.
    The full sequence still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
