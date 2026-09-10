@@ -35,15 +35,15 @@ export function SettingsPage({
     },
     unavailable: {
       status: {
-        en: "Some scan tools are unavailable · saved results are unaffected",
-        zhTW: "部分掃描工具無法使用 · 已保存的結果不受影響",
+        en: "Some scan tools are unavailable",
+        zhTW: "部分掃描工具無法使用",
       },
       action: { en: "Choose a scan", zhTW: "選擇掃描" },
     },
     unchecked: {
       status: {
-        en: "Scan tools not checked yet · saved results are available",
-        zhTW: "尚未檢查掃描工具 · 已保存的結果仍可查看",
+        en: "Scan tools not checked yet",
+        zhTW: "尚未檢查掃描工具",
       },
       action: { en: "Choose a scan", zhTW: "選擇掃描" },
     },
@@ -125,12 +125,12 @@ export function SettingsPage({
             {mode === "native" ? (
               <>
                 <p>{text({
-                  en: "Retry safely continues reusable download progress or starts a new setup attempt. Cancelling keeps downloaded progress; Continue resumes it. If Windows requires a restart, reopen the app afterward and setup resumes.",
-                  zhTW: "重試會安全沿用可重用的下載進度，或建立新的設定嘗試。取消會保留下載進度；「繼續」會從中斷處接續。若 Windows 要求重新啟動，之後重新開啟程式，設定便會接續。",
+                  en: "Retry reuses completed download progress. Pause keeps the download; Continue resumes it. After a required Windows restart, reopen the app and continue setup.",
+                  zhTW: "重試會沿用已完成的下載進度。暫停會保留下載；「繼續」會接續。若 Windows 要求重新啟動，請在重啟後開啟程式並繼續設定。",
                 })}</p>
                 <p>{text({
-                  en: "Saved projects and reports remain available. Any advanced check unavailable in this installed version stays marked Not tested; it is never shown as passed.",
-                  zhTW: "已保存的專案與報告仍可使用。這個安裝版本無法執行的進階檢查會保持標示為「未測試」，絕不會顯示為通過。",
+                  en: "Advanced checks unavailable in this installed version appear as Not tested.",
+                  zhTW: "這個安裝版本無法執行的進階檢查會標示為「未測試」。",
                 })}</p>
               </>
             ) : (

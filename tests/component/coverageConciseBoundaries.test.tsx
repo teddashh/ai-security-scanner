@@ -382,7 +382,7 @@ test("guided local Start keeps the exact copy, read-only check, and unchanged-so
 
   await waitFor(() => {
     expect(container.querySelector(".coverage-guided-boundary")?.textContent).toBe(
-      "Saved copy: source-tree-copy · Read-only checks: Review the saved local copy. The original source stays unchanged.",
+      "Saved copy: source-tree-copy · Read-only checks: Review the saved local copy.",
     );
   });
   expect(container.querySelector(".coverage-review-timing")?.textContent).toBe(
@@ -424,7 +424,7 @@ test("guided container Start routes Syft inventory with Trivy and Grype vulnerab
 
   await waitFor(() => {
     expect(container.querySelector(".coverage-guided-boundary")?.textContent).toBe(
-      "Saved copy: payments-image-copy · Read-only checks: Review the saved local copy. The original source stays unchanged.",
+      "Saved copy: payments-image-copy · Read-only checks: Review the saved local copy.",
     );
   });
 
@@ -485,7 +485,7 @@ test("guided cloud Start keeps the exact signed-in account, checks, and no-chang
 
   await waitFor(() => {
     expect(container.querySelector(".coverage-guided-boundary")?.textContent).toBe(
-      "Signed-in account: Production AWS (123456789012) · Read-only checks: Read-only inventory, Review settings. No cloud settings or data will be changed.",
+      "Signed-in account: Production AWS (123456789012) · Read-only checks: Read-only inventory, Review settings.",
     );
   });
   const advanced = container.querySelector<HTMLDetailsElement>(".coverage-scan-type-advanced");
@@ -517,7 +517,7 @@ test("public website flow applies the fixed Nuclei quick profile and starts with
 
   await waitFor(() => {
     expect(container.querySelector(".coverage-guided-boundary")?.textContent).toBe(
-      "Website to check: https://example.com:443, not only the entered page path /account. Nuclei identifies the technology and applies matching read-only checks from the pinned upstream template set, at max 10/s, 5 concurrent, and 10s per-request timeout. It does not sign in, submit forms, follow redirects, or exploit findings. If you are allowed to test only a specific path, do not use this quick scan.",
+      "Scope: https://example.com:443, not only /account. Nuclei applies matching pinned read-only checks at max 10/s, 5 concurrent, and 10s timeout. No sign-in, forms, redirects, or exploitation. Start only with permission for the full origin.",
     );
   });
   expect(container.querySelector(".coverage-review-timing")?.textContent).toBe(
@@ -1143,7 +1143,7 @@ test("an internal website uses the fixed Nuclei profile only after explicit priv
   });
 
   await waitFor(() => expect(container.querySelector(".coverage-guided-boundary")?.textContent).toContain(
-    "Website to check: https://app.internal.test:8443, not only the entered page path /health.",
+    "Scope: https://app.internal.test:8443, not only /health.",
   ));
 
   expect(container.querySelector(".scope-mode-fieldset")).toBeNull();

@@ -2527,7 +2527,7 @@ test("release-incompatible saved work is static, redacted, and not resumable", (
   assert.equal(failed?.resumable, false);
   assert.equal(
     failed?.message,
-    "這項已保存的檢查由不同版本的應用程式建立，無法安全續跑。請開始新的掃描；已保存的證據與問題不會變更。",
+    "這項已保存的檢查由不同版本的應用程式建立；請使用目前版本開始新的掃描。",
   );
   assert.equal(failed?.checkpoint?.lastError, undefined);
   assert.deepEqual(failed?.warnings, []);
@@ -2550,7 +2550,7 @@ test("an invalid saved work plan preserves data without offering another resume 
   assert.equal(failed?.resumable, false);
   assert.equal(
     failed?.message,
-    "這項已保存的檢查無法對應到原本的目標計畫。這次沒有重新執行，也沒有連線到任何目標；請開始新的掃描，既有資料仍會保留。",
+    "這項已保存的檢查已無法對應原本的目標計畫；請開始新的掃描。",
   );
   assert.equal(failed?.checkpoint?.lastError, undefined);
   assert.deepEqual(failed?.warnings, []);
@@ -2574,9 +2574,9 @@ test("ambiguous cleanup identity never offers an unsafe cleanup retry", () => {
   assert.deepEqual(failed?.warnings, []);
   assert.equal(
     failed?.message,
-    "這項檢查已安全結束，較舊的資料與結果都已保留。需要新結果時請開始新的掃描；不需要做其他處理。",
+    "請開始新的掃描取得新結果。",
   );
-  assert.doesNotMatch(failed?.message ?? "", /runtime|identity|cleanup|執行環境|識別|清理/iu);
+  assert.doesNotMatch(failed?.message ?? "", /runtime|identity|cleanup|執行環境|識別|清理|安全|保留/iu);
   assert.doesNotMatch(JSON.stringify(failed), /RAW_CLEANUP_SENTINEL|private-runtime-path/u);
 });
 
@@ -2605,9 +2605,9 @@ test("preserved-cleanup phases override a legacy error code without leaking or o
     assert.deepEqual(failed?.warnings, []);
     assert.equal(
       failed?.message,
-      "這項檢查已安全結束，較舊的資料與結果都已保留。需要新結果時請開始新的掃描；不需要做其他處理。",
+      "請開始新的掃描取得新結果。",
     );
-    assert.doesNotMatch(failed?.message ?? "", /runtime|identity|cleanup|執行環境|識別|清理/iu);
+    assert.doesNotMatch(failed?.message ?? "", /runtime|identity|cleanup|執行環境|識別|清理|安全|保留/iu);
     assert.doesNotMatch(JSON.stringify(failed), /RAW_PHASE_SENTINEL|egress gateway exited/u);
   }
 });

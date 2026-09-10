@@ -2178,18 +2178,18 @@ export const adaptNativeCase = (
         findingCountKnown: !hasLegacyUnattributedEvidence,
         message: releaseIncompatible
           ? adapterText(
-            "This saved check was created by a different app release and cannot be continued safely. Start a new scan; saved evidence and findings remain unchanged.",
-            "這項已保存的檢查由不同版本的應用程式建立，無法安全續跑。請開始新的掃描；已保存的證據與問題不會變更。",
+            "This saved check was created by a different app release. Start a new scan with this release.",
+            "這項已保存的檢查由不同版本的應用程式建立；請使用目前版本開始新的掃描。",
           )
           : savedWorkPlanUnavailable
           ? adapterText(
-            "This saved check could not be matched to its original target plan. Nothing was rerun and no target was contacted. Start a new scan; existing data remains available.",
-            "這項已保存的檢查無法對應到原本的目標計畫。這次沒有重新執行，也沒有連線到任何目標；請開始新的掃描，既有資料仍會保留。",
+            "This saved check no longer matches its original target plan. Start a new scan.",
+            "這項已保存的檢查已無法對應原本的目標計畫；請開始新的掃描。",
           )
           : cleanupIdentityUnavailable
           ? adapterText(
-            "This check ended safely, and its older data and results were kept. Start a new scan when you want fresh results; nothing else is required.",
-            "這項檢查已安全結束，較舊的資料與結果都已保留。需要新結果時請開始新的掃描；不需要做其他處理。",
+            "Start a new scan for fresh results.",
+            "請開始新的掃描取得新結果。",
           )
           : failureKind === "gateway_preparation_failed"
           ? adapterText(

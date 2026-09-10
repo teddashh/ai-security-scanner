@@ -710,7 +710,7 @@ test("browser local setup is an honest preview and never claims to read a folder
   });
 
   expect(container.textContent).toContain("Browser preview cannot read a local folder");
-  expect(container.textContent).toContain("No folder is read or copied here");
+  expect(container.textContent).toContain("Create a preview project to see the review steps");
   expect(getByRole<HTMLButtonElement>("button", { name: /Choose the infrastructure-code folder/u }).disabled).toBe(true);
   fireEvent.click(getByRole("button", { name: "Create preview project" }));
 
@@ -985,7 +985,7 @@ test("the empty native project list offers and opens the synthetic example", asy
   const { container, getByRole } = render(<Harness />);
 
   const action = getByRole("button", { name: "See an example project" });
-  expect(container.textContent).toContain("synthetic demonstration project");
+  expect(container.textContent).toContain("synthetic example project");
   fireEvent.click(action);
 
   await waitFor(() => expect(onSeedDemo).toHaveBeenCalledTimes(1));

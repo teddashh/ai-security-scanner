@@ -341,7 +341,7 @@ test("collapsing every check into one shared failure still states how many stopp
   expect(container.querySelectorAll(".engine-row").length).toBe(0);
   expect(container.querySelectorAll(".aggregate-engine-record").length).toBe(2);
   // ...so the count and the reason have to carry it instead.
-  expect(container.textContent).toContain("stopped 2 checks before they inspected anything");
+  expect(container.textContent).toContain("stopped 2 checks");
   expect(container.textContent).toContain("The private scan engine did not start");
   expect(container.textContent).toContain("Technical records — checks: 2");
 

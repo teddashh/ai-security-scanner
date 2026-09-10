@@ -46,9 +46,7 @@ const region = (source: string, from: string, lines: number): string => {
   return source.slice(start).split("\n").slice(0, lines).join("\n");
 };
 
-test("the panel names the report heading the unrunnable check is actually listed under", () => {
-  // The two literals have to be identical, per locale, or the sentence sends the
-  // user looking for a section that is not there.
+test("the panel gives a direct version action without report disclaimers", () => {
   const english = findingsPage.match(/gapsTitle: \{ en: "([^"]+)"/u)?.[1];
   const chinese = findingsPage.match(/gapsTitle: \{ en: "[^"]+", zhTW: "([^"]+)"/u)?.[1];
   assert.ok(english, "gapsTitle was not found; the extraction above is stale");
@@ -57,18 +55,12 @@ test("the panel names the report heading the unrunnable check is actually listed
 
   const nonRetryable = panel.match(/nonRetryableDescription: "([^"]+)"/u)?.[1];
   assert.ok(nonRetryable, "nonRetryableDescription was not found");
-  assert.ok(
-    nonRetryable.includes(english.toLowerCase()),
-    `the panel must name the "${english}" section it promises the check appears in`,
-  );
-  assert.match(nonRetryable, /never as a pass/u);
+  assert.equal(nonRetryable, "Install a compatible app version to run this advanced check.");
+  assert.doesNotMatch(nonRetryable, /report|saved results|never as a pass/u);
 
   const chineseNonRetryable = panel.match(/nonRetryableDescription: "([^"]*[^\x00-\x7F][^"]*)"/u)?.[1];
   assert.ok(chineseNonRetryable, "the Traditional Chinese nonRetryableDescription was not found");
-  assert.ok(
-    chineseNonRetryable.includes(chinese),
-    `the Traditional Chinese panel must name the "${chinese}" section`,
-  );
+  assert.equal(chineseNonRetryable, "請安裝相容的程式版本，再執行這項進階檢查。");
 });
 
 test("the panel does not claim the counter that this failure path leaves at zero", () => {
@@ -104,7 +96,7 @@ test("every check that did not complete is listed, so the panel's promise has so
   assert.match(findingsPage, /report\.coverageGaps\.map\(\(gap, index\) => \{/u);
 });
 
-test("the no-runnable blocker means no sibling check survives, and the panel says so", () => {
+test("the no-runnable blocker gives one version action", () => {
   // Both halves are load-bearing: the count is taken over `compatible`, and the
   // blocker fires only at zero. Either one changing would make "no check in
   // this version can run for this target" wrong in the opposite direction.
@@ -123,9 +115,7 @@ test("the no-runnable blocker means no sibling check survives, and the panel say
   )?.[1];
   assert.ok(blocked, "the no_runnable_authorized_targets description was not found");
   assert.doesNotMatch(blocked, /Other available checks can continue/u);
-  assert.match(blocked, /No check in this version can run for this target/u);
-  // The half that is kept: a run still persists and the report still names it.
-  assert.match(blocked, /report will still name this coverage gap/u);
+  assert.equal(blocked, "Install the latest app version, then check availability again.");
 });
 
 test("the setup panel and the readiness banner agree about the same blocker code", () => {
@@ -135,7 +125,7 @@ test("the setup panel and the readiness banner agree about the same blocker code
     /no_runnable_authorized_targets: \{\s*en: "([^"]+)"/u,
   )?.[1];
   assert.ok(banner, "the App.tsx blocker copy was not found");
-  assert.match(banner, /this version has no working scan tool for it/u);
+  assert.match(banner, /This version has no working scan tool for this target/u);
 
   const blocked = panel.match(
     /no_runnable_authorized_targets: \{\s*title: "[^"]+",\s*description: "([^"]+)"/u,

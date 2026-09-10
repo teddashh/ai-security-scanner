@@ -31,10 +31,10 @@ export const localProfileByAssessmentIntent: Partial<Record<UseCaseId, LocalInpu
 export const localInputDefinitions: Record<LocalInputProfile, LocalInputDefinition> = {
   repository_working_tree: {
     label: bilingual("Source-code project", "程式碼專案"),
-    detail: bilingual("Check one local project without changing its files.", "在本機檢查一個專案，不會修改任何檔案。"),
+    detail: bilingual("Check one local source-code project.", "檢查一個本機程式碼專案。"),
     formTitle: bilingual("Choose the source code you want checked", "選擇想檢查的程式碼"),
-    formIntro: bilingual("Pick one project folder. We'll check it locally for risky code, exposed secrets, software components, and vulnerable packages without changing its files.", "選擇一個專案資料夾；我們會在本機檢查危險程式碼、暴露的秘密、軟體元件與有弱點的套件，不會修改任何檔案。"),
-    cautionTitle: bilingual("Your project stays local and unchanged", "專案留在本機，檔案不會被修改"),
+    formIntro: bilingual("Pick one project folder to check for risky code, exposed secrets, software components, and vulnerable packages.", "選擇一個專案資料夾，檢查危險程式碼、暴露的秘密、軟體元件與有弱點的套件。"),
+    cautionTitle: bilingual("Scan a private local copy", "掃描私密的本機副本"),
     cautionBody: bilingual("Only the selected folder is copied into the private local scan. Detected secret values are masked in results.", "只會把選定資料夾複製到私密的本機掃描；找到的秘密值會在結果中遮罩。"),
     directoryLabel: bilingual("Source-code folder", "程式碼資料夾"),
     selection: bilingual("Choose the source-code folder", "選擇程式碼資料夾"),
@@ -44,7 +44,7 @@ export const localInputDefinitions: Record<LocalInputProfile, LocalInputDefiniti
   },
   iac_working_tree: {
     label: bilingual("Infrastructure-code project", "基礎設施程式碼專案"),
-    detail: bilingual("Check the Terraform, JSON, and YAML files in one project folder without changing them.", "檢查一個專案資料夾內的 Terraform、JSON 與 YAML 檔案，不會修改內容。"),
+    detail: bilingual("Check the Terraform, JSON, and YAML files in one project folder.", "檢查一個專案資料夾內的 Terraform、JSON 與 YAML 檔案。"),
     formTitle: bilingual("Choose the infrastructure code you want checked", "選擇想檢查的基礎設施程式碼"),
     formIntro: bilingual("Pick the folder that contains your Terraform, CloudFormation, JSON, or YAML deployment files. We'll look for risky settings before they go live.", "選擇包含 Terraform、CloudFormation、JSON 或 YAML 部署檔案的資料夾；我們會在上線前找出危險設定。"),
     cautionTitle: bilingual("Remove secret values from deployment files first", "請先移除部署檔案中的秘密值"),
@@ -100,7 +100,7 @@ const aiApplicationInputDefinition: LocalInputDefinition = {
   ...localInputDefinitions.repository_working_tree,
   label: bilingual("Code you wrote or generated with AI", "自己寫或 AI 生成的程式碼"),
   formTitle: bilingual("Choose code you wrote or generated with AI", "選擇自己寫或 AI 生成的程式碼"),
-  formIntro: bilingual("Pick the AI app or agent project folder. We'll check it locally for risky code, exposed secrets, vulnerable packages, and related deployment settings without changing its files.", "選擇 AI 應用或 Agent 的專案資料夾；我們會在本機檢查危險程式碼、暴露的秘密、有弱點的套件與相關部署設定，不會修改任何檔案。"),
+  formIntro: bilingual("Pick the AI app or agent project folder to check for risky code, exposed secrets, vulnerable packages, and related deployment settings.", "選擇 AI 應用或 Agent 的專案資料夾，檢查危險程式碼、暴露的秘密、有弱點的套件與相關部署設定。"),
   attachAction: bilingual("Add this AI project", "加入這份 AI 專案"),
   createAction: bilingual("Create scan with this AI project", "用這份 AI 專案建立掃描"),
 };

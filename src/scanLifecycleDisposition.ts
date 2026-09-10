@@ -201,12 +201,12 @@ const finalResultDetail = (
   const outcome = localhostResult ?? result[status];
   return action === "cancel"
     ? {
-        en: `The check ${outcome.en} before the stop request could take effect. That saved result was kept.`,
-        zhTW: `這項檢查在停止要求生效前${outcome.zhTW}；該結果已完整保留。`,
+        en: `The check ${outcome.en} before the stop request took effect.`,
+        zhTW: `這項檢查在停止要求生效前${outcome.zhTW}。`,
       }
     : {
-        en: `The check ${outcome.en} before the continue request could take effect. That saved result was kept; nothing was restarted.`,
-        zhTW: `這項檢查在繼續要求生效前${outcome.zhTW}；該結果已完整保留，也沒有重新執行。`,
+        en: `The check ${outcome.en} before the continue request took effect.`,
+        zhTW: `這項檢查在繼續要求生效前${outcome.zhTW}。`,
       };
 };
 
@@ -238,8 +238,8 @@ export const scanLifecycleToastPresentation = (
           tone: "info",
           title: { en: "Stop requested", zhTW: "已要求停止" },
           detail: {
-            en: "The saved scan state shows that active work is stopping. Progress will show Cancelled only after it stops.",
-            zhTW: "已保存的掃描狀態顯示作用中的工作正在停止。工作停止後，進度才會顯示「已取消」。",
+            en: "Active scan work is stopping.",
+            zhTW: "作用中的掃描工作正在停止。",
           },
         };
   }
@@ -248,8 +248,8 @@ export const scanLifecycleToastPresentation = (
       tone: "success",
       title: { en: "This check is cancelled", zhTW: "這項檢查已取消" },
       detail: {
-        en: "The check stopped. Any results saved before it stopped remain available.",
-        zhTW: "這項檢查已停止；停止前保存的任何結果仍可查看。",
+        en: "The check stopped.",
+        zhTW: "這項檢查已停止。",
       },
     };
   }

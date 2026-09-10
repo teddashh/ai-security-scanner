@@ -21,11 +21,12 @@ const { scanRequestOutcomeBeginnerSummary } = await import(
 );
 
 test("every no-checks code has stable bilingual first-layer guidance", () => {
-  for (const code of [
-    "no_effective_scope_grants",
-    "no_ownership_confirmed_targets",
-    "no_applicable_checks",
-  ] as const) {
+  const reasons = {
+    no_effective_scope_grants: ["The saved permission was missing or expired.", "已保存的許可不存在或已過期。"],
+    no_ownership_confirmed_targets: ["None of the selected targets was confirmed as yours.", "所選目標都還沒有確認為你所控制。"],
+    no_applicable_checks: ["No available check matched what you selected.", "目前沒有可用的檢查符合你選擇的內容。"],
+  } as const;
+  for (const code of Object.keys(reasons) as Array<keyof typeof reasons>) {
     const outcome: ScanRequestOutcome = {
       status: "no_checks_completed",
       code,
@@ -38,9 +39,9 @@ test("every no-checks code has stable bilingual first-layer guidance", () => {
     assert.equal(summary.title.zhTW, "沒有完成任何檢查");
     assert.ok(summary.title.en);
     assert.ok(summary.title.zhTW);
-    assert.match(summary.description.en, /No target was contacted/u);
-    assert.match(summary.description.en, /not a result with zero problems/u);
-    assert.match(summary.description.zhTW, /不代表問題數量是零/u);
+    assert.equal(summary.description.en, reasons[code][0]);
+    assert.equal(summary.description.zhTW, reasons[code][1]);
+    assert.doesNotMatch(summary.description.en, /No target was contacted|not a result with zero problems/u);
     assert.ok(summary.nextStep.en);
     assert.ok(summary.nextStep.zhTW);
   }

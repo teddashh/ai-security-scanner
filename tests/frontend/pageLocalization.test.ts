@@ -43,15 +43,17 @@ test("non-scan actions use truthful saved-state toasts while scan execution keep
 
   for (const [english, traditionalChinese] of [
     ["Project prepared locally", "專案已在本機準備完成"],
-    ["Private copy verified; no scan started.", "私密副本已驗證；尚未開始掃描。"],
+    ["Private copy verified. Review the checks, then start.", "私密副本已驗證；請檢查掃描項目後開始。"],
     ["Project was not prepared", "專案尚未準備完成"],
     ["Scan access saved", "掃描許可已儲存"],
-    ["The exact target and limits are saved; no scan started.", "確切目標與限制已儲存；尚未開始掃描。"],
+    ["The exact target and limits are saved.", "確切目標與限制已儲存。"],
     ["Change saved", "變更已儲存"],
   ] as const) {
     assert.ok(copyMap.includes(english), english);
     assert.ok(copyMap.includes(traditionalChinese), traditionalChinese);
   }
+
+  assert.doesNotMatch(copyMap, /no scan started|尚未開始掃描/u);
 
   assert.doesNotMatch(copyMap, /"start-scan"|\brescan:|"resume-scan"/u);
   const actionStart = app.indexOf("const executeAction = async");
@@ -85,8 +87,8 @@ test("all progress controls remain wired while raw scanner status stays in detai
   }
   assert.doesNotMatch(source, /<code>error:\s*\{engine\.errorCode\}/u);
   assert.doesNotMatch(source, /<small>\{engine\.category\}[\s\S]*\{engine\.version\}<\/small>/u);
-  assert.match(source, /A check that did not run is not a passed check/u);
-  assert.match(source, /未執行的檢查不能視為已通過/u);
+  assert.match(source, /Status: not run\./u);
+  assert.match(source, /狀態：未執行。/u);
 });
 
 test("scan readiness only blocks unsafe empty runs and sends each fix to the useful screen", async () => {
@@ -101,8 +103,8 @@ test("scan readiness only blocks unsafe empty runs and sends each fix to the use
   assert.match(progress, /先完成一次設定，就可以開始掃描/u);
   assert.match(progress, /Connect the cloud account you want to scan/u);
   assert.match(progress, /請先連接你要掃描的雲端帳號/u);
-  assert.match(progress, /Nothing was scanned/u);
-  assert.match(progress, /這次其實沒有開始掃描/u);
+  assert.match(progress, /Scan did not start/u);
+  assert.match(progress, /掃描沒有開始/u);
   assert.match(progress, /Download diagnostic log/u);
   assert.match(progress, /下載診斷紀錄/u);
 
@@ -174,8 +176,9 @@ test("cloud readiness failures use distinct plain-language fixes without exposin
   const ambiguousStart = progress.indexOf("provider_source_ambiguous:", capabilityStart);
   assert.match(progress.slice(capabilityStart, ambiguousStart), /reconnectCloud/u);
   assert.doesNotMatch(progress.slice(ambiguousStart), /action: copy\.reconnectCloud/u);
-  assert.match(progress, /No scan started/u);
-  assert.match(progress, /掃描尚未開始/u);
+  assert.match(progress, /The cloud readiness check did not finish/u);
+  assert.match(progress, /雲端準備狀態檢查尚未完成/u);
+  assert.doesNotMatch(progress, /No scan started|掃描尚未開始/u);
   assert.doesNotMatch(progress, /readiness\.(?:message|detail|error)/u);
 });
 
@@ -204,22 +207,22 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
     ["Choose the local files again", "請重新選擇本機檔案"],
     ["Reconnect the saved data source", "請重新連接已保存的資料來源"],
     ["Restore one installed scan component", "恢復一項安裝元件"],
-    ["The app could not finish checking the selected inputs and scan tools", "程式尚未完成所選輸入與掃描工具的準備檢查"],
-    ["Review the results that are still available", "請查看目前仍可用的結果"],
+    ["The selected-input and scan-tool check did not finish", "所選輸入與掃描工具的準備檢查尚未完成"],
+    ["Open the saved results", "開啟已保存的結果"],
   ] as const) {
     assert.ok(progress.includes(english), english);
     assert.ok(progress.includes(traditionalChinese), traditionalChinese);
   }
 
   for (const [english, traditionalChinese] of [
-    ["This target is ready, but this version has no working scan tool for it", "目標已準備好，但這個版本沒有可執行這項檢查的工具"],
+    ["This version has no working scan tool for this target", "目前版本沒有可執行這個目標的掃描工具"],
     ["The saved local copy is missing or changed", "掃描用的本機副本已遺失或有變更"],
     ["An installed scan component is missing or changed", "一項隨附的掃描元件已遺失或變更"],
     ["A required installed scan component is missing or out of date", "一項必要的隨附掃描元件已遺失或過期"],
     ["The saved read-only data source is missing or changed", "已保存的唯讀資料來源已遺失或有變更"],
-    ["The final readiness check could not finish", "最後的準備狀態檢查尚未完成"],
-    ["The saved results needed to continue are missing or changed", "續跑所需的已保存結果已遺失或有變更"],
-    ["This saved check could not be matched to its original target plan", "這項已保存的檢查無法對應到原本的目標計畫"],
+    ["The final readiness check did not finish", "最後的準備狀態檢查未完成"],
+    ["Saved results needed to continue are missing or changed", "續跑所需的已保存結果已遺失或有變更"],
+    ["This saved check no longer matches its original target plan", "這項已保存的檢查已無法對應原本的目標計畫"],
   ] as const) {
     assert.ok(app.includes(english), english);
     assert.ok(app.includes(traditionalChinese), traditionalChinese);
@@ -251,8 +254,8 @@ test("missing captured evidence never offers resume or setup and starts fresh on
   for (const copy of [
     "Start a new scan for fresh results",
     "開始新的掃描取得新結果",
-    "Nothing was rerun",
-    "這次沒有重新執行任何檢查",
+    "Saved results or evidence needed to continue are missing or changed. Start a new scan",
+    "續跑所需的已保存結果或證據已遺失或變更；請開始新的掃描",
   ]) {
     assert.ok(progress.includes(copy) || app.includes(copy), copy);
   }
@@ -276,14 +279,12 @@ test("missing captured evidence never offers resume or setup and starts fresh on
   assert.doesNotMatch(app.slice(actionStart, actionEnd), /detail:\s*result\.data\.message/u);
 });
 
-test("release-incompatible resume explains the safe next step without exposing native error text", async () => {
+test("release-incompatible resume explains the next step without exposing native error text", async () => {
   const app = await readFile(new URL("../../src/App.tsx", import.meta.url), "utf8");
 
   for (const copy of [
-    "This unfinished scan was created by a different app release and cannot be continued safely.",
-    "Nothing was rerun. Start a new scan; saved evidence and findings remain unchanged.",
-    "這個未完成的掃描由不同版本的應用程式建立，無法安全續跑。",
-    "這次沒有重新執行任何檢查；請開始新的掃描，已保存的證據與問題不會變更。",
+    "This unfinished scan was created by a different app release. Start a new scan with this release.",
+    "這個未完成的掃描由不同版本的應用程式建立；請使用目前版本開始新的掃描。",
   ]) {
     assert.ok(app.includes(copy), copy);
   }
@@ -353,8 +354,8 @@ test("readiness errors remain retryable and runtime setup receives focus", async
   for (const copy of [
     "We could not check what is ready",
     "目前無法確認掃描準備狀態",
-    "No scan started and nothing changed. Check again now.",
-    "掃描尚未開始，也沒有變更任何資料；請立即重新檢查。",
+    "Check readiness again.",
+    "請重新檢查準備狀態。",
   ]) assert.ok(progress.includes(copy), copy);
 });
 

@@ -111,7 +111,7 @@ test("known setup failures lead to the matching automatic next step", () => {
   assert.match(tools.zhTW, /自動準備/u);
 });
 
-test("preserved older data recommends a new scan without first-layer infrastructure jargon", () => {
+test("an unavailable cleanup identity recommends a new scan without infrastructure jargon", () => {
   const action = engineNextStepFor(engine({
     status: "failed",
     phase: "cleanup_identity_unavailable",
@@ -120,10 +120,9 @@ test("preserved older data recommends a new scan without first-layer infrastruct
     resumable: false,
   }));
 
-  assert.match(action.en, /older data and results were kept/u);
   assert.match(action.en, /Start a new scan/u);
-  assert.match(action.en, /nothing else is required/u);
-  assert.match(action.zhTW, /較舊的資料與結果都已保留/u);
+  assert.match(action.zhTW, /開始新的掃描取得新結果/u);
+  assert.doesNotMatch(`${action.en} ${action.zhTW}`, /older data|nothing else|較舊|保留/iu);
   assert.doesNotMatch(`${action.en} ${action.zhTW}`, /runtime|identity|cleanup|執行環境|識別|清理/iu);
 });
 

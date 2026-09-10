@@ -148,8 +148,8 @@ test("progress hides pause and resume for the exact task and makes a stop reques
     /terminalLocalhostSummary\.outcome === "reachable"[\s\S]{0,160}needsFreshLocalhostTcpAttempt/u,
   );
   assert.match(progress, /onRetryLocalhostQuickScan\(terminalLocalhostSummary\.port\)/u);
-  assert.match(progress, /Running it again creates a new saved attempt for 127\.0\.0\.1:\{port\}\. This result stays unchanged\./u);
-  assert.match(progress, /重新執行會為 127\.0\.0\.1:\{port\} 建立一筆新的已保存嘗試；這筆結果會保持不變。/u);
+  assert.match(progress, /Create a new connection-test attempt for 127\.0\.0\.1:\{port\}\./u);
+  assert.match(progress, /為 127\.0\.0\.1:\{port\} 建立新的連線測試嘗試。/u);
   assert.match(progress, /\{!terminalExactLocalhostQuickScan && readinessCheckFailed/u);
   assert.match(progress, /\{!terminalExactLocalhostQuickScan && readiness && !readiness\.ready/u);
   assert.match(progress, /const localhostCancelRequested = isLocalhostQuickScanCancelRequested\(selectedRun\)/u);

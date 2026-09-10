@@ -158,10 +158,10 @@ test("every low-impact IPv4 CIDR setup gets an effective-rate and host-ceiling w
   for (const phrase of [
     "Pacing floor: {effectiveRate}/s; requested rate: {requestedRate}/s; concurrency: {concurrency}.",
     "速率下限採用每秒 {effectiveRate} 次檢查，也就是每秒請求 {requestedRate} 次與 {concurrency} 個並行檢查中較低的數值。",
-    "The host scanner stops after a fixed {ceilingHours} hr.",
-    "主機掃描器會在固定 {ceilingHours} 小時後停止。",
-    "may stop incomplete before every address and port is checked",
-    "可能在檢查完所有位址與連接埠前停止並留下不完整結果",
+    "Estimated upper bound: {upperHours} hr {upperMinutes} min; scanner limit: {ceilingHours} hr.",
+    "預估上限：{upperHours} 小時 {upperMinutes} 分鐘；掃描限制：{ceilingHours} 小時。",
+    "Narrow the CIDR, ports, or {timeout}-second timeout before starting.",
+    "開始前請縮小 CIDR、連接埠或 {timeout} 秒逾時。",
   ]) assert.ok(source.includes(phrase), phrase);
   assert.match(source, /networkScanEstimate\.mayExceedEngineCeiling[\s\S]*durationCeilingRiskBody[\s\S]*durationCeilingWithinBody/u);
 });
@@ -280,7 +280,7 @@ test("cloud sign-in leads to one exact read-only scan confirmation instead of an
   assert.match(source, /guidedCloudConsent \? \([\s\S]*pageCopy\.changeScanType/u);
   for (const [english, traditionalChinese] of [
     ["Signed-in account: {account}", "已登入帳號：{account}"],
-    ["Read-only checks: {checks}. No cloud settings or data will be changed.", "唯讀檢查：{checks}。不會修改雲端設定或資料。"],
+    ["Signed-in account: {account} · Read-only checks: {checks}.", "已登入帳號：{account} · 唯讀檢查：{checks}。"],
     ["Scan this signed-in account", "掃描這個已登入帳號"],
   ]) {
     assert.ok(source.includes(english), english);
@@ -371,18 +371,18 @@ test("choosing a local folder authorizes its private read-only snapshot without 
     assert.ok(!source.includes(retired), `retired duplicate local consent remains: ${retired}`);
   }
   for (const phrase of [
-    "Saved copy: {copy} · Read-only checks: {checks}. The original source stays unchanged.",
-    "已保存副本：{copy} · 唯讀檢查：{checks}。原始來源不會被修改。",
+    "Saved copy: {copy} · Read-only checks: {checks}.",
+    "已保存副本：{copy} · 唯讀檢查：{checks}。",
   ]) assert.ok(source.includes(phrase), phrase);
   assert.match(source, /guidedLocalConsent && \([\s\S]*pageCopy\.guidedLocalBoundary[\s\S]*copy: selectedScopeAssets\.map[\s\S]*checks: scopeModes\.map/u);
 });
 
-test("source-code setup says local, masked, and unchanged instead of asking users to remove secrets", () => {
+test("source-code setup says private and masked instead of asking users to remove secrets", () => {
   for (const phrase of [
     "Code you wrote or generated with AI",
     "自己寫或 AI 生成的程式碼",
-    "Your project stays local and unchanged",
-    "專案留在本機，檔案不會被修改",
+    "Scan a private local copy",
+    "掃描私密的本機副本",
     "Detected secret values are masked in results",
     "找到的秘密值會在結果中遮罩",
   ]) {
@@ -449,8 +449,8 @@ test("guided selection status is honest and does not keep prompting after auto-s
 
 test("saved permission without a scan attempt is shown as ready instead of failed", () => {
   for (const phrase of [
-    "Permission is saved. No scan has started for this item yet.",
-    "掃描許可已儲存，這個項目尚未開始掃描。",
+    "Permission is saved. Start this item when ready.",
+    "掃描許可已儲存；準備好後即可開始這個項目。",
     "Permission is saved. Start the scan from Scan progress.",
     "掃描許可已儲存；請到「掃描進度」開始掃描。",
     "Not scanned yet",

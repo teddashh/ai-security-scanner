@@ -808,7 +808,7 @@ test("a packaged surface with a missing bridge stays native and fails visibly", 
   assert.equal(packagedScannerService.isNative(), true);
   await assert.rejects(
     () => packagedScannerService.getSnapshot(),
-    /(?:desktop service is not ready.*No sample data was substituted|桌面服務尚未就緒.*沒有改用範例資料)/iu,
+    /(?:desktop service is starting.*Keep the app open|桌面服務正在啟動.*請讓程式保持開啟)/iu,
   );
 
   const manifests = await packagedScannerService.listEngineManifests();

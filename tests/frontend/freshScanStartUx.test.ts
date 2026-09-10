@@ -113,8 +113,8 @@ test("fresh-start feedback is visible, bilingual, and does not invent a scan rec
   for (const phrase of [
     "Starting your scan…",
     "正在開始掃描…",
-    "The app is still creating the new scan entry, so per-tool progress is not available yet.",
-    "程式仍在建立新的掃描紀錄，因此目前還沒有各工具進度可顯示",
+    "Creating the scan entry. Per-tool progress appears next.",
+    "正在建立掃描紀錄；接著會顯示各工具進度。",
     "Starting a new scan…",
     "正在開始新的掃描…",
   ]) assert.ok(progress.includes(phrase), phrase);
@@ -128,7 +128,7 @@ test("fresh-start feedback is visible, bilingual, and does not invent a scan rec
   assert.doesNotMatch(historyStartingNotice, /selectedRun\.id|runIdTitle/u);
 });
 
-test("release-incompatible saved checks offer a static safe fresh-scan path", async () => {
+test("release-incompatible saved checks offer a direct fresh-scan path", async () => {
   const [progress, presentation] = await Promise.all([
     readSource("src/pages/ProgressPage.tsx"),
     readSource("src/scanPresentation.ts"),
@@ -137,13 +137,15 @@ test("release-incompatible saved checks offer a static safe fresh-scan path", as
   for (const phrase of [
     "Some saved checks need a new scan",
     "部分已保存的檢查需要新的掃描",
-    "Nothing from the earlier scan will be rerun or changed.",
-    "先前掃描的內容不會重新執行或變更",
-    "Compatible saved checks can still continue.",
-    "相容的已保存檢查仍可繼續",
-    "this project is not ready yet",
-    "這個專案尚未準備完成",
+    "These checks were created by a different app release. Start a new scan to run them with this release.",
+    "這些檢查由不同版本建立；請開始新的掃描，以目前版本執行。",
+    "Compatible checks can continue here.",
+    "相容的檢查可在這裡繼續",
+    "Complete the readiness step below",
+    "完成下方的準備步驟",
   ]) assert.ok(progress.includes(phrase), phrase);
+
+  assert.doesNotMatch(progress, /Nothing from the earlier scan|先前掃描的內容不會重新執行/u);
 
   assert.match(
     progress,
@@ -176,7 +178,7 @@ test("release-incompatible saved checks offer a static safe fresh-scan path", as
     /if \(engine\.errorCode === "resume_work_plan_invalid"\) return nextStepCopy\.savedPlanUnavailable/u,
   );
   assert.ok(
-    presentation.includes("The saved scan stays unchanged."),
+    presentation.includes("Start a new scan to run this check with the installed release."),
     "the per-check next step must not suggest retrying frozen work",
   );
 });

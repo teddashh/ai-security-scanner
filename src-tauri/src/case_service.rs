@@ -4550,7 +4550,7 @@ impl<'a> CaseService<'a> {
                             checkpoint.stage = ExecutionStage::Failed;
                         }
                         checkpoint.last_error = Some(
-                            "The app closed while preparing this check. No target was contacted; retry continues from the saved plan."
+                            "The app closed while preparing this check. Retry from the saved plan."
                                 .into(),
                         );
                         engine_run.status = EngineRunStatus::Failed;
@@ -8339,7 +8339,7 @@ pub(crate) fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
             "the saved cloud connection does not match this scan target"
         }
         ScanReadinessBlocker::ProviderPreflightUnavailable => {
-            "cloud readiness could not be checked; no scan started; retry the readiness check"
+            "cloud readiness could not be checked; retry the readiness check"
         }
         ScanReadinessBlocker::WorkspaceSnapshotUnavailable => {
             "the prepared workspace snapshot is unavailable; prepare the scan inputs again"
@@ -8357,7 +8357,7 @@ pub(crate) fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
             "saved scan evidence needed to continue is missing or changed; start a new scan for fresh results"
         }
         ScanReadinessBlocker::ExecutionPreflightUnavailable => {
-            "execution readiness could not be checked; no scan started; retry the readiness check"
+            "execution readiness could not be checked; retry the readiness check"
         }
     };
     let detail = format!(

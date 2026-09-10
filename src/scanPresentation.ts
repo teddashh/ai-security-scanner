@@ -120,8 +120,8 @@ const nextStepCopy = {
     zhTW: "這項檢查已開始但沒有完成；請下載診斷紀錄後再重試。",
   },
   executionUnknown: {
-    en: "This check stopped without enough detail to blame setup. Download the diagnostic log, then retry it.",
-    zhTW: "目前沒有足夠資訊判定是設定問題；請下載診斷紀錄後重試這項檢查。",
+    en: "This check stopped. Download the diagnostic log, then retry it.",
+    zhTW: "這項檢查已停止；請下載診斷紀錄後重試。",
   },
   cleanupPending: {
     en: "Review the saved results and cleanup status, then retry after cleanup finishes.",
@@ -140,16 +140,16 @@ const nextStepCopy = {
     zhTW: "這些檢查在目前版本無法使用；請先查看已完成的結果，更新程式後再試。",
   },
   releaseIncompatible: {
-    en: "Start a new scan to run this check with the installed release. The saved scan stays unchanged.",
-    zhTW: "請開始新的掃描，以目前安裝的版本執行這項檢查；已保存的掃描不會變更。",
+    en: "Start a new scan to run this check with the installed release.",
+    zhTW: "請開始新的掃描，以目前安裝的版本執行這項檢查。",
   },
   savedPlanUnavailable: {
-    en: "Start a new scan for this check. Its older data was preserved, and no target was contacted.",
-    zhTW: "請為這項檢查開始新的掃描。較舊的資料已保留，而且這次沒有連線到任何目標。",
+    en: "Start a new scan for this check.",
+    zhTW: "請為這項檢查開始新的掃描。",
   },
   cleanupIdentityUnavailable: {
-    en: "This check ended safely, and its older data and results were kept. Start a new scan when you want fresh results; nothing else is required.",
-    zhTW: "這項檢查已安全結束，較舊的資料與結果都已保留。需要新結果時請開始新的掃描；不需要做其他處理。",
+    en: "Start a new scan for fresh results.",
+    zhTW: "請開始新的掃描取得新結果。",
   },
   mixedSkippedSetup: {
     en: "Finish the target or cloud step shown, then try the unfinished checks again. The app prepares its scan tools automatically.",

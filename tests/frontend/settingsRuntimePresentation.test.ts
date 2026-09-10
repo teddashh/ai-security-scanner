@@ -26,8 +26,8 @@ test("settings presents an authoritative false runtime as unavailable", () => {
 
   assert.equal(presentation.state, "unavailable");
   assert.equal(presentation.icon, "warning");
-  assert.match(presentation.status.en, /last check.*unavailable/u);
-  assert.match(presentation.status.zhTW, /上次檢查.*無法使用/u);
+  assert.match(presentation.status.en, /scan tools are unavailable/u);
+  assert.match(presentation.status.zhTW, /掃描工具無法使用/u);
 });
 
 test("settings presents undefined runtime truth as not yet checked", () => {
@@ -62,10 +62,10 @@ test("SettingsPage keeps detail-heavy lifecycle and privacy honesty collapsed", 
   assert.match(source, /<details className="settings-details">[\s\S]*Data boundaries/u);
   assert.match(source, /connections and exports can send data out/u);
   assert.match(source, /unless you connect a source or choose an export destination/u);
-  assert.match(source, /Some scan tools are unavailable · saved results are unaffected/u);
-  assert.match(source, /Retry safely continues reusable download progress/u);
-  assert.match(source, /Cancelling keeps downloaded progress; Continue resumes it/u);
-  assert.match(source, /If Windows requires a restart/u);
-  assert.match(source, /stays marked Not tested; it is never shown as passed/u);
+  assert.match(source, /Some scan tools are unavailable/u);
+  assert.match(source, /Retry reuses completed download progress/u);
+  assert.match(source, /Pause keeps the download; Continue resumes it/u);
+  assert.match(source, /After a required Windows restart/u);
+  assert.match(source, /appear as Not tested/u);
   assert.doesNotMatch(source, /<details[^>]*\sopen(?:=|\s|>)/u);
 });

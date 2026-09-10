@@ -33,10 +33,8 @@ const tauriSource = readFileSync(
 test("backend prerequisite states stay inside one user-triggered, plain-language setup path", () => {
   for (const phrase of [
     "Advanced local scan-tool setup did not finish",
-    "Your saved results and unaffected checks remain available",
     "Try advanced scan setup again",
     "進階本機掃描工具設定未能完成",
-    "已保存的結果與不受影響的檢查仍可使用",
     "再試一次進階掃描設定",
   ]) assert.ok(source.includes(phrase), phrase);
   assert.doesNotMatch(source, /localhost quick check|localhost 快速檢查/u);
@@ -74,11 +72,11 @@ test("an admitted setup can reconcile its own workspace without claiming a repla
   assert.equal(state.setupFailed, false);
   for (const phrase of [
     "Preparing a fresh advanced local scan workspace",
-    "prepares an isolated replacement for this request",
-    "Safely recovering the advanced local scan workspace",
+    "Preparing an isolated replacement workspace for this request",
+    "Recovering the advanced local scan workspace",
     "正在準備新的進階本機掃描隔離工作區",
-    "為這次要求準備隔離的新工作空間",
-    "正在安全復原進階本機掃描工作區",
+    "正在為這次要求準備隔離的新工作空間",
+    "正在復原進階本機掃描工作區",
   ]) assert.ok(source.includes(phrase), phrase);
 
   assert.match(source, /setupRecovering[\s\S]*text\.recoveryTitle/u);
@@ -104,12 +102,12 @@ test("a generic setup failure offers a retry without inventing an external actio
   assert.match(shellSource, /runtimeSetup\?\.phase === "failed"[\s\S]*"runtime\.setup\.retry"/u);
 });
 
-test("managed-runtime toasts keep the advanced-tool failure focused on preserved work", () => {
+test("managed-runtime toasts keep the advanced-tool failure focused on the next action", () => {
   for (const phrase of [
     "Advanced local scan-tool setup did not finish",
-    "Your saved results and unaffected checks remain available",
+    "Try advanced local scan preparation again",
     "進階本機掃描工具設定未能完成",
-    "已保存的結果與不受影響的檢查仍可使用",
+    "請再試一次進階本機掃描準備",
   ]) assert.ok(appSource.includes(phrase), phrase);
   assert.doesNotMatch(appSource, /localhost quick check|localhost 快速檢查/u);
 
@@ -137,11 +135,9 @@ test("an exact packaged-runtime admission failure degrades gracefully without an
   assert.equal(state.setupFailed, true);
   for (const phrase of [
     "An advanced local scan tool is unavailable in this app version",
-    "Your saved results and unaffected checks remain available",
-    "The report lists the affected advanced check under what was not tested, never as a pass",
+    "Install a compatible app version to run this advanced check",
     "這個程式版本無法使用一項進階本機掃描工具",
-    "已保存的結果與不受影響的檢查仍可使用",
-    "報告會把受影響的進階檢查列在「沒有測到的內容」裡，不會當成通過",
+    "請安裝相容的程式版本，再執行這項進階檢查",
   ]) assert.ok(source.includes(phrase), phrase);
 
   assert.match(source, /setupNonRetryable \|\| \(!setupFailed[\s\S]*\? null : \(/u);
@@ -190,10 +186,9 @@ test("canRetry false alone never masquerades as a package admission failure", ()
 
 test("a required Windows restart is explicit without exposing platform administration", () => {
   for (const phrase of [
-    "Windows requires a restart to finish the advanced-tool change",
-    "reopen ai-security-scanner and select Continue setup",
+    "Restart Windows, reopen ai-security-scanner, then select Continue setup",
     "Continue after restarting Windows",
-    "Windows 必須重新啟動才能完成進階工具變更",
+    "重新啟動 Windows，開啟 ai-security-scanner",
     "按下「繼續設定」",
     "重新啟動 Windows 後繼續",
   ]) assert.ok(source.includes(phrase), phrase);
@@ -217,10 +212,10 @@ test("cancelled setup offers an honest continuation", () => {
   assert.equal(state.setupFailed, false);
   for (const phrase of [
     "Advanced local scan-tool setup paused",
-    "The advanced-tool download was kept on this computer",
+    "Continue setup from the saved download",
     "Continue advanced scan setup",
     "進階本機掃描工具設定已暫停",
-    "進階工具的下載進度已保留在這台電腦上",
+    "可從已保存的下載進度繼續設定",
     "繼續進階掃描設定",
   ]) assert.ok(source.includes(phrase), phrase);
   assert.match(source, /setupCancelled \? text\.continue : text\.start/u);
@@ -281,10 +276,10 @@ test("an admitted idle runtime offers an explicit preparation action", () => {
   assert.equal(state.setupActive, false);
   for (const phrase of [
     "This scan needs additional local tools",
-    "Nothing is downloaded until you select Prepare scan tools",
+    "Select Prepare scan tools to begin",
     "Prepare scan tools",
     "這項掃描需要額外的本機工具",
-    "按下「準備掃描工具」前不會下載任何內容",
+    "按下「準備掃描工具」即可開始",
     "準備掃描工具",
   ]) assert.ok(source.includes(phrase), phrase);
   assert.match(source, /setupNonRetryable \|\| \(!setupFailed && !setupCancelled && !setupIdleUnavailable\) \? null/u);
@@ -314,9 +309,9 @@ test("backend stale state is visible without the UI inventing a terminal failure
   assert.equal(state.setupFailed, false);
   for (const phrase of [
     "Advanced local scan-tool setup is taking longer than expected",
-    "stopping that advanced-setup attempt safely",
+    "Stopping this setup attempt",
     "進階本機掃描工具設定時間超過預期",
-    "安全停止這次進階設定",
+    "正在停止這次設定",
   ]) assert.ok(source.includes(phrase), phrase);
 });
 

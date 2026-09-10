@@ -82,20 +82,15 @@ const actionButtons = (container: HTMLElement): HTMLButtonElement[] =>
 
 afterEach(cleanup);
 
-test("a check that can never run says the results will record it as untested", () => {
+test("a check that can never run gives the required version action", () => {
   // The whole point of this state is that no amount of waiting fixes it, so the
   // user's only remaining question is what their report will claim about the
   // check. A silent omission would read as a clean pass.
   const { container } = renderAssistant({ status: packagedAdmissionFailure });
 
   expect(heading(container)).toBe("An advanced local scan tool is unavailable in this app version");
-  // Worded against the report heading the gap is actually rendered under, not
-  // against the "Not tested" count tile, which stays 0 on this path. See
-  // tests/frontend/setupPanelReportPromises.test.ts for the binding.
-  expect(explanation(container)).toContain(
-    "lists the affected advanced check under what was not tested, never as a pass",
-  );
-  expect(explanation(container)).toContain("unaffected checks remain available");
+  expect(explanation(container)).toContain("Install a compatible app version");
+  expect(explanation(container)).not.toContain("saved results");
   expect(explanation(container)).not.toContain("localhost");
   // No phase line: "Setup needs attention" beside a terminal failure implies
   // something is still being attempted.
@@ -125,7 +120,7 @@ test("a failure that could succeed on another attempt does offer the retry", () 
   expect(buttons[0].disabled).toBe(false);
 
   expect(heading(container)).toBe("Advanced local scan-tool setup did not finish");
-  expect(explanation(container)).toContain("unaffected checks remain available");
+  expect(explanation(container)).toContain("Try advanced scan setup again");
   expect(explanation(container)).not.toContain("localhost");
   // A failure names a bounded category rather than leaving the user with a
   // headline and nothing to quote to anyone.
@@ -134,12 +129,11 @@ test("a failure that could succeed on another attempt does offer the retry", () 
   expect(technical?.querySelector("code")?.textContent).toBe("local_scan_tool_unavailable");
 });
 
-test("an admitted idle setup says no download starts until the user asks", () => {
+test("an admitted idle setup gives one start action", () => {
   const { container, onSetup } = renderAssistant({ status: setupStatus({ phase: "idle" }) });
 
   expect(heading(container)).toBe("This scan needs additional local tools");
-  expect(explanation(container)).toContain("Nothing is downloaded until you select Prepare scan tools");
-  expect(explanation(container)).toContain("unaffected checks remain available");
+  expect(explanation(container)).toContain("Select Prepare scan tools to begin");
   expect(explanation(container)).not.toContain("localhost");
   expect(actionButtons(container)[0].textContent).toContain("Prepare scan tools");
   expect(onSetup).not.toHaveBeenCalled();
@@ -147,7 +141,7 @@ test("an admitted idle setup says no download starts until the user asks", () =>
   expect(onSetup).toHaveBeenCalledTimes(1);
 });
 
-test("a Windows restart requirement replaces the generic failure, and still says the scans are intact", () => {
+test("a Windows restart requirement replaces the generic failure", () => {
   // `restart_windows` is the one failure whose cause is outside the app. Losing
   // the specific text would tell the user to keep retrying something that
   // cannot change until Windows restarts.
@@ -160,10 +154,8 @@ test("a Windows restart requirement replaces the generic failure, and still says
   });
 
   expect(heading(container)).toBe("Advanced local scan-tool setup is waiting for a Windows restart");
-  expect(explanation(container)).toContain("Windows requires a restart to finish the advanced-tool change");
+  expect(explanation(container)).toContain("Restart Windows, reopen ai-security-scanner");
   expect(explanation(container)).not.toContain("localhost");
-  expect(explanation(container)).toContain("saved results remain available");
-  expect(explanation(container)).not.toContain("readable exports remain available");
   expect(actionButtons(container)[0]?.textContent).toContain("Continue after restarting Windows");
 });
 
@@ -176,9 +168,8 @@ test("a slow attempt says Retry comes later, and does not show a Retry now", () 
   });
 
   expect(heading(container)).toBe("Advanced local scan-tool setup is taking longer than expected");
-  expect(explanation(container)).toContain("will offer Retry when it has stopped");
+  expect(explanation(container)).toContain("Retry appears when it has stopped");
   expect(explanation(container)).not.toContain("localhost");
-  expect(explanation(container)).toContain("saved results remain available");
 
   const buttons = actionButtons(container);
   expect(buttons).toHaveLength(1);
@@ -201,9 +192,8 @@ test("stopping promises the download is kept, and the paused state confirms it w
 
   const { container } = renderAssistant({ status: setupStatus({ phase: "cancelled" }) });
   expect(heading(container)).toBe("Advanced local scan-tool setup paused");
-  expect(explanation(container)).toContain("The advanced-tool download was kept on this computer");
+  expect(explanation(container)).toContain("Continue setup from the saved download");
   expect(explanation(container)).not.toContain("localhost");
-  expect(explanation(container)).toContain("saved results remain available");
   // "Continue" and "Try again" are different claims about what was kept.
   expect(actionButtons(container)[0].textContent).toContain("Continue advanced scan setup");
   expect(container.querySelector(".runtime-assistant__technical")).toBeNull();
@@ -224,7 +214,7 @@ test("a stop already under way says so instead of looking unclicked", () => {
   expect(button.disabled).toBe(true);
 });
 
-test("a gap in the installed version promises the report will name it, and points at the right retry", () => {
+test("a gap in the installed version points at the right retry", () => {
   // Runtime truth here says everything is available; the blocker is what makes
   // this state reachable, and it must win. The action also has to be the
   // availability re-check -- running setup again cannot change what shipped.
@@ -236,10 +226,7 @@ test("a gap in the installed version promises the report will name it, and point
 
   expect(container.querySelector(".runtime-assistant--ready")).toBeNull();
   expect(heading(container)).toBe("This check is unavailable in the installed version");
-  expect(explanation(container)).toContain("The report will still name this coverage gap");
-  // This blocker is raised only when the runnable count over the compatible
-  // engines is zero, so there is no sibling check left to continue.
-  expect(explanation(container)).toContain("No check in this version can run for this target");
+  expect(explanation(container)).toContain("Install the latest app version");
   expect(explanation(container)).not.toContain("Other available checks can continue");
 
   const buttons = actionButtons(container);
@@ -308,13 +295,9 @@ test("a resumed download is only claimed when bytes were actually carried over",
     .toContain("Existing download reused");
 });
 
-test("the Traditional Chinese panel carries the same two report promises", () => {
-  // Separate literals, and a reader of one locale never sees the other. These
-  // are the two claims about a document the user has not opened yet.
+test("the Traditional Chinese panel gives the same direct actions", () => {
   const untested = renderAssistant({ locale: "zh-TW", status: packagedAdmissionFailure });
-  // 「沒有測到的內容」 is the exact FindingsPage gaps heading in this locale.
-  expect(explanation(untested.container)).toContain("報告會把受影響的進階檢查列在「沒有測到的內容」裡，不會當成通過");
-  expect(explanation(untested.container)).toContain("已保存的結果與不受影響的檢查仍可使用");
+  expect(explanation(untested.container)).toContain("請安裝相容的程式版本");
   expect(explanation(untested.container)).not.toContain("localhost");
   expect(actionButtons(untested.container)).toHaveLength(0);
 
@@ -326,6 +309,5 @@ test("the Traditional Chinese panel carries the same two report promises", () =>
     scannerSetupBlocker: "no_runnable_authorized_targets",
   });
   expect(heading(container)).toBe("目前安裝版本無法執行這項檢查");
-  expect(explanation(container)).toContain("報告仍會列出這個涵蓋缺口");
-  expect(explanation(container)).toContain("這個版本沒有任何檢查能處理這個目標");
+  expect(explanation(container)).toContain("請安裝最新版本，再重新檢查可用性");
 });

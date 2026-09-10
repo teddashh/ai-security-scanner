@@ -101,7 +101,7 @@ test("a preview project announces that no target is contacted", () => {
   const demo = container.querySelector(".demo-banner");
   expect(demo).not.toBeNull();
   expect(demo!.textContent).toContain("Preview only");
-  expect(demo!.textContent).toContain("No target is contacted.");
+  expect(demo!.textContent).toContain("Synthetic sample data");
 });
 
 test("preview mode announces itself even when the open project is not itself a sample", () => {
@@ -113,7 +113,7 @@ test("preview mode announces itself even when the open project is not itself a s
   const demo = container.querySelector(".demo-banner");
   expect(demo).not.toBeNull();
   expect(demo!.textContent).toContain("Preview only");
-  expect(demo!.textContent).toContain("No target is contacted.");
+  expect(demo!.textContent).toContain("Synthetic sample data");
 });
 
 test("a real project in native mode carries no sample marker", () => {
@@ -134,16 +134,15 @@ test("a view the app could not refresh says so instead of looking current", () =
   );
   expect(alert).toBeTruthy();
   expect(alert!.textContent).toContain("Saved scans couldn't be refreshed");
-  expect(alert!.textContent).toContain("last saved information on this device");
-  expect(alert!.textContent).toContain("Nothing was replaced or changed");
+  expect(alert!.textContent).toContain("Showing the last saved information");
 });
 
-test("a project that failed to open says the current one is untouched", () => {
+test("a project that failed to open gives a direct retry", () => {
   const { container } = renderShell({ caseSelectionUnavailable: true });
 
   const text = banners(container).join(" ");
   expect(text).toContain("That scan project couldn't be opened");
-  expect(text).toContain("still open and unchanged");
+  expect(text).toContain("Try the selection again when the desktop service is ready");
 });
 
 test("recovery reports each project's outcome rather than one reassuring summary", () => {
@@ -162,8 +161,7 @@ test("recovery reports each project's outcome rather than one reassuring summary
     (candidate) => candidate.textContent?.includes("need recovery"),
   );
   expect(banner).toBeTruthy();
-  expect(banner!.textContent).toContain("left their original local data unchanged");
-  expect(banner!.textContent).toContain("no sample data was substituted");
+  expect(banner!.textContent).toContain("Review the unavailable projects below");
 
   const entries = Array.from(banner!.querySelectorAll("li")).map((item) => item.textContent ?? "");
   expect(entries.length).toBe(2);

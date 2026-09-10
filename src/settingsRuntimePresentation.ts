@@ -32,16 +32,16 @@ const presentations: Record<SettingsRuntimeState, SettingsRuntimePresentation> =
     state: "unavailable",
     icon: "warning",
     status: {
-      en: "The last check found one or more local scan tools unavailable. Saved projects and reports remain available; try automatic preparation again.",
-      zhTW: "上次檢查發現一項或多項本機掃描工具無法使用。已保存的專案與報告仍可使用；請再試一次自動準備。",
+      en: "One or more local scan tools are unavailable. Try automatic preparation again.",
+      zhTW: "一項或多項本機掃描工具無法使用；請再試一次自動準備。",
     },
   },
   unchecked: {
     state: "unchecked",
     icon: "clock",
     status: {
-      en: "Local scan tools have not been checked yet. Their status will appear here after the first check; saved projects and reports remain available.",
-      zhTW: "尚未檢查本機掃描工具。完成第一次檢查後，這裡才會顯示工具狀態；已保存的專案與報告仍可使用。",
+      en: "Local scan tools have not been checked yet.",
+      zhTW: "尚未檢查本機掃描工具。",
     },
   },
 };

@@ -199,51 +199,51 @@ interface NonExecutionActionToastCopy {
 const nonExecutionActionToastCopy = {
   "attach-workspace": {
     acceptedTitle: { en: "Project prepared locally", zhTW: "專案已在本機準備完成" },
-    acceptedDetail: { en: "Private copy verified; no scan started.", zhTW: "私密副本已驗證；尚未開始掃描。" },
+    acceptedDetail: { en: "Private copy verified. Review the checks, then start.", zhTW: "私密副本已驗證；請檢查掃描項目後開始。" },
     failedTitle: { en: "Project was not prepared", zhTW: "專案尚未準備完成" },
-    failedDetail: { en: "The private copy could not be verified. No scan started.", zhTW: "無法驗證私密副本；尚未開始掃描。" },
+    failedDetail: { en: "Choose the local project again.", zhTW: "請重新選擇本機專案。" },
   },
   scope: {
     acceptedTitle: { en: "Scan access saved", zhTW: "掃描許可已儲存" },
-    acceptedDetail: { en: "The exact target and limits are saved; no scan started.", zhTW: "確切目標與限制已儲存；尚未開始掃描。" },
+    acceptedDetail: { en: "The exact target and limits are saved.", zhTW: "確切目標與限制已儲存。" },
     failedTitle: { en: "Scan access was not saved", zhTW: "掃描許可尚未儲存" },
-    failedDetail: { en: "No scan started. Review the selected target and permission, then try again.", zhTW: "尚未開始掃描；請檢查所選目標與許可後再試一次。" },
+    failedDetail: { en: "Review the selected target and permission, then try again.", zhTW: "請檢查所選目標與許可後再試一次。" },
   },
   "archive-case": {
     acceptedTitle: { en: "Change saved", zhTW: "變更已儲存" },
-    acceptedDetail: { en: "The scan project was moved to the archive; no scan started.", zhTW: "掃描專案已移至封存區；尚未開始掃描。" },
+    acceptedDetail: { en: "The scan project was moved to the archive.", zhTW: "掃描專案已移至封存區。" },
     failedTitle: { en: "Change was not saved", zhTW: "變更尚未儲存" },
-    failedDetail: { en: "The scan project was not archived. Existing saved data was kept.", zhTW: "掃描專案尚未封存；原有已儲存資料仍保留。" },
+    failedDetail: { en: "Try archiving the scan project again.", zhTW: "請再試一次封存掃描專案。" },
   },
   "finding-workflow": {
     acceptedTitle: { en: "Change saved", zhTW: "變更已儲存" },
-    acceptedDetail: { en: "The problem's review status was updated; no scan started.", zhTW: "問題的審查狀態已更新；尚未開始掃描。" },
+    acceptedDetail: { en: "The problem's review status was updated.", zhTW: "問題的審查狀態已更新。" },
     failedTitle: { en: "Change was not saved", zhTW: "變更尚未儲存" },
-    failedDetail: { en: "The previous review status was kept.", zhTW: "先前的審查狀態仍保留。" },
+    failedDetail: { en: "Try updating the review status again.", zhTW: "請再試一次更新審查狀態。" },
   },
   "finding-group": {
     acceptedTitle: { en: "Change saved", zhTW: "變更已儲存" },
-    acceptedDetail: { en: "The related problems were grouped; no scan started.", zhTW: "相關問題已分組；尚未開始掃描。" },
+    acceptedDetail: { en: "The related problems were grouped.", zhTW: "相關問題已分組。" },
     failedTitle: { en: "Change was not saved", zhTW: "變更尚未儲存" },
-    failedDetail: { en: "The previous problem grouping was kept.", zhTW: "先前的問題分組仍保留。" },
+    failedDetail: { en: "Try grouping the problems again.", zhTW: "請再試一次將問題分組。" },
   },
   "finding-ungroup": {
     acceptedTitle: { en: "Change saved", zhTW: "變更已儲存" },
-    acceptedDetail: { en: "The group was removed and the individual problems remain saved; no scan started.", zhTW: "群組已移除，各個問題仍有儲存；尚未開始掃描。" },
+    acceptedDetail: { en: "The group was removed.", zhTW: "群組已移除。" },
     failedTitle: { en: "Change was not saved", zhTW: "變更尚未儲存" },
-    failedDetail: { en: "The previous problem grouping was kept.", zhTW: "先前的問題分組仍保留。" },
+    failedDetail: { en: "Try removing the group again.", zhTW: "請再試一次移除群組。" },
   },
   "connect-source": {
     acceptedTitle: { en: "Source prepared", zhTW: "資料來源已準備完成" },
-    acceptedDetail: { en: "The read-only source is saved for review; no scan started.", zhTW: "唯讀資料來源已儲存供檢視；尚未開始掃描。" },
+    acceptedDetail: { en: "The read-only source is ready for review.", zhTW: "唯讀資料來源已準備好，可供檢查。" },
     failedTitle: { en: "Source was not prepared", zhTW: "資料來源尚未準備完成" },
-    failedDetail: { en: "No scan started. Check the selected source and try again.", zhTW: "尚未開始掃描；請檢查所選資料來源後再試一次。" },
+    failedDetail: { en: "Check the selected source and try again.", zhTW: "請檢查所選資料來源後再試一次。" },
   },
   discovery: {
     acceptedTitle: { en: "Asset list updated", zhTW: "資產清單已更新" },
-    acceptedDetail: { en: "Review the items found; no scan started.", zhTW: "請檢視找到的項目；尚未開始掃描。" },
+    acceptedDetail: { en: "Review the items found.", zhTW: "請檢視找到的項目。" },
     failedTitle: { en: "Asset list was not updated", zhTW: "資產清單尚未更新" },
-    failedDetail: { en: "No scan started. Check the source setup and try again.", zhTW: "尚未開始掃描；請檢查資料來源設定後再試一次。" },
+    failedDetail: { en: "Check the source setup and try again.", zhTW: "請檢查資料來源設定後再試一次。" },
   },
 } as const satisfies Partial<Record<keyof typeof busyActionCopy, NonExecutionActionToastCopy>>;
 
@@ -261,16 +261,16 @@ const scanStartIssueCopy = {
     zhTW: "目前的輸入還不能交給任何檢查使用；請完成掃描設定中的目標步驟。",
   },
   no_runnable_authorized_targets: {
-    en: "This target is ready, but this version has no working scan tool for it. Get the latest installer; your local scan projects will stay on this device.",
-    zhTW: "目標已準備好，但這個版本沒有可執行這項檢查的工具。請取得最新安裝程式；這台電腦上的掃描專案會完整保留。",
+    en: "This version has no working scan tool for this target. Install the latest version.",
+    zhTW: "目前版本沒有可執行這個目標的掃描工具；請安裝最新版本。",
   },
   runtime_unavailable: {
-    en: "The target is ready, but this scan needs additional local tools. No scan has started yet.",
-    zhTW: "目標已準備好，但這項掃描需要額外的本機工具；掃描尚未開始。",
+    en: "Prepare the required local scan tools, then start the scan.",
+    zhTW: "請準備必要的本機掃描工具，再開始掃描。",
   },
   provider_source_required: {
-    en: "Connect the cloud account you want to scan. No scan has started yet.",
-    zhTW: "請先連接你要掃描的雲端帳號；掃描尚未開始。",
+    en: "Connect the cloud account you want to scan.",
+    zhTW: "請連接你要掃描的雲端帳號。",
   },
   provider_capability_unavailable: {
     en: "The read-only connection has expired or is no longer available. Reconnect the same account, then start the scan.",
@@ -289,8 +289,8 @@ const scanStartIssueCopy = {
     zhTW: "已連接的雲端帳號與這次掃描目標不一致；請先檢查目標。",
   },
   provider_preflight_unavailable: {
-    en: "The cloud readiness check could not finish. No scan started. Check again.",
-    zhTW: "雲端準備狀態尚未檢查完成；掃描尚未開始。請重新檢查。",
+    en: "The cloud readiness check did not finish. Check again.",
+    zhTW: "雲端準備狀態檢查未完成；請重新檢查。",
   },
   workspace_snapshot_unavailable: {
     en: "The saved local copy is missing or changed. Choose the local project again before scanning.",
@@ -309,20 +309,20 @@ const scanStartIssueCopy = {
     zhTW: "已保存的唯讀資料來源已遺失或有變更；請重新連接後再掃描。",
   },
   captured_evidence_unavailable: {
-    en: "The saved results needed to continue are missing or changed. Nothing was rerun. Review what remains, then start a new scan for fresh results.",
-    zhTW: "續跑所需的已保存結果已遺失或有變更；這次沒有重新執行任何檢查。請查看目前仍可用的結果，再開始新的掃描取得新結果。",
+    en: "Saved results needed to continue are missing or changed. Start a new scan.",
+    zhTW: "續跑所需的已保存結果已遺失或有變更；請開始新的掃描。",
   },
   resume_release_incompatible: {
-    en: "This unfinished scan was created by a different app release and cannot be continued safely. Nothing was rerun. Start a new scan; saved evidence and findings remain unchanged.",
-    zhTW: "這個未完成的掃描由不同版本的應用程式建立，無法安全續跑。這次沒有重新執行任何檢查；請開始新的掃描，已保存的證據與問題不會變更。",
+    en: "This unfinished scan was created by a different app release. Start a new scan with this release.",
+    zhTW: "這個未完成的掃描由不同版本的應用程式建立；請使用目前版本開始新的掃描。",
   },
   resume_work_plan_invalid: {
-    en: "This saved check could not be matched to its original target plan. Nothing was rerun and no target was contacted. Start a new scan; existing data remains available.",
-    zhTW: "這項已保存的檢查無法對應到原本的目標計畫。這次沒有重新執行，也沒有連線到任何目標；請開始新的掃描，既有資料仍會保留。",
+    en: "This saved check no longer matches its original target plan. Start a new scan.",
+    zhTW: "這項已保存的檢查已無法對應原本的目標計畫；請開始新的掃描。",
   },
   execution_preflight_unavailable: {
-    en: "The final readiness check could not finish. No scan started. Check again.",
-    zhTW: "最後的準備狀態檢查尚未完成；掃描尚未開始。請重新檢查。",
+    en: "The final readiness check did not finish. Check again.",
+    zhTW: "最後的準備狀態檢查未完成；請重新檢查。",
   },
 } as const satisfies Partial<Record<ScanReadinessBlocker | "resume_release_incompatible" | "resume_work_plan_invalid", BilingualText>>;
 
@@ -568,8 +568,8 @@ export default function App() {
           tone: "danger",
           title: text({ en: "Scan projects could not be loaded", zhTW: "目前無法讀取掃描專案" }),
           detail: text({
-            en: "Nothing was changed. Keep the app open and try again.",
-            zhTW: "這次沒有更動任何資料；請讓程式保持開啟並再試一次。",
+            en: "Keep the app open and try again.",
+            zhTW: "請讓程式保持開啟並再試一次。",
           }),
         });
       }
@@ -806,8 +806,8 @@ export default function App() {
         tone: "danger",
         title: text({ en: "The app update did not finish", zhTW: "應用程式更新未完成" }),
         detail: text({
-          en: "Your scan projects were not changed. Check the connection and try again.",
-          zhTW: "掃描專案沒有被更動；請確認網路連線後再試一次。",
+          en: "Check the connection and try again.",
+          zhTW: "請確認網路連線後再試一次。",
         }),
       });
     }
@@ -962,22 +962,22 @@ export default function App() {
               zhTW: "掃描工具已就緒。",
             })
             : text({
-              en: "Advanced local scan setup finished, but the app has not confirmed that the advanced tools are available. Your saved results are unchanged; use Retry if this does not update.",
-              zhTW: "進階本機掃描設定已完成，但程式尚未確認工具可用。已保存的結果不受影響；若狀態沒有更新，請按「再試一次」。",
+              en: "Checking whether the advanced tools are ready. Select Retry if the status does not update.",
+              zhTW: "正在確認進階工具是否就緒；若狀態沒有更新，請按「再試一次」。",
             })
           : nonRetryable
             ? text({
-              en: "Your saved results and checks that do not need this tool remain available. Results will mark the affected advanced check as not tested.",
-              zhTW: "已保存的結果與不需要這項工具的檢查仍可使用；結果會把受影響的進階檢查標示為「未測試」。",
+              en: "Install a compatible app version to run this advanced check.",
+              zhTW: "請安裝相容的程式版本，再執行這項進階檢查。",
             })
           : cancelled
             ? text({
-              en: "The completed part of the advanced-tool download was kept, and your saved results remain available. Continue setup whenever you are ready.",
-              zhTW: "進階工具已完成的下載進度與既有結果都已保留；準備好時可繼續設定。",
+              en: "Continue setup from the saved download.",
+              zhTW: "可從已保存的下載進度繼續設定。",
             })
             : text({
-              en: "Advanced local scan-tool setup did not finish. Your saved results and unaffected checks remain available. Try setup again; open Technical details if it keeps happening.",
-              zhTW: "進階本機掃描工具設定未能完成。已保存的結果與不受影響的檢查仍可使用；請再試一次。如果問題持續發生，可查看「技術細節」。",
+              en: "Try setup again. Open Technical details if it stops again.",
+              zhTW: "請再試一次；若再次停止，可查看「技術細節」。",
             }),
       });
     } catch (error) {
@@ -993,8 +993,8 @@ export default function App() {
         tone: "danger",
         title: text({ en: "Advanced local scan-tool setup did not finish", zhTW: "進階本機掃描工具設定未能完成" }),
         detail: text({
-          en: "Your saved results and unaffected checks remain available; retry advanced local scan preparation when ready.",
-          zhTW: "已保存的結果與不受影響的檢查仍可使用；準備好時可再試一次進階本機掃描準備。",
+          en: "Try advanced local scan preparation again.",
+          zhTW: "請再試一次進階本機掃描準備。",
         }),
       });
     } finally {
@@ -1021,8 +1021,8 @@ export default function App() {
           tone: "info",
           title: text({ en: "Stopping scan-engine setup", zhTW: "正在停止掃描引擎設定" }),
           detail: text({
-            en: "The completed part of the download will be kept for the next attempt.",
-            zhTW: "已完成的下載會保留，下次可以接著使用。",
+            en: "The next setup attempt resumes this download.",
+            zhTW: "下次設定會接續這次下載。",
           }),
         });
       }
@@ -1032,8 +1032,8 @@ export default function App() {
         tone: "danger",
         title: text({ en: "Setup could not be stopped yet", zhTW: "目前無法停止設定" }),
         detail: text({
-          en: "Setup is still safe to leave running. Try the stop button again in a moment.",
-          zhTW: "設定仍可安全繼續；請稍後再按一次停止。",
+          en: "Try the stop button again in a moment.",
+          zhTW: "請稍後再按一次停止。",
         }),
       });
     }
@@ -1122,10 +1122,10 @@ export default function App() {
         recordTechnicalError("subscribe to desktop status", error);
         pushToast({
           tone: "warning",
-          title: text({ en: "Live status is temporarily unavailable", zhTW: "即時狀態暫時無法使用" }),
+          title: text({ en: "Live status is unavailable", zhTW: "即時狀態無法使用" }),
           detail: text({
-            en: "Saved work is unaffected. Reopen the case to refresh its status.",
-            zhTW: "已保存的工作不受影響；重新開啟案件即可更新狀態。",
+            en: "Reopen the case to refresh its status.",
+            zhTW: "重新開啟案件以更新狀態。",
           }),
         });
       }
@@ -1224,8 +1224,8 @@ export default function App() {
         tone: "danger",
         title: text({ en: "This scan project could not be opened", zhTW: "目前無法開啟這個掃描專案" }),
         detail: text({
-          en: "The current scan project was left unchanged. Try opening it again.",
-          zhTW: "目前掃描專案沒有被更動；請再開啟一次。",
+          en: "Try opening it again.",
+          zhTW: "請再開啟一次。",
         }),
       });
       return undefined;
@@ -1271,8 +1271,8 @@ export default function App() {
           tone: "warning",
           title: text({ en: "Could not check yet", zhTW: "目前仍無法完成檢查" }),
           detail: text({
-            en: "No scan started and nothing changed. Check again in a moment.",
-            zhTW: "掃描尚未開始，也沒有變更任何資料；請稍後重新檢查。",
+            en: "Check readiness again in a moment.",
+            zhTW: "請稍後重新檢查準備狀態。",
           }),
         });
       }
@@ -1327,9 +1327,9 @@ export default function App() {
           : text({ en: "Demo scan project created", zhTW: "展示掃描專案已建立" }),
         detail: result.mode === "native"
           ? returnToReview
-            ? text({ en: "The scan project is saved on this device. No scan has started.", zhTW: "掃描專案已保存在這台電腦；尚未開始任何掃描。" })
-            : text({ en: "The scan project is saved on this device. Open My scans when ready; no scan has started.", zhTW: "掃描專案已保存在這台電腦。準備好時請開啟「我的掃描」；尚未開始任何掃描。" })
-          : text({ en: "It is saved only in this browser. No real target was contacted.", zhTW: "只保存在這個瀏覽器；沒有接觸任何真實目標。" }),
+            ? text({ en: "Review the selected assets and checks, then start.", zhTW: "請檢查所選資產與掃描項目後開始。" })
+            : text({ en: "Open My scans to review and start it.", zhTW: "請開啟「我的掃描」檢查並開始。" })
+          : text({ en: "This demo project is saved in this browser.", zhTW: "這個展示專案已保存在瀏覽器中。" }),
       });
       return true;
     } catch (error) {
@@ -1403,8 +1403,8 @@ export default function App() {
         detail: failedWorkspaceCount === 0
           ? returnToReview
             ? text({
-              en: "The private snapshots are attached. Review the exact checks, then press Start; no scan has started yet.",
-              zhTW: "私密快照已附加。請先檢查確切掃描項目，再按下「開始」；目前尚未開始掃描。",
+              en: "The private snapshots are attached. Review the exact checks, then press Start.",
+              zhTW: "私密快照已附加；請檢查確切掃描項目後按下「開始」。",
             })
             : text({
               en: "The private snapshots are attached. Open My scans when ready to review and start them.",
@@ -1412,8 +1412,8 @@ export default function App() {
             })
           : returnToReview
             ? text({
-              en: `${failedWorkspaceCount} folder(s) could not be copied. The project and every successful snapshot were kept; add the missing folder again in Scan setup.`,
-              zhTW: `有 ${failedWorkspaceCount} 個資料夾無法複製。專案與已成功的快照均已保留；請在掃描設定重新加入缺少的資料夾。`,
+              en: `${failedWorkspaceCount} folder(s) could not be copied. Add them again in Scan setup.`,
+              zhTW: `有 ${failedWorkspaceCount} 個資料夾無法複製；請在掃描設定重新加入。`,
             })
             : text({
               en: `${failedWorkspaceCount} folder(s) could not be copied. Open My scans to review the saved project and add the missing folder again.`,
@@ -1435,12 +1435,12 @@ export default function App() {
         title: text({ en: "Scan project created; review is unavailable", zhTW: "掃描專案已建立；目前無法開啟檢查畫面" }),
         detail: returnToReview
           ? text({
-            en: "The project and copied folders were kept. Reopen it from My scans; no scan started.",
-            zhTW: "專案與已複製的資料夾均已保留。請從「我的掃描」重新開啟；尚未開始掃描。",
+            en: "Reopen the project from My scans.",
+            zhTW: "請從「我的掃描」重新開啟專案。",
           })
           : text({
-            en: "The project and copied folders were kept. Open My scans when ready; no scan started.",
-            zhTW: "專案與已複製的資料夾均已保留。準備好時請開啟「我的掃描」；尚未開始掃描。",
+            en: "Open the project from My scans.",
+            zhTW: "請從「我的掃描」開啟專案。",
           }),
       });
       return false;
@@ -1465,8 +1465,8 @@ export default function App() {
         tone: "info",
         title: text({ en: "Example project opened", zhTW: "已開啟範例專案" }),
         detail: text({
-          en: "This is synthetic demonstration data. No target was contacted and no scan was started.",
-          zhTW: "這是合成的展示資料；沒有連線到任何目標，也沒有開始掃描。",
+          en: "Explore the workflow with synthetic demonstration data.",
+          zhTW: "可使用合成展示資料體驗完整流程。",
         }),
       });
     } catch (error) {
@@ -1474,7 +1474,7 @@ export default function App() {
       pushToast({
         tone: "danger",
         title: text({ en: "The example project could not be opened", zhTW: "目前無法開啟範例專案" }),
-        detail: text({ en: "Your saved projects were not changed. Try again.", zhTW: "已保存的專案沒有變更；請再試一次。" }),
+        detail: text({ en: "Try again.", zhTW: "請再試一次。" }),
       });
     } finally {
       setBusyAction(undefined);
@@ -1510,18 +1510,18 @@ export default function App() {
             : text({ en: "This computer check needs attention", zhTW: "這台電腦的檢查需要留意" }),
           detailText: result.mode === "native"
             ? {
-              en: "The app could not confirm the saved state. Open Scan progress first; if no new check appears, try again. Existing projects and results were kept.",
-              zhTW: "程式無法確認已保存的狀態。請先開啟「掃描進度」查看；若沒有新的檢查，再試一次。既有專案與結果都已保留。",
+              en: "Open Scan progress. If no new check appears, try again.",
+              zhTW: "請開啟「掃描進度」；若沒有新的檢查，再試一次。",
             }
             : undefined,
           detail: result.mode === "demo"
             ? text({
-              en: "Nothing on this computer was contacted or changed.",
-              zhTW: "沒有連線或更動這台電腦上的任何內容。",
+              en: "Open the desktop app to run this check.",
+              zhTW: "請開啟桌面版執行這項檢查。",
             })
             : text({
-              en: "The app could not confirm the saved state. Open Scan progress first; if no new check appears, try again. Existing projects and results were kept.",
-              zhTW: "程式無法確認已保存的狀態。請先開啟「掃描進度」查看；若沒有新的檢查，再試一次。既有專案與結果都已保留。",
+              en: "Open Scan progress. If no new check appears, try again.",
+              zhTW: "請開啟「掃描進度」；若沒有新的檢查，再試一次。",
             }),
         });
         return;
@@ -1572,12 +1572,12 @@ export default function App() {
         titleText: { en: "This computer check needs attention", zhTW: "這台電腦的檢查需要留意" },
         title: text({ en: "This computer check needs attention", zhTW: "這台電腦的檢查需要留意" }),
         detailText: {
-          en: "The app could not confirm the saved state. Open Scan progress first; if no new check appears, try again. Existing projects and results were kept.",
-          zhTW: "程式無法確認已保存的狀態。請先開啟「掃描進度」查看；若沒有新的檢查，再試一次。既有專案與結果都已保留。",
+          en: "Open Scan progress. If no new check appears, try again.",
+          zhTW: "請開啟「掃描進度」；若沒有新的檢查，再試一次。",
         },
         detail: text({
-          en: "The app could not confirm the saved state. Open Scan progress first; if no new check appears, try again. Existing projects and results were kept.",
-          zhTW: "程式無法確認已保存的狀態。請先開啟「掃描進度」查看；若沒有新的檢查，再試一次。既有專案與結果都已保留。",
+          en: "Open Scan progress. If no new check appears, try again.",
+          zhTW: "請開啟「掃描進度」；若沒有新的檢查，再試一次。",
         }),
       });
     } finally {
@@ -1679,10 +1679,10 @@ export default function App() {
           : nonExecutionCopy
             ? text(nonExecutionCopy.failedDetail)
           : result.mode === "demo"
-            ? text({ en: "No target was contacted. Open the desktop app to run this scan.", zhTW: "沒有接觸任何目標；請使用桌面程式執行這次掃描。" })
+            ? text({ en: "Open the desktop app to run this scan.", zhTW: "請使用桌面程式執行這次掃描。" })
           : preflightCode
             ? text(scanStartIssueCopy[preflightCode])
-          : text({ en: "No target was contacted. Check the current step and try again.", zhTW: "沒有接觸任何目標；請確認目前步驟後再試一次。" }),
+          : text({ en: "Check the current step and try again.", zhTW: "請確認目前步驟後再試一次。" }),
       });
       if (response.snapshot) setSnapshot(response.snapshot);
       else if (response.workspace) {
@@ -1703,7 +1703,7 @@ export default function App() {
       pushToast({
         tone: "danger",
         title: text(nonExecutionCopy?.failedTitle ?? { en: "The local work could not finish", zhTW: "本機工作未能完成" }),
-        detail: text(nonExecutionCopy?.failedDetail ?? { en: "Saved scan data was kept. Check the current step before trying again.", zhTW: "已保存的掃描資料仍保留；請確認目前步驟後再試一次。" }),
+        detail: text(nonExecutionCopy?.failedDetail ?? { en: "Check the current step before trying again.", zhTW: "請確認目前步驟後再試一次。" }),
       });
       return false;
     } finally {
@@ -1896,7 +1896,7 @@ export default function App() {
       pushToast({
         tone: "danger",
         title: text({ en: "The case was not deleted", zhTW: "案件沒有被刪除" }),
-        detail: text({ en: "Nothing was changed. Confirm the exact case name and try again.", zhTW: "這次沒有更動資料；請確認完整案件名稱後再試一次。" }),
+        detail: text({ en: "Confirm the exact case name and try again.", zhTW: "請確認完整案件名稱後再試一次。" }),
       });
       return false;
     } finally {
@@ -1927,7 +1927,7 @@ export default function App() {
             { path: result.data.exactPath },
           )
           : text(
-            { en: "{path} was already absent or was left unchanged.", zhTW: "{path} 原本就不存在，或這次沒有被移除。" },
+            { en: "No evidence folder was found at {path}.", zhTW: "在 {path} 找不到證據資料夾。" },
             { path: result.data.exactPath },
           ),
       });
@@ -1937,7 +1937,7 @@ export default function App() {
       pushToast({
         tone: "danger",
         title: text({ en: "The evidence folder was not deleted", zhTW: "證據資料夾沒有被刪除" }),
-        detail: text({ en: "Nothing was removed. Check the exact path and confirmation, then try again.", zhTW: "這次沒有移除任何檔案；請確認精確路徑與確認文字後再試一次。" }),
+        detail: text({ en: "Check the exact path and confirmation, then try again.", zhTW: "請確認精確路徑與確認文字後再試一次。" }),
       });
       return false;
     } finally {
@@ -2162,8 +2162,8 @@ export default function App() {
         tone: "danger",
         title: text({ en: "The file could not be verified", zhTW: "目前無法驗證這個檔案" }),
         detail: text({
-          en: "The file was not changed. Choose it again, or ask the sender for a new case package.",
-          zhTW: "檔案沒有被更動；請重新選擇，或請寄件者提供新的案件包。",
+          en: "Choose it again, or ask the sender for a new case package.",
+          zhTW: "請重新選擇，或請寄件者提供新的案件包。",
         }),
       });
     } finally {
@@ -2537,8 +2537,8 @@ export default function App() {
               groupId,
               removedBy: text({ en: "Local user", zhTW: "本機使用者" }),
               reason: text({
-                en: "The user removed this presentation group from the Problems found page; original findings and evidence remain unchanged.",
-                zhTW: "使用者從「發現的問題」頁面移除這個呈現群組；原始問題與證據完整保留。",
+                en: "Presentation group removed from the Problems found page.",
+                zhTW: "已從「發現的問題」頁面移除呈現群組。",
               }),
             }))}
             onOpenCoverage={() => navigate("coverage")}

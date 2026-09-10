@@ -159,8 +159,8 @@ const isNativeSurface = (): boolean => Boolean(packagedTauriPlatform) || hasLive
 const invoke = async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
   if (!hasLiveTauriBridge()) {
     throw new Error(serviceText(
-      "The desktop service is not ready. No sample data was substituted. Keep the app open and try again.",
-      "桌面服務尚未就緒；程式沒有改用範例資料。請讓程式保持開啟並再試一次。",
+      "The desktop service is starting. Keep the app open and try again.",
+      "桌面服務正在啟動；請讓程式保持開啟並再試一次。",
     ));
   }
   return tauriInvoke<T>(command, args);
@@ -731,8 +731,8 @@ export const scannerService = {
         decisions: nativeScopeDecisions(input),
       },
       serviceText(
-        "The selected target and permission boundary were recorded. No scan started automatically.",
-        "已記錄選定目標與權限範圍；尚未自動開始掃描。",
+        "The selected target and permission boundary were recorded.",
+        "已記錄選定目標與權限範圍。",
       ),
       serviceText(
         "Demo mode only shows the permission flow and does not create real scan permission.",

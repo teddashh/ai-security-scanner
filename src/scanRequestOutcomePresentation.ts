@@ -7,11 +7,6 @@ export interface ScanRequestOutcomeBeginnerSummary {
   nextStep: BilingualText;
 }
 
-const commonDescription: BilingualText = {
-  en: "No target was contacted and no check completed. This is not a result with zero problems.",
-  zhTW: "這次沒有連線到任何目標，也沒有完成任何檢查；這不代表問題數量是零。",
-};
-
 const title: BilingualText = {
   en: "No checks completed",
   zhTW: "沒有完成任何檢查",
@@ -58,10 +53,7 @@ export const scanRequestOutcomeBeginnerSummary = (
   const summary = summaries[outcome.code];
   return {
     title,
-    description: {
-      en: `${summary.reason.en} ${commonDescription.en}`,
-      zhTW: `${summary.reason.zhTW}${commonDescription.zhTW}`,
-    },
+    description: summary.reason,
     nextStep: summary.nextStep,
   };
 };

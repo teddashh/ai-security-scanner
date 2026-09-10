@@ -145,7 +145,7 @@ test("cancelled is never promoted to a result, while mixed saved work remains pa
   })]);
   const cancelled = deriveCancelLifecycleDisposition(workspace(genericCancelled), "run-1");
   assert.equal(cancelled.outcome, "cancelled");
-  assert.match(scanLifecycleToastPresentation(cancelled).detail.en, /results saved before it stopped remain available/u);
+  assert.equal(scanLifecycleToastPresentation(cancelled).detail.en, "The check stopped.");
 
   const mixed = deriveCancelLifecycleDisposition(workspace(run("cancelled", [
     engine({ id: "completed", status: "completed", phase: "completed" }),
@@ -178,7 +178,7 @@ test("result-won dispositions preserve reachable, closed, timed-out, and failed 
     assert.equal(disposition.outcome, "result_already_final");
     const presentation = scanLifecycleToastPresentation(disposition);
     assert.match(presentation.detail.en, expectedCopy);
-    assert.match(presentation.detail.en, /saved result was kept/u);
+    assert.match(presentation.detail.en, /before the (?:stop|continue) request took effect/u);
   }
 
   const failed = deriveCancelLifecycleDisposition(workspace(run("failed", [engine({

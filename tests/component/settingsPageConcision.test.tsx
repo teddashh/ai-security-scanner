@@ -74,8 +74,8 @@ test("storage and privacy expose one compact state and one action before closed 
 
 test.each([
   { mode: "native" as const, runtimeAvailable: true, state: "ready", status: "Ready at the last check", action: "New scan" },
-  { mode: "native" as const, runtimeAvailable: false, state: "unavailable", status: "Some scan tools are unavailable · saved results are unaffected", action: "Choose a scan" },
-  { mode: "native" as const, runtimeAvailable: undefined, state: "unchecked", status: "Scan tools not checked yet · saved results are available", action: "Choose a scan" },
+  { mode: "native" as const, runtimeAvailable: false, state: "unavailable", status: "Some scan tools are unavailable", action: "Choose a scan" },
+  { mode: "native" as const, runtimeAvailable: undefined, state: "unchecked", status: "Scan tools not checked yet", action: "Choose a scan" },
   { mode: "demo" as const, runtimeAvailable: true, state: "demo", status: "Preview only · real checks do not run", action: "Open preview" },
 ])("runtime $state keeps one truthful status and one action", ({ mode, runtimeAvailable, state, status, action }) => {
   const { container, getByRole, onOpenNewScan } = renderSettings({ mode, runtimeAvailable });
@@ -97,11 +97,10 @@ test("native runtime mechanics and consequences stay in closed details", () => {
   const content = details?.textContent ?? "";
 
   expect(details?.open).toBe(false);
-  expect(content).toContain("Saved projects and reports remain available");
-  expect(content).toContain("Retry safely continues reusable download progress");
-  expect(content).toContain("Cancelling keeps downloaded progress");
+  expect(content).toContain("Retry reuses completed download progress");
+  expect(content).toContain("Pause keeps the download");
   expect(content).toContain("Continue resumes it");
-  expect(content).toContain("If Windows requires a restart");
-  expect(content).toContain("stays marked Not tested");
-  expect(content).toContain("never shown as passed");
+  expect(content).toContain("After a required Windows restart");
+  expect(content).toContain("appear as Not tested");
+  expect(content).not.toContain("Saved projects and reports remain available");
 });
