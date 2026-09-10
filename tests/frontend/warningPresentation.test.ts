@@ -48,8 +48,8 @@ const sample = (rustFormat: string): string => rustFormat
   // Preserve the numeric contract of count-bearing warnings. The generic
   // placeholder below intentionally remains nonnumeric for every other field.
   .replaceAll(/\{(?:total|retained|omitted)_findings\}/gu, "1")
-  .replaceAll(/\{[^}]*\}/gu, "retained-value")
-  .replaceAll("{}", "retained-value");
+  .replaceAll(/\{[^}]*\}/gu, "sample-value")
+  .replaceAll("{}", "sample-value");
 
 test("every censused product-authored engine-warning sentence has a Chinese shape", () => {
   const files = [
@@ -95,6 +95,20 @@ test("every censused product-authored engine-warning sentence has a Chinese shap
   assert.ok(authored.size >= 70, `producer extractor found only ${authored.size} warning sentences`);
   const untranslated = [...authored].filter((warning) => recognizedEngineWarningZhTW(warning) === undefined);
   assert.deepEqual(untranslated, [], `engine warning shapes without Chinese:\n${untranslated.join("\n")}`);
+
+  const defensive = [...authored].flatMap((warning) => {
+    const english = localizedEngineWarning(warning, "en");
+    const chinese = localizedEngineWarning(warning, "zh-TW");
+    const violations: string[] = [];
+    if (/\b(?:retained|preserved|adapter|pinned|reporter)\b|result reader|no (?:security issue|findings?) (?:was|were) (?:invented|inferred)|You stopped/iu.test(english)) {
+      violations.push(`en: ${english}`);
+    }
+    if (/已保留|仍保留|只保留|未推斷|未從.+臆造|你已停止|轉接器|結果讀取器|固定的? (?:JSON|Syft)/u.test(chinese)) {
+      violations.push(`zh-TW: ${chinese}`);
+    }
+    return violations;
+  });
+  assert.deepEqual(defensive, [], `defensive engine warning presentation:\n${defensive.join("\n")}`);
 });
 
 test("every beginner-report data-quality warning has a Chinese form", () => {
@@ -106,8 +120,8 @@ test("every beginner-report data-quality warning has a Chinese form", () => {
     value.startsWith("One check") || value.startsWith("Saved run") ||
     value.startsWith("Finding "));
   assert.deepEqual(warnings.sort(), [
-    "Finding retained-value presentation detail: unavailable. Retained run observation: available.",
-    "Finding retained-value selected-run presentation snapshot: unavailable. Display wording: current canonical text.",
+    "Finding sample-value presentation detail: unavailable. Retained run observation: available.",
+    "Finding sample-value selected-run presentation snapshot: unavailable. Display wording: current canonical text.",
     "One check has incomplete coverage history.",
     "The selected run has an inconsistent project identity. Report data: selected in-project record.",
     "This run has inconsistent request and check data.",
@@ -132,15 +146,15 @@ test("Steampipe inventory warnings have exact Traditional Chinese presentations"
   const cases = [
     [
       "Steampipe output was not its supported JSON document; the raw artifact was retained, and the inventory query should be retried",
-      "Steampipe 輸出不是支援的 JSON 文件；原始成品已保留，請重試盤點查詢",
+      "Steampipe 輸出不是支援的 JSON 文件；請重試盤點查詢",
     ],
     [
       "Steampipe output lacked its rows array; the raw artifact was retained, and the inventory query should be retried",
-      "Steampipe 輸出缺少 rows 陣列；原始成品已保留，請重試盤點查詢",
+      "Steampipe 輸出缺少 rows 陣列；請重試盤點查詢",
     ],
     [
       "Steampipe rows exceeded the record safety boundary; later inventory rows remain only as raw evidence",
-      "Steampipe 資料列超過記錄安全界線；後續盤點資料列只保留為原始證據",
+      "Steampipe 資料列超過記錄安全界線；後續盤點資料列未正規化",
     ],
     [
       `Steampipe inventory record at ${pointer} was not an object and was not normalized`,
@@ -177,77 +191,77 @@ test("Steampipe inventory warnings have exact Traditional Chinese presentations"
     recognizedEngineWarningZhTW(
       `${engine} output is inventory evidence; no security issue was invented from inventory rows`,
     ),
-    `${engine} 輸出是資產清冊證據；未從清冊資料列臆造安全問題`,
+    `${engine} 輸出是資產清冊，不是安全問題`,
   );
 
   const laterBuildWarning = `${cases[8][0]}; later-build detail`;
   assert.equal(localizedEngineWarning(laterBuildWarning, "zh-TW"), laterBuildWarning);
 });
 
-test("Cloudsplaining schema-drift warnings preserve actionable context in Traditional Chinese", () => {
+test("Cloudsplaining schema-drift warnings state exact result gaps in Traditional Chinese", () => {
   const cases = [
-    ["Cloudsplaining output links were not an object; findings were preserved without those references", "Cloudsplaining 輸出的 links 不是物件；問題已保留，但不含那些參照"],
-    ["Cloudsplaining output lacked its required links object; findings were preserved without those references", "Cloudsplaining 輸出缺少必要的 links 物件；問題已保留，但不含那些參照"],
+    ["Cloudsplaining output links were not an object; findings were preserved without those references", "Cloudsplaining 輸出的 links 不是物件；參照不可用"],
+    ["Cloudsplaining output lacked its required links object; findings were preserved without those references", "Cloudsplaining 輸出缺少必要的 links 物件；參照不可用"],
     [
       "Cloudsplaining policy section customer_managed_policies was not an object; valid sibling findings were preserved",
-      "Cloudsplaining 原則區段 customer_managed_policies 不是物件；已保留其他有效問題",
+      "Cloudsplaining 原則區段 customer_managed_policies 不是物件",
     ],
-    ["Cloudsplaining output lacked required policy section inline_policies; valid sibling findings were preserved", "Cloudsplaining 輸出缺少必要的原則區段 inline_policies；已保留其他有效問題"],
+    ["Cloudsplaining output lacked required policy section inline_policies; valid sibling findings were preserved", "Cloudsplaining 輸出缺少必要的原則區段 inline_policies"],
     [
       "Cloudsplaining policy at /aws_managed_policies/policy was not an object; valid sibling findings were preserved",
-      "/aws_managed_policies/policy 的 Cloudsplaining 原則不是物件；已保留其他有效問題",
+      "/aws_managed_policies/policy 的 Cloudsplaining 原則不是物件",
     ],
     [
       "Cloudsplaining policy at /aws_managed_policies/policy did not carry its required boolean is_excluded value and was retained only as raw evidence",
-      "/aws_managed_policies/policy 的 Cloudsplaining 原則缺少必要的布林 is_excluded 值，因此只保留在原始證據中",
+      "/aws_managed_policies/policy 的 Cloudsplaining 原則缺少必要的布林 is_excluded 值，因此未正規化",
     ],
     [
       "Cloudsplaining category at /aws_managed_policies/policy/DataExfiltration was not an object; valid sibling findings were preserved",
-      "/aws_managed_policies/policy/DataExfiltration 的 Cloudsplaining 風險類別不是物件；已保留其他有效問題",
+      "/aws_managed_policies/policy/DataExfiltration 的 Cloudsplaining 風險類別不是物件",
     ],
     [
       "Cloudsplaining policy at /customer_managed_policies/policy lacked category CredentialsExposure; valid sibling findings were preserved",
-      "/customer_managed_policies/policy 的 Cloudsplaining 原則缺少風險類別 CredentialsExposure；已保留其他有效問題",
+      "/customer_managed_policies/policy 的 Cloudsplaining 原則缺少風險類別 CredentialsExposure",
     ],
     [
       "Cloudsplaining category at /inline_policies/policy/ResourceExposure lacked its findings array; valid sibling findings were preserved",
-      "/inline_policies/policy/ResourceExposure 的 Cloudsplaining 風險類別缺少 findings 陣列；已保留其他有效問題",
+      "/inline_policies/policy/ResourceExposure 的 Cloudsplaining 風險類別缺少 findings 陣列",
     ],
     [
       "Cloudsplaining category at /inline_policies/policy/InfrastructureModification lacked its source severity; valid sibling findings were preserved",
-      "/inline_policies/policy/InfrastructureModification 的 Cloudsplaining 風險類別缺少來源嚴重性；已保留其他有效問題",
+      "/inline_policies/policy/InfrastructureModification 的 Cloudsplaining 風險類別缺少來源嚴重性",
     ],
     [
       "Cloudsplaining category at /inline_policies/policy/ServiceWildcard lacked its source description; findings were preserved without it",
-      "/inline_policies/policy/ServiceWildcard 的 Cloudsplaining 風險類別缺少來源說明；問題已保留，但不含該說明",
+      "/inline_policies/policy/ServiceWildcard 的 Cloudsplaining 風險類別缺少來源說明；來源說明不可用",
     ],
     [
       "Cloudsplaining PrivilegeEscalation category at /inline_policies/policy/PrivilegeEscalation lacked its required links object; findings were preserved without those references",
-      "/inline_policies/policy/PrivilegeEscalation 的 Cloudsplaining 權限提升類別缺少必要的 links 物件；問題已保留，但不含那些參照",
+      "/inline_policies/policy/PrivilegeEscalation 的 Cloudsplaining 權限提升類別缺少必要的 links 物件；參照不可用",
     ],
     [
       "Cloudsplaining category links at /inline_policies/policy/PrivilegeEscalation/links were not an object; findings were preserved without those references",
-      "/inline_policies/policy/PrivilegeEscalation/links 的 Cloudsplaining 風險類別 links 不是物件；問題已保留，但不含那些參照",
+      "/inline_policies/policy/PrivilegeEscalation/links 的 Cloudsplaining 風險類別 links 不是物件；參照不可用",
     ],
     [
       "Cloudsplaining finding at /inline_policies/policy/PrivilegeEscalation/findings/2 did not match the pinned PrivilegeEscalation entry shape and was retained only as raw evidence",
-      "/inline_policies/policy/PrivilegeEscalation/findings/2 的 Cloudsplaining 問題不符合此版本採用的 PrivilegeEscalation 項目格式，因此只保留在原始證據中",
+      "/inline_policies/policy/PrivilegeEscalation/findings/2 的 Cloudsplaining 問題不符合此版本採用的 PrivilegeEscalation 項目格式，因此未正規化",
     ],
     [
       "Cloudsplaining finding at /inline_policies/policy/DataExfiltration/findings/2 did not match the pinned DataExfiltration entry shape and was retained only as raw evidence",
-      "/inline_policies/policy/DataExfiltration/findings/2 的 Cloudsplaining 問題不符合此版本採用的 DataExfiltration 項目格式，因此只保留在原始證據中",
+      "/inline_policies/policy/DataExfiltration/findings/2 的 Cloudsplaining 問題不符合此版本採用的 DataExfiltration 項目格式，因此未正規化",
     ],
     [
       "Cloudsplaining privilege-escalation finding at /inline_policies/policy/PrivilegeEscalation/findings/0 lacked its required method link; the finding was preserved without that reference",
-      "/inline_policies/policy/PrivilegeEscalation/findings/0 的 Cloudsplaining 權限提升問題缺少必要的方法參照連結；問題已保留，但不含該參照",
+      "/inline_policies/policy/PrivilegeEscalation/findings/0 的 Cloudsplaining 權限提升問題缺少必要的方法參照連結；參照不可用",
     ],
     [
       "Cloudsplaining action link for iam:CreateAccessKey was malformed; the finding was preserved without that reference",
-      "Cloudsplaining 操作 iam:CreateAccessKey 的參照連結格式錯誤；問題已保留，但不含該參照",
+      "Cloudsplaining 操作 iam:CreateAccessKey 的參照連結格式錯誤；參照不可用",
     ],
     [
       "Cloudsplaining reported 10002 valid policy findings; the bounded report retained 10000 in Critical, High, Medium, Unknown, Low, then Informational order, and 2 remain only in raw evidence",
-      "Cloudsplaining 回報 10002 筆有效的 IAM 原則問題；有界報告依重大、高、中、未知、低、資訊的優先順序保留 10000 筆，其餘 2 筆只保留在原始證據中",
+      "Cloudsplaining 已達報告限制：10002 筆問題中納入 10000 筆，排除 2 筆。",
     ],
   ] as const;
 
@@ -263,55 +277,55 @@ test("Cloudsplaining schema-drift warnings preserve actionable context in Tradit
   );
 });
 
-test("repo adapter shape-loss warnings have bounded Traditional Chinese presentations", () => {
+test("repository result-shape warnings have direct Traditional Chinese presentations", () => {
   const cases = [
     [
       "Semgrep output lacked its required errors array; valid findings were preserved, but completeness cannot be established",
-      "Semgrep 輸出缺少必要的 errors 陣列；有效問題已保留，但無法確認完整性",
+      "Semgrep 輸出缺少必要的 errors 陣列；結果不完整",
     ],
     [
       "Semgrep reported one or more scanner errors; valid findings were preserved, but the error details remain only in the raw artifact and completeness cannot be established",
-      "Semgrep 回報一項或多項掃描器錯誤；有效問題已保留，錯誤細節只留在原始成品中，且無法確認完整性",
+      "Semgrep 回報一項或多項掃描器錯誤；結果不完整",
     ],
     [
       "Semgrep finding at /results/2 lacked its check_id; the raw record was retained",
-      "/results/2 的 Semgrep 問題缺少 check_id；原始記錄已保留",
+      "/results/2 的 Semgrep 問題缺少 check_id",
     ],
     [
       "KICS output lacked its queries array; the raw artifact was retained",
-      "KICS 輸出缺少 queries 陣列；原始成品已保留",
+      "KICS 輸出缺少 queries 陣列",
     ],
     [
       "KICS query at /queries/1 was not an object; the raw record was retained",
-      "/queries/1 的 KICS 查詢不是物件；原始記錄已保留",
+      "/queries/1 的 KICS 查詢不是物件",
     ],
     [
       "KICS query at /queries/2 lacked a valid query_id; the raw record was retained",
-      "/queries/2 的 KICS 查詢缺少有效的 query_id；原始記錄已保留",
+      "/queries/2 的 KICS 查詢缺少有效的 query_id",
     ],
     [
       "KICS query at /queries/3 lacked its files array; the raw record was retained",
-      "/queries/3 的 KICS 查詢缺少 files 陣列；原始記錄已保留",
+      "/queries/3 的 KICS 查詢缺少 files 陣列",
     ],
     [
       "KICS file at /queries/4/files/0 was not an object; the raw record was retained",
-      "/queries/4/files/0 的 KICS 檔案記錄不是物件；原始記錄已保留",
+      "/queries/4/files/0 的 KICS 檔案記錄不是物件",
     ],
     [
       "Trivy result at /Results/2 was not an object; the raw record was retained",
-      "/Results/2 的 Trivy 結果不是物件；原始記錄已保留",
+      "/Results/2 的 Trivy 結果不是物件",
     ],
     [
       "Trivy Secrets at /Results/0/Secrets was present but not an array; the raw value was retained",
-      "/Results/0/Secrets 的 Trivy Secrets 已存在但不是陣列；原始值已保留",
+      "/Results/0/Secrets 的 Trivy Secrets 已存在但不是陣列",
     ],
     [
       "Grype match at /matches/1 was not an object; the raw record was retained",
-      "/matches/1 的 Grype 配對記錄不是物件；原始記錄已保留",
+      "/matches/1 的 Grype 配對記錄不是物件",
     ],
     [
       "Grype match at /matches/2 lacked vulnerability.id; the raw record was retained",
-      "/matches/2 的 Grype 配對記錄缺少 vulnerability.id；原始記錄已保留",
+      "/matches/2 的 Grype 配對記錄缺少 vulnerability.id",
     ],
   ] as const;
 

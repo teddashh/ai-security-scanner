@@ -251,10 +251,11 @@ test("a check that never ran is still accounted for on screen", () => {
 
 test("a Traditional Chinese reader sees a translated technical warning", () => {
   window.localStorage.setItem(localeStorageKey, "zh-TW");
-  const english = "Semgrep output had no results array";
+  const english = "Semgrep reported one or more scanner errors; valid findings were preserved, but the error details remain only in the raw artifact and completeness cannot be established";
   const { container } = renderProgress(run([engine("semgrep", "partial", { warnings: [english] })]));
   const row = engineRow(container, "semgrep");
-  expect(row.textContent).toContain("Semgrep 輸出沒有 results 陣列");
+  expect(row.textContent).toContain("Semgrep 回報一項或多項掃描器錯誤；結果不完整");
+  expect(row.textContent).not.toMatch(/已保留|原始成品/u);
   expect(row.textContent).not.toContain(english);
 });
 

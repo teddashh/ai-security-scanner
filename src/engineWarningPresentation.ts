@@ -59,7 +59,7 @@ const FIXED_ENGINE_WARNINGS: ReadonlyArray<readonly [string, string]> = [
   ["Steampipe rows exceeded the record safety boundary; later inventory rows remain only as raw evidence", "Steampipe 資料列超過記錄安全界線；後續盤點資料列只保留為原始證據"],
   ["Runtime object ownership is unavailable. Retry uses a new isolated attempt.", "無法確認執行階段物件的所有權；重試會使用新的隔離嘗試。"],
   ["Scan batch stopped. Unfinished work: not tested.", "掃描批次已停止；未完成工作：未檢測。"],
-  ["You stopped this scan. Remaining planned work: not tested.", "你已停止這次掃描；其餘規劃工作：未檢測。"],
+  ["Scan cancelled. Remaining planned work: not tested.", "掃描已取消；其餘規劃工作：未檢測。"],
   ["Framework relationships are unavailable because the saved mapping identity differs from the installed mapping.", "已保存的對照識別資料與已安裝對照不同，因此無法使用框架關聯。"],
   ["Result processing stopped. Start a new scan with the current result reader.", "結果處理已停止；請使用目前的結果讀取器開始新的掃描。"],
   ["Result processing is incomplete. This check is Partial.", "結果處理未完成；這項檢查為部分完成。"],
@@ -132,7 +132,7 @@ const normalizeLegacyEngineWarning = (warning: string): string => {
     return "Scan batch stopped. Unfinished work: not tested.";
   }
   if (normalized.startsWith("You stopped this scan after the current batch was saved.")) {
-    return "You stopped this scan. Remaining planned work: not tested.";
+    return "Scan cancelled. Remaining planned work: not tested.";
   }
   if (normalized.startsWith("Framework relationships were omitted because")) {
     return "Framework relationships are unavailable because the saved mapping identity differs from the installed mapping.";
@@ -200,10 +200,187 @@ const normalizeLegacyEngineWarning = (warning: string): string => {
   return normalized;
 };
 
+const directEngineWarningEnglish = (warning: string): string => {
+  if (warning === "Greenbone result lacked an upstream result type and a positive severity; it was retained only as raw evidence and this run cannot be treated as a clean result") {
+    return "Greenbone result excluded: upstream result type and positive severity missing. Check result incomplete.";
+  }
+  if (warning === "Greenbone reported a target it could not evaluate, but the result named no authorized asset; the raw artifact was retained") {
+    return "Greenbone result excluded: no authorized asset identified.";
+  }
+  if (warning === "Greenbone XML contained no complete bounded result records; no findings were inferred") {
+    return "Greenbone result processing incomplete: no complete bounded result records.";
+  }
+  if (warning === "Semgrep output lacked its required errors array; valid findings were preserved, but completeness cannot be established") {
+    return "Semgrep results incomplete: required errors array missing.";
+  }
+  if (warning === "Semgrep reported one or more scanner errors; valid findings were preserved, but the error details remain only in the raw artifact and completeness cannot be established") {
+    return "Semgrep results incomplete: scanner errors reported.";
+  }
+  if (warning === "Cloudsplaining principal context exceeded the bounded report budget; later findings retain policy and action details, while their complete AttachedTo values stay in raw evidence") {
+    return "Cloudsplaining principal attribution incomplete: report limit reached.";
+  }
+  const missingAdapter = warning.match(
+    /^scanner output was captured, but no verified adapter is registered for (.+) version (.+)$/u,
+  );
+  if (missingAdapter) {
+    return `${missingAdapter[1]} ${missingAdapter[2]} results unavailable: unsupported result format.`;
+  }
+  const invalidAdapter = warning.match(
+    /^scanner output was captured, but adapter (.+) version (.+) failed validation$/u,
+  );
+  if (invalidAdapter) {
+    return `${invalidAdapter[1]} ${invalidAdapter[2]} result processing failed.`;
+  }
+  const missingResultCount = warning.match(
+    /^(.+) document did not declare how many results it normalized, so nothing can confirm none were lost$/u,
+  );
+  if (missingResultCount) {
+    return `${missingResultCount[1]} document omitted its normalized result count; result completeness unknown.`;
+  }
+  const launcherCoverage = warning.match(
+    /^Captured launcher coverage remained unverified after restart \((.+)\); no unverified work was counted as tested\.$/u,
+  );
+  if (launcherCoverage) {
+    return `Launcher coverage verification failed after restart (${launcherCoverage[1]}).`;
+  }
+  const tenantDispute = warning.match(
+    /^the tenant's ScubaGear configuration disputes the result of (.+) (.+); they are reported on ScubaGear's own determination and tagged tenant-disputed rather than suppressed$/u,
+  );
+  if (tenantDispute) {
+    return `ScubaGear marked ${tenantDispute[1]} ${tenantDispute[2]} tenant-disputed.`;
+  }
+  const findingLimit = warning.match(
+    /^Cloudsplaining reported (\d+) valid policy findings; the bounded report retained (\d+) in Critical, High, Medium, Unknown, Low, then Informational order, and (\d+) remain only in raw evidence$/u,
+  );
+  if (findingLimit) {
+    return `Cloudsplaining report limit reached: ${findingLimit[2]} of ${findingLimit[1]} findings included; ${findingLimit[3]} excluded.`;
+  }
+
+  return warning
+    .replace(/^(.+) adapter input mismatch: document declares engine (.+)$/u, "$1 results unavailable: document declares engine $2")
+    .replace(/^adapter /u, "result processing ")
+    .replace(
+      "output is inventory evidence; no security issue was invented from inventory rows",
+      "output contains inventory, not security findings",
+    )
+    .replace("did not match the pinned", "did not match the supported")
+    .replace("; remaining raw artifacts were retained but not normalized", "; normalized output incomplete")
+    .replace("; remaining raw records were retained but not normalized", "; normalized output incomplete")
+    .replace("; extra raw artifacts were retained but not normalized", "; normalized output incomplete")
+    .replace(/; later ([^;]+) remain only as raw evidence$/u, "; later $1 were not normalized")
+    .replace(/ and remains only as raw evidence$/u, " and was not normalized")
+    .replace(/ and was retained only as raw evidence$/u, " and was not normalized")
+    .replace(/; it was retained only as raw evidence$/u, "; it was not normalized")
+    .replace(/ was retained only as raw evidence$/u, " was not normalized")
+    .replace(
+      /; the raw (?:artifact|record) was retained, and the scan should be retried with (.+)$/u,
+      "; retry with $1",
+    )
+    .replace(
+      "; the raw artifact was retained, and the inventory query should be retried",
+      "; retry the inventory query",
+    )
+    .replace(
+      /; retry with (?:the )?(?:supported )?pinned (?:Syft )?(?:JSONL output|JSON reporter)$/u,
+      "; result excluded",
+    )
+    .replace(/; the raw (?:artifact|record|value) was retained$/u, "")
+    .replace("; its metadata remains in the case", "")
+    .replace("; valid sibling findings were preserved", "")
+    .replace("; findings were preserved without complete principal attribution", "; principal attribution incomplete")
+    .replace("; valid principal names were preserved", "")
+    .replace(
+      "; bounded valid names were preserved and the remainder stays in raw evidence",
+      "; principal attribution incomplete",
+    )
+    .replace("; a bounded display value was preserved", "; display value bounded")
+    .replace(
+      "; bounded valid actions were preserved and the complete list stays in raw evidence",
+      "; finding actions incomplete",
+    )
+    .replace("; findings were preserved without those references", "; references unavailable")
+    .replace("; findings were preserved without it", "; source description unavailable")
+    .replace("; the finding was preserved without that reference", "; reference unavailable")
+    .replace(". Raw target text is retained only as untrusted evidence.", ".")
+    .replace("Earlier saved error classification was preserved for diagnosis:", "Earlier saved error classification:")
+    .replace(
+      "Result processing stopped. Start a new scan with the current result reader.",
+      "Result processing stopped. Start a new scan.",
+    )
+    .replace(
+      "The installed result reader cannot continue processing this check. Start a new scan for a fresh result.",
+      "The installed version cannot process this saved check. Start a new scan.",
+    )
+    .replace(
+      /Execution retains this explicit stale-knowledge warning; its results must not be presented as current knowledge\.$/u,
+      "Results use outdated knowledge.",
+    )
+    .replace(
+      /Verified empty JSONL result processing continued without scanner execution or mapping changes\.$/u,
+      "Empty JSONL result processing completed.",
+    );
+};
+
+const directEngineWarningZhTW = (warning: string): string => {
+  if (warning === "Greenbone 結果缺少上游結果類型與正的嚴重程度；只保留為原始證據，本輪不能視為乾淨的結果") {
+    return "Greenbone 結果已排除：缺少上游結果類型與正的嚴重程度。檢查結果不完整。";
+  }
+  if (warning === "Greenbone XML 沒有完整且有界的結果記錄；未推斷任何問題") {
+    return "Greenbone 結果處理不完整：沒有完整且有界的結果記錄。";
+  }
+  if (warning === "Cloudsplaining 主體資訊超過報告的有界容量；後續問題仍保留政策與動作資訊，完整 AttachedTo 值則保留在原始證據中") {
+    return "Cloudsplaining 主體歸屬資訊不完整：已達報告限制。";
+  }
+  const findingLimit = warning.match(
+    /^Cloudsplaining 回報 (\d+) 筆有效的 IAM 原則問題；有界報告依重大、高、中、未知、低、資訊的優先順序保留 (\d+) 筆，其餘 (\d+) 筆只保留在原始證據中$/u,
+  );
+  if (findingLimit) {
+    return `Cloudsplaining 已達報告限制：${findingLimit[1]} 筆問題中納入 ${findingLimit[2]} 筆，排除 ${findingLimit[3]} 筆。`;
+  }
+
+  return warning
+    .replace(/^(.+) 轉接器輸入不符：文件宣告掃描工具為 (.+)$/u, "$1 結果不可用：文件宣告掃描工具為 $2")
+    .replace(/^轉接器/u, "結果處理")
+    .replace(/^掃描器輸出已擷取，但沒有為 (.+) (.+) 版登錄經驗證的轉接器$/u, "$1 $2 結果不可用：不支援的結果格式")
+    .replace(/^掃描器輸出已擷取，但 (.+) (.+) 版轉接器驗證失敗$/u, "$1 $2 結果處理失敗")
+    .replace(/^(.+) 文件未宣告正規化的結果數量，因此無法確認沒有遺失$/u, "$1 文件缺少正規化結果數量；結果完整性未知")
+    .replace(/^重新啟動後，擷取的啟動器涵蓋仍未驗證（(.+)）；未驗證的工作不會計為已檢測。$/u, "重新啟動後啟動器涵蓋驗證失敗（$1）。")
+    .replace(/^租用戶的 ScubaGear 設定對 (.+) (.+) 的結果有異議；系統依 ScubaGear 本身的判定回報，並標記為租用戶異議，而不是隱藏$/u, "ScubaGear 將 $1 $2 標記為租用戶異議。")
+    .replace("輸出是資產清冊證據；未從清冊資料列臆造安全問題", "輸出是資產清冊，不是安全問題")
+    .replace("；其餘原始成品已保留，但未正規化", "；正規化輸出不完整")
+    .replace("；其餘原始記錄已保留，但未正規化", "；正規化輸出不完整")
+    .replace("；額外的原始成品已保留，但未正規化", "；正規化輸出不完整")
+    .replace(/；後續([^；]+)只保留為原始證據$/u, "；後續$1未正規化")
+    .replace(/，只保留為原始證據$/u, "，未正規化")
+    .replace(/只保留在原始證據中$/u, "未正規化")
+    .replace(/只保留為原始證據$/u, "未正規化")
+    .replace(/；原始(?:成品|記錄)已保留，請/u, "；請")
+    .replace(/；請使用(?:支援的)?固定的? (?:Syft )?(?:JSONL 輸出|JSON 報告器)重試$/u, "；該結果已排除")
+    .replace(/；原始(?:成品|記錄|值)已保留$/u, "")
+    .replace("；其中繼資料仍保留在案件中", "")
+    .replace("；已保留其他有效問題", "")
+    .replace("；問題已保留，但主體歸屬資訊不完整", "；主體歸屬資訊不完整")
+    .replace("；已保留有效的主體名稱", "")
+    .replace("；已保留有界的有效名稱，其餘仍在原始證據中", "；主體歸屬資訊不完整")
+    .replace("；已保留有界的顯示值", "；顯示值已限制長度")
+    .replace("；已保留有界的有效動作，完整清單仍在原始證據中", "；問題動作不完整")
+    .replace("；問題已保留，但不含那些參照", "；參照不可用")
+    .replace("；問題已保留，但不含該說明", "；來源說明不可用")
+    .replace("；問題已保留，但不含該參照", "；參照不可用")
+    .replace("；有效問題已保留，但無法確認完整性", "；結果不完整")
+    .replace("；有效問題已保留，錯誤細節只留在原始成品中，且無法確認完整性", "；結果不完整")
+    .replace("。原始目標文字只保留為不受信任的證據。", "。")
+    .replace("已保留先前儲存的錯誤分類供診斷：", "先前儲存的錯誤分類：")
+    .replace("結果處理已停止；請使用目前的結果讀取器開始新的掃描。", "結果處理已停止；請開始新的掃描。")
+    .replace("已安裝的結果讀取器無法繼續處理這項檢查；請開始新的掃描。", "已安裝版本無法處理這項已保存的檢查；請開始新的掃描。")
+    .replace("執行記錄保留這項明確的過時知識警告；其結果不得呈現為目前知識。", "結果使用過時知識。")
+    .replace("已驗證的空白 JSONL 結果已繼續處理，沒有重新執行掃描器或變更對照。", "空白 JSONL 結果處理完成。");
+};
+
 export const recognizedEngineWarningZhTW = (warning: string): string | undefined => {
   const normalized = normalizeLegacyEngineWarning(warning);
   const fixed = FIXED_ENGINE_WARNINGS.find(([english]) => english === normalized)?.[1];
-  if (fixed) return fixed;
+  if (fixed) return directEngineWarningZhTW(fixed);
   const rules: ReadonlyArray<readonly [RegExp, (...values: string[]) => string]> = [
     [/^(.+) produced no raw artifacts to normalize$/u, (engine) => `${engine} 未產生可正規化的原始成品`],
     [/^(.+) output is inventory evidence; no security issue was invented from inventory rows$/u, (engine) => `${engine} 輸出是資產清冊證據；未從清冊資料列臆造安全問題`],
@@ -319,12 +496,14 @@ export const recognizedEngineWarningZhTW = (warning: string): string | undefined
   ];
   for (const [expression, render] of rules) {
     const translated = frame(normalized, expression, render);
-    if (translated) return translated;
+    if (translated) return directEngineWarningZhTW(translated);
   }
   return undefined;
 };
 
 export const localizedEngineWarning = (warning: string, locale: "en" | "zh-TW"): string => {
   const normalized = normalizeLegacyEngineWarning(warning);
-  return locale === "en" ? normalized : recognizedEngineWarningZhTW(normalized) ?? normalized;
+  return locale === "en"
+    ? directEngineWarningEnglish(normalized)
+    : recognizedEngineWarningZhTW(normalized) ?? directEngineWarningEnglish(normalized);
 };
