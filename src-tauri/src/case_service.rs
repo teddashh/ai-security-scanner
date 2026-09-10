@@ -13,11 +13,13 @@ use crate::artifact_store::{
     ArtifactContext, LauncherV2OutputArtifact, classify_launcher_v2_output_artifact,
     inspect_raw_artifacts, read_verified_raw_artifact,
 };
+#[cfg(test)]
+use crate::beginner_report::ReportLifecycle;
 use crate::beginner_report::{
     BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerInventoryItem, BeginnerInventoryItemKind,
     BeginnerMasterReport, BeginnerReportSummary, CheckResultKind, CoverageDimensionStatus,
-    CoverageGap, CoverageGapKind, FindingSnapshotSource, NextActionCode, ReportLifecycle,
-    ReportScanStage, RequestedLimitSource,
+    CoverageGap, CoverageGapKind, FindingSnapshotSource, NextActionCode, ReportScanStage,
+    RequestedLimitSource,
 };
 use crate::bootstrap::executor::list_bootstrap_cleanup_obligations;
 use crate::connectors::{
@@ -6613,16 +6615,7 @@ impl<'a> CaseService<'a> {
             ));
         }
         let case = self.storage.get_case(case_id)?;
-        let selected_run = case
-            .scan_runs
-            .iter()
-            .find(|run| run.id == run_id)
-            .ok_or_else(|| AppError::InvalidRequest(format!("scan run not found: {run_id}")))?;
-        if selected_run.case_id != case.id {
-            return Err(AppError::InvalidRequest(
-                "scan run does not belong to the selected case".into(),
-            ));
-        }
+        let selected_run = terminal_export_run(&case, run_id)?;
         let selected_finding_ids = case
             .finding_observations
             .iter()
@@ -6771,6 +6764,7 @@ impl<'a> CaseService<'a> {
         options: ExportOptions,
     ) -> AppResult<CaseExport> {
         let mut case = self.storage.get_case(case_id)?;
+        terminal_export_run(&case, run_id)?;
         let export = create_case_bundle(
             &case,
             run_id,
@@ -6833,16 +6827,7 @@ impl<'a> CaseService<'a> {
         options: ExportOptions,
     ) -> AppResult<CaseExport> {
         let mut case = self.storage.get_case(case_id)?;
-        let selected_run = case
-            .scan_runs
-            .iter()
-            .find(|run| run.id == run_id)
-            .ok_or_else(|| AppError::InvalidRequest(format!("scan run not found: {run_id}")))?;
-        if selected_run.case_id != case.id {
-            return Err(AppError::InvalidRequest(
-                "scan run does not belong to the selected case".into(),
-            ));
-        }
+        terminal_export_run(&case, run_id)?;
         let document_case = case_for_document_export(&case, &options);
         let bytes = match format {
             CaseExportFormat::CanonicalJson => canonical_json_bytes(&case, run_id, &options)?,
@@ -13112,6 +13097,23 @@ fn run_is_terminal(run: &ScanRun) -> bool {
                 .all(|engine_run| engine_status_terminal(&engine_run.status)))
 }
 
+fn terminal_export_run<'a>(case: &'a AssessmentCase, run_id: &str) -> AppResult<&'a ScanRun> {
+    let run = case
+        .scan_runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .ok_or_else(|| AppError::InvalidRequest(format!("scan run not found: {run_id}")))?;
+    if run.case_id != case.id {
+        return Err(AppError::InvalidRequest(
+            "scan run does not belong to the selected case".into(),
+        ));
+    }
+    if !run_is_terminal(run) {
+        return Err(AppError::NotAvailable("scan is in progress".into()));
+    }
+    Ok(run)
+}
+
 fn coverage_manifest_destination(destination: &Path) -> AppResult<PathBuf> {
     validate_destination(destination)?;
     let file_name = destination
@@ -14685,44 +14687,6 @@ fn html_report_bytes(
             }
         }
     };
-    let report_lifecycle = match report.state.lifecycle {
-        ReportLifecycle::Live => catalog.text("This report is still updating", "這份報告仍在更新"),
-        ReportLifecycle::Final => catalog.text("Final for this run", "本輪最終報告"),
-    };
-    let report_explanation = if connection_diagnostic {
-        catalog.text(
-            "No vulnerability, configuration, code, or secret security check completed. This result records only whether one local port accepted, refused, or timed out during a bounded TCP connection attempt; it is not a no-problems security result.",
-            "未完成漏洞、設定、程式碼或秘密資訊資安檢查。這份結果只記錄單一本機連接埠在有限制的 TCP 連線嘗試中接受、拒絕或逾時，不能解讀為未發現資安問題。",
-        )
-    } else if non_security_only {
-        catalog.text(
-            "This run contains only inventory or connectivity work. It did not complete a vulnerability, configuration, code, or secret security check. These observations are not a no-problems security result.",
-            "本輪只包含盤點或連線工作；未完成漏洞、設定、程式碼或秘密資訊資安檢查。這些觀察不能解讀為未發現資安問題。",
-        )
-    } else {
-        match (report.state.summary, report.state.lifecycle) {
-        (BeginnerReportSummary::Complete, ReportLifecycle::Final) => catalog.text(
-            "Every saved check reached a complete terminal result for this run.",
-            "本輪每一項已保存的檢查都已取得完整的最終結果。",
-        ),
-        (BeginnerReportSummary::NoChecksCompleted, _) => catalog.text(
-            "No check reached a completed result; do not treat missing findings as a clean result.",
-            "沒有任何檢查完成；請勿把沒有問題紀錄解讀為安全無虞。",
-        ),
-        (BeginnerReportSummary::Partial, ReportLifecycle::Live) => catalog.text(
-            "Some work is incomplete and this report can still change.",
-            "部分工作尚未完成，這份報告仍可能變更。",
-        ),
-        (BeginnerReportSummary::Partial, ReportLifecycle::Final) => catalog.text(
-            "This run ended with incomplete, failed, timed-out, cancelled, or untested work.",
-            "本輪結束時仍有未完成、失敗、逾時、取消或未測試的工作。",
-        ),
-        (BeginnerReportSummary::Complete, ReportLifecycle::Live) => catalog.text(
-            "Saved checks are complete so far, but this live report can still change.",
-            "目前已保存的檢查均已完成，但這份即時報告仍可能變更。",
-        ),
-        }
-    };
     let requested_stage = report
         .requested
         .stage
@@ -15841,7 +15805,7 @@ fn html_report_bytes(
             "<header><p>{}</p><h1>{}</h1>",
             "<p>{} <code>{}</code></p></header>",
             "<section class=\"report-state\"><strong class=\"pill\">{}</strong>",
-            "<span>{}</span><span>{}</span><span>{} {}</span></section>",
+            "<span>{} {}</span></section>",
             "<p><strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
             "<strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
             "<strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
@@ -15855,8 +15819,6 @@ fn html_report_bytes(
         catalog.text("Selected run", "選定的掃描輪次"),
         html_escape(&report.run_id),
         report_summary,
-        report_lifecycle,
-        html_escape(report_explanation),
         catalog.text("Last saved", "最後保存"),
         html_escape(&catalog.format_time(&report.state.last_durable_update)),
         catalog.text("Checks completed", "已完成檢查"),
@@ -21459,9 +21421,7 @@ mod tests {
         )
         .unwrap();
         assert!(html.contains("Inventory or connectivity only"));
-        assert!(html.contains(
-            "did not complete a vulnerability, configuration, code, or secret security check"
-        ));
+        assert!(html.contains("What was not tested"));
         assert!(html.contains(&expected_unit_count));
         assert!(html.contains("Exact network coverage and outcome"));
         assert!(html.contains("[redacted address set 1]"));
@@ -21892,7 +21852,7 @@ mod tests {
         let html = fs::read_to_string(destination).expect("read exported internal HTML");
         for expected in [
             "Complete",
-            "Final for this run",
+            "Which assets need attention",
             "192.168.50.0/24",
             "What was actually tested",
             "What was not tested",
@@ -30606,7 +30566,6 @@ mod tests {
         for expected in [
             "Connection test (not a vulnerability scan)",
             "Connection test only",
-            "No vulnerability, configuration, code, or secret security check completed.",
             "Web service",
             "saved task settings",
             "127.0.0.1:9001",
@@ -30647,21 +30606,15 @@ mod tests {
         assert!(html.contains("asset-result--not-tested"));
         assert!(html.contains("No completed security check is recorded for this asset."));
 
-        case.scan_runs
-            .iter_mut()
-            .find(|run| run.id == prepared.prepared.scan_run_id)
-            .unwrap()
-            .case_id = "mismatched-project-id".into();
-
         let zh_options = ExportOptions {
             redaction: RedactionProfile::None,
             include_raw_artifacts: false,
             locale: crate::export::ReportLocale::ZhHant,
         };
-        let zh_html = String::from_utf8(
-            html_report_bytes(&case, &prepared.prepared.scan_run_id, &zh_options).unwrap(),
-        )
-        .unwrap();
+        fixture
+            .storage
+            .save_case(&mut case, "test.terminal_localhost_report")
+            .unwrap();
         let zh_preview = fixture
             .service()
             .preview_export(
@@ -30671,6 +30624,16 @@ mod tests {
                 &zh_options,
             )
             .unwrap();
+
+        case.scan_runs
+            .iter_mut()
+            .find(|run| run.id == prepared.prepared.scan_run_id)
+            .unwrap()
+            .case_id = "mismatched-project-id".into();
+        let zh_html = String::from_utf8(
+            html_report_bytes(&case, &prepared.prepared.scan_run_id, &zh_options).unwrap(),
+        )
+        .unwrap();
 
         assert_eq!(zh_preview.locale, crate::export::ReportLocale::ZhHant);
         assert!(!zh_preview.include_raw_evidence);
@@ -35223,7 +35186,41 @@ mod tests {
         fixture.storage.save_case(&mut case, "test.runs").unwrap();
         let destination = fixture.directory.path().join("ocsf.json");
         let service = fixture.service();
-        for run_id in ["active", "incomplete"] {
+        for format in [
+            CaseExportFormat::CaseBundle,
+            CaseExportFormat::CanonicalJson,
+            CaseExportFormat::FrameworkReport,
+            CaseExportFormat::Html,
+            CaseExportFormat::OcsfJson,
+            CaseExportFormat::OscalJson,
+        ] {
+            assert!(matches!(
+                service.preview_export(
+                    &case.id,
+                    "active",
+                    format.clone(),
+                    &ExportOptions::default(),
+                ),
+                Err(AppError::NotAvailable(_))
+            ));
+            let active_destination = fixture
+                .directory
+                .path()
+                .join(format!("active-{}", format.as_str()));
+            assert!(matches!(
+                service.export_case(
+                    &case.id,
+                    "active",
+                    format,
+                    &active_destination,
+                    ExportOptions::default(),
+                ),
+                Err(AppError::NotAvailable(_))
+            ));
+            assert!(!active_destination.exists());
+        }
+        {
+            let run_id = "incomplete";
             for format in [CaseExportFormat::OcsfJson, CaseExportFormat::OscalJson] {
                 let preview = service
                     .preview_export(&case.id, run_id, format.clone(), &ExportOptions::default())
@@ -35258,7 +35255,7 @@ mod tests {
                         .valid
                 );
             }
-            let interim_preview = service
+            let incomplete_preview = service
                 .preview_export(
                     &case.id,
                     run_id,
@@ -35266,10 +35263,10 @@ mod tests {
                     &ExportOptions::default(),
                 )
                 .unwrap();
-            assert_eq!(interim_preview.run_id, run_id);
-            assert_eq!(interim_preview.selected_run_finding_count, 0);
-            assert_eq!(interim_preview.selected_engine_run_count, 1);
-            assert_eq!(interim_preview.incomplete_engine_run_count, 1);
+            assert_eq!(incomplete_preview.run_id, run_id);
+            assert_eq!(incomplete_preview.selected_run_finding_count, 0);
+            assert_eq!(incomplete_preview.selected_engine_run_count, 1);
+            assert_eq!(incomplete_preview.incomplete_engine_run_count, 1);
             let framework_destination = fixture
                 .directory
                 .path()
@@ -35345,7 +35342,7 @@ mod tests {
         let reopened = service.show_case(&case.id).unwrap();
         assert_eq!(
             reopened.exports.len(),
-            8,
+            5,
             "partial findings exports, framework reports, and baseline exports must be persisted"
         );
         assert_eq!(reopened.comparisons.len(), 1);

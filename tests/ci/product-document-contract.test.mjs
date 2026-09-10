@@ -51,7 +51,7 @@ function localMarkdownTargets(markdown) {
   return targets;
 }
 
-test("the product specification records the owner's four product decisions", async () => {
+test("the product specification records the owner's five product decisions", async () => {
   const specification = await load("docs/product-spec.md");
 
   assert.match(specification, /beginner quickly completes a meaningful scan and understands the result/i);
@@ -61,6 +61,7 @@ test("the product specification records the owner's four product decisions", asy
     specification,
     /Versioning, publication, certification, and compliance positioning belong to the product owner/i,
   );
+  assert.match(specification, /concise first and detailed on demand/i);
   assert.match(specification, /socket connection.*not a vulnerability scan/is);
 });
 
@@ -78,6 +79,8 @@ test("Codex, Claude, contributors, and the operator skill use the same prioritie
     assert.match(content, /professional report|shared report/i, `${document} must use the shared report layer`);
     assert.match(content, /product owner|product-owner/i, `${document} must preserve owner authority`);
     assert.match(content, /unless the (?:product )?owner explicitly requests/i, `${document} must not invent release work`);
+    assert.match(content, /active work stays in Progress|active scans remain in Progress|keep active work in Progress/i, `${document} must keep active scans out of reports`);
+    assert.match(content, /defensive caveat walls/i, `${document} must keep defensive prose out of the primary path`);
   }
 
   assert.equal(

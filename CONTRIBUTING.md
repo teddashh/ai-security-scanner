@@ -10,6 +10,7 @@ Use these priorities when choosing and reviewing work:
 2. Scanner integrations stay close to upstream behavior and data.
 3. The product combines engine output into one clear, professional report.
 4. Versioning, release timing, publication, and compliance positioning are product-owner decisions. Do not expand work into those areas unless the owner explicitly requests it.
+5. Primary choices, progress, and reports stay concise and action-led; detail is available on demand.
 
 A connectivity check, process launch, or empty report is not meaningful scan value. Product-facing work should help the user discover a real exposure, vulnerability, secret, risky configuration, or other actionable security signal—or clearly explain why a requested check could not run.
 
@@ -24,6 +25,8 @@ Prefer the shortest complete beginner journey:
 - show which assets were scanned, the most important results, their impact, and the next action in one report;
 - distinguish no findings from checks that did not run; and
 - preserve saved work and allow unaffected checks to continue when one scanner fails.
+
+Active scans remain in Progress. Results and Export open only for a terminal run. Do not add live/interim reports, defensive caveat walls, implementation-defect or test-harness explanations, or prose that transfers product responsibility to the user. Put required formal terms at the end or footer of the final report and keep technical evidence in collapsed detail.
 
 Inventory, service discovery, port reachability, and connectivity may prepare an internal target, but they cannot satisfy vulnerability-scan value by themselves.
 

@@ -1,8 +1,9 @@
 use crate::domain::{
-    AssessmentCase, Confidence, EngineRunStatus, Evidence, EvidenceKind, Finding,
-    FindingObservation, FindingStatus, ScanRun, Severity,
+    AssessmentCase, Confidence, Evidence, EvidenceKind, Finding, FindingObservation, FindingStatus,
+    ScanRun, Severity,
 };
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
+use crate::exporters::terminal_run;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -20,16 +21,7 @@ pub const OSCAL_EXPORT_NOTICE: &str = "This document contains preliminary scanne
 /// sentinel instead of `include-all`. Canonical control mappings appear only as
 /// namespaced observation properties.
 pub fn export_oscal_assessment_results(case: &AssessmentCase, run_id: &str) -> AppResult<Value> {
-    let run = case
-        .scan_runs
-        .iter()
-        .find(|run| run.id == run_id)
-        .ok_or_else(|| AppError::InvalidRequest(format!("scan run not found: {run_id}")))?;
-    if run.case_id != case.id {
-        return Err(AppError::InvalidRequest(
-            "scan run does not belong to the selected case".into(),
-        ));
-    }
+    let run = terminal_run(case, run_id)?;
 
     let findings = case
         .findings
@@ -63,27 +55,18 @@ pub fn export_oscal_assessment_results(case: &AssessmentCase, run_id: &str) -> A
         })
         .collect::<Vec<_>>();
 
-    // OSCAL 1.2.3 defines `end` as optional and specifically as the end of
-    // evidence collection. An active run therefore omits it instead of
-    // substituting the run's creation time and implying work has ended.
-    let final_run = run_is_authoritatively_final(run);
-    let end = final_run.then_some(run.completed_at.unwrap_or(last_durable_activity));
-    let lifecycle = if final_run { "final" } else { "live-snapshot" };
-    let description = if final_run {
-        "Read-only and explicitly authorized scanner observations normalized by ai-security-scanner."
-    } else {
-        "Live snapshot of read-only and explicitly authorized scanner observations normalized by ai-security-scanner; evidence collection has not ended."
-    };
-    let mut result = json!({
+    let end = run.completed_at.unwrap_or(last_durable_activity);
+    let result = json!({
         "uuid": stable_uuid(&format!("assessment-result:{}:{}", case.id, run_id)),
         "title": format!("Scanner run {} observations", run.sequence),
-        "description": description,
+        "description": "Read-only and explicitly authorized scanner observations normalized by ai-security-scanner.",
         "start": run.created_at.to_rfc3339(),
+        "end": end.to_rfc3339(),
         "props": [
             property("canonical-case-id", &case.id),
             property("canonical-run-id", run_id),
             property("export-kind", "preliminary-scanner-observations"),
-            property("result-lifecycle", lifecycle)
+            property("result-lifecycle", "final")
         ],
         "reviewed-controls": {
             "description": "No formal catalog controls were reviewed. The required OSCAL selection contains only a product-local structural sentinel; related framework coordinates appear only on observations.",
@@ -96,18 +79,8 @@ pub fn export_oscal_assessment_results(case: &AssessmentCase, run_id: &str) -> A
             }]
         },
         "observations": observations,
-        "remarks": if final_run {
-            OSCAL_EXPORT_NOTICE.to_string()
-        } else {
-            format!("{OSCAL_EXPORT_NOTICE} This is a live snapshot; the optional result end is intentionally absent because evidence collection has not ended.")
-        }
+        "remarks": OSCAL_EXPORT_NOTICE
     });
-    if let Some(end) = end {
-        result
-            .as_object_mut()
-            .expect("OSCAL result is an object")
-            .insert("end".into(), json!(end.to_rfc3339()));
-    }
     Ok(json!({
         "assessment-results": {
             "uuid": stable_uuid(&format!("assessment-results:{}:{}", case.id, run_id)),
@@ -127,25 +100,6 @@ pub fn export_oscal_assessment_results(case: &AssessmentCase, run_id: &str) -> A
     }))
 }
 
-fn run_is_authoritatively_final(run: &ScanRun) -> bool {
-    if run.is_terminal_no_checks() {
-        return true;
-    }
-    if run.engine_runs.is_empty() {
-        return run.completed_at.is_some();
-    }
-    run.engine_runs.iter().all(|task| {
-        matches!(
-            task.status,
-            EngineRunStatus::NotExecuted
-                | EngineRunStatus::Completed
-                | EngineRunStatus::PartiallyCompleted
-                | EngineRunStatus::Failed
-                | EngineRunStatus::Cancelled
-        )
-    })
-}
-
 fn selected_run_last_durable_activity(
     run: &ScanRun,
     observations: &[&FindingObservation],
@@ -162,9 +116,7 @@ fn selected_run_last_durable_activity(
     for observation in observations {
         latest = latest.max(observation.observed_at);
     }
-    if run_is_authoritatively_final(run)
-        && let Some(completed_at) = run.completed_at
-    {
+    if let Some(completed_at) = run.completed_at {
         latest = latest.max(completed_at);
     }
     latest
@@ -866,23 +818,14 @@ mod tests {
     }
 
     #[test]
-    fn active_run_omits_optional_evidence_collection_end() {
+    fn active_run_cannot_be_exported() {
         let mut case = fixture();
         case.scan_runs[0].completed_at = None;
 
-        let value = export_oscal_assessment_results(&case, "run-1").unwrap();
-        let result = &value["assessment-results"]["results"][0];
-
-        assert!(result.get("end").is_none());
+        let error = export_oscal_assessment_results(&case, "run-1").unwrap_err();
         assert!(
-            result["remarks"]
-                .as_str()
-                .unwrap()
-                .contains("live snapshot")
+            matches!(error, crate::error::AppError::NotAvailable(message) if message == "scan is in progress")
         );
-        assert!(result["props"].as_array().unwrap().iter().any(|property| {
-            property["name"] == "result-lifecycle" && property["value"] == "live-snapshot"
-        }));
     }
 
     #[test]

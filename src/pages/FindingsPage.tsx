@@ -213,17 +213,12 @@ const copy = {
   inventoryTlsObserved: { en: "TLS observed", zhTW: "觀察到 TLS" },
   inventoryNativeId: { en: "Native ID", zhTW: "原生識別碼" },
   emptyNoRunTitle: { en: "No scan results yet", zhTW: "尚未產生掃描結果" },
-  emptyActiveTitle: {
-    en: "The scan is still running; no problems have arrived yet",
-    zhTW: "掃描仍在執行，目前還沒有收到問題",
-  },
-  emptyActiveCompletedTitle: {
-    en: "Completed checks have reported no problems so far; the scan is still running",
-    zhTW: "已完成的檢查目前沒有回報問題；掃描仍在執行",
-  },
+  activePageEyebrow: { en: "SCAN IN PROGRESS", zhTW: "掃描進行中" },
+  activePageTitle: { en: "Scan in progress", zhTW: "掃描進行中" },
+  activePageDescription: { en: "Continue in Scan progress.", zhTW: "請回到「掃描進度」繼續。" },
   emptyIncompleteTitle: {
-    en: "This run produced no saved problems, but the scan did not finish",
-    zhTW: "本輪沒有正式問題紀錄，但掃描未完整完成",
+    en: "Scan needs attention",
+    zhTW: "掃描需要處理",
   },
   emptyUnknownTitle: {
     en: "No problems are shown, but some sources still need data",
@@ -237,27 +232,9 @@ const copy = {
     en: "Add what you want to scan, then start the check from Scan progress.",
     zhTW: "先加入想掃描的目標，再到掃描進度開始檢查。",
   },
-  emptyActiveDescription: {
-    en: "This is an interim view, not a clean result. Keep Scan progress open until every check has a final outcome.",
-    zhTW: "這只是暫時畫面，不代表沒有問題。請查看「掃描進度」，直到每項檢查都有最終結果。",
-  },
-  emptyActiveCompletedDescription: {
-    en: "This is a useful result for the completed security checks only—not a clean result for the whole scan. More checks may still report problems; keep Scan progress open until every check has a final outcome.",
-    zhTW: "這項結果只適用於已完成的資安檢查，不代表整輪掃描沒有問題。其餘檢查仍可能回報問題；請查看「掃描進度」，直到每項檢查都有最終結果。",
-  },
-  activeTitle: { en: "These are interim results", zhTW: "這些是暫時結果" },
-  activeDescription: {
-    en: "A scan is still running. More problems may appear, and the current counts must not be treated as the final result.",
-    zhTW: "掃描仍在執行，之後可能還會出現更多問題；目前數量不能視為最終結果。",
-  },
-  incompleteTitle: { en: "These results are incomplete", zhTW: "這些結果尚不完整" },
-  incompleteDescription: {
-    en: "Some checks stopped early. Review saved findings, but do not treat these counts as final.",
-    zhTW: "部分檢查提早停止；請檢視已保存問題，但勿將目前數量視為最終結果。",
-  },
   emptyIncompleteDescription: {
-    en: "Some checks did not finish, so there may be issues we could not see. Open Scan progress to see what needs attention.",
-    zhTW: "有些檢查沒有完成，因此可能還有看不到的問題。打開掃描進度，就能知道哪裡需要處理。",
+    en: "Retry unfinished checks from Scan progress.",
+    zhTW: "請到「掃描進度」重試未完成的檢查。",
   },
   emptyUnknownDescription: {
     en: "Sources still needing usable information: {count}. Open Scan setup to connect or check them.",
@@ -610,8 +587,6 @@ const copy = {
   reportNonSecurityOnly: { en: "Inventory or connectivity only", zhTW: "僅完成盤點或連線工作" },
   reportPartial: { en: "Partial results", zhTW: "部分結果" },
   reportNoChecks: { en: "No checks completed", zhTW: "沒有完成任何檢查" },
-  reportLive: { en: "Still updating", zhTW: "仍在更新" },
-  reportFinal: { en: "Final for this run", zhTW: "本輪已結束" },
   reportRun: { en: "Report run", zhTW: "報告輪次" },
   reportRunUnavailable: { en: "Previously selected scan unavailable", zhTW: "先前選擇的掃描已無法使用" },
   lastSaved: { en: "Last saved {time}", zhTW: "最後保存：{time}" },
@@ -1371,11 +1346,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         <div>
           <p className="eyebrow">{text(copy.masterEyebrow)}</p>
           <h2 id="beginner-master-report-title">{text(copy.masterTitle)}</h2>
-          <p role="status" aria-live="polite" aria-atomic="true">
-            {text(report.state.lifecycle === "live" ? copy.reportLive : copy.reportFinal)}
-            {" · "}
-            {text(copy.lastSaved, { time: formatDateTime(report.state.lastDurableUpdate) })}
-          </p>
+          <p>{text(copy.lastSaved, { time: formatDateTime(report.state.lastDurableUpdate) })}</p>
         </div>
         <StatusPill label={text(summary.label)} tone={summary.tone} />
       </div>
@@ -1938,20 +1909,6 @@ export function FindingsPage({
     ? (report ? runs.find((run) => run.id === report.runId) : undefined) ?? runs[0]
     : explicitlySelectedRun;
   const activeRun = latestRun && activeRunStatuses.has(latestRun.status) ? latestRun : undefined;
-  const incompleteTerminalRun = latestRun
-    && !activeRun
-    && latestRun.status !== "completed"
-    ? latestRun
-    : undefined;
-  // Progress only unlocks a zero-finding live report after a durable, explicitly
-  // typed security check completes. Preserve that same evidence boundary here:
-  // legacy or inventory-only work must not receive the stronger interim copy.
-  const hasCompletedLiveSecurityResult = Boolean(
-    activeRun
-    && report?.runId === activeRun.id
-    && report.actual.checks.some((check) =>
-      check.resultKind === "security_check" && check.status === "tested_complete"),
-  );
   const latestRequestOutcomeSummary = scanRequestOutcomeBeginnerSummary(latestRun?.requestOutcome);
   const reportRunPicker = runs.length > 1 || (runs.length > 0 && !latestRun) ? (
     <label className="select-filter">
@@ -1977,6 +1934,22 @@ export function FindingsPage({
   const unavailableReportNotice = latestRun
     ? unavailableRunBoundReportCopy
     : unavailableSelectedRunCopy;
+  if (activeRun) {
+    return (
+      <div className="page">
+        <PageHeader
+          eyebrow={text(copy.activePageEyebrow)}
+          title={text(copy.activePageTitle)}
+          description={text(copy.activePageDescription)}
+          actions={(
+            <button className="button button--primary" type="button" onClick={onOpenProgress}>
+              <Icon name="progress" size={16} />{text(copy.openProgress)}
+            </button>
+          )}
+        />
+      </div>
+    );
+  }
   const nonSecurityOnly = Boolean(report?.actual.checks.length
     && report.actual.checks.every((check) => checkResultKind(check) !== "security_check"));
   const observationDetails = (finding: Finding): string[] => {
@@ -2145,8 +2118,7 @@ export function FindingsPage({
   if (findings.length === 0) {
     const unknownSources = coverage.filter((item) => item.state === "source_unavailable_unknown").length;
     const connectedWithoutAssets = coverage.filter((item) => item.state === "source_connected_none").length;
-    const latestRunIsActive = Boolean(latestRun && activeRunStatuses.has(latestRun.status));
-    const incompleteRun = latestRun && !latestRunIsActive && latestRun.status !== "completed";
+    const incompleteRun = latestRun && latestRun.status !== "completed";
     const localhostSummary = latestRun && isExactBuiltInLocalhostQuickScanRun(latestRun)
       ? localhostTcpBeginnerSummary(latestRun.engineRuns[0]!)
       : undefined;
@@ -2159,11 +2131,7 @@ export function FindingsPage({
           ? text(localhostSummary.title)
           : nonSecurityOnly
             ? text(copy.nonSecurityEmptyTitle)
-          : latestRunIsActive
-            ? text(hasCompletedLiveSecurityResult
-              ? copy.emptyActiveCompletedTitle
-              : copy.emptyActiveTitle)
-            : incompleteRun
+          : incompleteRun
               ? text(copy.emptyIncompleteTitle)
               : unknownSources > 0
                 ? text(copy.emptyUnknownTitle)
@@ -2180,11 +2148,7 @@ export function FindingsPage({
             ].join(" ")
           : nonSecurityOnly
             ? text(copy.nonSecurityEmptyDescription)
-          : latestRunIsActive
-            ? text(hasCompletedLiveSecurityResult
-              ? copy.emptyActiveCompletedDescription
-              : copy.emptyActiveDescription)
-            : incompleteRun
+          : incompleteRun
               ? text(copy.emptyIncompleteDescription)
               : unknownSources > 0
                 ? text(copy.emptyUnknownDescription, { count: formatNumber(unknownSources) })
@@ -2215,8 +2179,7 @@ export function FindingsPage({
         {typedInventorySection}
         {observationSection}
         <EmptyState
-          icon={latestRunIsActive
-            || incompleteRun
+          icon={incompleteRun
             || unknownSources > 0
             || Boolean(requestOutcomeSummary)
             || ["closed", "timed_out", "failed", "cancelled", "missing", "inconsistent"]
@@ -2297,27 +2260,9 @@ export function FindingsPage({
 
       {reportUnavailable && <InlineNotice tone="warning" title={text(unavailableReportNotice.title)}><p>{text(unavailableReportNotice.body)}</p></InlineNotice>}
 
-      {activeRun && (
-        <InlineNotice tone="warning" title={text(copy.activeTitle)}>
-          <p>{text(copy.activeDescription)}</p>
-          <button className="button button--secondary button--small" type="button" onClick={onOpenProgress}>
-            <Icon name="progress" size={15} /> {text(copy.openProgress)}
-          </button>
-        </InlineNotice>
-      )}
-
       {latestRequestOutcomeSummary && (
         <InlineNotice tone="warning" title={text(latestRequestOutcomeSummary.title)}>
           <p>{[text(latestRequestOutcomeSummary.description), text(latestRequestOutcomeSummary.nextStep)].join(" ")}</p>
-          <button className="button button--secondary button--small" type="button" onClick={onOpenProgress}>
-            <Icon name="progress" size={15} /> {text(copy.openProgress)}
-          </button>
-        </InlineNotice>
-      )}
-
-      {incompleteTerminalRun && !latestRequestOutcomeSummary && (
-        <InlineNotice tone="warning" title={text(copy.incompleteTitle)}>
-          <p>{text(copy.incompleteDescription)}</p>
           <button className="button button--secondary button--small" type="button" onClick={onOpenProgress}>
             <Icon name="progress" size={15} /> {text(copy.openProgress)}
           </button>

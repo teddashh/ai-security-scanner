@@ -1,6 +1,6 @@
 use crate::beginner_report::{
     BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerInventoryItem, BeginnerInventoryItemKind,
-    BeginnerMasterReport, TechnicalExecution, build_beginner_master_report,
+    BeginnerMasterReport, ReportLifecycle, TechnicalExecution, build_beginner_master_report,
 };
 use crate::domain::{
     AssessmentCase, CaseExport, DataSource, EngineTaskKind, Finding, InventoryObservation,
@@ -241,6 +241,10 @@ pub fn create_case_bundle_at(
     created_at: DateTime<Utc>,
 ) -> AppResult<CaseExport> {
     let run = selected_run(case, run_id)?;
+    // A report is a terminal deliverable. Resolve it before creating a
+    // directory, key, or temporary archive so active scan work has no export
+    // side effect.
+    let beginner_report = beginner_report_for_export(case, run_id, options.redaction)?;
     let destination = destination.as_ref();
     validate_destination(destination)?;
 
@@ -283,7 +287,6 @@ pub fn create_case_bundle_at(
     // work plans and attempt journals. The report is then redacted as a
     // presentation document; execution evidence is never reconstructed from
     // the reduced export case.
-    let beginner_report = beginner_report_for_export(case, run_id, options.redaction)?;
     let redacted_case = case_for_export(case, options.redaction);
     let artifact_root = artifact_root.as_ref();
     let (artifact_records, artifact_sources) = prepare_artifacts(
@@ -1270,6 +1273,9 @@ pub(crate) fn beginner_report_for_export(
 ) -> AppResult<BeginnerMasterReport> {
     let mut report = build_beginner_master_report(case, run_id)
         .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+    if report.state.lifecycle != ReportLifecycle::Final {
+        return Err(AppError::NotAvailable("scan is in progress".into()));
+    }
     if redaction == RedactionProfile::Standard {
         let mut alias_case = case.clone();
         sort_case(&mut alias_case);

@@ -96,13 +96,16 @@ const preview = (overrides: Partial<ExportPreview> = {}): ExportPreview => ({
   ...overrides,
 });
 
-const renderExport = (answer: ExportPreview | undefined) => {
+const renderExport = (
+  answer: ExportPreview | undefined,
+  workspaceValue: CaseWorkspace = workspace,
+) => {
   const onPreview = vi.fn(() => Promise.resolve(answer));
   const onExport = vi.fn(() => Promise.resolve());
   const { container } = render(
     <I18nProvider>
       <ExportPage
-        workspace={workspace}
+        workspace={workspaceValue}
         selectedRunId={CHOSEN}
         exports={[]}
         demoMode={false}
@@ -139,6 +142,27 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
+});
+
+test("an active run stays in Progress and creates no export preview", () => {
+  const activeRun = {
+    ...run(CHOSEN),
+    status: "running" as const,
+    progress: 40,
+    finishedAt: undefined,
+  };
+  const { container, onPreview, onExport } = renderExport(undefined, {
+    ...workspace,
+    runs: [activeRun, run(NEWEST)],
+  });
+
+  expect(container.textContent).toContain("Scan in progress");
+  expect(container.textContent).toContain("Export opens after this scan finishes.");
+  expect(container.querySelector('a[href="#progress"]')?.textContent).toContain("View scan progress");
+  expect(container.querySelector(".export-layout")).toBeNull();
+  expect(container.textContent).not.toContain("Interim export");
+  expect(onPreview).not.toHaveBeenCalled();
+  expect(onExport).not.toHaveBeenCalled();
 });
 
 test("the export writes the run the user chose, not the newest one", async () => {

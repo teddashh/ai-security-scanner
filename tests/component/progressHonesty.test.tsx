@@ -357,22 +357,20 @@ test("collapsing every check into one shared failure still states how many stopp
   }
 });
 
-test("an active scan exposes durable security findings without waiting for the run to finish", () => {
+test("an active scan keeps durable security findings in progress until the run finishes", () => {
   const { container } = renderProgress(
     run([engine("semgrep", "running", { findingCount: 2 })], "running"),
     [finding()],
     "source_code",
   );
 
-  const results = container.querySelector<HTMLAnchorElement>('a[href="#findings"]');
-  expect(results?.textContent).toContain("View results");
-  expect(results?.className).toContain("button--primary");
+  expect(container.querySelector('a[href="#findings"]')).toBeNull();
   expect(container.querySelector(".run-overview__timing")?.textContent).toContain(
-    "A useful security result is available now; remaining checks may take longer.",
+    "Timing target: a useful result within minutes after tools are ready. Large folders can take longer.",
   );
 });
 
-test("the live results action is clear in Traditional Chinese", () => {
+test("Traditional Chinese progress stays focused while a scan is active", () => {
   window.localStorage.setItem(localeStorageKey, "zh-TW");
   const { container } = renderProgress(
     run([engine("semgrep", "running", { findingCount: 1 })], "running"),
@@ -380,11 +378,9 @@ test("the live results action is clear in Traditional Chinese", () => {
     "source_code",
   );
 
-  const results = container.querySelector<HTMLAnchorElement>('a[href="#findings"]');
-  expect(results?.textContent).toContain("查看結果");
-  expect(results?.className).toContain("button--primary");
+  expect(container.querySelector('a[href="#findings"]')).toBeNull();
   expect(container.querySelector(".run-overview__timing")?.textContent).toContain(
-    "目前已有可用的資安結果；其餘檢查可能需要更久。",
+    "時間目標：工具就緒後幾分鐘內提供有用結果；大型資料夾可能需要更久。",
   );
   expect(container.querySelector(".scan-activity__current")?.textContent).toContain(
     "目前或下一項檢查的資產 · selected-project",
@@ -404,7 +400,7 @@ test("an active scan with no durable finding does not offer results yet", () => 
   );
 });
 
-test("a completed security check unlocks its no-problem result while sibling work continues", () => {
+test("a completed security check does not open a half-finished report while sibling work continues", () => {
   const { container } = renderProgress(
     run([
       engine("semgrep", "completed", { progress: 100, findingCount: 0 }),
@@ -416,11 +412,9 @@ test("a completed security check unlocks its no-problem result while sibling wor
     reportWithCompletedCheck("security_check"),
   );
 
-  const results = container.querySelector<HTMLAnchorElement>('a[href="#findings"]');
-  expect(results?.textContent).toContain("View results");
-  expect(results?.className).toContain("button--primary");
+  expect(container.querySelector('a[href="#findings"]')).toBeNull();
   expect(container.querySelector(".run-overview__timing")?.textContent).toContain(
-    "A useful security result is available now; remaining checks may take longer.",
+    "Timing target: a useful result within minutes after tools are ready. Large folders can take longer.",
   );
 });
 
@@ -619,5 +613,5 @@ test("a terminal scan keeps the results entry even when it found no problems", (
 
   const results = container.querySelector<HTMLAnchorElement>('a[href="#findings"]');
   expect(results?.textContent).toContain("View results");
-  expect(results?.className).toContain("button--secondary");
+  expect(results?.className).toContain("button--primary");
 });

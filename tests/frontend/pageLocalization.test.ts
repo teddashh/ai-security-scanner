@@ -481,36 +481,28 @@ test("export preview, export, and both verification paths remain wired", async (
   assert.match(verification, /mappingVersionDriftOnlyForFinding \? mappingDiffSummary/u);
 });
 
-test("active and incomplete scans never present findings or exports as final", async () => {
+test("active scans stay in Progress instead of opening defensive interim surfaces", async () => {
   const findings = await readPage("FindingsPage.tsx");
   for (const phrase of [
-    "These are interim results",
-    "這些是暫時結果",
-    "This is an interim view, not a clean result.",
-    "這只是暫時畫面，不代表沒有問題。",
-    "These results are incomplete",
-    "這些結果尚不完整",
-    "Some checks stopped early. Review saved findings, but do not treat these counts as final.",
-    "部分檢查提早停止；請檢視已保存問題，但勿將目前數量視為最終結果。",
+    "Scan in progress",
+    "掃描進行中",
+    "Continue in Scan progress.",
+    "請回到「掃描進度」繼續。",
   ]) assert.ok(findings.includes(phrase), phrase);
   assert.match(findings, /activeRunStatuses\.has\(latestRun\.status\)/u);
   assert.match(findings, /activeRun[\s\S]*onOpenProgress/u);
-  assert.match(findings, /incompleteTerminalRun[\s\S]*onOpenProgress/u);
+  assert.doesNotMatch(findings, /interim results|暫時結果|Still updating|仍在更新/u);
 
   const exportPage = await readPage("ExportPage.tsx");
   for (const phrase of [
-    "Interim export",
-    "暫時報告",
-    "Save interim {format}",
-    "儲存暫時的「{format}」",
-    "Incomplete export",
-    "不完整報告",
-    "Save incomplete {format}",
-    "儲存不完整的「{format}」",
+    "Scan in progress",
+    "掃描進行中",
+    "Export opens after this scan finishes.",
+    "本輪掃描完成後即可匯出。",
   ]) assert.ok(exportPage.includes(phrase), phrase);
   assert.match(exportPage, /workspaceExportRevision/u);
-  assert.match(exportPage, /activeRun[\s\S]*createInterimExport/u);
-  assert.match(exportPage, /incompleteTerminalRun[\s\S]*createIncompleteExport/u);
+  assert.match(exportPage, /if \(activeRun\)[\s\S]*href="#progress"/u);
+  assert.doesNotMatch(exportPage, /Interim export|暫時報告|createInterimExport/u);
 });
 
 test("count copy stays grammatical when exactly one item is shown", async () => {
@@ -557,7 +549,7 @@ test("export leads with recipient choices and keeps file standards and integrity
   const source = await readPage("ExportPage.tsx");
   const normalizedSource = source.replaceAll("\r\n", "\n");
   const cardRendererStart = normalizedSource.indexOf("const renderFormatCard");
-  const cardRendererEnd = normalizedSource.indexOf("\n  };\n\n  return (", cardRendererStart);
+  const cardRendererEnd = normalizedSource.indexOf("\n  };\n\n  if (activeRun)", cardRendererStart);
   const cardRenderer = normalizedSource.slice(cardRendererStart, cardRendererEnd);
   assert.ok(cardRendererStart >= 0 && cardRendererEnd > cardRendererStart);
   assert.doesNotMatch(cardRenderer, /item\.extension/u);

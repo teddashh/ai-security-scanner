@@ -221,16 +221,7 @@ pub fn export_master_framework_report(
     case: &AssessmentCase,
     run_id: &str,
 ) -> AppResult<MasterFrameworkReport> {
-    let run = case
-        .scan_runs
-        .iter()
-        .find(|run| run.id == run_id)
-        .ok_or_else(|| AppError::InvalidRequest(format!("scan run not found: {run_id}")))?;
-    if run.case_id != case.id {
-        return Err(AppError::InvalidRequest(
-            "scan run does not belong to the selected case".into(),
-        ));
-    }
+    let run = super::terminal_run(case, run_id)?;
 
     let mut observations = case
         .finding_observations
@@ -1734,6 +1725,19 @@ mod tests {
                 .iter()
                 .all(|framework| framework.explanation.contains("not")
                     || framework.control_count > 0)
+        );
+    }
+
+    #[test]
+    fn active_run_cannot_be_exported() {
+        let mut case = fixture();
+        case.scan_runs[0].engine_runs[0].status = EngineRunStatus::Running;
+        case.scan_runs[0].engine_runs[0].finished_at = None;
+        case.scan_runs[0].completed_at = None;
+
+        let error = export_master_framework_report(&case, "run-1").unwrap_err();
+        assert!(
+            matches!(error, AppError::NotAvailable(message) if message == "scan is in progress")
         );
     }
 

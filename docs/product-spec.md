@@ -10,12 +10,13 @@ A precedence banner is not enough to preserve alignment: a conflicting subordina
 
 `ai-security-scanner` helps an IT generalist or developer find which selected company assets have real security problems and understand what to do next, without first learning a collection of scanner tools, Linux, containers, or security terminology.
 
-Four principles control product decisions:
+Five principles control product decisions:
 
 1. A beginner quickly completes a meaningful scan and understands the result.
 2. Scanner integrations stay as close to upstream behavior as practical.
 3. All results become one professional, product-owned report instead of disconnected tool reports or framework views.
 4. Versioning, publication, certification, and compliance positioning belong to the product owner. Existing work is preserved, but it is not an engineering priority or product prerequisite unless the owner explicitly asks.
+5. User-facing choices, progress, and reports are concise first and detailed on demand. The product does not fill the primary path with defensive caveats, implementation defects, test-harness language, or explanations that transfer product responsibility to the user. Required legal terms belong in one report-end or footer destination; technical evidence belongs in collapsed detail.
 
 The product succeeds when a user can say:
 
@@ -56,7 +57,7 @@ A meaningful result is one of:
 
 - an evidence-backed security problem with an actionable next step;
 - an evidence-backed statement that completed checks observed no problem in their exact scope, with important limits and a sensible next step;
-- a partial report that preserves completed security checks and explains which checks could not run and how to continue.
+- a terminal incomplete result that preserves completed security checks and gives one direct continuation for work that could not finish.
 
 A DNS lookup, ping, socket connection, open/closed port observation, runtime health check, target validation, or scanner download is preparation or inventory. By itself it is not a vulnerability scan, a security finding, or first meaningful value.
 
@@ -88,7 +89,7 @@ The IT-environment path is additive rather than wizard-heavy:
 
 Adding ten assets must not create ten copies of the same form. Repeated targets use compact rows, shared safe defaults, and per-target overrides only where the execution boundary differs.
 
-The quick profile aims to show a durable security-relevant update within minutes. The UI shows an honest time range. Longer inventory and deeper checks may continue after the first useful result.
+The quick profile aims to show durable security-relevant progress within minutes. The UI shows an honest time range. Longer inventory and deeper checks continue in Progress; the unified report opens when the run reaches a terminal outcome.
 
 If tools need preparation, the product explains download size, expected wait, and any operating-system action in ordinary language. Preparation runs in the background, resumes after interruption, and never hides saved reports.
 After preparation succeeds in the same uninterrupted UI context, the product
@@ -129,9 +130,9 @@ Optional depth, rate, template, and engine controls are collapsed. Unchanged aut
 
 ### 3.3 Progress
 
-Progress leads with what is happening, which asset is being checked, the first useful result, completed/remaining/attention-needed assets and checks, elapsed time and range, supported controls, and one obvious **View results** action.
+Progress leads with what is happening, which asset is being checked, confirmed problem counts, completed/remaining/attention-needed assets and checks, elapsed time and range, and supported controls. **View results** becomes the obvious primary action when the run reaches a terminal outcome.
 
-Scanner logs and runtime details remain collapsed. A completed useful check updates the report immediately; it does not wait for every independent check.
+Scanner logs and runtime details remain collapsed. Durable task outcomes update Progress immediately without exposing a half-finished report.
 
 Tool preparation progress appears in the main content, including on narrow
 screens. An expected missing-runtime response becomes this preparation state,
@@ -139,7 +140,7 @@ not a contradictory scan-failed message.
 
 ### 3.4 Results and export
 
-Results open to the unified report. It first answers which repositories, internal systems/endpoints, and websites need attention, then shows the important problems and next actions before technical metrics. A readable HTML report has one primary save action; JSON and specialist formats remain secondary.
+Results open only for a terminal run and show the unified report. It first answers which repositories, internal systems/endpoints, and websites need attention, then shows the important problems and next actions before technical metrics. A readable HTML report has one primary save action; JSON and specialist formats remain secondary. Export does not create a live or interim report.
 
 ## 4. Real scan semantics
 
@@ -219,7 +220,7 @@ Runtime availability affects only dependent checks. Existing projects, results, 
 
 ## 6. Unified professional report
 
-Every run produces one report model used by live Results, final Results, reopen, preview, and readable export. A combined IT-environment run is one report, not separate reports that the user must mentally merge. Every requested repository, website, internal system, legacy service endpoint, or inventory-only item has one asset row derived from its own findings, completed checks, and coverage gaps. It is professional because it is consistent, evidence-based, prioritized, and actionable—not because it mirrors an external framework.
+Every run produces one durable report model. Its terminal projection is used by Results, reopen, preview, and readable export; any live projection is internal progress state, not a user-facing report or export. A combined IT-environment run is one report, not separate reports that the user must mentally merge. Every requested repository, website, internal system, legacy service endpoint, or inventory-only item has one asset row derived from its own findings, completed checks, and coverage gaps. It is professional because it is consistent, evidence-based, prioritized, concise, and actionable—not because it mirrors an external framework.
 
 ### 6.1 First layer
 
@@ -231,7 +232,7 @@ Without opening technical details, the user can answer:
 4. What is the smallest practical next step?
 5. How can I verify the fix?
 6. What exactly was checked and not checked for each asset?
-7. Is the scan still running or final?
+7. Which requested work completed and which work needs attention?
 
 Each priority item shows severity, confidence, affected target/location, plain-language impact, next action, and verification guidance. Priority is transparent ordering, not a pseudo-precise score.
 
@@ -247,7 +248,7 @@ available in a collapsed detail rather than displacing actual problems.
 
 “No problems observed” is limited to checks and scope that completed. It never means “secure.” Connection failure, missing input, scanner failure, cancellation, and untested scope are not green or passed.
 
-A partial report preserves completed findings and places consequential missing coverage beside the relevant result, with one plain next action such as Retry, choose a folder, narrow the target, or ask a named specialist.
+A terminal incomplete report preserves completed findings and places consequential missing coverage beside the relevant result, with one direct product action such as Retry, choose a folder, or narrow the target. The first layer does not repeat caveats; full scope, evidence, and formal terms remain available at the end or in collapsed detail.
 
 ### 6.3 Evidence and one presentation system
 
@@ -287,7 +288,7 @@ A beginner-path change is complete when the maintained product demonstrates:
 2. one focused Review and Start step;
 3. at least one real security-relevant upstream check;
 4. a durable unified report with an actionable result;
-5. clear partial/no-problem language;
+5. concise per-asset completion and no-problem states;
 6. reopen and readable export without losing findings.
 
 Connectivity-only fixtures prove connectivity handling, not vulnerability scanning. Component counts, build success, runtime health, and documentation do not prove first value.
@@ -297,7 +298,7 @@ Unless the product owner directs otherwise, work is ordered by user value:
 1. Make the mixed IT-environment, website, and local-project scans short, real, and reliable.
 2. Keep the supported repository, website, and generic exact-host paths reliable together; broaden scanner coverage through pinned upstream profiles rather than product-owned vendor detectors.
 3. Remove naming, project-management, runtime, and navigation detours before Start.
-4. Deliver the unified actionable report as checks finish.
+4. Deliver the unified actionable report when each run reaches its terminal outcome.
 5. Improve recovery, speed, scanner coverage, and upstream currency without regressing the beginner paths.
 
 Version labels, publication ceremony, certification, framework mapping, and compliance positioning are outside this priority order unless the product owner explicitly requests them. Existing implementation and evidence in those areas remain intact.

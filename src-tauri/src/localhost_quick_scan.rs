@@ -1363,7 +1363,7 @@ mod tests {
         let html = fs::read_to_string(destination).expect("read exported HTML");
         for expected in [
             "Complete",
-            "Final for this run",
+            "Which assets need attention",
             "127.0.0.1:9001",
             "What was actually tested",
             "What was not tested",

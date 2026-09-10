@@ -1374,14 +1374,8 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "這項工作標示為已完成，卻既沒有結束時間，也沒有內建檢查的觀察時間。報告不會臆造檢測的時間。",
     ),
     // The one step a report with nothing else to say still offers.
-    (
-        "Let the scan continue or cancel it if you need to stop.",
-        "可以讓掃描繼續，或是在你需要停止時取消它。",
-    ),
-    (
-        "This report is still changing and keeps the durable work already saved.",
-        "這份報告仍在變動中，並保留已經儲存下來的成果。",
-    ),
+    ("Scan continues automatically.", "掃描會自動繼續。"),
+    ("Current checks are in progress.", "目前的檢查正在進行中。"),
     (
         "If you expected an app on this port, start it and run the check again.",
         "如果你預期這個連接埠上有服務在執行，請先啟動它，再重新執行檢查。",

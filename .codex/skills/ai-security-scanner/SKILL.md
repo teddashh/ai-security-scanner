@@ -20,6 +20,8 @@ For normal use, open the desktop app and choose the closest starting point:
 
 In an IT-environment project, run only the applicable upstream checks for each approved asset and combine their results in one report organized by asset. Discovery, an open port, or a responding service is preparation; do not describe an internal device as vulnerability-scanned until a service-aware or vulnerability check actually ran. Mark unsupported or unfinished checks as not tested.
 
+Keep active work in Progress. Open Results and Export only for a terminal run. Use concise, action-led status and result text; do not create live/interim reports, defensive caveat walls, implementation-defect or test-harness explanations, or text that transfers product responsibility to the user. Put formal terms at the end or footer of the final report and technical evidence in collapsed detail.
+
 Use the localhost TCP utility only when the user actually wants to test whether one local service accepts a connection. Describe it as connectivity only.
 
 Ask only for the selected target and information the product needs. Never approve ownership, a target, CIDR, redirect, template, or scan intensity for the user.

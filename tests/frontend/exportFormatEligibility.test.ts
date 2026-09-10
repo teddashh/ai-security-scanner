@@ -46,19 +46,18 @@ const run = (
   totalAssetCount: 0,
 });
 
-test("finding-only formats are available for every existing run", () => {
+test("finding-only formats are available only for terminal runs", () => {
   assert.equal(runSupportsFindingOnlyExport(run("completed", "completed")), true);
   assert.equal(runSupportsFindingOnlyExport(run("completed", "completed", { finished: false })), true);
   assert.equal(runSupportsFindingOnlyExport(run("completed", "completed", { engineRuns: [] })), true);
-  assert.equal(runSupportsFindingOnlyExport(run("running", "running", { finished: false })), true);
+  assert.equal(runSupportsFindingOnlyExport(run("running", "running", { finished: false })), false);
   assert.equal(runSupportsFindingOnlyExport(run("partial", "partial")), true);
   assert.equal(runSupportsFindingOnlyExport(run("failed", "failed")), true);
   assert.equal(runSupportsFindingOnlyExport(undefined), false);
 });
 
-test("interim and incomplete runs retain every export with coverage companions where needed", () => {
+test("terminal incomplete runs retain every export with coverage companions where needed", () => {
   for (const incompleteRun of [
-    run("running", "running", { finished: false }),
     run("partial", "partial"),
     run("failed", "failed"),
   ]) {
@@ -66,6 +65,13 @@ test("interim and incomplete runs retain every export with coverage companions w
       assert.equal(exportFormatIsAvailable(format, incompleteRun), true);
       assert.equal(resetUnavailableExportFormat(format, incompleteRun), format);
     }
+  }
+});
+
+test("active runs expose no export format", () => {
+  const active = run("running", "running", { finished: false });
+  for (const format of ["case_bundle", "json", "framework_report", "html", "ocsf", "oscal"] as const) {
+    assert.equal(exportFormatIsAvailable(format, active), false);
   }
 });
 

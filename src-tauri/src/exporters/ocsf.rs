@@ -2,7 +2,8 @@ use crate::domain::{
     AssessmentCase, Asset, Confidence, Evidence, Finding, FindingObservation, FindingStatus,
     Severity,
 };
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
+use crate::exporters::terminal_run;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
@@ -15,16 +16,7 @@ pub const OCSF_EXPORT_NOTICE: &str = "Preliminary scanner observations only. Rel
 /// reachability rows use Network Activity (class UID 4001) because a service
 /// response is an inventory observation, not a detection finding.
 pub fn export_ocsf_finding_events(case: &AssessmentCase, run_id: &str) -> AppResult<Vec<Value>> {
-    let run = case
-        .scan_runs
-        .iter()
-        .find(|run| run.id == run_id)
-        .ok_or_else(|| AppError::InvalidRequest(format!("scan run not found: {run_id}")))?;
-    if run.case_id != case.id {
-        return Err(AppError::InvalidRequest(
-            "scan run does not belong to the selected case".into(),
-        ));
-    }
+    terminal_run(case, run_id)?;
 
     let findings = case
         .findings
@@ -562,6 +554,17 @@ mod tests {
             "deterministic_policy_evaluation"
         );
         assert_eq!(extension["context_factors"][0], "internet_exposed_asset");
+    }
+
+    #[test]
+    fn active_run_cannot_be_exported() {
+        let mut case = fixture();
+        case.scan_runs[0].completed_at = None;
+
+        let error = export_ocsf_finding_events(&case, "run-1").unwrap_err();
+        assert!(
+            matches!(error, crate::error::AppError::NotAvailable(message) if message == "scan is in progress")
+        );
     }
 
     #[test]

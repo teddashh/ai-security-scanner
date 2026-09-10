@@ -17,6 +17,7 @@ Use [`docs/product-spec.md`](docs/product-spec.md) as the product source of trut
 - Preserve upstream detector behavior, identifiers, severity, evidence, and remediation. Adapters may translate typed inputs, enforce scope and resource boundaries, invoke upstream, and normalize output; do not rebuild detection logic in wrappers.
 - Put product-owned prioritization, deduplication, plain-language explanation, cross-engine correlation, and report presentation in the shared report layer.
 - The report's first layer answers: what was scanned, what was found, what matters first, why it matters, what to do next, and what was not tested. Keep evidence and upstream provenance available as technical detail.
+- Keep the primary path concise and action-led. Do not ship live/interim reports, defensive caveat walls, implementation-defect or test-harness explanations, or prose that transfers product responsibility to the user. Active work stays in Progress; terminal Results carry concise outcomes, with formal terms at the report end or footer and technical evidence in collapsed detail.
 - Test the rendered beginner path and real execution result in proportion to the changed risk. Tests support product decisions; test gates do not choose the roadmap.
 
 ## Owner authority

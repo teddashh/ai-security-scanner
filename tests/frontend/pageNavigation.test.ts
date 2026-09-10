@@ -105,7 +105,7 @@ test("the shell settles navigation after render and all primary page headings ar
   assert.match(startPage, /<h1 id="start-page-title" data-page-heading tabIndex=\{-1\}>/u);
 });
 
-test("progress links to localized results for terminal runs or durable live security results", async () => {
+test("progress links to localized results only after a run reaches a terminal outcome", async () => {
   const progress = await source("../../src/pages/ProgressPage.tsx");
   const statusesStart = progress.indexOf("const terminalRunStatuses");
   const statusesEnd = progress.indexOf("]);", statusesStart);
@@ -115,12 +115,8 @@ test("progress links to localized results for terminal runs or durable live secu
   for (const status of ["completed", "no_checks_completed", "partial", "failed", "cancelled"]) {
     assert.ok(terminalStatuses.includes(`"${status}"`), status);
   }
-  assert.match(progress, /activeRunStatuses\.has\(selectedRun\.status\)[\s\S]*durableSecurityFindingCount > 0/u);
-  assert.match(progress, /findings\.filter\(\(finding\) => isSecurityFinding\(finding\)[\s\S]*finding\.lastSeenRunId === selectedRun\.id[\s\S]*evidence\.runId === selectedRun\.id/u);
-  assert.doesNotMatch(progress, /engine\.findingCount[\s\S]*durableSecurityFindingCount/u);
   assert.match(progress, /selectedRunReport = report\?\.runId === selectedRun\?\.id \? report : undefined/u);
-  assert.match(progress, /check\.resultKind === "security_check" && check\.status === "tested_complete"/u);
-  assert.match(progress, /terminalRunStatuses\.has\(selectedRun\.status\)[\s\S]*activeRunHasUsefulSecurityResult/u);
-  assert.match(progress, /activeRunHasUsefulSecurityResult \? "button--primary" : "button--secondary"/u);
+  assert.match(progress, /showResultsAction = Boolean\([\s\S]*terminalRunStatuses\.has\(selectedRun\.status\)/u);
+  assert.doesNotMatch(progress, /activeRunHasUsefulSecurityResult/u);
   assert.match(progress, /href="#findings"[\s\S]*text\(copy\.viewResults\)/u);
 });

@@ -3653,8 +3653,8 @@ fn project_next_steps(
         let (code, action, reason) = if state.lifecycle == ReportLifecycle::Live {
             (
                 NextActionCode::WaitOrCancel,
-                "Let the scan continue or cancel it if you need to stop.",
-                "This report is still changing and keeps the durable work already saved.",
+                "Scan continues automatically.",
+                "Current checks are in progress.",
             )
         } else if actual.checks.iter().any(is_closed_localhost_check) {
             (
@@ -4012,6 +4012,9 @@ pub(crate) fn run_is_non_security_only(run: &ScanRun) -> bool {
 }
 
 fn non_security_only_explanation(run: &ScanRun, lifecycle: ReportLifecycle) -> String {
+    if lifecycle == ReportLifecycle::Live {
+        return "Scan in progress.".into();
+    }
     let has_inventory = run
         .engine_runs
         .iter()
@@ -4026,13 +4029,8 @@ fn non_security_only_explanation(run: &ScanRun, lifecycle: ReportLifecycle) -> S
         (false, true) => "connectivity",
         (false, false) => "non-security",
     };
-    let progress = if lifecycle == ReportLifecycle::Live {
-        "This live run contains only"
-    } else {
-        "This run contained only"
-    };
     format!(
-        "{progress} {work} work. No vulnerability, configuration, code, or secret security check completed. Inventory and connectivity observations are not a no-problems security result."
+        "This run contained only {work} work. No vulnerability, configuration, code, or secret security check completed. Inventory and connectivity observations are not a no-problems security result."
     )
 }
 
@@ -4044,15 +4042,11 @@ fn state_explanation(summary: BeginnerReportSummary, lifecycle: ReportLifecycle)
         (BeginnerReportSummary::NoChecksCompleted, _) => {
             "The request finished without any check contacting a target. Nothing untested is presented as passed."
         }
-        (BeginnerReportSummary::Partial, ReportLifecycle::Live) => {
-            "This report is still changing. Durable work already saved is available now, and unfinished coverage remains explicit."
-        }
+        (BeginnerReportSummary::Partial, ReportLifecycle::Live) => "Scan in progress.",
         (BeginnerReportSummary::Partial, ReportLifecycle::Final) => {
             "Useful saved results are available, but one or more requested or historical coverage dimensions are incomplete or unavailable."
         }
-        (BeginnerReportSummary::Complete, ReportLifecycle::Live) => {
-            "The report is still changing and is therefore not treated as final coverage."
-        }
+        (BeginnerReportSummary::Complete, ReportLifecycle::Live) => "Scan in progress.",
     }
 }
 
@@ -4814,7 +4808,7 @@ mod tests {
     }
 
     #[test]
-    fn frozen_web_origins_keep_same_host_services_distinct_across_live_reopen_and_export() {
+    fn frozen_web_origins_keep_same_host_services_distinct_across_live_reopen() {
         let mut case = empty_case();
         case.assets = vec![
             Asset {
@@ -4955,16 +4949,14 @@ mod tests {
             live,
             "reopening must preserve each frozen origin and web-service kind"
         );
-        assert_eq!(
+        assert!(matches!(
             crate::export::beginner_report_for_export(
                 &reopened,
                 "run-1",
                 crate::export::RedactionProfile::None,
-            )
-            .unwrap(),
-            live,
-            "the readable export must use the same shared live report identity"
-        );
+            ),
+            Err(crate::error::AppError::NotAvailable(_))
+        ));
     }
 
     #[test]

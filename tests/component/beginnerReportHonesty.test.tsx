@@ -327,7 +327,7 @@ test("a partial run is distinguished from a complete one", () => {
   expect(partialPill.textContent).not.toEqual(completePill.textContent);
 });
 
-test("a live zero-finding security result is useful only for the checks that completed", () => {
+test("an active run stays in progress instead of exposing a half-finished report", () => {
   const base = report("partial");
   const activeRun = catalogRun("trivy");
   activeRun.status = "running";
@@ -359,19 +359,13 @@ test("a live zero-finding security result is useful only for the checks that com
     coverageCounts: counts({ testedComplete: 1, testedPartial: 1 }),
   }), [], [activeRun]);
 
-  const overview = container.querySelector<HTMLElement>(
-    "section[aria-labelledby='beginner-master-report-title']",
-  );
-  expect(overview?.textContent).toContain("Still updating");
-  expect(overview?.textContent).not.toContain("Final for this run");
-  expect(container.textContent).toContain(
-    "Completed checks have reported no problems so far; the scan is still running",
-  );
-  expect(container.textContent).toContain(
-    "This is a useful result for the completed security checks only—not a clean result for the whole scan.",
-  );
-  expect(container.textContent).toContain("More checks may still report problems");
+  expect(container.querySelector(".asset-result-board")).toBeNull();
+  expect(container.querySelector("section[aria-labelledby='beginner-master-report-title']")).toBeNull();
+  expect(container.textContent).toContain("Scan in progress");
+  expect(container.textContent).toContain("Continue in Scan progress.");
   expect(container.textContent).toContain("Scan progress");
+  expect(container.textContent).not.toContain("interim");
+  expect(container.textContent).not.toContain("Still updating");
 
   unmount();
   window.localStorage.setItem(localeStorageKey, "zh-TW");
@@ -391,34 +385,10 @@ test("a live zero-finding security result is useful only for the checks that com
     },
     coverageCounts: counts({ testedComplete: 1 }),
   }), [], [activeRun]);
-  expect(zh.container.textContent).toContain("已完成的檢查目前沒有回報問題；掃描仍在執行");
-  expect(zh.container.textContent).toContain("這項結果只適用於已完成的資安檢查，不代表整輪掃描沒有問題");
-});
-
-test("an untyped legacy check cannot receive the stronger live-result claim", () => {
-  const base = report("partial");
-  const activeRun = catalogRun("legacy-check");
-  activeRun.status = "running";
-  activeRun.progress = 60;
-  activeRun.finishedAt = undefined;
-  const { container } = renderReport(report("partial", {
-    state: { ...base.state, lifecycle: "live" },
-    actual: {
-      checks: [{
-        taskId: "legacy-task",
-        checkId: "legacy-check",
-        targetAssetIds: ["asset-1"],
-        status: "tested_complete",
-        testedDimensions: [],
-      }],
-      networkScopes: [],
-      unavailableDimensions: [],
-    },
-    coverageCounts: counts({ testedComplete: 1 }),
-  }), [], [activeRun]);
-
-  expect(container.textContent).toContain("The scan is still running; no problems have arrived yet");
-  expect(container.textContent).not.toContain("Completed checks have reported no problems so far");
+  expect(zh.container.textContent).toContain("掃描進行中");
+  expect(zh.container.textContent).toContain("請回到「掃描進度」繼續。");
+  expect(zh.container.textContent).not.toContain("暫時報告");
+  expect(zh.container.textContent).not.toContain("仍在更新");
 });
 
 test("the first layer gives every requested asset one evidence-derived result status", () => {

@@ -52,18 +52,9 @@ const copy = {
   preparing: { en: "Preparing…", zhTW: "準備中…" },
   exportDemo: { en: "Download {format} demo file", zhTW: "下載「{format}」展示檔" },
   createExport: { en: "Save {format}", zhTW: "儲存「{format}」" },
-  createInterimExport: { en: "Save interim {format}", zhTW: "儲存暫時的「{format}」" },
-  createIncompleteExport: { en: "Save incomplete {format}", zhTW: "儲存不完整的「{format}」" },
-  activeTitle: { en: "Interim export", zhTW: "暫時報告" },
-  activeBody: {
-    en: "The scan is still running. This file may omit findings reported later.",
-    zhTW: "掃描仍在進行；此檔案可能缺少之後才回報的問題。",
-  },
-  incompleteTitle: { en: "Incomplete export", zhTW: "不完整報告" },
-  incompleteBody: {
-    en: "Some checks did not finish. The file records those gaps but may omit unreported problems.",
-    zhTW: "有些檢查未完成；檔案會記錄缺口，但可能缺少尚未回報的問題。",
-  },
+  activeTitle: { en: "Scan in progress", zhTW: "掃描進行中" },
+  activeBody: { en: "Export opens after this scan finishes.", zhTW: "本輪掃描完成後即可匯出。" },
+  openProgress: { en: "View scan progress", zhTW: "查看掃描進度" },
   connectionOnlyTitle: {
     en: "Connection test only — no vulnerability scan ran",
     zhTW: "這只是連線測試，沒有執行漏洞掃描",
@@ -355,11 +346,6 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
   const activeRun = selectedRun && ["queued", "running", "paused"].includes(selectedRun.status)
     ? selectedRun
     : undefined;
-  const incompleteTerminalRun = selectedRun
-    && !activeRun
-    && selectedRun.status !== "completed"
-    ? selectedRun
-    : undefined;
   const workspaceExportRevision = `${workspace.findings.length}|${workspace.runs
     .map((run) => `${run.id}:${run.status}:${run.progress}:${run.finishedAt ?? ""}`)
     .join("|")}`;
@@ -371,7 +357,9 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
   const [previewPending, setPreviewPending] = useState(true);
   const [previewRequest, setPreviewRequest] = useState(0);
   const findingOnlyFormatsAvailable = runSupportsFindingOnlyExport(selectedRun);
-  const selectedFormatUnavailable = !selectedRun || !exportFormatIsAvailable(format, selectedRun);
+  const selectedFormatUnavailable = !selectedRun
+    || Boolean(activeRun)
+    || !exportFormatIsAvailable(format, selectedRun);
 
   useEffect(() => {
     if (!demoMode) return;
@@ -394,6 +382,12 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
     setPreview(undefined);
     setPreviewError(undefined);
     if (demoMode && format !== "json") {
+      return () => {
+        active = false;
+      };
+    }
+    if (activeRun) {
+      setPreviewPending(false);
       return () => {
         active = false;
       };
@@ -444,7 +438,7 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
     return () => {
       active = false;
     };
-  }, [demoMode, format, includeRawEvidence, onPreview, previewRequest, redactSensitiveValues, reportLocale, selectedFormatUnavailable, selectedRun, workspace.case.id, workspaceExportRevision]);
+  }, [activeRun, demoMode, format, includeRawEvidence, onPreview, previewRequest, redactSensitiveValues, reportLocale, selectedFormatUnavailable, selectedRun, workspace.case.id, workspaceExportRevision]);
 
   const previewMatchesSelection = Boolean(
     preview
@@ -527,6 +521,23 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
     );
   };
 
+  if (activeRun) {
+    return (
+      <div className="page">
+        <PageHeader
+          eyebrow={text(copy.eyebrow)}
+          title={text(copy.activeTitle)}
+          description={text(copy.activeBody)}
+          actions={(
+            <a className="button button--primary" href="#progress">
+              <Icon name="progress" size={17} />{text(copy.openProgress)}
+            </a>
+          )}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="page">
       <PageHeader
@@ -534,18 +545,6 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
         title={text(copy.title)}
         description={text(copy.description)}
       />
-
-      {activeRun && !demoMode && (
-        <InlineNotice tone="warning" title={text(copy.activeTitle)}>
-          <p>{text(copy.activeBody)}</p>
-        </InlineNotice>
-      )}
-
-      {incompleteTerminalRun && !demoMode && (
-        <InlineNotice tone="warning" title={text(copy.incompleteTitle)}>
-          <p>{text(copy.incompleteBody)}</p>
-        </InlineNotice>
-      )}
 
       {connectionOnlyRun && !demoMode && (
         <InlineNotice tone="warning" title={text(copy.connectionOnlyTitle)}>
@@ -673,11 +672,7 @@ export function ExportPage({ workspace, selectedRunId, exports, demoMode, busy, 
                 ? text(copy.preparing)
                 : demoMode
                   ? text(copy.exportDemo, { format: text(currentFormat.title) })
-                  : activeRun
-                    ? text(copy.createInterimExport, { format: text(currentFormat.title) })
-                    : incompleteTerminalRun
-                      ? text(copy.createIncompleteExport, { format: text(currentFormat.title) })
-                      : text(copy.createExport, { format: text(currentFormat.title) })}
+                  : text(copy.createExport, { format: text(currentFormat.title) })}
             </button>
           </div>
         </section>

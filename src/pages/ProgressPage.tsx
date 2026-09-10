@@ -41,7 +41,6 @@ import {
   findRunCreatedAfterStart,
   hasActiveScanWork,
 } from "../freshScanSelection";
-import { isSecurityFinding } from "../findingClassification";
 import type { UseCaseId } from "../useCases";
 import type {
   Asset,
@@ -484,10 +483,6 @@ const copy = {
   elapsedUnderMinute: { en: "under 1 min", zhTW: "未滿 1 分鐘" },
   elapsedMinutes: { en: "{count} min", zhTW: "{count} 分鐘" },
   estimateUnavailable: { en: "Estimate unavailable", zhTW: "目前無可靠預估" },
-  usefulSecurityResultAvailable: {
-    en: "A useful security result is available now; remaining checks may take longer.",
-    zhTW: "目前已有可用的資安結果；其餘檢查可能需要更久。",
-  },
   lastSaved: { en: "Last saved {time}", zhTW: "最後保存 {time}" },
   overallProgress: { en: "Overall scan progress", zhTW: "整體掃描進度" },
   scanTechnicalDetails: { en: "Scan details and versions", zhTW: "掃描細節與版本" },
@@ -745,7 +740,6 @@ export function ProgressPage({
   assets,
   report,
   runs,
-  findings,
   selectedRunId: controlledSelectedRunId,
   readiness,
   readinessCheckFailed,
@@ -786,35 +780,9 @@ export function ProgressPage({
       || needsFreshLocalhostTcpAttempt(terminalLocalhostSummary.outcome)
     ),
   );
-  const durableSecurityFindingCount = selectedRun
-    ? findings.filter((finding) => isSecurityFinding(finding) && (
-      finding.lastSeenRunId === selectedRun.id
-      || finding.evidence.some((evidence) => evidence.runId === selectedRun.id)
-    )).length
-    : 0;
   const selectedRunReport = report?.runId === selectedRun?.id ? report : undefined;
-  const reportHasDurableSecurityFinding = Boolean(
-    selectedRunReport?.findings.some((finding) => isSecurityFinding(finding)),
-  );
-  const reportHasCompletedSecurityCheck = Boolean(
-    selectedRunReport?.actual.checks.some((check) =>
-      check.resultKind === "security_check" && check.status === "tested_complete"
-    ),
-  );
-  const activeRunHasUsefulSecurityResult = Boolean(
-    selectedRun
-    && activeRunStatuses.has(selectedRun.status)
-    && (
-      durableSecurityFindingCount > 0
-      || reportHasDurableSecurityFinding
-      || reportHasCompletedSecurityCheck
-    ),
-  );
   const showResultsAction = Boolean(
-    selectedRun && (
-      terminalRunStatuses.has(selectedRun.status)
-      || activeRunHasUsefulSecurityResult
-    ),
+    selectedRun && terminalRunStatuses.has(selectedRun.status),
   );
   const scanWorkActive = hasActiveScanWork(runs);
   const canStart = !terminalExactLocalhostQuickScan
@@ -917,11 +885,9 @@ export function ProgressPage({
     ? primaryTimingTargets[assessmentIntent]
     : undefined;
   const activeTimingStatus = activity?.active
-    ? activeRunHasUsefulSecurityResult
-      ? text(copy.usefulSecurityResultAvailable)
-      : primaryTimingTarget && !exactLocalhostQuickScan
-        ? text(primaryTimingTarget)
-        : text(copy.estimateUnavailable)
+    ? primaryTimingTarget && !exactLocalhostQuickScan
+      ? text(primaryTimingTarget)
+      : text(copy.estimateUnavailable)
     : undefined;
   const stateCounts = useMemo(
     () => Object.fromEntries(
@@ -1189,7 +1155,7 @@ export function ProgressPage({
             )}
             {showResultsAction && (
               <a
-                className={`button ${activeRunHasUsefulSecurityResult ? "button--primary" : "button--secondary"}`}
+                className="button button--primary"
                 href="#findings"
               >
                 <Icon name="findings" size={17} />{text(copy.viewResults)}
