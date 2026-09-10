@@ -899,9 +899,31 @@ try {
   }
 
   $managedRuntimeDirectory = Join-Path $dataDirectory "managed-runtime"
-  if (Test-Path -LiteralPath $managedRuntimeDirectory) {
-    throw "Normal N-1 upgrade fixture unexpectedly contains managed runtime state."
+  $providerHomeDirectory = Join-Path $managedRuntimeDirectory "provider-home"
+  $providerNamespace = $priorRuntimeManifestSha256.Substring(0, 16)
+  $priorVersionDirectoryName = "podman-machine-5.8.2-$providerNamespace"
+  $versionsDirectory = Join-Path $managedRuntimeDirectory "versions"
+  $priorVersionDirectory = Join-Path $versionsDirectory $priorVersionDirectoryName
+  Assert-RealDirectory $managedRuntimeDirectory "N-1 managed-runtime cache root" | Out-Null
+  Assert-RealDirectory $versionsDirectory "N-1 managed-runtime versions root" | Out-Null
+  Assert-RealDirectory $priorVersionDirectory "N-1 managed-runtime payload" | Out-Null
+  $installedRuntimeEntries = @(Get-ChildItem -LiteralPath $versionsDirectory -Force)
+  if ($installedRuntimeEntries.Count -ne 1 -or
+      -not [String]::Equals(
+        [string]$installedRuntimeEntries[0].Name,
+        $priorVersionDirectoryName,
+        [StringComparison]::Ordinal
+      )) {
+    throw "N-1 installer did not seed exactly one immutable managed-runtime payload."
   }
+  $installedRuntimeManifest = Join-Path $priorVersionDirectory "manifest.json"
+  if ((Get-LowerSha256 $installedRuntimeManifest (1024 * 1024)) -cne $priorRuntimeManifestSha256) {
+    throw "N-1 private managed-runtime manifest differs from its installed package."
+  }
+  if (Test-Path -LiteralPath $providerHomeDirectory) {
+    throw "N-1 runtime cache unexpectedly initialized provider state."
+  }
+  $managedRuntimeSnapshotBefore = Get-PrivateDataSnapshot $managedRuntimeDirectory
 
   $beforeSnapshot = Get-PrivateDataSnapshot $dataDirectory
   Invoke-ExactProcess $candidateInstallerPath @("/S", "/D=$installDirectory") 180000 "Candidate silent NSIS upgrade" -ExpectedExecutableProof $candidateInstallerItem -AllowRestartRequired | Out-Null
@@ -952,11 +974,26 @@ try {
       $beforeSnapshot.totalBytes -ne $afterSnapshot.totalBytes) {
     throw "Candidate NSIS installer changed private application data during upgrade."
   }
+  $managedRuntimeSnapshotAfterInstaller = Get-PrivateDataSnapshot $managedRuntimeDirectory
+  if ($managedRuntimeSnapshotAfterInstaller.digest -cne $managedRuntimeSnapshotBefore.digest -or
+      $managedRuntimeSnapshotAfterInstaller.fileCount -ne $managedRuntimeSnapshotBefore.fileCount -or
+      $managedRuntimeSnapshotAfterInstaller.totalBytes -ne $managedRuntimeSnapshotBefore.totalBytes) {
+    throw "Candidate NSIS upgrade or reinstall changed the N-1 managed-runtime cache."
+  }
+  $candidateInstalledRuntimeManifests = @(
+    Get-ChildItem -LiteralPath $installDirectory -Filter "manifest.json" -File -Recurse -Force |
+      Where-Object { $_.FullName -match '(?i)[\\/]managed-runtime[\\/]manifest\.json$' }
+  )
+  if ($candidateInstalledRuntimeManifests.Count -ne 1 -or
+      (Get-LowerSha256 $candidateInstalledRuntimeManifests[0].FullName (1024 * 1024)) -cne $priorRuntimeManifestSha256) {
+    throw "Candidate installation does not retain the reviewed managed-runtime identity."
+  }
   if (-not (Test-Path -LiteralPath $sentinelPath -PathType Leaf) -or
       -not (Test-Path -LiteralPath $registrySentinelPath -PathType Container) -or
       (Get-ItemPropertyValue -LiteralPath $registrySentinelPath -Name "value") -cne "synthetic-non-sensitive" -or
-      (Test-Path -LiteralPath $managedRuntimeDirectory)) {
-    throw "NSIS upgrade did not preserve the bounded data, registry, and absent managed-runtime state."
+      -not (Test-Path -LiteralPath $priorVersionDirectory -PathType Container) -or
+      (Test-Path -LiteralPath $providerHomeDirectory)) {
+    throw "NSIS upgrade did not preserve the bounded data, registry, and managed-runtime cache."
   }
   $candidateCase = Invoke-CliJson $candidateCli @(
     "--json", "--data-dir", $dataDirectory, "case", "show", $caseId
@@ -1027,8 +1064,12 @@ try {
   Assert-SameFileProof $sentinelBeforeUninstall $sentinelAfterUninstall (
     "App-only uninstall data-preservation sentinel"
   )
-  if (Test-Path -LiteralPath $managedRuntimeDirectory) {
-    throw "Normal app-only uninstall fixture unexpectedly created managed runtime state."
+  $managedRuntimeSnapshotAfterUninstall = Get-PrivateDataSnapshot $managedRuntimeDirectory
+  if ($managedRuntimeSnapshotAfterUninstall.digest -cne $managedRuntimeSnapshotBefore.digest -or
+      $managedRuntimeSnapshotAfterUninstall.fileCount -ne $managedRuntimeSnapshotBefore.fileCount -or
+      $managedRuntimeSnapshotAfterUninstall.totalBytes -ne $managedRuntimeSnapshotBefore.totalBytes -or
+      (Test-Path -LiteralPath $providerHomeDirectory)) {
+    throw "App-only uninstall changed the verified N-1 managed-runtime cache."
   }
   $existingExportIdentityAfterUninstall = Get-NoFollowFileSha256Proof $existingExportIdentityPath (
     "Existing local export identity after app-only NSIS uninstall"
@@ -1054,7 +1095,7 @@ try {
   }
 
   $observations = [ordered]@{
-    schemaVersion = 8
+    schemaVersion = 9
     scenario = "automated_n_minus_one_nsis_data_preservation_fixture"
     platform = "windows-x86_64"
     runner = "windows-2025"
@@ -1131,10 +1172,15 @@ try {
         allNonLeaseProductDataPreserved = $true
       }
     }
-    managedRuntimeState = [ordered]@{
-      absentBeforeUpgrade = $true
-      absentAfterUpgradeAndReinstall = $true
-      absentAfterAppOnlyUninstall = $true
+    managedRuntimeCache = [ordered]@{
+      versionDirectory = $priorVersionDirectoryName
+      manifestSha256 = $priorRuntimeManifestSha256
+      preUpgradeFileCount = [int]$managedRuntimeSnapshotBefore.fileCount
+      preUpgradeBytes = [int64]$managedRuntimeSnapshotBefore.totalBytes
+      installedByPriorRelease = $true
+      providerStateAbsent = $true
+      exactBytesPreservedThroughUpgradeAndReinstall = $true
+      exactBytesPreservedThroughAppOnlyUninstall = $true
     }
     cleanup = [ordered]@{
       uninstallerInvoked = $true

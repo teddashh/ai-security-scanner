@@ -614,6 +614,22 @@ function Assert-OwnerOnlyFullControlFile(
   }
 }
 
+function Set-CanonicalProductDataOwner([string]$Path) {
+  Assert-RealDirectory $Path "Canonical product data directory" | Out-Null
+  $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+  if ($null -eq $currentSid) {
+    throw "The current Windows user has no SID."
+  }
+  $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+  $acl.SetOwner($currentSid)
+  Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+  $verifiedAcl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+  $verifiedOwner = $verifiedAcl.GetOwner([Security.Principal.SecurityIdentifier])
+  if ($verifiedOwner.Value -cne $currentSid.Value) {
+    throw "Canonical product data directory owner was not set to the current Windows user."
+  }
+}
+
 function Get-NoFollowFileSha256Proof(
   [string]$Path,
   [string]$Label,
@@ -2435,6 +2451,7 @@ try {
   }
 
   New-Item -ItemType Directory -Path $dataDirectory -Force | Out-Null
+  Set-CanonicalProductDataOwner $dataDirectory
   $sentinelPath = Join-Path $dataDirectory "ghost-recovery-data-sentinel.json"
   [IO.File]::WriteAllText(
     $sentinelPath,
@@ -2977,7 +2994,7 @@ try {
   $cleanupComplete = $true
 
   $observations = [ordered]@{
-    schemaVersion = 8
+    schemaVersion = 9
     scenario = "automated_registered_wsl_n_minus_one_ghost_isolated_generation_fixture"
     platform = "windows-x86_64"
     runner = "windows-2025"
@@ -3010,6 +3027,7 @@ try {
     }
     ghostFixture = [ordered]@{
       defaultInstallDirectoryUsed = $true
+      canonicalProductDataCurrentUserOwner = $true
       priorCliVersion = $priorCliVersion
       oldRegistryIdentityExact = $true
       oldRuntimeInstalled = ($oldInstallStatus.manifest_sha256 -ceq $priorRuntimeManifestSha256)

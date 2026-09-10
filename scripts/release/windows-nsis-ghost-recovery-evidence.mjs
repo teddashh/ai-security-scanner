@@ -12,7 +12,7 @@ import {
   writeJsonAtomic,
 } from "./lib.mjs";
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 const PLATFORM = "windows-x86_64";
 const RUNNER = "windows-2025";
 const INSTALLER_TYPE = "nsis";
@@ -478,6 +478,7 @@ function validateObservations(observations, identity, version) {
     fixture,
     [
       "defaultInstallDirectoryUsed",
+      "canonicalProductDataCurrentUserOwner",
       "priorCliVersion",
       "oldRegistryIdentityExact",
       "oldRuntimeInstalled",
@@ -501,6 +502,7 @@ function validateObservations(observations, identity, version) {
     "real ghost fixture",
   );
   yes(fixture.defaultInstallDirectoryUsed, "default NSIS install directory");
+  yes(fixture.canonicalProductDataCurrentUserOwner, "canonical product data current-user owner");
   assert(fixture.priorCliVersion === PRIOR_GHOST_RELEASE.version, "ghost fixture CLI is not v0.1.7");
   for (const field of [
     "oldRegistryIdentityExact",

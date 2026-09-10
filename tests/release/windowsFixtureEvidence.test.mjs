@@ -73,8 +73,12 @@ test("Windows preservation fixtures bind the 0.1.10 candidate and its true N-1 r
   }
   assert.match(upgradeFixture, /\$uninstallResult\.exitCode -ne 0/u);
   assert.doesNotMatch(upgradeFixture, /AllowRetainedState/u);
+  assert.match(upgradeFixture, /installedByPriorRelease = \$true/u);
+  assert.match(upgradeFixture, /exactBytesPreservedThroughAppOnlyUninstall = \$true/u);
   assert.match(ghostFixture, /\$uninstallResult\.exitCode -ne 10/u);
   assert.match(ghostFixture, /AllowRetainedState/u);
+  assert.match(ghostFixture, /Set-CanonicalProductDataOwner \$dataDirectory/u);
+  assert.match(ghostFixture, /canonicalProductDataCurrentUserOwner = \$true/u);
 });
 
 test("Windows preservation fixtures require exact NSIS uninstall outcomes and prove app removal", async () => {

@@ -22,7 +22,7 @@ export const PRIOR_WINDOWS_NSIS = Object.freeze({
   machineImageSha256: "e2b6cbcadd8b41b708fecb58a246a20d737dee0ef26872a3f75b575f77eba968",
 });
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 const PLATFORM = "windows-x86_64";
 const INSTALLER_TYPE = "nsis";
 const RUNNER = "windows-2025";
@@ -158,7 +158,7 @@ async function identity(args) {
 function validateObservations(observations, currentVersion, currentInstaller) {
   exactKeys(observations, [
     "schemaVersion", "scenario", "platform", "runner", "priorRelease", "candidate",
-    "fixtureScope", "installation", "dataPreservation", "managedRuntimeState", "cleanup",
+    "fixtureScope", "installation", "dataPreservation", "managedRuntimeCache", "cleanup",
   ], "Windows NSIS upgrade observations");
   assert(observations.schemaVersion === SCHEMA_VERSION, "Windows NSIS upgrade observation schema is unsupported");
   assert(
@@ -284,11 +284,24 @@ function validateObservations(observations, currentVersion, currentInstaller) {
   yes(uninstall.allNonLeaseProductDataPreserved, "app-only uninstall non-lease product-data preservation");
   assert(uninstall.beforeFileCount === uninstall.afterFileCount && uninstall.beforeBytes === uninstall.afterBytes && uninstall.beforeDigest === uninstall.afterDigest, "app-only uninstall changed non-lease product data");
 
-  const runtime = observations.managedRuntimeState;
+  const runtime = observations.managedRuntimeCache;
   exactKeys(runtime, [
-    "absentBeforeUpgrade", "absentAfterUpgradeAndReinstall", "absentAfterAppOnlyUninstall",
-  ], "managed-runtime state");
-  for (const field of Object.keys(runtime)) yes(runtime[field], `managed runtime ${field}`);
+    "versionDirectory", "manifestSha256", "preUpgradeFileCount", "preUpgradeBytes",
+    "installedByPriorRelease", "providerStateAbsent",
+    "exactBytesPreservedThroughUpgradeAndReinstall", "exactBytesPreservedThroughAppOnlyUninstall",
+  ], "managed-runtime cache");
+  assert(
+    runtime.versionDirectory ===
+      `podman-machine-5.8.2-${PRIOR_WINDOWS_NSIS.runtimeManifestSha256.slice(0, 16)}`,
+    "managed-runtime cache directory is incorrect",
+  );
+  assert(runtime.manifestSha256 === PRIOR_WINDOWS_NSIS.runtimeManifestSha256, "managed-runtime cache manifest is incorrect");
+  bounded(runtime.preUpgradeFileCount, 1, 4096, "managed-runtime cache file count");
+  bounded(runtime.preUpgradeBytes, 1, 512 * 1024 * 1024, "managed-runtime cache bytes");
+  for (const field of [
+    "installedByPriorRelease", "providerStateAbsent",
+    "exactBytesPreservedThroughUpgradeAndReinstall", "exactBytesPreservedThroughAppOnlyUninstall",
+  ]) yes(runtime[field], `managed runtime ${field}`);
 
   exactKeys(observations.cleanup, [
     "uninstallerInvoked", "productRegistryRemovedByUninstaller",
