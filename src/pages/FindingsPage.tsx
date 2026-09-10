@@ -148,8 +148,8 @@ const copy = {
     zhTW: "這只是連線測試，沒有執行漏洞掃描",
   },
   connectionHeaderDescription: {
-    en: "This result shows only whether one local port accepted a TCP connection. It did not complete a vulnerability, configuration, code, or secret check. Choose an applicable security scan to look for problems.",
-    zhTW: "這份結果只顯示單一本機連接埠是否接受 TCP 連線，未完成漏洞、設定、程式碼或秘密資訊檢查。若要找資安問題，請選擇適用的資安掃描。",
+    en: "One local TCP port was checked. Choose an applicable security scan to look for weaknesses.",
+    zhTW: "已檢查一個本機 TCP 連接埠；請選擇適用的資安掃描來尋找弱點。",
   },
   nonSecurityHeaderEyebrow: { en: "INVENTORY / CONNECTIVITY", zhTW: "盤點／連線" },
   nonSecurityHeaderTitle: {
@@ -157,8 +157,8 @@ const copy = {
     zhTW: "只完成盤點或連線工作，沒有執行資安檢查",
   },
   nonSecurityHeaderDescription: {
-    en: "This run did not complete a vulnerability, configuration, code, or secret check. Inventory and connectivity observations are not a no-problems security result.",
-    zhTW: "本輪未完成漏洞、設定、程式碼或秘密資訊檢查。盤點與連線觀察不能解讀為未發現資安問題。",
+    en: "This run completed inventory or connectivity, not a security check. Choose an applicable security scan.",
+    zhTW: "本輪完成盤點或連線工作，未執行資安檢查；請選擇適用的資安掃描。",
   },
   nonSecurityEmptyTitle: { en: "Inventory or connectivity results", zhTW: "盤點或連線結果" },
   nonSecurityEmptyDescription: {
@@ -171,8 +171,8 @@ const copy = {
     zhTW: "觀察到可連線服務，但這些不是漏洞",
   },
   observationsDescription: {
-    en: "Discovery confirmed that these services responded. This is useful inventory, but reachability alone does not show a security weakness.",
-    zhTW: "探索檢查確認這些服務有回應。這是有用的盤點資料，但僅能連線不代表存在資安弱點。",
+    en: "These services responded. Reachability is inventory, not a security weakness.",
+    zhTW: "這些服務有回應；連線結果屬於盤點，不代表資安弱點。",
   },
   observationSummary: {
     en: "{services} observed services across {assets} assets",

@@ -208,10 +208,10 @@ test("internal network detection stays an explicit inventory-only bilingual sugg
     "請在下方輸入精確的內部 IP 或網段",
     "Add {target} to the target list?",
     "要將 {target} 加入目標清單嗎",
-    "CIDR ranges are recorded only.",
-    "This run will not contact or vulnerability-scan them",
-    "CIDR 網段只會保存為盤點資料",
-    "本次執行不會連線或掃描其弱點",
+    "CIDR ranges are inventory only.",
+    "Add each exact host above for a vulnerability check.",
+    "CIDR 網段僅供盤點",
+    "請在上方逐一加入需要弱點檢查的精確主機",
   ]) assert.ok(casesPageSource.includes(phrase), phrase);
   assert.ok(casesPageSource.includes("scannerService.detectLocalPrivateSubnets()"));
   assert.ok(casesPageSource.includes("onClick={() => useDetectedLocalNetwork(detectedLocalNetwork.target)}"));

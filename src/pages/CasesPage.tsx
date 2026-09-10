@@ -214,8 +214,8 @@ const pageCopy = {
     zhTW: "記錄尚未支援的裸主機或 CIDR 網段；本次執行不會掃描它們",
   },
   environmentInventoryHelp: {
-    en: "CIDR ranges are recorded only. This run will not contact or vulnerability-scan them; add each exact host above when it should be checked.",
-    zhTW: "CIDR 網段只會保存為盤點資料。本次執行不會連線或掃描其弱點；要檢查時，請在上方逐一加入精確主機。",
+    en: "CIDR ranges are inventory only. Add each exact host above for a vulnerability check.",
+    zhTW: "CIDR 網段僅供盤點；請在上方逐一加入需要弱點檢查的精確主機。",
   },
   environmentAtLeastOne: {
     en: "Add at least one scan-ready project folder, website or API URL, or exact internal system. Inventory-only ranges can be saved alongside one of these items.",
@@ -223,16 +223,16 @@ const pageCopy = {
   },
   websitePreparedTitle: { en: "Ready: {target}", zhTW: "已準備：{target}" },
   websitePrepared: {
-    en: "The page path {path} is kept for reference. Nuclei checks the displayed website origin {origin} with applicable upstream templates; it is not limited to {path}. If you are allowed to test only a specific path, do not use this quick scan.",
-    zhTW: "頁面路徑 {path} 只會保留作為參考。Nuclei 會以適用的上游模板檢查畫面所列網站來源範圍 {origin}，不會限制於 {path}。如果只獲准測試特定路徑，請勿使用此快速掃描。",
+    en: "Scan scope: {origin}. Reference path: {path}. Path-only authorization is not supported.",
+    zhTW: "掃描範圍：{origin}。參考路徑：{path}。不支援僅限特定路徑的授權。",
   },
   websitePreparedInternal: {
-    en: "The page path {path} is kept for reference. The fixed Nuclei quick profile checks the displayed internal website origin {origin}; it is not limited to {path}. Start requires explicit access confirmation for this exact internal network target on the next screen. If authorization covers only a specific path, do not use this quick scan.",
-    zhTW: "頁面路徑 {path} 只會保留作為參考。固定的 Nuclei 快速設定會檢查畫面所列的內部網站來源範圍 {origin}，不會限制於 {path}。在下一頁明確確認可存取這個精確的內部網路目標後，才能開始掃描。如果只獲准測試特定路徑，請勿使用此快速掃描。",
+    en: "Scan scope: {origin}. Reference path: {path}. Start requires exact internal-target confirmation; path-only authorization is not supported.",
+    zhTW: "掃描範圍：{origin}。參考路徑：{path}。開始前須確認精確內部目標；不支援僅限特定路徑的授權。",
   },
   websiteQueryRemoved: {
-    en: "Query parameters and page fragments are not saved because they can contain private tokens or personal data.",
-    zhTW: "網址參數與頁面片段不會保存，因為其中可能含有私人權杖或個人資料。",
+    en: "Not saved: query parameters and page fragments, which can contain tokens or personal data.",
+    zhTW: "不保存網址參數與頁面片段；其中可能含有 token 或個人資料。",
   },
   publicTargets: { en: "Public domains, IP addresses, or small network ranges", zhTW: "公開網域、IP 或小型網段" },
   publicTargetsPlaceholder: { en: "example.com\n203.0.113.10\n203.0.113.0/28", zhTW: "example.com\n203.0.113.10\n203.0.113.0/28" },

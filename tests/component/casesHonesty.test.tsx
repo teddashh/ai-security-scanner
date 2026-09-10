@@ -559,11 +559,9 @@ test("a beginner can create a website scan without inventing a project name", as
     target: { value: "https://portal.example.test/login" },
   });
   expect(container.querySelector(".inline-notice")?.textContent).toContain(
-    "The page path /login is kept for reference. Nuclei checks the displayed website origin https://portal.example.test:443 with applicable upstream templates; it is not limited to /login.",
+    "Scan scope: https://portal.example.test:443. Reference path: /login. Path-only authorization is not supported.",
   );
-  expect(container.querySelector(".inline-notice")?.textContent).toContain(
-    "If you are allowed to test only a specific path, do not use this quick scan.",
-  );
+  expect(container.querySelector(".inline-notice")?.textContent).not.toContain("If you are allowed");
   fireEvent.submit(container.querySelector(".create-case-panel")!);
 
   await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
@@ -585,10 +583,10 @@ test("an internal website shortcut promises the fixed profile and the required n
     target: { value: "https://10.20.30.40:8443/admin" },
   });
   expect(container.querySelector(".inline-notice")?.textContent).toContain(
-    "The fixed Nuclei quick profile checks the displayed internal website origin https://10.20.30.40:8443; it is not limited to /admin.",
+    "Scan scope: https://10.20.30.40:8443. Reference path: /admin.",
   );
   expect(container.querySelector(".inline-notice")?.textContent).toContain(
-    "Start requires explicit access confirmation for this exact internal network target on the next screen.",
+    "Start requires exact internal-target confirmation; path-only authorization is not supported.",
   );
   expect(container.querySelector(".inline-notice")?.textContent).not.toMatch(/you must/iu);
   fireEvent.submit(container.querySelector(".create-case-panel")!);

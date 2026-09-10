@@ -518,7 +518,7 @@ test("setup prerequisites and missing-source states use direct product language"
   );
 
   for (const phrase of [
-    "Start requires explicit access confirmation for this exact internal network target",
+    "Start requires exact internal-target confirmation",
     "Active testing requires separate authorization",
     "Candidate list status: no connected source",
     "Sources without data: {count}",

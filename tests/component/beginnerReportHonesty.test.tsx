@@ -581,7 +581,7 @@ test.each(["syft", "cloudquery"])(
     expect(row?.dataset.assetResult).toBe("not_tested");
     expect(container.textContent).toContain("Inventory or connectivity only — no security check ran");
     expect(container.textContent).toContain(
-      "This run did not complete a vulnerability, configuration, code, or secret check.",
+      "This run completed inventory or connectivity, not a security check.",
     );
     expect(container.textContent).not.toContain("completed security check reported no problems");
   },
@@ -615,7 +615,7 @@ test("a legacy Steampipe-only report without resultKind remains inventory, not a
     "Inventory or connectivity only — no security check ran",
   );
   expect(container.textContent).toContain(
-    "Inventory and connectivity observations are not a no-problems security result.",
+    "This run completed inventory or connectivity, not a security check.",
   );
   expect(container.textContent).not.toContain("completed security check reported no problems");
 });

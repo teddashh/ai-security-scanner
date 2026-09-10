@@ -357,8 +357,8 @@ test("choosing a local folder authorizes its private read-only snapshot without 
   for (const phrase of [
     "Choose once, then scan the private copy",
     "選擇一次，再掃描私密副本",
-    "Press Start once to run the recommended checks; there is no second ownership form.",
-    "按一次「開始」即可執行建議檢查，不必再填第二份所有權表單。",
+    "Choosing a folder creates a private read-only snapshot.",
+    "選擇資料夾會建立私密唯讀快照。",
   ]) {
     assert.ok(source.includes(phrase), `missing local one-step permission contract: ${phrase}`);
   }
