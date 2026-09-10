@@ -199,6 +199,13 @@ cleanup, and checkpoint state directly. Planning, discovery, grouping, deletion,
 engine retrieval, and cleanup responses use structured outcome fields instead of
 appending defensive notice paragraphs.
 
+Active product guidance now follows the same contract. Progress, runtime setup,
+provider authorization, coverage entry, scan lifecycle, and application actions
+state the current outcome and the next useful action without repeating
+non-events, saved-state reassurance, implementation language, or responsibility
+transfer. Required authorization and exact scope boundaries remain concise and
+specific.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -229,8 +236,10 @@ The high-value remaining gaps are:
    Review, and Progress one shared concise timing target and moves scanner and
    scope qualifications out of the primary choices. `b8bf318` makes the terminal
    report direct, moves formal terms to the end, and normalizes superseded stored
-   narrative. The full sequence still
-   needs observation in a controlled installed-desktop walkthrough.
+   narrative. `cbd6481` applies the direct-response contract to the CLI, and
+   `502b70a` applies it to active Progress, setup, authorization, lifecycle,
+   coverage, and application guidance. The full sequence still needs observation
+   in a controlled installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
    AWS cloud paths do not hide a comparable product-authored security subset:
