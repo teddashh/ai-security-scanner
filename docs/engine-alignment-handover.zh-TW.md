@@ -2,7 +2,7 @@
 
 狀態日期：2026-09-10
 
-最後完成的產品程式 checkpoint：`5dbdeff`
+最後完成的產品程式 checkpoint：`6247c25`
 
 這份文件是目前唯一的開發交接摘要，已直接取代舊的歷史版。產品決策以[產品規格](product-spec.md)為準，能力現況以[產品檢視](product-audit.md)為準。
 
@@ -63,6 +63,10 @@ Scanner 應盡量保留上游行為、規則、識別碼、severity、證據與 
 - `5dbdeff` 完成其餘可見文案清理。App shell、更新、專案、雲端權限、Progress、Results、
   Verification 與 Export 的失敗狀態都直接給結果與下一步；移除第一人稱解釋、等待語句、
   未發生事件的安撫與首層簽章但書。正式條款維持在報告末端，必要授權邊界保持不變。
+- `6247c25` 把相同契約落到 backend producer、保存結果與 recovery 狀態。20 種 typed preflight
+  blocker 都限制為 160 字元內的精確狀態與下一步；runtime、cloud、workspace、network、component、
+  evidence 與 cleanup 失敗不再附加重試安撫、未發生事件或實作解釋。typed code、授權邊界與
+  durable outcome 語意不變。
 
 ## 已在 main 上成立的產品能力
 
@@ -390,6 +394,13 @@ lifecycle 文案已統一成「目前結果＋下一個動作」。缺少報告�
 Export 首層只列完整性狀態；完整條款留在報告末端。產品指引改用程式、掃描或所選狀態為主詞，
 不再以 AI 第一人稱介入操作流程。真正的限時雲端存取、破壞性刪除警告及目標授權仍保留原意。
 
+## 前置檢查與保存結果直接化（`6247c25`）
+
+直接敘述契約已從畫面延伸到 Rust producer。20 種 `ScanReadinessBlocker` 各自回傳精確狀態與
+下一步，不再共用模糊的 scope 說明；單元測試逐一鎖住非空、160 字元上限及禁用句型。
+Greenbone partial coverage、無適用檢查、localhost connection、managed runtime、bootstrap、
+egress 與 cleanup/recovery 紀錄同步採用直接結果。英／繁中共用敘述表與畫面文字已一起更新。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -477,6 +488,11 @@ contract 32 項、TypeScript typecheck、production frontend build、`clippy -D 
 `5dbdeff` 新增後，frontend 569 項、component 252 項、CI contract 32 項、TypeScript typecheck、
 production frontend build 與 diff check 全部通過；build 只有既有的大型 chunk 提示。本輪沒有
 執行 scanner、刪除 RAM disk 資料或接觸任何 target。
+
+`6247c25` 新增後，完整 Rust CLI workspace 1,589 項、frontend 569 項、component 252 項、CI
+contract 32 項、TypeScript typecheck、production frontend build、`clippy -D warnings`、format
+與 diff check 全部通過；build 只有既有的大型 chunk 提示。本輪沒有執行 scanner、刪除 RAM
+disk 資料或接觸任何 target。
 
 ## 後續順序
 

@@ -220,6 +220,13 @@ non-event reassurance, or implementation detail. Export integrity is one compact
 fact; formal terms remain at the report end. Product guidance describes the app,
 scan, or selected state rather than speaking as an AI assistant.
 
+Backend readiness and recovery producers now use the same contract before text
+reaches the UI or a saved result. All 20 typed preflight blockers state the exact
+status and next action in at most 160 characters. Runtime, cloud, workspace,
+network, component, evidence, and cleanup failures no longer append retry
+reassurance, non-events, or implementation explanations. Typed blocker codes,
+authorization boundaries, and durable outcome semantics are unchanged.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -257,7 +264,9 @@ The high-value remaining gaps are:
    on terminal work, and applies direct result wording throughout the shared
    report surfaces. `5dbdeff` completes the visible-copy sweep across the app
    shell, project setup, provider access, Progress, Results, verification, and
-   export. The full sequence still needs observation in a controlled
+   export. `6247c25` completes the producer-side preflight and recovery sweep,
+   with a bounded direct-copy contract covering all 20 blocker variants. The
+   full sequence still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
