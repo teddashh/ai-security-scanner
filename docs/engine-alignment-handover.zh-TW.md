@@ -667,6 +667,14 @@ case-bundle 資料來源，不再預告資料之後出現或用辯解句說明 u
 沿用 `8da9b5a` 已通過的 1,590 項完整 Rust CLI workspace 基線。本輪沒有執行 scanner、刪除 RAM
 disk 資料或接觸任何 target。
 
+`57fa5eb` 新增後，frontend 582 項、component 258 項、CI contract 32 項、TypeScript typecheck、
+production frontend build 與 diff check 全部通過；update control 直接列出重新啟動影響，未驗證的
+cloud scope 直接列出資料來源，Progress 直接標示準備事件與各檢查欄位，verification setup 直接
+列出四種比較結果，缺少資產授權也直接標示 project permission，不再用「準備好後」「驗證後才
+顯示」「會顯示在這裡」或「新掃描完成後會列出」等預告句。Rust 程式碼未變更，沿用 `8da9b5a`
+已通過的 1,590 項完整 Rust CLI workspace 基線。本輪沒有執行 scanner、刪除 RAM disk 資料或
+接觸任何 target。
+
 ## 後續順序
 
 1. 在使用者明確允許安裝缺少的 managed runtime／desktop dependencies，並對確切自有 target

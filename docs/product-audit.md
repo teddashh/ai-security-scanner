@@ -343,6 +343,13 @@ unselected problem detail points directly to selection. Export labels selected
 file contents and saved location, records unknown counts as unknown, and states
 the exact historical fallback sources inside the case-bundle detail.
 
+The remaining cross-page forecast copy has been replaced with current facts:
+the update control states its restart effect, unverified cloud scope names
+provider verification as its source, Progress labels readiness events and check
+fields directly, and verification setup names its four comparison outcomes.
+Unknown asset authorization also states the missing project permission without
+suggesting that time alone changes it.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -416,7 +423,9 @@ The high-value remaining gaps are:
    `fb440f7` routes active Results and Export requests directly to Progress and
    removes their transitional placeholder pages. `d4a4532` replaces remaining
    terminal-page forecasts and defensive unknown-count explanations with direct
-   result, selection, file-content, location, and provenance facts.
+   result, selection, file-content, location, and provenance facts. `57fa5eb`
+   replaces the remaining update, provider-scope, Progress, authorization, and
+   verification forecasts with present product facts.
    The full sequence still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
