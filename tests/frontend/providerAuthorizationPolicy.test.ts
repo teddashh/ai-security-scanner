@@ -135,6 +135,14 @@ test("provider sign-in leads with the setup-file journey and keeps manual entry 
   assert.doesNotMatch(primaryJourney, /copy\.fields\./u);
 });
 
+test("provider handoff copy stays neutral and uses an automatic clipboard fallback", () => {
+  assert.match(panelSource, /Provide the non-secret \{provider\} connection setup JSON/u);
+  assert.doesNotMatch(panelSource, /Please send me|using our existing|copy it manually|手動複製/iu);
+  assert.match(panelSource, /navigator\.clipboard\?\.writeText/u);
+  assert.match(panelSource, /document\.execCommand\("copy"\)/u);
+  assert.match(panelSource, /field\.remove\(\)/u);
+});
+
 test("product capability metadata stays in one default-collapsed details disclosure after the primary connection states", () => {
   const connectedStart = panelSource.indexOf("{installed && (");
   const unconnectedStart = panelSource.indexOf("{!installed && !prompt", connectedStart);

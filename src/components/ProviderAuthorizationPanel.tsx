@@ -117,18 +117,18 @@ const copy = {
     zhTW: "把這段簡短訊息傳給 IT 或雲端管理員：",
   },
   requestMessagePreferred: {
-    en: "Please send me the non-secret {provider} connection setup JSON for ai-security-scanner, using our existing read-only access.",
+    en: "Provide the non-secret {provider} connection setup JSON for ai-security-scanner, using the organization's existing read-only access.",
     zhTW: "請提供 ai-security-scanner 使用的 {provider} 非機密 connection setup JSON，並使用組織既有的唯讀權限。",
   },
   requestMessageBootstrap: {
-    en: "Please send me the non-secret {provider} connection setup JSON for ai-security-scanner, for temporary read-only scan access.",
+    en: "Provide the non-secret {provider} connection setup JSON for ai-security-scanner, for temporary read-only scan access.",
     zhTW: "請提供 ai-security-scanner 使用的 {provider} 非機密 connection setup JSON，用來建立暫時的唯讀掃描權限。",
   },
   copyRequest: { en: "Copy request for IT", zhTW: "複製給 IT 的請求" },
   requestCopied: { en: "Request copied", zhTW: "已複製請求" },
   requestCopyFailed: {
-    en: "Copy was unavailable. Select the request and copy it manually.",
-    zhTW: "無法自動複製；請選取上方訊息並手動複製。",
+    en: "Request copy unavailable.",
+    zhTW: "請求內容無法複製。",
   },
   requestExactDetails: { en: "See the JSON template for IT", zhTW: "查看給 IT 的 JSON 範本" },
   registrationNote: {
@@ -300,8 +300,8 @@ const copy = {
   copyDeviceCode: { en: "Copy code", zhTW: "複製代碼" },
   deviceCodeCopied: { en: "Code copied", zhTW: "已複製代碼" },
   deviceCodeCopyFailed: {
-    en: "Copy was unavailable. Select the code above and copy it manually.",
-    zhTW: "無法自動複製；請選取上方代碼並手動複製。",
+    en: "Code copy unavailable.",
+    zhTW: "代碼無法複製。",
   },
   backendSafety: { en: "Provider safety note", zhTW: "雲端服務商安全提示" },
   cancel: { en: "Cancel this sign-in", zhTW: "取消本次登入" },
@@ -470,6 +470,41 @@ const GCP_CLIENT_ID_PATTERN = /^[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.
 const GCP_PROJECT_ID_PATTERN = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u;
 const AWS_REGION_PATTERN = /^(?:[a-z]{2}(?:-gov)?-[a-z]+-\d)$/u;
 const AWS_ROLE_NAME_PATTERN = /^[A-Za-z0-9+=,.@_/-]{1,64}$/u;
+
+const copyText = async (value: string): Promise<boolean> => {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    // Continue with the document copy path.
+  }
+
+  if (typeof document.execCommand !== "function") return false;
+  const field = document.createElement("textarea");
+  field.value = value;
+  field.readOnly = true;
+  field.tabIndex = -1;
+  field.setAttribute("aria-hidden", "true");
+  field.style.position = "fixed";
+  field.style.inset = "0 auto auto -10000px";
+  const priorFocus = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : undefined;
+  document.body.append(field);
+  field.focus({ preventScroll: true });
+  field.select();
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    field.remove();
+    priorFocus?.focus({ preventScroll: true });
+  }
+};
+
 const connectionSetupFileFields: Readonly<
   Record<Provider, Readonly<Record<ProviderAuthorizationPath, readonly ProviderCoordinateField[]>>>
 > = {
@@ -1089,13 +1124,7 @@ export function ProviderAuthorizationPanel({
   };
 
   const copyItRequest = async (request: string) => {
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
-      await navigator.clipboard.writeText(request);
-      setRequestCopyState("copied");
-    } catch {
-      setRequestCopyState("failed");
-    }
+    setRequestCopyState(await copyText(request) ? "copied" : "failed");
   };
 
   const authorizationConfig = useCallback((): ProviderAuthorizationConfig => {
@@ -1324,13 +1353,7 @@ export function ProviderAuthorizationPanel({
 
   const copyPromptDeviceCode = async () => {
     if (prompt?.flow !== "device") return;
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
-      await navigator.clipboard.writeText(prompt.prompt.user_code);
-      setDeviceCodeCopyState("copied");
-    } catch {
-      setDeviceCodeCopyState("failed");
-    }
+    setDeviceCodeCopyState(await copyText(prompt.prompt.user_code) ? "copied" : "failed");
   };
 
   const openProviderLogin = async () => {

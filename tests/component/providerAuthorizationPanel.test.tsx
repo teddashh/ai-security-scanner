@@ -239,6 +239,65 @@ test("temporary access distinguishes reviewed IAM setup from read-only scanner a
   expect(firstLayer).not.toContain("does not change cloud resources");
 });
 
+test("the IT request is neutral copy and the document fallback completes clipboard copy", async () => {
+  const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
+  const primaryCopy = vi.fn().mockRejectedValue(new Error("clipboard denied"));
+  let fallbackCopy = "";
+  const execCommand = vi.fn((command: string) => {
+    fallbackCopy = document.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-hidden="true"]',
+    )?.value ?? "";
+    return command === "copy";
+  });
+
+  try {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: primaryCopy },
+    });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: execCommand,
+    });
+    renderPanel();
+
+    const guide = panel().querySelector<HTMLDetailsElement>("details.provider-connection-guide");
+    expect(guide).not.toBeNull();
+    guide!.open = true;
+    const request = guide!.querySelector("blockquote")?.textContent ?? "";
+    expect(request).toContain(
+      "Provide the non-secret Microsoft 365 connection setup JSON for ai-security-scanner",
+    );
+    expect(request).not.toMatch(/\b(?:me|our)\b/iu);
+
+    const copyButton = within(guide!).getByRole("button", { name: "Copy request for IT" });
+    copyButton.focus();
+    fireEvent.click(copyButton);
+
+    await waitFor(() => {
+      expect(within(guide!).getByRole("status").textContent).toBe("Request copied");
+    });
+    expect(primaryCopy).toHaveBeenCalledOnce();
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    expect(fallbackCopy).toContain(request);
+    expect(fallbackCopy).toContain('"schema_version": "1.0.0"');
+    expect(document.querySelector('textarea[aria-hidden="true"]')).toBeNull();
+    expect(document.activeElement).toBe(copyButton);
+  } finally {
+    if (clipboardDescriptor) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    } else {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
+    if (execCommandDescriptor) {
+      Object.defineProperty(document, "execCommand", execCommandDescriptor);
+    } else {
+      Reflect.deleteProperty(document, "execCommand");
+    }
+  }
+});
+
 test("collapsed capability details preserve exact scope, version, profiles, and support dates", () => {
   const projection = projectSourceCapabilityView({
     provider: "microsoft365",

@@ -1043,18 +1043,15 @@ impl ManagedRuntimeSetupController {
         if status.active && status.can_cancel {
             self.cancel_requested.store(true, Ordering::Release);
             status.cancel_requested = true;
-            status.detail =
-                "cancellation requested; downloaded partial bytes will be retained for resume"
-                    .into();
+            status.detail = "Scan-tool preparation is stopping.".into();
         } else if status.active {
             // Export/import/unregister is a short transaction with a durable
             // recovery copy. Interrupting it between those boundaries would
             // make the next launch harder to explain, so finish the coherent
             // recovery step before accepting cancellation again.
-            status.detail = "finishing the safe recovery copy before setup can be stopped".into();
+            status.detail = "Scan-tool preparation stop status: current step completing.".into();
         } else if status.prerequisite_repair_active {
-            status.detail =
-                "Windows preparation is finishing its bounded step before setup can stop".into();
+            status.detail = "Windows preparation stop status: current step completing.".into();
         } else {
             // A stale cancel must never poison the next setup attempt.
             self.cancel_requested.store(false, Ordering::Release);
@@ -1164,7 +1161,7 @@ impl ManagedRuntimeSetupController {
         self.finish(
             operation_id,
             ManagedRuntimeSetupPhase::Cancelled,
-            "managed runtime setup was cancelled; partial download retained for retry".into(),
+            "Scan-tool preparation cancelled.".into(),
         )
     }
 
@@ -1325,9 +1322,7 @@ fn public_managed_runtime_setup_status(
 }
 
 fn setup_cancelled_error() -> AppError {
-    AppError::InvalidRequest(
-        "managed runtime setup was cancelled; partial download was retained for resume".into(),
-    )
+    AppError::InvalidRequest("Scan-tool preparation cancelled.".into())
 }
 
 #[derive(Debug, Clone)]
@@ -9205,8 +9200,7 @@ fn windows_wsl_repair_timeout_result() -> ManagedRuntimePrerequisiteRepairResult
     ManagedRuntimePrerequisiteRepairResult {
         outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
         restart_required: false,
-        detail: "Windows may still be completing the requested change after the bounded wait. ai-security-scanner will keep checking the current state before it asks for administrator approval again."
-            .into(),
+        detail: "Windows setup completion status unavailable.".into(),
     }
 }
 
@@ -9372,8 +9366,7 @@ where
         return Ok(ManagedRuntimePrerequisiteRepairResult {
             outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
             restart_required: false,
-            detail: "Windows may still be finishing the previous setup action. ai-security-scanner checked the current state and will wait before asking for administrator approval again."
-                .into(),
+            detail: "Windows setup action already submitted. Completion status unavailable.".into(),
         });
     }
     repair(action)
@@ -19673,8 +19666,10 @@ mod tests {
         );
         assert!(!waiting.restart_required);
         assert_eq!(repair_calls.load(Ordering::Acquire), 0);
-        assert!(waiting.detail.contains("checked the current state"));
-        assert!(!waiting.detail.contains("ready"));
+        assert_eq!(
+            waiting.detail,
+            "Windows setup action already submitted. Completion status unavailable."
+        );
 
         let completed = repair_windows_wsl_prerequisite_with_cooldown(
             ManagedRuntimeSetupNextAction::InstallWsl,
@@ -19964,7 +19959,7 @@ mod tests {
     }
 
     #[test]
-    fn windows_wsl_repair_timeout_is_bounded_and_keeps_saved_work_available() {
+    fn windows_wsl_repair_timeout_is_bounded_and_reports_one_direct_outcome() {
         assert_eq!(
             WINDOWS_WSL_PREREQUISITE_REPAIR_TIMEOUT,
             Duration::from_secs(5 * 60)
@@ -19975,10 +19970,10 @@ mod tests {
             ManagedRuntimePrerequisiteRepairOutcome::Failed
         );
         assert!(!result.restart_required);
-        assert!(result.detail.contains("bounded wait"));
-        assert!(result.detail.contains("keep checking"));
-        assert!(result.detail.contains("before it asks"));
-        assert!(!result.detail.contains("ready"));
+        assert_eq!(
+            result.detail,
+            "Windows setup completion status unavailable."
+        );
     }
 
     #[test]
@@ -23770,7 +23765,11 @@ mod tests {
         let requested = controller.request_cancel().expect("request cancellation");
         assert!(requested.active);
         assert!(requested.cancel_requested);
-        assert!(controller.check_cancelled().is_err());
+        assert_eq!(requested.detail, "Scan-tool preparation is stopping.");
+        assert_eq!(
+            controller.check_cancelled().unwrap_err().to_string(),
+            "invalid request: Scan-tool preparation cancelled."
+        );
         controller
             .finish_cancelled(&operation_id)
             .expect("finish cancelled");
@@ -23778,6 +23777,7 @@ mod tests {
         assert_eq!(cancelled.phase, ManagedRuntimeSetupPhase::Cancelled);
         assert!(!cancelled.active);
         assert!(cancelled.can_retry);
+        assert_eq!(cancelled.detail, "Scan-tool preparation cancelled.");
 
         controller.begin().expect("retry starts");
         assert_eq!(

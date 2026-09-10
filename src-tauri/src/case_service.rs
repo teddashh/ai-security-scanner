@@ -2502,9 +2502,7 @@ impl<'a> CaseService<'a> {
                 ));
             }
             checkpoint.stage = ExecutionStage::Cancelled;
-            checkpoint.last_error = Some(
-                "The scan was cancelled before this attempt performed new target contact.".into(),
-            );
+            checkpoint.last_error = Some("Scan cancelled before dispatch.".into());
             resource_free_tokens.insert(engine_run.id.clone(), checkpoint.resume_token()?);
         }
 
@@ -2560,8 +2558,7 @@ impl<'a> CaseService<'a> {
                     || !latest_result.normalization_complete
                 {
                     return Err(AppError::NotAvailable(
-                        "Result processing is incomplete. Wait for it to finish, then cancel again."
-                            .into(),
+                        "Cancellation request no longer matches the current result state.".into(),
                     ));
                 }
                 let checkpoint = exact_engine_checkpoint(
@@ -20198,6 +20195,13 @@ mod tests {
                 .unwrap();
             assert_eq!(sibling.status, EngineRunStatus::Cancelled);
             assert_eq!(sibling.phase, "cancelled_before_dispatch");
+            assert_eq!(
+                ExecutionCheckpoint::from_resume_token(sibling.resume_token.as_deref().unwrap())
+                    .unwrap()
+                    .last_error
+                    .as_deref(),
+                Some("Scan cancelled before dispatch.")
+            );
         }
         let cancelled_naabu = run
             .engine_runs

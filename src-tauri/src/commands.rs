@@ -1718,14 +1718,13 @@ pub fn delete_case(
         .any(|job| job.key.case_id == case_id)
     {
         return Err(AppError::InvalidRequest(
-            "cancel and wait for the live scan worker to finish before deleting this case".into(),
+            "Case deletion blocked: active scan has no terminal result.".into(),
         ));
     }
     if state.provider_discovery_jobs.is_active(&case_id)? {
         state.provider_discovery_jobs.cancel(&case_id)?;
         return Err(AppError::InvalidRequest(
-            "provider discovery cancellation was requested; wait for it to stop before deleting this case"
-                .into(),
+            "Case deletion blocked: provider discovery cancellation is in progress.".into(),
         ));
     }
     state
@@ -6930,7 +6929,7 @@ fn terminal_after_prestart_error(
                     &mut durable.cleanup,
                     &mut durable.warnings,
                     &cleanup_error.to_string(),
-                    "The scanner did not start, but managed egress cleanup remains pending.",
+                    "Managed egress cleanup status: pending.",
                 );
             }
         }
