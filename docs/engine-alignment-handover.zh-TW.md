@@ -639,6 +639,13 @@ build 與 diff check 全部通過；盤點檔、基礎設施程式碼、containe
 內部資料缺陷解釋。Rust 程式碼未變更，沿用 `8da9b5a` 已通過的 1,590 項完整 Rust CLI workspace
 基線。本輪沒有執行 scanner、刪除 RAM disk 資料或接觸任何 target。
 
+`18f8d67` 新增後，frontend 581 項、component 258 項、TypeScript typecheck、production frontend
+build 與 diff check 全部通過；新外部掃描不再提供沒有任何已發布 scanner 能執行的公開資料
+permission，也移除用來解釋零檢查路徑的但書牆。舊案件的 `public_data`／`passive` 型別與顯示仍可
+讀取；授權區直接列出精確目標、核准紀錄與不得含憑證的輸入規格。Rust 程式碼未變更，沿用
+`8da9b5a` 已通過的 1,590 項完整 Rust CLI workspace 基線。本輪沒有執行 scanner、刪除 RAM disk
+資料或接觸任何 target。
+
 ## 後續順序
 
 1. 在使用者明確允許安裝缺少的 managed runtime／desktop dependencies，並對確切自有 target

@@ -317,6 +317,13 @@ localhost TCP observation now presents one outcome—no reachability result—an
 one retry action; implementation-state vocabulary remains out of the first
 layer while the exact connection boundary stays visible.
 
+New external scans no longer offer the public-record permission because no
+released scanner accepts it. This removes a zero-check route and its explanatory
+caveat wall instead of asking a beginner to understand why the option does no
+work. Historical `public_data` and `passive` grants remain readable. Network
+authorization copy now states the exact approval and credential-free field
+requirements without delegating the product decision to the reader.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -383,7 +390,9 @@ The high-value remaining gaps are:
    connectivity-result boundaries while preserving exact authorization and
    not-tested meaning. `9b7697c` converts saved-input cautions into direct input
    requirements and removes implementation-state explanations from the
-   localhost TCP first layer.
+   localhost TCP first layer. `18f8d67` removes the selectable public-record
+   permission until a released scanner can perform it and converts the related
+   authorization guidance into direct requirements.
    The full sequence still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
