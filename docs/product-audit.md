@@ -213,6 +213,13 @@ Active work is represented only by Progress. Result, coverage, verification,
 setup, and export copy state the recorded outcome and next action directly, and
 older stored defensive prose is normalized before presentation.
 
+The remaining desktop copy now follows the same direct contract. Saved-data,
+update, setup, project, preview, verification, export, and correlation failures
+name the outcome and next action without first-person excuses, delay language,
+non-event reassurance, or implementation detail. Export integrity is one compact
+fact; formal terms remain at the report end. Product guidance describes the app,
+scan, or selected state rather than speaking as an AI assistant.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -248,7 +255,9 @@ The high-value remaining gaps are:
    coverage, and application guidance. `acac84a` removes the live-report state
    from the Rust and TypeScript contracts, gates report construction and export
    on terminal work, and applies direct result wording throughout the shared
-   report surfaces. The full sequence still needs observation in a controlled
+   report surfaces. `5dbdeff` completes the visible-copy sweep across the app
+   shell, project setup, provider access, Progress, Results, verification, and
+   export. The full sequence still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced

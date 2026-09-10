@@ -2,7 +2,7 @@
 
 狀態日期：2026-09-10
 
-最後完成的產品程式 checkpoint：`502b70a`
+最後完成的產品程式 checkpoint：`5dbdeff`
 
 這份文件是目前唯一的開發交接摘要，已直接取代舊的歷史版。產品決策以[產品規格](product-spec.md)為準，能力現況以[產品檢視](product-audit.md)為準。
 
@@ -57,6 +57,12 @@ Scanner 應盡量保留上游行為、規則、識別碼、severity、證據與 
   authorization、coverage 輸入、scan lifecycle 與應用程式動作只呈現當前結果和下一個有效
   動作；移除重複的未發生事件、保存狀態安撫、實作術語與責任轉移文字。必要的授權與精確
   scope 邊界仍以簡短明確的文字保留。
+- `acac84a` 把 Rust 與 TypeScript report lifecycle 收斂為只表示終態；active work 只存在於
+  Progress，report builder、snapshot 與所有 exporter 都拒絕 queued、preparing、running 或
+  paused 工作。
+- `5dbdeff` 完成其餘可見文案清理。App shell、更新、專案、雲端權限、Progress、Results、
+  Verification 與 Export 的失敗狀態都直接給結果與下一步；移除第一人稱解釋、等待語句、
+  未發生事件的安撫與首層簽章但書。正式條款維持在報告末端，必要授權邊界保持不變。
 
 ## 已在 main 上成立的產品能力
 
@@ -377,6 +383,13 @@ lifecycle 文案已統一成「目前結果＋下一個動作」。缺少報告�
 差異及 historical coverage 都直接顯示狀態與 recovery action；舊 case 中的防禦性句子會先正規化，
 不會再送到畫面或新匯出檔。正式條款仍只出現在報告末端，技術證據仍留在收合細節。
 
+## 可見產品文案直接化（`5dbdeff`）
+
+剩餘的 saved-data、update、setup、project、preview、verification、export 與 correlation 文案已
+移除「我們無法」、稍後重試、未建立檔案／未更動資料等防禦性敘述，改成精確結果與單一步驟。
+Export 首層只列完整性狀態；完整條款留在報告末端。產品指引改用程式、掃描或所選狀態為主詞，
+不再以 AI 第一人稱介入操作流程。真正的限時雲端存取、破壞性刪除警告及目標授權仍保留原意。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -460,6 +473,10 @@ production frontend build、完整 Rust CLI suite、`clippy -D warnings`、forma
 contract 32 項、TypeScript typecheck、production frontend build、`clippy -D warnings`、format
 與 diff check 全部通過；build 只有既有的大型 chunk 提示。本輪沒有執行 scanner、刪除 RAM disk
 資料或接觸任何 target。
+
+`5dbdeff` 新增後，frontend 569 項、component 252 項、CI contract 32 項、TypeScript typecheck、
+production frontend build 與 diff check 全部通過；build 只有既有的大型 chunk 提示。本輪沒有
+執行 scanner、刪除 RAM disk 資料或接觸任何 target。
 
 ## 後續順序
 
