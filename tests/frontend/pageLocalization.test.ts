@@ -626,6 +626,18 @@ test("export leads with recipient choices and keeps file standards and integrity
   const firstLayer = source.slice(historyRow, technicalDetails);
   assert.doesNotMatch(firstLayer, /item\.fileName|item\.sha256|signatureState|includesRawEvidence/u);
   assert.match(source.slice(technicalDetails, verifyButton), /item\.fileName[\s\S]*item\.sha256[\s\S]*signatureState[\s\S]*includesRawEvidence/u);
+
+  for (const phrase of [
+    "FILE CONTENTS",
+    "檔案內容",
+    "Saved reports use only the selected location on this device.",
+    "報告只會儲存到這台電腦上選定的位置。",
+    "Exact count: unknown.",
+    "精確數量：未知。",
+    "Source visibility: none. Asset count: unknown.",
+    "來源視野：無。資產數量：未知。",
+  ]) assert.ok(source.includes(phrase), phrase);
+  assert.doesNotMatch(source, /WHAT WILL BE INCLUDED|即將包含|When you save one|儲存報告後|do not treat this as zero|不能把它當成零/u);
 });
 
 test("scan projects keep diagnostic counts, run IDs, and legal workflow in optional details", async () => {

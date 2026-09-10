@@ -139,8 +139,8 @@ const copy = {
   reviewHistory: { en: "Resolution status & history", zhTW: "解決狀態與歷程" },
   emptyHeaderTitle: { en: "Problem list", zhTW: "問題清單" },
   emptyHeaderDescription: {
-    en: "Your scan results and recommended next steps will appear here.",
-    zhTW: "掃描結果與建議的下一步會顯示在這裡。",
+    en: "Review this run's outcome and next action.",
+    zhTW: "查看這輪掃描的結果與下一步。",
   },
   connectionHeaderEyebrow: { en: "CONNECTION RESULT", zhTW: "連線結果" },
   connectionHeaderTitle: {
@@ -547,8 +547,8 @@ const copy = {
   viewSource: { en: "Open source document", zhTW: "查看來源文件" },
   chooseProblem: { en: "Choose a problem", zhTW: "選擇一項問題" },
   chooseProblemDescription: {
-    en: "Evidence, source details, review history, and framework navigation will appear here.",
-    zhTW: "完整證據、來源細節、處理歷程與控制項導航會顯示在這裡。",
+    en: "Select a problem to review its evidence, source details, status history, and framework references.",
+    zhTW: "選擇一項問題，查看證據、來源細節、處理歷程與框架參考。",
   },
   masterEyebrow: { en: "YOUR SCAN REPORT", zhTW: "你的掃描報告" },
   masterTitle: { en: "What was checked—and what was not", zhTW: "這次檢查了什麼，也漏了什麼" },

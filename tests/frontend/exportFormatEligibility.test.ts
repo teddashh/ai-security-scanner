@@ -122,12 +122,14 @@ test("the technical case bundle discloses its case-wide and run-bound scope befo
     source,
     /case-wide assets, grants, coverage, scan history, findings, workflow history, comparisons/u,
   );
-  assert.match(source, /Reports select observations and evidence from the chosen scan run/u);
+  assert.match(source, /Reports use observations and evidence from the selected scan run/u);
   assert.match(source, /older observations without a frozen snapshot/u);
-  assert.match(source, /workflow status and asset names may also reflect the current case/u);
-  assert.match(source, /包內報告會選取所選掃描輪次的觀察與證據/u);
+  assert.match(source, /fallback wording uses the current finding/u);
+  assert.match(source, /workflow status and asset names come from the current case/u);
+  assert.match(source, /包內報告使用所選掃描輪次的觀察與證據/u);
   assert.match(source, /較舊且沒有凍結快照的觀察/u);
-  assert.match(source, /工作流程狀態與資產名稱也可能反映目前案件/u);
+  assert.match(source, /會以目前問題內容作為後備文字/u);
+  assert.match(source, /工作流程狀態與資產名稱來自目前案件/u);
   assert.doesNotMatch(source, /Reports inside the bundle remain limited to the selected scan run/u);
   assert.doesNotMatch(source, /包內報告仍只涵蓋選定的掃描輪次/u);
   assert.match(source, /Case \/ selected-run result records/u);

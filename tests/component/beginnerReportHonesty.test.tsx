@@ -308,6 +308,10 @@ test("a run where nothing completed never reads as a clean result", () => {
   // the tone is what stops this reading as an all-clear.
   expect(pill.className).not.toContain("status-pill--positive");
   expect(pill.className).toContain("status-pill--danger");
+  expect(container.querySelector(".page-header")?.textContent).toContain(
+    "Review this run's outcome and next action.",
+  );
+  expect(container.querySelector(".page-header")?.textContent).not.toContain("will appear here");
 });
 
 test("a partial run is distinguished from a complete one", () => {
@@ -1580,6 +1584,10 @@ test("priority cards show target, location, confidence, next action, and verific
   expect(card!.textContent).toContain("Verify the fix");
   expect(card!.textContent).toContain("After the approved update, rerun the same dependency check.");
   expect(container.querySelector<HTMLElement>(".finding-detail")?.classList.contains("finding-detail--empty")).toBe(true);
+  expect(container.querySelector<HTMLElement>(".finding-detail")?.textContent).toContain(
+    "Select a problem to review its evidence, source details, status history, and framework references.",
+  );
+  expect(container.querySelector<HTMLElement>(".finding-detail")?.textContent).not.toContain("will appear here");
 });
 
 test("run-bound upstream rule identity reaches the finding evidence drawer", () => {

@@ -195,7 +195,7 @@ test("a preview describing another run is never presented as this run's numbers"
   expect(within(facts!).queryByText("7")).toBeNull();
 
   // No count survives, and none of them degrade to a reassuring zero.
-  expect(container.textContent).toContain("Exact count unavailable; do not treat this as zero.");
+  expect(container.textContent).toContain("Exact count: unknown.");
 
   expect(saveButton(container).disabled).toBe(true);
   fireEvent.click(saveButton(container));
