@@ -331,6 +331,12 @@ ends, wait for a provider limit to reset, or explain an internal connection stop
 before giving the retry action. The shared cross-page contract rejects those
 phrases in both product languages.
 
+Results and Export now resolve an active selected run directly to Progress at
+the application routing boundary. The report and export components render no
+active-run placeholder, completion promise, or preview; their visible surfaces
+are reserved for terminal-run content. Historical terminal runs remain directly
+selectable while a different run is active.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -401,6 +407,8 @@ The high-value remaining gaps are:
    permission until a released scanner can perform it and converts the related
    authorization guidance into direct requirements. `e174156` removes the
    remaining delayed and mechanism-first Progress and per-check recovery copy.
+   `fb440f7` routes active Results and Export requests directly to Progress and
+   removes their transitional placeholder pages.
    The full sequence still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond

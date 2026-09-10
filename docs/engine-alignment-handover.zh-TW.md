@@ -653,6 +653,13 @@ build 與 diff check 全部通過；Progress 與各項檢查的 recovery 只顯�
 `8da9b5a` 已通過的 1,590 項完整 Rust CLI workspace 基線。本輪沒有執行 scanner、刪除 RAM disk
 資料或接觸任何 target。
 
+`fb440f7` 新增後，frontend 582 項、component 258 項、CI contract 32 項、TypeScript typecheck、
+production frontend build 與 diff check 全部通過；所選輪次仍在 queued／running／paused 時，
+Results 與 Export 會在 app routing boundary 直接解析成 Progress，頁面元件不再顯示完成後才開放的
+placeholder、過渡解釋或 export preview。另一輪掃描進行中時，已選定的歷史終態輪次仍可照常開啟。
+Rust 程式碼未變更，沿用 `8da9b5a` 已通過的 1,590 項完整 Rust CLI workspace 基線。本輪沒有執行
+scanner、刪除 RAM disk 資料或接觸任何 target。
+
 ## 後續順序
 
 1. 在使用者明確允許安裝缺少的 managed runtime／desktop dependencies，並對確切自有 target
