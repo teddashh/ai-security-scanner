@@ -125,7 +125,7 @@ test("the setup panel and the readiness banner agree about the same blocker code
     /no_runnable_authorized_targets: \{\s*en: "([^"]+)"/u,
   )?.[1];
   assert.ok(banner, "the App.tsx blocker copy was not found");
-  assert.match(banner, /This version has no working scan tool for this target/u);
+  assert.match(banner, /Applicable scan tool unavailable/u);
 
   const blocked = panel.match(
     /no_runnable_authorized_targets: \{\s*title: "[^"]+",\s*description: "([^"]+)"/u,

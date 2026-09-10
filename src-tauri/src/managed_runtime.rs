@@ -6660,37 +6660,35 @@ impl ManagedRuntimeLock {
 
 fn retryable_server_readiness_error(error: AppError) -> AppError {
     AppError::NotAvailable(format!(
-        "managed runtime server readiness is temporarily unavailable; the exact managed machine was preserved for retry: {error}"
+        "managed runtime server readiness check incomplete: {error}"
     ))
 }
 
 fn retryable_machine_start_error(error: AppError) -> AppError {
-    AppError::NotAvailable(format!(
-        "managed runtime machine start did not complete; this can be a transient provider or SSH-port race, so the exact managed machine was preserved for retry: {error}"
-    ))
+    AppError::NotAvailable(format!("managed runtime machine start incomplete: {error}"))
 }
 
 fn retryable_machine_identity_inspection_error(error: AppError) -> AppError {
     AppError::NotAvailable(format!(
-        "managed runtime could not finish its immutable machine-identity check; the exact managed machine was preserved for retry: {error}"
+        "managed runtime machine-identity check incomplete: {error}"
     ))
 }
 
 fn retryable_windows_registration_inspection_error(error: AppError) -> AppError {
     AppError::NotAvailable(format!(
-        "managed runtime could not finish the Windows registration binding check; the exact selected generation was preserved for retry: {error}"
+        "managed runtime Windows registration binding check incomplete: {error}"
     ))
 }
 
 fn retryable_generation_selection_inspection_error(error: AppError) -> AppError {
     AppError::NotAvailable(format!(
-        "managed runtime could not finish reading its durable Windows generation selection; the current generations were preserved for retry: {error}"
+        "managed runtime Windows generation selection unreadable: {error}"
     ))
 }
 
 fn retryable_ownership_proof_inspection_error(error: AppError) -> AppError {
     AppError::NotAvailable(format!(
-        "managed runtime could not finish reading its Windows ownership proof; the exact managed machine was preserved for retry: {error}"
+        "managed runtime Windows ownership proof unreadable: {error}"
     ))
 }
 
@@ -9655,22 +9653,20 @@ fn repair_windows_wsl_prerequisite_platform(
                 return Ok(ManagedRuntimePrerequisiteRepairResult {
                     outcome: ManagedRuntimePrerequisiteRepairOutcome::Cancelled,
                     restart_required: false,
-                    detail: "Windows administrator confirmation was cancelled; no change was made"
-                        .into(),
+                    detail: "Windows administrator confirmation cancelled.".into(),
                 });
             }
             return Ok(ManagedRuntimePrerequisiteRepairResult {
                 outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
                 restart_required: false,
-                detail: "Windows could not start the requested setup change".into(),
+                detail: "Windows setup change failed to start.".into(),
             });
         }
         if execution.hProcess.is_null() {
             return Ok(ManagedRuntimePrerequisiteRepairResult {
                 outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
                 restart_required: false,
-                detail: "Windows started the setup change but did not provide completion status"
-                    .into(),
+                detail: "Windows setup change status unavailable.".into(),
             });
         }
         let process = OwnedProcessHandle(execution.hProcess);
@@ -18266,7 +18262,7 @@ mod tests {
             .expect_err("transient registry failure must not allocate another generation");
 
         assert!(matches!(&error, AppError::NotAvailable(_)));
-        assert!(error.to_string().contains("preserved for retry"));
+        assert!(!error.to_string().contains("preserved for retry"));
         assert_eq!(
             fixture
                 .manager
@@ -18320,7 +18316,7 @@ mod tests {
             .expect_err("a transient storage-sharing failure must preserve the generation");
 
         assert!(matches!(&error, AppError::NotAvailable(_)));
-        assert!(error.to_string().contains("preserved for retry"));
+        assert!(!error.to_string().contains("preserved for retry"));
         assert_eq!(
             fixture
                 .manager
@@ -19798,8 +19794,7 @@ mod tests {
                 ManagedRuntimePrerequisiteRepairResult {
                     outcome: ManagedRuntimePrerequisiteRepairOutcome::Cancelled,
                     restart_required: false,
-                    detail: "Windows administrator confirmation was cancelled; no change was made"
-                        .into(),
+                    detail: "Windows administrator confirmation cancelled.".into(),
                 },
             ),
         ]));
@@ -19820,7 +19815,11 @@ mod tests {
             })
             .expect_err("cancelled UAC affects only the runtime-dependent setup");
 
-        assert!(error.to_string().contains("confirmation was cancelled"));
+        assert!(
+            error
+                .to_string()
+                .contains("administrator confirmation cancelled")
+        );
         assert_eq!(attempts, 1);
         assert_eq!(
             repairer.actions(),
@@ -19838,7 +19837,11 @@ mod tests {
             setup.next_action,
             Some(ManagedRuntimeSetupNextAction::EnableWslOptionalFeatures)
         );
-        assert!(setup.detail.contains("confirmation was cancelled"));
+        assert!(
+            setup
+                .detail
+                .contains("administrator confirmation cancelled")
+        );
     }
 
     #[test]
@@ -21606,7 +21609,11 @@ mod tests {
             .expect_err("readiness failure must remain retryable on the exact owned machine");
 
         assert!(matches!(&error, AppError::NotAvailable(_)));
-        assert!(error.to_string().contains("preserved for retry"));
+        assert!(
+            error
+                .to_string()
+                .contains("managed runtime server readiness check incomplete")
+        );
         assert_eq!(fs::read(&existing_vhd).unwrap(), existing_bytes);
         let first_probe_timeout = *fixture.commands.timeouts().last().expect("probe timeout");
         assert!(first_probe_timeout > Duration::ZERO);
@@ -22651,7 +22658,11 @@ mod tests {
         };
 
         assert!(matches!(&error, AppError::NotAvailable(_)));
-        assert!(error.to_string().contains("preserved for retry"));
+        assert!(
+            error
+                .to_string()
+                .contains("managed runtime machine-identity check incomplete")
+        );
         assert_eq!(fs::read(&identity).unwrap(), identity_before);
         assert_eq!(
             inspect_managed_ssh_identity(&identity).unwrap(),

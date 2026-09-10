@@ -198,7 +198,7 @@ const copy = {
   },
   providerCheckTitle: { en: "Check cloud readiness again", zhTW: "重新檢查雲端準備狀態" },
   providerCheckDescription: {
-    en: "The cloud readiness check did not finish.",
+    en: "Cloud readiness check incomplete.",
     zhTW: "雲端準備狀態檢查尚未完成。",
   },
   workspaceSnapshotTitle: { en: "Choose the local files again", zhTW: "請重新選擇本機檔案" },
@@ -233,7 +233,7 @@ const copy = {
   },
   executionCheckTitle: { en: "Check readiness again", zhTW: "重新檢查準備狀態" },
   executionCheckDescription: {
-    en: "The selected-input and scan-tool check did not finish.",
+    en: "Selected-input and scan-tool readiness incomplete.",
     zhTW: "所選輸入與掃描工具的準備檢查尚未完成。",
   },
   readiness: {
@@ -272,7 +272,7 @@ const copy = {
       zhTW: "已連接的雲端帳號與這次掃描目標不一致；請先檢查目標。",
     },
     provider_preflight_unavailable: {
-      en: "The cloud readiness check did not finish. Check again.",
+      en: "Cloud readiness check incomplete. Check again.",
       zhTW: "雲端準備狀態檢查尚未完成；請重新檢查。",
     },
     workspace_snapshot_unavailable: {
@@ -296,7 +296,7 @@ const copy = {
       zhTW: "續跑所需的已保存結果或證據已遺失或變更；請開始新的掃描。",
     },
     execution_preflight_unavailable: {
-      en: "The final readiness check did not finish. Check again.",
+      en: "Final readiness check incomplete. Check again.",
       zhTW: "最後的準備狀態檢查尚未完成；請重新檢查。",
     },
   } satisfies Record<ScanReadinessBlocker, BilingualText>,

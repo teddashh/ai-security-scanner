@@ -660,10 +660,8 @@ fn complete_localhost_quick_scan_once(
                     engine_run.phase = "failed".into();
                     engine_run.localhost_tcp_observation = None;
                     engine_run.error_code = Some(failure.code.as_str().into());
-                    engine_run.error_message = Some(
-                        "The local connection attempt could not finish, so no result was inferred."
-                            .into(),
-                    );
+                    engine_run.error_message =
+                        Some("Local connection failed. Result: not recorded.".into());
                 }
             }
             terminal_status = Some(engine_run.status.clone());

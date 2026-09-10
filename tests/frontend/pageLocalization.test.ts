@@ -176,7 +176,7 @@ test("cloud readiness failures use distinct plain-language fixes without exposin
   const ambiguousStart = progress.indexOf("provider_source_ambiguous:", capabilityStart);
   assert.match(progress.slice(capabilityStart, ambiguousStart), /reconnectCloud/u);
   assert.doesNotMatch(progress.slice(ambiguousStart), /action: copy\.reconnectCloud/u);
-  assert.match(progress, /The cloud readiness check did not finish/u);
+  assert.match(progress, /Cloud readiness check incomplete/u);
   assert.match(progress, /雲端準備狀態檢查尚未完成/u);
   assert.doesNotMatch(progress, /No scan started|掃描尚未開始/u);
   assert.doesNotMatch(progress, /readiness\.(?:message|detail|error)/u);
@@ -207,7 +207,7 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
     ["Choose the local files again", "請重新選擇本機檔案"],
     ["Reconnect the saved data source", "請重新連接已保存的資料來源"],
     ["Restore one installed scan component", "恢復一項安裝元件"],
-    ["The selected-input and scan-tool check did not finish", "所選輸入與掃描工具的準備檢查尚未完成"],
+    ["Selected-input and scan-tool readiness incomplete", "所選輸入與掃描工具的準備檢查尚未完成"],
     ["Open the saved results", "開啟已保存的結果"],
   ] as const) {
     assert.ok(progress.includes(english), english);
@@ -215,12 +215,12 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
   }
 
   for (const [english, traditionalChinese] of [
-    ["This version has no working scan tool for this target", "目前版本沒有可執行這個目標的掃描工具"],
+    ["Applicable scan tool unavailable", "適用的掃描工具無法使用"],
     ["The saved local copy is missing or changed", "掃描用的本機副本已遺失或有變更"],
-    ["An installed scan component is missing or changed", "一項隨附的掃描元件已遺失或變更"],
-    ["A required installed scan component is missing or out of date", "一項必要的隨附掃描元件已遺失或過期"],
+    ["Installed scan component missing or changed", "隨附的掃描元件已遺失或變更"],
+    ["Required installed scan component missing or out of date", "必要的隨附掃描元件已遺失或過期"],
     ["The saved read-only data source is missing or changed", "已保存的唯讀資料來源已遺失或有變更"],
-    ["The final readiness check did not finish", "最後的準備狀態檢查未完成"],
+    ["Final readiness check incomplete", "最後的準備狀態檢查未完成"],
     ["Saved results needed to continue are missing or changed", "續跑所需的已保存結果已遺失或有變更"],
     ["This saved check no longer matches its original target plan", "這項已保存的檢查已無法對應原本的目標計畫"],
   ] as const) {

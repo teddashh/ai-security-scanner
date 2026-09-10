@@ -2467,7 +2467,7 @@ mod tests {
             ScanRequestOutcomeCode::NoApplicableChecks,
             vec!["asset-1".into(), "asset-1".into()],
             vec!["engine-a".into(), "engine-b".into(), "engine-a".into()],
-            "No selected check can inspect the requested target, so nothing contacted it.",
+            "No selected check can inspect the requested target.",
         )
         .unwrap();
         let run = ScanRun {

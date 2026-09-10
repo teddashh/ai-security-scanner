@@ -440,52 +440,56 @@ impl ScanReadinessBlocker {
     pub fn diagnostic(self) -> &'static str {
         match self {
             Self::RuntimeUnavailable => {
-                "The local scan tools could not be prepared, so this check was not tested. Other available checks can still continue; try this check again."
+                "Local scan tools unavailable. Check outcome: not tested. Retry this check."
             }
             Self::ProviderSourceRequired => {
-                "This check needs a connected read-only cloud account, so it was not tested. Connect the account and try this check again."
+                "Read-only cloud account required. Check outcome: not tested. Connect the account, then retry."
             }
             Self::ProviderCapabilityUnavailable => {
-                "The saved read-only cloud connection is no longer available, so this check was not tested. Reconnect it and try again."
+                "Read-only cloud connection unavailable. Check outcome: not tested. Reconnect it, then retry."
             }
             Self::ProviderSourceAmbiguous => {
-                "More than one cloud connection matches this target, so this check was not tested. Choose the intended connection and try again."
+                "Multiple cloud connections match this target. Check outcome: not tested. Choose one connection, then retry."
             }
             Self::ProviderAuthorizationBindingMismatch => {
-                "The saved cloud account no longer matches its verified read-only connection, so this check was not tested. Reconnect it and try again."
+                "Cloud authorization and source do not match. Check outcome: not tested. Reconnect the source, then retry."
             }
             Self::ProviderTargetBindingMismatch => {
-                "The selected cloud target does not match the verified account, so this check was not tested. Choose the correct target and try again."
+                "Cloud account and target do not match. Check outcome: not tested. Choose the correct target, then retry."
             }
             Self::ProviderPreflightUnavailable => {
-                "The cloud connection could not be checked right now, so this check was not tested. Other available checks can still continue; try again."
+                "Cloud connection check incomplete. Check outcome: not tested. Retry."
             }
             Self::WorkspaceSnapshotUnavailable => {
-                "The selected local input is missing or changed, so this check was not tested. Choose it again and retry."
+                "Local input missing or changed. Check outcome: not tested. Choose it again, then retry."
             }
             Self::EgressGatewayUnavailable => {
-                "The isolated scan network could not be prepared, so this check was not tested. Other available checks can still continue; try again."
+                "Private scan network unavailable. Check outcome: not tested. Retry."
             }
             Self::EngineExecutionContractInvalid => {
-                "A required scan-tool component is unavailable, so this check was not tested. Other available checks can still continue."
+                "Required scan-tool component unavailable. Check outcome: not tested."
             }
             Self::PassiveSourceUnavailable => {
-                "The saved read-only data source is missing or changed, so this check was not tested. Reconnect it and try again."
+                "Read-only data source missing or changed. Check outcome: not tested. Reconnect it, then retry."
             }
             Self::CapturedEvidenceUnavailable => {
-                "Saved evidence needed to continue is missing or changed, so this check was not tested. Start a new scan for fresh results."
+                "Saved continuation evidence missing or changed. Check outcome: not tested. Start a new scan."
             }
             Self::ExecutionPreflightUnavailable => {
-                "Preparation for this check could not finish, so it was not tested. Other available checks can still continue; try again."
+                "Check preparation incomplete. Check outcome: not tested. Retry."
             }
-            Self::DemoCase
-            | Self::ArchivedCase
-            | Self::ScanAlreadyActive
-            | Self::NoEffectiveScopeGrants
-            | Self::NoOwnershipConfirmedTargets
-            | Self::NoCompatibleAuthorizedTargets
-            | Self::NoRunnableAuthorizedTargets => {
-                "This check could not start with the saved scan scope. Review what is selected, then try again."
+            Self::DemoCase => "Demo projects are read-only. Create or select a real scan project.",
+            Self::ArchivedCase => "Scan project archived. Select an active project.",
+            Self::ScanAlreadyActive => "A scan is already running or paused for this project.",
+            Self::NoEffectiveScopeGrants => {
+                "No active scope grant covers the selected target. Review scan setup."
+            }
+            Self::NoOwnershipConfirmedTargets => "Target confirmation required. Review scan setup.",
+            Self::NoCompatibleAuthorizedTargets => {
+                "No compatible scanner matches the selected target and permission. Review scan setup."
+            }
+            Self::NoRunnableAuthorizedTargets => {
+                "No selected scanner is runnable. Review scan setup."
             }
         }
     }
@@ -3712,7 +3716,7 @@ impl<'a> CaseService<'a> {
                     "No checks ran because none of the selected targets is confirmed as yours to scan."
                 }
                 ScanRequestOutcomeCode::NoApplicableChecks => {
-                    "No installed check applies to the selected target and permission. Nothing contacted the target."
+                    "No installed check applies to the selected target and permission."
                 }
             },
         )
@@ -4459,7 +4463,7 @@ impl<'a> CaseService<'a> {
                             Ok(_) => Some(
                                 "The saved recovery record does not belong to this exact check.",
                             ),
-                            Err(_) => Some("The saved recovery record could not be read."),
+                            Err(_) => Some("Saved recovery record unreadable."),
                         };
                         if let Some(problem) = checkpoint_problem {
                             // The user-work lifecycle must not remain paused
@@ -4779,7 +4783,7 @@ impl<'a> CaseService<'a> {
                     engine_run.phase = "results_partial".into();
                     engine_run.error_code = Some("coverage_unverified_after_restart".into());
                     engine_run.error_message = Some(
-                        "The captured scanner files were preserved and cleanup finished, but tested coverage could not be verified after restart. Start a new scan to fill this coverage gap."
+                        "Restart recovery coverage verification incomplete. Start a new scan to fill this gap."
                             .into(),
                     );
                     let warning = format!(
@@ -8338,7 +8342,7 @@ pub(crate) fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
             "the saved cloud connection does not match this scan target"
         }
         ScanReadinessBlocker::ProviderPreflightUnavailable => {
-            "cloud readiness could not be checked; retry the readiness check"
+            "cloud readiness check incomplete; retry the readiness check"
         }
         ScanReadinessBlocker::WorkspaceSnapshotUnavailable => {
             "the prepared workspace snapshot is unavailable; prepare the scan inputs again"
@@ -8356,7 +8360,7 @@ pub(crate) fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
             "saved scan evidence needed to continue is missing or changed; start a new scan for fresh results"
         }
         ScanReadinessBlocker::ExecutionPreflightUnavailable => {
-            "execution readiness could not be checked; retry the readiness check"
+            "execution readiness check incomplete; retry the readiness check"
         }
     };
     let detail = format!(
@@ -16024,6 +16028,44 @@ mod tests {
     use crate::naabu_work_plan::{NaabuWorkPlanIdentity, build_naabu_work_plan};
     use chrono::Duration;
 
+    #[test]
+    fn every_preflight_diagnostic_is_direct_and_bounded() {
+        let reasons = [
+            ScanReadinessBlocker::DemoCase,
+            ScanReadinessBlocker::ArchivedCase,
+            ScanReadinessBlocker::ScanAlreadyActive,
+            ScanReadinessBlocker::NoEffectiveScopeGrants,
+            ScanReadinessBlocker::NoOwnershipConfirmedTargets,
+            ScanReadinessBlocker::NoCompatibleAuthorizedTargets,
+            ScanReadinessBlocker::NoRunnableAuthorizedTargets,
+            ScanReadinessBlocker::RuntimeUnavailable,
+            ScanReadinessBlocker::ProviderSourceRequired,
+            ScanReadinessBlocker::ProviderCapabilityUnavailable,
+            ScanReadinessBlocker::ProviderSourceAmbiguous,
+            ScanReadinessBlocker::ProviderAuthorizationBindingMismatch,
+            ScanReadinessBlocker::ProviderTargetBindingMismatch,
+            ScanReadinessBlocker::ProviderPreflightUnavailable,
+            ScanReadinessBlocker::WorkspaceSnapshotUnavailable,
+            ScanReadinessBlocker::EgressGatewayUnavailable,
+            ScanReadinessBlocker::EngineExecutionContractInvalid,
+            ScanReadinessBlocker::PassiveSourceUnavailable,
+            ScanReadinessBlocker::CapturedEvidenceUnavailable,
+            ScanReadinessBlocker::ExecutionPreflightUnavailable,
+        ];
+
+        for reason in reasons {
+            let diagnostic = reason.diagnostic();
+            assert!(!diagnostic.is_empty(), "{}", reason.as_str());
+            assert!(diagnostic.chars().count() <= 160, "{diagnostic}");
+            assert!(!diagnostic.contains("could not"), "{diagnostic}");
+            assert!(
+                !diagnostic.contains("Other available checks"),
+                "{diagnostic}"
+            );
+            assert!(!diagnostic.contains("right now"), "{diagnostic}");
+        }
+    }
+
     struct Fixture {
         directory: tempfile::TempDir,
         storage: Storage,
@@ -18462,7 +18504,7 @@ mod tests {
             prepared_naabu_launcher_v2_execution_report(&fixture, WorkUnitOutcome::TestedComplete);
         report.checkpoint.stage = ExecutionStage::Failed;
         report.checkpoint.last_error =
-            Some("Runtime ownership could not be proven; captured output is not trusted.".into());
+            Some("Runtime ownership unverified; captured output rejected.".into());
         report.warnings.push(
             "An existing runtime object was preserved because ownership was ambiguous.".into(),
         );
@@ -23105,7 +23147,7 @@ mod tests {
                 &case_id,
                 &run_id,
                 &engine_run_id,
-                "The saved cleanup checkpoint could not be decoded.",
+                "Saved cleanup checkpoint unreadable.",
             )
             .unwrap();
         let engine = after
@@ -25213,7 +25255,7 @@ mod tests {
                     &case_id,
                     &execution.scan_run_id,
                     &execution.engine_run_id,
-                    "The retained runtime identity could not be safely reconciled.",
+                    "Retained runtime identity unresolved.",
                 )
                 .expect("ambiguous runtime bytes become a terminal partial outcome");
             let terminal_engine = terminal.scan_runs[0]
@@ -30495,7 +30537,7 @@ mod tests {
             task_id: Some("task-unavailable".into()),
             target_asset_ids: vec![asset_id],
             dimension: "saved result processing".into(),
-            reason: "The result could not be processed completely.".into(),
+            reason: "Result processing incomplete.".into(),
             next_action_code: NextActionCode::ReviewCoverage,
             next_action: "Review the coverage gap.".into(),
             unattributed: None,

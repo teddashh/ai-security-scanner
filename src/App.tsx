@@ -257,12 +257,12 @@ const scanStartIssueCopy = {
     zhTW: "請回到掃描設定，確認畫面上的目標。",
   },
   no_compatible_authorized_targets: {
-    en: "The current input is not usable by any check yet. Finish the target step in scan setup.",
-    zhTW: "目前的輸入還不能交給任何檢查使用；請完成掃描設定中的目標步驟。",
+    en: "No check supports the current input. Finish target setup.",
+    zhTW: "目前沒有檢查支援這項輸入；請完成目標設定。",
   },
   no_runnable_authorized_targets: {
-    en: "This version has no working scan tool for this target. Install the latest version.",
-    zhTW: "目前版本沒有可執行這個目標的掃描工具；請安裝最新版本。",
+    en: "Applicable scan tool unavailable. Install the latest version.",
+    zhTW: "適用的掃描工具無法使用；請安裝最新版本。",
   },
   runtime_unavailable: {
     en: "Prepare the required local scan tools, then start the scan.",
@@ -289,7 +289,7 @@ const scanStartIssueCopy = {
     zhTW: "已連接的雲端帳號與這次掃描目標不一致；請先檢查目標。",
   },
   provider_preflight_unavailable: {
-    en: "The cloud readiness check did not finish. Check again.",
+    en: "Cloud readiness check incomplete. Check again.",
     zhTW: "雲端準備狀態檢查未完成；請重新檢查。",
   },
   workspace_snapshot_unavailable: {
@@ -297,12 +297,12 @@ const scanStartIssueCopy = {
     zhTW: "掃描用的本機副本已遺失或有變更；請重新選擇本機專案後再掃描。",
   },
   egress_gateway_unavailable: {
-    en: "An installed scan component is missing or changed. Get the latest installer; your local scan projects will stay on this device.",
-    zhTW: "一項隨附的掃描元件已遺失或變更。請取得最新安裝程式；這台電腦上的掃描專案會完整保留。",
+    en: "Installed scan component missing or changed. Get the latest installer.",
+    zhTW: "隨附的掃描元件已遺失或變更；請取得最新安裝程式。",
   },
   engine_execution_contract_invalid: {
-    en: "A required installed scan component is missing or out of date. Get the latest installer; your local scan projects will stay on this device.",
-    zhTW: "一項必要的隨附掃描元件已遺失或過期。請取得最新安裝程式；這台電腦上的掃描專案會完整保留。",
+    en: "Required installed scan component missing or out of date. Get the latest installer.",
+    zhTW: "必要的隨附掃描元件已遺失或過期；請取得最新安裝程式。",
   },
   passive_source_unavailable: {
     en: "The saved read-only data source is missing or changed. Reconnect it before scanning.",
@@ -321,7 +321,7 @@ const scanStartIssueCopy = {
     zhTW: "這項已保存的檢查已無法對應原本的目標計畫；請開始新的掃描。",
   },
   execution_preflight_unavailable: {
-    en: "The final readiness check did not finish. Check again.",
+    en: "Final readiness check incomplete. Check again.",
     zhTW: "最後的準備狀態檢查未完成；請重新檢查。",
   },
 } as const satisfies Partial<Record<ScanReadinessBlocker | "resume_release_incompatible" | "resume_work_plan_invalid", BilingualText>>;

@@ -1376,8 +1376,8 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "Greenbone 回報這台主機在掃描期間沒有回應，因此它的弱點檢查一項都沒有執行。這不是乾淨的結果。",
     ),
     (
-        "Greenbone reported one or more scanner errors for this host, so some of its checks did not finish. Findings and checks that did complete remain valid.",
-        "Greenbone 回報這台主機發生一項或多項掃描器錯誤，因此部分檢查沒有完成。已完成的檢查與問題仍然有效。",
+        "Greenbone scanner errors left some host checks incomplete. Completed findings and checks remain in this report.",
+        "Greenbone 回報掃描器錯誤；部分主機檢查未完成。已完成的問題與檢查保留在本報告。",
     ),
     (
         "The request-level outcome contradicts the run's durable task state and was ignored.",
@@ -1595,8 +1595,8 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "沒有執行任何檢查，因為所選目標都尚未確認是你有權掃描的對象。",
     ),
     (
-        "No installed check applies to the selected target and permission. Nothing contacted the target.",
-        "沒有任何已安裝的檢查適用於所選的目標與授權範圍。沒有任何連線接觸過該目標。",
+        "No installed check applies to the selected target and permission.",
+        "沒有已安裝的檢查同時符合所選目標與授權範圍。",
     ),
     (
         "Review the exact target and permission, then start the scan again.",
@@ -1607,8 +1607,8 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "請選擇一個你有掌控權的目標，然後重新開始掃描。",
     ),
     (
-        "Choose another available check or add a compatible target source.",
-        "請改選其他可用的檢查，或新增相容的目標來源。",
+        "Finish target setup or add a supported input, then start a new scan.",
+        "請完成目標設定或加入受支援的輸入，然後重新開始掃描。",
     ),
     // What to do about it.
     ("Open the saved scope details.", "查看已保存的範圍細節。"),

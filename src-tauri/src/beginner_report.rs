@@ -1707,7 +1707,7 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                         task_id: Some(task.id.clone()),
                         target_asset_ids: vec![asset_id.clone()],
                         dimension: format!("{}: scanner errors", check_id(task)),
-                        reason: "Greenbone reported one or more scanner errors for this host, so some of its checks did not finish. Findings and checks that did complete remain valid."
+                        reason: "Greenbone scanner errors left some host checks incomplete. Completed findings and checks remain in this report."
                             .into(),
                         next_action_code: NextActionCode::RetryCheck,
                         next_action: "Retry this check to complete the missing work."
@@ -2277,7 +2277,7 @@ fn append_request_outcome_gaps(
         ),
         ScanRequestOutcomeCode::NoApplicableChecks => (
             NextActionCode::ChooseCompatibleCheck,
-            "Choose another available check or add a compatible target source.",
+            "Finish target setup or add a supported input, then start a new scan.",
         ),
     };
     if requested_engine_ids.is_empty() {
@@ -7193,7 +7193,7 @@ mod tests {
         assert_eq!(gap.target_asset_ids, ["host-asset"]);
         assert_eq!(
             gap.reason,
-            "Greenbone reported one or more scanner errors for this host, so some of its checks did not finish. Findings and checks that did complete remain valid."
+            "Greenbone scanner errors left some host checks incomplete. Completed findings and checks remain in this report."
         );
         assert_eq!(gap.next_action_code, NextActionCode::RetryCheck);
         assert_eq!(

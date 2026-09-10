@@ -268,10 +268,10 @@ const pageCopy = {
     en: "Enter the exact internal IP address or range below.",
     zhTW: "請在下方輸入精確的內部 IP 或網段。",
   },
-  localNetworkUnavailableTitle: { en: "Automatic fill isn't available right now", zhTW: "目前無法自動帶入網段" },
+  localNetworkUnavailableTitle: { en: "Enter the local network manually", zhTW: "請手動輸入區域網路" },
   localNetworkUnavailableBody: {
-    en: "You can still continue. Enter the internal IP address or small network range you want to check below.",
-    zhTW: "你仍可繼續；請在下方輸入想檢查的內部 IP 或小型網段。",
+    en: "Enter the internal IP address or small network range below.",
+    zhTW: "請在下方輸入內部 IP 或小型網段。",
   },
   localNetworkUnsupportedTitle: { en: "Enter your local network", zhTW: "請輸入你的區域網路" },
   localNetworkUnsupportedBody: {

@@ -275,8 +275,8 @@ fn public_error(error: &AppError) -> &'static str {
     match error {
         AppError::InvalidRequest(_) => "invalid bootstrap request",
         AppError::NotAuthorized(_) => "bootstrap request is not authorized",
-        AppError::NotAvailable(_) => "bootstrap provider is temporarily unavailable",
-        _ => "bootstrap broker failed safely",
+        AppError::NotAvailable(_) => "bootstrap provider unavailable",
+        _ => "bootstrap broker failed",
     }
 }
 

@@ -19,7 +19,7 @@ fn main() {
         }
     };
     if perform_probe(gateway).is_err() {
-        eprintln!("egress probe failed safely");
+        eprintln!("egress probe failed");
         std::process::exit(1);
     }
     println!("{SUCCESS_JSON}");

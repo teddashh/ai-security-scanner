@@ -385,7 +385,7 @@ const pageCopy = {
   unknownTitle: bilingual("Sources still needing data: {count}", "{count} 個來源還需要資料"),
   unknownBody: bilingual("Connect or import these sources to see what they contain.", "連接或匯入這些來源，就能查看其中內容。"),
   noneTitle: bilingual("Connected sources finding no items: {count}", "{count} 個已連接來源沒有找到項目"),
-  noneBody: bilingual("The source connected successfully but had nothing to add to this list right now.", "來源已成功連接，只是目前沒有內容可加入這份清單。"),
+  noneBody: bilingual("Source connected. Items added: 0.", "來源已連接；加入項目：0。"),
   sourcesEyebrow: bilingual("Your sources", "你的資料來源"),
   sourcesTitle: bilingual("Sources ({count})", "來源（{count}）"),
   noSourcesTitle: bilingual("No input has been attached yet", "尚未附加任何輸入"),

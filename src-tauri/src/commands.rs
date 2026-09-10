@@ -535,7 +535,7 @@ where
                         case_id: case.id.clone(),
                         run_id: run.id.clone(),
                         engine_run_id: engine_run.id.clone(),
-                        problem: "The saved cleanup checkpoint could not be decoded.",
+                        problem: "Saved cleanup checkpoint unreadable.",
                     });
                     continue;
                 };
@@ -833,7 +833,7 @@ fn reconcile_exact_runtime_cleanup(
         Some(_) => runtime.cleanup_owned_container(&owned)?,
         None => CleanupOutcome {
             removed: false,
-            detail: "no scanner container was created".into(),
+            detail: "scanner container: not created".into(),
         },
     };
     let managed = checkpoint
@@ -879,7 +879,7 @@ fn reconcile_exact_runtime_cleanup(
 fn retryable_error_after_cleanup_started(error: AppError) -> AppError {
     match error {
         AppError::NotAuthorized(message) => AppError::Runtime(format!(
-            "cleanup made bounded progress but a later ownership check could not finish: {message}"
+            "cleanup status: partial; ownership check incomplete: {message}"
         )),
         other => other,
     }
@@ -2266,8 +2266,7 @@ fn run_bootstrap_broker_execute(
     let _ = stderr_reader.join();
     if !status.success() {
         return Err(AppError::NotAuthorized(
-            "isolated bootstrap broker failed safely; exact partial cleanup remains in its ledger"
-                .into(),
+            "isolated bootstrap broker failed; partial cleanup items recorded".into(),
         ));
     }
     authorization
@@ -2307,8 +2306,7 @@ fn run_bootstrap_broker_cleanup(
     let _ = stderr_reader.join();
     if !status.success() || encoded.len() > 1024 * 1024 {
         return Err(AppError::NotAuthorized(
-            "isolated bootstrap cleanup failed safely; unresolved exact items remain in the ledger"
-                .into(),
+            "isolated bootstrap cleanup failed; unresolved items recorded".into(),
         ));
     }
     let result: BootstrapCleanupResult = serde_json::from_slice(&encoded)
