@@ -907,20 +907,20 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
     "Maester 已評估這項控制措施，但未回傳通過或失敗的判定。",
   ],
   [
-    "No completed upstream security-template execution record was retained for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template.",
-    "這個網站沒有保留任何已完成的上游安全模板執行記錄，因此無法將這次掃描顯示為已檢測。網站可能沒有回應，或上游技術偵測可能沒有選出任何適用的模板。",
+    "Website security-template evidence unavailable. Outcome: not tested.",
+    "網站安全模板證據無法取得；結果：未測試。",
   ],
   [
-    "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result.",
-    "Greenbone 回報這台主機在掃描期間沒有回應，因此它的弱點檢查一項都沒有執行。這不是乾淨的結果。",
+    "Host response unavailable. Vulnerability checks: not run.",
+    "主機回應無法取得；弱點檢查：未執行。",
   ],
   [
     "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again.",
     "請確認這台主機已開機，且本機能連到已核准的連接埠，然後再執行一次這項檢查。",
   ],
   [
-    "Greenbone scanner errors left some host checks incomplete. Completed findings and checks remain in this report.",
-    "Greenbone 回報掃描器錯誤；部分主機檢查未完成。已完成的問題與檢查保留在本報告。",
+    "Greenbone scanner errors. Host checks: partially completed.",
+    "Greenbone 掃描器錯誤；主機檢查：部分完成。",
   ],
   [
     "Retry this check to complete the missing work.",
@@ -1015,12 +1015,12 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
     "這項檢查沒有終止結果。",
   ],
   [
-    "The packaged check list could not be loaded. Available checks may still run, but checks from that list are not tested.",
-    "無法載入內建的檢查清單。可用的檢查仍然可以執行，但該清單上的檢查未被檢測。",
+    "Packaged check list unavailable. Additional checks: not tested.",
+    "內建檢查清單無法取得；額外檢查：未測試。",
   ],
   [
-    "One additional packaged check was unavailable before planning. Whether it applied to the selected target is unknown, so it is not tested.",
-    "有一項額外的內建檢查在規劃前無法使用。無法得知它是否適用於所選目標，因此未被檢測。",
+    "Packaged scanner information unavailable. Additional checks: not tested.",
+    "內建掃描工具資訊無法取得；額外檢查：未測試。",
   ],
   [
     "At least one target identifier is frozen with the run, but its displayed label or type comes from current project data or is unavailable. The report labels that provenance and does not call it historical fact.",
@@ -1107,8 +1107,8 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
     "Greenbone 程序雖已完成，但本輪沒有為每個綁定資產保留一份精確且經審查的弱點掃描設定檔。因此程序完成不會被算成弱點掃描結果。",
   ],
   [
-    "This asset was added to the IT environment, but this run had no supported service-specific vulnerability profile for it. It was not contacted or tested.",
-    "此資產已加入 IT 環境，但本輪沒有適用的服務專屬弱點掃描設定，因此沒有連線，也沒有進行測試。",
+    "Supported service-specific vulnerability profile unavailable. Outcome: not tested.",
+    "支援的服務專屬弱點掃描設定無法取得；結果：未測試。",
   ],
   [
     "Completed-check time: unavailable. Finish and bounded observation times are absent.",
@@ -1127,8 +1127,8 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
     "請先檢視已檢測的內容，再決定是否需要更大範圍的掃描。",
   ],
   [
-    "No actionable finding was recorded, but a no-findings result is only as broad as the displayed coverage.",
-    "沒有記錄到需要處理的問題，但「沒有發現問題」的結論，只在畫面上顯示的涵蓋範圍內成立。",
+    "Actionable findings in completed checks: 0.",
+    "已完成檢查中的可處理問題：0。",
   ],
   [
     "No checks ran because this scan has no active permission for a selected target.",
@@ -1312,13 +1312,53 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
  * `not_tested` kind is written for a check that saved partial work, one that
  * never started, and one still running.
  */
+const normalizeDirectCoverageGapProse = (english: string): string => {
+  let normalized = english
+    .replace(
+      "No completed upstream security-template execution record was retained for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template.",
+      "Website security-template evidence unavailable. Outcome: not tested.",
+    )
+    .replace(
+      "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result.",
+      "Host response unavailable. Vulnerability checks: not run.",
+    )
+    .replace(
+      "Greenbone reported one or more scanner errors for this host, so some of its checks did not finish. Findings and checks that did complete remain valid.",
+      "Greenbone scanner errors. Host checks: partially completed.",
+    )
+    .replace(
+      "Greenbone scanner errors left some host checks incomplete. Completed findings and checks remain in this report.",
+      "Greenbone scanner errors. Host checks: partially completed.",
+    )
+    .replace(
+      "The packaged check list could not be loaded. Available checks may still run, but checks from that list are not tested.",
+      "Packaged check list unavailable. Additional checks: not tested.",
+    )
+    .replace(
+      "One additional packaged check was unavailable before planning. Whether it applied to the selected target is unknown, so it is not tested.",
+      "Packaged scanner information unavailable. Additional checks: not tested.",
+    )
+    .replace(
+      "This asset was added to the IT environment, but this run had no supported service-specific vulnerability profile for it. It was not contacted or tested.",
+      "Supported service-specific vulnerability profile unavailable. Outcome: not tested.",
+    )
+    .replace(
+      "No actionable finding was recorded, but a no-findings result is only as broad as the displayed coverage.",
+      "Actionable findings in completed checks: 0.",
+    );
+  if (normalized.includes("additional packaged checks were unavailable before planning")) {
+    normalized = "Packaged scanner information unavailable. Additional checks: not tested.";
+  }
+  return normalized;
+};
+
 export const coverageGapProse = (
   locale: "en" | "zh-TW",
   english: string,
 ): string => {
   const legacyReviewBase = "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.";
   const reviewBase = "Maester evaluated this control but did not return a pass or fail verdict.";
-  let normalized = english
+  let normalized = normalizeDirectCoverageGapProse(english)
     .replace(legacyReviewBase, reviewBase)
     .replace(
       "Review the upstream detail and record a human decision for this control.",

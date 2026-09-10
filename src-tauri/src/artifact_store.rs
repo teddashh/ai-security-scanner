@@ -1100,7 +1100,7 @@ fn create_or_reuse_empty_private_capture_file(path: &Path) -> AppResult<File> {
             }
             let file = open_read_write_no_follow(path).map_err(|error| {
                 AppError::Runtime(format!(
-                    "existing private capture file {} could not be opened safely: {error}",
+                    "existing private capture file {} open failed: {error}",
                     path.display()
                 ))
             })?;
@@ -1243,7 +1243,7 @@ fn complete_interrupted_private_control_file(
 
     let mut file = open_read_append_no_follow(path).map_err(|error| {
         AppError::Runtime(format!(
-            "interrupted private control file {} could not be opened safely: {error}",
+            "interrupted private control file {} open failed: {error}",
             path.display()
         ))
     })?;
@@ -1338,7 +1338,7 @@ fn verify_existing_private_control_file(
     }
     .map_err(|error| {
         AppError::Runtime(format!(
-            "existing private control file {} could not be opened safely: {error}",
+            "existing private control file {} open failed: {error}",
             path.display()
         ))
     })?;

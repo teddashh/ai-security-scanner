@@ -100,8 +100,8 @@ const nextStepCopy = {
     zhTW: "繼續原本的掃描，就能從程式停止的位置接著執行。",
   },
   providerBusy: {
-    en: "Wait a few minutes, then continue this scan.",
-    zhTW: "請稍等幾分鐘，再繼續這次掃描。",
+    en: "Provider rate limit reached. Continue this scan after the limit resets.",
+    zhTW: "雲端服務已達速率上限；上限重設後繼續這次掃描。",
   },
   targetSetup: {
     en: "Return to scan setup, choose the intended target, and confirm it once.",

@@ -265,10 +265,10 @@ export const scanLifecycleToastPresentation = (
   }
   return {
     tone: "warning",
-    title: { en: "Checking the latest scan state", zhTW: "正在確認最新掃描狀態" },
+    title: { en: "Scan action status unavailable", zhTW: "掃描動作狀態無法取得" },
     detail: {
-      en: "The returned state did not confirm that this request took effect or that the check finished. Scan progress is refreshing now.",
-      zhTW: "傳回的狀態尚未確認這項要求已生效，也沒有確認檢查已結束；掃描進度正在重新整理。",
+      en: "Open Progress to check the current scan state.",
+      zhTW: "請開啟進度頁面查看目前掃描狀態。",
     },
   };
 };

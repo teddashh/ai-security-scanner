@@ -360,9 +360,9 @@ test("accepted deletion preserves the latest selection and distinguishes its cle
   const deletion = app.slice(start, end);
 
   assert.ok(start >= 0 && end > start);
-  assert.match(deletion, /result\.data\.artifacts\.exists[\s\S]*Local evidence is still present/u);
-  assert.match(deletion, /result\.mode === "demo"[\s\S]*browser-saved project record[\s\S]*no evidence files/u);
-  assert.match(deletion, /no evidence folder remains/iu);
+  assert.match(deletion, /result\.data\.artifacts\.exists[\s\S]*Evidence cleanup requires separate confirmation/u);
+  assert.match(deletion, /result\.mode === "demo"[\s\S]*Browser project record deleted/u);
+  assert.match(deletion, /Evidence status: none/iu);
   assert.match(
     deletion,
     /setArtifactCleanupPlan\(result\.data\.artifacts\.exists \? result\.data\.artifacts : undefined\)/u,

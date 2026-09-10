@@ -2410,7 +2410,7 @@ impl ManagedNetworkRegistry {
                     push_summary_detail(
                         &mut summary,
                         bounded_cleanup_detail(&format!(
-                            "managed-network recovery was safely retained: {error}"
+                            "managed-network recovery incomplete: {error}"
                         )),
                     );
                 }
@@ -2535,7 +2535,7 @@ impl ManagedNetworkRegistry {
                 push_summary_detail(
                     &mut summary,
                     bounded_cleanup_detail(&format!(
-                        "compatibility gateway cleanup was safely retained: {error}"
+                        "compatibility gateway cleanup incomplete: {error}"
                     )),
                 );
                 return summary;
@@ -2549,7 +2549,7 @@ impl ManagedNetworkRegistry {
                     push_summary_detail(
                         &mut summary,
                         bounded_cleanup_detail(&format!(
-                            "compatibility gateway cleanup was safely retained: {error}"
+                            "compatibility gateway cleanup incomplete: {error}"
                         )),
                     );
                     continue;
@@ -2570,7 +2570,7 @@ impl ManagedNetworkRegistry {
                     push_summary_detail(
                         &mut summary,
                         bounded_cleanup_detail(&format!(
-                            "compatibility gateway cleanup was safely retained: {error}"
+                            "compatibility gateway cleanup incomplete: {error}"
                         )),
                     );
                 }

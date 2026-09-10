@@ -2160,6 +2160,7 @@ test("native gateway failures preserve frozen authorization but restart before r
   assert.equal(failed?.scopeContractBound, true);
   assert.equal(failed?.checkpoint?.scopeBound, false);
   assert.equal(failed?.failureKind, "gateway_preparation_failed");
+  assert.equal(failed?.message, "專用掃描連線無法使用。");
   assert.equal(failed?.recoveryAction, "restart_check");
   assert.equal(failed?.resumable, true);
 });

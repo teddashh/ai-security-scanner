@@ -1221,9 +1221,7 @@ fn execute_product_uninstall_early(
 
     let local_data_root = BaseDirs::new()
         .map(|directories| directories.data_local_dir().to_path_buf())
-        .ok_or_else(|| {
-            AppError::Internal("could not determine the platform local-data directory".into())
-        })?;
+        .ok_or_else(|| AppError::Internal("platform local-data directory unavailable".into()))?;
     let data_root = local_data_root.join(PRODUCT_DATA_DIRECTORY_NAME);
     let (data_existed_before, data_root_guard) =
         prepare_fixed_product_data_root(&data_root, &local_data_root)?;
@@ -1821,7 +1819,7 @@ fn execute_scan(
 
 fn out_of_process_scan_control_error(action: &str, case_id: &str, run_id: &str) -> AppError {
     AppError::NotAvailable(format!(
-        "scan {action} was not applied to case {case_id} run {run_id}: the standalone CLI cannot coordinate the desktop's live worker or capability session; use the desktop scan controls"
+        "scan {action} unavailable in CLI for case {case_id} run {run_id}; use the desktop scan controls"
     ))
 }
 
@@ -2263,9 +2261,7 @@ async fn execute_managed_runtime_cli_command(
     })
     .await
     .map_err(|error| {
-        AppError::Internal(format!(
-            "managed runtime worker could not be joined: {error}"
-        ))
+        AppError::Internal(format!("managed runtime worker join failed: {error}"))
     })??;
     print_value(&value, json_output)
 }
@@ -2536,9 +2532,7 @@ fn open_exact_packaged_installer_runtime_cache_source(
 ) -> AppResult<ManagedRuntimeManager> {
     let expected_manifest_sha256 = installer_runtime_cache_manifest_digest_anchor()?;
     let executable = std::env::current_exe().map_err(|_| {
-        AppError::NotAvailable(
-            "the installed cache coordinator could not resolve its executable".into(),
-        )
+        AppError::NotAvailable("installed cache coordinator executable unresolved".into())
     })?;
     let bundle = exact_packaged_installer_runtime_bundle(&executable)?;
     let manager = ManagedRuntimeManager::open(data_dir, &bundle, &bundle.join("manifest.json"))?;
@@ -2664,9 +2658,7 @@ fn execute_managed_runtime_command(
         }
     };
     value.map_err(|error| {
-        AppError::Internal(format!(
-            "managed runtime result could not be encoded: {error}"
-        ))
+        AppError::Internal(format!("managed runtime result encoding failed: {error}"))
     })
 }
 
@@ -2982,8 +2974,7 @@ fn execute_fixed_managed_container_qualification<R: ContainerRuntime>(
     }
     if !cleanup.removed {
         return Err(AppError::Runtime(
-            "managed-container qualification could not prove removal of its created container"
-                .into(),
+            "managed-container qualification removal unverified".into(),
         ));
     }
     let created_object_id = created_object_id.ok_or_else(|| {
@@ -3177,8 +3168,7 @@ fn perform_exact_runtime_cleanup(
             })?,
         None => CleanupOutcome {
             removed: false,
-            detail: "no scanner container was started; container reconciliation was not required"
-                .into(),
+            detail: "scanner container cleanup: not applicable".into(),
         },
     };
 
@@ -3271,9 +3261,7 @@ fn resolve_data_dir(override_path: Option<PathBuf>) -> AppResult<PathBuf> {
 
     BaseDirs::new()
         .map(|directories| canonical_product_data_dir(directories.data_local_dir()))
-        .ok_or_else(|| {
-            AppError::Internal("could not determine the platform local-data directory".into())
-        })
+        .ok_or_else(|| AppError::Internal("platform local-data directory unavailable".into()))
 }
 
 fn canonical_product_data_dir(local_data_dir: &Path) -> PathBuf {

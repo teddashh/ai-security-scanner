@@ -2193,8 +2193,8 @@ export const adaptNativeCase = (
           )
           : failureKind === "gateway_preparation_failed"
           ? adapterText(
-            "The private scan connection could not be prepared.",
-            "無法準備這次掃描使用的專用連線。",
+            "Private scan connection unavailable.",
+            "專用掃描連線無法使用。",
           )
           : engineRun.error_message ?? (engineRun.error_code
             ? adapterText(`Error code: ${engineRun.error_code}`, `錯誤代碼：${engineRun.error_code}`)

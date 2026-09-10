@@ -841,10 +841,7 @@ fn record_localhost_cancelled_once(
         engine_run.resume_token = None;
         engine_run.localhost_tcp_observation = None;
         engine_run.error_code = Some("cancelled_without_observation".into());
-        engine_run.error_message = Some(
-            "This local connection test was cancelled before its result was committed. No result was inferred."
-                .into(),
-        );
+        engine_run.error_message = Some("Connection test cancelled. Result: not recorded.".into());
     }
     let run = case
         .scan_runs
@@ -944,10 +941,8 @@ fn reconcile_interrupted_localhost_quick_scan_once(
             engine_run.resume_token = None;
             engine_run.localhost_tcp_observation = None;
             engine_run.error_code = Some("localhost_probe_interrupted".into());
-            engine_run.error_message = Some(
-                "This local connection test stopped before a result was safely saved. No result was inferred; start the test again."
-                    .into(),
-            );
+            engine_run.error_message =
+                Some("Connection test interrupted. Result: not recorded. Start a new test.".into());
         }
     }
     if already_terminal {
@@ -1433,6 +1428,10 @@ mod tests {
             task.error_code.as_deref(),
             Some("cancelled_without_observation")
         );
+        assert_eq!(
+            task.error_message.as_deref(),
+            Some("Connection test cancelled. Result: not recorded.")
+        );
         assert!(task.localhost_tcp_observation.is_none());
         assert!(calls.lock().expect("calls").is_empty());
     }
@@ -1508,6 +1507,10 @@ mod tests {
         assert_eq!(
             task.error_code.as_deref(),
             Some("cancelled_without_observation")
+        );
+        assert_eq!(
+            task.error_message.as_deref(),
+            Some("Connection test cancelled. Result: not recorded.")
         );
         assert!(task.localhost_tcp_observation.is_none());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1901,6 +1904,10 @@ mod tests {
         let task = &reconciled.scan_runs[0].engine_runs[0];
         assert_eq!(task.status, EngineRunStatus::Failed);
         assert_eq!(task.phase, "localhost_probe_interrupted");
+        assert_eq!(
+            task.error_message.as_deref(),
+            Some("Connection test interrupted. Result: not recorded. Start a new test.")
+        );
         assert!(task.localhost_tcp_observation.is_none());
         assert!(reconciled.scan_runs[0].completed_at.is_some());
         let persisted = storage

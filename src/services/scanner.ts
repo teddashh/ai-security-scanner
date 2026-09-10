@@ -1099,8 +1099,8 @@ export const scannerService = {
   async exportCase(input: ExportCaseInput, workspace: CaseWorkspace): Promise<ServiceResult<CaseExport | null>> {
     const run = findRequestedExportRun(input, workspace);
     if (!run) throw new Error(serviceText(
-      "The selected scan run is no longer available. No export was created.",
-      "選取的掃描紀錄已無法使用，因此沒有建立匯出檔。",
+      "Selected scan run unavailable.",
+      "選取的掃描紀錄無法使用。",
     ));
     if (isNativeSurface()) {
       const fileType = exportFileTypes[input.format];

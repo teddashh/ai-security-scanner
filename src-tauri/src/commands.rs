@@ -338,7 +338,7 @@ where
                 summary.reconciled = summary.reconciled.saturating_add(1);
                 summary.details.push(bounded_text(
                     &format!(
-                        "{} / {}: {} No runtime resource was changed or deleted.",
+                        "{} / {}: cleanup status: unresolved; {}",
                         marker.run_id, marker.engine_run_id, marker.problem
                     ),
                     2_000,
@@ -348,7 +348,7 @@ where
                 summary.pending = summary.pending.saturating_add(1);
                 summary.details.push(bounded_text(
                     &format!(
-                        "{} / {}: untrusted interrupted cleanup state could not be terminalized durably: {error}",
+                        "{} / {}: interrupted cleanup status: pending; saved status update failed: {error}",
                         marker.run_id, marker.engine_run_id
                     ),
                     2_000,
@@ -395,7 +395,7 @@ where
                         {
                             summary.details.push(bounded_text(
                                 &format!(
-                                    "{} / {}: captured evidence and cleanup were recovered, but result organization remains partial: {error}",
+                                    "{} / {}: cleanup status: completed; result organization: partial; {error}",
                                     obligation.run_id, obligation.engine_run.id
                                 ),
                                 2_000,
@@ -406,7 +406,7 @@ where
                         summary.pending = summary.pending.saturating_add(1);
                         summary.details.push(bounded_text(
                             &format!(
-                                "{} / {}: cleanup succeeded but its durable record could not be updated: {error}",
+                                "{} / {}: cleanup status: completed; saved status update failed: {error}",
                                 obligation.run_id, obligation.engine_run.id
                             ),
                             2_000,
@@ -421,13 +421,13 @@ where
                         &obligation.case_id,
                         &obligation.run_id,
                         &obligation.engine_run.id,
-                        &format!("Exact interrupted cleanup was skipped: {problem}"),
+                        &format!("Interrupted cleanup ownership unavailable: {problem}"),
                     ) {
                     Ok(_) => {
                         summary.reconciled = summary.reconciled.saturating_add(1);
                         summary.details.push(bounded_text(
                             &format!(
-                                "{} / {}: exact ownership proof was unavailable. No runtime resource was changed or deleted.",
+                                "{} / {}: cleanup status: unresolved; ownership proof unavailable.",
                                 obligation.run_id, obligation.engine_run.id
                             ),
                             2_000,
@@ -437,7 +437,7 @@ where
                         summary.pending = summary.pending.saturating_add(1);
                         summary.details.push(bounded_text(
                             &format!(
-                                "{} / {}: untrusted interrupted cleanup state could not be terminalized durably: {error}",
+                                "{} / {}: interrupted cleanup status: pending; saved status update failed: {error}",
                                 obligation.run_id, obligation.engine_run.id
                             ),
                             2_000,
@@ -447,7 +447,7 @@ where
             }
             Err(error) => {
                 let explanation = bounded_text(
-                    &format!("Exact interrupted runtime cleanup is still pending: {error}"),
+                    &format!("Interrupted runtime cleanup status: pending. {error}"),
                     2_000,
                 );
                 let persisted = state.case_service().record_interrupted_cleanup_failure(
@@ -594,7 +594,7 @@ where
                 summary.reconciled = summary.reconciled.saturating_add(1);
                 summary.details.push(bounded_text(
                     &format!(
-                        "{} / {}: {} No runtime resource was changed or deleted.",
+                        "{} / {}: cleanup status: unresolved; {}",
                         marker.run_id, marker.engine_run_id, marker.problem
                     ),
                     2_000,
@@ -604,7 +604,7 @@ where
                 summary.pending = summary.pending.saturating_add(1);
                 summary.details.push(bounded_text(
                     &format!(
-                        "{} / {}: untrusted cleanup state could not be terminalized durably: {error}",
+                        "{} / {}: cleanup status: pending; saved status update failed: {error}",
                         marker.run_id, marker.engine_run_id
                     ),
                     2_000,
@@ -631,7 +631,7 @@ where
                         summary.pending = summary.pending.saturating_add(1);
                         summary.details.push(bounded_text(
                             &format!(
-                                "{} / {}: exact cleanup succeeded but its durable state could not be updated: {error}",
+                                "{} / {}: cleanup status: completed; saved status update failed: {error}",
                                 obligation.run_id, obligation.engine_run.id
                             ),
                             2_000,
@@ -644,13 +644,13 @@ where
                     &obligation.case_id,
                     &obligation.run_id,
                     &obligation.engine_run.id,
-                    &format!("Exact runtime cleanup was skipped: {problem}"),
+                    &format!("Runtime cleanup ownership unavailable: {problem}"),
                 ) {
                     Ok(_) => {
                         summary.reconciled = summary.reconciled.saturating_add(1);
                         summary.details.push(bounded_text(
                             &format!(
-                                "{} / {}: exact ownership proof was unavailable. No runtime resource was changed or deleted.",
+                                "{} / {}: cleanup status: unresolved; ownership proof unavailable.",
                                 obligation.run_id, obligation.engine_run.id
                             ),
                             2_000,
@@ -660,7 +660,7 @@ where
                         summary.pending = summary.pending.saturating_add(1);
                         summary.details.push(bounded_text(
                             &format!(
-                                "{} / {}: untrusted cleanup state could not be terminalized durably: {error}",
+                                "{} / {}: cleanup status: pending; saved status update failed: {error}",
                                 obligation.run_id, obligation.engine_run.id
                             ),
                             2_000,
@@ -669,10 +669,8 @@ where
                 }
             }
             Err(error) => {
-                let explanation = bounded_text(
-                    &format!("Automatic exact runtime cleanup is still pending: {error}"),
-                    2_000,
-                );
+                let explanation =
+                    bounded_text(&format!("Runtime cleanup status: pending. {error}"), 2_000);
                 let persisted = state.case_service().record_cleanup_pending_failure(
                     &obligation.case_id,
                     &obligation.run_id,
@@ -5166,7 +5164,7 @@ fn prepare_naabu_launcher_attempt(
             now,
         );
         build_naabu_work_plan(identity, &resolved, None).map_err(|error| {
-            AppError::InvalidRequest(format!("Naabu work could not be divided safely: {error}"))
+            AppError::InvalidRequest(format!("Naabu work division failed: {error}"))
         })?
     };
 
@@ -8590,9 +8588,10 @@ mod tests {
             assert_eq!(summary.reconciled, 1);
             assert_eq!(summary.pending, 0);
             assert!(
-                summary.details.iter().any(|detail| {
-                    detail.contains("No runtime resource was changed or deleted")
-                })
+                summary
+                    .details
+                    .iter()
+                    .any(|detail| { detail.contains("cleanup status: unresolved") })
             );
 
             let after = state.case_service().show_case(&case_id).unwrap();
@@ -8762,7 +8761,7 @@ mod tests {
         assert_eq!(engine.phase, "cleanup_pending");
         assert_eq!(engine.cleanup_removed, Some(false));
         let reason = engine.error_message.as_deref().unwrap();
-        assert!(reason.contains("Automatic exact runtime cleanup is still pending"));
+        assert!(reason.contains("Runtime cleanup status: pending"));
         assert!(reason.chars().count() <= 2_000);
         let checkpoint =
             ExecutionCheckpoint::from_resume_token(engine.resume_token.as_deref().unwrap())
@@ -8897,7 +8896,7 @@ mod tests {
                 summary
                     .details
                     .iter()
-                    .any(|detail| detail.contains("No runtime resource was changed or deleted"))
+                    .any(|detail| detail.contains("cleanup status: unresolved"))
             );
 
             let after = state.case_service().show_case(&case_id).unwrap();

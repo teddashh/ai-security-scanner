@@ -257,7 +257,7 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
         productDoes:
           "Analyzes the attached image read-only with pinned offline vulnerability data, records recognized packages, and produces a software inventory (SBOM).",
         productDoesNot:
-          "It does not run the image, sign in to an image registry, scan an ambiguous version such as latest, or claim coverage for content it could not recognize.",
+          "Image execution, registry sign-in, mutable tags such as latest, and unrecognized content are outside this scan.",
       },
       kubernetes: {
         title: "Kubernetes configuration",

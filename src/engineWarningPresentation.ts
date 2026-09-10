@@ -68,7 +68,7 @@ const FIXED_ENGINE_WARNINGS: ReadonlyArray<readonly [string, string]> = [
   ["Coverage verification failed for this attempt. Retry this check.", "本次嘗試的涵蓋驗證失敗；請重試這項檢查。"],
   ["Greenbone XML element exceeded the attribute limit", "Greenbone XML 元素超過屬性限制"],
   ["Greenbone XML contained a malformed attribute", "Greenbone XML 含有格式錯誤的屬性"],
-  ["Greenbone XML attribute could not be decoded safely", "無法安全解碼 Greenbone XML 屬性"],
+  ["Greenbone XML attribute decode failed", "Greenbone XML 屬性解碼失敗"],
   ["This check completed with coverage gaps after one automatic retry per unfinished item. Start a new scan to retry the remaining items.", "每個未完成項目自動重試一次後，這項檢查仍有涵蓋缺口。請開始新的掃描以重試剩餘項目。"],
   ["The installed version does not include this check. Update the app, then start a new scan.", "已安裝版本不包含這項檢查；請更新應用程式後開始新的掃描。"],
   ["The installed result reader cannot continue processing this check. Start a new scan for a fresh result.", "已安裝的結果讀取器無法繼續處理這項檢查；請開始新的掃描。"],
@@ -116,10 +116,15 @@ const frame = (value: string, expression: RegExp, render: (...values: string[]) 
 };
 
 const normalizeLegacyEngineWarning = (warning: string): string => {
-  const normalized = warning.replaceAll(
-    "reserved for manual review",
-    "left without an automated verdict",
-  );
+  const normalized = warning
+    .replace(
+      "Greenbone XML attribute could not be decoded safely",
+      "Greenbone XML attribute decode failed",
+    )
+    .replaceAll(
+      "reserved for manual review",
+      "left without an automated verdict",
+    );
   if (normalized.startsWith("An existing runtime object could not be proven")) {
     return "Runtime object ownership is unavailable. Retry uses a new isolated attempt.";
   }
@@ -173,6 +178,12 @@ const normalizeLegacyEngineWarning = (warning: string): string => {
   }
   if (normalized.startsWith("Framework mapping was unavailable while this run was planned.")) {
     return "Framework relationships are unavailable for this run because mapping was unavailable during planning.";
+  }
+  const legacyAdapterMismatch = normalized.match(
+    /^(.+) adapter was given a document declaring engine (.+); nothing was normalized from it$/u,
+  );
+  if (legacyAdapterMismatch) {
+    return `${legacyAdapterMismatch[1]} adapter input mismatch: document declares engine ${legacyAdapterMismatch[2]}`;
   }
   const releaseMismatch = normalized.match(
     /^Engine (.+) was not resumed: its frozen release identity differs from the installed release \((.+)\), and (.+)\. Start a new scan/u,
@@ -234,7 +245,7 @@ export const recognizedEngineWarningZhTW = (warning: string): string | undefined
     [/^Cloudsplaining privilege-escalation finding at (.+) lacked its required method link; the finding was preserved without that reference$/u, (pointer) => `${pointer} 的 Cloudsplaining 權限提升問題缺少必要的方法參照連結；問題已保留，但不含該參照`],
     [/^Cloudsplaining action link for (.+) was malformed; the finding was preserved without that reference$/u, (action) => `Cloudsplaining 操作 ${action} 的參照連結格式錯誤；問題已保留，但不含該參照`],
     [/^Cloudsplaining reported (\d+) valid policy findings; the bounded report retained (\d+) in Critical, High, Medium, Unknown, Low, then Informational order, and (\d+) remain only in raw evidence$/u, (total, retained, omitted) => `Cloudsplaining 回報 ${total} 筆有效的 IAM 原則問題；有界報告依重大、高、中、未知、低、資訊的優先順序保留 ${retained} 筆，其餘 ${omitted} 筆只保留在原始證據中`],
-    [/^(.+) adapter was given a document declaring engine (.+); nothing was normalized from it$/u, (engine, declared) => `${engine} 轉接器收到宣告掃描工具為 ${declared} 的文件；未從中正規化任何資料`],
+    [/^(.+) adapter input mismatch: document declares engine (.+)$/u, (engine, declared) => `${engine} 轉接器輸入不符：文件宣告掃描工具為 ${declared}`],
     [/^(.+) document did not name the engine that wrote it; it was normalized but not verified as this engine's own output$/u, (engine) => `${engine} 文件未指明產生它的掃描工具；已正規化，但未驗證為該工具本身的輸出`],
     [/^(.+) document declared no Results list and was not normalized$/u, (engine) => `${engine} 文件未宣告 Results 清單，因此未正規化`],
     [/^(.+) reported writing (.+) normalized results but its Results list holds (.+)$/u, (engine, declared, actual) => `${engine} 回報寫入 ${declared} 筆正規化結果，但 Results 清單含有 ${actual} 筆`],

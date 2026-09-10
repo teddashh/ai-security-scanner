@@ -2568,7 +2568,7 @@ fn a_document_another_engine_wrote_is_refused_rather_than_mined_for_findings() {
         output
             .warnings
             .iter()
-            .any(|warning| warning.contains("declaring engine Maester")),
+            .any(|warning| warning.contains("document declares engine Maester")),
         "the mismatch must be named: {:?}",
         output.warnings
     );

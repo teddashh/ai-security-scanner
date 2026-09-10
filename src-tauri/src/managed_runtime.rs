@@ -970,8 +970,7 @@ impl ManagedRuntimeSetupController {
             status.cancel_requested = true;
             status.can_cancel = false;
             status.can_retry = false;
-            status.detail = "scan-tool preparation stopped reporting progress; the app is stopping that exact attempt safely"
-                .into();
+            status.detail = "Scan-tool preparation stalled. This attempt is stopping.".into();
         }
     }
 
@@ -6060,7 +6059,7 @@ impl ManagedRuntimeManager {
         if let Err(error) = proof_cleanup {
             return Err(MachineInitializationAttemptFailure::OwnershipJournal(
                 AppError::Runtime(format!(
-                    "managed Windows WSL initialization journal could not be consumed safely: {error}"
+                    "managed Windows WSL initialization journal processing failed: {error}"
                 )),
             ));
         }
@@ -9679,7 +9678,7 @@ fn repair_windows_wsl_prerequisite_platform(
                 return Ok(ManagedRuntimePrerequisiteRepairResult {
                     outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
                     restart_required: false,
-                    detail: "Windows could not report whether the setup change finished".into(),
+                    detail: "Windows setup completion status unavailable.".into(),
                 });
             }
             _ => {
@@ -9698,7 +9697,7 @@ fn repair_windows_wsl_prerequisite_platform(
             return Ok(ManagedRuntimePrerequisiteRepairResult {
                 outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
                 restart_required: false,
-                detail: "Windows could not report the setup result".into(),
+                detail: "Windows setup result unavailable.".into(),
             });
         }
         let result = windows_wsl_repair_result_from_exit_code(exit_code);
@@ -9722,7 +9721,7 @@ fn repair_windows_wsl_prerequisite_platform(
         return Ok(ManagedRuntimePrerequisiteRepairResult {
             outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
             restart_required: false,
-            detail: "Windows could not prepare the administrator confirmation".into(),
+            detail: "Windows administrator confirmation unavailable.".into(),
         });
     };
 
@@ -9898,7 +9897,7 @@ impl WindowsWslPrerequisiteFailure {
                 "Windows must restart to finish preparing the local scan tools.{status} Restart Windows and reopen ai-security-scanner; automatic preparation will continue."
             ),
             ManagedRuntimeSetupFailureReason::WslCommandFailed => format!(
-                "Windows could not confirm that the local scan tools are ready.{status} Try automatic preparation again. If the problem continues, export the redacted diagnostic log."
+                "Local scan-tool readiness unconfirmed.{status} Run automatic preparation again."
             ),
         }
     }
@@ -10199,9 +10198,7 @@ fn verify_windows_wsl_product_storage_directory(
         ));
     }
     let storage = open_windows_real_directory_security_handle(wsldist).map_err(|error| {
-        AppError::NotAvailable(format!(
-            "Windows WSL storage could not be inspected safely: {error}"
-        ))
+        AppError::NotAvailable(format!("Windows WSL storage inspection failed: {error}"))
     })?;
     let inheritance = u8::try_from(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)
         .expect("Windows inheritance flags fit in an ACE header");
@@ -10209,9 +10206,7 @@ fn verify_windows_wsl_product_storage_directory(
         .map_err(|error| windows_managed_acl_verification_error("Windows WSL storage", error))?;
     let distribution = open_windows_real_directory_security_handle(registration_base_path)
         .map_err(|error| {
-            AppError::NotAvailable(format!(
-                "Windows WSL workspace could not be inspected safely: {error}"
-            ))
+            AppError::NotAvailable(format!("Windows WSL workspace inspection failed: {error}"))
         })?;
     let information = windows_file_information(&distribution).map_err(|error| {
         AppError::NotAvailable(format!(
@@ -12983,7 +12978,7 @@ pub fn ensure_private_product_data_directory(
         let platform_local_data = directories::BaseDirs::new()
             .map(|directories| directories.data_local_dir().to_path_buf())
             .ok_or_else(|| {
-                AppError::Internal("could not determine the platform local-data directory".into())
+                AppError::Internal("platform local-data directory unavailable".into())
             })?;
         // Only the desktop/default-CLI root may bootstrap a missing platform
         // parent. Managed-runtime fixtures and caller-selected roots retain the
@@ -19547,7 +19542,7 @@ mod tests {
         let retry_detail = WindowsWslPrerequisiteFailure::command_failed(Some(1))
             .detail()
             .to_ascii_lowercase();
-        assert!(retry_detail.contains("try automatic preparation again"));
+        assert!(retry_detail.contains("run automatic preparation again"));
         assert!(
             !retry_detail.contains("it will retry automatic preparation"),
             "a user-triggered retry must not be described as automatic: {retry_detail}"
@@ -22293,7 +22288,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("initialization journal could not be consumed safely")
+                .contains("initialization journal processing failed")
         );
         assert!(intent.is_dir());
         let calls = fixture.commands.calls();
@@ -23748,6 +23743,10 @@ mod tests {
         assert!(stale.cancel_requested);
         assert!(!stale.can_cancel);
         assert!(!stale.can_retry);
+        assert_eq!(
+            stale.detail,
+            "Scan-tool preparation stalled. This attempt is stopping."
+        );
         assert!(controller.cancel_requested.load(Ordering::Acquire));
         assert!(controller.check_cancelled().is_err());
 

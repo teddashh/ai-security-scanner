@@ -198,7 +198,7 @@ impl ProviderHttp for ReqwestProviderHttp {
             builder = builder.body(request.body.to_vec());
         }
         let response = builder.send().map_err(|_| {
-            AppError::NotAvailable("provider endpoint could not be reached safely".into())
+            AppError::NotAvailable("provider endpoint unavailable within the approved scope".into())
         })?;
         if response
             .content_length()

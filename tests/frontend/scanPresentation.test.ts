@@ -111,6 +111,19 @@ test("known setup failures lead to the matching automatic next step", () => {
   assert.match(tools.zhTW, /自動準備/u);
 });
 
+test("provider rate limits use a direct status and next action", () => {
+  const action = engineNextStepFor(engine({
+    status: "failed",
+    errorCode: "provider_rate_limited",
+  }));
+
+  assert.deepEqual(action, {
+    en: "Provider rate limit reached. Continue this scan after the limit resets.",
+    zhTW: "雲端服務已達速率上限；上限重設後繼續這次掃描。",
+  });
+  assert.doesNotMatch(`${action.en}${action.zhTW}`, /wait|稍等|later|稍後/iu);
+});
+
 test("an unavailable cleanup identity recommends a new scan without infrastructure jargon", () => {
   const action = engineNextStepFor(engine({
     status: "failed",

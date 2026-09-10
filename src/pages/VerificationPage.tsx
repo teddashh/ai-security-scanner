@@ -31,7 +31,7 @@ const copy = {
   beforeTitle: { en: "See whether the fix worked", zhTW: "看看修復有沒有成功" },
   beforeDescription: {
     en: "Choose a scan from before the change. The recheck shows what disappeared, what remains, and what is new.",
-    zhTW: "選擇修復前的掃描，我們會再次檢查，告訴你哪些消失了、哪些還在，以及有哪些新問題。",
+    zhTW: "選擇修復前的掃描；複驗會顯示哪些問題已消失、仍存在或是新出現。",
   },
   resultTitle: { en: "See whether the fix worked", zhTW: "看看修復有沒有成功" },
   resultDescription: {
@@ -70,7 +70,7 @@ const copy = {
   },
   selectedDescription: {
     en: "Scanner readiness is checked first, then the new result is compared with {run} from {date}.",
-    zhTW: "我們會先確認掃描工具，再把新的檢查與 {date} 的 {run} 比較。",
+    zhTW: "先確認掃描工具，再把新的檢查與 {date} 的 {run} 比較。",
   },
   handleActiveFirst: { en: "Handle the unfinished scan first", zhTW: "先處理未完成的掃描" },
   start: { en: "Check the fix again", zhTW: "重新檢查修復結果" },

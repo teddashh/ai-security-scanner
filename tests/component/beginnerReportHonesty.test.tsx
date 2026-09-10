@@ -747,7 +747,7 @@ test("a Greenbone dead-host gap gives a Traditional Chinese reader the exact cau
   if (!gapRow) throw new Error("the dead-host coverage-gap row did not render");
 
   expect(within(gapRow).getByText(
-    /Greenbone 回報這台主機在掃描期間沒有回應，因此它的弱點檢查一項都沒有執行。這不是乾淨的結果。/u,
+    /主機回應無法取得；弱點檢查：未執行。/u,
   )).toBeTruthy();
 });
 

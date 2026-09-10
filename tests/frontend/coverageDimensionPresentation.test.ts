@@ -188,6 +188,31 @@ test("every tested-dimension observation has a Traditional Chinese sentence", ()
   }
 });
 
+test("stored defensive coverage prose is normalized into direct bilingual outcomes", () => {
+  const legacy = [
+    [
+      "No completed upstream security-template execution record was retained for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template.",
+      "Website security-template evidence unavailable. Outcome: not tested.",
+      "網站安全模板證據無法取得；結果：未測試。",
+    ],
+    [
+      "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result.",
+      "Host response unavailable. Vulnerability checks: not run.",
+      "主機回應無法取得；弱點檢查：未執行。",
+    ],
+    [
+      "3 additional packaged checks were unavailable before planning. Whether they applied to the selected target is unknown, so they are not tested.",
+      "Packaged scanner information unavailable. Additional checks: not tested.",
+      "內建掃描工具資訊無法取得；額外檢查：未測試。",
+    ],
+  ] as const;
+
+  for (const [stored, english, traditionalChinese] of legacy) {
+    assert.equal(coverageGapProse("en", stored), english);
+    assert.equal(coverageGapProse("zh-TW", stored), traditionalChinese);
+  }
+});
+
 test("RDP transport coverage and its explicit limits are readable in both languages", () => {
   const observation =
     "The completed Greenbone task retained the exact reviewed RDP transport profile: ten TLS protocol, cipher, and certificate checks plus one check for the legacy fixed private key used by RDP 5.2 or earlier.";

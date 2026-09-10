@@ -63,7 +63,7 @@ async fn main() {
         if let Some(status_file) = invocation.status_file.as_deref() {
             let _ = write_status(status_file, GatewayPhase::Failed, code);
         }
-        eprintln!("egress gateway stopped safely");
+        eprintln!("egress gateway stopped");
         std::process::exit(1);
     }
 }

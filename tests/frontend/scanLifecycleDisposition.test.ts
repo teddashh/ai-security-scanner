@@ -131,7 +131,10 @@ test("a cancelled localhost record with a contradictory observation remains unco
     outcome: "unconfirmed",
     runId: "run-1",
   });
-  assert.match(scanLifecycleToastPresentation(disposition).detail.en, /refreshing now/u);
+  assert.equal(
+    scanLifecycleToastPresentation(disposition).detail.en,
+    "Open Progress to check the current scan state.",
+  );
 });
 
 test("cancelled is never promoted to a result, while mixed saved work remains partial", () => {
@@ -254,5 +257,12 @@ test("lifecycle toast copy is bilingual, bounded, and honest for every dispositi
   );
   const unconfirmed = scanLifecycleToastPresentation(dispositions[3]!);
   assert.equal(unconfirmed.tone, "warning");
-  assert.match(unconfirmed.detail.en, /refreshing now/u);
+  assert.deepEqual(unconfirmed, {
+    tone: "warning",
+    title: { en: "Scan action status unavailable", zhTW: "掃描動作狀態無法取得" },
+    detail: {
+      en: "Open Progress to check the current scan state.",
+      zhTW: "請開啟進度頁面查看目前掃描狀態。",
+    },
+  });
 });

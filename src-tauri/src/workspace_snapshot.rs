@@ -1319,7 +1319,7 @@ fn load_repository_gitignore(
     let maximum_bytes = limits.max_file_bytes.min(MAX_GITIGNORE_BYTES);
     let bytes = read_bounded_stable_file(source_path, maximum_bytes).map_err(|error| {
         AppError::InvalidRequest(format!(
-            "repository ignore rules could not be read safely at {relative_path}: {error}"
+            "repository ignore rules unreadable at {relative_path}: {error}"
         ))
     })?;
     let contents = std::str::from_utf8(&bytes).map_err(|_| {

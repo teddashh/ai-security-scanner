@@ -112,7 +112,7 @@ const pageCopy = {
   newCaseTitle: { en: "New scan", zhTW: "新掃描" },
   newCaseDescription: {
     en: "Add the target. A project name is generated when this field is blank.",
-    zhTW: "加入目標即可；專案名稱可以留白，我們會依目標自動建立。",
+    zhTW: "加入目標即可；專案名稱留白時會依目標自動建立。",
   },
   changeUseCase: { en: "Choose a different scan", zhTW: "改選其他檢查方式" },
   caseName: { en: "Scan project name (optional)", zhTW: "掃描專案名稱（選填）" },
@@ -365,7 +365,7 @@ const pageCopy = {
   verificationTitle: { en: "Choose the earlier run to compare", zhTW: "選擇要比較的先前掃描" },
   verificationDescription: {
     en: "Pick the scan from before the fix. The same checks run again and show what changed.",
-    zhTW: "選擇修復前的掃描；我們會再次執行相同檢查，直接顯示前後差異。",
+    zhTW: "選擇修復前的掃描；相同檢查會再次執行並直接顯示前後差異。",
   },
   viewDifference: { en: "View differences", zhTW: "查看差異" },
   baseline: { en: "Finished baseline run", zhTW: "已結束的基準掃描" },

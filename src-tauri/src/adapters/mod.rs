@@ -1540,7 +1540,7 @@ fn xml_attribute(
         if attribute.key.as_ref() == name && matched.is_none() {
             let value = attribute
                 .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
-                .map_err(|_| "Greenbone XML attribute could not be decoded safely".to_owned())?;
+                .map_err(|_| "Greenbone XML attribute decode failed".to_owned())?;
             matched = Some(safe_text(&value, MAX_SHORT_TEXT));
         }
     }
@@ -3441,7 +3441,7 @@ fn extract_m365(
                     push_warning(
                         warnings,
                         format!(
-                            "{engine} adapter was given a document declaring engine {declared}; nothing was normalized from it"
+                            "{engine} adapter input mismatch: document declares engine {declared}"
                         ),
                     );
                     return M365Extraction {

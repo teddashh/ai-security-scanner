@@ -932,7 +932,7 @@ fn read_private_file_if_present(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(AppError::NotAuthorized(format!(
-                "private identity file could not be opened safely: {error}"
+                "private identity file open failed: {error}"
             )));
         }
     };
@@ -1009,7 +1009,7 @@ fn read_signing_key_record_if_present(path: &Path) -> AppResult<Option<SigningKe
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(AppError::NotAuthorized(format!(
-                "local signing key could not be opened safely: {error}"
+                "local signing key open failed: {error}"
             )));
         }
     };

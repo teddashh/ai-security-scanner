@@ -5951,7 +5951,7 @@ impl<'a> CaseService<'a> {
         if candidates.is_empty() {
             if let Some(first_blocked) = blocked.first() {
                 let error_message = format!(
-                    "scan_preflight:{}: {} No scanner or runtime was started.",
+                    "scan_preflight:{}: {}",
                     first_blocked.error_code, first_blocked.explanation
                 );
                 for blocked in &blocked {
@@ -5992,7 +5992,7 @@ impl<'a> CaseService<'a> {
             }
             if had_invalid_plan {
                 return Err(AppError::NotAvailable(format!(
-                    "scan_preflight:resume_work_plan_invalid: {invalid_plan_explanation} No scanner or runtime was started."
+                    "scan_preflight:resume_work_plan_invalid: {invalid_plan_explanation}"
                 )));
             }
             return Err(AppError::InvalidRequest(
@@ -26464,9 +26464,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert!(english.contains(
-            "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result."
-        ));
+        assert!(english.contains("Host response unavailable. Vulnerability checks: not run."));
         assert!(english.contains(
             "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again."
         ));
@@ -26484,15 +26482,11 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert!(zh_hant.contains(
-            "Greenbone 回報這台主機在掃描期間沒有回應，因此它的弱點檢查一項都沒有執行。這不是乾淨的結果。"
-        ));
+        assert!(zh_hant.contains("主機回應無法取得；弱點檢查：未執行。"));
         assert!(zh_hant.contains(
             "請確認這台主機已開機，且本機能連到已核准的連接埠，然後再執行一次這項檢查。"
         ));
-        assert!(
-            !zh_hant.contains("Greenbone reported that this host did not respond during the scan")
-        );
+        assert!(!zh_hant.contains("Host response unavailable"));
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -32630,7 +32624,7 @@ mod tests {
             );
             assert!(error.to_string().contains("Start a new scan"));
             assert!(
-                error
+                !error
                     .to_string()
                     .contains("No scanner or runtime was started")
             );

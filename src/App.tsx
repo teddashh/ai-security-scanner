@@ -1858,19 +1858,19 @@ export default function App() {
             ? text({ en: "Browser preview project deleted", zhTW: "瀏覽器預覽專案已刪除" })
             : text({ en: "Case record deleted", zhTW: "案件紀錄已刪除" })
           : result.mode === "demo"
-            ? text({ en: "Demo mode did not delete the case", zhTW: "展示模式沒有刪除案件" })
-            : text({ en: "The case was not deleted", zhTW: "案件沒有被刪除" }),
+            ? text({ en: "Demo case deletion unavailable", zhTW: "展示案件無法刪除" })
+            : text({ en: "Case deletion rejected", zhTW: "案件刪除遭拒" }),
         detail: result.data.accepted
           ? result.data.artifacts.exists
-            ? text({ en: "Local evidence is still present until you confirm its separate cleanup.", zhTW: "本機證據仍保留，直到你另外確認清理為止。" })
+            ? text({ en: "Evidence cleanup requires separate confirmation.", zhTW: "證據清理需要另行確認。" })
             : result.mode === "demo"
               ? text({
-                en: "Only its browser-saved project record was removed; the preview creates no evidence files.",
-                zhTW: "只移除瀏覽器儲存的專案紀錄；預覽模式不會建立證據檔案。",
+                en: "Browser project record deleted.",
+                zhTW: "瀏覽器專案紀錄已刪除。",
               })
               : text({
-                en: "The case record was removed, and no evidence folder remains.",
-                zhTW: "案件紀錄已移除，而且沒有留下證據資料夾。",
+                en: "Case record deleted. Evidence status: none.",
+                zhTW: "案件紀錄已刪除；證據狀態：無。",
               })
           : text({ en: "Check the confirmation and retry deletion.", zhTW: "請確認刪除文字後重試。" }),
       });
@@ -1895,7 +1895,7 @@ export default function App() {
       recordTechnicalError("delete case", error);
       pushToast({
         tone: "danger",
-        title: text({ en: "The case was not deleted", zhTW: "案件沒有被刪除" }),
+        title: text({ en: "Case deletion failed", zhTW: "案件刪除失敗" }),
         detail: text({ en: "Confirm the exact case name and try again.", zhTW: "請確認完整案件名稱後再試一次。" }),
       });
       return false;
@@ -1920,14 +1920,14 @@ export default function App() {
         tone: result.data.removed ? "warning" : "info",
         title: result.data.removed
           ? text({ en: "Case evidence was permanently deleted", zhTW: "案件證據已永久刪除" })
-          : text({ en: "The evidence folder was not deleted", zhTW: "證據資料夾沒有被刪除" }),
+          : text({ en: "Evidence folder not found", zhTW: "找不到證據資料夾" }),
         detail: result.data.removed
           ? text(
             { en: "{path} was deleted and cannot be recovered.", zhTW: "{path} 已刪除，而且無法復原。" },
             { path: result.data.exactPath },
           )
           : text(
-            { en: "No evidence folder was found at {path}.", zhTW: "在 {path} 找不到證據資料夾。" },
+            { en: "Checked path: {path}.", zhTW: "已檢查路徑：{path}。" },
             { path: result.data.exactPath },
           ),
       });
@@ -1936,7 +1936,7 @@ export default function App() {
       recordTechnicalError("delete case artifacts", error);
       pushToast({
         tone: "danger",
-        title: text({ en: "The evidence folder was not deleted", zhTW: "證據資料夾沒有被刪除" }),
+        title: text({ en: "Evidence deletion failed", zhTW: "證據刪除失敗" }),
         detail: text({ en: "Check the exact path and confirmation, then try again.", zhTW: "請確認精確路徑與確認文字後再試一次。" }),
       });
       return false;
@@ -2126,15 +2126,15 @@ export default function App() {
         action: () => {
           if (selectedCaseIdRef.current === exportCaseId) void exportCase(options);
         },
-        titleText: { en: "The case was not exported", zhTW: "案件沒有匯出成功" },
-        title: text({ en: "The case was not exported", zhTW: "案件沒有匯出成功" }),
+        titleText: { en: "Case export failed", zhTW: "案件匯出失敗" },
+        title: text({ en: "Case export failed", zhTW: "案件匯出失敗" }),
         detailText: {
-          en: "No output file was written. Try another report type or location; open Technical details if it keeps happening.",
-          zhTW: "沒有寫出檔案；請改用另一種報告格式或儲存位置。如果問題持續發生，請查看「技術細節」。",
+          en: "Choose another report type or location, then retry.",
+          zhTW: "請改用另一種報告格式或儲存位置，然後重試。",
         },
         detail: text({
-          en: "No output file was written. Try another report type or location; open Technical details if it keeps happening.",
-          zhTW: "沒有寫出檔案；請改用另一種報告格式或儲存位置。如果問題持續發生，請查看「技術細節」。",
+          en: "Choose another report type or location, then retry.",
+          zhTW: "請改用另一種報告格式或儲存位置，然後重試。",
         }),
       });
     } finally {

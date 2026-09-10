@@ -1368,16 +1368,16 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "Maester 已評估這項控制措施，但未回傳通過或失敗的判定。",
     ),
     (
-        "No completed upstream security-template execution record was retained for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template.",
-        "這個網站沒有保留任何已完成的上游安全模板執行記錄，因此無法將這次掃描顯示為已檢測。網站可能沒有回應，或上游技術偵測可能沒有選出任何適用的模板。",
+        "Website security-template evidence unavailable. Outcome: not tested.",
+        "網站安全模板證據無法取得；結果：未測試。",
     ),
     (
-        "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result.",
-        "Greenbone 回報這台主機在掃描期間沒有回應，因此它的弱點檢查一項都沒有執行。這不是乾淨的結果。",
+        "Host response unavailable. Vulnerability checks: not run.",
+        "主機回應無法取得；弱點檢查：未執行。",
     ),
     (
-        "Greenbone scanner errors left some host checks incomplete. Completed findings and checks remain in this report.",
-        "Greenbone 回報掃描器錯誤；部分主機檢查未完成。已完成的問題與檢查保留在本報告。",
+        "Greenbone scanner errors. Host checks: partially completed.",
+        "Greenbone 掃描器錯誤；主機檢查：部分完成。",
     ),
     (
         "The request-level outcome contradicts the run's durable task state and was ignored.",
@@ -1468,12 +1468,12 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "這項檢查沒有終止結果。",
     ),
     (
-        "The packaged check list could not be loaded. Available checks may still run, but checks from that list are not tested.",
-        "無法載入內建的檢查清單。可用的檢查仍然可以執行，但該清單上的檢查未被檢測。",
+        "Packaged check list unavailable. Additional checks: not tested.",
+        "內建檢查清單無法取得；額外檢查：未測試。",
     ),
     (
-        "One additional packaged check was unavailable before planning. Whether it applied to the selected target is unknown, so it is not tested.",
-        "有一項額外的內建檢查在規劃前無法使用。無法得知它是否適用於所選目標，因此未被檢測。",
+        "Packaged scanner information unavailable. Additional checks: not tested.",
+        "內建掃描工具資訊無法取得；額外檢查：未測試。",
     ),
     (
         "At least one target identifier is frozen with the run, but its displayed label or type comes from current project data or is unavailable. The report labels that provenance and does not call it historical fact.",
@@ -1560,8 +1560,8 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "Greenbone 程序雖已完成，但本輪沒有為每個綁定資產保留一份精確且經審查的弱點掃描設定檔。因此程序完成不會被算成弱點掃描結果。",
     ),
     (
-        "This asset was added to the IT environment, but this run had no supported service-specific vulnerability profile for it. It was not contacted or tested.",
-        "此資產已加入 IT 環境，但本輪沒有適用的服務專屬弱點掃描設定，因此沒有連線，也沒有進行測試。",
+        "Supported service-specific vulnerability profile unavailable. Outcome: not tested.",
+        "支援的服務專屬弱點掃描設定無法取得；結果：未測試。",
     ),
     (
         "Completed-check time: unavailable. Finish and bounded observation times are absent.",
@@ -1580,8 +1580,8 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "請先檢視已檢測的內容，再決定是否需要更大範圍的掃描。",
     ),
     (
-        "No actionable finding was recorded, but a no-findings result is only as broad as the displayed coverage.",
-        "沒有記錄到需要處理的問題，但「沒有發現問題」的結論，只在畫面上顯示的涵蓋範圍內成立。",
+        "Actionable findings in completed checks: 0.",
+        "已完成檢查中的可處理問題：0。",
     ),
     // The three explanations this build stores on a request that contacted
     // nothing. The field is durable free text, so an unrecognized one falls
@@ -1756,14 +1756,57 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
 
 /// One sentence of a coverage row, in Traditional Chinese, or `None` when this
 /// product did not author it.
+fn normalize_direct_coverage_gap_prose(english: &str) -> String {
+    let normalized = english
+        .replace(
+            "No completed upstream security-template execution record was retained for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template.",
+            "Website security-template evidence unavailable. Outcome: not tested.",
+        )
+        .replace(
+            "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result.",
+            "Host response unavailable. Vulnerability checks: not run.",
+        )
+        .replace(
+            "Greenbone reported one or more scanner errors for this host, so some of its checks did not finish. Findings and checks that did complete remain valid.",
+            "Greenbone scanner errors. Host checks: partially completed.",
+        )
+        .replace(
+            "Greenbone scanner errors left some host checks incomplete. Completed findings and checks remain in this report.",
+            "Greenbone scanner errors. Host checks: partially completed.",
+        )
+        .replace(
+            "The packaged check list could not be loaded. Available checks may still run, but checks from that list are not tested.",
+            "Packaged check list unavailable. Additional checks: not tested.",
+        )
+        .replace(
+            "One additional packaged check was unavailable before planning. Whether it applied to the selected target is unknown, so it is not tested.",
+            "Packaged scanner information unavailable. Additional checks: not tested.",
+        )
+        .replace(
+            "This asset was added to the IT environment, but this run had no supported service-specific vulnerability profile for it. It was not contacted or tested.",
+            "Supported service-specific vulnerability profile unavailable. Outcome: not tested.",
+        )
+        .replace(
+            "No actionable finding was recorded, but a no-findings result is only as broad as the displayed coverage.",
+            "Actionable findings in completed checks: 0.",
+        );
+    if normalized.contains("additional packaged checks were unavailable before planning") {
+        "Packaged scanner information unavailable. Additional checks: not tested.".to_owned()
+    } else {
+        normalized
+    }
+}
+
 pub fn coverage_gap_prose_zh_hant(english: &str) -> Option<String> {
     const LEGACY_REVIEW_BASE: &str = "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.";
     const REVIEW_BASE: &str =
         "Maester evaluated this control but did not return a pass or fail verdict.";
-    let normalized = english.replace(LEGACY_REVIEW_BASE, REVIEW_BASE).replace(
-        "Review the upstream detail and record a human decision for this control.",
-        "Open the upstream detail and set this control's status.",
-    );
+    let normalized = normalize_direct_coverage_gap_prose(english)
+        .replace(LEGACY_REVIEW_BASE, REVIEW_BASE)
+        .replace(
+            "Review the upstream detail and record a human decision for this control.",
+            "Open the upstream detail and set this control's status.",
+        );
     let normalized = if normalized
         .contains("saved work-unit coverage for this check is internally inconsistent")
     {
@@ -1833,7 +1876,7 @@ pub fn coverage_gap_prose_zh_hant(english: &str) -> Option<String> {
 }
 
 pub fn coverage_gap_prose_english(english: &str) -> String {
-    let normalized = english
+    let normalized = normalize_direct_coverage_gap_prose(english)
         .replace(
             "Maester evaluated this control but did not return a pass or fail verdict. It requires manual review and is not a vulnerability finding.",
             "Maester evaluated this control but did not return a pass or fail verdict.",
@@ -2242,6 +2285,33 @@ pub fn action_zh_hant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_defensive_coverage_prose_is_normalized_to_direct_outcomes() {
+        for (stored, english, traditional_chinese) in [
+            (
+                "No completed upstream security-template execution record was retained for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template.",
+                "Website security-template evidence unavailable. Outcome: not tested.",
+                "網站安全模板證據無法取得；結果：未測試。",
+            ),
+            (
+                "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result.",
+                "Host response unavailable. Vulnerability checks: not run.",
+                "主機回應無法取得；弱點檢查：未執行。",
+            ),
+            (
+                "3 additional packaged checks were unavailable before planning. Whether they applied to the selected target is unknown, so they are not tested.",
+                "Packaged scanner information unavailable. Additional checks: not tested.",
+                "內建掃描工具資訊無法取得；額外檢查：未測試。",
+            ),
+        ] {
+            assert_eq!(coverage_gap_prose_english(stored), english);
+            assert_eq!(
+                coverage_gap_prose_zh_hant(stored),
+                Some(traditional_chinese.to_owned())
+            );
+        }
+    }
 
     #[test]
     fn control_mapping_rationale_lookup_translates_only_reviewed_catalog_prose() {

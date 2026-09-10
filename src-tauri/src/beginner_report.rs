@@ -1646,11 +1646,11 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                         task_id: Some(task.id.clone()),
                         target_asset_ids: vec![asset_id.clone()],
                         dimension: format!("{}: website execution evidence", check_id(task)),
-                        reason: "No completed upstream security-template execution record was retained for this website, so the scan cannot be shown as tested. The site may not have responded, or upstream technology detection may not have selected an applicable template."
-                            .into(),
+                        reason:
+                            "Website security-template evidence unavailable. Outcome: not tested."
+                                .into(),
                         next_action_code: NextActionCode::RetryCheck,
-                        next_action: "Retry this check to complete the missing work."
-                            .into(),
+                        next_action: "Retry this check to complete the missing work.".into(),
                     });
                 }
                 if !unproven_nuclei_asset_ids.is_empty() {
@@ -1693,7 +1693,7 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                         task_id: Some(task.id.clone()),
                         target_asset_ids: vec![asset_id.clone()],
                         dimension: format!("{}: target response", check_id(task)),
-                        reason: "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result."
+                        reason: "Host response unavailable. Vulnerability checks: not run."
                             .into(),
                         next_action_code: NextActionCode::ReviewScopeAndRetry,
                         next_action: "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again."
@@ -1707,11 +1707,10 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                         task_id: Some(task.id.clone()),
                         target_asset_ids: vec![asset_id.clone()],
                         dimension: format!("{}: scanner errors", check_id(task)),
-                        reason: "Greenbone scanner errors left some host checks incomplete. Completed findings and checks remain in this report."
+                        reason: "Greenbone scanner errors. Host checks: partially completed."
                             .into(),
                         next_action_code: NextActionCode::RetryCheck,
-                        next_action: "Retry this check to complete the missing work."
-                            .into(),
+                        next_action: "Retry this check to complete the missing work.".into(),
                     });
                 }
                 if !dead_host_asset_ids.is_empty() || !scanner_error_asset_ids.is_empty() {
@@ -2315,7 +2314,6 @@ fn append_engine_admission_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
         .engine_admission_issues
         .iter()
         .any(|issue| issue.code == "catalog_container_invalid");
-    let count = run.engine_admission_issues.len();
     gaps.push(CoverageGap {
         unattributed: None,
         kind: CoverageGapKind::NotTested,
@@ -2325,15 +2323,9 @@ fn append_engine_admission_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
         target_asset_ids: Vec::new(),
         dimension: "additional packaged checks".into(),
         reason: if catalog_list_unavailable {
-            "The packaged check list could not be loaded. Available checks may still run, but checks from that list are not tested."
-                .into()
-        } else if count == 1 {
-            "One additional packaged check was unavailable before planning. Whether it applied to the selected target is unknown, so it is not tested."
-                .into()
+            "Packaged check list unavailable. Additional checks: not tested.".into()
         } else {
-            format!(
-                "{count} additional packaged checks were unavailable before planning. Whether they applied to the selected target is unknown, so they are not tested."
-            )
+            "Packaged scanner information unavailable. Additional checks: not tested.".into()
         },
         next_action_code: NextActionCode::PreserveVisibleLimitation,
         next_action: "Restore the packaged scanner information, then run the missing checks."
@@ -3190,7 +3182,7 @@ fn append_report_asset_snapshot_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>)
             task_id: None,
             target_asset_ids: vec![snapshot.asset.id.clone()],
             dimension: "supported vulnerability profile".into(),
-            reason: "This asset was added to the IT environment, but this run had no supported service-specific vulnerability profile for it. It was not contacted or tested."
+            reason: "Supported service-specific vulnerability profile unavailable. Outcome: not tested."
                 .into(),
             next_action_code: NextActionCode::ChooseCompatibleCheck,
             next_action: "Add a supported exact service profile when you want this asset vulnerability-tested."
@@ -3685,7 +3677,7 @@ fn project_next_steps(
             (
                 NextActionCode::ReviewCoverage,
                 "Review what was tested before deciding whether you need a broader scan.",
-                "No actionable finding was recorded, but a no-findings result is only as broad as the displayed coverage.",
+                "Actionable findings in completed checks: 0.",
             )
         };
         steps.push(BeginnerNextStep {
@@ -5040,7 +5032,7 @@ mod tests {
 
         assert_eq!(
             gap.reason,
-            "The packaged check list could not be loaded. Available checks may still run, but checks from that list are not tested."
+            "Packaged check list unavailable. Additional checks: not tested."
         );
         assert!(!gap.reason.chars().any(|character| character.is_numeric()));
         assert!(!gap.reason.contains("One additional"));
@@ -7058,7 +7050,10 @@ mod tests {
             .unwrap();
         assert_eq!(inventory_gap.kind, CoverageGapKind::NotTested);
         assert_eq!(inventory_gap.target_asset_ids, ["inventory-only-asset"]);
-        assert!(inventory_gap.reason.contains("not contacted or tested"));
+        assert_eq!(
+            inventory_gap.reason,
+            "Supported service-specific vulnerability profile unavailable. Outcome: not tested."
+        );
 
         let reopened: AssessmentCase =
             serde_json::from_str(&serde_json::to_string(&case).unwrap()).unwrap();
@@ -7149,7 +7144,7 @@ mod tests {
         assert_eq!(gap.target_asset_ids, ["host-asset"]);
         assert_eq!(
             gap.reason,
-            "Greenbone reported that this host did not respond during the scan, so none of its vulnerability checks ran. This is not a clean result."
+            "Host response unavailable. Vulnerability checks: not run."
         );
         assert_eq!(gap.next_action_code, NextActionCode::ReviewScopeAndRetry);
         assert_eq!(
@@ -7193,7 +7188,7 @@ mod tests {
         assert_eq!(gap.target_asset_ids, ["host-asset"]);
         assert_eq!(
             gap.reason,
-            "Greenbone scanner errors left some host checks incomplete. Completed findings and checks remain in this report."
+            "Greenbone scanner errors. Host checks: partially completed."
         );
         assert_eq!(gap.next_action_code, NextActionCode::RetryCheck);
         assert_eq!(
@@ -7271,9 +7266,10 @@ mod tests {
             .expect("missing Nuclei execution evidence must remain visible");
         assert_eq!(gap.kind, CoverageGapKind::Unavailable);
         assert_eq!(gap.target_asset_ids, ["website-asset"]);
-        assert!(gap.reason.contains("cannot be shown as tested"));
-        assert!(gap.reason.contains("may not have responded"));
-        assert!(gap.reason.contains("may not have selected"));
+        assert_eq!(
+            gap.reason,
+            "Website security-template evidence unavailable. Outcome: not tested."
+        );
         assert_eq!(
             report.state.summary,
             BeginnerReportSummary::NoChecksCompleted

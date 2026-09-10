@@ -556,7 +556,7 @@ fn verify_and_restrict_matching_provider_artifact(
             },
             |error| {
                 DiscoveryError::Connector(format!(
-                    "matching provider artifact could not be safely verified or restricted: {error}"
+                    "matching provider artifact verification or permission restriction failed: {error}"
                 ))
             },
         )
@@ -2118,7 +2118,11 @@ mod tests {
         )
         .expect_err("an unsafe recovery slot must fail closed instead of advancing");
 
-        assert!(error.to_string().contains("safely verified"));
+        assert!(
+            error.to_string().contains(
+                "matching provider artifact verification or permission restriction failed"
+            )
+        );
         assert_eq!(fs::read(&canonical).unwrap(), b"different existing bytes");
         assert_eq!(fs::read(&recovery).unwrap(), expected);
         assert_eq!(
@@ -2174,7 +2178,11 @@ mod tests {
             &["test-provider"],
         )
         .expect_err("durable reuse must fail while a write-capable pinned open is blocked");
-        assert!(error.to_string().contains("safely verified"));
+        assert!(
+            error.to_string().contains(
+                "matching provider artifact verification or permission restriction failed"
+            )
+        );
         assert_eq!(fs::read_dir(&connector_root).unwrap().count(), 1);
 
         drop(blocker);
@@ -2212,7 +2220,11 @@ mod tests {
         )
         .expect_err("custom verify-only authority must not repair a permissive artifact");
 
-        assert!(error.to_string().contains("safely verified"));
+        assert!(
+            error.to_string().contains(
+                "matching provider artifact verification or permission restriction failed"
+            )
+        );
         assert_eq!(fs::read(&artifact).unwrap(), expected);
         assert_eq!(
             crate::managed_runtime::test_windows_product_file_security_descriptor(&artifact)
