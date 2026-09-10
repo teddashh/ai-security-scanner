@@ -2,7 +2,7 @@
 
 狀態日期：2026-09-10
 
-最後完成的產品程式 checkpoint：`6247c25`
+最後完成的產品程式 checkpoint：`8b6024b`
 
 這份文件是目前唯一的開發交接摘要，已直接取代舊的歷史版。產品決策以[產品規格](product-spec.md)為準，能力現況以[產品檢視](product-audit.md)為準。
 
@@ -67,6 +67,10 @@ Scanner 應盡量保留上游行為、規則、識別碼、severity、證據與 
   blocker 都限制為 160 字元內的精確狀態與下一步；runtime、cloud、workspace、network、component、
   evidence 與 cleanup 失敗不再附加重試安撫、未發生事件或實作解釋。typed code、授權邊界與
   durable outcome 語意不變。
+- `8b6024b` 完成 lifecycle acknowledgement、terminal coverage gap、cleanup reconciliation、
+  case deletion、export failure、platform setup 與 adapter warning 的直接化。Nuclei、Greenbone、
+  packaged check、unsupported profile 與零 finding 的舊保存句子會在顯示及匯出前正規化；英／繁中
+  保持同一結果，產品撰寫的中文不再使用 AI 第一人稱。掃描、授權、清理與 durable state 語意不變。
 
 ## 已在 main 上成立的產品能力
 
@@ -401,6 +405,15 @@ Export 首層只列完整性狀態；完整條款留在報告末端。產品指�
 Greenbone partial coverage、無適用檢查、localhost connection、managed runtime、bootstrap、
 egress 與 cleanup/recovery 紀錄同步採用直接結果。英／繁中共用敘述表與畫面文字已一起更新。
 
+## 生命週期與舊案件結果直接化（`8b6024b`）
+
+取消／繼續回應、rate limit、localhost 終態、managed runtime、cleanup reconciliation、case
+deletion、export、platform 與 adapter warning 已統一為「精確狀態＋下一步」。報告中的 Nuclei
+證據缺口、Greenbone dead host／scanner error、packaged scanner 資訊缺口、unsupported profile
+與 completed checks 零 finding 都直接標明結果。舊案件中的原句會在 Rust 與 TypeScript
+presentation layer 正規化後再顯示或匯出；英／繁中對應由 parity 與 presentation tests 鎖定。
+掃描範圍、target binding、認證、清理判定與 durable outcome 沒有改變。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -490,6 +503,11 @@ production frontend build 與 diff check 全部通過；build 只有既有的大
 執行 scanner、刪除 RAM disk 資料或接觸任何 target。
 
 `6247c25` 新增後，完整 Rust CLI workspace 1,589 項、frontend 569 項、component 252 項、CI
+contract 32 項、TypeScript typecheck、production frontend build、`clippy -D warnings`、format
+與 diff check 全部通過；build 只有既有的大型 chunk 提示。本輪沒有執行 scanner、刪除 RAM
+disk 資料或接觸任何 target。
+
+`8b6024b` 新增後，完整 Rust CLI workspace 1,590 項、frontend 571 項、component 252 項、CI
 contract 32 項、TypeScript typecheck、production frontend build、`clippy -D warnings`、format
 與 diff check 全部通過；build 只有既有的大型 chunk 提示。本輪沒有執行 scanner、刪除 RAM
 disk 資料或接觸任何 target。

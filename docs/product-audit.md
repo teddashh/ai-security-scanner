@@ -227,6 +227,14 @@ network, component, evidence, and cleanup failures no longer append retry
 reassurance, non-events, or implementation explanations. Typed blocker codes,
 authorization boundaries, and durable outcome semantics are unchanged.
 
+Lifecycle acknowledgements, terminal coverage gaps, cleanup reconciliation,
+case deletion, export failures, platform setup, and adapter warnings now use the
+same compact status-first wording in English and Traditional Chinese. Older
+saved Nuclei, Greenbone, packaged-check, unsupported-profile, and zero-finding
+sentences are normalized before display or export. Product-authored Chinese copy
+uses the scan, result, or application state as its subject rather than an AI
+first-person voice.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -265,8 +273,11 @@ The high-value remaining gaps are:
    report surfaces. `5dbdeff` completes the visible-copy sweep across the app
    shell, project setup, provider access, Progress, Results, verification, and
    export. `6247c25` completes the producer-side preflight and recovery sweep,
-   with a bounded direct-copy contract covering all 20 blocker variants. The
-   full sequence still needs observation in a controlled
+   with a bounded direct-copy contract covering all 20 blocker variants.
+   `8b6024b` applies the same contract to lifecycle acknowledgements, report
+   coverage gaps, cleanup reconciliation, deletion, export, platform setup, and
+   adapter warnings while normalizing superseded saved prose. The full sequence
+   still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
