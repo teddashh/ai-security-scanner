@@ -97,10 +97,9 @@ test("native runtime mechanics and consequences stay in closed details", () => {
   const content = details?.textContent ?? "";
 
   expect(details?.open).toBe(false);
-  expect(content).toContain("Retry reuses completed download progress");
-  expect(content).toContain("Pause keeps the download");
-  expect(content).toContain("Continue resumes it");
-  expect(content).toContain("After a required Windows restart");
+  expect(content).toContain("Setup downloads the advanced local scan tools");
+  expect(content).toContain("A required Windows restart appears as the next action");
   expect(content).toContain("appear as Not tested");
+  expect(content).not.toMatch(/Pause keeps|download progress|Continue resumes/u);
   expect(content).not.toContain("Saved projects and reports remain available");
 });

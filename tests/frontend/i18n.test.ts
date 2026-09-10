@@ -120,11 +120,15 @@ test("shared status copy and legacy date helpers follow the active locale", () =
   assert.equal(i18n.coverageMeta.source_unavailable_unknown.shortLabel, "Unknown");
   assert.equal(i18n.runStatusMeta.no_checks_completed.label, "No checks completed");
   assert.equal(i18n.runStatusMeta.no_checks_completed.tone, "warning");
+  assert.equal(i18n.translate("en", "status.stage.capturing.description"), "Recording scanner output.");
+  assert.equal(i18n.translate("en", "shell.data.refreshErrorDetail"), "Refresh saved scans.");
 
   i18n.setActiveLocale("zh-TW");
   assert.equal(i18n.phaseMeta.ready.label, "可以開始掃描");
   assert.equal(i18n.coverageMeta.source_unavailable_unknown.shortLabel, "未知");
   assert.equal(i18n.runStatusMeta.no_checks_completed.label, "沒有完成任何檢查");
+  assert.equal(i18n.translate("zh-TW", "status.stage.capturing.description"), "正在記錄掃描器輸出。");
+  assert.equal(i18n.translate("zh-TW", "shell.data.refreshErrorDetail"), "請重新整理已保存的掃描。");
 
   const value = "2026-08-25T14:30:00.000Z";
   assert.equal(

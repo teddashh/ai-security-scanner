@@ -63,9 +63,9 @@ test("SettingsPage keeps detail-heavy lifecycle and privacy honesty collapsed", 
   assert.match(source, /connections and exports can send data out/u);
   assert.match(source, /unless you connect a source or choose an export destination/u);
   assert.match(source, /Some scan tools are unavailable/u);
-  assert.match(source, /Retry reuses completed download progress/u);
-  assert.match(source, /Pause keeps the download; Continue resumes it/u);
-  assert.match(source, /After a required Windows restart/u);
+  assert.match(source, /Setup downloads the advanced local scan tools/u);
+  assert.match(source, /A required Windows restart appears as the next action/u);
   assert.match(source, /appear as Not tested/u);
+  assert.doesNotMatch(source, /Pause keeps|download progress|Continue resumes/u);
   assert.doesNotMatch(source, /<details[^>]*\sopen(?:=|\s|>)/u);
 });

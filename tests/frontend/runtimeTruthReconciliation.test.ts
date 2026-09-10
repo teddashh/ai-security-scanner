@@ -120,6 +120,7 @@ test("a completed setup claims ready only after the refreshed runtime is authori
   assert.match(setup, /const runtimeReady = refreshedSnapshot\?\.runtime\?\.available === true/u);
   assert.match(setup, /const completedAndReady = completed && runtimeReady/u);
   assert.match(setup, /tone: completedAndReady \? "success" : "warning"/u);
-  assert.match(setup, /completedAndReady[\s\S]*Advanced local scan tools are ready[\s\S]*Advanced local scan setup finished; checking availability/u);
-  assert.match(setup, /Checking whether the advanced tools are ready/u);
+  assert.match(setup, /completedAndReady[\s\S]*Advanced local scan tools are ready[\s\S]*Advanced local scan tools are not ready/u);
+  assert.match(setup, /Check availability again/u);
+  assert.doesNotMatch(setup, /checking availability|Checking whether the advanced tools are ready/u);
 });

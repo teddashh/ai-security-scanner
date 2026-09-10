@@ -134,7 +134,8 @@ test("a view the app could not refresh says so instead of looking current", () =
   );
   expect(alert).toBeTruthy();
   expect(alert!.textContent).toContain("Saved-scan refresh failed");
-  expect(alert!.textContent).toContain("Last saved information remains visible");
+  expect(alert!.textContent).toContain("Refresh saved scans");
+  expect(alert!.textContent).not.toContain("remains visible");
 });
 
 test("a project that failed to open gives a direct retry", () => {

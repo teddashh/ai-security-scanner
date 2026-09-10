@@ -125,8 +125,8 @@ export function SettingsPage({
             {mode === "native" ? (
               <>
                 <p>{text({
-                  en: "Retry reuses completed download progress. Pause keeps the download; Continue resumes it. After a required Windows restart, reopen the app and continue setup.",
-                  zhTW: "重試會沿用已完成的下載進度。暫停會保留下載；「繼續」會接續。若 Windows 要求重新啟動，請在重啟後開啟程式並繼續設定。",
+                  en: "Setup downloads the advanced local scan tools. A required Windows restart appears as the next action.",
+                  zhTW: "設定會下載進階本機掃描工具；需要重新啟動 Windows 時，畫面會列為下一步。",
                 })}</p>
                 <p>{text({
                   en: "Advanced checks unavailable in this installed version appear as Not tested.",

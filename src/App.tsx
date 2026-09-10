@@ -949,7 +949,7 @@ export default function App() {
         title: completed
           ? completedAndReady
             ? text({ en: "Advanced local scan tools are ready", zhTW: "進階本機掃描工具已就緒" })
-            : text({ en: "Advanced local scan setup finished; checking availability", zhTW: "進階本機掃描設定已完成，正在確認可用狀態" })
+            : text({ en: "Advanced local scan tools are not ready", zhTW: "進階本機掃描工具尚未就緒" })
           : nonRetryable
             ? text({ en: "An advanced local scan tool is unavailable in this app version", zhTW: "這個程式版本無法使用一項進階本機掃描工具" })
             : cancelled
@@ -962,8 +962,8 @@ export default function App() {
               zhTW: "掃描工具已就緒。",
             })
             : text({
-              en: "Checking whether the advanced tools are ready. Retry refreshes the status.",
-              zhTW: "正在確認進階工具是否就緒；「再試一次」會重新整理狀態。",
+              en: "Check availability again.",
+              zhTW: "請重新檢查可用狀態。",
             })
           : nonRetryable
             ? text({
@@ -1496,22 +1496,22 @@ export default function App() {
           tone: result.mode === "demo" ? "info" : "warning",
           persistent: result.mode === "native",
           actionLabelText: result.mode === "native"
-            ? { en: "Open Scan progress", zhTW: "開啟掃描進度" }
+            ? { en: "Refresh Scan progress", zhTW: "重新整理掃描進度" }
             : undefined,
           actionLabel: result.mode === "native"
-            ? text({ en: "Open Scan progress", zhTW: "開啟掃描進度" })
+            ? text({ en: "Refresh Scan progress", zhTW: "重新整理掃描進度" })
             : undefined,
           action: result.mode === "native" ? recoverScanProgress : undefined,
           titleText: result.mode === "native"
-            ? { en: "This computer check needs attention", zhTW: "這台電腦的檢查需要留意" }
+            ? { en: "Connection check status unavailable", zhTW: "無法取得連線檢查狀態" }
             : undefined,
           title: result.mode === "demo"
             ? text({ en: "Browser demo did not run a real check", zhTW: "瀏覽器展示模式沒有執行真實檢查" })
-            : text({ en: "This computer check needs attention", zhTW: "這台電腦的檢查需要留意" }),
+            : text({ en: "Connection check status unavailable", zhTW: "無法取得連線檢查狀態" }),
           detailText: result.mode === "native"
             ? {
-              en: "Open Scan progress. If no new check appears, try again.",
-              zhTW: "請開啟「掃描進度」；若沒有新的檢查，再試一次。",
+              en: "Refresh Scan progress.",
+              zhTW: "請重新整理「掃描進度」。",
             }
             : undefined,
           detail: result.mode === "demo"
@@ -1520,8 +1520,8 @@ export default function App() {
               zhTW: "請開啟桌面版執行這項檢查。",
             })
             : text({
-              en: "Open Scan progress. If no new check appears, try again.",
-              zhTW: "請開啟「掃描進度」；若沒有新的檢查，再試一次。",
+              en: "Refresh Scan progress.",
+              zhTW: "請重新整理「掃描進度」。",
             }),
         });
         return;
@@ -1566,18 +1566,18 @@ export default function App() {
       pushToast({
         tone: "danger",
         persistent: true,
-        actionLabelText: { en: "Open Scan progress", zhTW: "開啟掃描進度" },
-        actionLabel: text({ en: "Open Scan progress", zhTW: "開啟掃描進度" }),
+        actionLabelText: { en: "Refresh Scan progress", zhTW: "重新整理掃描進度" },
+        actionLabel: text({ en: "Refresh Scan progress", zhTW: "重新整理掃描進度" }),
         action: recoverScanProgress,
-        titleText: { en: "This computer check needs attention", zhTW: "這台電腦的檢查需要留意" },
-        title: text({ en: "This computer check needs attention", zhTW: "這台電腦的檢查需要留意" }),
+        titleText: { en: "Connection check status unavailable", zhTW: "無法取得連線檢查狀態" },
+        title: text({ en: "Connection check status unavailable", zhTW: "無法取得連線檢查狀態" }),
         detailText: {
-          en: "Open Scan progress. If no new check appears, try again.",
-          zhTW: "請開啟「掃描進度」；若沒有新的檢查，再試一次。",
+          en: "Refresh Scan progress.",
+          zhTW: "請重新整理「掃描進度」。",
         },
         detail: text({
-          en: "Open Scan progress. If no new check appears, try again.",
-          zhTW: "請開啟「掃描進度」；若沒有新的檢查，再試一次。",
+          en: "Refresh Scan progress.",
+          zhTW: "請重新整理「掃描進度」。",
         }),
       });
     } finally {
@@ -1717,12 +1717,12 @@ export default function App() {
     pushToast({
       tone: "info",
       title: text({
-        en: "This connection test runs once",
-        zhTW: "這項連線測試會執行一次",
+        en: "This connection test cannot pause",
+        zhTW: "這項連線測試無法暫停",
       }),
       detail: text({
-        en: "Its connection attempt has a three-second maximum. Let it finish, or cancel it and start a new check later.",
-        zhTW: "這次連線嘗試最長三秒。請讓它完成，或取消後再開始一次新的檢查。",
+        en: "Attempt limit: three seconds. Available action: Cancel.",
+        zhTW: "嘗試上限：三秒。可用操作：取消。",
       }),
     });
     return true;

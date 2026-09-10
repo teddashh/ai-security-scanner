@@ -212,6 +212,10 @@ test("recoverable scan and export failures stay visible and expose a real destin
   assert.match(app, /const recoverScanProgress = \(\) => \{[\s\S]*loadSnapshot\(undefined, true\)\.finally\(\(\) => navigate\("progress"\)\)/u);
   assert.match(app, /persistent: result\.mode === "native"[\s\S]*action: result\.mode === "native" \? recoverScanProgress/u);
   assert.match(app, /recordTechnicalError\("start local connection test"[\s\S]*persistent: true[\s\S]*action: recoverScanProgress/u);
+  assert.match(app, /Connection check status unavailable/u);
+  assert.match(app, /Refresh Scan progress\./u);
+  assert.match(app, /Attempt limit: three seconds\. Available action: Cancel\./u);
+  assert.doesNotMatch(app, /This computer check needs attention|If no new check appears|start a new check later/u);
   assert.match(app, /recordTechnicalError\("export case"[\s\S]*persistent: true[\s\S]*actionCaseId: exportCaseId/u);
   assert.match(app, /selectedCaseIdRef\.current === exportCaseId\)[\s\S]*exportCase\(options\)/u);
   assert.match(app, /appendExportToMatchingSnapshot\(current, exportCaseId, exported\)/u);

@@ -154,8 +154,8 @@ const summaryForOutcome = (
         },
         outcomeLabel: { en: "Stopping; no observation yet", zhTW: "正在停止；尚無觀察結果" },
         nextStep: {
-          en: "The current connection attempt has a three-second maximum. It will show Cancelled only after the connection has stopped.",
-          zhTW: "目前的連線嘗試最長三秒。只有在連線停止後，才會顯示「已取消」。",
+          en: "Stopping the current connection attempt (maximum three seconds).",
+          zhTW: "正在停止目前的連線嘗試（最長三秒）。",
         },
       };
     case "cancelled":
