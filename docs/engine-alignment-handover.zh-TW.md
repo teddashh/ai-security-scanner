@@ -475,6 +475,12 @@ Managed runtime 的啟動、驗證、失敗與授權需求改成精確狀態，�
 好了或需要注意等模糊文字。暫時雲端 cleanup 直接顯示 required action，不再要求在關閉程式前處理；
 案件證據目錄不存在時只顯示 backend 已確認的結果，不再解釋沒有送出刪除命令。
 
+## Active cleanup 與 verification 收斂（`bb0733f`）
+
+Runtime cleanup 只顯示正在清理本機掃描工作區，不再插入「結果已保存」的 reassurance。Verification
+遇到 running／paused scan 時只顯示目前狀態並導回 Progress；收合的比較機制只記錄相同授權範圍與
+兩個輪次 ID 的綁定，不再保證保存、重啟後重建或要求等待終態。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -609,6 +615,10 @@ scan tests 均通過。Rust 程式碼未變更，本輪沒有執行 scanner、�
 `cb60dbe` 新增後，frontend 575 項、component 254 項、TypeScript typecheck、production frontend
 build 與 diff check 全部通過；shared i18n contract、Cases 與 Coverage rendered tests 均通過。Rust
 程式碼未變更，本輪沒有執行 scanner、刪除 RAM disk 資料或接觸任何 target。
+
+`bb0733f` 新增後，frontend 575 項、component 256 項、TypeScript typecheck、production frontend
+build 與 diff check 全部通過；running／paused verification rendered cases 與 shared i18n contract
+均通過。Rust 程式碼未變更，本輪沒有執行 scanner、刪除 RAM disk 資料或接觸任何 target。
 
 ## 後續順序
 

@@ -290,6 +290,11 @@ recorded required action without an artificial close-the-app deadline, and an
 absent evidence folder is reported as the confirmed outcome without explaining
 an unsent deletion command.
 
+Runtime cleanup now names the active local-workspace cleanup without inserting
+a saved-results reassurance. Verification sends active work back to Progress
+with one current state; its collapsed comparison detail states the repeated
+approved scope and bound run IDs without restart or persistence guarantees.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -346,8 +351,10 @@ The high-value remaining gaps are:
    connection mechanism explanations while retaining the exact network,
    credential, and administrator-approval boundaries. `cb60dbe` replaces the
    remaining runtime delay and generic-attention labels with exact setup phases,
-   authorization state, cleanup action, and evidence-folder outcome. The full
-   sequence still needs observation in a controlled
+   authorization state, cleanup action, and evidence-folder outcome. `bb0733f`
+   removes saved-results reassurance from active cleanup and reduces active
+   verification and comparison mechanics to their exact states and bindings.
+   The full sequence still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
