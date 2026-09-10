@@ -365,33 +365,18 @@ outcome presentation。rendered tests 鎖住一個 completed、一個 active、�
 以及 terminal cancellation 含一個無法歸因 asset 的 conservative count；static localization test
 同時鎖住兩種語言與 asset／check 用詞。
 
-## zero-finding 的完成 security check 不再等待 sibling run 結束（`24fddc4`）
+## active scan 固定留在 Progress（`137db23`）
 
-Progress 原本只有 active run 已保存 security finding 時才顯示 primary `View results`。因此一項真正的
-security check 已 `tested_complete`、結果是零 findings，但另一個獨立 check 仍在執行時，live
-beginner report 明明已有 product spec 定義的有用 no-problem result，使用者卻不能開啟。現在 App
-把 selected run 的 durable beginner report 傳入 Progress；只有 report `runId` 與 selected run 完全
-相同，而且 `actual.checks` 有明確 `resultKind: security_check` 與 `status: tested_complete`，才把這個
-active result 解鎖並顯示「已有可用的資安結果；其餘檢查可能需要更久」。
+執行中的 selected run 只顯示 Progress：durable finding count、check outcome、asset/check
+completed／remaining／attention 數量與目前資產會持續更新，但不開啟 Results，也不建立任何格式的
+preview、document 或 case bundle。直接呼叫 beginner、OCSF、OSCAL 或 framework exporter 時也套用
+相同 terminal gate，避免繞過 UI；被拒絕的 bundle 不會建立目錄、key、temporary archive 或目的檔案。
 
-既有 durable security finding 路徑仍保留。`inventory`、`connectivity`、缺少 `resultKind` 的 legacy
-check，以及另一個 run 的 report 都 fail closed，不能單獨解鎖 Results；exact localhost utility 也不會
-因此變成資安結果。run-bound report 同時繼續提供 active asset label，避免新增第二套 snapshot
-coordinate。rendered tests 鎖住 zero-finding security completion、三個非資安／不明分類、cross-run
-report 與既有 finding path；navigation contract 也改為要求 typed completed security result。
-
-## live zero-finding Results 清楚限定在已完成檢查（`b0bff17`）
-
-新開放的 zero-finding live result 進入 Results 後，原本只會顯示泛稱「尚未收到問題」。現在只要同一個
-active run 的 durable report 有明確 `resultKind: security_check` 且 `status: tested_complete`，空狀態
-會說明「已完成的檢查目前沒有回報問題」，並緊接著限定這項結果只適用於已完成的資安檢查、整輪掃描
-仍未完成、其餘檢查仍可能回報問題。report overview 仍顯示 `Still updating`，並保留回到 Progress 的
-動作。
-
-這項較強的 bounded claim 使用與 Progress 解鎖相同的 exact typed evidence，不採用 Results 為舊報告
-保留的 legacy engine-name fallback。缺少 `resultKind` 的完成 check 仍只顯示一般 interim copy，避免
-使用者透過手動導覽得到 Progress 不會允許的宣稱。rendered tests 同時鎖住 English／Traditional
-Chinese 文案、live lifecycle、仍在執行的 sibling security check，以及 legacy fail-closed boundary。
+Results 與 Export 的 active deep link 都只顯示簡短的 Scan in progress 動作並返回 Progress。terminal
+run 才顯示 per-asset result、finding、coverage gap 與儲存選項。HTML 首層移除 lifecycle、報告變動與
+防禦性說明段落，只留下結果摘要、最後保存時間與可執行內容；正式條款維持在報告末端，machine-facing
+evidence 維持 collapsed technical detail。這項產品規則已同步寫入 `docs/product-spec.md`、AGENTS、
+CLAUDE、CONTRIBUTING，以及 Codex／Claude 的 ai-security-scanner skill。
 
 ## 驗證方式
 
@@ -451,11 +436,9 @@ build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有�
 `083040c` 新增後，frontend 568 項、component 245 項、TypeScript typecheck 與 production frontend
 build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
 
-`24fddc4` 新增後，frontend 568 項、component 250 項、TypeScript typecheck 與 production frontend
-build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
-
-`b0bff17` 新增後，frontend 568 項、component 252 項、TypeScript typecheck 與 production frontend
-build 全部通過；build 仍只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
+`137db23` 新增後，完整 Rust CLI suite 1,588 項、frontend 569 項、component 252 項、CI contract
+32 項、TypeScript typecheck、clippy、format、diff check 與 production frontend build 全部通過；
+build 只有既有的大型 chunk 提示。本輪沒有執行 scanner 或接觸 target。
 
 ## 後續順序
 

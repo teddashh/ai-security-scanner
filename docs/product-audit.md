@@ -52,16 +52,11 @@ response and applicable checks, or a large project folder. Numeric ETAs remain
 unset until a controlled installed run supplies measurements. The focused
 Review panel repeats the applicable timing target beside the exact environment,
 website, or local-folder plan before Start. Progress keeps that same target next
-to elapsed time until either a durable security finding or a completed typed
-security check is available, then says that a useful security result can already
-be opened while remaining checks continue. This includes a bounded no-problem
-result from a completed security check; completed inventory, connectivity, or
-legacy untyped checks cannot unlock Results by themselves.
-The zero-finding Results view now carries that same boundary: it names the
-no-problem outcome as applying only to completed security checks, keeps the
-whole scan explicitly live, and warns that sibling checks may still report
-problems. A legacy untyped completion retains the generic interim state instead
-of receiving this stronger claim.
+to elapsed time throughout active work. Durable counts and per-check outcomes
+continue updating there, while Results and every export format remain closed
+until the selected run reaches a terminal outcome. The terminal report then
+shows concise per-asset results and keeps technical evidence in collapsed
+detail.
 Advanced paths without a maintained target and the localhost connection utility
 keep the no-estimate presentation. The live activity card also names the saved
 asset or assets bound to the current check. It prefers the run-bound report label
@@ -216,11 +211,10 @@ The high-value remaining gaps are:
    ETA, `282d3fb` carries it through Review, and `4ad0759` preserves it during
    active Progress without treating the full run as complete. `00dc9a1` also
    surfaces the current check's saved asset labels, and `083040c` adds explicit
-   asset/check completion, remaining, and attention counts. `24fddc4` makes a
-   completed typed security check immediately reviewable even with zero findings
-   while sibling work continues, and `b0bff17` bounds the destination copy to
-   completed checks while preserving the still-live whole-run warning; the full
-   sequence still needs observation in a controlled installed-desktop walkthrough.
+   asset/check completion, remaining, and attention counts. `137db23` keeps all
+   active work in Progress, opens Results and Export only for terminal runs, and
+   removes live-report caveats from the primary path. The full sequence still
+   needs observation in a controlled installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced
    AWS cloud paths do not hide a comparable product-authored security subset:
