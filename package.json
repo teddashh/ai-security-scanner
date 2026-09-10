@@ -32,6 +32,7 @@
     "validate:engine-line-endings": "node scripts/validate-engine-line-endings.mjs",
     "validate:engines": "node scripts/validate-engine-line-endings.mjs && node scripts/validate-engine-catalog.mjs && node --test tests/engines/prowlerCatalogContract.test.mjs",
     "validate:usability-evidence": "node scripts/validate-usability-evidence.mjs",
+    "verify:vendored-glib": "bash scripts/verify-vendored-glib.sh",
     "desktop:prepare-sidecar": "node scripts/release/build-sidecar.mjs",
     "desktop:check": "node scripts/release/check-desktop.mjs",
     "release:validate": "node scripts/release/validate-release.mjs",

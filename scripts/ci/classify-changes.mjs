@@ -68,6 +68,8 @@ const FRONTEND_PATHS = [
 
 const RUST_PATHS = [
   /^Cargo\.(?:toml|lock)$/,
+  /^vendor\/glib-0\.18\.5\//,
+  /^scripts\/verify-vendored-glib\.sh$/,
   /^src-tauri\/(?:Cargo\.toml|build\.rs|src\/|tests\/|examples\/)/,
   // `external_scope.rs` includes the shared target corpus in its parity test.
   /^tests\/fixtures\/external-target-corpus\.json$/,
@@ -80,6 +82,8 @@ const RUST_PATHS = [
 
 const DESKTOP_PATHS = [
   /^Cargo\.(?:toml|lock)$/,
+  /^vendor\/glib-0\.18\.5\//,
+  /^scripts\/verify-vendored-glib\.sh$/,
   /^src-tauri\/(?:Cargo\.toml|app-icon\.svg$|binaries\/|build\.rs|capabilities\/|icons\/|src\/|tauri\.conf\.json$)/,
   /^bootstrap\//,
   /^engines\/catalog\.json$/,
@@ -106,6 +110,8 @@ const FRAMEWORK_PATHS = [
 
 const RELEASE_CONTRACT_PATHS = [
   /^Cargo\.(?:toml|lock)$/,
+  /^vendor\/glib-0\.18\.5\//,
+  /^scripts\/verify-vendored-glib\.sh$/,
   /^scripts\/release\//,
   /^tests\/release\//,
   /^\.github\/workflows\/(?:release|promote-release|windows-external-evidence)\.ya?ml$/,

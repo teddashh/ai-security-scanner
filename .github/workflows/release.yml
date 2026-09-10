@@ -58,6 +58,9 @@ jobs:
       - name: Install locked release tooling
         run: npm ci --ignore-scripts
 
+      - name: Verify the vendored glib security backport
+        run: npm run verify:vendored-glib
+
       - name: Resolve source identity
         id: identity
         shell: bash

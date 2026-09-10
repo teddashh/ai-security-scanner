@@ -500,7 +500,9 @@ async function scopedFinalizeMain() {
     sourceCommit: commit,
     publicationMode,
   });
-  const packageJson = await readJson(path.join(PROJECT_ROOT, "package.json"));
+  const packageJson = await readJson(
+    path.resolve(args.get("package-json") ?? path.join(PROJECT_ROOT, "package.json")),
+  );
   assert(
     metadata.releaseChannel === packageJson.release?.channel &&
       metadata.stableTarget === packageJson.release?.target,

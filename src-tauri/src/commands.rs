@@ -8707,7 +8707,7 @@ mod tests {
                 .last_error
                 .as_deref()
                 .unwrap()
-                .contains("does not prove that the scanner completed")
+                .contains("Runtime cleanup: complete. Scanner outcome: Partial.")
         );
         let later_engine = after
             .scan_runs
@@ -8923,7 +8923,7 @@ mod tests {
                     .error_message
                     .as_deref()
                     .unwrap()
-                    .contains("new isolated scan can still be started")
+                    .contains("Start a new isolated scan.")
             );
 
             let new_run = state
@@ -10047,7 +10047,7 @@ mod tests {
         let message = engine_run.error_message.as_deref().unwrap();
         assert!(message.contains("container image does not match the persisted pinned image"));
         assert!(message.contains("background scan worker stopped"));
-        assert!(message.contains("Exact product-owned runtime cleanup is complete"));
+        assert!(message.contains("Runtime cleanup: complete. Scanner outcome: Partial."));
         assert_ne!(
             message,
             "background scan worker stopped before a durable terminal report"

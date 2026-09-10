@@ -51,8 +51,19 @@ const TAG = `v${VERSION}`;
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const TEST_KEY_PASSWORD = "release-self-test-only";
 const TAURI_CLI = path.join(PROJECT_ROOT, "node_modules", "@tauri-apps", "cli", "tauri.js");
+let releasePolicyFixture = null;
 function run(script, arguments_) {
-  execFileSync(process.execPath, [path.join(PROJECT_ROOT, "scripts/release", script), ...arguments_], {
+  const policyArguments = releasePolicyFixture && [
+    "finalize-release.mjs",
+    "verify-finalized-release.mjs",
+  ].includes(script)
+    ? ["--package-json", releasePolicyFixture]
+    : [];
+  execFileSync(process.execPath, [
+    path.join(PROJECT_ROOT, "scripts/release", script),
+    ...arguments_,
+    ...policyArguments,
+  ], {
     cwd: PROJECT_ROOT,
     stdio: "inherit",
   });
@@ -675,6 +686,11 @@ async function main() {
   await mkdir(temporaryRoot, { recursive: true });
   const temporary = await mkdtemp(path.join(temporaryRoot, "run-"));
   try {
+    releasePolicyFixture = path.join(temporary, "prerelease-package.json");
+    await writeFile(
+      releasePolicyFixture,
+      `${JSON.stringify({ version: VERSION, release: { channel: "prerelease", target: "0.2.0" } })}\n`,
+    );
     const signingKey = path.join(temporary, "updater-test.key");
     tauriSigner([
       "generate",

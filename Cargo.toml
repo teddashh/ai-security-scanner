@@ -1,3 +1,10 @@
 [workspace]
 members = ["src-tauri"]
+exclude = ["vendor/glib-0.18.5"]
 resolver = "3"
+
+# Tauri's Linux GTK3 backend requires glib 0.18.x. This exact crates.io source
+# carries the upstream gtk-rs/gtk-rs-core#1343 fix for GHSA-wrw7-89jp-8q8g.
+# Remove the override when Tauri's Linux dependency graph reaches glib 0.20+.
+[patch.crates-io]
+glib = { path = "vendor/glib-0.18.5" }

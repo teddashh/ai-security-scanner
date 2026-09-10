@@ -22679,7 +22679,11 @@ mod tests {
         };
 
         assert!(matches!(&error, AppError::NotAvailable(_)));
-        assert!(error.to_string().contains("generations were preserved"));
+        assert!(
+            error
+                .to_string()
+                .contains("managed runtime Windows generation selection unreadable")
+        );
         assert_eq!(fs::read(&selection_path).unwrap(), selection_before);
         assert_eq!(
             fixture

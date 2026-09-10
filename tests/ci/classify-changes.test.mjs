@@ -276,6 +276,21 @@ test("installer and managed-runtime inputs schedule their focused heavyweight la
   });
 });
 
+test("the vendored Linux desktop security patch runs its provenance and build gates", () => {
+  const result = classifyChangedPaths(["vendor/glib-0.18.5/src/variant_iter.rs"]);
+  assert.equal(result.rust_core, true);
+  assert.equal(result.desktop, true);
+  assert.equal(result.release_contract, true);
+  assert.equal(result.windows_runtime, false);
+  assert.equal(result.engine, false);
+  assert.equal(result.docs_only, false);
+
+  assert.ok(
+    ciJobSteps("rust-core").some((step) => step.includes("bash scripts/verify-vendored-glib.sh")),
+    "rust-core must verify the checksum-pinned glib backport",
+  );
+});
+
 test("shared Node dependency changes exercise every Node and desktop packaging consumer", () => {
   const result = classifyChangedPaths(["package-lock.json"]);
   assert.equal(result.frontend, true);
