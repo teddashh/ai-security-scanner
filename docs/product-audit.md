@@ -295,6 +295,14 @@ a saved-results reassurance. Verification sends active work back to Progress
 with one current state; its collapsed comparison detail states the repeated
 approved scope and bound run IDs without restart or persistence guarantees.
 
+First-layer retries, readiness failures, cancellation states, and empty states
+now state the current outcome and one action. They do not branch on a repeated
+failure, defer action until later, direct the reader to support, or describe a
+page as incomplete. A capped correlation list names the omitted grouping
+suggestions while every finding remains individually listed. The shared Rust
+report layer, English and Traditional Chinese presentation, and rendered UI use
+the same direct wording; a source-level regression contract protects it.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -354,6 +362,9 @@ The high-value remaining gaps are:
    authorization state, cleanup action, and evidence-folder outcome. `bb0733f`
    removes saved-results reassurance from active cleanup and reduces active
    verification and comparison mechanics to their exact states and bindings.
+   `8da9b5a` removes the remaining delayed and repeat-failure copy from setup,
+   Progress, Results, correlation, verification, settings, provider access, and
+   report next actions, and adds a cross-page direct-copy regression contract.
    The full sequence still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond

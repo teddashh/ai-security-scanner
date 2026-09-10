@@ -620,6 +620,13 @@ build 與 diff check 全部通過；shared i18n contract、Cases 與 Coverage re
 build 與 diff check 全部通過；running／paused verification rendered cases 與 shared i18n contract
 均通過。Rust 程式碼未變更，本輪沒有執行 scanner、刪除 RAM disk 資料或接觸任何 target。
 
+`8da9b5a` 新增後，完整 Rust CLI workspace 1,590 項、frontend 576 項、component 256 項、CI
+contract 32 項、TypeScript typecheck、production frontend build、`clippy -D warnings`、format
+與 diff check 全部通過。setup、Progress、Results、correlation、verification、settings、provider
+access 與 report next action 已移除「之後再做／若再次失敗／找 support／頁面不完整」等延後或
+防禦性文案；跨頁面 source-level contract 會阻止這些句型回流。本輪沒有執行 scanner、刪除
+RAM disk 資料或接觸任何 target。
+
 ## 後續順序
 
 1. 在使用者明確允許安裝缺少的 managed runtime／desktop dependencies，並對確切自有 target
