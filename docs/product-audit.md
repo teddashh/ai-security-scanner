@@ -250,6 +250,13 @@ desktop-service absence, and technical fallbacks also use compact outcome-first
 copy. Active adapter conversion remains in Progress and states the work being
 performed instead of presenting saved output as a report-like holding state.
 
+Progress now presents product-authored engine warnings through one direct
+English and Traditional Chinese layer. Adapter evidence can retain its exact
+technical diagnostic, while the rendered warning states excluded records,
+incomplete results, unavailable references, and valid next actions without
+retention reassurance, human blame, or adapter/reporter implementation terms.
+The warning-producer census enforces this contract for every current shape.
+
 Observed services are listed separately from security problems. They do not
 increase problem counts or receive remediation merely because a port answered.
 "No problems" applies only to completed security checks and always keeps the
@@ -295,8 +302,9 @@ The high-value remaining gaps are:
    the remaining wait-and-repeat cancellation/setup copy and adds an automatic
    clipboard fallback for cloud handoff requests and device codes. `0396db3`
    completes the visible setup-cancellation, project-creation,
-   desktop-service, and adapter-conversion copy alignment. The full sequence
-   still needs observation in a controlled
+   desktop-service, and adapter-conversion copy alignment. `048df2c` applies the
+   same direct presentation contract to every censused engine warning. The full
+   sequence still needs observation in a controlled
    installed-desktop walkthrough.
 3. Make an explicit product-owner decision before widening GCP Prowler beyond
    its reviewed four-check permission and endpoint closure. The other advanced

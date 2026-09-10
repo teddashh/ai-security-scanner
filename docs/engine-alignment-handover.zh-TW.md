@@ -431,6 +431,13 @@ cancellation、Windows WSL servicing timeout／cooldown 及 managed-egress clean
 保留為操作。專案建立失敗、桌面服務不可用、技術錯誤 fallback 與 adapter conversion 進度也改成
 精確結果或正在執行的工作；英／繁中及 rendered component 契約同步鎖定。
 
+## 引擎警告顯示層直接化（`048df2c`）
+
+Progress 的引擎技術警告統一經過英／繁中產品顯示層。Adapter 仍保存精確診斷與證據語意；畫面只
+說明哪些記錄被排除、哪些結果不完整、哪些參照不可用，以及真正可執行的下一步。不再顯示 raw
+artifact／valid findings 已保留、未臆造 finding、使用者停止掃描等辯護句，也不把 adapter、pinned
+reporter 或 result reader 等實作細節當成使用者操作。Producer census 逐條驗證目前所有警告形狀。
+
 ## 驗證方式
 
 Rust gate 使用 CI 的 `--no-default-features --features cli` lane；預設的 `desktop` feature 需要本機沒有的 GTK／webkit 開發函式庫：
@@ -538,6 +545,11 @@ disk 資料或接觸任何 target。
 production frontend build 與 diff check 全部通過；build 只有既有的大型 chunk 提示。Rust 程式碼
 未變更，沿用上一個已通過的 1,590 項完整 Rust CLI workspace 基線。本輪沒有執行 scanner、刪除
 RAM disk 資料或接觸任何 target。
+
+`048df2c` 新增後，frontend 573 項、component 253 項、TypeScript typecheck、production frontend
+build 與 diff check 全部通過；producer census 涵蓋目前 70 種以上的 product-authored engine-warning
+形狀，Progress rendered case 也通過。Rust 程式碼未變更，本輪沒有執行 scanner、刪除 RAM disk
+資料或接觸任何 target。
 
 ## 後續順序
 
