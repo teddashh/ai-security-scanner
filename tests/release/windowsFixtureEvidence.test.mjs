@@ -75,6 +75,8 @@ test("Windows preservation fixtures bind the 0.1.10 candidate and its true N-1 r
   assert.doesNotMatch(upgradeFixture, /AllowRetainedState/u);
   assert.match(upgradeFixture, /installedByPriorRelease = \$true/u);
   assert.match(upgradeFixture, /exactBytesPreservedThroughAppOnlyUninstall = \$true/u);
+  assert.match(upgradeFixture, /processLeaseIdentityPreserved = \$true/u);
+  assert.doesNotMatch(upgradeFixture, /processLeaseAbsentBefore/u);
   assert.match(ghostFixture, /\$uninstallResult\.exitCode -ne 10/u);
   assert.match(ghostFixture, /AllowRetainedState/u);
   assert.match(ghostFixture, /Set-CanonicalProductDataOwner \$dataDirectory/u);
@@ -324,13 +326,13 @@ test("app-only uninstall cannot change unrelated WSL VHD bytes or NTFS identity"
   );
 });
 
-test("ghost qualification accepts only the exact non-authorizing generation-zero routing record", () => {
+test("ghost qualification accepts only the first non-authorizing isolated-generation routing record", () => {
   const identity = {
     runtimeManifestSha256: "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a",
     machineImageSha256: "e2b6cbcadd8b41b708fecb58a246a20d737dee0ef26872a3f75b575f77eba968",
   };
   const selection = {
-    pathBoundToCandidateManifestGenerationZero: true,
+    pathBoundToCandidateManifestAndGeneration: true,
     recordPresent: true,
     recordProtected: true,
     recordBytes: 512,
@@ -340,8 +342,9 @@ test("ghost qualification accepts only the exact non-authorizing generation-zero
     manifestSha256: identity.runtimeManifestSha256,
     machineImageSha256: identity.machineImageSha256,
     defaultMachineName: "assm2-win-x64-e2b6cbcadd8b",
-    selectedMachineName: "assm2-win-x64-e2b6cbcadd8b",
-    generationIndex: 0,
+    selectedMachineName: "assm2-iso-0123456789abcdefabcd",
+    selectedMachineDeterministic: true,
+    generationIndex: 1,
     preservedCollisionNames: [],
     recordPreservedAfterCurrentRuntimePurge: true,
     recordPreservedThroughAppOnlyUninstall: true,

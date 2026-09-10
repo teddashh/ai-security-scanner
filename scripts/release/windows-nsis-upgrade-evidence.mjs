@@ -22,7 +22,7 @@ export const PRIOR_WINDOWS_NSIS = Object.freeze({
   machineImageSha256: "e2b6cbcadd8b41b708fecb58a246a20d737dee0ef26872a3f75b575f77eba968",
 });
 
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 const PLATFORM = "windows-x86_64";
 const INSTALLER_TYPE = "nsis";
 const RUNNER = "windows-2025";
@@ -267,7 +267,8 @@ function validateObservations(observations, currentVersion, currentInstaller) {
   const uninstall = data.appOnlyUninstallSnapshot;
   exactKeys(uninstall, [
     "beforeFileCount", "afterFileCount", "beforeBytes", "afterBytes", "beforeDigest", "afterDigest",
-    "processLeaseAbsentBefore", "processLeaseAfter", "allNonLeaseProductDataPreserved",
+    "processLeaseBefore", "processLeaseAfter", "processLeaseIdentityPreserved",
+    "allNonLeaseProductDataPreserved",
   ], "app-only uninstall non-lease product-data snapshot");
   bounded(uninstall.beforeFileCount, 1, 4096, "pre-uninstall non-lease file count");
   bounded(uninstall.afterFileCount, 1, 4096, "post-uninstall non-lease file count");
@@ -275,12 +276,20 @@ function validateObservations(observations, currentVersion, currentInstaller) {
   bounded(uninstall.afterBytes, 1, 512 * 1024 * 1024, "post-uninstall non-lease product-data bytes");
   sha256(uninstall.beforeDigest, "pre-uninstall non-lease product-data digest");
   sha256(uninstall.afterDigest, "post-uninstall non-lease product-data digest");
-  yes(uninstall.processLeaseAbsentBefore, "pre-uninstall root process-lease absence");
-  exactKeys(uninstall.processLeaseAfter, ["length", "sha256", "volume", "fileIndex"], "post-uninstall root process lease");
-  assert(uninstall.processLeaseAfter.length === 0, "post-uninstall root process lease is not empty");
-  assert(uninstall.processLeaseAfter.sha256 === "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "post-uninstall root process lease has unexpected bytes");
-  bounded(uninstall.processLeaseAfter.volume, 0, 0xffff_ffff, "post-uninstall root process lease volume");
-  positiveDecimal(uninstall.processLeaseAfter.fileIndex, "post-uninstall root process lease file index");
+  const validateProcessLease = (proof, label) => {
+    exactKeys(proof, ["length", "sha256", "volume", "fileIndex"], label);
+    assert(proof.length === 0, `${label} is not empty`);
+    assert(proof.sha256 === "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", `${label} has unexpected bytes`);
+    bounded(proof.volume, 0, 0xffff_ffff, `${label} volume`);
+    positiveDecimal(proof.fileIndex, `${label} file index`);
+  };
+  validateProcessLease(uninstall.processLeaseBefore, "pre-uninstall root process lease");
+  validateProcessLease(uninstall.processLeaseAfter, "post-uninstall root process lease");
+  yes(uninstall.processLeaseIdentityPreserved, "root process lease identity preservation");
+  assert(
+    JSON.stringify(uninstall.processLeaseBefore) === JSON.stringify(uninstall.processLeaseAfter),
+    "app-only uninstall changed the root process lease bytes or NTFS identity",
+  );
   yes(uninstall.allNonLeaseProductDataPreserved, "app-only uninstall non-lease product-data preservation");
   assert(uninstall.beforeFileCount === uninstall.afterFileCount && uninstall.beforeBytes === uninstall.afterBytes && uninstall.beforeDigest === uninstall.afterDigest, "app-only uninstall changed non-lease product data");
 

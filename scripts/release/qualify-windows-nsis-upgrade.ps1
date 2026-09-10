@@ -1020,9 +1020,9 @@ try {
   )
 
   $appOnlyUninstallSnapshotBefore = Get-PrivateDataSnapshot $dataDirectory -ExcludeProcessLease
-  if (Test-Path -LiteralPath $processLeasePath) {
-    throw "N-1 fixture no longer exercises creation of the current root process lease."
-  }
+  $processLeaseBeforeUninstall = Get-NoFollowEmptyFileProof $processLeasePath (
+    "Root process lease before app-only uninstall"
+  )
   $sentinelBeforeUninstall = Get-NoFollowFileSha256Proof $sentinelPath (
     "Data-preservation sentinel before app-only uninstall"
   ) (64 * 1024)
@@ -1051,7 +1051,10 @@ try {
   }
   $appOnlyUninstallSnapshotAfter = Get-PrivateDataSnapshot $dataDirectory -ExcludeProcessLease
   $processLeaseAfterUninstall = Get-NoFollowEmptyFileProof $processLeasePath (
-    "Root process lease created by app-only uninstall"
+    "Root process lease after app-only uninstall"
+  )
+  Assert-SameFileProof $processLeaseBeforeUninstall $processLeaseAfterUninstall (
+    "App-only uninstall root process lease"
   )
   if ($appOnlyUninstallSnapshotAfter.digest -cne $appOnlyUninstallSnapshotBefore.digest -or
       $appOnlyUninstallSnapshotAfter.fileCount -ne $appOnlyUninstallSnapshotBefore.fileCount -or
@@ -1095,7 +1098,7 @@ try {
   }
 
   $observations = [ordered]@{
-    schemaVersion = 9
+    schemaVersion = 10
     scenario = "automated_n_minus_one_nsis_data_preservation_fixture"
     platform = "windows-x86_64"
     runner = "windows-2025"
@@ -1167,8 +1170,9 @@ try {
         afterBytes = [int64]$appOnlyUninstallSnapshotAfter.totalBytes
         beforeDigest = [string]$appOnlyUninstallSnapshotBefore.digest
         afterDigest = [string]$appOnlyUninstallSnapshotAfter.digest
-        processLeaseAbsentBefore = $true
+        processLeaseBefore = Convert-FileProofObservation $processLeaseBeforeUninstall
         processLeaseAfter = Convert-FileProofObservation $processLeaseAfterUninstall
+        processLeaseIdentityPreserved = $true
         allNonLeaseProductDataPreserved = $true
       }
     }

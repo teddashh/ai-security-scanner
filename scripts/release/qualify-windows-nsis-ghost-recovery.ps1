@@ -20,6 +20,7 @@ $priorProviderNamespace = $priorRuntimeManifestSha256.Substring(0, 16)
 $oldMachineName = "assm1-win-x64-$($priorMachineImageSha256.Substring(0, 12))"
 $oldDistributionName = "podman-$oldMachineName"
 $currentMachinePrefix = "assm2-win-x64"
+$isolatedMachinePrefix = "assm2-iso-"
 $oldVersionDirectoryName = "podman-machine-5.8.2-$priorProviderNamespace"
 $maximumDownloadBytes = 64 * 1024 * 1024
 $maximumSnapshotFiles = 4096
@@ -42,6 +43,43 @@ $sentinelLifecycleRequiredPhases = @(
   "after_current_runtime_purge",
   "before_app_only_uninstall"
 )
+
+function Get-ExpectedIsolatedMachineName(
+  [string]$StateRoot,
+  [string]$ManifestSha256,
+  [string]$MachineImageSha256,
+  [uint32]$GenerationIndex
+) {
+  if ($ManifestSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+      $MachineImageSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+      $GenerationIndex -lt 1 -or $GenerationIndex -gt 32) {
+    throw "Isolated machine identity input is invalid."
+  }
+  $hash = [Security.Cryptography.IncrementalHash]::CreateHash(
+    [Security.Cryptography.HashAlgorithmName]::SHA256
+  )
+  try {
+    $zero = [byte[]]@(0)
+    foreach ($segment in @(
+      "ai-security-scanner/windows-wsl-isolated-generation/v1",
+      [IO.Path]::GetFullPath($StateRoot),
+      $ManifestSha256,
+      $MachineImageSha256
+    )) {
+      $hash.AppendData([Text.Encoding]::UTF8.GetBytes($segment))
+      $hash.AppendData($zero)
+    }
+    $generationBytes = [BitConverter]::GetBytes($GenerationIndex)
+    if (-not [BitConverter]::IsLittleEndian) {
+      [Array]::Reverse($generationBytes)
+    }
+    $hash.AppendData($generationBytes)
+    $suffix = [Convert]::ToHexString($hash.GetHashAndReset()).ToLowerInvariant()
+  } finally {
+    $hash.Dispose()
+  }
+  return "assm2-iso-$($suffix.Substring(0, 20))"
+}
 
 if ($CurrentVersion -cne $candidateVersion) {
   throw "The bounded v0.1.7 ghost-isolation data-preservation fixture applies only to candidate $candidateVersion."
@@ -2378,7 +2416,7 @@ $candidateRuntimeManifestSha256 = Get-LowerSha256 $candidateRuntimeEvidencePath 
 if ($candidateRuntimeManifestSha256 -cne $candidateRuntimeManifestExpectedSha256) {
   throw "Candidate managed-runtime evidence differs from the reviewed Windows identity."
 }
-$candidateProviderNamespace = $candidateRuntimeManifestSha256.Substring(0, 16)
+$candidateVersionNamespace = $candidateRuntimeManifestSha256.Substring(0, 16)
 $candidateTargets = @($candidateRuntimeEvidence.targets | Where-Object {
   $_.operating_system -ceq "windows" -and $_.architecture -ceq "x86_64" -and $_.provider -ceq "wsl"
 })
@@ -2389,15 +2427,21 @@ if ($candidateRuntimeEvidence.schema_version -cne "3" -or
   throw "Candidate managed-runtime evidence has no exact Windows WSL identity."
 }
 $candidateMachineImageSha256 = [string]$candidateTargets[0].machine_image.sha256
-$candidateMachineName = "$currentMachinePrefix-$($candidateMachineImageSha256.Substring(0, 12))"
+$candidateDefaultMachineName = "$currentMachinePrefix-$($candidateMachineImageSha256.Substring(0, 12))"
+$candidateGenerationIndex = 1
+$candidateMachineName = Get-ExpectedIsolatedMachineName $managedRuntimeRoot (
+  $candidateRuntimeManifestSha256
+) $candidateMachineImageSha256 $candidateGenerationIndex
 $candidateDistributionName = "podman-$candidateMachineName"
+$isolatedMachineSuffix = $candidateMachineName.Substring($isolatedMachinePrefix.Length)
+$candidateProviderNamespace = "$($candidateRuntimeManifestSha256.Substring(0, 8))-iso-$($isolatedMachineSuffix.Substring(0, 12))"
 $candidateProviderHome = Join-Path $managedRuntimeRoot "provider-home\$candidateProviderNamespace"
 $candidateWslBasePath = Join-Path $candidateProviderHome "data\containers\podman\machine\wsl\wsldist\$candidateMachineName"
-$candidateVersionDirectory = Join-Path $managedRuntimeRoot "versions\podman-machine-5.8.2-$candidateProviderNamespace"
-$generationSelectionName = "$candidateRuntimeManifestSha256.0.json"
+$candidateVersionDirectory = Join-Path $managedRuntimeRoot "versions\podman-machine-5.8.2-$candidateVersionNamespace"
+$generationSelectionName = "$candidateRuntimeManifestSha256.$candidateGenerationIndex.json"
 $generationSelectionPath = Assert-ExactChildPath $generationSelectionRoot (
   Join-Path $generationSelectionRoot $generationSelectionName
-) $generationSelectionName "Candidate generation-zero routing record"
+) $generationSelectionName "Candidate isolated-generation routing record"
 $trustedWsl = Get-TrustedWslExecutable
 $unrelatedDistributionName = "ai-security-scanner-unrelated-$([Guid]::NewGuid().ToString("N"))"
 $unrelatedWslBasePath = Assert-ExactChildPath $workRoot (
@@ -2649,8 +2693,8 @@ try {
   }
   Get-ExactWslRegistration $oldDistributionName $oldWslBasePath | Out-Null
 
-  if (Test-Path -LiteralPath $generationSelectionPath) {
-    throw "Candidate wrote the runtime routing record before runtime initialization began."
+  if (Test-Path -LiteralPath $generationSelectionRoot) {
+    throw "Candidate wrote generation-routing state before runtime initialization began."
   }
   $preStartRegistry = Get-ExactProductRegistry $CurrentVersion $installDirectory
   $noVersionedReceiptBeforeRuntimeStart = [bool]$preStartRegistry.NoVersionedReceipt
@@ -2682,8 +2726,48 @@ try {
     throw "Candidate assm2 workspace did not reach the released running runtime identity."
   }
   Assert-RealDirectory $candidateVersionDirectory "Candidate installed runtime version" | Out-Null
-  Assert-RealDirectory $candidateProviderHome "Candidate provider home" | Out-Null
   Assert-RealDirectory $oldProviderHome "Retained v0.1.7 provider home" | Out-Null
+
+  Assert-RealDirectory $generationSelectionRoot "Candidate generation routing directory" | Out-Null
+  $generationSelectionEntries = @(Get-ChildItem -LiteralPath $generationSelectionRoot -Force)
+  if ($generationSelectionEntries.Count -ne 1 -or
+      $generationSelectionEntries[0].PSIsContainer -or
+      ($generationSelectionEntries[0].Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+      $generationSelectionEntries[0].Name -cne $generationSelectionName) {
+    throw "Candidate did not create exactly its append-only isolated-generation routing record."
+  }
+  Assert-OwnerOnlyFullControlFile $generationSelectionPath (
+    "Candidate isolated-generation routing record"
+  ) (64 * 1024) | Out-Null
+  $generationSelectionFileProof = Get-NoFollowFileSha256Proof $generationSelectionPath (
+    "Candidate isolated-generation routing record"
+  ) (64 * 1024)
+  $generationSelection = Read-BoundedJsonFile $generationSelectionPath (
+    "Candidate isolated-generation routing record"
+  ) (64 * 1024)
+  Assert-ExactJsonProperties $generationSelection @(
+    "schema_version",
+    "authorizes_cleanup",
+    "manifest_sha256",
+    "machine_image_sha256",
+    "default_machine_name",
+    "selected_machine_name",
+    "generation_index",
+    "preserved_collision_names"
+  ) "Candidate isolated-generation routing record"
+  if ($generationSelection.schema_version -cne
+        "ai-security-scanner.managed-wsl-generation-selection/v1" -or
+      $generationSelection.authorizes_cleanup -ne $false -or
+      [string]$generationSelection.manifest_sha256 -cne $candidateRuntimeManifestSha256 -or
+      [string]$generationSelection.machine_image_sha256 -cne $candidateMachineImageSha256 -or
+      [string]$generationSelection.default_machine_name -cne $candidateDefaultMachineName -or
+      [string]$generationSelection.selected_machine_name -cnotmatch '^assm2-iso-[0-9a-f]{20}$' -or
+      [string]$generationSelection.selected_machine_name -cne $candidateMachineName -or
+      [uint32]$generationSelection.generation_index -ne $candidateGenerationIndex -or
+      @($generationSelection.preserved_collision_names).Count -ne 0) {
+    throw "Candidate isolated-generation routing record does not match the current runtime."
+  }
+  Assert-RealDirectory $candidateProviderHome "Candidate isolated provider home" | Out-Null
 
   $oldRegistrationAfter = Get-ExactWslRegistration $oldDistributionName $oldWslBasePath
   $currentRegistration = Get-ExactWslRegistration $candidateDistributionName $candidateWslBasePath
@@ -2715,46 +2799,6 @@ try {
   if ((Get-LowerSha256 $oldProviderConfigPath (16 * 1024)) -cne $oldProviderConfigSha256 -or
       (Get-LowerSha256 $oldSshPublicKeyPath (4 * 1024)) -cne $oldSshPublicKeySha256) {
     throw "Candidate changed the retained legacy provider proof files."
-  }
-
-  Assert-RealDirectory $generationSelectionRoot "Candidate generation routing directory" | Out-Null
-  $generationSelectionFiles = @(
-    Get-ChildItem -LiteralPath $generationSelectionRoot -File -Force |
-      Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0 }
-  )
-  if ($generationSelectionFiles.Count -ne 1 -or
-      $generationSelectionFiles[0].Name -cne $generationSelectionName) {
-    throw "Candidate did not create exactly its append-only generation-zero routing record."
-  }
-  Assert-OwnerOnlyFullControlFile $generationSelectionPath (
-    "Candidate generation-zero routing record"
-  ) (64 * 1024) | Out-Null
-  $generationSelectionFileProof = Get-NoFollowFileSha256Proof $generationSelectionPath (
-    "Candidate generation-zero routing record"
-  ) (64 * 1024)
-  $generationSelection = Read-BoundedJsonFile $generationSelectionPath (
-    "Candidate generation-zero routing record"
-  ) (64 * 1024)
-  Assert-ExactJsonProperties $generationSelection @(
-    "schema_version",
-    "authorizes_cleanup",
-    "manifest_sha256",
-    "machine_image_sha256",
-    "default_machine_name",
-    "selected_machine_name",
-    "generation_index",
-    "preserved_collision_names"
-  ) "Candidate generation-zero routing record"
-  if ($generationSelection.schema_version -cne
-        "ai-security-scanner.managed-wsl-generation-selection/v1" -or
-      $generationSelection.authorizes_cleanup -ne $false -or
-      [string]$generationSelection.manifest_sha256 -cne $candidateRuntimeManifestSha256 -or
-      [string]$generationSelection.machine_image_sha256 -cne $candidateMachineImageSha256 -or
-      [string]$generationSelection.default_machine_name -cne $candidateMachineName -or
-      [string]$generationSelection.selected_machine_name -cne $candidateMachineName -or
-      [uint32]$generationSelection.generation_index -ne 0 -or
-      @($generationSelection.preserved_collision_names).Count -ne 0) {
-    throw "Candidate generation-zero routing record does not match the current assm2 runtime."
   }
 
   $postSideBySideRegistry = Get-ExactProductRegistry $CurrentVersion $installDirectory
@@ -2801,10 +2845,10 @@ try {
     "--json", "--data-dir", $dataDirectory, "runtime", "managed", "uninstall", "--force", "--purge-image-cache"
   ) 900000 "Current assm2 managed runtime cleanup uninstall" | Out-Null
   $generationSelectionAfterPurge = Get-NoFollowFileSha256Proof $generationSelectionPath (
-    "Generation-zero routing record after current-runtime purge"
+    "Isolated-generation routing record after current-runtime purge"
   ) (64 * 1024)
   Assert-SameFileProof $generationSelectionFileProof $generationSelectionAfterPurge (
-    "Current-runtime purge generation-zero routing record"
+    "Current-runtime purge isolated-generation routing record"
   )
   $currentAfterPurge = @(Get-WslRegistrations | Where-Object {
     [String]::Equals($_.Name, $candidateDistributionName, [StringComparison]::Ordinal)
@@ -2916,10 +2960,10 @@ try {
     "App-only ghost NSIS uninstall readable beginner report"
   )
   $generationSelectionAfterUninstall = Get-NoFollowFileSha256Proof $generationSelectionPath (
-    "Generation-zero routing record after app-only uninstall"
+    "Isolated-generation routing record after app-only uninstall"
   ) (64 * 1024)
   Assert-SameFileProof $generationSelectionFileProof $generationSelectionAfterUninstall (
-    "App-only uninstall generation-zero routing record"
+    "App-only uninstall isolated-generation routing record"
   )
   $oldProviderConfigAfterUninstallSha256 = Get-LowerSha256 $oldProviderConfigPath (16 * 1024)
   $oldSshPublicKeyAfterUninstallSha256 = Get-LowerSha256 $oldSshPublicKeyPath (4 * 1024)
@@ -2994,7 +3038,7 @@ try {
   $cleanupComplete = $true
 
   $observations = [ordered]@{
-    schemaVersion = 9
+    schemaVersion = 10
     scenario = "automated_registered_wsl_n_minus_one_ghost_isolated_generation_fixture"
     platform = "windows-x86_64"
     runner = "windows-2025"
@@ -3086,7 +3130,7 @@ try {
       unrelatedRegistrationBasePathExact = $true
       noQuarantineDistributionCreated = $true
       generationSelection = [ordered]@{
-        pathBoundToCandidateManifestGenerationZero = $true
+        pathBoundToCandidateManifestAndGeneration = $true
         recordPresent = $true
         recordProtected = $true
         recordBytes = [int64]$generationSelectionFileProof.Length
@@ -3097,6 +3141,7 @@ try {
         machineImageSha256 = [string]$generationSelection.machine_image_sha256
         defaultMachineName = [string]$generationSelection.default_machine_name
         selectedMachineName = [string]$generationSelection.selected_machine_name
+        selectedMachineDeterministic = $true
         generationIndex = [uint32]$generationSelection.generation_index
         preservedCollisionNames = @($generationSelection.preserved_collision_names)
         recordPreservedAfterCurrentRuntimePurge = $true

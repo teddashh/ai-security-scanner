@@ -1641,9 +1641,11 @@ export function validateSynchronousNsisQualificationFixture(
       );
     } else {
       assert(
-        source.includes("processLeaseAbsentBefore = $true") &&
-          source.includes("$processLeaseAfterUninstall = Get-NoFollowEmptyFileProof"),
-        `${label} must prove that the current product added only its exact empty root process lease`,
+        source.includes("$processLeaseBeforeUninstall = Get-NoFollowEmptyFileProof") &&
+          source.includes("$processLeaseAfterUninstall = Get-NoFollowEmptyFileProof") &&
+          source.includes("Assert-SameFileProof $processLeaseBeforeUninstall $processLeaseAfterUninstall") &&
+          source.includes("processLeaseIdentityPreserved = $true"),
+        `${label} must prove that app-only uninstall preserves the exact empty root process lease`,
       );
     }
   }

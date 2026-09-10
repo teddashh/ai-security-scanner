@@ -12,14 +12,14 @@ import {
   writeJsonAtomic,
 } from "./lib.mjs";
 
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 const PLATFORM = "windows-x86_64";
 const RUNNER = "windows-2025";
 const INSTALLER_TYPE = "nsis";
 const OLD_MACHINE = "assm1-win-x64-e2b6cbcadd8b";
 const OLD_DISTRIBUTION = "podman-assm1-win-x64-e2b6cbcadd8b";
-const CURRENT_MACHINE = "assm2-win-x64-e2b6cbcadd8b";
-const CURRENT_DISTRIBUTION = "podman-assm2-win-x64-e2b6cbcadd8b";
+const CURRENT_DEFAULT_MACHINE = "assm2-win-x64-e2b6cbcadd8b";
+const ISOLATED_MACHINE_PREFIX = "assm2-iso-";
 const OLD_VERSION_DIRECTORY = "podman-machine-5.8.2-8b2257ace33ecb14";
 const GENERATION_SELECTION_SCHEMA = "ai-security-scanner.managed-wsl-generation-selection/v1";
 const CANDIDATE_RUNTIME_MANIFEST_SHA256 =
@@ -189,7 +189,7 @@ export function validateWindowsNsisUnrelatedVhdPreservation(before, after) {
 
 export function validateWindowsNsisGenerationSelection(selection, identity) {
   exactKeys(selection, [
-    "pathBoundToCandidateManifestGenerationZero",
+    "pathBoundToCandidateManifestAndGeneration",
     "recordPresent",
     "recordProtected",
     "recordBytes",
@@ -200,28 +200,31 @@ export function validateWindowsNsisGenerationSelection(selection, identity) {
     "machineImageSha256",
     "defaultMachineName",
     "selectedMachineName",
+    "selectedMachineDeterministic",
     "generationIndex",
     "preservedCollisionNames",
     "recordPreservedAfterCurrentRuntimePurge",
     "recordPreservedThroughAppOnlyUninstall",
-  ], "generation-zero routing record");
+  ], "isolated-generation routing record");
   for (const field of [
-    "pathBoundToCandidateManifestGenerationZero",
+    "pathBoundToCandidateManifestAndGeneration",
     "recordPresent",
     "recordProtected",
+    "selectedMachineDeterministic",
     "recordPreservedAfterCurrentRuntimePurge",
     "recordPreservedThroughAppOnlyUninstall",
-  ]) yes(selection[field], `generation-zero routing record ${field}`);
+  ]) yes(selection[field], `isolated-generation routing record ${field}`);
   assert(selection.schemaVersion === GENERATION_SELECTION_SCHEMA, "generation selection schema changed");
   assert(selection.authorizesCleanup === false, "generation selection incorrectly grants cleanup authority");
   assert(selection.manifestSha256 === identity.runtimeManifestSha256, "generation selection is not bound to the candidate manifest");
   assert(selection.machineImageSha256 === identity.machineImageSha256, "generation selection is not bound to the candidate image");
-  assert(selection.defaultMachineName === CURRENT_MACHINE, "generation selection default machine is not assm2");
-  assert(selection.selectedMachineName === CURRENT_MACHINE, "generation selection did not select the default assm2 machine");
-  assert(selection.generationIndex === 0, "generation selection did not use generation zero");
+  assert(selection.defaultMachineName === CURRENT_DEFAULT_MACHINE, "generation selection default machine is not assm2");
+  assert(/^assm2-iso-[0-9a-f]{20}$/u.test(selection.selectedMachineName), "generation selection did not select a canonical isolated assm2 machine");
+  assert(selection.selectedMachineName !== selection.defaultMachineName, "generation selection reused the compatibility machine");
+  assert(selection.generationIndex === 1, "generation selection did not use the first isolated generation");
   assert(
     Array.isArray(selection.preservedCollisionNames) && selection.preservedCollisionNames.length === 0,
-    "generation-zero routing record unexpectedly claims a preserved current-generation collision",
+    "isolated-generation routing record unexpectedly claims a preserved current-generation collision",
   );
   bounded(selection.recordBytes, 1, 64 * 1024, "generation selection bytes");
   sha256(selection.recordSha256, "generation selection digest");
@@ -616,10 +619,15 @@ function validateObservations(observations, identity, version) {
     sideBySide.legacyProviderNamespace === PRIOR_GHOST_RELEASE.runtimeManifestSha256.slice(0, 16),
     "legacy provider namespace changed",
   );
-  assert(sideBySide.currentMachineName === CURRENT_MACHINE, "candidate did not use the assm2 epoch");
-  assert(sideBySide.currentDistributionName === CURRENT_DISTRIBUTION, "candidate distribution is not assm2");
+  assert(/^assm2-iso-[0-9a-f]{20}$/u.test(sideBySide.currentMachineName), "candidate did not use a canonical isolated assm2 machine");
+  assert(sideBySide.currentDistributionName === `podman-${sideBySide.currentMachineName}`, "candidate distribution is not bound to its isolated machine");
   assert(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(sideBySide.currentRegistrationId), "current registration ID is not canonical");
-  assert(sideBySide.currentProviderNamespace === identity.providerNamespace, "current provider namespace is not the candidate");
+  const isolatedSuffix = sideBySide.currentMachineName.slice(ISOLATED_MACHINE_PREFIX.length);
+  assert(
+    sideBySide.currentProviderNamespace ===
+      `${identity.runtimeManifestSha256.slice(0, 8)}-iso-${isolatedSuffix.slice(0, 12)}`,
+    "current provider namespace is not bound to the selected isolated generation",
+  );
   assert(sideBySide.unrelatedDistributionName === fixture.unrelatedDistributionName, "unrelated distribution identity changed");
   assert(sideBySide.unrelatedRegistrationIdBefore === fixture.unrelatedRegistrationId, "unrelated registration does not match fixture");
   assert(sideBySide.unrelatedRegistrationIdAfter === sideBySide.unrelatedRegistrationIdBefore, "unrelated registration GUID changed");
