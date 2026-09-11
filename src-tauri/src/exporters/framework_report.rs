@@ -11,7 +11,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const MASTER_FRAMEWORK_REPORT_SCHEMA_VERSION: &str = "1.3.0";
+pub const MASTER_FRAMEWORK_REPORT_SCHEMA_VERSION: &str = "1.4.0";
 pub const MASTER_FRAMEWORK_REPORT_NOTICE: &str = "This report groups preliminary scanner observations by related framework coordinate. It is not an audit, certification, attestation, compliance determination, implementation assessment, score, pass, or fail. Missing relationships are unknown whenever coverage is incomplete. The legacy knowledge_date is only a run-level compatibility timestamp; engine, rule, feed, database, and mapping freshness come from their own technical records.";
 
 const FRAMEWORKS: [(&str, &str); 3] = [
@@ -68,6 +68,11 @@ pub struct FrameworkCoverageSummary {
     pub selected_run_snapshot_count: usize,
     pub selected_run_missing_snapshot_count: usize,
     pub selected_run_observations_without_evidence_count: usize,
+    /// How many of the run's findings the packaged mapping catalog could
+    /// place, and how many it could not. Without the second number an absent
+    /// coordinate reads as an assertion that no control relates.
+    pub selected_run_findings_with_framework_relationship: usize,
+    pub selected_run_findings_without_framework_relationship: usize,
     pub engine_states: BTreeMap<String, usize>,
     pub selected_run_coverage_states: BTreeMap<String, usize>,
     pub limitations: Vec<String>,
@@ -198,6 +203,17 @@ enum AidefendApplicability {
     Unknown,
 }
 
+/// What the observation walk counted, handed to the coverage summary so it
+/// reports the run the export actually produced rather than recounting it.
+#[derive(Debug, Clone, Copy, Default)]
+struct ObservationCounts {
+    findings: usize,
+    snapshots: usize,
+    missing_snapshots: usize,
+    without_evidence: usize,
+    findings_with_relationship: usize,
+}
+
 #[derive(Debug, Clone)]
 struct ValidatedObservationEvidence {
     state: &'static str,
@@ -241,6 +257,7 @@ pub fn export_master_framework_report(
     let mut selected_run_snapshot_count = 0_usize;
     let mut selected_run_missing_snapshot_count = 0_usize;
     let mut selected_run_observations_without_evidence_count = 0_usize;
+    let mut findings_with_relationship = BTreeSet::<String>::new();
     let aidefend_applicability = aidefend_applicability(run);
     for observation in &observations {
         let Some(finding) = observation.finding_snapshot.as_ref() else {
@@ -276,6 +293,13 @@ pub fn export_master_framework_report(
             evidence_reference_state: validated_evidence.state.into(),
             framework_mapping_state: if validated_evidence.bindings.is_empty() {
                 "not_exported_without_exact_evidence"
+            } else if finding.control_references.is_empty() {
+                // The snapshot is complete and its evidence is exact. The
+                // packaged catalog simply carries no entry for the rule that
+                // produced this finding, and saying relationships were used
+                // would read as "this finding relates to no control" -- a
+                // claim about the frameworks that this product never made.
+                "no_packaged_catalog_relationship"
             } else {
                 "run_snapshot_relationships_used"
             }
@@ -308,6 +332,7 @@ pub fn export_master_framework_report(
                     reference.control_id
                 )));
             }
+            findings_with_relationship.insert(finding.id.clone());
             let coordinate = control_coordinate(reference);
             let relationship = relationship_from_reference(
                 reference,
@@ -364,10 +389,13 @@ pub fn export_master_framework_report(
     let coverage = coverage_summary(
         case,
         run_id,
-        selected_run_finding_count,
-        selected_run_snapshot_count,
-        selected_run_missing_snapshot_count,
-        selected_run_observations_without_evidence_count,
+        ObservationCounts {
+            findings: selected_run_finding_count,
+            snapshots: selected_run_snapshot_count,
+            missing_snapshots: selected_run_missing_snapshot_count,
+            without_evidence: selected_run_observations_without_evidence_count,
+            findings_with_relationship: findings_with_relationship.len(),
+        },
     );
     let frameworks = FRAMEWORKS
         .into_iter()
@@ -671,11 +699,17 @@ fn normalized_evidence_hash(value: &str) -> AppResult<String> {
 fn coverage_summary(
     case: &AssessmentCase,
     run_id: &str,
-    selected_run_finding_count: usize,
-    selected_run_snapshot_count: usize,
-    selected_run_missing_snapshot_count: usize,
-    selected_run_observations_without_evidence_count: usize,
+    counts: ObservationCounts,
 ) -> FrameworkCoverageSummary {
+    let ObservationCounts {
+        findings: selected_run_finding_count,
+        snapshots: selected_run_snapshot_count,
+        missing_snapshots: selected_run_missing_snapshot_count,
+        without_evidence: selected_run_observations_without_evidence_count,
+        findings_with_relationship: selected_run_findings_with_framework_relationship,
+    } = counts;
+    let selected_run_findings_without_framework_relationship = selected_run_finding_count
+        .saturating_sub(selected_run_findings_with_framework_relationship);
     let run = case
         .scan_runs
         .iter()
@@ -868,6 +902,11 @@ fn coverage_summary(
             "{excluded_unbound_coverage_entry_count} coverage-ledger {noun} {verb} no run ID and {excluded_verb} excluded from selected-run coverage states, counts, and completeness."
         ));
     }
+    if selected_run_findings_without_framework_relationship > 0 {
+        limitations.push(format!(
+            "{selected_run_findings_without_framework_relationship} of {selected_run_finding_count} selected-run finding(s) carry no relationship in the packaged mapping catalog. Their framework position is unknown, not absent."
+        ));
+    }
     limitations.push(
         "No related finding or framework coordinate is interpreted as a passed control or a complete environment.".into(),
     );
@@ -900,6 +939,8 @@ fn coverage_summary(
         selected_run_snapshot_count,
         selected_run_missing_snapshot_count,
         selected_run_observations_without_evidence_count,
+        selected_run_findings_with_framework_relationship,
+        selected_run_findings_without_framework_relationship,
         engine_states,
         selected_run_coverage_states,
         limitations,
@@ -1682,6 +1723,110 @@ mod tests {
             finding_snapshot: Some(finding),
         });
         case
+    }
+
+    /// A second finding on the same run whose rule the packaged catalog does
+    /// not carry. Everything about it is complete -- immutable snapshot, exact
+    /// evidence, terminal run -- so nothing else in the export flags it.
+    fn add_unmapped_finding(case: &mut AssessmentCase) {
+        let source = case.finding_observations[0]
+            .finding_snapshot
+            .clone()
+            .expect("the fixture observation carries its snapshot");
+        let mut finding = source.clone();
+        finding.id = "finding-2".into();
+        finding.fingerprint = "fp-2".into();
+        finding.title = "A rule the catalog does not carry".into();
+        finding.control_references.clear();
+        for evidence in &mut finding.evidence {
+            evidence.finding_id = finding.id.clone();
+            bind_current_evidence_identity(
+                evidence,
+                &finding.fingerprint,
+                "ai-security-scanner.python.rule-no-catalog-entry",
+                "/result/1",
+            );
+        }
+        let observation = FindingObservation {
+            id: "observation-2".into(),
+            finding_id: finding.id.clone(),
+            fingerprint: finding.fingerprint.clone(),
+            finding_snapshot: Some(finding.clone()),
+            ..case.finding_observations[0].clone()
+        };
+        case.findings.push(finding);
+        case.finding_observations.push(observation);
+    }
+
+    #[test]
+    fn a_finding_the_catalog_cannot_place_is_counted_and_said_so() {
+        let mut case = fixture();
+        add_unmapped_finding(&mut case);
+        let report = export_master_framework_report(&case, "run-1").unwrap();
+
+        // The provenance ledger has to separate the two. Before it did, an
+        // unmapped finding claimed "run_snapshot_relationships_used" -- the
+        // same words as a finding that carried three coordinates.
+        let states = report
+            .observation_provenance
+            .iter()
+            .map(|entry| {
+                (
+                    entry.finding_id.as_str(),
+                    entry.framework_mapping_state.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            states,
+            [
+                ("finding-1", "run_snapshot_relationships_used"),
+                ("finding-2", "no_packaged_catalog_relationship"),
+            ]
+        );
+
+        assert_eq!(report.coverage.selected_run_finding_count, 2);
+        assert_eq!(
+            report
+                .coverage
+                .selected_run_findings_with_framework_relationship,
+            1
+        );
+        assert_eq!(
+            report
+                .coverage
+                .selected_run_findings_without_framework_relationship,
+            1
+        );
+        // And the reader of the summary alone is told, without walking the
+        // per-observation ledger.
+        assert!(
+            report.coverage.limitations.iter().any(|limitation| limitation
+                == "1 of 2 selected-run finding(s) carry no relationship in the packaged mapping catalog. Their framework position is unknown, not absent."),
+            "{:#?}",
+            report.coverage.limitations
+        );
+    }
+
+    #[test]
+    fn a_fully_mapped_run_claims_no_mapping_limitation() {
+        let report = export_master_framework_report(&fixture(), "run-1").unwrap();
+
+        assert_eq!(
+            report
+                .coverage
+                .selected_run_findings_without_framework_relationship,
+            0
+        );
+        assert!(
+            !report
+                .coverage
+                .limitations
+                .iter()
+                .any(|limitation| limitation.contains("packaged mapping catalog")),
+            "{:#?}",
+            report.coverage.limitations
+        );
     }
 
     #[test]

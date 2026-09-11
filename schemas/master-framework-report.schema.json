@@ -22,7 +22,7 @@
     "unrecognized_relationships"
   ],
   "properties": {
-    "schema_version": { "const": "1.3.0" },
+    "schema_version": { "const": "1.4.0" },
     "product_name": { "const": "ai-security-scanner" },
     "product_version": { "type": "string", "minLength": 1 },
     "export_kind": {
@@ -129,6 +129,8 @@
         "selected_run_snapshot_count",
         "selected_run_missing_snapshot_count",
         "selected_run_observations_without_evidence_count",
+        "selected_run_findings_with_framework_relationship",
+        "selected_run_findings_without_framework_relationship",
         "engine_states",
         "selected_run_coverage_states",
         "limitations"
@@ -136,7 +138,7 @@
       "properties": {
         "state": {
           "const": "incomplete_or_unknown",
-          "$comment": "Version 1.3 cannot establish exact requested-versus-executed host, address, port, protocol, path, stage, and task coverage from this engine/asset ledger. Historical v1.2 documents retain their own schema; current producers and documents MUST NOT claim the retired no-known-gap state."
+          "$comment": "Version 1.3 and later cannot establish exact requested-versus-executed host, address, port, protocol, path, stage, and task coverage from this engine/asset ledger. Historical v1.2 documents retain their own schema; current producers and documents MUST NOT claim the retired no-known-gap state."
         },
         "selected_run_coverage_ledger_basis": { "const": "selected_run_entries_matching_frozen_planned_assets" },
         "selected_run_checks_complete": { "type": "boolean" },
@@ -160,6 +162,14 @@
         "selected_run_snapshot_count": { "$ref": "#/$defs/nonNegativeInteger" },
         "selected_run_missing_snapshot_count": { "$ref": "#/$defs/nonNegativeInteger" },
         "selected_run_observations_without_evidence_count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "selected_run_findings_with_framework_relationship": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "$comment": "How many selected-run findings the packaged mapping catalog could place."
+        },
+        "selected_run_findings_without_framework_relationship": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "$comment": "How many it could not. A finding counted here has no coordinate in any family; its framework position is unknown, not absent. Consumers MUST NOT read an absent coordinate as an assertion that no control relates."
+        },
         "engine_states": { "$ref": "#/$defs/countMap" },
         "selected_run_coverage_states": { "$ref": "#/$defs/countMap" },
         "limitations": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
@@ -348,7 +358,10 @@
         "fingerprint": { "type": "string", "minLength": 1 },
         "snapshot_state": { "enum": ["run_snapshot", "legacy_run_snapshot_missing"] },
         "evidence_reference_state": { "enum": ["missing", "validated_from_observation_only", "validated_from_run_snapshot"] },
-        "framework_mapping_state": { "enum": ["run_snapshot_relationships_used", "not_exported_without_exact_evidence", "not_exported_without_run_snapshot"] }
+        "framework_mapping_state": {
+          "enum": ["run_snapshot_relationships_used", "no_packaged_catalog_relationship", "not_exported_without_exact_evidence", "not_exported_without_run_snapshot"],
+          "$comment": "Version 1.4 separates no_packaged_catalog_relationship -- a complete, exactly evidenced snapshot the catalog carries no entry for -- from run_snapshot_relationships_used. Version 1.3 documents reported both as the latter."
+        }
       }
     },
     "unrecognizedRelationship": {

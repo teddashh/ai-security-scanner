@@ -1381,6 +1381,11 @@ struct AidefendView {
     reached: BTreeMap<String, BTreeSet<String>>,
     finding_titles: Vec<String>,
     html: String,
+    /// The framework export's own account of how much of the run it placed.
+    mapped: usize,
+    unmapped: usize,
+    limitations: Vec<String>,
+    mapping_states: BTreeMap<String, usize>,
 }
 
 /// Runs the whole 21-engine batch under one set of case answers and reads back
@@ -1459,8 +1464,32 @@ fn aidefend_view(
                 }
             }
         }
+        let mut mapping_states = BTreeMap::<String, usize>::new();
+        for entry in framework["observation_provenance"].as_array().unwrap() {
+            *mapping_states
+                .entry(
+                    entry["framework_mapping_state"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                )
+                .or_default() += 1;
+        }
         AidefendView {
             state: family["state"].as_str().unwrap().to_owned(),
+            mapped: framework["coverage"]["selected_run_findings_with_framework_relationship"]
+                .as_u64()
+                .unwrap() as usize,
+            unmapped: framework["coverage"]["selected_run_findings_without_framework_relationship"]
+                .as_u64()
+                .unwrap() as usize,
+            limitations: framework["coverage"]["limitations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|limitation| limitation.as_str().unwrap().to_owned())
+                .collect(),
+            mapping_states,
             reached,
             finding_titles: subject
                 .report
@@ -1541,6 +1570,32 @@ fn the_ai_framework_follows_the_case_answers_and_nothing_else() {
         no_artifact.reached.keys().collect::<Vec<_>>(),
         ["AID-H-003.001", "AID-H-003.010", "AID-I-001.001"]
     );
+
+    // What the catalog could not place, said out loud. The packaged catalog
+    // carries one representative rule per engine, so most of a 45-finding run
+    // lands outside it -- and an absent coordinate has to read as unknown,
+    // not as "no control relates to this".
+    for view in [&withheld, &declared, &no_artifact] {
+        assert_eq!(view.mapped + view.unmapped, 45);
+        assert_eq!(
+            view.mapping_states.get("no_packaged_catalog_relationship"),
+            Some(&view.unmapped),
+            "every unplaced finding says so in the provenance ledger"
+        );
+        assert!(
+            view.limitations.iter().any(|limitation| *limitation
+                == format!(
+                    "{} of 45 selected-run finding(s) carry no relationship in the packaged mapping catalog. Their framework position is unknown, not absent.",
+                    view.unmapped
+                )),
+            "{:#?}",
+            view.limitations
+        );
+    }
+    // Declaring an AI system adds coordinates to findings the catalog had
+    // already placed, so it moves no finding across the line.
+    assert_eq!((withheld.mapped, withheld.unmapped), (19, 26));
+    assert_eq!((declared.mapped, declared.unmapped), (19, 26));
 
     // None of this is detection. The same 21 checks found the same problems
     // in all three runs; only the coordinates the report may name changed.
