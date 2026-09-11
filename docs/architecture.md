@@ -90,25 +90,33 @@ Every third-party engine executes out of process through an adapter. It receives
 
 ## 4. Repository boundaries
 
-The repository preserves these logical boundaries across workspace crates and modules:
+The repository preserves these logical boundaries. They are boundaries, not
+directories: the Rust side is a single workspace member, `src-tauri`, and each
+boundary below names the module that owns it. A boundary may move to its own
+crate later; crossing one without going through its module is the thing this
+section forbids either way.
 
 ```text
 src/                         React application
-src-tauri/                   Rust desktop backend and typed IPC
-crates/case-domain/          domain types and state transitions
-crates/case-store/           SQLite and evidence blob storage
-crates/credential-service/   capability handles and provider auth
-crates/bootstrap-broker/     isolated administrative bootstrap binary
-crates/engine-registry/      manifests, compatibility, and license metadata
-crates/orchestrator/         durable engine job state machine
-crates/runtime/              managed, Docker, and Podman providers
-crates/adapters/             adapter protocol and built-in adapters
-crates/normalization/        canonical model and exporters
-crates/case-export/          package, redaction, hash, and verification
+src-tauri/                   Rust backend and typed IPC (the only workspace member)
 engines/                     declarative manifests and adapter fixtures
 mappings/                    versioned NIST/ISO/AIDEFEND relationships
+bootstrap/                   read-only provider bootstrap templates
 .codex/skills/, .claude/skills/  Codex/Claude setup and operations guidance
 ```
+
+| Boundary | Owning module |
+| --- | --- |
+| domain types and state transitions | `src-tauri/src/domain.rs`, `case_service.rs` |
+| SQLite and evidence blob storage | `src-tauri/src/storage.rs`, `artifact_store.rs` |
+| capability handles and provider auth | `src-tauri/src/credential_vault.rs`, `source_authorization/` |
+| isolated administrative bootstrap binary | `src-tauri/src/bin/bootstrap_broker.rs`, `bootstrap/executor.rs` |
+| manifests, compatibility, and license metadata | `src-tauri/src/registry.rs` |
+| durable engine job state machine | `src-tauri/src/orchestrator.rs`, `job_manager.rs` |
+| managed, Docker, and Podman providers | `src-tauri/src/runtime.rs`, `container_runtime.rs`, `managed_runtime.rs` |
+| adapter protocol and built-in adapters | `src-tauri/src/adapter.rs`, `adapters/` |
+| canonical model and exporters | `src-tauri/src/beginner_report.rs`, `finding_narrative.rs`, `prioritization.rs`, `correlation.rs`, `exporters/` |
+| package, redaction, hash, and verification | `src-tauri/src/export.rs`, `export_identity.rs` |
 
 Third-party source checkouts used for research are not runtime imports and must not be compiled into the application merely because they exist in the workspace.
 
@@ -554,7 +562,7 @@ coverage (an internal engine execution may retain `not_executed` as its
 technical state). Naming engines is an Advanced override, not a prerequisite
 for ordinary use and never applies an engine to every asset by default.
 
-The durable orchestrator schedules independent target-stage-engine jobs with resource limits. Applicable security checks do not wait for unrelated inventory. Discovery and inventory may update target preparation and coverage first, but only a completed security, vulnerability, secret, dependency, configuration, or reviewed exposure check becomes a security result or supports a no-findings statement. The report opens on its first durable security-relevant result and continues updating as sibling checks finish. Checkpoints are persisted after state changes and bounded result batches. Completed ports, hosts, pages, repositories, or batches survive failure of later siblings, and Retry selects only unfinished work by default.
+The durable orchestrator schedules independent target-stage-engine jobs with resource limits. Applicable security checks do not wait for unrelated inventory. Discovery and inventory may update target preparation and coverage first, but only a completed security, vulnerability, secret, dependency, configuration, or reviewed exposure check becomes a security result or supports a no-findings statement. Active work stays in Progress; the report is produced from a terminal run and is not opened or updated while checks are still running. Checkpoints are persisted after state changes and bounded result batches. Completed ports, hosts, pages, repositories, or batches survive failure of later siblings, and Retry selects only unfinished work by default.
 
 Every checkpoint that can leave a container or managed egress resource behind also persists a typed, non-secret runtime record sufficient for exact cleanup and historical explanation. Compatibility providers record their exact provider; the managed-local provider records the verified runtime generation and artifact identities actually used. Recovery first reconciles the exact product-owned container/network identity. If that exact generation is unavailable, historical results remain readable and the product may create a new attempt on a current verified generation. It never selects or deletes a runtime by a resource-name prefix or whichever executable happens to be on `PATH`, and it never makes byte-identical historical runtime recovery a prerequisite for a current attempt.
 
