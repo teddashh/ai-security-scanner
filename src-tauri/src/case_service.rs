@@ -15435,13 +15435,18 @@ fn html_report_bytes(
         );
         findings.push_str(&format!(
             concat!(
-                "<article><h3>{}</h3>",
+                // The asset belongs in the heading, not four items into the
+                // identifier line below it. On a mixed run two scanners find
+                // the same CVE on a repository and on the image built from it,
+                // and the two cards are titled identically; with the asset
+                // buried, adjacent cards read as the report printing one
+                // problem twice.
+                "<article><h3>{} <span class=\"finding-asset\">— {}</span></h3>",
                 "<p><span class=\"pill\">{}: {}</span> ",
                 "<span class=\"pill\">{}: {}</span> ",
                 "<span class=\"pill\">{}: {}</span> {} #{}</p>",
                 "<p><strong>{}:</strong> {} · ",
-                "<strong>{}:</strong> <code>{}</code> · ",
-                "<strong>{}:</strong> {}</p>",
+                "<strong>{}:</strong> <code>{}</code></p>",
                 "<p>{}</p><h4>{}</h4><p>{}</p>",
                 "<h4>{}</h4><ul>{}</ul>",
                 "<h4>{}</h4><p>{}</p>",
@@ -15452,6 +15457,7 @@ fn html_report_bytes(
                 "<h4>{}</h4><ul>{}</ul></details></article>"
             ),
             html_escape(&finding.title),
+            targets,
             catalog.text("Severity", "嚴重程度"),
             html_escape(&catalog.identifier(&enum_key(&finding.severity))),
             catalog.text("Confidence", "信心程度"),
@@ -15464,8 +15470,6 @@ fn html_report_bytes(
             html_escape(catalog.finding_source(&finding.snapshot_source)),
             catalog.text("Finding ID", "問題 ID"),
             html_escape(&finding.finding_id),
-            catalog.text("Targets", "目標"),
-            targets,
             html_escape(&plain_language_risk),
             catalog.text("Possible impact", "可能影響"),
             html_escape(&possible_impact),
@@ -15902,6 +15906,7 @@ fn html_report_bytes(
         ".asset-result--problems-found{border-left-color:#b42318}.asset-result--no-problems-completed{border-left-color:#027a48}",
         ".asset-result--incomplete-failed{border-left-color:#b54708}.asset-result--not-tested{border-left-color:#475467}",
         "details.technical{margin-top:2rem;border-top:1px solid #ccd1d1;padding-top:1rem}",
+        ".finding-asset{font-weight:400;color:#4b5563}",
         "details.finding-technical{margin-top:1rem;padding-top:0.5rem}",
         "details.finding-technical>summary{cursor:pointer;color:#4b5563}",
         "@media(max-width:760px){body{padding:1rem}.report-grid,.asset-result{grid-template-columns:1fr}table{display:block;overflow-x:auto}}",

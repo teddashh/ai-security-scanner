@@ -1121,6 +1121,47 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
         cards,
         "every card keeps its evidence and framework provenance collapsed"
     );
+    // Two scanners find the same CVE on the repository and on the image built
+    // from it. The cards are titled identically by upstream, so with the asset
+    // four items into the identifier line the reader sees the same heading
+    // twice in a row and reads it as the report duplicating one problem.
+    let headings = problems
+        .match_indices("<h3>")
+        .map(|(at, _)| {
+            let rest = &problems[at + "<h3>".len()..];
+            rest[..rest.find("</h3>").expect("heading end")].to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(headings.len(), cards);
+    let mut unique = headings.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        headings.len(),
+        "no two problems are titled the same: {headings:#?}"
+    );
+    for (heading, finding) in headings.iter().zip(&report.findings) {
+        assert!(
+            heading.contains("<span class=\"finding-asset\">"),
+            "every heading names the asset it is on: {heading}"
+        );
+        let (title, asset) = heading
+            .split_once(" <span class=\"finding-asset\">")
+            .expect("heading end");
+        assert_eq!(
+            title
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&#39;", "'"),
+            finding.title,
+            "the upstream title still leads, unchanged"
+        );
+        assert!(asset.starts_with("— "), "{asset}");
+    }
+
     let first_card = &problems[problems.find("<article>").expect("a card")..];
     let first_card = &first_card[..first_card.find("</article>").expect("card end")];
     let collapsed_at = first_card
