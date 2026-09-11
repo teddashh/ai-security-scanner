@@ -1,7 +1,9 @@
+use ai_security_scanner_lib::adapter::AdapterRegistry;
 use ai_security_scanner_lib::adapters::{BUILTIN_ENGINE_IDS, builtin_adapter_registry};
 use ai_security_scanner_lib::artifact_store::ArtifactStore;
 use ai_security_scanner_lib::beginner_report::{
-    BeginnerInventoryItemKind, CoverageDimensionStatus, build_beginner_master_report,
+    BeginnerInventoryItemKind, BeginnerMasterReport, CoverageDimensionStatus,
+    build_beginner_master_report,
 };
 use ai_security_scanner_lib::case_service::{
     CaseExportFormat, CaseService, DurableExecutionReport, EngineAssetRoute,
@@ -17,8 +19,8 @@ use ai_security_scanner_lib::container_runtime::{
 };
 use ai_security_scanner_lib::discovery::run_connector;
 use ai_security_scanner_lib::domain::{
-    AiGeneratedArtifactAnswer, AssessmentActivity, AssessmentIntent, AssetKind, CreateCaseRequest,
-    DataClass, DeclaredAssetInput, DeclaredAssetKind, DeclaredHostScanInput,
+    AiGeneratedArtifactAnswer, AssessmentActivity, AssessmentCase, AssessmentIntent, AssetKind,
+    CreateCaseRequest, DataClass, DeclaredAssetInput, DeclaredAssetKind, DeclaredHostScanInput,
     DeclaredHostScanProfile, DeclaredNetworkProtocol, DeclaredWebProtocol, DeclaredWebServiceInput,
     EngineRunStatus, ScanPermission, SourceConnectionStatus, SourceKind,
 };
@@ -356,8 +358,35 @@ fn execute(
         .unwrap()
 }
 
-#[test]
-fn every_integrated_engine_lands_in_one_terminal_report() {
+/// One finished all-engine run, handed to the audit body by reference so the
+/// service and the temporary tree it writes into outlive every check.
+struct AllEngineRun<'a> {
+    engines: &'a EngineRegistry,
+    adapters: &'a AdapterRegistry,
+    database: &'a Path,
+    artifact_root: &'a Path,
+    signing_key: &'a Path,
+    case_id: &'a str,
+    scan_run_id: &'a str,
+    completed: AssessmentCase,
+    report: BeginnerMasterReport,
+}
+
+/// Runs every integrated engine once against one fixture case and hands the
+/// terminal report to `audit`.
+///
+/// The two case answers are parameters because they are the only inputs that
+/// decide which framework families a report may reference: AIDEFEND
+/// coordinates are withheld unless the case declares an AI system, and its
+/// static-admission coordinate unless the case also declares an AI-generated
+/// artifact. Everything else -- assets, grants, routes, fixture bytes and the
+/// per-engine outcomes -- is identical between runs, so a difference between
+/// two reports is a difference the answers caused.
+fn all_engines_in_one_report<T>(
+    intent: AssessmentIntent,
+    ai_generated: AiGeneratedArtifactAnswer,
+    audit: impl FnOnce(&AllEngineRun<'_>) -> T,
+) -> T {
     let temp = tempfile::tempdir().unwrap();
     let database = temp.path().join("casework.db");
     let artifact_root = temp.path().join("artifacts");
@@ -369,11 +398,11 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
     let service = CaseService::new(&storage, &engines, &adapters, &artifact_root, &signing_key);
     let case = service
         .create_case(&CreateCaseRequest {
-            title: "All 21 engines, one report".into(),
+            title: format!("All 21 engines, one report ({intent:?})"),
             organization_name: "Fixture organization".into(),
             employee_range: "1-10".into(),
-            assessment_intent: Some(AssessmentIntent::InternalItEnvironment),
-            ai_generated_artifact: AiGeneratedArtifactAnswer::No,
+            assessment_intent: Some(intent),
+            ai_generated_artifact: ai_generated,
             data_classes: vec![DataClass::CredentialsAndSecrets],
             requested_activities: vec![AssessmentActivity::ActiveExternalVulnerabilityTests],
             source_kinds: vec![],
@@ -802,509 +831,720 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
 
     let completed = service.show_case(&case.id).unwrap();
     let report = build_beginner_master_report(&completed, &plan.scan_run.id).unwrap();
-    assert_eq!(
-        report
-            .actual
-            .checks
-            .iter()
-            .map(|check| check.check_id.as_str())
-            .collect::<BTreeSet<_>>(),
-        BUILTIN_ENGINE_IDS.iter().copied().collect()
-    );
-    assert_eq!(
-        report
-            .requested
-            .targets
-            .iter()
-            .map(|target| &target.asset_id)
-            .collect::<BTreeSet<_>>()
-            .len(),
-        completed.assets.len()
-    );
-    for (engine, status) in [
-        ("nuclei", CoverageDimensionStatus::TestedPartial),
-        ("semgrep", CoverageDimensionStatus::TestedComplete),
-        ("checkov", CoverageDimensionStatus::Failed),
-        ("kics", CoverageDimensionStatus::TimedOut),
-        ("trufflehog", CoverageDimensionStatus::Cancelled),
-    ] {
-        assert_eq!(
-            report
-                .actual
-                .checks
+    audit(&AllEngineRun {
+        engines: &engines,
+        adapters: &adapters,
+        database: &database,
+        artifact_root: &artifact_root,
+        signing_key: &signing_key,
+        case_id: &case.id,
+        scan_run_id: &plan.scan_run.id,
+        completed,
+        report,
+    })
+}
+
+#[test]
+fn every_integrated_engine_lands_in_one_terminal_report() {
+    all_engines_in_one_report(
+        AssessmentIntent::InternalItEnvironment,
+        AiGeneratedArtifactAnswer::No,
+        |subject| {
+            let &AllEngineRun {
+                engines,
+                adapters,
+                database,
+                artifact_root,
+                signing_key,
+                case_id,
+                scan_run_id,
+                ..
+            } = subject;
+            let (completed, report) = (&subject.completed, &subject.report);
+            assert_eq!(
+                report
+                    .actual
+                    .checks
+                    .iter()
+                    .map(|check| check.check_id.as_str())
+                    .collect::<BTreeSet<_>>(),
+                BUILTIN_ENGINE_IDS.iter().copied().collect()
+            );
+            assert_eq!(
+                report
+                    .requested
+                    .targets
+                    .iter()
+                    .map(|target| &target.asset_id)
+                    .collect::<BTreeSet<_>>()
+                    .len(),
+                completed.assets.len()
+            );
+            for (engine, status) in [
+                ("nuclei", CoverageDimensionStatus::TestedPartial),
+                ("semgrep", CoverageDimensionStatus::TestedComplete),
+                ("checkov", CoverageDimensionStatus::Failed),
+                ("kics", CoverageDimensionStatus::TimedOut),
+                ("trufflehog", CoverageDimensionStatus::Cancelled),
+            ] {
+                assert_eq!(
+                    report
+                        .actual
+                        .checks
+                        .iter()
+                        .find(|check| check.check_id == engine)
+                        .unwrap()
+                        .status,
+                    status
+                );
+            }
+            let inventory = ["syft", "cloudquery", "steampipe", "naabu", "httpx"];
+            assert!(
+                completed
+                    .findings
+                    .iter()
+                    .flat_map(|finding| &finding.evidence)
+                    .all(|evidence| !inventory.contains(&evidence.engine_id.as_str()))
+            );
+            assert!(report.inventory.items.iter().any(|item| matches!(
+                item.details,
+                BeginnerInventoryItemKind::SoftwareComponent { .. }
+            )));
+            assert!(
+                report
+                    .actual
+                    .checks
+                    .iter()
+                    .any(|check| check.check_id == "gitleaks"
+                        && check.status == CoverageDimensionStatus::TestedComplete)
+            );
+            assert!(
+                report
+                    .actual
+                    .checks
+                    .iter()
+                    .any(|check| check.check_id == "trivy"
+                        && check.status == CoverageDimensionStatus::TestedComplete)
+            );
+            assert!(
+                completed
+                    .scan_runs
+                    .iter()
+                    .find(|run| run.id == scan_run_id)
+                    .unwrap()
+                    .engine_runs
+                    .iter()
+                    .any(|run| run.status == EngineRunStatus::Completed)
+            );
+
+            // One instruction is listed once, however many findings name it. Every
+            // finding still reaches the reader through exactly one step: nothing is
+            // dropped by the merge, and nothing is counted twice.
+            let mut step_findings = report
+                .next_steps
                 .iter()
-                .find(|check| check.check_id == engine)
-                .unwrap()
-                .status,
-            status
-        );
-    }
-    let inventory = ["syft", "cloudquery", "steampipe", "naabu", "httpx"];
-    assert!(
-        completed
-            .findings
-            .iter()
-            .flat_map(|finding| &finding.evidence)
-            .all(|evidence| !inventory.contains(&evidence.engine_id.as_str()))
-    );
-    assert!(report.inventory.items.iter().any(|item| matches!(
-        item.details,
-        BeginnerInventoryItemKind::SoftwareComponent { .. }
-    )));
-    assert!(
-        report
-            .actual
-            .checks
-            .iter()
-            .any(|check| check.check_id == "gitleaks"
-                && check.status == CoverageDimensionStatus::TestedComplete)
-    );
-    assert!(
-        report
-            .actual
-            .checks
-            .iter()
-            .any(|check| check.check_id == "trivy"
-                && check.status == CoverageDimensionStatus::TestedComplete)
-    );
-    assert!(
-        completed
-            .scan_runs
-            .iter()
-            .find(|run| run.id == plan.scan_run.id)
-            .unwrap()
-            .engine_runs
-            .iter()
-            .any(|run| run.status == EngineRunStatus::Completed)
-    );
+                .filter_map(|step| step.finding_id.clone().map(|lead| (lead, step)))
+                .flat_map(|(lead, step)| {
+                    std::iter::once(lead).chain(step.also_resolves.iter().cloned())
+                })
+                .collect::<Vec<_>>();
+            let listed = step_findings.len();
+            step_findings.sort();
+            step_findings.dedup();
+            assert_eq!(
+                listed,
+                step_findings.len(),
+                "a finding must be named by exactly one next step"
+            );
+            let mut actionable = report
+                .findings
+                .iter()
+                .filter(|finding| {
+                    !finding
+                        .severity_basis_code
+                        .is_some_and(|code| code.is_exposure_observation())
+                })
+                .map(|finding| finding.finding_id.clone())
+                .collect::<Vec<_>>();
+            actionable.sort();
+            assert_eq!(
+                step_findings, actionable,
+                "every actionable finding reaches the reader through a next step"
+            );
+            let repeated = report
+                .next_steps
+                .iter()
+                .filter(|step| !step.also_resolves.is_empty())
+                .count();
+            assert!(
+                repeated > 0,
+                "this run has findings that share a fix; the merge must be exercised"
+            );
+            assert!(
+                report.next_steps.len() < actionable.len(),
+                "{} steps for {} findings is the findings list printed twice",
+                report.next_steps.len(),
+                actionable.len()
+            );
 
-    // One instruction is listed once, however many findings name it. Every
-    // finding still reaches the reader through exactly one step: nothing is
-    // dropped by the merge, and nothing is counted twice.
-    let mut step_findings = report
-        .next_steps
-        .iter()
-        .filter_map(|step| step.finding_id.clone().map(|lead| (lead, step)))
-        .flat_map(|(lead, step)| std::iter::once(lead).chain(step.also_resolves.iter().cloned()))
-        .collect::<Vec<_>>();
-    let listed = step_findings.len();
-    step_findings.sort();
-    step_findings.dedup();
-    assert_eq!(
-        listed,
-        step_findings.len(),
-        "a finding must be named by exactly one next step"
-    );
-    let mut actionable = report
-        .findings
-        .iter()
-        .filter(|finding| {
-            !finding
-                .severity_basis_code
-                .is_some_and(|code| code.is_exposure_observation())
-        })
-        .map(|finding| finding.finding_id.clone())
-        .collect::<Vec<_>>();
-    actionable.sort();
-    assert_eq!(
-        step_findings, actionable,
-        "every actionable finding reaches the reader through a next step"
-    );
-    let repeated = report
-        .next_steps
-        .iter()
-        .filter(|step| !step.also_resolves.is_empty())
-        .count();
-    assert!(
-        repeated > 0,
-        "this run has findings that share a fix; the merge must be exercised"
-    );
-    assert!(
-        report.next_steps.len() < actionable.len(),
-        "{} steps for {} findings is the findings list printed twice",
-        report.next_steps.len(),
-        actionable.len()
-    );
-
-    // Two findings whose stored instruction is the same string are still two
-    // instructions when the reader is sent to a different specialist, and a
-    // Cloudsplaining step is composed from its typed policy record rather than
-    // from that string at all. Merging on the stored text alone would collapse
-    // both of these into one wrong sentence.
-    let same_text_different_expert = report
-        .next_steps
-        .iter()
-        .filter(|step| {
-            step.action
-                == "Document why this service must remain reachable, or remove or restrict the exposure."
-        })
-        .map(|step| step.recommended_expert_type.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        same_text_different_expert,
-        [
-            Some("Vulnerability manager".to_string()),
-            Some("Application security engineer".to_string()),
-        ],
-        "one stored sentence, two experts, two steps"
-    );
-    let iam_policies = [
-        "IAMFullAccess",
-        "InlinePolicyForAdminGroup",
-        "InsecurePolicy",
-    ];
-    for policy in iam_policies {
-        let named = report
+            // Two findings whose stored instruction is the same string are still two
+            // instructions when the reader is sent to a different specialist, and a
+            // Cloudsplaining step is composed from its typed policy record rather than
+            // from that string at all. Merging on the stored text alone would collapse
+            // both of these into one wrong sentence.
+            let same_text_different_expert = report
             .next_steps
             .iter()
-            .filter(|step| step.action.contains(policy))
+            .filter(|step| {
+                step.action
+                    == "Document why this service must remain reachable, or remove or restrict the exposure."
+            })
+            .map(|step| step.recommended_expert_type.clone())
             .collect::<Vec<_>>();
-        assert_eq!(
-            named.len(),
-            1,
-            "one step per IAM policy the reader has to change; {policy} has {}",
-            named.len()
-        );
-        assert!(
-            !named[0].also_resolves.is_empty(),
-            "{policy} is named by more than one finding"
-        );
-    }
+            assert_eq!(
+                same_text_different_expert,
+                [
+                    Some("Vulnerability manager".to_string()),
+                    Some("Application security engineer".to_string()),
+                ],
+                "one stored sentence, two experts, two steps"
+            );
+            let iam_policies = [
+                "IAMFullAccess",
+                "InlinePolicyForAdminGroup",
+                "InsecurePolicy",
+            ];
+            for policy in iam_policies {
+                let named = report
+                    .next_steps
+                    .iter()
+                    .filter(|step| step.action.contains(policy))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    named.len(),
+                    1,
+                    "one step per IAM policy the reader has to change; {policy} has {}",
+                    named.len()
+                );
+                assert!(
+                    !named[0].also_resolves.is_empty(),
+                    "{policy} is named by more than one finding"
+                );
+            }
 
-    // CloudQuery is the one engine in the catalog whose declared knowledge
-    // support ended before this run. Planning already writes that as an
-    // engine-run warning, but the warning is a Progress surface: without a
-    // coverage row the reader receives a report in which a scanner running on
-    // knowledge three years past support is indistinguishable from a current
-    // one.
-    let stale = report
-        .coverage_gaps
-        .iter()
-        .filter(|gap| gap.dimension.ends_with(": expired detection knowledge"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        stale.len(),
-        1,
-        "exactly the engines whose support ended: {:#?}",
-        stale
-    );
-    assert_eq!(
-        stale[0].dimension,
-        "cloudquery: expired detection knowledge"
-    );
-    assert!(
-        stale[0].reason.ends_with(" Support ended: 2023-04-10."),
-        "{}",
-        stale[0].reason
-    );
-    // The check still ran and its inventory is still reported. The row
-    // qualifies the result; it does not withdraw it.
-    assert_eq!(
-        report
-            .actual
-            .checks
-            .iter()
-            .find(|check| check.check_id == "cloudquery")
-            .unwrap()
-            .status,
-        CoverageDimensionStatus::TestedComplete
-    );
+            // CloudQuery is the one engine in the catalog whose declared knowledge
+            // support ended before this run. Planning already writes that as an
+            // engine-run warning, but the warning is a Progress surface: without a
+            // coverage row the reader receives a report in which a scanner running on
+            // knowledge three years past support is indistinguishable from a current
+            // one.
+            let stale = report
+                .coverage_gaps
+                .iter()
+                .filter(|gap| gap.dimension.ends_with(": expired detection knowledge"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                stale.len(),
+                1,
+                "exactly the engines whose support ended: {:#?}",
+                stale
+            );
+            assert_eq!(
+                stale[0].dimension,
+                "cloudquery: expired detection knowledge"
+            );
+            assert!(
+                stale[0].reason.ends_with(" Support ended: 2023-04-10."),
+                "{}",
+                stale[0].reason
+            );
+            // The check still ran and its inventory is still reported. The row
+            // qualifies the result; it does not withdraw it.
+            assert_eq!(
+                report
+                    .actual
+                    .checks
+                    .iter()
+                    .find(|check| check.check_id == "cloudquery")
+                    .unwrap()
+                    .status,
+                CoverageDimensionStatus::TestedComplete
+            );
 
-    let reopened_storage = Storage::open(&database).unwrap();
-    let reopened = reopened_storage.get_case(&case.id).unwrap();
-    assert_eq!(
-        build_beginner_master_report(&reopened, &plan.scan_run.id).unwrap(),
-        report
-    );
-    let reopened_service = CaseService::new(
-        &reopened_storage,
-        &engines,
-        &adapters,
-        &artifact_root,
-        &signing_key,
-    );
-    // Two vulnerability scanners cover the same repository and the same
-    // image, so this run is the shape cross-engine correlation exists for:
-    // Trivy and Grype both name CVE-2024-2511 on openssl. The suggestion is
-    // the product's offer to combine them; nothing is merged without the
-    // reader accepting it, and an unfired suggestion here would mean the
-    // reader is never offered the choice on a run that plainly needs it.
-    let correlations = ai_security_scanner_lib::correlation::correlation_report(&completed);
-    let openssl = correlations
-        .suggestions
-        .iter()
-        .filter(|suggestion| suggestion.vulnerability_id == "CVE-2024-2511")
-        .collect::<Vec<_>>();
-    assert_eq!(
-        openssl.len(),
-        2,
-        "one suggestion per asset the two scanners agree on: {:#?}",
-        correlations
-    );
-    for suggestion in openssl {
-        assert_eq!(suggestion.package, "openssl");
-        assert_eq!(suggestion.engine_ids, ["grype", "trivy"]);
-        assert_eq!(suggestion.finding_ids.len(), 2);
-    }
-    assert_eq!(correlations.truncated_suggestions, 0);
+            let reopened_storage = Storage::open(database).unwrap();
+            let reopened = reopened_storage.get_case(case_id).unwrap();
+            assert_eq!(
+                &build_beginner_master_report(&reopened, scan_run_id).unwrap(),
+                report
+            );
+            let reopened_service = CaseService::new(
+                &reopened_storage,
+                engines,
+                adapters,
+                artifact_root,
+                signing_key,
+            );
+            // Two vulnerability scanners cover the same repository and the same
+            // image, so this run is the shape cross-engine correlation exists for:
+            // Trivy and Grype both name CVE-2024-2511 on openssl. The suggestion is
+            // the product's offer to combine them; nothing is merged without the
+            // reader accepting it, and an unfired suggestion here would mean the
+            // reader is never offered the choice on a run that plainly needs it.
+            let correlations = ai_security_scanner_lib::correlation::correlation_report(completed);
+            let openssl = correlations
+                .suggestions
+                .iter()
+                .filter(|suggestion| suggestion.vulnerability_id == "CVE-2024-2511")
+                .collect::<Vec<_>>();
+            assert_eq!(
+                openssl.len(),
+                2,
+                "one suggestion per asset the two scanners agree on: {:#?}",
+                correlations
+            );
+            for suggestion in openssl {
+                assert_eq!(suggestion.package, "openssl");
+                assert_eq!(suggestion.engine_ids, ["grype", "trivy"]);
+                assert_eq!(suggestion.finding_ids.len(), 2);
+            }
+            assert_eq!(correlations.truncated_suggestions, 0);
 
-    // The heading promises the assets that need attention, so the list is
-    // read as an order. Before it was one, this run put the asset carrying a
-    // single problem first, the asset carrying twenty-two third, and the host
-    // whose check failed in the middle of the healthy ones.
-    let ordered_html = artifact_root.join("asset-order.html");
-    reopened_service
-        .export_case(
-            &case.id,
-            &plan.scan_run.id,
-            CaseExportFormat::Html,
-            ordered_html.clone(),
-            ExportOptions {
-                redaction: RedactionProfile::None,
-                include_raw_artifacts: false,
-                locale: ReportLocale::En,
-            },
-        )
-        .unwrap();
-    let ordered_html = fs::read_to_string(&ordered_html).unwrap();
-    let asset_board = &ordered_html[ordered_html
-        .find("Which assets need attention")
-        .expect("asset board")..];
-    let asset_board = &asset_board[..asset_board.find("</section>").expect("board end")];
-    let leading_finding = &report.findings[0];
-    let leading_asset = report
-        .requested
-        .targets
-        .iter()
-        .find(|target| leading_finding.target_asset_ids.contains(&target.asset_id))
-        .and_then(|target| target.label.clone())
-        .expect("the report's first problem is on a requested asset");
-    let first_row = asset_board
-        .find("<li class=\"asset-result")
-        .expect("at least one asset row");
-    assert!(
-        asset_board[first_row..].starts_with(&format!(
-            "<li class=\"asset-result asset-result--problems-found\"><div class=\"asset-result__identity\"><strong>{leading_asset}</strong>"
-        )),
-        "the asset carrying the report's first problem leads the board"
-    );
-    let last_problem = asset_board
-        .rfind("asset-result--problems-found")
-        .expect("a problems row");
-    let first_incomplete = asset_board
-        .find("asset-result--incomplete-failed")
-        .expect("an incomplete row");
-    assert!(
-        last_problem < first_incomplete,
-        "every asset with a found problem is read before the ones with none"
-    );
-
-    // What this product retained about how it knows is kept, and kept out of
-    // the way. On this run those two blocks were 57% of everything printed
-    // under "Problems found" -- artifact and engine-run identifiers, capture
-    // hashes, and the same catalog rationale repeated once per reference --
-    // read before the reader reached the next problem.
-    let problems = &ordered_html[ordered_html
-        .find(">Problems found</h2>")
-        .expect("problems section")..];
-    // Bounded before the run-level technical section, whose task records are
-    // articles too.
-    let problems = &problems[..problems
-        .find("<details class=\"technical\">")
-        .expect("technical details follow the problems")];
-    let cards = problems.match_indices("<article>").count();
-    assert_eq!(cards, report.findings.len(), "one card per finding");
-    assert_eq!(
-        problems
-            .match_indices("<details class=\"technical finding-technical\">")
-            .count(),
-        cards,
-        "every card keeps its evidence and framework provenance collapsed"
-    );
-    // The report cites twenty-one third-party projects by name. Humanizing
-    // their identifiers named five of them something their own documentation
-    // does not use, and split one on its hyphen.
-    let tested = &ordered_html[ordered_html
-        .find(">What was actually tested</h2>")
-        .expect("tested section")..];
-    let tested = &tested[..tested
-        .find(">What needs attention</h2>")
-        .expect("gaps follow")];
-    for wrong in [
-        "Httpx",
-        "Kics",
-        "Kube Bench",
-        "Scoutsuite",
-        "Scubagear",
-        "Trufflehog",
-        "Cloudquery",
-        "Completed check To Target",
-    ] {
-        assert!(
-            !tested.contains(wrong),
-            "the report printed a humanized identifier: {wrong}"
-        );
-    }
-    for right in [
-        "httpx",
-        "KICS",
-        "kube-bench",
-        "ScoutSuite",
-        "ScubaGear",
-        "TruffleHog",
-        "CloudQuery",
-    ] {
-        assert!(tested.contains(right), "the report lost a name: {right}");
-    }
-
-    // A completed check's coarse coordinate restated its own header line and
-    // added a sentence about this product's record keeping. Eighteen of them
-    // were a third of this section.
-    for restated in [
-        "check-to-target coordinate",
-        "The durable task reached completed state for this target binding.",
-    ] {
-        assert!(
-            !tested.contains(restated),
-            "a completed check restates its header: {restated}"
-        );
-    }
-    // The header still carries every completed check, its window, and its
-    // target, and Nuclei's partial run still shows the dimensions it proved.
-    assert!(tested.contains("<strong>Syft</strong> — Completed"));
-
-    // Every remediable finding carries the same product-authored safety
-    // sentence, so the report printed the same 115 characters forty-five
-    // times. It is advice about making any change, not about one finding.
-    assert_eq!(ordered_html.matches("Before changing anything").count(), 1);
-    assert!(
-        ordered_html.find("Before changing anything") < ordered_html.find(">Problems found</h2>")
-    );
-
-    // Two scanners find the same CVE on the repository and on the image built
-    // from it. The cards are titled identically by upstream, so with the asset
-    // four items into the identifier line the reader sees the same heading
-    // twice in a row and reads it as the report duplicating one problem.
-    let headings = problems
-        .match_indices("<h3>")
-        .map(|(at, _)| {
-            let rest = &problems[at + "<h3>".len()..];
-            rest[..rest.find("</h3>").expect("heading end")].to_owned()
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(headings.len(), cards);
-    let mut unique = headings.clone();
-    unique.sort();
-    unique.dedup();
-    assert_eq!(
-        unique.len(),
-        headings.len(),
-        "no two problems are titled the same: {headings:#?}"
-    );
-    for (heading, finding) in headings.iter().zip(&report.findings) {
-        assert!(
-            heading.contains("<span class=\"finding-asset\">"),
-            "every heading names the asset it is on: {heading}"
-        );
-        let (title, asset) = heading
-            .split_once(" <span class=\"finding-asset\">")
-            .expect("heading end");
-        assert_eq!(
-            title
-                .replace("&amp;", "&")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&quot;", "\"")
-                .replace("&#39;", "'"),
-            finding.title,
-            "the upstream title still leads, unchanged"
-        );
-        assert!(asset.starts_with("— "), "{asset}");
-    }
-
-    let first_card = &problems[problems.find("<article>").expect("a card")..];
-    let first_card = &first_card[..first_card.find("</article>").expect("card end")];
-    let collapsed_at = first_card
-        .find("<details class=\"technical finding-technical\">")
-        .expect("collapsed block");
-    for open_text in [
-        "Grype reported a critical-severity condition on the assessed asset.",
-        "Upgrade the affected component to a fixed version",
-        "Container security engineer",
-        "https://nvd.nist.gov/vuln/detail/CVE-2025-0002",
-    ] {
-        let at = first_card
-            .find(open_text)
-            .unwrap_or_else(|| panic!("card omitted {open_text}"));
-        assert!(at < collapsed_at, "{open_text} must stay in the open");
-    }
-    for retained in [
-        "Evidence SHA-256",
-        "Related framework coordinates",
-        "Mapping version",
-        "ISO/IEC 27001",
-    ] {
-        let at = first_card
-            .find(retained)
-            .unwrap_or_else(|| panic!("card dropped {retained}"));
-        assert!(
-            at > collapsed_at,
-            "{retained} must stay available, collapsed"
-        );
-    }
-
-    if let Some(dump) = std::env::var_os("AI_SCANNER_REPORT_DUMP_DIR").map(PathBuf::from) {
-        fs::create_dir_all(&dump).unwrap();
-        for (name, format, locale, redaction) in [
-            (
-                "report-en.html",
-                CaseExportFormat::Html,
-                ReportLocale::En,
-                RedactionProfile::None,
-            ),
-            (
-                "report-zh.html",
-                CaseExportFormat::Html,
-                ReportLocale::ZhHant,
-                RedactionProfile::None,
-            ),
-            (
-                "report-standard-redacted.html",
-                CaseExportFormat::Html,
-                ReportLocale::En,
-                RedactionProfile::Standard,
-            ),
-            (
-                "report.json",
-                CaseExportFormat::CanonicalJson,
-                ReportLocale::En,
-                RedactionProfile::None,
-            ),
-            (
-                "framework.json",
-                CaseExportFormat::FrameworkReport,
-                ReportLocale::En,
-                RedactionProfile::None,
-            ),
-        ] {
+            // The heading promises the assets that need attention, so the list is
+            // read as an order. Before it was one, this run put the asset carrying a
+            // single problem first, the asset carrying twenty-two third, and the host
+            // whose check failed in the middle of the healthy ones.
+            let ordered_html = artifact_root.join("asset-order.html");
             reopened_service
                 .export_case(
-                    &case.id,
-                    &plan.scan_run.id,
-                    format,
-                    dump.join(name),
+                    case_id,
+                    scan_run_id,
+                    CaseExportFormat::Html,
+                    ordered_html.clone(),
                     ExportOptions {
-                        redaction,
+                        redaction: RedactionProfile::None,
                         include_raw_artifacts: false,
-                        locale,
+                        locale: ReportLocale::En,
                     },
                 )
                 .unwrap();
-        }
-        fs::write(
-            dump.join("beginner-report.json"),
-            serde_json::to_string_pretty(&report).unwrap(),
-        )
+            let ordered_html = fs::read_to_string(&ordered_html).unwrap();
+            let asset_board = &ordered_html[ordered_html
+                .find("Which assets need attention")
+                .expect("asset board")..];
+            let asset_board = &asset_board[..asset_board.find("</section>").expect("board end")];
+            let leading_finding = &report.findings[0];
+            let leading_asset = report
+                .requested
+                .targets
+                .iter()
+                .find(|target| leading_finding.target_asset_ids.contains(&target.asset_id))
+                .and_then(|target| target.label.clone())
+                .expect("the report's first problem is on a requested asset");
+            let first_row = asset_board
+                .find("<li class=\"asset-result")
+                .expect("at least one asset row");
+            assert!(
+            asset_board[first_row..].starts_with(&format!(
+                "<li class=\"asset-result asset-result--problems-found\"><div class=\"asset-result__identity\"><strong>{leading_asset}</strong>"
+            )),
+            "the asset carrying the report's first problem leads the board"
+        );
+            let last_problem = asset_board
+                .rfind("asset-result--problems-found")
+                .expect("a problems row");
+            let first_incomplete = asset_board
+                .find("asset-result--incomplete-failed")
+                .expect("an incomplete row");
+            assert!(
+                last_problem < first_incomplete,
+                "every asset with a found problem is read before the ones with none"
+            );
+
+            // What this product retained about how it knows is kept, and kept out of
+            // the way. On this run those two blocks were 57% of everything printed
+            // under "Problems found" -- artifact and engine-run identifiers, capture
+            // hashes, and the same catalog rationale repeated once per reference --
+            // read before the reader reached the next problem.
+            let problems = &ordered_html[ordered_html
+                .find(">Problems found</h2>")
+                .expect("problems section")..];
+            // Bounded before the run-level technical section, whose task records are
+            // articles too.
+            let problems = &problems[..problems
+                .find("<details class=\"technical\">")
+                .expect("technical details follow the problems")];
+            let cards = problems.match_indices("<article>").count();
+            assert_eq!(cards, report.findings.len(), "one card per finding");
+            assert_eq!(
+                problems
+                    .match_indices("<details class=\"technical finding-technical\">")
+                    .count(),
+                cards,
+                "every card keeps its evidence and framework provenance collapsed"
+            );
+            // The report cites twenty-one third-party projects by name. Humanizing
+            // their identifiers named five of them something their own documentation
+            // does not use, and split one on its hyphen.
+            let tested = &ordered_html[ordered_html
+                .find(">What was actually tested</h2>")
+                .expect("tested section")..];
+            let tested = &tested[..tested
+                .find(">What needs attention</h2>")
+                .expect("gaps follow")];
+            for wrong in [
+                "Httpx",
+                "Kics",
+                "Kube Bench",
+                "Scoutsuite",
+                "Scubagear",
+                "Trufflehog",
+                "Cloudquery",
+                "Completed check To Target",
+            ] {
+                assert!(
+                    !tested.contains(wrong),
+                    "the report printed a humanized identifier: {wrong}"
+                );
+            }
+            for right in [
+                "httpx",
+                "KICS",
+                "kube-bench",
+                "ScoutSuite",
+                "ScubaGear",
+                "TruffleHog",
+                "CloudQuery",
+            ] {
+                assert!(tested.contains(right), "the report lost a name: {right}");
+            }
+
+            // A completed check's coarse coordinate restated its own header line and
+            // added a sentence about this product's record keeping. Eighteen of them
+            // were a third of this section.
+            for restated in [
+                "check-to-target coordinate",
+                "The durable task reached completed state for this target binding.",
+            ] {
+                assert!(
+                    !tested.contains(restated),
+                    "a completed check restates its header: {restated}"
+                );
+            }
+            // The header still carries every completed check, its window, and its
+            // target, and Nuclei's partial run still shows the dimensions it proved.
+            assert!(tested.contains("<strong>Syft</strong> — Completed"));
+
+            // Every remediable finding carries the same product-authored safety
+            // sentence, so the report printed the same 115 characters forty-five
+            // times. It is advice about making any change, not about one finding.
+            assert_eq!(ordered_html.matches("Before changing anything").count(), 1);
+            assert!(
+                ordered_html.find("Before changing anything")
+                    < ordered_html.find(">Problems found</h2>")
+            );
+
+            // Two scanners find the same CVE on the repository and on the image built
+            // from it. The cards are titled identically by upstream, so with the asset
+            // four items into the identifier line the reader sees the same heading
+            // twice in a row and reads it as the report duplicating one problem.
+            let headings = problems
+                .match_indices("<h3>")
+                .map(|(at, _)| {
+                    let rest = &problems[at + "<h3>".len()..];
+                    rest[..rest.find("</h3>").expect("heading end")].to_owned()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(headings.len(), cards);
+            let mut unique = headings.clone();
+            unique.sort();
+            unique.dedup();
+            assert_eq!(
+                unique.len(),
+                headings.len(),
+                "no two problems are titled the same: {headings:#?}"
+            );
+            for (heading, finding) in headings.iter().zip(&report.findings) {
+                assert!(
+                    heading.contains("<span class=\"finding-asset\">"),
+                    "every heading names the asset it is on: {heading}"
+                );
+                let (title, asset) = heading
+                    .split_once(" <span class=\"finding-asset\">")
+                    .expect("heading end");
+                assert_eq!(
+                    title
+                        .replace("&amp;", "&")
+                        .replace("&lt;", "<")
+                        .replace("&gt;", ">")
+                        .replace("&quot;", "\"")
+                        .replace("&#39;", "'"),
+                    finding.title,
+                    "the upstream title still leads, unchanged"
+                );
+                assert!(asset.starts_with("— "), "{asset}");
+            }
+
+            let first_card = &problems[problems.find("<article>").expect("a card")..];
+            let first_card = &first_card[..first_card.find("</article>").expect("card end")];
+            let collapsed_at = first_card
+                .find("<details class=\"technical finding-technical\">")
+                .expect("collapsed block");
+            for open_text in [
+                "Grype reported a critical-severity condition on the assessed asset.",
+                "Upgrade the affected component to a fixed version",
+                "Container security engineer",
+                "https://nvd.nist.gov/vuln/detail/CVE-2025-0002",
+            ] {
+                let at = first_card
+                    .find(open_text)
+                    .unwrap_or_else(|| panic!("card omitted {open_text}"));
+                assert!(at < collapsed_at, "{open_text} must stay in the open");
+            }
+            for retained in [
+                "Evidence SHA-256",
+                "Related framework coordinates",
+                "Mapping version",
+                "ISO/IEC 27001",
+            ] {
+                let at = first_card
+                    .find(retained)
+                    .unwrap_or_else(|| panic!("card dropped {retained}"));
+                assert!(
+                    at > collapsed_at,
+                    "{retained} must stay available, collapsed"
+                );
+            }
+
+            if let Some(dump) = std::env::var_os("AI_SCANNER_REPORT_DUMP_DIR").map(PathBuf::from) {
+                fs::create_dir_all(&dump).unwrap();
+                for (name, format, locale, redaction) in [
+                    (
+                        "report-en.html",
+                        CaseExportFormat::Html,
+                        ReportLocale::En,
+                        RedactionProfile::None,
+                    ),
+                    (
+                        "report-zh.html",
+                        CaseExportFormat::Html,
+                        ReportLocale::ZhHant,
+                        RedactionProfile::None,
+                    ),
+                    (
+                        "report-standard-redacted.html",
+                        CaseExportFormat::Html,
+                        ReportLocale::En,
+                        RedactionProfile::Standard,
+                    ),
+                    (
+                        "report.json",
+                        CaseExportFormat::CanonicalJson,
+                        ReportLocale::En,
+                        RedactionProfile::None,
+                    ),
+                    (
+                        "framework.json",
+                        CaseExportFormat::FrameworkReport,
+                        ReportLocale::En,
+                        RedactionProfile::None,
+                    ),
+                ] {
+                    reopened_service
+                        .export_case(
+                            case_id,
+                            scan_run_id,
+                            format,
+                            dump.join(name),
+                            ExportOptions {
+                                redaction,
+                                include_raw_artifacts: false,
+                                locale,
+                            },
+                        )
+                        .unwrap();
+                }
+                fs::write(
+                    dump.join("beginner-report.json"),
+                    serde_json::to_string_pretty(&report).unwrap(),
+                )
+                .unwrap();
+            }
+        },
+    );
+}
+
+/// What one set of case answers leaves in the AIDEFEND half of a finished
+/// report.
+struct AidefendView {
+    state: String,
+    /// Coordinate to the engines whose evidence carried it.
+    reached: BTreeMap<String, BTreeSet<String>>,
+    finding_titles: Vec<String>,
+    html: String,
+}
+
+/// Runs the whole 21-engine batch under one set of case answers and reads back
+/// what AIDEFEND received.
+///
+/// Running the whole batch is the point. A coordinate that only a hand-built
+/// single-engine case can reach is not a coordinate a reader will ever see,
+/// and the reach depends on the run: a check that failed, timed out or was
+/// cancelled carries no evidence, so its coordinates stay out no matter what
+/// the catalog says.
+fn aidefend_view(
+    intent: AssessmentIntent,
+    ai_generated: AiGeneratedArtifactAnswer,
+) -> AidefendView {
+    all_engines_in_one_report(intent, ai_generated, |subject| {
+        let storage = Storage::open(subject.database).unwrap();
+        let service = CaseService::new(
+            &storage,
+            subject.engines,
+            subject.adapters,
+            subject.artifact_root,
+            subject.signing_key,
+        );
+        let export = |format, name: &str| {
+            let path = subject.artifact_root.join(name);
+            service
+                .export_case(
+                    subject.case_id,
+                    subject.scan_run_id,
+                    format,
+                    path.clone(),
+                    ExportOptions {
+                        redaction: RedactionProfile::None,
+                        include_raw_artifacts: false,
+                        locale: ReportLocale::En,
+                    },
+                )
+                .unwrap();
+            fs::read(&path).unwrap()
+        };
+        let framework: serde_json::Value = serde_json::from_slice(&export(
+            CaseExportFormat::FrameworkReport,
+            "aidefend-framework.json",
+        ))
         .unwrap();
-    }
+        assert!(
+            framework["unrecognized_relationships"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "a relationship the catalog cannot explain must never reach a reader"
+        );
+        let family = framework["frameworks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["framework"] == "AIDEFEND")
+            .expect("AIDEFEND is one of the declared families")
+            .clone();
+        let mut reached = BTreeMap::<String, BTreeSet<String>>::new();
+        for control in family["controls"].as_array().unwrap() {
+            for relationship in control["relationships"].as_array().unwrap() {
+                // A drifted mapping version is a different claim than one the
+                // current catalog still states, and the reader cannot tell
+                // them apart from the coordinate alone.
+                assert_eq!(relationship["mapping_version_state"], "exact_match");
+                assert_eq!(
+                    relationship["mapping_provenance_state"],
+                    "verified_current_catalog"
+                );
+                let engines = reached
+                    .entry(control["control_id"].as_str().unwrap().to_owned())
+                    .or_default();
+                for engine in relationship["finding"]["engine_ids"].as_array().unwrap() {
+                    engines.insert(engine.as_str().unwrap().to_owned());
+                }
+            }
+        }
+        AidefendView {
+            state: family["state"].as_str().unwrap().to_owned(),
+            reached,
+            finding_titles: subject
+                .report
+                .findings
+                .iter()
+                .map(|finding| finding.title.clone())
+                .collect(),
+            html: String::from_utf8(export(CaseExportFormat::Html, "aidefend-report.html"))
+                .unwrap(),
+        }
+    })
+}
+
+/// AIDEFEND is a third of the framework structure this product maps to, and
+/// the audit above cannot reach any of it: coordinates are withheld from a
+/// case that declares a non-AI assessment, which is exactly what the
+/// IT-environment run declares. So the AI half of the mapping is exercised
+/// here -- catalog, adapter, report layer and export -- on the same 21 checks.
+#[test]
+fn the_ai_framework_follows_the_case_answers_and_nothing_else() {
+    let withheld = aidefend_view(
+        AssessmentIntent::InternalItEnvironment,
+        AiGeneratedArtifactAnswer::No,
+    );
+    assert_eq!(withheld.state, "not_applicable_to_declared_context");
+    assert!(
+        withheld.reached.is_empty(),
+        "a non-AI assessment infers no AI coordinate: {:?}",
+        withheld.reached
+    );
+    assert!(
+        !withheld.html.contains("AIDEFEND 1.20260805 /"),
+        "no AIDEFEND coordinate reaches the reader of a non-AI run"
+    );
+
+    let declared = aidefend_view(
+        AssessmentIntent::AiApplication,
+        AiGeneratedArtifactAnswer::Yes,
+    );
+    assert_eq!(declared.state, "related_coordinates_observed");
+    // Coordinate by coordinate, with the engine that earned it. The catalog
+    // also carries IaC-scanning and static-analysis coordinates; Checkov
+    // failed, KICS timed out and Semgrep completed empty on this run, so
+    // those three carry no evidence and correctly stay out.
+    assert_eq!(
+        declared
+            .reached
+            .iter()
+            .map(|(control, engines)| (
+                control.as_str(),
+                engines.iter().map(String::as_str).collect::<Vec<_>>()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("AID-H-003.001", vec!["grype", "trivy"]),
+            ("AID-H-003.010", vec!["greenbone", "grype", "trivy"]),
+            ("AID-H-031.002", vec!["gitleaks"]),
+            ("AID-I-001.001", vec!["kubescape"]),
+        ]
+    );
+    assert!(
+        declared.html.contains(
+            "<strong>AIDEFEND 1.20260805 / AID-H-003.001</strong> \
+             — Software Dependency &amp; Package Security"
+        ),
+        "the coordinate has to reach the report, not only the export"
+    );
+
+    // The artifact answer moves one coordinate and nothing else: the
+    // static-admission gate is about artifacts an AI wrote, so a declared AI
+    // system that wrote none of its own code does not acquire it.
+    let no_artifact = aidefend_view(
+        AssessmentIntent::AiApplication,
+        AiGeneratedArtifactAnswer::No,
+    );
+    assert_eq!(no_artifact.state, "related_coordinates_observed");
+    assert_eq!(
+        no_artifact.reached.keys().collect::<Vec<_>>(),
+        ["AID-H-003.001", "AID-H-003.010", "AID-I-001.001"]
+    );
+
+    // None of this is detection. The same 21 checks found the same problems
+    // in all three runs; only the coordinates the report may name changed.
+    assert_eq!(withheld.finding_titles.len(), 45);
+    assert_eq!(declared.finding_titles, withheld.finding_titles);
+    assert_eq!(no_artifact.finding_titles, withheld.finding_titles);
 }
