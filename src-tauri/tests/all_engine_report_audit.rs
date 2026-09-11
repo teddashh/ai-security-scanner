@@ -12,8 +12,8 @@ use ai_security_scanner_lib::connectors::{
     SnapshotConnectorRegistry,
 };
 use ai_security_scanner_lib::container_runtime::{
-    CancellationToken, FakeContainerRuntime, FakeRunBehavior, NetworkPolicy, ResourceLimits,
-    ScannerCredentialSet,
+    CONTAINER_EXECUTION_TIMEOUT_ERROR, CancellationToken, FakeContainerRuntime, FakeRunBehavior,
+    NetworkPolicy, ResourceLimits, ScannerCredentialSet,
 };
 use ai_security_scanner_lib::discovery::run_connector;
 use ai_security_scanner_lib::domain::{
@@ -715,7 +715,8 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
     let runtime = FakeContainerRuntime::default();
     let orchestrator = Orchestrator::new(&runtime, &artifacts, &adapters);
     // Outcome carriers: nuclei=partial; semgrep=complete-empty; checkov=failed;
-    // kics=timed out; trufflehog=cancelled; greenbone=unevaluated/dead host.
+    // kics=timed out on the host deadline; trufflehog=cancelled;
+    // greenbone=unevaluated/dead host.
     // Syft, CloudQuery, Steampipe, Naabu and HTTPX are observation/inventory only.
     for execution in &plan.executable {
         let workspace = local_assets
@@ -786,8 +787,11 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             ),
         };
         if execution.manifest.id == "kics" {
+            // The product's own host deadline, recorded the way the runtime
+            // records it. An invented marker here would have exercised a
+            // shape no run produces and left the timed-out row untested.
             report.checkpoint.stage = ExecutionStage::Failed;
-            report.checkpoint.last_error = Some("execution_timeout".into());
+            report.checkpoint.last_error = Some(CONTAINER_EXECUTION_TIMEOUT_ERROR.into());
             report.exit_code = None;
             report.findings.clear();
         }
@@ -821,7 +825,7 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
         ("nuclei", CoverageDimensionStatus::TestedPartial),
         ("semgrep", CoverageDimensionStatus::TestedComplete),
         ("checkov", CoverageDimensionStatus::Failed),
-        ("kics", CoverageDimensionStatus::Failed),
+        ("kics", CoverageDimensionStatus::TimedOut),
         ("trufflehog", CoverageDimensionStatus::Cancelled),
     ] {
         assert_eq!(

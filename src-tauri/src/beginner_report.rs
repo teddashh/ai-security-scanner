@@ -3992,6 +3992,18 @@ fn stable_timeout_marker(task: &EngineRun) -> bool {
     }) || {
         let phase = task.phase.to_ascii_lowercase();
         phase == "timed_out" || phase == "timeout"
+    } || {
+        // The product's own deadline is the ordinary way a check runs out of
+        // time, and it never reached the two markers above: the recorded
+        // error reconciles to one generic code and the phase becomes the
+        // failure stage, so a timed-out check was reported as a check that
+        // failed and the reader was told to retry it rather than to check
+        // reachability first. The sentence is an exact product-owned constant
+        // and is matched as one; a cleanup-pending record can carry it
+        // alongside a later error, so it is searched for rather than compared.
+        task.error_message.as_deref().is_some_and(|message| {
+            message.contains(crate::container_runtime::CONTAINER_EXECUTION_TIMEOUT_ERROR)
+        })
     }
 }
 
@@ -4004,9 +4016,18 @@ fn check_id(task: &EngineRun) -> String {
     }
 }
 
+/// The generic code every recorded execution error is reconciled to.
+///
+/// It is set from `last_error.is_some()` and nothing else, so it is the same
+/// string for a host deadline, a rejected adapter result, and an unfinished
+/// cleanup. Printed after a sentence that already says the check stopped, it
+/// reads as a diagnosis and is not one.
+const RECONCILED_EXECUTION_ERROR_CODE: &str = "execution_failed";
+
 fn stable_task_reason(task: &EngineRun, fallback: &str) -> String {
     task.error_code
-        .as_ref()
+        .as_deref()
+        .filter(|code| *code != RECONCILED_EXECUTION_ERROR_CODE)
         .map(|code| format!("{fallback} Diagnostic code: {code}."))
         .unwrap_or_else(|| fallback.into())
 }
@@ -4783,6 +4804,107 @@ mod tests {
         );
         let encoded = serde_json::to_string(&report).unwrap();
         assert!(!encoded.contains("untrusted target text"));
+    }
+
+    #[test]
+    fn the_reconciled_error_code_stays_out_of_the_reason_and_a_real_one_stays_in() {
+        // Every recorded execution error reconciles to one constant, so
+        // printing it after "This check stopped" is a diagnosis-shaped
+        // sentence that says only what the sentence before it already said.
+        // The constant is still in the technical record either way.
+        let mut generic = catalog_task("generic", EngineRunStatus::Failed);
+        generic.error_code = Some(RECONCILED_EXECUTION_ERROR_CODE.into());
+        let generic_report =
+            build_beginner_master_report(&case_with_catalog_tasks(vec![generic], true), "run-1")
+                .unwrap();
+        let generic_gap = generic_report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.kind == CoverageGapKind::Failed)
+            .expect("failed gap");
+        assert_eq!(
+            generic_gap.reason,
+            "This check stopped before it could establish completed coverage."
+        );
+        assert!(
+            generic_report
+                .technical_details
+                .tasks
+                .iter()
+                .any(|task| task.error_code.as_deref() == Some(RECONCILED_EXECUTION_ERROR_CODE)),
+            "the code stays available as technical detail"
+        );
+
+        let mut named = catalog_task("named", EngineRunStatus::Failed);
+        named.error_code = Some("image_pull_denied".into());
+        let named_report =
+            build_beginner_master_report(&case_with_catalog_tasks(vec![named], true), "run-1")
+                .unwrap();
+        assert_eq!(
+            named_report
+                .coverage_gaps
+                .iter()
+                .find(|gap| gap.kind == CoverageGapKind::Failed)
+                .expect("failed gap")
+                .reason,
+            "This check stopped before it could establish completed coverage. Diagnostic code: image_pull_denied."
+        );
+    }
+
+    #[test]
+    fn the_host_deadline_is_a_timed_out_check_not_a_failed_one() {
+        // A host-deadline timeout ends the task as a failure and reconciles
+        // its error to the same generic code as every other error, so the two
+        // stable markers never saw it. The reader was told to retry a check
+        // that had run out of time, instead of to check reachability first.
+        let mut timed_out = catalog_task("timed-out", EngineRunStatus::Failed);
+        timed_out.error_code = Some(RECONCILED_EXECUTION_ERROR_CODE.into());
+        timed_out.error_message = Some(format!(
+            "{}; container cleanup completed",
+            crate::container_runtime::CONTAINER_EXECUTION_TIMEOUT_ERROR
+        ));
+        let report =
+            build_beginner_master_report(&case_with_catalog_tasks(vec![timed_out], true), "run-1")
+                .unwrap();
+
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::TimedOut
+        );
+        assert_eq!(report.coverage_counts.timed_out, 1);
+        assert_eq!(report.coverage_counts.failed, 0);
+        let gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.kind == CoverageGapKind::TimedOut)
+            .expect("timed-out gap");
+        assert_eq!(
+            gap.reason,
+            "The bounded check reached its time limit, so it cannot be treated as tested complete."
+        );
+        assert!(
+            report.next_steps.iter().any(|step| step.action
+                == "Confirm reachability in Scan setup, then retry the timed-out work."),
+            "a timed-out check asks for reachability before a retry"
+        );
+        // Not a pass, either way it is classified.
+        assert_eq!(
+            report.state.summary,
+            BeginnerReportSummary::NoChecksCompleted
+        );
+
+        // An ordinary failure keeps its own classification.
+        let mut failed = catalog_task("failed", EngineRunStatus::Failed);
+        failed.error_code = Some(RECONCILED_EXECUTION_ERROR_CODE.into());
+        failed.error_message = Some("adapter rejected the captured result".into());
+        let failed_report =
+            build_beginner_master_report(&case_with_catalog_tasks(vec![failed], true), "run-1")
+                .unwrap();
+        assert_eq!(
+            failed_report.actual.checks[0].status,
+            CoverageDimensionStatus::Failed
+        );
+        assert_eq!(failed_report.coverage_counts.timed_out, 0);
     }
 
     #[test]

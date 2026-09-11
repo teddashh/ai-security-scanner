@@ -51,7 +51,13 @@ const RUNTIME_COMMAND_TIMEOUT: StdDuration = StdDuration::from_secs(30);
 const PINNED_IMAGE_PULL_TIMEOUT: StdDuration = StdDuration::from_secs(10 * 60);
 const RUNTIME_PIPE_DRAIN_TIMEOUT: StdDuration = StdDuration::from_secs(2);
 const CONTAINER_CAPTURE_DRAIN_TIMEOUT: StdDuration = StdDuration::from_secs(30);
-const CONTAINER_EXECUTION_TIMEOUT_ERROR: &str =
+/// The one sentence a host-deadline timeout is recorded as.
+///
+/// Public because the shared report reads it back: every recorded execution
+/// error reconciles to the same `error_code`, so this sentence is what
+/// separates "the check ran out of time" from "the check failed", and those
+/// two send the reader to different next steps.
+pub const CONTAINER_EXECUTION_TIMEOUT_ERROR: &str =
     "scanner execution exceeded its configured host deadline";
 const MANAGED_NETWORK_LABEL_KEY: &str = "ai.security-scanner.managed";
 const NETWORK_POLICY_LABEL_KEY: &str = "ai.security-scanner.policy-id";
