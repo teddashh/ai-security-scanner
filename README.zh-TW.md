@@ -1,6 +1,6 @@
 # ai-security-scanner
 
-[English](README.md) · [文件](docs/README.zh-TW.md) · [下載](https://github.com/teddashh/ai-security-scanner/releases)
+[專案網站](https://teddashh.github.io/ai-security-scanner/?lang=zh-TW) · [English](README.md) · [文件](docs/README.zh-TW.md) · [下載](https://github.com/teddashh/ai-security-scanner/releases)
 
 一個桌面應用程式，同時檢查程式碼專案、網站與內部系統。選好資產後只需啟動一次掃描，即可取得一份依優先順序整理的報告，直接列出問題、受影響資產、證據與下一步。
 
@@ -34,16 +34,54 @@
 
 個別檢查失敗時，其他已完成結果仍會保留。報告可重新開啟、與後續掃描比較，並匯出成好讀的 HTML 或結構化資料。
 
-## 執行的安全檢查
+## 串接的工具
 
-| 選定資產 | 安全檢查 |
+目前的引擎目錄整合了 21 個上游專案。產品只會針對每個選定資產執行適用工具，保留原始識別碼、嚴重度、證據與修正建議，再把所有已完成結果整理到同一份報告。
+
+**選定資產 → 適用的上游工具 → 薄層轉接器 → 一份依資產整理、排好優先順序的報告**
+
+### 程式碼專案、相依套件與基礎設施即程式碼
+
+| 工具 | ai-security-scanner 的使用方式 |
 | --- | --- |
-| 專案資料夾 | Gitleaks、TruffleHog、Semgrep、Trivy、Grype、Checkov 與 KICS 會依適用情況檢查隔離的唯讀副本。 |
-| 網站或 API | Nuclei 先辨識網站技術，再從固定的上游模板快照選擇相符的唯讀檢查。 |
-| 內部系統 | Greenbone 在獲准主機與連接埠辨識服務，再從固定的 Community Feed 執行相符的遠端檢查。 |
-| 基礎設施、雲端、容器或 Kubernetes 來源 | 適用的上游設定會針對精確選定的來源與範圍執行。 |
+| [Semgrep](https://github.com/semgrep/semgrep) | 使用固定的上游安全規則快照，進行危險程式碼模式的靜態分析。 |
+| [Gitleaks](https://github.com/gitleaks/gitleaks) | 離線偵測秘密模式；一般證據會遮蔽秘密值。 |
+| [TruffleHog](https://github.com/trufflesecurity/trufflehog) | 離線檔案系統秘密偵測；停用網路驗證。 |
+| [Trivy](https://github.com/aquasecurity/trivy) | 使用固定離線資料，檢查支援的專案 manifest 與單一映像 OCI layout 中的弱點套件。 |
+| [Grype](https://github.com/anchore/grype) | 使用固定離線資料，檢查專案副本與單一映像 OCI layout 中的弱點套件。 |
+| [Checkov](https://github.com/bridgecrewio/checkov) | 針對選定的唯讀副本執行適用的基礎設施與設定檢查。 |
+| [KICS](https://github.com/Checkmarx/kics) | 使用上游 query pack 檢查基礎設施即程式碼的錯誤設定。 |
+| [Syft](https://github.com/anchore/syft) | 建立軟體元件盤點與可保存的 SBOM；盤點本身不是弱點結果。 |
 
-資產盤點與 localhost TCP 工具是輔助功能，只說明資產或連線狀態；安全問題來自適用的安全檢查。
+### 網站與內部系統
+
+| 工具 | ai-security-scanner 的使用方式 |
+| --- | --- |
+| [Nuclei](https://github.com/projectdiscovery/nuclei) | 從固定的 [Nuclei Templates](https://github.com/projectdiscovery/nuclei-templates) 快照，執行會辨識技術、範圍受限的唯讀 HTTP 安全檢查。 |
+| [Greenbone OpenVAS Scanner](https://github.com/greenbone/openvas-scanner) | 針對精確獲准的主機與連接埠，從固定 Community Feed 執行會辨識服務的遠端檢查。 |
+| [Naabu](https://github.com/projectdiscovery/naabu) | 探索選定 TCP 連接埠的可達性與曝露；開放連接埠不等於弱點。 |
+| [httpx](https://github.com/projectdiscovery/httpx) | 取得範圍受限的 HTTP 可達性與狀態資訊；它不是弱點掃描器。 |
+
+### 雲端與 Microsoft 365
+
+| 工具 | ai-security-scanner 的使用方式 |
+| --- | --- |
+| [Prowler](https://github.com/prowler-cloud/prowler) | 針對 AWS、Azure 與 GCP 精確資產的限縮 IAM 設定檢查。 |
+| [ScoutSuite](https://github.com/nccgroup/ScoutSuite) | 限縮的 AWS IAM 評估，並非完整 ScoutSuite 涵蓋範圍。 |
+| [Cloudsplaining](https://github.com/salesforce/cloudsplaining) | 分析有界 AWS IAM 證據中的過度權限。 |
+| [CloudQuery](https://github.com/cloudquery/cloudquery) | 固定的 AWS IAM 盤點；回傳資料維持盤點資訊，不會轉成安全問題。 |
+| [Steampipe](https://github.com/turbot/steampipe) | AWS IAM 使用者盤點；盤點欄位不會轉成安全問題。 |
+| [ScubaGear](https://github.com/cisagov/ScubaGear) | 固定的 Microsoft 365 安全基準設定檢查。 |
+| [Maester](https://github.com/maester365/maester) | 固定的 Microsoft 365 安全設定測試。 |
+
+### Kubernetes
+
+| 工具 | ai-security-scanner 的使用方式 |
+| --- | --- |
+| [Kubescape](https://github.com/kubescape/kubescape) | 離線檢查使用者明確選定的本機 Kubernetes manifests。 |
+| [kube-bench](https://github.com/aquasecurity/kube-bench) | 檢查不可變的節點設定副本是否符合 CIS，不使用具特權的即時主機掛載。 |
+
+探索、盤點、SBOM 與 localhost TCP 連線工具會和弱點問題清楚分開。完整固定版本、授權、設定與執行界線記錄在[引擎目錄](docs/engine-catalog.md)。
 
 完整掃描界線與設定行為請參閱[掃描範圍](docs/scanning-scope.zh-TW.md)。
 

@@ -9,7 +9,7 @@
   "description": "One guided desktop app for security checks across websites, networks, code, IaC, cloud, containers, and Kubernetes.",
   "license": "Apache-2.0",
   "author": "Ted Huang and ai-security-scanner contributors",
-  "homepage": "https://github.com/teddashh/ai-security-scanner#readme",
+  "homepage": "https://teddashh.github.io/ai-security-scanner/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/teddashh/ai-security-scanner.git"

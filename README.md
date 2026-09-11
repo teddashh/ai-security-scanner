@@ -1,6 +1,6 @@
 # ai-security-scanner
 
-[繁體中文](README.zh-TW.md) · [Documentation](docs/README.md) · [Releases](https://github.com/teddashh/ai-security-scanner/releases)
+[Project website](https://teddashh.github.io/ai-security-scanner/) · [繁體中文](README.zh-TW.md) · [Documentation](docs/README.md) · [Releases](https://github.com/teddashh/ai-security-scanner/releases)
 
 One desktop app for security checks across repositories, websites, and internal systems. Select the assets, start one scan, and receive one prioritized report with findings, affected assets, evidence, and next actions.
 
@@ -34,16 +34,54 @@ The report leads with:
 
 Completed results remain available when an independent check fails. Reports can be reopened, compared with later runs, and exported as readable HTML or structured data.
 
-## What runs
+## Integrated tools
 
-| Selected asset | Security checks |
+The current engine catalog integrates 21 upstream projects. The product runs only the tools that apply to each selected asset, keeps their original identifiers, severity, evidence, and remediation, then organizes every completed result in the same report.
+
+**Selected assets → applicable upstream tools → thin adapters → one prioritized report organized by asset**
+
+### Repositories, dependencies, and infrastructure as code
+
+| Tool | What ai-security-scanner uses it for |
 | --- | --- |
-| Project folder | Gitleaks, TruffleHog, Semgrep, Trivy, Grype, Checkov, and KICS inspect an isolated read-only snapshot when applicable. |
-| Website or API | Nuclei detects the site's technology and selects matching read-only checks from the pinned upstream template snapshot. |
-| Internal system | Greenbone detects exposed services on the approved host and ports, then applies matching remote checks from the pinned Community Feed. |
-| Infrastructure, cloud, container, or Kubernetes source | The applicable upstream profile runs against the exact selected source and scope. |
+| [Semgrep](https://github.com/semgrep/semgrep) | Static analysis for risky code patterns using a pinned upstream security rule snapshot. |
+| [Gitleaks](https://github.com/gitleaks/gitleaks) | Offline secret-pattern scanning with secret values redacted from normal evidence. |
+| [TruffleHog](https://github.com/trufflesecurity/trufflehog) | Offline filesystem secret detection; network verification is disabled. |
+| [Trivy](https://github.com/aquasecurity/trivy) | Vulnerable packages in recognized repository manifests and single-image OCI layouts using pinned offline data. |
+| [Grype](https://github.com/anchore/grype) | Vulnerable packages in repository snapshots and single-image OCI layouts using pinned offline data. |
+| [Checkov](https://github.com/bridgecrewio/checkov) | Applicable infrastructure and configuration checks across the selected read-only snapshot. |
+| [KICS](https://github.com/Checkmarx/kics) | Infrastructure-as-code misconfiguration checks from the upstream query pack. |
+| [Syft](https://github.com/anchore/syft) | Software component inventory and preserved SBOM output; inventory is not a vulnerability result. |
 
-Inventory and the localhost TCP utility are supporting tools. They describe assets or connectivity; security findings come from the applicable security checks.
+### Websites and internal systems
+
+| Tool | What ai-security-scanner uses it for |
+| --- | --- |
+| [Nuclei](https://github.com/projectdiscovery/nuclei) | Technology-aware, bounded read-only HTTP security checks from a pinned [Nuclei Templates](https://github.com/projectdiscovery/nuclei-templates) snapshot. |
+| [Greenbone OpenVAS Scanner](https://github.com/greenbone/openvas-scanner) | Service-aware remote checks from a pinned Community Feed for exact approved hosts and ports. |
+| [Naabu](https://github.com/projectdiscovery/naabu) | Selected TCP-port reachability and exposure discovery; an open port is not a vulnerability finding. |
+| [httpx](https://github.com/projectdiscovery/httpx) | Bounded HTTP reachability and status metadata; it is not a vulnerability scanner. |
+
+### Cloud and Microsoft 365
+
+| Tool | What ai-security-scanner uses it for |
+| --- | --- |
+| [Prowler](https://github.com/prowler-cloud/prowler) | Narrow, exact-asset IAM configuration profiles for AWS, Azure, and GCP. |
+| [ScoutSuite](https://github.com/nccgroup/ScoutSuite) | A reduced AWS IAM assessment rather than full ScoutSuite coverage. |
+| [Cloudsplaining](https://github.com/salesforce/cloudsplaining) | Excessive-permission analysis over bounded AWS IAM evidence. |
+| [CloudQuery](https://github.com/cloudquery/cloudquery) | A fixed AWS IAM inventory; returned rows remain inventory rather than security findings. |
+| [Steampipe](https://github.com/turbot/steampipe) | AWS IAM user inventory; inventory fields do not become findings. |
+| [ScubaGear](https://github.com/cisagov/ScubaGear) | A fixed Microsoft 365 security-baseline configuration profile. |
+| [Maester](https://github.com/maester365/maester) | A fixed Microsoft 365 security-configuration test profile. |
+
+### Kubernetes
+
+| Tool | What ai-security-scanner uses it for |
+| --- | --- |
+| [Kubescape](https://github.com/kubescape/kubescape) | Offline configuration checks over explicitly selected local Kubernetes manifests. |
+| [kube-bench](https://github.com/aquasecurity/kube-bench) | CIS checks over an immutable node-configuration snapshot, without a privileged live-host mount. |
+
+Discovery, inventory, SBOM generation, and the localhost TCP utility remain clearly separated from vulnerability findings. The complete pinned versions, licenses, profiles, and execution boundaries are recorded in the [engine catalog](docs/engine-catalog.md).
 
 Exact scan boundaries and profile behavior are documented in [Scanning scope](docs/scanning-scope.md).
 

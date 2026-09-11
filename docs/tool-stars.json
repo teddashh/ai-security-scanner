@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-09-10T23:15:00-04:00",
+  "source": "GitHub REST API",
+  "tools": [
+    { "id": "cloudquery", "repository": "cloudquery/cloudquery", "stars": 6516 },
+    { "id": "steampipe", "repository": "turbot/steampipe", "stars": 7956 },
+    { "id": "prowler", "repository": "prowler-cloud/prowler", "stars": 14790 },
+    { "id": "scoutsuite", "repository": "nccgroup/ScoutSuite", "stars": 7816 },
+    { "id": "cloudsplaining", "repository": "salesforce/cloudsplaining", "stars": 2247 },
+    { "id": "scubagear", "repository": "cisagov/ScubaGear", "stars": 2658 },
+    { "id": "maester", "repository": "maester365/maester", "stars": 1086 },
+    { "id": "naabu", "repository": "projectdiscovery/naabu", "stars": 6238 },
+    { "id": "httpx", "repository": "projectdiscovery/httpx", "stars": 10385 },
+    { "id": "nuclei", "repository": "projectdiscovery/nuclei", "stars": 31108 },
+    { "id": "greenbone", "repository": "greenbone/openvas-scanner", "stars": 4822 },
+    { "id": "semgrep", "repository": "semgrep/semgrep", "stars": 16583 },
+    { "id": "gitleaks", "repository": "gitleaks/gitleaks", "stars": 29223 },
+    { "id": "trufflehog", "repository": "trufflesecurity/trufflehog", "stars": 27768 },
+    { "id": "checkov", "repository": "bridgecrewio/checkov", "stars": 8996 },
+    { "id": "kics", "repository": "Checkmarx/kics", "stars": 2699 },
+    { "id": "trivy", "repository": "aquasecurity/trivy", "stars": 37861 },
+    { "id": "grype", "repository": "anchore/grype", "stars": 12872 },
+    { "id": "syft", "repository": "anchore/syft", "stars": 9550 },
+    { "id": "kubescape", "repository": "kubescape/kubescape", "stars": 11726 },
+    { "id": "kube-bench", "repository": "aquasecurity/kube-bench", "stars": 8178 }
+  ],
+  "ruleSources": [
+    { "repository": "projectdiscovery/nuclei-templates", "stars": 12948 },
+    { "repository": "semgrep/semgrep-rules", "stars": 1251 }
+  ]
+}
