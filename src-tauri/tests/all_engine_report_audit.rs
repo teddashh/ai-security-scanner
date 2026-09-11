@@ -984,6 +984,57 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
         &artifact_root,
         &signing_key,
     );
+    // The heading promises the assets that need attention, so the list is
+    // read as an order. Before it was one, this run put the asset carrying a
+    // single problem first, the asset carrying twenty-two third, and the host
+    // whose check failed in the middle of the healthy ones.
+    let ordered_html = artifact_root.join("asset-order.html");
+    reopened_service
+        .export_case(
+            &case.id,
+            &plan.scan_run.id,
+            CaseExportFormat::Html,
+            ordered_html.clone(),
+            ExportOptions {
+                redaction: RedactionProfile::None,
+                include_raw_artifacts: false,
+                locale: ReportLocale::En,
+            },
+        )
+        .unwrap();
+    let ordered_html = fs::read_to_string(&ordered_html).unwrap();
+    let asset_board = &ordered_html[ordered_html
+        .find("Which assets need attention")
+        .expect("asset board")..];
+    let asset_board = &asset_board[..asset_board.find("</section>").expect("board end")];
+    let leading_finding = &report.findings[0];
+    let leading_asset = report
+        .requested
+        .targets
+        .iter()
+        .find(|target| leading_finding.target_asset_ids.contains(&target.asset_id))
+        .and_then(|target| target.label.clone())
+        .expect("the report's first problem is on a requested asset");
+    let first_row = asset_board
+        .find("<li class=\"asset-result")
+        .expect("at least one asset row");
+    assert!(
+        asset_board[first_row..].starts_with(&format!(
+            "<li class=\"asset-result asset-result--problems-found\"><div class=\"asset-result__identity\"><strong>{leading_asset}</strong>"
+        )),
+        "the asset carrying the report's first problem leads the board"
+    );
+    let last_problem = asset_board
+        .rfind("asset-result--problems-found")
+        .expect("a problems row");
+    let first_incomplete = asset_board
+        .find("asset-result--incomplete-failed")
+        .expect("an incomplete row");
+    assert!(
+        last_problem < first_incomplete,
+        "every asset with a found problem is read before the ones with none"
+    );
+
     if let Some(dump) = std::env::var_os("AI_SCANNER_REPORT_DUMP_DIR").map(PathBuf::from) {
         fs::create_dir_all(&dump).unwrap();
         for (name, format, locale, redaction) in [

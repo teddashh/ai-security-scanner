@@ -824,6 +824,13 @@ const checkResultKind = (
 ): "security_check" | "inventory" | "connectivity" =>
   check.resultKind ?? legacyCheckResultKind(check.checkId);
 
+const assetResultRank: Record<AssetResultStatus, number> = {
+  problems_found: 0,
+  incomplete_failed: 1,
+  not_tested: 2,
+  no_problems_completed: 3,
+};
+
 function AssetResultBoard({ report }: { report: BeginnerMasterReport }) {
   const { locale, text, formatNumber } = useI18n();
   if (report.requested.targets.length === 0) return null;
@@ -914,8 +921,26 @@ function AssetResultBoard({ report }: { report: BeginnerMasterReport }) {
       }
     })();
 
-    return { target, status, presentation };
+    // Where this asset's most urgent problem sits in the report's own finding
+    // order. `Infinity` for an asset with none, which sorts it behind every
+    // asset that has one without needing a second rule.
+    const firstProblem = securityFindings
+      .findIndex((finding) => finding.targetAssetIds.includes(target.assetId));
+    return {
+      target,
+      status,
+      presentation,
+      firstProblem: firstProblem === -1 ? Number.POSITIVE_INFINITY : firstProblem,
+    };
   });
+  // Ranked, not listed in the order the targets were declared. Under a heading
+  // that promises the assets needing attention, the list is read as an order:
+  // what was found, then what is unknown, then what is clean. The order within
+  // the problem tier is the report's own finding order, so this board and the
+  // problems list agree on what to read first. The HTML export ranks the same
+  // way; the two surfaces show one report.
+  rows.sort((left, right) => assetResultRank[left.status] - assetResultRank[right.status]
+    || left.firstProblem - right.firstProblem);
 
   return (
     <section className="section-block asset-result-board" aria-labelledby="asset-result-board-title">

@@ -13835,6 +13835,20 @@ fn html_gap_next_action(gap: &CoverageGap, catalog: HtmlReportCatalog) -> String
     }
 }
 
+/// Read order for the asset list: what was found, then what is unknown, then
+/// what is clean. A problem the run actually found is the thing a beginner can
+/// act on now; an incomplete check is a gap they have to close before they
+/// know. The clean assets are the answer to "is anything left", so they go
+/// last rather than being interleaved with the two that need work.
+fn html_asset_result_rank(status: HtmlAssetResultStatus) -> u8 {
+    match status {
+        HtmlAssetResultStatus::ProblemsFound => 0,
+        HtmlAssetResultStatus::IncompleteOrFailed => 1,
+        HtmlAssetResultStatus::NotTested => 2,
+        HtmlAssetResultStatus::NoProblemsInCompletedChecks => 3,
+    }
+}
+
 fn html_asset_result_section(
     report: &BeginnerMasterReport,
     labels: &BTreeMap<Id, String>,
@@ -13844,8 +13858,14 @@ fn html_asset_result_section(
         return String::new();
     }
 
-    let mut rows = String::new();
-    for target in &report.requested.targets {
+    // Ranked, not listed in the order the targets were declared. Under a
+    // heading that promises the assets needing attention, an audit run put
+    // the asset carrying one problem above the asset carrying twenty-two and
+    // the failed host in the middle of the healthy ones. The order within the
+    // problem tier is the report's own finding order, so this section and the
+    // problems section agree on what to read first.
+    let mut ranked = Vec::new();
+    for (declared, target) in report.requested.targets.iter().enumerate() {
         let checks = report
             .actual
             .checks
@@ -14053,21 +14073,44 @@ fn html_asset_result_section(
             .as_ref()
             .map(|kind| format!("<small>{}</small>", html_escape(catalog.asset_kind(kind))))
             .unwrap_or_default();
-        rows.push_str(&format!(
-            concat!(
-                "<li class=\"asset-result asset-result--{}\">",
-                "<div class=\"asset-result__identity\"><strong>{}</strong>{}</div>",
-                "<strong class=\"pill asset-result__status\">{}</strong>",
-                "<p><strong>{}</strong><br>{}</p></li>"
+        // Where this asset's most urgent problem sits in the report's own
+        // finding order. `usize::MAX` for an asset with none, which sorts it
+        // behind every asset that has one without needing a second rule.
+        let first_problem = report
+            .findings
+            .iter()
+            .position(|finding| {
+                !finding
+                    .severity_basis_code
+                    .is_some_and(|basis| basis.is_exposure_observation())
+                    && finding.target_asset_ids.contains(&target.asset_id)
+            })
+            .unwrap_or(usize::MAX);
+        ranked.push((
+            html_asset_result_rank(status),
+            first_problem,
+            declared,
+            format!(
+                concat!(
+                    "<li class=\"asset-result asset-result--{}\">",
+                    "<div class=\"asset-result__identity\"><strong>{}</strong>{}</div>",
+                    "<strong class=\"pill asset-result__status\">{}</strong>",
+                    "<p><strong>{}</strong><br>{}</p></li>"
+                ),
+                class_name,
+                html_escape(target_label),
+                target_kind,
+                html_escape(status_label),
+                html_escape(&summary),
+                html_escape(&action),
             ),
-            class_name,
-            html_escape(target_label),
-            target_kind,
-            html_escape(status_label),
-            html_escape(&summary),
-            html_escape(&action),
         ));
     }
+    ranked.sort_by_key(|(rank, first_problem, declared, _)| (*rank, *first_problem, *declared));
+    let rows = ranked
+        .into_iter()
+        .map(|(_, _, _, row)| row)
+        .collect::<String>();
 
     format!(
         concat!(

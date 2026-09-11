@@ -2469,3 +2469,65 @@ test("a merged step survives when only a later finding it covers is a security f
   expect(container.textContent).toContain("Review the problem and its evidence.");
   expect(container.textContent).not.toContain("No additional action is listed for this scan.");
 });
+
+test("the asset board is read in attention order, not in the order targets were declared", () => {
+  const target = (assetId: string, label: string) => ({
+    assetId,
+    label,
+    assetKind: "host" as const,
+    labelAvailability: "recorded" as const,
+    assetKindAvailability: "recorded" as const,
+  });
+  const base = report("partial");
+  const { container } = renderReport(report("partial", {
+    requested: {
+      ...base.requested,
+      // Declared worst-last on purpose: one problem, then a failed check,
+      // then the asset carrying the report's most urgent problem.
+      targets: [target("asset-minor", "minor.example"), target("asset-failed", "failed.example"), target("asset-critical", "critical.example")],
+    },
+    actual: {
+      checks: [{
+        taskId: "task-failed",
+        checkId: "greenbone",
+        targetAssetIds: ["asset-failed"],
+        status: "failed",
+        testedDimensions: [],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    coverageGaps: [{
+      kind: "failed",
+      taskId: "task-failed",
+      targetAssetIds: ["asset-failed"],
+      dimension: "greenbone: failed check dimension",
+      reason: "This check stopped before it could establish completed coverage.",
+      nextActionCode: "retry_check",
+      nextAction: "Retry this check.",
+    }],
+    coverageCounts: counts({ failed: 1 }),
+    findings: [
+      frozenFinding({
+        findingId: "finding-critical",
+        fingerprint: "fp-critical",
+        title: "Remote code execution",
+        severity: "critical",
+        targetAssetIds: ["asset-critical"],
+      }),
+      frozenFinding({
+        findingId: "finding-minor",
+        fingerprint: "fp-minor",
+        title: "Weak cipher offered",
+        severity: "low",
+        targetAssetIds: ["asset-minor"],
+      }),
+    ],
+  }));
+
+  const board = container.querySelector(".asset-result-board__list");
+  expect(board).not.toBeNull();
+  const order = Array.from(board!.querySelectorAll("li"))
+    .map((row) => row.querySelector("strong")?.textContent);
+  expect(order).toEqual(["critical.example", "minor.example", "failed.example"]);
+});
