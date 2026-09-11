@@ -1060,6 +1060,59 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
         "every asset with a found problem is read before the ones with none"
     );
 
+    // What this product retained about how it knows is kept, and kept out of
+    // the way. On this run those two blocks were 57% of everything printed
+    // under "Problems found" -- artifact and engine-run identifiers, capture
+    // hashes, and the same catalog rationale repeated once per reference --
+    // read before the reader reached the next problem.
+    let problems = &ordered_html[ordered_html
+        .find(">Problems found</h2>")
+        .expect("problems section")..];
+    // Bounded before the run-level technical section, whose task records are
+    // articles too.
+    let problems = &problems[..problems
+        .find("<details class=\"technical\">")
+        .expect("technical details follow the problems")];
+    let cards = problems.match_indices("<article>").count();
+    assert_eq!(cards, report.findings.len(), "one card per finding");
+    assert_eq!(
+        problems
+            .match_indices("<details class=\"technical finding-technical\">")
+            .count(),
+        cards,
+        "every card keeps its evidence and framework provenance collapsed"
+    );
+    let first_card = &problems[problems.find("<article>").expect("a card")..];
+    let first_card = &first_card[..first_card.find("</article>").expect("card end")];
+    let collapsed_at = first_card
+        .find("<details class=\"technical finding-technical\">")
+        .expect("collapsed block");
+    for open_text in [
+        "Grype reported a critical-severity condition on the assessed asset.",
+        "Upgrade the affected component to a fixed version",
+        "Container security engineer",
+        "https://nvd.nist.gov/vuln/detail/CVE-2025-0002",
+    ] {
+        let at = first_card
+            .find(open_text)
+            .unwrap_or_else(|| panic!("card omitted {open_text}"));
+        assert!(at < collapsed_at, "{open_text} must stay in the open");
+    }
+    for retained in [
+        "Evidence SHA-256",
+        "Related framework coordinates",
+        "Mapping version",
+        "ISO/IEC 27001",
+    ] {
+        let at = first_card
+            .find(retained)
+            .unwrap_or_else(|| panic!("card dropped {retained}"));
+        assert!(
+            at > collapsed_at,
+            "{retained} must stay available, collapsed"
+        );
+    }
+
     if let Some(dump) = std::env::var_os("AI_SCANNER_REPORT_DUMP_DIR").map(PathBuf::from) {
         fs::create_dir_all(&dump).unwrap();
         for (name, format, locale, redaction) in [

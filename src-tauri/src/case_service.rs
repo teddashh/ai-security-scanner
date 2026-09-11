@@ -15447,8 +15447,9 @@ fn html_report_bytes(
                 "<h4>{}</h4><p>{}</p>",
                 "<p><strong>{}:</strong> {}</p>",
                 "<h4>{}</h4><ul>{}</ul>",
+                "<details class=\"technical finding-technical\"><summary><strong>{}</strong></summary>",
                 "<h4>{}</h4><ul>{}</ul>",
-                "<h4>{}</h4><ul>{}</ul></article>"
+                "<h4>{}</h4><ul>{}</ul></details></article>"
             ),
             html_escape(&finding.title),
             catalog.text("Severity", "嚴重程度"),
@@ -15474,10 +15475,23 @@ fn html_report_bytes(
             next_step_html,
             catalog.text("Suggested expert", "建議諮詢的專家"),
             html_escape(&expert_type),
-            catalog.text("Evidence SHA-256", "證據 SHA-256"),
-            evidence,
+            // The upstream advisory stays in the open: it is where a reader
+            // goes to understand the problem, not a record of how this
+            // product handled it.
             catalog.text("Official scanner references", "掃描工具官方參照"),
             official_references,
+            // Everything this product retained about how it knows. On a
+            // 21-engine run these two blocks were 57% of everything printed
+            // under "Problems found" -- artifact and engine-run identifiers,
+            // capture hashes, and the same catalog rationale and mapping
+            // provenance repeated once per reference -- read before the
+            // reader reached the next problem. All of it is still here.
+            catalog.text(
+                "Evidence and framework references",
+                "證據與框架參照",
+            ),
+            catalog.text("Evidence SHA-256", "證據 SHA-256"),
+            evidence,
             catalog.text("Related framework coordinates", "相關框架座標"),
             frameworks,
         ));
@@ -15888,6 +15902,8 @@ fn html_report_bytes(
         ".asset-result--problems-found{border-left-color:#b42318}.asset-result--no-problems-completed{border-left-color:#027a48}",
         ".asset-result--incomplete-failed{border-left-color:#b54708}.asset-result--not-tested{border-left-color:#475467}",
         "details.technical{margin-top:2rem;border-top:1px solid #ccd1d1;padding-top:1rem}",
+        "details.finding-technical{margin-top:1rem;padding-top:0.5rem}",
+        "details.finding-technical>summary{cursor:pointer;color:#4b5563}",
         "@media(max-width:760px){body{padding:1rem}.report-grid,.asset-result{grid-template-columns:1fr}table{display:block;overflow-x:auto}}",
         ".pill{border:1px solid currentColor;border-radius:1rem;padding:.1rem .5rem}</style></head><body>"
     ));
