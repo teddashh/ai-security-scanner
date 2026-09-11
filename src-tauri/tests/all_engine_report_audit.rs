@@ -984,6 +984,31 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
         &artifact_root,
         &signing_key,
     );
+    // Two vulnerability scanners cover the same repository and the same
+    // image, so this run is the shape cross-engine correlation exists for:
+    // Trivy and Grype both name CVE-2024-2511 on openssl. The suggestion is
+    // the product's offer to combine them; nothing is merged without the
+    // reader accepting it, and an unfired suggestion here would mean the
+    // reader is never offered the choice on a run that plainly needs it.
+    let correlations = ai_security_scanner_lib::correlation::correlation_report(&completed);
+    let openssl = correlations
+        .suggestions
+        .iter()
+        .filter(|suggestion| suggestion.vulnerability_id == "CVE-2024-2511")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        openssl.len(),
+        2,
+        "one suggestion per asset the two scanners agree on: {:#?}",
+        correlations
+    );
+    for suggestion in openssl {
+        assert_eq!(suggestion.package, "openssl");
+        assert_eq!(suggestion.engine_ids, ["grype", "trivy"]);
+        assert_eq!(suggestion.finding_ids.len(), 2);
+    }
+    assert_eq!(correlations.truncated_suggestions, 0);
+
     // The heading promises the assets that need attention, so the list is
     // read as an order. Before it was one, this run put the asset carrying a
     // single problem first, the asset carrying twenty-two third, and the host

@@ -480,13 +480,13 @@ test("the control verdict survives being normalized twice", () => {
 test("only Microsoft 365 findings get a control verdict", () => {
   const english = "Trivy reported this control as failing.";
   for (const family of [
-    "cloudPosture",
-    "cloudIdentity",
-    "networkExposure",
-    "sourceCode",
+    "cloud_posture",
+    "cloud_identity",
+    "network_exposure",
+    "source_code",
     "secret",
-    "infrastructureAsCode",
-    "vulnerableComponent",
+    "infrastructure_as_code",
+    "vulnerable_component",
     "kubernetes",
   ] as const) {
     const summary = findingSummarySentence("zh-TW", {
