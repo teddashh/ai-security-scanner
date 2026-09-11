@@ -1381,6 +1381,7 @@ struct AidefendView {
     reached: BTreeMap<String, BTreeSet<String>>,
     finding_titles: Vec<String>,
     html: String,
+    zh_html: String,
     /// The framework export's own account of how much of the run it placed.
     mapped: usize,
     unmapped: usize,
@@ -1409,7 +1410,7 @@ fn aidefend_view(
             subject.artifact_root,
             subject.signing_key,
         );
-        let export = |format, name: &str| {
+        let export = |format, name: &str, locale| {
             let path = subject.artifact_root.join(name);
             service
                 .export_case(
@@ -1420,7 +1421,7 @@ fn aidefend_view(
                     ExportOptions {
                         redaction: RedactionProfile::None,
                         include_raw_artifacts: false,
-                        locale: ReportLocale::En,
+                        locale,
                     },
                 )
                 .unwrap();
@@ -1429,6 +1430,7 @@ fn aidefend_view(
         let framework: serde_json::Value = serde_json::from_slice(&export(
             CaseExportFormat::FrameworkReport,
             "aidefend-framework.json",
+            ReportLocale::En,
         ))
         .unwrap();
         assert!(
@@ -1497,8 +1499,18 @@ fn aidefend_view(
                 .iter()
                 .map(|finding| finding.title.clone())
                 .collect(),
-            html: String::from_utf8(export(CaseExportFormat::Html, "aidefend-report.html"))
-                .unwrap(),
+            html: String::from_utf8(export(
+                CaseExportFormat::Html,
+                "aidefend-report.html",
+                ReportLocale::En,
+            ))
+            .unwrap(),
+            zh_html: String::from_utf8(export(
+                CaseExportFormat::Html,
+                "aidefend-report-zh.html",
+                ReportLocale::ZhHant,
+            ))
+            .unwrap(),
         }
     })
 }
@@ -1582,6 +1594,26 @@ fn the_ai_framework_follows_the_case_answers_and_nothing_else() {
             Some(&view.unmapped),
             "every unplaced finding says so in the provenance ledger"
         );
+        // And the reader is told on the card, in either language, instead of
+        // reading the absence as "no control relates to this".
+        assert_eq!(
+            view.html
+                .matches("The packaged mapping catalog has no entry for this finding's rule, so its framework position is unknown, not absent.")
+                .count(),
+            view.unmapped
+        );
+        assert_eq!(
+            view.zh_html
+                .matches("內建的對照目錄沒有此問題規則的項目，因此其框架位置為未知，而非不存在。")
+                .count(),
+            view.unmapped
+        );
+        assert!(
+            !view
+                .html
+                .contains("No selected-run framework coordinate was retained.")
+        );
+        assert!(!view.zh_html.contains("未保留本輪的框架座標。"));
         assert!(
             view.limitations.iter().any(|limitation| *limitation
                 == format!(

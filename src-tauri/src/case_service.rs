@@ -15450,10 +15450,24 @@ fn html_report_bytes(
             })
             .collect::<String>();
         if frameworks.is_empty() {
-            frameworks.push_str(catalog.text(
-                "<li>No selected-run framework coordinate was retained.</li>",
-                "<li>未保留本輪的框架座標。</li>",
-            ));
+            // Two different silences. A frozen selected-run finding with no
+            // coordinate is one the packaged catalog carries no rule for --
+            // unplaced, not unrelated -- and on a mixed run that is most of
+            // them. Only a finding that is not from this run's immutable
+            // snapshot has coordinates that were genuinely not retained.
+            frameworks.push_str(
+                if finding.snapshot_source == crate::beginner_report::FindingSnapshotSource::FrozenSelectedRun {
+                    catalog.text(
+                        "<li>The packaged mapping catalog has no entry for this finding's rule, so its framework position is unknown, not absent.</li>",
+                        "<li>內建的對照目錄沒有此問題規則的項目，因此其框架位置為未知，而非不存在。</li>",
+                    )
+                } else {
+                    catalog.text(
+                        "<li>No selected-run framework coordinate was retained.</li>",
+                        "<li>未保留本輪的框架座標。</li>",
+                    )
+                },
+            );
         }
         let targets = readable_target_list(&finding.target_asset_ids, &target_labels, catalog);
         if finding
