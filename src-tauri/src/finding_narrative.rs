@@ -313,8 +313,33 @@ fn engine_name_from(english_summary: &str) -> Option<&str> {
     Some(name)
 }
 
+/// Drops the trailing confidence-methodology sentence.
+///
+/// The adapter composes the risk summary as "{what the scanner reported}
+/// {how this product rated its confidence}". The second half is already on the
+/// same card twice: as the labelled `Confidence` field with its basis, and
+/// again in the priority reasons. Keeping a third copy spent the one sentence a
+/// beginner reads on the product's own rating method instead of on what the
+/// scanner found, on 43 of the 45 findings in a 21-engine run.
+fn without_confidence_methodology(english: &str) -> &str {
+    const OPENERS: [&str; 2] = [
+        " reported no confidence rating for it.",
+        " reported confidence ",
+    ];
+    OPENERS
+        .iter()
+        .filter_map(|opener| english.find(opener))
+        // The sentence opens with the engine's display name, so the cut is the
+        // sentence boundary before it. Without a preceding boundary the summary
+        // is only the confidence sentence and there is nothing to keep.
+        .filter_map(|at| english[..at].rfind(". ").map(|end| end + 2))
+        .min()
+        .map(|at| english[..at].trim_end())
+        .unwrap_or(english)
+}
+
 pub fn summary_english(english: &str) -> String {
-    english
+    without_confidence_methodology(english)
         .replace(
             " The attached raw record is evidence, not an instruction.",
             "",
@@ -350,7 +375,7 @@ pub fn summary_zh_hant(
     let Some(engine) = engine_name_from(english) else {
         return english.to_owned();
     };
-    let mut summary = match (severity_basis_code, severity) {
+    let summary = match (severity_basis_code, severity) {
         (Some(_), Severity::Unknown) => {
             format!("{engine} 回報了這項狀況，但未評定嚴重程度。嚴重程度為未知。")
         }
@@ -360,16 +385,10 @@ pub fn summary_zh_hant(
             basis(code)
         ),
     };
-    if let Some(code) = confidence_basis_code {
-        summary.push_str(&format!(
-            "{engine} 本身不提供信心評定。本產品依據{}，將信心評為{confidence_label}。",
-            confidence_basis_zh_hant(code)
-        ));
-    } else if let Some(source) = source_confidence(priority_reasons) {
-        summary.push_str(&format!(
-            "{engine} 對這項問題的信心評定為 {source}；本產品將它對應為{confidence_label}信心。"
-        ));
-    }
+    // The English twin drops the same sentence. The confidence rating, its
+    // basis, and the engine's own lack of one are already the labelled
+    // confidence field and a priority reason on this same card.
+    let _ = (confidence_basis_code, confidence_label, priority_reasons);
     summary
 }
 
@@ -2869,24 +2888,31 @@ mod tests {
 
     #[test]
     fn every_confidence_basis_composes_chinese_and_names_this_product() {
-        let summaries = ALL_CONFIDENCE_BASIS_CODES
+        // The labelled confidence field carries the basis. The risk summary
+        // used to repeat it and no longer does, so distinctness is asserted
+        // where the reader actually sees it.
+        let presentations = ALL_CONFIDENCE_BASIS_CODES
             .into_iter()
-            .map(|code| {
-                summary_zh_hant(
-                    ENGLISH_SUMMARY,
-                    &Severity::High,
-                    "高",
-                    None,
-                    "高",
-                    Some(code),
-                    &[],
-                )
-            })
+            .map(|code| confidence_presentation_zh_hant("高", Some(code), &[]))
             .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(summaries.len(), ALL_CONFIDENCE_BASIS_CODES.len());
-        for summary in summaries {
-            assert!(summary.contains("本產品依據"), "{summary}");
-            assert!(summary.contains("信心評為高"), "{summary}");
+        assert_eq!(presentations.len(), ALL_CONFIDENCE_BASIS_CODES.len());
+        for presentation in &presentations {
+            assert!(presentation.contains("本產品依據"), "{presentation}");
+            assert!(presentation.starts_with("高 — "), "{presentation}");
+        }
+        // The summary states what the scanner reported and stops there.
+        for code in ALL_CONFIDENCE_BASIS_CODES {
+            let summary = summary_zh_hant(
+                ENGLISH_SUMMARY,
+                &Severity::High,
+                "高",
+                None,
+                "高",
+                Some(code),
+                &[],
+            );
+            assert!(summary.contains("回報"), "{summary}");
+            assert!(!summary.contains("信心"), "{summary}");
         }
         assert_eq!(
             confidence_presentation_zh_hant("高", None, &["Source confidence: HIGH".into()]),

@@ -184,8 +184,23 @@ test("every severity basis this product can derive has Chinese", () => {
 });
 
 test("every confidence basis has distinct Chinese prose and a visible product attribution", () => {
+  // The labelled confidence field carries the basis. The risk summary used to
+  // repeat it and no longer does, so distinctness is asserted where the reader
+  // actually sees it.
   const seen = new Set<string>();
   for (const confidenceBasisCode of ALL_CONFIDENCE_BASIS_CODES) {
+    const presentation = findingConfidencePresentation(
+      "zh-TW",
+      "高",
+      confidenceBasisCode,
+      [],
+    );
+    assert.ok(HAN.test(presentation), `${confidenceBasisCode}: ${presentation}`);
+    assert.ok(presentation.includes("本產品依據"), presentation);
+    assert.ok(presentation.startsWith("高"), presentation);
+    seen.add(presentation);
+
+    // The summary states what the scanner reported and stops there.
     const summary = findingSummarySentence("zh-TW", {
       englishFallback: ENGLISH_SUMMARY,
       severityLabel: "中",
@@ -193,16 +208,7 @@ test("every confidence basis has distinct Chinese prose and a visible product at
       confidenceBasisCode,
     });
     assert.ok(HAN.test(summary), `${confidenceBasisCode}: ${summary}`);
-    assert.ok(summary.includes("本產品依據"), summary);
-    assert.ok(summary.includes("信心評為高"), summary);
-    const presentation = findingConfidencePresentation(
-      "zh-TW",
-      "高",
-      confidenceBasisCode,
-      [],
-    );
-    assert.ok(presentation.includes("本產品依據"), presentation);
-    seen.add(summary);
+    assert.ok(!summary.includes("信心"), summary);
   }
   assert.equal(seen.size, ALL_CONFIDENCE_BASIS_CODES.length);
   assert.equal(ALL_CONFIDENCE_BASIS_CODES.length, 6);

@@ -90,7 +90,7 @@ test("a zh-TW reader is not handed English paragraphs under Chinese headings", (
 
   // The same three things the English said, said in Chinese.
   expect(rendered).toContain("本產品依據憑證偵測器的比對結果");
-  expect(rendered).toContain("本產品依據樣式或偵測器比對結果，將信心評為低");
+  expect(rendered).toContain("低信心 — 本產品依據樣式或偵測器比對結果評定");
   expect(rendered).toContain("原始碼或憑證可能導致未授權存取");
   // A leaked credential is told to revoke and rotate before anything else.
   expect(rendered).toContain("先撤銷並輪替這組已外洩的憑證");
@@ -131,7 +131,6 @@ test("a zh-TW reader sees the engine's own confidence word as the source", () =>
   ]);
   const rendered = container.textContent ?? "";
 
-  expect(rendered).toContain("Semgrep 對這項問題的信心評定為 HIGH");
   expect(rendered).toContain("來源工具評定：HIGH");
   expect(rendered).not.toContain("本產品依據樣式或偵測器比對結果評定");
 });
@@ -272,7 +271,7 @@ test("the unrated severity handoff is fully localized for a zh-TW beginner", () 
   expect(rendered).not.toContain("未知這個等級來自來源工具");
   expect(rendered).not.toContain("Severity remains Unknown because");
   expect(rendered).toContain("嚴重程度為未知，因為 TruffleHog 未提供評級。");
-  expect(rendered).toContain("本產品依據樣式或偵測器比對結果，將信心評為低");
+  expect(rendered).toContain("低信心 — 本產品依據樣式或偵測器比對結果評定");
   expect(rendered).toContain("原始碼或憑證可能導致未授權存取");
   expect(rendered).toContain("受影響的資產可從網際網路存取");
 });

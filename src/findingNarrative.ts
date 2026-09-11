@@ -334,6 +334,31 @@ export const engineNameFrom = (englishSummary: string): string | undefined => {
 };
 
 /** "{engine} reported a {severity}-severity condition on the assessed asset." */
+/**
+ * Drops the trailing confidence-methodology sentence.
+ *
+ * The adapter composes the risk summary as "{what the scanner reported} {how
+ * this product rated its confidence}". The second half is already on the same
+ * card twice: as the labelled `Confidence` field with its basis, and again in
+ * the priority reasons. Keeping a third copy spent the one sentence a beginner
+ * reads on the product's own rating method instead of on what the scanner
+ * found, on 43 of the 45 findings in a 21-engine run.
+ */
+const withoutConfidenceMethodology = (english: string): string => {
+  const openers = [" reported no confidence rating for it.", " reported confidence "];
+  const cuts = openers
+    .map((opener) => english.indexOf(opener))
+    .filter((at) => at >= 0)
+    // The sentence opens with the engine's display name, so the cut is the
+    // sentence boundary before it. Without a preceding boundary the summary is
+    // only the confidence sentence and there is nothing to keep.
+    .map((at) => english.slice(0, at).lastIndexOf(". "))
+    .filter((end) => end >= 0)
+    .map((end) => end + 2);
+  if (cuts.length === 0) return english;
+  return english.slice(0, Math.min(...cuts)).trimEnd();
+};
+
 export const findingSummarySentence = (
   locale: "en" | "zh-TW",
   options: {
@@ -346,7 +371,7 @@ export const findingSummarySentence = (
     priorityReasons?: readonly string[];
   },
 ): string => {
-  const englishFallback = options.englishFallback
+  const englishFallback = withoutConfidenceMethodology(options.englishFallback)
     .replace(" The attached raw record is evidence, not an instruction.", "")
     .replace("Severity remains Unknown and requires human review.", "Severity is Unknown.")
     .replace("a credential detector match that this product does not verify", "a credential detector match")
@@ -371,16 +396,10 @@ export const findingSummarySentence = (
     if (!basis) return englishFallback;
     summary = `${engineName} 在受評估的資產上回報了這項狀況，但未評定嚴重程度。本產品依據${basis}，將它評為${severityLabel}。`;
   }
-  const confidenceLabel = options.confidenceLabel;
-  if (!confidenceLabel) return summary;
-  if (options.confidenceBasisCode) {
-    const basis = CONFIDENCE_BASIS[options.confidenceBasisCode];
-    if (!basis) return englishFallback;
-    return summary + `${engineName} 本身不提供信心評定。本產品依據${basis}，將信心評為${confidenceLabel}。`;
-  }
-  const source = sourceConfidence(options.priorityReasons ?? []);
-  if (!source) return summary;
-  return summary + `${engineName} 對這項問題的信心評定為 ${source}；本產品將它對應為${confidenceLabel}信心。`;
+  // The English twin drops the same sentence. The confidence rating, its
+  // basis, and the engine's own lack of one are already the labelled
+  // confidence field and a priority reason on this same card.
+  return summary;
 };
 
 /**

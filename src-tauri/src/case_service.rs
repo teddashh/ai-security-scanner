@@ -30254,7 +30254,9 @@ mod tests {
             // so a reader was given a Chinese heading over an English list.
             "嚴重程度是由掃描到的原始碼中符合機密資料的樣式推導而來",
             "Gitleaks 本身不提供嚴重程度",
-            "本產品依據樣式或偵測器比對結果，將信心評為低",
+            // The labelled confidence field, then the priority reason. The
+            // risk summary used to repeat both and no longer does.
+            "本產品依據樣式或偵測器比對結果評定",
             "信心是由樣式或偵測器比對結果推導而來",
             "Gitleaks 本身不提供信心評定",
             // Why the findings list is short, and the one thing that fixes it.
