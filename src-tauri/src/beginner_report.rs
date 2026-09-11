@@ -588,6 +588,14 @@ pub struct BeginnerNextStep {
     /// own sentence names the identifier they have to add.
     #[serde(default)]
     pub unattributed: Option<crate::domain::UnattributedResults>,
+    /// The other findings that name this same step as their fix, beyond the one
+    /// in `finding_id`. One instruction repeated once per finding is a second
+    /// copy of the findings list, not a list of things to do: nine findings on
+    /// one AWS-managed policy printed the same 168-character sentence nine
+    /// times. The findings stay separate everywhere else in the report; only
+    /// the instruction is stated once, and every id it covers stays here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also_resolves: Vec<Id>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3600,6 +3608,23 @@ pub(crate) fn finding_step_reason(
     )
 }
 
+/// The typed Cloudsplaining policy record a finding's instruction is composed
+/// from, when it has one.
+pub(crate) fn finding_aws_iam_policy(
+    finding: &BeginnerFinding,
+) -> Option<&crate::domain::AwsIamPolicyFindingDetails> {
+    finding
+        .evidence_references
+        .iter()
+        .filter(|reference| reference.details_frozen && reference.engine_id == "cloudsplaining")
+        .find_map(|reference| {
+            reference
+                .scanner_details
+                .as_ref()
+                .and_then(|details| details.aws_iam_policy.as_ref())
+        })
+}
+
 fn severity_word(severity: &Severity) -> &'static str {
     match severity {
         // Not "informational" and not "low": the source gave no recognized
@@ -3627,17 +3652,39 @@ fn project_next_steps(
     gaps: &[CoverageGap],
     actual: &ActualCoverage,
 ) -> Vec<BeginnerNextStep> {
-    let mut steps = findings
-        .iter()
-        .filter(|finding| {
-            !finding
-                .severity_basis_code
-                .is_some_and(|code| code.is_exposure_observation())
-        })
-        .enumerate()
-        .map(|(index, finding)| BeginnerNextStep {
+    // Keyed on the sentences the reader actually sees rather than on the
+    // stored `next_step`: a Cloudsplaining finding's instruction is composed
+    // from its typed policy record and ignores the stored text entirely, so
+    // two findings can store the same string and still be told to do two
+    // different things. Rendering both locales here keeps a step that reads
+    // as one instruction in English from being two in Chinese.
+    let mut step_at: BTreeMap<(String, String, String), usize> = BTreeMap::new();
+    let mut steps: Vec<BeginnerNextStep> = Vec::new();
+    for finding in findings.iter().filter(|finding| {
+        !finding
+            .severity_basis_code
+            .is_some_and(|code| code.is_exposure_observation())
+    }) {
+        let policy = finding_aws_iam_policy(finding);
+        let expert = finding.recommended_expert_type.clone();
+        let key = (
+            crate::finding_narrative::action_english(&finding.next_step, finding.family, policy),
+            crate::finding_narrative::action_zh_hant(
+                &finding.next_step,
+                &expert,
+                finding.family,
+                policy,
+            ),
+            expert.clone(),
+        );
+        if let Some(&at) = step_at.get(&key) {
+            steps[at].also_resolves.push(finding.finding_id.clone());
+            continue;
+        }
+        step_at.insert(key, steps.len());
+        steps.push(BeginnerNextStep {
             unattributed: None,
-            priority: index as u16,
+            priority: steps.len() as u16,
             code: NextActionCode::ReviewFinding,
             action: finding.next_step.clone(),
             reason: finding_step_reason(
@@ -3649,15 +3696,17 @@ fn project_next_steps(
             ),
             finding_id: Some(finding.finding_id.clone()),
             task_id: None,
-            recommended_expert_type: Some(finding.recommended_expert_type.clone()),
+            recommended_expert_type: Some(expert),
             family: finding.family,
-        })
-        .collect::<Vec<_>>();
+            also_resolves: Vec::new(),
+        });
+    }
 
     let mut seen_gap_actions = BTreeSet::new();
     for gap in gaps {
         if seen_gap_actions.insert(gap.next_action.clone()) {
             steps.push(BeginnerNextStep {
+                also_resolves: Vec::new(),
                 family: None,
                 priority: 100 + gap_rank(gap.kind) as u16,
                 code: gap.next_action_code,
@@ -3690,6 +3739,7 @@ fn project_next_steps(
             )
         };
         steps.push(BeginnerNextStep {
+            also_resolves: Vec::new(),
             unattributed: None,
             family: None,
             priority: 0,

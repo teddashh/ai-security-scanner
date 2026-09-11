@@ -14352,20 +14352,7 @@ fn html_evidence_reference(
     )
 }
 
-fn beginner_aws_iam_policy(
-    finding: &crate::beginner_report::BeginnerFinding,
-) -> Option<&crate::domain::AwsIamPolicyFindingDetails> {
-    finding
-        .evidence_references
-        .iter()
-        .filter(|reference| reference.details_frozen && reference.engine_id == "cloudsplaining")
-        .find_map(|reference| {
-            reference
-                .scanner_details
-                .as_ref()
-                .and_then(|details| details.aws_iam_policy.as_ref())
-        })
-}
+use crate::beginner_report::finding_aws_iam_policy as beginner_aws_iam_policy;
 
 fn html_official_references(
     references: &Option<Vec<String>>,
@@ -15054,6 +15041,22 @@ fn html_report_bytes(
                     crate::finding_narrative::coverage_gap_prose_english(&step.reason),
                 ),
                 _ => (action, step.reason.clone()),
+            };
+            // One instruction, stated once, over the finding that leads the
+            // group. Saying how many name it is the part a beginner acts on:
+            // it is the difference between nine things to do and one.
+            let reason = if step.also_resolves.is_empty() {
+                reason
+            } else {
+                let count = step.also_resolves.len() + 1;
+                match catalog.locale {
+                    crate::export::ReportLocale::En => {
+                        format!("{count} problems name this same fix. The first is {reason}")
+                    }
+                    crate::export::ReportLocale::ZhHant => {
+                        format!("有 {count} 項問題指向同一個修復方式，第一項是{reason}")
+                    }
+                }
             };
             format!(
                 "<li><strong>{}</strong> — {}{}</li>",

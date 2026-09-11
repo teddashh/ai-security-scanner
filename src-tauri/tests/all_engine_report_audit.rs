@@ -874,6 +874,99 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             .any(|run| run.status == EngineRunStatus::Completed)
     );
 
+    // One instruction is listed once, however many findings name it. Every
+    // finding still reaches the reader through exactly one step: nothing is
+    // dropped by the merge, and nothing is counted twice.
+    let mut step_findings = report
+        .next_steps
+        .iter()
+        .filter_map(|step| step.finding_id.clone().map(|lead| (lead, step)))
+        .flat_map(|(lead, step)| std::iter::once(lead).chain(step.also_resolves.iter().cloned()))
+        .collect::<Vec<_>>();
+    let listed = step_findings.len();
+    step_findings.sort();
+    step_findings.dedup();
+    assert_eq!(
+        listed,
+        step_findings.len(),
+        "a finding must be named by exactly one next step"
+    );
+    let mut actionable = report
+        .findings
+        .iter()
+        .filter(|finding| {
+            !finding
+                .severity_basis_code
+                .is_some_and(|code| code.is_exposure_observation())
+        })
+        .map(|finding| finding.finding_id.clone())
+        .collect::<Vec<_>>();
+    actionable.sort();
+    assert_eq!(
+        step_findings, actionable,
+        "every actionable finding reaches the reader through a next step"
+    );
+    let repeated = report
+        .next_steps
+        .iter()
+        .filter(|step| !step.also_resolves.is_empty())
+        .count();
+    assert!(
+        repeated > 0,
+        "this run has findings that share a fix; the merge must be exercised"
+    );
+    assert!(
+        report.next_steps.len() < actionable.len(),
+        "{} steps for {} findings is the findings list printed twice",
+        report.next_steps.len(),
+        actionable.len()
+    );
+
+    // Two findings whose stored instruction is the same string are still two
+    // instructions when the reader is sent to a different specialist, and a
+    // Cloudsplaining step is composed from its typed policy record rather than
+    // from that string at all. Merging on the stored text alone would collapse
+    // both of these into one wrong sentence.
+    let same_text_different_expert = report
+        .next_steps
+        .iter()
+        .filter(|step| {
+            step.action
+                == "Document why this service must remain reachable, or remove or restrict the exposure."
+        })
+        .map(|step| step.recommended_expert_type.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        same_text_different_expert,
+        [
+            Some("Vulnerability manager".to_string()),
+            Some("Application security engineer".to_string()),
+        ],
+        "one stored sentence, two experts, two steps"
+    );
+    let iam_policies = [
+        "IAMFullAccess",
+        "InlinePolicyForAdminGroup",
+        "InsecurePolicy",
+    ];
+    for policy in iam_policies {
+        let named = report
+            .next_steps
+            .iter()
+            .filter(|step| step.action.contains(policy))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            named.len(),
+            1,
+            "one step per IAM policy the reader has to change; {policy} has {}",
+            named.len()
+        );
+        assert!(
+            !named[0].also_resolves.is_empty(),
+            "{policy} is named by more than one finding"
+        );
+    }
+
     let reopened_storage = Storage::open(&database).unwrap();
     let reopened = reopened_storage.get_case(&case.id).unwrap();
     assert_eq!(

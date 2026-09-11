@@ -1074,6 +1074,12 @@ export interface BeginnerMasterReport {
     findingId?: string;
     taskId?: string;
     recommendedExpertType?: string;
+    /**
+     * The other findings that name this same step as their fix, beyond
+     * `findingId`. One instruction is listed once; the count tells the reader
+     * how many problems it covers.
+     */
+    alsoResolves?: string[];
   }>;
   /** Expert-only, redacted execution records. The Results page keeps these collapsed. */
   technicalDetails: {

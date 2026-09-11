@@ -2382,3 +2382,90 @@ test("the identifier a zh-TW reader must copy is not stranded in English", () =>
   expect(rendered).toContain("123456789012");
   expect(rendered).toContain("aws");
 });
+
+test("one instruction several findings share is listed once and says how many it covers", () => {
+  const shared = ["finding-a", "finding-b", "finding-c"].map((findingId, index) =>
+    frozenFinding({
+      findingId,
+      fingerprint: `fp-${findingId}`,
+      title: `Over-broad permission ${index + 1} in policy AdminPolicy`,
+      nextStep: "Narrow policy AdminPolicy.",
+      recommendedExpertType: "Cloud identity specialist",
+    }));
+  const { container } = renderReport(report("complete", {
+    actual: {
+      checks: [{
+        taskId: "cloudsplaining-task",
+        checkId: "cloudsplaining",
+        targetAssetIds: ["asset-1"],
+        status: "tested_complete",
+        testedDimensions: [],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    findings: shared,
+    nextSteps: [{
+      priority: 0,
+      code: "review_finding",
+      action: "Narrow policy AdminPolicy.",
+      reason: shared[0]!.title,
+      findingId: "finding-a",
+      recommendedExpertType: "Cloud identity specialist",
+      alsoResolves: ["finding-b", "finding-c"],
+    }],
+  }));
+
+  const steps = Array.from(container.querySelectorAll("ol.detail-list li"))
+    .filter((item) => item.textContent?.includes("Review the problem and its evidence."));
+  expect(steps).toHaveLength(1);
+  expect(steps[0]!.textContent).toContain("Problems this step covers: 3");
+  // The three findings stay three problems everywhere else in the report.
+  const problemMetric = Array.from(container.querySelectorAll<HTMLElement>(".metric-card"))
+    .find((card) => card.textContent?.includes("Problems found"));
+  expect(problemMetric?.textContent).toContain("3");
+});
+
+test("a merged step survives when only a later finding it covers is a security finding", () => {
+  const observation = frozenFinding({
+    findingId: "finding-observation",
+    fingerprint: "fp-observation",
+    title: "Externally reachable network service",
+    severity: "info",
+    severityBasisCode: "open_port",
+    nextStep: "Document why this service must remain reachable.",
+  });
+  const problem = frozenFinding({
+    findingId: "finding-problem",
+    fingerprint: "fp-problem",
+    title: "Unauthenticated admin interface",
+    nextStep: "Document why this service must remain reachable.",
+  });
+  const { container } = renderReport(report("complete", {
+    actual: {
+      checks: [{
+        taskId: "nuclei-task",
+        checkId: "nuclei",
+        targetAssetIds: ["asset-1"],
+        status: "tested_complete",
+        testedDimensions: [],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    findings: [observation, problem],
+    nextSteps: [{
+      priority: 0,
+      code: "review_finding",
+      action: "Document why this service must remain reachable.",
+      reason: observation.title,
+      findingId: "finding-observation",
+      alsoResolves: ["finding-problem"],
+    }],
+  }));
+
+  // Dropping the step because its lead is inventory would take the real
+  // problem's only instruction with it.
+  expect(container.textContent).toContain("Review the problem and its evidence.");
+  expect(container.textContent).not.toContain("No additional action is listed for this scan.");
+});

@@ -582,6 +582,7 @@ const copy = {
   attentionTitle: { en: "What needs attention", zhTW: "需要留意的內容" },
   nextTitle: { en: "What to do next", zhTW: "接下來怎麼做" },
   moreItems: { en: "+{count} more", zhTW: "另 {count} 項" },
+  stepCoversProblems: { en: "Problems this step covers: {count}", zhTW: "這一步涵蓋的問題：{count}" },
   noRequestedTarget: {
     en: "The older run did not retain an exact target description.",
     zhTW: "這筆舊掃描沒有保留精確的目標說明。",
@@ -1119,7 +1120,11 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
   );
   const engineByTaskId = new Map(run?.engineRuns.map((engine) => [engine.id, engine]) ?? []);
   const orderedNextSteps = report.nextSteps
-    .filter((step) => !step.findingId || securityFindingIds.has(step.findingId))
+    // A step is listed once and can be the fix several findings name, so it
+    // stays as long as one of them is a security finding.
+    .filter((step) => !step.findingId
+      || securityFindingIds.has(step.findingId)
+      || (step.alsoResolves ?? []).some((findingId) => securityFindingIds.has(findingId)))
     .sort((left, right) => left.priority - right.priority);
   const firstRequestedTarget = report.requested.targets[0];
   const firstTestedCheck = testedChecks[0];
@@ -1547,12 +1552,18 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
       </div>
       {orderedNextSteps.length > 0 ? (
         <ol className="detail-list">
-          {orderedNextSteps.map((step, index) => (
+          {orderedNextSteps.map((step, index) => {
+            const covers = (step.alsoResolves?.length ?? 0) + 1;
+            return (
               <li key={`${step.code}-${step.findingId ?? step.taskId ?? index}`}>
                 <strong>{text(nextActionCopy(step.code))}</strong>
+                {step.findingId && covers > 1 && (
+                  <span>{text(copy.stepCoversProblems, { count: formatNumber(covers) })}</span>
+                )}
                 {step.recommendedExpertType && <span>{localizedExpertType(step.recommendedExpertType, locale)}</span>}
               </li>
-            ))}
+            );
+          })}
         </ol>
       ) : <p>{text(copy.noNextStep)}</p>}
 
