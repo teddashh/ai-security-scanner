@@ -829,7 +829,6 @@ export const localizedCoverageDimension = (
 
   // "{check id} {kind}".
   for (const [suffix, label] of [
-    [" granular executed scope", "細部執行範圍"],
     [" completed-check time", "檢查完成時間"],
     [" saved work-unit coverage", "已儲存的工作單元涵蓋記錄"],
     [" saved result processing", "已儲存結果的處理"],
@@ -1045,10 +1044,6 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
   [
     "Readable frozen network plans contain quick discovery only, but another network check has no valid saved plan. Quick discovery is the highest known stage, not a complete run-wide record.",
     "可讀取的凍結網路計畫只包含快速探索，但另一項網路檢查沒有有效的已儲存計畫。快速探索是目前已知的最高階段，不代表整輪的完整記錄。",
-  ],
-  [
-    "The run records the completed engine/asset coordinate but not exact observed hosts, services, ports, paths, files, branches, accounts, or resources.",
-    "本輪記錄了完成的掃描工具與資產對應關係，但沒有記錄實際觀察到的主機、服務、連接埠、路徑、檔案、分支、帳號或資源。",
   ],
   [
     "This HTTPS management-service profile contains no device product or firmware vulnerability checks. TLS protocol, cipher, and certificate checks are reported separately.",

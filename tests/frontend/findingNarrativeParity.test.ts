@@ -135,7 +135,7 @@ test("both sides recognise the same English before writing the same Chinese", ()
   ].map((match) => ({ english: match[1] ?? "", chinese: match[2] ?? "" }));
 
   assert.ok(pairs.length >= 90, `extractor found only ${pairs.length} pairs`);
-  assert.ok(pairs.some((pair) => pair.english === " granular executed scope"));
+  assert.ok(pairs.some((pair) => pair.english === " completed-check time"));
   assert.ok(pairs.some((pair) => pair.english === "This check did not start, so it is not a pass."));
 
   const unmatched = pairs.filter(

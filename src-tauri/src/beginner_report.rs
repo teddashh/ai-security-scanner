@@ -1594,11 +1594,15 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                 append_internal_endpoint_vnc_dimensions(run, task, &mut tested_dimensions);
                 append_internal_endpoint_smtp_dimensions(case, run, task, &mut tested_dimensions);
                 append_internal_endpoint_telnet_dimensions(run, task, &mut tested_dimensions);
-                unavailable_dimensions.push(UnavailableDimension {
-                    dimension: format!("{} granular executed scope", task.engine_id),
-                    explanation: "The run records the completed engine/asset coordinate but not exact observed hosts, services, ports, paths, files, branches, accounts, or resources."
-                        .into(),
-                });
+                // The completed check-to-target coordinate pushed just above
+                // already tells the reader, for this same engine and asset,
+                // that more granular executed dimensions were not frozen. A
+                // second copy as an unavailable dimension became a coverage-gap
+                // row that fired for every completed task without exception, so
+                // it carried no per-run information and grew with the number of
+                // engines: on a 21-engine run it filled 16 of the 25 rows a
+                // beginner reads to learn what was not tested, ahead of the
+                // dead host and the checks that actually failed.
                 let meaningful_completed_profile = task.engine_id != GREENBONE_ENGINE_ID
                     || task_has_exact_frozen_greenbone_vulnerability_profile(run, task);
                 if !meaningful_completed_profile {

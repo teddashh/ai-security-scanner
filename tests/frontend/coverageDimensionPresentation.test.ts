@@ -78,9 +78,9 @@ const testedObservations = [
  * These matter more than the fixed ones and were the whole blind spot in this
  * file's first version: it censused only `dimension: "..."`, which no composed
  * name matches, so sixteen shapes reached a Chinese reader as raw English while
- * the coverage assertion below passed. Every ordinary run emits at least one --
- * `{engine} granular executed scope` is written for every completed catalog
- * check.
+ * the coverage assertion below passed. Composed names are the common case: a
+ * failed, cancelled or timed-out check, a dead host, and an unfinished website
+ * all name their engine before the fragment they carry.
  *
  * Three producers, because the backend writes a dimension three ways:
  *
@@ -143,7 +143,6 @@ test("the backend's dimension vocabulary was found", () => {
     `found only ${composedDimensions.length} composed dimensions: ${composedDimensions.join(", ")}`,
   );
   for (const expected of [
-    "cloudquery granular executed scope",
     "cloudquery failed work units (3)",
     "cloudquery final-state reconciliation",
     "cloudquery: not-tested check dimension",

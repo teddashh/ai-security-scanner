@@ -30264,14 +30264,12 @@ mod tests {
             // Which coverage each gap row is about. Composed around the engine
             // id, which is the only part telling one row from the next, so the
             // id survives and the kind is what gets translated.
-            "gitleaks 的細部執行範圍",
             "要求的掃描深度",
             "自動縮減的範圍",
             "目標的歷史顯示資料",
             "本輪問題顯示資料",
             // Why each row is a gap, and what to do about it. Both were stored
             // as English prose and printed under translated headings.
-            "本輪記錄了完成的掃描工具與資產對應關係",
             "本輪沒有保留精確的縮減記錄",
             "至少有一筆舊版的問題觀察結果",
             "查看已保存的範圍細節。",
@@ -30369,10 +30367,8 @@ mod tests {
             "No authorized asset carries that identifier",
             // Every gap row began with one of these, so a Chinese report
             // opened each line with a phrase the reader could not place.
-            "granular executed scope",
             "requested scan stage",
             "run-frozen target label or type",
-            "The run records the completed engine/asset coordinate",
             "This run did not retain an exact reduction record",
             "Open the saved scope details",
             "Execution Timeout",
