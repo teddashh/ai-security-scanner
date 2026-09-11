@@ -15597,8 +15597,12 @@ fn html_report_bytes(
             continue;
         }
         problem_count += 1;
+        // Its own paragraph, because the two blocks after it are a heading
+        // and a paragraph. Nested inside the card's `<p>` slot they closed it
+        // early and left a stray `</p>` on all forty-five cards of every
+        // export.
         let next_step_html = format!(
-            "{}{safety_block}{verification_block}",
+            "<p>{}</p>{safety_block}{verification_block}",
             html_escape(&next_step)
         );
         findings.push_str(&format!(
@@ -15617,7 +15621,7 @@ fn html_report_bytes(
                 "<strong>{}:</strong> <code>{}</code></p>",
                 "<p>{}</p><h4>{}</h4><p>{}</p>",
                 "<h4>{}</h4><ul>{}</ul>",
-                "<h4>{}</h4><p>{}</p>",
+                "<h4>{}</h4>{}",
                 "<p><strong>{}:</strong> {}</p>",
                 "<h4>{}</h4><ul>{}</ul>",
                 "<details class=\"technical finding-technical\"><summary><strong>{}</strong></summary>",

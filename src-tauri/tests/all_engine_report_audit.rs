@@ -844,6 +844,38 @@ fn all_engines_in_one_report<T>(
     })
 }
 
+/// Every paragraph in one export closes before a block element opens.
+///
+/// Forty-five cards shipped `<p>...<h4>...</h4><p>...</p></p>`: a heading
+/// nested in a paragraph, which every parser recovers from by closing the
+/// paragraph early, plus a stray end tag after it. No reader saw an error and
+/// no assertion about the report's words could see it either.
+fn assert_paragraphs_are_well_formed(html: &str, label: &str) {
+    assert_eq!(
+        html.matches("<p>").count(),
+        html.matches("</p>").count(),
+        "{label} does not close every paragraph"
+    );
+    let mut cursor = 0usize;
+    while let Some(at) = html[cursor..].find("<p>") {
+        let start = cursor + at + "<p>".len();
+        let end = html[start..]
+            .find("</p>")
+            .map_or(html.len(), |offset| start + offset);
+        for block in [
+            "<p>", "<h1", "<h2", "<h3", "<h4", "<ul", "<ol", "<table", "<section", "<article",
+            "<details",
+        ] {
+            assert!(
+                !html[start..end].contains(block),
+                "{label} opens {block} inside a paragraph: {}",
+                &html[start..end.min(start + 200)]
+            );
+        }
+        cursor = end;
+    }
+}
+
 #[test]
 fn every_integrated_engine_lands_in_one_terminal_report() {
     all_engines_in_one_report(
@@ -1128,6 +1160,7 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 )
                 .unwrap();
             let ordered_html = fs::read_to_string(&ordered_html).unwrap();
+            assert_paragraphs_are_well_formed(&ordered_html, "the English report");
             let asset_board = &ordered_html[ordered_html
                 .find("Which assets need attention")
                 .expect("asset board")..];
@@ -1552,6 +1585,20 @@ fn aidefend_view(
                 )
                 .or_default() += 1;
         }
+        let html = String::from_utf8(export(
+            CaseExportFormat::Html,
+            "aidefend-report.html",
+            ReportLocale::En,
+        ))
+        .unwrap();
+        let zh_html = String::from_utf8(export(
+            CaseExportFormat::Html,
+            "aidefend-report-zh.html",
+            ReportLocale::ZhHant,
+        ))
+        .unwrap();
+        assert_paragraphs_are_well_formed(&html, "the English report");
+        assert_paragraphs_are_well_formed(&zh_html, "the Chinese report");
         AidefendView {
             state: family["state"].as_str().unwrap().to_owned(),
             mapped: framework["coverage"]["selected_run_findings_with_framework_relationship"]
@@ -1574,18 +1621,8 @@ fn aidefend_view(
                 .iter()
                 .map(|finding| finding.title.clone())
                 .collect(),
-            html: String::from_utf8(export(
-                CaseExportFormat::Html,
-                "aidefend-report.html",
-                ReportLocale::En,
-            ))
-            .unwrap(),
-            zh_html: String::from_utf8(export(
-                CaseExportFormat::Html,
-                "aidefend-report-zh.html",
-                ReportLocale::ZhHant,
-            ))
-            .unwrap(),
+            html,
+            zh_html,
         }
     })
 }
