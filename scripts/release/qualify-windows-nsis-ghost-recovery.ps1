@@ -62,7 +62,7 @@ function Get-ExpectedIsolatedMachineName(
     $zero = [byte[]]@(0)
     foreach ($segment in @(
       "ai-security-scanner/windows-wsl-isolated-generation/v1",
-      [IO.Path]::GetFullPath($StateRoot),
+      (Get-VerbatimWindowsPath $StateRoot "Isolated managed runtime state root"),
       $ManifestSha256,
       $MachineImageSha256
     )) {
@@ -2756,16 +2756,32 @@ try {
     "preserved_collision_names"
   ) "Candidate isolated-generation routing record"
   if ($generationSelection.schema_version -cne
-        "ai-security-scanner.managed-wsl-generation-selection/v1" -or
-      $generationSelection.authorizes_cleanup -ne $false -or
-      [string]$generationSelection.manifest_sha256 -cne $candidateRuntimeManifestSha256 -or
-      [string]$generationSelection.machine_image_sha256 -cne $candidateMachineImageSha256 -or
-      [string]$generationSelection.default_machine_name -cne $candidateDefaultMachineName -or
-      [string]$generationSelection.selected_machine_name -cnotmatch '^assm2-iso-[0-9a-f]{20}$' -or
-      [string]$generationSelection.selected_machine_name -cne $candidateMachineName -or
-      [uint32]$generationSelection.generation_index -ne $candidateGenerationIndex -or
-      @($generationSelection.preserved_collision_names).Count -ne 0) {
-    throw "Candidate isolated-generation routing record does not match the current runtime."
+      "ai-security-scanner.managed-wsl-generation-selection/v1") {
+    throw "Candidate isolated-generation routing record has the wrong schema."
+  }
+  if ($generationSelection.authorizes_cleanup -ne $false) {
+    throw "Candidate isolated-generation routing record grants cleanup authority."
+  }
+  if ([string]$generationSelection.manifest_sha256 -cne $candidateRuntimeManifestSha256) {
+    throw "Candidate isolated-generation routing record has the wrong manifest identity."
+  }
+  if ([string]$generationSelection.machine_image_sha256 -cne $candidateMachineImageSha256) {
+    throw "Candidate isolated-generation routing record has the wrong machine-image identity."
+  }
+  if ([string]$generationSelection.default_machine_name -cne $candidateDefaultMachineName) {
+    throw "Candidate isolated-generation routing record has the wrong default machine identity."
+  }
+  if ([string]$generationSelection.selected_machine_name -cnotmatch '^assm2-iso-[0-9a-f]{20}$') {
+    throw "Candidate isolated-generation routing record has a malformed selected machine identity."
+  }
+  if ([string]$generationSelection.selected_machine_name -cne $candidateMachineName) {
+    throw "Candidate isolated-generation routing record has a non-deterministic selected machine identity."
+  }
+  if ([uint32]$generationSelection.generation_index -ne $candidateGenerationIndex) {
+    throw "Candidate isolated-generation routing record has the wrong generation index."
+  }
+  if (@($generationSelection.preserved_collision_names).Count -ne 0) {
+    throw "Candidate isolated-generation routing record reports an unexpected preserved collision."
   }
   Assert-RealDirectory $candidateProviderHome "Candidate isolated provider home" | Out-Null
 
