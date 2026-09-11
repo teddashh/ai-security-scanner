@@ -1161,6 +1161,11 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 .unwrap();
             let ordered_html = fs::read_to_string(&ordered_html).unwrap();
             assert_paragraphs_are_well_formed(&ordered_html, "the English report");
+            // The inventory sample prints addresses, not quantities. Digit
+            // grouping turned this run's 8080 into "8,080", which is not a
+            // port anyone can paste back into a tool.
+            assert!(ordered_html.contains("port 8080"));
+            assert!(!ordered_html.contains("port 8,080"));
             let asset_board = &ordered_html[ordered_html
                 .find("Which assets need attention")
                 .expect("asset board")..];

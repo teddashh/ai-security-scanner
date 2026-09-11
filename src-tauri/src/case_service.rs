@@ -14508,7 +14508,9 @@ fn html_inventory_item_summary(item: &BeginnerInventoryItem, catalog: HtmlReport
                 details.push(format!(
                     "{} {}",
                     catalog.text("port", "連接埠"),
-                    catalog.format_number(*port as usize)
+                    // A port is an address the reader may copy, not a quantity.
+                    // Digit grouping turns 8080 into 8,080, which no tool takes.
+                    port
                 ));
             }
             if let Some(transport) = transport {
@@ -14533,9 +14535,10 @@ fn html_inventory_item_summary(item: &BeginnerInventoryItem, catalog: HtmlReport
                 details.push(format!(
                     "{} {}",
                     catalog.text("HTTP status", "HTTP 狀態"),
+                    // A response code is an identifier too, on the same rule.
                     http_statuses
                         .iter()
-                        .map(|value| catalog.format_number(*value as usize))
+                        .map(u16::to_string)
                         .collect::<Vec<_>>()
                         .join(", ")
                 ));
