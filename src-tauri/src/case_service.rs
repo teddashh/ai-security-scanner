@@ -13725,6 +13725,24 @@ fn readable_limit_name(name: &str, labels: &BTreeMap<Id, String>) -> String {
     readable_identifier(&replace_target_ids(name, labels))
 }
 
+/// The coverage name one gap row leads with, as the reader sees it.
+///
+/// Chinese keeps the stored text as composed; English names the engine and
+/// capitalizes the sentence. Neither splits an identifier on its hyphens:
+/// "naabu-tcp" has to keep matching what the reader sees in the scanner's own
+/// output. The step list below reuses this so a step and the row it closes
+/// name the same coverage the same way.
+fn displayed_dimension(
+    dimension: &str,
+    catalog: HtmlReportCatalog,
+    target_labels: &BTreeMap<Id, String>,
+) -> String {
+    match catalog.locale {
+        crate::export::ReportLocale::ZhHant => replace_target_ids(dimension, target_labels),
+        _ => readable_dimension(&replace_target_ids(dimension, target_labels)),
+    }
+}
+
 fn readable_target_labels(
     report: &BeginnerMasterReport,
     catalog: HtmlReportCatalog,
@@ -15042,16 +15060,7 @@ fn html_report_bytes(
                     gap.next_action.clone(),
                 ),
             };
-            // Chinese keeps the stored text as composed; English names the
-            // engine and capitalizes the sentence. Neither splits an
-            // identifier on its hyphens: "naabu-tcp" has to keep matching what
-            // the reader sees in the scanner's own output.
-            let dimension = match catalog.locale {
-                crate::export::ReportLocale::ZhHant => {
-                    replace_target_ids(&dimension, &target_labels)
-                }
-                _ => readable_dimension(&replace_target_ids(&dimension, &target_labels)),
-            };
+            let dimension = displayed_dimension(&dimension, catalog, &target_labels);
             format!(
                 "<li><strong>{} — {}</strong><br>{}<br><em>{}:</em> {}</li>",
                 html_escape(catalog.gap_kind(&gap.kind)),
@@ -15156,6 +15165,44 @@ fn html_report_bytes(
                     crate::finding_narrative::coverage_gap_prose_english(&step.reason),
                 ),
                 _ => (action, step.reason.clone()),
+            };
+            // A gap-derived step's stored reason is the coverage row's own
+            // sentence, printed one section above this list. Repeating it was
+            // a quarter of everything under "What to do next", and five of
+            // the nine repeats said "this check" with nothing in the sentence
+            // to say which one. Name the coverage the step closes instead:
+            // shorter, and it answers the question the restated sentence
+            // raised. A step can close more than one row -- two cancelled
+            // checks share a retry -- and every row it closes is named.
+            let closes = if step.finding_id.is_none() && step.unattributed.is_none() {
+                report
+                    .coverage_gaps
+                    .iter()
+                    .filter(|gap| gap.unattributed.is_none() && gap.next_action == step.action)
+                    .map(|gap| {
+                        displayed_dimension(
+                            &match catalog.locale {
+                                crate::export::ReportLocale::ZhHant => {
+                                    crate::finding_narrative::coverage_dimension_zh_hant(
+                                        &gap.dimension,
+                                    )
+                                }
+                                _ => gap
+                                    .dimension
+                                    .replace(": manual review for ", ": no verdict for "),
+                            },
+                            catalog,
+                            &target_labels,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let reason = if closes.is_empty() {
+                reason
+            } else {
+                closes.join(catalog.text("; ", "；"))
             };
             // One instruction, stated once, over the finding that leads the
             // group. Saying how many name it is the part a beginner acts on:

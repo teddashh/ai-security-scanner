@@ -1273,6 +1273,46 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             // sentence, so the report printed the same 115 characters forty-five
             // times. It is advice about making any change, not about one finding.
             assert_eq!(ordered_html.matches("Before changing anything").count(), 1);
+
+            // The coverage rows and the action list sit next to each other, and
+            // every gap-derived step used to restate its row's own sentence --
+            // a quarter of the section, and five of the nine said "this check"
+            // without saying which. Each now names the coverage it closes.
+            let steps = &ordered_html[ordered_html
+                .find(">What to do next</h2>")
+                .expect("next-step section")..];
+            let steps = &steps[..steps.find(">Problems found</h2>").expect("problems follow")];
+            for restated in [
+                "This check stopped before it could establish completed coverage.",
+                "Host response unavailable. Vulnerability checks: not run.",
+                "The bounded check reached its time limit, so it cannot be treated as tested complete.",
+                "This check was cancelled before completed coverage was recorded.",
+                "This check produced some durable work but did not complete every planned dimension.",
+                "This check ran on detection knowledge whose declared support had already ended",
+                "This run did not retain an exact reduction record.",
+                "Maester evaluated this control but did not return a pass or fail verdict.",
+            ] {
+                assert!(
+                    !steps.contains(restated),
+                    "a step restates the coverage row above it: {restated}"
+                );
+            }
+            for named in [
+                "Retry this check.</strong> — Checkov: failed check dimension",
+                "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again.</strong> — Greenbone Community Edition: target response",
+                "Confirm reachability in Scan setup, then retry the timed-out work.</strong> — KICS: timed-out check dimension",
+                "Retry this check to complete the unfinished dimensions.</strong> — Nuclei: remaining requested dimensions",
+                "Treat these results as evidence from expired knowledge, not as current coverage.</strong> — CloudQuery: expired detection knowledge",
+                // One step closes two rows, and says so rather than showing one
+                // of the two reasons and dropping the other.
+                "Retry this check to complete the missing coverage.</strong> — TruffleHog: cancelled check dimension; Naabu: cancelled check dimension",
+                "Open the saved scope details.</strong> — Automatic scope reductions or truncations; Requested scan stage",
+            ] {
+                assert!(
+                    steps.contains(named),
+                    "a step lost its coverage name: {named}"
+                );
+            }
             assert!(
                 ordered_html.find("Before changing anything")
                     < ordered_html.find(">Problems found</h2>")
