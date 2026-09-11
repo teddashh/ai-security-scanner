@@ -1234,6 +1234,41 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             // target, and Nuclei's partial run still shows the dimensions it proved.
             assert!(tested.contains("<strong>Syft</strong> — Completed"));
 
+            // The same rule, in the one other place the report composes a name
+            // around an identifier. This list named six scanners differently
+            // from the "Requested checks" list two headings above it, and
+            // title-cased the reader's own target into "Https://...".
+            let limits = &ordered_html[ordered_html.find(">Limits</h3>").expect("limits")..];
+            let limits = &limits[..limits.find("</ul>").expect("limits end")];
+            for wrong in [
+                "Httpx",
+                "Kics",
+                "Kube Bench",
+                "Scoutsuite",
+                "Scubagear",
+                "Trufflehog",
+                "Cloudquery",
+                "Https://",
+            ] {
+                assert!(
+                    !limits.contains(wrong),
+                    "the limits list humanized an identifier: {wrong}"
+                );
+            }
+            for right in [
+                "httpx execution timeout",
+                "KICS execution timeout",
+                "kube-bench execution timeout",
+                "ScoutSuite execution timeout",
+                "ScubaGear execution timeout",
+                "TruffleHog execution timeout",
+                "CloudQuery execution timeout",
+                "Greenbone Community Edition execution timeout",
+                "https://portal.example.test:443 approved ports",
+            ] {
+                assert!(limits.contains(right), "the limits list lost: {right}");
+            }
+
             // Every remediable finding carries the same product-authored safety
             // sentence, so the report printed the same 115 characters forty-five
             // times. It is advice about making any change, not about one finding.

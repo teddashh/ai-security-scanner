@@ -13648,6 +13648,10 @@ impl HtmlReportCatalog {
     }
 }
 
+/// The coarse per-target coordinate every completed catalog check produces
+/// when the case froze no finer executed dimension.
+const COMPLETED_COORDINATE_DIMENSION: &str = "completed check-to-target coordinate";
+
 /// English display for one stored coverage or tested-dimension name.
 ///
 /// These names are composed prose, and they often open with an engine's own
@@ -13657,10 +13661,6 @@ impl HtmlReportCatalog {
 /// five scanners "Httpx", "Kics", "Scoutsuite", "Scubagear" and "Kube Bench".
 /// Name the engine the way upstream spells it, and otherwise change nothing
 /// but the first letter. The Chinese side already leaves this text alone.
-/// The coarse per-target coordinate every completed catalog check produces
-/// when the case froze no finer executed dimension.
-const COMPLETED_COORDINATE_DIMENSION: &str = "completed check-to-target coordinate";
-
 fn readable_dimension(dimension: &str) -> String {
     let head = dimension.split([':', ' ']).next().unwrap_or_default();
     if let Some(name) = crate::registry::builtin_display_name(head) {
@@ -13702,6 +13702,27 @@ fn readable_identifier(value: &str) -> String {
     } else {
         words.join(" ")
     }
+}
+
+/// English display for one requested-limit name.
+///
+/// Every one of these is composed as `{identifier} {what was limited}`: an
+/// engine id for a saved task setting, an asset id for a saved scope grant.
+/// Both are identifiers the report spells elsewhere, and title-casing them
+/// broke both spellings at once -- the same run's "Limits" list said
+/// "Cloudquery", "Kube Bench", "Scoutsuite", "Trufflehog", "Httpx" and "Kics"
+/// beside a "Requested checks" list naming those six correctly, and it turned
+/// the reader's own target into "Https://portal.example.test:443".
+fn readable_limit_name(name: &str, labels: &BTreeMap<Id, String>) -> String {
+    let (head, rest) = name.split_once(' ').unwrap_or((name, ""));
+    let separator = if rest.is_empty() { "" } else { " " };
+    if let Some(engine) = crate::registry::builtin_display_name(head) {
+        return format!("{engine}{separator}{rest}");
+    }
+    if let Some(label) = labels.get(head) {
+        return format!("{label}{separator}{rest}");
+    }
+    readable_identifier(&replace_target_ids(name, labels))
 }
 
 fn readable_target_labels(
@@ -14794,7 +14815,7 @@ fn html_report_bytes(
                 crate::export::ReportLocale::ZhHant => {
                     crate::finding_narrative::requested_limit_name_zh_hant(&name)
                 }
-                _ => readable_identifier(&name),
+                _ => readable_limit_name(&limit.name, &target_labels),
             };
             format!(
                 "<li><strong>{}:</strong> {}</li>",
