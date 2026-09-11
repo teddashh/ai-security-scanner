@@ -13657,6 +13657,10 @@ impl HtmlReportCatalog {
 /// five scanners "Httpx", "Kics", "Scoutsuite", "Scubagear" and "Kube Bench".
 /// Name the engine the way upstream spells it, and otherwise change nothing
 /// but the first letter. The Chinese side already leaves this text alone.
+/// The coarse per-target coordinate every completed catalog check produces
+/// when the case froze no finer executed dimension.
+const COMPLETED_COORDINATE_DIMENSION: &str = "completed check-to-target coordinate";
+
 fn readable_dimension(dimension: &str) -> String {
     let head = dimension.split([':', ' ']).next().unwrap_or_default();
     if let Some(name) = crate::registry::builtin_display_name(head) {
@@ -14826,9 +14830,28 @@ fn html_report_bytes(
         .checks
         .iter()
         .map(|check| {
-            let mut dimensions = check
+            // A completed catalog check always produces this coarse
+            // coordinate, and the row restates its own header: the engine id
+            // and the asset id the line above already names, an observed time
+            // equal to the finish time three words earlier, and a sentence
+            // about this product's record keeping rather than about the
+            // target. Eighteen of them were a third of this section.
+            //
+            // Dropped only when every target the header lists has one. A check
+            // that proved the coordinate for some of its targets and not
+            // others is telling the reader which, and that has to stay.
+            let coordinates = check
                 .tested_dimensions
                 .iter()
+                .filter(|dimension| dimension.dimension == COMPLETED_COORDINATE_DIMENSION)
+                .count();
+            let header_says_it = coordinates > 0 && coordinates == check.target_asset_ids.len();
+            let dimensions = check
+                .tested_dimensions
+                .iter()
+                .filter(|dimension| {
+                    !header_says_it || dimension.dimension != COMPLETED_COORDINATE_DIMENSION
+                })
                 .map(|dimension| {
                     format!(
                         concat!(
@@ -14843,7 +14866,7 @@ fn html_report_bytes(
                             }
                             _ => readable_dimension(&dimension.dimension),
                         }),
-                        html_escape(&dimension.value),
+                        html_escape(&replace_target_ids(&dimension.value, &target_labels)),
                         html_escape(&match catalog.locale {
                             crate::export::ReportLocale::ZhHant => {
                                 crate::finding_narrative::tested_observation_zh_hant(
@@ -14858,18 +14881,26 @@ fn html_report_bytes(
                     )
                 })
                 .collect::<String>();
-            if dimensions.is_empty() {
-                dimensions.push_str(catalog.text(
-                    "<li>No completed dimension was retained.</li>",
-                    "<li>未保留已完成的檢查面向。</li>",
-                ));
-            }
+            // Retained, and said by the header instead. "No completed
+            // dimension was retained" would be false here.
+            let dimensions = if !dimensions.is_empty() {
+                format!("<ul>{dimensions}</ul>")
+            } else if header_says_it {
+                String::new()
+            } else {
+                catalog
+                    .text(
+                        "<ul><li>No completed dimension was retained.</li></ul>",
+                        "<ul><li>未保留已完成的檢查面向。</li></ul>",
+                    )
+                    .to_owned()
+            };
             let targets = readable_target_list(&check.target_asset_ids, &target_labels, catalog);
             format!(
                 concat!(
                     "<li><strong>{}</strong> — {}",
                     "<br><small>{}: {} · {}: {}</small>",
-                    "<br><small>{}: {}</small><ul>{}</ul></li>"
+                    "<br><small>{}: {}</small>{}</li>"
                 ),
                 html_escape(&readable_dimension(&check.check_id)),
                 html_escape(catalog.coverage_status(&check.status)),
@@ -30277,7 +30308,10 @@ mod tests {
             readable_report_time(&started),
             readable_report_time(&finished)
         )));
-        assert!(html.contains(&format!("Observed: {}", readable_report_time(&finished))));
+        // This run froze only the coarse check-to-target coordinate, whose row
+        // restated the header above it. The header is where the window is now.
+        assert!(!html.contains("check-to-target coordinate"));
+        assert!(!html.contains("No completed dimension was retained."));
         for inventory_text in [
             "Inventory observations",
             "Inventory observations are separate from vulnerability findings and remediation priorities.",
@@ -30416,8 +30450,6 @@ mod tests {
             // headings, the last one as Rust variant names.
             "檢查逾時限制（gitleaks）",
             "3600 秒",
-            "完成的目標檢查",
-            "這項已保存的工作已針對這個目標完成。這份案件記錄沒有凍結更細部的執行範圍。",
             "Frozen selected-run secret exposure — 嚴重程度：高；信心程度：低 — 本產品依據樣式或偵測器比對結果評定",
             "某個身分未登記多重要素驗證裝置的證據，與驗證使用者及保護驗證資訊有關。",
             "<br>關係: 相關",
@@ -30457,6 +30489,10 @@ mod tests {
                 "zh-Hant report omitted {composed}"
             );
         }
+        // Both languages drop the coarse coordinate: the row restated the
+        // header it sat under in either one.
+        assert!(!zh_html.contains("完成的目標檢查"));
+        assert!(!zh_html.contains("未保留已完成的檢查面向。"));
         let standard_redacted_html = String::from_utf8(
             html_report_bytes(
                 &case,

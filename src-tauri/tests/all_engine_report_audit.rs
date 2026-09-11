@@ -1153,10 +1153,25 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
         "ScubaGear",
         "TruffleHog",
         "CloudQuery",
-        "Completed check-to-target coordinate",
     ] {
         assert!(tested.contains(right), "the report lost a name: {right}");
     }
+
+    // A completed check's coarse coordinate restated its own header line and
+    // added a sentence about this product's record keeping. Eighteen of them
+    // were a third of this section.
+    for restated in [
+        "check-to-target coordinate",
+        "The durable task reached completed state for this target binding.",
+    ] {
+        assert!(
+            !tested.contains(restated),
+            "a completed check restates its header: {restated}"
+        );
+    }
+    // The header still carries every completed check, its window, and its
+    // target, and Nuclei's partial run still shows the dimensions it proved.
+    assert!(tested.contains("<strong>Syft</strong> — Completed"));
 
     // Two scanners find the same CVE on the repository and on the image built
     // from it. The cards are titled identically by upstream, so with the asset
