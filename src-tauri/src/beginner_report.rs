@@ -795,11 +795,16 @@ pub fn build_beginner_master_report(
         });
     }
 
+    // Within a kind, order by the name the reader sees. The task id is a
+    // per-run identifier that appears nowhere in the report, so ordering on it
+    // put two cancelled checks in a different order on every run for no reason
+    // a reader could follow. The dimension opens with the check id, so one
+    // task's rows still land together.
     coverage_gaps.sort_by(|left, right| {
         gap_rank(left.kind)
             .cmp(&gap_rank(right.kind))
-            .then_with(|| left.task_id.cmp(&right.task_id))
             .then_with(|| left.dimension.cmp(&right.dimension))
+            .then_with(|| left.task_id.cmp(&right.task_id))
     });
     coverage_gaps.dedup();
     debug_assert_coverage_prose_is_translatable(&coverage_gaps);

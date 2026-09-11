@@ -1305,7 +1305,7 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 "Treat these results as evidence from expired knowledge, not as current coverage.</strong> — CloudQuery: expired detection knowledge",
                 // One step closes two rows, and says so rather than showing one
                 // of the two reasons and dropping the other.
-                "Retry this check to complete the missing coverage.</strong> — TruffleHog: cancelled check dimension; Naabu: cancelled check dimension",
+                "Retry this check to complete the missing coverage.</strong> — Naabu: cancelled check dimension; TruffleHog: cancelled check dimension",
                 "Open the saved scope details.</strong> — Automatic scope reductions or truncations; Requested scan stage",
             ] {
                 assert!(
