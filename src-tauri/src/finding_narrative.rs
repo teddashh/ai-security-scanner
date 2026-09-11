@@ -823,6 +823,7 @@ pub(crate) fn recognized_coverage_dimension_zh_hant(dimension: &str) -> Option<S
             ("failed check dimension", "失敗的檢查項目"),
             ("cancelled check dimension", "已取消的檢查項目"),
             ("not-tested check dimension", "未檢測的檢查項目"),
+            ("expired detection knowledge", "已過期的偵測知識"),
             ("unfinished check dimension", "未完成的檢查項目"),
             ("vulnerability profile evidence", "弱點掃描設定檔證據"),
             ("website execution evidence", "網站執行證據"),
@@ -1455,6 +1456,14 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "已保存的工作單元涵蓋記錄不一致；已檢測單元為未知。",
     ),
     (
+        "This check ran on detection knowledge whose declared support had already ended, so issues published after that date were not tested.",
+        "這項檢查執行時所用的偵測知識，其宣告的支援期限已經結束，因此該日期之後才公布的問題並未受測。",
+    ),
+    (
+        "Treat these results as evidence from expired knowledge, not as current coverage.",
+        "請將這些結果視為過期知識留下的證據，而不是目前的涵蓋範圍。",
+    ),
+    (
         "Usable results were saved for these work units, but their remaining planned operations were not tested complete.",
         "這些工作單元已儲存可用的結果，但其餘計畫中的操作並未完成檢測。",
     ),
@@ -1927,6 +1936,16 @@ pub fn coverage_gap_prose_zh_hant(english: &str) -> Option<String> {
         // period, so the head is a complete key on its own.
         let base = lookup(head)?;
         return Some(format!("{base}診斷代碼：{code}。"));
+    }
+    // The stale-knowledge reason carries the support date the run recorded.
+    // Same split as the diagnostic code above: the date is data and stays
+    // verbatim, only the sentence around it moves.
+    if let Some((head, ended)) = trimmed
+        .strip_suffix('.')
+        .and_then(|rest| rest.rsplit_once(" Support ended: "))
+    {
+        let base = lookup(head)?;
+        return Some(format!("{base}支援結束日期：{ended}。"));
     }
     lookup(trimmed)
 }
@@ -2492,6 +2511,35 @@ mod tests {
         );
         assert_eq!(
             tested_observation_zh_hant("A later build recorded a different observation."),
+            None
+        );
+    }
+
+    #[test]
+    fn the_stale_knowledge_reason_keeps_its_date_and_moves_its_sentence() {
+        // The date is data the run recorded and stays verbatim in both
+        // languages; only the words around it are translated.
+        assert_eq!(
+            coverage_gap_prose_zh_hant(
+                "This check ran on detection knowledge whose declared support had already ended, so issues published after that date were not tested. Support ended: 2023-04-10."
+            ),
+            Some("這項檢查執行時所用的偵測知識，其宣告的支援期限已經結束，因此該日期之後才公布的問題並未受測。支援結束日期：2023-04-10。".to_owned())
+        );
+        assert_eq!(
+            coverage_gap_prose_zh_hant(
+                "Treat these results as evidence from expired knowledge, not as current coverage."
+            ),
+            Some("請將這些結果視為過期知識留下的證據，而不是目前的涵蓋範圍。".to_owned())
+        );
+        assert_eq!(
+            coverage_dimension_zh_hant("cloudquery: expired detection knowledge"),
+            "cloudquery 的已過期的偵測知識"
+        );
+        // A sentence this build does not write keeps returning None so the
+        // producer census in `beginner_report.rs` still has something to fail
+        // on.
+        assert_eq!(
+            coverage_gap_prose_zh_hant("Some other reason. Support ended: 2023-04-10."),
             None
         );
     }

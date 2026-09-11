@@ -909,6 +909,7 @@ export const localizedCoverageDimension = (
       ["failed check dimension", "失敗的檢查項目"],
       ["cancelled check dimension", "已取消的檢查項目"],
       ["not-tested check dimension", "未檢測的檢查項目"],
+      ["expired detection knowledge", "已過期的偵測知識"],
       ["unfinished check dimension", "未完成的檢查項目"],
       ["vulnerability profile evidence", "弱點掃描設定檔證據"],
       ["website execution evidence", "網站執行證據"],
@@ -990,6 +991,14 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
   [
     "Saved work-unit coverage is inconsistent; tested units are unknown.",
     "已保存的工作單元涵蓋記錄不一致；已檢測單元為未知。",
+  ],
+  [
+    "This check ran on detection knowledge whose declared support had already ended, so issues published after that date were not tested.",
+    "這項檢查執行時所用的偵測知識，其宣告的支援期限已經結束，因此該日期之後才公布的問題並未受測。",
+  ],
+  [
+    "Treat these results as evidence from expired knowledge, not as current coverage.",
+    "請將這些結果視為過期知識留下的證據，而不是目前的涵蓋範圍。",
   ],
   [
     "Usable results were saved for these work units, but their remaining planned operations were not tested complete.",
@@ -1447,6 +1456,15 @@ export const coverageGapProse = (
   if (withCode) {
     const base = lookupProse(withCode[1] ?? "");
     if (base) return `${base}診斷代碼：${withCode[2]}。`;
+    return normalized;
+  }
+  // The stale-knowledge reason carries the support date the run recorded.
+  // Same split as the diagnostic code above: the date is data and stays
+  // verbatim, only the sentence around it moves.
+  const withSupportEnd = /^(.*\.) Support ended: (.+)\.$/u.exec(trimmed);
+  if (withSupportEnd) {
+    const base = lookupProse(withSupportEnd[1] ?? "");
+    if (base) return `${base}支援結束日期：${withSupportEnd[2]}。`;
     return normalized;
   }
   return lookupProse(trimmed) ?? normalized;

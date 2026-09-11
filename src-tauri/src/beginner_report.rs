@@ -17,7 +17,7 @@ use crate::execution_coverage::{
     CumulativeNaabuCoverage, WorkUnitOutcome, reduce_naabu_attempt_coverage,
 };
 use crate::naabu_work_plan::{NAABU_ENGINE_ID, NaabuWorkStage};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -26,6 +26,11 @@ use std::net::IpAddr;
 pub const BEGINNER_MASTER_REPORT_SCHEMA_VERSION: &str = "1.1.0";
 
 pub const FRAMEWORK_NON_CERTIFICATION_NOTICE: &str = "These references do not establish certification, compliance, control implementation, control effectiveness, endorsement, or a pass/fail result.";
+
+/// The fixed half of the stale-knowledge coverage reason. The support date
+/// follows it as its own clause so a reader in either language rebuilds the
+/// sentence from one lookup plus the date the run actually recorded.
+const STALE_KNOWLEDGE_REASON: &str = "This check ran on detection knowledge whose declared support had already ended, so issues published after that date were not tested.";
 
 const GREENBONE_ENGINE_ID: &str = "greenbone";
 const GREENBONE_REMOTE_SAFE_PROFILE_ID: &str = "greenbone_remote_safe_v1";
@@ -1767,6 +1772,7 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
         if !task_gap_already_projected {
             append_task_gap(task, status, &mut gaps);
         }
+        append_stale_knowledge_gap(task, status, run.created_at, &mut gaps);
         if useful_result {
             useful_task_ids.insert(task.id.clone());
         }
@@ -2257,6 +2263,65 @@ fn append_task_gap(task: &EngineRun, status: CoverageDimensionStatus, gaps: &mut
         reason: stable_task_reason(task, reason),
         next_action_code,
         next_action: next_action.into(),
+    });
+}
+
+/// A check whose detection knowledge outlived its declared support still
+/// produced real results. What those results cannot show is current coverage:
+/// nothing published after the support date was in the knowledge the check ran
+/// on. Planning already records that as an engine-run warning, but the warning
+/// is shown on Progress and never reaches the report a reader is sent, so the
+/// limitation would otherwise disappear at exactly the moment it is relied on.
+///
+/// It is a `NotTested` gap rather than a kind of its own because the dimension
+/// named here genuinely was not tested, and because a completed check that
+/// still owes a not-tested dimension is the same shape the partial-completion
+/// gap above already writes.
+fn append_stale_knowledge_gap(
+    task: &EngineRun,
+    status: CoverageDimensionStatus,
+    run_created_at: DateTime<Utc>,
+    gaps: &mut Vec<CoverageGap>,
+) {
+    if !matches!(
+        status,
+        CoverageDimensionStatus::TestedComplete | CoverageDimensionStatus::TestedPartial
+    ) {
+        // Every other state already carries a gap saying this check did not
+        // establish coverage. Qualifying it further would only add prose.
+        return;
+    }
+    let Some(support_until) = task
+        .knowledge_input
+        .as_ref()
+        .and_then(|input| input.support_until.as_deref())
+    else {
+        return;
+    };
+    let Ok(support_ended) = NaiveDate::parse_from_str(support_until, "%Y-%m-%d") else {
+        return;
+    };
+    // The run's own clock, never today's: this report is re-exported long after
+    // the scan, and it has to keep describing the run it records.
+    let ran_at = task
+        .finished_at
+        .or(task.started_at)
+        .unwrap_or(run_created_at)
+        .date_naive();
+    if support_ended >= ran_at {
+        return;
+    }
+    gaps.push(CoverageGap {
+        unattributed: None,
+        kind: CoverageGapKind::NotTested,
+        task_id: Some(task.id.clone()),
+        target_asset_ids: task.asset_ids.clone(),
+        dimension: format!("{}: expired detection knowledge", check_id(task)),
+        reason: format!("{STALE_KNOWLEDGE_REASON} Support ended: {support_until}."),
+        next_action_code: NextActionCode::PreserveVisibleLimitation,
+        next_action:
+            "Treat these results as evidence from expired knowledge, not as current coverage."
+                .into(),
     });
 }
 
@@ -4222,8 +4287,9 @@ mod tests {
         AssessmentIntent, Asset, AssetIdentifier,
         BUILT_IN_LOCALHOST_TCP_ASSET_IDENTIFIER_NAMESPACE,
         BUILT_IN_LOCALHOST_TCP_AUTHORIZATION_REFERENCE, BUILT_IN_LOCALHOST_TCP_ENGINE_ID,
-        CaseStatus, ControlReference, CoverageEntry, CoverageStatus, DataClass, EngineRun,
-        Evidence, EvidenceKind, FindingGroup, FindingStatus, ManualReviewControl,
+        CaseStatus, ControlReference, CoverageEntry, CoverageStatus, DataClass,
+        EngineKnowledgeInput, EngineRun, Evidence, EvidenceKind, FindingGroup, FindingStatus,
+        KnowledgeInputKind, KnowledgePinState, ManualReviewControl,
         NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION, NAABU_ATTEMPT_RESULT_SCHEMA_VERSION,
         NaabuAttemptRequest, NaabuAttemptResult, OrganizationProfile, RawArtifact,
         ReportAssetSnapshot, ScopeGrant, SecurityTemplateExecution, SourceKind, new_id,
@@ -4804,6 +4870,141 @@ mod tests {
         );
         let encoded = serde_json::to_string(&report).unwrap();
         assert!(!encoded.contains("untrusted target text"));
+    }
+
+    fn knowledge_dated(knowledge_date: &str, support_until: &str) -> EngineKnowledgeInput {
+        EngineKnowledgeInput {
+            kind: KnowledgeInputKind::Embedded,
+            identifier: "embedded".into(),
+            version: None,
+            acquisition_source: None,
+            pin_state: KnowledgePinState::PinnedOrNotApplicable,
+            knowledge_date: Some(knowledge_date.into()),
+            support_until: Some(support_until.into()),
+        }
+    }
+
+    #[test]
+    fn a_completed_check_on_expired_knowledge_says_so_in_the_report() {
+        // Planning records this as an engine-run warning, and Progress shows
+        // it. The report a reader is actually sent never printed it, so a
+        // scanner whose knowledge ended years before the run read exactly like
+        // one that ran on current knowledge.
+        let mut expired = catalog_task("expired", EngineRunStatus::Completed);
+        expired.knowledge_input = Some(knowledge_dated("2023-01-10", "2023-04-10"));
+        let report =
+            build_beginner_master_report(&case_with_catalog_tasks(vec![expired], true), "run-1")
+                .unwrap();
+        let gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension.ends_with(": expired detection knowledge"))
+            .expect("stale-knowledge gap");
+        assert_eq!(gap.kind, CoverageGapKind::NotTested);
+        assert_eq!(
+            gap.reason,
+            "This check ran on detection knowledge whose declared support had already ended, so issues published after that date were not tested. Support ended: 2023-04-10."
+        );
+        assert_eq!(
+            gap.next_action_code,
+            NextActionCode::PreserveVisibleLimitation
+        );
+        // The check still ran, and its result still counts as one. The row is
+        // added to what the reader already sees, not swapped for it.
+        assert_eq!(report.coverage_counts.tested_complete, 1);
+        let baseline = build_beginner_master_report(
+            &case_with_catalog_tasks(
+                vec![catalog_task("expired", EngineRunStatus::Completed)],
+                true,
+            ),
+            "run-1",
+        )
+        .unwrap();
+        assert_eq!(report.coverage_gaps.len(), baseline.coverage_gaps.len() + 1);
+        assert_eq!(
+            report.coverage_counts.not_tested,
+            baseline.coverage_counts.not_tested + 1
+        );
+    }
+
+    #[test]
+    fn knowledge_still_in_support_adds_no_row_and_neither_does_a_check_that_failed() {
+        let mut current = catalog_task("current", EngineRunStatus::Completed);
+        current.knowledge_input = Some(knowledge_dated("2026-08-24", "2026-11-22"));
+        let supported =
+            build_beginner_master_report(&case_with_catalog_tasks(vec![current], true), "run-1")
+                .unwrap();
+        assert!(
+            supported
+                .coverage_gaps
+                .iter()
+                .all(|gap| !gap.dimension.contains("expired detection knowledge")),
+            "in-support knowledge is not a coverage gap"
+        );
+        // Same fixture with no recorded knowledge window at all: in-support
+        // knowledge has to leave the report exactly as it found it.
+        let unrecorded = build_beginner_master_report(
+            &case_with_catalog_tasks(
+                vec![catalog_task("current", EngineRunStatus::Completed)],
+                true,
+            ),
+            "run-1",
+        )
+        .unwrap();
+        assert_eq!(supported.coverage_gaps, unrecorded.coverage_gaps);
+        assert_eq!(supported.state.summary, unrecorded.state.summary);
+
+        // A check that did not establish coverage already carries a gap saying
+        // so. Qualifying the knowledge it did not get to use adds a second row
+        // and no information.
+        let mut failed = catalog_task("failed", EngineRunStatus::Failed);
+        failed.knowledge_input = Some(knowledge_dated("2023-01-10", "2023-04-10"));
+        let failed_report =
+            build_beginner_master_report(&case_with_catalog_tasks(vec![failed], true), "run-1")
+                .unwrap();
+        assert!(
+            failed_report
+                .coverage_gaps
+                .iter()
+                .all(|gap| !gap.dimension.contains("expired detection knowledge"))
+        );
+    }
+
+    #[test]
+    fn the_expiry_is_judged_against_the_run_not_against_today() {
+        // A run that happened while its knowledge was still supported keeps
+        // that verdict however long the exported report is kept. Comparing
+        // against the current clock would rewrite history on re-export.
+        let mut task = catalog_task("boundary", EngineRunStatus::Completed);
+        task.knowledge_input = Some(knowledge_dated(
+            "2026-08-24",
+            &instant(14).date_naive().to_string(),
+        ));
+        let same_day =
+            build_beginner_master_report(&case_with_catalog_tasks(vec![task], true), "run-1")
+                .unwrap();
+        assert!(
+            same_day
+                .coverage_gaps
+                .iter()
+                .all(|gap| !gap.dimension.contains("expired detection knowledge")),
+            "support that ends on the run date still covers the run"
+        );
+
+        let mut day_before = catalog_task("elapsed", EngineRunStatus::Completed);
+        day_before.knowledge_input = Some(knowledge_dated(
+            "2026-08-24",
+            &(instant(14).date_naive() - chrono::Days::new(1)).to_string(),
+        ));
+        let elapsed =
+            build_beginner_master_report(&case_with_catalog_tasks(vec![day_before], true), "run-1")
+                .unwrap();
+        assert!(
+            elapsed
+                .coverage_gaps
+                .iter()
+                .any(|gap| gap.dimension.contains("expired detection knowledge"))
+        );
     }
 
     #[test]

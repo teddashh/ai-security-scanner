@@ -212,6 +212,35 @@ test("stored defensive coverage prose is normalized into direct bilingual outcom
   }
 });
 
+test("an expired-knowledge coverage row keeps its date and moves its sentence", () => {
+  // The screen and the exported report have to say the same thing about a
+  // scanner whose declared knowledge support ended before the run. The date is
+  // data the run recorded and stays verbatim in both languages.
+  const reason =
+    "This check ran on detection knowledge whose declared support had already ended, so issues published after that date were not tested. Support ended: 2023-04-10.";
+  const nextAction =
+    "Treat these results as evidence from expired knowledge, not as current coverage.";
+
+  assert.equal(
+    coverageGapProse("zh-TW", reason),
+    "這項檢查執行時所用的偵測知識，其宣告的支援期限已經結束，因此該日期之後才公布的問題並未受測。支援結束日期：2023-04-10。",
+  );
+  assert.equal(
+    coverageGapProse("zh-TW", nextAction),
+    "請將這些結果視為過期知識留下的證據，而不是目前的涵蓋範圍。",
+  );
+  assert.equal(coverageGapProse("en", reason), reason);
+  assert.equal(coverageGapProse("en", nextAction), nextAction);
+  assert.equal(
+    localizedCoverageDimension("cloudquery: expired detection knowledge", "zh-TW"),
+    "cloudquery 的已過期的偵測知識",
+  );
+  // A sentence this build does not write keeps its own text rather than being
+  // rebuilt from a base it never had.
+  const unknown = "Some other reason. Support ended: 2023-04-10.";
+  assert.equal(coverageGapProse("zh-TW", unknown), unknown);
+});
+
 test("RDP transport coverage and its explicit limits are readable in both languages", () => {
   const observation =
     "The completed Greenbone task retained the exact reviewed RDP transport profile: ten TLS protocol, cipher, and certificate checks plus one check for the legacy fixed private key used by RDP 5.2 or earlier.";

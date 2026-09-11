@@ -971,6 +971,45 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
         );
     }
 
+    // CloudQuery is the one engine in the catalog whose declared knowledge
+    // support ended before this run. Planning already writes that as an
+    // engine-run warning, but the warning is a Progress surface: without a
+    // coverage row the reader receives a report in which a scanner running on
+    // knowledge three years past support is indistinguishable from a current
+    // one.
+    let stale = report
+        .coverage_gaps
+        .iter()
+        .filter(|gap| gap.dimension.ends_with(": expired detection knowledge"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        stale.len(),
+        1,
+        "exactly the engines whose support ended: {:#?}",
+        stale
+    );
+    assert_eq!(
+        stale[0].dimension,
+        "cloudquery: expired detection knowledge"
+    );
+    assert!(
+        stale[0].reason.ends_with(" Support ended: 2023-04-10."),
+        "{}",
+        stale[0].reason
+    );
+    // The check still ran and its inventory is still reported. The row
+    // qualifies the result; it does not withdraw it.
+    assert_eq!(
+        report
+            .actual
+            .checks
+            .iter()
+            .find(|check| check.check_id == "cloudquery")
+            .unwrap()
+            .status,
+        CoverageDimensionStatus::TestedComplete
+    );
+
     let reopened_storage = Storage::open(&database).unwrap();
     let reopened = reopened_storage.get_case(&case.id).unwrap();
     assert_eq!(
