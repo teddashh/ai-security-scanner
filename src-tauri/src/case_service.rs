@@ -15173,6 +15173,31 @@ fn html_report_bytes(
             "<li>除非需要更廣的涵蓋範圍，否則目前不需要其他動作。</li>",
         ));
     }
+    // Said once, above the steps, when any finding carries it.
+    let any_shared_safety = report.findings.iter().any(|finding| {
+        finding
+            .rollback_considerations
+            .as_deref()
+            .is_some_and(|english| {
+                crate::finding_narrative::rollback_english(english)
+                    == crate::finding_narrative::ENGLISH_ROLLBACK
+            })
+    });
+    let shared_safety_note = if any_shared_safety {
+        format!(
+            "<p><strong>{}:</strong> {}</p>",
+            catalog.text("Before changing anything", "變更前考量"),
+            html_escape(&match catalog.locale {
+                crate::export::ReportLocale::En =>
+                    crate::finding_narrative::ENGLISH_ROLLBACK.to_owned(),
+                crate::export::ReportLocale::ZhHant => crate::finding_narrative::rollback_zh_hant(
+                    crate::finding_narrative::ENGLISH_ROLLBACK
+                ),
+            })
+        )
+    } else {
+        String::new()
+    };
     let report_counts = &report.coverage_counts;
     let coverage_items_label = if report_counts.manual_review > 0 {
         catalog.text(
@@ -15280,6 +15305,16 @@ fn html_report_bytes(
         let safety = finding
             .rollback_considerations
             .as_ref()
+            // The adapters attach one product-authored sentence to every
+            // remediable finding, so this printed the same 115 characters on
+            // all forty-five cards of a twenty-one engine run. It is advice
+            // about making any change, not about this finding; it is said once
+            // under "What to do next" instead. Advice an upstream wrote for
+            // this finding in particular still belongs here.
+            .filter(|english| {
+                crate::finding_narrative::rollback_english(english)
+                    != crate::finding_narrative::ENGLISH_ROLLBACK
+            })
             .map(|english| match catalog.locale {
                 crate::export::ReportLocale::En => {
                     crate::finding_narrative::rollback_english(english)
@@ -16010,7 +16045,7 @@ fn html_report_bytes(
             "<div class=\"report-card\"><h2>{}</h2>",
             "<p><strong>{}:</strong> {}</p><ul>{}</ul>{}</div>",
             "<div class=\"report-card\"><h2>{}</h2><ul>{}</ul></div></section>",
-            "<section><h2>{}</h2><ol>{}</ol></section>",
+            "<section><h2>{}</h2>{}<ol>{}</ol></section>",
             "<h2>{}</h2>",
             "<p>{}</p>{}{}"
         ),
@@ -16031,6 +16066,7 @@ fn html_report_bytes(
         coverage_items_title,
         gap_items,
         catalog.text("What to do next", "下一步怎麼做"),
+        shared_safety_note,
         next_step_items,
         catalog.text("Problems found", "發現的問題"),
         catalog.text(
@@ -30312,6 +30348,14 @@ mod tests {
         // restated the header above it. The header is where the window is now.
         assert!(!html.contains("check-to-target coordinate"));
         assert!(!html.contains("No completed dimension was retained."));
+        // The adapters attach this to every remediable finding. It is advice
+        // about making any change, so it is said once, before the steps, and
+        // not on each card.
+        assert_eq!(html.matches("Before changing anything").count(), 1);
+        assert!(
+            html.find("Before changing anything") < html.find(">Problems found</h2>"),
+            "the note stands above the steps, not inside a card"
+        );
         for inventory_text in [
             "Inventory observations",
             "Inventory observations are separate from vulnerability findings and remediation priorities.",
@@ -30948,6 +30992,114 @@ mod tests {
                 "canonical JSON unexpectedly changed {canonical_value}"
             );
         }
+    }
+
+    #[test]
+    fn shared_safety_advice_is_said_once_and_a_findings_own_advice_stays_on_its_card() {
+        const OWN_ADVICE: &str = "Snapshot the cluster admission configuration first.";
+        let fixture = Fixture::new();
+        let mut case = fixture.create();
+        let now = Utc::now();
+        case.scan_runs.push(ScanRun {
+            id: "run-1".into(),
+            case_id: case.id.clone(),
+            sequence: 1,
+            created_at: now,
+            completed_at: Some(now),
+            request_outcome: None,
+            report_asset_snapshots: Vec::new(),
+            knowledge_cutoff: now,
+            ai_system_applicable: false,
+            ai_system_applicability: Default::default(),
+            ai_generated_artifact: Default::default(),
+            verification_baseline_run_id: None,
+            scope_grant_ids: vec![],
+            scope_grant_snapshots: vec![],
+            engine_admission_issues: Vec::new(),
+            engine_runs: vec![],
+        });
+        for (id, advice) in [
+            ("finding-shared", crate::finding_narrative::ENGLISH_ROLLBACK),
+            ("finding-own", OWN_ADVICE),
+        ] {
+            case.findings.push(Finding {
+                family: None,
+                severity_basis_code: None,
+                confidence_basis_code: None,
+                context_factors: Vec::new(),
+                id: id.into(),
+                case_id: case.id.clone(),
+                first_seen_run_id: "run-1".into(),
+                last_seen_run_id: "run-1".into(),
+                fingerprint: format!("{id}:rule"),
+                title: format!("Problem {id}"),
+                plain_language_summary: "Independent canonical record".into(),
+                possible_impact: "Requires human review".into(),
+                severity: Severity::Medium,
+                confidence: Confidence::High,
+                priority: 50,
+                priority_reasons: vec![],
+                asset_ids: vec!["asset-1".into()],
+                evidence: vec![Evidence {
+                    id: format!("evidence-{id}"),
+                    finding_id: id.into(),
+                    run_id: "run-1".into(),
+                    engine_run_id: None,
+                    kind: EvidenceKind::Configuration,
+                    engine_id: "kubescape".into(),
+                    scanner_details: None,
+                    source_rule: None,
+                    result_pointer_sha256: None,
+                    observed_at: now,
+                    summary: format!("Independent evidence for {id}"),
+                    location: None,
+                    artifact_id: format!("artifact-{id}"),
+                    artifact_sha256: "a".repeat(64),
+                    pointer: Some(format!("/findings/{id}")),
+                    redacted: false,
+                }],
+                control_references: vec![],
+                recommendation: "Review without automatic remediation".into(),
+                verification_guidance: "Re-run the responsible engine".into(),
+                rollback_considerations: Some(advice.into()),
+                official_references: vec![],
+                recommended_expert_type: "Security reviewer".into(),
+                status: FindingStatus::Unreviewed,
+                tags: vec![],
+            });
+            case.finding_observations.push(FindingObservation {
+                id: format!("observation-{id}"),
+                run_id: "run-1".into(),
+                finding_id: id.into(),
+                fingerprint: format!("{id}:rule"),
+                asset_ids: vec!["asset-1".into()],
+                engine_ids: vec!["kubescape".into()],
+                severity: Severity::Medium,
+                confidence: Confidence::High,
+                evidence_hashes: vec!["a".repeat(64)],
+                observed_at: now,
+                finding_snapshot: None,
+            });
+        }
+        case.updated_at = now;
+
+        let html = String::from_utf8(
+            html_report_bytes(&case, "run-1", &ExportOptions::default()).unwrap(),
+        )
+        .unwrap();
+        // The product-authored sentence every remediable finding carries is
+        // advice about making any change. Said once, above the steps.
+        assert_eq!(
+            html.matches(crate::finding_narrative::ENGLISH_ROLLBACK)
+                .count(),
+            1
+        );
+        assert!(html.find("Before changing anything") < html.find(">Problems found</h2>"));
+        // Advice written for one finding is about that finding, and stays with
+        // it, however many cards there are.
+        assert_eq!(html.matches(OWN_ADVICE).count(), 1);
+        let own_card = html.find(OWN_ADVICE).expect("the card keeps its advice");
+        assert!(own_card > html.find(">Problems found</h2>").expect("problems"));
     }
 
     #[test]

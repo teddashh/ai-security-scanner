@@ -1173,6 +1173,14 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
     // target, and Nuclei's partial run still shows the dimensions it proved.
     assert!(tested.contains("<strong>Syft</strong> — Completed"));
 
+    // Every remediable finding carries the same product-authored safety
+    // sentence, so the report printed the same 115 characters forty-five
+    // times. It is advice about making any change, not about one finding.
+    assert_eq!(ordered_html.matches("Before changing anything").count(), 1);
+    assert!(
+        ordered_html.find("Before changing anything") < ordered_html.find(">Problems found</h2>")
+    );
+
     // Two scanners find the same CVE on the repository and on the image built
     // from it. The cards are titled identically by upstream, so with the asset
     // four items into the identifier line the reader sees the same heading
