@@ -685,8 +685,8 @@ mod tests {
     fn embedded_catalog_is_bounded_and_only_uses_known_engines() {
         validate_catalog(ENGINES).expect("valid embedded mappings");
         let provenance = catalog_provenance().expect("embedded provenance");
-        assert_eq!(provenance.mapping_version, "2026-09-09.1");
-        assert_eq!(provenance.reviewed_at, "2026-09-09");
+        assert_eq!(provenance.mapping_version, "2026-09-11.1");
+        assert_eq!(provenance.reviewed_at, "2026-09-11");
         assert_eq!(provenance.review_process, REVIEW_PROCESS_V1);
         assert_eq!(provenance.catalog_sha256.len(), 64);
     }
@@ -703,18 +703,21 @@ mod tests {
     /// prefix the launcher itself puts there. Each assertion below names the
     /// upstream fact it encodes.
     ///
-    /// kube-bench and Semgrep are checked exactly rather than by shape. The
-    /// kube-bench IDs come from a real execution of the checksum-bound upstream
-    /// CIS 1.11 node profile, while Semgrep's rule pack is tracked directly.
+    /// kube-bench, Cloudsplaining, and Semgrep are checked exactly rather than
+    /// by shape. The kube-bench IDs come from a real execution of the
+    /// checksum-bound upstream CIS 1.11 node profile, Cloudsplaining writes a
+    /// closed set of six risk category keys, and Semgrep's rule pack is tracked
+    /// directly.
     ///
     /// This does not cover every engine, and the gaps are real rather than
     /// oversights. Nuclei was the fifth broken entry, and no shape check would
     /// have found it: `exposed-panel` is indistinguishable from the 13,613 real
     /// template ids, which are ordinary lowercase-hyphenated words. Checkov,
-    /// KICS by name, and Gitleaks are likewise unconstrained. Catching those
-    /// needs the pinned rule pack, which is not available here — the upstream
-    /// checkouts are 9.7 GB and untracked. Reviewing a new entry against real
-    /// engine output remains the only defence for them.
+    /// KICS by name, Gitleaks, Kubescape, and ScoutSuite are likewise
+    /// unconstrained. Catching those needs the pinned rule pack, which is not
+    /// available here — the upstream checkouts are 9.7 GB and untracked.
+    /// Reviewing a new entry against real engine output remains the only
+    /// defence for them.
     #[test]
     fn engine_rule_identifiers_have_the_shape_their_engine_actually_emits() {
         let catalog = catalog_fixture();
@@ -764,6 +767,17 @@ mod tests {
                         source_rule.starts_with("trufflehog:"),
                         "the TruffleHog adapter emits trufflehog:{{DetectorName}}; \
                          {source_rule:?} cannot match"
+                    );
+                    checked += 1;
+                }
+                // Cloudsplaining writes one closed set of risk category
+                // keys into every policy object, and the adapter carries that
+                // key through as the source rule. Any other value is invented.
+                "cloudsplaining" => {
+                    assert!(
+                        crate::adapters::CLOUDSPLAINING_RISKS.contains(&source_rule.as_str()),
+                        "Cloudsplaining writes only {:?}; {source_rule:?} cannot match real output",
+                        crate::adapters::CLOUDSPLAINING_RISKS
                     );
                     checked += 1;
                 }
@@ -830,10 +844,10 @@ mod tests {
         assert_eq!(overprivileged_policy.len(), 3);
         assert!(overprivileged_policy.iter().all(|item| {
             item.relationship == "related"
-                && item.mapping_version == "2026-09-09.1"
+                && item.mapping_version == "2026-09-11.1"
                 && item.mapping_provenance.as_ref().is_some_and(|provenance| {
                     provenance.catalog_sha256
-                        == "1c9e2b31c6ed5058baed63091ae4d9ee10c2cb19dddc09e3d1982597f6da8296"
+                        == "627c398ca7ad69fc43a375723026a64219eda4030a3799aa82a958489822e702"
                 })
                 && !item.rationale.to_ascii_lowercase().contains("compliant")
         }));

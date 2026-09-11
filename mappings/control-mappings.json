@@ -1,10 +1,10 @@
 {
   "schema_version": "1.1",
-  "mapping_version": "2026-09-09.1",
+  "mapping_version": "2026-09-11.1",
   "provenance": {
-    "reviewed_at": "2026-09-09",
+    "reviewed_at": "2026-09-11",
     "review_process": "source_coordinate_and_rationale_review_v1",
-    "canonical_sha256": "1c9e2b31c6ed5058baed63091ae4d9ee10c2cb19dddc09e3d1982597f6da8296"
+    "canonical_sha256": "627c398ca7ad69fc43a375723026a64219eda4030a3799aa82a958489822e702"
   },
   "relationship": "related",
   "disclaimer": "These evidence-to-control references indicate topical relationships only. They do not establish implementation, effectiveness, certification, or compliance.",
@@ -62,6 +62,13 @@
       "title": "Protection of data at rest"
     },
     {
+      "key": "nist-pr-ps-01",
+      "framework": "NIST CSF",
+      "framework_version": "2.0",
+      "control_id": "PR.PS-01",
+      "title": "Configuration management practices"
+    },
+    {
       "key": "nist-pr-ps-04",
       "framework": "NIST CSF",
       "framework_version": "2.0",
@@ -74,6 +81,20 @@
       "framework_version": "2.0",
       "control_id": "PR.PS-06",
       "title": "Secure software development practices"
+    },
+    {
+      "key": "nist-pr-ir-01",
+      "framework": "NIST CSF",
+      "framework_version": "2.0",
+      "control_id": "PR.IR-01",
+      "title": "Protection of networks and environments from unauthorized access"
+    },
+    {
+      "key": "nist-pr-ir-04",
+      "framework": "NIST CSF",
+      "framework_version": "2.0",
+      "control_id": "PR.IR-04",
+      "title": "Resource capacity for availability"
     },
     {
       "key": "iso-5-15",
@@ -111,6 +132,13 @@
       "title": "Privileged access safeguards"
     },
     {
+      "key": "iso-8-6",
+      "framework": "ISO/IEC 27001",
+      "framework_version": "2022",
+      "control_id": "A.8.6",
+      "title": "Capacity management"
+    },
+    {
       "key": "iso-8-8",
       "framework": "ISO/IEC 27001",
       "framework_version": "2022",
@@ -118,11 +146,25 @@
       "title": "Technical vulnerability handling"
     },
     {
+      "key": "iso-8-9",
+      "framework": "ISO/IEC 27001",
+      "framework_version": "2022",
+      "control_id": "A.8.9",
+      "title": "Configuration management"
+    },
+    {
       "key": "iso-8-15",
       "framework": "ISO/IEC 27001",
       "framework_version": "2022",
       "control_id": "A.8.15",
       "title": "Security-relevant audit records"
+    },
+    {
+      "key": "iso-8-20",
+      "framework": "ISO/IEC 27001",
+      "framework_version": "2022",
+      "control_id": "A.8.20",
+      "title": "Networks security"
     },
     {
       "key": "iso-8-24",
@@ -210,11 +252,60 @@
       "rationale": "Evidence that an object-storage resource permits public access is related to access policy, authorization review, and cloud service protection."
     },
     {
+      "engine_id": "scoutsuite",
+      "match_kind": "exact",
+      "source_rule": "iam-password-policy-no-uppercase-required",
+      "controls": ["nist-pr-aa-01", "iso-5-17"],
+      "rationale": "Evidence that the account password policy does not require an uppercase character is related to credential lifecycle management and to safeguarding authentication information."
+    },
+    {
+      "engine_id": "scoutsuite",
+      "match_kind": "exact",
+      "source_rule": "iam-ec2-role-without-instances",
+      "controls": ["nist-pr-aa-05", "iso-5-18"],
+      "rationale": "Evidence that a role assumable by the EC2 service is attached to no instance is related to least privilege and entitlement review; an unused entitlement stays usable until it is removed."
+    },
+    {
       "engine_id": "cloudsplaining",
       "match_kind": "exact",
       "source_rule": "PrivilegeEscalation",
       "controls": ["nist-pr-aa-05", "iso-5-18", "iso-8-2"],
       "rationale": "Evidence of an identity privilege-escalation path is related to least privilege, entitlement review, and privileged access safeguards."
+    },
+    {
+      "engine_id": "cloudsplaining",
+      "match_kind": "exact",
+      "source_rule": "CredentialsExposure",
+      "controls": ["nist-pr-aa-01", "nist-pr-aa-05", "iso-5-17", "iso-8-2"],
+      "rationale": "Evidence that an identity policy permits actions returning credential material is related to credential lifecycle management, least privilege, authentication information safeguards, and privileged access safeguards."
+    },
+    {
+      "engine_id": "cloudsplaining",
+      "match_kind": "exact",
+      "source_rule": "DataExfiltration",
+      "controls": ["nist-pr-aa-05", "nist-pr-ds-01", "iso-5-15", "iso-5-18"],
+      "rationale": "Evidence that an identity policy permits actions that can read stored data out of the account is related to least privilege, protection of data at rest, access policy, and entitlement review."
+    },
+    {
+      "engine_id": "cloudsplaining",
+      "match_kind": "exact",
+      "source_rule": "ResourceExposure",
+      "controls": ["nist-pr-aa-05", "iso-5-15", "iso-5-18", "iso-5-23"],
+      "rationale": "Evidence that an identity policy permits actions that change who can reach a resource is related to least privilege, access policy, entitlement review, and cloud service security responsibilities."
+    },
+    {
+      "engine_id": "cloudsplaining",
+      "match_kind": "exact",
+      "source_rule": "InfrastructureModification",
+      "controls": ["nist-pr-aa-05", "iso-5-18", "iso-8-2"],
+      "rationale": "Evidence that an identity policy permits actions that alter account infrastructure is related to least privilege, entitlement review, and privileged access safeguards."
+    },
+    {
+      "engine_id": "cloudsplaining",
+      "match_kind": "exact",
+      "source_rule": "ServiceWildcard",
+      "controls": ["nist-pr-aa-05", "iso-5-18", "iso-8-2"],
+      "rationale": "Evidence that an identity policy grants every action in a service is related to least privilege, entitlement review, and privileged access safeguards; a wildcard also covers actions the account has never reviewed."
     },
     {
       "engine_id": "scubagear",
@@ -315,11 +406,60 @@
       "rationale": "Evidence that subjects can run commands inside running containers is related to least-privilege authorization, privileged access safeguards, and container isolation. AIDEFEND's container-isolation coordinate applies when the workload is part of an AI system."
     },
     {
+      "engine_id": "kubescape",
+      "match_kind": "exact",
+      "source_rule": "C-0009",
+      "controls": ["nist-pr-ir-04", "iso-8-6", "iso-8-9"],
+      "rationale": "Evidence that a workload declares no CPU or memory limit is related to maintaining resource capacity for availability, capacity management, and platform configuration management."
+    },
+    {
+      "engine_id": "kubescape",
+      "match_kind": "exact",
+      "source_rule": "C-0017",
+      "controls": ["nist-pr-ps-01", "iso-8-9", "aidefend-i-001-001"],
+      "rationale": "Evidence that a container can write to its own root filesystem is related to platform configuration management and container isolation. AIDEFEND's container-isolation coordinate applies when the workload is part of an AI system."
+    },
+    {
+      "engine_id": "kube-bench",
+      "match_kind": "exact",
+      "source_rule": "4.1.1",
+      "controls": ["nist-pr-ps-01", "iso-8-2", "iso-8-9"],
+      "rationale": "Evidence that the kubelet service file is writable beyond its owner is related to node configuration management and privileged access safeguards; that file governs a root-level service."
+    },
+    {
+      "engine_id": "kube-bench",
+      "match_kind": "exact",
+      "source_rule": "4.1.9",
+      "controls": ["nist-pr-ps-01", "iso-8-2", "iso-8-9"],
+      "rationale": "Evidence that the kubelet config.yaml file is readable or writable beyond its owner is related to node configuration management and privileged access safeguards; that file holds the kubelet's security settings."
+    },
+    {
+      "engine_id": "kube-bench",
+      "match_kind": "exact",
+      "source_rule": "4.1.10",
+      "controls": ["nist-pr-ps-01", "iso-8-2", "iso-8-9"],
+      "rationale": "Evidence that the kubelet config.yaml file is not owned by root is related to node configuration management and privileged access safeguards; a non-root owner can change the kubelet's security settings."
+    },
+    {
       "engine_id": "kube-bench",
       "match_kind": "exact",
       "source_rule": "4.2.1",
       "controls": ["nist-pr-aa-03", "iso-5-17"],
       "rationale": "Evidence that the kubelet accepts anonymous authentication is related to authentication enforcement and authentication information safeguards. This is the node check the shipped snapshot benchmark runs; the control-plane equivalent is not in scope for this product."
+    },
+    {
+      "engine_id": "kube-bench",
+      "match_kind": "exact",
+      "source_rule": "4.2.10",
+      "controls": ["nist-pr-aa-01", "iso-5-17", "iso-8-24"],
+      "rationale": "Evidence that kubelet client certificate rotation is turned off is related to credential lifecycle management, authentication information safeguards, and cryptographic safeguards."
+    },
+    {
+      "engine_id": "kube-bench",
+      "match_kind": "exact",
+      "source_rule": "4.3.1",
+      "controls": ["nist-pr-ir-01", "nist-pr-ps-01", "iso-8-20"],
+      "rationale": "Evidence that the kube-proxy metrics endpoint is not bound to localhost is related to protecting networks from unauthorized access, node configuration management, and network security."
     },
     {
       "engine_id": "greenbone",

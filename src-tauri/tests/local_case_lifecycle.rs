@@ -1690,7 +1690,7 @@ fn assert_current_greenbone_relationships(
     );
     for relationship in relationships {
         assert_eq!(relationship["relationship"], "related");
-        assert_eq!(relationship["mapping_version"], "2026-09-09.1");
+        assert_eq!(relationship["mapping_version"], "2026-09-11.1");
         assert_eq!(
             relationship["mapping_provenance_state"],
             "verified_current_catalog"
@@ -1698,7 +1698,7 @@ fn assert_current_greenbone_relationships(
         assert_eq!(relationship["mapping_version_state"], "exact_match");
         assert_eq!(
             relationship["mapping_provenance"]["mapping_version"],
-            "2026-09-09.1"
+            "2026-09-11.1"
         );
         let finding_id = relationship["finding"]["finding_id"]
             .as_str()
@@ -1713,7 +1713,7 @@ fn assert_current_greenbone_relationships(
         assert!(!bindings.is_empty());
         for binding in bindings {
             assert_eq!(binding["engine_id"], "greenbone");
-            assert_eq!(binding["engine_mapping_version"], "2026-09-09.1");
+            assert_eq!(binding["engine_mapping_version"], "2026-09-11.1");
             assert_eq!(
                 binding["engine_mapping_provenance_state"],
                 "verified_current_catalog"
@@ -1741,11 +1741,11 @@ fn assert_current_greenbone_relationships(
     let summary = framework(&vertical.report, framework_name);
     assert_eq!(
         summary["observed_mapping_versions"],
-        serde_json::json!(["2026-09-09.1"])
+        serde_json::json!(["2026-09-11.1"])
     );
     assert_eq!(
         summary["evidence_engine_mapping_versions"],
-        serde_json::json!(["2026-09-09.1"])
+        serde_json::json!(["2026-09-11.1"])
     );
     assert_eq!(
         summary["mapping_version_state"],

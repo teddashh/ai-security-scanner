@@ -1077,8 +1077,36 @@ const CONTROL_MAPPING_RATIONALE_PROSE: &[(&str, &str)] = &[
         "物件儲存資源允許公開存取的證據，與存取政策、授權審查及雲端服務保護有關。",
     ),
     (
+        "Evidence that the account password policy does not require an uppercase character is related to credential lifecycle management and to safeguarding authentication information.",
+        "帳戶密碼政策未要求包含大寫字元的證據，與憑證生命週期管理及保護驗證資訊有關。",
+    ),
+    (
+        "Evidence that a role assumable by the EC2 service is attached to no instance is related to least privilege and entitlement review; an unused entitlement stays usable until it is removed.",
+        "可由 EC2 服務擔任的角色未附加到任何執行個體的證據，與最小權限及權限審查有關；未使用的權限在移除前仍然可用。",
+    ),
+    (
         "Evidence of an identity privilege-escalation path is related to least privilege, entitlement review, and privileged access safeguards.",
         "身分權限提升路徑的證據，與最小權限、權限審查及特權存取保護有關。",
+    ),
+    (
+        "Evidence that an identity policy permits actions returning credential material is related to credential lifecycle management, least privilege, authentication information safeguards, and privileged access safeguards.",
+        "身分政策允許會回傳憑證資料之操作的證據，與憑證生命週期管理、最小權限、驗證資訊保護及特權存取保護有關。",
+    ),
+    (
+        "Evidence that an identity policy permits actions that can read stored data out of the account is related to least privilege, protection of data at rest, access policy, and entitlement review.",
+        "身分政策允許將帳戶內已儲存資料讀出之操作的證據，與最小權限、靜態資料保護、存取政策及權限審查有關。",
+    ),
+    (
+        "Evidence that an identity policy permits actions that change who can reach a resource is related to least privilege, access policy, entitlement review, and cloud service security responsibilities.",
+        "身分政策允許變更誰可以存取資源之操作的證據，與最小權限、存取政策、權限審查及雲端服務安全責任有關。",
+    ),
+    (
+        "Evidence that an identity policy permits actions that alter account infrastructure is related to least privilege, entitlement review, and privileged access safeguards.",
+        "身分政策允許變更帳戶基礎架構之操作的證據，與最小權限、權限審查及特權存取保護有關。",
+    ),
+    (
+        "Evidence that an identity policy grants every action in a service is related to least privilege, entitlement review, and privileged access safeguards; a wildcard also covers actions the account has never reviewed.",
+        "身分政策授予某項服務全部操作的證據，與最小權限、權限審查及特權存取保護有關；萬用字元也會涵蓋該帳戶從未審查過的操作。",
     ),
     (
         "Evidence that legacy authentication is not blocked is related to enforcing appropriate authentication and protecting authentication information.",
@@ -1133,8 +1161,36 @@ const CONTROL_MAPPING_RATIONALE_PROSE: &[(&str, &str)] = &[
         "主體可以在執行中的容器內執行命令的證據，與最小權限授權、特權存取保護及容器隔離有關。當工作負載屬於 AI 系統的一部分時，AIDEFEND 的容器隔離座標才適用。",
     ),
     (
+        "Evidence that a workload declares no CPU or memory limit is related to maintaining resource capacity for availability, capacity management, and platform configuration management.",
+        "工作負載未宣告 CPU 或記憶體上限的證據，與維持可用性所需的資源容量、容量管理及平台組態管理有關。",
+    ),
+    (
+        "Evidence that a container can write to its own root filesystem is related to platform configuration management and container isolation. AIDEFEND's container-isolation coordinate applies when the workload is part of an AI system.",
+        "容器可以寫入自身根檔案系統的證據，與平台組態管理及容器隔離有關。當工作負載屬於 AI 系統的一部分時，AIDEFEND 的容器隔離座標才適用。",
+    ),
+    (
+        "Evidence that the kubelet service file is writable beyond its owner is related to node configuration management and privileged access safeguards; that file governs a root-level service.",
+        "kubelet 服務檔案可由擁有者以外的人寫入的證據，與節點組態管理及特權存取保護有關；該檔案掌管一個以 root 執行的服務。",
+    ),
+    (
+        "Evidence that the kubelet config.yaml file is readable or writable beyond its owner is related to node configuration management and privileged access safeguards; that file holds the kubelet's security settings.",
+        "kubelet config.yaml 檔案可由擁有者以外的人讀取或寫入的證據，與節點組態管理及特權存取保護有關；該檔案存放 kubelet 的安全設定。",
+    ),
+    (
+        "Evidence that the kubelet config.yaml file is not owned by root is related to node configuration management and privileged access safeguards; a non-root owner can change the kubelet's security settings.",
+        "kubelet config.yaml 檔案的擁有者不是 root 的證據，與節點組態管理及特權存取保護有關；非 root 的擁有者可以變更 kubelet 的安全設定。",
+    ),
+    (
         "Evidence that the kubelet accepts anonymous authentication is related to authentication enforcement and authentication information safeguards. This is the node check the shipped snapshot benchmark runs; the control-plane equivalent is not in scope for this product.",
         "kubelet 接受匿名驗證的證據，與強制驗證及驗證資訊保護有關。這是隨附的快照基準所執行的節點檢查；對應的控制平面檢查不在本產品範圍內。",
+    ),
+    (
+        "Evidence that kubelet client certificate rotation is turned off is related to credential lifecycle management, authentication information safeguards, and cryptographic safeguards.",
+        "kubelet 用戶端憑證輪替已關閉的證據，與憑證生命週期管理、驗證資訊保護及密碼學保護措施有關。",
+    ),
+    (
+        "Evidence that the kube-proxy metrics endpoint is not bound to localhost is related to protecting networks from unauthorized access, node configuration management, and network security.",
+        "kube-proxy 指標端點未繫結至 localhost 的證據，與保護網路免於未經授權的存取、節點組態管理及網路安全有關。",
     ),
     (
         "A Greenbone vulnerability-test alarm on an authorized host is evidence related to technical vulnerability handling. For an AI system, AIDEFEND separates build-time dependency admission from the deployed-software remediation lifecycle; this reference points at the deployed lifecycle and does not decide remediation state.",

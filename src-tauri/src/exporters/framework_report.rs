@@ -903,8 +903,13 @@ fn coverage_summary(
         ));
     }
     if selected_run_findings_without_framework_relationship > 0 {
+        let (verb, pronoun) = if selected_run_findings_without_framework_relationship == 1 {
+            ("has", "Its")
+        } else {
+            ("have", "Their")
+        };
         limitations.push(format!(
-            "{selected_run_findings_without_framework_relationship} of {selected_run_finding_count} selected-run finding(s) carry no relationship in the packaged mapping catalog. Their framework position is unknown, not absent."
+            "{selected_run_findings_without_framework_relationship} of {selected_run_finding_count} selected-run findings {verb} no relationship in the packaged mapping catalog. {pronoun} framework position is unknown, not absent."
         ));
     }
     limitations.push(
@@ -1802,7 +1807,7 @@ mod tests {
         // per-observation ledger.
         assert!(
             report.coverage.limitations.iter().any(|limitation| limitation
-                == "1 of 2 selected-run finding(s) carry no relationship in the packaged mapping catalog. Their framework position is unknown, not absent."),
+                == "1 of 2 selected-run findings has no relationship in the packaged mapping catalog. Its framework position is unknown, not absent."),
             "{:#?}",
             report.coverage.limitations
         );

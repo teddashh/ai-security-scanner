@@ -1695,10 +1695,11 @@ fn the_ai_framework_follows_the_case_answers_and_nothing_else() {
         ["AID-H-003.001", "AID-H-003.010", "AID-I-001.001"]
     );
 
-    // What the catalog could not place, said out loud. The packaged catalog
-    // carries one representative rule per engine, so most of a 45-finding run
-    // lands outside it -- and an absent coordinate has to read as unknown,
-    // not as "no control relates to this".
+    // What the catalog could not place, said out loud. One finding in this run
+    // comes from the deliberately malformed Nuclei fixture, whose template id
+    // exists only in that fixture, so no reviewed relationship can be written
+    // for it -- and an absent coordinate has to read as unknown, not as "no
+    // control relates to this".
     for view in [&withheld, &declared, &no_artifact] {
         assert_eq!(view.mapped + view.unmapped, 45);
         assert_eq!(
@@ -1727,19 +1728,16 @@ fn the_ai_framework_follows_the_case_answers_and_nothing_else() {
         );
         assert!(!view.zh_html.contains("未保留本輪的框架座標。"));
         assert!(
-            view.limitations.iter().any(|limitation| *limitation
-                == format!(
-                    "{} of 45 selected-run finding(s) carry no relationship in the packaged mapping catalog. Their framework position is unknown, not absent.",
-                    view.unmapped
-                )),
+            view.limitations.iter().any(|limitation| limitation
+                == "1 of 45 selected-run findings has no relationship in the packaged mapping catalog. Its framework position is unknown, not absent."),
             "{:#?}",
             view.limitations
         );
     }
     // Declaring an AI system adds coordinates to findings the catalog had
     // already placed, so it moves no finding across the line.
-    assert_eq!((withheld.mapped, withheld.unmapped), (19, 26));
-    assert_eq!((declared.mapped, declared.unmapped), (19, 26));
+    assert_eq!((withheld.mapped, withheld.unmapped), (44, 1));
+    assert_eq!((declared.mapped, declared.unmapped), (44, 1));
 
     // None of this is detection. The same 21 checks found the same problems
     // in all three runs; only the coordinates the report may name changed.
