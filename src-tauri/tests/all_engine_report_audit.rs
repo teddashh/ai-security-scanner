@@ -1121,6 +1121,43 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
         cards,
         "every card keeps its evidence and framework provenance collapsed"
     );
+    // The report cites twenty-one third-party projects by name. Humanizing
+    // their identifiers named five of them something their own documentation
+    // does not use, and split one on its hyphen.
+    let tested = &ordered_html[ordered_html
+        .find(">What was actually tested</h2>")
+        .expect("tested section")..];
+    let tested = &tested[..tested
+        .find(">What needs attention</h2>")
+        .expect("gaps follow")];
+    for wrong in [
+        "Httpx",
+        "Kics",
+        "Kube Bench",
+        "Scoutsuite",
+        "Scubagear",
+        "Trufflehog",
+        "Cloudquery",
+        "Completed check To Target",
+    ] {
+        assert!(
+            !tested.contains(wrong),
+            "the report printed a humanized identifier: {wrong}"
+        );
+    }
+    for right in [
+        "httpx",
+        "KICS",
+        "kube-bench",
+        "ScoutSuite",
+        "ScubaGear",
+        "TruffleHog",
+        "CloudQuery",
+        "Completed check-to-target coordinate",
+    ] {
+        assert!(tested.contains(right), "the report lost a name: {right}");
+    }
+
     // Two scanners find the same CVE on the repository and on the image built
     // from it. The cards are titled identically by upstream, so with the asset
     // four items into the identifier line the reader sees the same heading

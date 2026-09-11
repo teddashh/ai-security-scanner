@@ -13648,6 +13648,27 @@ impl HtmlReportCatalog {
     }
 }
 
+/// English display for one stored coverage or tested-dimension name.
+///
+/// These names are composed prose, and they often open with an engine's own
+/// identifier. `readable_identifier` below title-cases a word and splits it on
+/// its hyphens, which is right for `not_tested` and wrong here: it printed
+/// "Completed check To Target coordinate" once per finished check, and named
+/// five scanners "Httpx", "Kics", "Scoutsuite", "Scubagear" and "Kube Bench".
+/// Name the engine the way upstream spells it, and otherwise change nothing
+/// but the first letter. The Chinese side already leaves this text alone.
+fn readable_dimension(dimension: &str) -> String {
+    let head = dimension.split([':', ' ']).next().unwrap_or_default();
+    if let Some(name) = crate::registry::builtin_display_name(head) {
+        return format!("{name}{}", &dimension[head.len()..]);
+    }
+    let mut characters = dimension.chars();
+    match characters.next() {
+        Some(first) => first.to_uppercase().chain(characters).collect(),
+        None => String::new(),
+    }
+}
+
 fn readable_identifier(value: &str) -> String {
     let words = value
         .split(['_', '-'])
@@ -14792,7 +14813,7 @@ fn html_report_bytes(
         .requested
         .requested_check_ids
         .iter()
-        .map(|check_id| format!("<li>{}</li>", html_escape(&readable_identifier(check_id))))
+        .map(|check_id| format!("<li>{}</li>", html_escape(&readable_dimension(check_id))))
         .collect::<String>();
     if requested_checks.is_empty() {
         requested_checks.push_str(catalog.text(
@@ -14820,7 +14841,7 @@ fn html_report_bytes(
                                     &dimension.dimension,
                                 )
                             }
-                            _ => readable_identifier(&dimension.dimension),
+                            _ => readable_dimension(&dimension.dimension),
                         }),
                         html_escape(&dimension.value),
                         html_escape(&match catalog.locale {
@@ -14850,7 +14871,7 @@ fn html_report_bytes(
                     "<br><small>{}: {} · {}: {}</small>",
                     "<br><small>{}: {}</small><ul>{}</ul></li>"
                 ),
-                html_escape(&readable_identifier(&check.check_id)),
+                html_escape(&readable_dimension(&check.check_id)),
                 html_escape(catalog.coverage_status(&check.status)),
                 catalog.text("Started", "開始"),
                 html_escape(&display_time(check.started_at.as_ref())),
@@ -14899,7 +14920,7 @@ fn html_report_bytes(
                         "<br><span>{}: <code>{}</code> · {}: {} <code>{}</code></span>",
                         "<br><small>{}: {} · {}: {}</small></li>"
                     ),
-                    html_escape(&readable_identifier(&scope.check_id)),
+                    html_escape(&readable_dimension(&scope.check_id)),
                     html_escape(catalog.report_stage(&scope.stage)),
                     catalog.text("Target", "目標"),
                     html_escape(target_label),
@@ -14969,16 +14990,15 @@ fn html_report_bytes(
                     gap.next_action.clone(),
                 ),
             };
-            // Only the stored English is a machine identifier worth prettifying.
-            // Running it over a composed name capitalizes the engine's own id
-            // and splits it on its hyphens -- "naabu-tcp 的..." becomes
-            // "Naabu TCP 的...", so the id no longer matches what the reader
-            // sees in the scanner's own output, which is what it is there for.
+            // Chinese keeps the stored text as composed; English names the
+            // engine and capitalizes the sentence. Neither splits an
+            // identifier on its hyphens: "naabu-tcp" has to keep matching what
+            // the reader sees in the scanner's own output.
             let dimension = match catalog.locale {
                 crate::export::ReportLocale::ZhHant => {
                     replace_target_ids(&dimension, &target_labels)
                 }
-                _ => readable_identifier(&replace_target_ids(&dimension, &target_labels)),
+                _ => readable_dimension(&replace_target_ids(&dimension, &target_labels)),
             };
             format!(
                 "<li><strong>{} — {}</strong><br>{}<br><em>{}:</em> {}</li>",
@@ -29776,6 +29796,45 @@ mod tests {
             verification_guidance: None,
         };
         assert!(beginner_aws_iam_policy(&finding).is_none());
+    }
+
+    #[test]
+    fn the_report_spells_every_scanner_the_way_its_own_project_does() {
+        // The report cites these projects. Title-casing their identifiers named
+        // five of them something their own documentation does not use, and
+        // split one on its hyphen.
+        for (engine_id, expected) in [
+            ("httpx", "httpx"),
+            ("kics", "KICS"),
+            ("kube-bench", "kube-bench"),
+            ("scoutsuite", "ScoutSuite"),
+            ("scubagear", "ScubaGear"),
+            ("trufflehog", "TruffleHog"),
+            ("cloudquery", "CloudQuery"),
+        ] {
+            assert_eq!(readable_dimension(engine_id), expected);
+            assert_eq!(
+                readable_dimension(&format!("{engine_id}: failed check dimension")),
+                format!("{expected}: failed check dimension")
+            );
+        }
+        // Composed prose keeps its hyphens and gains only a capital. This one
+        // is printed once per completed check, and read "Completed check To
+        // Target coordinate".
+        assert_eq!(
+            readable_dimension("completed check-to-target coordinate"),
+            "Completed check-to-target coordinate"
+        );
+        assert_eq!(
+            readable_dimension("internal-device TLS vulnerability checks"),
+            "Internal-device TLS vulnerability checks"
+        );
+        assert_eq!(
+            readable_dimension("native localhost TCP check on 127.0.0.1:9001"),
+            "Native localhost TCP check on 127.0.0.1:9001"
+        );
+        // An acronym the humanizer knows is still the humanizer's job.
+        assert_eq!(readable_identifier("not_tested"), "Not Tested");
     }
 
     #[test]

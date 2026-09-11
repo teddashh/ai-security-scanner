@@ -7,6 +7,7 @@ use crate::error::{AppError, AppResult};
 use chrono::NaiveDate;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 const KNOWN_ENGINE_IDS: [&str; 21] = [
     "cloudquery",
@@ -49,6 +50,33 @@ const NAABU_LAUNCHER_JOURNAL_COMMAND: [&str; 10] = [
 ];
 
 const BUILTIN_CATALOG: &str = include_str!("../../engines/catalog.json");
+
+/// Upstream's own spelling for one packaged engine id, or `None` for an id this
+/// build does not ship.
+///
+/// The shared report cites the projects it ran, so it needs their names rather
+/// than a humanized identifier: title-casing `httpx`, `kics`, `scoutsuite`,
+/// `scubagear` and `kube-bench` printed five scanners under names their own
+/// projects do not use. Reading the packaged catalog instead of keeping a
+/// second list means a renamed engine cannot leave the report spelling it the
+/// old way.
+pub fn builtin_display_name(engine_id: &str) -> Option<&'static str> {
+    static NAMES: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+    NAMES
+        .get_or_init(|| {
+            serde_json::from_str::<Vec<Value>>(BUILTIN_CATALOG)
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| {
+                    let id = entry.get("id")?.as_str()?.to_owned();
+                    let name = entry.get("display_name")?.as_str()?.to_owned();
+                    Some((id, name))
+                })
+                .collect()
+        })
+        .get(engine_id)
+        .map(String::as_str)
+}
 
 #[derive(Debug)]
 pub struct EngineRegistry {
@@ -1126,6 +1154,22 @@ mod tests {
                 .to_string()
                 .contains("must be non-empty and unique")
         );
+    }
+
+    #[test]
+    fn every_packaged_engine_offers_its_own_name_to_the_report() {
+        // The report reads this instead of humanizing an id. An engine with no
+        // entry falls back to that humanizer and reaches a reader under a name
+        // its own project does not use.
+        for id in KNOWN_ENGINE_IDS {
+            let name = builtin_display_name(id)
+                .unwrap_or_else(|| panic!("{id} has no display name in the packaged catalog"));
+            assert!(!name.is_empty(), "{id}");
+        }
+        assert_eq!(builtin_display_name("kube-bench"), Some("kube-bench"));
+        assert_eq!(builtin_display_name("scoutsuite"), Some("ScoutSuite"));
+        // An id this build does not ship stays the caller's problem.
+        assert_eq!(builtin_display_name("not-an-engine"), None);
     }
 
     #[test]
