@@ -433,3 +433,70 @@ test("a priority reason this build cannot identify is left alone, not invented",
     "Severity derived from something unheard of; X reports no severity of its own.",
   );
 });
+
+test("the control verdict survives being normalized twice", () => {
+  // The report bakes the English verdict into the stored summary, and the
+  // exporter then normalizes that stored summary again for the reader's
+  // locale. The second pass sees its own output as input, so a Chinese reader
+  // got the English sentence until the sentence could be read back.
+  const adapter =
+    "ScubaGear reported this control as failing. ScubaGear reported confidence High for it.";
+  const stored = findingSummarySentence("en", {
+    englishFallback: adapter,
+    severityLabel: "High",
+    family: "microsoft365",
+  });
+  assert.equal(
+    stored,
+    "ScubaGear checked this Microsoft 365 requirement and the tenant did not meet it.",
+  );
+  assert.equal(
+    findingSummarySentence("en", {
+      englishFallback: stored,
+      severityLabel: "High",
+      family: "microsoft365",
+    }),
+    stored,
+    "a second English pass must not rewrite the sentence it just wrote",
+  );
+
+  const zh = findingSummarySentence("zh-TW", {
+    englishFallback: stored,
+    severityLabel: "高",
+    family: "microsoft365",
+  });
+  assert.equal(zh, "ScubaGear 檢查了這項 Microsoft 365 要求，這個租戶未通過。");
+  assert.equal(
+    findingSummarySentence("zh-TW", {
+      englishFallback: adapter,
+      severityLabel: "高",
+      family: "microsoft365",
+    }),
+    zh,
+    "both passes must reach the same Chinese sentence",
+  );
+});
+
+test("only Microsoft 365 findings get a control verdict", () => {
+  const english = "Trivy reported this control as failing.";
+  for (const family of [
+    "cloudPosture",
+    "cloudIdentity",
+    "networkExposure",
+    "sourceCode",
+    "secret",
+    "infrastructureAsCode",
+    "vulnerableComponent",
+    "kubernetes",
+  ] as const) {
+    const summary = findingSummarySentence("zh-TW", {
+      englishFallback: english,
+      severityLabel: "高",
+      family,
+    });
+    assert.ok(
+      !summary.includes("Microsoft 365 要求"),
+      `${family} does not check a Microsoft 365 requirement: ${summary}`,
+    );
+  }
+});

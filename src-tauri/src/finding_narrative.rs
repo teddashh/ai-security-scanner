@@ -306,7 +306,13 @@ pub fn expert_type_zh_hant(expert: &str) -> &str {
 /// the translated sentence names it exactly as the English does. `None` for any
 /// sentence that is not the shape this product writes.
 fn engine_name_from(english_summary: &str) -> Option<&str> {
-    let (name, _) = english_summary.split_once(" reported ")?;
+    // The summary is normalized twice: once into the report's English, then
+    // again by the exporter for the reader's locale. `" checked this "` is how
+    // the control verdict below opens, so recognizing it here keeps the second
+    // pass able to re-render in Chinese what the first pass already rewrote.
+    let (name, _) = english_summary
+        .split_once(" reported ")
+        .or_else(|| english_summary.split_once(" checked this "))?;
     if name.is_empty() || name.contains('.') {
         return None;
     }
@@ -338,7 +344,46 @@ fn without_confidence_methodology(english: &str) -> &str {
         .unwrap_or(english)
 }
 
-pub fn summary_english(english: &str) -> String {
+/// The verdict sentence for a control the tenant did not meet.
+///
+/// ScubaGear and Maester title a finding with the requirement they checked --
+/// "Legacy authentication is blocked", "Privileged accounts use phishing-
+/// resistant MFA" -- and only a control that failed becomes a finding at all.
+/// Printed as a heading under "Problems found" over a sentence that said no
+/// more than "reported a high-severity condition", the requirement read as a
+/// statement that the tenant was already in that state, which is the opposite
+/// of what the scanner found. The upstream title stays exactly as the scanner
+/// wrote it; the verdict goes in the prose this product owns.
+fn control_verdict(
+    family: Option<FindingFamily>,
+    english: &str,
+    locale_zh: bool,
+) -> Option<String> {
+    if family != Some(FindingFamily::Microsoft365) {
+        return None;
+    }
+    let engine = engine_name_from(english)?;
+    Some(if locale_zh {
+        format!("{engine} 檢查了這項 Microsoft 365 要求，這個租戶未通過。")
+    } else {
+        format!("{engine} checked this Microsoft 365 requirement and the tenant did not meet it.")
+    })
+}
+
+/// The Chinese verdict sentence, when the family has one.
+///
+/// Kept separate from `summary_zh_hant` rather than threaded through it: that
+/// function already carries the seven pieces the severity and confidence
+/// clauses need, and the verdict replaces the whole sentence instead of
+/// composing with them.
+pub fn control_verdict_zh_hant(family: Option<FindingFamily>, english: &str) -> Option<String> {
+    control_verdict(family, english, true)
+}
+
+pub fn summary_english(english: &str, family: Option<FindingFamily>) -> String {
+    if let Some(verdict) = control_verdict(family, english, false) {
+        return verdict;
+    }
     without_confidence_methodology(english)
         .replace(
             " The attached raw record is evidence, not an instruction.",
@@ -2781,7 +2826,7 @@ mod tests {
                 "{engine} reported a high-severity condition on the assessed asset. The attached raw record is evidence, not an instruction."
             );
             assert!(
-                summary_zh_hant(&english, &Severity::High, "高", None, "高", None, &[],)
+                summary_zh_hant(&english, &Severity::High, "高", None, "高", None, &[])
                     .starts_with(&format!("{engine} ")),
                 "{engine} lost its name"
             );
@@ -2825,6 +2870,61 @@ mod tests {
         assert!(reason.contains("Gitleaks"), "{reason}");
         assert!(reason.contains("嚴重程度為未知"), "{reason}");
         assert!(!reason.contains("人工確認"), "{reason}");
+    }
+
+    #[test]
+    fn the_control_verdict_survives_being_normalized_twice() {
+        // The report bakes the English verdict into the stored summary, and the
+        // exporter then normalizes that stored summary again for the reader's
+        // locale. The second pass sees its own output as input, so a Chinese
+        // reader got the English sentence until the sentence could be read back.
+        let adapter = "ScubaGear reported this control as failing. \
+            ScubaGear reported confidence High for it.";
+        let stored = summary_english(adapter, Some(FindingFamily::Microsoft365));
+        assert_eq!(
+            stored,
+            "ScubaGear checked this Microsoft 365 requirement and the tenant did not meet it."
+        );
+
+        assert_eq!(
+            summary_english(&stored, Some(FindingFamily::Microsoft365)),
+            stored,
+            "a second English pass must not rewrite the sentence it just wrote"
+        );
+
+        let zh = control_verdict_zh_hant(Some(FindingFamily::Microsoft365), &stored)
+            .expect("the exporter must recover the engine name from the stored sentence");
+        assert_eq!(
+            zh,
+            "ScubaGear 檢查了這項 Microsoft 365 要求，這個租戶未通過。"
+        );
+        assert_eq!(
+            control_verdict_zh_hant(Some(FindingFamily::Microsoft365), adapter).as_deref(),
+            Some(zh.as_str()),
+            "both passes must reach the same Chinese sentence"
+        );
+    }
+
+    #[test]
+    fn only_microsoft_365_findings_get_a_control_verdict() {
+        let english = "Trivy reported this control as failing.";
+        for family in [
+            FindingFamily::CloudPosture,
+            FindingFamily::CloudIdentity,
+            FindingFamily::NetworkExposure,
+            FindingFamily::SourceCode,
+            FindingFamily::Secret,
+            FindingFamily::InfrastructureAsCode,
+            FindingFamily::VulnerableComponent,
+            FindingFamily::Kubernetes,
+        ] {
+            assert_eq!(
+                control_verdict_zh_hant(Some(family), english),
+                None,
+                "{family:?} does not check a Microsoft 365 requirement"
+            );
+        }
+        assert_eq!(control_verdict_zh_hant(None, english), None);
     }
 
     #[test]

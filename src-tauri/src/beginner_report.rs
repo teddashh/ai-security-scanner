@@ -3466,7 +3466,10 @@ fn project_finding(
         } else {
             details
                 .map(|finding| {
-                    crate::finding_narrative::summary_english(&finding.plain_language_summary)
+                    crate::finding_narrative::summary_english(
+                        &finding.plain_language_summary,
+                        finding.family,
+                    )
                 })
                 .unwrap_or_else(|| {
                     "A retained observation exists, but this older run did not save its full plain-language description."

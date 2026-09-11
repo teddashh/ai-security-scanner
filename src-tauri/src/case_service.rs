@@ -15111,7 +15111,10 @@ fn html_report_bytes(
         let confidence_label = catalog.identifier(&enum_key(&finding.confidence));
         let (plain_language_risk, possible_impact, next_step, expert_type) = match catalog.locale {
             crate::export::ReportLocale::En => (
-                crate::finding_narrative::summary_english(&finding.plain_language_risk),
+                crate::finding_narrative::summary_english(
+                    &finding.plain_language_risk,
+                    finding.family,
+                ),
                 crate::finding_narrative::impact_english(
                     &finding.possible_impact,
                     finding.family,
@@ -15125,15 +15128,21 @@ fn html_report_bytes(
                 finding.recommended_expert_type.clone(),
             ),
             crate::export::ReportLocale::ZhHant => (
-                crate::finding_narrative::summary_zh_hant(
+                crate::finding_narrative::control_verdict_zh_hant(
+                    finding.family,
                     &finding.plain_language_risk,
-                    &finding.severity,
-                    &severity_label,
-                    finding.severity_basis_code,
-                    &confidence_label,
-                    finding.confidence_basis_code,
-                    &finding.priority_reasons,
-                ),
+                )
+                .unwrap_or_else(|| {
+                    crate::finding_narrative::summary_zh_hant(
+                        &finding.plain_language_risk,
+                        &finding.severity,
+                        &severity_label,
+                        finding.severity_basis_code,
+                        &confidence_label,
+                        finding.confidence_basis_code,
+                        &finding.priority_reasons,
+                    )
+                }),
                 crate::finding_narrative::impact_zh_hant(
                     &finding.possible_impact,
                     &finding.severity,

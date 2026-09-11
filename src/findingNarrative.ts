@@ -328,12 +328,44 @@ export const localizedExpertType = (
  * sends the caller back to the English.
  */
 export const engineNameFrom = (englishSummary: string): string | undefined => {
-  const [name, ...rest] = englishSummary.split(" reported ");
+  // The summary is normalized twice: once into the report's English, then
+  // again by the exporter for the reader's locale. `" checked this "` is how
+  // the control verdict below opens, so recognizing it here keeps the second
+  // pass able to re-render in Chinese what the first pass already rewrote.
+  const opener = englishSummary.includes(" reported ")
+    ? " reported "
+    : " checked this ";
+  const [name, ...rest] = englishSummary.split(opener);
   if (rest.length === 0 || !name || name.includes(".")) return undefined;
   return name;
 };
 
 /** "{engine} reported a {severity}-severity condition on the assessed asset." */
+/**
+ * The verdict sentence for a control the tenant did not meet.
+ *
+ * ScubaGear and Maester title a finding with the requirement they checked --
+ * "Legacy authentication is blocked", "Privileged accounts use phishing-
+ * resistant MFA" -- and only a control that failed becomes a finding at all.
+ * Printed as a heading under "Problems found" over a sentence that said no
+ * more than "reported a high-severity condition", the requirement read as a
+ * statement that the tenant was already in that state, which is the opposite
+ * of what the scanner found. The upstream title stays exactly as the scanner
+ * wrote it; the verdict goes in the prose this product owns.
+ */
+const controlVerdict = (
+  family: FindingFamily | undefined,
+  english: string,
+  localeZh: boolean,
+): string | undefined => {
+  if (family !== "microsoft365") return undefined;
+  const engine = engineNameFrom(english);
+  if (!engine) return undefined;
+  return localeZh
+    ? `${engine} 檢查了這項 Microsoft 365 要求，這個租戶未通過。`
+    : `${engine} checked this Microsoft 365 requirement and the tenant did not meet it.`;
+};
+
 /**
  * Drops the trailing confidence-methodology sentence.
  *
@@ -369,8 +401,11 @@ export const findingSummarySentence = (
     confidenceLabel?: string;
     confidenceBasisCode?: ConfidenceBasisCode;
     priorityReasons?: readonly string[];
+    family?: FindingFamily;
   },
 ): string => {
+  const verdict = controlVerdict(options.family, options.englishFallback, locale === "zh-TW");
+  if (verdict) return verdict;
   const englishFallback = withoutConfidenceMethodology(options.englishFallback)
     .replace(" The attached raw record is evidence, not an instruction.", "")
     .replace("Severity remains Unknown and requires human review.", "Severity is Unknown.")

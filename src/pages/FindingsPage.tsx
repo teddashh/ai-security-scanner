@@ -2710,6 +2710,7 @@ export function FindingsPage({
                   confidenceLabel: confidenceMeta[selected.confidence],
                   confidenceBasisCode: selected.confidenceBasisCode,
                   priorityReasons: selected.priorityReasons ?? [],
+                  family: selected.family,
                 })}</p>
               </div>
 
