@@ -16272,8 +16272,7 @@ fn html_report_bytes(
     ));
     document.push_str(&format!(
         concat!(
-            "<footer><h2>{}</h2><p>{}</p><p>{}: {}. {} ",
-            "{}</p></footer>",
+            "<footer><h2>{}</h2><p>{}</p><p>{}{}{}{}{}{}</p></footer>",
             "</body></html>"
         ),
         catalog.text("Report terms", "報告條款"),
@@ -16281,7 +16280,11 @@ fn html_report_bytes(
             "Framework references are informational navigation. AIDEFEND references are an independent, unofficial mapping unless the framework owner states otherwise. This report is not an audit, certification, compliance decision, security guarantee, or automatic remediation.",
             "框架參照只供資訊導航。除非框架擁有者另有聲明，AIDEFEND 參照屬於獨立、非官方的對照。本報告不是稽核、認證、合規判定、資安保證或自動修復。",
         ),
-        catalog.text("Redaction profile", "遮蔽設定"),
+        // This one line is the report's own sentence rather than a label and
+        // its value, and it was punctuated as English in both languages: the
+        // Chinese footer ended a clause with "." and joined the next with a
+        // space, beside a sibling clause already set with "：" and "；".
+        catalog.text("Redaction profile: ", "遮蔽設定："),
         html_escape(catalog.text(
             match options.redaction {
                 crate::export::RedactionProfile::None => "none",
@@ -16292,10 +16295,12 @@ fn html_report_bytes(
                 crate::export::RedactionProfile::Standard => "標準",
             },
         )),
+        catalog.text(". ", "。"),
         catalog.text(
             "Integrity: unsigned HTML with SHA-256 retained in the local case.",
             "完整性：未簽章的 HTML；SHA-256 保留在本機案件中。",
         ),
+        catalog.text(" ", ""),
         catalog.text(
             "Raw evidence is excluded. No scripts, forms, remote resources, scanner messages, or executable remediation are included.",
             "不包含原始證據，也不包含指令碼、表單、遠端資源、掃描器訊息或可執行的修復動作。",

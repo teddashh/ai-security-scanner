@@ -850,6 +850,59 @@ fn all_engines_in_one_report<T>(
 /// nested in a paragraph, which every parser recovers from by closing the
 /// paragraph early, plus a stray end tag after it. No reader saw an error and
 /// no assertion about the report's words could see it either.
+/// The reader-visible text of one rendered report, markup and entities gone.
+fn strip_markup(html: &str) -> String {
+    let mut text = String::with_capacity(html.len());
+    let mut inside_tag = false;
+    for character in html.chars() {
+        match character {
+            '<' => inside_tag = true,
+            '>' => inside_tag = false,
+            _ if !inside_tag => text.push(character),
+            _ => {}
+        }
+    }
+    text.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+}
+
+/// The first place an ASCII sentence mark closes a Chinese clause, with the
+/// words around it.
+///
+/// A mark inside a value -- the decimal point of a version, the comma between
+/// two fixed releases -- is not a clause break, so only a mark followed by
+/// whitespace, another Han character or the end of the text counts.
+fn ascii_clause_break_after_han(text: &str) -> Option<String> {
+    fn is_han(character: char) -> bool {
+        ('\u{4e00}'..='\u{9fff}').contains(&character)
+    }
+    let characters = text.chars().collect::<Vec<_>>();
+    characters.windows(3).enumerate().find_map(|(at, window)| {
+        let [before, mark, after] = [window[0], window[1], window[2]];
+        (is_han(before)
+            && matches!(mark, '.' | ',' | ';' | '!' | '?')
+            && (after.is_whitespace() || is_han(after)))
+        .then(|| {
+            characters[at.saturating_sub(30)..(at + 30).min(characters.len())]
+                .iter()
+                .collect::<String>()
+        })
+    })
+}
+
+#[test]
+fn an_ascii_clause_break_is_only_reported_where_a_chinese_clause_ends() {
+    assert!(ascii_clause_break_after_han("遮蔽設定：無. 完整性：未簽章的 HTML").is_some());
+    assert!(ascii_clause_break_after_han("移除群組只會附加歷史,不會刪除成員").is_some());
+    // A mark inside a value is not a clause break.
+    assert!(ascii_clause_break_after_han("對照版本：2026-09-11.1 · 目錄 SHA-256").is_none());
+    assert!(ascii_clause_break_after_han("掃描工具提供的修正版版本 1.1, 1.2").is_none());
+    assert!(ascii_clause_break_after_han("移除群組只會附加歷史，不會刪除成員。").is_none());
+}
+
 fn assert_paragraphs_are_well_formed(html: &str, label: &str) {
     assert_eq!(
         html.matches("<p>").count(),
@@ -1447,6 +1500,14 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                     ordered_html.contains(kept),
                     "the English report lost: {kept}"
                 );
+            }
+
+            // A Chinese clause does not end with an ASCII full stop, comma or
+            // semicolon. The footer set "遮蔽設定: 無." that way and joined the
+            // next Chinese sentence with a space, beside a sibling clause
+            // already using "：" and "；".
+            if let Some(offence) = ascii_clause_break_after_han(&strip_markup(&zh_html)) {
+                panic!("the Chinese report ends a clause as English: {offence}");
             }
 
             for spelled_two_ways in [
