@@ -1525,6 +1525,46 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 );
             }
 
+            // A compliance reader scans a control list by its own numbering.
+            // Ordering the identifiers as text put A.8.20 and A.8.24 between
+            // A.8.2 and A.8.6.
+            let framework_path = artifact_root.join("asset-order-framework.json");
+            reopened_service
+                .export_case(
+                    case_id,
+                    scan_run_id,
+                    CaseExportFormat::FrameworkReport,
+                    framework_path.clone(),
+                    ExportOptions {
+                        redaction: RedactionProfile::None,
+                        include_raw_artifacts: false,
+                        locale: ReportLocale::En,
+                    },
+                )
+                .unwrap();
+            let framework: serde_json::Value =
+                serde_json::from_slice(&fs::read(&framework_path).unwrap()).unwrap();
+            let iso = framework["frameworks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["framework"] == "ISO/IEC 27001")
+                .expect("this run places findings on ISO/IEC 27001")
+                .clone();
+            let iso_controls = iso["controls"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|control| control["control_id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                iso_controls,
+                [
+                    "A.5.15", "A.5.17", "A.5.18", "A.5.23", "A.8.2", "A.8.6", "A.8.8", "A.8.9",
+                    "A.8.20", "A.8.24",
+                ]
+            );
+
             // Two scanners find the same CVE on the repository and on the image built
             // from it. The cards are titled identically by upstream, so with the asset
             // four items into the identifier line the reader sees the same heading

@@ -959,6 +959,72 @@ fn count_coverage(coverage: &[&crate::domain::CoverageEntry], status: CoverageSt
         .count()
 }
 
+/// Orders two control identifiers the way their own numbering reads.
+///
+/// Comparing them a character at a time is comparing digits as text, which put
+/// ISO/IEC 27001 A.8.20 and A.8.24 between A.8.2 and A.8.6 in every framework
+/// export. A digit run is compared by value: leading zeros dropped, longer run
+/// first, then character by character, so no length of identifier overflows.
+fn compare_control_id(left: &str, right: &str) -> std::cmp::Ordering {
+    let mut left_segments = control_id_segments(left);
+    let mut right_segments = control_id_segments(right);
+    loop {
+        return match (left_segments.next(), right_segments.next()) {
+            (None, None) => std::cmp::Ordering::Equal,
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (Some(left), Some(right)) => {
+                let ordering = match (left, right) {
+                    (ControlIdSegment::Digits(left), ControlIdSegment::Digits(right)) => {
+                        let left = left.trim_start_matches('0');
+                        let right = right.trim_start_matches('0');
+                        left.len().cmp(&right.len()).then_with(|| left.cmp(right))
+                    }
+                    (ControlIdSegment::Text(left), ControlIdSegment::Text(right)) => {
+                        left.cmp(right)
+                    }
+                    // A number sorts ahead of a word at the same position, the
+                    // way "A.8.2" sorts ahead of "A.8.general".
+                    (ControlIdSegment::Digits(_), ControlIdSegment::Text(_)) => {
+                        std::cmp::Ordering::Less
+                    }
+                    (ControlIdSegment::Text(_), ControlIdSegment::Digits(_)) => {
+                        std::cmp::Ordering::Greater
+                    }
+                };
+                if ordering != std::cmp::Ordering::Equal {
+                    return ordering;
+                }
+                continue;
+            }
+        };
+    }
+}
+
+enum ControlIdSegment<'a> {
+    Digits(&'a str),
+    Text(&'a str),
+}
+
+/// Splits a control identifier into its alternating digit and non-digit runs.
+fn control_id_segments(control_id: &str) -> impl Iterator<Item = ControlIdSegment<'_>> {
+    let mut rest = control_id;
+    std::iter::from_fn(move || {
+        let first = rest.chars().next()?;
+        let digits = first.is_ascii_digit();
+        let at = rest
+            .find(|character: char| character.is_ascii_digit() != digits)
+            .unwrap_or(rest.len());
+        let (segment, remainder) = rest.split_at(at);
+        rest = remainder;
+        Some(if digits {
+            ControlIdSegment::Digits(segment)
+        } else {
+            ControlIdSegment::Text(segment)
+        })
+    })
+}
+
 fn framework_summary(
     framework: &str,
     expected_version: &str,
@@ -994,6 +1060,7 @@ fn framework_summary(
     controls.sort_by(|left, right| {
         left.framework_version
             .cmp(&right.framework_version)
+            .then_with(|| compare_control_id(&left.control_id, &right.control_id))
             .then_with(|| left.control_id.cmp(&right.control_id))
     });
     let observed_versions = controls
@@ -1502,6 +1569,32 @@ mod tests {
 
     const DYNAMIC_CODE_RULE: &str = "ai-security-scanner.python.dynamic-code-execution";
     const SHELL_RULE: &str = "ai-security-scanner.python.shell-true";
+
+    #[test]
+    fn control_identifiers_order_by_their_own_numbering() {
+        let mut ordered = vec![
+            "A.8.24", "A.5.7", "A.8.2", "A.8.9", "A.5.15", "A.8.20", "A.8.6", "A.5.7a",
+        ];
+        ordered.sort_by(|left, right| compare_control_id(left, right));
+        assert_eq!(
+            ordered,
+            [
+                "A.5.7", "A.5.7a", "A.5.15", "A.8.2", "A.8.6", "A.8.9", "A.8.20", "A.8.24",
+            ],
+            "string order puts A.8.20 and A.8.24 between A.8.2 and A.8.6"
+        );
+
+        // Zero padding is a spelling of the same number, and no digit run is
+        // long enough to be parsed into an integer that could overflow.
+        assert_eq!(
+            compare_control_id("PR.AA-01", "PR.AA-1"),
+            std::cmp::Ordering::Equal
+        );
+        assert_eq!(
+            compare_control_id(&format!("A.{}", "9".repeat(40)), "A.100"),
+            std::cmp::Ordering::Greater
+        );
+    }
 
     #[test]
     fn framework_export_preserves_unknown_severity() {
