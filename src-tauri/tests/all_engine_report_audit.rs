@@ -1403,6 +1403,52 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                     "the Chinese report lost a scanner's name: {named}"
                 );
             }
+            // The deepest technical block is the report's provenance, not a
+            // dumping ground: its headings were translated while the values
+            // under them stayed in English. A Chinese reader saw "證據類型:
+            // Configuration", "散布方式 Pull Pinned Image", a partly finished
+            // run labelled "Partially Completed" beside "已完成" siblings, and
+            // one English sentence between two translated ones.
+            for translated in [
+                "設定",
+                "套件盤點",
+                "外部驗證",
+                "原始碼",
+                "拉取已釘選映像",
+                "部分完成",
+                "本輪的診斷紀錄無法取得；已遮蔽的診斷匯出為獨立檔案。",
+            ] {
+                assert!(
+                    zh_html.contains(translated),
+                    "the Chinese report lost a technical value: {translated}"
+                );
+            }
+            for stored_english in [
+                "Configuration<",
+                "Package Inventory",
+                "External Validation",
+                "Pull Pinned Image",
+                "Partially Completed",
+                "Run-bound diagnostic log",
+            ] {
+                assert!(
+                    !zh_html.contains(stored_english),
+                    "the Chinese report printed a technical value in English: {stored_english}"
+                );
+            }
+            // The same values stay in English where English is the report.
+            for kept in [
+                "Package Inventory",
+                "Pull Pinned Image",
+                "Partially Completed",
+                "Run-bound diagnostic log: unavailable. Redacted diagnostic export: separate.",
+            ] {
+                assert!(
+                    ordered_html.contains(kept),
+                    "the English report lost: {kept}"
+                );
+            }
+
             for spelled_two_ways in [
                 "（checkov）",
                 "（cloudquery）",

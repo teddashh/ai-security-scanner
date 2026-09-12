@@ -13643,6 +13643,32 @@ impl HtmlReportCatalog {
             "created" => "已建立".into(),
             "updated" => "已更新".into(),
             "removed" => "已移除".into(),
+            // The rest of `EngineRunStatus`. Only the three terminal states
+            // were listed, so a run frozen while partly finished printed
+            // "Partially Completed" beside translated siblings.
+            "not_executed" => "未執行".into(),
+            "queued" => "已排入佇列".into(),
+            "preparing" => "準備中".into(),
+            "running" => "執行中".into(),
+            "paused" => "已暫停".into(),
+            "partially_completed" => "部分完成".into(),
+            // `EvidenceKind`, under a translated "證據類型" heading.
+            "configuration" => "設定".into(),
+            "observation" => "觀察紀錄".into(),
+            "external_validation" => "外部驗證".into(),
+            "source_code" => "原始碼".into(),
+            "package_inventory" => "套件盤點".into(),
+            "user_declaration" => "使用者聲明".into(),
+            "raw_tool_output" => "掃描工具原始輸出".into(),
+            // `DistributionMode`, in the execution-identity provenance line.
+            "bundled_image" => "隨附映像".into(),
+            "pull_pinned_image" => "拉取已釘選映像".into(),
+            "build_from_pinned_source" => "由已釘選來源建置".into(),
+            "external_executable" => "外部執行檔".into(),
+            // `LocalhostTcpOutcome`.
+            "reachable" => "可連線".into(),
+            "closed" => "已關閉".into(),
+            "timed_out" => "逾時".into(),
             _ => readable_identifier(value),
         }
     }
@@ -15856,6 +15882,18 @@ fn html_report_bytes(
             .as_ref()
             .map(|value| format!("<br><code>{}</code>", html_escape(value)))
             .unwrap_or_default();
+        // One fixed English sentence written into the report model, printed
+        // between a translated heading and a translated footnote. Anything
+        // else a build stores here stays in the language it was stored in.
+        let diagnostic_explanation = match task.redacted_diagnostic_log.explanation.as_str() {
+            "Run-bound diagnostic log: unavailable. Redacted diagnostic export: separate." => {
+                catalog.text(
+                    "Run-bound diagnostic log: unavailable. Redacted diagnostic export: separate.",
+                    "本輪的診斷紀錄無法取得；已遮蔽的診斷匯出為獨立檔案。",
+                )
+            }
+            stored => stored,
+        };
         let cleanup = task
             .cleanup_removed
             .map(|removed| {
@@ -15919,7 +15957,7 @@ fn html_report_bytes(
             catalog.text("Availability", "可用狀態"),
             html_escape(&catalog.identifier(&enum_key(&task.redacted_diagnostic_log.availability))),
             diagnostic_value,
-            html_escape(&task.redacted_diagnostic_log.explanation),
+            html_escape(diagnostic_explanation),
             catalog.text(
                 "Scanner messages are not included in this readable HTML report.",
                 "這份好讀的 HTML 報告不包含掃描器訊息。",
@@ -30614,7 +30652,7 @@ mod tests {
             "證據摘要",
             "Redacted selected-run evidence &lt;summary&gt;",
             "證據類型",
-            "Source Code",
+            "原始碼",
             "掃描工具執行 ID",
             "成品 ID",
             "已遮蔽</dt><dd>是",
