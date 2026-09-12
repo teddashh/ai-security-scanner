@@ -167,6 +167,38 @@ test("Cloudsplaining actions tell a Chinese reader how each upstream policy sour
   assert.doesNotMatch(inline, /AWS 受管政策無法由此帳戶直接編輯|附加清單不完整/u);
 });
 
+test("an English IAM action agrees in number with the principals it names", () => {
+  const details = (
+    users: string[],
+    roles: string[] = [],
+  ): AwsIamPolicyFindingDetails => ({
+    policySource: "customer_managed",
+    policyName: "BillingReadPolicy",
+    findingIdentity: "PrivilegeEscalation",
+    actions: ["iam:PassRole"],
+    actionsComplete: true,
+    attachedTo: { roles, groups: [], users, complete: true },
+  });
+  const action = (awsIamPolicy: AwsIamPolicyFindingDetails) => findingActionSentence("en", {
+    englishFallback: "ENGLISH_IAM_FALLBACK_MUST_NOT_RENDER",
+    family: "cloud_identity",
+    awsIamPolicy,
+  });
+
+  // "user break-glass-user retain" is not English, and one attached principal
+  // is the common case for a customer-managed policy.
+  assert.match(action(details(["break-glass-user"])), /user break-glass-user retains only/u);
+  assert.match(
+    action(details(["break-glass-user"], ["ApplicationRole"])),
+    /role ApplicationRole, user break-glass-user retain only/u,
+  );
+
+  // Past the preview limit the overflow count is a countable noun too.
+  const seven = Array.from({ length: 7 }, (_value, index) => `operator-${index}`);
+  assert.match(action(details(seven)), /and 1 more principal retain only/u);
+  assert.match(action(details([...seven, "operator-7"])), /and 2 more principals retain only/u);
+});
+
 test("every severity basis this product can derive has Chinese", () => {
   const seen = new Set<string>();
   for (const severityBasisCode of BASES) {

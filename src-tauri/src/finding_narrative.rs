@@ -2255,25 +2255,35 @@ fn iam_principal_labels(details: &AwsIamPolicyFindingDetails, locale: &str) -> V
         .collect()
 }
 
-fn iam_principal_summary(details: &AwsIamPolicyFindingDetails, locale: &str) -> Option<String> {
+/// The attached principals a reader sees, and how many there are. English
+/// prose downstream has to agree in number with a one-principal attachment,
+/// which is the common case for an inline or customer-managed policy.
+fn iam_principal_summary(
+    details: &AwsIamPolicyFindingDetails,
+    locale: &str,
+) -> Option<(String, usize)> {
     let labels = iam_principal_labels(details, locale);
     if labels.is_empty() {
         return None;
     }
+    let count = labels.len();
     let retained = labels
         .iter()
         .take(IAM_PRINCIPAL_PREVIEW_LIMIT)
         .cloned()
         .collect::<Vec<_>>()
         .join(if locale == "zh-Hant" { "、" } else { ", " });
-    let omitted = labels.len().saturating_sub(IAM_PRINCIPAL_PREVIEW_LIMIT);
-    if omitted == 0 {
-        Some(retained)
+    let omitted = count.saturating_sub(IAM_PRINCIPAL_PREVIEW_LIMIT);
+    let summary = if omitted == 0 {
+        retained
     } else if locale == "zh-Hant" {
-        Some(format!("{retained}，以及另外 {omitted} 個主體"))
+        format!("{retained}，以及另外 {omitted} 個主體")
+    } else if omitted == 1 {
+        format!("{retained}, and 1 more principal")
     } else {
-        Some(format!("{retained}, and {omitted} more principal(s)"))
-    }
+        format!("{retained}, and {omitted} more principals")
+    };
+    Some((summary, count))
 }
 
 /// Product-owned English next action for bounded Cloudsplaining evidence.
@@ -2285,9 +2295,10 @@ pub fn aws_iam_policy_action_english(
     details: &AwsIamPolicyFindingDetails,
 ) -> String {
     let principals = iam_principal_summary(details, "en");
+    let one_principal = principals.as_ref().is_some_and(|(_, count)| *count == 1);
     let action = match (
         details.policy_source,
-        principals.as_deref(),
+        principals.as_ref().map(|(summary, _)| summary.as_str()),
         details.attached_to.complete,
     ) {
         (AwsIamPolicySource::AwsManaged, Some(principals), _) => format!(
@@ -2303,8 +2314,9 @@ pub fn aws_iam_policy_action_english(
             details.policy_name
         ),
         (AwsIamPolicySource::CustomerManaged, Some(principals), _) => format!(
-            "Narrow customer-managed policy {} and verify that {principals} retain only the permissions they need",
-            details.policy_name
+            "Narrow customer-managed policy {} and verify that {principals} {} only the permissions they need",
+            details.policy_name,
+            if one_principal { "retains" } else { "retain" }
         ),
         (AwsIamPolicySource::CustomerManaged, None, true) => format!(
             "Narrow customer-managed policy {} before it is attached or reused",
@@ -2335,7 +2347,7 @@ fn aws_iam_policy_action_zh_hant(
     let principals = iam_principal_summary(details, "zh-Hant");
     let action = match (
         details.policy_source,
-        principals.as_deref(),
+        principals.as_ref().map(|(summary, _)| summary.as_str()),
         details.attached_to.complete,
     ) {
         (AwsIamPolicySource::AwsManaged, Some(principals), _) => format!(
@@ -2856,6 +2868,32 @@ mod tests {
             aws_iam_policy_action_english("Cloud security engineer", &customer_managed);
         assert!(customer_action.contains("Narrow customer-managed policy IAMFullAccess"));
         assert!(!customer_action.contains("cannot be edited by this account"));
+        // Two principals here, one in the common case. The sentence has to
+        // agree with whichever it got: "user Operator retain" is not English.
+        assert!(customer_action.contains("role BuildRole, user Operator retain only"));
+        let mut one_principal = customer_managed.clone();
+        one_principal.attached_to.roles.clear();
+        assert!(
+            aws_iam_policy_action_english("Cloud security engineer", &one_principal)
+                .contains("user Operator retains only")
+        );
+
+        // Past the preview limit the count itself is a countable noun.
+        let mut crowded = customer_managed;
+        crowded.attached_to.users = (0..IAM_PRINCIPAL_PREVIEW_LIMIT)
+            .map(|index| format!("Operator{index}"))
+            .collect();
+        let seven = aws_iam_policy_action_english("Cloud security engineer", &crowded);
+        assert!(
+            seven.contains("and 1 more principal retain only"),
+            "{seven}"
+        );
+        crowded.attached_to.users.push("OperatorLast".into());
+        let eight = aws_iam_policy_action_english("Cloud security engineer", &crowded);
+        assert!(
+            eight.contains("and 2 more principals retain only"),
+            "{eight}"
+        );
 
         let mut inline = details;
         inline.policy_source = AwsIamPolicySource::Inline;

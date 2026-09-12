@@ -109,20 +109,30 @@ const iamPrincipalLabels = (
   ];
 };
 
+/**
+ * The attached principals a reader sees, and how many there are. English prose
+ * downstream has to agree in number with a one-principal attachment, which is
+ * the common case for an inline or customer-managed policy.
+ */
 const iamPrincipalSummary = (
   details: AwsIamPolicyFindingDetails,
   locale: "en" | "zh-TW",
-): string | undefined => {
+): { text: string; count: number } | undefined => {
   const labels = iamPrincipalLabels(details, locale);
   if (labels.length === 0) return undefined;
+  const count = labels.length;
   const retained = labels
     .slice(0, IAM_PRINCIPAL_PREVIEW_LIMIT)
     .join(locale === "en" ? ", " : "、");
-  const omitted = Math.max(0, labels.length - IAM_PRINCIPAL_PREVIEW_LIMIT);
-  if (omitted === 0) return retained;
-  return locale === "en"
-    ? `${retained}, and ${omitted} more principal(s)`
-    : `${retained}，以及另外 ${omitted} 個主體`;
+  const omitted = Math.max(0, count - IAM_PRINCIPAL_PREVIEW_LIMIT);
+  if (omitted === 0) return { text: retained, count };
+  if (locale !== "en") return { text: `${retained}，以及另外 ${omitted} 個主體`, count };
+  return {
+    text: omitted === 1
+      ? `${retained}, and 1 more principal`
+      : `${retained}, and ${omitted} more principals`,
+    count,
+  };
 };
 
 export const awsIamPolicySourceLabel = (
@@ -135,7 +145,7 @@ export const awsIamPolicySourceLabel = (
 };
 
 const awsIamPolicyActionZhTW = (details: AwsIamPolicyFindingDetails): string => {
-  const principals = iamPrincipalSummary(details, "zh-TW");
+  const principals = iamPrincipalSummary(details, "zh-TW")?.text;
   const attachmentsComplete = details.attachedTo.complete;
   let action: string;
   if (details.policySource === "aws_managed") {
@@ -162,17 +172,19 @@ const awsIamPolicyActionZhTW = (details: AwsIamPolicyFindingDetails): string => 
 };
 
 const awsIamPolicyActionEnglish = (details: AwsIamPolicyFindingDetails): string => {
-  const principals = iamPrincipalSummary(details, "en");
+  const summary = iamPrincipalSummary(details, "en");
+  const principals = summary?.text;
+  const onePrincipal = summary?.count === 1;
   let action: string;
   if (details.policySource === "aws_managed") {
     action = principals
       ? `Replace AWS-managed policy ${details.policyName} with a narrower policy on ${principals}, or detach it where it is not needed; AWS-managed policies cannot be edited by this account`
       : details.attachedTo.complete
         ? `Keep AWS-managed policy ${details.policyName} detached and choose a narrower policy before attaching it; AWS-managed policies cannot be edited by this account`
-        : `Identify the roles, groups, and users attached to AWS-managed policy ${details.policyName}, then replace it with a narrower policy or detach it where it is not needed; AWS-managed policies cannot be edited by this account`;
+        : `Identify the current roles, groups, and users attached to AWS-managed policy ${details.policyName}, then replace it with a narrower policy or detach it where it is not needed; AWS-managed policies cannot be edited by this account`;
   } else if (details.policySource === "customer_managed") {
     action = principals
-      ? `Narrow customer-managed policy ${details.policyName} and verify that ${principals} retain only the permissions they need`
+      ? `Narrow customer-managed policy ${details.policyName} and verify that ${principals} ${onePrincipal ? "retains" : "retain"} only the permissions they need`
       : details.attachedTo.complete
         ? `Narrow customer-managed policy ${details.policyName} before it is attached or reused`
         : `Identify the current attachments to customer-managed policy ${details.policyName}, then narrow it and verify that each principal retains only the permissions it needs`;

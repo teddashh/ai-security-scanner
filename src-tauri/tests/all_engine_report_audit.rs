@@ -1356,6 +1356,12 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                     < ordered_html.find(">Problems found</h2>")
             );
 
+            // One attached principal is the ordinary shape of a customer-managed
+            // policy, and the sentence had been written only for a list.
+            assert!(steps.contains(
+                "Narrow customer-managed policy InsecurePolicy and verify that user ExampleUser retains only the permissions they need."
+            ));
+
             // Two scanners find the same CVE on the repository and on the image built
             // from it. The cards are titled identically by upstream, so with the asset
             // four items into the identifier line the reader sees the same heading
