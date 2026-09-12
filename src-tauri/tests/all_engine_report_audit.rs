@@ -1362,6 +1362,69 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 "Narrow customer-managed policy InsecurePolicy and verify that user ExampleUser retains only the permissions they need."
             ));
 
+            // The Chinese report composes its coverage names from the engine's
+            // id, so the same scanner was "Checkov" in the tested-checks list
+            // and "checkov" in the limits, coverage rows and next steps two
+            // sections below. A reader cannot tell whether that is one tool.
+            let zh_path = artifact_root.join("asset-order-zh.html");
+            reopened_service
+                .export_case(
+                    case_id,
+                    scan_run_id,
+                    CaseExportFormat::Html,
+                    zh_path.clone(),
+                    ExportOptions {
+                        redaction: RedactionProfile::None,
+                        include_raw_artifacts: false,
+                        locale: ReportLocale::ZhHant,
+                    },
+                )
+                .unwrap();
+            let zh_html = fs::read_to_string(&zh_path).unwrap();
+            assert_paragraphs_are_well_formed(&zh_html, "the Chinese report");
+            for named in [
+                "檢查逾時限制（Checkov）",
+                "檢查逾時限制（CloudQuery）",
+                "檢查逾時限制（Greenbone Community Edition）",
+                "檢查逾時限制（KICS）",
+                "檢查逾時限制（ScoutSuite）",
+                "檢查逾時限制（TruffleHog）",
+                "Checkov 的失敗的檢查項目",
+                "Greenbone Community Edition 的目標回應",
+                "KICS 的逾時的檢查項目",
+                "Naabu 的已取消的檢查項目",
+                "TruffleHog 的已取消的檢查項目",
+                "CloudQuery 的已過期的偵測知識",
+                "Nuclei 的尚未完成的要求項目",
+                "Maester：未回傳判定的控制項 MT.1003",
+            ] {
+                assert!(
+                    zh_html.contains(named),
+                    "the Chinese report lost a scanner's name: {named}"
+                );
+            }
+            for spelled_two_ways in [
+                "（checkov）",
+                "（cloudquery）",
+                "（greenbone）",
+                "（kics）",
+                "（scoutsuite）",
+                "（trufflehog）",
+                "checkov 的",
+                "greenbone 的",
+                "kics 的",
+                "naabu 的",
+                "trufflehog 的",
+                "cloudquery 的",
+                "nuclei 的",
+                "maester：",
+            ] {
+                assert!(
+                    !zh_html.contains(spelled_two_ways),
+                    "the Chinese report named a scanner by its id: {spelled_two_ways}"
+                );
+            }
+
             // Two scanners find the same CVE on the repository and on the image built
             // from it. The cards are titled identically by upstream, so with the asset
             // four items into the identifier line the reader sees the same heading

@@ -13661,10 +13661,26 @@ const COMPLETED_COORDINATE_DIMENSION: &str = "completed check-to-target coordina
 /// five scanners "Httpx", "Kics", "Scoutsuite", "Scubagear" and "Kube Bench".
 /// Name the engine the way upstream spells it, and otherwise change nothing
 /// but the first letter. The Chinese side already leaves this text alone.
+/// Spells the scanner a composed coverage name is about the way the rest of
+/// the report spells it, and leaves anything else byte for byte.
+///
+/// The backend writes these names around the engine's id. English prettifies
+/// them on the way out, but the Traditional Chinese renderers translate the
+/// kind and interpolate the identifier they were handed, so a Chinese reader
+/// saw "checkov" in the limits and coverage rows while the tested-checks list
+/// two sections above said "Checkov". This runs before those renderers.
+fn engine_named(name: &str) -> String {
+    let head = name.split([':', ' ']).next().unwrap_or_default();
+    match crate::registry::builtin_display_name(head) {
+        Some(engine) => format!("{engine}{}", &name[head.len()..]),
+        None => name.to_owned(),
+    }
+}
+
 fn readable_dimension(dimension: &str) -> String {
     let head = dimension.split([':', ' ']).next().unwrap_or_default();
-    if let Some(name) = crate::registry::builtin_display_name(head) {
-        return format!("{name}{}", &dimension[head.len()..]);
+    if crate::registry::builtin_display_name(head).is_some() {
+        return engine_named(dimension);
     }
     let mut characters = dimension.chars();
     match characters.next() {
@@ -14834,7 +14850,7 @@ fn html_report_bytes(
             };
             let display_name = match catalog.locale {
                 crate::export::ReportLocale::ZhHant => {
-                    crate::finding_narrative::requested_limit_name_zh_hant(&name)
+                    crate::finding_narrative::requested_limit_name_zh_hant(&engine_named(&name))
                 }
                 _ => readable_limit_name(&limit.name, &target_labels),
             };
@@ -14902,9 +14918,9 @@ fn html_report_bytes(
                         ),
                         html_escape(&match catalog.locale {
                             crate::export::ReportLocale::ZhHant => {
-                                crate::finding_narrative::coverage_dimension_zh_hant(
+                                crate::finding_narrative::coverage_dimension_zh_hant(&engine_named(
                                     &dimension.dimension,
-                                )
+                                ))
                             }
                             _ => readable_dimension(&dimension.dimension),
                         }),
@@ -15038,10 +15054,15 @@ fn html_report_bytes(
                         .split_once(':')
                         .map(|(engine, _)| engine)
                         .unwrap_or(gap.dimension.as_str());
-                    crate::finding_narrative::unattributed_gap_zh_hant(engine_id, unattributed)
+                    crate::finding_narrative::unattributed_gap_zh_hant(
+                        &engine_named(engine_id),
+                        unattributed,
+                    )
                 }
                 (crate::export::ReportLocale::ZhHant, None) => (
-                    crate::finding_narrative::coverage_dimension_zh_hant(&gap.dimension),
+                    crate::finding_narrative::coverage_dimension_zh_hant(&engine_named(
+                        &gap.dimension,
+                    )),
                     // An unrecognized sentence keeps its stored English. An
                     // excluded area carries the words a person typed about
                     // their own case, and a run written by another build may
@@ -15133,7 +15154,10 @@ fn html_report_bytes(
                         .map(|(engine, _)| engine)
                         .unwrap_or(step.reason.as_str());
                     let (_, reason, next_action) =
-                        crate::finding_narrative::unattributed_gap_zh_hant(engine_id, unattributed);
+                        crate::finding_narrative::unattributed_gap_zh_hant(
+                            &engine_named(engine_id),
+                            unattributed,
+                        );
                     (next_action, reason)
                 }
                 // A finding-derived step's reason is the finding's title and its
@@ -15187,7 +15211,7 @@ fn html_report_bytes(
                             &match catalog.locale {
                                 crate::export::ReportLocale::ZhHant => {
                                     crate::finding_narrative::coverage_dimension_zh_hant(
-                                        &gap.dimension,
+                                        &engine_named(&gap.dimension),
                                     )
                                 }
                                 _ => gap
@@ -30581,7 +30605,7 @@ mod tests {
             // actually tested, and why a finding-derived next step is listed.
             // All three were printed as stored English under translated
             // headings, the last one as Rust variant names.
-            "檢查逾時限制（gitleaks）",
+            "檢查逾時限制（Gitleaks）",
             "3600 秒",
             "Frozen selected-run secret exposure — 嚴重程度：高；信心程度：低 — 本產品依據樣式或偵測器比對結果評定",
             "某個身分未登記多重要素驗證裝置的證據，與驗證使用者及保護驗證資訊有關。",
