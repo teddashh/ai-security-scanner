@@ -1214,6 +1214,14 @@ pub(crate) fn case_for_export(
     exported
 }
 
+/// Removes the identifying half of one inventory observation.
+///
+/// Every removed value says it was removed. Dropping an optional field to
+/// `None` reads in the exported report as an observation that never recorded
+/// one: a redacted cloud resource printed "Resource type aws_iam_users" and
+/// nothing else, beside a service whose endpoint carried an explicit marker.
+/// The port is the exception, and is dropped rather than marked, because the
+/// endpoint marker beside it already stands for the whole address.
 fn redact_inventory_observation(observation: &mut InventoryObservation) {
     observation.pointer = "[redacted inventory pointer]".into();
     match &mut observation.kind {
@@ -1228,16 +1236,18 @@ fn redact_inventory_observation(observation: &mut InventoryObservation) {
             ..
         } => {
             *name = "[redacted software component]".into();
-            *version = None;
-            *purl = None;
+            *version = version.as_ref().map(|_| "[redacted version]".into());
+            *purl = purl.as_ref().map(|_| "[redacted purl]".into());
         }
         InventoryObservationKind::CloudResource {
             native_id,
             display_name,
             ..
         } => {
-            *native_id = None;
-            *display_name = None;
+            *native_id = native_id.as_ref().map(|_| "[redacted native ID]".into());
+            *display_name = display_name
+                .as_ref()
+                .map(|_| "[redacted display name]".into());
         }
     }
 }
@@ -1588,6 +1598,9 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
     }
 }
 
+/// The same removal, on the projected report the HTML and JSON exports render
+/// from. Kept in step with [`redact_inventory_observation`], including which
+/// removed values say so.
 fn redact_beginner_inventory_item(item: &mut BeginnerInventoryItem) {
     for source in &mut item.sources {
         source.pointer = "[redacted inventory pointer]".into();
@@ -1604,16 +1617,18 @@ fn redact_beginner_inventory_item(item: &mut BeginnerInventoryItem) {
             ..
         } => {
             *name = "[redacted software component]".into();
-            *version = None;
-            *purl = None;
+            *version = version.as_ref().map(|_| "[redacted version]".into());
+            *purl = purl.as_ref().map(|_| "[redacted purl]".into());
         }
         BeginnerInventoryItemKind::CloudResource {
             native_id,
             display_name,
             ..
         } => {
-            *native_id = None;
-            *display_name = None;
+            *native_id = native_id.as_ref().map(|_| "[redacted native ID]".into());
+            *display_name = display_name
+                .as_ref()
+                .map(|_| "[redacted display name]".into());
         }
     }
 }
@@ -4311,22 +4326,40 @@ mod tests {
                 && transport == "tcp"
                 && scheme == "https"
         ));
-        assert!(
-            redacted_case
-                .inventory_observations
-                .iter()
-                .any(|observation| {
-                    matches!(
-                        &observation.kind,
-                        InventoryObservationKind::SoftwareComponent {
-                            name,
-                            version: None,
-                            package_type: Some(package_type),
-                            purl: None,
-                        } if name == "[redacted software component]" && package_type == "generic"
-                    )
-                })
-        );
+        // A value that was recorded says it was removed; a value that was
+        // never recorded stays absent. Dropping both to `None` read in the
+        // exported report as an observation that had nothing to remove.
+        let redacted_component = redacted_case
+            .inventory_observations
+            .iter()
+            .find(|observation| observation.id == "inventory-y-component")
+            .unwrap();
+        assert!(matches!(
+            &redacted_component.kind,
+            InventoryObservationKind::SoftwareComponent {
+                name,
+                version: Some(version),
+                package_type: Some(package_type),
+                purl: Some(purl),
+            } if name == "[redacted software component]"
+                && version == "[redacted version]"
+                && package_type == "generic"
+                && purl == "[redacted purl]"
+        ));
+        let redacted_newer = redacted_case
+            .inventory_observations
+            .iter()
+            .find(|observation| observation.id == "inventory-a-newer")
+            .unwrap();
+        assert!(matches!(
+            &redacted_newer.kind,
+            InventoryObservationKind::SoftwareComponent {
+                name,
+                version: None,
+                package_type: Some(package_type),
+                purl: None,
+            } if name == "[redacted software component]" && package_type == "generic"
+        ));
         assert!(
             redacted_case
                 .inventory_observations
@@ -4336,9 +4369,11 @@ mod tests {
                         &observation.kind,
                         InventoryObservationKind::CloudResource {
                             resource_type,
-                            native_id: None,
-                            display_name: None,
+                            native_id: Some(native_id),
+                            display_name: Some(display_name),
                         } if resource_type == "aws_s3_bucket"
+                            && native_id == "[redacted native ID]"
+                            && display_name == "[redacted display name]"
                     )
                 })
         );
@@ -4399,16 +4434,22 @@ mod tests {
                     ..
                 } => {
                     assert_eq!(name, "[redacted software component]");
-                    assert!(version.is_none());
-                    assert!(purl.is_none());
+                    // One fixture component carries a version and a purl and
+                    // one carries neither, so both halves of the rule are
+                    // exercised here: removed says so, absent stays absent.
+                    assert!(matches!(
+                        version.as_deref(),
+                        None | Some("[redacted version]")
+                    ));
+                    assert!(matches!(purl.as_deref(), None | Some("[redacted purl]")));
                 }
                 BeginnerInventoryItemKind::CloudResource {
                     native_id,
                     display_name,
                     ..
                 } => {
-                    assert!(native_id.is_none());
-                    assert!(display_name.is_none());
+                    assert_eq!(native_id.as_deref(), Some("[redacted native ID]"));
+                    assert_eq!(display_name.as_deref(), Some("[redacted display name]"));
                 }
             }
         }

@@ -1471,6 +1471,60 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 );
             }
 
+            // The redacted export is the copy that leaves this machine. Every
+            // value it removes has to say it was removed: a cloud resource
+            // whose native ID was dropped to nothing printed one line reading
+            // "Resource type aws_iam_users", which a recipient reads as an
+            // observation that recorded nothing else.
+            let redacted_path = artifact_root.join("asset-order-redacted.html");
+            reopened_service
+                .export_case(
+                    case_id,
+                    scan_run_id,
+                    CaseExportFormat::Html,
+                    redacted_path.clone(),
+                    ExportOptions {
+                        redaction: RedactionProfile::Standard,
+                        include_raw_artifacts: false,
+                        locale: ReportLocale::En,
+                    },
+                )
+                .unwrap();
+            let redacted_html = fs::read_to_string(&redacted_path).unwrap();
+            for removed in [
+                "192.0.2.11",
+                "arn:aws:iam::123456789012:user/alice",
+                "pkg:deb/debian/example-package@1.0",
+                "example-user",
+            ] {
+                assert!(
+                    ordered_html.contains(removed),
+                    "the run no longer carries {removed}; this gate proves nothing"
+                );
+                assert!(
+                    !redacted_html.contains(removed),
+                    "the redacted report kept {removed}"
+                );
+            }
+            for marker in [
+                "[redacted service endpoint]",
+                "[redacted software component]",
+                "[redacted version]",
+                "[redacted purl]",
+                "[redacted native ID]",
+                "[redacted display name]",
+                "[redacted inventory pointer]",
+            ] {
+                assert!(
+                    redacted_html.contains(marker),
+                    "the redacted report dropped a value silently: {marker}"
+                );
+                assert!(
+                    !ordered_html.contains(marker),
+                    "the unredacted report marked a value redacted: {marker}"
+                );
+            }
+
             // Two scanners find the same CVE on the repository and on the image built
             // from it. The cards are titled identically by upstream, so with the asset
             // four items into the identifier line the reader sees the same heading
