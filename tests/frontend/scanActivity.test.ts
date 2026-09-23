@@ -19,6 +19,7 @@ const engine = (overrides: Partial<EngineRun> = {}): EngineRun => ({
   startedAt: "2026-08-26T13:01:00Z",
   assetIds: ["private-target-id"],
   rawArtifactCount: 0,
+  savedResultArtifactCount: 0,
   findingCount: 0,
   message: "raw scanner output",
   resumable: false,

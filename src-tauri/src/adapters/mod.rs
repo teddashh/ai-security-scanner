@@ -1114,6 +1114,10 @@ pub(crate) fn is_mapping_independent_empty_json_lines(
 /// look malformed (including the normal empty-stream case). Match the complete
 /// private run layout so an engine-created `output/raw/stdout.log` remains
 /// ordinary untrusted output instead of being silently skipped.
+const RUNTIME_STREAM_CAPTURE_FILE_NAMES: [&str; 2] = ["stdout.log", "stderr.log"];
+const RUNTIME_STREAM_CAPTURE_RAW_DIRECTORY: &str = "raw";
+const RUNTIME_STREAM_CAPTURE_ATTEMPT_PREFIX: &str = "attempt-";
+
 pub(crate) fn is_runtime_stream_capture_path(relative_path: &str) -> bool {
     let mut components = Path::new(relative_path).components().rev();
     let Some(Component::Normal(file_name)) = components.next() else {
@@ -1129,10 +1133,12 @@ pub(crate) fn is_runtime_stream_capture_path(relative_path: &str) -> bool {
         return false;
     };
 
-    matches!(file_name.to_str(), Some("stdout.log" | "stderr.log"))
-        && raw_directory == "raw"
+    file_name
+        .to_str()
+        .is_some_and(|file_name| RUNTIME_STREAM_CAPTURE_FILE_NAMES.contains(&file_name))
+        && raw_directory == RUNTIME_STREAM_CAPTURE_RAW_DIRECTORY
         && attempt_directory
-            .strip_prefix("attempt-")
+            .strip_prefix(RUNTIME_STREAM_CAPTURE_ATTEMPT_PREFIX)
             .is_some_and(|attempt| {
                 !attempt.is_empty() && attempt.bytes().all(|byte| byte.is_ascii_digit())
             })
@@ -8122,6 +8128,42 @@ mod tests {
         ));
         assert!(!is_runtime_stream_capture_path(
             "case/run/engine/attempt-1/raw/result.json"
+        ));
+    }
+
+    #[test]
+    fn runtime_stream_capture_path_matches_the_progress_adapter() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../src/services/nativeAdapter.ts");
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("reading {} failed: {error}", path.display()));
+
+        assert!(source.contains(&format!(
+            "const runtimeStreamCaptureFileNames = {RUNTIME_STREAM_CAPTURE_FILE_NAMES:?} as const;"
+        )));
+        assert!(source.contains(&format!(
+            r#"const runtimeStreamCaptureRawDirectory = "{RUNTIME_STREAM_CAPTURE_RAW_DIRECTORY}";"#
+        )));
+        assert!(source.contains(&format!(
+            r#"const runtimeStreamCaptureAttemptPrefix = "{RUNTIME_STREAM_CAPTURE_ATTEMPT_PREFIX}";"#
+        )));
+        assert!(source.contains(
+            r#"const isRuntimeStreamCapturePath = (relativePath: string): boolean => {
+  const components = relativePath
+    .split("/")
+    .filter((component) => component !== "" && component !== ".");
+  const fileName = components.at(-1);
+  const rawDirectory = components.at(-2);
+  const attemptDirectory = components.at(-3);
+  const attempt = attemptDirectory?.startsWith(runtimeStreamCaptureAttemptPrefix)
+    ? attemptDirectory.slice(runtimeStreamCaptureAttemptPrefix.length)
+    : "";
+
+  return runtimeStreamCaptureFileNames.some((candidate) => candidate === fileName)
+    && rawDirectory === runtimeStreamCaptureRawDirectory
+    && attempt.length > 0
+    && [...attempt].every((character) => character >= "0" && character <= "9");
+};"#
         ));
     }
 

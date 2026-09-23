@@ -39,6 +39,7 @@ const engine = (overrides: Partial<EngineRun> = {}): EngineRun => ({
   phase: "connecting",
   assetIds: ["localhost-asset"],
   rawArtifactCount: 0,
+  savedResultArtifactCount: 0,
   findingCount: 0,
   resumable: false,
   ...overrides,
@@ -144,6 +145,7 @@ test("cancelled work stays stopped and completed sibling results are kept", () =
     status: "cancelled",
     phase: "cancelled",
     rawArtifactCount: 2,
+    savedResultArtifactCount: 2,
     findingCount: 1,
   })]);
   const cancelled = deriveCancelLifecycleDisposition(workspace(genericCancelled), "run-1");

@@ -108,7 +108,7 @@ test.each([
   const recovered = run({ status: "failed", engineRuns: [{
     id: "engine-1", engineId: "gitleaks", engineName: "Gitleaks", category: "secrets",
     status: "failed", phase: "interrupted_restart", errorCode: "desktop_process_restarted",
-    progress: 0, assetIds: [], rawArtifactCount: 0, findingCount: 0, resumable: true, warnings: [],
+    progress: 0, assetIds: [], rawArtifactCount: 0, savedResultArtifactCount: 0, findingCount: 0, resumable: true, warnings: [],
   }] });
   const beforeStart = renderCases({ latestRun: recovered, runs: [recovered] });
   expect(beforeStart.container.querySelector(".current-case-hero__meta")?.textContent).toContain(notStarted);
@@ -391,6 +391,7 @@ test("work interrupted by a restart is counted and names its saved checkpoint", 
         phase: "interrupted_restart",
         assetIds: ["asset-1"],
         rawArtifactCount: 0,
+        savedResultArtifactCount: 0,
         findingCount: 0,
         resumable: true,
         checkpoint: { attempt: 1, stage: "running", artifactCount: 0, cleanupCompleted: false, scopeBound: true },
@@ -408,6 +409,7 @@ test("work interrupted by a restart is counted and names its saved checkpoint", 
         errorCode: "desktop_process_restarted",
         assetIds: ["asset-2"],
         rawArtifactCount: 0,
+        savedResultArtifactCount: 0,
         findingCount: 0,
         resumable: true,
       },

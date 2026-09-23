@@ -877,6 +877,8 @@ export interface EngineRun {
   finishedAt?: string;
   assetIds: string[];
   rawArtifactCount: number;
+  /** Engine-produced raw result artifacts, excluding backend-owned stdout/stderr captures. */
+  savedResultArtifactCount: number;
   findingCount: number;
   /** False only when legacy evidence lacks an exact engine-run identifier. */
   findingCountKnown?: boolean;

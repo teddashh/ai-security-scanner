@@ -282,6 +282,11 @@ interface NativeScanRun {
   engine_runs: NativeEngineRun[];
 }
 
+interface NativeRawArtifact {
+  id?: unknown;
+  relative_path?: unknown;
+}
+
 interface NativeEngineAdmissionIssue {
   engine_id: string | null;
   code: string;
@@ -821,6 +826,7 @@ export interface NativeAssessmentCase {
   scope_grants: NativeScopeGrant[];
   coverage: NativeCoverageEntry[];
   scan_runs: NativeScanRun[];
+  raw_artifacts?: NativeRawArtifact[] | null;
   findings: NativeFinding[];
   finding_groups?: NativeFindingGroup[];
   finding_group_events?: NativeFindingGroupEvent[];
@@ -1911,6 +1917,28 @@ const checkpointStages = new Set([
   "failed",
 ]);
 
+const runtimeStreamCaptureFileNames = ["stdout.log", "stderr.log"] as const;
+const runtimeStreamCaptureRawDirectory = "raw";
+const runtimeStreamCaptureAttemptPrefix = "attempt-";
+
+/** Mirrors Rust's is_runtime_stream_capture_path complete private-run layout check. */
+const isRuntimeStreamCapturePath = (relativePath: string): boolean => {
+  const components = relativePath
+    .split("/")
+    .filter((component) => component !== "" && component !== ".");
+  const fileName = components.at(-1);
+  const rawDirectory = components.at(-2);
+  const attemptDirectory = components.at(-3);
+  const attempt = attemptDirectory?.startsWith(runtimeStreamCaptureAttemptPrefix)
+    ? attemptDirectory.slice(runtimeStreamCaptureAttemptPrefix.length)
+    : "";
+
+  return runtimeStreamCaptureFileNames.some((candidate) => candidate === fileName)
+    && rawDirectory === runtimeStreamCaptureRawDirectory
+    && attempt.length > 0
+    && [...attempt].every((character) => character >= "0" && character <= "9");
+};
+
 const parseCheckpoint = (token: string | null, engineRun: NativeEngineRun): EngineCheckpoint | undefined => {
   if (!token) return undefined;
   try {
@@ -2485,6 +2513,14 @@ export const adaptNativeCase = (
     actor: event.actor,
     occurredAt: event.occurred_at,
   }));
+  const rawArtifactPathById = new Map<string, string>();
+  if (Array.isArray(nativeCase.raw_artifacts)) {
+    for (const artifact of nativeCase.raw_artifacts) {
+      if (typeof artifact?.id === "string" && typeof artifact.relative_path === "string") {
+        rawArtifactPathById.set(artifact.id, artifact.relative_path);
+      }
+    }
+  }
   const runs = [...nativeCase.scan_runs].sort((left, right) =>
     right.sequence - left.sequence ||
     right.created_at.localeCompare(left.created_at) ||
@@ -2540,6 +2576,12 @@ export const adaptNativeCase = (
           !evidence.engine_run_id
         )
       );
+      const savedResultArtifactCount = (engineRun.raw_artifact_ids ?? []).filter((artifactId) => {
+        const relativePath = rawArtifactPathById.get(artifactId);
+        // An absent or malformed artifact record cannot prove saved results. Fail closed so
+        // the retry hint understates saved work instead of repeating the false claim fixed here.
+        return relativePath !== undefined && !isRuntimeStreamCapturePath(relativePath);
+      }).length;
       return {
         id: engineRun.id,
         engineId: engineRun.engine_id,
@@ -2585,6 +2627,7 @@ export const adaptNativeCase = (
         finishedAt: engineRun.finished_at ?? undefined,
         assetIds: engineRun.asset_ids,
         rawArtifactCount: engineRun.raw_artifact_ids?.length ?? 0,
+        savedResultArtifactCount,
         findingCount: exactFindingCount,
         findingCountKnown: !hasLegacyUnattributedEvidence,
         message: releaseIncompatible

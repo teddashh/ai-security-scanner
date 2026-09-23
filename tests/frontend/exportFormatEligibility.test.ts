@@ -22,6 +22,7 @@ const engine = (status: EngineRun["status"] = "completed"): EngineRun => ({
   phase: status,
   assetIds: [],
   rawArtifactCount: 0,
+  savedResultArtifactCount: 0,
   findingCount: 0,
   findingCountKnown: true,
   warnings: [],

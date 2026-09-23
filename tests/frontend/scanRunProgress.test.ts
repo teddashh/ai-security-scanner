@@ -20,6 +20,7 @@ const engine = (
   phase: status,
   assetIds: ["asset-1"],
   rawArtifactCount: 0,
+  savedResultArtifactCount: 0,
   findingCount: 0,
   resumable: false,
 });

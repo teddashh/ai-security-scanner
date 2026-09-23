@@ -36,6 +36,7 @@ const run = (id: string, engineRunId: string, assetId: string): ScanRun => ({
     phase: "completed",
     assetIds: [assetId],
     rawArtifactCount: 1,
+    savedResultArtifactCount: 1,
     findingCount: 1,
     resumable: false,
   }],

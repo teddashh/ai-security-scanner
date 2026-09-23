@@ -270,6 +270,7 @@ const localhostRun = (): ScanRun => ({
     finishedAt: "2026-09-04T12:00:03Z",
     assetIds: ["asset-1"],
     rawArtifactCount: 0,
+    savedResultArtifactCount: 0,
     findingCount: 0,
     resumable: false,
   }],

@@ -41,6 +41,7 @@ const engine = (overrides: Partial<EngineRun> = {}): EngineRun => ({
   phase: "completed",
   assetIds: ["localhost-asset"],
   rawArtifactCount: 0,
+  savedResultArtifactCount: 0,
   findingCount: 0,
   resumable: false,
   ...overrides,

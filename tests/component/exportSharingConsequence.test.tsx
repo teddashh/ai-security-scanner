@@ -239,6 +239,7 @@ test("a connection-only export says that no vulnerability scan ran", async () =>
       finishedAt: "2026-08-31T12:00:03Z",
       assetIds: ["asset-1"],
       rawArtifactCount: 0,
+      savedResultArtifactCount: 0,
       findingCount: 0,
       resumable: false,
     }],

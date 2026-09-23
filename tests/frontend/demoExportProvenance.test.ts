@@ -34,6 +34,7 @@ const run: ScanRun = {
     phase: "completed",
     assetIds: ["asset-1"],
     rawArtifactCount: 1,
+    savedResultArtifactCount: 1,
     findingCount: 1,
     resumable: false,
   }],

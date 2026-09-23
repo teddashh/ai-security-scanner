@@ -37,6 +37,7 @@ const engine = (overrides: Partial<EngineRun> = {}): EngineRun => ({
   phase: "not_executed",
   assetIds: [],
   rawArtifactCount: 0,
+  savedResultArtifactCount: 0,
   findingCount: 0,
   errorCode: "no_compatible_authorized_assets",
   message: "target-controlled detail must not leave the app",
@@ -167,6 +168,7 @@ test("missing checkpoint, runtime preflight, or an exit code is not pre-start ev
     errorCode: "execution_failed",
     message: "same failure",
     rawArtifactCount: 0,
+    savedResultArtifactCount: 0,
     findingCount: 0,
   });
   assert.equal(isExplicitPreScannerInfrastructureFailure(base), false);

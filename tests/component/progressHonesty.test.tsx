@@ -47,6 +47,7 @@ const engine = (
     : undefined,
   assetIds: ["asset-1"],
   rawArtifactCount: 0,
+  savedResultArtifactCount: 0,
   findingCount: 0,
   resumable: false,
   ...overrides,
@@ -709,6 +710,7 @@ test("collapsing every check into one shared failure still states how many stopp
   const preScannerFailure = (id: string): EngineRun => engine(id, "failed", {
     errorCode: "execution_failed",
     rawArtifactCount: 0,
+    savedResultArtifactCount: 0,
     findingCount: 0,
     message: "The private scan engine did not start.",
     checkpoint: {

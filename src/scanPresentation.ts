@@ -362,7 +362,7 @@ export const engineNextStepFor = (engine: EngineRun): BilingualText => {
       if (engine.errorCode === "runtime_cleanup_pending") return nextStepCopy.cleanupPending;
       if (engine.errorCode === "execution_failed") {
         if (isExplicitPreScannerInfrastructureFailure(engine)) return nextStepCopy.toolSetup;
-        if (engine.rawArtifactCount > 0 || engine.findingCount > 0 || (engine.checkpoint?.artifactCount ?? 0) > 0) {
+        if (engine.savedResultArtifactCount > 0 || engine.findingCount > 0) {
           return nextStepCopy.executionStoppedWithResults;
         }
         if (engine.checkpoint?.scopeBound || engine.runtimeProvider || engine.exitCode !== undefined) {

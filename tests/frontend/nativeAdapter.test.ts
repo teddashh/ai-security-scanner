@@ -3325,6 +3325,48 @@ const engineRunFixture = (id: string, status: string) => ({
   error_message: status === "failed" ? "bounded test failure" : null,
 });
 
+test("engine result artifact counts exclude only backend stream captures and fail closed", () => {
+  const workspace = adaptNativeCase(platformCaseFixture({
+    raw_artifacts: [{
+      id: "stdout-capture",
+      relative_path: "case/run/engine/attempt-1/raw/stdout.log",
+    }, {
+      id: "stderr-capture",
+      relative_path: "case/run/engine/attempt-1/raw/stderr.log",
+    }, {
+      id: "engine-output",
+      relative_path: "case/run/engine/attempt-1/output/raw/stdout.log",
+    }, {
+      id: "malformed-path",
+      relative_path: 42,
+    }],
+    scan_runs: [{
+      id: "run-result-artifacts",
+      case_id: "case-platforms-1",
+      sequence: 1,
+      created_at: "2026-08-26T00:00:00Z",
+      completed_at: "2026-08-26T00:01:00Z",
+      knowledge_cutoff: "2026-08-24T00:00:00Z",
+      engine_runs: [{
+        ...engineRunFixture("engine-stream-captures", "failed"),
+        raw_artifact_ids: ["stdout-capture", "stderr-capture"],
+      }, {
+        ...engineRunFixture("engine-result-artifacts", "failed"),
+        raw_artifact_ids: [
+          "engine-output",
+          "missing-record",
+          "malformed-path",
+        ],
+      }],
+    }],
+  }));
+
+  assert.equal(workspace.runs[0]?.engineRuns[0]?.rawArtifactCount, 2);
+  assert.equal(workspace.runs[0]?.engineRuns[0]?.savedResultArtifactCount, 0);
+  assert.equal(workspace.runs[0]?.engineRuns[1]?.rawArtifactCount, 3);
+  assert.equal(workspace.runs[0]?.engineRuns[1]?.savedResultArtifactCount, 1);
+});
+
 test("scan attempts require a valid task that entered execution", () => {
   const attemptedFor = (engineRun: Record<string, unknown> | undefined, lastRunId: unknown = null) => {
     const workspace = adaptNativeCase(platformCaseFixture({

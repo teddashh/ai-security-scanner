@@ -39,6 +39,7 @@ const engine = (overrides: Partial<EngineRun> = {}): EngineRun => ({
   phase: "completed",
   assetIds: ["asset-1"],
   rawArtifactCount: 1,
+  savedResultArtifactCount: 0,
   findingCount: 0,
   resumable: false,
   ...overrides,
@@ -220,11 +221,36 @@ test("execution_failed only recommends tool setup with explicit pre-start eviden
 });
 
 test("post-start failures preserve results and cleanup guidance", () => {
+  const logsOnly = engineNextStepFor(engine({
+    status: "failed",
+    phase: "failed",
+    errorCode: "execution_failed",
+    rawArtifactCount: 2,
+    savedResultArtifactCount: 0,
+    findingCount: 0,
+    checkpoint: { attempt: 1, stage: "failed", artifactCount: 2, cleanupCompleted: true, scopeBound: true },
+  }));
+  assert.equal(logsOnly.en, "This check began but did not finish. Retry it; its error code is under Technical status and errors.");
+  assert.equal(logsOnly.zhTW, "這項檢查已開始但沒有完成；請重試，錯誤代碼位於「技術狀態與錯誤」。");
+
+  const cleanResult = engineNextStepFor(engine({
+    status: "failed",
+    phase: "failed",
+    errorCode: "execution_failed",
+    rawArtifactCount: 1,
+    savedResultArtifactCount: 1,
+    findingCount: 0,
+    checkpoint: { attempt: 1, stage: "failed", artifactCount: 1, cleanupCompleted: true, scopeBound: true },
+  }));
+  assert.equal(cleanResult.en, "This check saved partial results before it stopped. Retry it to complete the missing work.");
+  assert.equal(cleanResult.zhTW, "這項檢查在停止前已保存部分結果；請重試以完成缺少的工作。");
+
   const withResults = engineNextStepFor(engine({
     status: "failed",
     phase: "failed",
     errorCode: "execution_failed",
     rawArtifactCount: 1,
+    savedResultArtifactCount: 0,
     findingCount: 2,
     checkpoint: { attempt: 1, stage: "failed", artifactCount: 1, cleanupCompleted: true, scopeBound: true },
   }));
