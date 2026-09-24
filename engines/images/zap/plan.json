@@ -66,6 +66,6 @@
   "blockers": [
     "no scope-grant profile exists for a ZAP passive website scan, so no run could be authorized against a website",
     "the generated automation plan is not yet delivered into a run, so the pinned command finds nothing at /run/ai-security-scanner/zap-plan.yaml",
-    "ZAP enforces no requests-per-second limit of its own, so a website scan cannot yet be held to the rate its grant would declare"
+    "ZAP enforces no requests-per-second limit of its own, and the managed gateway bounds connections rather than requests, so a website scan cannot yet be held to the rate its grant would declare"
   ]
 }
