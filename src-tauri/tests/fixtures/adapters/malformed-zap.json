@@ -1,0 +1,59 @@
+{
+  "@programName": "ZAP",
+  "@version": "2.17.0",
+  "site": [
+    {
+      "@name": "https://service.example.test",
+      "alerts": [
+        {
+          "pluginid": "90001",
+          "alertRef": "90001-1",
+          "alert": "Valid retained alert",
+          "riskcode": "1",
+          "confidence": "2",
+          "riskdesc": "Low (Medium)",
+          "desc": "<p>Valid description.</p>",
+          "solution": "<p>Valid remediation.</p>",
+          "reference": "",
+          "cweid": "200",
+          "wascid": "20",
+          "instances": [
+            {
+              "id": "1",
+              "uri": "https://service.example.test/valid",
+              "method": "GET",
+              "param": "",
+              "evidence": "retained evidence",
+              "otherinfo": "retained context"
+            },
+            {
+              "uri": "https://service.example.test/uri-only"
+            }
+          ]
+        },
+        {
+          "pluginid": "90002",
+          "alertRef": "90002-1",
+          "alert": "Malformed skipped alert",
+          "confidence": "3",
+          "desc": "<p>This alert is missing its risk code.</p>",
+          "solution": "<p>Not normalized.</p>",
+          "reference": "",
+          "cweid": "201",
+          "wascid": "21",
+          "instances": [
+            {
+              "id": "2",
+              "uri": "https://service.example.test/malformed",
+              "method": "GET",
+              "param": "",
+              "evidence": "",
+              "otherinfo": ""
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sequences": []
+}

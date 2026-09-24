@@ -121,6 +121,7 @@ convention.
 |---|---|---|---|
 | Model endpoint probes | [garak](https://github.com/NVIDIA/garak/tree/93aa9cdec309ec4170559676f1826ea2a679920c) | Apache-2.0 | Reads probe/detector failure counts without inventing severity; real endpoint testing and packaging remain blocked. |
 | Agent workflow inventory | [Agentic Radar](https://github.com/splx-ai/agentic-radar/tree/65a7e4bd01e2034c7cb52e9620eeed287688cc53) | Apache-2.0 | Normalizes a patched machine-readable workflow graph as observations, never its generic category warnings as findings. |
+| Website passive findings | [OWASP ZAP](https://github.com/zaproxy/zaproxy/tree/2665d972f6d587ba4773a95053ac39af3fdf8df9) | Apache-2.0 | Crawls an authorized origin and applies upstream passive rules to the observed responses, sending no attack payloads. Preserves pinned JSON alert identity, severity, remediation, and per-instance evidence; automation-plan generation and dispatch remain blocked. |
 
 ### Provider scope and credentials
 
@@ -180,7 +181,6 @@ These are evaluation references, not current capabilities or hidden dependencies
 | Runtime security | [Falco](https://github.com/falcosecurity/falco) | Apache-2.0 | Continuous monitoring versus snapshot lifecycle. |
 | TLS | [testssl.sh](https://github.com/testssl/testssl.sh) | GPL-2.0 | Authorized-contact boundary and distribution. |
 | External discovery | [Subfinder](https://github.com/projectdiscovery/subfinder) | MIT | Provider keys and passive/active source classification. |
-| Web application testing | [OWASP ZAP](https://github.com/zaproxy/zaproxy) | Apache-2.0 | Safe crawling/active policy and resource cost. |
 | Dependency vulnerability | [OSV-Scanner](https://github.com/google/osv-scanner) | Apache-2.0 | Overlap and a lighter source first pass. |
 | Web server testing | [Nikto](https://github.com/sullo/nikto) | NOASSERTION | License and active-test boundary. |
 | Source-scan UX reference | [VibeScan](https://github.com/Armur-Ai/vibescan/tree/52efb12fdcd8118c6f0f2b642558b2f335e7bf66) | MIT at `52efb12fdcd8118c6f0f2b642558b2f335e7bf66` | Research only; `NOT_DISTRIBUTED`, not an engine. |

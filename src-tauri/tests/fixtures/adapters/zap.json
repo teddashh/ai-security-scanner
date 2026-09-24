@@ -1,0 +1,185 @@
+{
+  "@programName": "ZAP",
+  "@version": "2.17.0",
+  "@generated": "Wed, 23 Sept 2026 19:18:20",
+  "created": "2026-09-23T19:18:20.000000000Z",
+  "insights": [
+    {
+      "level": "Info",
+      "reason": "Informational",
+      "site": "https://service.example.test",
+      "key": "insight.code.2xx",
+      "description": "Percentage of responses with status code 2xx",
+      "statistic": "62"
+    },
+    {
+      "level": "Info",
+      "reason": "Informational",
+      "site": "https://service.example.test",
+      "key": "insight.code.4xx",
+      "description": "Percentage of responses with status code 4xx",
+      "statistic": "25"
+    },
+    {
+      "level": "Info",
+      "reason": "Informational",
+      "site": "https://service.example.test",
+      "key": "insight.code.5xx",
+      "description": "Percentage of responses with status code 5xx",
+      "statistic": "12"
+    },
+    {
+      "level": "Info",
+      "reason": "Informational",
+      "site": "https://service.example.test",
+      "key": "insight.endpoint.ctype.text/html",
+      "description": "Percentage of endpoints with content type text/html",
+      "statistic": "100"
+    },
+    {
+      "level": "Info",
+      "reason": "Informational",
+      "site": "https://service.example.test",
+      "key": "insight.endpoint.method.GET",
+      "description": "Percentage of endpoints with method GET",
+      "statistic": "83"
+    },
+    {
+      "level": "Info",
+      "reason": "Informational",
+      "site": "https://service.example.test",
+      "key": "insight.endpoint.method.POST",
+      "description": "Percentage of endpoints with method POST",
+      "statistic": "16"
+    },
+    {
+      "level": "Info",
+      "reason": "Informational",
+      "site": "https://service.example.test",
+      "key": "insight.endpoint.total",
+      "description": "Count of total endpoints",
+      "statistic": "6"
+    }
+  ],
+  "site": [
+    {
+      "@name": "https://service.example.test",
+      "@host": "service.example.test",
+      "@port": "443",
+      "@ssl": "true",
+      "alerts": [
+        {
+          "pluginid": "10038",
+          "alertRef": "10038-1",
+          "alert": "Content Security Policy (CSP) Header Not Set",
+          "name": "Content Security Policy (CSP) Header Not Set",
+          "riskcode": "2",
+          "confidence": "3",
+          "riskdesc": "Medium (High)",
+          "desc": "<p>Content Security Policy (CSP) is an added layer of security that helps to detect and mitigate certain types of attacks, including Cross Site Scripting (XSS) and data injection attacks. These attacks are used for everything from data theft to site defacement or distribution of malware. CSP provides a set of standard HTTP headers that allow website owners to declare approved sources of content that browsers should be allowed to load on that page — covered types are JavaScript, CSS, HTML frames, fonts, images and embeddable objects such as Java applets, ActiveX, audio and video files.</p>",
+          "instances": [
+            {
+              "id": "2",
+              "uri": "https://service.example.test",
+              "nodeName": "https://service.example.test",
+              "method": "GET",
+              "param": "",
+              "attack": "",
+              "evidence": "",
+              "otherinfo": ""
+            },
+            {
+              "id": "9",
+              "uri": "https://service.example.test/",
+              "nodeName": "https://service.example.test/",
+              "method": "GET",
+              "param": "",
+              "attack": "",
+              "evidence": "",
+              "otherinfo": ""
+            }
+          ],
+          "count": "2",
+          "systemic": true,
+          "solution": "<p>Ensure that your web server, application server, load balancer, etc. is configured to set the Content-Security-Policy header.</p>",
+          "otherinfo": "",
+          "reference": "<p>https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP</p><p>https://cheatsheetseries.owasp.org/cheatsheets/Content_Security_Policy_Cheat_Sheet.html</p><p>https://www.w3.org/TR/CSP/</p><p>https://w3c.github.io/webappsec-csp/</p><p>https://web.dev/articles/csp</p><p>https://caniuse.com/#feat=contentsecuritypolicy</p><p>https://content-security-policy.com/</p>",
+          "cweid": "693",
+          "wascid": "15",
+          "sourceid": "1"
+        },
+        {
+          "pluginid": "10020",
+          "alertRef": "10020-1",
+          "alert": "Missing Anti-clickjacking Header",
+          "name": "Missing Anti-clickjacking Header",
+          "riskcode": "2",
+          "confidence": "2",
+          "riskdesc": "Medium (Medium)",
+          "desc": "<p>The response does not protect against 'ClickJacking' attacks. It should include either Content-Security-Policy with 'frame-ancestors' directive or X-Frame-Options.</p>",
+          "instances": [
+            {
+              "id": "1",
+              "uri": "https://service.example.test",
+              "nodeName": "https://service.example.test",
+              "method": "GET",
+              "param": "x-frame-options",
+              "attack": "",
+              "evidence": "",
+              "otherinfo": ""
+            },
+            {
+              "id": "7",
+              "uri": "https://service.example.test/",
+              "nodeName": "https://service.example.test/",
+              "method": "GET",
+              "param": "x-frame-options",
+              "attack": "",
+              "evidence": "",
+              "otherinfo": ""
+            }
+          ],
+          "count": "2",
+          "systemic": false,
+          "solution": "<p>Modern Web browsers support the Content-Security-Policy and X-Frame-Options HTTP headers. Ensure one of them is set on all web pages returned by your site/app.</p><p>If you expect the page to be framed only by pages on your server (e.g. it's part of a FRAMESET) then you'll want to use SAMEORIGIN, otherwise if you never expect the page to be framed, you should use DENY. Alternatively consider implementing Content Security Policy's \"frame-ancestors\" directive.</p>",
+          "otherinfo": "",
+          "reference": "<p>https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Frame-Options</p>",
+          "cweid": "1021",
+          "wascid": "15",
+          "sourceid": "1"
+        },
+        {
+          "pluginid": "10027",
+          "alertRef": "10027",
+          "alert": "Information Disclosure - Suspicious Comments",
+          "name": "Information Disclosure - Suspicious Comments",
+          "riskcode": "0",
+          "confidence": "2",
+          "riskdesc": "Informational (Medium)",
+          "desc": "<p>The response appears to contain suspicious comments which may help an attacker.</p>",
+          "instances": [
+            {
+              "id": "25",
+              "uri": "https://service.example.test/login.html",
+              "nodeName": "https://service.example.test/login.html",
+              "method": "GET",
+              "param": "",
+              "attack": "",
+              "evidence": "<!-- TODO: remove debug token",
+              "otherinfo": "The following pattern was used: \\bTODO\\b and was detected in likely comment: \"<!-- TODO: remove debug token abc123 -->\", see evidence field for the suspicious comment/snippet."
+            }
+          ],
+          "count": "1",
+          "systemic": false,
+          "solution": "<p>Remove all comments that return information that may help an attacker and fix any underlying problems they refer to.</p>",
+          "otherinfo": "<p>The following pattern was used: \\bTODO\\b and was detected in likely comment: \"<!-- TODO: remove debug token abc123 -->\", see evidence field for the suspicious comment/snippet.</p>",
+          "reference": "",
+          "cweid": "615",
+          "wascid": "13",
+          "sourceid": "14"
+        }
+      ]
+    }
+  ],
+  "sequences": []
+}

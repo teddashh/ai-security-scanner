@@ -1570,6 +1570,152 @@
   },
   {
     "schema_version": "2.0.0",
+    "id": "zap",
+    "display_name": "ZAP",
+    "category": "external_attack_surface",
+    "description": "Crawls an explicitly authorized website origin and applies ZAP's upstream passive scan rules to the responses it observes, reporting per-page findings without sending attack payloads.",
+    "supported_providers": [],
+    "repository_url": "https://github.com/zaproxy/zaproxy",
+    "homepage_url": "https://www.zaproxy.org/",
+    "license_spdx": "Apache-2.0",
+    "distribution_mode": "pull_pinned_image",
+    "image": {
+      "repository": "ghcr.io/zaproxy/zaproxy",
+      "tag": "2.17.0",
+      "digest": "sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef",
+      "signature_identity": null
+    },
+    "source_revision": "2665d972f6d587ba4773a95053ac39af3fdf8df9",
+    "engine_version": "2.17.0",
+    "rule_version": "pscanrules-75.0.0",
+    "adapter_version": "0.2.0",
+    "supported_asset_kinds": [
+      "domain",
+      "ip_address",
+      "web_service"
+    ],
+    "direct_network_contract": {
+      "target_kinds": [
+        "hostname",
+        "address"
+      ],
+      "protocols": [
+        "http",
+        "https"
+      ]
+    },
+    "required_permissions": [
+      "active_external_testing"
+    ],
+    "active_external": true,
+    "default_enabled": false,
+    "estimated_memory_mb": 2048,
+    "estimated_disk_mb": 4096,
+    "network_destinations": [
+      "authorized target services"
+    ],
+    "output_formats": [
+      "json"
+    ],
+    "command": [
+      "-Xmx1200m",
+      "-cmd",
+      "-silent",
+      "-autorun",
+      "/run/ai-security-scanner/zap-plan.yaml"
+    ],
+    "status": "experimental",
+    "notices": [
+      "The passive scan reads only the responses returned by crawling; it sends no attack payloads and does not exercise ZAP's active scanner.",
+      "The pinned image loads 48 upstream add-ons. The Automation Framework (automation 0.60.0) is upstream beta and the passive scan framework (pscan 0.6.0) is upstream alpha; the rule pack itself (pscanrules 75.0.0) is upstream release.",
+      "The heap must be pinned on the command line because zap.sh sizes it from host memory and ignores the container memory limit.",
+      "Apache-2.0 upstream code and add-ons permit redistribution with notices."
+    ],
+    "license": {
+      "disposition": "allow",
+      "rationale": "Apache-2.0 permits redistribution with notices.",
+      "source_offer_path": null
+    },
+    "provenance": {
+      "engine": {
+        "version": "2.17.0",
+        "source_repository": "https://github.com/zaproxy/zaproxy",
+        "source_revision": "2665d972f6d587ba4773a95053ac39af3fdf8df9",
+        "source_ref": "v2.17.0",
+        "acquisition_source": "https://github.com/zaproxy/zaproxy/commit/2665d972f6d587ba4773a95053ac39af3fdf8df9",
+        "artifact_source_revision": "2665d972f6d587ba4773a95053ac39af3fdf8df9",
+        "source_association": "attested_match"
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "zaproxy/zap-extensions pscanrules",
+        "revision": "pscanrules-75.0.0",
+        "acquisition_source": "bundled in the pinned upstream image at /zap/plugin/pscanrules-release-75.zap"
+      },
+      "data": {
+        "mode": "runtime_live",
+        "identifier": "authorized service responses",
+        "revision": null,
+        "acquisition_source": "only services with active-testing scope grants"
+      },
+      "adapter": {
+        "id": "ai-security-scanner:zap",
+        "version": "0.2.0",
+        "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
+        "source_revision": "91dc7cb0c73d16ae5fbc0e8a494c511113d30608",
+        "release_state": "workspace_unreleased"
+      }
+    },
+    "compatibility": {
+      "knowledge_date": "2026-08-07",
+      "support_until": "2026-11-05",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
+      "runnable": false,
+      "artifact_state": "verified_upstream_image",
+      "blocked_by": [
+        "no scope-grant profile exists for a ZAP passive website scan, so no run could be authorized against a website",
+        "the product does not yet generate the automation plan the pinned command reads from /run/ai-security-scanner/zap-plan.yaml"
+      ],
+      "knowledge_input": {
+        "kind": "runtime_live",
+        "identifier": "authorized service responses",
+        "version": null,
+        "acquisition_source": "only services with active-testing scope grants",
+        "pin_state": "runtime_live"
+      },
+      "wrapper": {
+        "required": false,
+        "strategy": "The product writes the automation plan for one frozen website grant into the read-only /run/ai-security-scanner mount, so the pinned upstream entrypoint reads an exact origin it cannot widen.",
+        "entrypoint": null
+      },
+      "packaging_plan": "engines/images/zap/plan.json"
+    },
+    "execution": {
+      "output": {
+        "primary_format": "json",
+        "path": "/output/zap.json",
+        "media_type": "application/json",
+        "adapter_state": "workspace_unreleased"
+      },
+      "resources": {
+        "memory_mb": 2048,
+        "disk_mb": 4096,
+        "cpu_millis": 2000,
+        "pids": 512,
+        "timeout_seconds": 1800
+      },
+      "network": {
+        "required": true,
+        "mode": "managed_allowlist",
+        "destinations": [
+          "authorized target services"
+        ]
+      }
+    }
+  },
+  {
+    "schema_version": "2.0.0",
     "id": "semgrep",
     "display_name": "Semgrep",
     "category": "code_and_secrets",

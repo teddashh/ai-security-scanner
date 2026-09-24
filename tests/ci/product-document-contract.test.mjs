@@ -357,13 +357,14 @@ test("public development status stays catalog-backed and excludes local handoff 
     "garak": [/No managed image/iu, /model-endpoint scope grant/iu, /credential path/iu],
     "agentic-radar": [/No managed image/iu, /typed framework-selection path/iu, /accepted upstream release/iu],
     "mcp-armor": [/No verified published digest/iu],
+    "zap": [/No scope-grant profile/iu, /automation plan/iu],
   };
 
   assert.equal(integrated.length + experimental.length, catalog.length);
   assert.match(
     statusContent,
     new RegExp(
-      `contains ${catalog.length} records: ${integrated.length} integrated, runnable engines and ${experimental.length} experimental AI\\s+integrations that remain non-runnable`,
+      `contains ${catalog.length} records: ${integrated.length} integrated, runnable engines and ${experimental.length} experimental\\s+integrations that remain non-runnable`,
       "iu",
     ),
   );
@@ -371,7 +372,20 @@ test("public development status stays catalog-backed and excludes local handoff 
   assert.match(statusContent, new RegExp(`CI document and contract tests: ${ciTestCount} tests`, "u"));
   for (const engine of experimental) {
     assert.equal(engine.compatibility?.runnable, false, `${engine.id} must remain non-runnable`);
-    assert.equal(engine.image, null, `${engine.id} must not claim a published image`);
+    assert.equal(engine.default_enabled, false, `${engine.id} must not be default-enabled`);
+    if (engine.image !== null) {
+      // A verified upstream artifact may exist before the product can dispatch it. What must
+      // never happen is an experimental record claiming a project-managed publication.
+      assert.equal(
+        engine.compatibility?.artifact_state,
+        "verified_upstream_image",
+        `${engine.id} may only name an image when it is a verified upstream artifact`,
+      );
+      assert.ok(
+        !engine.image.repository.startsWith("ghcr.io/teddashh/"),
+        `${engine.id} must not claim a project-managed image while experimental`,
+      );
+    }
     assert.ok(engine.compatibility?.blocked_by?.length > 0, `${engine.id} must retain blockers`);
     const statusRowPrefix = `| ${engine.display_name} |`.toLowerCase();
     const statusRow = statusContent

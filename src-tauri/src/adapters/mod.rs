@@ -46,6 +46,7 @@ pub const BUILTIN_ENGINE_IDS: &[&str] = &[
     "httpx",
     "nuclei",
     "greenbone",
+    "zap",
     "semgrep",
     "gitleaks",
     "trufflehog",
@@ -75,6 +76,7 @@ const MAX_MANUAL_REVIEW_DETAIL: usize = 4_096;
 const MAX_XML_DEPTH: usize = 64;
 const MAX_XML_EVENTS: usize = 200_000;
 const MAX_XML_ATTRIBUTES: usize = 256;
+const MAX_ZAP_EVIDENCE_TAG_VALUE: usize = 120;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Profile {
@@ -89,6 +91,7 @@ enum Profile {
     Httpx,
     Nuclei,
     Greenbone,
+    Zap,
     Semgrep,
     Gitleaks,
     Trufflehog,
@@ -546,6 +549,7 @@ pub fn builtin_adapter_registry() -> AppResult<AdapterRegistry> {
         ("httpx", Profile::Httpx, "Application security engineer"),
         ("nuclei", Profile::Nuclei, "Application security engineer"),
         ("greenbone", Profile::Greenbone, "Vulnerability manager"),
+        ("zap", Profile::Zap, "Application security engineer"),
         ("semgrep", Profile::Semgrep, "Application security engineer"),
         ("gitleaks", Profile::Gitleaks, "Secrets-response specialist"),
         (
@@ -2789,6 +2793,7 @@ fn extract_records(
         Profile::Maester => extract_maester(parsed, warnings).records,
         Profile::Nuclei => extract_nuclei(parsed, warnings).records,
         Profile::Greenbone => unreachable!("Greenbone extraction needs authorized asset ids"),
+        Profile::Zap => extract_zap(parsed, warnings),
         Profile::Semgrep => extract_semgrep(parsed, warnings),
         Profile::Gitleaks => extract_gitleaks(parsed, warnings),
         Profile::Trufflehog => extract_trufflehog(parsed, warnings),
@@ -4927,6 +4932,356 @@ fn extract_nuclei(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Nuclei
         records,
         execution_counts,
     }
+}
+
+fn extract_zap(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
+    let Some(root) = json_root(parsed).and_then(Value::as_object) else {
+        push_warning(warnings, "ZAP expected one JSON report object");
+        return Vec::new();
+    };
+    let Some(sites) = root.get("site").and_then(Value::as_array) else {
+        push_warning(
+            warnings,
+            "ZAP output lacked its site array; the raw artifact was retained, and the scan should be retried with the pinned JSON reporter",
+        );
+        return Vec::new();
+    };
+
+    let mut records = Vec::new();
+    for (site_index, site) in sites.iter().enumerate() {
+        let site_pointer = format!("/site/{site_index}");
+        let Some(site) = site.as_object() else {
+            push_warning(
+                warnings,
+                format!(
+                    "ZAP site at {site_pointer} was not an object; the raw record was retained"
+                ),
+            );
+            continue;
+        };
+        let Some(alerts) = site.get("alerts").and_then(Value::as_array) else {
+            push_warning(
+                warnings,
+                format!(
+                    "ZAP site at {site_pointer} lacked its alerts array; the raw record was retained"
+                ),
+            );
+            continue;
+        };
+
+        for (alert_index, alert) in alerts.iter().enumerate() {
+            let alert_pointer = format!("{site_pointer}/alerts/{alert_index}");
+            let Some(alert) = alert.as_object() else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "ZAP alert at {alert_pointer} was not an object; the raw record was retained"
+                    ),
+                );
+                continue;
+            };
+            let Some(plugin_id) = exact_rule_string_any(alert, &["pluginid"]) else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "ZAP alert at {alert_pointer} lacked its pluginid; the raw record was retained"
+                    ),
+                );
+                continue;
+            };
+            let Some(title) = alert.get("alert").and_then(Value::as_str) else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "ZAP alert at {alert_pointer} lacked its alert title; the raw record was retained"
+                    ),
+                );
+                continue;
+            };
+            let Some(risk_code) = alert.get("riskcode").and_then(Value::as_str) else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "ZAP alert at {alert_pointer} lacked its riskcode; the raw record was retained"
+                    ),
+                );
+                continue;
+            };
+            let Some(severity) = zap_severity(risk_code) else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "ZAP alert at {alert_pointer} had an unsupported riskcode and was not normalized"
+                    ),
+                );
+                continue;
+            };
+            let Some(confidence_code) = alert.get("confidence").and_then(Value::as_str) else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "ZAP alert at {alert_pointer} lacked its confidence; the raw record was retained"
+                    ),
+                );
+                continue;
+            };
+            let Some(confidence) = zap_confidence(confidence_code) else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "ZAP alert at {alert_pointer} had an unsupported confidence and was not normalized"
+                    ),
+                );
+                continue;
+            };
+            let Some(instances) = alert.get("instances").and_then(Value::as_array) else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "ZAP alert at {alert_pointer} lacked its instances array; the raw record was retained"
+                    ),
+                );
+                continue;
+            };
+
+            let alert_ref = alert.get("alertRef").and_then(Value::as_str);
+            let description = alert
+                .get("desc")
+                .and_then(Value::as_str)
+                .map(zap_plain_text);
+            let remediation = alert
+                .get("solution")
+                .and_then(Value::as_str)
+                .map(zap_plain_text);
+            let references = zap_references(alert.get("reference"));
+            let cwe_ids = cwe_identifiers(alert.get("cweid"));
+            let wasc_id = alert.get("wascid").and_then(Value::as_str);
+
+            for (instance_index, instance) in instances.iter().enumerate() {
+                if records.len() >= MAX_RECORDS {
+                    return records;
+                }
+                let pointer = format!("{alert_pointer}/instances/{instance_index}");
+                let Some(instance) = instance.as_object() else {
+                    push_warning(
+                        warnings,
+                        format!(
+                            "ZAP instance at {pointer} was not an object; the raw record was retained"
+                        ),
+                    );
+                    continue;
+                };
+                let Some(uri) = instance.get("uri").and_then(Value::as_str) else {
+                    push_warning(
+                        warnings,
+                        format!(
+                            "ZAP instance at {pointer} lacked its uri; the raw record was retained"
+                        ),
+                    );
+                    continue;
+                };
+                let method = instance
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let parameter = instance
+                    .get("param")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let instance_evidence = instance
+                    .get("evidence")
+                    .and_then(Value::as_str)
+                    .and_then(bounded_zap_evidence_tag_value);
+                // `otherinfo` is plain text even when it quotes the matched
+                // response markup, so preserve it without HTML conversion.
+                let instance_other_info = instance
+                    .get("otherinfo")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_default();
+                let instance_id = instance
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+
+                let mut tags = vec![
+                    format!("zap-risk-code:{risk_code}"),
+                    format!("zap-confidence-code:{confidence_code}"),
+                    format!("zap-method:{method}"),
+                    format!("zap-param:{parameter}"),
+                ];
+                if let Some(alert_ref) = alert_ref {
+                    tags.push(format!("zap-alert-ref:{alert_ref}"));
+                }
+                if let Some(wasc_id) = wasc_id {
+                    tags.push(format!("wasc:{wasc_id}"));
+                }
+                if !instance_id.is_empty() {
+                    tags.push(format!("zap-instance-id:{instance_id}"));
+                }
+                if let Some(instance_evidence) = instance_evidence {
+                    tags.push(format!("zap-evidence:{instance_evidence}"));
+                }
+
+                let instance_description = if instance_other_info.trim().is_empty() {
+                    description.clone()
+                } else if let Some(description) = description.as_deref() {
+                    Some(format!("{description} {instance_other_info}"))
+                } else {
+                    Some(instance_other_info)
+                };
+
+                let mut record = with_weakness(
+                    with_scanner_details(
+                        record!(
+                            pointer,
+                            plugin_id.clone(),
+                            title.to_owned(),
+                            severity.to_owned(),
+                            uri.to_owned(),
+                            None,
+                            confidence.to_owned(),
+                            None,
+                            EvidenceKind::ExternalValidation,
+                            references.clone(),
+                            tags,
+                        ),
+                        instance_description,
+                        remediation.clone(),
+                        None,
+                        None,
+                    ),
+                    UpstreamWeakness {
+                        cwe_ids: cwe_ids.clone(),
+                        cvss: Vec::new(),
+                    },
+                );
+                let alert_identity = alert_ref.unwrap_or(&plugin_id);
+                record.fingerprint_identity = Some(format!(
+                    "zap-alert-instance:{alert_identity}:{}",
+                    if instance_id.is_empty() {
+                        instance_index.to_string()
+                    } else {
+                        instance_id.to_owned()
+                    }
+                ));
+                records.push(record);
+            }
+        }
+    }
+    records
+}
+
+fn zap_severity(risk_code: &str) -> Option<&'static str> {
+    match risk_code {
+        "0" => Some("Informational"),
+        "1" => Some("Low"),
+        "2" => Some("Medium"),
+        "3" => Some("High"),
+        _ => None,
+    }
+}
+
+fn zap_confidence(confidence: &str) -> Option<&'static str> {
+    match confidence {
+        "0" => Some("False Positive"),
+        "1" => Some("Low"),
+        "2" => Some("Medium"),
+        "3" => Some("High"),
+        "4" => Some("Confirmed"),
+        _ => None,
+    }
+}
+
+fn bounded_zap_evidence_tag_value(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    let mut characters = value.chars();
+    let bounded = characters
+        .by_ref()
+        .take(MAX_ZAP_EVIDENCE_TAG_VALUE)
+        .collect::<String>();
+    Some(if characters.next().is_some() {
+        format!("{bounded}…")
+    } else {
+        bounded
+    })
+}
+
+/// Convert ZAP's presentation-only HTML fragments to bounded report text.
+///
+/// Paragraph and line-break tags become spaces, remaining tags are
+/// discarded, and the small entity set ZAP uses for quoted markup is decoded.
+fn zap_plain_text(value: &str) -> String {
+    let mut plain = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(tag_start) = rest.find('<') {
+        plain.push_str(&rest[..tag_start]);
+        let after_start = &rest[tag_start + 1..];
+        let Some(tag_end) = after_start.find('>') else {
+            plain.push_str(&rest[tag_start..]);
+            rest = "";
+            break;
+        };
+        let tag = after_start[..tag_end].trim().to_ascii_lowercase();
+        let closing = tag.starts_with('/');
+        let tag_name = tag
+            .strip_prefix('/')
+            .unwrap_or(&tag)
+            .trim_start()
+            .split(|character: char| character.is_ascii_whitespace() || character == '/')
+            .next()
+            .unwrap_or_default();
+        if tag_name == "br" || (closing && tag_name == "p") {
+            plain.push(' ');
+        }
+        rest = &after_start[tag_end + 1..];
+    }
+    plain.push_str(rest);
+    decode_zap_html_entities(&plain)
+}
+
+fn decode_zap_html_entities(value: &str) -> String {
+    let mut decoded = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(entity_start) = rest.find('&') {
+        decoded.push_str(&rest[..entity_start]);
+        let entity = &rest[entity_start..];
+        let replacement = [
+            ("&amp;", '&'),
+            ("&lt;", '<'),
+            ("&gt;", '>'),
+            ("&quot;", '"'),
+            ("&#39;", '\''),
+            ("&apos;", '\''),
+        ]
+        .into_iter()
+        .find_map(|(encoded, decoded)| entity.starts_with(encoded).then_some((encoded, decoded)));
+        if let Some((encoded, replacement)) = replacement {
+            decoded.push(replacement);
+            rest = &entity[encoded.len()..];
+        } else {
+            decoded.push('&');
+            rest = &entity[1..];
+        }
+    }
+    decoded.push_str(rest);
+    decoded
+}
+
+fn zap_references(reference: Option<&Value>) -> Vec<String> {
+    let Some(reference) = reference.and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    zap_plain_text(reference)
+        .split_whitespace()
+        .filter(|value| value.starts_with("https://"))
+        .take(32)
+        .map(str::to_owned)
+        .collect()
 }
 
 fn extract_greenbone(
@@ -7343,7 +7698,7 @@ fn impact_for(
         Profile::ScubaGear | Profile::Maester => {
             "Microsoft 365 identities, messages, files, or administrative settings may have weaker protection"
         }
-        Profile::Naabu | Profile::Httpx | Profile::Nuclei | Profile::Greenbone => {
+        Profile::Naabu | Profile::Httpx | Profile::Nuclei | Profile::Greenbone | Profile::Zap => {
             "an internet-reachable service may expose unexpected functionality or a known weakness"
         }
         Profile::Semgrep | Profile::Gitleaks | Profile::Trufflehog => {
@@ -7385,7 +7740,7 @@ fn family_for(profile: Profile) -> FindingFamily {
         }
         Profile::Cloudsplaining => FindingFamily::CloudIdentity,
         Profile::ScubaGear | Profile::Maester => FindingFamily::Microsoft365,
-        Profile::Naabu | Profile::Httpx | Profile::Nuclei | Profile::Greenbone => {
+        Profile::Naabu | Profile::Httpx | Profile::Nuclei | Profile::Greenbone | Profile::Zap => {
             FindingFamily::NetworkExposure
         }
         Profile::Semgrep => FindingFamily::SourceCode,
@@ -7425,9 +7780,9 @@ fn remedy_for(profile: Profile, family: FindingFamily) -> &'static str {
         Profile::ScubaGear | Profile::Maester => {
             "Correct the Microsoft 365 tenant setting named by this control"
         }
-        // Nuclei and Greenbone are the findings that actually use this clause.
+        // Nuclei, Greenbone, and ZAP are the findings that actually use this clause.
         // Naabu/httpx observations take the exposure-observation path instead.
-        Profile::Naabu | Profile::Httpx | Profile::Nuclei | Profile::Greenbone => {
+        Profile::Naabu | Profile::Httpx | Profile::Nuclei | Profile::Greenbone | Profile::Zap => {
             "Correct the service or configuration named by this check"
         }
         Profile::Semgrep => "Change the code to remove the reported unsafe pattern",
@@ -7741,6 +8096,31 @@ fn push_priority_warning(warnings: &mut Vec<String>, warning: impl AsRef<str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zap_plain_text_separates_boundaries_and_decodes_entities() {
+        assert_eq!(
+            zap_plain_text(
+                "<p>First &amp; &quot;quoted&quot;.</p><p>Second&lt;value&gt;.<br />Third &#39;line&#39;.</p>"
+            ),
+            "First & \"quoted\". Second<value>. Third 'line'. "
+        );
+    }
+
+    #[test]
+    fn zap_evidence_tag_value_preserves_markup_and_marks_truncation() {
+        assert_eq!(
+            bounded_zap_evidence_tag_value(" <!-- matched --> "),
+            Some("<!-- matched -->".into())
+        );
+        assert_eq!(bounded_zap_evidence_tag_value("  "), None);
+
+        let long_value = format!("{}tail", "x".repeat(MAX_ZAP_EVIDENCE_TAG_VALUE));
+        assert_eq!(
+            bounded_zap_evidence_tag_value(&long_value),
+            Some(format!("{}…", "x".repeat(MAX_ZAP_EVIDENCE_TAG_VALUE)))
+        );
+    }
 
     #[test]
     fn only_provably_complete_zero_byte_jsonl_engines_ignore_mapping_drift() {

@@ -74,6 +74,11 @@ fn fixture(engine_id: &str) -> (&'static [u8], &'static str, &'static str) {
             "greenbone.xml",
             "application/xml",
         ),
+        "zap" => (
+            include_bytes!("fixtures/adapters/zap.json"),
+            "zap.json",
+            "application/json",
+        ),
         "semgrep" => (
             include_bytes!("fixtures/adapters/semgrep.json"),
             "semgrep.json",
@@ -336,7 +341,7 @@ fn normalize_ai_generated_fixture(engine_id: &str) -> AdapterOutput {
 }
 
 #[test]
-fn registry_covers_exactly_the_twenty_four_catalog_engines() {
+fn registry_covers_exactly_the_twenty_five_catalog_engines() {
     let catalog = EngineRegistry::load_builtin().expect("valid catalog");
     let catalog_ids = catalog
         .manifests()
@@ -345,8 +350,8 @@ fn registry_covers_exactly_the_twenty_four_catalog_engines() {
         .collect::<BTreeSet<_>>();
     let adapter_ids = BUILTIN_ENGINE_IDS.iter().copied().collect::<BTreeSet<_>>();
 
-    assert_eq!(BUILTIN_ENGINE_IDS.len(), 24);
-    assert_eq!(adapter_ids.len(), 24);
+    assert_eq!(BUILTIN_ENGINE_IDS.len(), 25);
+    assert_eq!(adapter_ids.len(), 25);
     assert_eq!(adapter_ids, catalog_ids);
 
     let adapters = builtin_adapter_registry().expect("valid built-in adapter registry");
@@ -3449,6 +3454,191 @@ fn malformed_jsonl_is_contained_while_valid_records_survive() {
             .iter()
             .any(|warning| warning.contains("malformed JSONL line 2"))
     );
+}
+
+#[test]
+fn malformed_zap_alert_is_contained_while_valid_instances_survive() {
+    let bytes = include_bytes!("fixtures/adapters/malformed-zap.json");
+    let output = normalize_bytes(
+        "zap",
+        bytes,
+        "malformed-zap.json",
+        "application/json",
+        "run-malformed-zap",
+    );
+    assert_eq!(output.findings.len(), 2);
+    assert!(!output.complete);
+    assert!(
+        output
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("lacked its riskcode"))
+    );
+    let uri_only = output
+        .findings
+        .iter()
+        .find(|finding| {
+            finding.evidence.iter().any(|evidence| {
+                evidence.location.as_deref() == Some("https://service.example.test/uri-only")
+            })
+        })
+        .expect("ZAP instance containing only uri was normalized");
+    assert!(uri_only.tags.iter().any(|tag| tag == "zap-method:"));
+    assert!(uri_only.tags.iter().any(|tag| tag == "zap-param:"));
+    assert!(
+        output
+            .warnings
+            .iter()
+            .all(|warning| !warning.contains("/instances/1")),
+        "optional instance fields produced a warning: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn zap_preserves_alert_identity_severity_remediation_and_instance_evidence() {
+    let output = normalize_fixture("zap");
+    assert!(output.complete, "warnings: {:?}", output.warnings);
+    assert!(output.warnings.is_empty());
+    assert_eq!(output.findings.len(), 5);
+
+    let source_rules = output
+        .findings
+        .iter()
+        .flat_map(|finding| &finding.evidence)
+        .filter_map(|evidence| evidence.source_rule.as_deref())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(source_rules, BTreeSet::from(["10020", "10027", "10038"]));
+
+    for (rule_id, severity, remediation) in [
+        (
+            "10038",
+            Severity::Medium,
+            "Ensure that your web server, application server, load balancer, etc. is configured to set the Content-Security-Policy header.",
+        ),
+        (
+            "10020",
+            Severity::Medium,
+            "Modern Web browsers support the Content-Security-Policy and X-Frame-Options HTTP headers.",
+        ),
+        (
+            "10027",
+            Severity::Informational,
+            "Remove all comments that return information that may help an attacker",
+        ),
+    ] {
+        let findings = output
+            .findings
+            .iter()
+            .filter(|finding| {
+                finding
+                    .evidence
+                    .iter()
+                    .any(|evidence| evidence.source_rule.as_deref() == Some(rule_id))
+            })
+            .collect::<Vec<_>>();
+        assert!(!findings.is_empty(), "missing ZAP rule {rule_id}");
+        assert!(findings.iter().all(|finding| finding.severity == severity));
+        assert!(
+            findings.iter().all(|finding| {
+                finding.evidence.iter().all(|evidence| {
+                    evidence.scanner_details.as_ref().is_some_and(|details| {
+                        details
+                            .remediation
+                            .as_deref()
+                            .is_some_and(|value| value.starts_with(remediation))
+                    })
+                })
+            }),
+            "unexpected ZAP rule {rule_id} remediation: {:?}",
+            findings
+                .iter()
+                .flat_map(|finding| &finding.evidence)
+                .filter_map(|evidence| evidence.scanner_details.as_ref())
+                .filter_map(|details| details.remediation.as_deref())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    assert!(output.findings.iter().all(|finding| {
+        finding.evidence.iter().all(|evidence| {
+            evidence.scanner_details.as_ref().is_none_or(|details| {
+                details
+                    .description
+                    .as_ref()
+                    .into_iter()
+                    .chain(details.remediation.as_ref())
+                    .all(|value| {
+                        !value.contains("<p>") && !value.contains("</p>") && !value.contains("<br")
+                    })
+            })
+        })
+    }));
+    assert!(output.findings.iter().any(|finding| {
+        finding.evidence.iter().any(|evidence| {
+            evidence.source_rule.as_deref() == Some("10020")
+                && evidence.scanner_details.as_ref().is_some_and(|details| {
+                    details.remediation.as_deref().is_some_and(|remediation| {
+                        remediation.contains("returned by your site/app. If you expect the page")
+                    })
+                })
+        })
+    }));
+
+    assert!(output.findings.iter().any(|finding| {
+        finding
+            .tags
+            .iter()
+            .any(|tag| tag == "zap-alert-ref:10020-1")
+            && finding
+                .tags
+                .iter()
+                .any(|tag| tag == "zap-param:x-frame-options")
+    }));
+    assert!(output.findings.iter().any(|finding| {
+        finding
+            .tags
+            .iter()
+            .any(|tag| tag == "zap-evidence:<!-- TODO: remove debug token")
+            && finding.tags.iter().all(|tag| {
+                !tag.starts_with("zap-otherinfo:")
+                    && !tag.starts_with("zap-risk-description:")
+            })
+            && finding.evidence.iter().any(|evidence| {
+                evidence.location.as_deref() == Some("https://service.example.test/login.html")
+                    && evidence.scanner_details.as_ref().is_some_and(|details| {
+                        details.description.as_deref().is_some_and(|description| {
+                            description
+                                == "The response appears to contain suspicious comments which may help an attacker. The following pattern was used: \\bTODO\\b and was detected in likely comment: \"<!-- TODO: remove debug token abc123 -->\", see evidence field for the suspicious comment/snippet."
+                                && description.contains("<!-- TODO: remove debug token abc123 -->")
+                        })
+                    })
+            })
+    }));
+    assert!(output.findings.iter().any(|finding| {
+        finding.official_references.iter().any(|reference| {
+            reference == "https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP"
+        }) && finding.evidence.iter().any(|evidence| {
+            evidence
+                .scanner_details
+                .as_ref()
+                .is_some_and(|details| details.cwe_ids == ["CWE-693"])
+        })
+    }));
+}
+
+#[test]
+fn empty_zap_alert_array_is_a_zero_finding_result_without_a_security_claim() {
+    let output = normalize_bytes(
+        "zap",
+        br#"{"site":[{"alerts":[]}],"sequences":[]}"#,
+        "zap.json",
+        "application/json",
+        "run-empty-zap",
+    );
+    assert!(output.complete, "warnings: {:?}", output.warnings);
+    assert!(output.findings.is_empty());
+    assert!(output.warnings.is_empty());
 }
 
 #[test]

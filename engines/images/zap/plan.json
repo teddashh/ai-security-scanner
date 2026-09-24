@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "zap",
+  "plan_kind": "upstream_image",
+  "knowledge_date": "2026-08-07",
+  "support_until": "2026-11-05",
+  "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+  "update_procedure": "docs/engine-maintenance.md",
+  "publish_state": "verified_upstream_artifact",
+  "source": {
+    "repository": "https://github.com/zaproxy/zaproxy",
+    "revision": "2665d972f6d587ba4773a95053ac39af3fdf8df9",
+    "acquisition_source": "https://github.com/zaproxy/zaproxy/commit/2665d972f6d587ba4773a95053ac39af3fdf8df9",
+    "local_research_checkout": ".upstreams/zaproxy/zaproxy"
+  },
+  "verified_upstream_artifact": {
+    "repository": "ghcr.io/zaproxy/zaproxy",
+    "tag": "2.17.0",
+    "digest": "sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef",
+    "signature_identity": null,
+    "entrypoint": [
+      "/zap/zap.sh"
+    ],
+    "verification": {
+      "method": "docker_buildx_imagetools_inspect_and_oci_labels",
+      "verified_at": "2026-09-23",
+      "source_association": "attested_match",
+      "artifact_source_revision": "2665d972f6d587ba4773a95053ac39af3fdf8df9"
+    }
+  },
+  "final_artifact": {
+    "repository": "ghcr.io/zaproxy/zaproxy",
+    "tag": "2.17.0",
+    "digest": "sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef"
+  },
+  "build_recipe": null,
+  "dockerfile": {
+    "emitted": false,
+    "reason": "No managed Dockerfile is needed for the verified upstream artifact."
+  },
+  "wrapper": {
+    "required": false,
+    "strategy": "The product writes the automation plan for one frozen website grant into the read-only /run/ai-security-scanner mount, so the pinned upstream entrypoint reads an exact origin it cannot widen.",
+    "entrypoint": null
+  },
+  "command": [
+    "-Xmx1200m",
+    "-cmd",
+    "-silent",
+    "-autorun",
+    "/run/ai-security-scanner/zap-plan.yaml"
+  ],
+  "output": {
+    "primary_format": "json",
+    "path": "/output/zap.json",
+    "media_type": "application/json",
+    "adapter_state": "workspace_unreleased"
+  },
+  "license": {
+    "disposition": "allow",
+    "rationale": "Apache-2.0 permits redistribution with notices.",
+    "source_offer_path": null
+  },
+  "blockers": [
+    "no scope-grant profile exists for a ZAP passive website scan, so no run could be authorized against a website",
+    "the product does not yet generate the automation plan the pinned command reads from /run/ai-security-scanner/zap-plan.yaml"
+  ]
+}
