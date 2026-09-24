@@ -56,6 +56,7 @@ import type {
   BeginnerInventoryItem,
   BeginnerMasterReport,
   BeginnerNextActionCode,
+  BeginnerRequestedTarget,
   BeginnerReportStage,
   BeginnerReportSummary,
   CorrelationReport,
@@ -672,7 +673,6 @@ const copy = {
   reductionLine: { en: "Requested {requested}; tested {executed}", zhTW: "原要求：{requested}；實際測試：{executed}" },
   observedWindow: { en: "Observed {from} to {until}", zhTW: "觀察時間：{from} 至 {until}" },
   savedAt: { en: "Saved {time}", zhTW: "保存時間：{time}" },
-  currentFallback: { en: "Display name comes from the current project", zhTW: "顯示名稱來自目前專案資料" },
   unavailableProvenance: { en: "Historical detail unavailable", zhTW: "無法取得歷史細節" },
   coverageDetail: { en: "Coverage detail", zhTW: "涵蓋範圍細節" },
   exactNetworkScope: { en: "Exact addresses and ports", zhTW: "實際位址與連接埠" },
@@ -796,6 +796,81 @@ const localizedAssetKind = (kind: string, locale: "en" | "zh-TW"): string => {
     kubernetes_cluster: "Kubernetes 叢集",
     cloud_account: "雲端帳號",
   } as Record<string, string>)[kind] ?? "掃描目標";
+};
+
+const requestedTargetQualifier = (
+  target: BeginnerRequestedTarget | undefined,
+  locale: "en" | "zh-TW",
+): string | undefined => {
+  const availability = target?.labelAvailability ?? "unavailable";
+  const qualifier = availability === "current_case_fallback"
+    ? copy.currentProjectFallback
+    : availability === "unavailable"
+      ? copy.unavailableProvenance
+      : undefined;
+  if (!qualifier) return undefined;
+  return locale === "en" ? qualifier.en : qualifier.zhTW;
+};
+
+const requestedTargetLabel = (
+  target: BeginnerRequestedTarget,
+  locale: "en" | "zh-TW",
+): string => {
+  const label = target.label ?? target.assetId;
+  const qualifier = requestedTargetQualifier(target, locale);
+  return qualifier ? `${label} (${qualifier})` : label;
+};
+
+const requestedTargetLabelById = (
+  assetId: string,
+  targetById: ReadonlyMap<string, BeginnerRequestedTarget>,
+  locale: "en" | "zh-TW",
+): string => {
+  const target = targetById.get(assetId);
+  if (target) return requestedTargetLabel(target, locale);
+  return `${assetId} (${requestedTargetQualifier(undefined, locale)})`;
+};
+
+const requestedTargetListLabel = (
+  assetIds: readonly string[],
+  targetById: ReadonlyMap<string, BeginnerRequestedTarget>,
+  locale: "en" | "zh-TW",
+): string => {
+  const groups: Array<{ qualifier?: string; labels: string[] }> = [];
+  const groupByQualifier = new Map<string | undefined, { qualifier?: string; labels: string[] }>();
+  for (const assetId of assetIds) {
+    const target = targetById.get(assetId);
+    const qualifier = requestedTargetQualifier(target, locale);
+    let group = groupByQualifier.get(qualifier);
+    if (!group) {
+      group = { qualifier, labels: [] };
+      groupByQualifier.set(qualifier, group);
+      groups.push(group);
+    }
+    group.labels.push(target?.label ?? assetId);
+  }
+  const itemSeparator = locale === "en" ? ", " : "、";
+  const groupSeparator = locale === "en" ? "; " : "；";
+  return groups.map(({ qualifier, labels }) => {
+    const joined = labels.join(itemSeparator);
+    return qualifier ? `${joined} (${qualifier})` : joined;
+  }).join(groupSeparator);
+};
+
+/**
+ * A network scope row carries the grant's own canonical target text, which is
+ * part of this report. When the display label was not retained, show that text
+ * rather than the internal ID: the detail is not unavailable, and a row that
+ * says so while the address sits beside it is simply wrong.
+ */
+const networkScopeTargetLabel = (
+  scope: BeginnerMasterReport["actual"]["networkScopes"][number],
+  targetById: ReadonlyMap<string, BeginnerRequestedTarget>,
+  locale: "en" | "zh-TW",
+): string => {
+  const target = targetById.get(scope.targetAssetId);
+  if (target?.label) return requestedTargetLabel(target, locale);
+  return scope.target || requestedTargetLabelById(scope.targetAssetId, targetById, locale);
 };
 
 type AssetResultStatus =
@@ -1060,7 +1135,7 @@ function AssetResultBoard({
         {rows.map(({ target, status, presentation }) => (
           <li key={target.assetId} className={`asset-result-row asset-result-row--${status}`} data-asset-result={status}>
             <div className="asset-result-row__identity">
-              <strong>{target.label ?? target.assetId}</strong>
+              <strong>{requestedTargetLabel(target, locale)}</strong>
               {target.assetKind && <span>{localizedAssetKind(target.assetKind, locale)}</span>}
             </div>
             <StatusPill label={presentation.label} tone={presentation.tone} />
@@ -1155,9 +1230,11 @@ const projectReportFindings = (
     // did not retain that asset's display label. Keep the exact ID visible;
     // omitting it turns attributable scanner output into an apparently
     // asset-less problem (or silently hides one member of a shared finding).
-    const targetLabels = frozen.targetAssetIds.map((assetId) =>
-      targetById.get(assetId)?.label ?? assetId);
-    const targetLabel = [...new Set(targetLabels)].join(locale === "en" ? ", " : "、");
+    const targetLabel = requestedTargetListLabel(
+      [...new Set(frozen.targetAssetIds)],
+      targetById,
+      locale,
+    );
     return {
       id: frozen.findingId,
       caseId: report.caseId,
@@ -1257,8 +1334,8 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
   const untestedNetworkScopes = report.actual.networkScopes.filter((scope) =>
     scope.outcome !== "tested_complete" && scope.outcome !== "tested_partial",
   );
-  const targetLabelById = new Map(
-    report.requested.targets.map((target) => [target.assetId, target.label ?? target.assetId]),
+  const targetById = new Map(
+    report.requested.targets.map((target) => [target.assetId, target]),
   );
   const engineByTaskId = new Map(run?.engineRuns.map((engine) => [engine.id, engine]) ?? []);
   const orderedNextSteps = report.nextSteps
@@ -1276,9 +1353,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
   const firstCoverageGap = coverageLossGaps[0];
   const firstRecordNote = recordNotes[0];
   const coverageGapLine = (gap: BeginnerMasterReport["coverageGaps"][number]): string => {
-    const targets = gap.targetAssetIds
-      .map((assetId) => targetLabelById.get(assetId) ?? assetId)
-      .join(locale === "en" ? ", " : "、");
+    const targets = requestedTargetListLabel(gap.targetAssetIds, targetById, locale);
     const unattributedText = gap.unattributed
       ? findingUnattributedGap(
           locale,
@@ -1300,21 +1375,9 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
   const appendRemainingCount = (value: string, count: number): string => count > 0
     ? `${value} · ${text(copy.moreItems, { count: formatNumber(count) })}`
     : value;
-  const requestedTargetLabel = (
-    target: BeginnerMasterReport["requested"]["targets"][number],
-  ): string => {
-    const label = target.label ?? target.assetId;
-    if (target.labelAvailability === "current_case_fallback") {
-      return `${label} (${text(copy.currentProjectFallback)})`;
-    }
-    if (target.labelAvailability === "unavailable") {
-      return `${label} (${text(copy.unavailableProvenance)})`;
-    }
-    return label;
-  };
   const requestedSummary = firstRequestedTarget
     ? appendRemainingCount(
-        requestedTargetLabel(firstRequestedTarget),
+        requestedTargetLabel(firstRequestedTarget, locale),
         report.requested.targets.length - 1,
       )
     : text(copy.noRequestedTarget);
@@ -1340,7 +1403,11 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
     : text(copy.noNextStep);
   const inlineSeparator = locale === "en" ? "; " : "；";
   const requestedTargetsSummary = report.requested.targets.length > 0
-    ? report.requested.targets.map(requestedTargetLabel).join(inlineSeparator)
+    ? requestedTargetListLabel(
+        report.requested.targets.map((target) => target.assetId),
+        targetById,
+        locale,
+      )
     : text(copy.noRequestedTarget);
   const requestedStageSummary = `${text(reportStageCopy(report.requested.stage.value))}${
     report.requested.stage.availability === "current_case_fallback"
@@ -1390,7 +1457,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
     });
   });
   const testedNetworkScopeSummaries = testedNetworkScopes.map((scope) => {
-    const target = targetLabelById.get(scope.targetAssetId) ?? scope.target;
+    const target = networkScopeTargetLabel(scope, targetById, locale);
     const addresses = scope.addressRanges.join(locale === "en" ? ", " : "、");
     const ports = scope.portRanges.join(locale === "en" ? ", " : "、");
     return `${target}: ${addresses} · ${scope.transport.toUpperCase()} ${ports} · ${text(reportStageCopy(scope.stage))} · ${text(testedStatusCopy(scope.outcome))}`;
@@ -1435,9 +1502,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
     ? text(localhostSummary.exclusions)
     : excludedGaps.length > 0
       ? `${text(copy.recordedExclusions)}: ${excludedGaps.map((gap) => {
-          const targets = gap.targetAssetIds
-            .map((assetId) => targetLabelById.get(assetId) ?? assetId)
-            .join(locale === "en" ? ", " : "、");
+          const targets = requestedTargetListLabel(gap.targetAssetIds, targetById, locale);
           return `${targets ? `${targets} · ` : ""}${localizedCoverageDimension(gap.dimension, locale)} · ${coverageGapProse(locale, gap.reason)}`;
         }).join(inlineSeparator)}`
       : report.coverageCounts.excluded > 0
@@ -1559,10 +1624,8 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
             <ul className="detail-list">
               {report.requested.targets.map((target) => (
                 <li key={target.assetId}>
-                  <strong>{target.label ?? target.assetId}</strong>
+                  <strong>{requestedTargetLabel(target, locale)}</strong>
                   {target.assetKind && <span>{localizedAssetKind(target.assetKind, locale)}</span>}
-                  {target.labelAvailability === "current_case_fallback" && <small>{text(copy.currentFallback)}</small>}
-                  {target.labelAvailability === "unavailable" && <small>{text(copy.unavailableProvenance)}</small>}
                 </li>
               ))}
             </ul>
@@ -1637,7 +1700,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
               <ul className="detail-list">
                 {testedNetworkScopes.map((scope) => (
                   <li key={`${scope.taskId}-${scope.workUnitId}`}>
-                    <strong>{targetLabelById.get(scope.targetAssetId) ?? scope.target}</strong>
+                    <strong>{networkScopeTargetLabel(scope, targetById, locale)}</strong>
                     <span>{scope.target}</span>
                     <span>{text(copy.networkAddresses)}: {scope.addressRanges.join(locale === "en" ? ", " : "、")}</span>
                     <span>{text(copy.networkPorts)}: {scope.transport.toUpperCase()} {scope.portRanges.join(locale === "en" ? ", " : "、")}</span>
@@ -1655,9 +1718,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
           {coverageLossGaps.length > 0 ? (
             <ul className="detail-list">
               {coverageLossGaps.map((gap, index) => {
-                const targets = gap.targetAssetIds
-                  .map((assetId) => targetLabelById.get(assetId) ?? assetId)
-                  .join(locale === "en" ? ", " : "、");
+                const targets = requestedTargetListLabel(gap.targetAssetIds, targetById, locale);
                 // The dimension is "{engine}: results for {provider} {id}", so
                 // the engine name is what precedes the first colon.
                 const unattributedText = gap.unattributed
@@ -1698,7 +1759,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
               <ul className="detail-list">
                 {untestedNetworkScopes.map((scope) => (
                   <li key={`${scope.taskId}-${scope.workUnitId}`}>
-                    <strong>{targetLabelById.get(scope.targetAssetId) ?? scope.target}</strong>
+                    <strong>{networkScopeTargetLabel(scope, targetById, locale)}</strong>
                     <span>{scope.target}</span>
                     <span>{text(copy.networkAddresses)}: {scope.addressRanges.join(locale === "en" ? ", " : "、")}</span>
                     <span>{text(copy.networkPorts)}: {scope.transport.toUpperCase()} {scope.portRanges.join(locale === "en" ? ", " : "、")}</span>
@@ -1715,9 +1776,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
             <h3>{text(copy.recordNotes)}</h3>
             <ul className="detail-list">
               {recordNotes.map((gap, index) => {
-                const targets = gap.targetAssetIds
-                  .map((assetId) => targetLabelById.get(assetId) ?? assetId)
-                  .join(locale === "en" ? ", " : "、");
+                const targets = requestedTargetListLabel(gap.targetAssetIds, targetById, locale);
                 const unattributedText = gap.unattributed
                   ? findingUnattributedGap(
                       locale,
@@ -1981,11 +2040,8 @@ export function FindingsPage({
     .sort((left, right) => right.decidedAt.localeCompare(left.decidedAt));
   const topFindings = ordered.filter((finding) => finding.workflowState !== "verified_resolved" && finding.workflowState !== "false_positive").slice(0, 3);
   const affectedAssetSummaries = useMemo(() => {
-    const targetLabels = new Map(
-      (report?.requested.targets ?? []).map((target) => [
-        target.assetId,
-        target.label ?? target.assetId,
-      ]),
+    const targetById = new Map(
+      (report?.requested.targets ?? []).map((target) => [target.assetId, target]),
     );
     const summaries = new Map<string, {
       assetId: string;
@@ -2007,10 +2063,16 @@ export function FindingsPage({
           }
           continue;
         }
+        // A finding carries its own resolved asset name. That was never the
+        // internal-ID defect, so it stays ahead of the qualified ID fallback.
+        const requestedTarget = targetById.get(assetId);
         summaries.set(assetId, {
           assetId,
-          label: targetLabels.get(assetId)
-            ?? (assetIds.length === 1 ? finding.assetName : assetId),
+          label: requestedTarget?.label
+            ? requestedTargetLabel(requestedTarget, locale)
+            : assetIds.length === 1 && finding.assetName
+              ? finding.assetName
+              : requestedTargetLabelById(assetId, targetById, locale),
           findingCount: 1,
           highestSeverity: finding.severity,
           topFindingId: finding.id,
@@ -2022,7 +2084,7 @@ export function FindingsPage({
       severityOrder.indexOf(left.highestSeverity) - severityOrder.indexOf(right.highestSeverity)
       || right.findingCount - left.findingCount
       || left.label.localeCompare(right.label, collationLocale));
-  }, [collationLocale, ordered, report?.requested.targets]);
+  }, [collationLocale, locale, ordered, report?.requested.targets]);
   const locationsFor = (finding: Finding): string[] => [
     ...new Set(finding.evidence
       .map((evidence) => evidence.location?.trim())
@@ -2134,8 +2196,8 @@ export function FindingsPage({
     finding.assetIds?.length ? finding.assetIds : [finding.assetId])).size;
   const representativeObservations = observations.slice(0, 3);
   const typedInventory = report?.inventory;
-  const inventoryTargetLabels = new Map(
-    report?.requested.targets.map((target) => [target.assetId, target.label ?? target.assetId]) ?? [],
+  const inventoryTargetById = new Map(
+    report?.requested.targets.map((target) => [target.assetId, target]) ?? [],
   );
   const inventoryItemPresentation = (item: BeginnerInventoryItem) => {
     if (item.kind === "service") {
@@ -2188,7 +2250,7 @@ export function FindingsPage({
         <div>
           <strong>{presentation.title}</strong>
           <span>{[
-            inventoryTargetLabels.get(item.assetId) ?? item.assetId,
+            requestedTargetLabelById(item.assetId, inventoryTargetById, locale),
             presentation.detail,
           ].filter(Boolean).join(" · ")}</span>
         </div>
@@ -2232,7 +2294,7 @@ export function FindingsPage({
         {typedInventory.byAsset.map((asset) => (
           <section className="section-block" key={asset.assetId}>
             <div className="section-heading">
-              <h3>{inventoryTargetLabels.get(asset.assetId) ?? asset.assetId}</h3>
+              <h3>{requestedTargetLabelById(asset.assetId, inventoryTargetById, locale)}</h3>
               <p>{text(copy.inventoryAssetSummary, { count: formatNumber(asset.total) })}</p>
             </div>
             <div className="evidence-list">

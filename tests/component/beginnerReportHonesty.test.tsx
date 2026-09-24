@@ -1810,6 +1810,218 @@ test.each([
   },
 );
 
+const reportWithQualifiedTargetSurfaces = (
+  labelAvailability: "current_case_fallback" | "unavailable" | "recorded",
+  label?: string,
+): BeginnerMasterReport => {
+  const base = report("partial");
+  const assetId = "asset-internal-1";
+  return report("partial", {
+    requested: {
+      ...base.requested,
+      targets: [{
+        assetId,
+        label,
+        assetKind: "host",
+        labelAvailability,
+        assetKindAvailability: "recorded",
+      }],
+    },
+    actual: {
+      checks: [{
+        taskId: "task-tested",
+        checkId: "greenbone",
+        resultKind: "security_check",
+        targetAssetIds: [assetId],
+        status: "tested_complete",
+        testedDimensions: [],
+      }],
+      networkScopes: [{
+        taskId: "task-tested",
+        checkId: "greenbone",
+        workUnitId: "scope-tested",
+        targetAssetId: assetId,
+        target: "10.0.0.10",
+        addressRanges: ["10.0.0.10"],
+        portRanges: ["443"],
+        transport: "tcp",
+        stage: "deep",
+        outcome: "tested_complete",
+      }, {
+        taskId: "task-untested",
+        checkId: "greenbone",
+        workUnitId: "scope-untested",
+        targetAssetId: assetId,
+        target: "10.0.0.10",
+        addressRanges: ["10.0.0.10"],
+        portRanges: ["8443"],
+        transport: "tcp",
+        stage: "deep",
+        outcome: "not_tested",
+      }],
+      unavailableDimensions: [],
+    },
+    coverageGaps: [{
+      kind: "excluded",
+      class: "coverage_loss",
+      targetAssetIds: [assetId],
+      dimension: "authenticated checks",
+      reason: "Authentication was outside the selected scope.",
+      nextActionCode: "no_action_unless_scope_changes",
+      nextAction: "Keep this limit visible.",
+    }, {
+      kind: "unavailable",
+      class: "record_note",
+      targetAssetIds: [assetId],
+      dimension: "saved target detail",
+      reason: "Some saved target detail was not retained.",
+      nextActionCode: "preserve_visible_limitation",
+      nextAction: "Keep this record note visible.",
+    }],
+    coverageCounts: counts({ testedComplete: 1, excluded: 1 }),
+    findings: [frozenFinding({ targetAssetIds: [assetId] })],
+  });
+};
+
+test.each([
+  ["current_case_fallback", "from the current project; not retained by this run"],
+  ["unavailable", "Historical detail unavailable"],
+] as const)(
+  "every beginner-report target surface qualifies an absent %s label",
+  (labelAvailability, qualifier) => {
+    const assetId = "asset-internal-1";
+    const qualified = `${assetId} (${qualifier})`;
+    const { container } = renderReport(reportWithQualifiedTargetSurfaces(labelAvailability));
+
+    expect(container.querySelector(".asset-result-row__identity strong")?.textContent).toBe(qualified);
+    expect(outcomeStripCell(container, "What you asked to scan").querySelector("dd")?.textContent)
+      .toBe(qualified);
+    expect(container.querySelector(".report-first-layer-scope")?.textContent).toContain(qualified);
+    expect(coverageCard(container, "What you asked to scan").querySelector("strong")?.textContent)
+      .toBe(qualified);
+
+    // A network scope carries the grant's own canonical target text, so those
+    // two rows name the address instead of falling back to the internal ID.
+    const testedScope = coverageCard(container, "What was actually tested")
+      .querySelector(":scope > details .detail-list strong");
+    expect(testedScope?.textContent).toBe("10.0.0.10");
+    const gapTargets = Array.from(
+      coverageCard(container, "What was not tested").querySelectorAll(".detail-list strong"),
+      (node) => node.textContent,
+    );
+    expect(gapTargets).toEqual([qualified, "10.0.0.10"]);
+    expect(coverageCard(container, "Record notes").querySelector("strong")?.textContent)
+      .toBe(qualified);
+
+    expect(container.querySelector(".priority-card__target")?.textContent).toContain(qualified);
+    expect(container.querySelector(".affected-asset-row__identity strong")?.textContent)
+      .toBe(qualified);
+  },
+);
+
+test("a joined coverage-gap target list states one shared qualifier once", () => {
+  const base = report("partial");
+  const assetIds = ["asset-internal-a", "asset-internal-b", "asset-internal-c"];
+  const { container } = renderReport(report("partial", {
+    requested: {
+      ...base.requested,
+      targets: assetIds.map((assetId) => ({
+        assetId,
+        assetKind: "host" as const,
+        labelAvailability: "unavailable" as const,
+        assetKindAvailability: "recorded" as const,
+      })),
+    },
+    coverageGaps: [{
+      kind: "not_tested",
+      targetAssetIds: assetIds,
+      dimension: "vulnerability checks",
+      reason: "The checks did not run.",
+      nextActionCode: "retry_check",
+      nextAction: "Retry this check.",
+    }],
+    coverageCounts: counts({ notTested: 1 }),
+  }));
+
+  const renderedTargets = coverageCard(container, "What was not tested")
+    .querySelector(".detail-list strong")?.textContent;
+  expect(renderedTargets).toBe(
+    "asset-internal-a, asset-internal-b, asset-internal-c (Historical detail unavailable)",
+  );
+  expect(renderedTargets?.match(/Historical detail unavailable/gu)).toHaveLength(1);
+});
+
+test("a coverage-gap asset absent from the requested targets is qualified as unavailable", () => {
+  const missingAssetId = "asset-not-in-request";
+  const { container } = renderReport(report("partial", {
+    coverageGaps: [{
+      kind: "not_tested",
+      targetAssetIds: [missingAssetId],
+      dimension: "vulnerability checks",
+      reason: "The checks did not run.",
+      nextActionCode: "retry_check",
+      nextAction: "Retry this check.",
+    }],
+    coverageCounts: counts({ notTested: 1 }),
+  }));
+
+  expect(coverageCard(container, "What was not tested")
+    .querySelector(".detail-list strong")?.textContent).toBe(
+    `${missingAssetId} (Historical detail unavailable)`,
+  );
+});
+
+test("a frozen shared finding keeps every distinct unlabelled asset ID", () => {
+  const base = report("partial");
+  const requestedAssetIds = ["asset-frozen-a", "asset-frozen-b"];
+  const missingAssetId = "asset-frozen-not-requested";
+  const { container } = renderReport(report("partial", {
+    requested: {
+      ...base.requested,
+      targets: requestedAssetIds.map((assetId) => ({
+        assetId,
+        assetKind: "host" as const,
+        labelAvailability: "unavailable" as const,
+        assetKindAvailability: "recorded" as const,
+      })),
+    },
+    findings: [frozenFinding({
+      targetAssetIds: [...requestedAssetIds, missingAssetId],
+    })],
+  }));
+
+  const affectedTarget = container.querySelector(".priority-card__target")?.textContent ?? "";
+  expect(affectedTarget).toContain(
+    "asset-frozen-a, asset-frozen-b, asset-frozen-not-requested (Historical detail unavailable)",
+  );
+  for (const assetId of [...requestedAssetIds, missingAssetId]) {
+    expect(affectedTarget).toContain(assetId);
+  }
+  expect(affectedTarget.match(/Historical detail unavailable/gu)).toHaveLength(1);
+});
+
+test("a network scope keeps its recorded address when the display label was not retained", () => {
+  const { container } = renderReport(reportWithQualifiedTargetSurfaces("unavailable"));
+  const scopeRows = Array.from(
+    container.querySelectorAll(".detail-list strong"),
+    (node) => node.textContent,
+  );
+  expect(scopeRows).toContain("10.0.0.10");
+  expect(scopeRows).not.toContain("asset-internal-1 (Historical detail unavailable): 10.0.0.10");
+  // The address is recorded in this report, so no row may call it unavailable.
+  expect(container.querySelector(".coverage-card")?.textContent)
+    .not.toContain("10.0.0.10 (Historical detail unavailable)");
+});
+
+test("a fully labelled report renders no target provenance qualifier", () => {
+  const { container } = renderReport(
+    reportWithQualifiedTargetSurfaces("recorded", "internal.example"),
+  );
+
+  expect(container.textContent).not.toContain("from the current project; not retained by this run");
+  expect(container.textContent).not.toContain("Historical detail unavailable");
+});
+
 test("completed checks with only record notes report zero coverage gaps and keep the explanations", () => {
   const englishReasons = [
     "Recorded stage selection: unavailable. Current project settings: excluded from this historical record.",

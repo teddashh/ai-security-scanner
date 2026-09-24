@@ -91,6 +91,17 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
+test("an affected asset with no beginner report keeps the finding's own asset name", () => {
+  const { container } = renderPage(false);
+  // With no report there are no requested targets to match, but the finding
+  // still carries a resolved name. Showing the internal ID here would replace
+  // a real name with bookkeeping.
+  expect(container.querySelector(".affected-asset-row__identity strong")?.textContent)
+    .toBe("Sample server");
+  expect(container.textContent).not.toContain("asset-1 (");
+  expect(container.textContent).not.toContain("Historical detail unavailable");
+});
+
 test("canonical findings render when no beginner report is required", () => {
   const { container } = renderPage(false);
   expect(container.querySelectorAll(".finding-row")).toHaveLength(1);
