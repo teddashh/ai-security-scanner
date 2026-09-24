@@ -1621,6 +1621,8 @@
       "-Xmx1200m",
       "-cmd",
       "-silent",
+      "-dir",
+      "/tmp/zaphome",
       "-autorun",
       "/run/ai-security-scanner/zap-plan.yaml"
     ],
