@@ -813,6 +813,7 @@ fn reconcile_exact_runtime_cleanup(
             AppError::NotAuthorized("cleanup checkpoint has no frozen scope digest".into())
         })?,
         launcher_plan_sha256: checkpoint.launcher_plan_sha256.clone(),
+        zap_plan_sha256: None,
         image,
     };
     if let Some(container_name) = checkpoint.container_name.as_deref()
@@ -5689,6 +5690,7 @@ fn cleanup_resume_container(
             AppError::NotAuthorized("resume cleanup checkpoint has no frozen scope digest".into())
         })?,
         launcher_plan_sha256: checkpoint.launcher_plan_sha256.clone(),
+        zap_plan_sha256: None,
         image: PinnedImage::from_manifest(&execution.manifest)?,
     };
     if ownership.container_name()? != persisted_container_name {

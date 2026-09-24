@@ -6,6 +6,7 @@ use crate::domain::{
 use crate::error::{AppError, AppResult};
 use crate::execution_coverage::LAUNCHER_V2_JOURNAL_SCHEMA_VERSION;
 use crate::naabu_work_plan::{MAX_NAABU_LAUNCHER_PLAN_BYTES, NAABU_ENGINE_ID};
+use crate::zap_work_plan::{MAX_ZAP_PLAN_BYTES, ZAP_ENGINE_ID};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -27,6 +28,8 @@ const CONTAINER_SCOPE_PATH: &str = "/run/ai-security-scanner/scope.json";
 pub(crate) const NAABU_LAUNCHER_PLAN_CONTROL_FILE: &str = "execution-journal-v2.json";
 pub(crate) const CONTAINER_NAABU_LAUNCHER_PLAN_PATH: &str =
     "/run/ai-security-scanner/execution-journal-v2.json";
+pub(crate) const ZAP_PLAN_CONTROL_FILE: &str = "zap-plan.yaml";
+pub(crate) const CONTAINER_ZAP_PLAN_PATH: &str = "/run/ai-security-scanner/zap-plan.yaml";
 const CONTAINER_CREDENTIAL_PATH: &str = "/run/ai-security-scanner/credentials.json";
 /// Also read by `adapters::redact_location`, which strips this prefix back off
 /// engine-reported paths. Sharing the constant is what keeps a finding from
@@ -85,6 +88,7 @@ const CONTAINER_ATTEMPT_LABEL_KEY: &str = "ai.security-scanner.attempt";
 const CONTAINER_SCOPE_LABEL_KEY: &str = "ai.security-scanner.scope-sha256";
 const CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY: &str =
     "ai.security-scanner.naabu-launcher-plan-sha256";
+const CONTAINER_ZAP_PLAN_LABEL_KEY: &str = "ai.security-scanner.zap-plan-sha256";
 const NAABU_LAUNCHER_COMMAND: [&str; 10] = [
     "--engine",
     "naabu",
@@ -1092,6 +1096,8 @@ pub struct ContainerRunPlan {
     scope_sha256: String,
     launcher_plan_file: Option<PathBuf>,
     launcher_plan_sha256: Option<String>,
+    zap_plan_file: Option<PathBuf>,
+    zap_plan_sha256: Option<String>,
     credential_control_dir: PathBuf,
     network_policy: NetworkPolicy,
     output_bytes: u64,
@@ -1140,6 +1146,14 @@ impl ContainerRunPlan {
         self.launcher_plan_sha256.as_deref()
     }
 
+    pub fn zap_plan_file(&self) -> Option<&Path> {
+        self.zap_plan_file.as_deref()
+    }
+
+    pub fn zap_plan_sha256(&self) -> Option<&str> {
+        self.zap_plan_sha256.as_deref()
+    }
+
     fn credential_control_dir(&self) -> &Path {
         &self.credential_control_dir
     }
@@ -1167,6 +1181,7 @@ pub struct ContainerPlanBuilder<'a> {
     directories: &'a RunDirectories,
     scope_file: &'a Path,
     launcher_plan_file: Option<&'a Path>,
+    zap_plan_file: Option<&'a Path>,
     limits: &'a ResourceLimits,
     network_policy: &'a NetworkPolicy,
     credential_set: &'a ScannerCredentialSet,
@@ -1197,6 +1212,7 @@ impl<'a> ContainerPlanBuilder<'a> {
             directories,
             scope_file,
             launcher_plan_file: None,
+            zap_plan_file: None,
             limits,
             network_policy,
             credential_set,
@@ -1212,6 +1228,14 @@ impl<'a> ContainerPlanBuilder<'a> {
     /// product-owned fixed control-file location.
     pub fn with_launcher_plan_file(mut self, launcher_plan_file: Option<&'a Path>) -> Self {
         self.launcher_plan_file = launcher_plan_file;
+        self
+    }
+
+    /// Adds the generated ZAP Automation Framework plan. The builder accepts this
+    /// only for the reviewed ZAP manifest and only at the product-owned fixed
+    /// control-file location.
+    pub fn with_zap_plan_file(mut self, zap_plan_file: Option<&'a Path>) -> Self {
+        self.zap_plan_file = zap_plan_file;
         self
     }
 
@@ -1240,6 +1264,7 @@ impl<'a> ContainerPlanBuilder<'a> {
             self.manifest,
             self.launcher_plan_file.is_some(),
         )?;
+        validate_zap_plan_manifest_contract(self.manifest, self.zap_plan_file.is_some())?;
         let manifest_requires_network = self.manifest.active_external
             || !self.manifest.network_destinations.is_empty()
             || self.manifest.required_permissions.iter().any(|permission| {
@@ -1286,6 +1311,25 @@ impl<'a> ContainerPlanBuilder<'a> {
                     &canonical,
                     MAX_NAABU_LAUNCHER_PLAN_BYTES as u64,
                     "Naabu launcher plan",
+                )?;
+                (Some(canonical), Some(digest))
+            }
+            None => (None, None),
+        };
+        let (zap_plan_file, zap_plan_sha256) = match self.zap_plan_file {
+            Some(path) => {
+                validate_mount_file(path, "ZAP automation plan")?;
+                let canonical = canonical_mount_path(path, "ZAP automation plan")?;
+                let expected = credential_control_dir.join(ZAP_PLAN_CONTROL_FILE);
+                if canonical != expected {
+                    return Err(AppError::NotAuthorized(
+                        "ZAP automation plan must use the fixed product-owned control path".into(),
+                    ));
+                }
+                let digest = hash_bounded_control_file(
+                    &canonical,
+                    MAX_ZAP_PLAN_BYTES as u64,
+                    "ZAP automation plan",
                 )?;
                 (Some(canonical), Some(digest))
             }
@@ -1344,6 +1388,12 @@ impl<'a> ContainerPlanBuilder<'a> {
                 format!("{CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY}={digest}"),
             ]);
         }
+        if let Some(digest) = zap_plan_sha256.as_ref() {
+            runtime_args.extend([
+                "--label".into(),
+                format!("{CONTAINER_ZAP_PLAN_LABEL_KEY}={digest}"),
+            ]);
+        }
 
         match self.network_policy {
             NetworkPolicy::Disabled => {
@@ -1386,6 +1436,12 @@ impl<'a> ContainerPlanBuilder<'a> {
                 bind_mount(path, CONTAINER_NAABU_LAUNCHER_PLAN_PATH, true)?,
             ]);
         }
+        if let Some(path) = &zap_plan_file {
+            runtime_args.extend([
+                "--mount".into(),
+                bind_mount(path, CONTAINER_ZAP_PLAN_PATH, true)?,
+            ]);
+        }
 
         runtime_args.push(self.image.reference());
         runtime_args.extend(self.manifest.command.iter().cloned());
@@ -1402,6 +1458,8 @@ impl<'a> ContainerPlanBuilder<'a> {
             scope_sha256: scope_sha256.clone(),
             launcher_plan_file,
             launcher_plan_sha256: launcher_plan_sha256.clone(),
+            zap_plan_file,
+            zap_plan_sha256: zap_plan_sha256.clone(),
             credential_control_dir,
             network_policy: self.network_policy.clone(),
             output_bytes: self.limits.output_bytes,
@@ -1414,6 +1472,7 @@ impl<'a> ContainerPlanBuilder<'a> {
                 attempt: self.attempt,
                 scope_sha256,
                 launcher_plan_sha256: launcher_plan_sha256.clone(),
+                zap_plan_sha256: zap_plan_sha256.clone(),
                 image: self.image.clone(),
             },
         })
@@ -1475,6 +1534,10 @@ pub struct OwnedContainerCleanupRequest {
     /// Exact digest of the private versioned launcher work plan. Legacy executions
     /// have no such document or ownership label and therefore retain `None`.
     pub launcher_plan_sha256: Option<String>,
+    /// Exact digest of the generated ZAP Automation Framework plan. Executions
+    /// without that plan have no such document or ownership label and therefore
+    /// retain `None`.
+    pub zap_plan_sha256: Option<String>,
     pub image: PinnedImage,
 }
 
@@ -1515,6 +1578,19 @@ impl OwnedContainerCleanupRequest {
                 ));
             }
         }
+        if let Some(digest) = self.zap_plan_sha256.as_deref() {
+            if self.engine_id != ZAP_ENGINE_ID {
+                return Err(AppError::InvalidRequest(
+                    "a ZAP automation plan digest is valid only for owned ZAP container cleanup"
+                        .into(),
+                ));
+            }
+            if !is_lowercase_sha256(digest) {
+                return Err(AppError::InvalidRequest(
+                    "ZAP automation plan digest is invalid for owned container cleanup".into(),
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -1533,6 +1609,9 @@ impl OwnedContainerCleanupRequest {
         ]);
         if let Some(digest) = self.launcher_plan_sha256.as_ref() {
             labels.insert(CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY, digest.clone());
+        }
+        if let Some(digest) = self.zap_plan_sha256.as_ref() {
+            labels.insert(CONTAINER_ZAP_PLAN_LABEL_KEY, digest.clone());
         }
         labels
     }
@@ -1893,6 +1972,16 @@ fn prove_owned_container(
     {
         return Err(AppError::NotAuthorized(format!(
             "container ownership label {CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY} was not present in the persisted execution"
+        )));
+    }
+    if request.zap_plan_sha256.is_none()
+        && inspected
+            .config
+            .labels
+            .contains_key(CONTAINER_ZAP_PLAN_LABEL_KEY)
+    {
+        return Err(AppError::NotAuthorized(format!(
+            "container ownership label {CONTAINER_ZAP_PLAN_LABEL_KEY} was not present in the persisted execution"
         )));
     }
     let image_matches = inspected
@@ -3693,6 +3782,56 @@ fn validate_naabu_launcher_manifest_contract(
     Ok(())
 }
 
+/// The pinned ZAP command names its automation plan by absolute path. A manifest
+/// that names that path without a mounted plan would start the engine against an
+/// empty file, and a plan mounted for any other engine would be an unreviewed file
+/// inside a scanner container. Both are refused here rather than at runtime.
+fn validate_zap_plan_manifest_contract(
+    manifest: &EngineManifest,
+    has_zap_plan: bool,
+) -> AppResult<()> {
+    let names_plan = manifest
+        .command
+        .iter()
+        .any(|part| part == CONTAINER_ZAP_PLAN_PATH);
+    if names_plan && manifest.id != ZAP_ENGINE_ID {
+        return Err(AppError::EngineRegistry(
+            "the ZAP automation plan path is reserved for the reviewed ZAP contract".into(),
+        ));
+    }
+    if has_zap_plan && manifest.id != ZAP_ENGINE_ID {
+        return Err(AppError::EngineRegistry(
+            "the ZAP automation plan is supported only by the reviewed ZAP contract".into(),
+        ));
+    }
+    if has_zap_plan && !names_plan {
+        return Err(AppError::EngineRegistry(
+            "the ZAP manifest must invoke its automation plan at the product-owned path".into(),
+        ));
+    }
+    if names_plan && !has_zap_plan {
+        return Err(AppError::InvalidRequest(
+            "the ZAP automation framework run requires its generated plan".into(),
+        ));
+    }
+    // ZAP reads the mounted file only when it is the argument of `-autorun`.
+    // Any other placement would start the engine without the plan it was given.
+    if names_plan
+        && !manifest.command.iter().enumerate().all(|(index, part)| {
+            part != CONTAINER_ZAP_PLAN_PATH
+                || index
+                    .checked_sub(1)
+                    .and_then(|previous| manifest.command.get(previous))
+                    .is_some_and(|flag| flag == "-autorun")
+        })
+    {
+        return Err(AppError::EngineRegistry(
+            "the ZAP manifest must invoke its automation plan with -autorun".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_mount_directory(path: &Path, label: &str) -> AppResult<()> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         AppError::Runtime(format!(
@@ -5389,6 +5528,16 @@ esac
         });
     }
 
+    fn enable_zap_automation_plan(manifest: &mut EngineManifest) {
+        manifest.id = ZAP_ENGINE_ID.into();
+        manifest.command = vec![
+            "-cmd".into(),
+            "-silent".into(),
+            "-autorun".into(),
+            CONTAINER_ZAP_PLAN_PATH.into(),
+        ];
+    }
+
     fn owned_cleanup_request(scope: &Path, image: &PinnedImage) -> OwnedContainerCleanupRequest {
         OwnedContainerCleanupRequest {
             case_id: "case-1".into(),
@@ -5398,6 +5547,7 @@ esac
             attempt: 1,
             scope_sha256: hash_control_file(scope).expect("scope digest"),
             launcher_plan_sha256: None,
+            zap_plan_sha256: None,
             image: image.clone(),
         }
     }
@@ -5859,6 +6009,28 @@ esac\n",
     }
 
     #[test]
+    fn cleanup_refuses_an_unexpected_zap_plan_label() {
+        let (_temp, _store, _directories, scope, _manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let request = owned_cleanup_request(&scope, &image);
+        let mut labels = request.expected_labels();
+        labels.insert(CONTAINER_ZAP_PLAN_LABEL_KEY, "e".repeat(64));
+        let document = serde_json::to_vec(&serde_json::json!([{
+            "Id": "b".repeat(64),
+            "Name": request.container_name().expect("name"),
+            "Config": {
+                "Image": request.image.reference(),
+                "Labels": labels,
+            }
+        }]))
+        .expect("inspect document");
+
+        let error = prove_owned_container(&document, &request)
+            .expect_err("unexpected ZAP plan ownership label rejected");
+        assert!(error.to_string().contains(CONTAINER_ZAP_PLAN_LABEL_KEY));
+    }
+
+    #[test]
     fn launcher_cleanup_digest_must_be_lowercase_sha256() {
         let (_temp, _store, _directories, scope, _manifest, image) =
             plan_fixture(vec!["scanner".into()]);
@@ -5883,6 +6055,36 @@ esac\n",
             .container_name()
             .expect_err("non-Naabu launcher digest rejected");
         assert!(error.to_string().contains("only for owned Naabu"));
+    }
+
+    #[test]
+    fn zap_plan_cleanup_digest_requires_the_zap_engine() {
+        let (_temp, _store, _directories, scope, _manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let mut request = owned_cleanup_request(&scope, &image);
+        let digest = "a".repeat(64);
+        request.zap_plan_sha256 = Some(digest.clone());
+
+        let error = request
+            .container_name()
+            .expect_err("non-ZAP plan digest rejected");
+        assert!(error.to_string().contains("only for owned ZAP"));
+
+        request.engine_id = ZAP_ENGINE_ID.into();
+        request.zap_plan_sha256 = Some("A".repeat(64));
+        let error = request
+            .container_name()
+            .expect_err("uppercase ZAP plan digest rejected");
+        assert!(error.to_string().contains("ZAP automation plan digest"));
+
+        request.zap_plan_sha256 = Some(digest.clone());
+        request
+            .validate()
+            .expect("ZAP plan digest is valid for owned ZAP cleanup");
+        assert_eq!(
+            request.expected_labels().get(CONTAINER_ZAP_PLAN_LABEL_KEY),
+            Some(&digest)
+        );
     }
 
     #[test]
@@ -6471,6 +6673,308 @@ esac\n",
                 .to_string()
                 .contains("changed after the immutable run plan")
         );
+    }
+
+    #[test]
+    fn zap_plan_has_one_exact_read_only_control_mount() {
+        let (_temp, store, directories, scope, mut manifest, _) =
+            plan_fixture(vec!["scanner".into()]);
+        enable_zap_automation_plan(&mut manifest);
+        let image = PinnedImage::from_manifest(&manifest).expect("ZAP image");
+        let zap_plan = store
+            .write_control_json(
+                &directories,
+                ZAP_PLAN_CONTROL_FILE,
+                &serde_json::json!({"jobs": []}),
+            )
+            .expect("zap plan");
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .with_zap_plan_file(Some(&zap_plan.path))
+        .build()
+        .expect("zap run plan");
+
+        let canonical = fs::canonicalize(&zap_plan.path).expect("canonical plan");
+        assert_eq!(plan.zap_plan_file(), Some(canonical.as_path()));
+        let expected_digest =
+            hash_bounded_control_file(&canonical, MAX_ZAP_PLAN_BYTES as u64, "ZAP automation plan")
+                .expect("zap plan digest");
+        assert_eq!(plan.zap_plan_sha256(), Some(expected_digest.as_str()));
+        assert_eq!(
+            plan.ownership().zap_plan_sha256.as_deref(),
+            Some(expected_digest.as_str())
+        );
+        assert_eq!(
+            plan.ownership()
+                .expected_labels()
+                .get(CONTAINER_ZAP_PLAN_LABEL_KEY),
+            Some(&expected_digest)
+        );
+        let expected_label = format!("{CONTAINER_ZAP_PLAN_LABEL_KEY}={expected_digest}");
+        assert_eq!(
+            plan.runtime_args
+                .windows(2)
+                .filter_map(|arguments| {
+                    (arguments[0] == "--label"
+                        && arguments[1].starts_with(CONTAINER_ZAP_PLAN_LABEL_KEY))
+                    .then_some(arguments[1].as_str())
+                })
+                .collect::<Vec<_>>(),
+            [expected_label.as_str()]
+        );
+        let expected_mount = bind_mount(&canonical, CONTAINER_ZAP_PLAN_PATH, true).expect("mount");
+        assert_eq!(
+            plan.runtime_args
+                .windows(2)
+                .filter_map(|arguments| {
+                    (arguments[0] == "--mount" && arguments[1].contains(CONTAINER_ZAP_PLAN_PATH))
+                        .then_some(arguments[1].as_str())
+                })
+                .collect::<Vec<_>>(),
+            [expected_mount.as_str()]
+        );
+        let image_index = plan
+            .runtime_args
+            .iter()
+            .position(|argument| argument == &image.reference())
+            .expect("image argument");
+        assert_eq!(plan.runtime_args[image_index + 1..], manifest.command);
+        validate_run_plan_integrity(&plan).expect("immutable zap plan");
+    }
+
+    #[test]
+    fn zap_plan_must_use_the_fixed_control_path() {
+        let (_temp, store, directories, scope, mut manifest, _) =
+            plan_fixture(vec!["scanner".into()]);
+        enable_zap_automation_plan(&mut manifest);
+        let image = PinnedImage::from_manifest(&manifest).expect("ZAP image");
+        let other_plan = store
+            .write_control_json(
+                &directories,
+                "other-plan.yaml",
+                &serde_json::json!({"jobs": []}),
+            )
+            .expect("misplaced zap plan");
+        let error = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .with_zap_plan_file(Some(&other_plan.path))
+        .build()
+        .expect_err("zap plan outside the fixed control path rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("fixed product-owned control path")
+        );
+    }
+
+    #[test]
+    fn zap_manifest_that_names_the_plan_requires_the_generated_file() {
+        let (_temp, _store, directories, scope, mut manifest, _) =
+            plan_fixture(vec!["scanner".into()]);
+        enable_zap_automation_plan(&mut manifest);
+        let image = PinnedImage::from_manifest(&manifest).expect("ZAP image");
+        let error = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect_err("named zap plan path requires the generated file");
+        assert!(error.to_string().contains("requires its generated plan"));
+    }
+
+    #[test]
+    fn zap_plan_file_is_rejected_for_a_non_zap_manifest() {
+        let (_temp, store, directories, scope, manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let zap_plan = store
+            .write_control_json(
+                &directories,
+                ZAP_PLAN_CONTROL_FILE,
+                &serde_json::json!({"jobs": []}),
+            )
+            .expect("zap plan");
+        let error = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .with_zap_plan_file(Some(&zap_plan.path))
+        .build()
+        .expect_err("non-ZAP engine cannot receive a zap plan");
+        assert!(
+            error
+                .to_string()
+                .contains("supported only by the reviewed ZAP contract")
+        );
+    }
+
+    #[test]
+    fn zap_plan_path_is_reserved_for_the_zap_manifest() {
+        let (_temp, _store, directories, scope, manifest, image) =
+            plan_fixture(vec!["-autorun".into(), CONTAINER_ZAP_PLAN_PATH.into()]);
+        let error = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect_err("non-ZAP command cannot name the zap plan path");
+        assert!(
+            error
+                .to_string()
+                .contains("reserved for the reviewed ZAP contract")
+        );
+    }
+
+    #[test]
+    fn zap_plan_must_be_invoked_at_the_product_owned_path() {
+        let (_temp, store, directories, scope, mut manifest, _) =
+            plan_fixture(vec!["scanner".into()]);
+        manifest.id = ZAP_ENGINE_ID.into();
+        let image = PinnedImage::from_manifest(&manifest).expect("ZAP image");
+        let zap_plan = store
+            .write_control_json(
+                &directories,
+                ZAP_PLAN_CONTROL_FILE,
+                &serde_json::json!({"jobs": []}),
+            )
+            .expect("zap plan");
+        let error = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .with_zap_plan_file(Some(&zap_plan.path))
+        .build()
+        .expect_err("zap plan without the product-owned path rejected");
+        assert!(error.to_string().contains("product-owned path"));
+    }
+
+    #[test]
+    fn zap_plan_must_be_the_autorun_argument() {
+        let (_temp, store, directories, scope, mut manifest, _) =
+            plan_fixture(vec!["scanner".into()]);
+        manifest.id = ZAP_ENGINE_ID.into();
+        manifest.command = vec![
+            "-autorun".into(),
+            "-silent".into(),
+            CONTAINER_ZAP_PLAN_PATH.into(),
+        ];
+        let image = PinnedImage::from_manifest(&manifest).expect("ZAP image");
+        let zap_plan = store
+            .write_control_json(
+                &directories,
+                ZAP_PLAN_CONTROL_FILE,
+                &serde_json::json!({"jobs": []}),
+            )
+            .expect("zap plan");
+        let error = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .with_zap_plan_file(Some(&zap_plan.path))
+        .build()
+        .expect_err("zap plan path without an immediate -autorun rejected");
+        assert!(error.to_string().contains("with -autorun"));
+    }
+
+    #[test]
+    fn oversized_zap_plan_is_rejected() {
+        let (_temp, store, directories, scope, mut manifest, _) =
+            plan_fixture(vec!["scanner".into()]);
+        enable_zap_automation_plan(&mut manifest);
+        let image = PinnedImage::from_manifest(&manifest).expect("ZAP image");
+        let zap_plan = store
+            .write_control_json(
+                &directories,
+                ZAP_PLAN_CONTROL_FILE,
+                &"a".repeat(MAX_ZAP_PLAN_BYTES + 1),
+            )
+            .expect("oversized zap plan");
+        let error = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .with_zap_plan_file(Some(&zap_plan.path))
+        .build()
+        .expect_err("oversized zap plan rejected");
+        assert!(error.to_string().contains(&format!(
+            "ZAP automation plan exceeds the {} byte limit",
+            MAX_ZAP_PLAN_BYTES
+        )));
     }
 
     #[test]

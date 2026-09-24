@@ -18,6 +18,11 @@ use thiserror::Error;
 use url::Url;
 
 pub const ZAP_PASSIVE_PROFILE_ID: &str = "zap_passive_v1";
+pub const ZAP_ENGINE_ID: &str = "zap";
+/// The generated plan is a single context with four bounded jobs. The ceiling
+/// exists so a control file that grew for any other reason is rejected before
+/// it is hashed and mounted, not so the plan can approach it.
+pub const MAX_ZAP_PLAN_BYTES: usize = 64 * 1024;
 
 /// Conservative passive-crawl limits. These are validation ceilings, not
 /// defaults: every caller must supply an explicit non-zero value.

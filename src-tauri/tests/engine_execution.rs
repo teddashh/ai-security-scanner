@@ -24,3 +24,10 @@ mod naabu_work_plan;
 mod orchestrator;
 #[path = "../src/process_lease.rs"]
 mod process_lease;
+// Included so `container_runtime` can import the ZAP plan constants the same
+// way it imports the Naabu ones. The enum is public in the library, where
+// clippy skips `enum_variant_names` for exported items; this private copy is
+// not exported, so the same enum would fail the harness.
+#[allow(clippy::enum_variant_names)]
+#[path = "../src/zap_work_plan.rs"]
+mod zap_work_plan;

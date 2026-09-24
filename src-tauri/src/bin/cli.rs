@@ -2393,6 +2393,7 @@ async fn execute_runtime(
                     attempt: checkpoint.attempt,
                     scope_sha256,
                     launcher_plan_sha256: checkpoint.launcher_plan_sha256.clone(),
+                    zap_plan_sha256: None,
                     image,
                 };
                 if let Some(name) = container_name.as_deref()
