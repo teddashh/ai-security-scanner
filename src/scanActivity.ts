@@ -232,7 +232,7 @@ export const buildScanActivity = (
     activeCheckNames,
     lastProgressAt,
     progress: run.progress,
-    stale: active && staleMinutes >= 2,
+    stale: active && runningChecks.length === 0 && pausedChecks.length === 0 && staleMinutes >= 2,
     staleMinutes,
     events: events
       .filter((event): event is ScanActivityEvent => Boolean(event))

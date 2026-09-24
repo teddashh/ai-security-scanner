@@ -499,7 +499,6 @@ pub enum NextActionCode {
     StartNewScan,
     ReviewScopeAndRetry,
     ChooseCompatibleCheck,
-    WaitOrCancel,
     StartExpectedServiceAndRetry,
     ReviewCoverage,
     ReviewManualControl,

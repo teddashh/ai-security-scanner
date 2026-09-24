@@ -950,7 +950,6 @@ export type BeginnerNextActionCode =
   | "start_new_scan"
   | "review_scope_and_retry"
   | "choose_compatible_check"
-  | "wait_or_cancel"
   | "start_expected_service_and_retry"
   | "review_coverage"
   | "review_manual_control"

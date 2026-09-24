@@ -1298,7 +1298,6 @@ const assetNextActionControlCases = [
   ["retry_check", "progress"],
   ["start_new_scan", "progress"],
   ["review_scope_and_retry", "coverage"],
-  ["wait_or_cancel", "progress"],
   ["start_expected_service_and_retry", "progress"],
   ["choose_compatible_check", "coverage"],
   ["review_coverage", "coverage"],
@@ -1777,6 +1776,39 @@ const coverageCard = (container: HTMLElement, title: string): HTMLElement => {
   if (!card) throw new Error(`the coverage card titled "${title}" did not render`);
   return card;
 };
+
+test.each([
+  ["current_case_fallback", "from the current project; not retained by this run"],
+  ["unavailable", "Historical detail unavailable"],
+] as const)(
+  "the compact requested-target cell qualifies an absent %s label",
+  (labelAvailability, qualifier) => {
+    const base = report("complete");
+    const internalAssetId = "asset-internal-1";
+    const { container } = renderReport(report("complete", {
+      requested: {
+        ...base.requested,
+        targets: [{
+          assetId: internalAssetId,
+          assetKind: "domain",
+          labelAvailability,
+          assetKindAvailability: "recorded",
+        }, {
+          assetId: "asset-2",
+          label: "second.example",
+          assetKind: "domain",
+          labelAvailability: "recorded",
+          assetKindAvailability: "recorded",
+        }],
+      },
+    }));
+
+    const asked = outcomeStripCell(container, "What you asked to scan");
+    expect(asked.querySelector("dd")?.textContent).toBe(
+      `${internalAssetId} (${qualifier}) · +1 more`,
+    );
+  },
+);
 
 test("completed checks with only record notes report zero coverage gaps and keep the explanations", () => {
   const englishReasons = [

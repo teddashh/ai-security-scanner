@@ -48,12 +48,12 @@ const run = (overrides: Partial<ScanRun> = {}): ScanRun => ({
   ...overrides,
 });
 
-test("active scan activity explains the wait and reports the last durable progress", () => {
+test("a healthy long-running check keeps elapsed progress time without being called stale", () => {
   const activity = buildScanActivity(run(), new Date("2026-08-26T13:05:30Z"));
   assert.equal(activity.state, "scanner_working");
   assert.deepEqual(activity.activeCheckNames, ["Scanner name must stay technical"]);
   assert.equal(activity.lastProgressAt, "2026-08-26T13:02:00Z");
-  assert.equal(activity.stale, true);
+  assert.equal(activity.stale, false);
   assert.equal(activity.staleMinutes, 3);
   assert.deepEqual(activity.events.map((event) => event.code), [
     "progress_saved",
@@ -96,6 +96,7 @@ test("paused and terminal runs show their own state and terminal timestamp", () 
   assert.equal(paused.state, "paused");
   assert.equal(paused.active, false);
   assert.equal(paused.stale, false, "an intentional pause is never reported as a delayed live scan");
+  assert.equal(paused.staleMinutes, 88, "a pause does not hide the true elapsed progress time");
   const completed = buildScanActivity(run({
     status: "completed",
     progress: 100,
@@ -105,6 +106,19 @@ test("paused and terminal runs show their own state and terminal timestamp", () 
   assert.equal(completed.state, "completed");
   assert.equal(completed.lastProgressAt, "2026-08-26T13:06:00Z");
   assert.ok(completed.events.some((event) => event.code === "run_completed"));
+});
+
+test("an active run with no running or paused check can be stale", () => {
+  const activity = buildScanActivity(
+    run({
+      engineRuns: [engine({ status: "pending", startedAt: undefined })],
+    }),
+    new Date("2026-08-26T13:05:30Z"),
+  );
+
+  assert.equal(activity.active, true);
+  assert.equal(activity.stale, true);
+  assert.equal(activity.staleMinutes, 3);
 });
 
 test("a terminal no-checks request is neither queued work nor a technical failure", () => {

@@ -835,8 +835,6 @@ const assetNextActionDestination = {
   retry_check: "progress",
   // Progress renders Start when this check cannot be resumed.
   start_new_scan: "progress",
-  // The active work and its cancel are in Progress.
-  wait_or_cancel: "progress",
   // Ends in the same retry as retry_check.
   start_expected_service_and_retry: "progress",
   // Coverage is where applicable checks are chosen.
@@ -1302,9 +1300,21 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
   const appendRemainingCount = (value: string, count: number): string => count > 0
     ? `${value} · ${text(copy.moreItems, { count: formatNumber(count) })}`
     : value;
+  const requestedTargetLabel = (
+    target: BeginnerMasterReport["requested"]["targets"][number],
+  ): string => {
+    const label = target.label ?? target.assetId;
+    if (target.labelAvailability === "current_case_fallback") {
+      return `${label} (${text(copy.currentProjectFallback)})`;
+    }
+    if (target.labelAvailability === "unavailable") {
+      return `${label} (${text(copy.unavailableProvenance)})`;
+    }
+    return label;
+  };
   const requestedSummary = firstRequestedTarget
     ? appendRemainingCount(
-        firstRequestedTarget.label ?? firstRequestedTarget.assetId,
+        requestedTargetLabel(firstRequestedTarget),
         report.requested.targets.length - 1,
       )
     : text(copy.noRequestedTarget);
@@ -1330,16 +1340,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
     : text(copy.noNextStep);
   const inlineSeparator = locale === "en" ? "; " : "；";
   const requestedTargetsSummary = report.requested.targets.length > 0
-    ? report.requested.targets.map((target) => {
-        const label = target.label ?? target.assetId;
-        if (target.labelAvailability === "current_case_fallback") {
-          return `${label} (${text(copy.currentProjectFallback)})`;
-        }
-        if (target.labelAvailability === "unavailable") {
-          return `${label} (${text(copy.unavailableProvenance)})`;
-        }
-        return label;
-      }).join(inlineSeparator)
+    ? report.requested.targets.map(requestedTargetLabel).join(inlineSeparator)
     : text(copy.noRequestedTarget);
   const requestedStageSummary = `${text(reportStageCopy(report.requested.stage.value))}${
     report.requested.stage.availability === "current_case_fallback"
