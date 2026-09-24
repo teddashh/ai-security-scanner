@@ -50,7 +50,7 @@ current scan capability.
 
 | Integration | Implemented | Current fail-closed boundary |
 | --- | --- | --- |
-| ZAP | A thin adapter normalizes the pinned upstream JSON report, preserving alert identity, upstream severity, remediation, and per-instance evidence. The pinned upstream image was verified by digest and observed completing a passive crawl under a read-only root filesystem, a dropped-capability non-root user, and a hard memory limit. | No scope-grant profile exists for a ZAP passive website scan, so no run could be authorized against a website, and the product does not yet generate the automation plan the pinned command reads. |
+| ZAP | A thin adapter normalizes the pinned upstream JSON report, preserving alert identity, upstream severity, remediation, and per-instance evidence. The product builds the bounded passive automation plan the pinned command reads, confining the crawl to one approved origin and routing every request through the managed-network gateway; a run against a site linking off-site requested only the approved origin. The pinned upstream image was verified by digest and observed completing a passive crawl under a read-only root filesystem, a dropped-capability non-root user, and a hard memory limit. | No scope-grant profile exists for a ZAP passive website scan, so no run could be authorized against a website; the generated automation plan is not yet delivered into a run; and ZAP enforces no requests-per-second limit of its own. |
 
 ## Grype repository scan
 

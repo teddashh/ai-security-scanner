@@ -1631,6 +1631,7 @@
       "The passive scan reads only the responses returned by crawling; it sends no attack payloads and does not exercise ZAP's active scanner.",
       "The pinned image loads 48 upstream add-ons. The Automation Framework (automation 0.60.0) is upstream beta and the passive scan framework (pscan 0.6.0) is upstream alpha; the rule pack itself (pscanrules 75.0.0) is upstream release.",
       "The heap must be pinned on the command line because zap.sh sizes it from host memory and ignores the container memory limit.",
+      "ZAP ignores the proxy environment variables the product sets for managed engines, so the generated plan pins the managed-network gateway in its own configuration; without that setting the engine would reach the target directly.",
       "Apache-2.0 upstream code and add-ons permit redistribution with notices."
     ],
     "license": {
@@ -1677,7 +1678,8 @@
       "artifact_state": "verified_upstream_image",
       "blocked_by": [
         "no scope-grant profile exists for a ZAP passive website scan, so no run could be authorized against a website",
-        "the product does not yet generate the automation plan the pinned command reads from /run/ai-security-scanner/zap-plan.yaml"
+        "the generated automation plan is not yet delivered into a run, so the pinned command finds nothing at /run/ai-security-scanner/zap-plan.yaml",
+        "ZAP enforces no requests-per-second limit of its own, so a website scan cannot yet be held to the rate its grant would declare"
       ],
       "knowledge_input": {
         "kind": "runtime_live",

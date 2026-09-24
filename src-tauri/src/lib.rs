@@ -48,6 +48,7 @@ mod state;
 pub mod storage;
 pub mod target_candidates;
 pub mod workspace_snapshot;
+pub mod zap_work_plan;
 
 #[cfg(feature = "desktop")]
 use error::AppError;

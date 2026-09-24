@@ -357,7 +357,7 @@ test("public development status stays catalog-backed and excludes local handoff 
     "garak": [/No managed image/iu, /model-endpoint scope grant/iu, /credential path/iu],
     "agentic-radar": [/No managed image/iu, /typed framework-selection path/iu, /accepted upstream release/iu],
     "mcp-armor": [/No verified published digest/iu],
-    "zap": [/No scope-grant profile/iu, /automation plan/iu],
+    "zap": [/No scope-grant profile/iu, /automation plan/iu, /requests-per-second/iu],
   };
 
   assert.equal(integrated.length + experimental.length, catalog.length);
