@@ -923,7 +923,11 @@ export interface EngineAdmissionIssue {
 
 export type BeginnerReportSummary = "complete" | "partial" | "no_checks_completed";
 export type BeginnerReportLifecycle = "final";
-export type BeginnerReportDataAvailability = "recorded" | "current_case_fallback" | "unavailable";
+export type BeginnerReportDataAvailability =
+  | "recorded"
+  | "current_case_fallback"
+  | "unavailable"
+  | "not_applicable";
 export type BeginnerReportStage = "connection_diagnostic" | "quick_discovery" | "inventory" | "deep";
 export type BeginnerCoverageStatus =
   | "tested_complete"

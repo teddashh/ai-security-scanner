@@ -1485,6 +1485,53 @@ test("the first layer names the requested target, tested work, top gap, and next
   expect(firstLayerScope!.textContent).toContain("Recorded exclusions: contoso.example · ports outside the requested port set");
 });
 
+test("a run with no network-discovery stage omits scan depth from the first layer and the coverage card", () => {
+  const base = report("partial");
+  const { container } = renderReport(report("partial", {
+    requested: {
+      ...base.requested,
+      stage: {
+        availability: "not_applicable",
+        explanation: "This run has no network discovery stage.",
+      },
+    },
+  }));
+
+  const firstLayerScope = container.querySelector<HTMLElement>(".report-first-layer-scope");
+  expect(firstLayerScope).not.toBeNull();
+  expect(firstLayerScope!.textContent).not.toContain("Scan depth");
+
+  const askedCard = Array.from(container.querySelectorAll<HTMLElement>(".coverage-card")).find(
+    (card) => card.textContent?.includes("What you asked to scan"),
+  );
+  expect(askedCard).not.toBeUndefined();
+  expect(askedCard!.textContent).not.toContain("Scan depth");
+  // The requested-targets metric card carried the stage copy as its detail.
+  expect(container.textContent).not.toContain("Not retained by this run");
+});
+
+test("a run that lost its recorded stage still shows scan depth as not retained", () => {
+  const base = report("partial");
+  const { container } = renderReport(report("partial", {
+    requested: {
+      ...base.requested,
+      stage: {
+        availability: "unavailable",
+        explanation:
+          "Recorded stage selection: unavailable. Current project settings: excluded from this historical record.",
+      },
+    },
+  }));
+
+  const firstLayerScope = container.querySelector<HTMLElement>(".report-first-layer-scope");
+  expect(firstLayerScope!.textContent).toContain("Scan depth: Not retained by this run");
+
+  const askedCard = Array.from(container.querySelectorAll<HTMLElement>(".coverage-card")).find(
+    (card) => card.textContent?.includes("What you asked to scan"),
+  );
+  expect(askedCard!.textContent).toContain("Scan depth: Not retained by this run");
+});
+
 test("the tested time window excludes failed sibling task activity", () => {
   const testedFrom = "2026-09-04T12:00:00Z";
   const testedUntil = "2026-09-04T12:01:00Z";

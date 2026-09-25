@@ -16,8 +16,8 @@ use crate::artifact_store::{
 use crate::beginner_report::{
     BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerInventoryItem, BeginnerInventoryItemKind,
     BeginnerMasterReport, BeginnerReportSummary, CheckResultKind, CoverageDimensionStatus,
-    CoverageGap, CoverageGapClass, CoverageGapKind, FindingSnapshotSource, ReportScanStage,
-    RequestedLimitSource, finding_unconfirmed_by_coverage,
+    CoverageGap, CoverageGapClass, CoverageGapKind, DataAvailability, FindingSnapshotSource,
+    ReportScanStage, RequestedLimitSource, finding_unconfirmed_by_coverage,
 };
 #[cfg(test)]
 use crate::beginner_report::{NextActionCode, ReportLifecycle};
@@ -17341,6 +17341,21 @@ fn html_report_bytes(
         .as_ref()
         .map(|stage| catalog.report_stage(stage))
         .unwrap_or(catalog.text("not retained by this run", "本輪未保留"));
+    // A run with no network-discovery stage at all (every local-project,
+    // website, or guided internal-system run that is not the native
+    // localhost diagnostic) has nothing honest to print here: it is not
+    // "not retained", it simply never had a scan-depth dimension. Omit the
+    // whole paragraph rather than call it unavailable.
+    let scan_depth_paragraph =
+        if report.requested.stage.availability == DataAvailability::NotApplicable {
+            String::new()
+        } else {
+            format!(
+                "<p><strong>{}:</strong> {}</p>",
+                catalog.text("Scan depth", "掃描深度"),
+                html_escape(requested_stage),
+            )
+        };
     let mut requested_targets = report
         .requested
         .targets
@@ -19246,7 +19261,7 @@ fn html_report_bytes(
     document.push_str(&format!(
         concat!(
             "<section class=\"report-grid\"><div class=\"report-card\">",
-            "<h2>{}</h2><p><strong>{}:</strong> {}</p>",
+            "<h2>{}</h2>{}",
             "<h3>{}</h3><ul>{}</ul><h3>{}</h3><ul>{}</ul>",
             "<h3>{}</h3><ul>{}</ul></div>",
             "<div class=\"report-card\"><h2>{}</h2>",
@@ -19262,8 +19277,7 @@ fn html_report_bytes(
             "<p>{}</p>{}{}{}"
         ),
         catalog.text("What you asked to scan", "你要求掃描的內容"),
-        catalog.text("Scan depth", "掃描深度"),
-        html_escape(requested_stage),
+        scan_depth_paragraph,
         catalog.text("Targets", "目標"),
         requested_targets,
         catalog.text("Requested checks", "要求的檢查"),
@@ -25579,6 +25593,9 @@ mod tests {
                 .valid
         );
         let html = fs::read_to_string(destination).expect("read exported internal HTML");
+        // Unlike a repository or website run, a Naabu network-discovery run
+        // does have a scan-depth dimension, and its export still prints it.
+        assert!(html.contains("Scan depth"));
         for expected in [
             "Complete",
             "Which assets need attention",
@@ -36460,14 +36477,13 @@ mod tests {
             "然後重新掃描",
             // Which coverage each gap row is about. Composed around the engine
             // id, which is the only part telling one row from the next, so the
-            // id survives and the kind is what gets translated.
-            "要求的掃描深度",
-            "自動縮減的範圍",
+            // id survives and the kind is what gets translated. A gitleaks-only
+            // run has no network-discovery stage, so the stage and reductions
+            // dimensions are not_applicable and no longer produce a row here.
             "目標的歷史顯示資料",
             "記錄的問題說明文字",
             // Why each row is a gap, and what to do about it. Both were stored
             // as English prose and printed under translated headings.
-            "本輪沒有保留精確的縮減記錄",
             "部分問題顯示的說明不是這次掃描當時記錄的內容",
             "重新執行掃描以建立完全凍結的結果。",
             // The limits the run was executed under, the dimension each check
@@ -36707,16 +36723,18 @@ mod tests {
             "section-order fixture must contain a coverage gap"
         );
 
-        for (locale, problems_label, terms_label) in [
+        for (locale, problems_label, terms_label, scan_depth_marker) in [
             (
                 crate::export::ReportLocale::En,
                 "Problems found",
                 "Report terms",
+                "Scan depth",
             ),
             (
                 crate::export::ReportLocale::ZhHant,
                 "發現的問題",
                 "報告條款",
+                "掃描深度",
             ),
         ] {
             let html = String::from_utf8(
@@ -36731,6 +36749,13 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
+            // This gitleaks-only run has no network-discovery stage, so
+            // "What you asked to scan" must not print a scan-depth paragraph
+            // (or the same-worded coverage-gap row) in either language.
+            assert!(
+                !html.contains(scan_depth_marker),
+                "§6.1 a non-network run must not mention scan depth in {locale:?}"
+            );
             let asset_results = html
                 .find("<section class=\"asset-results\"")
                 .unwrap_or_else(|| panic!("§6.3 asset-results marker is missing in {locale:?}"));

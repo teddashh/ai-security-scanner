@@ -1430,6 +1430,11 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         ? ` (${text(copy.unavailableProvenance)})`
         : ""
   }`;
+  // Only a Naabu network-discovery plan or the native localhost diagnostic has
+  // a scan-depth dimension at all. Every other run (local project, website, or
+  // guided internal-system) must not print "Scan depth" as if a value could
+  // have been retained but wasn't.
+  const stageIsApplicable = report.requested.stage.availability !== "not_applicable";
   const requestedLimitsSummary = report.requested.limits.length > 0
     ? report.requested.limits.map((limit) =>
         `${localizedRequestedLimitName(limit.name, locale)}: ${localizedRequestedLimitValue(limit.name, limit.value, locale)}`,
@@ -1574,7 +1579,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
 
       <p className="report-first-layer-scope">
         <strong>{text(copy.firstLayerRequested)}:</strong>{" "}
-        {requestedTargetsSummary} · {text(copy.stage)}: {requestedStageSummary} · {text(copy.firstLayerLimits)}: {requestedLimitsSummary}
+        {requestedTargetsSummary}{stageIsApplicable ? ` · ${text(copy.stage)}: ${requestedStageSummary}` : ""} · {text(copy.firstLayerLimits)}: {requestedLimitsSummary}
         {" | "}
         <strong>{text(copy.firstLayerActuallyTested)}:</strong>{" "}
         {actualTestedSummary} · {text(copy.firstLayerTime)}: {observedTimeSummary} · {exclusionsSummary}
@@ -1591,7 +1596,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         <MetricCard
           label={text(copy.requestedTargets)}
           value={formatNumber(report.requested.targets.length)}
-          detail={text(reportStageCopy(report.requested.stage.value))}
+          detail={stageIsApplicable ? text(reportStageCopy(report.requested.stage.value)) : undefined}
           icon="coverage"
         />
         <MetricCard
@@ -1644,7 +1649,9 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
               ))}
             </ul>
           ) : <p>{text(copy.noRequestedTarget)}</p>}
-          <p><strong>{text(copy.stage)}:</strong> {text(reportStageCopy(report.requested.stage.value))}</p>
+          {stageIsApplicable && (
+            <p><strong>{text(copy.stage)}:</strong> {text(reportStageCopy(report.requested.stage.value))}</p>
+          )}
           {report.requested.limits.length > 0 && (
             <details>
               <summary>{text(copy.requestedLimits)}</summary>

@@ -304,6 +304,10 @@ pub enum DataAvailability {
     Recorded,
     CurrentCaseFallback,
     Unavailable,
+    /// This run has no such dimension at all, for example no network
+    /// discovery stage. Target labels and kinds never use this: a target
+    /// either has a recorded label and kind or does not.
+    NotApplicable,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1254,6 +1258,14 @@ fn project_requested_coverage(
         .collect::<Vec<_>>();
     let all_naabu_plans_valid =
         !naabu_tasks.is_empty() && valid_naabu_plans.len() == naabu_tasks.len();
+    // Only a Naabu network-discovery plan or the native localhost diagnostic
+    // has a scan-stage or automatic-reductions concept at all. A terminal
+    // no-checks run whose request named Naabu still belongs on the
+    // Unavailable path below, not NotApplicable, because Naabu work was
+    // actually requested.
+    let network_stage_applies = exact_localhost_only
+        || !naabu_tasks.is_empty()
+        || requested_check_ids.contains(NAABU_ENGINE_ID);
     let stage = if exact_localhost_only {
         RecordedStage {
             value: Some(ReportScanStage::ConnectionDiagnostic),
@@ -1292,6 +1304,12 @@ fn project_requested_coverage(
             } else {
                 "The frozen network plan contains quick discovery work only.".into()
             },
+        }
+    } else if !network_stage_applies {
+        RecordedStage {
+            value: None,
+            availability: DataAvailability::NotApplicable,
+            explanation: "This run has no network discovery stage.".into(),
         }
     } else {
         RecordedStage {
@@ -1397,6 +1415,8 @@ fn project_requested_coverage(
     }
     let reductions_availability = if exact_localhost_only || all_naabu_plans_valid {
         DataAvailability::Recorded
+    } else if !network_stage_applies {
+        DataAvailability::NotApplicable
     } else {
         unavailable_dimensions.push(UnavailableDimension {
             dimension: "automatic scope reductions or truncations".into(),
@@ -6760,6 +6780,144 @@ mod tests {
                 .iter()
                 .any(|gap| gap.kind == CoverageGapKind::NotTested)
         );
+    }
+
+    #[test]
+    fn terminal_no_checks_stage_is_unavailable_only_when_naabu_was_requested() {
+        let mut case = empty_case();
+        case.assets.push(Asset {
+            id: "asset-1".into(),
+            kind: AssetKind::Domain,
+            name: "example.invalid".into(),
+            provider: None,
+            region: None,
+            identifiers: vec![],
+            discovered_from: vec![],
+            candidate: false,
+            owner_confirmed: true,
+            internet_exposed: Some(true),
+            contains_sensitive_data: None,
+            metadata: BTreeMap::new(),
+        });
+        case.scan_runs.push(ScanRun {
+            id: "run-1".into(),
+            case_id: case.id.clone(),
+            sequence: 1,
+            created_at: instant(10),
+            completed_at: Some(instant(11)),
+            request_outcome: Some(
+                ScanRequestOutcome::no_checks_completed(
+                    ScanRequestOutcomeCode::NoApplicableChecks,
+                    vec!["asset-1".into()],
+                    vec![NAABU_ENGINE_ID.into()],
+                    "No available check supports the requested target.",
+                )
+                .unwrap(),
+            ),
+            report_asset_snapshots: Vec::new(),
+            knowledge_cutoff: instant(10),
+            ai_system_applicable: false,
+            ai_system_applicability: Default::default(),
+            ai_generated_artifact: Default::default(),
+            verification_baseline_run_id: None,
+            scope_grant_ids: vec![],
+            scope_grant_snapshots: vec![],
+            engine_admission_issues: Vec::new(),
+            engine_runs: vec![],
+        });
+
+        // The terminal request named Naabu, so a network-discovery stage was
+        // sought and never produced: the report must still say so.
+        let naabu_report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(naabu_report.requested.stage.value, None);
+        assert_eq!(
+            naabu_report.requested.stage.availability,
+            DataAvailability::Unavailable
+        );
+        assert!(
+            naabu_report
+                .requested
+                .unavailable_dimensions
+                .iter()
+                .any(|dimension| dimension.dimension == "requested scan stage"),
+            "a terminal run whose request named Naabu must keep the stage note"
+        );
+        assert!(
+            naabu_report
+                .coverage_gaps
+                .iter()
+                .any(|gap| gap.dimension == "requested scan stage")
+        );
+
+        // The same terminal shape, but the request never named Naabu: there
+        // was never a network-discovery stage to fail to record.
+        case.scan_runs[0].request_outcome = Some(
+            ScanRequestOutcome::no_checks_completed(
+                ScanRequestOutcomeCode::NoApplicableChecks,
+                vec!["asset-1".into()],
+                vec!["missing-check".into()],
+                "No available check supports the requested target.",
+            )
+            .unwrap(),
+        );
+        let non_naabu_report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(non_naabu_report.requested.stage.value, None);
+        assert_eq!(
+            non_naabu_report.requested.stage.availability,
+            DataAvailability::NotApplicable
+        );
+        assert!(
+            !non_naabu_report
+                .requested
+                .unavailable_dimensions
+                .iter()
+                .any(|dimension| dimension.dimension == "requested scan stage"),
+            "the same request without Naabu must not carry the stage note"
+        );
+        assert!(
+            !non_naabu_report
+                .coverage_gaps
+                .iter()
+                .any(|gap| gap.dimension == "requested scan stage")
+        );
+    }
+
+    #[test]
+    fn completed_non_naabu_catalog_run_has_no_applicable_network_stage() {
+        let task = catalog_task("gitleaks-like", EngineRunStatus::Completed);
+        let case = case_with_catalog_tasks(vec![task], true);
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        assert_eq!(report.requested.stage.value, None);
+        assert_eq!(
+            report.requested.stage.availability,
+            DataAvailability::NotApplicable
+        );
+        assert_eq!(
+            report.requested.reductions_availability,
+            DataAvailability::NotApplicable
+        );
+        for dimension in [
+            "requested scan stage",
+            "automatic scope reductions or truncations",
+        ] {
+            assert!(
+                !report
+                    .requested
+                    .unavailable_dimensions
+                    .iter()
+                    .any(|entry| entry.dimension == dimension),
+                "{dimension} must not be an unavailable dimension for a non-network run"
+            );
+            assert!(
+                !report
+                    .coverage_gaps
+                    .iter()
+                    .any(|gap| gap.dimension == dimension),
+                "{dimension} must not be a coverage gap for a non-network run"
+            );
+        }
     }
 
     #[test]

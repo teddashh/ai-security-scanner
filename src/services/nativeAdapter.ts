@@ -3054,7 +3054,12 @@ const mapBeginnerCoverageGapClass = (value: unknown): BeginnerCoverageGapClass =
     : "coverage_loss";
 };
 
-const BEGINNER_REPORT_DATA_AVAILABILITIES = ["recorded", "current_case_fallback", "unavailable"] as const;
+const BEGINNER_REPORT_DATA_AVAILABILITIES = [
+  "recorded",
+  "current_case_fallback",
+  "unavailable",
+  "not_applicable",
+] as const;
 
 // An unknown provenance value must expose the report dimension as unavailable.
 const mapBeginnerReportDataAvailability = (

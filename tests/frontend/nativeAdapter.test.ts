@@ -796,7 +796,7 @@ test("report target and stage availability fail closed on unknown required value
     });
   };
 
-  for (const availability of ["recorded", "current_case_fallback", "unavailable"]) {
+  for (const availability of ["recorded", "current_case_fallback", "unavailable", "not_applicable"]) {
     const report = adaptedFor(availability);
     assert.equal(report.requested.targets[0]?.labelAvailability, availability);
     assert.equal(report.requested.targets[0]?.assetKindAvailability, availability);
