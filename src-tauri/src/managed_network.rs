@@ -1789,7 +1789,7 @@ impl ManagedNetworkLease {
             &["network".into(), "inspect".into(), network_name.into()],
         )?;
         if !output.success {
-            if runtime_reports_absent(&output.stderr) {
+            if runtime_reports_network_absent(&output.stderr, network_name) {
                 return Ok(());
             }
             return Err(runtime_failure(
@@ -3429,7 +3429,7 @@ fn inspect_optional_network(
         &["network".into(), "inspect".into(), network_name.into()],
     )?;
     if !output.success {
-        if runtime_reports_absent(&output.stderr) {
+        if runtime_reports_network_absent(&output.stderr, network_name) {
             return Ok(None);
         }
         return Err(runtime_failure("managed network inspection", &output));
@@ -4154,7 +4154,7 @@ fn inspect_optional_uplink_network_with_requirement(
         &["network".into(), "inspect".into(), network_name.into()],
     )?;
     if !output.success {
-        if runtime_reports_absent(&output.stderr) {
+        if runtime_reports_network_absent(&output.stderr, network_name) {
             return Ok(None);
         }
         return Err(runtime_failure("gateway uplink inspection", &output));
@@ -4857,7 +4857,7 @@ fn remove_network(
         provider,
         &["network".into(), "rm".into(), network_name.into()],
     )?;
-    if output.success || runtime_reports_absent(&output.stderr) {
+    if output.success || runtime_reports_network_absent(&output.stderr, network_name) {
         Ok(())
     } else {
         Err(runtime_failure("managed network removal", &output))
@@ -5774,11 +5774,18 @@ fn bounded_diagnostic(bytes: &[u8]) -> String {
         .to_owned()
 }
 
-fn runtime_reports_absent(stderr: &[u8]) -> bool {
+fn runtime_reports_network_absent(stderr: &[u8], selector: &str) -> bool {
     let message = bounded_diagnostic(stderr).to_ascii_lowercase();
+    // Docker Engine 29 reports a missing network as "network <selector> not found",
+    // echoing the selector. The match includes the selector so a missing plugin,
+    // sandbox, or other network does not count as absence of this network.
     message.contains("no such network")
         || message.contains("network not found")
         || message.contains("does not exist")
+        || message.contains(&format!(
+            "network {} not found",
+            selector.to_ascii_lowercase()
+        ))
 }
 
 fn runtime_reports_container_absent(stderr: &[u8]) -> bool {
@@ -6460,6 +6467,8 @@ mod tests {
         pull_timeout: Option<Duration>,
         internal_conflicts_remaining: usize,
         uplink_conflicts_remaining: usize,
+        docker_engine_29_wording: bool,
+        uplink_create_failures_remaining: usize,
         networks: BTreeMap<String, FakeContainerNetwork>,
         container: Option<FakeGatewayContainer>,
         probe: Option<FakeGatewayContainer>,
@@ -6488,6 +6497,7 @@ mod tests {
                 .collect::<Vec<_>>();
             let mut state = self.state.lock().expect("fake container runtime");
             state.calls.push(args.clone());
+            let docker_engine_29_wording = state.docker_engine_29_wording;
             if args.first().is_some_and(|argument| argument == "pull") {
                 return Ok(success_output(Vec::new()));
             }
@@ -6513,6 +6523,12 @@ mod tests {
                         assert_eq!(subnets.len(), 2);
                         assert!(args.iter().any(|argument| argument == "--ipv6"));
                     }
+                    if !internal && state.uplink_create_failures_remaining > 0 {
+                        state.uplink_create_failures_remaining -= 1;
+                        return Ok(failure_output(
+                            "Error response from daemon: permission denied",
+                        ));
+                    }
                     let conflicts_remaining = if internal {
                         &mut state.internal_conflicts_remaining
                     } else {
@@ -6520,10 +6536,16 @@ mod tests {
                     };
                     if *conflicts_remaining > 0 {
                         *conflicts_remaining -= 1;
-                        return Ok(failure_output(&format!(
-                            "subnet {} is already used on the host or by another config",
-                            subnets[0]
-                        )));
+                        let message = if docker_engine_29_wording {
+                            "Error response from daemon: invalid pool request: Pool overlaps with other one on this address space"
+                                .to_owned()
+                        } else {
+                            format!(
+                                "subnet {} is already used on the host or by another config",
+                                subnets[0]
+                            )
+                        };
+                        return Ok(failure_output(&message));
                     }
                     let mut labels = BTreeMap::new();
                     let mut index = 0;
@@ -6568,7 +6590,12 @@ mod tests {
                         })
                         .map(|(name, network)| (name.clone(), network.clone()));
                     let Some((name, network)) = network else {
-                        return Ok(failure_output("network not found"));
+                        let message = if docker_engine_29_wording {
+                            format!("Error response from daemon: network {selector} not found")
+                        } else {
+                            "network not found".to_owned()
+                        };
+                        return Ok(failure_output(&message));
                     };
                     let mut subnets = vec![json!({
                         "subnet": network.subnet,
@@ -6598,7 +6625,14 @@ mod tests {
                         .values_mut()
                         .find(|network| !network.removed && &network.id == selector)
                     else {
-                        return Ok(failure_output("network not found"));
+                        let message = if docker_engine_29_wording {
+                            format!(
+                                "Error response from daemon: network {selector} not found\nexit status 1"
+                            )
+                        } else {
+                            "network not found".to_owned()
+                        };
+                        return Ok(failure_output(&message));
                     };
                     network.removed = true;
                     Ok(success_output(Vec::new()))
@@ -7672,6 +7706,103 @@ mod tests {
     }
 
     #[test]
+    fn container_network_creation_retries_a_docker_engine_29_subnet_conflict() {
+        let (_temporary, _gateway, policies) = test_paths();
+        let registry = test_registry(&policies);
+        let (runtime, state) = FakeContainerRuntime::new();
+        {
+            let mut state = state.lock().expect("fake container runtime");
+            state.internal_conflicts_remaining = 1;
+            state.uplink_conflicts_remaining = 1;
+            state.docker_engine_29_wording = true;
+        }
+        let controller = ManagedNetworkController::with_container_components(
+            RuntimeProvider::ManagedLocal,
+            gateway_container_spec(),
+            &policies,
+            &registry,
+            Arc::new(runtime),
+            Arc::new(FakeContainerReadiness { fail: false }),
+        )
+        .expect("container controller");
+        let now = Utc::now();
+        let mut lease = controller
+            .provision(&owner(), &[plan(now, "203.0.113.8", 5, 2, 30)], now)
+            .expect("network conflict retries");
+        {
+            let state = state.lock().expect("fake container runtime");
+            let creates = state
+                .calls
+                .iter()
+                .filter(|call| call.get(0..2) == Some(&["network".into(), "create".into()]))
+                .collect::<Vec<_>>();
+            assert_eq!(creates.len(), 4);
+            for internal in [true, false] {
+                let role_creates = creates
+                    .iter()
+                    .filter(|call| call.iter().any(|argument| argument == "--internal") == internal)
+                    .collect::<Vec<_>>();
+                assert_eq!(role_creates.len(), 2);
+                let subnets = role_creates
+                    .iter()
+                    .map(|call| {
+                        call.windows(2)
+                            .find(|pair| pair[0] == "--subnet")
+                            .map(|pair| pair[1].clone())
+                            .expect("explicit subnet")
+                    })
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(subnets.len(), 2, "retry must select a new explicit subnet");
+            }
+        }
+        lease.cleanup().expect("retry cleanup");
+    }
+
+    #[test]
+    fn failed_uplink_creation_cleanup_treats_the_missing_uplink_as_absent_in_docker_engine_29_wording()
+     {
+        let (_temporary, _gateway, policies) = test_paths();
+        let registry = test_registry(&policies);
+        let (runtime, state) = FakeContainerRuntime::new();
+        {
+            let mut state = state.lock().expect("fake container runtime");
+            state.docker_engine_29_wording = true;
+            state.uplink_create_failures_remaining = 1;
+        }
+        let controller = ManagedNetworkController::with_container_components(
+            RuntimeProvider::ManagedLocal,
+            gateway_container_spec(),
+            &policies,
+            &registry,
+            Arc::new(runtime),
+            Arc::new(FakeContainerReadiness { fail: false }),
+        )
+        .expect("container controller");
+        let now = Utc::now();
+        let error = controller
+            .provision(&owner(), &[plan(now, "203.0.113.8", 5, 2, 30)], now)
+            .err()
+            .expect("uplink creation must fail");
+        let error = error.to_string();
+        assert!(
+            error.contains("managed private network creation"),
+            "{error}"
+        );
+        assert!(error.contains("permission denied"), "{error}");
+        {
+            let state = state.lock().expect("fake container runtime");
+            assert!(
+                state
+                    .networks
+                    .values()
+                    .any(|network| network.internal && network.removed)
+            );
+            assert!(state.networks.values().all(|network| network.internal));
+        }
+        assert!(fs::read_dir(&registry).expect("registry").next().is_none());
+    }
+
+    #[test]
     fn explicit_container_subnets_do_not_capture_a_frozen_default_podman_range_target() {
         let (_temporary, _gateway, policies) = test_paths();
         let registry = test_registry(&policies);
@@ -8246,6 +8377,38 @@ mod tests {
     }
 
     #[test]
+    fn docker_engine_29_reports_a_missing_network_by_its_exact_selector() {
+        assert!(runtime_reports_network_absent(
+            b"Error response from daemon: network ass-uplink-1 not found",
+            "ass-uplink-1",
+        ));
+        let id = "d".repeat(64);
+        let removal =
+            format!("Error response from daemon: network {id} not found\nexit status 1\n");
+        assert!(runtime_reports_network_absent(removal.as_bytes(), &id));
+        assert!(!runtime_reports_network_absent(
+            b"Error response from daemon: network ass-uplink-1 not found",
+            "ass-uplink-2",
+        ));
+        assert!(!runtime_reports_network_absent(
+            b"Error response from daemon: plugin \"weave\" not found",
+            "ass-uplink-1",
+        ));
+        assert!(!runtime_reports_network_absent(
+            b"Error response from daemon: network sandbox for container abc not found",
+            "ass-uplink-1",
+        ));
+        assert!(runtime_reports_network_absent(
+            b"Error: No such network: ass-uplink-1",
+            "ass-uplink-1",
+        ));
+        assert!(runtime_reports_network_absent(
+            b"network not found",
+            "ass-uplink-1",
+        ));
+    }
+
+    #[test]
     fn provision_writes_private_policy_and_cleanup_removes_exact_resources() {
         let (_temporary, gateway, policies) = test_paths();
         let (runtime, runtime_state) = FakeRuntime::new(FakeInspectKind::Docker);
@@ -8664,6 +8827,56 @@ mod tests {
 
         assert_eq!(summary.reconciled, 1);
         assert!(runtime_state.lock().expect("runtime").removed);
+        assert!(
+            fs::read_dir(&registry_root)
+                .expect("registry")
+                .next()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn startup_reconciles_a_never_created_uplink_in_docker_engine_29_wording() {
+        let (_temporary, _gateway, artifacts, _policies, registry_root) = recovery_paths();
+        let (runtime, state) = FakeContainerRuntime::new();
+        state
+            .lock()
+            .expect("fake container runtime")
+            .docker_engine_29_wording = true;
+        let runtime = Arc::new(runtime);
+        let now = Utc::now();
+        let unique = "c".repeat(32);
+        let spec = gateway_container_spec();
+        let mut record = ManagedNetworkRecord {
+            schema_version: REGISTRY_SCHEMA_VERSION.into(),
+            owner: owner(),
+            provider: RuntimeProvider::ManagedLocal,
+            network_name: format!("ass-egress-{unique}"),
+            policy_id: format!("egress-{unique}"),
+            created_at: now,
+            expires_at: now + ChronoDuration::hours(1),
+            phase: RegistryPhase::Intent,
+            network_id: None,
+            uplink_network_name: Some(format!("ass-uplink-{unique}")),
+            uplink_network_id: None,
+            gateway_container_name: Some(format!("ass-gateway-{unique}")),
+            gateway_container_id: None,
+            gateway_listener_ip: None,
+            gateway_image_repository: Some(spec.repository().into()),
+            gateway_image_digest: Some(spec.digest().into()),
+            policy_sha256: None,
+        };
+        write_registry_snapshot(&registry_root, &record).expect("intent record");
+        record.phase = RegistryPhase::NetworkVerified;
+        record.network_id = Some("a".repeat(64));
+        write_registry_snapshot(&registry_root, &record).expect("network record");
+
+        let registry = ManagedNetworkRegistry::with_runtime(&registry_root, &artifacts, runtime)
+            .expect("registry");
+        let summary = registry.reconcile_all(now).expect("reconciliation");
+
+        assert_eq!(summary.reconciled, 1);
+        assert_eq!(summary.incomplete, 0);
         assert!(
             fs::read_dir(&registry_root)
                 .expect("registry")
