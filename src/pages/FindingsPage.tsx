@@ -1034,6 +1034,7 @@ function AssetResultBoard({
     // asset incomplete when another security check did complete.
     const unfinishedRequestedGap = gaps.find((gap) => isCoverageLossGap(gap)
       && gap.kind === "not_tested"
+      && gap.nextActionCode !== "no_action_unless_scope_changes"
       && Boolean(gap.taskId)
       && !checks.some((check) => check.taskId === gap.taskId && check.status === "tested_complete"));
     const hasIncompleteGap = Boolean(firstIncompleteGap);

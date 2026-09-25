@@ -371,8 +371,8 @@ test("a failed check's next step does not name a control absent from its row", (
       branch: "release-unavailable error code",
       run: engine({ status: "failed", phase: "failed", errorCode: "engine_release_unavailable" }),
       expected: {
-        en: "Update the app, then retry these checks.",
-        zhTW: "請更新應用程式，再重試這些檢查。",
+        en: "This version of the app does not include this check.",
+        zhTW: "這個版本的應用程式沒有提供這項檢查。",
       },
     },
     {
@@ -583,7 +583,7 @@ test("typed skipped reasons choose a specific bilingual next step without render
     [["provider_target_binding_mismatch"], /cloud account/u, /雲端帳號/u],
     [["runtime_image_unavailable"], /setup is automatic/u, /自動準備/u],
     [["engine_execution_contract_invalid"], /setup is automatic/u, /自動準備/u],
-    [["engine_release_unavailable"], /Update the app/u, /更新應用程式/u],
+    [["engine_release_unavailable"], /does not include this check/u, /沒有提供這項檢查/u],
     [["direct_network_protocol_mismatch"], /approved protocol or target form/u, /已核准的通訊協定或目標形式/u],
     [["direct_network_target_kind_mismatch"], /approved protocol or target form/u, /已核准的通訊協定或目標形式/u],
     [["external_scope_missing"], /approved protocol or target form/u, /已核准的通訊協定或目標形式/u],
@@ -602,6 +602,33 @@ test("typed skipped reasons choose a specific bilingual next step without render
   const mixed = skippedChecksNextStepFor(["no_compatible_authorized_assets", "runtime_image_unavailable"]);
   assert.match(mixed.en, /Finish the displayed target or cloud step/u);
   assert.match(mixed.zhTW, /完成畫面上的目標或雲端步驟/u);
+});
+
+test("multiple settled-skip reasons together choose the settled-skipped copy, not the generic mixed-setup copy", () => {
+  const allSettled = skippedChecksNextStepFor(["engine_release_unavailable", "mcp_configuration_absent"]);
+  assert.match(allSettled.en, /do not apply to this project or are not included in this version of the app/u);
+  assert.match(allSettled.zhTW, /不適用於這個專案，或這個版本的應用程式沒有提供/u);
+
+  const mixedWithASettledSkip = skippedChecksNextStepFor([
+    "engine_release_unavailable",
+    "no_compatible_authorized_assets",
+  ]);
+  assert.match(mixedWithASettledSkip.en, /Finish the displayed target or cloud step/u);
+  assert.match(mixedWithASettledSkip.zhTW, /完成畫面上的目標或雲端步驟/u);
+
+  // No update provides a check this app does not include.
+  for (const reasonCodes of [
+    ["engine_deprecated"],
+    ["engine_release_unavailable"],
+    ["license_review"],
+    ["mcp_configuration_absent"],
+    ["research_only"],
+    ["engine_release_unavailable", "mcp_configuration_absent"],
+  ]) {
+    const nextStep = skippedChecksNextStepFor(reasonCodes);
+    assert.doesNotMatch(nextStep.en, /Update the app/u, reasonCodes.join(", "));
+    assert.doesNotMatch(nextStep.zhTW, /更新應用程式/u, reasonCodes.join(", "));
+  }
 });
 
 test("every planner skip reason is classified without falling through to skippedUnknown", () => {

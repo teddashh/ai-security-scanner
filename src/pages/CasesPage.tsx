@@ -32,6 +32,7 @@ import {
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import { isNeverStartedScanRun } from "../freshScanSelection";
 import { isTerminalResultRun, isVerificationBaselineRun } from "../runLifecycle.ts";
+import { isSettledSkippedCheck } from "../settledSkippedChecks";
 import { scannerService } from "../services/scanner";
 import type {
   AiGeneratedArtifactAnswer,
@@ -753,7 +754,10 @@ export function CasesPage({
   const interruptedEngineCount = latestRun?.engineRuns.filter(
     (engine) => engine.phase === "interrupted_restart" || engine.errorCode === "desktop_process_restarted",
   ).length ?? 0;
-  const incompleteEngineCount = latestRun?.engineRuns.filter((engine) => engine.status !== "completed").length ?? 0;
+  // A check this project or app version does not include is settled, not unfinished work.
+  const incompleteEngineCount = latestRun?.engineRuns.filter(
+    (engine) => engine.status !== "completed" && !isSettledSkippedCheck(engine),
+  ).length ?? 0;
   const latestRunNeverStarted = Boolean(latestRun
     && isTerminalResultRun(latestRun)
     && isNeverStartedScanRun(latestRun));

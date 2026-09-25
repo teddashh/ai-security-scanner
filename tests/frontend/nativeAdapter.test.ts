@@ -3453,6 +3453,55 @@ test("mixed terminal and queued engine work keeps the scan queued for downstream
   }
 });
 
+test("a completed check beside settled-skip checks still reports the run as completed, but settled skips alone do not", () => {
+  const settledSkip = (id: string, errorCode: string) => ({
+    ...engineRunFixture(id, "not_executed"),
+    task_kind: { kind: "catalog_engine" },
+    error_code: errorCode,
+  });
+
+  const withCompletedSibling = adaptNativeCase(platformCaseFixture({
+    scan_runs: [{
+      id: "run-settled-skip-status",
+      case_id: "case-platforms-1",
+      sequence: 1,
+      created_at: "2026-08-26T00:00:00Z",
+      completed_at: "2026-08-26T00:01:00Z",
+      knowledge_cutoff: "2026-08-24T00:00:00Z",
+      engine_runs: [
+        { ...engineRunFixture("trivy-task", "completed"), task_kind: { kind: "catalog_engine" } },
+        settledSkip("mcp-armor", "mcp_configuration_absent"),
+        settledSkip("agentic-radar", "engine_release_unavailable"),
+      ],
+    }],
+  }));
+  assert.equal(
+    withCompletedSibling.runs[0]?.status,
+    "completed",
+    "a completed check beside two settled skips is a completed run",
+  );
+
+  const onlySettledSkips = adaptNativeCase(platformCaseFixture({
+    scan_runs: [{
+      id: "run-only-settled-skips",
+      case_id: "case-platforms-1",
+      sequence: 1,
+      created_at: "2026-08-26T00:00:00Z",
+      completed_at: "2026-08-26T00:01:00Z",
+      knowledge_cutoff: "2026-08-24T00:00:00Z",
+      engine_runs: [
+        settledSkip("mcp-armor", "mcp_configuration_absent"),
+        settledSkip("agentic-radar", "engine_release_unavailable"),
+      ],
+    }],
+  }));
+  assert.equal(
+    onlySettledSkips.runs[0]?.status,
+    "failed",
+    "a run made only of settled skips has done no security work and is not completed",
+  );
+});
+
 test("present catalog engine tasks preserve scanner completion and coverage", () => {
   const known = adaptNativeCase(platformCaseFixture({
     scan_runs: [{
@@ -3471,6 +3520,53 @@ test("present catalog engine tasks preserve scanner completion and coverage", ()
   assert.deepEqual(known.runs[0]?.engineRuns[0]?.taskKind, { kind: "catalog_engine" });
   assert.equal(known.runs[0]?.engineRuns[0]?.status, "completed");
   assert.equal(known.runs[0]?.coveredAssetCount, 1);
+});
+
+test("coveredAssetIds excludes settled skips: they neither grant coverage alone nor block a completed sibling's coverage", () => {
+  const settledSkip = (id: string, errorCode: string) => ({
+    ...engineRunFixture(id, "not_executed"),
+    task_kind: { kind: "catalog_engine" },
+    error_code: errorCode,
+    asset_ids: ["repository-asset"],
+  });
+
+  const skipAlone = adaptNativeCase(platformCaseFixture({
+    scan_runs: [{
+      id: "run-settled-skip-coverage-alone",
+      case_id: "case-platforms-1",
+      sequence: 1,
+      created_at: "2026-08-26T00:00:00Z",
+      completed_at: "2026-08-26T00:01:00Z",
+      knowledge_cutoff: "2026-08-24T00:00:00Z",
+      engine_runs: [settledSkip("mcp-armor", "mcp_configuration_absent")],
+    }],
+  }));
+  assert.equal(skipAlone.runs[0]?.totalAssetCount, 1);
+  assert.equal(skipAlone.runs[0]?.coveredAssetCount, 0, "a settled skip alone grants no coverage");
+
+  const skipWithCompletedSibling = adaptNativeCase(platformCaseFixture({
+    scan_runs: [{
+      id: "run-settled-skip-coverage-with-sibling",
+      case_id: "case-platforms-1",
+      sequence: 1,
+      created_at: "2026-08-26T00:00:00Z",
+      completed_at: "2026-08-26T00:01:00Z",
+      knowledge_cutoff: "2026-08-24T00:00:00Z",
+      engine_runs: [
+        {
+          ...engineRunFixture("trivy-task", "completed"),
+          task_kind: { kind: "catalog_engine" },
+          asset_ids: ["repository-asset"],
+        },
+        settledSkip("mcp-armor", "mcp_configuration_absent"),
+      ],
+    }],
+  }));
+  assert.equal(
+    skipWithCompletedSibling.runs[0]?.coveredAssetCount,
+    1,
+    "a settled skip beside a completed check on the same asset does not block coverage",
+  );
 });
 
 test("unevaluated targets preserve known causes, legacy absence, and fail closed on unknown values", () => {

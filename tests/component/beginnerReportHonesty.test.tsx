@@ -840,6 +840,72 @@ test("the asset board keeps the recorded skip next action", () => {
   expect(row?.querySelector("button")).toBeNull();
 });
 
+/**
+ * A completed security check for `asset-1` beside an mcp-armor gap that can
+ * never run from user action: no MCP configuration exists to check. Only
+ * `findings` differs between the two tests below that use this.
+ */
+const settledSkipBesideCompletedCheckReport = (
+  findings: BeginnerReportFinding[],
+): BeginnerMasterReport => {
+  const base = report("partial");
+  return report("partial", {
+    actual: {
+      ...base.actual,
+      checks: [{
+        taskId: "task-completed",
+        checkId: "trivy",
+        resultKind: "security_check",
+        targetAssetIds: ["asset-1"],
+        status: "tested_complete",
+        testedDimensions: [{
+          dimension: "completed check-to-target coordinate",
+          value: "trivy on asset asset-1",
+          observation: "The security check completed for this target.",
+        }],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    coverageGaps: [{
+      kind: "not_tested",
+      taskId: "task-mcp",
+      targetAssetIds: ["asset-1"],
+      dimension: "mcp-armor: not-tested check dimension",
+      reason: "This check did not start, so it is not a pass. Diagnostic code: mcp_configuration_absent.",
+      nextActionCode: "no_action_unless_scope_changes",
+      nextAction: "This project has no MCP configuration to check. Continue with the other checks.",
+    }],
+    findings,
+    coverageCounts: counts({ testedComplete: 1, notTested: 1 }),
+  });
+};
+
+test("a settled-skip gap beside a completed check does not add an incomplete addendum to a problem result", () => {
+  const { container } = renderReport(settledSkipBesideCompletedCheckReport([
+    frozenFinding({ targetAssetIds: ["asset-1"] }),
+  ]));
+
+  const row = container.querySelector<HTMLElement>(".asset-result-row");
+  if (!row) throw new Error("asset result row did not render");
+  expect(row.dataset.assetResult).toBe("problems_found");
+  expect(row.textContent).not.toContain("Some checks are incomplete");
+  expect(row.querySelector(".asset-result-row__outcome span")?.textContent)
+    .not.toContain("Open Review scanner status to finish or retry them.");
+  expect(row.querySelector("button")).toBeNull();
+});
+
+test("a settled-skip gap beside a completed check with no findings still reads as a clean completed result", () => {
+  const { container } = renderReport(settledSkipBesideCompletedCheckReport([]));
+
+  const row = container.querySelector<HTMLElement>(".asset-result-row");
+  if (!row) throw new Error("asset result row did not render");
+  expect(row.dataset.assetResult).toBe("no_problems_completed");
+  expect(row.textContent).toContain("No problems in completed checks");
+  expect(row.textContent).not.toContain("Some checks are incomplete");
+  expect(row.querySelector("button")).toBeNull();
+});
+
 test("a Greenbone dead-host gap gives a Traditional Chinese reader the exact cause", () => {
   window.localStorage.setItem(localeStorageKey, "zh-TW");
   const { container } = renderReport(greenboneDeadHostReport());

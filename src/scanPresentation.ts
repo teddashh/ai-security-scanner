@@ -1,6 +1,7 @@
 import type { BilingualText } from "./i18n";
 import { isExplicitPreScannerInfrastructureFailure } from "./scanDiagnostics";
 import { localhostTcpBeginnerSummary } from "./localhostTcpPresentation";
+import { settledSkipReasonCodes } from "./settledSkippedChecks";
 import type { EngineRun } from "./types";
 
 export const catalogEngineIds = [
@@ -136,8 +137,8 @@ const nextStepCopy = {
     zhTW: "重試這項檢查；專用連線會自動準備。",
   },
   unavailableInRelease: {
-    en: "Update the app, then retry these checks.",
-    zhTW: "請更新應用程式，再重試這些檢查。",
+    en: "This version of the app does not include this check.",
+    zhTW: "這個版本的應用程式沒有提供這項檢查。",
   },
   releaseIncompatible: {
     en: "Start a new scan to run this check with the installed release.",
@@ -154,6 +155,10 @@ const nextStepCopy = {
   mixedSkippedSetup: {
     en: "Finish the displayed target or cloud step, then retry the unfinished checks.",
     zhTW: "完成畫面上的目標或雲端步驟，再重試未完成的檢查。",
+  },
+  settledSkipped: {
+    en: "These checks do not apply to this project or are not included in this version of the app.",
+    zhTW: "這些檢查不適用於這個專案，或這個版本的應用程式沒有提供。",
   },
   skippedUnknown: {
     en: "Open the technical records for the skipped checks, finish the indicated setup, then start a new scan.",
@@ -270,7 +275,11 @@ export const skippedChecksNextStepFor = (reasonCodes: readonly string[]): Biling
   const hasMcpDiscoveryIssue = reasonCodes.some((code) => mcpConfigurationDiscoveryErrorCodes.has(code));
   const knownCount = Number(hasTargetIssue) + Number(hasProviderIssue) + Number(hasToolIssue) + Number(hasReleaseIssue) + Number(hasApprovedScopeIssue) + Number(hasMcpAbsent) + Number(hasMcpChoice) + Number(hasMcpDiscoveryIssue);
 
-  if (knownCount > 1) return nextStepCopy.mixedSkippedSetup;
+  if (knownCount > 1) {
+    return reasonCodes.every((code) => settledSkipReasonCodes.has(code))
+      ? nextStepCopy.settledSkipped
+      : nextStepCopy.mixedSkippedSetup;
+  }
   if (hasTargetIssue) return nextStepCopy.targetSetup;
   if (hasProviderIssue) return nextStepCopy.providerSetup;
   if (hasToolIssue) return nextStepCopy.toolSetup;

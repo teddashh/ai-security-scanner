@@ -426,6 +426,54 @@ test("work interrupted by a restart is counted and names its saved checkpoint", 
   expect(interrupted).not.toContain("will not reconnect automatically");
 });
 
+test("checks this project or app version does not include are not counted as unfinished scanner jobs", () => {
+  const engine = (id: string, status: ScanRun["engineRuns"][number]["status"], errorCode?: string) => ({
+    id: `engine-run-${id}`,
+    engineId: id,
+    engineName: id,
+    category: "code",
+    taskKind: { kind: "catalog_engine" as const },
+    warnings: [],
+    status,
+    progress: status === "completed" ? 100 : 0,
+    phase: status,
+    errorCode,
+    assetIds: ["asset-1"],
+    rawArtifactCount: 0,
+    savedResultArtifactCount: 0,
+    findingCount: 0,
+    resumable: false,
+  });
+  const incompleteJobs = (container: HTMLElement) => Array.from(container.querySelectorAll<HTMLElement>(".metric-card"))
+    .find((card) => card.querySelector(".metric-card__label")?.textContent === "Incomplete scanner jobs");
+
+  const settledRun = run({
+    id: "run-settled",
+    engineRuns: [
+      engine("semgrep", "completed"),
+      engine("agentic-radar", "not_executed", "engine_release_unavailable"),
+      engine("mcp-armor", "not_executed", "mcp_configuration_absent"),
+    ],
+  });
+  const settled = renderCases({ assetCount: 1, latestRun: settledRun, runs: [settledRun] });
+  expect(incompleteJobs(settled.container)?.querySelector(".metric-card__value")?.textContent).toBe("0");
+  expect(incompleteJobs(settled.container)?.className).not.toContain("metric-card--warning");
+  cleanup();
+
+  const unfinishedRun = run({
+    id: "run-unfinished",
+    status: "partial",
+    engineRuns: [
+      ...settledRun.engineRuns,
+      engine("trivy", "failed"),
+      engine("mcp-scan", "not_executed", "mcp_configuration_discovery_incomplete"),
+    ],
+  });
+  const unfinished = renderCases({ assetCount: 1, latestRun: unfinishedRun, runs: [unfinishedRun] });
+  expect(incompleteJobs(unfinished.container)?.querySelector(".metric-card__value")?.textContent).toBe("2");
+  expect(incompleteJobs(unfinished.container)?.className).toContain("metric-card--warning");
+});
+
 test("a run that failed is offered as a baseline without being called completed", () => {
   // `terminalRuns` deliberately admits failed and cancelled runs: comparing
   // against one is legitimate, and the backend records the resulting comparison

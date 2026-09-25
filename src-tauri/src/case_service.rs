@@ -13,14 +13,14 @@ use crate::artifact_store::{
     ArtifactContext, LauncherV2OutputArtifact, classify_launcher_v2_output_artifact,
     inspect_raw_artifacts, read_verified_raw_artifact,
 };
+#[cfg(test)]
+use crate::beginner_report::ReportLifecycle;
 use crate::beginner_report::{
     BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerInventoryItem, BeginnerInventoryItemKind,
     BeginnerMasterReport, BeginnerReportSummary, CheckResultKind, CoverageDimensionStatus,
     CoverageGap, CoverageGapClass, CoverageGapKind, DataAvailability, FindingSnapshotSource,
-    ReportScanStage, RequestedLimitSource, finding_unconfirmed_by_coverage,
+    NextActionCode, ReportScanStage, RequestedLimitSource, finding_unconfirmed_by_coverage,
 };
-#[cfg(test)]
-use crate::beginner_report::{NextActionCode, ReportLifecycle};
 use crate::bootstrap::executor::list_bootstrap_cleanup_obligations;
 use crate::connectors::{
     LIVE_PROVIDER_ARTIFACT_SET_SCHEMA, LiveProviderArtifactSet, MAX_LIVE_PROVIDER_PAGES,
@@ -8815,6 +8815,31 @@ pub const PLANNER_NOT_EXECUTED_REASON_CODES: &[&str] = &[
     "workspace_snapshot_unavailable",
 ];
 
+/// Planner skip reasons for a check that has nothing to check in this
+/// project, or that this app version does not include. The check stays in
+/// the run as not executed and in the report as not tested, but no user
+/// action can make it run, so it does not hold the case in Needs attention.
+/// `src/settledSkippedChecks.ts` mirrors this list.
+pub const SETTLED_SKIP_REASON_CODES: &[&str] = &[
+    "engine_deprecated",
+    "engine_release_unavailable",
+    "license_review",
+    "mcp_configuration_absent",
+    "research_only",
+];
+
+/// True when no user action can ever make this planned check run: it has
+/// nothing to check in this project, or this app version does not include
+/// it. Such a check must not hold its case in Needs attention.
+fn engine_run_is_settled_skip(engine_run: &EngineRun) -> bool {
+    engine_run.status == EngineRunStatus::NotExecuted
+        && engine_run.task_kind == EngineTaskKind::CatalogEngine
+        && engine_run
+            .error_code
+            .as_deref()
+            .is_some_and(|code| SETTLED_SKIP_REASON_CODES.contains(&code))
+}
+
 const NO_COMPATIBLE_AUTHORIZED_ASSETS_EXPLANATION: &str =
     "No ownership-confirmed asset has all unexpired permissions required by this engine.";
 
@@ -11729,11 +11754,13 @@ fn update_run_and_case_status(case: &mut AssessmentCase, run_index: usize, now: 
     let run = &mut case.scan_runs[run_index];
     if run_is_terminal(run) {
         run.completed_at = Some(now);
-        case.status = if run
-            .engine_runs
-            .iter()
-            .all(|engine_run| engine_run.status == EngineRunStatus::Completed)
-        {
+        let every_check_settled = run.engine_runs.iter().all(|engine_run| {
+            engine_run.status == EngineRunStatus::Completed
+                || engine_run_is_settled_skip(engine_run)
+        });
+        let only_settled_skips =
+            !run.engine_runs.is_empty() && run.engine_runs.iter().all(engine_run_is_settled_skip);
+        case.status = if every_check_settled && !only_settled_skips {
             CaseStatus::ReadyForHandoff
         } else {
             CaseStatus::NeedsAttention
@@ -16062,6 +16089,7 @@ fn html_asset_result_section(
         });
         let unfinished_requested_gap = gaps.iter().copied().find(|gap| {
             gap.kind == CoverageGapKind::NotTested
+                && gap.next_action_code != NextActionCode::NoActionUnlessScopeChanges
                 && gap.task_id.as_ref().is_some_and(|task_id| {
                     !checks.iter().any(|check| {
                         check.task_id == task_id.as_str()
@@ -37681,6 +37709,197 @@ mod tests {
         assert!(zh_html.contains("這個專案沒有可檢查的 MCP 設定；請繼續查看其他檢查。"));
         assert!(!zh_html.contains("查看涵蓋缺口並完成缺少的檢查。"));
         assert!(!zh_html.contains("目前範圍不需處理"));
+    }
+
+    #[test]
+    fn html_asset_board_does_not_treat_a_settled_skip_gap_as_unfinished_work() {
+        let fixture = Fixture::new();
+        let prepared = crate::localhost_quick_scan::prepare_localhost_quick_scan(
+            &fixture.storage,
+            fixture.engines.manifests(),
+            9001,
+        )
+        .unwrap();
+        let mut case = fixture
+            .storage
+            .get_case(&prepared.prepared.case_id)
+            .unwrap();
+        close_run_without_execution_for_report_fixture(&mut case, &prepared.prepared.scan_run_id);
+        let mut report =
+            build_beginner_master_report(&case, &prepared.prepared.scan_run_id).unwrap();
+        let target = report.requested.targets.first_mut().unwrap();
+        let asset_id = target.asset_id.clone();
+        let completed_check = report.actual.checks.first_mut().unwrap();
+        completed_check.task_id = "task-completed".into();
+        completed_check.check_id = "greenbone".into();
+        completed_check.result_kind = Some(CheckResultKind::SecurityCheck);
+        completed_check.status = CoverageDimensionStatus::TestedComplete;
+        report.findings.clear();
+        report.coverage_gaps = vec![CoverageGap {
+            kind: CoverageGapKind::NotTested,
+            class: CoverageGapClass::CoverageLoss,
+            task_id: Some("task-mcp".into()),
+            target_asset_ids: vec![asset_id],
+            dimension: "mcp-armor: not-tested check dimension".into(),
+            reason: "This check did not start, so it is not a pass. Diagnostic code: mcp_configuration_absent."
+                .into(),
+            next_action_code: NextActionCode::NoActionUnlessScopeChanges,
+            next_action:
+                "This project has no MCP configuration to check. Continue with the other checks."
+                    .into(),
+            unattributed: None,
+        }];
+
+        let catalog = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let labels = readable_target_labels(&report, catalog);
+        let html = html_asset_result_section(&report, &labels, catalog);
+        assert!(html.contains("asset-result--no-problems-completed"));
+        assert!(!html.contains("asset-result--incomplete-failed"));
+    }
+
+    #[test]
+    fn update_run_and_case_status_treats_settled_skips_as_no_blocking_work() {
+        let fixture = Fixture::new();
+        let mut case = fixture.create();
+        let now = Utc::now();
+        let engine =
+            |engine_id: &str, status: EngineRunStatus, error_code: Option<&str>| EngineRun {
+                unattributed: Vec::new(),
+                unevaluated_targets: Vec::new(),
+                security_template_executions: Vec::new(),
+                manual_review_controls: Vec::new(),
+                id: format!("engine-{engine_id}"),
+                scan_run_id: "run-1".into(),
+                engine_id: engine_id.into(),
+                task_kind: EngineTaskKind::CatalogEngine,
+                localhost_tcp_observation: None,
+                asset_ids: vec!["asset-1".into()],
+                status,
+                progress_percent: 100,
+                phase: "done".into(),
+                started_at: Some(now),
+                finished_at: Some(now),
+                resume_token: None,
+                last_execution_report_sha256: None,
+                engine_version: None,
+                image_digest: None,
+                rule_version: None,
+                adapter_version: "0.1.0".into(),
+                manifest_schema_version: None,
+                source_revision: None,
+                repository_url: None,
+                distribution_mode: None,
+                image_repository: None,
+                command_sha256: None,
+                execution_timeout_seconds: None,
+                knowledge_input: None,
+                scope_contract_sha256: None,
+                naabu_work_plan: None,
+                naabu_attempt_requests: Vec::new(),
+                naabu_attempt_results: Vec::new(),
+                mapping_version: None,
+                mapping_provenance: None,
+                fingerprint_schema_version: None,
+                runtime_provider: None,
+                runtime_version: None,
+                runtime_security_options: None,
+                exit_code: None,
+                cleanup_removed: None,
+                cleanup_detail: None,
+                gateway_refusals: None,
+                warnings: vec![],
+                raw_artifact_ids: vec![],
+                error_code: error_code.map(|code| code.to_string()),
+                error_message: None,
+            };
+        let mut status_for = |engine_runs: Vec<EngineRun>| -> CaseStatus {
+            case.scan_runs = vec![ScanRun {
+                id: "run-1".into(),
+                case_id: case.id.clone(),
+                sequence: 1,
+                created_at: now,
+                completed_at: None,
+                request_outcome: None,
+                report_asset_snapshots: Vec::new(),
+                knowledge_cutoff: now,
+                ai_system_applicable: false,
+                ai_system_applicability: Default::default(),
+                ai_generated_artifact: Default::default(),
+                verification_baseline_run_id: None,
+                scope_grant_ids: vec![],
+                scope_grant_snapshots: vec![],
+                engine_admission_issues: Vec::new(),
+                engine_runs,
+            }];
+            update_run_and_case_status(&mut case, 0, now);
+            case.status.clone()
+        };
+
+        assert_eq!(
+            status_for(vec![
+                engine("trivy", EngineRunStatus::Completed, None),
+                engine(
+                    "mcp-armor",
+                    EngineRunStatus::NotExecuted,
+                    Some("mcp_configuration_absent"),
+                ),
+                engine(
+                    "agentic-radar",
+                    EngineRunStatus::NotExecuted,
+                    Some("engine_release_unavailable"),
+                ),
+            ]),
+            CaseStatus::ReadyForHandoff,
+            "a completed check beside two settled skips is ready for handoff",
+        );
+
+        assert_eq!(
+            status_for(vec![
+                engine("trivy", EngineRunStatus::Completed, None),
+                engine(
+                    "mcp-armor",
+                    EngineRunStatus::NotExecuted,
+                    Some("mcp_configuration_discovery_incomplete"),
+                ),
+            ]),
+            CaseStatus::NeedsAttention,
+            "an unresolved discovery gap still needs attention",
+        );
+
+        assert_eq!(
+            status_for(vec![
+                engine(
+                    "mcp-armor",
+                    EngineRunStatus::NotExecuted,
+                    Some("mcp_configuration_absent"),
+                ),
+                engine(
+                    "agentic-radar",
+                    EngineRunStatus::NotExecuted,
+                    Some("engine_release_unavailable"),
+                ),
+            ]),
+            CaseStatus::NeedsAttention,
+            "a run made only of settled skips has done no security work yet",
+        );
+
+        assert_eq!(
+            status_for(vec![
+                engine("trivy", EngineRunStatus::Completed, None),
+                engine("grype", EngineRunStatus::Failed, None),
+            ]),
+            CaseStatus::NeedsAttention,
+            "a genuine failure beside a completed check still needs attention",
+        );
+
+        assert_eq!(
+            status_for(vec![
+                engine("trivy", EngineRunStatus::Completed, None),
+                engine("grype", EngineRunStatus::Completed, None),
+            ]),
+            CaseStatus::ReadyForHandoff,
+            "an all-completed run stays ready for handoff",
+        );
     }
 
     #[test]

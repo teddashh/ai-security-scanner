@@ -99,6 +99,7 @@ import {
   isExactBuiltInLocalhostQuickScanRun,
 } from "../localhostQuickScan";
 import { scanRunOverallProgress } from "../scanRunProgress";
+import { isSettledSkippedCheck } from "../settledSkippedChecks";
 import { useCaseById } from "../useCases";
 import type { UseCaseId } from "../useCases";
 
@@ -2025,7 +2026,10 @@ const runStatus = (runs: EngineRun[]): RunStatus => {
   if (runs.some((run) => run.status === "running")) return "running";
   if (runs.some((run) => run.status === "paused")) return "paused";
   if (runs.some((run) => run.status === "pending")) return "queued";
-  if (runs.every((run) => run.status === "completed")) return "completed";
+  if (
+    runs.every((run) => run.status === "completed" || isSettledSkippedCheck(run))
+    && runs.some((run) => run.status === "completed")
+  ) return "completed";
   if (runs.every((run) => run.status === "cancelled")) return "cancelled";
   if (runs.every((run) => run.status === "failed" || run.status === "not_executed")) return "failed";
   return "partial";
@@ -2667,7 +2671,11 @@ export const adaptNativeCase = (
       ...(requestOutcome?.requestedAssetIds ?? []),
     ]);
     const coveredAssetIds = allAssetIds.filter((assetId) => {
-      const applicableRuns = engineRuns.filter((engineRun) => engineRun.assetIds.includes(assetId));
+      // Settled skips neither block nor grant coverage: they have nothing to
+      // check in this project, or this app version does not include them.
+      const applicableRuns = engineRuns
+        .filter((engineRun) => engineRun.assetIds.includes(assetId))
+        .filter((engineRun) => !isSettledSkippedCheck(engineRun));
       return applicableRuns.length > 0 && applicableRuns.every((engineRun) =>
         engineRun.taskKind.kind === "built_in_localhost_tcp"
           ? exactCompletedLocalhostBinding(engineRun, assetId, nativeCase.assets)

@@ -1424,6 +1424,10 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
     "請更新應用程式，再重試這些檢查。",
   ],
   [
+    "This version of the app does not include this check.",
+    "這個版本的應用程式沒有提供這項檢查。",
+  ],
+  [
     "Retry this check; scan-tool setup is automatic.",
     "重試這項檢查；掃描工具會自動準備。",
   ],

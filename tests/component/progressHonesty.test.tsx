@@ -490,7 +490,9 @@ test("a check that never ran is still accounted for on screen", () => {
   expect(attention?.textContent).toContain("1");
 
   // And it is present as its own row, not only as a number in a tally.
-  expect(container.querySelector(".engine-not-executed")).not.toBeNull();
+  const aggregateRow = container.querySelector(".engine-row--aggregate");
+  expect(aggregateRow).not.toBeNull();
+  expect(aggregateRow?.querySelector(".status-pill")?.textContent).toBe("Not run");
 });
 
 test("a finished scan shows 100% processed on first render without a reload", () => {
@@ -563,6 +565,91 @@ test("a terminal run with one completed dead-host check and one clean completed 
   expect(notice?.textContent).toContain(
     "Some checks did not finish. Open each affected check below and complete or retry it.",
   );
+});
+
+/**
+ * A real local-project scan: agentic-radar has no shipped release image and
+ * mcp-armor found no MCP configuration to check. Neither can ever run from a
+ * user action.
+ */
+const settledSkipRun = (
+  second: EngineRun,
+  status: ScanRun["status"],
+  overrides: Partial<ScanRun> = {},
+): ScanRun => run([
+  engine("trivy", "completed", { taskKind: { kind: "catalog_engine" } }),
+  second,
+  engine("mcp-armor", "not_executed", {
+    taskKind: { kind: "catalog_engine" },
+    errorCode: "mcp_configuration_absent",
+  }),
+  engine("agentic-radar", "not_executed", {
+    taskKind: { kind: "catalog_engine" },
+    errorCode: "engine_release_unavailable",
+  }),
+], status, overrides);
+
+const settledSkipSentence =
+  "These checks do not apply to this project or are not included in this version of the app.";
+
+test("settled skips beside completed checks need no attention and disappear from the attention summary", () => {
+  const { container } = renderProgress(settledSkipRun(
+    engine("gitleaks", "completed", { taskKind: { kind: "catalog_engine" } }),
+    "completed",
+  ));
+
+  const summary = container.querySelector(".run-overview__progress-counts")?.textContent;
+  expect(summary).toContain("Checks · Completed 2 · Remaining 0 · Need attention 0");
+  expect(container.querySelector(".scan-attention-summary")).toBeNull();
+  expect(Array.from(container.querySelectorAll<HTMLElement>(".inline-notice")).some(
+    (candidate) => candidate.textContent?.includes("This run did not cover everything"),
+  )).toBe(false);
+  expect(container.textContent?.split(settledSkipSentence).length).toBe(2);
+  expect(container.textContent).not.toContain("Finish the displayed target or cloud step");
+
+  // They still stay visible with their own "Not run" status; they are simply
+  // outside the count of work that needs the reader's attention.
+  const aggregateRow = container.querySelector(".engine-row--aggregate");
+  expect(aggregateRow).not.toBeNull();
+  expect(aggregateRow?.querySelector(".status-pill")?.textContent).toBe("Not run");
+});
+
+test("while a check is still running, settled skips do not put its asset in need of attention", () => {
+  const { container } = renderProgress(settledSkipRun(
+    engine("gitleaks", "running", { taskKind: { kind: "catalog_engine" } }),
+    "running",
+    { coveredAssetCount: 0 },
+  ));
+
+  const counts = container.querySelector(".run-overview__progress-counts")?.textContent;
+  expect(counts).toContain("Assets · Fully checked 0 · Remaining 1 · Need attention 0");
+});
+
+test("a failed check beside settled skips still raises the incomplete notice", () => {
+  const { container } = renderProgress(settledSkipRun(
+    engine("gitleaks", "failed", { taskKind: { kind: "catalog_engine" } }),
+    "partial",
+  ));
+
+  const summary = container.querySelector(".run-overview__progress-counts")?.textContent;
+  expect(summary).toContain("Need attention 1");
+  expect(Array.from(container.querySelectorAll<HTMLElement>(".inline-notice")).some(
+    (candidate) => candidate.textContent?.includes("This run did not cover everything"),
+  )).toBe(true);
+});
+
+test("a not-executed check that is not a settled skip still counts toward attention and remaining", () => {
+  const { container } = renderProgress(run([
+    engine("trivy", "completed"),
+    engine("grype", "not_executed", {
+      taskKind: { kind: "catalog_engine" },
+      errorCode: "runtime_image_unavailable",
+    }),
+  ], "completed"));
+
+  const summary = container.querySelector(".run-overview__progress-counts")?.textContent;
+  expect(summary).toContain("Checks · Completed 1 · Remaining 0 · Need attention 1");
+  expect(container.querySelector(".scan-attention-summary")).not.toBeNull();
 });
 
 test("a completed website check with no security-template evidence states the recorded retry", () => {

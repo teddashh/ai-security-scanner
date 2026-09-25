@@ -4214,6 +4214,11 @@ fn project_next_steps(
 
     let mut seen_gap_actions = BTreeSet::new();
     for gap in gaps {
+        // A gap needing no action is disclosed under what was not tested, not
+        // listed as a step here: no user action can change its outcome.
+        if gap.next_action_code == NextActionCode::NoActionUnlessScopeChanges {
+            continue;
+        }
         if seen_gap_actions.insert(gap.next_action.clone()) {
             steps.push(BeginnerNextStep {
                 also_resolves: Vec::new(),
@@ -4537,8 +4542,8 @@ fn not_tested_next_action(task: &EngineRun) -> (NextActionCode, &'static str) {
         Some(
             "engine_release_unavailable" | "engine_deprecated" | "research_only" | "license_review",
         ) => (
-            NextActionCode::PreserveVisibleLimitation,
-            "Update the app, then retry these checks.",
+            NextActionCode::NoActionUnlessScopeChanges,
+            "This version of the app does not include this check.",
         ),
         Some(
             "manifest_unavailable"
@@ -5359,7 +5364,7 @@ mod tests {
             "This project has no MCP configuration to check. Continue with the other checks."
         );
         assert!(mcp_gap.reason.contains("mcp_configuration_absent"));
-        assert!(mcp_report.next_steps.iter().any(|step| {
+        assert!(!mcp_report.next_steps.iter().any(|step| {
             step.action
                 == "This project has no MCP configuration to check. Continue with the other checks."
         }));
@@ -5377,13 +5382,18 @@ mod tests {
             .expect("radar not-tested gap");
         assert_eq!(
             radar_gap.next_action_code,
-            NextActionCode::PreserveVisibleLimitation
+            NextActionCode::NoActionUnlessScopeChanges
         );
         assert_eq!(
             radar_gap.next_action,
-            "Update the app, then retry these checks."
+            "This version of the app does not include this check."
         );
         assert!(radar_gap.reason.contains("engine_release_unavailable"));
+        assert!(
+            !radar_report.next_steps.iter().any(|step| {
+                step.action == "This version of the app does not include this check."
+            })
+        );
 
         let mut unknown = catalog_task("unknown", EngineRunStatus::NotExecuted);
         unknown.error_code = None;
@@ -5414,6 +5424,65 @@ mod tests {
                 "{code} kept the generic not-tested next action"
             );
         }
+    }
+
+    #[test]
+    fn every_settled_skip_reason_is_a_planner_reason_that_needs_no_action() {
+        for code in crate::case_service::SETTLED_SKIP_REASON_CODES {
+            assert!(
+                crate::case_service::PLANNER_NOT_EXECUTED_REASON_CODES.contains(code),
+                "{code} is missing from PLANNER_NOT_EXECUTED_REASON_CODES"
+            );
+            let mut task = catalog_task(code, EngineRunStatus::NotExecuted);
+            task.error_code = Some(code.to_string());
+            let (next_code, _) = not_tested_next_action(&task);
+            assert_eq!(
+                next_code,
+                NextActionCode::NoActionUnlessScopeChanges,
+                "{code} did not resolve to NoActionUnlessScopeChanges"
+            );
+        }
+    }
+
+    #[test]
+    fn settled_skips_beside_a_completed_check_ask_for_no_action_and_keep_their_gaps() {
+        let mut done = catalog_task("done", EngineRunStatus::Completed);
+        done.engine_id = "trivy".into();
+        done.error_code = None;
+
+        let mut mcp = catalog_task("mcp", EngineRunStatus::NotExecuted);
+        mcp.engine_id = "mcp-armor".into();
+        mcp.error_code = Some("mcp_configuration_absent".into());
+
+        let mut radar = catalog_task("radar", EngineRunStatus::NotExecuted);
+        radar.engine_id = "agentic-radar".into();
+        radar.error_code = Some("engine_release_unavailable".into());
+
+        let report = build_beginner_master_report(
+            &case_with_catalog_tasks(vec![done, mcp, radar], true),
+            "run-1",
+        )
+        .unwrap();
+
+        assert!(
+            report
+                .next_steps
+                .iter()
+                .all(|step| step.code != NextActionCode::NoActionUnlessScopeChanges)
+        );
+        assert!(report.next_steps.iter().all(|step| {
+            step.action
+                != "This project has no MCP configuration to check. Continue with the other checks."
+                && step.action != "This version of the app does not include this check."
+        }));
+        assert_eq!(
+            report
+                .coverage_gaps
+                .iter()
+                .filter(|gap| gap.kind == CoverageGapKind::NotTested)
+                .count(),
+            2
+        );
     }
 
     #[test]

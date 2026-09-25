@@ -39,6 +39,7 @@ import {
   skippedChecksNextStepFor,
 } from "../scanPresentation";
 import { isCapturedEvidenceBlocker } from "../scanReadiness";
+import { isSettledSkippedCheck } from "../settledSkippedChecks";
 import {
   canStartPreparedScan,
   findRunCreatedAfterStart,
@@ -1190,7 +1191,8 @@ export function ProgressPage({
   const unevaluatedCompletedCheckCount = selectedRun.engineRuns.filter(
     (engine) => engine.status === "completed" && engineRecordedUnevaluatedTarget(engine),
   ).length;
-  const incompleteCount = stateCounts.partial + stateCounts.failed + stateCounts.not_executed + stateCounts.cancelled + unevaluatedCompletedCheckCount;
+  const settledSkippedCount = selectedRun.engineRuns.filter(isSettledSkippedCheck).length;
+  const incompleteCount = stateCounts.partial + stateCounts.failed + (stateCounts.not_executed - settledSkippedCount) + stateCounts.cancelled + unevaluatedCompletedCheckCount;
   const incompleteNoticeVisible = !savedPlanAfterRestart && !blocked && !sharedInfrastructureFailure && incompleteCount > 0;
   const terminalCount = terminalEngineStates.reduce((sum, state) => sum + stateCounts[state], 0);
   const completedAssetCount = Math.min(selectedRun.totalAssetCount, selectedRun.coveredAssetCount);
@@ -1198,7 +1200,8 @@ export function ProgressPage({
   const knownAttentionAssetCount = Math.min(
     uncoveredAssetCount,
     new Set(selectedRun.engineRuns
-      .filter((engine) => ["partial", "failed", "not_executed", "cancelled"].includes(engine.status)
+      .filter((engine) => (["partial", "failed", "not_executed", "cancelled"].includes(engine.status)
+        && !isSettledSkippedCheck(engine))
         || engineRecordedUnevaluatedTarget(engine))
       .flatMap((engine) => engine.assetIds)).size,
   );
@@ -1210,7 +1213,7 @@ export function ProgressPage({
   const attentionCheckCount = incompleteCount;
   const remainingCheckCount = Math.max(
     0,
-    selectedRun.engineRuns.length - completedCheckCount - attentionCheckCount,
+    selectedRun.engineRuns.length - completedCheckCount - attentionCheckCount - settledSkippedCount,
   );
   const today = new Date().toISOString().slice(0, 10);
   const expiredSupportEngines = selectedRun.engineRuns.filter((engine) =>
@@ -1659,10 +1662,6 @@ export function ProgressPage({
                   </span>
                 </div>
                 <div className="engine-row__progress">
-                  <div className="engine-not-executed">
-                    <Icon name="info" size={16} />
-                    <span><strong>{text(copy.notStarted)}</strong><small>{text(skippedChecksNextStepFor(skipped.reasonCodes))}</small></span>
-                  </div>
                   {aggregateTechnicalRecords(
                     selectedRun.engineRuns.filter((engine) => engine.status === "not_executed"),
                     text(copy.skippedTechnical, { count: formatNumber(skipped.checkCount) }),
