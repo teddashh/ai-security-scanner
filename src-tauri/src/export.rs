@@ -3,7 +3,7 @@ use crate::beginner_report::{
     BeginnerMasterReport, BeginnerReportError, TechnicalExecution, build_beginner_master_report,
 };
 use crate::domain::{
-    AssessmentCase, CaseExport, DataSource, EngineTaskKind, Finding, InventoryObservation,
+    AssessmentCase, Asset, CaseExport, DataSource, EngineTaskKind, Finding, InventoryObservation,
     InventoryObservationKind, RawArtifact, ScanRun, ScannerFindingDetails, ScopeGrant, new_id,
 };
 use crate::error::{AppError, AppResult};
@@ -1118,12 +1118,14 @@ pub(crate) fn case_for_export(
         for (index, source) in exported.data_sources.iter_mut().enumerate() {
             redact_data_source(source, index + 1);
         }
+        // Every frozen `report_asset_snapshots` entry below must alias to the
+        // same label its live asset gets here, so the position is captured
+        // before the run loop needs it.
+        let mut asset_aliases: BTreeMap<String, String> = BTreeMap::new();
         for (index, asset) in exported.assets.iter_mut().enumerate() {
-            asset.name = format!("Asset {}", index + 1);
-            asset.provider = None;
-            asset.region = None;
-            asset.identifiers.clear();
-            asset.metadata.clear();
+            let alias = format!("Asset {}", index + 1);
+            asset_aliases.insert(asset.id.clone(), alias.clone());
+            redact_asset_record(asset, alias);
         }
         for grant in &mut exported.scope_grants {
             redact_scope_grant(grant);
@@ -1156,6 +1158,17 @@ pub(crate) fn case_for_export(
         for run in &mut exported.scan_runs {
             for grant in &mut run.scope_grant_snapshots {
                 redact_scope_grant(grant);
+            }
+            // Full `Asset` clones frozen when an IT-environment run was
+            // planned. The live asset may have been renamed, edited, or
+            // deleted since, so each copy is masked on its own, under the
+            // alias its ID has above or the report's absent-target label.
+            for snapshot in &mut run.report_asset_snapshots {
+                let alias = asset_aliases
+                    .get(&snapshot.asset.id)
+                    .cloned()
+                    .unwrap_or_else(|| "[redacted target]".into());
+                redact_asset_record(&mut snapshot.asset, alias);
             }
             for engine_run in &mut run.engine_runs {
                 engine_run.resume_token = None;
@@ -1698,6 +1711,17 @@ fn redact_scope_grant(grant: &mut ScopeGrant) {
 fn redact_data_source(source: &mut DataSource, index: usize) {
     source.label = format!("Source {index}");
     source.metadata.clear();
+}
+
+/// Applies the Standard asset mask. Shared by the live `exported.assets` loop
+/// and every frozen `report_asset_snapshots` entry so the two representations
+/// of the same asset cannot drift apart under redaction.
+fn redact_asset_record(asset: &mut Asset, alias: String) {
+    asset.name = alias;
+    asset.provider = None;
+    asset.region = None;
+    asset.identifiers.clear();
+    asset.metadata.clear();
 }
 
 fn redact_finding(finding: &mut Finding, replacements: &[(String, String)], aliases: &IamAliases) {
@@ -4872,6 +4896,16 @@ mod tests {
         case.assets[0]
             .metadata
             .insert("sensitive".into(), json!(SENTINEL));
+        // A full `Asset` clone frozen at planning time. It carries the same
+        // sentinel as the live asset above, through a completely separate
+        // document path (`scan_runs[].report_asset_snapshots`), so it must be
+        // masked independently rather than by whatever redacts `case.assets`.
+        case.scan_runs[0]
+            .report_asset_snapshots
+            .push(ReportAssetSnapshot {
+                asset: case.assets[0].clone(),
+                disposition: ReportAssetDisposition::RequestedForScan,
+            });
 
         let grant = ScopeGrant {
             id: "grant-1".into(),
@@ -5129,6 +5163,11 @@ mod tests {
         assert!(
             unredacted.contains(SENTINEL),
             "the sentinel fixture must be meaningful"
+        );
+        assert_eq!(
+            unredacted_value["scan_runs"][0]["report_asset_snapshots"][0]["asset"]["name"],
+            SENTINEL,
+            "the frozen report-asset snapshot fixture must be meaningful"
         );
         assert!(unredacted.contains(ARBITRARY_SCANNER_DESCRIPTION));
         assert!(unredacted.contains(ARBITRARY_SCANNER_REMEDIATION));
@@ -5404,6 +5443,128 @@ mod tests {
             serde_json::to_value(&standard_report).unwrap(),
             "the case bundle must use the same authoritative beginner report as every other export"
         );
+    }
+
+    #[test]
+    fn standard_redaction_aliases_frozen_report_assets_like_the_case_assets() {
+        const SENTINEL: &str = "SNAPSHOT_ALIAS_SENTINEL_DO_NOT_EXPORT_2b91";
+        let temp = tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let mut case = fixture(&artifact_root, false);
+        // Inserted ahead of the fixture's own "asset-1" so an alias derived
+        // from push order, rather than from `sort_case`'s id order, would
+        // give both snapshots below the wrong label.
+        case.assets.insert(
+            0,
+            Asset {
+                id: "asset-2".into(),
+                kind: AssetKind::Host,
+                name: "second.example.test".into(),
+                provider: None,
+                region: None,
+                identifiers: vec![AssetIdentifier {
+                    namespace: "dns".into(),
+                    value: "second.example.test".into(),
+                }],
+                discovered_from: vec![],
+                candidate: false,
+                owner_confirmed: true,
+                internet_exposed: Some(false),
+                contains_sensitive_data: Some(false),
+                metadata: BTreeMap::new(),
+            },
+        );
+
+        let snapshot = |asset_id: &str, suffix: &str, disposition: ReportAssetDisposition| {
+            ReportAssetSnapshot {
+                asset: Asset {
+                    id: asset_id.into(),
+                    kind: AssetKind::Host,
+                    name: format!("{SENTINEL}-name-{suffix}"),
+                    provider: Some(format!("{SENTINEL}-provider-{suffix}")),
+                    region: Some(format!("{SENTINEL}-region-{suffix}")),
+                    identifiers: vec![AssetIdentifier {
+                        namespace: "dns".into(),
+                        value: format!("{SENTINEL}-identifier-{suffix}"),
+                    }],
+                    discovered_from: vec![],
+                    candidate: false,
+                    owner_confirmed: true,
+                    internet_exposed: Some(false),
+                    contains_sensitive_data: Some(false),
+                    metadata: BTreeMap::from([(
+                        "sensitive".into(),
+                        json!(format!("{SENTINEL}-metadata-{suffix}")),
+                    )]),
+                },
+                disposition,
+            }
+        };
+        // Deliberately out of both id order and asset-list order, so the
+        // snapshot loop's own per-entry alias lookup -- not incidental
+        // iteration order -- is what the assertions below exercise.
+        let input_snapshots = vec![
+            snapshot(
+                "asset-absent",
+                "missing",
+                ReportAssetDisposition::NoSupportedProfile,
+            ),
+            snapshot(
+                "asset-2",
+                "second",
+                ReportAssetDisposition::RequestedForScan,
+            ),
+            snapshot(
+                "asset-1",
+                "first",
+                ReportAssetDisposition::NoSupportedProfile,
+            ),
+        ];
+        case.scan_runs[0].report_asset_snapshots = input_snapshots.clone();
+
+        let unredacted = case_for_export(&case, RedactionProfile::None);
+        assert_eq!(
+            serde_json::to_value(&unredacted.scan_runs[0].report_asset_snapshots).unwrap(),
+            serde_json::to_value(&input_snapshots).unwrap(),
+            "RedactionProfile::None must leave the frozen report assets unchanged"
+        );
+
+        let redacted = case_for_export(&case, RedactionProfile::Standard);
+        assert!(
+            !serde_json::to_string(&redacted.scan_runs)
+                .unwrap()
+                .contains(SENTINEL),
+            "standard-redacted scan runs leaked a frozen report-asset sentinel"
+        );
+
+        // Ground the expected aliases in the same run's live assets, since
+        // that -- not a hardcoded literal -- is the contract: a snapshot's
+        // alias must equal whatever alias its asset ID gets in
+        // `exported.assets`.
+        assert_eq!(redacted.assets[0].id, "asset-1");
+        assert_eq!(redacted.assets[0].name, "Asset 1");
+        assert_eq!(redacted.assets[1].id, "asset-2");
+        assert_eq!(redacted.assets[1].name, "Asset 2");
+
+        let snapshots = &redacted.scan_runs[0].report_asset_snapshots;
+        assert_eq!(snapshots.len(), 3, "snapshot count must be unchanged");
+        // Order preserved exactly as pushed: absent, second, first.
+        assert_eq!(snapshots[0].asset.id, "asset-absent");
+        assert_eq!(snapshots[0].asset.name, "[redacted target]");
+        assert_eq!(snapshots[1].asset.id, "asset-2");
+        assert_eq!(snapshots[1].asset.name, "Asset 2");
+        assert_eq!(snapshots[2].asset.id, "asset-1");
+        assert_eq!(snapshots[2].asset.name, "Asset 1");
+
+        for (redacted_snapshot, original) in snapshots.iter().zip(&input_snapshots) {
+            assert_eq!(redacted_snapshot.asset.id, original.asset.id);
+            assert_eq!(redacted_snapshot.asset.kind, original.asset.kind);
+            assert_eq!(redacted_snapshot.disposition, original.disposition);
+            assert!(redacted_snapshot.asset.provider.is_none());
+            assert!(redacted_snapshot.asset.region.is_none());
+            assert!(redacted_snapshot.asset.identifiers.is_empty());
+            assert!(redacted_snapshot.asset.metadata.is_empty());
+        }
     }
 
     #[test]
