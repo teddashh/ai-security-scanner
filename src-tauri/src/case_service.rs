@@ -16303,9 +16303,9 @@ const UNTRUSTED_EVIDENCE_CAVEAT: &str = " Raw target text is retained only as un
 /// Scanner-authored fix text for the finding card's first layer.
 ///
 /// Product next-action prose names the kind of change. The scanner's own
-/// remediation is the specific step when it supplied one, and a stated
-/// absence when it did not. Collapsed evidence still carries the same
-/// strings as provenance.
+/// remediation text or reported fixed version is the specific step when it
+/// supplied one, and a stated absence when it supplied neither. Collapsed
+/// evidence still carries the same strings as provenance.
 fn html_scanner_remediation_block(
     finding: &crate::beginner_report::BeginnerFinding,
     catalog: HtmlReportCatalog,
@@ -16326,7 +16326,22 @@ fn html_scanner_remediation_block(
             unique.push(text);
         }
     }
-    if unique.is_empty() {
+    let mut fixed_versions = Vec::new();
+    for reference in &finding.evidence_references {
+        let Some(version) = reference
+            .scanner_details
+            .as_ref()
+            .and_then(|details| details.fixed_version.as_deref())
+            .map(str::trim)
+            .filter(|version| !version.is_empty())
+        else {
+            continue;
+        };
+        if !fixed_versions.contains(&version) {
+            fixed_versions.push(version);
+        }
+    }
+    if unique.is_empty() && fixed_versions.is_empty() {
         return format!(
             "<p class=\"finding-scanner-remediation\"><strong>{}:</strong> {}</p>",
             label,
@@ -16336,7 +16351,7 @@ fn html_scanner_remediation_block(
             )
         );
     }
-    unique
+    let mut html = unique
         .into_iter()
         .map(|text| {
             format!(
@@ -16345,7 +16360,21 @@ fn html_scanner_remediation_block(
                 html_escape(text)
             )
         })
-        .collect()
+        .collect::<String>();
+    if !fixed_versions.is_empty() {
+        let fixed_label =
+            catalog.text("Scanner-provided fixed version", "掃描工具提供的修正版版本");
+        let versions = fixed_versions
+            .into_iter()
+            .map(html_escape)
+            .collect::<Vec<_>>()
+            .join(catalog.text(", ", "、"));
+        html.push_str(&format!(
+            "<p class=\"finding-scanner-remediation\"><strong>{}:</strong> {}</p>",
+            fixed_label, versions
+        ));
+    }
+    html
 }
 
 fn html_evidence_reference(
@@ -35247,6 +35276,95 @@ mod tests {
         let html = html_scanner_remediation_block(&finding, catalog);
         assert!(html.contains("The scanner did not provide a specific fix for this finding."));
         assert!(!html.contains("must remain reachable"));
+    }
+
+    #[test]
+    fn html_scanner_remediation_block_shows_a_scanner_fixed_version_instead_of_absence() {
+        let reference = |evidence_id: &str, remediation: Option<&str>, fixed_version: &str| {
+            crate::beginner_report::FindingEvidenceReference {
+                evidence_id: evidence_id.into(),
+                engine_id: "trivy".into(),
+                details_frozen: true,
+                source_rule: Some("CVE-2020-1747".into()),
+                scanner_details: Some(crate::domain::ScannerFindingDetails {
+                    description: Some("PyYAML full_load can run arbitrary code".into()),
+                    remediation: remediation.map(str::to_owned),
+                    installed_version: Some("5.1".into()),
+                    fixed_version: Some(fixed_version.into()),
+                    aws_iam_policy: None,
+                    cwe_ids: Vec::new(),
+                    cvss: Vec::new(),
+                }),
+                summary: Some("summary".into()),
+                kind: Some(EvidenceKind::PackageInventory),
+                engine_run_id: Some("engine-run-1".into()),
+                artifact_id: Some("artifact-1".into()),
+                redacted: Some(false),
+                artifact_sha256: "a".repeat(64),
+                observed_at: chrono::Utc::now(),
+                location: None,
+                pointer: None,
+            }
+        };
+        let finding = |evidence_references: Vec<
+            crate::beginner_report::FindingEvidenceReference,
+        >| {
+            crate::beginner_report::BeginnerFinding {
+                finding_id: "finding-pyyaml".into(),
+                fingerprint: "trivy:CVE-2020-1747".into(),
+                snapshot_source: crate::beginner_report::FindingSnapshotSource::FrozenSelectedRun,
+                title: "PyYAML arbitrary code execution".into(),
+                plain_language_risk: "Risk".into(),
+                possible_impact: "Impact".into(),
+                severity: Severity::High,
+                confidence: Confidence::Low,
+                priority: Some(50),
+                priority_reasons: vec![],
+                target_asset_ids: vec!["asset-1".into()],
+                next_step: "Upgrade the affected dependency".into(),
+                recommended_expert_type: "Vulnerability manager".into(),
+                evidence_references,
+                official_references: Some(vec![]),
+                framework_references: vec![],
+                family: None,
+                severity_basis_code: None,
+                confidence_basis_code: None,
+                observation_details: vec![],
+                context_factors: vec![],
+                rollback_considerations: None,
+                verification_guidance: None,
+            }
+        };
+        let catalog = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let html = html_scanner_remediation_block(
+            &finding(vec![
+                reference("evidence-fixed-5-3-1", None, "5.3.1"),
+                reference("evidence-fixed-5-4", None, "<5.4>"),
+            ]),
+            catalog,
+        );
+        assert!(html.contains("Scanner-provided fixed version"));
+        assert!(html.contains("5.3.1"));
+        assert!(html.contains("&lt;5.4&gt;"));
+        assert!(html.contains("5.3.1, &lt;5.4&gt;"));
+        assert!(!html.contains("<5.4>"));
+        assert!(!html.contains("The scanner did not provide a specific fix for this finding."));
+
+        let html = html_scanner_remediation_block(
+            &finding(vec![reference(
+                "evidence-fixed-with-remediation",
+                Some("Upgrade PyYAML"),
+                "5.4",
+            )]),
+            catalog,
+        );
+        assert!(html.contains(
+            "<p class=\"finding-scanner-remediation\"><strong>Scanner-provided remediation:</strong> Upgrade PyYAML</p>"
+        ));
+        assert!(html.contains(
+            "<p class=\"finding-scanner-remediation\"><strong>Scanner-provided fixed version:</strong> 5.4</p>"
+        ));
+        assert!(!html.contains("The scanner did not provide a specific fix for this finding."));
     }
 
     #[test]

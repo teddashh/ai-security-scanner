@@ -969,6 +969,20 @@ const uniqueScannerRemediations = (
   return values;
 };
 
+const uniqueScannerFixedVersions = (
+  evidence: Array<{ scannerDetails?: { fixedVersion?: string } | null }>,
+): string[] => {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const item of evidence) {
+    const text = item.scannerDetails?.fixedVersion?.trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    values.push(text);
+  }
+  return values;
+};
+
 const checkRecordedTestedWork = (
   check: BeginnerMasterReport["actual"]["checks"][number],
 ): boolean =>
@@ -2027,6 +2041,9 @@ export function FindingsPage({
   const selectedScannerRemediations = selected
     ? uniqueScannerRemediations(selected.evidence)
     : [];
+  const selectedScannerFixedVersions = selected
+    ? uniqueScannerFixedVersions(selected.evidence)
+    : [];
   const iamValuePreview = (values: string[]): string => {
     if (values.length === 0) return text(copy.notReported);
     const visible = values.slice(0, 6).join(" · ");
@@ -2574,6 +2591,7 @@ export function FindingsPage({
           <div className="priority-grid">
             {topFindings.map((finding, index) => {
               const scannerRemediations = uniqueScannerRemediations(finding.evidence);
+              const scannerFixedVersions = uniqueScannerFixedVersions(finding.evidence);
               return (
               <button
                 key={finding.id}
@@ -2613,19 +2631,21 @@ export function FindingsPage({
                       unconfirmedByCoverage: actionUnconfirmedByCoverage(finding),
                     })}
                   </span>
-                  {scannerRemediations.length > 0
-                    ? scannerRemediations.map((remediation) => (
-                      <span key={remediation}>
-                        <strong>{text(copy.scannerRemediation)}</strong>
-                        {remediation}
-                      </span>
-                    ))
-                    : (
-                      <span>
-                        <strong>{text(copy.scannerRemediation)}</strong>
-                        {text(copy.scannerRemediationMissing)}
-                      </span>
-                    )}
+                  {scannerRemediations.map((remediation) => (
+                    <span key={remediation}>
+                      <strong>{text(copy.scannerRemediation)}</strong>
+                      {remediation}
+                    </span>
+                  ))}
+                  {scannerFixedVersions.length > 0 && (
+                    <span><strong>{text(copy.fixedVersion)}</strong>{scannerFixedVersions.join(" · ")}</span>
+                  )}
+                  {scannerRemediations.length === 0 && scannerFixedVersions.length === 0 && (
+                    <span>
+                      <strong>{text(copy.scannerRemediation)}</strong>
+                      {text(copy.scannerRemediationMissing)}
+                    </span>
+                  )}
                   <span>
                     <strong>{text(copy.verifyFix)}</strong>
                     {finding.verificationGuidance
@@ -3165,19 +3185,24 @@ export function FindingsPage({
                   awsIamPolicy: selected.awsIamPolicy,
                   unconfirmedByCoverage: actionUnconfirmedByCoverage(selected),
                 })}</p>
-                {selectedScannerRemediations.length > 0
-                  ? selectedScannerRemediations.map((remediation) => (
-                    <p key={remediation}>
-                      <strong>{text(copy.scannerRemediation)}</strong>{" "}
-                      {remediation}
-                    </p>
-                  ))
-                  : (
-                    <p>
-                      <strong>{text(copy.scannerRemediation)}</strong>{" "}
-                      {text(copy.scannerRemediationMissing)}
-                    </p>
-                  )}
+                {selectedScannerRemediations.map((remediation) => (
+                  <p key={remediation}>
+                    <strong>{text(copy.scannerRemediation)}</strong>{" "}
+                    {remediation}
+                  </p>
+                ))}
+                {selectedScannerFixedVersions.length > 0 && (
+                  <p>
+                    <strong>{text(copy.fixedVersion)}</strong>{" "}
+                    {selectedScannerFixedVersions.join(" · ")}
+                  </p>
+                )}
+                {selectedScannerRemediations.length === 0 && selectedScannerFixedVersions.length === 0 && (
+                  <p>
+                    <strong>{text(copy.scannerRemediation)}</strong>{" "}
+                    {text(copy.scannerRemediationMissing)}
+                  </p>
+                )}
                 {selected.rollbackConsiderations && (
                   <p>
                     <strong>{text(copy.beforeChanging)}</strong>{" "}

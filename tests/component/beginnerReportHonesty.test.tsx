@@ -3190,6 +3190,91 @@ test("a finding without scanner remediation says the scanner did not provide a s
   expect(card!.textContent).not.toContain("After the change, rerun the same check");
 });
 
+test("a scanner-reported fixed version is the finding's specific fix on the first layer and in the advice", () => {
+  const { container } = renderReport(report("partial", {
+    findings: [frozenFinding({
+      evidenceReferences: [{
+        evidenceId: "evidence-1",
+        engineId: "trivy",
+        detailsFrozen: true,
+        scannerDetails: { installedVersion: "5.1", fixedVersion: "5.3.1" },
+        summary: "Frozen evidence summary",
+        artifactSha256: "a".repeat(64),
+        observedAt: "2026-09-04T12:00:00Z",
+      }],
+    })],
+  }));
+
+  const card = container.querySelector<HTMLElement>(".priority-card");
+  expect(card!.textContent).toContain("Scanner-reported fixed version");
+  expect(card!.textContent).toContain("5.3.1");
+  expect(card!.textContent).not.toContain("The scanner did not provide a specific fix for this finding.");
+
+  openFirstFinding(container);
+  const advice = container.querySelector<HTMLElement>(".detail-section--advice");
+  expect(advice!.textContent).toContain("Scanner-reported fixed version");
+  expect(advice!.textContent).toContain("5.3.1");
+  expect(advice!.textContent).not.toContain("The scanner did not provide a specific fix for this finding.");
+});
+
+test("scanner fixed versions are listed once each in evidence order", () => {
+  const { container } = renderReport(report("partial", {
+    findings: [frozenFinding({
+      evidenceReferences: [{
+        evidenceId: "evidence-1",
+        engineId: "trivy",
+        detailsFrozen: true,
+        scannerDetails: { fixedVersion: "5.4" },
+        summary: "Frozen evidence summary",
+        artifactSha256: "a".repeat(64),
+        observedAt: "2026-09-04T12:00:00Z",
+      }, {
+        evidenceId: "evidence-2",
+        engineId: "trivy",
+        detailsFrozen: true,
+        scannerDetails: { fixedVersion: "5.4" },
+        summary: "Frozen evidence summary",
+        artifactSha256: "b".repeat(64),
+        observedAt: "2026-09-04T12:00:00Z",
+      }, {
+        evidenceId: "evidence-3",
+        engineId: "trivy",
+        detailsFrozen: true,
+        scannerDetails: { fixedVersion: "6.0.1" },
+        summary: "Frozen evidence summary",
+        artifactSha256: "c".repeat(64),
+        observedAt: "2026-09-04T12:00:00Z",
+      }],
+    })],
+  }));
+
+  const card = container.querySelector<HTMLElement>(".priority-card");
+  expect(card!.textContent).toContain("5.4 · 6.0.1");
+  expect(card!.textContent!.match(/5\.4(?!\.)/g)).toEqual(["5.4"]);
+});
+
+test("a scanner fixed version keeps its source label in Traditional Chinese", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderReport(report("partial", {
+    findings: [frozenFinding({
+      evidenceReferences: [{
+        evidenceId: "evidence-1",
+        engineId: "trivy",
+        detailsFrozen: true,
+        scannerDetails: { fixedVersion: "5.3.1" },
+        summary: "Frozen evidence summary",
+        artifactSha256: "a".repeat(64),
+        observedAt: "2026-09-04T12:00:00Z",
+      }],
+    })],
+  }));
+
+  const card = container.querySelector<HTMLElement>(".priority-card");
+  expect(card!.textContent).toContain("掃描器回報的修正版");
+  expect(card!.textContent).toContain("5.3.1");
+  expect(card!.textContent).not.toContain("掃描器未提供這項問題的具體修復方式。");
+});
+
 test("scanner remediation keeps its source label concise in Traditional Chinese", () => {
   window.localStorage.setItem(localeStorageKey, "zh-TW");
   const { container } = renderReport(report("partial", {
