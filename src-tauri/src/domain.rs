@@ -887,10 +887,11 @@ pub struct EngineRun {
     pub cleanup_detail: Option<String>,
     /// Managed-gateway refusal counts for this attempt.
     ///
-    /// `None` means no managed gateway ran, or the case file predates this
-    /// field. An old case file cannot tell those apart, so the report stays
-    /// silent for `None`. Do not synthesize a record for a legacy run:
-    /// historical absence is not a claim that the gateway refused nothing.
+    /// `None` means no managed gateway ran, the gateway that ran does not
+    /// record refusals, or the case file predates this field. An old case
+    /// file cannot tell those apart, so the report stays silent for `None`.
+    /// Do not synthesize a record for a legacy run: historical absence is
+    /// not a claim that the gateway refused nothing.
     #[serde(default)]
     pub gateway_refusals: Option<GatewayRefusalRecord>,
     #[serde(default)]
