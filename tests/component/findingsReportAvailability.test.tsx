@@ -70,7 +70,6 @@ const renderPage = (
       findings={[canonicalFinding]}
       findingGroups={[]}
       findingGroupEvents={[]}
-      coverage={[]}
       runs={runs}
       workflowEvents={[]}
       busy={false}

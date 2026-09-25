@@ -16,7 +16,6 @@ const renderEmptyResults = () =>
         findings={[]}
         findingGroups={[]}
         findingGroupEvents={[]}
-        coverage={[]}
         runs={[]}
         workflowEvents={[]}
         busy={false}

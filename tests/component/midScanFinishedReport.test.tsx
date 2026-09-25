@@ -76,7 +76,6 @@ test("mid-scan Results renders the finished run and explains when the running sc
         findings={[savedFinding]}
         findingGroups={[]}
         findingGroupEvents={[]}
-        coverage={[]}
         runs={runs}
         workflowEvents={[]}
         busy={false}
@@ -110,7 +109,6 @@ test("the mid-scan finished-report sentence is localized in Traditional Chinese"
         findings={[savedFinding]}
         findingGroups={[]}
         findingGroupEvents={[]}
-        coverage={[]}
         runs={runs}
         workflowEvents={[]}
         busy={false}

@@ -538,7 +538,6 @@ test("setup prerequisites and missing-source states use direct product language"
     "Active testing requires separate authorization",
     "Candidate list status: no connected source",
     "Sources without data: {count}",
-    "No problems shown; source data missing",
     "Cleanup records requiring action",
     "Temporary access expiry pending",
   ]) assert.ok(`${cases}\n${coverage}\n${findings}\n${provider}`.includes(phrase), phrase);

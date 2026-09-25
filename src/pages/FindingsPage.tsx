@@ -60,7 +60,6 @@ import type {
   BeginnerReportSummary,
   CorrelationReport,
   CorroborationStatus,
-  CoverageRecord,
   Finding,
   FindingGroup,
   FindingGroupEvent,
@@ -89,7 +88,6 @@ interface FindingsPageProps {
    * the same as an empty report, and must not be rendered as "nothing related".
    */
   correlationReport?: CorrelationReport;
-  coverage: CoverageRecord[];
   runs: ScanRun[];
   focusedFindingId?: string;
   workflowEvents: FindingWorkflowEvent[];
@@ -231,10 +229,6 @@ const copy = {
     en: "Scan needs attention",
     zhTW: "掃描需要處理",
   },
-  emptyUnknownTitle: {
-    en: "No problems shown; source data missing",
-    zhTW: "沒有顯示問題；缺少來源資料",
-  },
   emptyCompletedTitle: {
     en: "No problems were observed in the work that completed",
     zhTW: "已完成的範圍內沒有觀察到問題",
@@ -247,13 +241,9 @@ const copy = {
     en: "Open the scan to retry unfinished checks.",
     zhTW: "打開這次掃描以重試未完成的檢查。",
   },
-  emptyUnknownDescription: {
-    en: "Sources without usable information: {count}. Open Scan setup to connect or check them.",
-    zhTW: "沒有可用資訊的來源：{count} 個。打開掃描設定即可連接或確認。",
-  },
   emptyCompletedDescription: {
-    en: "The completed checks recorded no issues in their tested scope. Sources included: {count}.",
-    zhTW: "已完成的檢查在實際測試範圍內沒有記錄問題。包含的來源：{count} 個。",
+    en: "The completed checks recorded no issues in their tested scope.",
+    zhTW: "已完成的檢查在實際測試範圍內沒有記錄問題。",
   },
   openCoverage: { en: "Open scan setup", zhTW: "開啟掃描設定" },
   openProgress: { en: "Review scanner status", zhTW: "查看掃描器狀態" },
@@ -1951,7 +1941,6 @@ export function FindingsPage({
   findingGroups,
   findingGroupEvents,
   correlationReport,
-  coverage,
   runs,
   focusedFindingId,
   workflowEvents,
@@ -2416,8 +2405,6 @@ export function FindingsPage({
   ) : null;
 
   if (findings.length === 0) {
-    const unknownSources = coverage.filter((item) => item.state === "source_unavailable_unknown").length;
-    const connectedWithoutAssets = coverage.filter((item) => item.state === "source_connected_none").length;
     const incompleteRun = latestRun && latestRun.status !== "completed";
     const localhostSummary = latestRun && isExactBuiltInLocalhostQuickScanRun(latestRun)
       ? localhostTcpBeginnerSummary(latestRun.engineRuns[0]!)
@@ -2436,14 +2423,12 @@ export function FindingsPage({
           : nonSecurityOnly
             ? text(copy.nonSecurityEmptyTitle)
           : incompleteRun
-              ? text(copy.emptyIncompleteTitle)
-              : unknownSources > 0
-                ? text(copy.emptyUnknownTitle)
-                : hasCompletedSecurityCheck
-                  ? text(copy.emptyCompletedTitle)
-                  : hasTestedNonSecurityWork
-                    ? text(copy.nonSecurityEmptyTitle)
-                    : text(copy.emptyIncompleteTitle);
+            ? text(copy.emptyIncompleteTitle)
+          : hasCompletedSecurityCheck
+            ? text(copy.emptyCompletedTitle)
+          : hasTestedNonSecurityWork
+            ? text(copy.nonSecurityEmptyTitle)
+            : text(copy.emptyIncompleteTitle);
     const description = !latestRun
       ? text(copy.emptyNoRunDescription)
       : requestOutcomeSummary
@@ -2457,20 +2442,17 @@ export function FindingsPage({
           : nonSecurityOnly
             ? text(copy.nonSecurityEmptyDescription)
           : incompleteRun
-              ? text(copy.emptyIncompleteDescription)
-              : unknownSources > 0
-                ? text(copy.emptyUnknownDescription, { count: formatNumber(unknownSources) })
-                : hasCompletedSecurityCheck
-                  ? text(copy.emptyCompletedDescription, { count: formatNumber(connectedWithoutAssets) })
-                  : hasTestedNonSecurityWork
-                    ? text(copy.nonSecurityEmptyDescription)
-                    : text(copy.emptyIncompleteDescription);
+            ? text(copy.emptyIncompleteDescription)
+          : hasCompletedSecurityCheck
+            ? text(copy.emptyCompletedDescription)
+          : hasTestedNonSecurityWork
+            ? text(copy.nonSecurityEmptyDescription)
+            : text(copy.emptyIncompleteDescription);
     const cleanCompletedOutcome = Boolean(latestRun)
       && !incompleteRun
       && !requestOutcomeSummary
       && !localhostSummary
       && !nonSecurityOnly
-      && unknownSources === 0
       && hasCompletedSecurityCheck;
     const terminalActions = (
       <div className="button-group">
@@ -2520,7 +2502,6 @@ export function FindingsPage({
         {!cleanCompletedOutcome && (
           <EmptyState
             icon={incompleteRun
-              || unknownSources > 0
               || Boolean(requestOutcomeSummary)
               || ["closed", "timed_out", "failed", "cancelled", "missing", "inconsistent"]
                 .includes(localhostSummary?.outcome ?? "")

@@ -73,7 +73,6 @@ const renderPage = (
         findingGroups={options.groups ?? []}
         findingGroupEvents={[]}
         correlationReport={correlationReport}
-        coverage={[]}
         runs={[]}
         workflowEvents={[]}
         busy={options.busy ?? false}

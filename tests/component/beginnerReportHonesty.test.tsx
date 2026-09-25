@@ -230,7 +230,6 @@ const renderReport = (
         findings={canonical}
         findingGroups={[]}
         findingGroupEvents={[]}
-        coverage={[]}
         runs={runs}
         workflowEvents={[]}
         busy={false}
@@ -981,7 +980,7 @@ test("a clean terminal run states its bounded outcome before the coverage detail
 
   expect(header.textContent).toContain("No problems were observed in the work that completed");
   expect(header.textContent).toContain("in their tested scope");
-  expect(header.textContent).toContain("Sources included: 0.");
+  expect(header.textContent).not.toContain("Sources included");
   expect(header.textContent).not.toContain("Open Scan setup to review exactly what was included");
   expect(container.textContent).toContain("No problems in completed checks");
   expect(header.compareDocumentPosition(coverage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -993,7 +992,8 @@ test("a clean terminal run states its bounded outcome before the coverage detail
   const { container: zh } = renderReport(cleanCompletedReport(), [], [catalogRun("trivy")]);
   const zhHeader = zh.querySelector<HTMLElement>(".page-header");
   expect(zhHeader?.textContent).toContain("已完成的檢查在實際測試範圍內沒有記錄問題");
-  expect(zhHeader?.textContent).toContain("包含的來源：0 個");
+  expect(zhHeader?.textContent).not.toContain("包含的來源");
+  expect(zhHeader?.textContent).toContain("已完成的範圍內沒有觀察到問題");
   expect(zhHeader?.textContent).not.toContain("打開掃描設定");
 });
 

@@ -2653,7 +2653,6 @@ export default function App() {
             findingGroupEvents={workspace.findingGroupEvents}
             correlationReport={correlationReport}
             workflowEvents={workspace.workflowEvents}
-            coverage={workspace.coverage}
             runs={workspace.runs}
             focusedFindingId={focusedFindingId}
             busy={["finding-workflow", "finding-group", "finding-ungroup"].includes(busyAction ?? "")}

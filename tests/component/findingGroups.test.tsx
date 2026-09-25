@@ -51,7 +51,6 @@ const renderPage = (findings: Finding[], groups: FindingGroup[]) =>
         findings={findings}
         findingGroups={groups}
         findingGroupEvents={[]}
-        coverage={[]}
         runs={[]}
         workflowEvents={[]}
         busy={false}
