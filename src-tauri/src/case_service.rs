@@ -6115,9 +6115,12 @@ impl<'a> CaseService<'a> {
             }
             // A cleaned terminal attempt needs a new resource-free checkpoint
             // before desktop preflight or Cancel. The old container, scope,
-            // and artifact IDs belong to the ended attempt; evidence remains
-            // on the engine run and in the case. Keep the recorded runtime.
-            // Adapter-only work and pending cleanup retain their recovery path.
+            // artifact IDs, and managed-network identity belong to the ended
+            // attempt; the new attempt provisions its own network. So do the
+            // runtime, exit, and cleanup projections. Evidence remains on the
+            // engine run and in the case. Keep the recorded runtime.
+            // Adapter-only work and pending cleanup, including an unfinished
+            // network cleanup, retain their recovery path.
             if let Some(checkpoint) = candidate.execution.resume_checkpoint.as_mut()
                 && matches!(
                     checkpoint.stage,
@@ -6125,7 +6128,6 @@ impl<'a> CaseService<'a> {
                 )
                 && checkpoint.attempt < candidate.execution.attempt
                 && checkpoint.cleanup_completed
-                && checkpoint.managed_network.is_none()
             {
                 checkpoint.attempt = candidate.execution.attempt;
                 checkpoint.stage = ExecutionStage::Planned;
@@ -6133,10 +6135,18 @@ impl<'a> CaseService<'a> {
                 checkpoint.scope_sha256 = None;
                 checkpoint.launcher_plan_sha256 = None;
                 checkpoint.artifact_ids.clear();
+                checkpoint.managed_network = None;
                 checkpoint.last_error = None;
                 checkpoint.failure_code = None;
                 engine_run.resume_token = Some(checkpoint.resume_token()?);
                 engine_run.last_execution_report_sha256 = None;
+                engine_run.runtime_provider = None;
+                engine_run.runtime_version = None;
+                engine_run.runtime_security_options = None;
+                engine_run.exit_code = None;
+                engine_run.cleanup_removed = None;
+                engine_run.cleanup_detail = None;
+                engine_run.gateway_refusals = None;
                 engine_run.error_code = None;
                 engine_run.error_message = None;
             }
@@ -10981,10 +10991,10 @@ fn validate_checkpoint_progress(
                 "same-attempt execution checkpoint changed its managed-network identity".into(),
             ));
         }
+        // A retried planned checkpoint keeps its recorded runtime. The checks
+        // above bind the incoming report to that same runtime.
         let introduced_managed_network = existing.stage == ExecutionStage::Planned
             && existing.container_name.is_none()
-            && existing.runtime_provider.is_none()
-            && existing.runtime_command_provenance.is_none()
             && existing.managed_network.is_none()
             && incoming.container_name.is_some()
             && incoming.runtime_provider.is_some()
@@ -33873,6 +33883,577 @@ mod tests {
                     .unwrap();
                 assert_eq!(retried.executable[0].attempt, checkpoint.attempt + 2);
             }
+        }
+    }
+
+    #[test]
+    fn cleaned_terminal_retry_after_managed_egress_prepares_a_new_attempt() {
+        for stage in [ExecutionStage::Cancelled, ExecutionStage::Failed] {
+            for already_queued in [false, true] {
+                let fixture = Fixture::new();
+                let (case_id, run_id, engine_run_id, token) =
+                    ordinary_cleanup_pending_case(&fixture);
+                let service = fixture.service();
+                let mut stored = service.show_case(&case_id).unwrap();
+                let mut checkpoint = ExecutionCheckpoint::from_resume_token(&token).unwrap();
+                checkpoint.stage = stage.clone();
+                checkpoint.cleanup_completed = true;
+                let grant_ids = stored.scan_runs[0].scope_grant_ids.clone();
+                assert!(!grant_ids.is_empty());
+                checkpoint.managed_network = Some(historical_managed_egress_identity(
+                    &case_id,
+                    checkpoint.runtime_provider.unwrap(),
+                    grant_ids,
+                    &"d".repeat(32),
+                ));
+                let engine = &mut stored.scan_runs[0].engine_runs[0];
+                engine.resume_token = Some(checkpoint.resume_token().unwrap());
+                engine.status = if already_queued {
+                    EngineRunStatus::Queued
+                } else if stage == ExecutionStage::Cancelled {
+                    EngineRunStatus::Cancelled
+                } else {
+                    EngineRunStatus::Failed
+                };
+                engine.phase = if already_queued {
+                    "queued_for_resume".into()
+                } else {
+                    enum_key(&stage)
+                };
+                if already_queued {
+                    engine.finished_at = None;
+                }
+                let evidence = engine.raw_artifact_ids.clone();
+                let warnings = engine.warnings.clone();
+                assert!(!evidence.is_empty());
+                fixture
+                    .storage
+                    .save_case(&mut stored, "test.cleaned_terminal")
+                    .unwrap();
+
+                let resumed = service
+                    .persist_resume_before_execution_preflight(&case_id, &run_id)
+                    .unwrap();
+                assert_eq!(resumed.executable.len(), 1);
+                assert_eq!(resumed.executable[0].attempt, checkpoint.attempt + 1);
+                assert_eq!(
+                    resumed.scan_run.scope_grant_ids,
+                    stored.scan_runs[0].scope_grant_ids
+                );
+                assert_eq!(
+                    resumed.scan_run.engine_runs[0].asset_ids,
+                    stored.scan_runs[0].engine_runs[0].asset_ids
+                );
+                let next = resumed.executable[0].resume_checkpoint.as_ref().unwrap();
+                assert_eq!(next.stage, ExecutionStage::Planned);
+                assert_eq!(next.attempt, checkpoint.attempt + 1);
+                assert!(next.container_name.is_none());
+                assert!(next.scope_sha256.is_none());
+                assert!(next.artifact_ids.is_empty());
+                assert!(next.managed_network.is_none());
+                assert_eq!(next.runtime_provider, checkpoint.runtime_provider);
+                assert_eq!(
+                    next.runtime_command_provenance,
+                    checkpoint.runtime_command_provenance
+                );
+                let persisted = service.show_case(&case_id).unwrap();
+                let persisted_checkpoint = ExecutionCheckpoint::from_resume_token(
+                    persisted.scan_runs[0].engine_runs[0]
+                        .resume_token
+                        .as_deref()
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(persisted_checkpoint.attempt, next.attempt);
+                assert_eq!(persisted_checkpoint.stage, ExecutionStage::Planned);
+                assert_eq!(persisted_checkpoint.stage, next.stage);
+                assert!(persisted_checkpoint.managed_network.is_none());
+
+                let ids = vec![engine_run_id.clone()];
+                service
+                    .transition_persisted_scan_pre_dispatch(
+                        &case_id,
+                        &run_id,
+                        &PersistedPreDispatchTransition::Preparing {
+                            engine_run_ids: ids.clone(),
+                        },
+                    )
+                    .unwrap();
+                service
+                    .transition_persisted_scan_pre_dispatch(
+                        &case_id,
+                        &run_id,
+                        &PersistedPreDispatchTransition::ApplyOutcome {
+                            task_outcomes: vec![PersistedPreDispatchTaskOutcome::Runnable {
+                                engine_run_id,
+                            }],
+                        },
+                    )
+                    .unwrap();
+                let cancelled = service
+                    .cancel_no_worker_scan_work(&case_id, &run_id, &ids, None)
+                    .unwrap();
+                let engine = &cancelled.scan_runs[0].engine_runs[0];
+                assert_eq!(engine.status, EngineRunStatus::Cancelled);
+                assert_eq!(engine.raw_artifact_ids, evidence);
+                assert!(
+                    warnings
+                        .iter()
+                        .all(|warning| engine.warnings.contains(warning))
+                );
+                assert!(cancelled.scan_runs[0].completed_at.is_some());
+                let retried = service
+                    .persist_resume_before_execution_preflight(&case_id, &run_id)
+                    .unwrap();
+                assert_eq!(retried.executable[0].attempt, checkpoint.attempt + 2);
+            }
+        }
+    }
+
+    #[test]
+    fn managed_egress_cleanup_that_did_not_finish_is_not_replaced_by_a_retry_plan() {
+        let stage = ExecutionStage::Failed;
+        let fixture = Fixture::new();
+        let (case_id, run_id, _engine_run_id, token) = ordinary_cleanup_pending_case(&fixture);
+        let service = fixture.service();
+        let mut stored = service.show_case(&case_id).unwrap();
+        let mut checkpoint = ExecutionCheckpoint::from_resume_token(&token).unwrap();
+        checkpoint.stage = stage.clone();
+        checkpoint.cleanup_completed = false;
+        let grant_ids = stored.scan_runs[0].scope_grant_ids.clone();
+        assert!(!grant_ids.is_empty());
+        let identity = historical_managed_egress_identity(
+            &case_id,
+            checkpoint.runtime_provider.unwrap(),
+            grant_ids,
+            &"d".repeat(32),
+        );
+        checkpoint.managed_network = Some(identity.clone());
+        let engine = &mut stored.scan_runs[0].engine_runs[0];
+        engine.resume_token = Some(checkpoint.resume_token().unwrap());
+        engine.status = EngineRunStatus::Failed;
+        engine.phase = enum_key(&stage);
+        fixture
+            .storage
+            .save_case(&mut stored, "test.managed_egress_cleanup_open")
+            .unwrap();
+
+        let resumed = service
+            .persist_resume_before_execution_preflight(&case_id, &run_id)
+            .unwrap();
+        assert_eq!(resumed.executable.len(), 1);
+        assert_eq!(resumed.executable[0].attempt, checkpoint.attempt + 1);
+        let returned = resumed.executable[0].resume_checkpoint.as_ref().unwrap();
+        assert_eq!(returned.stage, ExecutionStage::Failed);
+        assert_eq!(returned.attempt, checkpoint.attempt);
+        assert!(!returned.cleanup_completed);
+        assert_eq!(returned.container_name, checkpoint.container_name);
+        assert_eq!(returned.scope_sha256, checkpoint.scope_sha256);
+        assert_eq!(returned.artifact_ids, checkpoint.artifact_ids);
+        assert_eq!(returned.managed_network.as_ref(), Some(&identity));
+        assert_eq!(returned.runtime_provider, checkpoint.runtime_provider);
+        assert_eq!(
+            returned.runtime_command_provenance,
+            checkpoint.runtime_command_provenance
+        );
+
+        let persisted = service.show_case(&case_id).unwrap();
+        let engine = &persisted.scan_runs[0].engine_runs[0];
+        let stored_checkpoint =
+            ExecutionCheckpoint::from_resume_token(engine.resume_token.as_deref().unwrap())
+                .unwrap();
+        assert_eq!(stored_checkpoint.attempt, checkpoint.attempt);
+        assert_eq!(stored_checkpoint.stage, ExecutionStage::Failed);
+        assert!(!stored_checkpoint.cleanup_completed);
+        assert_eq!(stored_checkpoint.managed_network.as_ref(), Some(&identity));
+    }
+
+    #[test]
+    fn retried_managed_egress_attempt_records_its_new_network_and_its_own_outcome() {
+        let fixture = Fixture::new();
+        let (case_id, run_id, engine_run_id, token) = ordinary_cleanup_pending_case(&fixture);
+        let service = fixture.service();
+        let mut stored = service.show_case(&case_id).unwrap();
+        let mut checkpoint = ExecutionCheckpoint::from_resume_token(&token).unwrap();
+        checkpoint.stage = ExecutionStage::Failed;
+        checkpoint.cleanup_completed = true;
+        let grant_ids = stored.scan_runs[0].scope_grant_ids.clone();
+        assert!(!grant_ids.is_empty());
+        checkpoint.managed_network = Some(historical_managed_egress_identity(
+            &case_id,
+            checkpoint.runtime_provider.unwrap(),
+            grant_ids.clone(),
+            &"d".repeat(32),
+        ));
+        let engine = &mut stored.scan_runs[0].engine_runs[0];
+        engine.resume_token = Some(checkpoint.resume_token().unwrap());
+        engine.status = EngineRunStatus::Failed;
+        engine.phase = enum_key(&ExecutionStage::Failed);
+        engine.exit_code = Some(17);
+        engine.cleanup_removed = Some(true);
+        engine.cleanup_detail = Some("ended attempt cleanup".into());
+        engine.runtime_version = Some("old".into());
+        let evidence = engine.raw_artifact_ids.clone();
+        assert!(!evidence.is_empty());
+        fixture
+            .storage
+            .save_case(&mut stored, "test.cleaned_terminal")
+            .unwrap();
+
+        let resumed = service
+            .persist_resume_before_execution_preflight(&case_id, &run_id)
+            .unwrap();
+        let next = resumed.executable[0]
+            .resume_checkpoint
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(next.stage, ExecutionStage::Planned);
+        assert!(next.cleanup_completed);
+        assert!(next.managed_network.is_none());
+        assert!(next.runtime_provider.is_some());
+        let persisted = service.show_case(&case_id).unwrap();
+        let engine = &persisted.scan_runs[0].engine_runs[0];
+        assert_eq!(engine.exit_code, None);
+        assert_eq!(engine.cleanup_removed, None);
+        assert_eq!(engine.cleanup_detail, None);
+        assert_eq!(engine.runtime_version, None);
+        assert_eq!(engine.runtime_provider, None);
+        assert_eq!(engine.runtime_security_options, None);
+        assert_eq!(engine.gateway_refusals, None);
+        assert_eq!(engine.raw_artifact_ids, evidence);
+
+        service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &run_id,
+                &PersistedPreDispatchTransition::Preparing {
+                    engine_run_ids: vec![engine_run_id.clone()],
+                },
+            )
+            .unwrap();
+        service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &run_id,
+                &PersistedPreDispatchTransition::ApplyOutcome {
+                    task_outcomes: vec![PersistedPreDispatchTaskOutcome::Runnable {
+                        engine_run_id,
+                    }],
+                },
+            )
+            .unwrap();
+
+        let mut reported = next.clone();
+        reported.container_name = Some(
+            crate::container_runtime::planned_container_name(
+                &reported.engine_id,
+                &reported.engine_run_id,
+                reported.attempt,
+            )
+            .unwrap(),
+        );
+        reported.scope_sha256 = Some("e".repeat(64));
+        reported.managed_network = Some(historical_managed_egress_identity(
+            &case_id,
+            reported.runtime_provider.unwrap(),
+            grant_ids,
+            &"e".repeat(32),
+        ));
+        reported.cleanup_completed = false;
+        service
+            .apply_execution_report(
+                &case_id,
+                &DurableExecutionReport {
+                    checkpoint: reported.clone(),
+                    runtime_preflight: None,
+                    cleanup: None,
+                    exit_code: None,
+                    raw_artifacts: Vec::new(),
+                    findings: Vec::new(),
+                    observations: Vec::new(),
+                    warnings: Vec::new(),
+                    unattributed: Vec::new(),
+                    unevaluated_targets: Vec::new(),
+                    security_template_executions: Vec::new(),
+                    manual_review_controls: Vec::new(),
+                },
+            )
+            .unwrap();
+
+        reported.stage = ExecutionStage::Failed;
+        reported.cleanup_completed = true;
+        reported.last_error = Some("scanner container exited with status Some(126)".into());
+        service
+            .apply_execution_report(
+                &case_id,
+                &DurableExecutionReport {
+                    checkpoint: reported,
+                    runtime_preflight: None,
+                    cleanup: Some(CleanupOutcome {
+                        removed: true,
+                        detail: "attempt cleanup".into(),
+                        gateway_refusals: None,
+                    }),
+                    exit_code: Some(126),
+                    raw_artifacts: Vec::new(),
+                    findings: Vec::new(),
+                    observations: Vec::new(),
+                    warnings: Vec::new(),
+                    unattributed: Vec::new(),
+                    unevaluated_targets: Vec::new(),
+                    security_template_executions: Vec::new(),
+                    manual_review_controls: Vec::new(),
+                },
+            )
+            .unwrap();
+
+        let stored = service.show_case(&case_id).unwrap();
+        let engine = &stored.scan_runs[0].engine_runs[0];
+        assert_eq!(engine.status, EngineRunStatus::Failed);
+        assert_eq!(engine.exit_code, Some(126));
+        assert_eq!(engine.cleanup_detail.as_deref(), Some("attempt cleanup"));
+        let stored_checkpoint =
+            ExecutionCheckpoint::from_resume_token(engine.resume_token.as_deref().unwrap())
+                .unwrap();
+        assert_eq!(stored_checkpoint.attempt, next.attempt);
+        assert!(stored_checkpoint.cleanup_completed);
+        let policy_id = &stored_checkpoint
+            .managed_network
+            .as_ref()
+            .unwrap()
+            .policy_id;
+        assert!(policy_id.ends_with(&"e".repeat(32)), "{policy_id}");
+    }
+
+    #[test]
+    fn retried_managed_egress_attempt_cannot_switch_its_recorded_runtime() {
+        let fixture = Fixture::new();
+        let (case_id, run_id, engine_run_id, token) = ordinary_cleanup_pending_case(&fixture);
+        let service = fixture.service();
+        let mut stored = service.show_case(&case_id).unwrap();
+        let mut checkpoint = ExecutionCheckpoint::from_resume_token(&token).unwrap();
+        checkpoint.stage = ExecutionStage::Failed;
+        checkpoint.cleanup_completed = true;
+        let grant_ids = stored.scan_runs[0].scope_grant_ids.clone();
+        assert!(!grant_ids.is_empty());
+        checkpoint.managed_network = Some(historical_managed_egress_identity(
+            &case_id,
+            checkpoint.runtime_provider.unwrap(),
+            grant_ids.clone(),
+            &"d".repeat(32),
+        ));
+        let engine = &mut stored.scan_runs[0].engine_runs[0];
+        engine.resume_token = Some(checkpoint.resume_token().unwrap());
+        engine.status = EngineRunStatus::Failed;
+        engine.phase = enum_key(&ExecutionStage::Failed);
+        fixture
+            .storage
+            .save_case(&mut stored, "test.cleaned_terminal")
+            .unwrap();
+
+        let resumed = service
+            .persist_resume_before_execution_preflight(&case_id, &run_id)
+            .unwrap();
+        let next = resumed.executable[0]
+            .resume_checkpoint
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(next.stage, ExecutionStage::Planned);
+        assert_eq!(
+            next.runtime_provider,
+            Some(crate::container_runtime::RuntimeProvider::Podman)
+        );
+
+        service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &run_id,
+                &PersistedPreDispatchTransition::Preparing {
+                    engine_run_ids: vec![engine_run_id.clone()],
+                },
+            )
+            .unwrap();
+        service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &run_id,
+                &PersistedPreDispatchTransition::ApplyOutcome {
+                    task_outcomes: vec![PersistedPreDispatchTaskOutcome::Runnable {
+                        engine_run_id,
+                    }],
+                },
+            )
+            .unwrap();
+        let token_after_prepare = service.show_case(&case_id).unwrap().scan_runs[0].engine_runs[0]
+            .resume_token
+            .clone();
+
+        let mut reported = next;
+        reported.runtime_provider = Some(crate::container_runtime::RuntimeProvider::Docker);
+        reported.container_name = Some(
+            crate::container_runtime::planned_container_name(
+                &reported.engine_id,
+                &reported.engine_run_id,
+                reported.attempt,
+            )
+            .unwrap(),
+        );
+        reported.scope_sha256 = Some("e".repeat(64));
+        reported.managed_network = Some(historical_managed_egress_identity(
+            &case_id,
+            crate::container_runtime::RuntimeProvider::Docker,
+            grant_ids,
+            &"e".repeat(32),
+        ));
+        reported.cleanup_completed = false;
+        let error = service
+            .apply_execution_report(
+                &case_id,
+                &DurableExecutionReport {
+                    checkpoint: reported,
+                    runtime_preflight: None,
+                    cleanup: None,
+                    exit_code: None,
+                    raw_artifacts: Vec::new(),
+                    findings: Vec::new(),
+                    observations: Vec::new(),
+                    warnings: Vec::new(),
+                    unattributed: Vec::new(),
+                    unevaluated_targets: Vec::new(),
+                    security_template_executions: Vec::new(),
+                    manual_review_controls: Vec::new(),
+                },
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("changed its runtime provider identity"),
+            "{error}"
+        );
+        assert_eq!(
+            service.show_case(&case_id).unwrap().scan_runs[0].engine_runs[0].resume_token,
+            token_after_prepare
+        );
+    }
+
+    #[test]
+    fn fresh_attempt_still_introduces_its_managed_network() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let service = fixture.service();
+        let original = service
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
+                },
+            )
+            .unwrap();
+        let run_id = original.scan_run.id.clone();
+        let grant_ids = original.scan_run.scope_grant_ids.clone();
+        assert!(!grant_ids.is_empty());
+        let engine_run_id = original.executable[0].engine_run_id.clone();
+        service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &run_id,
+                &PersistedPreDispatchTransition::Preparing {
+                    engine_run_ids: vec![engine_run_id.clone()],
+                },
+            )
+            .unwrap();
+        let preparing = service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &run_id,
+                &PersistedPreDispatchTransition::ApplyOutcome {
+                    task_outcomes: vec![PersistedPreDispatchTaskOutcome::Runnable {
+                        engine_run_id,
+                    }],
+                },
+            )
+            .unwrap();
+        let mut checkpoint = ExecutionCheckpoint::from_resume_token(
+            preparing.scan_runs[0].engine_runs[0]
+                .resume_token
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(checkpoint.stage, ExecutionStage::Planned);
+        assert!(checkpoint.runtime_provider.is_none());
+        assert!(checkpoint.runtime_command_provenance.is_none());
+        assert!(checkpoint.cleanup_completed);
+        checkpoint.container_name = Some(
+            crate::container_runtime::planned_container_name(
+                &checkpoint.engine_id,
+                &checkpoint.engine_run_id,
+                checkpoint.attempt,
+            )
+            .unwrap(),
+        );
+        checkpoint.scope_sha256 = Some("e".repeat(64));
+        checkpoint.runtime_provider = Some(crate::container_runtime::RuntimeProvider::Docker);
+        checkpoint.runtime_command_provenance =
+            Some(crate::container_runtime::RuntimeCommandProvenance::Compatibility);
+        checkpoint.managed_network = Some(historical_managed_egress_identity(
+            &case_id,
+            crate::container_runtime::RuntimeProvider::Docker,
+            grant_ids,
+            &"d".repeat(32),
+        ));
+        checkpoint.cleanup_completed = false;
+        service
+            .apply_execution_report(
+                &case_id,
+                &DurableExecutionReport {
+                    checkpoint,
+                    runtime_preflight: None,
+                    cleanup: None,
+                    exit_code: None,
+                    raw_artifacts: Vec::new(),
+                    findings: Vec::new(),
+                    observations: Vec::new(),
+                    warnings: Vec::new(),
+                    unattributed: Vec::new(),
+                    unevaluated_targets: Vec::new(),
+                    security_template_executions: Vec::new(),
+                    manual_review_controls: Vec::new(),
+                },
+            )
+            .unwrap();
+    }
+
+    fn historical_managed_egress_identity(
+        case_id: &str,
+        provider: crate::container_runtime::RuntimeProvider,
+        grant_ids: Vec<String>,
+        policy_unique: &str,
+    ) -> crate::managed_network::ManagedNetworkIdentity {
+        crate::managed_network::ManagedNetworkIdentity {
+            schema_version: "1.0.0".into(),
+            provider,
+            network_name: format!("ass-egress-{policy_unique}"),
+            network_id: "historical-network-id".into(),
+            uplink_network_name: None,
+            uplink_network_id: None,
+            gateway_container_name: None,
+            gateway_container_id: None,
+            gateway_listener_ip: None,
+            gateway_image_repository: None,
+            gateway_image_digest: None,
+            policy_id: format!("egress-{policy_unique}"),
+            policy_sha256: "c".repeat(64),
+            expires_at: Utc::now(),
+            provenance: crate::managed_network::EgressGatewayProvenance::ExternalAssetGrants {
+                case_id: case_id.to_owned(),
+                grant_ids,
+                activities: vec![ExternalActivity::LowImpactExternal],
+            },
         }
     }
 
