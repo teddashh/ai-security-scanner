@@ -21,7 +21,7 @@ const {
   engineNextStepFor,
   engineOutcomeCopy,
   engineOutcomeFor,
-  engineRecoveryLabelFor,
+  engineRecoveryModeFor,
   skippedChecksNextStepFor,
 } = await import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString("base64")}`);
 
@@ -565,12 +565,12 @@ test("a gateway preparation failure gives direct automatic setup and retry", () 
     },
   });
   const nextStep = engineNextStepFor(failed);
-  const recovery = engineRecoveryLabelFor(failed);
+  const recovery = engineRecoveryModeFor(failed);
 
   assert.match(nextStep.en, /private connection setup is automatic/u);
   assert.match(nextStep.zhTW, /專用連線會自動準備/u);
-  assert.match(recovery.en, /from the beginning/u);
-  assert.match(recovery.zhTW, /從頭重試/u);
+  assert.match(recovery.en, /starts this check over/u);
+  assert.match(recovery.zhTW, /從頭執行/u);
   assert.doesNotMatch(`${nextStep.en}${recovery.en}`, /continue from saved|last saved point/u);
 });
 

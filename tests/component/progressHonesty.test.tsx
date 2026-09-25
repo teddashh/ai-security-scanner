@@ -685,6 +685,88 @@ test("a paused check that must restart names that retry", () => {
   expect(container.textContent).toContain("Retry stopped checks");
 });
 
+test("a paused run keeps its activity card body beside the incomplete notice", () => {
+  const { container } = renderProgress(
+    run(
+      [
+        engine("waiting-check", "paused", { phase: "paused", progress: 40, finishedAt: undefined }),
+        engine("never-ran", "not_executed", { progress: 0, startedAt: undefined }),
+      ],
+      "paused",
+      { progress: 40, finishedAt: undefined },
+    ),
+  );
+
+  expect(container.textContent).toContain("This run did not cover everything");
+  const activity = container.querySelector(".scan-activity__current");
+  expect(activity?.textContent).toContain("Continue or cancel this scan.");
+});
+
+test("a stopped run's recovery line describes the retry action instead of repeating the stopped instruction", () => {
+  const { container } = renderProgress(
+    run([engine("broke-check", "failed", {
+      recoveryAction: "restart_check",
+      resumable: true,
+    })], "failed"),
+  );
+
+  // The header button is the only live retry control; its accessible name is
+  // overridden by an aria-label, so the visible label is asserted as text.
+  expect(container.textContent).toContain("Retry stopped checks");
+
+  const row = engineRow(container, "broke-check");
+  const recovery = row.querySelector<HTMLElement>(".engine-row__recovery");
+  expect(recovery).not.toBeNull();
+  expect(recovery!.textContent).toContain("Retrying starts this check over");
+  expect(recovery!.closest("button, a")).toBeNull();
+  expect(recovery!.querySelector("svg")).toBeNull();
+
+  // "Retry this check from the beginning" is the paused next-step sentence;
+  // this run has no paused check, so it must not appear anywhere on the page.
+  expect(container.textContent).not.toContain("Retry this check from the beginning");
+
+  const incompleteNotices = Array.from(container.querySelectorAll<HTMLElement>(".inline-notice")).filter(
+    (candidate) => candidate.textContent?.includes("This run did not cover everything"),
+  );
+  expect(incompleteNotices.length).toBe(1);
+
+  expect(container.textContent).not.toContain("Open each unfinished check and follow its next action.");
+});
+
+test("a zh-TW stopped run shows the retry recovery line in Traditional Chinese", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderProgress(
+    run([engine("broke-check", "failed", {
+      recoveryAction: "restart_check",
+      resumable: true,
+    })], "failed"),
+  );
+
+  const row = engineRow(container, "broke-check");
+  expect(row.querySelector(".engine-row__recovery")?.textContent).toContain("重試時會從頭執行這項檢查");
+});
+
+test("a terminal exact localhost quick scan shows no recovery line for a resumable check", () => {
+  // The exact localhost quick scan never offers the retry control, even for a
+  // terminal run whose check could be retried.
+  const { container } = renderProgress(run([
+    engine(BUILT_IN_LOCALHOST_QUICK_SCAN_ENGINE_ID, "failed", {
+      category: "built_in_localhost_tcp",
+      taskKind: {
+        kind: "built_in_localhost_tcp",
+        port: 9001,
+        timeoutMs: LOCALHOST_QUICK_SCAN_TIMEOUT_MS,
+        payloadBytes: 0,
+      },
+      recoveryAction: "restart_check",
+      resumable: true,
+    }),
+  ], "failed"));
+
+  expect(container.querySelector(".engine-row__recovery")).toBeNull();
+  expect(container.textContent).not.toContain("Retry stopped checks");
+});
+
 test("queued work is named directly in the progress overview and check row", () => {
   const { container } = renderProgress(
     run(

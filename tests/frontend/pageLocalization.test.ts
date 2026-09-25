@@ -437,7 +437,7 @@ test("pre-scanner failures separate frozen authorization from runtime scope and 
     "重試已停止的檢查",
   ]) assert.ok(progress.includes(copy), copy);
   assert.match(progress, /engine\.scopeContractBound[\s\S]*checkpoint\.scopeBound/u);
-  assert.match(progress, /engineRecoveryLabelFor\(engine\)/u);
+  assert.match(progress, /canResume \? engineRecoveryModeFor\(engine\)/u);
   assert.doesNotMatch(progress, /Can continue where it stopped|Scope lock|Not created/u);
   assert.doesNotMatch(english, /You can continue from the last saved point/u);
   assert.doesNotMatch(traditionalChinese, /你可以從最後保存的進度繼續/u);

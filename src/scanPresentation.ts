@@ -377,7 +377,26 @@ export const engineNextStepFor = (engine: EngineRun): BilingualText => {
   }
 };
 
-export const engineRecoveryLabelFor = (engine: EngineRun): BilingualText | undefined => {
+const recoveryModeCopy = {
+  restart_check: {
+    en: "Retrying starts this check over",
+    zhTW: "重試時會從頭執行這項檢查",
+  },
+  continue_saved_results: {
+    en: "Continuing picks up from its saved results",
+    zhTW: "繼續時會從已保存的結果接著做",
+  },
+  finish_cleanup: {
+    en: "Cleanup finishes before it runs again",
+    zhTW: "再次執行前會先完成清理",
+  },
+} as const satisfies Record<Exclude<NonNullable<EngineRun["recoveryAction"]>, "none">, BilingualText>;
+
+/**
+ * Describes what the on-screen retry control will do for this check. Show it
+ * only where that control renders (`canResume`).
+ */
+export const engineRecoveryModeFor = (engine: EngineRun): BilingualText | undefined => {
   const action = engine.recoveryAction ?? (engine.resumable ? "continue_saved_results" : "none");
-  return action === "none" ? undefined : recoveryCopy[action];
+  return action === "none" ? undefined : recoveryModeCopy[action];
 };

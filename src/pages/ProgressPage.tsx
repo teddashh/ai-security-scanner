@@ -35,7 +35,7 @@ import {
   engineNextStepFor,
   engineOutcomeFor,
   engineRecordedUnevaluatedTarget,
-  engineRecoveryLabelFor,
+  engineRecoveryModeFor,
   skippedChecksNextStepFor,
 } from "../scanPresentation";
 import { isCapturedEvidenceBlocker } from "../scanReadiness";
@@ -1191,6 +1191,7 @@ export function ProgressPage({
     (engine) => engine.status === "completed" && engineRecordedUnevaluatedTarget(engine),
   ).length;
   const incompleteCount = stateCounts.partial + stateCounts.failed + stateCounts.not_executed + stateCounts.cancelled + unevaluatedCompletedCheckCount;
+  const incompleteNoticeVisible = !savedPlanAfterRestart && !blocked && !sharedInfrastructureFailure && incompleteCount > 0;
   const terminalCount = terminalEngineStates.reduce((sum, state) => sum + stateCounts[state], 0);
   const completedAssetCount = Math.min(selectedRun.totalAssetCount, selectedRun.coveredAssetCount);
   const uncoveredAssetCount = Math.max(0, selectedRun.totalAssetCount - completedAssetCount);
@@ -1540,7 +1541,9 @@ export function ProgressPage({
               <strong>{text(savedPlanAfterRestart ? copy.noChecksStarted : copy.activityStates[activity.state].title)}</strong>
               {savedPlanAfterRestart
                 ? <p>{text(copy.savedPlanReady)}</p>
-                : (!activity.active || activity.stale) && <p>{text(copy.activityStates[activity.state].body)}</p>}
+                : (!activity.active || activity.stale)
+                  && !(activity.state === "stopped" && incompleteNoticeVisible)
+                  && <p>{text(copy.activityStates[activity.state].body)}</p>}
               <span>{text(copy.lastProgress)} · {showDateTime(activity.lastProgressAt)}</span>
               {activity.activeCheckNames.length > 0 && (
                 <span>{text(copy.activeScanTools)} · {activity.activeCheckNames.join(locale === "zh-TW" ? "、" : ", ")}</span>
@@ -1614,7 +1617,7 @@ export function ProgressPage({
         </div>
       )}
 
-      {!savedPlanAfterRestart && !blocked && !sharedInfrastructureFailure && incompleteCount > 0 && (
+      {incompleteNoticeVisible && (
         <InlineNotice tone="warning" title={text(copy.incompleteTitle)}>
           <p>{text(copy.incompleteBody)}</p>
         </InlineNotice>
@@ -1675,7 +1678,7 @@ export function ProgressPage({
             {visibleEngineRuns.map((engine) => {
               const meta = engineStatusMeta[engine.status];
               const checkpoint = engine.checkpoint;
-              const recoveryLabel = engineRecoveryLabelFor(engine);
+              const recoveryMode = canResume ? engineRecoveryModeFor(engine) : undefined;
               const localhostSummary = localhostTcpBeginnerSummary(engine);
               const localhostTone = !localhostSummary
                 ? undefined
@@ -1775,8 +1778,8 @@ export function ProgressPage({
                       : engine.findingCountKnown === false
                         ? text(copy.legacyFindingUnknown)
                         : text(copy.findingCount, { count: formatNumber(engine.findingCount) })}</span>
-                    {recoveryLabel && (
-                      <small><Icon name="refresh" size={13} /> {text(recoveryLabel)}</small>
+                    {recoveryMode && (
+                      <span className="engine-row__recovery">{text(recoveryMode)}</span>
                     )}
                   </div>
                   <details className="engine-provenance">
