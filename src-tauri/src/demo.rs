@@ -2,7 +2,7 @@ use crate::coverage::NOT_APPLICABLE_REASON_METADATA;
 use crate::domain::*;
 use chrono::{Duration, Utc};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn artifact_hash(content: &str) -> String {
     hex::encode(Sha256::digest(content.as_bytes()))
@@ -300,6 +300,22 @@ pub fn build_demo_case() -> AssessmentCase {
             },
         ],
     });
+    // Freeze the requested assets the way planning does for a real run, so
+    // the example report labels its targets from the run.
+    let requested_asset_ids = case.scan_runs[0]
+        .engine_runs
+        .iter()
+        .flat_map(|engine_run| engine_run.asset_ids.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    case.scan_runs[0].report_asset_snapshots = case
+        .assets
+        .iter()
+        .filter(|asset| requested_asset_ids.contains(&asset.id))
+        .map(|asset| ReportAssetSnapshot {
+            asset: asset.clone(),
+            disposition: ReportAssetDisposition::RequestedForScan,
+        })
+        .collect();
 
     case.coverage = vec![
         CoverageEntry {
@@ -651,6 +667,36 @@ mod tests {
                 )
             });
         }
+    }
+
+    #[test]
+    fn demo_report_labels_its_targets_from_the_run() {
+        let demo = build_demo_case();
+        let report =
+            crate::beginner_report::build_beginner_master_report(&demo, &demo.scan_runs[0].id)
+                .unwrap();
+
+        assert_eq!(report.requested.targets.len(), 3);
+        for target in &report.requested.targets {
+            assert_eq!(
+                target.label_availability,
+                crate::beginner_report::DataAvailability::Recorded,
+                "{target:?}"
+            );
+            assert_eq!(
+                target.asset_kind_availability,
+                crate::beginner_report::DataAvailability::Recorded,
+                "{target:?}"
+            );
+        }
+        assert!(
+            !report
+                .requested
+                .unavailable_dimensions
+                .iter()
+                .any(|dimension| dimension.dimension == "run-frozen target label or type"),
+            "the example report asked a reader to rerun a scan it cannot rerun"
+        );
     }
 
     #[test]

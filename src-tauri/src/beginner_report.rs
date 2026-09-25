@@ -1200,9 +1200,10 @@ fn project_requested_coverage(
     let mut requested_check_ids = BTreeSet::new();
     let mut request_outcome_code = None;
 
-    // New mixed-environment runs freeze both the routed assets and explicitly
-    // added inventory-only assets. This is the authoritative per-run list for
-    // the report; mutable case state must not make an earlier target vanish.
+    // New runs freeze every requested asset, and IT-environment runs also
+    // freeze explicitly added inventory-only assets. This is the
+    // authoritative per-run list for the report; mutable case state must not
+    // make an earlier target vanish.
     target_ids.extend(
         run.report_asset_snapshots
             .iter()

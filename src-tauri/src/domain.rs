@@ -1166,10 +1166,12 @@ pub struct ScanRun {
     /// `completed_at` and contain no queued engine runs.
     #[serde(default)]
     pub request_outcome: Option<ScanRequestOutcome>,
-    /// Product-report asset identity frozen at planning time for one
-    /// mixed-environment run. Full assets prevent later case edits from
-    /// silently relabeling historical results. Empty means a legacy or
-    /// non-environment run, never that the current case should be substituted.
+    /// The assets a run was asked to scan, frozen at planning time, plus the
+    /// explicitly added inventory-only assets of an IT-environment run. Full
+    /// assets prevent later case edits from silently relabeling historical
+    /// results. Empty means a legacy run, a run that requested no asset, or a
+    /// request too large to freeze, never that the current case should be
+    /// substituted.
     #[serde(
         default,
         deserialize_with = "deserialize_report_asset_snapshots",

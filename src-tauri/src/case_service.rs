@@ -8539,12 +8539,25 @@ fn scan_plan_request_from_baseline(baseline: &ScanRun) -> ScanPlanRequest {
     }
 }
 
+/// Freezes the assets a run was asked to scan. An IT-environment run also
+/// freezes the explicitly added inventory-only assets it did not route,
+/// because each one is still a reportable coverage gap.
 fn freeze_report_asset_snapshots(
     case: &AssessmentCase,
     requested_asset_ids: &BTreeSet<Id>,
 ) -> AppResult<Vec<ReportAssetSnapshot>> {
-    if case.assessment_intent != Some(AssessmentIntent::InternalItEnvironment) {
-        return Ok(Vec::new());
+    let it_environment = case.assessment_intent == Some(AssessmentIntent::InternalItEnvironment);
+    if !it_environment {
+        // An oversized request keeps the current-case labels an empty list
+        // already reports honestly, rather than failing a scan that plans.
+        let requested_asset_count = case
+            .assets
+            .iter()
+            .filter(|asset| requested_asset_ids.contains(&asset.id))
+            .count();
+        if requested_asset_count > MAX_SCAN_RUN_REPORT_ASSET_SNAPSHOTS {
+            return Ok(Vec::new());
+        }
     }
 
     let mut snapshots = Vec::new();
@@ -8552,7 +8565,7 @@ fn freeze_report_asset_snapshots(
     for asset in &case.assets {
         let disposition = if requested_asset_ids.contains(&asset.id) {
             Some(ReportAssetDisposition::RequestedForScan)
-        } else if is_explicit_inventory_only_environment_asset(asset) {
+        } else if it_environment && is_explicit_inventory_only_environment_asset(asset) {
             Some(ReportAssetDisposition::NoSupportedProfile)
         } else {
             None
@@ -32311,6 +32324,222 @@ mod tests {
     }
 
     #[test]
+    fn source_code_run_freezes_its_requested_repository() {
+        let fixture = Fixture::new();
+        let case = fixture.create_with_intent(Some(AssessmentIntent::SourceCode));
+        let (_, asset_id) = fixture.discovered_asset(&case.id, AssetKind::Repository);
+        let service = fixture.service();
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id: asset_id.clone(),
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        let plan = service
+            .persist_scan_before_execution_preflight(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
+                },
+            )
+            .unwrap();
+        let run_id = plan.scan_run.id.clone();
+
+        assert_eq!(plan.scan_run.report_asset_snapshots.len(), 1);
+        assert_eq!(plan.scan_run.report_asset_snapshots[0].asset.id, asset_id);
+        assert_eq!(
+            plan.scan_run.report_asset_snapshots[0].disposition,
+            ReportAssetDisposition::RequestedForScan
+        );
+        let planned_name = plan.scan_run.report_asset_snapshots[0].asset.name.clone();
+
+        // Rename the live asset after planning, the same way
+        // `report_asset_snapshots_freeze_routed_ssh_and_inventory_only_without_unselected_profiles`
+        // proves an IT-environment run keeps its frozen name; a source-code
+        // run must keep it too now that freezing is no longer IT-only.
+        let mut changed_case = service.show_case(&case.id).unwrap();
+        changed_case
+            .assets
+            .iter_mut()
+            .find(|asset| asset.id == asset_id)
+            .unwrap()
+            .name = "Renamed after planning".into();
+        fixture
+            .storage
+            .save_case(
+                &mut changed_case,
+                "test.source_code_asset_renamed_after_scan_plan",
+            )
+            .unwrap();
+
+        let mut reopened = service.show_case(&case.id).unwrap();
+        let run = reopened
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == run_id)
+            .unwrap();
+        run.completed_at = Some(Utc::now());
+        let engine_run = run.engine_runs.first_mut().unwrap();
+        engine_run.status = EngineRunStatus::Completed;
+        engine_run.phase = "completed".into();
+        engine_run.finished_at = run.completed_at;
+
+        let report = build_beginner_master_report(&reopened, &run_id).unwrap();
+        let target = report
+            .requested
+            .targets
+            .iter()
+            .find(|target| target.asset_id == asset_id)
+            .expect("requested target for the frozen repository asset");
+        assert_eq!(target.label, Some(planned_name));
+        assert_eq!(target.label_availability, DataAvailability::Recorded);
+        assert_eq!(target.asset_kind_availability, DataAvailability::Recorded);
+        assert!(
+            !report
+                .requested
+                .unavailable_dimensions
+                .iter()
+                .any(|dimension| dimension.dimension == "run-frozen target label or type"),
+            "a fresh source-code run must not carry the run-frozen target label or type note"
+        );
+    }
+
+    #[test]
+    fn case_without_an_assessment_intent_freezes_only_its_requested_asset() {
+        let fixture = Fixture::new();
+        let created = fixture
+            .service()
+            .create_case(&CreateCaseRequest {
+                title: "No explicit assessment intent".into(),
+                organization_name: "Example Co".into(),
+                employee_range: "2-49".into(),
+                assessment_intent: None,
+                ai_generated_artifact: Default::default(),
+                data_classes: vec![],
+                requested_activities: vec![],
+                source_kinds: vec![],
+                not_applicable_source_kinds: vec![],
+                declared_assets: vec![DeclaredAssetInput {
+                    kind: DeclaredAssetKind::ExternalTarget,
+                    value: "10.44.0.0/24".into(),
+                    internet_exposed: Some(false),
+                    web_service: None,
+                    network_service: None,
+                    host_scan: None,
+                }],
+                notes: None,
+            })
+            .unwrap();
+        let inventory_asset_id = created.assets[0].id.clone();
+
+        // `create_case` infers an IT-environment intent from this declared
+        // asset. Clear it to model a case that has no intent.
+        let mut case = fixture.service().show_case(&created.id).unwrap();
+        assert_eq!(
+            case.assessment_intent,
+            Some(AssessmentIntent::InternalItEnvironment)
+        );
+        case.assessment_intent = None;
+        fixture
+            .storage
+            .save_case(&mut case, "test.assessment_intent_reset_to_none")
+            .unwrap();
+
+        let (_, asset_id) = fixture.discovered_asset(&case.id, AssetKind::Repository);
+        let service = fixture.service();
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id: asset_id.clone(),
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        let plan = service
+            .persist_scan_before_execution_preflight(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(plan.scan_run.report_asset_snapshots.len(), 1);
+        assert_eq!(plan.scan_run.report_asset_snapshots[0].asset.id, asset_id);
+        assert_eq!(
+            plan.scan_run.report_asset_snapshots[0].disposition,
+            ReportAssetDisposition::RequestedForScan
+        );
+        assert!(
+            !plan
+                .scan_run
+                .report_asset_snapshots
+                .iter()
+                .any(|snapshot| snapshot.asset.id == inventory_asset_id),
+            "an unrequested inventory-only-shaped asset must not be frozen outside an IT environment"
+        );
+    }
+
+    #[test]
+    fn freeze_report_asset_snapshots_cap_is_forgiving_outside_it_environment_and_strict_inside_it()
+    {
+        let base_asset = Asset {
+            id: "asset-0".into(),
+            kind: AssetKind::Repository,
+            name: "cap-fixture".into(),
+            provider: None,
+            region: None,
+            identifiers: vec![],
+            discovered_from: vec![],
+            candidate: false,
+            owner_confirmed: true,
+            internet_exposed: None,
+            contains_sensitive_data: None,
+            metadata: BTreeMap::new(),
+        };
+        let assets = (0..=MAX_SCAN_RUN_REPORT_ASSET_SNAPSHOTS)
+            .map(|index| {
+                let mut asset = base_asset.clone();
+                asset.id = format!("asset-{index}");
+                asset
+            })
+            .collect::<Vec<_>>();
+        let requested_asset_ids = assets
+            .iter()
+            .map(|asset| asset.id.clone())
+            .collect::<BTreeSet<_>>();
+
+        let fixture = Fixture::new();
+        let mut case = fixture.create_with_intent(Some(AssessmentIntent::SourceCode));
+        case.assets = assets;
+        assert!(
+            freeze_report_asset_snapshots(&case, &requested_asset_ids)
+                .unwrap()
+                .is_empty(),
+            "a non-IT-environment case must not fail a scan it would otherwise plan today"
+        );
+
+        case.assessment_intent = Some(AssessmentIntent::InternalItEnvironment);
+        assert!(freeze_report_asset_snapshots(&case, &requested_asset_ids).is_err());
+    }
+
+    #[test]
     fn engine_routes_reject_foreign_and_unowned_asset_ids_without_persisting_a_run() {
         let fixture = Fixture::new();
         let created = fixture.create();
@@ -36480,7 +36709,8 @@ mod tests {
             // id survives and the kind is what gets translated. A gitleaks-only
             // run has no network-discovery stage, so the stage and reductions
             // dimensions are not_applicable and no longer produce a row here.
-            "目標的歷史顯示資料",
+            // The run froze its requested repository, so no run-frozen target
+            // label or type row is produced either.
             "記錄的問題說明文字",
             // Why each row is a gap, and what to do about it. Both were stored
             // as English prose and printed under translated headings.
