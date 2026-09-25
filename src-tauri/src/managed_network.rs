@@ -1703,6 +1703,24 @@ impl ManagedNetworkLease {
             && self.uplink_network_name.is_none()
             && let Some(status_directory) = self.gateway_status_directory.as_ref()
         {
+            // A missing line would make "no refusals" and "no record" look the same.
+            match read_gateway_status(status_directory) {
+                Ok(Some(status)) => {
+                    let rate = status.refusals.rate;
+                    let destination = status.refusals.destination;
+                    let unauthorized = status.refusals.unauthorized_client;
+                    if rate == 0 && destination == 0 && unauthorized == 0 {
+                        details.push("gateway refused no connections".to_owned());
+                    } else {
+                        details.push(format!(
+                            "gateway refused connections: rate {rate}, destination {destination}, unauthorized client {unauthorized}"
+                        ));
+                    }
+                }
+                Ok(None) | Err(_) => {
+                    details.push("gateway refusal record was unavailable".to_owned());
+                }
+            }
             match remove_gateway_status_directory(status_directory) {
                 Ok(()) => {
                     self.gateway_status_directory = None;
@@ -1961,7 +1979,7 @@ fn read_opened_gateway_status(file: fs::File) -> AppResult<GatewayStatusDocument
     }
     let status: GatewayStatusDocument = serde_json::from_slice(&bytes)
         .map_err(|_| AppError::NotAuthorized("gateway status was malformed".into()))?;
-    if status.schema_version != "1.0.0" {
+    if status.schema_version != "1.1.0" {
         return Err(AppError::NotAuthorized(
             "gateway status schema is unsupported".into(),
         ));
@@ -1979,7 +1997,9 @@ fn read_opened_gateway_status(file: fs::File) -> AppResult<GatewayStatusDocument
                 | "signal_handler_failed"
                 | "status_write_failed"
         ),
-        GatewayStatusPhase::Stopped => status.code == "policy_expired",
+        GatewayStatusPhase::Stopped => {
+            matches!(status.code.as_str(), "policy_expired" | "stopped")
+        }
     };
     if !valid_pair {
         return Err(AppError::NotAuthorized(
@@ -2009,6 +2029,7 @@ fn bounded_gateway_status_code(code: &str) -> AppResult<&str> {
         "signal_handler_failed",
         "status_write_failed",
         "policy_expired",
+        "stopped",
     ];
     if CODES.contains(&code) {
         Ok(code)
@@ -2062,10 +2083,19 @@ fn remove_gateway_status_directory(status_directory: &GatewayStatusDirectory) ->
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+struct GatewayStatusRefusals {
+    rate: u64,
+    destination: u64,
+    unauthorized_client: u64,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct GatewayStatusDocument {
     schema_version: String,
     phase: GatewayStatusPhase,
     code: String,
+    refusals: GatewayStatusRefusals,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -7916,20 +7946,25 @@ mod tests {
             create_gateway_status_directory(&policies, &policy_id).expect("status directory");
         fs::write(
             status.status_path(),
-            br#"{"schema_version":"1.0.0","phase":"ready","code":"ready"}"#,
+            br#"{"schema_version":"1.1.0","phase":"ready","code":"ready","refusals":{"rate":0,"destination":0,"unauthorized_client":0}}"#,
         )
         .expect("ready status");
         assert_eq!(
             read_gateway_status(&status).expect("read status"),
             Some(GatewayStatusDocument {
-                schema_version: "1.0.0".into(),
+                schema_version: "1.1.0".into(),
                 phase: GatewayStatusPhase::Ready,
                 code: "ready".into(),
+                refusals: GatewayStatusRefusals {
+                    rate: 0,
+                    destination: 0,
+                    unauthorized_client: 0,
+                },
             })
         );
         fs::write(
             status.status_path(),
-            br#"{"schema_version":"1.0.0","phase":"stopped","code":"ready"}"#,
+            br#"{"schema_version":"1.1.0","phase":"stopped","code":"ready","refusals":{"rate":0,"destination":0,"unauthorized_client":0}}"#,
         )
         .expect("mismatched status");
         assert!(read_gateway_status(&status).is_err());
@@ -7947,7 +7982,7 @@ mod tests {
         let status_path = status.status_path();
         fs::write(
             &status_path,
-            br#"{"schema_version":"1.0.0","phase":"starting","code":"initializing"}"#,
+            br#"{"schema_version":"1.1.0","phase":"starting","code":"initializing","refusals":{"rate":0,"destination":0,"unauthorized_client":0}}"#,
         )
         .expect("starting status");
         let stale_length = fs::symlink_metadata(&status_path)
@@ -7956,7 +7991,7 @@ mod tests {
         let replacement = status.path.join("status.replacement");
         fs::write(
             &replacement,
-            br#"{"schema_version":"1.0.0","phase":"ready","code":"ready"}"#,
+            br#"{"schema_version":"1.1.0","phase":"ready","code":"ready","refusals":{"rate":0,"destination":0,"unauthorized_client":0}}"#,
         )
         .expect("ready replacement");
         fs::rename(&replacement, &status_path).expect("atomic status replacement");
@@ -7973,9 +8008,14 @@ mod tests {
         assert_eq!(
             read_opened_gateway_status(opened).expect("opened replacement"),
             GatewayStatusDocument {
-                schema_version: "1.0.0".into(),
+                schema_version: "1.1.0".into(),
                 phase: GatewayStatusPhase::Ready,
                 code: "ready".into(),
+                refusals: GatewayStatusRefusals {
+                    rate: 0,
+                    destination: 0,
+                    unauthorized_client: 0,
+                },
             }
         );
         remove_gateway_status_directory(&status).expect("status cleanup");
@@ -7989,7 +8029,7 @@ mod tests {
             create_gateway_status_directory(&policies, &policy_id).expect("status directory");
         fs::write(
             status.status_path(),
-            br#"{"schema_version":"1.0.0","phase":"failed","code":"listener_bind_failed"}"#,
+            br#"{"schema_version":"1.1.0","phase":"failed","code":"listener_bind_failed","refusals":{"rate":0,"destination":0,"unauthorized_client":0}}"#,
         )
         .expect("terminal status");
         let (runtime, runtime_state) = FakeContainerRuntime::new();
@@ -8439,6 +8479,160 @@ mod tests {
                 & 0o777,
             0o600,
             "inspection must not chmod the sidecar"
+        );
+    }
+
+    fn open_gateway_status_file(path: &Path) -> fs::File {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        configure_no_follow_open(&mut options);
+        options.open(path).expect("status file")
+    }
+
+    fn lease_for_status_cleanup(status: GatewayStatusDirectory) -> ManagedNetworkLease {
+        ManagedNetworkLease {
+            provider: RuntimeProvider::Docker,
+            runtime: Arc::new(DirectRuntimeCommands),
+            network_name: None,
+            network_id: None,
+            remove_unverified_network: false,
+            expected_labels: BTreeMap::new(),
+            uplink_network_name: None,
+            uplink_network_id: None,
+            uplink_expected_labels: BTreeMap::new(),
+            gateway_process: None,
+            gateway_container: None,
+            gateway_status_directory: Some(status),
+            policy_file: None,
+            network_policy: None,
+            egress_policy: None,
+            registry_files: Vec::new(),
+        }
+    }
+
+    fn write_refusal_status(
+        status: &GatewayStatusDirectory,
+        phase: &str,
+        code: &str,
+        rate: u64,
+        destination: u64,
+        unauthorized_client: u64,
+    ) {
+        fs::write(
+            status.status_path(),
+            format!(
+                r#"{{"schema_version":"1.1.0","phase":"{phase}","code":"{code}","refusals":{{"rate":{rate},"destination":{destination},"unauthorized_client":{unauthorized_client}}}}}"#
+            ),
+        )
+        .expect("status document");
+    }
+
+    #[test]
+    fn opened_gateway_status_accepts_refusal_counts_and_rejects_schema_1_0_0() {
+        let (_temporary, _gateway, policies) = test_paths();
+        let policy_id = format!("egress-{}", "b".repeat(32));
+        let status =
+            create_gateway_status_directory(&policies, &policy_id).expect("status directory");
+        write_refusal_status(&status, "ready", "ready", 4, 5, 6);
+        assert_eq!(
+            read_opened_gateway_status(open_gateway_status_file(&status.status_path()))
+                .expect("1.1.0 status"),
+            GatewayStatusDocument {
+                schema_version: "1.1.0".into(),
+                phase: GatewayStatusPhase::Ready,
+                code: "ready".into(),
+                refusals: GatewayStatusRefusals {
+                    rate: 4,
+                    destination: 5,
+                    unauthorized_client: 6,
+                },
+            }
+        );
+        fs::write(
+            status.status_path(),
+            br#"{"schema_version":"1.0.0","phase":"ready","code":"ready","refusals":{"rate":4,"destination":5,"unauthorized_client":6}}"#,
+        )
+        .expect("legacy status");
+        let error = read_opened_gateway_status(open_gateway_status_file(&status.status_path()))
+            .expect_err("1.0.0 is unsupported");
+        assert!(
+            error
+                .to_string()
+                .contains("gateway status schema is unsupported")
+        );
+        remove_gateway_status_directory(&status).expect("status cleanup");
+    }
+
+    #[test]
+    fn stopped_status_code_is_an_accepted_terminal_pair() {
+        let (_temporary, _gateway, policies) = test_paths();
+        let policy_id = format!("egress-{}", "c".repeat(32));
+        let status =
+            create_gateway_status_directory(&policies, &policy_id).expect("status directory");
+        for code in ["stopped", "policy_expired"] {
+            write_refusal_status(&status, "stopped", code, 0, 0, 0);
+            assert_eq!(
+                read_opened_gateway_status(open_gateway_status_file(&status.status_path()))
+                    .expect("stopped pair")
+                    .code,
+                code
+            );
+        }
+        remove_gateway_status_directory(&status).expect("status cleanup");
+    }
+
+    #[test]
+    fn cleanup_records_gateway_refusal_counts_or_their_absence() {
+        let (_temporary, _gateway, policies) = test_paths();
+        let counted =
+            create_gateway_status_directory(&policies, &format!("egress-{}", "d".repeat(32)))
+                .expect("counted status");
+        write_refusal_status(&counted, "stopped", "stopped", 2, 3, 4);
+        let counted_path = counted.path.clone();
+        let mut counted_lease = lease_for_status_cleanup(counted);
+        let counted_outcome = counted_lease
+            .cleanup_with_outcome()
+            .expect("counted cleanup");
+        assert_eq!(
+            counted_outcome.detail,
+            "gateway refused connections: rate 2, destination 3, unauthorized client 4; bounded gateway status removed or already absent; durable recovery records removed"
+        );
+        assert!(!counted_path.exists());
+
+        let quiet =
+            create_gateway_status_directory(&policies, &format!("egress-{}", "e".repeat(32)))
+                .expect("quiet status");
+        write_refusal_status(&quiet, "stopped", "stopped", 0, 0, 0);
+        let mut quiet_lease = lease_for_status_cleanup(quiet);
+        let quiet_outcome = quiet_lease.cleanup_with_outcome().expect("quiet cleanup");
+        assert_eq!(
+            quiet_outcome.detail,
+            "gateway refused no connections; bounded gateway status removed or already absent; durable recovery records removed"
+        );
+
+        let missing =
+            create_gateway_status_directory(&policies, &format!("egress-{}", "f".repeat(32)))
+                .expect("missing status");
+        let mut missing_lease = lease_for_status_cleanup(missing);
+        let missing_outcome = missing_lease
+            .cleanup_with_outcome()
+            .expect("missing cleanup");
+        assert_eq!(
+            missing_outcome.detail,
+            "gateway refusal record was unavailable; bounded gateway status removed or already absent; durable recovery records removed"
+        );
+
+        let malformed =
+            create_gateway_status_directory(&policies, &format!("egress-{}", "9".repeat(32)))
+                .expect("malformed status");
+        fs::write(malformed.status_path(), b"{").expect("malformed document");
+        let mut malformed_lease = lease_for_status_cleanup(malformed);
+        let malformed_outcome = malformed_lease
+            .cleanup_with_outcome()
+            .expect("malformed cleanup stays successful");
+        assert_eq!(
+            malformed_outcome.detail,
+            "gateway refusal record was unavailable; bounded gateway status removed or already absent; durable recovery records removed"
         );
     }
 }

@@ -12,6 +12,7 @@ use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -21,7 +22,7 @@ use tokio::time::{Instant as TokioInstant, timeout};
 const POLICY_PATH: &str = "/run/ai-security-scanner/egress-policy.json";
 const STATUS_FILE_NAME: &str = "status.json";
 const STATUS_TEMP_FILE_NAME: &str = "status.tmp";
-const STATUS_SCHEMA_VERSION: &str = "1.0.0";
+const STATUS_SCHEMA_VERSION: &str = "1.1.0";
 const MAX_STATUS_BYTES: usize = 1024;
 const MAX_POLICY_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_DESTINATIONS: usize = 10_000;
@@ -59,9 +60,10 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    if let Err(code) = run(&invocation).await {
+    let refusals = Arc::new(RefusalCounts::default());
+    if let Err(code) = run(&invocation, Arc::clone(&refusals)).await {
         if let Some(status_file) = invocation.status_file.as_deref() {
-            let _ = write_status(status_file, GatewayPhase::Failed, code);
+            let _ = write_status(status_file, GatewayPhase::Failed, code, refusals.snapshot());
         }
         eprintln!("egress gateway stopped");
         std::process::exit(1);
@@ -95,6 +97,25 @@ enum GatewayStatusCode {
     SignalHandlerFailed,
     StatusWriteFailed,
     PolicyExpired,
+    Stopped,
+}
+
+/// A refused connection is indistinguishable from an empty result unless the
+/// product records it. These counters exist so a bounded run can report that
+/// the gateway, not the target, ended a request.
+#[derive(Debug, Default)]
+struct RefusalCounts {
+    rate: AtomicU64,
+    destination: AtomicU64,
+    unauthorized_client: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct GatewayRefusalCounts {
+    rate: u64,
+    destination: u64,
+    unauthorized_client: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -103,14 +124,29 @@ struct GatewayStatus {
     schema_version: String,
     phase: GatewayPhase,
     code: GatewayStatusCode,
+    refusals: GatewayRefusalCounts,
 }
 
-async fn run(invocation: &GatewayInvocation) -> Result<(), GatewayStatusCode> {
+impl RefusalCounts {
+    fn snapshot(&self) -> GatewayRefusalCounts {
+        GatewayRefusalCounts {
+            rate: self.rate.load(Ordering::Relaxed),
+            destination: self.destination.load(Ordering::Relaxed),
+            unauthorized_client: self.unauthorized_client.load(Ordering::Relaxed),
+        }
+    }
+}
+
+async fn run(
+    invocation: &GatewayInvocation,
+    refusals: Arc<RefusalCounts>,
+) -> Result<(), GatewayStatusCode> {
     if let Some(status_file) = invocation.status_file.as_deref() {
         write_status(
             status_file,
             GatewayPhase::Starting,
             GatewayStatusCode::Initializing,
+            GatewayRefusalCounts::default(),
         )?;
     }
     let policy = Arc::new(load_policy(&invocation.policy_path)?);
@@ -120,10 +156,17 @@ async fn run(invocation: &GatewayInvocation) -> Result<(), GatewayStatusCode> {
         .await
         .map_err(|_| GatewayStatusCode::ListenerBindFailed)?;
     if let Some(status_file) = invocation.status_file.as_deref() {
-        write_status(status_file, GatewayPhase::Ready, GatewayStatusCode::Ready)?;
+        write_status(
+            status_file,
+            GatewayPhase::Ready,
+            GatewayStatusCode::Ready,
+            GatewayRefusalCounts::default(),
+        )?;
     }
     let expires_after = policy_remaining(&policy).ok_or(GatewayStatusCode::PolicyInvalid)?;
     let expiry_deadline = tokio::time::Instant::now() + expires_after;
+    let mut last_written_refusals = GatewayRefusalCounts::default();
+    let mut status_tick = tokio::time::interval(Duration::from_secs(1));
 
     loop {
         tokio::select! {
@@ -137,29 +180,60 @@ async fn run(invocation: &GatewayInvocation) -> Result<(), GatewayStatusCode> {
                         status_file,
                         GatewayPhase::Stopped,
                         GatewayStatusCode::PolicyExpired,
+                        refusals.snapshot(),
                     )?;
                 }
                 return Ok(());
             }
+            _ = status_tick.tick() => {
+                // Biased select polls this before accept so a busy listener
+                // cannot starve the refusal record. One write per second
+                // bounds the I/O however many refusals arrive. A failed write
+                // leaves the previous snapshot in place so the next tick retries.
+                let snapshot = refusals.snapshot();
+                if snapshot != last_written_refusals
+                    && let Some(status_file) = invocation.status_file.as_deref()
+                    && write_status(
+                        status_file,
+                        GatewayPhase::Ready,
+                        GatewayStatusCode::Ready,
+                        snapshot,
+                    )
+                    .is_ok()
+                {
+                    last_written_refusals = snapshot;
+                }
+            }
             accepted = listener.accept() => {
                 let (client, peer) = accepted.map_err(|_| GatewayStatusCode::ListenerFailed)?;
-                if policy.expires_at <= Utc::now() || !authorized_client(&policy, peer.ip()) {
+                if refuse_accepted_peer(&policy, peer.ip(), &refusals) {
                     continue;
                 }
                 let policy = Arc::clone(&policy);
                 let concurrency = Arc::clone(&concurrency);
                 let rate_window = Arc::clone(&rate_window);
+                let refusals = Arc::clone(&refusals);
                 tokio::spawn(async move {
                     let _ = handle_authorized_client(
                         client,
                         policy,
                         concurrency,
                         rate_window,
+                        refusals,
                     ).await;
                 });
             }
             signal = tokio::signal::ctrl_c() => {
                 signal.map_err(|_| GatewayStatusCode::SignalHandlerFailed)?;
+                // The gateway was signalled while its policy was still in force.
+                if let Some(status_file) = invocation.status_file.as_deref() {
+                    write_status(
+                        status_file,
+                        GatewayPhase::Stopped,
+                        GatewayStatusCode::Stopped,
+                        refusals.snapshot(),
+                    )?;
+                }
                 return Ok(());
             }
         }
@@ -171,12 +245,13 @@ async fn handle_authorized_client(
     policy: Arc<ValidatedPolicy>,
     concurrency: Arc<Semaphore>,
     rate_window: Arc<Mutex<VecDeque<Instant>>>,
+    refusals: Arc<RefusalCounts>,
 ) -> io::Result<()> {
     let _permit = concurrency
         .acquire_owned()
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "gateway stopped"))?;
-    handle_client(client, &policy, &rate_window).await
+    handle_client(client, &policy, &rate_window, &refusals).await
 }
 
 async fn take_rate_slot(policy: &ValidatedPolicy, rate_window: &Mutex<VecDeque<Instant>>) -> bool {
@@ -202,12 +277,13 @@ async fn handle_client(
     mut client: TcpStream,
     policy: &ValidatedPolicy,
     rate_window: &Mutex<VecDeque<Instant>>,
+    refusals: &RefusalCounts,
 ) -> io::Result<()> {
     let remaining = policy_remaining(policy)
         .ok_or_else(|| io::Error::new(io::ErrorKind::PermissionDenied, "expired policy"))?;
     timeout(
         remaining,
-        handle_client_before_expiry(&mut client, policy, rate_window),
+        handle_client_before_expiry(&mut client, policy, rate_window, refusals),
     )
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "policy expired"))?
@@ -217,6 +293,7 @@ async fn handle_client_before_expiry(
     client: &mut TcpStream,
     policy: &ValidatedPolicy,
     rate_window: &Mutex<VecDeque<Instant>>,
+    refusals: &RefusalCounts,
 ) -> io::Result<()> {
     timeout(HANDSHAKE_TIMEOUT, negotiate(client))
         .await
@@ -224,12 +301,21 @@ async fn handle_client_before_expiry(
     let (target, port) = timeout(HANDSHAKE_TIMEOUT, read_request(client))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "request timeout"))??;
-    let destinations = resolve_request(policy, target, port)
-        .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "destination denied"))?;
+    let destinations = match resolve_request(policy, target, port) {
+        Ok(destinations) => destinations,
+        Err(_) => {
+            let _ = refusals.destination.fetch_add(1, Ordering::Relaxed);
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "destination denied",
+            ));
+        }
+    };
     // A TCP-only proxy liveness check may open and close the socket without
     // sending CONNECT. Count only a syntactically valid, policy-authorized
     // upstream request so those checks cannot consume the scanner's rate.
     if !take_rate_slot(policy, rate_window).await {
+        let _ = refusals.rate.fetch_add(1, Ordering::Relaxed);
         send_reply(client, 2, None).await?;
         return Err(io::Error::new(
             io::ErrorKind::WouldBlock,
@@ -465,6 +551,7 @@ fn write_status(
     path: &Path,
     phase: GatewayPhase,
     code: GatewayStatusCode,
+    refusals: GatewayRefusalCounts,
 ) -> Result<(), GatewayStatusCode> {
     if !path.is_absolute()
         || path.as_os_str().len() > 4096
@@ -486,6 +573,7 @@ fn write_status(
         schema_version: STATUS_SCHEMA_VERSION.to_owned(),
         phase,
         code,
+        refusals,
     })
     .map_err(|_| GatewayStatusCode::StatusWriteFailed)?;
     if bytes.is_empty() || bytes.len() > MAX_STATUS_BYTES {
@@ -684,6 +772,19 @@ fn is_private_network(network: IpNet) -> bool {
 
 fn authorized_client(policy: &ValidatedPolicy, peer: IpAddr) -> bool {
     peer != policy.listen_address.ip() && policy.allowed_client_network.contains(&peer)
+}
+
+fn refuse_accepted_peer(policy: &ValidatedPolicy, peer: IpAddr, refusals: &RefusalCounts) -> bool {
+    // An expiring gateway is a lifecycle state the status file already records.
+    // It is not a refusal of authorized work.
+    if policy.expires_at <= Utc::now() {
+        return true;
+    }
+    if !authorized_client(policy, peer) {
+        let _ = refusals.unauthorized_client.fetch_add(1, Ordering::Relaxed);
+        return true;
+    }
+    false
 }
 
 fn resolve_request(
@@ -911,12 +1012,13 @@ mod tests {
         policy.expires_at = Utc::now() - chrono::Duration::milliseconds(1);
         assert!(policy_remaining(&policy).is_none());
         let rate_window = Mutex::new(VecDeque::new());
+        let refusals = RefusalCounts::default();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
         let address = listener.local_addr().expect("address");
         let client = TcpStream::connect(address).await.expect("client");
         let (server, _) = listener.accept().await.expect("accepted");
-        let error = handle_client(server, &policy, &rate_window)
+        let error = handle_client(server, &policy, &rate_window, &refusals)
             .await
             .expect_err("expired socket denied before reading a greeting");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
@@ -934,6 +1036,7 @@ mod tests {
             policy,
             concurrency,
             Arc::clone(&rate_window),
+            Arc::new(RefusalCounts::default()),
         ));
         probe_client.shutdown().await.expect("probe EOF");
         handler
@@ -993,6 +1096,7 @@ mod tests {
         let policy = Arc::new(validate_policy(raw, Utc::now()).expect("policy"));
         let concurrency = Arc::new(Semaphore::new(1));
         let rate_window = Arc::new(Mutex::new(VecDeque::new()));
+        let refusals = Arc::new(RefusalCounts::default());
 
         let (mut first_client, first_server) = connected_pair().await;
         let first_handler = tokio::spawn(handle_authorized_client(
@@ -1000,6 +1104,7 @@ mod tests {
             Arc::clone(&policy),
             Arc::clone(&concurrency),
             Arc::clone(&rate_window),
+            Arc::clone(&refusals),
         ));
         socks_connect(&mut first_client, target_address).await;
         first_client.shutdown().await.expect("first client EOF");
@@ -1016,6 +1121,7 @@ mod tests {
             Arc::clone(&policy),
             Arc::clone(&concurrency),
             Arc::clone(&rate_window),
+            Arc::clone(&refusals),
         ));
         timeout(
             Duration::from_secs(1),
@@ -1121,9 +1227,16 @@ mod tests {
             &path,
             GatewayPhase::Starting,
             GatewayStatusCode::Initializing,
+            GatewayRefusalCounts::default(),
         )
         .expect("starting status");
-        write_status(&path, GatewayPhase::Ready, GatewayStatusCode::Ready).expect("ready status");
+        write_status(
+            &path,
+            GatewayPhase::Ready,
+            GatewayStatusCode::Ready,
+            GatewayRefusalCounts::default(),
+        )
+        .expect("ready status");
         assert!(!temporary.path().join(STATUS_TEMP_FILE_NAME).exists());
         let bytes = fs::read(&path).expect("status bytes");
         assert!(bytes.len() <= MAX_STATUS_BYTES);
@@ -1134,6 +1247,7 @@ mod tests {
                 schema_version: STATUS_SCHEMA_VERSION.to_owned(),
                 phase: GatewayPhase::Ready,
                 code: GatewayStatusCode::Ready,
+                refusals: GatewayRefusalCounts::default(),
             }
         );
     }
@@ -1146,6 +1260,7 @@ mod tests {
                 &temporary.path().join("other.json"),
                 GatewayPhase::Starting,
                 GatewayStatusCode::Initializing,
+                GatewayRefusalCounts::default(),
             ),
             Err(GatewayStatusCode::StatusWriteFailed)
         );
@@ -1156,8 +1271,160 @@ mod tests {
                 &temporary.path().join(STATUS_FILE_NAME),
                 GatewayPhase::Starting,
                 GatewayStatusCode::Initializing,
+                GatewayRefusalCounts::default(),
             ),
             Err(GatewayStatusCode::StatusWriteFailed)
         );
+    }
+
+    async fn write_socks_connect(client: &mut TcpStream, destination: SocketAddr) {
+        client
+            .write_all(&[SOCKS_VERSION, 1, METHOD_NO_AUTH])
+            .await
+            .expect("SOCKS greeting");
+        let mut greeting = [0_u8; 2];
+        timeout(Duration::from_secs(1), client.read_exact(&mut greeting))
+            .await
+            .expect("greeting timed out")
+            .expect("greeting");
+        assert_eq!(greeting, [SOCKS_VERSION, METHOD_NO_AUTH]);
+        let SocketAddr::V4(destination) = destination else {
+            panic!("test destination must be IPv4");
+        };
+        let mut request = vec![SOCKS_VERSION, COMMAND_CONNECT, 0, 1];
+        request.extend(destination.ip().octets());
+        request.extend(destination.port().to_be_bytes());
+        client.write_all(&request).await.expect("SOCKS request");
+    }
+
+    #[tokio::test]
+    async fn a_rate_refusal_increments_only_rate_and_is_recorded_in_status() {
+        let mut raw = raw_policy();
+        raw.limits.max_connections_per_second = 1;
+        let policy = validate_policy(raw, Utc::now()).expect("policy");
+        let rate_window = Mutex::new(VecDeque::from([Instant::now()]));
+        let refusals = Arc::new(RefusalCounts::default());
+        let (mut client, mut server) = connected_pair().await;
+        let handler_refusals = Arc::clone(&refusals);
+        let handler = tokio::spawn(async move {
+            handle_client_before_expiry(&mut server, &policy, &rate_window, &handler_refusals).await
+        });
+        write_socks_connect(&mut client, "203.0.113.9:443".parse().expect("destination")).await;
+        let mut reply = [0_u8; 10];
+        timeout(Duration::from_secs(1), client.read_exact(&mut reply))
+            .await
+            .expect("rate reply timed out")
+            .expect("SOCKS reply");
+        assert_eq!(reply[1], 2);
+        let error = timeout(Duration::from_secs(1), handler)
+            .await
+            .expect("rate refusal did not finish")
+            .expect("handler task")
+            .expect_err("rate denied");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(error.to_string(), "connection rate denied");
+        assert_eq!(
+            refusals.snapshot(),
+            GatewayRefusalCounts {
+                rate: 1,
+                destination: 0,
+                unauthorized_client: 0,
+            }
+        );
+
+        let temporary = tempfile::tempdir().expect("temporary status directory");
+        let path = temporary.path().join(STATUS_FILE_NAME);
+        write_status(
+            &path,
+            GatewayPhase::Ready,
+            GatewayStatusCode::Ready,
+            refusals.snapshot(),
+        )
+        .expect("status");
+        let bytes = fs::read(&path).expect("status bytes");
+        assert!(bytes.len() <= MAX_STATUS_BYTES);
+        let status: GatewayStatus = serde_json::from_slice(&bytes).expect("status json");
+        assert_eq!(status.schema_version, STATUS_SCHEMA_VERSION);
+        assert_eq!(status.phase, GatewayPhase::Ready);
+        assert_eq!(status.code, GatewayStatusCode::Ready);
+        assert_eq!(status.refusals, refusals.snapshot());
+    }
+
+    #[tokio::test]
+    async fn a_denied_destination_increments_only_destination_and_keeps_its_error() {
+        let policy = validate_policy(raw_policy(), Utc::now()).expect("policy");
+        let rate_window = Mutex::new(VecDeque::new());
+        let refusals = Arc::new(RefusalCounts::default());
+        let (mut client, mut server) = connected_pair().await;
+        let handler_refusals = Arc::clone(&refusals);
+        let handler = tokio::spawn(async move {
+            handle_client_before_expiry(&mut server, &policy, &rate_window, &handler_refusals).await
+        });
+        write_socks_connect(&mut client, "203.0.113.9:80".parse().expect("denied port")).await;
+        let error = timeout(Duration::from_secs(1), handler)
+            .await
+            .expect("destination refusal did not finish")
+            .expect("handler task")
+            .expect_err("destination denied");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(error.to_string(), "destination denied");
+        assert_eq!(
+            refusals.snapshot(),
+            GatewayRefusalCounts {
+                rate: 0,
+                destination: 1,
+                unauthorized_client: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn an_unauthorized_peer_is_counted_and_an_expired_policy_is_not() {
+        let policy = validate_policy(raw_policy(), Utc::now()).expect("policy");
+        let refusals = RefusalCounts::default();
+        assert!(refuse_accepted_peer(
+            &policy,
+            "127.0.0.1".parse().expect("unauthorized peer"),
+            &refusals,
+        ));
+        assert_eq!(
+            refusals.snapshot(),
+            GatewayRefusalCounts {
+                rate: 0,
+                destination: 0,
+                unauthorized_client: 1,
+            }
+        );
+
+        let mut expired = validate_policy(raw_policy(), Utc::now()).expect("policy");
+        expired.expires_at = Utc::now() - chrono::Duration::seconds(1);
+        let expired_refusals = RefusalCounts::default();
+        assert!(refuse_accepted_peer(
+            &expired,
+            "172.29.0.2".parse().expect("authorized peer"),
+            &expired_refusals,
+        ));
+        assert_eq!(expired_refusals.snapshot(), GatewayRefusalCounts::default());
+    }
+
+    #[test]
+    fn refusal_counts_round_trip_within_the_status_bound() {
+        let status = GatewayStatus {
+            schema_version: STATUS_SCHEMA_VERSION.to_owned(),
+            phase: GatewayPhase::Stopped,
+            code: GatewayStatusCode::Stopped,
+            refusals: GatewayRefusalCounts {
+                rate: u64::MAX,
+                destination: u64::MAX,
+                unauthorized_client: u64::MAX,
+            },
+        };
+        let temporary = tempfile::tempdir().expect("temporary status directory");
+        let path = temporary.path().join(STATUS_FILE_NAME);
+        write_status(&path, status.phase, status.code, status.refusals).expect("status");
+        let bytes = fs::read(&path).expect("status bytes");
+        assert!(bytes.len() <= MAX_STATUS_BYTES);
+        let decoded: GatewayStatus = serde_json::from_slice(&bytes).expect("status json");
+        assert_eq!(decoded, status);
     }
 }
