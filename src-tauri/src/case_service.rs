@@ -8750,15 +8750,22 @@ fn selected_engine_ids(
     Ok(selected.into_iter().collect())
 }
 
-/// Beginner default selection keeps engines that can read an authorized asset,
-/// plus engines blocked only by MCP configuration state. Engines that cannot
-/// read the asset kind stay out.
+/// The default selection includes every engine that can read an authorized
+/// asset, plus an engine whose only barrier is an MCP configuration state a
+/// user can still act on (several configurations with none selected, or
+/// discovery that did not finish). It leaves out a release-blocked engine and
+/// an engine whose only barrier is an absent MCP configuration: the first
+/// beginner scan never plans either, no user action can make them run, and a
+/// repeat scan must not list them as untested work.
 fn default_plan_includes_manifest(
     case: &AssessmentCase,
     manifest: &EngineManifest,
     effective: &[&ScopeGrant],
     now: DateTime<Utc>,
 ) -> bool {
+    if manifest.release_blocker().is_some() {
+        return false;
+    }
     if !compatible_authorized_assets(case, manifest, effective, now).is_empty() {
         return true;
     }
@@ -8773,7 +8780,8 @@ fn default_plan_includes_manifest(
         .filter(|asset| asset_satisfies_engine_permissions(manifest, asset, effective, now))
         .map(|asset| local_input_compatibility(case, manifest, asset))
         .collect::<Vec<_>>();
-    mcp_configuration_not_executed_reason(&incompatibilities).is_some()
+    mcp_configuration_not_executed_reason(&incompatibilities)
+        .is_some_and(|(code, _)| code != "mcp_configuration_absent")
 }
 
 fn default_scan_admission_issues(
@@ -26941,9 +26949,22 @@ mod tests {
             !compatible.contains(MCP_ARMOR_ENGINE_ID),
             "this repository fixture has no MCP configuration, so MCP Armor is not compatible-authorized"
         );
+        assert!(
+            fixture.engines.manifests().iter().any(|manifest| {
+                compatible.contains(&manifest.id) && manifest.release_blocker().is_some()
+            }),
+            "the exclusion of release-blocked manifests must be exercised by this fixture"
+        );
 
-        let mut expected = compatible;
-        expected.insert(MCP_ARMOR_ENGINE_ID.to_owned());
+        let expected = compatible
+            .into_iter()
+            .filter(|id| {
+                fixture
+                    .engines
+                    .get(id)
+                    .is_some_and(|manifest| manifest.release_blocker().is_none())
+            })
+            .collect::<BTreeSet<_>>();
 
         let plan = service
             .plan_scan(&created.id, ScanPlanRequest::default())
@@ -27022,6 +27043,71 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn default_plan_omits_a_check_this_app_version_does_not_include() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let service = fixture.service();
+        approve_repository_local_artifact_read(&service, &created.id, asset_id);
+
+        let radar = fixture
+            .engines
+            .get("agentic-radar")
+            .expect("agentic-radar catalog entry");
+        assert!(radar.supported_asset_kinds.contains(&AssetKind::Repository));
+        assert!(radar.release_blocker().is_some());
+
+        let scoped = service.show_case(&created.id).unwrap();
+        let now = Utc::now();
+        let effective = effective_grants(&scoped, now);
+        assert!(
+            !compatible_authorized_assets(&scoped, radar, &effective, now).is_empty(),
+            "agentic-radar would otherwise be planned for this repository"
+        );
+
+        let plan = service
+            .plan_scan(&created.id, ScanPlanRequest::default())
+            .unwrap();
+        assert!(
+            plan.executable
+                .iter()
+                .all(|execution| execution.manifest.id != "agentic-radar")
+        );
+        assert!(
+            plan.not_executed
+                .iter()
+                .all(|not_executed| not_executed.engine_id != "agentic-radar")
+        );
+        assert!(
+            plan.scan_run
+                .engine_runs
+                .iter()
+                .all(|engine_run| engine_run.engine_id != "agentic-radar")
+        );
+
+        // A durable plan leaves the case with a non-terminal scan run, so the
+        // first plan must be cancelled before this same case can be planned
+        // again with an explicit request.
+        service.cancel_scan(&created.id, &plan.scan_run.id).unwrap();
+
+        let explicit_plan = service
+            .plan_scan(
+                &created.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["agentic-radar".into()],
+                    engine_asset_routes: Vec::new(),
+                },
+            )
+            .unwrap();
+        let skipped = explicit_plan
+            .not_executed
+            .iter()
+            .find(|not_executed| not_executed.engine_id == "agentic-radar")
+            .expect("explicit request still records agentic-radar as not executed");
+        assert_eq!(skipped.reason_code, "engine_release_unavailable");
     }
 
     #[test]
@@ -29870,7 +29956,7 @@ mod tests {
     }
 
     #[test]
-    fn default_plan_records_mcp_armor_when_discovery_finds_no_configuration() {
+    fn default_plan_omits_mcp_armor_when_discovery_finds_no_configuration() {
         let fixture = Fixture::new();
         let created = fixture.create();
         let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
@@ -29906,13 +29992,53 @@ mod tests {
                 .iter()
                 .all(|execution| execution.manifest.id != MCP_ARMOR_ENGINE_ID)
         );
+        assert!(
+            plan.not_executed
+                .iter()
+                .all(|not_executed| not_executed.engine_id != MCP_ARMOR_ENGINE_ID)
+        );
+        assert!(
+            plan.scan_run
+                .engine_runs
+                .iter()
+                .all(|engine_run| engine_run.engine_id != MCP_ARMOR_ENGINE_ID)
+        );
+    }
+
+    #[test]
+    fn default_plan_records_mcp_armor_when_configurations_are_unselected() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, asset_id) = fixture.discovered_repository_with_files(
+            &created.id,
+            &[
+                ("mcp.json", "{\"mcpServers\":{}}\n"),
+                (".cursor/mcp.json", "{\"mcpServers\":{}}\n"),
+            ],
+        );
+        let service = fixture.service();
+        approve_repository_local_artifact_read(&service, &created.id, asset_id);
+        let stored = service.show_case(&created.id).unwrap();
+        let asset = stored
+            .assets
+            .iter()
+            .find(|asset| asset.kind == AssetKind::Repository)
+            .expect("repository asset");
+
+        let plan = service
+            .plan_scan(&created.id, ScanPlanRequest::default())
+            .unwrap();
         let skipped = plan
             .not_executed
             .iter()
             .find(|not_executed| not_executed.engine_id == MCP_ARMOR_ENGINE_ID)
-            .expect("default plan must record MCP Armor when discovery found no configuration");
-        assert_eq!(skipped.reason_code, "mcp_configuration_absent");
-        assert_eq!(skipped.explanation, MCP_CONFIGURATION_ABSENT_EXPLANATION);
+            .expect("default plan must record MCP Armor when configurations are unselected");
+        assert_eq!(skipped.reason_code, "mcp_configuration_unselected");
+        assert_eq!(
+            skipped.explanation,
+            MCP_CONFIGURATION_UNSELECTED_EXPLANATION
+        );
+        assert_eq!(skipped.asset_ids, vec![asset.id.clone()]);
         let engine_run = plan
             .scan_run
             .engine_runs
@@ -29922,14 +30048,19 @@ mod tests {
         assert_eq!(engine_run.status, EngineRunStatus::NotExecuted);
         assert_eq!(engine_run.id, skipped.engine_run_id);
         assert_eq!(engine_run.asset_ids, vec![asset.id.clone()]);
-        assert_eq!(skipped.asset_ids, vec![asset.id.clone()]);
     }
 
     #[test]
     fn default_plan_omits_mcp_armor_when_repository_lacks_local_artifact_read() {
         let fixture = Fixture::new();
         let created = fixture.create();
-        let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let (_, asset_id) = fixture.discovered_repository_with_files(
+            &created.id,
+            &[
+                ("mcp.json", "{\"mcpServers\":{}}\n"),
+                (".cursor/mcp.json", "{\"mcpServers\":{}}\n"),
+            ],
+        );
         let service = fixture.service();
         service
             .approve_scope(
@@ -29963,12 +30094,13 @@ mod tests {
         assert!(asset.owner_confirmed && !asset.candidate);
         assert_eq!(
             crate::mcp_armor_input::mcp_configuration_plan_status(asset),
-            crate::mcp_armor_input::McpConfigurationPlanStatus::Absent
+            crate::mcp_armor_input::McpConfigurationPlanStatus::Unselected
         );
-        assert!(
+        assert_eq!(
             crate::mcp_armor_input::candidates_from_asset(asset)
                 .unwrap()
-                .is_empty()
+                .len(),
+            2
         );
         assert_eq!(
             asset
@@ -30004,9 +30136,9 @@ mod tests {
         assert!(
             plan.not_executed.iter().all(|skipped| {
                 skipped.engine_id != MCP_ARMOR_ENGINE_ID
-                    || skipped.reason_code != "mcp_configuration_absent"
+                    || skipped.reason_code != "mcp_configuration_unselected"
             }),
-            "must not claim MCP configuration was absent on a repository nobody granted local_artifact_read to read"
+            "must not claim MCP configuration was unselected on a repository nobody granted local_artifact_read to read"
         );
     }
 
@@ -30014,7 +30146,13 @@ mod tests {
     fn default_plan_omits_mcp_armor_when_repository_is_not_owner_confirmed() {
         let fixture = Fixture::new();
         let created = fixture.create();
-        let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let (_, asset_id) = fixture.discovered_repository_with_files(
+            &created.id,
+            &[
+                ("mcp.json", "{\"mcpServers\":{}}\n"),
+                (".cursor/mcp.json", "{\"mcpServers\":{}}\n"),
+            ],
+        );
         let service = fixture.service();
         approve_repository_local_artifact_read(&service, &created.id, asset_id);
         approve_direct_external_target(
@@ -30049,12 +30187,13 @@ mod tests {
         assert!(!asset.candidate);
         assert_eq!(
             crate::mcp_armor_input::mcp_configuration_plan_status(asset),
-            crate::mcp_armor_input::McpConfigurationPlanStatus::Absent
+            crate::mcp_armor_input::McpConfigurationPlanStatus::Unselected
         );
-        assert!(
+        assert_eq!(
             crate::mcp_armor_input::candidates_from_asset(asset)
                 .unwrap()
-                .is_empty()
+                .len(),
+            2
         );
         assert_eq!(
             asset
@@ -30090,9 +30229,9 @@ mod tests {
         assert!(
             plan.not_executed.iter().all(|skipped| {
                 skipped.engine_id != MCP_ARMOR_ENGINE_ID
-                    || skipped.reason_code != "mcp_configuration_absent"
+                    || skipped.reason_code != "mcp_configuration_unselected"
             }),
-            "must not claim MCP configuration was absent on a repository nobody confirmed"
+            "must not claim MCP configuration was unselected on a repository nobody confirmed"
         );
     }
 
@@ -30100,7 +30239,13 @@ mod tests {
     fn default_plan_omits_mcp_armor_when_repository_is_still_a_candidate() {
         let fixture = Fixture::new();
         let created = fixture.create();
-        let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let (_, asset_id) = fixture.discovered_repository_with_files(
+            &created.id,
+            &[
+                ("mcp.json", "{\"mcpServers\":{}}\n"),
+                (".cursor/mcp.json", "{\"mcpServers\":{}}\n"),
+            ],
+        );
         let service = fixture.service();
         approve_repository_local_artifact_read(&service, &created.id, asset_id);
         approve_direct_external_target(
@@ -30135,12 +30280,13 @@ mod tests {
         assert!(asset.candidate);
         assert_eq!(
             crate::mcp_armor_input::mcp_configuration_plan_status(asset),
-            crate::mcp_armor_input::McpConfigurationPlanStatus::Absent
+            crate::mcp_armor_input::McpConfigurationPlanStatus::Unselected
         );
-        assert!(
+        assert_eq!(
             crate::mcp_armor_input::candidates_from_asset(asset)
                 .unwrap()
-                .is_empty()
+                .len(),
+            2
         );
         assert_eq!(
             asset
@@ -30176,9 +30322,9 @@ mod tests {
         assert!(
             plan.not_executed.iter().all(|skipped| {
                 skipped.engine_id != MCP_ARMOR_ENGINE_ID
-                    || skipped.reason_code != "mcp_configuration_absent"
+                    || skipped.reason_code != "mcp_configuration_unselected"
             }),
-            "must not claim MCP configuration was absent on a repository that is still a candidate"
+            "must not claim MCP configuration was unselected on a repository that is still a candidate"
         );
     }
 
