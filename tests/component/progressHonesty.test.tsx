@@ -1369,3 +1369,28 @@ test("a blocked run hides the checks heading count", () => {
   expect(container.querySelector(".section-heading .count-label")).toBeNull();
   expect(container.textContent).toContain("Technical records — skipped checks: 2");
 });
+
+test.each([
+  ["en", "running", "running", "Scan tool running"],
+  ["zh-TW", "running", "running", "掃描工具執行中"],
+  ["en", "paused", "paused", "This scan is paused"],
+  ["zh-TW", "paused", "paused", "這次掃描已暫停"],
+] as const)(
+  "a %s %s scan keeps its activity visible after a sibling gateway fails",
+  (locale, runStatus, engineStatus, title) => {
+    window.localStorage.setItem(localeStorageKey, locale);
+    const { container } = renderProgress(run([
+      engine("failed-web-check", "failed", {
+        failureKind: "gateway_preparation_failed",
+        finishedAt: "2026-09-04T12:01:00Z",
+      }),
+      engine("independent-repository-check", engineStatus),
+    ], runStatus, { finishedAt: undefined }));
+
+    const activity = container.querySelector(".scan-activity__current");
+    expect(activity?.textContent).toContain(title);
+    expect(activity?.textContent).toContain("independent-repository-check");
+    expect(activity?.textContent).not.toMatch(/The private scan connection did not start|專用掃描連線未能啟動/u);
+    expect(container.querySelector('a[href="#findings"]')).toBeNull();
+  },
+);
