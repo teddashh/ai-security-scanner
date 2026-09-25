@@ -1299,3 +1299,73 @@ test("a waiting undispatched plan is named and offers a direct cancel", () => {
   expect(chinese.container.textContent).toContain("掃描器尚未啟動。");
   expect(chinese.container.textContent).toContain("取消這份計畫");
 });
+
+// The "Checks" heading count previously counted rendered rows
+// (`visibleWorkCount`), not checks: a shared aggregate row hid every check it
+// stood in for, and a blocked run's setup-attempt placeholder still counted as
+// one check. The heading now always counts `selectedRun.engineRuns.length`,
+// and does not render at all for a blocked run, whose own notice and
+// collapsed technical record already carry that count.
+
+test("the checks heading counts every check, including ones that share a row", () => {
+  const { container } = renderProgress(settledSkipRun(
+    engine("gitleaks", "completed", { taskKind: { kind: "catalog_engine" } }),
+    "completed",
+  ));
+
+  const label = container.querySelector(".section-heading .count-label");
+  expect(label?.textContent).toBe("4 checks");
+});
+
+test("a zh-TW checks heading counts every check, including ones that share a row", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderProgress(settledSkipRun(
+    engine("gitleaks", "completed", { taskKind: { kind: "catalog_engine" } }),
+    "completed",
+  ));
+
+  const label = container.querySelector(".section-heading .count-label");
+  expect(label?.textContent).toBe("4 項檢查");
+});
+
+test("the checks heading still counts both checks when a shared failure collapses their rows", () => {
+  const preScannerFailure = (id: string): EngineRun => engine(id, "failed", {
+    errorCode: "execution_failed",
+    rawArtifactCount: 0,
+    savedResultArtifactCount: 0,
+    findingCount: 0,
+    message: "The private scan engine did not start.",
+    checkpoint: {
+      attempt: 1,
+      stage: "failed",
+      artifactCount: 0,
+      cleanupCompleted: true,
+      scopeBound: false,
+      lastError: "gateway unavailable",
+    },
+  });
+
+  const { container } = renderProgress(
+    run([preScannerFailure("check-a"), preScannerFailure("check-b")], "failed"),
+  );
+
+  const label = container.querySelector(".section-heading .count-label");
+  expect(label?.textContent).toBe("2 checks");
+});
+
+test("the checks heading counts a single check without pluralizing", () => {
+  const { container } = renderProgress(run([engine("gitleaks", "completed")], "completed"));
+
+  const label = container.querySelector(".section-heading .count-label");
+  expect(label?.textContent).toBe("1 check");
+});
+
+test("a blocked run hides the checks heading count", () => {
+  const { container } = renderProgress(run([
+    engine("mcp-armor", "not_executed", { errorCode: "mcp_configuration_absent" }),
+    engine("agentic-radar", "not_executed", { errorCode: "engine_release_unavailable" }),
+  ], "failed"));
+
+  expect(container.querySelector(".section-heading .count-label")).toBeNull();
+  expect(container.textContent).toContain("Technical records — skipped checks: 2");
+});

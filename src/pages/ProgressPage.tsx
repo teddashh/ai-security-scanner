@@ -1138,9 +1138,6 @@ export function ProgressPage({
   const visibleEngineRuns = sharedInfrastructureFailure
     ? []
     : selectedRun.engineRuns.filter((engine) => engine.status !== "not_executed");
-  const visibleWorkCount = sharedInfrastructureFailure
-    ? 1 + (skipped && !blocked ? 1 : 0)
-    : visibleEngineRuns.length + (skipped && !blocked ? 1 : 0);
   const localhostCancelRequested = isLocalhostQuickScanCancelRequested(selectedRun);
   const canPause = selectedRun.status === "running" && !exactLocalhostQuickScan;
   const recoverableEngines = selectedRun.engineRuns.filter((engine) => engine.resumable);
@@ -1631,8 +1628,8 @@ export function ProgressPage({
           <div>
             <h2>{text(copy.workTitle)}</h2>
           </div>
-          {!(blocked && blocked.skippedCheckCount === 0) && (
-            <span className="count-label">{workCountLabel(blocked ? 1 : visibleWorkCount)}</span>
+          {!blocked && (
+            <span className="count-label">{workCountLabel(selectedRun.engineRuns.length)}</span>
           )}
         </div>
 

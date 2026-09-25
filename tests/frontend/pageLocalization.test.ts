@@ -362,7 +362,6 @@ test("readiness errors remain retryable and runtime setup receives focus", async
 
 test("progress aggregates empty, skipped, and shared-infrastructure attempts", async () => {
   const progress = await readPage("ProgressPage.tsx");
-  assert.match(progress, /blocked \? 1 : visibleWorkCount/u);
   assert.match(progress, /selectedRun\.engineRuns\.filter\(\(engine\) => engine\.status !== "not_executed"\)/u);
   assert.match(progress, /skipped && !blocked/u);
   assert.match(progress, /skippedChecksNextStepFor\(skipped\.reasonCodes\)/u);
