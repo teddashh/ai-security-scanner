@@ -13,7 +13,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, Semaphore};
@@ -151,7 +151,7 @@ async fn run(
     }
     let policy = Arc::new(load_policy(&invocation.policy_path)?);
     let concurrency = Arc::new(Semaphore::new(policy.max_concurrency));
-    let rate_window = Arc::new(Mutex::new(VecDeque::<Instant>::new()));
+    let rate_window = Arc::new(Mutex::new(VecDeque::<TokioInstant>::new()));
     let listener = TcpListener::bind(policy.listen_address)
         .await
         .map_err(|_| GatewayStatusCode::ListenerBindFailed)?;
@@ -244,7 +244,7 @@ async fn handle_authorized_client(
     client: TcpStream,
     policy: Arc<ValidatedPolicy>,
     concurrency: Arc<Semaphore>,
-    rate_window: Arc<Mutex<VecDeque<Instant>>>,
+    rate_window: Arc<Mutex<VecDeque<TokioInstant>>>,
     refusals: Arc<RefusalCounts>,
 ) -> io::Result<()> {
     let _permit = concurrency
@@ -254,29 +254,55 @@ async fn handle_authorized_client(
     handle_client(client, &policy, &rate_window, &refusals).await
 }
 
-async fn take_rate_slot(policy: &ValidatedPolicy, rate_window: &Mutex<VecDeque<Instant>>) -> bool {
-    if policy.expires_at <= Utc::now() {
-        return false;
+/// Admits one connection into the rolling one-second window, waiting for the
+/// oldest admission to age out when the window is full. Engines pace in
+/// bursts, and a request refused here is dropped rather than retried, so a
+/// refusal loses scan work that a short wait would keep. Waiting does not
+/// widen the bound at the target: a slot is recorded only at admission. A
+/// slot that cannot free up before `deadline` is refused at once.
+async fn take_rate_slot(
+    policy: &ValidatedPolicy,
+    rate_window: &Mutex<VecDeque<TokioInstant>>,
+    deadline: TokioInstant,
+) -> bool {
+    loop {
+        if policy.expires_at <= Utc::now() {
+            return false;
+        }
+        let now = TokioInstant::now();
+        if now >= deadline {
+            return false;
+        }
+        let wake_at = {
+            let mut samples = rate_window.lock().await;
+            while samples
+                .front()
+                .is_some_and(|sample| now.duration_since(*sample) >= Duration::from_secs(1))
+            {
+                samples.pop_front();
+            }
+            if samples.len() < policy.max_connections_per_second {
+                samples.push_back(now);
+                return true;
+            }
+            // Unreachable while validation requires at least one connection
+            // per second; a full window with no slot to wait for is refused.
+            let Some(oldest) = samples.front().copied() else {
+                return false;
+            };
+            oldest + Duration::from_secs(1)
+        };
+        if wake_at >= deadline {
+            return false;
+        }
+        tokio::time::sleep_until(wake_at).await;
     }
-    let now = Instant::now();
-    let mut samples = rate_window.lock().await;
-    while samples
-        .front()
-        .is_some_and(|sample| now.duration_since(*sample) >= Duration::from_secs(1))
-    {
-        samples.pop_front();
-    }
-    if samples.len() >= policy.max_connections_per_second {
-        return false;
-    }
-    samples.push_back(now);
-    true
 }
 
 async fn handle_client(
     mut client: TcpStream,
     policy: &ValidatedPolicy,
-    rate_window: &Mutex<VecDeque<Instant>>,
+    rate_window: &Mutex<VecDeque<TokioInstant>>,
     refusals: &RefusalCounts,
 ) -> io::Result<()> {
     let remaining = policy_remaining(policy)
@@ -292,7 +318,7 @@ async fn handle_client(
 async fn handle_client_before_expiry(
     client: &mut TcpStream,
     policy: &ValidatedPolicy,
-    rate_window: &Mutex<VecDeque<Instant>>,
+    rate_window: &Mutex<VecDeque<TokioInstant>>,
     refusals: &RefusalCounts,
 ) -> io::Result<()> {
     timeout(HANDSHAKE_TIMEOUT, negotiate(client))
@@ -319,7 +345,9 @@ async fn handle_client_before_expiry(
     // A TCP-only proxy liveness check may open and close the socket without
     // sending CONNECT. Count only a syntactically valid, policy-authorized
     // upstream request so those checks cannot consume the scanner's rate.
-    if !take_rate_slot(policy, rate_window).await {
+    // The connect budget covers both the rate wait and the upstream connect.
+    let connect_deadline = TokioInstant::now() + policy.connect_timeout;
+    if !take_rate_slot(policy, rate_window, connect_deadline).await {
         let _ = refusals.rate.fetch_add(1, Ordering::Relaxed);
         send_reply(client, 2, None).await?;
         return Err(io::Error::new(
@@ -327,7 +355,11 @@ async fn handle_client_before_expiry(
             "connection rate denied",
         ));
     }
-    let mut upstream = match connect_frozen_destinations(destinations, policy.connect_timeout).await
+    let mut upstream = match connect_frozen_destinations(
+        destinations,
+        connect_deadline.saturating_duration_since(TokioInstant::now()),
+    )
+    .await
     {
         Ok(stream) => stream,
         Err(error) => {
@@ -1306,8 +1338,11 @@ mod tests {
     async fn a_rate_refusal_increments_only_rate_and_is_recorded_in_status() {
         let mut raw = raw_policy();
         raw.limits.max_connections_per_second = 1;
-        let policy = validate_policy(raw, Utc::now()).expect("policy");
-        let rate_window = Mutex::new(VecDeque::from([Instant::now()]));
+        let mut policy = validate_policy(raw, Utc::now()).expect("policy");
+        // The only slot frees after the connect budget, so the connection is
+        // refused rather than waited for.
+        policy.connect_timeout = Duration::from_millis(200);
+        let rate_window = Mutex::new(VecDeque::from([TokioInstant::now()]));
         let refusals = Arc::new(RefusalCounts::default());
         let (mut client, mut server) = connected_pair().await;
         let handler_refusals = Arc::clone(&refusals);
@@ -1353,6 +1388,138 @@ mod tests {
         assert_eq!(status.phase, GatewayPhase::Ready);
         assert_eq!(status.code, GatewayStatusCode::Ready);
         assert_eq!(status.refusals, refusals.snapshot());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_full_rate_window_waits_for_its_oldest_slot_to_age_out() {
+        let mut raw = raw_policy();
+        raw.limits.max_connections_per_second = 2;
+        let policy = validate_policy(raw, Utc::now()).expect("policy");
+        let start = TokioInstant::now();
+        let rate_window = Mutex::new(VecDeque::from([
+            start - Duration::from_millis(600),
+            start - Duration::from_millis(100),
+        ]));
+        let admitted = take_rate_slot(&policy, &rate_window, start + Duration::from_secs(5)).await;
+        assert!(admitted);
+        assert_eq!(TokioInstant::now() - start, Duration::from_millis(400));
+        let window = rate_window.lock().await;
+        assert_eq!(window.len(), 2);
+        assert_eq!(window[0], start - Duration::from_millis(100));
+        assert_eq!(window[1], start + Duration::from_millis(400));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slot_that_frees_after_the_deadline_is_refused_without_waiting() {
+        let mut raw = raw_policy();
+        raw.limits.max_connections_per_second = 1;
+        let policy = validate_policy(raw, Utc::now()).expect("policy");
+        let start = TokioInstant::now();
+        let rate_window = Mutex::new(VecDeque::from([start]));
+        let admitted =
+            take_rate_slot(&policy, &rate_window, start + Duration::from_millis(500)).await;
+        assert!(!admitted);
+        assert_eq!(TokioInstant::now(), start);
+        let window = rate_window.lock().await;
+        assert_eq!(window.len(), 1);
+        assert_eq!(window[0], start);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn waiting_connections_never_exceed_the_bound_in_any_second() {
+        let mut raw = raw_policy();
+        raw.limits.max_connections_per_second = 2;
+        let policy = Arc::new(validate_policy(raw, Utc::now()).expect("policy"));
+        let rate_window = Arc::new(Mutex::new(VecDeque::<TokioInstant>::new()));
+        let start = TokioInstant::now();
+        let deadline = start + Duration::from_secs(10);
+        let mut tasks = Vec::new();
+        for _ in 0..5 {
+            let policy = Arc::clone(&policy);
+            let rate_window = Arc::clone(&rate_window);
+            tasks.push(tokio::spawn(async move {
+                let admitted = take_rate_slot(&policy, &rate_window, deadline).await;
+                assert!(admitted);
+                TokioInstant::now()
+            }));
+        }
+        let mut instants = Vec::new();
+        for task in tasks {
+            instants.push(task.await.expect("admission task"));
+        }
+        instants.sort();
+        assert_eq!(instants.len(), 5);
+        for pair in instants.windows(3) {
+            assert!(pair[2] - pair[0] >= Duration::from_secs(1));
+        }
+        assert_eq!(instants[4], start + Duration::from_secs(2));
+    }
+
+    #[tokio::test]
+    async fn a_connection_over_the_rate_waits_for_a_slot_instead_of_being_refused() {
+        let target = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("target listener");
+        let target_address = target.local_addr().expect("target address");
+        let target_task = tokio::spawn(async move {
+            let (mut stream, _) = target.accept().await.expect("target connection");
+            let mut body = Vec::new();
+            timeout(Duration::from_secs(1), stream.read_to_end(&mut body))
+                .await
+                .expect("target did not receive EOF")
+                .expect("target read");
+            assert!(body.is_empty());
+        });
+
+        let mut raw = raw_policy();
+        raw.limits.max_connections_per_second = 1;
+        raw.destinations[0].hostname = None;
+        raw.destinations[0].addresses = [target_address.ip()].into_iter().collect();
+        raw.destinations[0].ports = [target_address.port()].into_iter().collect();
+        raw.destinations[0].allow_sensitive_networks = true;
+        let policy = Arc::new(validate_policy(raw, Utc::now()).expect("policy"));
+        let concurrency = Arc::new(Semaphore::new(1));
+        let started = TokioInstant::now();
+        let rate_window = Arc::new(Mutex::new(VecDeque::from([
+            started - Duration::from_millis(700)
+        ])));
+        let refusals = Arc::new(RefusalCounts::default());
+
+        let (mut client, server) = connected_pair().await;
+        let handler = tokio::spawn(handle_authorized_client(
+            server,
+            policy,
+            concurrency,
+            Arc::clone(&rate_window),
+            Arc::clone(&refusals),
+        ));
+        timeout(
+            Duration::from_secs(2),
+            socks_connect(&mut client, target_address),
+        )
+        .await
+        .expect("connection was refused instead of waiting for a rate slot");
+        assert!(started.elapsed() >= Duration::from_millis(300));
+        assert_eq!(
+            refusals.snapshot(),
+            GatewayRefusalCounts {
+                rate: 0,
+                destination: 0,
+                unauthorized_client: 0,
+            }
+        );
+        {
+            let window = rate_window.lock().await;
+            assert_eq!(window.len(), 1);
+            assert!(window[0] >= started);
+        }
+        client.shutdown().await.expect("client EOF");
+        timeout(Duration::from_secs(1), handler)
+            .await
+            .expect("handler remained blocked")
+            .expect("handler task")
+            .expect("relay");
+        target_task.await.expect("target task");
     }
 
     #[tokio::test]
