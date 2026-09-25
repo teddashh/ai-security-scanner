@@ -24,6 +24,7 @@ import {
   findingPriorityReason,
   findingUnattributedGap,
   coverageGapProse,
+  coverageGapProseWithoutDiagnosticCode,
   findingRollbackSentence,
   findingVerificationSentence,
   findingImpactSentence,
@@ -1351,6 +1352,27 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
   const firstTestedEngine = firstTestedCheck ? engineByTaskId.get(firstTestedCheck.taskId) : undefined;
   const firstCoverageGap = coverageLossGaps[0];
   const firstRecordNote = recordNotes[0];
+  /**
+   * A gap's dimension, with its leading check id (the text before the first
+   * ":") replaced by that check's display name -- the same `localizedCheckName`
+   * every other row on this page uses, and the same substitution the saved HTML
+   * report's `engine_named` makes. Without this the desktop prints the raw
+   * check id while the report it exports names the check, so the two disagree
+   * about what to call the same check.
+   */
+  const coverageGapDimensionText = (
+    gap: BeginnerMasterReport["coverageGaps"][number],
+    unattributedDimension?: string,
+  ): string => {
+    const dimensionText = unattributedDimension ?? localizedCoverageDimension(gap.dimension, locale);
+    const checkId = (gap.dimension.split(":")[0] ?? gap.dimension).trim();
+    const taskEngine = gap.taskId ? engineByTaskId.get(gap.taskId) : undefined;
+    const engine = taskEngine && taskEngine.engineId === checkId
+      ? taskEngine
+      : run?.engineRuns.find((candidate) => candidate.engineId === checkId);
+    if (!engine || !dimensionText.startsWith(checkId)) return dimensionText;
+    return `${localizedCheckName(engine.engineId, locale, engine)}${dimensionText.slice(checkId.length)}`;
+  };
   const coverageGapLine = (gap: BeginnerMasterReport["coverageGaps"][number]): string => {
     const targets = requestedTargetListLabel(gap.targetAssetIds, targetById, locale);
     const unattributedText = gap.unattributed
@@ -1365,11 +1387,9 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
           },
         )
       : undefined;
-    return `${targets || text(copy.requestedScope)} · ${unattributedText
-      ? unattributedText.dimension
-      : localizedCoverageDimension(gap.dimension, locale)} · ${unattributedText
+    return `${targets || text(copy.requestedScope)} · ${coverageGapDimensionText(gap, unattributedText?.dimension)} · ${unattributedText
       ? unattributedText.reason
-      : coverageGapProse(locale, gap.reason)}`;
+      : coverageGapProseWithoutDiagnosticCode(locale, gap.reason)}`;
   };
   const appendRemainingCount = (value: string, count: number): string => count > 0
     ? `${value} · ${text(copy.moreItems, { count: formatNumber(count) })}`
@@ -1539,7 +1559,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
     : excludedGaps.length > 0
       ? `${text(copy.recordedExclusions)}: ${excludedGaps.map((gap) => {
           const targets = requestedTargetListLabel(gap.targetAssetIds, targetById, locale);
-          return `${targets ? `${targets} · ` : ""}${localizedCoverageDimension(gap.dimension, locale)} · ${coverageGapProse(locale, gap.reason)}`;
+          return `${targets ? `${targets} · ` : ""}${coverageGapDimensionText(gap)} · ${coverageGapProse(locale, gap.reason)}`;
         }).join(inlineSeparator)}`
       : report.coverageCounts.excluded > 0
         ? text(copy.recordedExclusionsUnavailable, { count: formatNumber(report.coverageCounts.excluded) })
@@ -1784,9 +1804,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
                       * sentence per kind was false for all but one of them, and
                       * contradicted the dimension printed beside it.
                       */}
-                    <span>{unattributedText
-                      ? unattributedText.dimension
-                      : localizedCoverageDimension(gap.dimension, locale)} · {unattributedText
+                    <span>{coverageGapDimensionText(gap, unattributedText?.dimension)} · {unattributedText
                       ? unattributedText.reason
                       : coverageGapProse(locale, gap.reason)}</span>
                     <span>{unattributedText
@@ -1832,9 +1850,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
                 return (
                   <li key={`${gap.taskId ?? "request"}-${gap.dimension}-${index}`}>
                     <strong>{targets || text(copy.requestedScope)}</strong>
-                    <span>{unattributedText
-                      ? unattributedText.dimension
-                      : localizedCoverageDimension(gap.dimension, locale)} · {unattributedText
+                    <span>{coverageGapDimensionText(gap, unattributedText?.dimension)} · {unattributedText
                       ? unattributedText.reason
                       : coverageGapProse(locale, gap.reason)}</span>
                     <span>{unattributedText

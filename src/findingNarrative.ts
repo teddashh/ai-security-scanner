@@ -1516,6 +1516,22 @@ export const coverageGapProse = (
   return lookupProse(trimmed) ?? english;
 };
 
+/**
+ * `coverageGapProse`, with a trailing diagnostic code removed first.
+ *
+ * The first-layer summary is not the place for a scanner's internal code --
+ * the collapsed coverage-gap list already prints this same reason with its
+ * code and the next action, so the code stays available there. A sentence
+ * with no code to remove passes through `coverageGapProse` unchanged.
+ */
+export const coverageGapProseWithoutDiagnosticCode = (
+  locale: "en" | "zh-TW",
+  english: string,
+): string => {
+  const withCode = /^(.*\.) Diagnostic code: (.+)\.$/u.exec(english.trim());
+  return coverageGapProse(locale, withCode ? withCode[1] ?? english : english);
+};
+
 const lookupProse = (english: string): string | undefined =>
   COVERAGE_GAP_PROSE.find(([candidate]) => candidate === english)?.[1];
 

@@ -3751,6 +3751,111 @@ test("a coverage gap names the cause the backend actually recorded", () => {
   expect(row).not.toContain("still changing");
 });
 
+test("a coverage gap's check is named the way the rest of the report names it, with the diagnostic code kept off the first layer", () => {
+  // The backend composes a gap's dimension as "<check id>: <kind>", and the
+  // saved HTML report already replaces that leading check id with the
+  // engine's display name (`engine_named` in case_service.rs). The desktop
+  // used to print the raw check id instead, disagreeing with the report it
+  // exports. The diagnostic code is technical detail: the first layer states
+  // the reason without it, while the collapsed coverage-gap list keeps it.
+  const run = localhostRun();
+  run.engineRuns = [{
+    ...run.engineRuns[0]!,
+    id: "task-agentic-radar",
+    engineId: "agentic-radar",
+    engineName: "Agentic Radar",
+    category: "ai_agent_framework",
+    taskKind: { kind: "catalog_engine" },
+    localhostTcpObservation: undefined,
+  }];
+  const { container } = renderReport(report("partial", {
+    coverageGaps: [{
+      kind: "not_tested",
+      taskId: "task-agentic-radar",
+      targetAssetIds: ["asset-1"],
+      dimension: "agentic-radar: not-tested check dimension",
+      reason: "This check did not start, so it is not a pass. Diagnostic code: engine_release_unavailable.",
+      nextActionCode: "no_action_unless_scope_changes",
+      nextAction: "This version of the app does not include this check.",
+    }],
+    coverageCounts: counts({ notTested: 1 }),
+  }), [], [run]);
+
+  const notTested = outcomeStripCell(container, "What was not tested");
+  expect(notTested.textContent).toContain("Agentic Radar: not-tested check dimension");
+  expect(notTested.textContent).toContain("This check did not start, so it is not a pass.");
+  expect(notTested.textContent).not.toContain("agentic-radar");
+  expect(notTested.textContent).not.toContain("Diagnostic code");
+
+  const gapsCard = coverageCard(container, "What was not tested");
+  expect(gapsCard.textContent).toContain("Agentic Radar: not-tested check dimension");
+  expect(gapsCard.textContent).toContain("Diagnostic code: engine_release_unavailable");
+});
+
+test("a Traditional Chinese reader sees the same check name, with the diagnostic code kept off the first layer", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const run = localhostRun();
+  run.engineRuns = [{
+    ...run.engineRuns[0]!,
+    id: "task-agentic-radar",
+    engineId: "agentic-radar",
+    engineName: "Agentic Radar",
+    category: "ai_agent_framework",
+    taskKind: { kind: "catalog_engine" },
+    localhostTcpObservation: undefined,
+  }];
+  const { container } = renderReport(report("partial", {
+    coverageGaps: [{
+      kind: "not_tested",
+      taskId: "task-agentic-radar",
+      targetAssetIds: ["asset-1"],
+      dimension: "agentic-radar: not-tested check dimension",
+      reason: "This check did not start, so it is not a pass. Diagnostic code: engine_release_unavailable.",
+      nextActionCode: "no_action_unless_scope_changes",
+      nextAction: "This version of the app does not include this check.",
+    }],
+    coverageCounts: counts({ notTested: 1 }),
+  }), [], [run]);
+
+  const notTested = outcomeStripCell(container, "沒有測到的內容");
+  expect(notTested.textContent).toContain("Agentic Radar");
+  expect(notTested.textContent).not.toContain("agentic-radar");
+  expect(notTested.textContent).not.toContain("診斷代碼");
+
+  const gapsCard = coverageCard(container, "沒有測到的內容");
+  expect(gapsCard.textContent).toContain("診斷代碼：engine_release_unavailable");
+
+  window.localStorage.setItem(localeStorageKey, "en");
+});
+
+test("a coverage gap naming a check with no matching engine run keeps its raw dimension text", () => {
+  const run = localhostRun();
+  run.engineRuns = [{
+    ...run.engineRuns[0]!,
+    id: "task-other",
+    engineId: "other-check",
+    engineName: "Other Check",
+    category: "host",
+    taskKind: { kind: "catalog_engine" },
+    localhostTcpObservation: undefined,
+  }];
+  const { container } = renderReport(report("partial", {
+    coverageGaps: [{
+      kind: "not_tested",
+      taskId: "task-unmatched",
+      targetAssetIds: ["asset-1"],
+      dimension: "unlisted-engine: not-tested check dimension",
+      reason: "This check did not start, so it is not a pass.",
+      nextActionCode: "retry_check",
+      nextAction: "Retry this check.",
+    }],
+    coverageCounts: counts({ notTested: 1 }),
+  }), [], [run]);
+
+  const gapsCard = coverageCard(container, "What was not tested");
+  expect(gapsCard.textContent).toContain("unlisted-engine: not-tested check dimension");
+});
+
 test("AIDEFEND is not presented as carrying the same standing as NIST and ISO", () => {
   // The backend writes the non-certification notice and the AIDEFEND
   // qualification as two separate sentences because the catalogues differ: NIST

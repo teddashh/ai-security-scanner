@@ -8,6 +8,7 @@ import {
 } from "../../src/coverageDimensionPresentation.ts";
 import {
   coverageGapProse,
+  coverageGapProseWithoutDiagnosticCode,
   localizedRequestedLimitKind,
   localizedRequestedLimitValue,
   localizedTestedValue,
@@ -219,6 +220,42 @@ test("a not-tested skip reason keeps its specific next action in both languages"
   assert.equal(
     coverageGapProse("zh-TW", mcpReason),
     "這項檢查沒有啟動，因此不代表通過。診斷代碼：mcp_configuration_absent。",
+  );
+});
+
+test("coverageGapProseWithoutDiagnosticCode drops a trailing code and otherwise matches coverageGapProse", () => {
+  // The first-layer summary is not the place for a scanner's internal code --
+  // the collapsed coverage-gap list already prints the same reason with its
+  // code and the next action, so the code stays available there.
+  const withCode =
+    "This check did not start, so it is not a pass. Diagnostic code: engine_release_unavailable.";
+  const withoutCode = "This check did not start, so it is not a pass.";
+  const unrelated = "This check did not reach a confirmed complete result.";
+
+  assert.equal(coverageGapProseWithoutDiagnosticCode("en", withCode), withoutCode);
+  assert.equal(
+    coverageGapProseWithoutDiagnosticCode("zh-TW", withCode),
+    coverageGapProse("zh-TW", withoutCode),
+  );
+  assert.ok(!coverageGapProseWithoutDiagnosticCode("zh-TW", withCode).includes("診斷代碼"));
+
+  // A sentence with no code to remove passes through coverageGapProse unchanged,
+  // in both languages.
+  assert.equal(
+    coverageGapProseWithoutDiagnosticCode("en", withoutCode),
+    coverageGapProse("en", withoutCode),
+  );
+  assert.equal(
+    coverageGapProseWithoutDiagnosticCode("zh-TW", withoutCode),
+    coverageGapProse("zh-TW", withoutCode),
+  );
+  assert.equal(
+    coverageGapProseWithoutDiagnosticCode("en", unrelated),
+    coverageGapProse("en", unrelated),
+  );
+  assert.equal(
+    coverageGapProseWithoutDiagnosticCode("zh-TW", unrelated),
+    coverageGapProse("zh-TW", unrelated),
   );
 });
 
