@@ -1479,10 +1479,96 @@ test("the first layer names the requested target, tested work, top gap, and next
   expect(firstLayerScope!.closest("details")).toBeNull();
   expect(firstLayerScope!.textContent).toContain("Requested: contoso.example");
   expect(firstLayerScope!.textContent).toContain("Scan depth: Full inventory");
-  expect(firstLayerScope!.textContent).toContain("Limits: naabu execution timeout: 30 seconds");
+  expect(firstLayerScope!.textContent).not.toContain("Limits:");
+  expect(firstLayerScope!.textContent).not.toContain("execution timeout");
   expect(firstLayerScope!.textContent).toContain("completed planned scan batches: 1 of 1");
   expect(firstLayerScope!.textContent).toMatch(/Time: Observed .+ to .+/u);
   expect(firstLayerScope!.textContent).toContain("Recorded exclusions: contoso.example · ports outside the requested port set");
+
+  const limitsList = Array.from(container.querySelectorAll<HTMLElement>("details")).find(
+    (details) => details.querySelector("summary")?.textContent === "Limits used",
+  );
+  if (!limitsList) throw new Error("the limits used list did not render");
+  expect(limitsList.textContent).toContain("Execution timeout");
+  expect(limitsList.textContent).toContain("30 seconds");
+});
+
+test("limits used merges identical policies and names their holders instead of raw ids", () => {
+  const base = report("complete");
+  const engineRunTemplate = localhostRun().engineRuns[0]!;
+  const runWithEngines: ScanRun = {
+    ...localhostRun(),
+    engineRuns: [
+      {
+        ...engineRunTemplate,
+        id: "task-gitleaks",
+        engineId: "gitleaks",
+        engineName: "Gitleaks",
+        category: "code_and_secrets",
+        taskKind: { kind: "catalog_engine" },
+        localhostTcpObservation: undefined,
+      },
+      {
+        ...engineRunTemplate,
+        id: "task-trivy",
+        engineId: "trivy",
+        engineName: "Trivy",
+        category: "container_and_sbom",
+        taskKind: { kind: "catalog_engine" },
+        localhostTcpObservation: undefined,
+      },
+    ],
+  };
+
+  const { container } = renderReport(report("complete", {
+    requested: {
+      ...base.requested,
+      targets: [
+        {
+          assetId: "asset-1",
+          label: "shop.example",
+          assetKind: "domain",
+          labelAvailability: "recorded",
+          assetKindAvailability: "recorded",
+        },
+        {
+          assetId: "asset-2",
+          label: "api.example",
+          assetKind: "domain",
+          labelAvailability: "recorded",
+          assetKindAvailability: "recorded",
+        },
+      ],
+      limits: [
+        { name: "asset-1 approved ports", value: "443", source: "frozen_scope_grant" },
+        { name: "asset-2 approved ports", value: "443", source: "frozen_scope_grant" },
+        { name: "asset-1 authorized network target", value: "shop.example", source: "frozen_scope_grant" },
+        { name: "gitleaks execution timeout", value: "3600 seconds", source: "frozen_task_contract" },
+        { name: "trivy execution timeout", value: "3600 seconds", source: "frozen_task_contract" },
+      ],
+    },
+  }), [], [runWithEngines]);
+
+  const limitsList = Array.from(container.querySelectorAll<HTMLElement>("details")).find(
+    (details) => details.querySelector("summary")?.textContent === "Limits used",
+  );
+  if (!limitsList) throw new Error("the limits used list did not render");
+
+  const rows = Array.from(limitsList.querySelectorAll("li"));
+  const portsRow = rows.find((row) => row.querySelector("strong")?.textContent === "Approved ports");
+  const timeoutRow = rows.find((row) => row.querySelector("strong")?.textContent === "Execution timeout");
+  if (!portsRow || !timeoutRow) {
+    throw new Error(`expected rows missing: ${rows.map((row) => row.textContent).join(" | ")}`);
+  }
+  expect(portsRow.textContent).toContain("shop.example");
+  expect(portsRow.textContent).toContain("api.example");
+  expect(timeoutRow.textContent).toContain("Gitleaks");
+  expect(timeoutRow.textContent).toContain("Trivy");
+
+  expect(limitsList.textContent).not.toContain("asset-1");
+  expect(limitsList.textContent).not.toContain("asset-2");
+  expect(limitsList.textContent).not.toContain("gitleaks execution timeout");
+  expect(limitsList.textContent).not.toContain("trivy execution timeout");
 });
 
 test("a run with no network-discovery stage omits scan depth from the first layer and the coverage card", () => {
@@ -2353,6 +2439,7 @@ test("a Traditional Chinese reader sees requested-limit units in their language"
   );
   expect(section!.textContent).toContain("600 秒");
   expect(section!.textContent).not.toContain("600 seconds");
+  expect(section!.textContent).toContain("檢查逾時限制");
 });
 
 test("a Traditional Chinese reader hears why completed network coverage is not a security pass", () => {

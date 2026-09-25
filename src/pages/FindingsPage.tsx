@@ -11,10 +11,7 @@ import {
   unavailableRunBoundReportCopy,
   unavailableSelectedRunCopy,
 } from "../findingsReportAvailability";
-import {
-  localizedCoverageDimension,
-  localizedRequestedLimitName,
-} from "../coverageDimensionPresentation";
+import { localizedCoverageDimension } from "../coverageDimensionPresentation";
 import { projectVisibleFindingGroups } from "../findingGroupPresentation";
 import { isExposureObservation, isSecurityFinding } from "../findingClassification";
 import {
@@ -36,8 +33,10 @@ import {
   localizedControlMappingRationale,
   localizedExpertType,
   localizedDataQualityWarning,
+  localizedRequestedLimitKind,
   localizedRequestedLimitValue,
   localizedTestedValue,
+  requestedLimitParts,
   testedObservationProse,
 } from "../findingNarrative.ts";
 import {
@@ -628,12 +627,7 @@ const copy = {
   },
   firstLayerRequested: { en: "Requested", zhTW: "要求" },
   firstLayerActuallyTested: { en: "Actually tested", zhTW: "實際測試" },
-  firstLayerLimits: { en: "Limits", zhTW: "限制" },
   firstLayerTime: { en: "Time", zhTW: "時間" },
-  noRequestedLimits: {
-    en: "No requested limit was saved",
-    zhTW: "未保存要求的限制",
-  },
   currentProjectFallback: {
     en: "from the current project; not retained by this run",
     zhTW: "來自目前專案；本輪未保存",
@@ -1435,11 +1429,43 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
   // guided internal-system) must not print "Scan depth" as if a value could
   // have been retained but wasn't.
   const stageIsApplicable = report.requested.stage.availability !== "not_applicable";
-  const requestedLimitsSummary = report.requested.limits.length > 0
-    ? report.requested.limits.map((limit) =>
-        `${localizedRequestedLimitName(limit.name, locale)}: ${localizedRequestedLimitValue(limit.name, limit.value, locale)}`,
-      ).join(inlineSeparator)
-    : text(copy.noRequestedLimits);
+  // The reader-facing name of whoever a limit applies to: the target list
+  // above already carries provenance for a requested target, so its label is
+  // shown bare; a scanner falls back to the same display name the tested-work
+  // rows use; anything else keeps its raw identifier rather than inventing one.
+  const requestedLimitHolderLabel = (holder: string): string => {
+    const target = targetById.get(holder);
+    if (target) return target.label || holder;
+    const engine = run?.engineRuns.find((candidate) => candidate.engineId === holder);
+    if (engine) return localizedCheckName(holder, locale, engine);
+    return holder;
+  };
+  // One row per distinct policy rather than per holder: a case authorizing
+  // several targets, or a run with several scanners, otherwise repeats the
+  // same kind and value once per holder in the collapsed "Limits used" list.
+  const groupedLimits: Array<{
+    kind: string;
+    name: string;
+    value: string;
+    source: string;
+    holders: string[];
+  }> = [];
+  const groupedLimitIndexByKey = new Map<string, number>();
+  for (const limit of report.requested.limits) {
+    const { holder, kind } = requestedLimitParts(limit.name);
+    const key = `${kind}\u0000${limit.value}\u0000${limit.source}`;
+    let index = groupedLimitIndexByKey.get(key);
+    if (index === undefined) {
+      index = groupedLimits.length;
+      groupedLimitIndexByKey.set(key, index);
+      groupedLimits.push({ kind, name: limit.name, value: limit.value, source: limit.source, holders: [] });
+    }
+    if (holder) {
+      const label = requestedLimitHolderLabel(holder);
+      const group = groupedLimits[index]!;
+      if (!group.holders.includes(label)) group.holders.push(label);
+    }
+  }
   const testedCheckSummaries = testedChecks.flatMap((check) => {
     const engine = engineByTaskId.get(check.taskId);
     const checkLabel = localizedCheckName(check.checkId, locale, engine);
@@ -1579,7 +1605,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
 
       <p className="report-first-layer-scope">
         <strong>{text(copy.firstLayerRequested)}:</strong>{" "}
-        {requestedTargetsSummary}{stageIsApplicable ? ` · ${text(copy.stage)}: ${requestedStageSummary}` : ""} · {text(copy.firstLayerLimits)}: {requestedLimitsSummary}
+        {requestedTargetsSummary}{stageIsApplicable ? ` · ${text(copy.stage)}: ${requestedStageSummary}` : ""}
         {" | "}
         <strong>{text(copy.firstLayerActuallyTested)}:</strong>{" "}
         {actualTestedSummary} · {text(copy.firstLayerTime)}: {observedTimeSummary} · {exclusionsSummary}
@@ -1656,8 +1682,14 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
             <details>
               <summary>{text(copy.requestedLimits)}</summary>
               <ul className="detail-list">
-                {report.requested.limits.map((limit, index) => (
-                  <li key={`${limit.name}-${limit.value}-${index}`}><strong>{localizedRequestedLimitName(limit.name, locale)}</strong><span>{localizedRequestedLimitValue(limit.name, limit.value, locale)}</span></li>
+                {groupedLimits.map((limit, index) => (
+                  <li key={`${limit.kind}-${limit.value}-${limit.source}-${index}`}>
+                    <strong>{localizedRequestedLimitKind(limit.kind, locale)}</strong>
+                    <span>{localizedRequestedLimitValue(limit.name, limit.value, locale)}</span>
+                    {limit.holders.length > 0 && (
+                      <small>{limit.holders.join(locale === "en" ? ", " : "、")}</small>
+                    )}
+                  </li>
                 ))}
               </ul>
             </details>

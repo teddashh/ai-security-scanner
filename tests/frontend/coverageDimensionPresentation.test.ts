@@ -8,8 +8,10 @@ import {
 } from "../../src/coverageDimensionPresentation.ts";
 import {
   coverageGapProse,
+  localizedRequestedLimitKind,
   localizedRequestedLimitValue,
   localizedTestedValue,
+  requestedLimitParts,
   testedObservationProse,
 } from "../../src/findingNarrative.ts";
 
@@ -725,6 +727,66 @@ test("an unrecognized limit name keeps its text instead of being replaced", () =
     localizedRequestedLimitName("prowler concurrency ceiling", "zh-TW"),
     /prowler concurrency ceiling/u,
   );
+});
+
+test("requestedLimitParts splits a composed name into its holder and kind", () => {
+  for (const suffix of [
+    "approved ports",
+    "request rate",
+    "network timeout",
+    "authorized network target",
+    "execution timeout",
+  ] as const) {
+    assert.deepEqual(requestedLimitParts(`asset-primary ${suffix}`), {
+      holder: "asset-primary",
+      kind: suffix,
+    });
+  }
+});
+
+test("requestedLimitParts leaves a bare suffix with an empty holder", () => {
+  assert.deepEqual(requestedLimitParts("execution timeout"), {
+    holder: "",
+    kind: "execution timeout",
+  });
+});
+
+test("requestedLimitParts treats a name with no matching suffix as its own kind", () => {
+  assert.deepEqual(requestedLimitParts("endpoint"), { holder: "", kind: "endpoint" });
+  assert.deepEqual(requestedLimitParts("prowler concurrency ceiling"), {
+    holder: "",
+    kind: "prowler concurrency ceiling",
+  });
+});
+
+test("localizedRequestedLimitKind names every known kind in both languages", () => {
+  for (const [kind, zh, en] of [
+    ["endpoint", "連線端點", "Endpoint"],
+    ["connection timeout", "連線逾時限制", "Connection timeout"],
+    ["application payload", "應用資料量", "Application payload"],
+    ["approved ports", "允許檢查的連接埠", "Approved ports"],
+    ["request rate", "請求速率", "Request rate"],
+    ["network timeout", "網路逾時限制", "Network timeout"],
+    ["authorized network target", "已確認的網路目標", "Authorized network target"],
+    ["execution timeout", "檢查逾時限制", "Execution timeout"],
+  ] as const) {
+    assert.equal(localizedRequestedLimitKind(kind, "zh-TW"), zh);
+    assert.equal(localizedRequestedLimitKind(kind, "en"), en);
+  }
+});
+
+test("localizedRequestedLimitKind keeps an unknown kind's English and falls back in Chinese", () => {
+  assert.equal(
+    localizedRequestedLimitKind("prowler concurrency ceiling", "en"),
+    "prowler concurrency ceiling",
+  );
+  assert.equal(
+    localizedRequestedLimitKind("prowler concurrency ceiling", "zh-TW"),
+    "本輪使用的限制：prowler concurrency ceiling",
+  );
+  // An inherited object key is not a known kind.
+  assert.equal(localizedRequestedLimitKind("constructor", "en"), "constructor");
+  assert.equal(localizedRequestedLimitKind("constructor", "zh-TW"), "本輪使用的限制：constructor");
 });
 
 /**

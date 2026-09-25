@@ -2973,6 +2973,9 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
 }
 
 .detail-list { margin: 0; padding-left: 18px; color: var(--muted); font-size: 0.78rem; line-height: 1.55; }
+/* An item's parts are separate elements with no text between them. */
+.detail-list li > strong ~ *::before,
+.detail-list li > span > * + *::before { content: " · "; }
 .detail-section__heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .detail-section__heading h3 { margin: 0; }
 .detail-section__heading > span { color: var(--muted); font-size: 0.78rem; }

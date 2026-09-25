@@ -2311,6 +2311,65 @@ const withIdentifier = (label: string, identifier: string): string =>
   identifier ? `${label}（${identifier}）` : label;
 
 /**
+ * The limit kinds the backend appends to a holder identifier, in match order,
+ * each with its Traditional Chinese label.
+ */
+const REQUESTED_LIMIT_KIND_SUFFIXES: ReadonlyArray<readonly [string, string]> = [
+  ["approved ports", "允許檢查的連接埠"],
+  ["request rate", "請求速率"],
+  ["network timeout", "網路逾時限制"],
+  ["authorized network target", "已確認的網路目標"],
+  ["execution timeout", "檢查逾時限制"],
+];
+
+/**
+ * The label for a limit kind this build authors, if it is one. Three names are
+ * fixed strings rather than composed ones, so they never carry a holder.
+ */
+const requestedLimitKindZh = (kind: string): string | undefined => {
+  if (kind === "endpoint") return "連線端點";
+  if (kind === "connection timeout") return "連線逾時限制";
+  if (kind === "application payload") return "應用資料量";
+  return REQUESTED_LIMIT_KIND_SUFFIXES.find(([suffix]) => suffix === kind)?.[1];
+};
+
+/**
+ * Splits a requested-limit name into the holder that carries it and the kind
+ * of limit it is. A name with none of the holder suffixes -- "endpoint",
+ * "connection timeout", "application payload", or a name this build has never
+ * seen -- has no holder to extract, so the whole name becomes the kind and the
+ * holder is empty.
+ */
+export const requestedLimitParts = (
+  name: string,
+): { holder: string; kind: string } => {
+  for (const [suffix] of REQUESTED_LIMIT_KIND_SUFFIXES) {
+    if (name.endsWith(suffix)) {
+      return {
+        holder: name.slice(0, name.length - suffix.length).trim(),
+        kind: suffix,
+      };
+    }
+  }
+  return { holder: "", kind: name };
+};
+
+/**
+ * Names a limit's kind alone, for a list that shows the holders in their own
+ * element beside it.
+ */
+export const localizedRequestedLimitKind = (
+  kind: string,
+  locale: "en" | "zh-TW",
+): string => {
+  const label = requestedLimitKindZh(kind);
+  if (locale === "zh-TW") return label ?? `本輪使用的限制：${kind}`;
+  return label === undefined
+    ? kind
+    : `${kind.charAt(0).toLocaleUpperCase("en")}${kind.slice(1)}`;
+};
+
+/**
  * Names one limit the run was executed under. The backend composes most of
  * these as "<engine or asset id> <limit kind>", so translating the kind alone
  * erases the only part saying which scanner or which authorized target the
@@ -2326,24 +2385,8 @@ export const localizedRequestedLimitName = (
   locale: "en" | "zh-TW",
 ): string => {
   if (locale === "en") return name;
-  if (name === "endpoint") return "連線端點";
-  if (name === "connection timeout") return "連線逾時限制";
-  if (name === "application payload") return "應用資料量";
-  for (const [suffix, label] of [
-    ["approved ports", "允許檢查的連接埠"],
-    ["request rate", "請求速率"],
-    ["network timeout", "網路逾時限制"],
-    ["authorized network target", "已確認的網路目標"],
-    ["execution timeout", "檢查逾時限制"],
-  ] as const) {
-    if (name.endsWith(suffix)) {
-      return withIdentifier(
-        label,
-        name.slice(0, name.length - suffix.length).trim(),
-      );
-    }
-  }
-  return `本輪使用的限制：${name}`;
+  const { holder, kind } = requestedLimitParts(name);
+  return withIdentifier(localizedRequestedLimitKind(kind, locale), holder);
 };
 
 const REQUESTED_LIMIT_VALUE_UNITS: ReadonlyArray<readonly [string, string]> = [
