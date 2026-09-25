@@ -304,7 +304,12 @@ async fn handle_client_before_expiry(
     let destinations = match resolve_request(policy, target, port) {
         Ok(destinations) => destinations,
         Err(_) => {
-            let _ = refusals.destination.fetch_add(1, Ordering::Relaxed);
+            refusals.destination.fetch_add(1, Ordering::Relaxed);
+            // Every other refusal answers before closing. Closing in silence
+            // here reaches the engine as a broken proxy rather than a refusal,
+            // so the one event the allowlist exists to produce is the one the
+            // engine cannot report. Reply 2 is "not allowed by ruleset".
+            send_reply(client, 2, None).await?;
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "destination denied",
@@ -1351,7 +1356,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_denied_destination_increments_only_destination_and_keeps_its_error() {
+    async fn a_denied_destination_answers_with_a_refusal_before_closing() {
         let policy = validate_policy(raw_policy(), Utc::now()).expect("policy");
         let rate_window = Mutex::new(VecDeque::new());
         let refusals = Arc::new(RefusalCounts::default());
@@ -1361,6 +1366,15 @@ mod tests {
             handle_client_before_expiry(&mut server, &policy, &rate_window, &handler_refusals).await
         });
         write_socks_connect(&mut client, "203.0.113.9:80".parse().expect("denied port")).await;
+        // A closed socket with no reply reaches the engine as a broken proxy.
+        // The allowlist refusal has to be legible as a refusal.
+        let mut reply = [0_u8; 10];
+        timeout(Duration::from_secs(1), client.read_exact(&mut reply))
+            .await
+            .expect("denial reply timed out")
+            .expect("SOCKS reply");
+        assert_eq!(reply[0], SOCKS_VERSION);
+        assert_eq!(reply[1], 2);
         let error = timeout(Duration::from_secs(1), handler)
             .await
             .expect("destination refusal did not finish")
