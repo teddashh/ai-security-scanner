@@ -185,6 +185,7 @@ pub fn prepare_localhost_quick_scan(
         exit_code: None,
         cleanup_removed: None,
         cleanup_detail: None,
+        gateway_refusals: None,
         warnings: Vec::new(),
         unattributed: Vec::new(),
         unevaluated_targets: Vec::new(),

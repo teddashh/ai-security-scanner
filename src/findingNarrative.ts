@@ -964,6 +964,12 @@ export const localizedCoverageDimension = (
       ["target response", "目標回應"],
       ["scanner errors", "掃描器錯誤"],
       ["unsupported target input", "不支援的目標輸入"],
+      [
+        "connections refused by the rate limit",
+        "遭速率限制拒絕的連線",
+      ],
+      ["destination outside the approved scope", "核准範圍外的目的地"],
+      ["unrecorded connection refusals", "未記錄的連線拒絕"],
     ] as const) {
       if (rest === fragment)
         return withCheck(dimension.slice(0, separator), label);
@@ -1445,6 +1451,18 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
     "No action for the current scope.",
     "目前範圍不需處理。",
   ],
+  [
+    "The approved rate limit refused some of this check's connections, so part of the check never reached the target.",
+    "核准的速率限制拒絕了這項檢查的部分連線，因此部分檢查未能送達目標。",
+  ],
+  [
+    "Connections this check attempted outside the approved scope were refused.",
+    "這項檢查嘗試在核准範圍以外建立的連線已被拒絕。",
+  ],
+  [
+    "Whether any of this check's connections were refused was not recorded.",
+    "這項檢查是否有連線遭到拒絕，並未留下記錄。",
+  ],
 ];
 
 /**
@@ -1452,7 +1470,7 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
  *
  * English is the stored sentence. Traditional Chinese is that sentence when
  * this product authored it, with a recorded upstream detail, diagnostic code,
- * or support-end date kept verbatim.
+ * support-end date, or refused-connection count kept verbatim.
  */
 export const coverageGapProse = (
   locale: "en" | "zh-TW",
@@ -1481,6 +1499,14 @@ export const coverageGapProse = (
   if (withSupportEnd) {
     const base = lookupProse(withSupportEnd[1] ?? "");
     if (base) return `${base}支援結束日期：${withSupportEnd[2]}。`;
+    return english;
+  }
+  // A gateway refusal count is data the cleanup record measured. Same split
+  // as the support date: the number stays verbatim, only the sentence moves.
+  const withRefusals = /^(.*\.) Refused connections: (\d+)\.$/u.exec(trimmed);
+  if (withRefusals) {
+    const base = lookupProse(withRefusals[1] ?? "");
+    if (base) return `${base}拒絕的連線：${withRefusals[2]}。`;
     return english;
   }
   return lookupProse(trimmed) ?? english;

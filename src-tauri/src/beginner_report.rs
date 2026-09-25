@@ -9,9 +9,10 @@ use crate::domain::{
     AssessmentCase, Asset, AssetKind, Confidence, ContextFactor, ControlMappingProvenance,
     DeclaredNetworkServiceMetadata, DeclaredNetworkServiceScanProfile, DeclaredWebServiceInput,
     DeclaredWebServiceScanProfile, DistributionMode, EngineRun, EngineRunStatus, EngineTaskKind,
-    Finding, FindingFamily, FindingObservation, Id, InventoryObservation, InventoryObservationKind,
-    LocalhostTcpObservation, LocalhostTcpOutcome, ReportAssetDisposition, ScanRequestOutcome,
-    ScanRequestOutcomeCode, ScanRun, Severity, SeverityBasisCode, UnevaluatedTargetCause,
+    Finding, FindingFamily, FindingObservation, GatewayRefusalRecord, Id, InventoryObservation,
+    InventoryObservationKind, LocalhostTcpObservation, LocalhostTcpOutcome, ReportAssetDisposition,
+    ScanRequestOutcome, ScanRequestOutcomeCode, ScanRun, Severity, SeverityBasisCode,
+    UnevaluatedTargetCause,
 };
 use crate::execution_coverage::{
     CumulativeNaabuCoverage, WorkUnitOutcome, reduce_naabu_attempt_coverage,
@@ -779,6 +780,7 @@ pub fn build_beginner_master_report(
     append_request_outcome_gaps(run, !contradictory_request_outcome, &mut coverage_gaps);
     append_engine_admission_gaps(run, &mut coverage_gaps);
     append_unattributed_gaps(run, &mut coverage_gaps);
+    append_gateway_refusal_gaps(run, &mut coverage_gaps);
     append_manual_review_gaps(run, &mut coverage_gaps);
     append_case_exclusions(case, run, &mut coverage_gaps);
     append_internal_device_profile_gaps(case, run, &mut coverage_gaps);
@@ -2697,6 +2699,87 @@ fn append_unattributed_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
                 ),
                 unattributed: Some(unattributed.clone()),
             });
+        }
+    }
+}
+
+/// One coverage row per gateway refusal kind on a task.
+///
+/// `unauthorized_client` stays in the cleanup record: a client that was not
+/// this engine is not a coverage claim. `None` is a legacy or gateway-less
+/// run and stays silent.
+fn append_gateway_refusal_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
+    const RATE_REASON: &str = "The approved rate limit refused some of this check's connections, so part of the check never reached the target.";
+    const DESTINATION_REASON: &str =
+        "Connections this check attempted outside the approved scope were refused.";
+    const UNAVAILABLE_REASON: &str =
+        "Whether any of this check's connections were refused was not recorded.";
+    for task in &run.engine_runs {
+        let Some(record) = task.gateway_refusals else {
+            continue;
+        };
+        match record {
+            GatewayRefusalRecord::Counted {
+                rate, destination, ..
+            } => {
+                if rate > 0 {
+                    // The retry sentence names the per-check Resume control,
+                    // which Progress renders only for a resumable task. A check
+                    // that finished after its refusals is not resumable, so it
+                    // is sent to the Start control that does render there.
+                    let (next_action_code, next_action) = if task_retry_control_is_available(task) {
+                        (NextActionCode::RetryCheck, "Retry this check.")
+                    } else {
+                        (
+                            NextActionCode::StartNewScan,
+                            "Start a new scan for a fresh result.",
+                        )
+                    };
+                    gaps.push(CoverageGap {
+                        kind: CoverageGapKind::Truncated,
+                        class: CoverageGapClass::CoverageLoss,
+                        task_id: Some(task.id.clone()),
+                        target_asset_ids: task.asset_ids.clone(),
+                        dimension: format!(
+                            "{}: connections refused by the rate limit",
+                            check_id(task)
+                        ),
+                        reason: format!("{RATE_REASON} Refused connections: {rate}."),
+                        next_action_code,
+                        next_action: next_action.into(),
+                        unattributed: None,
+                    });
+                }
+                if destination > 0 {
+                    gaps.push(CoverageGap {
+                        kind: CoverageGapKind::NotTested,
+                        class: CoverageGapClass::RecordNote,
+                        task_id: Some(task.id.clone()),
+                        target_asset_ids: task.asset_ids.clone(),
+                        dimension: format!(
+                            "{}: destination outside the approved scope",
+                            check_id(task)
+                        ),
+                        reason: format!("{DESTINATION_REASON} Refused connections: {destination}."),
+                        next_action_code: NextActionCode::NoActionUnlessScopeChanges,
+                        next_action: "No action for the current scope.".into(),
+                        unattributed: None,
+                    });
+                }
+            }
+            GatewayRefusalRecord::Unavailable => {
+                gaps.push(CoverageGap {
+                    kind: CoverageGapKind::Unavailable,
+                    class: CoverageGapClass::RecordNote,
+                    task_id: Some(task.id.clone()),
+                    target_asset_ids: task.asset_ids.clone(),
+                    dimension: format!("{}: unrecorded connection refusals", check_id(task)),
+                    reason: UNAVAILABLE_REASON.into(),
+                    next_action_code: NextActionCode::PreserveVisibleLimitation,
+                    next_action: "Start a new scan for a fresh result.".into(),
+                    unattributed: None,
+                });
+            }
         }
     }
 }
@@ -4762,7 +4845,7 @@ mod tests {
         BUILT_IN_LOCALHOST_TCP_AUTHORIZATION_REFERENCE, BUILT_IN_LOCALHOST_TCP_ENGINE_ID,
         CaseStatus, ControlReference, CoverageEntry, CoverageStatus, DataClass,
         EngineKnowledgeInput, EngineRun, Evidence, EvidenceKind, FindingGroup, FindingStatus,
-        KnowledgeInputKind, KnowledgePinState, ManualReviewControl,
+        GatewayRefusalRecord, KnowledgeInputKind, KnowledgePinState, ManualReviewControl,
         NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION, NAABU_ATTEMPT_RESULT_SCHEMA_VERSION,
         NaabuAttemptRequest, NaabuAttemptResult, OrganizationProfile, RawArtifact,
         ReportAssetSnapshot, ScopeGrant, SecurityTemplateExecution, SourceKind, new_id,
@@ -4906,6 +4989,7 @@ mod tests {
                 exit_code: None,
                 cleanup_removed: Some(true),
                 cleanup_detail: Some("No disposable runtime was created.".into()),
+                gateway_refusals: None,
                 warnings: vec![],
                 raw_artifact_ids: vec![],
                 error_code: None,
@@ -4959,6 +5043,7 @@ mod tests {
             exit_code: Some(1),
             cleanup_removed: Some(true),
             cleanup_detail: Some("done".into()),
+            gateway_refusals: None,
             warnings: vec![],
             raw_artifact_ids: vec![],
             error_code: None,
@@ -10320,5 +10405,208 @@ mod tests {
         // Naming the authorized assets as targets would assert the very
         // attribution the adapter refused to make.
         assert!(gap.target_asset_ids.is_empty());
+    }
+
+    /// Naabu runs behind the managed gateway, so its task is where a refusal
+    /// record really arrives. The completed check offers no per-check Resume.
+    fn case_with_gateway_refusals(record: Option<GatewayRefusalRecord>) -> AssessmentCase {
+        let mut case = naabu_case_with_complete_unit_evidence(
+            "task-gateway",
+            EngineRunStatus::Completed,
+            true,
+        );
+        case.scan_runs[0].engine_runs[0].gateway_refusals = record;
+        case
+    }
+
+    fn refusal_gaps(case: &AssessmentCase) -> Vec<CoverageGap> {
+        build_beginner_master_report(case, "run-1")
+            .unwrap()
+            .coverage_gaps
+            .into_iter()
+            .filter(|gap| {
+                gap.dimension
+                    .contains("connections refused by the rate limit")
+                    || gap
+                        .dimension
+                        .contains("destination outside the approved scope")
+                    || gap.dimension.contains("unrecorded connection refusals")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_rate_refusal_is_lost_coverage_on_the_task_assets() {
+        let baseline =
+            build_beginner_master_report(&case_with_gateway_refusals(None), "run-1").unwrap();
+        assert_eq!(baseline.coverage_counts.truncated, 0);
+        assert_eq!(baseline.state.summary, BeginnerReportSummary::Complete);
+
+        let case = case_with_gateway_refusals(Some(GatewayRefusalRecord::Counted {
+            rate: 4,
+            destination: 0,
+            unauthorized_client: 9,
+        }));
+        let task = &case.scan_runs[0].engine_runs[0];
+        assert!(!task_retry_control_is_available(task));
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        let gaps = refusal_gaps(&case);
+        assert_eq!(gaps.len(), 1);
+        let gap = &gaps[0];
+        assert_eq!(gap.kind, CoverageGapKind::Truncated);
+        assert_eq!(gap.class, CoverageGapClass::CoverageLoss);
+        assert_eq!(gap.task_id.as_deref(), Some(task.id.as_str()));
+        assert_eq!(gap.target_asset_ids, task.asset_ids);
+        // The check finished after its refusals, so Progress has no Resume
+        // for it. Naming one would send the reader to a control that is not
+        // there.
+        assert_eq!(gap.next_action_code, NextActionCode::StartNewScan);
+        assert_eq!(gap.next_action, "Start a new scan for a fresh result.");
+        // The rate count alone: the unauthorized-client count is not folded in.
+        assert!(
+            gap.reason.ends_with(" Refused connections: 4."),
+            "{}",
+            gap.reason
+        );
+        assert_eq!(report.coverage_counts.truncated, 1);
+        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+        assert_eq!(
+            crate::finding_narrative::coverage_gap_prose_zh_hant(&gap.reason).as_deref(),
+            Some(
+                "核准的速率限制拒絕了這項檢查的部分連線，因此部分檢查未能送達目標。拒絕的連線：4。"
+            )
+        );
+    }
+
+    #[test]
+    fn a_rate_refusal_on_a_resumable_check_names_its_retry() {
+        let mut case = naabu_case_with_one_partial_unit("task-gateway", EngineRunStatus::Failed);
+        {
+            let task = &mut case.scan_runs[0].engine_runs[0];
+            task.phase = "failed".into();
+            task.error_code = None;
+            let token = progress_resume_token(task, "failed");
+            task.resume_token = Some(token);
+            task.gateway_refusals = Some(GatewayRefusalRecord::Counted {
+                rate: 2,
+                destination: 0,
+                unauthorized_client: 0,
+            });
+            assert!(task_retry_control_is_available(task));
+        }
+        let gaps = refusal_gaps(&case);
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].kind, CoverageGapKind::Truncated);
+        assert_eq!(gaps[0].next_action_code, NextActionCode::RetryCheck);
+        assert_eq!(gaps[0].next_action, "Retry this check.");
+    }
+
+    #[test]
+    fn a_destination_refusal_is_a_record_note_not_lost_coverage() {
+        let baseline =
+            build_beginner_master_report(&case_with_gateway_refusals(None), "run-1").unwrap();
+        let case = case_with_gateway_refusals(Some(GatewayRefusalRecord::Counted {
+            rate: 0,
+            destination: 2,
+            unauthorized_client: 0,
+        }));
+        let task = &case.scan_runs[0].engine_runs[0];
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        let gaps = refusal_gaps(&case);
+        assert_eq!(gaps.len(), 1);
+        let gap = &gaps[0];
+        assert_eq!(gap.kind, CoverageGapKind::NotTested);
+        assert_eq!(gap.class, CoverageGapClass::RecordNote);
+        assert_eq!(gap.target_asset_ids, task.asset_ids);
+        assert_eq!(
+            gap.next_action_code,
+            NextActionCode::NoActionUnlessScopeChanges
+        );
+        assert_eq!(gap.next_action, "No action for the current scope.");
+        assert!(
+            gap.reason.ends_with(" Refused connections: 2."),
+            "{}",
+            gap.reason
+        );
+        assert_eq!(report.coverage_counts, baseline.coverage_counts);
+        assert_eq!(report.state.summary, baseline.state.summary);
+    }
+
+    #[test]
+    fn an_unauthorized_client_refusal_alone_adds_no_coverage_row() {
+        let unauthorized = refusal_gaps(&case_with_gateway_refusals(Some(
+            GatewayRefusalRecord::Counted {
+                rate: 0,
+                destination: 0,
+                unauthorized_client: 6,
+            },
+        )));
+        assert!(unauthorized.is_empty());
+        let quiet = refusal_gaps(&case_with_gateway_refusals(Some(
+            GatewayRefusalRecord::Counted {
+                rate: 0,
+                destination: 0,
+                unauthorized_client: 0,
+            },
+        )));
+        assert!(quiet.is_empty());
+    }
+
+    #[test]
+    fn a_legacy_run_without_a_refusal_record_adds_no_coverage_row() {
+        let case = case_with_gateway_refusals(None);
+        let mut json = serde_json::to_value(&case).unwrap();
+        json["scan_runs"][0]["engine_runs"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("gateway_refusals")
+            .expect("the field is written");
+        let legacy: AssessmentCase = serde_json::from_value(json).unwrap();
+        assert!(
+            legacy.scan_runs[0].engine_runs[0]
+                .gateway_refusals
+                .is_none()
+        );
+        assert!(refusal_gaps(&legacy).is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_gateway_record_is_a_note_and_not_a_coverage_loss() {
+        let baseline =
+            build_beginner_master_report(&case_with_gateway_refusals(None), "run-1").unwrap();
+        let case = case_with_gateway_refusals(Some(GatewayRefusalRecord::Unavailable));
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        let gaps = refusal_gaps(&case);
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].kind, CoverageGapKind::Unavailable);
+        assert_eq!(gaps[0].class, CoverageGapClass::RecordNote);
+        assert_eq!(
+            gaps[0].next_action_code,
+            NextActionCode::PreserveVisibleLimitation
+        );
+        assert_eq!(gaps[0].next_action, "Start a new scan for a fresh result.");
+        assert_eq!(
+            gaps[0].target_asset_ids,
+            case.scan_runs[0].engine_runs[0].asset_ids
+        );
+        assert_eq!(report.coverage_counts, baseline.coverage_counts);
+        assert_eq!(report.state.summary, baseline.state.summary);
+    }
+
+    #[test]
+    fn rate_and_destination_refusals_are_one_row_each() {
+        let case = case_with_gateway_refusals(Some(GatewayRefusalRecord::Counted {
+            rate: 8,
+            destination: 1,
+            unauthorized_client: 5,
+        }));
+        let gaps = refusal_gaps(&case);
+        assert_eq!(gaps.len(), 2);
+        assert!(gaps.iter().any(|gap| {
+            gap.kind == CoverageGapKind::Truncated && gap.class == CoverageGapClass::CoverageLoss
+        }));
+        assert!(gaps.iter().any(|gap| {
+            gap.kind == CoverageGapKind::NotTested && gap.class == CoverageGapClass::RecordNote
+        }));
     }
 }

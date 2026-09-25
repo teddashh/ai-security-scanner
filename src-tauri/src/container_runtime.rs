@@ -1,7 +1,7 @@
 use crate::artifact_store::{CapturePaths, CaptureWriter, RunDirectories};
 use crate::domain::{
-    EngineManifest, MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS, MIN_ENGINE_EXECUTION_TIMEOUT_SECONDS,
-    ScanPermission,
+    EngineManifest, GatewayRefusalRecord, MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS,
+    MIN_ENGINE_EXECUTION_TIMEOUT_SECONDS, ScanPermission,
 };
 use crate::error::{AppError, AppResult};
 use crate::execution_coverage::LAUNCHER_V2_JOURNAL_SCHEMA_VERSION;
@@ -1489,6 +1489,11 @@ pub struct RuntimeOutcome {
 pub struct CleanupOutcome {
     pub removed: bool,
     pub detail: String,
+    /// Present only when managed-egress cleanup read a gateway refusal record.
+    /// Container cleanup leaves this empty. Skipped when empty so an older
+    /// execution-report commitment stays byte-stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_refusals: Option<GatewayRefusalRecord>,
 }
 
 /// Immutable identity emitted by the runtime only when this invocation
@@ -3372,6 +3377,8 @@ impl ContainerRuntime for ProcessContainerRuntime {
                 return Ok(CleanupOutcome {
                     removed: false,
                     detail: "ownership-proven container was already absent".into(),
+
+                    gateway_refusals: None,
                 });
             }
             return Err(process_failure(inspect_operation.label(), &inspection));
@@ -3392,12 +3399,16 @@ impl ContainerRuntime for ProcessContainerRuntime {
             return Ok(CleanupOutcome {
                 removed: true,
                 detail: "ownership-proven container removed by immutable object ID".into(),
+
+                gateway_refusals: None,
             });
         }
         if runtime_object_is_absent(&removal.stderr) {
             return Ok(CleanupOutcome {
                 removed: false,
                 detail: "ownership-proven container disappeared before removal".into(),
+
+                gateway_refusals: None,
             });
         }
         Err(process_failure(cleanup_operation.label(), &removal))
@@ -3658,6 +3669,8 @@ impl ContainerRuntime for FakeContainerRuntime {
         Ok(CleanupOutcome {
             removed: true,
             detail: "fake container removed".into(),
+
+            gateway_refusals: None,
         })
     }
 }

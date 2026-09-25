@@ -994,6 +994,7 @@ mod tests {
             exit_code: None,
             cleanup_removed: None,
             cleanup_detail: None,
+            gateway_refusals: None,
             warnings: vec![],
             raw_artifact_ids: vec![],
             error_code: None,

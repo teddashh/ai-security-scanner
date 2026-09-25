@@ -889,6 +889,15 @@ pub(crate) fn recognized_coverage_dimension_zh_hant(dimension: &str) -> Option<S
             ("target response", "目標回應"),
             ("scanner errors", "掃描器錯誤"),
             ("unsupported target input", "不支援的目標輸入"),
+            (
+                "connections refused by the rate limit",
+                "遭速率限制拒絕的連線",
+            ),
+            (
+                "destination outside the approved scope",
+                "核准範圍外的目的地",
+            ),
+            ("unrecorded connection refusals", "未記錄的連線拒絕"),
         ] {
             if rest == fragment {
                 return Some(with_check(check, label));
@@ -2078,6 +2087,18 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "請檢視上游詳細資料，並為這項控制措施記錄人工判定。",
     ),
     ("No action for the current scope.", "目前範圍不需處理。"),
+    (
+        "The approved rate limit refused some of this check's connections, so part of the check never reached the target.",
+        "核准的速率限制拒絕了這項檢查的部分連線，因此部分檢查未能送達目標。",
+    ),
+    (
+        "Connections this check attempted outside the approved scope were refused.",
+        "這項檢查嘗試在核准範圍以外建立的連線已被拒絕。",
+    ),
+    (
+        "Whether any of this check's connections were refused was not recorded.",
+        "這項檢查是否有連線遭到拒絕，並未留下記錄。",
+    ),
 ];
 
 /// One sentence of a coverage row, in Traditional Chinese, or `None` when this
@@ -2112,6 +2133,17 @@ pub fn coverage_gap_prose_zh_hant(english: &str) -> Option<String> {
     {
         let base = lookup(head)?;
         return Some(format!("{base}支援結束日期：{ended}。"));
+    }
+    // A gateway refusal count is data the cleanup record measured. Same split
+    // as the support date: the number stays verbatim, only the sentence moves.
+    if let Some((head, count)) = trimmed
+        .strip_suffix('.')
+        .and_then(|rest| rest.rsplit_once(" Refused connections: "))
+        && !count.is_empty()
+        && count.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        let base = lookup(head)?;
+        return Some(format!("{base}拒絕的連線：{count}。"));
     }
     lookup(trimmed)
 }
@@ -2742,6 +2774,35 @@ mod tests {
         // on.
         assert_eq!(
             coverage_gap_prose_zh_hant("Some other reason. Support ended: 2023-04-10."),
+            None
+        );
+    }
+
+    #[test]
+    fn a_gateway_refusal_count_stays_verbatim_and_the_sentence_moves() {
+        assert_eq!(
+            coverage_gap_prose_zh_hant(
+                "The approved rate limit refused some of this check's connections, so part of the check never reached the target. Refused connections: 12."
+            ),
+            Some(
+                "核准的速率限制拒絕了這項檢查的部分連線，因此部分檢查未能送達目標。拒絕的連線：12。"
+                    .to_owned()
+            )
+        );
+        assert_eq!(
+            coverage_gap_prose_zh_hant(
+                "Connections this check attempted outside the approved scope were refused. Refused connections: 3."
+            ),
+            Some("這項檢查嘗試在核准範圍以外建立的連線已被拒絕。拒絕的連線：3。".to_owned())
+        );
+        assert_eq!(
+            coverage_gap_prose_zh_hant(
+                "Whether any of this check's connections were refused was not recorded."
+            ),
+            Some("這項檢查是否有連線遭到拒絕，並未留下記錄。".to_owned())
+        );
+        assert_eq!(
+            coverage_gap_prose_zh_hant("Some other reason. Refused connections: 12."),
             None
         );
     }

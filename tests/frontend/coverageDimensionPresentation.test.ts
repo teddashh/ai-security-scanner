@@ -249,6 +249,32 @@ test("an expired-knowledge coverage row keeps its date and moves its sentence", 
   assert.equal(coverageGapProse("zh-TW", unknown), unknown);
 });
 
+test("a gateway refusal count stays verbatim and the sentence moves", () => {
+  const rate =
+    "The approved rate limit refused some of this check's connections, so part of the check never reached the target. Refused connections: 12.";
+  const destination =
+    "Connections this check attempted outside the approved scope were refused. Refused connections: 3.";
+  const unavailable = "Whether any of this check's connections were refused was not recorded.";
+
+  assert.equal(coverageGapProse("en", rate), rate);
+  assert.equal(
+    coverageGapProse("zh-TW", rate),
+    "核准的速率限制拒絕了這項檢查的部分連線，因此部分檢查未能送達目標。拒絕的連線：12。",
+  );
+  assert.equal(
+    coverageGapProse("zh-TW", destination),
+    "這項檢查嘗試在核准範圍以外建立的連線已被拒絕。拒絕的連線：3。",
+  );
+  assert.equal(
+    coverageGapProse("zh-TW", unavailable),
+    "這項檢查是否有連線遭到拒絕，並未留下記錄。",
+  );
+  assert.equal(
+    coverageGapProse("zh-TW", "Some other reason. Refused connections: 12."),
+    "Some other reason. Refused connections: 12.",
+  );
+});
+
 test("RDP transport coverage and its explicit limits are readable in both languages", () => {
   const observation =
     "The completed Greenbone task retained the exact reviewed RDP transport profile: ten TLS protocol, cipher, and certificate checks plus one check for the legacy fixed private key used by RDP 5.2 or earlier.";

@@ -646,6 +646,8 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                 removed: false,
                 detail: "the runtime invocation ended before container creation was possible"
                     .into(),
+
+                gateway_refusals: None,
             }),
         };
 
@@ -676,6 +678,8 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                 report.cleanup = Some(CleanupOutcome {
                     removed: false,
                     detail: "Runtime object unchanged. Ownership status: unverified.".into(),
+
+                    gateway_refusals: None,
                 });
                 report.warnings.push(
                     "Runtime object ownership is unavailable. Retry uses a new isolated attempt."

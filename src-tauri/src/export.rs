@@ -3003,6 +3003,7 @@ mod tests {
                 exit_code: None,
                 cleanup_removed: None,
                 cleanup_detail: None,
+                gateway_refusals: None,
                 warnings: vec![],
                 raw_artifact_ids: vec!["artifact-1".into()],
                 error_code: None,

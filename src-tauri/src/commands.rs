@@ -779,6 +779,8 @@ fn reconcile_exact_runtime_cleanup(
             CleanupOutcome {
                 removed: false,
                 detail: "desktop ended before runtime resources were created".into(),
+
+                gateway_refusals: None,
             },
             0,
         ));
@@ -838,6 +840,8 @@ fn reconcile_exact_runtime_cleanup(
         None => CleanupOutcome {
             removed: false,
             detail: "scanner container: not created".into(),
+
+            gateway_refusals: None,
         },
     };
     let managed = checkpoint
@@ -858,8 +862,11 @@ fn reconcile_exact_runtime_cleanup(
         .map_err(retryable_error_after_cleanup_started)?;
     let orphan_credentials_removed = cleanup_orphaned_credentials(state.artifact_root(), &owned)
         .map_err(retryable_error_after_cleanup_started)?;
+    let gateway_refusals = managed
+        .as_ref()
+        .and_then(|outcome| outcome.gateway_refusals);
     let detail = bounded_text(
-        &match managed {
+        &match &managed {
             Some(managed) => format!(
                 "{}; managed egress: {}; orphan credential envelopes removed: {}",
                 container.detail, managed.detail, orphan_credentials_removed
@@ -875,6 +882,7 @@ fn reconcile_exact_runtime_cleanup(
         CleanupOutcome {
             removed: container.removed,
             detail,
+            gateway_refusals,
         },
         orphan_credentials_removed,
     ))
@@ -7017,6 +7025,7 @@ fn record_managed_cleanup_failure(
     *cleanup = Some(CleanupOutcome {
         removed: false,
         detail: bounded_text(cleanup_error, 2_000),
+        gateway_refusals: None,
     });
     warnings.push(warning.into());
 }
@@ -7068,6 +7077,11 @@ fn merge_managed_cleanup(
     managed: &ManagedNetworkCleanupOutcome,
 ) {
     let previous = cleanup.take();
+    // A later cleanup that did not read a status document must not erase a
+    // record an earlier one already read. A later read replaces it.
+    let gateway_refusals = managed.gateway_refusals.or(previous
+        .as_ref()
+        .and_then(|outcome| outcome.gateway_refusals));
     *cleanup = Some(CleanupOutcome {
         removed: previous.as_ref().is_none_or(|outcome| outcome.removed) && managed.removed,
         detail: bounded_text(
@@ -7079,6 +7093,7 @@ fn merge_managed_cleanup(
             },
             4_000,
         ),
+        gateway_refusals,
     });
 }
 
@@ -7087,6 +7102,7 @@ fn merge_container_cleanup(
     container: &CleanupOutcome,
 ) {
     let prior = managed.take();
+    let gateway_refusals = prior.as_ref().and_then(|outcome| outcome.gateway_refusals);
     *managed = Some(ManagedNetworkCleanupOutcome {
         removed: prior.as_ref().is_none_or(|outcome| outcome.removed) && container.removed,
         detail: bounded_text(
@@ -7099,6 +7115,7 @@ fn merge_container_cleanup(
             },
             2_000,
         ),
+        gateway_refusals,
     });
 }
 
@@ -7107,6 +7124,9 @@ fn merge_reconciled_managed_cleanup(
     managed: ManagedNetworkCleanupOutcome,
 ) {
     let prior = combined.take();
+    let gateway_refusals = managed
+        .gateway_refusals
+        .or(prior.as_ref().and_then(|outcome| outcome.gateway_refusals));
     *combined = Some(ManagedNetworkCleanupOutcome {
         removed: prior.as_ref().is_none_or(|outcome| outcome.removed) && managed.removed,
         detail: bounded_text(
@@ -7116,6 +7136,7 @@ fn merge_reconciled_managed_cleanup(
             },
             2_000,
         ),
+        gateway_refusals,
     });
 }
 
@@ -7383,6 +7404,52 @@ mod tests {
     use crate::storage::Storage;
     use std::collections::{BTreeMap, BTreeSet};
     use zeroize::Zeroizing;
+
+    #[test]
+    fn merge_managed_cleanup_keeps_a_read_refusal_record() {
+        let counted = GatewayRefusalRecord::Counted {
+            rate: 2,
+            destination: 0,
+            unauthorized_client: 0,
+        };
+        let mut cleanup = None;
+        merge_managed_cleanup(
+            &mut cleanup,
+            &ManagedNetworkCleanupOutcome {
+                removed: true,
+                detail: "gateway refused connections: rate 2, destination 0, unauthorized client 0"
+                    .into(),
+                gateway_refusals: Some(counted),
+            },
+        );
+        merge_managed_cleanup(
+            &mut cleanup,
+            &ManagedNetworkCleanupOutcome {
+                removed: true,
+                detail: "exact internal network removed or already absent".into(),
+                gateway_refusals: None,
+            },
+        );
+        let outcome = cleanup.as_ref().expect("merged cleanup");
+        assert_eq!(outcome.gateway_refusals, Some(counted));
+        assert!(outcome.detail.contains("managed egress:"));
+
+        let later = GatewayRefusalRecord::Counted {
+            rate: 0,
+            destination: 5,
+            unauthorized_client: 1,
+        };
+        merge_managed_cleanup(
+            &mut cleanup,
+            &ManagedNetworkCleanupOutcome {
+                removed: true,
+                detail: "gateway refused connections: rate 0, destination 5, unauthorized client 1"
+                    .into(),
+                gateway_refusals: Some(later),
+            },
+        );
+        assert_eq!(cleanup.expect("later read").gateway_refusals, Some(later));
+    }
 
     fn make_test_file_writable(path: &Path) {
         #[cfg(unix)]
@@ -8903,6 +8970,8 @@ mod tests {
                     CleanupOutcome {
                         removed: true,
                         detail: "removed only the exact product-owned runtime resources".into(),
+
+                        gateway_refusals: None,
                     },
                     0,
                 ))
@@ -10312,6 +10381,8 @@ mod tests {
                 CleanupOutcome {
                     removed: false,
                     detail: "ownership-proven container was already absent".into(),
+
+                    gateway_refusals: None,
                 },
                 0,
             ))

@@ -2489,6 +2489,9 @@ async fn execute_runtime(
                 .chars()
                 .take(4_000)
                 .collect();
+                let gateway_refusals = managed_cleanup
+                    .as_ref()
+                    .and_then(|outcome| outcome.gateway_refusals);
                 let durable = DurableExecutionReport {
                     checkpoint,
                     runtime_preflight: None,
@@ -2496,6 +2499,7 @@ async fn execute_runtime(
                         removed: container_cleanup.removed
                             && managed_cleanup.as_ref().is_none_or(|outcome| outcome.removed),
                         detail: cleanup_detail,
+                        gateway_refusals,
                     }),
                     exit_code: None,
                     raw_artifacts,
@@ -3500,6 +3504,8 @@ fn perform_exact_runtime_cleanup(
         None => CleanupOutcome {
             removed: false,
             detail: "scanner container cleanup: not applicable".into(),
+
+            gateway_refusals: None,
         },
     };
 

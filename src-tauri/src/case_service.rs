@@ -2881,6 +2881,7 @@ impl<'a> CaseService<'a> {
         engine_run.exit_code = None;
         engine_run.cleanup_removed = None;
         engine_run.cleanup_detail = None;
+        engine_run.gateway_refusals = None;
         engine_run.error_code = None;
         engine_run.error_message = None;
         case.scan_runs[run_index].completed_at = None;
@@ -4272,6 +4273,7 @@ impl<'a> CaseService<'a> {
                     exit_code: None,
                     cleanup_removed: None,
                     cleanup_detail: None,
+                    gateway_refusals: None,
                     warnings: stale_knowledge_warning(manifest, now)
                         .into_iter()
                         .chain(mapping_warning.clone())
@@ -4825,6 +4827,7 @@ impl<'a> CaseService<'a> {
         engine_run.finished_at.get_or_insert_with(Utc::now);
         engine_run.cleanup_removed = Some(result.cleanup.removed);
         engine_run.cleanup_detail = Some(result.cleanup.detail);
+        engine_run.gateway_refusals = result.cleanup.gateway_refusals;
         engine_run.error_code =
             (!recoverable_launcher_capture).then(|| "desktop_process_restarted".into());
         engine_run.error_message = checkpoint.last_error.clone();
@@ -5084,6 +5087,7 @@ impl<'a> CaseService<'a> {
         engine_run.finished_at.get_or_insert_with(Utc::now);
         engine_run.cleanup_removed = Some(result.cleanup.removed);
         engine_run.cleanup_detail = Some(result.cleanup.detail);
+        engine_run.gateway_refusals = result.cleanup.gateway_refusals;
         engine_run.error_code = Some("execution_partially_completed".into());
         engine_run.error_message = checkpoint.last_error;
         if result.orphan_credentials_removed > 0 {
@@ -6105,6 +6109,7 @@ impl<'a> CaseService<'a> {
                 engine_run.exit_code = None;
                 engine_run.cleanup_removed = None;
                 engine_run.cleanup_detail = None;
+                engine_run.gateway_refusals = None;
                 engine_run.error_code = None;
                 engine_run.error_message = None;
             }
@@ -6527,6 +6532,7 @@ impl<'a> CaseService<'a> {
             engine_run.exit_code = None;
             engine_run.cleanup_removed = None;
             engine_run.cleanup_detail = None;
+            engine_run.gateway_refusals = None;
         }
         if let Some(preflight) = &report.runtime_preflight {
             engine_run.runtime_provider = Some(enum_key(&preflight.provider));
@@ -6539,6 +6545,7 @@ impl<'a> CaseService<'a> {
         if let Some(cleanup) = &report.cleanup {
             engine_run.cleanup_removed = Some(cleanup.removed);
             engine_run.cleanup_detail = Some(cleanup.detail.clone());
+            engine_run.gateway_refusals = cleanup.gateway_refusals;
         }
         remove_superseded_adapter_parse_warnings(
             &mut engine_run.warnings,
@@ -9885,6 +9892,7 @@ fn not_executed_run(
         exit_code: None,
         cleanup_removed: None,
         cleanup_detail: None,
+        gateway_refusals: None,
         warnings: manifest
             .and_then(|value| stale_knowledge_warning(value, now))
             .into_iter()
@@ -11191,7 +11199,8 @@ fn validate_exact_report_replay_descendant(
     }
     if let Some(cleanup) = report.cleanup.as_ref()
         && (engine_run.cleanup_removed != Some(cleanup.removed)
-            || engine_run.cleanup_detail.as_deref() != Some(cleanup.detail.as_str()))
+            || engine_run.cleanup_detail.as_deref() != Some(cleanup.detail.as_str())
+            || engine_run.gateway_refusals != cleanup.gateway_refusals)
     {
         return Err(exact_report_replay_conflict(
             "its current cleanup projection changed the committed cleanup result",
@@ -20645,6 +20654,8 @@ mod tests {
             cleanup: Some(CleanupOutcome {
                 removed: true,
                 detail: "removed exact verified container".into(),
+
+                gateway_refusals: None,
             }),
             exit_code: Some(0),
             raw_artifacts,
@@ -21036,6 +21047,55 @@ mod tests {
     }
 
     #[test]
+    fn a_cleanup_refusal_record_is_stored_on_the_engine_run_and_replays() {
+        let fixture = Fixture::new();
+        let (prepared, mut report) =
+            prepared_naabu_launcher_v2_execution_report(&fixture, WorkUnitOutcome::TestedComplete);
+        let record = crate::domain::GatewayRefusalRecord::Counted {
+            rate: 3,
+            destination: 1,
+            unauthorized_client: 4,
+        };
+        report
+            .cleanup
+            .as_mut()
+            .expect("prepared report has container cleanup")
+            .gateway_refusals = Some(record);
+        let service = fixture.service();
+        let applied = service
+            .apply_naabu_launcher_v2_execution_report(&prepared.case_id, &report)
+            .expect("report with gateway refusals");
+        assert!(!applied.idempotent_replay);
+        let engine_run = applied
+            .case
+            .scan_runs
+            .iter()
+            .find(|run| run.id == prepared.scan_run_id)
+            .unwrap()
+            .engine_runs
+            .iter()
+            .find(|engine_run| engine_run.id == prepared.engine_run_id)
+            .unwrap();
+        assert_eq!(engine_run.gateway_refusals, Some(record));
+
+        let replay = service
+            .apply_naabu_launcher_v2_execution_report(&prepared.case_id, &report)
+            .expect("exact replay keeps the refusal record");
+        assert!(replay.idempotent_replay);
+        let replayed = replay
+            .case
+            .scan_runs
+            .iter()
+            .find(|run| run.id == prepared.scan_run_id)
+            .unwrap()
+            .engine_runs
+            .iter()
+            .find(|engine_run| engine_run.id == prepared.engine_run_id)
+            .unwrap();
+        assert_eq!(replayed.gateway_refusals, Some(record));
+    }
+
+    #[test]
     fn launcher_v2_captured_handoff_survives_until_final_gateway_cleanup_report() {
         let fixture = Fixture::new();
         let (prepared, report) =
@@ -21115,6 +21175,8 @@ mod tests {
                     cleanup: CleanupOutcome {
                         removed: true,
                         detail: "exact product-owned gateway was already absent".into(),
+
+                        gateway_refusals: None,
                     },
                     orphan_credentials_removed: 0,
                 },
@@ -21542,6 +21604,8 @@ mod tests {
                     cleanup: CleanupOutcome {
                         removed: true,
                         detail: "removed exact product-owned runtime resources".into(),
+
+                        gateway_refusals: None,
                     },
                     orphan_credentials_removed: 0,
                 },
@@ -21784,6 +21848,8 @@ mod tests {
             cleanup: Some(CleanupOutcome {
                 removed: true,
                 detail: "removed exact verified container".into(),
+
+                gateway_refusals: None,
             }),
             exit_code: Some(126),
             raw_artifacts: vec![journal_raw, final_raw, unreferenced_final_raw.clone()],
@@ -25909,6 +25975,7 @@ mod tests {
         sibling.exit_code = None;
         sibling.cleanup_removed = None;
         sibling.cleanup_detail = None;
+        sibling.gateway_refusals = None;
         sibling.warnings.clear();
         sibling.raw_artifact_ids.clear();
         sibling.error_code = None;
@@ -26591,6 +26658,8 @@ mod tests {
                     cleanup: CleanupOutcome {
                         removed: true,
                         detail: "removed exact product-owned runtime resources".into(),
+
+                        gateway_refusals: None,
                     },
                     orphan_credentials_removed: 0,
                 },
@@ -27889,6 +27958,8 @@ mod tests {
                 cleanup: Some(CleanupOutcome {
                     removed: true,
                     detail: "claimed cleanup".into(),
+
+                    gateway_refusals: None,
                 }),
                 exit_code: Some(0),
                 raw_artifacts: Vec::new(),
@@ -34772,6 +34843,7 @@ mod tests {
                 exit_code: Some(2),
                 cleanup_removed: Some(true),
                 cleanup_detail: Some("done".into()),
+                gateway_refusals: None,
                 warnings: vec![],
                 raw_artifact_ids: vec![],
                 error_code: error_code.map(str::to_owned),
@@ -39917,6 +39989,7 @@ mod tests {
         engine.runtime_provider = Some("preserved-unknown-runtime".into());
         engine.cleanup_removed = None;
         engine.cleanup_detail = None;
+        engine.gateway_refusals = None;
         fixture
             .storage
             .save_case(&mut capturing, "test.missing_checkpoint_after_dispatch")
@@ -40148,6 +40221,8 @@ mod tests {
                     cleanup: CleanupOutcome {
                         removed: true,
                         detail: "removed exact immutable container object".into(),
+
+                        gateway_refusals: None,
                     },
                     orphan_credentials_removed: 1,
                 },
@@ -41234,6 +41309,7 @@ mod tests {
                 exit_code: None,
                 cleanup_removed: None,
                 cleanup_detail: None,
+                gateway_refusals: None,
                 warnings: vec![],
                 raw_artifact_ids: vec![],
                 error_code: None,
@@ -41360,6 +41436,8 @@ mod tests {
             cleanup: Some(CleanupOutcome {
                 removed: true,
                 detail: "removed exact verified container".into(),
+
+                gateway_refusals: None,
             }),
             exit_code: Some(0),
             raw_artifacts: vec![artifact],
@@ -41722,6 +41800,7 @@ mod tests {
             exit_code: Some(0),
             cleanup_removed: None,
             cleanup_detail: None,
+            gateway_refusals: None,
             warnings: vec![],
             raw_artifact_ids: vec![],
             error_code: None,

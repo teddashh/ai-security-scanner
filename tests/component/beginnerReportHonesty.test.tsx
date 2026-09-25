@@ -3847,3 +3847,69 @@ test("the asset board is read in attention order, not in the order targets were 
     .map((row) => row.querySelector("strong")?.textContent);
   expect(order).toEqual(["critical.example", "minor.example", "failed.example"]);
 });
+
+// The check itself reads tested_complete. The rate-limit row is the only
+// evidence it was cut short, and the first producer of `truncated`, so it is
+// the only thing between this asset and "no problems found".
+const rateLimitedCompletedReport = (): BeginnerMasterReport =>
+  report("partial", {
+    actual: {
+      checks: [{
+        taskId: "task-nuclei",
+        checkId: "nuclei",
+        targetAssetIds: ["asset-1"],
+        status: "tested_complete",
+        testedDimensions: [],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    coverageGaps: [{
+      kind: "truncated",
+      class: "coverage_loss",
+      taskId: "task-nuclei",
+      targetAssetIds: ["asset-1"],
+      dimension: "nuclei: connections refused by the rate limit",
+      reason: "The approved rate limit refused some of this check's connections, so part of the check never reached the target. Refused connections: 4.",
+      nextActionCode: "start_new_scan",
+      nextAction: "Start a new scan for a fresh result.",
+    }, {
+      kind: "not_tested",
+      class: "record_note",
+      taskId: "task-nuclei",
+      targetAssetIds: ["asset-1"],
+      dimension: "nuclei: destination outside the approved scope",
+      reason: "Connections this check attempted outside the approved scope were refused. Refused connections: 2.",
+      nextActionCode: "no_action_unless_scope_changes",
+      nextAction: "No action for the current scope.",
+    }],
+    coverageCounts: counts({ testedComplete: 1, truncated: 1 }),
+  });
+
+test("a completed check cut short by the rate limit is not a clean asset", () => {
+  const onOpenProgress = vi.fn();
+  const { container } = renderReport(rateLimitedCompletedReport(), [], [], { onOpenProgress });
+
+  const row = container.querySelector<HTMLElement>(".asset-result-row");
+  expect(row?.dataset.assetResult).toBe("incomplete_failed");
+  expect(row?.querySelector(".asset-result-row__outcome span")?.textContent)
+    .toContain("Start a new scan for a fresh result.");
+  const action = row?.querySelector("button");
+  expect(action).not.toBeNull();
+  fireEvent.click(action!);
+  expect(onOpenProgress).toHaveBeenCalledTimes(1);
+  expect(container.textContent).toContain("Reduced by limits");
+  expect(container.textContent).toContain("Refused connections: 4.");
+});
+
+test("a Traditional Chinese reader gets the rate-limit row with its count kept verbatim", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderReport(rateLimitedCompletedReport());
+
+  const row = container.querySelector<HTMLElement>(".asset-result-row");
+  expect(row?.dataset.assetResult).toBe("incomplete_failed");
+  expect(container.textContent).toContain("受限制而縮減");
+  expect(container.textContent)
+    .toContain("核准的速率限制拒絕了這項檢查的部分連線，因此部分檢查未能送達目標。拒絕的連線：4。");
+  expect(container.textContent).not.toContain("The approved rate limit refused");
+});

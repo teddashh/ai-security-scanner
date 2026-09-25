@@ -1,6 +1,7 @@
 use crate::container_runtime::{
     NetworkPolicy, PinnedImage, RuntimeCommandContext, RuntimeProvider,
 };
+use crate::domain::GatewayRefusalRecord;
 use crate::error::{AppError, AppResult};
 use crate::external_scope::{
     CanonicalTarget, ExternalActivity, ResolvedExternalPlan, TransportProtocol,
@@ -274,6 +275,10 @@ impl GatewayContainerSpec {
 pub struct ManagedNetworkCleanupOutcome {
     pub removed: bool,
     pub detail: String,
+    /// Structured twin of the refusal sentence in `detail`. `None` means this
+    /// cleanup did not read a gateway status document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_refusals: Option<GatewayRefusalRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1632,6 +1637,7 @@ impl ManagedNetworkLease {
     pub fn cleanup_with_outcome(&mut self) -> AppResult<ManagedNetworkCleanupOutcome> {
         let mut failures = Vec::new();
         let mut details = Vec::new();
+        let mut gateway_refusals = None;
 
         if let Some(mut process) = self.gateway_process.take() {
             if let Err(error) = stop_gateway(process.as_mut()) {
@@ -1704,23 +1710,25 @@ impl ManagedNetworkLease {
             && let Some(status_directory) = self.gateway_status_directory.as_ref()
         {
             // A missing line would make "no refusals" and "no record" look the same.
-            match read_gateway_status(status_directory) {
-                Ok(Some(status)) => {
-                    let rate = status.refusals.rate;
-                    let destination = status.refusals.destination;
-                    let unauthorized = status.refusals.unauthorized_client;
-                    if rate == 0 && destination == 0 && unauthorized == 0 {
-                        details.push("gateway refused no connections".to_owned());
-                    } else {
-                        details.push(format!(
-                            "gateway refused connections: rate {rate}, destination {destination}, unauthorized client {unauthorized}"
-                        ));
-                    }
+            let record = gateway_refusal_record(read_gateway_status(status_directory));
+            gateway_refusals = Some(record);
+            details.push(match record {
+                GatewayRefusalRecord::Counted {
+                    rate: 0,
+                    destination: 0,
+                    unauthorized_client: 0,
+                } => "gateway refused no connections".to_owned(),
+                GatewayRefusalRecord::Counted {
+                    rate,
+                    destination,
+                    unauthorized_client,
+                } => format!(
+                    "gateway refused connections: rate {rate}, destination {destination}, unauthorized client {unauthorized_client}"
+                ),
+                GatewayRefusalRecord::Unavailable => {
+                    "gateway refusal record was unavailable".to_owned()
                 }
-                Ok(None) | Err(_) => {
-                    details.push("gateway refusal record was unavailable".to_owned());
-                }
-            }
+            });
             match remove_gateway_status_directory(status_directory) {
                 Ok(()) => {
                     self.gateway_status_directory = None;
@@ -1762,6 +1770,7 @@ impl ManagedNetworkLease {
             Ok(ManagedNetworkCleanupOutcome {
                 removed: true,
                 detail: bounded_cleanup_detail(&details.join("; ")),
+                gateway_refusals,
             })
         } else {
             Err(AppError::Runtime(format!(
@@ -1923,6 +1932,21 @@ fn create_gateway_status_directory(
         ));
     }
     Ok(GatewayStatusDirectory { path })
+}
+
+/// The refusal record a cleanup can claim from what it read. A status it
+/// could not read is recorded as such, never as zero refusals.
+fn gateway_refusal_record(
+    status: AppResult<Option<GatewayStatusDocument>>,
+) -> GatewayRefusalRecord {
+    match status {
+        Ok(Some(status)) => GatewayRefusalRecord::Counted {
+            rate: status.refusals.rate,
+            destination: status.refusals.destination,
+            unauthorized_client: status.refusals.unauthorized_client,
+        },
+        Ok(None) | Err(_) => GatewayRefusalRecord::Unavailable,
+    }
 }
 
 fn read_gateway_status(
@@ -2676,7 +2700,8 @@ impl ManagedNetworkRegistry {
             &identity.policy_id,
         )?;
         self.remove_uplink_network_from_identity(identity)?;
-        self.remove_exact_gateway_status(&owner.case_id, &identity.policy_id)?;
+        let gateway_refusals =
+            self.remove_exact_gateway_status(&owner.case_id, &identity.policy_id)?;
         self.remove_exact_policy(
             &owner.case_id,
             &identity.policy_id,
@@ -2692,6 +2717,7 @@ impl ManagedNetworkRegistry {
                 "exact managed egress policy {} was reconciled before resume",
                 identity.policy_id
             ),
+            gateway_refusals,
         })
     }
 
@@ -2705,7 +2731,8 @@ impl ManagedNetworkRegistry {
         let expected_id = latest.network_id.as_deref();
         self.remove_runtime_network_from_record(latest, expected_id)?;
         self.remove_uplink_network_from_record(latest)?;
-        self.remove_exact_gateway_status(&latest.owner.case_id, &latest.policy_id)?;
+        let gateway_refusals =
+            self.remove_exact_gateway_status(&latest.owner.case_id, &latest.policy_id)?;
         self.remove_exact_policy(
             &latest.owner.case_id,
             &latest.policy_id,
@@ -2721,6 +2748,7 @@ impl ManagedNetworkRegistry {
                 "reconciled exact orphaned managed egress policy {}",
                 latest.policy_id
             ),
+            gateway_refusals,
         })
     }
 
@@ -2959,7 +2987,16 @@ impl ManagedNetworkRegistry {
         })
     }
 
-    fn remove_exact_gateway_status(&self, case_id: &str, policy_id: &str) -> AppResult<()> {
+    /// Recovery removes the status document the lease would have read at
+    /// cleanup, so it reads it first. Otherwise a run cleaned up after the
+    /// desktop restarted reports nothing about the connections its gateway
+    /// refused. `None` means no status directory was ever created for this
+    /// policy, which is also the case in which the lease reads nothing.
+    fn remove_exact_gateway_status(
+        &self,
+        case_id: &str,
+        policy_id: &str,
+    ) -> AppResult<Option<GatewayRefusalRecord>> {
         validate_owner_segment(case_id, "case")?;
         validate_policy_id(policy_id)?;
         let case_root = self.artifact_root.join(case_id);
@@ -2970,7 +3007,7 @@ impl ManagedNetworkRegistry {
         ] {
             let metadata = match fs::symlink_metadata(directory) {
                 Ok(metadata) => metadata,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
                 Err(error) => return Err(error.into()),
             };
             if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -2992,7 +3029,18 @@ impl ManagedNetworkRegistry {
                 "managed-network recovery status path escaped its case directory".into(),
             ));
         }
-        remove_gateway_status_directory(&GatewayStatusDirectory { path })
+        let directory = GatewayStatusDirectory { path };
+        // Read only a real directory, the check the removal below applies, so
+        // a replaced path is refused rather than read through.
+        let record = match fs::symlink_metadata(&directory.path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                Some(gateway_refusal_record(read_gateway_status(&directory)))
+            }
+            _ => Some(GatewayRefusalRecord::Unavailable),
+        };
+        remove_gateway_status_directory(&directory)?;
+        Ok(record)
     }
 
     fn load_groups(
@@ -8298,6 +8346,105 @@ mod tests {
         assert!(!process_state.lock().expect("process").killed);
     }
 
+    /// What an abandoned gateway left where recovery looks for its status.
+    enum AbandonedStatus {
+        NoDirectory,
+        NoDocument,
+        Counted(u64, u64, u64),
+    }
+
+    /// A lease the desktop never cleaned up, recovered from its durable
+    /// identity the way a restarted desktop recovers it.
+    fn recover_abandoned_lease(status: AbandonedStatus) -> (ManagedNetworkCleanupOutcome, bool) {
+        let (_temporary, gateway, artifacts, policies, registry_root) = recovery_paths();
+        let (runtime, _runtime_state) = FakeRuntime::new(FakeInspectKind::Docker);
+        let runtime = Arc::new(runtime);
+        let controller = ManagedNetworkController::with_components(
+            RuntimeProvider::Docker,
+            &gateway,
+            &policies,
+            &registry_root,
+            runtime.clone(),
+            Arc::new(FakeLauncher {
+                state: Arc::new(Mutex::new(FakeProcessState::default())),
+            }),
+            Arc::new(FakeReadiness {
+                fail: false,
+                observed: Arc::new(Mutex::new(Vec::new())),
+            }),
+        )
+        .expect("controller");
+        let now = Utc::now();
+        let lease = controller
+            .provision(&owner(), &[plan(now, "203.0.113.8", 5, 2, 30)], now)
+            .expect("managed network");
+        let identity = lease.durable_identity().expect("durable identity");
+        std::mem::forget(lease);
+        // Container provisioning creates the status directory. The process
+        // launcher used here does not, so it is created where recovery
+        // derives it, as the container gateway would have left it.
+        let status_path = policies.join(format!("gateway-status-{}", identity.policy_id));
+        match status {
+            AbandonedStatus::NoDirectory => {}
+            AbandonedStatus::NoDocument => {
+                create_gateway_status_directory(&policies, &identity.policy_id)
+                    .expect("status directory");
+            }
+            AbandonedStatus::Counted(rate, destination, unauthorized_client) => {
+                let directory = create_gateway_status_directory(&policies, &identity.policy_id)
+                    .expect("status directory");
+                write_refusal_status(
+                    &directory,
+                    "ready",
+                    "ready",
+                    rate,
+                    destination,
+                    unauthorized_client,
+                );
+            }
+        }
+
+        let registry = ManagedNetworkRegistry::with_runtime(&registry_root, &artifacts, runtime)
+            .expect("registry");
+        let outcome = registry
+            .reconcile_identity(&owner(), &identity, now + ChronoDuration::seconds(1))
+            .expect("recovery");
+        (outcome, !status_path.exists())
+    }
+
+    #[test]
+    fn recovery_reads_the_refusal_record_before_removing_it() {
+        let (outcome, removed) = recover_abandoned_lease(AbandonedStatus::Counted(3, 1, 0));
+        assert_eq!(
+            outcome.gateway_refusals,
+            Some(GatewayRefusalRecord::Counted {
+                rate: 3,
+                destination: 1,
+                unauthorized_client: 0,
+            })
+        );
+        assert!(removed, "recovery still removes the status document");
+    }
+
+    #[test]
+    fn recovery_of_an_unwritten_status_records_it_as_unavailable() {
+        // Not zero refusals: nothing was read, so nothing may be claimed.
+        let (outcome, removed) = recover_abandoned_lease(AbandonedStatus::NoDocument);
+        assert_eq!(
+            outcome.gateway_refusals,
+            Some(GatewayRefusalRecord::Unavailable)
+        );
+        assert!(removed);
+    }
+
+    #[test]
+    fn recovery_without_a_status_directory_claims_no_record() {
+        // The lease reads nothing when it was given no status directory, and
+        // recovery matches it.
+        let (outcome, _) = recover_abandoned_lease(AbandonedStatus::NoDirectory);
+        assert_eq!(outcome.gateway_refusals, None);
+    }
+
     #[test]
     fn startup_refuses_a_replaced_or_mislabeled_network_and_retains_recovery_records() {
         let (_temporary, gateway, artifacts, policies, registry_root) = recovery_paths();
@@ -8597,6 +8744,14 @@ mod tests {
             counted_outcome.detail,
             "gateway refused connections: rate 2, destination 3, unauthorized client 4; bounded gateway status removed or already absent; durable recovery records removed"
         );
+        assert_eq!(
+            counted_outcome.gateway_refusals,
+            Some(GatewayRefusalRecord::Counted {
+                rate: 2,
+                destination: 3,
+                unauthorized_client: 4,
+            })
+        );
         assert!(!counted_path.exists());
 
         let quiet =
@@ -8608,6 +8763,14 @@ mod tests {
         assert_eq!(
             quiet_outcome.detail,
             "gateway refused no connections; bounded gateway status removed or already absent; durable recovery records removed"
+        );
+        assert_eq!(
+            quiet_outcome.gateway_refusals,
+            Some(GatewayRefusalRecord::Counted {
+                rate: 0,
+                destination: 0,
+                unauthorized_client: 0,
+            })
         );
 
         let missing =
@@ -8621,6 +8784,10 @@ mod tests {
             missing_outcome.detail,
             "gateway refusal record was unavailable; bounded gateway status removed or already absent; durable recovery records removed"
         );
+        assert_eq!(
+            missing_outcome.gateway_refusals,
+            Some(GatewayRefusalRecord::Unavailable)
+        );
 
         let malformed =
             create_gateway_status_directory(&policies, &format!("egress-{}", "9".repeat(32)))
@@ -8633,6 +8800,10 @@ mod tests {
         assert_eq!(
             malformed_outcome.detail,
             "gateway refusal record was unavailable; bounded gateway status removed or already absent; durable recovery records removed"
+        );
+        assert_eq!(
+            malformed_outcome.gateway_refusals,
+            Some(GatewayRefusalRecord::Unavailable)
         );
     }
 }

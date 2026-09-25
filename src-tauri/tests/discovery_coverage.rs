@@ -459,6 +459,7 @@ fn engine_run(run_id: &str, asset_id: &str, status: EngineRunStatus) -> EngineRu
         exit_code: None,
         cleanup_removed: None,
         cleanup_detail: None,
+        gateway_refusals: None,
         warnings: vec![],
         raw_artifact_ids: Vec::new(),
         error_code: None,

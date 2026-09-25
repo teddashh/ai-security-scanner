@@ -885,6 +885,14 @@ pub struct EngineRun {
     pub cleanup_removed: Option<bool>,
     #[serde(default)]
     pub cleanup_detail: Option<String>,
+    /// Managed-gateway refusal counts for this attempt.
+    ///
+    /// `None` means no managed gateway ran, or the case file predates this
+    /// field. An old case file cannot tell those apart, so the report stays
+    /// silent for `None`. Do not synthesize a record for a legacy run:
+    /// historical absence is not a claim that the gateway refused nothing.
+    #[serde(default)]
+    pub gateway_refusals: Option<GatewayRefusalRecord>,
     #[serde(default)]
     pub warnings: Vec<String>,
     /// Identifiers this run reported results for that no authorized asset
@@ -1717,6 +1725,25 @@ pub struct UnattributedResults {
     pub identifier: String,
     /// How many results were discarded for this identifier.
     pub discarded_results: usize,
+}
+
+/// Managed-gateway refusal counts.
+///
+/// Carried as data (not prose) so the report can say, in the reader's
+/// language, which check was cut short and why. The English cleanup line
+/// stays in the technical record.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GatewayRefusalRecord {
+    Counted {
+        rate: u64,
+        destination: u64,
+        unauthorized_client: u64,
+    },
+    /// The gateway ran but its status document could not be read at cleanup.
+    /// Not the same as refusing nothing: the report must not claim complete
+    /// coverage from a record it never read.
+    Unavailable,
 }
 
 /// An authorized target an engine reported it could not evaluate, or could

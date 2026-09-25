@@ -1766,6 +1766,7 @@ mod tests {
                 exit_code: Some(1),
                 cleanup_removed: Some(true),
                 cleanup_detail: None,
+                gateway_refusals: None,
                 warnings: vec![],
                 raw_artifact_ids: vec![],
                 error_code: Some("execution_failed".into()),
