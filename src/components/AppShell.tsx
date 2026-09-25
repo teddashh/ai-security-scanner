@@ -181,8 +181,8 @@ export function AppShell({
   const renderedPageTransitionKey = useRef(pageTransitionKey);
   renderedPageTransitionKey.current = pageTransitionKey;
   const mobileDialogOpen = reconcileMobileNavigationOpen(mobileOpen, narrowViewport);
-  const { locale, t, formatNumber } = useI18n();
-  const displayedCaseLabels = caseDisplayLabels(cases, locale);
+  const { locale, t, formatNumber, formatDateTime } = useI18n();
+  const displayedCaseLabels = caseDisplayLabels(cases, locale, formatDateTime);
   const selectedCaseDisplayName = selectedCase
     ? displayedCaseLabels.get(selectedCase.id)
       ?? caseIdentityPresentation(selectedCase, locale).name

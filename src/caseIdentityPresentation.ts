@@ -62,13 +62,15 @@ const stableCreatedAtSuffix = (createdAt: string): string => {
 };
 
 /**
- * Builds labels for case pickers and lists. Repeated product-owned localhost
- * quick scans receive a stable creation-time suffix; an exact timestamp tie
- * falls back to the immutable case id so every option remains distinguishable.
+ * Projects that share a displayed name get their creation time, in the format
+ * the list uses for times. A same-minute tie falls back to the precise
+ * creation time and then to the immutable case id, so every option stays
+ * distinguishable.
  */
 export const caseDisplayLabels = (
   cases: ReadonlyArray<CaseIdentitySource>,
   locale: Locale,
+  formatCreatedAt: (createdAt: string) => string,
 ): ReadonlyMap<string, string> => {
   const presented = cases.map((assessmentCase) => ({
     assessmentCase,
@@ -77,16 +79,17 @@ export const caseDisplayLabels = (
   const duplicateCounts = new Map<string, number>();
 
   for (const entry of presented) {
-    if (!entry.identity.isProductLocalhostQuickScan) continue;
     duplicateCounts.set(entry.identity.name, (duplicateCounts.get(entry.identity.name) ?? 0) + 1);
   }
 
-  const createdSuffixCounts = new Map<string, number>();
+  const formattedCounts = new Map<string, number>();
+  const preciseCounts = new Map<string, number>();
   for (const entry of presented) {
     if ((duplicateCounts.get(entry.identity.name) ?? 0) < 2) continue;
-    const suffix = stableCreatedAtSuffix(entry.assessmentCase.createdAt);
-    const key = `${entry.identity.name}\u0000${suffix}`;
-    createdSuffixCounts.set(key, (createdSuffixCounts.get(key) ?? 0) + 1);
+    const formattedKey = `${entry.identity.name}\u0000${formatCreatedAt(entry.assessmentCase.createdAt)}`;
+    formattedCounts.set(formattedKey, (formattedCounts.get(formattedKey) ?? 0) + 1);
+    const preciseKey = `${entry.identity.name}\u0000${stableCreatedAtSuffix(entry.assessmentCase.createdAt)}`;
+    preciseCounts.set(preciseKey, (preciseCounts.get(preciseKey) ?? 0) + 1);
   }
 
   return new Map(presented.map((entry) => {
@@ -94,11 +97,17 @@ export const caseDisplayLabels = (
       return [entry.assessmentCase.id, entry.identity.name];
     }
 
-    const suffix = stableCreatedAtSuffix(entry.assessmentCase.createdAt);
-    const suffixKey = `${entry.identity.name}\u0000${suffix}`;
-    const collisionSuffix = (createdSuffixCounts.get(suffixKey) ?? 0) > 1
+    const formatted = formatCreatedAt(entry.assessmentCase.createdAt);
+    const formattedKey = `${entry.identity.name}\u0000${formatted}`;
+    if ((formattedCounts.get(formattedKey) ?? 0) < 2) {
+      return [entry.assessmentCase.id, `${entry.identity.name} · ${formatted}`];
+    }
+
+    const precise = stableCreatedAtSuffix(entry.assessmentCase.createdAt);
+    const preciseKey = `${entry.identity.name}\u0000${precise}`;
+    const collisionSuffix = (preciseCounts.get(preciseKey) ?? 0) > 1
       ? ` · ${entry.assessmentCase.id}`
       : "";
-    return [entry.assessmentCase.id, `${entry.identity.name} · ${suffix}${collisionSuffix}`];
+    return [entry.assessmentCase.id, `${entry.identity.name} · ${precise}${collisionSuffix}`];
   }));
 };

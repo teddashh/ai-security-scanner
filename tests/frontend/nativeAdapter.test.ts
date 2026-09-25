@@ -2167,8 +2167,8 @@ test("structured localhost identities remain stable while switching selected cas
     ]);
   }
 
-  const labelsA = [...caseDisplayLabels(selectedA.cases, "zh-TW")];
-  const labelsB = [...caseDisplayLabels(selectedB.cases, "zh-TW")];
+  const labelsA = [...caseDisplayLabels(selectedA.cases, "zh-TW", (value: string) => value.slice(0, 16))];
+  const labelsB = [...caseDisplayLabels(selectedB.cases, "zh-TW", (value: string) => value.slice(0, 16))];
   assert.deepEqual(labelsA, labelsB);
   assert.notEqual(labelsA[0]?.[1], labelsA[1]?.[1]);
   assert.match(labelsA[0]?.[1] ?? "", /quick-a$/u);

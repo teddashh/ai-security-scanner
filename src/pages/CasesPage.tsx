@@ -675,7 +675,7 @@ export function CasesPage({
   onOpenVerification,
 }: CasesPageProps) {
   const { locale, t, text, formatDateTime, formatNumber } = useI18n();
-  const displayedCaseLabels = caseDisplayLabels(cases, locale);
+  const displayedCaseLabels = caseDisplayLabels(cases, locale, formatDateTime);
   const selectedCaseIdentity = selectedCase
     ? caseIdentityPresentation(selectedCase, locale)
     : undefined;

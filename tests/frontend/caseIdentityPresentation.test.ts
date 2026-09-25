@@ -7,6 +7,8 @@ import {
   caseIdentityPresentation,
 } from "../../src/caseIdentityPresentation.ts";
 
+const minuteFormatter = (value: string) => value.slice(0, 16);
+
 const savedQuickScan = (overrides: Partial<{
   id: string;
   name: string;
@@ -69,7 +71,7 @@ test("repeated quick scans get stable, distinct created-time labels", () => {
     id: "quick-scan-b",
     createdAt: "2026-08-30T12:00:01.250000000Z",
   });
-  const labels = caseDisplayLabels([first, second], "zh-TW");
+  const labels = caseDisplayLabels([first, second], "zh-TW", minuteFormatter);
 
   assert.equal(
     labels.get(first.id),
@@ -85,7 +87,7 @@ test("repeated quick scans get stable, distinct created-time labels", () => {
 test("an exact created-time tie remains distinguishable by immutable id", () => {
   const first = savedQuickScan();
   const second = savedQuickScan({ id: "quick-scan-b" });
-  const labels = caseDisplayLabels([first, second], "en");
+  const labels = caseDisplayLabels([first, second], "en", minuteFormatter);
 
   assert.match(labels.get(first.id) ?? "", / · quick-scan-a$/u);
   assert.match(labels.get(second.id) ?? "", / · quick-scan-b$/u);
@@ -93,7 +95,62 @@ test("an exact created-time tie remains distinguishable by immutable id", () => 
 
 test("a single quick scan keeps a concise localized label", () => {
   const saved = savedQuickScan();
-  assert.equal(caseDisplayLabels([saved], "zh-TW").get(saved.id), "這台電腦 · 127.0.0.1:9001");
+  assert.equal(
+    caseDisplayLabels([saved], "zh-TW", minuteFormatter).get(saved.id),
+    "這台電腦 · 127.0.0.1:9001",
+  );
+});
+
+test("same-named projects are labeled with their creation time", () => {
+  const first = {
+    id: "case-a",
+    name: "cleanrepo",
+    organizationName: "",
+    createdAt: "2026-09-25T02:20:00Z",
+  };
+  const second = {
+    id: "case-b",
+    name: "cleanrepo",
+    organizationName: "",
+    createdAt: "2026-09-25T07:51:00Z",
+  };
+  const third = {
+    id: "case-c",
+    name: "website",
+    organizationName: "",
+    createdAt: "2026-09-25T09:00:00Z",
+  };
+  const labels = caseDisplayLabels([first, second, third], "en", minuteFormatter);
+
+  assert.equal(labels.get(first.id), "cleanrepo · 2026-09-25T02:20");
+  assert.equal(labels.get(second.id), "cleanrepo · 2026-09-25T07:51");
+  assert.equal(labels.get(third.id), "website");
+});
+
+test("a same-minute tie among same-named projects falls back to the precise time", () => {
+  const first = {
+    id: "case-a",
+    name: "cleanrepo",
+    organizationName: "",
+    createdAt: "2026-09-25T02:20:00Z",
+  };
+  const second = {
+    id: "case-b",
+    name: "cleanrepo",
+    organizationName: "",
+    createdAt: "2026-09-25T02:20:30.5Z",
+  };
+  const third = {
+    id: "case-c",
+    name: "cleanrepo",
+    organizationName: "",
+    createdAt: "2026-09-25T07:51:00Z",
+  };
+  const labels = caseDisplayLabels([first, second, third], "en", minuteFormatter);
+
+  assert.equal(labels.get(first.id), "cleanrepo · 2026-09-25 02:20:00 UTC");
+  assert.equal(labels.get(second.id), "cleanrepo · 2026-09-25 02:20:30.5 UTC");
+  assert.equal(labels.get(third.id), "cleanrepo · 2026-09-25T07:51");
 });
 
 test("AppShell and Cases use display labels while delete confirmation keeps saved identity", async () => {
@@ -102,7 +159,7 @@ test("AppShell and Cases use display labels while delete confirmation keeps save
     readFile(new URL("../../src/pages/CasesPage.tsx", import.meta.url), "utf8"),
   ]);
 
-  assert.match(appShell, /caseDisplayLabels\(cases, locale\)/u);
+  assert.match(appShell, /caseDisplayLabels\(cases, locale, formatDateTime\)/u);
   assert.match(
     appShell,
     /displayedCaseLabels\.get\(assessmentCase\.id\) \?\? assessmentCase\.name/u,

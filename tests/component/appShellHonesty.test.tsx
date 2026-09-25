@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { AppShell } from "../../src/components/AppShell";
 import { I18nProvider, localeStorageKey } from "../../src/i18n";
+import { formatLocaleDateTime } from "../../src/i18n/core";
 import type { AssessmentCase } from "../../src/types";
 
 // The shell wraps every page, so its banners are the app's answer to "is what
@@ -500,4 +501,39 @@ test("a page transition behind the drawer keeps the new page at the top instead 
   expect(document.body.style.position).toBe("");
   expect(scrollTo).not.toHaveBeenCalledWith(0, 525);
   expect(scrollTo).toHaveBeenLastCalledWith({ top: 0, left: 0, behavior: "auto" });
+});
+
+test("same-named projects are distinguishable in the case switcher", () => {
+  const case1 = assessmentCase({ id: "case-1", name: "cleanrepo", createdAt: "2026-09-25T02:20:00Z" });
+  const case2 = assessmentCase({ id: "case-2", name: "cleanrepo", createdAt: "2026-09-25T07:51:00Z" });
+  const case3 = assessmentCase({ id: "case-3", name: "website" });
+  const { container } = renderShell({ cases: [case1, case2, case3], selectedCase: case1 });
+
+  const optionText = Array.from(
+    container.querySelectorAll<HTMLOptionElement>("#case-switcher option"),
+  ).map((option) => option.textContent);
+
+  expect(optionText).toEqual([
+    `cleanrepo · ${formatLocaleDateTime("en", "2026-09-25T02:20:00Z")}`,
+    `cleanrepo · ${formatLocaleDateTime("en", "2026-09-25T07:51:00Z")}`,
+    "website",
+  ]);
+});
+
+test("same-named projects are distinguishable in the case switcher in zh-TW", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const case1 = assessmentCase({ id: "case-1", name: "cleanrepo", createdAt: "2026-09-25T02:20:00Z" });
+  const case2 = assessmentCase({ id: "case-2", name: "cleanrepo", createdAt: "2026-09-25T07:51:00Z" });
+  const case3 = assessmentCase({ id: "case-3", name: "website" });
+  const { container } = renderShell({ cases: [case1, case2, case3], selectedCase: case1 });
+
+  const optionText = Array.from(
+    container.querySelectorAll<HTMLOptionElement>("#case-switcher option"),
+  ).map((option) => option.textContent);
+
+  expect(optionText).toEqual([
+    `cleanrepo · ${formatLocaleDateTime("zh-TW", "2026-09-25T02:20:00Z")}`,
+    `cleanrepo · ${formatLocaleDateTime("zh-TW", "2026-09-25T07:51:00Z")}`,
+    "website",
+  ]);
 });

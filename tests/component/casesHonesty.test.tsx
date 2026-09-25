@@ -6,6 +6,7 @@ import { CasesPage } from "../../src/pages/CasesPage";
 import type { CasesPageProps } from "../../src/pages/CasesPage";
 import { createStoredDemoCase } from "../../src/data/demo";
 import { I18nProvider, localeStorageKey } from "../../src/i18n";
+import { formatLocaleDateTime } from "../../src/i18n/core";
 import type { AssessmentCase, ScanRun } from "../../src/types";
 
 // Two things on this page can mislead badly and neither is visible to source
@@ -294,6 +295,28 @@ test("native deletion keeps its database-record and separate-evidence warning", 
   expect(confirmation!.textContent).toContain("does not automatically delete the evidence folder");
   expect(confirmation!.querySelector<HTMLButtonElement>(".button--danger")?.textContent).toContain("Delete case record only");
 }, 10_000);
+
+test("same-named projects have distinct titles and delete buttons on My scans", () => {
+  const first = assessmentCase({ id: "case-1", name: "cleanrepo", createdAt: "2026-09-25T02:20:00Z" });
+  const second = assessmentCase({ id: "case-2", name: "cleanrepo", createdAt: "2026-09-25T07:51:00Z" });
+  const { container } = renderCases({ cases: [first, second], selectedCase: first });
+
+  const expectedFirst = `cleanrepo · ${formatLocaleDateTime("en", "2026-09-25T02:20:00Z")}`;
+  const expectedSecond = `cleanrepo · ${formatLocaleDateTime("en", "2026-09-25T07:51:00Z")}`;
+
+  const titles = Array.from(container.querySelectorAll(".case-row__title strong")).map(
+    (node) => node.textContent,
+  );
+  expect(titles).toEqual([expectedFirst, expectedSecond]);
+
+  const deleteButtons = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(".case-row__actions .icon-button--danger"),
+  );
+  expect(deleteButtons).toHaveLength(2);
+  expect(deleteButtons[0]?.getAttribute("aria-label")).not.toBe(deleteButtons[1]?.getAttribute("aria-label"));
+  expect(deleteButtons[0]?.getAttribute("aria-label")).toContain(expectedFirst);
+  expect(deleteButtons[1]?.getAttribute("aria-label")).toContain(expectedSecond);
+});
 
 test.each([
   {
