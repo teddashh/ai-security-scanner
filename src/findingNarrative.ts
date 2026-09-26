@@ -2131,6 +2131,46 @@ const CONTROL_MAPPING_RATIONALE_PROSE: ReadonlyArray<
     "garak's web_injection module tries to make the target emit markdown or script that a client will act on, either exfiltrating conversation content through a URI or running as cross-site scripting. A detector judging those attempts as failures is evidence related to improper output handling and to sensitive information disclosure.",
     "garak 的 web_injection 模組嘗試讓目標輸出用戶端會實際處理的 markdown 或指令碼，藉此經由 URI 外傳對話內容，或形成跨站腳本攻擊。偵測器把這些嘗試判定為失敗，是與輸出處理不當及敏感資訊外洩相關的證據。",
   ],
+  [
+    "OWASP publishes A01:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
+    "OWASP 公布 A01:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+  ],
+  [
+    "OWASP publishes A02:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
+    "OWASP 公布 A02:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+  ],
+  [
+    "OWASP publishes A03:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
+    "OWASP 公布 A03:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+  ],
+  [
+    "OWASP publishes A04:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
+    "OWASP 公布 A04:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+  ],
+  [
+    "OWASP publishes A05:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
+    "OWASP 公布 A05:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+  ],
+  [
+    "OWASP publishes A06:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
+    "OWASP 公布 A06:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+  ],
+  [
+    "OWASP publishes A07:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
+    "OWASP 公布 A07:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+  ],
+  [
+    "OWASP publishes A08:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
+    "OWASP 公布 A08:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+  ],
+  [
+    "OWASP publishes A09:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
+    "OWASP 公布 A09:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+  ],
+  [
+    "OWASP publishes A10:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
+    "OWASP 公布 A10:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+  ],
 ];
 
 export const controlMappingRationaleZhHant = (

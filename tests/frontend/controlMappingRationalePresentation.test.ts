@@ -14,6 +14,7 @@ interface MappingCatalog {
     source_rule: string;
     rationale: string;
   }>;
+  cwe_derived_controls: Array<{ control: string; rationale: string }>;
 }
 
 const catalog = JSON.parse(readFileSync(
@@ -78,6 +79,35 @@ test("every reviewed catalog rationale has a Traditional Chinese presentation", 
     const translated = controlMappingRationaleZhHant(rationale);
     assert.ok(translated, `no Traditional Chinese for catalog rationale: ${rationale}`);
     assert.match(translated, /\p{Script=Han}/u);
+    assert.equal(localizedControlMappingRationale(rationale, "en"), rationale);
+  }
+});
+
+test("every CWE-derived category rationale has a Traditional Chinese presentation", () => {
+  const controls = catalog.cwe_derived_controls.map(({ control }) => control).sort();
+  assert.deepEqual(controls, [
+    "owasp-2021-a01",
+    "owasp-2021-a02",
+    "owasp-2021-a03",
+    "owasp-2021-a04",
+    "owasp-2021-a05",
+    "owasp-2021-a06",
+    "owasp-2021-a07",
+    "owasp-2021-a08",
+    "owasp-2021-a09",
+    "owasp-2021-a10",
+  ]);
+  for (const { rationale } of catalog.cwe_derived_controls) {
+    const translated = controlMappingRationaleZhHant(rationale);
+    assert.ok(translated, `no Traditional Chinese for catalog rationale: ${rationale}`);
+    assert.match(translated, /\p{Script=Han}/u);
+    const code = rationale.match(/A\d\d:2021/u)?.[0];
+    assert.ok(code, `no category code in rationale: ${rationale}`);
+    assert.ok(
+      translated.includes(code),
+      `translation missing category code ${code}: ${translated}`,
+    );
+    assert.equal(localizedControlMappingRationale(rationale, "zh-TW"), translated);
     assert.equal(localizedControlMappingRationale(rationale, "en"), rationale);
   }
 });
