@@ -416,8 +416,8 @@ const pageCopy = {
   focusedReviewTitle: bilingual("Review and start", "確認後開始"),
   environmentPlanTitle: bilingual("One scan for this IT environment", "一次掃描這個 IT 環境"),
   environmentPlanBody: bilingual(
-    "Choose the scan-ready items below. Each scanner receives only the assets it can check, and all completed results go into one report. Inventory-only ranges are not contacted or scanned.",
-    "選擇下方已可掃描的項目。每個掃描工具只會收到它能檢查的資產，所有完成結果會整合成一份報告。僅供盤點的網段不會被連線或掃描。",
+    "Choose the scan-ready items below. Each scanner receives only the assets it can check, and all completed results go into one report.",
+    "選擇下方已可掃描的項目。每個掃描工具只會收到它能檢查的資產，所有完成結果會整合成一份報告。",
   ),
   environmentTiming: primaryScanTiming,
   websiteTiming: primaryScanTiming,
@@ -499,10 +499,6 @@ const pageCopy = {
   environmentDeviceConfirmation: bilingual(
     "The user explicitly confirmed authorization to run the displayed fixed Greenbone HTTPS management-service profile against the exact {origin} origin.",
     "使用者已明確確認獲准對精確的 {origin} 來源範圍執行畫面所列的固定 Greenbone HTTPS 管理服務檢查。",
-  ),
-  environmentReportBoundary: bilingual(
-    "One Start creates one run and one combined report. Items that still need a real vulnerability profile stay listed as not tested.",
-    "按一次開始會建立一次執行與一份整合報告；仍缺少實際弱點檢查設定的項目會明列為未測試。",
   ),
   environmentStart: bilingual("Start one combined scan", "開始一次整合掃描"),
   editInputs: bilingual("Edit inputs", "編輯輸入"),
@@ -2300,7 +2296,6 @@ export function CoveragePage({
               </label>
             )}
 
-            <p className="coverage-guided-boundary">{text(pageCopy.environmentReportBoundary)}</p>
             <div className="form-actions">
               <button
                 className="button button--primary"

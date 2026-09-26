@@ -1127,6 +1127,12 @@ const visibleButtonsNamed = (container: HTMLElement, name: string) =>
   Array.from(container.querySelectorAll("button"))
     .filter((button) => button.textContent?.trim() === name && button.closest("[hidden]") === null);
 
+const visibleText = (container: HTMLElement) => {
+  const copy = container.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll("[hidden]").forEach((element) => element.remove());
+  return copy.textContent ?? "";
+};
+
 test("the IT-environment review leads with its plan and one Start", () => {
   const { container, queryByText, getByText, getByRole } = renderRoute({
     assessmentIntent: "internal_it_environment",
@@ -1145,6 +1151,9 @@ test("the IT-environment review leads with its plan and one Start", () => {
   expect(queryByText("3. Review and start")).toBeNull();
   expect(getByText("One scan for this IT environment")).not.toBeNull();
   expect(getByRole("button", { name: "Start one combined scan" })).not.toBeNull();
+  // Every item here is scan-ready, so the review has no inventory or
+  // not-tested caveat to state.
+  expect(visibleText(container)).not.toMatch(/inventory|not tested/iu);
 
   const editInputs = Array.from(pageHeader?.querySelectorAll<HTMLButtonElement>("button") ?? [])
     .find((button) => button.textContent?.includes("Edit inputs"));
@@ -1174,10 +1183,35 @@ test("the IT-environment review leads with its plan and one Start in Traditional
   const pageHeader = container.querySelector(".page-header");
   expect(pageHeader?.querySelector("h1")?.textContent).toBe("確認後開始");
   expect(container.textContent).not.toContain("沒有資料的來源");
+  expect(visibleText(container)).not.toMatch(/盤點|未測試/u);
   expect(visibleButtonsNamed(container, "重新整理項目")).toHaveLength(0);
   const editInputs = Array.from(pageHeader?.querySelectorAll<HTMLButtonElement>("button") ?? [])
     .find((button) => button.textContent?.includes("編輯輸入"));
   expect(editInputs).toBeTruthy();
+});
+
+test("the IT-environment review still names an inventory-only item as not scanned", () => {
+  const { container } = renderRoute({
+    assessmentIntent: "internal_it_environment",
+    requestedActivities: ["local_artifact_analysis", "active_external_vulnerability_tests"],
+    assets: [
+      ...oneRepositoryAndOneWebsiteEnvironmentAssets(),
+      pendingAsset({
+        id: "inventory-only",
+        name: "10.20.0.19",
+        type: "ip",
+        platform: "external",
+        locator: "10.20.0.19",
+        identifiers: [{ namespace: "ip_address", value: "10.20.0.19" }],
+        internetExposed: false,
+      }),
+    ],
+  });
+
+  expect(container.querySelector(".page-header h1")?.textContent).toBe("Review and start");
+  const text = visibleText(container);
+  expect(text).toContain("1 bare host(s) or range(s) are inventory only — not scanned");
+  expect(text).toContain("10.20.0.19");
 });
 
 test("an IT-environment case with nothing scan-ready keeps the full setup page", () => {
