@@ -66,9 +66,10 @@ function assertRequiredCheckContract(source) {
 test("documentation-only changes do not schedule product or release lanes", () => {
   assert.deepEqual(classifyChangedPaths([
     "README.md",
+    "CONTRIBUTORS.md",
     "docs/product-spec.md",
   ]), {
-    changed_path_count: 2,
+    changed_path_count: 3,
     docs_only: true,
     frontend: false,
     rust_core: false,

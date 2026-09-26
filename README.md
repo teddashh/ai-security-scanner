@@ -126,6 +126,7 @@ Use network scanning only for assets you own or are authorized to assess. The ap
 - [Documentation index](docs/README.md)
 - [Development status](docs/development-status.md)
 - [Contributing](CONTRIBUTING.md)
+- [Contributors](CONTRIBUTORS.md)
 - [Security policy](SECURITY.md)
 
 ## Development

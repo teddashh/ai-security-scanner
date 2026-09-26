@@ -126,6 +126,7 @@ Skill 引導**建置 → 選定目標與授權 → 掃描 → 最終報告**。�
 - [文件索引](docs/README.zh-TW.md)
 - [目前開發狀態](docs/development-status.md)
 - [參與開發](CONTRIBUTING.md)
+- [貢獻者](CONTRIBUTORS.md)
 - [安全政策](SECURITY.md)
 
 ## 開發

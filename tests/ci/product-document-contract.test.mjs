@@ -13,6 +13,7 @@ const CURRENT_PRODUCT_DOCUMENTS = [
   "README.md",
   "README.zh-TW.md",
   "CONTRIBUTING.md",
+  "CONTRIBUTORS.md",
   "SECURITY.md",
   "THIRD_PARTY.md",
   ".codex/skills/ai-security-scanner/SKILL.md",
