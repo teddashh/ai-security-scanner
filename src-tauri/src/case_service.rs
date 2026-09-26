@@ -14682,7 +14682,15 @@ fn html_asset_result_rank(status: HtmlAssetResultStatus) -> u8 {
 /// for, and the note that some of its checks did not finish. Only the states
 /// that actually fell back to their own step are named, in the order the
 /// table puts them.
-fn html_asset_state_steps(states: &[HtmlAssetResultStatus], catalog: HtmlReportCatalog) -> String {
+///
+/// `asset_specific` mirrors whether the table itself printed a per-row step
+/// column: with no column this is the run's one step, and with a column it is
+/// only the fallback for rows that did not write a step of their own.
+fn html_asset_state_steps(
+    states: &[HtmlAssetResultStatus],
+    asset_specific: bool,
+    catalog: HtmlReportCatalog,
+) -> String {
     if states.is_empty() {
         return String::new();
     }
@@ -14724,18 +14732,22 @@ fn html_asset_state_steps(states: &[HtmlAssetResultStatus], catalog: HtmlReportC
             format!(
                 "<strong>{}</strong>{}{}",
                 html_escape(label),
-                catalog.text(" \u{2014} ", "："),
+                catalog.text(" \u{2014} ", "，"),
                 html_escape(step),
             )
         })
         .collect::<Vec<_>>()
         .join(catalog.text("; ", "；"));
+    let prefix = match asset_specific {
+        false => catalog.text("Next step: ", "下一步："),
+        true => catalog.text(
+            "For rows without their own next step: ",
+            "沒有另寫下一步的列：",
+        ),
+    };
     format!(
         "<p class=\"asset-result-steps\">{}{}{}</p>",
-        catalog.text(
-            "Where a row gives no step of its own, its state is the step. ",
-            "沒有列出自己步驟的列，依其情形處理。",
-        ),
+        prefix,
         steps,
         catalog.text(".", "。"),
     )
@@ -14855,16 +14867,36 @@ fn html_executive_summary(
             catalog.format_number(counts.tested_complete),
         ),
         _ => format!(
-            "This run completed {} checks across {} assets.",
+            "This run completed {} {} on {} {}.",
             catalog.format_number(counts.tested_complete),
+            if counts.tested_complete == 1 {
+                "check"
+            } else {
+                "checks"
+            },
             catalog.format_number(report.requested.targets.len()),
+            if report.requested.targets.len() == 1 {
+                "asset"
+            } else {
+                "assets"
+            },
         ),
     };
 
     let found = match (catalog.locale, problem_count, urgent) {
         (crate::export::ReportLocale::ZhHant, 0, _) => "已完成的檢查沒有回報任何問題。".to_owned(),
+        (crate::export::ReportLocale::ZhHant, 1, 0) => {
+            "共發現 1 個問題，不屬於嚴重或高嚴重程度。".to_owned()
+        }
+        (crate::export::ReportLocale::ZhHant, 1, _) => {
+            "共發現 1 個問題，屬於嚴重或高嚴重程度。".to_owned()
+        }
         (crate::export::ReportLocale::ZhHant, total, 0) => format!(
             "共發現 {} 個問題，其中沒有嚴重或高嚴重程度的項目。",
+            catalog.format_number(total)
+        ),
+        (crate::export::ReportLocale::ZhHant, total, urgent) if urgent == total => format!(
+            "共發現 {} 個問題，全部都是嚴重或高嚴重程度。",
             catalog.format_number(total)
         ),
         (crate::export::ReportLocale::ZhHant, total, urgent) => format!(
@@ -14873,8 +14905,14 @@ fn html_executive_summary(
             catalog.format_number(urgent),
         ),
         (_, 0, _) => "The checks that completed reported no problems.".to_owned(),
+        (_, 1, 0) => "1 problem was found, and it is not Critical or High severity.".to_owned(),
+        (_, 1, _) => "1 problem was found, and it is Critical or High severity.".to_owned(),
         (_, total, 0) => format!(
             "{} problems were found, none of them Critical or High severity.",
+            catalog.format_number(total)
+        ),
+        (_, total, urgent) if urgent == total => format!(
+            "{} problems were found, all of them Critical or High severity.",
             catalog.format_number(total)
         ),
         (_, total, urgent) => format!(
@@ -16313,7 +16351,7 @@ fn html_asset_result_section(
         ),
         false => ("", String::new()),
     };
-    let own_step = html_asset_state_steps(&states_taking_their_own_step, catalog);
+    let own_step = html_asset_state_steps(&states_taking_their_own_step, asset_specific, catalog);
 
     format!(
         concat!(
@@ -37781,6 +37819,141 @@ mod tests {
         assert_eq!(loss_entries[1], ("Record notes", 1, "quiet"));
         let loss_tiles = html_kpi_tiles(&loss_entries, en);
         assert!(loss_tiles.contains("kpi kpi--partial"));
+    }
+
+    fn one_asset_one_completed_check_report(
+        fixture: &Fixture,
+        severity: Severity,
+    ) -> (BeginnerMasterReport, Id) {
+        let prepared = crate::localhost_quick_scan::prepare_localhost_quick_scan(
+            &fixture.storage,
+            fixture.engines.manifests(),
+            9001,
+        )
+        .unwrap();
+        let mut case = fixture
+            .storage
+            .get_case(&prepared.prepared.case_id)
+            .unwrap();
+        close_run_without_execution_for_report_fixture(&mut case, &prepared.prepared.scan_run_id);
+        let mut report =
+            build_beginner_master_report(&case, &prepared.prepared.scan_run_id).unwrap();
+        let target = report.requested.targets.first_mut().unwrap();
+        let asset_id = target.asset_id.clone();
+        let completed_check = report.actual.checks.first_mut().unwrap();
+        completed_check.task_id = "task-completed".into();
+        completed_check.check_id = "gitleaks".into();
+        completed_check.result_kind = Some(CheckResultKind::SecurityCheck);
+        completed_check.status = CoverageDimensionStatus::TestedComplete;
+        report.coverage_gaps.clear();
+        report.coverage_counts = Default::default();
+        report.coverage_counts.tested_complete = 1;
+        report.findings = vec![crate::beginner_report::BeginnerFinding {
+            finding_id: "finding-one-asset-one-check".into(),
+            fingerprint: "gitleaks:one-asset-one-check".into(),
+            snapshot_source: crate::beginner_report::FindingSnapshotSource::FrozenSelectedRun,
+            title: "Retained secret exposure".into(),
+            plain_language_risk: "A secret pattern was retained.".into(),
+            possible_impact: "The exposed value may permit unauthorized access.".into(),
+            severity,
+            confidence: Confidence::Low,
+            priority: Some(50),
+            priority_reasons: vec![],
+            target_asset_ids: vec![asset_id.clone()],
+            next_step: "Revoke and rotate the exposed value.".into(),
+            recommended_expert_type: "Secrets-response specialist".into(),
+            evidence_references: vec![],
+            official_references: Some(vec![]),
+            framework_references: vec![],
+            family: Some(crate::domain::FindingFamily::Secret),
+            severity_basis_code: Some(crate::domain::SeverityBasisCode::SecretPatternMatch),
+            confidence_basis_code: None,
+            observation_details: vec![],
+            context_factors: vec![],
+            rollback_considerations: None,
+            verification_guidance: None,
+        }];
+        (report, asset_id)
+    }
+
+    /// The state pill's step is said once under the table, behind a prefix
+    /// that only claims what it means: the run's one step where no row wrote
+    /// its own, since a single problem asset with a normally completed check
+    /// has nothing of its own to add.
+    #[test]
+    fn html_executive_summary_and_step_line_use_singular_wording_for_one_asset_and_one_problem() {
+        let fixture = Fixture::new();
+        let (report, _asset_id) = one_asset_one_completed_check_report(&fixture, Severity::Medium);
+
+        let en = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let zh = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
+        let en_summary = html_executive_summary(&report, &report.coverage_counts, 1, en);
+        let zh_summary = html_executive_summary(&report, &report.coverage_counts, 1, zh);
+        assert!(en_summary.contains("This run completed 1 check on 1 asset."));
+        assert!(
+            en_summary.contains("1 problem was found, and it is not Critical or High severity.")
+        );
+        assert!(!en_summary.contains("1 assets"));
+        assert!(!en_summary.contains("1 checks"));
+        assert!(!en_summary.contains("1 problems"));
+        assert!(zh_summary.contains("共發現 1 個問題，不屬於嚴重或高嚴重程度。"));
+
+        let en_labels = readable_target_labels(&report, en);
+        let zh_labels = readable_target_labels(&report, zh);
+        let en_board = html_asset_result_section(&report, &en_labels, en);
+        let zh_board = html_asset_result_section(&report, &zh_labels, zh);
+        assert!(!en_board.contains("<th scope=\"col\">What to do next</th>"));
+        let en_steps = en_board
+            .split("class=\"asset-result-steps\">")
+            .nth(1)
+            .and_then(|rest| rest.split("</p>").next())
+            .expect("the English state steps");
+        assert!(en_steps.starts_with("Next step: "), "{en_steps}");
+        assert!(!en_steps.contains("its state is the step"));
+        let zh_steps = zh_board
+            .split("class=\"asset-result-steps\">")
+            .nth(1)
+            .and_then(|rest| rest.split("</p>").next())
+            .expect("the Chinese state steps");
+        assert!(zh_steps.starts_with("下一步："), "{zh_steps}");
+        assert!(!zh_steps.contains("依其情形處理"));
+        // The state's label and its step are joined as one Chinese clause,
+        // not labelled like a field name.
+        assert!(zh_steps.contains("</strong>，"), "{zh_steps}");
+        assert!(!zh_steps.contains("</strong>："), "{zh_steps}");
+    }
+
+    /// When every problem is Critical or High, the summary says so instead of
+    /// repeating the total as "N of them".
+    #[test]
+    fn html_executive_summary_says_plainly_when_every_problem_is_critical_or_high() {
+        let fixture = Fixture::new();
+        let (mut report, _asset_id) =
+            one_asset_one_completed_check_report(&fixture, Severity::Critical);
+
+        let en = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let zh = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
+        let en_summary = html_executive_summary(&report, &report.coverage_counts, 1, en);
+        let zh_summary = html_executive_summary(&report, &report.coverage_counts, 1, zh);
+        assert!(en_summary.contains("1 problem was found, and it is Critical or High severity."));
+        assert!(zh_summary.contains("共發現 1 個問題，屬於嚴重或高嚴重程度。"));
+
+        let mut second = report.findings[0].clone();
+        second.finding_id = "finding-one-asset-second-problem".into();
+        second.fingerprint = "gitleaks:one-asset-second-problem".into();
+        second.severity = Severity::High;
+        report.findings.push(second);
+        let en_summary = html_executive_summary(&report, &report.coverage_counts, 2, en);
+        let zh_summary = html_executive_summary(&report, &report.coverage_counts, 2, zh);
+        assert!(
+            en_summary.contains("2 problems were found, all of them Critical or High severity."),
+            "{en_summary}"
+        );
+        assert!(!en_summary.contains("2 of them"), "{en_summary}");
+        assert!(
+            zh_summary.contains("共發現 2 個問題，全部都是嚴重或高嚴重程度。"),
+            "{zh_summary}"
+        );
     }
 
     #[test]

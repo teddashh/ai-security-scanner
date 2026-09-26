@@ -2375,6 +2375,12 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 .nth(1)
                 .and_then(|rest| rest.split("</p>").next())
                 .expect("the state steps");
+            // This board has its own "What to do next" column, so the shared
+            // line only speaks for the rows that left that column blank.
+            assert!(
+                steps.starts_with("For rows without their own next step: "),
+                "{steps}"
+            );
             assert!(steps.contains("Problems found"), "{steps}");
             assert!(
                 !steps.contains("Incomplete or failed"),
