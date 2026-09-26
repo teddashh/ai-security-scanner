@@ -2729,6 +2729,21 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             let grype_card_at = problems[..grype_impact_at]
                 .rfind("<article id=\"f")
                 .expect("Grype finding card");
+            let grype_finding_index = problems[..grype_card_at].matches("<article id=\"f").count();
+            let grype_finding = &report.findings[grype_finding_index];
+            assert!(
+                !grype_finding.target_asset_ids.is_empty()
+                    && grype_finding.target_asset_ids.iter().all(|asset_id| {
+                        completed.assets.iter().any(|asset| {
+                            asset.id == *asset_id
+                                && matches!(
+                                    asset.kind,
+                                    AssetKind::ContainerImage | AssetKind::ContainerRegistry
+                                )
+                        })
+                    }),
+                "this Grype card must belong to a container asset"
+            );
             let grype_card = &problems[grype_card_at..];
             let grype_card = &grype_card[..grype_card.find("</article>").expect("card end")];
             let collapsed_at = grype_card
@@ -2737,7 +2752,7 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             for open_text in [
                 grype_impact,
                 "Upgrade the affected component to a fixed version",
-                "Software supply-chain engineer",
+                "Container security engineer",
                 "https://nvd.nist.gov/vuln/detail/CVE-2025-0002",
             ] {
                 let at = grype_card
