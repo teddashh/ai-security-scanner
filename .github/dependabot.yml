@@ -4,16 +4,47 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Node types follow the Node major that CI and the desktop build run on.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
+      # Compatible updates arrive together. A major update, and any esbuild
+      # minor (esbuild is 0.x, so a minor may break), arrives on its own.
       frontend:
         patterns: ["*"]
+        exclude-patterns:
+          - "esbuild"
+          - "@tauri-apps/plugin-opener"
+          - "@tauri-apps/plugin-process"
+          - "@tauri-apps/plugin-updater"
+        update-types: ["minor", "patch"]
+      # The release contract pins these plugins to the same exact versions as
+      # their Rust crates, so moving them is a release-tooling decision.
+      desktop-release-pins:
+        patterns:
+          - "@tauri-apps/plugin-opener"
+          - "@tauri-apps/plugin-process"
+          - "@tauri-apps/plugin-updater"
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
     groups:
+      # Patch updates arrive together. Minor updates arrive one crate at a time:
+      # for a 0.x crate a minor release is a breaking change.
       rust:
         patterns: ["*"]
+        exclude-patterns:
+          - "tauri-plugin-opener"
+          - "tauri-plugin-process"
+          - "tauri-plugin-updater"
+        update-types: ["patch"]
+      desktop-release-pins:
+        patterns:
+          - "tauri-plugin-opener"
+          - "tauri-plugin-process"
+          - "tauri-plugin-updater"
   - package-ecosystem: github-actions
     directory: /
     schedule:
