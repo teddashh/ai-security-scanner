@@ -600,6 +600,41 @@ test("the verification sentence keeps the engine name and rule id verbatim", () 
   assert.equal(findingVerificationSentence("zh-TW", foreign), foreign);
 });
 
+test("a UUID source rule gives way to the finding's title in the verification sentence", () => {
+  const uuid = "38c5ee0d-7f22-4260-ab72-5073048df100";
+  const title = "S3 Bucket ACL Allows Read Or Write to All Users";
+  const current = `Rerun KICS with the same scope after the change and confirm that source rule ${uuid} is no longer reported.`;
+  const legacy = `After an approved manual change, rerun KICS with the same authorized scope and confirm that source rule ${uuid} is no longer reported.`;
+  const expectedEn = `Rerun KICS with the same scope after the change and confirm that “${title}” is no longer reported.`;
+  const expectedZh = `變更後以相同範圍重新執行 KICS，並確認「${title}」不再被回報。`;
+
+  for (const english of [current, legacy]) {
+    assert.equal(findingVerificationSentence("en", english, title), expectedEn);
+    assert.equal(findingVerificationSentence("zh-TW", english, title), expectedZh);
+  }
+
+  // An uppercase UUID is still opaque.
+  const uppercase = `Rerun KICS with the same scope after the change and confirm that source rule ${uuid.toUpperCase()} is no longer reported.`;
+  assert.equal(findingVerificationSentence("en", uppercase, title), expectedEn);
+
+  // No title, or a title that is only whitespace, keeps today's sentence.
+  assert.equal(findingVerificationSentence("en", current), current);
+  assert.equal(findingVerificationSentence("en", current, "   "), current);
+
+  // A title is available, but the rule is not opaque -- today's sentence
+  // still names the rule.
+  for (const rule of [
+    "CKV_AWS_20",
+    "GHSA-3pqx-4fqf-j49f",
+    "38c5ee0d-7f22-4260-ab72-5073048df10", // 11-digit last group
+    "38c5ee0g-7f22-4260-ab72-5073048df100", // non-hex digit
+  ]) {
+    const english = `Rerun KICS with the same scope after the change and confirm that source rule ${rule} is no longer reported.`;
+    assert.equal(findingVerificationSentence("en", english, title), english);
+    assert.ok(findingVerificationSentence("zh-TW", english, title).includes(`來源規則 ${rule}`));
+  }
+});
+
 test("why this priority is said in Chinese, keeping the engine's own words", () => {
   const derived =
     "Severity derived from a secret pattern match in scanned source; Gitleaks reports no severity of its own.";

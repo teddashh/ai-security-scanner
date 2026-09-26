@@ -568,6 +568,8 @@ export const findingRollbackSentence = (
   return "變更前先保存目前設定，並測試還原路徑。";
 };
 
+const OPAQUE_RULE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * "Rerun {engine} with the same scope after the change and confirm source rule {rule} is no
  * longer reported."
@@ -576,10 +578,15 @@ export const findingRollbackSentence = (
  * engine's display name and the source rule id are the engine's own strings and
  * have to appear in the Chinese exactly as they do in the English. Returns the
  * English unchanged for any sentence not in this shape.
+ *
+ * When the rule is opaque -- a UUID, as KICS names every query -- and a title
+ * is given, the sentence names the title instead: the rule stays in the
+ * evidence, and the reader recognises the title.
  */
 export const findingVerificationSentence = (
   locale: "en" | "zh-TW",
   english: string,
+  title?: string,
 ): string => {
   const LEGACY_RERUN = "After an approved manual change, rerun ";
   const LEGACY_SCOPE = " with the same authorized scope and confirm that source rule ";
@@ -597,8 +604,16 @@ export const findingVerificationSentence = (
   const engine = middle.slice(0, at);
   const rule = middle.slice(at + scope.length);
   if (!engine || !rule) return english;
-  if (locale === "en") return `Rerun ${engine} with the same scope after the change and confirm that source rule ${rule} is no longer reported.`;
-  return `變更後以相同範圍重新執行 ${engine}，並確認來源規則 ${rule} 不再被回報。`;
+  const trimmedTitle = title?.trim();
+  const namedTitle = trimmedTitle && OPAQUE_RULE_ID.test(rule) ? trimmedTitle : undefined;
+  if (locale === "en") {
+    return namedTitle
+      ? `Rerun ${engine} with the same scope after the change and confirm that “${namedTitle}” is no longer reported.`
+      : `Rerun ${engine} with the same scope after the change and confirm that source rule ${rule} is no longer reported.`;
+  }
+  return namedTitle
+    ? `變更後以相同範圍重新執行 ${engine}，並確認「${namedTitle}」不再被回報。`
+    : `變更後以相同範圍重新執行 ${engine}，並確認來源規則 ${rule} 不再被回報。`;
 };
 
 /**

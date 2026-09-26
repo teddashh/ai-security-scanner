@@ -4027,7 +4027,10 @@ fn project_finding(
         } else {
             details
                 .map(|finding| {
-                    crate::finding_narrative::verification_english(&finding.verification_guidance)
+                    crate::finding_narrative::verification_english(
+                        &finding.verification_guidance,
+                        None,
+                    )
                 })
                 .filter(|guidance| !guidance.trim().is_empty())
         },

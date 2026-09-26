@@ -18163,10 +18163,16 @@ fn html_report_bytes(
                 .as_ref()
                 .map(|english| match catalog.locale {
                     crate::export::ReportLocale::En => {
-                        crate::finding_narrative::verification_english(english)
+                        crate::finding_narrative::verification_english(
+                            english,
+                            Some(&finding.title),
+                        )
                     }
                     crate::export::ReportLocale::ZhHant => {
-                        crate::finding_narrative::verification_zh_hant(english)
+                        crate::finding_narrative::verification_zh_hant(
+                            english,
+                            Some(&finding.title),
+                        )
                     }
                 });
         let safety_block = safety
@@ -36184,6 +36190,42 @@ mod tests {
         )));
         assert!(html.contains(&format!("<td>{action}</td>")));
         assert!(html.contains(&format!("<li><strong>{action}</strong> — <a href=\"#f1\">")));
+    }
+
+    #[test]
+    fn html_finding_card_names_an_opaque_kics_rule_by_its_title_instead_of_the_uuid() {
+        const UUID: &str = "38c5ee0d-7f22-4260-ab72-5073048df100";
+        const TITLE: &str = "S3 Bucket ACL Allows Read Or Write to All Users";
+        let mut case =
+            case_for_rated_httpx_finding(EngineRunStatus::Completed, None, Some("httpx-task"));
+        let mut finding = case.findings[0].clone();
+        finding.title = TITLE.into();
+        finding.verification_guidance = format!(
+            "Rerun httpx with the same scope after the change and confirm that source rule {UUID} is no longer reported."
+        );
+        finding.evidence[0].source_rule = Some(UUID.into());
+        case.findings[0] = finding.clone();
+        // The observation's frozen snapshot is what the export actually
+        // reads; keep it in step with the mutated finding (see
+        // `case_for_two_findings_sharing_one_fix` for the same pattern).
+        case.finding_observations[0].finding_snapshot = Some(finding);
+
+        let en = html_from_export_case(&case, crate::export::ReportLocale::En);
+        let zh = html_from_export_case(&case, crate::export::ReportLocale::ZhHant);
+
+        let en_sentence = format!("confirm that \u{201c}{TITLE}\u{201d} is no longer reported.");
+        let zh_sentence = format!("並確認「{TITLE}」不再被回報");
+        assert!(en.contains(&en_sentence), "{en}");
+        assert!(zh.contains(&zh_sentence), "{zh}");
+        assert!(!en.contains("source rule 38c5ee0d"), "{en}");
+        assert!(!zh.contains("來源規則 38c5ee0d"), "{zh}");
+
+        // The same identifier stays in the technical detail, so upstream
+        // provenance is not lost by naming the finding in the sentence.
+        let en_evidence = format!("<dt>Source rule</dt><dd><code>{UUID}</code></dd>");
+        let zh_evidence = format!("<dt>來源規則</dt><dd><code>{UUID}</code></dd>");
+        assert!(en.contains(&en_evidence), "{en}");
+        assert!(zh.contains(&zh_evidence), "{zh}");
     }
 
     #[test]

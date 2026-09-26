@@ -6636,7 +6636,10 @@ fn the_safety_and_verification_sentences_are_the_ones_the_translator_knows() {
             // they are the engine's strings and must read identically in both
             // languages.
             let english = &finding.verification_guidance;
-            let translated = verification_zh_hant(english);
+            // `None`: this parity census checks every engine's sentence shape
+            // translates, not the opaque-rule-title substitution, so it keeps
+            // asking for today's source-rule sentence unchanged.
+            let translated = verification_zh_hant(english, None);
             assert_ne!(
                 &translated, english,
                 "{engine_id} verification sentence is not the shape the translator parses: {english}"

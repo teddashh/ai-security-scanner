@@ -616,13 +616,6 @@ pub fn rollback_zh_hant(english: &str) -> String {
     english.to_owned()
 }
 
-/// "After an approved manual change, rerun {engine} ... source rule {rule}
-/// is no longer reported."
-///
-/// Read back off the sentence for the same reason `engine_name_from` is: the
-/// engine's display name and the source rule id are the engine's own strings
-/// and have to appear in the Chinese exactly as they do in the English.
-/// Returns the English unchanged for any sentence not in this shape.
 /// The one priority reason every adapter finding carries.
 pub const ENGLISH_EVIDENCE_REASON: &str = "Direct scanner evidence is attached.";
 pub const ENGLISH_EXPOSURE_OBSERVATION_REASON: &str =
@@ -2321,6 +2314,17 @@ pub fn priority_reason_zh_hant(english: &str) -> String {
     )
 }
 
+/// "After an approved manual change, rerun {engine} ... source rule {rule}
+/// is no longer reported."
+///
+/// Read back off the sentence for the same reason `engine_name_from` is: the
+/// engine's display name and the source rule id are the engine's own strings
+/// and have to appear in the Chinese exactly as they do in the English.
+/// Returns the English unchanged for any sentence not in this shape.
+///
+/// When the rule is opaque -- a UUID, as KICS names every query -- and the
+/// finding carries a title, the sentence names the title instead: the rule
+/// stays in the evidence, and the reader recognises the title.
 fn verification_parts(english: &str) -> Option<(&str, &str)> {
     const LEGACY_RERUN: &str = "After an approved manual change, rerun ";
     const LEGACY_SCOPE: &str = " with the same authorized scope and confirm that source rule ";
@@ -2341,20 +2345,55 @@ fn verification_parts(english: &str) -> Option<(&str, &str)> {
     Some((engine, rule))
 }
 
-pub fn verification_english(english: &str) -> String {
+/// A source rule is opaque when it is a UUID: exactly five `-`-separated
+/// groups of 8, 4, 4, 4 and 12 ASCII hex digits, in either case. KICS names
+/// every query this way; the id tells a reader nothing and cannot be
+/// compared by eye. No dependency is added for this -- it is a plain split
+/// and a length and character check.
+fn is_opaque_rule_id(rule: &str) -> bool {
+    const GROUP_LENGTHS: [usize; 5] = [8, 4, 4, 4, 12];
+    let mut groups = rule.split('-');
+    for expected_len in GROUP_LENGTHS {
+        let Some(group) = groups.next() else {
+            return false;
+        };
+        if group.len() != expected_len || !group.chars().all(|c| c.is_ascii_hexdigit()) {
+            return false;
+        }
+    }
+    groups.next().is_none()
+}
+
+/// The title to name instead of the rule: only when the rule is opaque and a
+/// non-empty trimmed title is actually available. `None` keeps today's
+/// source-rule sentence.
+fn opaque_rule_title<'a>(rule: &str, title: Option<&'a str>) -> Option<&'a str> {
+    let title = title?.trim();
+    (!title.is_empty() && is_opaque_rule_id(rule)).then_some(title)
+}
+
+pub fn verification_english(english: &str, title: Option<&str>) -> String {
     verification_parts(english).map_or_else(
         || english.to_owned(),
-        |(engine, rule)| {
-            format!("Rerun {engine} with the same scope after the change and confirm that source rule {rule} is no longer reported.")
+        |(engine, rule)| match opaque_rule_title(rule, title) {
+            Some(title) => format!(
+                "Rerun {engine} with the same scope after the change and confirm that \u{201c}{title}\u{201d} is no longer reported."
+            ),
+            None => format!("Rerun {engine} with the same scope after the change and confirm that source rule {rule} is no longer reported."),
         },
     )
 }
 
-pub fn verification_zh_hant(english: &str) -> String {
+pub fn verification_zh_hant(english: &str, title: Option<&str>) -> String {
     verification_parts(english).map_or_else(
         || english.to_owned(),
-        |(engine, rule)| {
-            format!("變更後以相同範圍重新執行 {engine}，並確認來源規則 {rule} 不再被回報。")
+        |(engine, rule)| match opaque_rule_title(rule, title) {
+            Some(title) => {
+                format!("變更後以相同範圍重新執行 {engine}，並確認「{title}」不再被回報。")
+            }
+            None => {
+                format!("變更後以相同範圍重新執行 {engine}，並確認來源規則 {rule} 不再被回報。")
+            }
         },
     )
 }
@@ -2609,6 +2648,59 @@ pub fn finding_next_action_zh_hant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_opaque_source_rule_gives_way_to_the_finding_title() {
+        // Mirrors "a UUID source rule gives way to the finding's title in
+        // the verification sentence" in tests/frontend/findingNarrative.test.ts
+        // -- the two must stay identical.
+        const UUID: &str = "38c5ee0d-7f22-4260-ab72-5073048df100";
+        const TITLE: &str = "S3 Bucket ACL Allows Read Or Write to All Users";
+        let current = format!(
+            "Rerun KICS with the same scope after the change and confirm that source rule {UUID} is no longer reported."
+        );
+        let legacy = format!(
+            "After an approved manual change, rerun KICS with the same authorized scope and confirm that source rule {UUID} is no longer reported."
+        );
+        let expected_en = format!(
+            "Rerun KICS with the same scope after the change and confirm that \u{201c}{TITLE}\u{201d} is no longer reported."
+        );
+        let expected_zh = format!("變更後以相同範圍重新執行 KICS，並確認「{TITLE}」不再被回報。");
+
+        for english in [current.as_str(), legacy.as_str()] {
+            assert_eq!(verification_english(english, Some(TITLE)), expected_en);
+            assert_eq!(verification_zh_hant(english, Some(TITLE)), expected_zh);
+        }
+
+        // An uppercase UUID is still opaque.
+        let uppercase = format!(
+            "Rerun KICS with the same scope after the change and confirm that source rule {} is no longer reported.",
+            UUID.to_uppercase()
+        );
+        assert_eq!(verification_english(&uppercase, Some(TITLE)), expected_en);
+
+        // No title, or a title that is only whitespace, keeps today's
+        // source-rule sentence.
+        assert_eq!(verification_english(&current, None), current);
+        assert_eq!(verification_english(&current, Some("   ")), current);
+
+        // A title is available, but the rule is not opaque -- today's
+        // sentence still names the rule.
+        for rule in [
+            "CKV_AWS_20",
+            "GHSA-3pqx-4fqf-j49f",
+            "38c5ee0d-7f22-4260-ab72-5073048df10", // 11-digit last group
+            "38c5ee0g-7f22-4260-ab72-5073048df100", // non-hex digit
+        ] {
+            let english = format!(
+                "Rerun KICS with the same scope after the change and confirm that source rule {rule} is no longer reported."
+            );
+            assert_eq!(verification_english(&english, Some(TITLE)), english);
+            assert!(
+                verification_zh_hant(&english, Some(TITLE)).contains(&format!("來源規則 {rule}"))
+            );
+        }
+    }
 
     #[test]
     fn control_mapping_rationale_lookup_translates_only_reviewed_catalog_prose() {

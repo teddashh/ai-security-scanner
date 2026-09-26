@@ -2795,7 +2795,7 @@ export function FindingsPage({
                   <span>
                     <strong>{text(copy.verifyFix)}</strong>
                     {finding.verificationGuidance
-                      ? findingVerificationSentence(locale, finding.verificationGuidance)
+                      ? findingVerificationSentence(locale, finding.verificationGuidance, finding.title)
                       : text(copy.verifyFallback)}
                   </span>
                 </span>
@@ -3357,7 +3357,7 @@ export function FindingsPage({
               <section className="detail-section">
                 <h3>{text(copy.verification)}</h3>
                 <p>{selected.verificationGuidance
-                  ? findingVerificationSentence(locale, selected.verificationGuidance)
+                  ? findingVerificationSentence(locale, selected.verificationGuidance, selected.title)
                   : text(copy.verifyFallback)}</p>
               </section>
 

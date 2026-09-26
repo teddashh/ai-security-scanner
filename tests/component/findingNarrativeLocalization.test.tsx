@@ -321,6 +321,47 @@ test("the safety and verification advice is not left in English for a zh-TW read
   expect(rendered).toContain("TruffleHog");
 });
 
+// KICS names its queries with UUIDs. On a real scan the sentence above reads
+// "... confirm that source rule 38c5ee0d-7f22-4260-ab72-5073048df100 is no
+// longer reported." on every KICS card -- unreadable and impossible to
+// compare by eye. When the rule is opaque and the finding has a title, both
+// surfaces that carry this sentence (the Results priority card and the
+// selected finding's detail panel) name the title instead.
+const KICS_UUID = "38c5ee0d-7f22-4260-ab72-5073048df100";
+const KICS_TITLE = "S3 Bucket ACL Allows Read Or Write to All Users";
+const kicsUuidFinding = () => leakedCredential({
+  id: "finding-kics",
+  fingerprint: "fingerprint-kics",
+  title: KICS_TITLE,
+  verificationGuidance: `Rerun KICS with the same scope after the change and confirm that source rule ${KICS_UUID} is no longer reported.`,
+});
+
+test("a KICS UUID source rule names the finding's title, not the rule, for an English reader", () => {
+  window.localStorage.setItem(localeStorageKey, "en");
+  const { container } = renderPage([kicsUuidFinding()]);
+  const priorityCard = container.querySelector(".priority-card")?.textContent ?? "";
+  const detail = container.querySelector(".finding-detail")?.textContent ?? "";
+  const expected = `confirm that “${KICS_TITLE}” is no longer reported.`;
+
+  expect(priorityCard).toContain(expected);
+  expect(detail).toContain(expected);
+  expect(priorityCard).not.toContain(KICS_UUID);
+  expect(detail).not.toContain(KICS_UUID);
+});
+
+test("a KICS UUID source rule names the finding's title, not the rule, for a zh-TW reader", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderPage([kicsUuidFinding()]);
+  const priorityCard = container.querySelector(".priority-card")?.textContent ?? "";
+  const detail = container.querySelector(".finding-detail")?.textContent ?? "";
+  const expected = `並確認「${KICS_TITLE}」不再被回報`;
+
+  expect(priorityCard).toContain(expected);
+  expect(detail).toContain(expected);
+  expect(priorityCard).not.toContain(KICS_UUID);
+  expect(detail).not.toContain(KICS_UUID);
+});
+
 test("a finding whose safety sentence this build does not recognise keeps it rather than blanking it", () => {
   window.localStorage.setItem(localeStorageKey, "zh-TW");
   // Frozen by an older build with different wording. Untranslated is worse
