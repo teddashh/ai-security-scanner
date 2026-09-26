@@ -15,14 +15,17 @@ updates:
         patterns: ["*"]
         exclude-patterns:
           - "esbuild"
+          - "@tauri-apps/cli"
           - "@tauri-apps/plugin-opener"
           - "@tauri-apps/plugin-process"
           - "@tauri-apps/plugin-updater"
         update-types: ["minor", "patch"]
       # The release contract pins these plugins to the same exact versions as
-      # their Rust crates, so moving them is a release-tooling decision.
+      # their Rust crates, and the Windows installer template is reviewed
+      # against this Tauri CLI release, so moving them is a release decision.
       desktop-release-pins:
         patterns:
+          - "@tauri-apps/cli"
           - "@tauri-apps/plugin-opener"
           - "@tauri-apps/plugin-process"
           - "@tauri-apps/plugin-updater"
@@ -49,3 +52,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # CodeQL's analyze step refuses a configuration written by a different
+      # init release, so the CodeQL actions move together.
+      codeql:
+        patterns: ["github/codeql-action*"]
