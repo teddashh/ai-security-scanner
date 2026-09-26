@@ -267,7 +267,7 @@ const copy = {
     demo_case: { en: "Create or open a real scan project before starting.", zhTW: "請先建立或開啟真正的掃描專案。" },
     archived_case: { en: "This scan project is archived. Choose an active project to continue.", zhTW: "這個掃描專案已封存；請選擇仍在使用的專案。" },
     scan_already_active: { en: "A scan is already running or paused for this project.", zhTW: "這個專案已有正在執行或暫停中的掃描。" },
-    no_effective_scope_grants: { en: "Choose the exact target you want to check, then confirm it once.", zhTW: "請選擇這次要檢查的確切目標，並確認一次即可。" },
+    no_effective_scope_grants: { en: "Choose the exact target you want to check, then confirm it once.", zhTW: "請選擇這次要檢查的目標，並確認一次即可。" },
     no_ownership_confirmed_targets: { en: "Target confirmation required. Return to setup and confirm it.", zhTW: "需要確認目標；請回到設定頁確認這次要掃描的目標。" },
     no_compatible_authorized_targets: { en: "Finish target setup for the current input.", zhTW: "請完成目前輸入的目標設定。" },
     no_runnable_authorized_targets: {
@@ -391,7 +391,7 @@ const copy = {
     },
     checking_readiness: {
       title: { en: "Checking the saved target and scan tool", zhTW: "正在確認已保存的目標與掃描工具" },
-      body: { en: "The app is confirming the exact inputs needed before this check runs.", zhTW: "程式正在確認這項檢查所需的確切輸入。" },
+      body: { en: "The app is confirming the exact inputs needed before this check runs.", zhTW: "程式正在確認這項檢查執行前所需的輸入。" },
     },
     preparing_scanner: {
       title: { en: "Preparing the scan tool", zhTW: "正在準備掃描工具" },

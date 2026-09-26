@@ -43,10 +43,10 @@ test("non-scan actions use truthful saved-state toasts while scan execution keep
 
   for (const [english, traditionalChinese] of [
     ["Project prepared locally", "專案已在本機準備完成"],
-    ["Private copy verified. Review the checks, then start.", "私密副本已驗證；請檢查掃描項目後開始。"],
+    ["Private copy verified. Review the checks, then start.", "私密副本已驗證；請確認掃描項目後開始。"],
     ["Project was not prepared", "專案尚未準備完成"],
     ["Scan access saved", "掃描許可已儲存"],
-    ["The exact target and limits are saved.", "確切目標與限制已儲存。"],
+    ["The exact target and limits are saved.", "目標與限制已儲存。"],
     ["Change saved", "變更已儲存"],
   ] as const) {
     assert.ok(copyMap.includes(english), english);

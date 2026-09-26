@@ -357,7 +357,7 @@ const pageCopy = {
   gitWarningBody: bilingual("Only the selected folder is copied into the private local scan. Detected secret values are masked in results.", "只會把選定資料夾複製到私密的本機掃描；找到的秘密值會在結果中遮罩。"),
   gitTechnicalBody: bilingual("Every .git directory is excluded, so Git history, refs, hooks, and credentials stored inside .git are not opened or copied.", "所有 .git 目錄都會排除，因此不會開啟或複製其中的 Git history、refs、hooks 與 credentials。"),
   localSelectionPermissionTitle: bilingual("Choose once, then scan the private copy", "選擇一次，再掃描私密副本"),
-  localSelectionPermissionBody: bilingual("Choosing a folder creates a private read-only snapshot. The case saves its snapshot ID, input type, content hash, and relative paths—not the original host path. Start runs the recommended checks.", "選擇資料夾會建立私密唯讀快照。案件保存快照 ID、輸入類型、內容雜湊與相對路徑，不保存原始主機路徑；按「開始」執行建議檢查。"),
+  localSelectionPermissionBody: bilingual("Choosing a folder creates a private read-only snapshot. The case saves its snapshot ID, input type, content hash, and relative paths—not the original host path. Starting the scan runs the recommended checks.", "選擇資料夾會建立私密唯讀快照。案件保存快照 ID、輸入類型、內容雜湊與相對路徑，不保存原始主機路徑；開始掃描時會執行建議的檢查。"),
   demoFolderTitle: bilingual("Desktop app required for local folders", "本機資料夾需要桌面程式"),
   demoFolderBody: bilingual("Open the desktop app to create a real local snapshot. This preview only shows the steps.", "請使用桌面程式建立真實本機快照；目前預覽只會顯示步驟。"),
   inputType: bilingual("What are you attaching?", "你要附加什麼？"),

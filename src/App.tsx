@@ -206,13 +206,13 @@ interface NonExecutionActionToastCopy {
 const nonExecutionActionToastCopy = {
   "attach-workspace": {
     acceptedTitle: { en: "Project prepared locally", zhTW: "專案已在本機準備完成" },
-    acceptedDetail: { en: "Private copy verified. Review the checks, then start.", zhTW: "私密副本已驗證；請檢查掃描項目後開始。" },
+    acceptedDetail: { en: "Private copy verified. Review the checks, then start.", zhTW: "私密副本已驗證；請確認掃描項目後開始。" },
     failedTitle: { en: "Project was not prepared", zhTW: "專案尚未準備完成" },
     failedDetail: { en: "Choose the local project again.", zhTW: "請重新選擇本機專案。" },
   },
   scope: {
     acceptedTitle: { en: "Scan access saved", zhTW: "掃描許可已儲存" },
-    acceptedDetail: { en: "The exact target and limits are saved.", zhTW: "確切目標與限制已儲存。" },
+    acceptedDetail: { en: "The exact target and limits are saved.", zhTW: "目標與限制已儲存。" },
     failedTitle: { en: "Scan access was not saved", zhTW: "掃描許可尚未儲存" },
     failedDetail: { en: "Review the selected target and permission, then try again.", zhTW: "請檢查所選目標與許可後再試一次。" },
   },
@@ -257,7 +257,7 @@ const nonExecutionActionToastCopy = {
 const scanStartIssueCopy = {
   no_effective_scope_grants: {
     en: "Choose the exact target you want to check, then confirm it once.",
-    zhTW: "請先選擇這次要檢查的確切目標，並確認一次即可。",
+    zhTW: "請先選擇這次要檢查的目標，並確認一次即可。",
   },
   no_ownership_confirmed_targets: {
     en: "Return to scan setup and confirm the target shown there.",
@@ -1399,6 +1399,7 @@ export default function App() {
     const shouldReturnToReview = () => currentPageRef.current === requestedPage
       && pageTransitionGeneration.current === pageGenerationAtStart
       && caseSelectionBarrierRef.current.generation === caseSelectionGenerationAtStart;
+    const isSingleWorkspace = workspaces.length === 1;
     setBusyAction("create-local");
     let caseId: string;
     try {
@@ -1442,17 +1443,24 @@ export default function App() {
       pushToast({
         tone: failedWorkspaceCount === 0 ? "success" : "warning",
         title: failedWorkspaceCount === 0
-          ? text({ en: "Local projects ready for review", zhTW: "本機專案可供檢查" })
+          ? text({
+            en: isSingleWorkspace ? "Project folder ready" : "Project folders ready",
+            zhTW: "專案資料夾已準備好",
+          })
           : text({ en: "Scan project created; some folders were not added", zhTW: "掃描專案已建立；部分資料夾尚未加入" }),
         detail: failedWorkspaceCount === 0
           ? returnToReview
             ? text({
-              en: "The private snapshots are attached. Review the exact checks, then press Start.",
-              zhTW: "私密快照已附加；請檢查確切掃描項目後按下「開始」。",
+              en: isSingleWorkspace
+                ? "The private copy is ready. Review the checks, then start the scan."
+                : "The private copies are ready. Review the checks, then start the scan.",
+              zhTW: "私密副本已準備好；請確認掃描項目後開始掃描。",
             })
             : text({
-              en: "The private snapshots are attached. Open My scans to review and start them.",
-              zhTW: "私密快照已附加；請開啟「我的掃描」，檢查後開始。",
+              en: isSingleWorkspace
+                ? "The private copy is ready. Open My scans to review it and start the scan."
+                : "The private copies are ready. Open My scans to review them and start the scan.",
+              zhTW: "私密副本已準備好；請開啟「我的掃描」，確認後開始掃描。",
             })
           : returnToReview
             ? text({

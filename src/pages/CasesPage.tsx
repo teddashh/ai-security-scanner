@@ -173,10 +173,10 @@ const pageCopy = {
     en: "Enter one complete http:// or https:// URL without a username or password.",
     zhTW: "輸入一個不含帳號或密碼的完整 http:// 或 https:// 網址。",
   },
-  environmentRepositoriesTitle: { en: "Development projects", zhTW: "開發專案" },
+  environmentRepositoriesTitle: { en: "Project folders", zhTW: "專案資料夾" },
   environmentRepositoriesBody: {
-    en: "Choose each local repository you want checked for risky code, exposed secrets, vulnerable dependencies, and unsafe configuration.",
-    zhTW: "逐一選擇要檢查的本機程式碼儲存庫；產品會找危險程式碼、暴露秘密、有弱點的相依套件與不安全設定。",
+    en: "Choose each project folder you want checked for risky code, exposed secrets, vulnerable dependencies, and unsafe configuration.",
+    zhTW: "逐一選擇要檢查的專案資料夾；產品會找危險程式碼、暴露秘密、有弱點的相依套件與不安全設定。",
   },
   environmentAddRepository: { en: "Add a project folder", zhTW: "加入專案資料夾" },
   environmentRemoveRepository: { en: "Remove {name}", zhTW: "移除 {name}" },

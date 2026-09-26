@@ -812,6 +812,8 @@ test("one environment keeps same-named repository folders distinct through creat
     onChooseWorkspace,
   });
 
+  expect(getByRole("heading", { name: "Project folders" })).toBeTruthy();
+
   fireEvent.click(getByRole("button", { name: "Add a project folder" }));
   await waitFor(() => expect(container.textContent).toContain("api"));
   fireEvent.click(getByRole("button", { name: "Add a project folder" }));
@@ -970,13 +972,14 @@ test("an invalid inventory-only CIDR opens its collapsed field and receives focu
 
 test("the inventory field states its own boundary in Traditional Chinese", () => {
   window.localStorage.setItem(localeStorageKey, "zh-TW");
-  const { container } = renderCases({
+  const { container, getByRole } = renderCases({
     selectedCase: undefined,
     cases: [],
     selectedUseCase: "internal_it_environment",
     selectionKey: 1,
   });
 
+  expect(getByRole("heading", { name: "專案資料夾" })).toBeTruthy();
   expect(container.querySelector(".environment-inventory summary small")?.textContent).toBe(
     "會在報告中列為未測試；這裡的位址都不會被連線",
   );

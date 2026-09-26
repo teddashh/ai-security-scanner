@@ -33,7 +33,10 @@ test("guided local and environment creation attach chosen snapshots and preserve
   assert.doesNotMatch(action, /await loadSnapshot\(caseId, true\);\s*setSelectedUseCase\(undefined\);\s*navigate\("coverage"\)/u);
   assert.match(action, /Scan project created; some folders were not added/u);
   assert.match(action, /folder\(s\) not copied\. Add them again in Scan setup\./u);
-  assert.match(action, /The private snapshots are attached\. Review the exact checks, then press Start\./u);
+  assert.match(action, /The private copy is ready\. Review the checks, then start the scan\./u);
+  assert.match(action, /The private copies are ready\. Review the checks, then start the scan\./u);
+  assert.match(action, /私密副本已準備好；請確認掃描項目後開始掃描。/u);
+  assert.doesNotMatch(action, /press Start|按下「開始」/u);
   assert.doesNotMatch(action, /startScan|onStartScan/u);
 });
 
