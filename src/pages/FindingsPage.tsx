@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   confidenceMeta,
@@ -6,7 +6,7 @@ import {
   severityMeta,
   workflowMeta,
 } from "../lib";
-import { useI18n } from "../i18n";
+import { useI18n, type Locale } from "../i18n";
 import {
   unavailableRunBoundReportCopy,
   unavailableSelectedRunCopy,
@@ -514,7 +514,7 @@ const copy = {
   possibleImpact: { en: "Possible impact", zhTW: "可能影響" },
   whyPriority: { en: "Why this appears first", zhTW: "為何優先顯示" },
   recommendation: { en: "Recommended next step", zhTW: "建議下一步" },
-  beforeChanging: { en: "Before making a change:", zhTW: "變更前考量：" },
+  beforeChanging: { en: "Before making a change", zhTW: "變更前考量" },
   verification: { en: "How to verify the fix", zhTW: "修復確認方式" },
   scanEvidence: { en: "Scan evidence", zhTW: "掃描證據" },
   noEvidence: {
@@ -577,7 +577,6 @@ const copy = {
   // States what this record holds, not what the scanner published. A finding
   // whose canonical entry is gone still reaches this branch.
   noReferences: { en: "No official reference link is recorded for this finding.", zhTW: "這項問題沒有記錄官方參考連結。" },
-  viewSource: { en: "Open source document", zhTW: "查看來源文件" },
   chooseProblem: { en: "Choose a problem", zhTW: "選擇一項問題" },
   chooseProblemDescription: {
     en: "Select a problem to review its evidence, source details, status history, and framework references.",
@@ -999,6 +998,38 @@ const uniqueScannerFixedVersions = (
   }
   return values;
 };
+
+/**
+ * A reference link's display text: enough of the URL to tell it apart from
+ * its neighbours without hovering every one, never the same generic label for
+ * all of them. The full address stays in `href` and `title`. Anything that is
+ * not a plain http(s) URL renders as the stored string, unchanged.
+ */
+const readableReference = (reference: string): string => {
+  try {
+    const url = new URL(reference);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return reference;
+    const path = url.pathname.endsWith("/") ? url.pathname.slice(0, -1) : url.pathname;
+    return `${url.host}${path}${url.search}${url.hash}`;
+  } catch {
+    return reference;
+  }
+};
+
+/**
+ * The advice section's run-in label, with exactly one colon set in the
+ * reader's language instead of one baked into the label and another into the
+ * surrounding punctuation. English keeps a space after the colon; Chinese's
+ * full-width colon carries its own spacing and takes none.
+ */
+const adviceLabel = (locale: Locale, label: string): ReactNode =>
+  locale === "en" ? (
+    <>
+      <strong>{label}:</strong>{" "}
+    </>
+  ) : (
+    <strong>{label}：</strong>
+  );
 
 const checkRecordedTestedWork = (
   check: BeginnerMasterReport["actual"]["checks"][number],
@@ -3353,25 +3384,25 @@ export function FindingsPage({
                 })}</p>
                 {selectedScannerRemediations.map((remediation) => (
                   <p key={remediation}>
-                    <strong>{text(copy.scannerRemediation)}</strong>{" "}
+                    {adviceLabel(locale, text(copy.scannerRemediation))}
                     {remediation}
                   </p>
                 ))}
                 {selectedScannerFixedVersions.length > 0 && (
                   <p>
-                    <strong>{text(copy.fixedVersion)}</strong>{" "}
+                    {adviceLabel(locale, text(copy.fixedVersion))}
                     {selectedScannerFixedVersions.join(" · ")}
                   </p>
                 )}
                 {selectedScannerRemediations.length === 0 && selectedScannerFixedVersions.length === 0 && (
                   <p>
-                    <strong>{text(copy.scannerRemediation)}</strong>{" "}
+                    {adviceLabel(locale, text(copy.scannerRemediation))}
                     {text(copy.scannerRemediationMissing)}
                   </p>
                 )}
                 {selected.rollbackConsiderations && (
                   <p>
-                    <strong>{text(copy.beforeChanging)}</strong>{" "}
+                    {adviceLabel(locale, text(copy.beforeChanging))}
                     {findingRollbackSentence(locale, selected.rollbackConsiderations)}
                   </p>
                 )}
@@ -3517,9 +3548,17 @@ export function FindingsPage({
 
               <section className="detail-section">
                 <h3>{text(copy.officialReferences)}</h3>
-                {selected.officialReferences.length === 0 ? <p>{text(copy.noReferences)}</p> : selected.officialReferences.map((reference) => (
-                  <a key={reference} href={reference} target="_blank" rel="noreferrer noopener">{text(copy.viewSource)} <Icon name="external" size={14} /></a>
-                ))}
+                {selected.officialReferences.length === 0 ? <p>{text(copy.noReferences)}</p> : (
+                  <ul className="reference-list">
+                    {selected.officialReferences.map((reference) => (
+                      <li key={reference}>
+                        <a href={reference} target="_blank" rel="noreferrer noopener" title={reference}>
+                          {readableReference(reference)} <Icon name="external" size={14} />
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </section>
             </>
           ) : (

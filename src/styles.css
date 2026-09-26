@@ -3056,7 +3056,24 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
 
 .control-list b { color: var(--teal); }
 .control-list small { grid-column: 2; color: var(--muted); font-size: 0.78rem; }
-.detail-section > a { display: inline-flex; align-items: center; gap: 5px; font-size: 0.78rem; font-weight: 750; }
+
+.reference-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reference-list a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
 
 .control-item { display: grid; grid-template-columns: 95px minmax(0, 1fr); gap: 5px 10px; width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); text-align: left; background: var(--surface-soft); }
 .control-item:hover, .control-item--active { border-color: #8fb9ae; background: #eef8f4; }
