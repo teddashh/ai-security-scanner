@@ -384,7 +384,7 @@ test("choosing a local folder authorizes its private read-only snapshot without 
     "Saved copy: {copy} · Read-only checks: {checks}.",
     "已保存副本：{copy} · 唯讀檢查：{checks}。",
   ]) assert.ok(source.includes(phrase), phrase);
-  assert.match(source, /guidedLocalConsent && \([\s\S]*pageCopy\.guidedLocalBoundary[\s\S]*copy: selectedScopeAssets\.map[\s\S]*checks: scopeModes\.map/u);
+  assert.match(source, /guidedLocalConsent && \([\s\S]*pageCopy\.guidedLocalBoundary[\s\S]*copy: selectedScopeAssets\.map[\s\S]*checks: \(guidedLocalEngineIds \?\? \[\]\)\.map\(\(engineId\) => text\(engineOutcomeForId\(engineId\)\)\)/u);
 });
 
 test("source-code setup says private and masked instead of asking users to remove secrets", () => {

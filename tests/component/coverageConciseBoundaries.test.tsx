@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { CoveragePage } from "../../src/pages/CoveragePage";
 import { I18nProvider, localeStorageKey } from "../../src/i18n";
 import { scannerService } from "../../src/services/scanner";
-import type { Asset, BootstrapCleanupObligationSummary, ConnectedSource, CoverageRecord, InstalledProviderAuthorization } from "../../src/types";
+import type { Asset, BootstrapCleanupObligationSummary, ConnectedSource, CoverageRecord, EngineManifest, InstalledProviderAuthorization } from "../../src/types";
 import { internalDeviceHttpsProfile } from "../../src/internalDeviceProfile";
 import { internalEndpointProfiles } from "../../src/internalEndpointProfile";
 import { internalHostGreenboneProfile } from "../../src/internalHostProfile";
@@ -31,6 +31,7 @@ type RouteOptions = Pick<React.ComponentProps<typeof CoveragePage>, "assessmentI
   nativeMode?: boolean;
   busy?: boolean;
   runtimeSetupNotice?: React.ReactNode;
+  engineManifests?: EngineManifest[];
   onStartScan?: React.ComponentProps<typeof CoveragePage>["onStartScan"];
   onStartEnvironmentScan?: React.ComponentProps<typeof CoveragePage>["onStartEnvironmentScan"];
 };
@@ -45,6 +46,7 @@ const routeElement = ({
   nativeMode = true,
   busy = false,
   runtimeSetupNotice,
+  engineManifests = [],
   onStartScan = () => Promise.resolve(true),
   onStartEnvironmentScan = () => Promise.resolve(true),
 }: RouteOptions) => (
@@ -55,7 +57,7 @@ const routeElement = ({
       requestedActivities={requestedActivities}
       coverage={coverage}
       sources={sources}
-      engineManifests={[]}
+      engineManifests={engineManifests}
       assets={assets}
       scopeGrants={[]}
       nativeMode={nativeMode}
@@ -398,7 +400,7 @@ test("guided local Start keeps the exact copy, read-only check, and unchanged-so
 
   await waitFor(() => {
     expect(container.querySelector(".coverage-guided-boundary")?.textContent).toBe(
-      "Saved copy: source-tree-copy · Read-only checks: Review the saved local copy.",
+      "Saved copy: source-tree-copy · Read-only checks: Exposed secrets in code, Risky code patterns, Software ingredients, Known package vulnerabilities, Known software vulnerabilities, Exposed credentials and secrets, Infrastructure-code mistakes, Risky infrastructure settings.",
     );
   });
   expect(container.querySelector(".coverage-review-timing")?.textContent).toBe(
@@ -440,7 +442,7 @@ test("guided container Start routes Syft inventory with Trivy and Grype vulnerab
 
   await waitFor(() => {
     expect(container.querySelector(".coverage-guided-boundary")?.textContent).toBe(
-      "Saved copy: payments-image-copy · Read-only checks: Review the saved local copy.",
+      "Saved copy: payments-image-copy · Read-only checks: Software ingredients, Known package vulnerabilities, Known software vulnerabilities.",
     );
   });
 
@@ -455,6 +457,81 @@ test("guided container Start routes Syft inventory with Trivy and Grype vulnerab
     "The user explicitly selected this saved local copy and confirmed the recommended read-only checks.",
     undefined,
     ["syft", "trivy", "grype"],
+  );
+});
+
+test("guided local Review names the same checks in Traditional Chinese", async () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderRoute({
+    assessmentIntent: "source_code",
+    requestedActivities: ["local_artifact_analysis"],
+    assets: [pendingAsset({
+      name: "source-tree-copy",
+      localInputProfile: "repository_working_tree",
+    })],
+  });
+
+  await waitFor(() => {
+    expect(container.querySelector(".coverage-guided-boundary")?.textContent).toBe(
+      "已保存副本：source-tree-copy · 唯讀檢查：程式碼中暴露的秘密、程式碼中的危險寫法、軟體包含的元件、套件中的已知弱點、軟體中的已知弱點、外洩的憑證與機密資料、基礎設施程式碼錯誤、基礎設施設定風險。",
+    );
+  });
+});
+
+test("an AI project with a selected MCP configuration lists the MCP check it will run", async () => {
+  const onStartScan = vi.fn().mockResolvedValue(true);
+  const mcpArmorManifest: EngineManifest = {
+    id: "mcp-armor",
+    name: "mcp-armor",
+    category: "ai_mcp_configuration",
+    version: "1.0.2",
+    imageDigest: "sha256:mcp-armor",
+    license: "Apache-2.0",
+    redistribution: "on_demand",
+    platforms: [],
+    supportedProviders: [],
+    status: "ready",
+    runnable: true,
+    blockedBy: [],
+    compatibilityValid: true,
+    providerExecutionProfiles: [],
+    supportUntil: "9999-12-31",
+    supportStatus: "supported",
+  };
+
+  const { container } = renderRoute({
+    assessmentIntent: "ai_application",
+    requestedActivities: ["local_artifact_analysis"],
+    onStartScan,
+    engineManifests: [mcpArmorManifest],
+    assets: [pendingAsset({
+      name: "agent-copy",
+      localInputProfile: "repository_working_tree",
+      selectedMcpConfiguration: "mcp.json",
+      mcpConfigurationCandidates: [
+        { relativePath: "mcp.json", sha256: "0".repeat(64), byteLength: 42 },
+      ],
+    })],
+  });
+
+  await waitFor(() => {
+    expect(container.querySelector(".coverage-guided-boundary")).not.toBeNull();
+  });
+  expect(container.querySelector(".coverage-guided-boundary")?.textContent).toMatch(
+    /Risky infrastructure settings, MCP configuration risks\.$/u,
+  );
+
+  const start = Array.from(container.querySelectorAll<HTMLButtonElement>(".scope-confirmation-panel button[type='submit']"))
+    .find((button) => button.textContent?.includes("Confirm and start scan"));
+  expect(start).toBeTruthy();
+  fireEvent.click(start!);
+
+  expect(onStartScan).toHaveBeenCalledWith(
+    ["asset-1"],
+    ["local_artifact"],
+    "The user explicitly selected this saved local copy and confirmed the recommended read-only checks.",
+    undefined,
+    ["gitleaks", "semgrep", "syft", "trivy", "grype", "trufflehog", "kics", "checkov", "mcp-armor"],
   );
 });
 

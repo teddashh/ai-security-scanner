@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { build } from "esbuild";
 import type { EngineRun } from "../../src/types.ts";
+import { localInputEngineIds } from "../../src/localInputProfiles.ts";
 
 const bundled = await build({
   entryPoints: [fileURLToPath(new URL("../../src/scanPresentation.ts", import.meta.url))],
@@ -21,6 +22,7 @@ const {
   engineNextStepFor,
   engineOutcomeCopy,
   engineOutcomeFor,
+  engineOutcomeForId,
   engineRecoveryModeFor,
   skippedChecksNextStepFor,
 } = await import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString("base64")}`);
@@ -69,6 +71,26 @@ test("Gitleaks, Trivy, and Steampipe describe their exact plain-language outcome
     en: "AWS IAM user inventory",
     zhTW: "AWS IAM 使用者盤點",
   });
+});
+
+test("MCP Armor and lookups by engine id use plain-language names", () => {
+  const mcpArmorOutcome = { en: "MCP configuration risks", zhTW: "MCP 設定風險" };
+  assert.deepEqual(engineOutcomeCopy["mcp-armor"], mcpArmorOutcome);
+  assert.deepEqual(engineOutcomeFor(engine({ engineId: "mcp-armor" })), mcpArmorOutcome);
+  assert.deepEqual(engineOutcomeForId("gitleaks"), engineOutcomeCopy.gitleaks);
+  assert.deepEqual(engineOutcomeForId("not-a-check"), {
+    en: "Security check result",
+    zhTW: "安全檢查結果",
+  });
+});
+
+test("every check a local project can request has a plain-language name", () => {
+  for (const engineIds of Object.values(localInputEngineIds)) {
+    for (const engineId of engineIds) {
+      assert.ok(Object.hasOwn(engineOutcomeCopy, engineId), `${engineId} needs plain-language outcome copy`);
+    }
+  }
+  assert.ok(Object.hasOwn(engineOutcomeCopy, "mcp-armor"));
 });
 
 test("unknown scanner identities never leak into the first-layer fallback", () => {

@@ -26,6 +26,7 @@ export const catalogEngineIds = [
   "syft",
   "kubescape",
   "kube-bench",
+  "mcp-armor",
 ] as const;
 
 export type CatalogEngineId = typeof catalogEngineIds[number];
@@ -56,6 +57,7 @@ export const engineOutcomeCopy = {
   syft: { en: "Software ingredients", zhTW: "軟體包含的元件" },
   kubescape: { en: "Kubernetes workload risks", zhTW: "Kubernetes 工作負載風險" },
   "kube-bench": { en: "Kubernetes hardening settings", zhTW: "Kubernetes 強化設定" },
+  "mcp-armor": { en: "MCP configuration risks", zhTW: "MCP 設定風險" },
 } as const satisfies Record<CatalogEngineId, BilingualText>;
 
 const fallbackOutcome: BilingualText = {
@@ -259,10 +261,12 @@ const releaseUnavailableErrorCodes = new Set([
   "license_review",
 ]);
 
+/** Plain-language name of a check, by engine id, for surfaces that name a check before it runs. */
+export const engineOutcomeForId = (engineId: string): BilingualText =>
+  engineOutcomeCopy[engineId as CatalogEngineId] ?? fallbackOutcome;
+
 export const engineOutcomeFor = (engine: EngineRun): BilingualText =>
-  localhostTcpBeginnerSummary(engine)?.title
-  ?? engineOutcomeCopy[engine.engineId as CatalogEngineId]
-  ?? fallbackOutcome;
+  localhostTcpBeginnerSummary(engine)?.title ?? engineOutcomeForId(engine.engineId);
 
 export const skippedChecksNextStepFor = (reasonCodes: readonly string[]): BilingualText => {
   const hasTargetIssue = reasonCodes.some((code) => targetSetupErrorCodes.has(code));

@@ -62,6 +62,7 @@ import {
   localProfileByAssessmentIntent,
   type LocalInputProfile,
 } from "../localInputProfiles";
+import { engineOutcomeForId } from "../scanPresentation";
 
 import "../coverage-page.css";
 
@@ -1072,6 +1073,9 @@ export function CoveragePage({
     && scopeModes.length === 1
     && scopeModes[0] === "local_artifact",
   );
+  const guidedLocalEngineIds = guidedLocalConsent
+    ? [...new Set(selectedScopeAssets.flatMap((asset) => localEngineIdsForAsset(asset)))]
+    : undefined;
   const mcpSelectionRequired = Boolean(
     mcpArmorRunnable
     && guidedLocalConsent
@@ -1384,11 +1388,6 @@ export function CoveragePage({
       assertedAuthority: effectiveScopeConfirmation,
       allowSensitiveNetworks: effectiveAllowSensitiveNetworks,
     } : undefined;
-    const guidedLocalEngineIds = guidedLocalConsent
-      ? [...new Set(selectedScopeAssets.flatMap((asset) => (
-        localEngineIdsForAsset(asset)
-      )))]
-      : undefined;
     const started = await onStartScan(
       selectedAssets,
       scopeModes,
@@ -2587,7 +2586,7 @@ export function CoveragePage({
                 <p className="coverage-guided-boundary">
                   {text(pageCopy.guidedLocalBoundary, {
                     copy: selectedScopeAssets.map((asset) => asset.name).join(", "),
-                    checks: scopeModes.map((mode) => text(scopeModeLabels[mode].label)).join(", "),
+                    checks: (guidedLocalEngineIds ?? []).map((engineId) => text(engineOutcomeForId(engineId))).join(locale === "zh-TW" ? "、" : ", "),
                   })}
                 </p>
               </>
