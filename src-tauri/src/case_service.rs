@@ -16452,6 +16452,48 @@ fn html_scanner_remediation_block(
     html
 }
 
+/// Where the finding is, in the words the Results page uses, from the same
+/// evidence locations the technical details print raw.
+///
+/// The Standard-redaction placeholder is skipped: a masked report must not
+/// print "Location: [redacted location]" on every card. Locations are
+/// de-duplicated after formatting, so raw strings that differ only in KICS's
+/// similarity hash name one place. A finding with nothing left renders no
+/// paragraph.
+fn html_finding_location_block(
+    finding: &crate::beginner_report::BeginnerFinding,
+    catalog: HtmlReportCatalog,
+) -> String {
+    let mut locations: Vec<String> = Vec::new();
+    for reference in &finding.evidence_references {
+        let Some(raw) = reference.location.as_deref().map(str::trim) else {
+            continue;
+        };
+        if raw.is_empty() || raw == crate::export::REDACTED_LOCATION {
+            continue;
+        }
+        let formatted = match catalog.locale {
+            crate::export::ReportLocale::En => crate::finding_narrative::location_english(raw),
+            crate::export::ReportLocale::ZhHant => crate::finding_narrative::location_zh_hant(raw),
+        };
+        if !locations.contains(&formatted) {
+            locations.push(formatted);
+        }
+    }
+    if locations.is_empty() {
+        return String::new();
+    }
+    format!(
+        "<p class=\"finding-location\">{}{}</p>",
+        catalog.strong_label(catalog.text("Location", "位置")),
+        locations
+            .into_iter()
+            .map(|location| html_escape(&location))
+            .collect::<Vec<_>>()
+            .join(catalog.text("; ", "；"))
+    )
+}
+
 fn html_evidence_reference(
     reference: &crate::beginner_report::FindingEvidenceReference,
     catalog: HtmlReportCatalog,
@@ -18203,6 +18245,7 @@ fn html_report_bytes(
                 )
             });
         let scanner_remediation_block = html_scanner_remediation_block(finding, catalog);
+        let finding_location_block = html_finding_location_block(finding, catalog);
         // The reasons are stored as English prose with no per-entry code, so
         // each is recognised by shape. One this build cannot identify stays in
         // English rather than being replaced by a confident guess about why
@@ -18464,6 +18507,9 @@ fn html_report_bytes(
                 "<span class=\"pill\">{}{}</span>{}",
                 "<span class=\"pill\">{}{}</span><span>{} #{}</span>",
                 "<span>{}{}</span></p>",
+                // Where the problem is; empty when no location was retained
+                // or the export masks it.
+                "{}",
                 // Run-in labels, not headings. Each of these carries one
                 // sentence, and a heading line plus a margin above and below
                 // it cost more vertical space than the sentence did. Six of
@@ -18495,6 +18541,7 @@ fn html_report_bytes(
             catalog.format_number(index + 1),
             catalog.label(catalog.text("Suggested expert", "建議諮詢的專家")),
             html_escape(&expert_type),
+            finding_location_block,
             html_escape(&plain_language_risk),
             catalog.strong_label(catalog.text("Possible impact", "可能影響")),
             html_escape(&possible_impact),
@@ -43732,5 +43779,139 @@ mod tests {
             .unwrap();
         assert_eq!(older_snapshot.title, "Delayed older retry");
         assert_eq!(older_snapshot.evidence.len(), 2);
+    }
+
+    /// The finding card's first layer states where the problem is, in the
+    /// same words as the priority and evidence cards on the Results page
+    /// (`findingLocationText` / `location_english` / `location_zh_hant`).
+    #[test]
+    fn html_finding_card_states_the_location_in_its_first_layer() {
+        const KICS_LOCATION: &str = "infra/main.tf:line=3:resource=resource:demo-logs-bucket,similarity:6ed736ab0df4cde21ce2716cc0a80470709d43045ca36a0c897af1f7913f1009";
+        let mut case =
+            case_for_rated_httpx_finding(EngineRunStatus::Completed, None, Some("httpx-task"));
+        let mut finding = case.findings[0].clone();
+        finding.evidence[0].location = Some(KICS_LOCATION.into());
+        case.findings[0] = finding.clone();
+        // The observation's frozen snapshot is what the export actually
+        // reads; keep it in step with the mutated finding (see
+        // `case_for_two_findings_sharing_one_fix` for the same pattern).
+        case.finding_observations[0].finding_snapshot = Some(finding);
+
+        let en = html_from_export_case(&case, crate::export::ReportLocale::En);
+        let zh = html_from_export_case(&case, crate::export::ReportLocale::ZhHant);
+
+        assert!(
+            en.contains(
+                "<p class=\"finding-location\"><strong>Location:</strong> infra/main.tf · line 3 · demo-logs-bucket</p>"
+            ),
+            "{en}"
+        );
+        assert!(
+            zh.contains(
+                "<p class=\"finding-location\"><strong>位置：</strong>infra/main.tf · 第 3 行 · demo-logs-bucket</p>"
+            ),
+            "{zh}"
+        );
+
+        // KICS's own deduplication hash is dropped from the first-layer
+        // paragraph in both languages, but the raw location -- hash and all
+        // -- stays in the technical details.
+        for html in [&en, &zh] {
+            let location_paragraph = html
+                .split("<p class=\"finding-location\">")
+                .nth(1)
+                .and_then(|rest| rest.split("</p>").next())
+                .expect("a finding-location paragraph");
+            assert!(
+                !location_paragraph.contains("similarity:"),
+                "{location_paragraph}"
+            );
+        }
+        assert!(
+            en.contains(&format!(
+                "<dt>Evidence location</dt><dd>{KICS_LOCATION}</dd>"
+            )),
+            "{en}"
+        );
+        assert!(
+            zh.contains(&format!("<dt>證據位置</dt><dd>{KICS_LOCATION}</dd>")),
+            "{zh}"
+        );
+
+        // The fixture's finding already carried a location before this
+        // change -- a plain URL, not KICS's coordinate form -- and it still
+        // gets a first-layer paragraph, unchanged.
+        let base_case =
+            case_for_rated_httpx_finding(EngineRunStatus::Completed, None, Some("httpx-task"));
+        let base_en = html_from_export_case(&base_case, crate::export::ReportLocale::En);
+        assert!(
+            base_en.contains(
+                "<p class=\"finding-location\"><strong>Location:</strong> https://shop.example.test</p>"
+            ),
+            "{base_en}"
+        );
+
+        // Two distinct locations join with "; " / "；", the same separator
+        // the Results page uses to join several locations on one card.
+        let mut two_locations_case =
+            case_for_rated_httpx_finding(EngineRunStatus::Completed, None, Some("httpx-task"));
+        let mut two_locations_finding = two_locations_case.findings[0].clone();
+        let mut second_evidence = two_locations_finding.evidence[0].clone();
+        second_evidence.id = "evidence-hsts-2".into();
+        second_evidence.artifact_sha256 = "b".repeat(64);
+        second_evidence.location = Some("second/file.py:line=9".into());
+        // A third record at the same place, differing only in KICS's
+        // similarity hash, is the same location once formatted.
+        let mut third_evidence = second_evidence.clone();
+        third_evidence.id = "evidence-hsts-3".into();
+        third_evidence.artifact_sha256 = "c".repeat(64);
+        third_evidence.location = Some("second/file.py:line=9:resource=similarity:ffff".into());
+        two_locations_finding.evidence.push(second_evidence);
+        two_locations_finding.evidence.push(third_evidence);
+        two_locations_case.findings[0] = two_locations_finding.clone();
+        two_locations_case.finding_observations[0].evidence_hashes =
+            vec!["a".repeat(64), "b".repeat(64), "c".repeat(64)];
+        two_locations_case.finding_observations[0].finding_snapshot = Some(two_locations_finding);
+
+        let two_locations_en =
+            html_from_export_case(&two_locations_case, crate::export::ReportLocale::En);
+        assert!(
+            two_locations_en.contains(
+                "<p class=\"finding-location\"><strong>Location:</strong> https://shop.example.test; second/file.py · line 9</p>"
+            ),
+            "{two_locations_en}"
+        );
+        let two_locations_zh =
+            html_from_export_case(&two_locations_case, crate::export::ReportLocale::ZhHant);
+        assert!(
+            two_locations_zh.contains(
+                "<p class=\"finding-location\"><strong>位置：</strong>https://shop.example.test；second/file.py · 第 9 行</p>"
+            ),
+            "{two_locations_zh}"
+        );
+
+        // A masked report must not print "Location: [redacted location]" on
+        // every card; the technical details keep printing the placeholder.
+        let standard_redacted_html = String::from_utf8(
+            html_report_bytes(
+                &case,
+                "run-httpx",
+                &ExportOptions {
+                    redaction: RedactionProfile::Standard,
+                    include_raw_artifacts: false,
+                    locale: crate::export::ReportLocale::En,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !standard_redacted_html.contains("finding-location"),
+            "{standard_redacted_html}"
+        );
+        assert!(
+            standard_redacted_html.contains("[redacted location]"),
+            "{standard_redacted_html}"
+        );
     }
 }

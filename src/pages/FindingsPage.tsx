@@ -28,6 +28,7 @@ import {
   findingRollbackSentence,
   findingVerificationSentence,
   findingImpactSentence,
+  findingLocationText,
   isEvidenceOnlyPriorityReason,
   findingSeverityIsUnrated,
   findingSummarySentence,
@@ -117,6 +118,11 @@ const decisionStates = [
 const controlKey = (framework: string, version: string, controlId: string): string =>
   JSON.stringify([framework, version, controlId]);
 
+// Mirrors `UNTRUSTED_EVIDENCE_CAVEAT` in src-tauri/src/case_service.rs. The
+// shared report strips this exact trailing sentence before deciding whether an
+// evidence summary says anything past it; this page makes the same decision.
+const UNTRUSTED_EVIDENCE_CAVEAT = " Raw target text is retained only as untrusted evidence.";
+
 const copy = {
   eyebrow: { en: "PROBLEMS FOUND", zhTW: "發現的問題" },
   title: {
@@ -139,6 +145,12 @@ const copy = {
   reportBoundary: {
     en: "NIST and ISO references and AIDEFEND's independent, unofficial mapping are navigation only. This report is not an audit, certification, compliance decision, security guarantee, or automatic remediation.",
     zhTW: "NIST、ISO 參考與 AIDEFEND 的獨立非官方對照只供導航。本報告不是稽核、認證、合規判定、資安保證或自動修復。",
+  },
+  // Said once at the end, only when some retained summary needed it, rather
+  // than the same sentence stapled to every evidence record on the page.
+  untrustedEvidenceTerms: {
+    en: "Target text quoted in an evidence summary is retained as untrusted input and is not interpreted by this report.",
+    zhTW: "證據摘要引用的目標文字，是以不受信任的輸入形式保留，本報告不會加以解讀。",
   },
   relatedGroups: { en: "Related findings & groups", zhTW: "相關問題與群組" },
   reviewHistory: { en: "Resolution status & history", zhTW: "解決狀態與歷程" },
@@ -516,6 +528,7 @@ const copy = {
   technicalEvidence: { en: "Technical evidence details", zhTW: "證據技術細節" },
   evidenceKind: { en: "Type", zhTW: "種類" },
   sourceRule: { en: "Source rule", zhTW: "來源規則" },
+  evidenceLocation: { en: "Evidence location", zhTW: "證據位置" },
   scannerDescription: { en: "Scanner-provided description", zhTW: "掃描器提供的說明" },
   iamPolicyContext: { en: "AWS IAM policy context", zhTW: "AWS IAM 政策脈絡" },
   iamPolicySource: { en: "Policy source", zhTW: "政策來源" },
@@ -1986,6 +1999,8 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
 function ReportEndMatter({ report, run }: { report: BeginnerMasterReport; run?: ScanRun }) {
   const { locale, text, formatDateTime, formatNumber } = useI18n();
   const engineByTaskId = new Map(run?.engineRuns.map((engine) => [engine.id, engine]) ?? []);
+  const hasUntrustedEvidenceSummary = report.findings.some((finding) =>
+    finding.evidenceReferences.some((reference) => reference.summary?.endsWith(UNTRUSTED_EVIDENCE_CAVEAT)));
 
   return (
     <footer className="report-end-matter">
@@ -1994,6 +2009,7 @@ function ReportEndMatter({ report, run }: { report: BeginnerMasterReport; run?: 
         <section>
           <h3>{text(copy.reportTerms)}</h3>
           <p>{text(copy.reportBoundary)}</p>
+          {hasUntrustedEvidenceSummary && <p>{text(copy.untrustedEvidenceTerms)}</p>}
         </section>
         {report.dataQualityWarnings.length > 0 && (
           <section>
@@ -2013,7 +2029,7 @@ function ReportEndMatter({ report, run }: { report: BeginnerMasterReport; run?: 
               const engine = engineByTaskId.get(task.taskId);
               return (
                 <article key={task.taskId} className="evidence-item">
-                  <div>
+                  <div className="evidence-item__header">
                     <strong>{check ? localizedCheckName(check.checkId, locale, engine) : text(copy.coverageDetail)}</strong>
                     <span>{engineStatusMeta[task.status].label}</span>
                   </div>
@@ -2244,10 +2260,17 @@ export function FindingsPage({
       || right.findingCount - left.findingCount
       || left.label.localeCompare(right.label, collationLocale));
   }, [collationLocale, locale, ordered, report?.requested.targets]);
+  // Evidence carried over from an earlier run names an engine run of that
+  // run, so every run the page holds is searched, not only the one on screen.
+  const engineNameByEngineRunId = new Map(runs.flatMap((run) =>
+    run.engineRuns.map((engine) => [engine.id, engine.engineName.trim()] as const)));
+  // One location already joins its parts with " · ", so two locations are
+  // separated by a semicolon rather than another dot.
   const locationsFor = (finding: Finding): string[] => [
     ...new Set(finding.evidence
       .map((evidence) => evidence.location?.trim())
-      .filter((location): location is string => Boolean(location))),
+      .filter((location): location is string => Boolean(location))
+      .map((location) => findingLocationText(locale, location))),
   ];
   const criticalCount = findings.filter((finding) => finding.severity === "critical").length;
   const highCount = findings.filter((finding) => finding.severity === "high").length;
@@ -2406,7 +2429,7 @@ export function FindingsPage({
       .sort((left, right) => left.localeCompare(right, collationLocale));
     return (
       <article className="evidence-item" key={key}>
-        <div>
+        <div className="evidence-item__header">
           <strong>{presentation.title}</strong>
           <span>{[
             requestedTargetLabelById(item.assetId, inventoryTargetById, locale),
@@ -2476,7 +2499,7 @@ export function FindingsPage({
     const details = observationDetails(finding);
     return (
       <article className="evidence-item" key={finding.id}>
-        <div>
+        <div className="evidence-item__header">
           <strong>{text(finding.severityBasisCode === "open_port" ? copy.observationOpenPort : copy.observationHttp)}</strong>
           <span>{[finding.assetName, ...details].join(" · ")}</span>
         </div>
@@ -2765,7 +2788,7 @@ export function FindingsPage({
                 })}</p>
                 <span className="priority-card__target">
                   <span><strong>{text(copy.affectedTarget)}</strong>{finding.assetName}</span>
-                  <span><strong>{text(copy.reportedLocation)}</strong>{locationsFor(finding).join(" · ") || text(copy.locationUnavailable)}</span>
+                  <span><strong>{text(copy.reportedLocation)}</strong>{locationsFor(finding).join(locale === "en" ? "; " : "；") || text(copy.locationUnavailable)}</span>
                 </span>
                 <span className="priority-card__guidance">
                   <span>
@@ -2873,7 +2896,7 @@ export function FindingsPage({
           <div className="evidence-list">
             {correlationSuggestions.map((suggestion) => (
               <article key={suggestion.id} className="evidence-item">
-                <div>
+                <div className="evidence-item__header">
                   <strong>
                     {text(copy.correlationMatch, {
                       vulnerability: suggestion.vulnerabilityId,
@@ -2972,7 +2995,7 @@ export function FindingsPage({
                 .filter((finding): finding is Finding => Boolean(finding));
               return (
                 <article key={group.id} className="evidence-item">
-                  <div>
+                  <div className="evidence-item__header">
                     <strong>{group.title}</strong>
                     <span>{text(copy.items, { count: formatNumber(members.length) })} · {formatDateTime(group.createdAt)}</span>
                   </div>
@@ -3015,7 +3038,7 @@ export function FindingsPage({
                 .map((findingId) => ({ findingId, finding: findingById.get(findingId) }));
               return (
                 <article key={group.id} className="evidence-item">
-                  <div>
+                  <div className="evidence-item__header">
                     <strong>{group.title}</strong>
                     <span>{text(copy.items, { count: formatNumber(members.length) })} · {formatDateTime(group.createdAt)}</span>
                   </div>
@@ -3059,7 +3082,7 @@ export function FindingsPage({
             <div className="evidence-list">
               {orderedGroupEvents.map((event) => (
                 <article key={event.id} className="evidence-item">
-                  <div>
+                  <div className="evidence-item__header">
                     <strong>{event.action === "created" ? text(copy.groupCreated) : text(copy.groupRemoved)}: {event.title}</strong>
                     <span>{formatDateTime(event.occurredAt)}</span>
                   </div>
@@ -3285,7 +3308,7 @@ export function FindingsPage({
                   <div className="evidence-list">
                     {selectedEvents.map((event) => (
                       <article key={event.id} className="evidence-item">
-                        <div><strong>{workflowMeta[event.fromStatus]} → {workflowMeta[event.toStatus]}</strong><span>{formatDateTime(event.decidedAt)}</span></div>
+                        <div className="evidence-item__header"><strong>{workflowMeta[event.fromStatus]} → {workflowMeta[event.toStatus]}</strong><span>{formatDateTime(event.decidedAt)}</span></div>
                         <p>{event.reason}</p>
                         <small>
                           {text(copy.decisionActor, { actor: event.decidedBy })} · {event.expiresAt
@@ -3367,10 +3390,31 @@ export function FindingsPage({
                   <p>{text(copy.noEvidence)}</p>
                 ) : (
                   <div className="evidence-list">
-                    {selected.evidence.map((evidence) => (
+                    {selected.evidence.map((evidence) => {
+                      // The engine that produced this record, named the same way
+                      // the coverage rows name a check -- falling back to the raw
+                      // engine id only when no run on the page can place it.
+                      const evidenceHeaderName = (evidence.engineRunId
+                        ? engineNameByEngineRunId.get(evidence.engineRunId)
+                        : undefined) || evidence.sourceEngine;
+                      const evidenceSummary = evidence.summary.endsWith(UNTRUSTED_EVIDENCE_CAVEAT)
+                        ? evidence.summary.slice(0, -UNTRUSTED_EVIDENCE_CAVEAT.length)
+                        : evidence.summary;
+                      // A summary that only glues together the engine, source rule
+                      // and location already shown beside it says nothing past
+                      // those three fields, so it is dropped rather than rendered.
+                      const evidenceSummaryRestatesNeighbours = Boolean(evidence.sourceRule) && Boolean(evidence.location)
+                        && evidenceSummary === `${evidence.sourceEngine} reported rule ${evidence.sourceRule} at ${evidence.location}.`;
+                      return (
                       <article key={evidence.id} className="evidence-item">
-                        <div><strong>{evidence.sourceEngine}</strong><span>{formatDateTime(evidence.observedAt)}</span></div>
-                        <p>{evidence.summary}</p>
+                        <div className="evidence-item__header"><strong>{evidenceHeaderName}</strong><span>{formatDateTime(evidence.observedAt)}</span></div>
+                        {!evidenceSummaryRestatesNeighbours && <p>{evidenceSummary}</p>}
+                        {evidence.location && (
+                          <div className="scanner-evidence-location">
+                            <strong>{text(copy.reportedLocation)}</strong>
+                            <p>{findingLocationText(locale, evidence.location)}</p>
+                          </div>
+                        )}
                         {evidence.scannerDetails?.description && (
                           <div className="scanner-evidence-description">
                             <strong>{text(copy.scannerDescription)}</strong>
@@ -3418,6 +3462,9 @@ export function FindingsPage({
                           <dl className="evidence-provenance">
                             <div><dt>{text(copy.evidenceKind)}</dt><dd>{evidence.kind?.replaceAll("_", " ") ?? text(copy.notReported)}</dd></div>
                             <div><dt>{text(copy.sourceRule)}</dt><dd><code>{evidence.sourceRule ?? text(copy.notReported)}</code></dd></div>
+                            {evidence.location && (
+                              <div><dt>{text(copy.evidenceLocation)}</dt><dd><code>{evidence.location}</code></dd></div>
+                            )}
                             <div><dt>{text(copy.scanRun)}</dt><dd><code>{evidence.runId ?? selected.lastSeenRunId ?? text(copy.notReported)}</code></dd></div>
                             <div><dt>{text(copy.engineRun)}</dt><dd><code>{evidence.engineRunId ?? text(copy.legacyEngineRun)}</code></dd></div>
                             <div><dt>{text(copy.artifactId)}</dt><dd><code>{evidence.artifactId ?? text(copy.notReported)}</code></dd></div>
@@ -3427,7 +3474,8 @@ export function FindingsPage({
                           </dl>
                         </details>
                       </article>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </section>

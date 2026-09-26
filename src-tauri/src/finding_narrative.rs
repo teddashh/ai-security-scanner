@@ -2645,6 +2645,99 @@ pub fn finding_next_action_zh_hant(
     }
 }
 
+/// A [`parse_location_coordinate`] split: the leading path, then the line,
+/// column and resource captured from the coordinate tail, each present only
+/// when the raw location carried that piece.
+type LocationCoordinate<'a> = (&'a str, Option<&'a str>, Option<&'a str>, Option<&'a str>);
+
+/// The coordinate tail `source_coordinate_location` (`src-tauri/src/adapters/mod.rs`)
+/// appends to a path: `path[:line=N][:column=N][:resource=R]`, each piece
+/// optional and in that order. Splits `trimmed` at the first colon where such
+/// a tail runs to the end of the string -- the split the lazy
+/// `^(.*?)(?::line=(\d+))?(?::column=(\d+))?(?::resource=(.+))?$` in the
+/// TypeScript twin finds. Returns `None` when there is no such colon, or the
+/// first one leaves an empty path: a plain path, a URL, a `host:port` pair,
+/// `package:name`.
+fn parse_location_coordinate(trimmed: &str) -> Option<LocationCoordinate<'_>> {
+    fn number<'a>(cursor: &mut &'a str, prefix: &str) -> Option<&'a str> {
+        let rest = cursor.strip_prefix(prefix)?;
+        let end = rest
+            .find(|character: char| !character.is_ascii_digit())
+            .unwrap_or(rest.len());
+        if end == 0 {
+            return None;
+        }
+        let (digits, rest) = rest.split_at(end);
+        *cursor = rest;
+        Some(digits)
+    }
+
+    let (start, line, column, resource) = trimmed.match_indices(':').find_map(|(start, _)| {
+        let mut cursor = &trimmed[start..];
+        let line = number(&mut cursor, ":line=");
+        let column = number(&mut cursor, ":column=");
+        let resource = cursor
+            .strip_prefix(":resource=")
+            .filter(|rest| !rest.is_empty());
+        (resource.is_some() || cursor.is_empty()).then_some((start, line, column, resource))
+    })?;
+    (start > 0).then(|| (&trimmed[..start], line, column, resource))
+}
+
+/// The place `raw` names, with the position worded by `position`; see
+/// [`location_english`].
+fn location_text(
+    raw: &str,
+    position: impl Fn(Option<&str>, Option<&str>) -> Option<String>,
+) -> String {
+    let Some((path, line, column, resource)) = parse_location_coordinate(raw.trim()) else {
+        return raw.to_owned();
+    };
+    let mut parts = vec![path.to_owned()];
+    parts.extend(position(line, column));
+    if let Some(resource) = resource {
+        let names = resource
+            .split(',')
+            .filter(|part| !part.starts_with("similarity:"))
+            .map(|part| part.strip_prefix("resource:").unwrap_or(part))
+            .collect::<Vec<_>>();
+        if !names.is_empty() {
+            parts.push(names.join(", "));
+        }
+    }
+    parts.join(" · ")
+}
+
+/// Reads a stored scanner location as a place, not the coordinate string it
+/// is kept in. KICS's `R` carries a `resource:<name>` label and/or a
+/// `similarity:<64-hex hash>` deduplication key, joined by a comma; that hash
+/// is KICS's own deduplication key, not something a reader needs in order to
+/// find the spot, so it is dropped here and kept verbatim in the technical
+/// details instead. Anything that is not the coordinate form -- including an
+/// empty leading path -- is returned untouched.
+///
+/// `findingLocationText` in `src/findingNarrative.ts` is the twin of this
+/// function and of [`location_zh_hant`]; the two must keep producing
+/// byte-identical output for the same locale.
+pub fn location_english(raw: &str) -> String {
+    location_text(raw, |line, column| match (line, column) {
+        (Some(line), Some(column)) => Some(format!("line {line}, column {column}")),
+        (Some(line), None) => Some(format!("line {line}")),
+        (None, Some(column)) => Some(format!("column {column}")),
+        (None, None) => None,
+    })
+}
+
+/// The Traditional Chinese form of [`location_english`].
+pub fn location_zh_hant(raw: &str) -> String {
+    location_text(raw, |line, column| match (line, column) {
+        (Some(line), Some(column)) => Some(format!("第 {line} 行第 {column} 欄")),
+        (Some(line), None) => Some(format!("第 {line} 行")),
+        (None, Some(column)) => Some(format!("第 {column} 欄")),
+        (None, None) => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3695,5 +3788,60 @@ mod tests {
             "distinct specialists collapsed together: {named:?}"
         );
         assert!(!named.contains(&"資安或 IT 專業人員"));
+    }
+
+    #[test]
+    fn a_scanner_location_reads_as_a_place() {
+        // Mirrors "the scanner location reads as a place, not a coordinate
+        // string" in tests/frontend/findingNarrative.test.ts -- the rows and
+        // the two edge cases below must stay identical between the two
+        // files.
+        let rows: [(&str, &str, &str); 10] = [
+            (
+                "infra/main.tf:line=3:resource=resource:demo-logs-bucket,similarity:6ed736ab0df4cde21ce2716cc0a80470709d43045ca36a0c897af1f7913f1009",
+                "infra/main.tf · line 3 · demo-logs-bucket",
+                "infra/main.tf · 第 3 行 · demo-logs-bucket",
+            ),
+            (
+                "infra/main.tf:line=7:resource=similarity:ab12",
+                "infra/main.tf · line 7",
+                "infra/main.tf · 第 7 行",
+            ),
+            (
+                "requirements.txt:resource=PyYAML@5.1",
+                "requirements.txt · PyYAML@5.1",
+                "requirements.txt · PyYAML@5.1",
+            ),
+            (
+                "app.py:line=12:column=5",
+                "app.py · line 12, column 5",
+                "app.py · 第 12 行第 5 欄",
+            ),
+            (
+                "config.env:line=4:resource=offset:120",
+                "config.env · line 4 · offset:120",
+                "config.env · 第 4 行 · offset:120",
+            ),
+            (
+                "https://shop.example.test:8443/login",
+                "https://shop.example.test:8443/login",
+                "https://shop.example.test:8443/login",
+            ),
+            ("10.0.0.5:22", "10.0.0.5:22", "10.0.0.5:22"),
+            (
+                "/requirements.txt",
+                "/requirements.txt",
+                "/requirements.txt",
+            ),
+            // An empty path is not this form.
+            (":line=3", ":line=3", ":line=3"),
+            // The smallest valid split, not the first `:line=`.
+            ("a:line=3:line=4", "a:line=3 · line 4", "a:line=3 · 第 4 行"),
+        ];
+
+        for (raw, en, zh) in rows {
+            assert_eq!(location_english(raw), en, "{raw}");
+            assert_eq!(location_zh_hant(raw), zh, "{raw}");
+        }
     }
 }

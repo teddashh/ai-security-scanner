@@ -50,6 +50,14 @@ pub const PRELIMINARY_EVIDENCE_NOTICE: &str = "This package contains preliminary
 /// a title a case really carries.
 pub const REDACTED_CASE_TITLE: &str = "Redacted assessment case";
 
+/// The location a Standard-redaction export writes in place of a
+/// scanner-reported one.
+///
+/// Named once because the report layer has to recognize it: the HTML finding
+/// card leaves a masked location out of its first layer rather than print the
+/// stand-in as though a scanner had reported it.
+pub(crate) const REDACTED_LOCATION: &str = "[redacted location]";
+
 const IO_BUFFER_BYTES: usize = 64 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_RESERVED_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
@@ -1495,7 +1503,7 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
                 reference.summary = Some("[redacted evidence summary]".into());
             }
             if reference.location.is_some() {
-                reference.location = Some("[redacted location]".into());
+                reference.location = Some(REDACTED_LOCATION.into());
             }
             // A pointer names a record inside the artifact, and a scanner
             // writes the matched value into that name often enough that the
@@ -1766,7 +1774,7 @@ fn redact_finding(finding: &mut Finding, replacements: &[(String, String)], alia
     for evidence in &mut finding.evidence {
         evidence.summary = "[redacted evidence summary]".into();
         if evidence.location.is_some() {
-            evidence.location = Some("[redacted location]".into());
+            evidence.location = Some(REDACTED_LOCATION.into());
         }
         if let Some(details) = &mut evidence.scanner_details {
             redact_scanner_finding_details(details, replacements, aliases);

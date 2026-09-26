@@ -3002,7 +3002,7 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
   background: var(--surface-soft);
 }
 
-.evidence-item > div {
+.evidence-item__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3010,8 +3010,20 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
   font-size: 0.78rem;
 }
 
-.evidence-item > div span { color: var(--muted); }
+.evidence-item__header span { color: var(--muted); }
 .evidence-item p { margin: 8px 0; color: var(--muted); font-size: 0.78rem; line-height: 1.5; }
+.scanner-evidence-location,
+.scanner-evidence-description,
+.scanner-evidence-remediation {
+  margin-top: 9px;
+}
+.scanner-evidence-location > strong,
+.scanner-evidence-description > strong,
+.scanner-evidence-remediation > strong {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
 .evidence-item code,
 .export-row code {
   display: block;
@@ -3025,6 +3037,8 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
 
 .evidence-provenance { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: 9px 0 0; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: var(--line); }
 .evidence-provenance > div { min-width: 0; padding: 7px; background: #fff; }
+/* An odd last row spans both columns rather than leaving a blank grey cell. */
+.evidence-provenance > div:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .evidence-provenance dt { color: var(--muted); font-size: 0.78rem; }
 .evidence-provenance dd { margin: 3px 0 0; overflow: hidden; color: var(--ink); font-size: 0.78rem; text-overflow: ellipsis; white-space: nowrap; }
 .evidence-provenance code { font-size: 0.78rem; }

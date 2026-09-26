@@ -16,6 +16,7 @@ import {
   findingSeverityIsUnrated,
   findingVerificationSentence,
   findingImpactSentence,
+  findingLocationText,
   findingSummarySentence,
   localizedExpertType,
 } from "../../src/findingNarrative.ts";
@@ -742,5 +743,67 @@ test("only Microsoft 365 findings get a control verdict", () => {
       !summary.includes("Microsoft 365 要求"),
       `${family} does not check a Microsoft 365 requirement: ${summary}`,
     );
+  }
+});
+
+test("the scanner location reads as a place, not a coordinate string", () => {
+  const rows: Array<{ raw: string; en: string; zh: string }> = [
+    {
+      raw: "infra/main.tf:line=3:resource=resource:demo-logs-bucket,similarity:6ed736ab0df4cde21ce2716cc0a80470709d43045ca36a0c897af1f7913f1009",
+      en: "infra/main.tf · line 3 · demo-logs-bucket",
+      zh: "infra/main.tf · 第 3 行 · demo-logs-bucket",
+    },
+    {
+      raw: "infra/main.tf:line=7:resource=similarity:ab12",
+      en: "infra/main.tf · line 7",
+      zh: "infra/main.tf · 第 7 行",
+    },
+    {
+      raw: "requirements.txt:resource=PyYAML@5.1",
+      en: "requirements.txt · PyYAML@5.1",
+      zh: "requirements.txt · PyYAML@5.1",
+    },
+    {
+      raw: "app.py:line=12:column=5",
+      en: "app.py · line 12, column 5",
+      zh: "app.py · 第 12 行第 5 欄",
+    },
+    {
+      raw: "config.env:line=4:resource=offset:120",
+      en: "config.env · line 4 · offset:120",
+      zh: "config.env · 第 4 行 · offset:120",
+    },
+    {
+      raw: "https://shop.example.test:8443/login",
+      en: "https://shop.example.test:8443/login",
+      zh: "https://shop.example.test:8443/login",
+    },
+    {
+      raw: "10.0.0.5:22",
+      en: "10.0.0.5:22",
+      zh: "10.0.0.5:22",
+    },
+    {
+      raw: "/requirements.txt",
+      en: "/requirements.txt",
+      zh: "/requirements.txt",
+    },
+    // An empty path is not this form.
+    {
+      raw: ":line=3",
+      en: ":line=3",
+      zh: ":line=3",
+    },
+    // The smallest valid split, not the first `:line=`.
+    {
+      raw: "a:line=3:line=4",
+      en: "a:line=3 · line 4",
+      zh: "a:line=3 · 第 4 行",
+    },
+  ];
+
+  for (const { raw, en, zh } of rows) {
+    assert.equal(findingLocationText("en", raw), en, raw);
+    assert.equal(findingLocationText("zh-TW", raw), zh, raw);
   }
 });

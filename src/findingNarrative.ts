@@ -2507,3 +2507,42 @@ export const localizedRequestedLimitValue = (
     return value;
   return value;
 };
+
+/**
+ * The coordinate tail `source_coordinate_location`
+ * (src-tauri/src/adapters/mod.rs) appends to a path when the scanner reported
+ * a line, column, or resource: `path[:line=N][:column=N][:resource=R]`. A
+ * string with none of those markers is not this form at all -- a plain path, a
+ * URL, a `host:port` pair, `package:name` -- and is left alone below.
+ */
+const LOCATION_COORDINATE_FORM = /^(.*?)(?::line=(\d+))?(?::column=(\d+))?(?::resource=(.+))?$/s;
+
+/**
+ * Reads a stored scanner location as a place, not the coordinate string it is
+ * kept in. KICS's `R` carries a `resource:<name>` label and/or a
+ * `similarity:<64-hex hash>` deduplication key, joined by a comma; that hash
+ * is KICS's own dedup key, not something a reader needs to find the spot, so
+ * it is dropped here and kept verbatim in the technical details instead.
+ * Anything that is not the coordinate form is returned untouched.
+ */
+export const findingLocationText = (locale: "en" | "zh-TW", raw: string): string => {
+  const [, path, line, column, resource] = LOCATION_COORDINATE_FORM.exec(raw.trim()) ?? [];
+  if (!path || (!line && !column && !resource)) return raw;
+
+  const parts = [path];
+  if (line && column) {
+    parts.push(locale === "en" ? `line ${line}, column ${column}` : `第 ${line} 行第 ${column} 欄`);
+  } else if (line) {
+    parts.push(locale === "en" ? `line ${line}` : `第 ${line} 行`);
+  } else if (column) {
+    parts.push(locale === "en" ? `column ${column}` : `第 ${column} 欄`);
+  }
+  if (resource) {
+    const resourceParts = resource
+      .split(",")
+      .filter((part) => !part.startsWith("similarity:"))
+      .map((part) => (part.startsWith("resource:") ? part.slice("resource:".length) : part));
+    if (resourceParts.length > 0) parts.push(resourceParts.join(", "));
+  }
+  return parts.join(" · ");
+};
