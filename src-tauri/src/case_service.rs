@@ -15312,7 +15312,7 @@ fn source_line(
 fn framework_state_text(state: &str, catalog: HtmlReportCatalog) -> String {
     match state {
         "related_coordinates_observed" => catalog
-            .text("Related coordinates observed", "已觀察到相關座標")
+            .text("Related references observed", "已觀察到相關框架參考")
             .to_owned(),
         "not_applicable_to_declared_context" => catalog
             .text(
@@ -15333,7 +15333,7 @@ fn framework_state_text(state: &str, catalog: HtmlReportCatalog) -> String {
             )
             .to_owned(),
         "no_related_coordinate_observed" => catalog
-            .text("No related coordinate observed", "未觀察到相關座標")
+            .text("No related reference observed", "未觀察到相關框架參考")
             .to_owned(),
         other => readable_identifier(other),
     }
@@ -15355,16 +15355,16 @@ fn framework_explanation_text(state: &str, exported: &str, catalog: HtmlReportCa
             "本輪至少有一筆初步問題與這個框架存在證據綁定的關聯。這項關聯是導覽用途，不是控制項的評定結果。",
         ),
         "not_applicable_to_declared_context" => catalog.text(
-            "The frozen answers explicitly identify a non-AI assessment and a non-AI-generated artifact, so coordinates from frameworks that only describe AI systems were not inferred.",
-            "已凍結的回答明確指出這不是 AI 評估、產出也不是 AI 生成，因此不會推導只描述 AI 系統的框架座標。",
+            "The frozen answers explicitly identify a non-AI assessment and a non-AI-generated artifact, so references to frameworks that only describe AI systems were not inferred.",
+            "已凍結的回答明確指出這不是 AI 評估、產出也不是 AI 生成，因此不會推導只描述 AI 系統的框架參考。",
         ),
         "unknown_due_to_unanswered_context" => catalog.text(
-            "No coordinate from this AI-specific framework was inferred because at least one required AI-context answer is legacy or unanswered. This remains unknown, not not-applicable.",
-            "因為至少有一項必要的 AI 情境問題屬於舊版或尚未作答，所以沒有推導這個 AI 專用框架的任何座標。這屬於未知，不是不適用。",
+            "No reference to this AI-specific framework was inferred because at least one required AI-context answer is legacy or unanswered. This remains unknown, not not-applicable.",
+            "因為至少有一項必要的 AI 情境問題屬於舊版或尚未作答，所以沒有推導這個 AI 專用框架的任何參考。這屬於未知，不是不適用。",
         ),
         "unknown_due_to_incomplete_coverage" => catalog.text(
-            "No related coordinate was observed, but coverage is incomplete or unknown. This cannot be interpreted as a passed or implemented control.",
-            "沒有觀察到相關座標，但涵蓋範圍不完整或未知。這不能解讀為控制項已通過或已實作。",
+            "No related reference was observed, but coverage is incomplete or unknown. This cannot be interpreted as a passed or implemented control.",
+            "沒有觀察到相關框架參考，但涵蓋範圍不完整或未知。這不能解讀為控制項已通過或已實作。",
         ),
         "no_related_coordinate_observed" => catalog.text(
             "No selected-run finding carried an evidence-bound relationship to this framework. This is not a pass, implementation claim, or compliance conclusion.",
@@ -15392,7 +15392,7 @@ fn framework_source_notice_zh_hant(notice: &str) -> Option<&'static str> {
             "NIST 原始素材的使用仍受該出版品自身的聲明規範。"
         }
         "ISO/IEC 27001:2022 control coordinates are referenced nominatively." => {
-            "ISO/IEC 27001:2022 的控制項座標以指名方式引用。"
+            "ISO/IEC 27001:2022 的控制項編號以指名方式引用。"
         }
         "ISO/IEC standard content remains subject to ISO's terms; this report is not a copy of the standard." => {
             "ISO/IEC 標準內容仍受 ISO 的條款規範；本報告不是該標準的複本。"
@@ -15425,7 +15425,7 @@ fn framework_source_notice_zh_hant(notice: &str) -> Option<&'static str> {
             "OWASP Foundation 與 OWASP GenAI Security Project 未審閱或背書本報告與本整合。"
         }
         "CIS Kubernetes Benchmark v1.11 recommendation numbers and titles are referenced nominatively; they are the coordinates kube-bench itself reports against." => {
-            "CIS Kubernetes Benchmark v1.11 的建議編號與標題以指名方式引用；那正是 kube-bench 自己回報時所依據的座標。"
+            "CIS Kubernetes Benchmark v1.11 的建議編號與標題以指名方式引用；那正是 kube-bench 自己回報時所依據的編號與標題。"
         }
         "CIS Benchmark content remains subject to the Center for Internet Security's terms of use; this report is not a copy of the benchmark." => {
             "CIS Benchmark 內容仍受 Center for Internet Security 的使用條款規範；本報告不是該基準的複本。"
@@ -15659,8 +15659,8 @@ fn html_framework_section(
                 ),
                 html_escape(&framework.framework),
                 catalog.text(
-                    "controls with an observed coordinate",
-                    "中觀察到座標的控制項"
+                    "controls with an observed reference",
+                    "中觀察到框架參考的控制項"
                 ),
                 catalog.text("Control", "控制項"),
                 catalog.text("Title", "名稱"),
@@ -15715,8 +15715,8 @@ fn html_framework_section(
         ),
         catalog.text("Where this lands in each framework", "對應到各框架的位置"),
         catalog.text(
-            "Each coordinate below was reached from a finding's own rule or CWE through the packaged mapping catalog. They are navigation aids for finding the relevant control text, not a compliance result: nothing here is an audit, a certification, or a pass.",
-            "以下每個座標都是從問題本身的規則或 CWE，透過內建的對照目錄推導出來的。它們是用來找到相關控制項條文的導覽，不是合規結果：這裡沒有任何內容構成稽核、認證或通過與否的判定。",
+            "Each reference below was reached from a finding's own rule or CWE through the packaged mapping catalog. They are navigation aids for finding the relevant control text, not a compliance result: nothing here is an audit, a certification, or a pass.",
+            "以下每個框架參考都是從問題本身的規則或 CWE，透過內建的對照目錄推導出來的。它們是用來找到相關控制項條文的導覽，不是合規結果：這裡沒有任何內容構成稽核、認證或通過與否的判定。",
         ),
         catalog.text(
             "Every framework in this report and what this run shows against it",
@@ -18367,8 +18367,8 @@ fn html_report_bytes(
                     )
                 } else {
                     catalog.text(
-                        "<li>No selected-run framework coordinate was retained.</li>",
-                        "<li>未保留本輪的框架座標。</li>",
+                        "<li>No framework reference was retained for the selected run.</li>",
+                        "<li>未保留本輪的框架參考。</li>",
                     )
                 },
             );
@@ -18599,7 +18599,7 @@ fn html_report_bytes(
             priority_reasons,
             catalog.text("Evidence SHA-256", "證據 SHA-256"),
             evidence,
-            catalog.text("Related framework coordinates", "相關框架座標"),
+            catalog.text("Related framework references", "相關框架參考"),
             frameworks,
         ));
     }
@@ -19519,8 +19519,8 @@ fn html_report_bytes(
             format!(
                 "{}{}{}{}",
                 catalog.text(
-                    "Framework coordinates come from mapping catalog ",
-                    "框架座標來自對照目錄 ",
+                    "Framework references come from mapping catalog ",
+                    "框架參考來自對照目錄 ",
                 ),
                 html_escape(&identity),
                 catalog.text(".", "。"),
@@ -19583,8 +19583,8 @@ fn html_report_bytes(
         // The inventory prints regardless of its disclosure state; the
         // technical record prints only if a reader opened it.
         catalog.text(
-            "Framework sources and attribution are shown in the framework section. The complete asset inventory is collapsed on screen and printed in full. Per-finding evidence, source rules, framework coordinates and the run's task records stay collapsed technical detail; a printed copy carries those only where a reader opened them before printing.",
-            "框架來源與出處聲明顯示於框架區塊。完整資產清單在畫面上收合，列印時會完整輸出。各問題的證據、來源規則、框架座標與本輪工作紀錄仍屬收合的技術細節；列印出來的版本只會包含列印前已展開的部分。",
+            "Framework sources and attribution are shown in the framework section. The complete asset inventory is collapsed on screen and printed in full. Per-finding evidence, source rules, framework references and the run's task records stay collapsed technical detail; a printed copy carries those only where a reader opened them before printing.",
+            "框架來源與出處聲明顯示於框架區塊。完整資產清單在畫面上收合，列印時會完整輸出。各問題的證據、來源規則、框架參考與本輪工作紀錄仍屬收合的技術細節；列印出來的版本只會包含列印前已展開的部分。",
         ),
     ));
     if catalog.locale == crate::export::ReportLocale::ZhHant {
@@ -37432,6 +37432,151 @@ mod tests {
     }
 
     #[test]
+    fn html_finding_card_calls_a_framework_mapping_a_reference_not_a_coordinate() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let plan = fixture
+            .service()
+            .plan_scan(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
+                },
+            )
+            .unwrap();
+        let run_id = plan.scan_run.id.clone();
+        let mut case = fixture.service().show_case(&case_id).unwrap();
+        let asset_id = case.assets[0].id.clone();
+        let finished = plan.scan_run.created_at + Duration::seconds(1);
+        {
+            let run = case
+                .scan_runs
+                .iter_mut()
+                .find(|run| run.id == run_id)
+                .unwrap();
+            run.completed_at = Some(finished);
+            let task = &mut run.engine_runs[0];
+            task.status = EngineRunStatus::Failed;
+            task.phase = "failed".into();
+            task.started_at = Some(plan.scan_run.created_at);
+            task.finished_at = Some(finished);
+            task.error_message = Some("fixture failure after a retained finding".into());
+        }
+        case.status = CaseStatus::ReadyForHandoff;
+        case.updated_at = finished;
+
+        let finding = Finding {
+            family: Some(crate::domain::FindingFamily::Secret),
+            severity_basis_code: Some(crate::domain::SeverityBasisCode::SecretPatternMatch),
+            confidence_basis_code: Some(
+                crate::domain::ConfidenceBasisCode::UnverifiedPatternOrDetectorMatch,
+            ),
+            context_factors: Vec::new(),
+            id: "finding-framework-reference-wording".into(),
+            case_id: case.id.clone(),
+            first_seen_run_id: run_id.clone(),
+            last_seen_run_id: run_id.clone(),
+            fingerprint: "gitleaks:framework-reference-wording".into(),
+            title: "Retained secret exposure".into(),
+            plain_language_summary: "A secret pattern was retained before the task failed.".into(),
+            possible_impact: "The exposed value may permit unauthorized access.".into(),
+            severity: Severity::High,
+            confidence: Confidence::Low,
+            priority: 73,
+            priority_reasons: vec![crate::finding_narrative::ENGLISH_EVIDENCE_REASON.into()],
+            asset_ids: vec![asset_id.clone()],
+            evidence: Vec::new(),
+            control_references: vec![crate::domain::ControlReference {
+                framework: "AIDEFEND".into(),
+                framework_version: "2026.1".into(),
+                control_id: "ADF-APP-01".into(),
+                title: "Application secret handling".into(),
+                relationship: "related".into(),
+                rationale: "The finding relates to application secret handling.".into(),
+                mapping_version: "map-2026-08".into(),
+                mapping_provenance: Some(crate::domain::ControlMappingProvenance {
+                    mapping_version: "map-2026-08".into(),
+                    reviewed_at: "2026-09-05".into(),
+                    review_process: "human-coordinate-review".into(),
+                    catalog_sha256: "e".repeat(64),
+                }),
+            }],
+            recommendation: "Revoke and rotate the exposed value, then remove it from source."
+                .into(),
+            verification_guidance: "Rerun Gitleaks and confirm the rule is no longer reported."
+                .into(),
+            rollback_considerations: None,
+            official_references: Vec::new(),
+            recommended_expert_type: "Secrets-response specialist".into(),
+            status: FindingStatus::Unreviewed,
+            tags: Vec::new(),
+        };
+        case.findings.push(finding.clone());
+        case.finding_observations.push(FindingObservation {
+            id: "observation-framework-reference-wording".into(),
+            run_id: run_id.clone(),
+            finding_id: finding.id.clone(),
+            fingerprint: finding.fingerprint.clone(),
+            asset_ids: vec![asset_id],
+            engine_ids: vec!["gitleaks".into()],
+            severity: finding.severity.clone(),
+            confidence: finding.confidence.clone(),
+            evidence_hashes: Vec::new(),
+            observed_at: finished,
+            finding_snapshot: Some(finding),
+        });
+
+        let report = build_beginner_master_report(&case, &run_id).unwrap();
+        assert!(
+            !report.findings.is_empty(),
+            "framework-reference-wording fixture must contain a finding"
+        );
+
+        let html = String::from_utf8(
+            html_report_bytes(
+                &case,
+                &run_id,
+                &ExportOptions {
+                    locale: crate::export::ReportLocale::En,
+                    ..ExportOptions::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            html.contains("Related framework references"),
+            "the English finding card must call a framework mapping a reference"
+        );
+        assert!(
+            !html.contains("Related framework coordinates"),
+            "the English finding card must not keep calling a framework mapping a coordinate"
+        );
+
+        let zh_html = String::from_utf8(
+            html_report_bytes(
+                &case,
+                &run_id,
+                &ExportOptions {
+                    locale: crate::export::ReportLocale::ZhHant,
+                    ..ExportOptions::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            zh_html.contains("相關框架參考"),
+            "the Chinese finding card must call a framework mapping a 框架參考"
+        );
+        assert!(
+            !zh_html.contains("座標"),
+            "the Chinese report must not contain the retired word 座標"
+        );
+    }
+
+    #[test]
     fn a_target_identity_breaks_on_its_separators_and_nowhere_else() {
         let broken = html_escape_breakable_identity("https://portal.example.test:443");
         assert_eq!(
@@ -38436,7 +38581,7 @@ mod tests {
         use crate::export::ReportLocale;
         let english = HtmlReportCatalog::new(ReportLocale::En);
         let chinese = HtmlReportCatalog::new(ReportLocale::ZhHant);
-        let exported = "The frozen answers explicitly identify a non-AI assessment and a non-AI-generated artifact, so coordinates from frameworks that only describe AI systems were not inferred.";
+        let exported = "The frozen answers explicitly identify a non-AI assessment and a non-AI-generated artifact, so references to frameworks that only describe AI systems were not inferred.";
 
         // A state this report knows is translated, and the English report is
         // still the exporter's own sentence.

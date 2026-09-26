@@ -1300,6 +1300,33 @@ fn a_full_width_mark_is_not_followed_by_a_space() {
     assert!(space_after_full_width_mark("（軟體元件） · 版本").is_none());
 }
 
+/// The first appearance of "座標" in reader-facing report text, with the
+/// words around it.
+///
+/// A framework mapping is "a framework reference" (「框架參考」) everywhere a
+/// reader sees one, on Results and in this report alike. "座標" means
+/// nothing to a reader who does not already know the code, so any return
+/// here is a wording leak this report must not carry.
+fn retired_coordinate_word(text: &str) -> Option<String> {
+    let at = text.find("座標")?;
+    let characters = text.chars().collect::<Vec<_>>();
+    let char_at = text[..at].chars().count();
+    Some(
+        characters[char_at.saturating_sub(30)..(char_at + 30).min(characters.len())]
+            .iter()
+            .collect::<String>(),
+    )
+}
+
+#[test]
+fn the_retired_coordinate_word_is_found_by_its_own_two_characters() {
+    assert!(retired_coordinate_word("已觀察到相關座標").is_some());
+    assert!(retired_coordinate_word("已觀察到相關框架參考").is_none());
+    assert!(retired_coordinate_word("座標").is_some());
+    assert!(retired_coordinate_word("框架參考").is_none());
+    assert!(retired_coordinate_word("").is_none());
+}
+
 /// Discovery engines prepare a target for a security check. Their output is
 /// inventory, not a result, in either run.
 const INVENTORY_ONLY_ENGINES: [&str; 5] = ["cloudquery", "httpx", "naabu", "steampipe", "syft"];
@@ -1554,6 +1581,11 @@ fn every_detector_places_its_finding_on_its_mapped_control() {
             }
             if let Some(offence) = space_after_full_width_mark(&strip_markup(&chinese)) {
                 panic!("the Chinese report puts a space after full-width punctuation: {offence}");
+            }
+            if let Some(offence) = retired_coordinate_word(&strip_markup(&chinese)) {
+                panic!(
+                    "the Chinese report kept the retired word for a framework reference: {offence}"
+                );
             }
             assert!(!chinese.contains(":</strong>"));
             assert!(!chinese.contains(":</em>"));
@@ -2296,7 +2328,7 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 // this sentence with the state identifier and writes both to
                 // the canonical JSON in English; the report has to translate
                 // it like any other sentence it shows a reader.
-                "so coordinates from frameworks that only describe AI systems",
+                "so references to frameworks that only describe AI systems",
             ] {
                 assert!(
                     !zh_html.contains(stored_english),
@@ -2520,6 +2552,11 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             if let Some(offence) = space_after_full_width_mark(&strip_markup(&zh_html)) {
                 panic!("the Chinese report puts a space after full-width punctuation: {offence}");
             }
+            if let Some(offence) = retired_coordinate_word(&strip_markup(&zh_html)) {
+                panic!(
+                    "the Chinese report kept the retired word for a framework reference: {offence}"
+                );
+            }
             assert!(!zh_html.contains(":</strong>"));
             assert!(!zh_html.contains(":</em>"));
 
@@ -2704,7 +2741,7 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             }
             for retained in [
                 "Evidence SHA-256",
-                "Related framework coordinates",
+                "Related framework references",
                 "ISO/IEC 27001",
             ] {
                 let at = grype_card
@@ -3279,10 +3316,10 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             for (html, catalogued, digest) in [
                 (
                     &ordered_html,
-                    "Framework coordinates come from mapping catalog ",
+                    "Framework references come from mapping catalog ",
                     "Catalog SHA-256",
                 ),
-                (&zh_html, "框架座標來自對照目錄 ", "目錄 SHA-256"),
+                (&zh_html, "框架參考來自對照目錄 ", "目錄 SHA-256"),
             ] {
                 assert_eq!(
                     html.matches(catalogued).count(),
@@ -3756,9 +3793,9 @@ fn the_ai_framework_follows_the_case_answers_and_nothing_else() {
         assert!(
             !view
                 .html
-                .contains("No selected-run framework coordinate was retained.")
+                .contains("No framework reference was retained for the selected run.")
         );
-        assert!(!view.zh_html.contains("未保留本輪的框架座標。"));
+        assert!(!view.zh_html.contains("未保留本輪的框架參考。"));
         assert!(
             view.limitations.iter().any(|limitation| limitation
                 == "1 of 47 selected-run findings has no relationship in the packaged mapping catalog. Its framework position is unknown, not absent."),
