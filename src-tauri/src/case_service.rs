@@ -19305,8 +19305,6 @@ fn html_report_bytes(
     document.push_str(&html_severity_profile(&report, catalog));
     document.push_str(&html_coverage_matrix(&report, &target_labels, catalog));
     document.push_str(&html_asset_result_section(&report, &target_labels, catalog));
-    document.push_str(&html_framework_section(&exported, run_id, catalog));
-    document.push_str(&typed_inventory_section);
     document.push_str(&format!(
         concat!(
             "<section class=\"report-grid\"><div class=\"report-card\">",
@@ -19362,6 +19360,10 @@ fn html_report_bytes(
         findings,
         observation_section,
     ));
+    // Framework coordinates and inventory are context for the problems
+    // above, so they follow them (spec §6.3 and §6.1).
+    document.push_str(&typed_inventory_section);
+    document.push_str(&html_framework_section(&exported, run_id, catalog));
     document.push_str(&format!(
         concat!(
             "<details class=\"technical\"{}><summary><strong>{}</strong></summary>",
@@ -36759,6 +36761,11 @@ mod tests {
                 "HTML omitted {inventory_text}"
             );
         }
+        assert!(
+            html.find("<h2>Problems found</h2>").unwrap()
+                < html.find("<h2>Inventory observations</h2>").unwrap(),
+            "inventory must follow the problems it is context for"
+        );
         // Moving the basis off the cards has to move it somewhere, and the
         // legend is the somewhere. A card carries the chip; the sentence
         // behind it is stated once, under the index a reader reads first.
@@ -37171,6 +37178,13 @@ mod tests {
             assert!(
                 asset_results < framework,
                 "§6.3 optional framework context must follow actionable asset results in {locale:?}"
+            );
+            let problems_section = html
+                .find(&format!("<h2>{problems_label}</h2>"))
+                .unwrap_or_else(|| panic!("§6.3 the problems section is missing in {locale:?}"));
+            assert!(
+                problems_section < framework,
+                "§6.3 optional framework context must follow the problems in {locale:?}"
             );
 
             let kpi_row = html

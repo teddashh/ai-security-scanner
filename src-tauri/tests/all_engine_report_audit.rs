@@ -1898,11 +1898,19 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             let problems = &ordered_html[ordered_html
                 .find(">Problems found</h2>")
                 .expect("problems section")..];
-            // Bounded before the run-level technical section, whose task records are
-            // articles too.
-            let problems = &problems[..problems
-                .find("<details class=\"technical\">")
-                .expect("technical details follow the problems")];
+            // Bounded before the inventory and framework context that follow the
+            // problems, and before the run-level technical section, whose task
+            // records are articles too.
+            let problems_end = [
+                "<section><h2>Inventory observations</h2>",
+                "<section class=\"framework-coverage\"",
+                "<details class=\"technical\">",
+            ]
+            .iter()
+            .filter_map(|marker| problems.find(marker))
+            .min()
+            .expect("technical details follow the problems");
+            let problems = &problems[..problems_end];
             // Every card is anchored so the index above can point at it.
             let cards = problems.match_indices("<article id=\"f").count();
             assert_eq!(cards, report.findings.len(), "one card per finding");
