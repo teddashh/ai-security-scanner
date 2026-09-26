@@ -3563,6 +3563,57 @@ test("the first report layer filters by exact asset identity, including shared f
   expect(container.querySelector<HTMLElement>(".finding-detail")?.classList.contains("finding-detail--empty")).toBe(false);
 });
 
+test("Results rank problems in the report's order, not alphabetically", () => {
+  const { container } = renderReport(report("complete", {
+    actual: completedCoverage(),
+    findings: [
+      frozenFinding({
+        findingId: "finding-s3",
+        fingerprint: "fp-s3",
+        title: "S3 Bucket ACL Allows Read Or Write to All Users",
+        severity: "critical",
+        confidence: "high",
+        priority: 90,
+      }),
+      frozenFinding({
+        findingId: "finding-pyyaml",
+        fingerprint: "fp-pyyaml",
+        title: "PyYAML: arbitrary command execution when FullLoader is used",
+        severity: "critical",
+        confidence: "medium",
+        priority: 90,
+      }),
+      frozenFinding({
+        findingId: "finding-requests",
+        fingerprint: "fp-requests",
+        title: "A redirect can leak the Authorization header",
+        severity: "high",
+        confidence: "medium",
+        priority: 70,
+      }),
+    ],
+  }));
+
+  const priorityCards = Array.from(container.querySelectorAll(".priority-card"));
+  expect(priorityCards.map((card) => card.textContent)).toEqual([
+    expect.stringContaining("S3 Bucket ACL Allows Read Or Write to All Users"),
+    expect.stringContaining("PyYAML: arbitrary command execution when FullLoader is used"),
+    expect.stringContaining("A redirect can leak the Authorization header"),
+  ]);
+
+  const browseTitles = Array.from(container.querySelectorAll(".finding-list .finding-row strong"))
+    .map((node) => node.textContent);
+  expect(browseTitles).toEqual([
+    "S3 Bucket ACL Allows Read Or Write to All Users",
+    "PyYAML: arbitrary command execution when FullLoader is used",
+    "A redirect can leak the Authorization header",
+  ]);
+
+  const priorityRanks = Array.from(container.querySelectorAll(".finding-row__priority"));
+  expect(priorityRanks[0]?.textContent).toBe("#1");
+  expect(priorityRanks[1]?.textContent).toBe("#2");
+});
+
 test("specialist and framework filters are in one closed Advanced disclosure", () => {
   const { container } = renderReport(
     report("partial", { findings: [frozenFinding()] }),

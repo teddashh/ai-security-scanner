@@ -2035,9 +2035,12 @@ export function FindingsPage({
     setSelectedId((current) => findings.some((finding) => finding.id === current) ? current : undefined);
   }, [findings]);
 
+  // Rows projected from the report keep its order, the order the exported report numbers; only rows without a report are sorted here.
   const ordered = useMemo(
-    () => [...findings].sort((a, b) => b.priority - a.priority || a.title.localeCompare(b.title, collationLocale)),
-    [collationLocale, findings],
+    () => report
+      ? [...findings]
+      : [...findings].sort((a, b) => b.priority - a.priority || a.title.localeCompare(b.title, collationLocale)),
+    [collationLocale, findings, report],
   );
   const displayRankByFindingId = useMemo(
     () => new Map(ordered.map((finding, index) => [finding.id, index + 1])),
