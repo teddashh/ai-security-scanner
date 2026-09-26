@@ -207,3 +207,30 @@ test("first-layer activity identifies the active check but never carries scanner
   assert.doesNotMatch(serialized, /private-target-id/u);
   assert.doesNotMatch(serialized, /target-controlled warning/u);
 });
+
+for (const [status, engineStatus, expectedState] of [
+  ["queued", "pending", "waiting_to_start"],
+  ["running", "running", "scanner_working"],
+  ["paused", "paused", "paused"],
+] as const) {
+  test(`a failed gateway does not override a ${status} sibling's activity`, () => {
+    const failedAt = "2026-08-26T13:02:00Z";
+    const activity = buildScanActivity(run({
+      status,
+      engineRuns: [
+        engine({
+          id: "failed-gateway",
+          status: "failed",
+          failureKind: "gateway_preparation_failed",
+          finishedAt: failedAt,
+        }),
+        engine({ id: "independent-check", status: engineStatus }),
+      ],
+    }));
+
+    assert.equal(activity.state, expectedState);
+    assert.equal(activity.active, status !== "paused");
+    assert.ok(activity.events.some((event) =>
+      event.code === "gateway_preparation_failed" && event.count === 1));
+  });
+}

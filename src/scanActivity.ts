@@ -107,10 +107,12 @@ const stageFor = (engine?: EngineRun): ExecutionStage | undefined => {
 const activityState = (run: ScanRun): ScanActivityState => {
   if (run.status === "completed") return "completed";
   if (run.status === "no_checks_completed") return "no_checks_completed";
-  if (run.engineRuns.some((engine) => engine.failureKind === "gateway_preparation_failed")) {
-    return "gateway_preparation_failed";
+  if (["failed", "partial", "cancelled"].includes(run.status)) {
+    if (run.engineRuns.some((engine) => engine.failureKind === "gateway_preparation_failed")) {
+      return "gateway_preparation_failed";
+    }
+    return "stopped";
   }
-  if (["failed", "partial", "cancelled"].includes(run.status)) return "stopped";
   if (run.status === "paused") return "paused";
 
   const engine = activeEngine(run);
