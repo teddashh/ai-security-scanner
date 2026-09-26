@@ -96,16 +96,16 @@ const copy = {
   // computes the contradicting sentence -- it was rendered one disclosure down
   // from the promise.
   sharingRedacted: {
-    en: "Sensitive identifiers hidden. Source files excluded.",
-    zhTW: "已遮罩敏感識別資訊；不附來源檔案。",
+    en: "Sensitive identifiers hidden; source files excluded",
+    zhTW: "已遮罩敏感識別資訊；不附來源檔案",
   },
   sharingIdentifiable: {
-    en: "Identifiers remain readable. Source files are not attached.",
-    zhTW: "識別資訊仍可讀；不附來源檔案。",
+    en: "Identifiers remain readable; source files are not attached",
+    zhTW: "識別資訊仍可讀；不附來源檔案",
   },
   sharingRawSources: {
-    en: "Includes unredacted scanner files that may contain secrets. Share only with trusted recipients.",
-    zhTW: "將附上未遮罩的掃描器原始檔，可能含機密；僅交付可信對象。",
+    en: "Includes unredacted scanner files that may contain secrets; share only with trusted recipients",
+    zhTW: "將附上未遮罩的掃描器原始檔，可能含機密；僅交付可信對象",
   },
   previewPending: { en: "Checking file contents…", zhTW: "正在確認檔案內容…" },
   scopeSelectedRun: { en: "Selected-run report", zhTW: "所選掃描輪次報告" },
@@ -196,8 +196,8 @@ const copy = {
   },
   redact: { en: "Hide sensitive identifiers (recommended)", zhTW: "遮罩敏感識別資訊（建議）" },
   redactDetail: {
-    en: "Masks tokens, email addresses, internal IPs, and system IDs.",
-    zhTW: "遮罩權杖、電子郵件、內部 IP 與系統 ID。",
+    en: "Replaces project, organization, and target names (targets appear as “Asset 1”, “Asset 2”, …) and masks tokens, email addresses, internal IPs, and system IDs.",
+    zhTW: "以代稱取代專案、組織與目標名稱（目標會顯示為「Asset 1」、「Asset 2」…），並遮罩權杖、電子郵件、內部 IP 與系統 ID。",
   },
   includesEyebrow: { en: "FILE CONTENTS", zhTW: "檔案內容" },
   case: { en: "Case", zhTW: "案件" },

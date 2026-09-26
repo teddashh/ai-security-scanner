@@ -165,9 +165,18 @@ const toggle = (container: HTMLElement, label: string): HTMLInputElement => {
   return input;
 };
 
-const chooseCaseBundle = (container: HTMLElement) => {
+/** The `<small>` detail text beside a toggle located by its own label text. */
+const toggleDetail = (container: HTMLElement, label: string): string => {
+  const row = Array.from(container.querySelectorAll<HTMLElement>("label.toggle-row")).find(
+    (candidate) => candidate.querySelector("strong")?.textContent === label,
+  );
+  if (!row) throw new Error(`no toggle labelled "${label}"`);
+  return row.querySelector("small")?.textContent ?? "";
+};
+
+const chooseCaseBundle = (container: HTMLElement, title = "Technical case bundle") => {
   const card = Array.from(container.querySelectorAll<HTMLElement>("label.format-card")).find(
-    (candidate) => candidate.textContent?.includes("Technical case bundle"),
+    (candidate) => candidate.textContent?.includes(title),
   );
   if (!card) throw new Error("no case-bundle format card rendered");
   const input = card.querySelector<HTMLInputElement>("input");
@@ -204,7 +213,7 @@ test("the default export states that captured source files are left out", async 
   const { container } = renderExport();
 
   await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
-  expect(consequence(container)).toContain("Source files excluded");
+  expect(consequence(container)).toContain("source files excluded");
   expect(container.querySelector(".export-privacy-status--neutral")).not.toBeNull();
   expect(container.querySelector(".export-privacy-status--warning")).toBeNull();
   expect(container.querySelector(".export-privacy-status--danger")).toBeNull();
@@ -266,7 +275,7 @@ test("attaching source files without redaction says the secrets are in the file"
   fireEvent.click(toggle(container, "Include original scanner files"));
 
   await waitFor(() => expect(consequence(container)).toContain("Includes unredacted scanner files that may contain secrets"));
-  expect(consequence(container)).toContain("Share only with trusted recipients");
+  expect(consequence(container)).toContain("share only with trusted recipients");
 
   const notice = container.querySelector(".export-privacy-status--danger");
   expect(notice?.textContent).toContain("may contain secrets");
@@ -283,7 +292,7 @@ test("turning redaction off without attaching sources claims neither more nor le
   fireEvent.click(toggle(container, "Hide sensitive identifiers (recommended)"));
 
   await waitFor(() => expect(consequence(container)).toContain("Identifiers remain readable"));
-  expect(consequence(container)).toContain("Source files are not attached");
+  expect(consequence(container)).toContain("source files are not attached");
   expect(container.querySelector(".export-privacy-status--warning")).not.toBeNull();
   expect(container.querySelector(".export-privacy-status--danger")).toBeNull();
 
@@ -294,7 +303,7 @@ test("turning redaction off without attaching sources claims neither more nor le
   chooseCaseBundle(container);
   await waitFor(() => expect(toggle(container, "Include original scanner files").disabled).toBe(false));
   expect(toggle(container, "Include original scanner files").checked).toBe(false);
-  expect(consequence(container)).toContain("Source files are not attached");
+  expect(consequence(container)).toContain("source files are not attached");
   expect(consequence(container)).not.toContain("may contain secrets");
 });
 
@@ -330,7 +339,7 @@ test("the recommended format says plainly that it is not signed", async () => {
 
   const decision = decisionSummary(container);
   expect(decision.closest("details")).toBeNull();
-  expect(decision.textContent).toContain("Sensitive identifiers hidden. Source files excluded.");
+  expect(decision.textContent).toContain("Sensitive identifiers hidden; source files excluded");
   expect(decision.textContent).toContain("Selected-run report");
   expect(decision.textContent).toContain("Integrity: SHA-256 recorded in this scan project");
   expect(decision.textContent).not.toContain("Integrity: locally signed");
@@ -442,4 +451,75 @@ test("with a run selected the advanced formats are introduced, not explained awa
     .filter((input) => input.disabled)
     .map((input) => input.value);
   expect(disabled).toEqual([]);
+});
+
+// The three sharing phrases carry no sentence period of their own, so the
+// " · " join never follows one. These pin the join for every phrase in both
+// languages, and what the masking checkbox discloses: standard redaction also
+// replaces the project, organization, and target names.
+
+test("the default decision summary has no dangling sentence period, and the masking detail names what it replaces", async () => {
+  const { container } = renderExport();
+  await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
+
+  const summaryText = decisionSummary(container).textContent ?? "";
+  expect(summaryText).not.toContain(". ·");
+  expect(summaryText.endsWith(".")).toBe(false);
+
+  const detail = toggleDetail(container, "Hide sensitive identifiers (recommended)");
+  expect(detail).toContain("“Asset 1”");
+  expect(detail).toContain("target names");
+});
+
+test("with masking off and no raw files attached the decision summary still joins without a dangling period", async () => {
+  const { container } = renderExport();
+  await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
+
+  fireEvent.click(toggle(container, "Hide sensitive identifiers (recommended)"));
+  await waitFor(() => expect(consequence(container)).toContain("Identifiers remain readable"));
+
+  const summaryText = decisionSummary(container).textContent ?? "";
+  expect(summaryText).toContain("Identifiers remain readable; source files are not attached · ");
+  expect(summaryText).not.toContain(". ·");
+});
+
+test("a case bundle with masking off and original scanner files included joins without a dangling period", async () => {
+  const { container } = renderExport();
+  await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
+
+  chooseCaseBundle(container);
+  fireEvent.click(toggle(container, "Hide sensitive identifiers (recommended)"));
+  await waitFor(() => expect(toggle(container, "Include original scanner files").disabled).toBe(false));
+  fireEvent.click(toggle(container, "Include original scanner files"));
+  await waitFor(() => expect(consequence(container)).toContain("Includes unredacted scanner files that may contain secrets"));
+
+  const summaryText = decisionSummary(container).textContent ?? "";
+  expect(summaryText).toContain("share only with trusted recipients · ");
+  expect(summaryText).not.toContain(". ·");
+});
+
+test("in Traditional Chinese the default decision summary has no dangling sentence period, and the masking detail names what it replaces", async () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderExport();
+  await waitFor(() => expect(consequence(container)).toContain("已遮罩敏感識別資訊"));
+
+  const summaryText = decisionSummary(container).textContent ?? "";
+  expect(summaryText).toContain("已遮罩敏感識別資訊；不附來源檔案 · ");
+  expect(summaryText).not.toContain("。 ·");
+
+  const detail = toggleDetail(container, "遮罩敏感識別資訊（建議）");
+  expect(detail).toContain("「Asset 1」");
+  expect(detail).toContain("專案、組織與目標名稱");
+
+  fireEvent.click(toggle(container, "遮罩敏感識別資訊（建議）"));
+  await waitFor(() => expect(consequence(container)).toContain("識別資訊仍可讀"));
+  expect(decisionSummary(container).textContent).toContain("識別資訊仍可讀；不附來源檔案 · ");
+  expect(decisionSummary(container).textContent).not.toContain("。 ·");
+
+  chooseCaseBundle(container, "技術案件包");
+  await waitFor(() => expect(toggle(container, "附上掃描器原始檔").disabled).toBe(false));
+  fireEvent.click(toggle(container, "附上掃描器原始檔"));
+  await waitFor(() => expect(consequence(container)).toContain("將附上未遮罩的掃描器原始檔"));
+  expect(decisionSummary(container).textContent).toContain("僅交付可信對象 · ");
+  expect(decisionSummary(container).textContent).not.toContain("。 ·");
 });
