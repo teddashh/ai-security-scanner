@@ -1090,9 +1090,13 @@ export function CoveragePage({
   const conciseGuidedConsent = guidedLowImpactNetwork || guidedWebsiteQuickProfile || guidedLocalConsent || guidedCloudConsent;
   // The cloud consent boundary is owned by the mounted provider panel. Keep
   // that panel visible instead of creating an unmount/reconnect loop.
-  const focusedGuidedReview = (guidedLowImpactNetwork || guidedWebsiteQuickProfile || guidedLocalConsent)
+  // The IT-environment form already collected every target, so its review is
+  // the plan and Start alone; source setup and the ledger stay one click away.
+  const focusedGuidedReview = (
+    (guidedLowImpactNetwork || guidedWebsiteQuickProfile || guidedLocalConsent)
     && assets.length === 1
-    && selectedScopeAssets.length === 1;
+    && selectedScopeAssets.length === 1
+  ) || (environmentRoute && environmentReadyAssetIds.size > 0);
   const compactGuidedReview = focusedGuidedReview && !showCompletedSetup;
   const requiresAuthorizationReference = externalActivity === "active_external" && !guidedWebsiteQuickProfile;
   const quickProfileOrigin = guidedWebsiteQuickProfile && selectedWebsiteService && externalTarget

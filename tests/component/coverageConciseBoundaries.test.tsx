@@ -885,8 +885,8 @@ test("one IT-environment Start routes repositories and exact website origins int
   )).not.toBeNull();
   expect(
     Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Edit inputs")),
-    "the inventory-only notice may not name a control this situation never renders",
-  ).toBeUndefined();
+    "a case with scan-ready assets opens in the focused review, with Edit inputs in the header",
+  ).toBeTruthy();
   expect(getByText("10.20.0.19")).not.toBeNull();
   expect(getByText("host.internal.example")).not.toBeNull();
   expect(getByText("Greenbone remote-safe profile · TCP 22, 25, 443, 445, 3389")).not.toBeNull();
@@ -1085,6 +1085,120 @@ test("one IT-environment Start routes repositories and exact website origins int
   expect(routes.flatMap(({ assetIds }) => assetIds)).not.toContain("inventory-only");
   expect(routes.some(({ engineId }) => engineId === "naabu" || engineId === "httpx")).toBe(false);
 }, 15_000);
+
+const oneRepositoryAndOneWebsiteEnvironmentAssets = () => [
+  pendingAsset({
+    id: "repo-a",
+    name: "billing-api",
+    locator: "private-copy://repo-a",
+    localInputProfile: "repository_working_tree",
+  }),
+  pendingAsset({
+    id: "website-public",
+    name: "https://portal.example.com:443",
+    type: "service",
+    platform: "external",
+    locator: "https://portal.example.com:443",
+    identifiers: [
+      { namespace: "web_origin", value: "https://portal.example.com:443" },
+      { namespace: "dns_name", value: "portal.example.com" },
+    ],
+    internetExposed: true,
+    declaredWebService: { protocol: "https", port: 443, path: "/login" },
+  }),
+];
+
+const oneUnknownSourceCoverage = (): CoverageRecord[] => [{
+  id: "coverage-unknown",
+  label: "AWS inventory",
+  platform: "aws",
+  sourceKind: "aws_organization",
+  state: "source_unavailable_unknown",
+  assetCount: 0,
+  detail: "not connected",
+}];
+
+// Section 1 stays mounted while hidden, so only a button outside a hidden
+// section is one the reader can see.
+const visibleButtonsNamed = (container: HTMLElement, name: string) =>
+  Array.from(container.querySelectorAll("button"))
+    .filter((button) => button.textContent?.trim() === name && button.closest("[hidden]") === null);
+
+test("the IT-environment review leads with its plan and one Start", () => {
+  const { container, queryByText, getByText, getByRole } = renderRoute({
+    assessmentIntent: "internal_it_environment",
+    requestedActivities: ["local_artifact_analysis", "active_external_vulnerability_tests"],
+    coverage: oneUnknownSourceCoverage(),
+    assets: oneRepositoryAndOneWebsiteEnvironmentAssets(),
+  });
+
+  const pageHeader = container.querySelector(".page-header");
+  expect(pageHeader?.querySelector("h1")?.textContent).toBe("Review and start");
+  expect(pageHeader?.querySelector("p")?.textContent).toBe("Confirm the target and limits.");
+  expect(container.querySelector<HTMLElement>("#coverage-step-1")?.hidden).toBe(true);
+  expect(container.querySelector("#coverage-step-2")).toBeNull();
+  expect(container.textContent).not.toContain("Sources without data");
+  expect(visibleButtonsNamed(container, "Refresh items")).toHaveLength(0);
+  expect(queryByText("3. Review and start")).toBeNull();
+  expect(getByText("One scan for this IT environment")).not.toBeNull();
+  expect(getByRole("button", { name: "Start one combined scan" })).not.toBeNull();
+
+  const editInputs = Array.from(pageHeader?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+    .find((button) => button.textContent?.includes("Edit inputs"));
+  expect(editInputs).toBeTruthy();
+  fireEvent.click(editInputs!);
+  expect(container.querySelector<HTMLElement>("#coverage-step-1")?.hidden).toBe(false);
+  expect(container.querySelector("#coverage-step-2")).not.toBeNull();
+  expect(queryByText("Sources without data: 1")).not.toBeNull();
+
+  const backToReview = Array.from(pageHeader?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+    .find((button) => button.textContent?.includes("Back to review"));
+  expect(backToReview).toBeTruthy();
+  fireEvent.click(backToReview!);
+  expect(container.querySelector<HTMLElement>("#coverage-step-1")?.hidden).toBe(true);
+  expect(container.querySelector("#coverage-step-2")).toBeNull();
+});
+
+test("the IT-environment review leads with its plan and one Start in Traditional Chinese", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderRoute({
+    assessmentIntent: "internal_it_environment",
+    requestedActivities: ["local_artifact_analysis", "active_external_vulnerability_tests"],
+    coverage: oneUnknownSourceCoverage(),
+    assets: oneRepositoryAndOneWebsiteEnvironmentAssets(),
+  });
+
+  const pageHeader = container.querySelector(".page-header");
+  expect(pageHeader?.querySelector("h1")?.textContent).toBe("確認後開始");
+  expect(container.textContent).not.toContain("沒有資料的來源");
+  expect(visibleButtonsNamed(container, "重新整理項目")).toHaveLength(0);
+  const editInputs = Array.from(pageHeader?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+    .find((button) => button.textContent?.includes("編輯輸入"));
+  expect(editInputs).toBeTruthy();
+});
+
+test("an IT-environment case with nothing scan-ready keeps the full setup page", () => {
+  const { container, getByText } = renderRoute({
+    assessmentIntent: "internal_it_environment",
+    requestedActivities: ["active_external_vulnerability_tests"],
+    assets: [
+      pendingAsset({
+        id: "inventory-only",
+        name: "10.20.0.19",
+        type: "ip",
+        platform: "external",
+        locator: "10.20.0.19",
+        identifiers: [{ namespace: "ip_address", value: "10.20.0.19" }],
+        internetExposed: false,
+      }),
+    ],
+  });
+
+  const pageHeader = container.querySelector(".page-header");
+  expect(pageHeader?.querySelector("h1")?.textContent).toBe("Scan setup");
+  expect(container.querySelector<HTMLElement>("#coverage-step-1")?.hidden).toBe(false);
+  expect(getByText("Add one scan-ready item")).not.toBeNull();
+});
 
 test("changing the selected environment network targets requires authorization again", async () => {
   const onStartEnvironmentScan = vi.fn().mockResolvedValue(true);

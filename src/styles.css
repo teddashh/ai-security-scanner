@@ -2062,6 +2062,7 @@ button.update-control:hover:not(:disabled) {
 .coverage-review-timing { margin: 0; color: var(--ink); font-size: 0.78rem; font-weight: 700; line-height: 1.5; }
 .scope-mode-fieldset { margin: 0; padding: 0; border: 0; }
 .scope-mode-fieldset legend { margin-bottom: 8px; color: var(--ink); font-size: 0.72rem; font-weight: 750; }
+.scope-mode-fieldset > p { margin: 0 0 8px; color: var(--muted); font-size: 0.78rem; line-height: 1.5; }
 .scope-mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .scope-mode-card { display: flex; align-items: flex-start; gap: 9px; padding: 11px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .scope-mode-card--active { border-color: #88b7aa; background: #edf8f4; box-shadow: inset 0 0 0 1px #88b7aa; }
