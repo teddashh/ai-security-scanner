@@ -878,10 +878,9 @@ test("one IT-environment Start routes repositories and exact website origins int
   expect(getByText(
     "Timing target: a useful result within minutes after tools are ready.",
   )).not.toBeNull();
-  expect(getByText("1 bare host(s) or range(s) are inventory only — not scanned")).not.toBeNull();
-  expect(getByText(/These legacy bare hosts or ranges will not be contacted or vulnerability-scanned in this run/i)).not.toBeNull();
+  expect(getByText("Recorded for inventory, not scanned")).not.toBeNull();
   expect(getByText(
-    "These legacy bare hosts or ranges will not be contacted or vulnerability-scanned in this run; the report lists them as not tested. Start a new scan and add each exact host under Internal systems.",
+    "The report lists these as not tested. To check one of these hosts, start a new scan and add it under Internal systems.",
   )).not.toBeNull();
   expect(
     Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Edit inputs")),
@@ -1210,8 +1209,40 @@ test("the IT-environment review still names an inventory-only item as not scanne
 
   expect(container.querySelector(".page-header h1")?.textContent).toBe("Review and start");
   const text = visibleText(container);
-  expect(text).toContain("1 bare host(s) or range(s) are inventory only — not scanned");
+  expect(text).toContain("Recorded for inventory, not scanned");
   expect(text).toContain("10.20.0.19");
+  expect(text).not.toContain("bare host");
+  expect(text).not.toContain("legacy");
+});
+
+test("the IT-environment review still names an inventory-only item as not scanned in Traditional Chinese", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderRoute({
+    assessmentIntent: "internal_it_environment",
+    requestedActivities: ["local_artifact_analysis", "active_external_vulnerability_tests"],
+    assets: [
+      ...oneRepositoryAndOneWebsiteEnvironmentAssets(),
+      pendingAsset({
+        id: "inventory-only",
+        name: "10.20.0.19",
+        type: "ip",
+        platform: "external",
+        locator: "10.20.0.19",
+        identifiers: [{ namespace: "ip_address", value: "10.20.0.19" }],
+        internetExposed: false,
+      }),
+    ],
+  });
+
+  expect(container.querySelector(".page-header h1")?.textContent).toBe("確認後開始");
+  expect(container.querySelector(".scope-mode-fieldset legend")?.textContent).toBe("專案資料夾");
+  const text = visibleText(container);
+  expect(text).toContain("僅記錄於盤點，不會掃描");
+  expect(text).toContain("若要檢查其中的主機，請開始新的掃描，並在「內部系統」加入該主機。");
+  expect(text).not.toContain("裸主機");
+  expect(text).not.toContain("舊版");
+  expect(text).not.toContain("精確");
+  expect(text).not.toContain("開發案");
 });
 
 test("an IT-environment case with nothing scan-ready keeps the full setup page", () => {

@@ -204,14 +204,10 @@ test("internal network detection stays an explicit inventory-only bilingual sugg
   for (const phrase of [
     "Likely local network found",
     "找到一個可能的區域網路",
-    "Enter the exact internal IP address or range below.",
-    "請在下方輸入精確的內部 IP 或網段",
-    "Add {target} to the target list?",
-    "要將 {target} 加入目標清單嗎",
-    "CIDR ranges are inventory only.",
-    "Add each host above for a vulnerability check.",
-    "CIDR 網段僅供盤點",
-    "請在上方逐一加入需要弱點檢查的主機",
+    "Record {target} in this inventory list?",
+    "要將 {target} 記錄在這份盤點清單嗎",
+    "Nothing listed here is contacted.",
+    "這裡列出的位址都不會被連線",
   ]) assert.ok(casesPageSource.includes(phrase), phrase);
   assert.ok(casesPageSource.includes("scannerService.detectLocalPrivateSubnets()"));
   assert.ok(casesPageSource.includes("onClick={() => useDetectedLocalNetwork(detectedLocalNetwork.target)}"));

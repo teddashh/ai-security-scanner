@@ -422,7 +422,7 @@ const pageCopy = {
   environmentTiming: primaryScanTiming,
   websiteTiming: primaryScanTiming,
   localTiming: primaryScanTiming,
-  environmentRepositoriesTitle: bilingual("Project folders", "開發案資料夾"),
+  environmentRepositoriesTitle: bilingual("Project folders", "專案資料夾"),
   environmentRepositoriesBody: bilingual(
     "Read-only checks for risky code, exposed secrets, vulnerable dependencies, and unsafe configuration when applicable.",
     "依專案內容執行危險程式碼、暴露秘密、有弱點相依套件與不安全設定的唯讀檢查。",
@@ -468,17 +468,17 @@ const pageCopy = {
     "Greenbone · {checks} 項 TLS 弱點檢查",
   ),
   environmentNotReadyTitle: bilingual(
-    "{count} bare host(s) or range(s) are inventory only — not scanned",
-    "{count} 個裸主機或網段僅供盤點，不會掃描",
+    "Recorded for inventory, not scanned",
+    "僅記錄於盤點，不會掃描",
   ),
   environmentNotReadyBody: bilingual(
-    "These legacy bare hosts or ranges will not be contacted or vulnerability-scanned in this run; the report lists them as not tested. Start a new scan and add each exact host under Internal systems.",
-    "這些舊版裸主機或網段在本次執行中不會被連線或掃描弱點；報告會將它們列為未測試。請開始新的檢查，並在「內部系統」逐一加入精確主機。",
+    "The report lists these as not tested. To check one of these hosts, start a new scan and add it under Internal systems.",
+    "報告會將它們列為未測試。若要檢查其中的主機，請開始新的掃描，並在「內部系統」加入該主機。",
   ),
   environmentNoReadyTitle: bilingual("Add one scan-ready item", "請加入至少一個可掃描項目"),
   environmentNoReadyBody: bilingual(
     "Add a project folder, a complete HTTP(S) website or API URL, or one internal-system hostname or IP. Inventory-only ranges remain visible as not tested and are not contacted or scanned.",
-    "請加入開發案資料夾、完整 HTTP(S) 網站或 API 網址，或一個內部系統的主機名稱或 IP。僅供盤點的網段仍會顯示為未測試，而且不會被連線或掃描。",
+    "請加入專案資料夾、完整 HTTP(S) 網站或 API 網址，或一個內部系統的主機名稱或 IP。僅供盤點的網段仍會顯示為未測試，而且不會被連線或掃描。",
   ),
   environmentNetworkConfirmationTitle: bilingual(
     "I confirm I am allowed to scan every selected website, API, and internal system",
@@ -2258,9 +2258,7 @@ export function CoveragePage({
             {environmentUnreadyExternalAssets.length > 0 && (
               <InlineNotice
                 tone="warning"
-                title={text(pageCopy.environmentNotReadyTitle, {
-                  count: formatNumber(environmentUnreadyExternalAssets.length),
-                })}
+                title={text(pageCopy.environmentNotReadyTitle)}
               >
                 <p>{text(pageCopy.environmentNotReadyBody)}</p>
                 <ul>

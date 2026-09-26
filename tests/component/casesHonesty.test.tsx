@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -7,6 +7,7 @@ import type { CasesPageProps } from "../../src/pages/CasesPage";
 import { createStoredDemoCase } from "../../src/data/demo";
 import { I18nProvider, localeStorageKey } from "../../src/i18n";
 import { formatLocaleDateTime } from "../../src/i18n/core";
+import { scannerService } from "../../src/services/scanner";
 import type { AssessmentCase, ScanRun } from "../../src/types";
 
 // Two things on this page can mislead badly and neither is visible to source
@@ -965,6 +966,74 @@ test("an invalid inventory-only CIDR opens its collapsed field and receives focu
   expect(targetsInput.getAttribute("aria-describedby")).toBe("internal-targets-help internal-targets-error");
   expect(inventoryDetails.open).toBe(true);
   expect(document.activeElement).toBe(targetsInput);
+});
+
+test("the inventory field states its own boundary in Traditional Chinese", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "internal_it_environment",
+    selectionKey: 1,
+  });
+
+  expect(container.querySelector(".environment-inventory summary small")?.textContent).toBe(
+    "會在報告中列為未測試；這裡的位址都不會被連線",
+  );
+  expect(container.textContent).not.toContain("裸主機");
+});
+
+test("no local network suggestion appears once detection settles without a candidate", async () => {
+  const detect = vi.spyOn(scannerService, "detectLocalPrivateSubnets");
+  const { container } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "internal_it_environment",
+    selectionKey: 1,
+  });
+
+  await waitFor(() => expect(detect).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    await detect.mock.results[0]!.value;
+  });
+
+  expect(container.textContent).not.toContain("Likely local network found");
+  detect.mockRestore();
+});
+
+test("a detected local network is added to the inventory list only after Use is pressed", async () => {
+  const detect = vi.spyOn(scannerService, "detectLocalPrivateSubnets").mockResolvedValue({
+    data: {
+      status: "ready",
+      candidates: [{
+        id: "local-ipv4-test",
+        target: "192.168.50.0/24",
+        kind: "local_ipv4_subnet",
+        useCase: "internal_it_environment",
+        internetExposure: "internal",
+        addressCount: 256,
+        requiresConfirmation: true,
+      }],
+    },
+    mode: "native",
+  });
+
+  const { getByRole, getByText, getByLabelText } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "internal_it_environment",
+    selectionKey: 1,
+  });
+
+  await waitFor(() => expect(getByText("Record 192.168.50.0/24 in this inventory list?")).not.toBeNull());
+
+  const targetsInput = getByLabelText(/Internal IP addresses or small network ranges/u) as HTMLTextAreaElement;
+  fireEvent.click(getByRole("button", { name: "Use 192.168.50.0/24" }));
+
+  expect(targetsInput.value).toContain("192.168.50.0/24");
+  expect(getByText("Added to the inventory list")).not.toBeNull();
+
+  detect.mockRestore();
 });
 
 test("inventory-only ranges cannot create an environment without a scan-ready asset", async () => {

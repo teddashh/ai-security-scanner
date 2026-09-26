@@ -209,12 +209,12 @@ const pageCopy = {
   },
   environmentInventoryTitle: { en: "Other hosts and ranges — inventory only", zhTW: "其他主機與網段（僅供盤點）" },
   environmentInventoryHint: {
-    en: "Record unsupported bare hosts or CIDR ranges; this run will not scan them",
-    zhTW: "記錄尚未支援的裸主機或 CIDR 網段；本次執行不會掃描它們",
+    en: "Listed in the report as not tested; nothing here is contacted",
+    zhTW: "會在報告中列為未測試；這裡的位址都不會被連線",
   },
   environmentInventoryHelp: {
-    en: "CIDR ranges are inventory only. Add each host above for a vulnerability check.",
-    zhTW: "CIDR 網段僅供盤點；請在上方逐一加入需要弱點檢查的主機。",
+    en: "Nothing listed here is contacted. To check a host, add it under Internal systems above.",
+    zhTW: "這裡列出的位址都不會被連線。要檢查某台主機，請在上方的「內部系統」加入它。",
   },
   environmentAtLeastOne: {
     en: "Add at least one scan-ready project folder, website or API URL, or internal system. Inventory-only ranges can be saved alongside one of these items.",
@@ -245,38 +245,13 @@ const pageCopy = {
     en: "Enter one hostname, IP address, or CIDR range per line—without a protocol, path, port, or sign-in details.",
     zhTW: "每行輸入一個主機名稱、IP 或 CIDR 網段；不要加入通訊協定、路徑、連接埠或登入資訊。",
   },
-  localNetworkDetectingTitle: { en: "Looking for your local network", zhTW: "正在找這台電腦的區域網路" },
-  localNetworkDetectingBody: {
-    en: "Reading this computer's network settings.",
-    zhTW: "正在讀取這台電腦的網路設定。",
-  },
   localNetworkFoundTitle: { en: "Likely local network found", zhTW: "找到一個可能的區域網路" },
   localNetworkFoundBody: {
-    en: "Add {target} to the target list?",
-    zhTW: "要將 {target} 加入目標清單嗎？",
+    en: "Record {target} in this inventory list?",
+    zhTW: "要將 {target} 記錄在這份盤點清單嗎？",
   },
   localNetworkUseTarget: { en: "Use {target}", zhTW: "使用 {target}" },
-  localNetworkTargetAdded: { en: "Added to the target list", zhTW: "已加入目標清單" },
-  localNetworkNoneTitle: { en: "Enter the network you want to check", zhTW: "請輸入想檢查的網路" },
-  localNetworkNoneBody: {
-    en: "Enter an internal IP address or a small network range below.",
-    zhTW: "請在下方輸入一個內部 IP 或小型網段。",
-  },
-  localNetworkAmbiguousTitle: { en: "Exact local network required", zhTW: "需要精確的區域網路" },
-  localNetworkAmbiguousBody: {
-    en: "Enter the exact internal IP address or range below.",
-    zhTW: "請在下方輸入精確的內部 IP 或網段。",
-  },
-  localNetworkUnavailableTitle: { en: "Local network detection unavailable", zhTW: "無法偵測區域網路" },
-  localNetworkUnavailableBody: {
-    en: "Enter the internal IP address or small network range below.",
-    zhTW: "請在下方輸入內部 IP 或小型網段。",
-  },
-  localNetworkUnsupportedTitle: { en: "Enter your local network", zhTW: "請輸入你的區域網路" },
-  localNetworkUnsupportedBody: {
-    en: "Enter an internal IP address or small range below.",
-    zhTW: "請在下方輸入內部 IP 或小型網段。",
-  },
+  localNetworkTargetAdded: { en: "Added to the inventory list", zhTW: "已加入盤點清單" },
   repositories: { en: "Source project or repository", zhTW: "程式碼專案或儲存庫" },
   repositoriesPlaceholder: { en: "Local project name or read-only repository coordinate", zhTW: "本機專案名稱或唯讀程式碼儲存庫位置" },
   repositoriesHelp: {
@@ -1425,33 +1400,26 @@ export function CasesPage({
                 )}
               </label>
 
-              <details className="environment-network-suggestion">
-                <summary>{text(pageCopy.localNetworkFoundTitle)}</summary>
-                <div aria-live="polite">
-                  {detectingLocalNetwork && <p>{text(pageCopy.localNetworkDetectingBody)}</p>}
-                  {!detectingLocalNetwork && detectedLocalNetwork && (
-                    <>
-                      <p>{text(pageCopy.localNetworkFoundBody, { target: detectedLocalNetwork.target })}</p>
-                      <button
-                        className="button button--secondary button--small"
-                        type="button"
-                        disabled={detectedLocalNetworkAdded}
-                        onClick={() => useDetectedLocalNetwork(detectedLocalNetwork.target)}
-                      >
-                        <Icon name={detectedLocalNetworkAdded ? "check" : "plus"} size={15} />
-                        {text(
-                          detectedLocalNetworkAdded ? pageCopy.localNetworkTargetAdded : pageCopy.localNetworkUseTarget,
-                          { target: detectedLocalNetwork.target },
-                        )}
-                      </button>
-                    </>
-                  )}
-                  {!detectingLocalNetwork && localNetworkInventory?.status === "none" && <p>{text(pageCopy.localNetworkNoneBody)}</p>}
-                  {!detectingLocalNetwork && localNetworkInventory?.status === "ambiguous" && <p>{text(pageCopy.localNetworkAmbiguousBody)}</p>}
-                  {!detectingLocalNetwork && localNetworkInventory?.status === "unavailable" && <p>{text(pageCopy.localNetworkUnavailableBody)}</p>}
-                  {!detectingLocalNetwork && localNetworkInventory?.status === "unsupported" && <p>{text(pageCopy.localNetworkUnsupportedBody)}</p>}
-                </div>
-              </details>
+              {!detectingLocalNetwork && detectedLocalNetwork && (
+                <details className="environment-network-suggestion">
+                  <summary>{text(pageCopy.localNetworkFoundTitle)}</summary>
+                  <div aria-live="polite">
+                    <p>{text(pageCopy.localNetworkFoundBody, { target: detectedLocalNetwork.target })}</p>
+                    <button
+                      className="button button--secondary button--small"
+                      type="button"
+                      disabled={detectedLocalNetworkAdded}
+                      onClick={() => useDetectedLocalNetwork(detectedLocalNetwork.target)}
+                    >
+                      <Icon name={detectedLocalNetworkAdded ? "check" : "plus"} size={15} />
+                      {text(
+                        detectedLocalNetworkAdded ? pageCopy.localNetworkTargetAdded : pageCopy.localNetworkUseTarget,
+                        { target: detectedLocalNetwork.target },
+                      )}
+                    </button>
+                  </div>
+                </details>
+              )}
             </div>
           </details>
 

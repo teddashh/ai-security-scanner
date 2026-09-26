@@ -2024,7 +2024,7 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
     ),
     (
         "Start a new scan and add each exact host under Internal systems.",
-        "請開始新的檢查，並在「內部系統」逐一加入精確主機。",
+        "請開始新的掃描，並在「內部系統」逐一加入要檢查的主機。",
     ),
     (
         "Retry this scan to create a consistent coverage record.",
