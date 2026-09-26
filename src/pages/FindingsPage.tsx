@@ -569,6 +569,11 @@ const copy = {
   noControls: { en: "No framework reference is mapped to this problem.", zhTW: "這筆問題沒有控制項映射。" },
   relatedOnly: { en: "Relationship only", zhTW: "僅表示相關性" },
   viewSameControl: { en: "View problems with the same reference", zhTW: "查看同座標問題" },
+  // ScubaGear tags a finding `tenant-disputed` when the tenant's own
+  // configuration marks the result incorrect; the finding is still reported
+  // on ScubaGear's own determination. This says that in words in the header,
+  // instead of leaving the dispute to a raw tag chip in the technical detail.
+  tenantDisputed: { en: "Disputed by the tenant", zhTW: "租用戶對此結果有異議" },
   provenance: { en: "Technical source details", zhTW: "技術來源細節" },
   firstRun: { en: "First-seen run", zhTW: "初見輪次" },
   lastRun: { en: "Last-seen run", zhTW: "末見輪次" },
@@ -3286,6 +3291,9 @@ export function FindingsPage({
                     selected.priorityReasons ?? [],
                   )} tone="neutral" />
                   <StatusPill label={workflowMeta[selected.workflowState]} tone={workflowTone(selected.workflowState)} />
+                  {selected.tags?.includes("tenant-disputed") && (
+                    <StatusPill label={text(copy.tenantDisputed)} tone="neutral" />
+                  )}
                 </div>
                 <h2>{selected.title}</h2>
                 <p>{findingSummarySentence(locale, {
@@ -3542,8 +3550,8 @@ export function FindingsPage({
                     <div><dt>{text(copy.firstObserved)}</dt><dd>{formatDateTime(selected.firstSeenAt, historyDateTime)}</dd></div>
                     <div><dt>{text(copy.lastObserved)}</dt><dd>{formatDateTime(selected.lastSeenAt, historyDateTime)}</dd></div>
                   </dl>
+                  {(selected.tags?.length ?? 0) > 0 && <div className="tag-row">{selected.tags?.map((tag) => <span className="tag tag--light" key={tag}>{tag}</span>)}</div>}
                 </details>
-                {(selected.tags?.length ?? 0) > 0 && <div className="tag-row">{selected.tags?.map((tag) => <span className="tag tag--light" key={tag}>{tag}</span>)}</div>}
               </section>
 
               <section className="detail-section">
