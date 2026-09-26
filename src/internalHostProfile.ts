@@ -41,10 +41,6 @@ export const internalHostGreenboneProfile = {
     concurrency: 1,
     timeoutSeconds: 15,
   },
-  coverageNote: {
-    en: "Greenbone discovers the supported services on the selected ports and applies the remote-safe checks that match this exact host. It does not sign in, use credentials, or scan another address.",
-    zhTW: "Greenbone 會在所選連接埠探索支援的服務，並對這個精確主機執行適用的 remote-safe 檢查；不會登入、使用帳密或掃描其他位址。",
-  },
 } as const;
 
 export type InternalHostInputError =

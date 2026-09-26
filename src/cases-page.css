@@ -228,13 +228,6 @@
   margin-top: 21px;
 }
 
-.environment-device-row__coverage {
-  grid-column: 1 / -1;
-  color: var(--muted);
-  font-size: 0.76rem;
-  line-height: 1.5;
-}
-
 .environment-device-conflict {
   display: grid;
   gap: 3px;
@@ -438,10 +431,6 @@
   .environment-device-row__remove {
     width: 100%;
     margin-top: 0;
-  }
-
-  .environment-device-row__coverage {
-    grid-column: 1;
   }
 
   .environment-host-row__advanced {

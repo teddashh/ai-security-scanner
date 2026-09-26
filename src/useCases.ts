@@ -180,11 +180,11 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
       },
       internal_it_environment: {
         title: "Your repositories, internal systems, and websites",
-        summary: "Check selected code, websites, and exact internal hosts together in one result organized by asset.",
+        summary: "Check selected code, websites, and specific internal hosts together in one result organized by asset.",
         want:
           "The exact repository folders, website or API URLs, and hostname or IP for each internal system you want checked.",
         prepare:
-          "Local project folders, complete website or API URLs, exact internal hostnames or IPs, and permission to assess every network target. Common ports are selected automatically and can be changed under Advanced.",
+          "Local project folders, complete website or API URLs, internal hostnames or IPs, and permission to assess every network target. Common ports are selected automatically and can be changed under Advanced.",
         productDoes:
           "Runs applicable upstream code and vulnerability checks against each scan-ready selected asset, keeps target-specific limits, and combines completed results with explicit not-tested inventory in one prioritized report.",
         productDoesNot:
@@ -298,11 +298,11 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
         productDoesNot: "不自行擴大目標、不掃相鄰 IP，也不會把無法連線說成安全。",
       },
       internal_it_environment: {
-        title: "公司的 repo、內部系統與網站",
-        summary: "把指定程式碼、網站與精確內部主機一起檢查，再依資產查看同一份結果。",
-        want: "精確的 repo 資料夾、網站或 API 網址，以及每個要檢查之內部系統的主機名稱或 IP。",
-        prepare: "本機專案資料夾、完整網站或 API 網址、精確內部主機名稱或 IP，以及每個網路目標的檢查許可。系統會自動選用常用連接埠，也可在「進階」中修改。",
-        productDoes: "對每項已可掃描的資產執行適用的上游程式碼與弱點檢查，保留各目標限制，再把完成結果與明確的未測試盤點整合成一份有優先順序的報告。",
+        title: "公司的程式碼儲存庫、內部系統與網站",
+        summary: "把指定的程式碼、網站與內部主機一起檢查，再依資產查看同一份結果。",
+        want: "要檢查的程式碼儲存庫資料夾、網站或 API 網址，以及每個內部系統的主機名稱或 IP。",
+        prepare: "本機專案資料夾、完整網站或 API 網址、內部主機名稱或 IP，以及每個網路目標的檢查許可。系統會自動選用常用連接埠，也可在「進階」中修改。",
+        productDoes: "對每項已可掃描的資產執行適用的程式碼與弱點檢查，保留各目標限制，再把完成結果與明確的未測試盤點整合成一份有優先順序的報告。",
         productDoesNot: "不掃未列出的位址、不安裝代理程式、不修改程式碼或設備、不繞過存取控制，也不把只有盤點的觀察稱為漏洞掃描。",
       },
       ai_application: {

@@ -890,6 +890,9 @@ test("one IT-environment Start routes repositories and exact website origins int
   expect(getByText("10.20.0.19")).not.toBeNull();
   expect(getByText("host.internal.example")).not.toBeNull();
   expect(getByText("Greenbone remote-safe profile · TCP 22, 25, 443, 445, 3389")).not.toBeNull();
+  expect(getByText("host.internal.example").closest("label")?.textContent).not.toContain(
+    "the remote-safe checks that match this exact host",
+  );
   expect(getByText("server.internal.example:2222")).not.toBeNull();
   expect(getByText("desktop.internal.example:3389")).not.toBeNull();
   expect(getByText("workstation.internal.example:5900")).not.toBeNull();
@@ -908,7 +911,7 @@ test("one IT-environment Start routes repositories and exact website origins int
   const start = getByRole("button", { name: "Start one combined scan" });
   await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(true));
   fireEvent.click(getByRole("checkbox", {
-    name: /I confirm I am allowed to scan every selected website, API, and exact internal system/i,
+    name: /I confirm I am allowed to scan every selected website, API, and internal system/i,
   }));
   expect((start as HTMLButtonElement).disabled).toBe(false);
   fireEvent.click(start);
@@ -1245,7 +1248,7 @@ test("changing the selected environment network targets requires authorization a
 
   const start = getByRole("button", { name: "Start one combined scan" }) as HTMLButtonElement;
   const confirmation = getByRole("checkbox", {
-    name: /I confirm I am allowed to scan every selected website, API, and exact internal system/i,
+    name: /I confirm I am allowed to scan every selected website, API, and internal system/i,
   }) as HTMLInputElement;
 
   await waitFor(() => expect(start.disabled).toBe(true));

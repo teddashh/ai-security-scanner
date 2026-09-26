@@ -429,21 +429,21 @@ const pageCopy = {
   ),
   environmentWebsitesTitle: bilingual("Websites and APIs", "網站與 API"),
   environmentWebsitesBody: bilingual(
-    "Nuclei identifies the website technology and applies matching upstream vulnerability and exposure checks to each exact origin below. It does not sign in, exploit findings, crawl other hosts, or add targets.",
-    "Nuclei 會辨識網站技術，並對下方每個精確來源範圍執行適用的上游弱點與暴露檢查；不會登入、利用弱點、爬取其他主機或加入目標。",
+    "Nuclei identifies the website technology and applies its matching vulnerability and exposure checks to each origin below. It does not sign in, exploit findings, crawl other hosts, or add targets.",
+    "Nuclei 會辨識網站使用的技術，並對下方每個網站來源範圍執行適用的弱點與暴露檢查；不會登入、利用弱點、爬取其他主機或加入目標。",
   ),
   environmentWebsiteCheck: bilingual(
-    "Nuclei upstream automatic web scan",
-    "Nuclei 上游自動網站掃描",
+    "Nuclei automatic web scan",
+    "Nuclei 自動網站掃描",
   ),
   environmentHostsTitle: bilingual("Internal systems", "內部系統"),
   environmentHostsBody: bilingual(
-    "Greenbone discovers supported services on the selected common ports and applies its pinned remote-safe profile to each exact host. It does not sign in, use credentials, expand a range, or add another host.",
-    "Greenbone 會在所選常用連接埠探索支援的服務，並對每個精確主機套用固定的 remote-safe 設定；不會登入、使用帳密、擴大網段或加入其他主機。",
+    "Greenbone discovers supported services on the selected ports and applies its pinned remote-safe profile to each host below. It does not sign in, use credentials, expand a range, or add another host.",
+    "Greenbone 會在所選連接埠探索支援的服務，並對下方每台主機套用固定的遠端安全掃描設定；不會登入、使用帳密、擴大網段或加入其他主機。",
   ),
   environmentHostCheck: bilingual(
     "Greenbone remote-safe profile · TCP {ports}",
-    "Greenbone remote-safe 設定 · TCP {ports}",
+    "Greenbone 遠端安全掃描設定 · TCP {ports}",
   ),
   environmentEndpointsTitle: bilingual("Servers and workstations — SSH, RDP, VNC, SMTP, or Telnet", "伺服器與工作站（SSH、RDP、VNC、SMTP 或 Telnet）"),
   environmentEndpointsBody: bilingual(
@@ -477,16 +477,16 @@ const pageCopy = {
   ),
   environmentNoReadyTitle: bilingual("Add one scan-ready item", "請加入至少一個可掃描項目"),
   environmentNoReadyBody: bilingual(
-    "Add a project folder, a complete HTTP(S) website or API URL, or one exact internal-system hostname or IP. Inventory-only ranges remain visible as not tested and are not contacted or scanned.",
-    "請加入開發案資料夾、完整 HTTP(S) 網站或 API 網址，或一個精確的內部系統主機名稱或 IP。僅供盤點的網段仍會顯示為未測試，而且不會被連線或掃描。",
+    "Add a project folder, a complete HTTP(S) website or API URL, or one internal-system hostname or IP. Inventory-only ranges remain visible as not tested and are not contacted or scanned.",
+    "請加入開發案資料夾、完整 HTTP(S) 網站或 API 網址，或一個內部系統的主機名稱或 IP。僅供盤點的網段仍會顯示為未測試，而且不會被連線或掃描。",
   ),
   environmentNetworkConfirmationTitle: bilingual(
-    "I confirm I am allowed to scan every selected website, API, and exact internal system",
-    "我確認自己有權掃描每個已選網站、API 與精確內部系統",
+    "I confirm I am allowed to scan every selected website, API, and internal system",
+    "我確認自己有權掃描每個已選的網站、API 與內部系統",
   ),
   environmentNetworkConfirmationBody: bilingual(
-    "Start will contact only these exact network targets: {origins}",
-    "開始後只會連線到這些精確網路目標：{origins}",
+    "Start will contact only these network targets: {origins}",
+    "開始後只會連線到這些網路目標：{origins}",
   ),
   environmentEndpointConfirmation: bilingual(
     "The user explicitly confirmed authorization to run the displayed fixed Greenbone {service} profile against the exact {origin} service.",
@@ -2171,7 +2171,6 @@ export function CoveragePage({
                       <span>
                         <strong>{asset.name}</strong>
                         <small>{text(pageCopy.environmentHostCheck, { ports: ports.join(", ") })}</small>
-                        <small>{text(profile.coverageNote)}</small>
                       </span>
                     </label>
                   ))}

@@ -51,7 +51,7 @@ interface MarketingCopy {
 const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
   en: {
     title: "Security checks",
-    description: "Scan repositories, websites or APIs, and exact internal systems together. Get one prioritized result organized by asset.",
+    description: "Scan repositories, websites or APIs, and specific internal systems together. Get one prioritized result organized by asset.",
     previewDescription: "Preview mode · choose a target to review its setup.",
     localhostQuickScanAction: "Test local service connection · 127.0.0.1:9001",
     localhostQuickScanBusy: "Testing the connection…",
@@ -80,7 +80,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
       },
       internal_it_environment: {
         title: "Company IT environment",
-        outcome: "Check repositories, websites or APIs, and exact internal hosts together in one result organized by asset.",
+        outcome: "Check repositories, websites or APIs, and specific internal hosts together in one result organized by asset.",
         timing: primaryScanTiming.en,
         action: "Scan my environment",
       },
@@ -114,7 +114,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
   },
   "zh-TW": {
     title: "資安檢查",
-    description: "把 repo、網站或 API 與精確內部系統一起掃描，再依資產查看同一份優先結果。",
+    description: "把程式碼儲存庫、網站或 API 與指定的內部系統一起掃描，再依資產查看同一份優先結果。",
     previewDescription: "預覽模式 · 選擇目標以查看掃描設定。",
     localhostQuickScanAction: "測試本機服務連線 · 127.0.0.1:9001",
     localhostQuickScanBusy: "正在測試連線…",
@@ -143,7 +143,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
       },
       internal_it_environment: {
         title: "公司 IT 環境",
-        outcome: "把 repo、網站或 API 與精確內部主機一起檢查，再依資產查看同一份結果。",
+        outcome: "把程式碼儲存庫、網站或 API 與指定的內部主機一起檢查，再依資產查看同一份結果。",
         timing: primaryScanTiming.zhTW,
         action: "掃描公司環境",
       },

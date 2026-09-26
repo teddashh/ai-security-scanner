@@ -926,7 +926,7 @@ test("inventory-only ranges cannot create an environment without a scan-ready as
     onCreate,
   });
 
-  const hostInput = getByLabelText(/^Exact hostname or IP 1/u);
+  const hostInput = getByLabelText(/^Hostname or IP 1/u);
   const targetsInput = getByLabelText(/Internal IP addresses or small network ranges/u);
   fireEvent.change(targetsInput, { target: { value: "10.20.0.0/28" } });
   fireEvent.submit(container.querySelector(".create-case-panel")!);
@@ -952,13 +952,13 @@ test("one environment starts with one generic exact-host row and reviewed common
     onCreate,
   });
 
-  expect(getByLabelText(/^Exact hostname or IP 1/u)).not.toBeNull();
+  expect(getByLabelText(/^Hostname or IP 1/u)).not.toBeNull();
   expect(queryByRole("combobox", { name: /Security check/u })).toBeNull();
   expect(container.textContent).toContain("Greenbone discovers supported services on common ports");
   expect(container.querySelector('input[type="password"]')).toBeNull();
   expect(getByRole("button", { name: "Review scan" })).not.toBeNull();
 
-  fireEvent.change(getByLabelText(/^Exact hostname or IP 1/u), {
+  fireEvent.change(getByLabelText(/^Hostname or IP 1/u), {
     target: { value: " Server.Example.Internal. " },
   });
   fireEvent.submit(container.querySelector(".create-case-panel")!);
@@ -986,9 +986,9 @@ test("one environment accepts repeatable generic hosts with advanced custom port
     onCreate,
   });
 
-  fireEvent.change(getByLabelText(/^Exact hostname or IP 1/u), { target: { value: "10.20.0.8" } });
+  fireEvent.change(getByLabelText(/^Hostname or IP 1/u), { target: { value: "10.20.0.8" } });
   fireEvent.click(getByRole("button", { name: "Add another system" }));
-  fireEvent.change(getByLabelText(/^Exact hostname or IP 2/u), {
+  fireEvent.change(getByLabelText(/^Hostname or IP 2/u), {
     target: { value: "gateway.example.internal" },
   });
   fireEvent.click(container.querySelectorAll<HTMLDetailsElement>(".environment-host-row__advanced summary")[1]!);
@@ -1022,11 +1022,11 @@ test("generic internal-host validation keeps ranges and malformed ports out of s
     onCreate,
   });
 
-  const target = getByLabelText(/^Exact hostname or IP 1/u);
+  const target = getByLabelText(/^Hostname or IP 1/u);
   fireEvent.change(target, { target: { value: "10.20.0.0/24" } });
   fireEvent.submit(container.querySelector(".create-case-panel")!);
   await waitFor(() => expect(container.textContent).toContain(
-    "Enter one exact hostname or IP address, not a CIDR range.",
+    "Enter one hostname or IP address, not a CIDR range.",
   ));
   expect(document.activeElement).toBe(target);
   expect(onCreate).not.toHaveBeenCalled();
@@ -1131,4 +1131,27 @@ test.each([
   const { container } = renderCases({ cases: [demo], selectedCase: demo });
   const hero = container.querySelector(".current-case-hero");
   expect(hero?.querySelector(".status-pill--demo")?.textContent).toBe(label);
+});
+
+test("Traditional Chinese internal-system rows state the no-sign-in boundary once, not per row", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container, getByLabelText, getByRole } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "internal_it_environment",
+    selectionKey: 1,
+  });
+
+  fireEvent.click(getByRole("button", { name: "再加入一個系統" }));
+
+  expect(getByLabelText(/^主機名稱或 IP 1/u)).not.toBeNull();
+  expect(getByLabelText(/^主機名稱或 IP 2/u)).not.toBeNull();
+
+  // Only the target builder is read: other sections of the form, such as the
+  // active-testing authorization notice, use 精確 for a different scope idea.
+  const formText = container.querySelector(".environment-target-builder")?.textContent ?? "";
+  expect(formText.split("不會登入、使用帳密或掃描其他位址").length - 1).toBe(1);
+  expect(formText).not.toContain("精確");
+  expect(formText).not.toContain("remote-safe");
+  expect(formText).not.toContain("repo");
 });

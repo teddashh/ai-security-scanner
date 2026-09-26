@@ -52,14 +52,14 @@ test("both locales preserve optional preparation, behavior, and boundary details
   }
 });
 
-test("the combined environment path asks beginners for exact hosts instead of service categories", () => {
+test("the combined environment path asks beginners for specific hosts instead of service categories", () => {
   const english = startPageCopy.en.cards.internal_it_environment;
-  assert.match(english.summary, /exact internal hosts/u);
+  assert.match(english.summary, /specific internal hosts/u);
   assert.match(english.want, /hostname or IP for each internal system/u);
   assert.match(english.prepare, /Common ports are selected automatically/u);
 
   const traditionalChinese = startPageCopy["zh-TW"].cards.internal_it_environment;
-  assert.match(traditionalChinese.summary, /精確內部主機/u);
+  assert.match(traditionalChinese.summary, /內部主機一起檢查/u);
   assert.match(traditionalChinese.want, /內部系統的主機名稱或 IP/u);
   assert.match(traditionalChinese.prepare, /自動選用常用連接埠/u);
 });
@@ -209,9 +209,9 @@ test("internal network detection stays an explicit inventory-only bilingual sugg
     "Add {target} to the target list?",
     "要將 {target} 加入目標清單嗎",
     "CIDR ranges are inventory only.",
-    "Add each exact host above for a vulnerability check.",
+    "Add each host above for a vulnerability check.",
     "CIDR 網段僅供盤點",
-    "請在上方逐一加入需要弱點檢查的精確主機",
+    "請在上方逐一加入需要弱點檢查的主機",
   ]) assert.ok(casesPageSource.includes(phrase), phrase);
   assert.ok(casesPageSource.includes("scannerService.detectLocalPrivateSubnets()"));
   assert.ok(casesPageSource.includes("onClick={() => useDetectedLocalNetwork(detectedLocalNetwork.target)}"));

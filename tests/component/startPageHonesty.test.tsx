@@ -144,7 +144,7 @@ test("the first screen leads with a combined environment scan plus the website a
   const environmentCard = Array.from(container.querySelectorAll<HTMLElement>(".use-case-card"))
     .find((card) => card.textContent?.includes("Scan my environment"));
   expect(environmentCard?.textContent).toContain("Company IT environment");
-  expect(environmentCard?.textContent).toContain("repositories, websites or APIs, and exact internal hosts together");
+  expect(environmentCard?.textContent).toContain("repositories, websites or APIs, and specific internal hosts together");
   expect(environmentCard?.textContent).not.toContain("Greenbone");
   expect(environmentCard?.textContent).not.toContain("not tested");
   const websiteCard = Array.from(container.querySelectorAll<HTMLElement>(".use-case-card"))
@@ -231,7 +231,7 @@ test("the first-screen card outcome sentences are not line-clamped", () => {
     ".start-page__choices > .use-case-grid .use-case-card__header p",
   )).map((node) => node.textContent);
   expect(outcomes).toEqual([
-    "Check repositories, websites or APIs, and exact internal hosts together in one result organized by asset.",
+    "Check repositories, websites or APIs, and specific internal hosts together in one result organized by asset.",
     "Find website vulnerabilities and exposed services within the selected website origin.",
     "Find exposed secrets, vulnerable dependencies, risky code, and unsafe configuration in one local project.",
   ]);

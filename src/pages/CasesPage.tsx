@@ -176,7 +176,7 @@ const pageCopy = {
   environmentRepositoriesTitle: { en: "Development projects", zhTW: "開發專案" },
   environmentRepositoriesBody: {
     en: "Choose each local repository you want checked for risky code, exposed secrets, vulnerable dependencies, and unsafe configuration.",
-    zhTW: "逐一選擇要檢查的本機 repo；產品會找危險程式碼、暴露秘密、有弱點的相依套件與不安全設定。",
+    zhTW: "逐一選擇要檢查的本機程式碼儲存庫；產品會找危險程式碼、暴露秘密、有弱點的相依套件與不安全設定。",
   },
   environmentAddRepository: { en: "Add a project folder", zhTW: "加入專案資料夾" },
   environmentRemoveRepository: { en: "Remove {name}", zhTW: "移除 {name}" },
@@ -191,12 +191,12 @@ const pageCopy = {
   },
   environmentHostsTitle: { en: "Internal systems", zhTW: "內部系統" },
   environmentHostsBody: {
-    en: "Add each exact hostname or IP once. Greenbone discovers supported services on common ports and runs the remote-safe checks that apply to that host.",
-    zhTW: "每個精確主機名稱或 IP 只需加入一次。Greenbone 會在常用連接埠探索支援的服務，並執行適用於該主機的 remote-safe 檢查。",
+    en: "Add each hostname or IP once. Greenbone discovers supported services on common ports, or on the ports you choose under Advanced, and runs the remote-safe checks that apply to that host. It does not sign in, use credentials, or scan another address.",
+    zhTW: "每個主機名稱或 IP 只需加入一次。Greenbone 會在常用連接埠（或你在「進階」選擇的連接埠）探索支援的服務，並執行適用於該主機的遠端安全檢查；不會登入、使用帳密或掃描其他位址。",
   },
   environmentAddHost: { en: "Add another system", zhTW: "再加入一個系統" },
   environmentRemoveHost: { en: "Remove internal system {number}", zhTW: "移除內部系統 {number}" },
-  environmentHostTarget: { en: "Exact hostname or IP {number}", zhTW: "精確主機名稱或 IP {number}" },
+  environmentHostTarget: { en: "Hostname or IP {number}", zhTW: "主機名稱或 IP {number}" },
   environmentHostTargetHelp: {
     en: "Enter one hostname or IP only—no URL, CIDR range, port, username, or password.",
     zhTW: "只輸入一個主機名稱或 IP；不要輸入網址、CIDR 網段、連接埠、帳號或密碼。",
@@ -207,22 +207,18 @@ const pageCopy = {
     en: "Leave blank for common ports: {ports}. Or enter up to 64 comma-separated ports.",
     zhTW: "留白會使用常用連接埠：{ports}。也可輸入最多 64 個以逗號分隔的連接埠。",
   },
-  environmentHostCoverage: {
-    en: "Greenbone remote-safe profile · no sign-in or credentials",
-    zhTW: "Greenbone remote-safe 設定 · 不登入、不使用帳密",
-  },
   environmentInventoryTitle: { en: "Other hosts and ranges — inventory only", zhTW: "其他主機與網段（僅供盤點）" },
   environmentInventoryHint: {
     en: "Record unsupported bare hosts or CIDR ranges; this run will not scan them",
     zhTW: "記錄尚未支援的裸主機或 CIDR 網段；本次執行不會掃描它們",
   },
   environmentInventoryHelp: {
-    en: "CIDR ranges are inventory only. Add each exact host above for a vulnerability check.",
-    zhTW: "CIDR 網段僅供盤點；請在上方逐一加入需要弱點檢查的精確主機。",
+    en: "CIDR ranges are inventory only. Add each host above for a vulnerability check.",
+    zhTW: "CIDR 網段僅供盤點；請在上方逐一加入需要弱點檢查的主機。",
   },
   environmentAtLeastOne: {
-    en: "Add at least one scan-ready project folder, website or API URL, or exact internal system. Inventory-only ranges can be saved alongside one of these items.",
-    zhTW: "請至少加入一個可掃描的專案資料夾、網站或 API 網址，或精確的內部系統。僅供盤點的網段可與其中一項一起保存。",
+    en: "Add at least one scan-ready project folder, website or API URL, or internal system. Inventory-only ranges can be saved alongside one of these items.",
+    zhTW: "請至少加入一個可掃描的專案資料夾、網站或 API 網址，或一個內部系統。僅供盤點的網段可與其中一項一起保存。",
   },
   websitePreparedTitle: { en: "Ready: {target}", zhTW: "已準備：{target}" },
   websitePrepared: {
@@ -591,7 +587,7 @@ const internalHostErrorCopy: Record<InternalHostInputError, BilingualText> = {
   empty_target: { en: "Enter the internal system hostname or IP address.", zhTW: "請輸入內部系統的主機名稱或 IP 位址。" },
   url_not_allowed: { en: "Enter only the hostname or IP address, not a URL.", zhTW: "只輸入主機名稱或 IP 位址，不要輸入網址。" },
   credentials_not_allowed: { en: "Remove the username or password. This scan does not use credentials.", zhTW: "請移除帳號或密碼；這項掃描不會使用帳密。" },
-  cidr_not_allowed: { en: "Enter one exact hostname or IP address, not a CIDR range.", zhTW: "請輸入一個精確主機名稱或 IP 位址，不要輸入 CIDR 網段。" },
+  cidr_not_allowed: { en: "Enter one hostname or IP address, not a CIDR range.", zhTW: "請輸入一個主機名稱或 IP 位址，不要輸入 CIDR 網段。" },
   service_coordinate_not_allowed: { en: "Remove the port. Enter it under Advanced if needed.", zhTW: "請移除連接埠；如有需要，請在「進階」中輸入。" },
   invalid_target: { en: "Enter a valid fully qualified hostname or IP address.", zhTW: "請輸入有效的完整主機名稱或 IP 位址。" },
 };
@@ -1393,10 +1389,6 @@ export function CasesPage({
                         )}
                       </label>
                     </details>
-                    <small className="environment-device-row__coverage">
-                      <strong>{text(pageCopy.environmentHostCoverage)}</strong>{" "}
-                      {text(internalHostGreenboneProfile.coverageNote)}
-                    </small>
                   </div>
                 );
               })}
