@@ -179,11 +179,16 @@ const copy = {
     zhTW: "這些服務有回應；連線結果屬於盤點，不代表資安弱點。",
   },
   observationSummary: {
-    en: "{services} observed services across {assets} assets",
-    zhTW: "共觀察到 {services} 項服務，分布於 {assets} 項資產",
+    en: "{items} across {assets}",
+    zhTW: "共觀察到 {items}，分布於 {assets}",
   },
+  observationServicesCountOne: { en: "1 observed service", zhTW: "1 項服務" },
+  observationServicesCountMany: { en: "{count} observed services", zhTW: "{count} 項服務" },
+  observationAssetsCountOne: { en: "1 asset", zhTW: "1 項資產" },
+  observationAssetsCountMany: { en: "{count} assets", zhTW: "{count} 項資產" },
   observationExamples: { en: "Representative services", zhTW: "代表項目" },
-  observationCompleteList: {
+  observationCompleteListOne: { en: "View 1 observed service", zhTW: "查看全部 1 項觀察服務" },
+  observationCompleteListMany: {
     en: "View all {count} observed services",
     zhTW: "查看全部 {count} 項觀察服務",
   },
@@ -204,9 +209,13 @@ const copy = {
     zhTW: "這些是服務、軟體元件、雲端資源與工作流程結構，不是資安問題或修復建議。",
   },
   typedInventorySummary: {
-    en: "{total} inventory items across {assets} assets",
-    zhTW: "共 {total} 個盤點項目，分布於 {assets} 個資產",
+    en: "{items} across {assets}",
+    zhTW: "共 {items}，分布於 {assets}",
   },
+  typedInventoryItemsCountOne: { en: "1 inventory item", zhTW: "1 個盤點項目" },
+  typedInventoryItemsCountMany: { en: "{count} inventory items", zhTW: "{count} 個盤點項目" },
+  typedInventoryAssetsCountOne: { en: "1 asset", zhTW: "1 個資產" },
+  typedInventoryAssetsCountMany: { en: "{count} assets", zhTW: "{count} 個資產" },
   inventoryServices: { en: "Services", zhTW: "服務" },
   inventoryComponents: { en: "Software components", zhTW: "軟體元件" },
   inventoryCloudResources: { en: "Cloud resources", zhTW: "雲端資源" },
@@ -219,8 +228,10 @@ const copy = {
   inventoryNo: { en: "no", zhTW: "否" },
   inventoryCondition: { en: "Condition", zhTW: "條件" },
   inventoryExamples: { en: "Representative examples", zhTW: "代表性範例" },
-  inventoryAllItems: { en: "Show all {count} inventory items", zhTW: "顯示全部 {count} 個盤點項目" },
-  inventoryAssetSummary: { en: "{count} items for this asset", zhTW: "此資產共有 {count} 個項目" },
+  inventoryAllItemsOne: { en: "Show 1 inventory item", zhTW: "顯示全部 1 個盤點項目" },
+  inventoryAllItemsMany: { en: "Show all {count} inventory items", zhTW: "顯示全部 {count} 個盤點項目" },
+  inventoryAssetSummaryOne: { en: "1 item for this asset", zhTW: "此資產共有 1 個項目" },
+  inventoryAssetSummaryMany: { en: "{count} items for this asset", zhTW: "此資產共有 {count} 個項目" },
   inventorySources: { en: "Sources: {count}", zhTW: "來源：{count}" },
   inventoryHttpStatus: { en: "HTTP status", zhTW: "HTTP 狀態" },
   inventoryTlsObserved: { en: "TLS observed", zhTW: "觀察到 TLS" },
@@ -660,7 +671,8 @@ const copy = {
   unavailableProvenance: { en: "Historical detail unavailable", zhTW: "無法取得歷史細節" },
   coverageDetail: { en: "Coverage detail", zhTW: "涵蓋範圍細節" },
   exactNetworkScope: { en: "Exact addresses and ports", zhTW: "實際位址與連接埠" },
-  networkScopeCount: { en: "{count} network scope groups", zhTW: "{count} 組網路範圍" },
+  networkScopeCountOne: { en: "1 network scope group", zhTW: "1 組網路範圍" },
+  networkScopeCountMany: { en: "{count} network scope groups", zhTW: "{count} 組網路範圍" },
   networkAddresses: { en: "Addresses", zhTW: "位址" },
   networkPorts: { en: "Ports", zhTW: "連接埠" },
   networkResult: { en: "Result", zhTW: "結果" },
@@ -1812,7 +1824,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
           ) : <p>{text(copy.noTestedDimension)}</p>}
           {testedNetworkScopes.length > 0 && (
             <details>
-              <summary>{text(copy.networkScopeCount, { count: formatNumber(testedNetworkScopes.length) })} · {text(copy.exactNetworkScope)}</summary>
+              <summary>{text(testedNetworkScopes.length === 1 ? copy.networkScopeCountOne : copy.networkScopeCountMany, { count: formatNumber(testedNetworkScopes.length) })} · {text(copy.exactNetworkScope)}</summary>
               <ul className="detail-list">
                 {testedNetworkScopes.map((scope) => (
                   <li key={`${scope.taskId}-${scope.workUnitId}`}>
@@ -1869,7 +1881,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
           ) : <p>{text(noRecordedGapDetail)}</p>}
           {untestedNetworkScopes.length > 0 && (
             <details>
-              <summary>{text(copy.networkScopeCount, { count: formatNumber(untestedNetworkScopes.length) })} · {text(copy.exactNetworkScope)}</summary>
+              <summary>{text(untestedNetworkScopes.length === 1 ? copy.networkScopeCountOne : copy.networkScopeCountMany, { count: formatNumber(untestedNetworkScopes.length) })} · {text(copy.exactNetworkScope)}</summary>
               <ul className="detail-list">
                 {untestedNetworkScopes.map((scope) => (
                   <li key={`${scope.taskId}-${scope.workUnitId}`}>
@@ -2386,8 +2398,14 @@ export function FindingsPage({
       </div>
       <p className="service-observations__summary">
         <strong>{text(copy.typedInventorySummary, {
-          total: formatNumber(typedInventory.total),
-          assets: formatNumber(typedInventory.assetIds.length),
+          items: text(
+            typedInventory.total === 1 ? copy.typedInventoryItemsCountOne : copy.typedInventoryItemsCountMany,
+            { count: formatNumber(typedInventory.total) },
+          ),
+          assets: text(
+            typedInventory.assetIds.length === 1 ? copy.typedInventoryAssetsCountOne : copy.typedInventoryAssetsCountMany,
+            { count: formatNumber(typedInventory.assetIds.length) },
+          ),
         })}</strong>
       </p>
       <div className="metrics-grid metrics-grid--three">
@@ -2407,12 +2425,12 @@ export function FindingsPage({
           renderInventoryItem(item, `inventory-sample-${index}`))}
       </div>
       <details className="page-secondary-feature service-observations__complete">
-        <summary>{text(copy.inventoryAllItems, { count: formatNumber(typedInventory.total) })}</summary>
+        <summary>{text(typedInventory.total === 1 ? copy.inventoryAllItemsOne : copy.inventoryAllItemsMany, { count: formatNumber(typedInventory.total) })}</summary>
         {typedInventory.byAsset.map((asset) => (
           <section className="section-block" key={asset.assetId}>
             <div className="section-heading">
               <h3>{requestedTargetLabelById(asset.assetId, inventoryTargetById, locale)}</h3>
-              <p>{text(copy.inventoryAssetSummary, { count: formatNumber(asset.total) })}</p>
+              <p>{text(asset.total === 1 ? copy.inventoryAssetSummaryOne : copy.inventoryAssetSummaryMany, { count: formatNumber(asset.total) })}</p>
             </div>
             <div className="evidence-list">
               {typedInventory.items
@@ -2453,8 +2471,14 @@ export function FindingsPage({
       </div>
       <p className="service-observations__summary">
         <strong>{text(copy.observationSummary, {
-          services: formatNumber(observations.length),
-          assets: formatNumber(observationAssetCount),
+          items: text(
+            observations.length === 1 ? copy.observationServicesCountOne : copy.observationServicesCountMany,
+            { count: formatNumber(observations.length) },
+          ),
+          assets: text(
+            observationAssetCount === 1 ? copy.observationAssetsCountOne : copy.observationAssetsCountMany,
+            { count: formatNumber(observationAssetCount) },
+          ),
         })}</strong>
       </p>
       <div className="section-heading">
@@ -2464,7 +2488,7 @@ export function FindingsPage({
         {representativeObservations.map((finding) => renderObservation(finding, false))}
       </div>
       <details className="page-secondary-feature service-observations__complete">
-        <summary>{text(copy.observationCompleteList, { count: formatNumber(observations.length) })}</summary>
+        <summary>{text(observations.length === 1 ? copy.observationCompleteListOne : copy.observationCompleteListMany, { count: formatNumber(observations.length) })}</summary>
         <div className="evidence-list">
           {observations.map((finding) => renderObservation(finding, true))}
         </div>
@@ -2806,9 +2830,6 @@ export function FindingsPage({
       </section>
 
       {report && <BeginnerReportOverview report={report} run={latestRun} />}
-
-      {typedInventorySection}
-      {observationSection}
 
       <details className="section-block page-secondary-feature findings-related-work">
         <summary>{text(copy.relatedGroups)}</summary>
@@ -3428,6 +3449,8 @@ export function FindingsPage({
           )}
         </section>
       </section>
+      {typedInventorySection}
+      {observationSection}
       {report && <ReportEndMatter report={report} run={latestRun} />}
     </div>
   );

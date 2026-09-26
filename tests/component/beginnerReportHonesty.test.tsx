@@ -2909,7 +2909,7 @@ test("typed inventory leads over legacy exposure rows and presents every scanner
 
   const { container, unmount } = renderReport(value, [], [catalogRun("syft")]);
   expect(container.textContent).toContain("What the scanners inventoried");
-  expect(container.textContent).toContain("5 inventory items across 1 assets");
+  expect(container.textContent).toContain("5 inventory items across 1 asset");
   expect(container.textContent).toContain("10.0.0.5:443");
   expect(container.textContent).toContain("scanner <component>");
   expect(container.textContent).toContain("Uploads & archives");
@@ -2980,6 +2980,290 @@ test("service inventory leads with counts and three examples while retaining eve
   expect(complete?.textContent).toContain("View all 5 observed services");
   expect(complete?.querySelectorAll(".evidence-item")).toHaveLength(5);
   expect(complete?.textContent).toContain("Port 8004");
+});
+
+test("the complete problem list leads the typed inventory when both are present", () => {
+  const items: NonNullable<BeginnerMasterReport["inventory"]>["items"] = [{
+    kind: "service",
+    assetId: "asset-1",
+    endpoint: "10.0.0.5",
+    port: 443,
+    transport: "tcp",
+    schemes: ["https"],
+    httpStatuses: [200],
+    tlsObservations: [true],
+    sources: [],
+  }, {
+    kind: "service",
+    assetId: "asset-1",
+    endpoint: "10.0.0.6",
+    port: 8443,
+    transport: "tcp",
+    schemes: ["https"],
+    httpStatuses: [200],
+    tlsObservations: [true],
+    sources: [],
+  }];
+  const inventoryCounts = {
+    services: 2,
+    softwareComponents: 0,
+    cloudResources: 0,
+    workflowComponents: 0,
+    workflowRelationships: 0,
+  };
+  const value = report("partial", {
+    findings: [frozenFinding()],
+    inventory: {
+      total: 2,
+      counts: inventoryCounts,
+      assetIds: ["asset-1"],
+      representativeSample: items,
+      items,
+      byAsset: [{ assetId: "asset-1", total: 2, counts: inventoryCounts, representativeSample: items }],
+    },
+  });
+
+  const { container, unmount } = renderReport(value);
+  const scopeReport = container.querySelector<HTMLElement>(
+    "section[aria-labelledby='beginner-master-report-title']",
+  );
+  const findingBrowser = container.querySelector<HTMLElement>("#finding-browser");
+  const inventorySection = container.querySelector<HTMLElement>(
+    "section[aria-labelledby='typed-inventory-title']",
+  );
+  if (!scopeReport || !findingBrowser || !inventorySection) {
+    throw new Error("scope report, finding browser, or typed inventory section did not render");
+  }
+  expect(scopeReport.compareDocumentPosition(findingBrowser) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(findingBrowser.compareDocumentPosition(inventorySection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(inventorySection.querySelector(".service-observations__summary")?.textContent)
+    .toBe("2 inventory items across 1 asset");
+  unmount();
+
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const zh = renderReport(value);
+  expect(
+    zh.container.querySelector(
+      "section[aria-labelledby='typed-inventory-title'] .service-observations__summary",
+    )?.textContent,
+  ).toBe("共 2 個盤點項目，分布於 1 個資產");
+  window.localStorage.setItem(localeStorageKey, "en");
+});
+
+test("every typed inventory count reads as singular for exactly one item and one asset", () => {
+  const items: NonNullable<BeginnerMasterReport["inventory"]>["items"] = [{
+    kind: "service",
+    assetId: "asset-1",
+    endpoint: "10.0.0.5",
+    port: 443,
+    transport: "tcp",
+    schemes: ["https"],
+    httpStatuses: [200],
+    tlsObservations: [true],
+    sources: [],
+  }];
+  const inventoryCounts = {
+    services: 1,
+    softwareComponents: 0,
+    cloudResources: 0,
+    workflowComponents: 0,
+    workflowRelationships: 0,
+  };
+  const value = report("complete", {
+    inventory: {
+      total: 1,
+      counts: inventoryCounts,
+      assetIds: ["asset-1"],
+      representativeSample: items,
+      items,
+      byAsset: [{ assetId: "asset-1", total: 1, counts: inventoryCounts, representativeSample: items }],
+    },
+  });
+
+  const { container, unmount } = renderReport(value);
+  const section = container.querySelector<HTMLElement>("section[aria-labelledby='typed-inventory-title']");
+  if (!section) throw new Error("typed inventory section did not render");
+  expect(section.querySelector(".service-observations__summary")?.textContent)
+    .toBe("1 inventory item across 1 asset");
+  expect(section.querySelector(".service-observations__complete summary")?.textContent)
+    .toBe("Show 1 inventory item");
+  expect(section.querySelector(".service-observations__complete p")?.textContent)
+    .toBe("1 item for this asset");
+  unmount();
+
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const zh = renderReport(value);
+  const zhSection = zh.container.querySelector<HTMLElement>("section[aria-labelledby='typed-inventory-title']");
+  if (!zhSection) throw new Error("typed inventory section did not render in zh-TW");
+  expect(zhSection.querySelector(".service-observations__summary")?.textContent)
+    .toBe("共 1 個盤點項目，分布於 1 個資產");
+  expect(zhSection.querySelector(".service-observations__complete summary")?.textContent)
+    .toBe("顯示全部 1 個盤點項目");
+  expect(zhSection.querySelector(".service-observations__complete p")?.textContent)
+    .toBe("此資產共有 1 個項目");
+  window.localStorage.setItem(localeStorageKey, "en");
+});
+
+test("each typed inventory count picks its own form when items span several assets", () => {
+  const service = (assetId: string, endpoint: string): NonNullable<BeginnerMasterReport["inventory"]>["items"][number] => ({
+    kind: "service",
+    assetId,
+    endpoint,
+    port: 443,
+    transport: "tcp",
+    schemes: ["https"],
+    httpStatuses: [200],
+    tlsObservations: [true],
+    sources: [],
+  });
+  const counts = (services: number) => ({
+    services,
+    softwareComponents: 0,
+    cloudResources: 0,
+    workflowComponents: 0,
+    workflowRelationships: 0,
+  });
+  const first = [service("asset-1", "10.0.0.5"), service("asset-1", "10.0.0.6")];
+  const second = [service("asset-2", "10.0.0.7")];
+  const items = [...first, ...second];
+  const value = report("complete", {
+    inventory: {
+      total: 3,
+      counts: counts(3),
+      assetIds: ["asset-1", "asset-2"],
+      representativeSample: items,
+      items,
+      byAsset: [
+        { assetId: "asset-1", total: 2, counts: counts(2), representativeSample: first },
+        { assetId: "asset-2", total: 1, counts: counts(1), representativeSample: second },
+      ],
+    },
+  });
+
+  const perAsset = (container: HTMLElement) => [...container.querySelectorAll(
+    "section[aria-labelledby='typed-inventory-title'] .service-observations__complete .section-heading p",
+  )].map((line) => line.textContent);
+  const { container, unmount } = renderReport(value);
+  const section = container.querySelector<HTMLElement>("section[aria-labelledby='typed-inventory-title']");
+  if (!section) throw new Error("typed inventory section did not render");
+  expect(section.querySelector(".service-observations__summary")?.textContent)
+    .toBe("3 inventory items across 2 assets");
+  expect(section.querySelector(".service-observations__complete summary")?.textContent)
+    .toBe("Show all 3 inventory items");
+  expect(perAsset(container)).toEqual(["2 items for this asset", "1 item for this asset"]);
+  unmount();
+
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const zh = renderReport(value);
+  expect(zh.container.querySelector(
+    "section[aria-labelledby='typed-inventory-title'] .service-observations__summary",
+  )?.textContent).toBe("共 3 個盤點項目，分布於 2 個資產");
+  expect(perAsset(zh.container)).toEqual(["此資產共有 2 個項目", "此資產共有 1 個項目"]);
+});
+
+test("the complete problem list leads the service observations when both are present", () => {
+  const value = report("partial", {
+    findings: [
+      frozenFinding(),
+      frozenFinding({
+        findingId: "observation-1",
+        fingerprint: "observation-fingerprint-1",
+        title: "Reachable service",
+        severity: "info",
+        severityBasisCode: "open_port",
+        targetAssetIds: ["asset-1"],
+        observationDetails: ["port:8443", "protocol:tcp"],
+      }),
+    ],
+  });
+
+  const { container, unmount } = renderReport(value);
+  const scopeReport = container.querySelector<HTMLElement>(
+    "section[aria-labelledby='beginner-master-report-title']",
+  );
+  const findingBrowser = container.querySelector<HTMLElement>("#finding-browser");
+  const observationSection = container.querySelector<HTMLElement>(
+    "section[aria-labelledby='service-observations-title']",
+  );
+  if (!scopeReport || !findingBrowser || !observationSection) {
+    throw new Error("scope report, finding browser, or observation section did not render");
+  }
+  expect(scopeReport.compareDocumentPosition(findingBrowser) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(findingBrowser.compareDocumentPosition(observationSection) & Node.DOCUMENT_POSITION_FOLLOWING)
+    .toBeTruthy();
+  expect(observationSection.querySelector(".service-observations__summary")?.textContent)
+    .toBe("1 observed service across 1 asset");
+  expect(observationSection.querySelector(".service-observations__complete summary")?.textContent)
+    .toBe("View 1 observed service");
+  unmount();
+
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const zh = renderReport(value);
+  const zhSection = zh.container.querySelector<HTMLElement>(
+    "section[aria-labelledby='service-observations-title']",
+  );
+  if (!zhSection) throw new Error("observation section did not render in zh-TW");
+  expect(zhSection.querySelector(".service-observations__summary")?.textContent)
+    .toBe("共觀察到 1 項服務，分布於 1 項資產");
+  expect(zhSection.querySelector(".service-observations__complete summary")?.textContent)
+    .toBe("查看全部 1 項觀察服務");
+  window.localStorage.setItem(localeStorageKey, "en");
+});
+
+test("network scope group counts read as singular for one and plural for more than one", () => {
+  const assetId = "asset-1";
+  const value = report("partial", {
+    actual: {
+      checks: [],
+      networkScopes: [{
+        taskId: "task-tested",
+        checkId: "greenbone",
+        workUnitId: "scope-tested-1",
+        targetAssetId: assetId,
+        target: "10.0.0.10",
+        addressRanges: ["10.0.0.10"],
+        portRanges: ["443"],
+        transport: "tcp",
+        stage: "deep",
+        outcome: "tested_complete",
+      }, {
+        taskId: "task-tested",
+        checkId: "greenbone",
+        workUnitId: "scope-tested-2",
+        targetAssetId: assetId,
+        target: "10.0.0.11",
+        addressRanges: ["10.0.0.11"],
+        portRanges: ["443"],
+        transport: "tcp",
+        stage: "deep",
+        outcome: "tested_complete",
+      }, {
+        taskId: "task-untested",
+        checkId: "greenbone",
+        workUnitId: "scope-untested-1",
+        targetAssetId: assetId,
+        target: "10.0.0.10",
+        addressRanges: ["10.0.0.10"],
+        portRanges: ["8443"],
+        transport: "tcp",
+        stage: "deep",
+        outcome: "not_tested",
+      }],
+      unavailableDimensions: [],
+    },
+  });
+
+  const { container, unmount } = renderReport(value);
+  expect(container.textContent).toContain("2 network scope groups");
+  expect(container.textContent).toContain("1 network scope group");
+  expect(container.textContent).not.toContain("1 network scope groups");
+  unmount();
+
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const zh = renderReport(value);
+  expect(zh.container.textContent).toContain("2 組網路範圍");
+  expect(zh.container.textContent).toContain("1 組網路範圍");
+  window.localStorage.setItem(localeStorageKey, "en");
 });
 
 test("what the run could not establish is shown with its own dimension", () => {
