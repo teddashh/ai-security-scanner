@@ -109,9 +109,9 @@ const pageCopy = {
     en: "Create a scan or continue one.",
     zhTW: "建立新掃描，或繼續現有專案。",
   },
-  create: { en: "Start a new scan", zhTW: "開始新的檢查" },
+  create: { en: "Start a new scan", zhTW: "開始新的掃描" },
   closeForm: { en: "Close setup", zhTW: "關閉設定" },
-  newCaseEyebrow: { en: "New scan", zhTW: "新的檢查" },
+  newCaseEyebrow: { en: "New scan", zhTW: "新掃描" },
   newCaseTitle: { en: "New scan", zhTW: "新掃描" },
   newCaseDescription: {
     en: "Add the target. A project name is generated when this field is blank.",
@@ -142,13 +142,13 @@ const pageCopy = {
   },
   aiGeneratedUnknown: { en: "I'm not sure", zhTW: "我不確定" },
   targetCandidateHelp: {
-    en: "Create the scan project first, then start the selected checks.",
-    zhTW: "請先建立掃描專案，再開始執行所選檢查。",
+    en: "Nothing is contacted until you review the scan and press Start.",
+    zhTW: "在你確認掃描內容並按下開始之前，不會連線到任何目標。",
   },
   localPickerEyebrow: { en: "Local check", zhTW: "本機檢查" },
   localPickerBoundary: {
-    en: "The selected folder is copied into a private local snapshot. Create the scan project first, then start the selected checks.",
-    zhTW: "所選資料夾會複製成私密本機快照；請先建立掃描專案，再開始執行所選檢查。",
+    en: "Nothing is scanned until you review the scan and press Start.",
+    zhTW: "在你確認掃描內容並按下開始之前，不會進行掃描。",
   },
   localPathHelp: {
     en: "Only the folder name is shown here. Its full location stays on this computer.",
@@ -343,7 +343,7 @@ const pageCopy = {
     zhTW: "系統正在自動準備私密掃描副本。",
   },
   createLocal: { en: "Create scan project", zhTW: "建立掃描專案" },
-  reviewEnvironment: { en: "Review scan", zhTW: "檢查掃描內容" },
+  reviewScan: { en: "Review scan", zhTW: "檢查掃描內容" },
   formConflictTitle: { en: "The same target has two different descriptions", zhTW: "同一目標被標成兩種不同環境" },
   formConflict: {
     en: "{target} appears in both public and internal target lists. Keep it in the one list that describes where it is reached.",
@@ -1533,7 +1533,7 @@ export function CasesPage({
         title={text(showForm ? pageCopy.newCaseTitle : pageCopy.headerTitle)}
         description={showForm ? text(pageCopy.newCaseDescription) : undefined}
         actions={
-          <button className="button button--primary" type="button" disabled={showForm && busy} onClick={showForm ? closeForm : openBlankForm}>
+          <button className={showForm ? "button button--secondary" : "button button--primary"} type="button" disabled={showForm && busy} onClick={showForm ? closeForm : openBlankForm}>
             <Icon name={showForm ? "close" : "plus"} size={18} />
             {text(showForm ? pageCopy.closeForm : pageCopy.create)}
           </button>
@@ -1756,11 +1756,11 @@ export function CasesPage({
                 ? pageCopy.preparingLocalSnapshot
                 : busy
                 ? pageCopy.creating
-                : environmentUseCase
-                  ? pageCopy.reviewEnvironment
+                : environmentUseCase || selectedUseCase === "deployed_website" || (nativeMode && guidedLocalUseCase)
+                  ? pageCopy.reviewScan
                 : !nativeMode && guidedLocalUseCase
                   ? pageCopy.createPreview
-                  : guidedLocalInput?.createAction ?? pageCopy.createLocal)}
+                  : pageCopy.createLocal)}
               <Icon name="arrow" size={17} />
             </button>
           </div>

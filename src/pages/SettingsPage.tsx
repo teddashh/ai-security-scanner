@@ -31,7 +31,7 @@ export function SettingsPage({
     },
     ready: {
       status: { en: "Ready at the last check", zhTW: "上次檢查時已就緒" },
-      action: { en: "New scan", zhTW: "新增掃描" },
+      action: { en: "New scan", zhTW: "開始新掃描" },
     },
     unavailable: {
       status: {

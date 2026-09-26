@@ -711,6 +711,57 @@ test("an internal website shortcut promises the fixed profile and the required n
   }]);
 });
 
+test("a website shortcut asks to review the scan, not create a project", () => {
+  const { container, getByRole } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "deployed_website",
+    selectionKey: 1,
+  });
+
+  expect(getByRole("button", { name: "Review scan" })).toBeTruthy();
+  expect(container.textContent).toContain(
+    "Nothing is contacted until you review the scan and press Start.",
+  );
+  expect(container.textContent).not.toContain("Create the scan project first");
+
+  const closeButton = getByRole("button", { name: "Close setup" });
+  expect(closeButton.className).toContain("button--secondary");
+  expect(closeButton.className).not.toContain("button--primary");
+});
+
+test("a website shortcut asks to review the scan in Traditional Chinese", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container, getByRole } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "deployed_website",
+    selectionKey: 1,
+  });
+
+  expect(getByRole("button", { name: "檢查掃描內容" })).toBeTruthy();
+  expect(container.textContent).not.toContain("請先建立掃描專案");
+});
+
+test("the Chinese header button starts a new scan, not a new check", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { getByRole } = renderCases();
+
+  const start = getByRole("button", { name: "開始新的掃描" });
+  expect(start.className).toContain("button--primary");
+});
+
+test("a native guided source-code route asks to review the scan, not create a project", () => {
+  const { getByRole } = renderCases({
+    selectedCase: undefined,
+    cases: [],
+    selectedUseCase: "source_code",
+    selectionKey: 1,
+  });
+
+  expect(getByRole("button", { name: "Review scan" })).toBeTruthy();
+});
+
 test("a guided source-code scan chooses and attaches its folder in one creation action", async () => {
   const onCreate = vi.fn(() => Promise.resolve(true));
   const onCreateWithWorkspace = vi.fn(() => Promise.resolve(true));

@@ -270,7 +270,7 @@ test("beginner documentation leads with the three scan paths and one report", as
     assert.match(content, /Nuclei/u);
     assert.match(content, /read-only|唯讀/u);
     assert.match(content, /internal system|內部系統/iu);
-    assert.match(content, /Start scan|開始掃描/u);
+    assert.match(content, /Review and start|確認後開始/u);
     assert.match(content, /scanning-scope(?:\.zh-TW)?\.md/u);
   }
   assert.match(english, /One report for every selected asset/u);

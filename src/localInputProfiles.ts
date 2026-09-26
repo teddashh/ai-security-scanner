@@ -16,7 +16,6 @@ export interface LocalInputDefinition {
   directoryLabel: BilingualText;
   selection: BilingualText;
   attachAction: BilingualText;
-  createAction: BilingualText;
   technical: BilingualText;
 }
 
@@ -39,7 +38,6 @@ export const localInputDefinitions: Record<LocalInputProfile, LocalInputDefiniti
     directoryLabel: bilingual("Source-code folder", "程式碼資料夾"),
     selection: bilingual("Choose the source-code folder", "選擇程式碼資料夾"),
     attachAction: bilingual("Add this source-code project", "加入這份程式碼專案"),
-    createAction: bilingual("Create scan with this code", "用這份程式碼建立掃描"),
     technical: bilingual("Input profile: repository_working_tree. Every .git directory, including refs and hooks, is excluded from the saved copy.", "輸入格式：repository_working_tree。保存副本時會排除所有 .git 目錄，包括 refs 與 hooks。"),
   },
   iac_working_tree: {
@@ -52,7 +50,6 @@ export const localInputDefinitions: Record<LocalInputProfile, LocalInputDefiniti
     directoryLabel: bilingual("Infrastructure-code folder", "基礎設施程式碼資料夾"),
     selection: bilingual("Choose the infrastructure-code folder", "選擇基礎設施程式碼資料夾"),
     attachAction: bilingual("Add this infrastructure code", "加入這份基礎設施程式碼"),
-    createAction: bilingual("Create scan with this infrastructure code", "用這份基礎設施程式碼建立掃描"),
     technical: bilingual("Input profile: iac_working_tree. The saved copy accepts Terraform, JSON, and YAML deployment files.", "輸入格式：iac_working_tree。保存副本接受 Terraform、JSON 與 YAML 部署檔案。"),
   },
   container_image_oci_layout: {
@@ -65,7 +62,6 @@ export const localInputDefinitions: Record<LocalInputProfile, LocalInputDefiniti
     directoryLabel: bilingual("Exported image folder", "匯出映像資料夾"),
     selection: bilingual("Choose the exported container-image folder", "選擇匯出的容器映像資料夾"),
     attachAction: bilingual("Add this container image", "加入這份容器映像"),
-    createAction: bilingual("Create scan with this container image", "用這份容器映像建立掃描"),
     technical: bilingual("Input profile: container_image_oci_layout. Choose one digest-bound OCI Image Layout containing oci-layout, index.json, and blobs/.", "輸入格式：container_image_oci_layout。請選擇一份綁定精確內容指紋、且包含 oci-layout、index.json 與 blobs/ 的 OCI Image Layout。"),
   },
   kubernetes_manifests: {
@@ -78,7 +74,6 @@ export const localInputDefinitions: Record<LocalInputProfile, LocalInputDefiniti
     directoryLabel: bilingual("Kubernetes settings folder", "Kubernetes 設定資料夾"),
     selection: bilingual("Choose the Kubernetes configuration folder", "選擇 Kubernetes 設定資料夾"),
     attachAction: bilingual("Add these Kubernetes settings", "加入這些 Kubernetes 設定"),
-    createAction: bilingual("Create scan with these Kubernetes settings", "用這些 Kubernetes 設定建立掃描"),
     technical: bilingual("Input profile: kubernetes_manifests. The folder may contain Kubernetes YAML and JSON manifest files.", "輸入格式：kubernetes_manifests。資料夾可包含 Kubernetes YAML 與 JSON manifest 檔。"),
   },
   kubernetes_node_snapshot: {
@@ -91,7 +86,6 @@ export const localInputDefinitions: Record<LocalInputProfile, LocalInputDefiniti
     directoryLabel: bilingual("Exported node-settings folder", "匯出節點設定資料夾"),
     selection: bilingual("Choose the exported node-settings folder", "選擇匯出的節點設定資料夾"),
     attachAction: bilingual("Add these node settings", "加入這些節點設定"),
-    createAction: bilingual("Create scan with these node settings", "用這些節點設定建立掃描"),
     technical: bilingual("Input profile: kubernetes_node_snapshot. Choose the parent of node-snapshot/; the bounded CIS snapshot is read without mounting the host filesystem.", "輸入格式：kubernetes_node_snapshot。請選擇 node-snapshot/ 的父目錄；產品不掛載 host filesystem，只讀取有限範圍的 CIS 快照。"),
   },
 };
@@ -102,7 +96,6 @@ const aiApplicationInputDefinition: LocalInputDefinition = {
   formTitle: bilingual("Choose code you wrote or generated with AI", "選擇自己寫或 AI 生成的程式碼"),
   formIntro: bilingual("Pick the AI app or agent project folder to check for risky code, exposed secrets, vulnerable packages, and related deployment settings.", "選擇 AI 應用或 Agent 的專案資料夾，檢查危險程式碼、暴露的秘密、有弱點的套件與相關部署設定。"),
   attachAction: bilingual("Add this AI project", "加入這份 AI 專案"),
-  createAction: bilingual("Create scan with this AI project", "用這份 AI 專案建立掃描"),
 };
 
 export const localInputDefinitionForAssessmentIntent = (

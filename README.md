@@ -22,7 +22,7 @@ Open the app and choose one path:
 - **Check a website** scans one exact web origin with a reviewed Nuclei profile.
 - **Check code or an AI project** scans a read-only local snapshot for secrets, vulnerable dependencies, risky code, and unsafe configuration.
 
-Follow **New scan → Scan setup → Start scan → Scan progress → Results**. From Results, select **Save or share report** to open **Share results**, then **Save HTML report**. See the [step-by-step path to an HTML report](docs/getting-started.md#from-new-scan-to-an-html-report), including how to reopen a scan from **My scans**.
+Follow **New scan → Review and start → Scan progress → Results**. From Results, select **Save or share report** to open **Share results**, then **Save HTML report**. See the [step-by-step path to an HTML report](docs/getting-started.md#from-new-scan-to-an-html-report), including how to reopen a scan from **My scans**.
 
 ## Use with Claude Code or Codex
 
