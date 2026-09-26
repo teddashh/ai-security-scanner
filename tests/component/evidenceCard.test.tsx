@@ -17,8 +17,11 @@ import type { BeginnerMasterReport, Finding, ScanRun } from "../../src/types";
 const KICS_RULE = "38c5ee0d-7f22-4260-ab72-5073048df100";
 const KICS_LOCATION =
   "infra/main.tf:line=3:resource=resource:demo-logs-bucket,similarity:6ed736ab0df4cde21ce2716cc0a80470709d43045ca36a0c897af1f7913f1009";
+const CHECKOV_LOCATION = "/infra/main.tf:line=3:resource=demo-logs-bucket";
 const RESTATING_SUMMARY =
   `kics reported rule ${KICS_RULE} at ${KICS_LOCATION}. Raw target text is retained only as untrusted evidence.`;
+const restatingSummaryAt = (location: string) =>
+  `kics reported rule ${KICS_RULE} at ${location}. Raw target text is retained only as untrusted evidence.`;
 const NON_RESTATING_SUMMARY =
   "Bucket policy grants public read. Raw target text is retained only as untrusted evidence.";
 const READABLE_LOCATION: Record<"en" | "zh-TW", string> = {
@@ -161,11 +164,13 @@ const reportWithEvidenceSummary = (summary: string): BeginnerMasterReport => ({
 });
 
 /** Renders the plain problem list -- no frozen report -- with one finding selected. */
-const renderFinding = (summary: string) => {
+const renderFinding = (summary: string, location = KICS_LOCATION) => {
+  const finding = kicsFinding(summary);
+  finding.evidence[0]!.location = location;
   const result = render(
     <I18nProvider>
       <FindingsPage
-        findings={[kicsFinding(summary)]}
+        findings={[finding]}
         findingGroups={[]}
         findingGroupEvents={[]}
         runs={[kicsRun()]}
@@ -214,11 +219,16 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-test.each(["en", "zh-TW"] as const)(
-  "the priority card and evidence card read the KICS location as a place (%s)",
-  (locale) => {
+test.each([
+  ["KICS", "en", KICS_LOCATION],
+  ["KICS", "zh-TW", KICS_LOCATION],
+  ["Checkov", "en", CHECKOV_LOCATION],
+  ["Checkov", "zh-TW", CHECKOV_LOCATION],
+] as const)(
+  "the priority card and evidence card normalize the %s-style location (%s)",
+  (_scanner, locale, rawLocation) => {
     window.localStorage.setItem(localeStorageKey, locale);
-    const { container } = renderFinding(RESTATING_SUMMARY);
+    const { container } = renderFinding(restatingSummaryAt(rawLocation), rawLocation);
     const readableLocation = READABLE_LOCATION[locale];
 
     // 1. The priority card's location line.
@@ -240,7 +250,7 @@ test.each(["en", "zh-TW"] as const)(
     expect(locationBlock.querySelector("p")?.textContent).toBe(readableLocation);
 
     const technicalCode = Array.from(evidenceItem.querySelectorAll("code")).map((node) => node.textContent);
-    expect(technicalCode).toContain(KICS_LOCATION);
+    expect(technicalCode).toContain(rawLocation);
   },
 );
 

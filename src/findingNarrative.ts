@@ -2518,18 +2518,37 @@ export const localizedRequestedLimitValue = (
 const LOCATION_COORDINATE_FORM = /^(.*?)(?::line=(\d+))?(?::column=(\d+))?(?::resource=(.+))?$/s;
 
 /**
+ * Present a scanner's snapshot path consistently without changing the stored
+ * evidence. Checkov names the snapshot root with a leading slash while KICS
+ * and the other source scanners use repository-relative paths. Backslashes
+ * and a leading `./` are likewise scanner conventions, not useful location
+ * information for the reader.
+ */
+const reportFilePath = (raw: string): string => {
+  let path = raw.replaceAll("\\", "/");
+  while (path.startsWith("./")) path = path.slice(2);
+  if (path.startsWith("/") && !path.startsWith("//")) path = path.replace(/^\/+/, "");
+  return path || raw;
+};
+
+/**
  * Reads a stored scanner location as a place, not the coordinate string it is
  * kept in. KICS's `R` carries a `resource:<name>` label and/or a
  * `similarity:<64-hex hash>` deduplication key, joined by a comma; that hash
  * is KICS's own dedup key, not something a reader needs to find the spot, so
  * it is dropped here and kept verbatim in the technical details instead.
- * Anything that is not the coordinate form is returned untouched.
+ * A plain path receives the same separator/root cleanup. URLs, endpoints,
+ * package coordinates, and other non-path locations are returned untouched.
  */
 export const findingLocationText = (locale: "en" | "zh-TW", raw: string): string => {
-  const [, path, line, column, resource] = LOCATION_COORDINATE_FORM.exec(raw.trim()) ?? [];
-  if (!path || (!line && !column && !resource)) return raw;
+  const trimmed = raw.trim();
+  const [, path, line, column, resource] = LOCATION_COORDINATE_FORM.exec(trimmed) ?? [];
+  if (!path || (!line && !column && !resource)) {
+    if (/^(?:\.{0,2}[\\/]|[A-Za-z]:[\\/])/u.test(trimmed)) return reportFilePath(trimmed);
+    return raw;
+  }
 
-  const parts = [path];
+  const parts = [reportFilePath(path)];
   if (line && column) {
     parts.push(locale === "en" ? `line ${line}, column ${column}` : `第 ${line} 行第 ${column} 欄`);
   } else if (line) {
@@ -2540,8 +2559,10 @@ export const findingLocationText = (locale: "en" | "zh-TW", raw: string): string
   if (resource) {
     const resourceParts = resource
       .split(",")
-      .filter((part) => !part.startsWith("similarity:"))
-      .map((part) => (part.startsWith("resource:") ? part.slice("resource:".length) : part));
+      .map((part) => part.trim())
+      .filter((part) => part && !part.startsWith("similarity:"))
+      .map((part) => (part.startsWith("resource:") ? part.slice("resource:".length).trim() : part))
+      .filter((part, index, all) => part && all.indexOf(part) === index);
     if (resourceParts.length > 0) parts.push(resourceParts.join(", "));
   }
   return parts.join(" · ");

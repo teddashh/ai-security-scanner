@@ -44300,14 +44300,29 @@ mod tests {
     #[test]
     fn html_finding_card_states_the_location_in_its_first_layer() {
         const KICS_LOCATION: &str = "infra/main.tf:line=3:resource=resource:demo-logs-bucket,similarity:6ed736ab0df4cde21ce2716cc0a80470709d43045ca36a0c897af1f7913f1009";
+        const CHECKOV_LOCATION: &str = "/infra/main.tf:line=3:resource=demo-logs-bucket";
         let mut case =
             case_for_rated_httpx_finding(EngineRunStatus::Completed, None, Some("httpx-task"));
         let mut finding = case.findings[0].clone();
         finding.evidence[0].location = Some(KICS_LOCATION.into());
+        // Checkov spells the same snapshot-root path with a leading slash and
+        // does not prefix the resource name. Both evidence records remain in
+        // technical detail, while the report card names their shared place
+        // once in the same spelling.
+        let mut checkov_evidence = finding.evidence[0].clone();
+        checkov_evidence.id = "evidence-checkov-location".into();
+        checkov_evidence.artifact_sha256 = "b".repeat(64);
+        checkov_evidence.location = Some(CHECKOV_LOCATION.into());
+        finding.evidence.push(checkov_evidence);
         case.findings[0] = finding.clone();
         // The observation's frozen snapshot is what the export actually
         // reads; keep it in step with the mutated finding (see
         // `case_for_two_findings_sharing_one_fix` for the same pattern).
+        case.finding_observations[0].evidence_hashes = finding
+            .evidence
+            .iter()
+            .map(|evidence| evidence.artifact_sha256.clone())
+            .collect();
         case.finding_observations[0].finding_snapshot = Some(finding);
 
         let en = html_from_export_case(&case, crate::export::ReportLocale::En);
@@ -44348,6 +44363,16 @@ mod tests {
         );
         assert!(
             zh.contains(&format!("<dt>證據位置</dt><dd>{KICS_LOCATION}</dd>")),
+            "{zh}"
+        );
+        assert!(
+            en.contains(&format!(
+                "<dt>Evidence location</dt><dd>{CHECKOV_LOCATION}</dd>"
+            )),
+            "{en}"
+        );
+        assert!(
+            zh.contains(&format!("<dt>證據位置</dt><dd>{CHECKOV_LOCATION}</dd>")),
             "{zh}"
         );
 

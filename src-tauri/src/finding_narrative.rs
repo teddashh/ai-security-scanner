@@ -2690,17 +2690,34 @@ fn location_text(
     raw: &str,
     position: impl Fn(Option<&str>, Option<&str>) -> Option<String>,
 ) -> String {
-    let Some((path, line, column, resource)) = parse_location_coordinate(raw.trim()) else {
-        return raw.to_owned();
+    let trimmed = raw.trim();
+    let Some((path, line, column, resource)) = parse_location_coordinate(trimmed) else {
+        let path_like = trimmed.starts_with('/')
+            || trimmed.starts_with("./")
+            || trimmed.starts_with("../")
+            || trimmed.as_bytes().get(1) == Some(&b':')
+                && matches!(trimmed.as_bytes().get(2), Some(b'/') | Some(b'\\'));
+        return if path_like {
+            report_file_path(trimmed)
+        } else {
+            raw.to_owned()
+        };
     };
-    let mut parts = vec![path.to_owned()];
+    let mut parts = vec![report_file_path(path)];
     parts.extend(position(line, column));
     if let Some(resource) = resource {
-        let names = resource
+        let mut names = Vec::new();
+        for part in resource
             .split(',')
-            .filter(|part| !part.starts_with("similarity:"))
-            .map(|part| part.strip_prefix("resource:").unwrap_or(part))
-            .collect::<Vec<_>>();
+            .map(str::trim)
+            .filter(|part| !part.is_empty() && !part.starts_with("similarity:"))
+            .map(|part| part.strip_prefix("resource:").unwrap_or(part).trim())
+            .filter(|part| !part.is_empty())
+        {
+            if !names.contains(&part) {
+                names.push(part);
+            }
+        }
         if !names.is_empty() {
             parts.push(names.join(", "));
         }
@@ -2708,13 +2725,31 @@ fn location_text(
     parts.join(" · ")
 }
 
+/// Normalize only the report-facing spelling of a source path. The original
+/// scanner location remains unchanged in the evidence details.
+fn report_file_path(raw: &str) -> String {
+    let mut path = raw.replace('\\', "/");
+    while let Some(relative) = path.strip_prefix("./") {
+        path = relative.to_owned();
+    }
+    if path.starts_with('/') && !path.starts_with("//") {
+        path = path.trim_start_matches('/').to_owned();
+    }
+    if path.is_empty() {
+        raw.to_owned()
+    } else {
+        path
+    }
+}
+
 /// Reads a stored scanner location as a place, not the coordinate string it
 /// is kept in. KICS's `R` carries a `resource:<name>` label and/or a
 /// `similarity:<64-hex hash>` deduplication key, joined by a comma; that hash
 /// is KICS's own deduplication key, not something a reader needs in order to
 /// find the spot, so it is dropped here and kept verbatim in the technical
-/// details instead. Anything that is not the coordinate form -- including an
-/// empty leading path -- is returned untouched.
+/// details instead. A plain path receives the same separator/root cleanup;
+/// URLs, endpoints, package coordinates, and other non-path locations remain
+/// untouched. A coordinate with an empty leading path is likewise left raw.
 ///
 /// `findingLocationText` in `src/findingNarrative.ts` is the twin of this
 /// function and of [`location_zh_hant`]; the two must keep producing
@@ -3806,7 +3841,7 @@ mod tests {
         // string" in tests/frontend/findingNarrative.test.ts -- the rows and
         // the two edge cases below must stay identical between the two
         // files.
-        let rows: [(&str, &str, &str); 10] = [
+        let rows: [(&str, &str, &str); 12] = [
             (
                 "infra/main.tf:line=3:resource=resource:demo-logs-bucket,similarity:6ed736ab0df4cde21ce2716cc0a80470709d43045ca36a0c897af1f7913f1009",
                 "infra/main.tf · line 3 · demo-logs-bucket",
@@ -3838,10 +3873,16 @@ mod tests {
                 "https://shop.example.test:8443/login",
             ),
             ("10.0.0.5:22", "10.0.0.5:22", "10.0.0.5:22"),
+            ("/requirements.txt", "requirements.txt", "requirements.txt"),
             (
-                "/requirements.txt",
-                "/requirements.txt",
-                "/requirements.txt",
+                "/infra/storage.tf:line=4:resource=aws_s3_bucket.logs",
+                "infra/storage.tf · line 4 · aws_s3_bucket.logs",
+                "infra/storage.tf · 第 4 行 · aws_s3_bucket.logs",
+            ),
+            (
+                ".\\infra\\storage.tf:line=4:resource=resource:aws_s3_bucket.logs,resource:,similarity:dedup,resource:aws_s3_bucket.logs",
+                "infra/storage.tf · line 4 · aws_s3_bucket.logs",
+                "infra/storage.tf · 第 4 行 · aws_s3_bucket.logs",
             ),
             // An empty path is not this form.
             (":line=3", ":line=3", ":line=3"),
