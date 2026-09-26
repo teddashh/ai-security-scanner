@@ -54,7 +54,7 @@ Never turn zero findings into a security guarantee. Do not substitute a raw upst
 
 ## Deliver the HTML report
 
-1. Select the project in **My scans**, open **Results**, and choose the intended finished or stopped scan in **Report run**. Use **Save or share report** to reach **Share results**, choose **HTML report (recommended)**, keep **Hide sensitive identifiers (recommended)**, and select **Save HTML report (recommended)**.
+1. Select the project in **My scans**, open **Results**, and choose the intended finished or stopped scan in **Report run**. Use **Save or share report** to reach **Share results**, choose **HTML report (recommended)**, keep **Hide sensitive identifiers (recommended)**, and select **Save HTML report**.
 2. For an agent-driven local export, obtain the exact case and run IDs from `case show CASE_ID`. Select the requested run explicitly: a newer queued or cancelled run must not silently replace it. Inspect that run's engine outcomes with the command below; the surrounding case status and coverage may describe a newer run.
 
 ```sh

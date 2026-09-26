@@ -14,7 +14,7 @@ For the current source build, follow this path:
 4. Follow the work in **Scan progress**. Tool preparation appears here too. Wait until the run finishes or stops; completed checks remain available even when another check could not finish.
 5. Select **Results** in the sidebar. If there is more than one saved run, choose the intended scan in **Report run**. Read the affected assets, the highest-priority problems and next actions, and what was not tested.
 6. Select **Save or share report** at the top of Results. The breadcrumb changes to **Share results**.
-7. Select **HTML report (recommended)**, keep **Hide sensitive identifiers (recommended)** selected, then select **Save HTML report (recommended)**. Choose a filename and location in the save dialog and save the file. Open the saved `.html` file in a browser to read or share the professional report.
+7. Select **HTML report (recommended)**, keep **Hide sensitive identifiers (recommended)** selected, then select **Save HTML report**. Choose a filename and location in the save dialog and save the file. Open the saved `.html` file in a browser to read or share the professional report.
 
 The saved HTML uses the app language, English or Traditional Chinese. A CLI export uses `--locale en` by default, or `--locale zh-Hant` for Traditional Chinese. Scan facts stay the same.
 

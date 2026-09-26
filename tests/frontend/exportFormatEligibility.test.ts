@@ -96,8 +96,10 @@ test("the export page defaults to a readable report without raw source files", (
   assert.match(source, /useState\(false\)/u);
   assert.match(source, /const primaryFormats = \["html", "json"\]/u);
   assert.match(source, /const advancedFormats = \[\s*"case_bundle",\s*"framework_report",\s*"ocsf",\s*"oscal",/u);
-  assert.match(source, /HTML report \(recommended\)/u);
-  assert.match(source, /HTML 報告（建議）/u);
+  assert.match(source, /en: "HTML report"/u);
+  assert.match(source, /zhTW: "HTML 報告"/u);
+  assert.match(source, /en: "\{format\} \(recommended\)"/u);
+  assert.match(source, /zhTW: "\{format\}（建議）"/u);
   assert.match(source, /JSON report/u);
   assert.match(source, /JSON 報告/u);
   assert.match(source, /More formats/u);

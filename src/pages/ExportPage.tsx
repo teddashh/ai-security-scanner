@@ -57,6 +57,7 @@ const copy = {
   preparing: { en: "Preparing…", zhTW: "準備中…" },
   exportDemo: { en: "Download {format} demo file", zhTW: "下載「{format}」展示檔" },
   createExport: { en: "Save {format}", zhTW: "儲存「{format}」" },
+  recommendedFormat: { en: "{format} (recommended)", zhTW: "{format}（建議）" },
   connectionOnlyTitle: {
     en: "Connection test only — no vulnerability scan ran",
     zhTW: "這只是連線測試，沒有執行漏洞掃描",
@@ -272,7 +273,7 @@ const formatCopy = {
     extension: ".case.tar.gz",
   },
   html: {
-    title: { en: "HTML report (recommended)", zhTW: "HTML 報告（建議）" },
+    title: { en: "HTML report", zhTW: "HTML 報告" },
     detail: {
       en: "For teammates; opens in a browser.",
       zhTW: "給同事閱讀；可用瀏覽器開啟。",
@@ -318,6 +319,7 @@ const formatCopy = {
 }>;
 
 const primaryFormats = ["html", "json"] as const satisfies readonly ExportFormat[];
+const recommendedFormat = "html" as const satisfies ExportFormat;
 const advancedFormats = [
   "case_bundle",
   "framework_report",
@@ -512,7 +514,7 @@ export function ExportPage({ workspace, selectedRunId, runningScanResultsPending
         />
         <span className="format-card__icon"><Icon name={id === "case_bundle" ? "cases" : "file"} size={20} /></span>
         <span>
-          <strong>{text(item.title)}</strong>
+          <strong>{id === recommendedFormat ? text(copy.recommendedFormat, { format: text(item.title) }) : text(item.title)}</strong>
           <small>{text(isFindingOnlyExportFormat(id) ? findingOnlyCoverageCopy[id] : item.detail)}</small>
         </span>
       </label>
