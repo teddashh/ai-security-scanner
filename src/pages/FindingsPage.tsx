@@ -618,7 +618,6 @@ const copy = {
   },
   firstLayerRequested: { en: "Requested", zhTW: "要求" },
   firstLayerActuallyTested: { en: "Actually tested", zhTW: "實際測試" },
-  firstLayerTime: { en: "Time", zhTW: "時間" },
   currentProjectFallback: {
     en: "from the current project; not retained by this run",
     zhTW: "來自目前專案；本輪未保存",
@@ -1310,6 +1309,14 @@ const projectReportFindings = (
 
 function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport; run?: ScanRun }) {
   const { locale, text, formatDateTime, formatNumber } = useI18n();
+  // Scoped to the `report-first-layer-scope` paragraph only: a label there is
+  // followed by ": " in English but by a full-width "：" with no following
+  // space in Traditional Chinese (an ASCII colon plus space is not how a
+  // Chinese-reading label ends). Every other label on this page keeps its
+  // literal ": " regardless of locale.
+  const firstLayerLabelColon = locale === "en" ? ":" : "：";
+  const firstLayerLabelGap = locale === "en" ? " " : "";
+  const firstLayerLabelSeparator = `${firstLayerLabelColon}${firstLayerLabelGap}`;
   const securityFindingIds = new Set(
     report.findings.filter(isSecurityFinding).map((finding) => finding.findingId),
   );
@@ -1394,6 +1401,16 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
   const appendRemainingCount = (value: string, count: number): string => count > 0
     ? `${value} · ${text(copy.moreItems, { count: formatNumber(count) })}`
     : value;
+  /**
+   * Sibling of `appendRemainingCount` for values that are already a complete
+   * sentence (a coverage-gap line, a record note, or a next-step action).
+   * That sentence carries its own trailing "." or "。"; once a "+N more" tail
+   * follows it, the period reads as a dangling full stop before the count
+   * rather than the end of anything, so it is dropped -- but only when a tail
+   * is actually appended. A lone sentence (count 0) keeps its period.
+   */
+  const appendRemainingCountToSentence = (value: string, count: number): string =>
+    appendRemainingCount(count > 0 ? value.replace(/[.。]$/u, "") : value, count);
   const requestedSummary = firstRequestedTarget
     ? appendRemainingCount(
         requestedTargetLabel(firstRequestedTarget, locale),
@@ -1407,15 +1424,15 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
       )
     : text(copy.noTestedDimension);
   const gapSummary = firstCoverageGap
-    ? appendRemainingCount(coverageGapLine(firstCoverageGap), coverageLossGaps.length - 1)
+    ? appendRemainingCountToSentence(coverageGapLine(firstCoverageGap), coverageLossGaps.length - 1)
     : text(noRecordedGapDetail);
   const recordNoteSummary = firstRecordNote
-    ? appendRemainingCount(coverageGapLine(firstRecordNote), recordNotes.length - 1)
+    ? appendRemainingCountToSentence(coverageGapLine(firstRecordNote), recordNotes.length - 1)
     : undefined;
   const nextStepActionText = (step: (typeof orderedNextSteps)[number]): string =>
     beginnerStepAction(locale, step, report.findings, report.actual.checks);
   const nextStepSummary = orderedNextSteps[0]
-    ? appendRemainingCount(
+    ? appendRemainingCountToSentence(
         nextStepActionText(orderedNextSteps[0]),
         orderedNextSteps.length - 1,
       )
@@ -1477,7 +1494,22 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
       if (!group.holders.includes(label)) group.holders.push(label);
     }
   }
-  const testedCheckSummaries = testedChecks.flatMap((check) => {
+  // A completed check-to-target coordinate names one asset per check; a run
+  // with several catalog checks bound to the same asset otherwise repeats
+  // "completed for <asset>" once per check. Only `tested_complete` groups: a
+  // partial/failed/etc. sibling keeps its own line because "X completed for
+  // T · Partly completed" would contradict itself. Each group is reserved a
+  // slot (and rendered) at the position where its first member would have
+  // been emitted, so the relative order with every other line is preserved.
+  const completedCoordinateGroups = new Map<string, {
+    labels: string[];
+    resolvedTarget: string | undefined;
+    index: number;
+  }>();
+  const unresolvedCoordinateGroupKey = "\u0000target-not-retained";
+  const listSeparator = locale === "zh-TW" ? "、" : ", ";
+  const testedCheckSummaries: string[] = [];
+  for (const check of testedChecks) {
     const engine = engineByTaskId.get(check.taskId);
     const checkLabel = localizedCheckName(check.checkId, locale, engine);
     const targets = check.targetAssetIds
@@ -1488,9 +1520,10 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
       .join(locale === "en" ? ", " : "、");
     const checkPrefix = `${targets ? `${targets} · ` : ""}${checkLabel} · ${text(testedStatusCopy(check.status))}`;
     if (check.testedDimensions.length === 0) {
-      return [`${checkPrefix} · ${text(copy.checkDimensionsUnavailable)}`];
+      testedCheckSummaries.push(`${checkPrefix} · ${text(copy.checkDimensionsUnavailable)}`);
+      continue;
     }
-    return check.testedDimensions.map((dimension) => {
+    for (const dimension of check.testedDimensions) {
       if (dimension.dimension === "completed check-to-target coordinate") {
         const coordinatePrefix = `${check.checkId} on asset `;
         const coordinateAssetId = dimension.value.startsWith(coordinatePrefix)
@@ -1499,19 +1532,38 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         const resolvedTarget = coordinateAssetId && check.targetAssetIds.includes(coordinateAssetId)
           ? report.requested.targets.find((candidate) => candidate.assetId === coordinateAssetId)?.label
           : undefined;
-        return text(
-          resolvedTarget ? copy.completedCheckForTargets : copy.completedCheckTargetUnavailable,
-          { check: checkLabel, targets: resolvedTarget ?? "" },
-        ) + ` · ${text(testedStatusCopy(check.status))}`;
+        if (check.status === "tested_complete") {
+          const groupKey = resolvedTarget ? `asset:${coordinateAssetId}` : unresolvedCoordinateGroupKey;
+          let group = completedCoordinateGroups.get(groupKey);
+          if (!group) {
+            group = { labels: [], resolvedTarget, index: testedCheckSummaries.length };
+            completedCoordinateGroups.set(groupKey, group);
+            testedCheckSummaries.push("");
+          }
+          if (!group.labels.includes(checkLabel)) group.labels.push(checkLabel);
+          continue;
+        }
+        testedCheckSummaries.push(
+          `${resolvedTarget ? `${resolvedTarget} · ` : ""}${checkLabel} · ${text(testedStatusCopy(check.status))}`,
+        );
+        continue;
       }
-      return `${checkPrefix} · ${localizedCoverageDimension(dimension.dimension, locale)}: ${testedValueText(
-        engine,
-        dimension.dimension,
-        dimension.value,
-        locale,
-      )}`;
-    });
-  });
+      testedCheckSummaries.push(
+        `${checkPrefix} · ${localizedCoverageDimension(dimension.dimension, locale)}${firstLayerLabelSeparator}${testedValueText(
+          engine,
+          dimension.dimension,
+          dimension.value,
+          locale,
+        )}`,
+      );
+    }
+  }
+  for (const group of completedCoordinateGroups.values()) {
+    testedCheckSummaries[group.index] = text(
+      group.resolvedTarget ? copy.completedCheckForTargets : copy.completedCheckTargetUnavailable,
+      { check: group.labels.join(listSeparator), targets: group.resolvedTarget ?? "" },
+    );
+  }
   const testedNetworkScopeSummaries = testedNetworkScopes.map((scope) => {
     const target = networkScopeTargetLabel(scope, targetById, locale);
     const addresses = scope.addressRanges.join(locale === "en" ? ", " : "、");
@@ -1557,7 +1609,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
   const exclusionsSummary = localhostSummary
     ? text(localhostSummary.exclusions)
     : excludedGaps.length > 0
-      ? `${text(copy.recordedExclusions)}: ${excludedGaps.map((gap) => {
+      ? `${text(copy.recordedExclusions)}${firstLayerLabelSeparator}${excludedGaps.map((gap) => {
           const targets = requestedTargetListLabel(gap.targetAssetIds, targetById, locale);
           return `${targets ? `${targets} · ` : ""}${coverageGapDimensionText(gap)} · ${coverageGapProse(locale, gap.reason)}`;
         }).join(inlineSeparator)}`
@@ -1615,11 +1667,11 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
       </dl>
 
       <p className="report-first-layer-scope">
-        <strong>{text(copy.firstLayerRequested)}:</strong>{" "}
-        {requestedTargetsSummary}{stageIsApplicable ? ` · ${text(copy.stage)}: ${requestedStageSummary}` : ""}
+        <strong>{text(copy.firstLayerRequested)}{firstLayerLabelColon}</strong>{firstLayerLabelGap}
+        {requestedTargetsSummary}{stageIsApplicable ? ` · ${text(copy.stage)}${firstLayerLabelSeparator}${requestedStageSummary}` : ""}
         {" | "}
-        <strong>{text(copy.firstLayerActuallyTested)}:</strong>{" "}
-        {actualTestedSummary} · {text(copy.firstLayerTime)}: {observedTimeSummary} · {exclusionsSummary}
+        <strong>{text(copy.firstLayerActuallyTested)}{firstLayerLabelColon}</strong>{firstLayerLabelGap}
+        {actualTestedSummary} · {observedTimeSummary} · {exclusionsSummary}
       </p>
 
       <details className="page-secondary-feature report-scope-disclosure">

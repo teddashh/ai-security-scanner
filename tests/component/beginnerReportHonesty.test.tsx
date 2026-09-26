@@ -1475,9 +1475,9 @@ test("a recorded next action must never leave an asset with fewer ways to act th
   expect(onOpenProgress).toHaveBeenCalledTimes(1);
 });
 
-test("the first layer names the requested target, tested work, top gap, and next action", () => {
+const firstLayerScopeFixture = (): BeginnerMasterReport => {
   const base = report("partial");
-  const { container } = renderReport(report("partial", {
+  return report("partial", {
     requested: {
       ...base.requested,
       limits: [{
@@ -1528,7 +1528,11 @@ test("the first layer names the requested target, tested work, top gap, and next
       reason: "The TLS check did not start.",
       taskId: "task-2",
     }],
-  }));
+  });
+};
+
+test("the first layer names the requested target, tested work, top gap, and next action", () => {
+  const { container } = renderReport(firstLayerScopeFixture());
 
   const strip = container.querySelector<HTMLElement>(".report-outcome-strip");
   expect(strip).not.toBeNull();
@@ -1536,7 +1540,7 @@ test("the first layer names the requested target, tested work, top gap, and next
   expect(strip!.textContent).toContain("contoso.example");
   expect(strip!.textContent).toContain("naabu-tcp");
   expect(strip!.textContent).toContain("TLS configuration");
-  expect(strip!.textContent).toContain("The TLS check did not start.");
+  expect(strip!.textContent).toContain("The TLS check did not start");
   expect(strip!.textContent).toContain("Review the target and retry.");
   expect(strip!.textContent).not.toContain("Review the requested scope, then retry.");
 
@@ -1548,7 +1552,8 @@ test("the first layer names the requested target, tested work, top gap, and next
   expect(firstLayerScope!.textContent).not.toContain("Limits:");
   expect(firstLayerScope!.textContent).not.toContain("execution timeout");
   expect(firstLayerScope!.textContent).toContain("completed planned scan batches: 1 of 1");
-  expect(firstLayerScope!.textContent).toMatch(/Time: Observed .+ to .+/u);
+  expect(firstLayerScope!.textContent).toMatch(/Observed .+ to .+/u);
+  expect(firstLayerScope!.textContent).not.toContain("Time:");
   expect(firstLayerScope!.textContent).toContain("Recorded exclusions: contoso.example · ports outside the requested port set");
 
   const limitsList = Array.from(container.querySelectorAll<HTMLElement>("details")).find(
@@ -1557,6 +1562,19 @@ test("the first layer names the requested target, tested work, top gap, and next
   if (!limitsList) throw new Error("the limits used list did not render");
   expect(limitsList.textContent).toContain("Execution timeout");
   expect(limitsList.textContent).toContain("30 seconds");
+});
+
+test("every first-layer label ends with a full-width colon in Traditional Chinese", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container } = renderReport(firstLayerScopeFixture());
+
+  const paragraph = container.querySelector<HTMLElement>(".report-first-layer-scope")?.textContent ?? "";
+  expect(paragraph).toContain("要求：contoso.example");
+  expect(paragraph).toContain("掃描深度：");
+  expect(paragraph).toContain("實際測試：");
+  expect(paragraph).toContain("已記錄的排除項目：");
+  expect(paragraph).not.toContain(": ");
+  expect(paragraph).not.toContain("： ");
 });
 
 test("limits used merges identical policies and names their holders instead of raw ids", () => {
@@ -1732,7 +1750,7 @@ test("the tested time window excludes failed sibling task activity", () => {
   const firstLayerScope = container.querySelector<HTMLElement>(".report-first-layer-scope");
   expect(firstLayerScope).not.toBeNull();
   expect(firstLayerScope!.textContent).toContain(
-    `Time: Observed ${formatDateTime(testedFrom)} to ${formatDateTime(testedUntil)}`,
+    `Observed ${formatDateTime(testedFrom)} to ${formatDateTime(testedUntil)}`,
   );
   expect(firstLayerScope!.textContent).not.toContain(formatDateTime(allTasksFrom));
   expect(firstLayerScope!.textContent).not.toContain(formatDateTime(allTasksUntil));
@@ -1757,7 +1775,7 @@ test("the tested time is explicitly unavailable when only all-task bounds were r
   }));
 
   const firstLayerScope = container.querySelector<HTMLElement>(".report-first-layer-scope");
-  expect(firstLayerScope?.textContent).toContain("Time: Observation time not retained");
+  expect(firstLayerScope?.textContent).toContain("Observation time not retained");
 });
 
 test("the first layer does not drop a completed check whose exact dimensions were not saved", () => {
@@ -1866,6 +1884,196 @@ test("a generic completed coordinate uses display labels without leaking backend
 
   const technicalScope = container.querySelector<HTMLElement>(".report-scope-disclosure");
   expect(technicalScope?.textContent).toContain(rawCoordinate);
+});
+
+/**
+ * Two catalog checks, each contributing only a "completed check-to-target
+ * coordinate" dimension, bound to the same resolved target. Shared by the
+ * English and zh-TW grouping tests below so both exercise the identical
+ * fixture and differ only in rendered locale.
+ */
+const twoCompletedChecksBoundToOneTarget = (): { report: BeginnerMasterReport; run: ScanRun } => {
+  const assetId = "asset-source-repo";
+  const targetLabel = "Contoso source repository";
+  const secretEngineId = "catalog-secret-check";
+  const patternEngineId = "catalog-code-pattern-check";
+  const base = report("complete");
+  const engineTemplate = localhostRun().engineRuns[0]!;
+  const run: ScanRun = {
+    ...localhostRun(),
+    engineRuns: [{
+      ...engineTemplate,
+      id: "task-secret",
+      engineId: secretEngineId,
+      engineName: "Secret check",
+      category: "code_and_secrets",
+      taskKind: { kind: "catalog_engine" },
+      localhostTcpObservation: undefined,
+    }, {
+      ...engineTemplate,
+      id: "task-pattern",
+      engineId: patternEngineId,
+      engineName: "Code pattern check",
+      category: "code_and_secrets",
+      taskKind: { kind: "catalog_engine" },
+      localhostTcpObservation: undefined,
+    }],
+  };
+  return {
+    run,
+    report: report("complete", {
+      requested: {
+        ...base.requested,
+        targets: [{
+          assetId,
+          label: targetLabel,
+          assetKind: "repository",
+          labelAvailability: "recorded",
+          assetKindAvailability: "recorded",
+        }],
+        requestedCheckIds: [secretEngineId, patternEngineId],
+      },
+      actual: {
+        checks: [{
+          taskId: "task-secret",
+          checkId: secretEngineId,
+          targetAssetIds: [assetId],
+          status: "tested_complete",
+          testedDimensions: [{
+            dimension: "completed check-to-target coordinate",
+            value: `${secretEngineId} on asset ${assetId}`,
+            observation: "The durable task reached completed state for this target binding.",
+          }],
+        }, {
+          taskId: "task-pattern",
+          checkId: patternEngineId,
+          targetAssetIds: [assetId],
+          status: "tested_complete",
+          testedDimensions: [{
+            dimension: "completed check-to-target coordinate",
+            value: `${patternEngineId} on asset ${assetId}`,
+            observation: "The durable task reached completed state for this target binding.",
+          }],
+        }],
+        networkScopes: [],
+        unavailableDimensions: [],
+      },
+      coverageCounts: counts({ testedComplete: 2 }),
+    }),
+  };
+};
+
+test("two completed catalog checks bound to the same target group into one completed-for line", () => {
+  const { report: fixtureReport, run } = twoCompletedChecksBoundToOneTarget();
+  const { container } = renderReport(fixtureReport, [], [run]);
+
+  const firstLayer = container.querySelector<HTMLElement>(".report-first-layer-scope");
+  expect(firstLayer).not.toBeNull();
+  const expected = "Secret check, Code pattern check completed for Contoso source repository";
+  expect(firstLayer!.textContent).toContain(expected);
+  expect(firstLayer!.textContent!.split(expected).length - 1).toBe(1);
+  expect(firstLayer!.textContent).not.toContain(" · Completed");
+});
+
+test("a partly completed check with a coordinate dimension keeps its own status line instead of the completed-for template", () => {
+  const assetId = "asset-mail";
+  const targetLabel = "Contoso source repository";
+  const mailEngineId = "catalog-mail-check";
+  const base = report("partial");
+  const engineTemplate = localhostRun().engineRuns[0]!;
+  const run: ScanRun = {
+    ...localhostRun(),
+    engineRuns: [{
+      ...engineTemplate,
+      id: "task-mail",
+      engineId: mailEngineId,
+      engineName: "Mail check",
+      category: "code_and_secrets",
+      taskKind: { kind: "catalog_engine" },
+      localhostTcpObservation: undefined,
+    }],
+  };
+
+  const { container } = renderReport(report("partial", {
+    requested: {
+      ...base.requested,
+      targets: [{
+        assetId,
+        label: targetLabel,
+        assetKind: "domain",
+        labelAvailability: "recorded",
+        assetKindAvailability: "recorded",
+      }],
+      requestedCheckIds: [mailEngineId],
+    },
+    actual: {
+      checks: [{
+        taskId: "task-mail",
+        checkId: mailEngineId,
+        targetAssetIds: [assetId],
+        status: "tested_partial",
+        testedDimensions: [{
+          dimension: "completed check-to-target coordinate",
+          value: `${mailEngineId} on asset ${assetId}`,
+          observation: "The durable task reached a partial state for this target binding.",
+        }],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    coverageCounts: counts({ testedPartial: 1 }),
+  }), [], [run]);
+
+  const firstLayer = container.querySelector<HTMLElement>(".report-first-layer-scope");
+  expect(firstLayer).not.toBeNull();
+  expect(firstLayer!.textContent).toContain("Contoso source repository · Mail check · Partly completed");
+  expect(firstLayer!.textContent).not.toContain("Mail check completed for");
+});
+
+test("the same two-check completion groups with a full-width colon and no duplicated status label in zh-TW", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { report: fixtureReport, run } = twoCompletedChecksBoundToOneTarget();
+  const { container } = renderReport(fixtureReport, [], [run]);
+
+  const firstLayer = container.querySelector<HTMLElement>(".report-first-layer-scope");
+  expect(firstLayer).not.toBeNull();
+  expect(firstLayer!.textContent).toContain("要求：");
+  expect(firstLayer!.textContent).toContain("實際測試：");
+  expect(firstLayer!.textContent).toContain("已對 Contoso source repository 完成 Secret check、Code pattern check");
+  expect(firstLayer!.textContent).not.toContain("要求:");
+  expect(firstLayer!.textContent).not.toContain("實際測試:");
+  expect(firstLayer!.textContent).not.toContain("時間:");
+});
+
+test("a next step's period does not dangle before the outcome strip's +more count", () => {
+  const firstAction = "Fix the infrastructure-as-code template so redeploy does not restore this setting.";
+  const secondAction = "Rotate the exposed credential.";
+  const { container } = renderReport(report("partial", {
+    nextSteps: [
+      { priority: 1, code: "review_scope_and_retry", action: firstAction, reason: "The setting was reverted by an automated redeploy." },
+      { priority: 2, code: "review_scope_and_retry", action: secondAction, reason: "The credential appeared in a secret scan." },
+    ],
+  }));
+
+  const strip = container.querySelector<HTMLElement>(".report-outcome-strip");
+  expect(strip).not.toBeNull();
+  expect(strip!.textContent).toContain(
+    `${firstAction.slice(0, -1)} · +1 more`,
+  );
+  expect(strip!.textContent).not.toContain(". · ");
+});
+
+test("a single next step keeps its period in the outcome strip", () => {
+  const onlyAction = "Fix the infrastructure-as-code template so redeploy does not restore this setting.";
+  const { container } = renderReport(report("partial", {
+    nextSteps: [
+      { priority: 1, code: "review_scope_and_retry", action: onlyAction, reason: "The setting was reverted by an automated redeploy." },
+    ],
+  }));
+
+  const strip = container.querySelector<HTMLElement>(".report-outcome-strip");
+  expect(strip).not.toBeNull();
+  expect(strip!.textContent).toContain(onlyAction);
 });
 
 test("an absent coverage gap is stated once within the requested-check scope", () => {
