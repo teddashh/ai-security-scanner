@@ -1407,7 +1407,7 @@ fn parse_greenbone_xml(
                         pointer: format!("/report/results/result[{result_index}]"),
                         ..GreenboneXmlResult::default()
                     };
-                    match xml_attribute(&start, reader.decoder(), b"id") {
+                    match xml_attribute(&start, "id") {
                         Ok(value) => record.result_id = value,
                         Err(error) => {
                             push_warning(warnings, error);
@@ -1416,7 +1416,7 @@ fn parse_greenbone_xml(
                     }
                     current = Some(record);
                 } else if element == XmlElement::Nvt && current.is_some() {
-                    match xml_attribute(&start, reader.decoder(), b"oid") {
+                    match xml_attribute(&start, "oid") {
                         Ok(Some(value)) => {
                             if let Some(oid) = normalize_greenbone_oid(&value) {
                                 if let Some(record) = current.as_mut() {
@@ -1436,14 +1436,14 @@ fn parse_greenbone_xml(
                     && stack.last() == Some(&XmlElement::Refs)
                     && current.is_some()
                 {
-                    let reference_type = match xml_attribute(&start, reader.decoder(), b"type") {
+                    let reference_type = match xml_attribute(&start, "type") {
                         Ok(value) => value,
                         Err(error) => {
                             push_warning(warnings, error);
                             return None;
                         }
                     };
-                    let reference_id = match xml_attribute(&start, reader.decoder(), b"id") {
+                    let reference_id = match xml_attribute(&start, "id") {
                         Ok(value) => value,
                         Err(error) => {
                             push_warning(warnings, error);
@@ -1474,21 +1474,13 @@ fn parse_greenbone_xml(
                 stack.pop();
             }
             Ok(Event::Text(text)) if current.is_some() && is_greenbone_field(&stack) => {
-                let raw_text: &[u8] = text.as_ref();
+                let raw_text: &str = text.as_ref();
                 if raw_text.len() > MAX_LONG_TEXT * 4 {
                     push_warning(warnings, "an oversized Greenbone XML field was ignored");
                     buffer.clear();
                     continue;
                 }
-                let decoded = match text.decode() {
-                    Ok(value) => value,
-                    Err(_) => {
-                        push_warning(warnings, "a Greenbone XML text field could not be decoded");
-                        buffer.clear();
-                        continue;
-                    }
-                };
-                let unescaped = match quick_xml::escape::unescape(&decoded) {
+                let unescaped = match quick_xml::escape::unescape(raw_text) {
                     Ok(value) => value,
                     Err(_) => {
                         push_warning(
@@ -1502,22 +1494,13 @@ fn parse_greenbone_xml(
                 apply_greenbone_text(current.as_mut().expect("checked above"), &stack, &unescaped);
             }
             Ok(Event::CData(text)) if current.is_some() && is_greenbone_field(&stack) => {
-                let raw_text: &[u8] = text.as_ref();
+                let raw_text: &str = text.as_ref();
                 if raw_text.len() > MAX_LONG_TEXT * 4 {
                     push_warning(warnings, "an oversized Greenbone XML field was ignored");
                     buffer.clear();
                     continue;
                 }
-                match text.decode() {
-                    Ok(value) => apply_greenbone_text(
-                        current.as_mut().expect("checked above"),
-                        &stack,
-                        &value,
-                    ),
-                    Err(_) => {
-                        push_warning(warnings, "a Greenbone XML CDATA field could not be decoded")
-                    }
-                }
+                apply_greenbone_text(current.as_mut().expect("checked above"), &stack, raw_text);
             }
             Ok(Event::PI(_)) => {
                 push_warning(
@@ -1556,11 +1539,7 @@ fn parse_greenbone_xml(
     Some(records)
 }
 
-fn xml_attribute(
-    start: &BytesStart<'_>,
-    decoder: quick_xml::encoding::Decoder,
-    name: &[u8],
-) -> Result<Option<String>, String> {
+fn xml_attribute(start: &BytesStart<'_>, name: &str) -> Result<Option<String>, String> {
     let mut matched = None;
     for (index, attribute) in start.attributes().with_checks(true).enumerate() {
         if index >= MAX_XML_ATTRIBUTES {
@@ -1570,7 +1549,7 @@ fn xml_attribute(
             attribute.map_err(|_| "Greenbone XML contained a malformed attribute".to_owned())?;
         if attribute.key.as_ref() == name && matched.is_none() {
             let value = attribute
-                .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
+                .normalized_value(XmlVersion::Implicit1_0)
                 .map_err(|_| "Greenbone XML attribute decode failed".to_owned())?;
             matched = Some(safe_text(&value, MAX_SHORT_TEXT));
         }
@@ -1579,13 +1558,12 @@ fn xml_attribute(
 }
 
 fn safe_xml_reference(reference: &BytesRef<'_>) -> Option<char> {
-    let reference_bytes: &[u8] = reference.as_ref();
-    let value = match reference_bytes {
-        b"amp" => '&',
-        b"apos" => '\'',
-        b"gt" => '>',
-        b"lt" => '<',
-        b"quot" => '"',
+    let value = match reference.as_ref() {
+        "amp" => '&',
+        "apos" => '\'',
+        "gt" => '>',
+        "lt" => '<',
+        "quot" => '"',
         _ => reference.resolve_char_ref().ok().flatten()?,
     };
     matches!(
@@ -1598,25 +1576,25 @@ fn safe_xml_reference(reference: &BytesRef<'_>) -> Option<char> {
     .then_some(value)
 }
 
-fn xml_element(name: &[u8]) -> XmlElement {
+fn xml_element(name: &str) -> XmlElement {
     match name {
-        b"results" => XmlElement::Results,
-        b"result" => XmlElement::Result,
-        b"name" => XmlElement::Name,
-        b"nvt" => XmlElement::Nvt,
-        b"host" => XmlElement::Host,
-        b"port" => XmlElement::Port,
-        b"result_type" => XmlElement::ResultType,
-        b"severity" => XmlElement::Severity,
-        b"threat" => XmlElement::Threat,
-        b"summary" => XmlElement::Summary,
-        b"solution" => XmlElement::Solution,
-        b"qod" => XmlElement::Qod,
-        b"value" => XmlElement::Value,
-        b"asset_id" => XmlElement::AssetId,
-        b"family" => XmlElement::Family,
-        b"refs" => XmlElement::Refs,
-        b"ref" => XmlElement::Ref,
+        "results" => XmlElement::Results,
+        "result" => XmlElement::Result,
+        "name" => XmlElement::Name,
+        "nvt" => XmlElement::Nvt,
+        "host" => XmlElement::Host,
+        "port" => XmlElement::Port,
+        "result_type" => XmlElement::ResultType,
+        "severity" => XmlElement::Severity,
+        "threat" => XmlElement::Threat,
+        "summary" => XmlElement::Summary,
+        "solution" => XmlElement::Solution,
+        "qod" => XmlElement::Qod,
+        "value" => XmlElement::Value,
+        "asset_id" => XmlElement::AssetId,
+        "family" => XmlElement::Family,
+        "refs" => XmlElement::Refs,
+        "ref" => XmlElement::Ref,
         _ => XmlElement::Other,
     }
 }
@@ -8939,6 +8917,69 @@ mod tests {
             warnings
                 .iter()
                 .any(|warning| warning.contains("unsupported upstream result type"))
+        );
+    }
+
+    /// A Greenbone report is UTF-8. A stray non-UTF-8 byte inside a field
+    /// means the artifact was truncated or corrupted, so parsing stops at
+    /// that point instead of guessing at the intended text; results that
+    /// were already fully read are kept and the raw artifact stays retained.
+    #[test]
+    fn greenbone_non_utf8_field_stops_parsing_but_keeps_completed_results() {
+        let mut xml =
+            br#"<results><result id="result-1"><name>First result</name></result><result id="result-2"><name>Bad"#
+                .to_vec();
+        xml.push(0xFF);
+        xml.extend_from_slice(b"</name></result></results>");
+
+        let mut warnings = Vec::new();
+        let records = parse_greenbone_xml(&xml, &mut warnings)
+            .expect("the earlier complete result stays preserved");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].result_id.as_deref(), Some("result-1"));
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.starts_with("Greenbone XML parsing stopped at byte")),
+            "unexpected warnings: {warnings:?}"
+        );
+    }
+
+    /// Only the predefined and numeric XML references are safe to resolve
+    /// without a DTD; an HTML-only name like `&nbsp;` is exactly the kind of
+    /// undeclared entity the allow-list exists to catch.
+    #[test]
+    fn greenbone_undefined_named_entity_is_rejected_as_a_custom_entity() {
+        let xml =
+            br#"<results><result id="result-1"><name>Example&nbsp;Name</name></result></results>"#;
+        let mut warnings = Vec::new();
+        assert!(parse_greenbone_xml(xml, &mut warnings).is_none());
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("custom entity reference was rejected")),
+            "unexpected warnings: {warnings:?}"
+        );
+    }
+
+    /// The attribute-count limit must trip on the attribute that actually
+    /// crosses it, not one attribute later: exactly `MAX_XML_ATTRIBUTES + 1`
+    /// attributes on one element is already one too many.
+    #[test]
+    fn greenbone_attribute_limit_boundary_is_exact() {
+        let mut xml = String::from("<results><result id=\"result-1\"");
+        for index in 0..MAX_XML_ATTRIBUTES {
+            xml.push_str(&format!(" a{index}=\"x\""));
+        }
+        xml.push_str("><name>bounded</name></result></results>");
+
+        let mut warnings = Vec::new();
+        assert!(parse_greenbone_xml(xml.as_bytes(), &mut warnings).is_none());
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning == "Greenbone XML element exceeded the attribute limit"),
+            "unexpected warnings: {warnings:?}"
         );
     }
 }

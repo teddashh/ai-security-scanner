@@ -63,13 +63,7 @@ pub(super) fn parse_aws_organizations(
                         "AWS Organizations XML exceeded the nesting limit".into(),
                     ));
                 }
-                let name = std::str::from_utf8(start.local_name().as_ref())
-                    .map_err(|_| {
-                        DiscoveryError::Connector(
-                            "AWS Organizations XML contains a non-UTF-8 element".into(),
-                        )
-                    })?
-                    .to_owned();
+                let name = start.local_name().as_ref().to_owned();
                 if name == "member" && stack.last().is_some_and(|parent| parent == "Accounts") {
                     if current.is_some() {
                         return Err(DiscoveryError::Connector(
@@ -82,11 +76,7 @@ pub(super) fn parse_aws_organizations(
             }
             Ok(Event::End(end)) => {
                 let local_name = end.local_name();
-                let name = std::str::from_utf8(local_name.as_ref()).map_err(|_| {
-                    DiscoveryError::Connector(
-                        "AWS Organizations XML contains a non-UTF-8 closing element".into(),
-                    )
-                })?;
+                let name = local_name.as_ref();
                 if name == "member"
                     && stack
                         .last()
@@ -138,7 +128,7 @@ pub(super) fn parse_aws_organizations(
                 stack.pop();
             }
             Ok(Event::Text(text)) if current.is_some() => {
-                let raw_text: &[u8] = text.as_ref();
+                let raw_text: &str = text.as_ref();
                 if raw_text.len() > MAX_FIELD_BYTES {
                     return Err(DiscoveryError::Connector(
                         "AWS Organizations XML field exceeded the limit".into(),
@@ -152,12 +142,7 @@ pub(super) fn parse_aws_organizations(
                     buffer.clear();
                     continue;
                 }
-                let decoded = text.decode().map_err(|_| {
-                    DiscoveryError::Connector(
-                        "AWS Organizations XML text could not be decoded".into(),
-                    )
-                })?;
-                let value = quick_xml::escape::unescape(&decoded).map_err(|_| {
+                let value = quick_xml::escape::unescape(raw_text).map_err(|_| {
                     DiscoveryError::Connector(
                         "AWS Organizations XML used an unsupported entity".into(),
                     )
@@ -622,4 +607,34 @@ fn azure_resource_group(resource_id: &str) -> Option<&str> {
             .eq_ignore_ascii_case("resourceGroups")
             .then_some(pair[1])
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A live AWS Organizations response is UTF-8. A stray non-UTF-8 byte in
+    /// an account field means the artifact was truncated or corrupted in
+    /// transit, so the parser stops and reports the exact byte offset rather
+    /// than silently dropping or mis-decoding the account.
+    #[test]
+    fn aws_organizations_non_utf8_account_field_is_malformed_at_a_byte_offset() {
+        let mut xml = br#"<ListAccountsResponse><ListAccountsResult><Accounts><member><Id>111111111111</Id><Arn>arn:aws:organizations::111111111111:account/o-example/111111111111</Arn><Name>First Account</Name><Status>ACTIVE</Status></member><member><Id>222222222222</Id><Arn>arn:aws:organizations::222222222222:account/o-example/222222222222</Arn><Name>Bad"#.to_vec();
+        xml.push(0xFF);
+        xml.extend_from_slice(
+            br#"Account</Name><Status>ACTIVE</Status></member></Accounts></ListAccountsResult></ListAccountsResponse>"#,
+        );
+
+        let mut collector =
+            Collector::new("artifact-1", ParserProfile::AwsOrganizationsListAccounts);
+        let error = parse_aws_organizations(&xml, &SourceKind::AwsOrganization, &mut collector)
+            .expect_err("a non-UTF-8 byte inside an account field is a malformed document");
+        match error {
+            DiscoveryError::Connector(message) => assert!(
+                message.starts_with("AWS Organizations XML is malformed at byte"),
+                "unexpected message: {message}"
+            ),
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
 }
