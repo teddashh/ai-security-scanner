@@ -4846,3 +4846,138 @@ test("a Traditional Chinese reader gets the rate-limit row with its count kept v
     .toContain("核准的速率限制拒絕了這項檢查的部分連線，因此部分檢查未能送達目標。拒絕的連線：4。");
   expect(container.textContent).not.toContain("The approved rate limit refused");
 });
+
+/** The "What was actually tested" tile's sentence, read from its `<dd>`. */
+const testedTileText = (container: HTMLElement): string => {
+  const cell = Array.from(container.querySelectorAll<HTMLElement>(".report-outcome-strip > div")).find((candidate) => {
+    const label = candidate.querySelector("dt")?.textContent ?? "";
+    return label.startsWith("What was actually tested") || label.startsWith("實際完成的測試");
+  });
+  if (!cell) throw new Error("the tested tile did not render");
+  return cell.querySelector("dd")?.textContent ?? "";
+};
+
+/**
+ * Catalog checks bound to one recorded target, one engine run each. A check
+ * that tested something carries the coordinate dimension a real run records;
+ * `errorCode` turns its engine run into a planner skip with that reason.
+ */
+const catalogChecksOnOneTarget = (checks: Array<{
+  id: string;
+  name: string;
+  status: BeginnerCoverageStatus;
+  errorCode?: string;
+}>): { report: BeginnerMasterReport; run: ScanRun } => {
+  const assetId = "asset-source-repo";
+  const engineTemplate = localhostRun().engineRuns[0]!;
+  const completed = checks.filter((check) => check.status === "tested_complete").length;
+  const summary: BeginnerReportSummary = completed === checks.length
+    ? "complete"
+    : completed === 0 ? "no_checks_completed" : "partial";
+  const base = report(summary);
+  const countOf = (status: BeginnerCoverageStatus) => checks.filter((check) => check.status === status).length;
+  return {
+    run: {
+      ...localhostRun(),
+      engineRuns: checks.map((check): ScanRun["engineRuns"][number] => ({
+        ...engineTemplate,
+        id: `task-${check.id}`,
+        engineId: `catalog-${check.id}`,
+        engineName: check.name,
+        category: "code_and_secrets",
+        taskKind: { kind: "catalog_engine" },
+        localhostTcpObservation: undefined,
+        ...(check.errorCode ? { status: "not_executed", errorCode: check.errorCode } : {}),
+      })),
+    },
+    report: report(summary, {
+      requested: {
+        ...base.requested,
+        targets: [{
+          assetId,
+          label: "Contoso source repository",
+          assetKind: "repository",
+          labelAvailability: "recorded",
+          assetKindAvailability: "recorded",
+        }],
+        requestedCheckIds: checks.map((check) => `catalog-${check.id}`),
+      },
+      actual: {
+        checks: checks.map((check) => ({
+          taskId: `task-${check.id}`,
+          checkId: `catalog-${check.id}`,
+          targetAssetIds: [assetId],
+          status: check.status,
+          testedDimensions: check.status === "tested_complete" || check.status === "tested_partial"
+            ? [{
+                dimension: "completed check-to-target coordinate",
+                value: `catalog-${check.id} on asset ${assetId}`,
+                observation: "The durable task reached completed state for this target binding.",
+              }]
+            : [],
+        })),
+        networkScopes: [],
+        unavailableDimensions: [],
+      },
+      coverageCounts: counts({
+        testedComplete: completed,
+        testedPartial: countOf("tested_partial"),
+        failed: countOf("failed"),
+        notTested: countOf("not_tested"),
+      }),
+    }),
+  };
+};
+
+const expectTestedTile = (
+  checks: Parameters<typeof catalogChecksOnOneTarget>[0],
+  english: string,
+  chinese?: string,
+) => {
+  const fixture = catalogChecksOnOneTarget(checks);
+  const { container, unmount } = renderReport(fixture.report, [], [fixture.run]);
+  expect(testedTileText(container)).toBe(english);
+  for (const check of checks) expect(testedTileText(container)).not.toContain(check.name);
+  unmount();
+  if (chinese === undefined) return;
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const zh = renderReport(fixture.report, [], [fixture.run]);
+  expect(testedTileText(zh.container)).toBe(chinese);
+  window.localStorage.setItem(localeStorageKey, "en");
+};
+
+test("the tested tile counts completed checks instead of naming the first one", () => {
+  expectTestedTile([
+    { id: "secret-check", name: "Secret check", status: "tested_complete" },
+    { id: "code-pattern-check", name: "Code pattern check", status: "tested_complete" },
+    { id: "license-check", name: "License check", status: "tested_complete" },
+  ], "All 3 checks completed", "3 項檢查全部完成");
+  expectTestedTile([
+    { id: "secret-check", name: "Secret check", status: "tested_complete" },
+    { id: "code-pattern-check", name: "Code pattern check", status: "tested_complete" },
+  ], "Both checks completed", "2 項檢查全部完成");
+});
+
+test("the tested tile says how many checks completed when some did not", () => {
+  expectTestedTile([
+    { id: "secret-check", name: "Secret check", status: "tested_complete" },
+    { id: "code-pattern-check", name: "Code pattern check", status: "tested_complete" },
+    { id: "mail-check", name: "Mail check", status: "tested_partial" },
+  ], "2 of 3 checks completed", "3 項檢查中完成 2 項");
+  expectTestedTile([
+    { id: "failed-check", name: "Failed check", status: "failed" },
+    { id: "untested-check", name: "Untested check", status: "not_tested" },
+  ], "None of the 2 checks completed", "2 項檢查都沒有完成");
+});
+
+test("a check that can never run does not count against completion in the tested tile", () => {
+  const withThird = (errorCode: string) => [
+    { id: "secret-check", name: "Secret check", status: "tested_complete" as const },
+    { id: "code-pattern-check", name: "Code pattern check", status: "tested_complete" as const },
+    { id: "radar-check", name: "Radar check", status: "not_tested" as const, errorCode },
+  ];
+  expectTestedTile(withThird("engine_release_unavailable"), "Both checks completed");
+  expectTestedTile(withThird("mcp_configuration_absent"), "Both checks completed");
+  // An ordinary failure is unfinished work, so it still counts.
+  expectTestedTile(withThird("execution_failed"), "2 of 3 checks completed");
+});

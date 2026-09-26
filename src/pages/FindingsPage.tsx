@@ -50,6 +50,7 @@ import {
 } from "../localhostQuickScan";
 import { scanRequestOutcomeBeginnerSummary } from "../scanRequestOutcomePresentation";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
+import { isSettledSkippedCheck } from "../settledSkippedChecks";
 import type {
   BeginnerCheckResultKind,
   BeginnerCoverageStatus,
@@ -615,6 +616,13 @@ const copy = {
     en: "No completed test dimension was saved for this run.",
     zhTW: "本輪沒有保存已完成的測試範圍。",
   },
+  testedChecksBoth: { en: "Both checks completed", zhTW: "2 項檢查全部完成" },
+  testedChecksAll: { en: "All {total} checks completed", zhTW: "{total} 項檢查全部完成" },
+  testedChecksSome: {
+    en: "{completed} of {total} checks completed",
+    zhTW: "{total} 項檢查中完成 {completed} 項",
+  },
+  testedChecksNone: { en: "None of the {total} checks completed", zhTW: "{total} 項檢查都沒有完成" },
   checkDimensionsUnavailable: {
     en: "Exact tested dimensions not saved for this check",
     zhTW: "這項檢查未保存精確的測試範圍",
@@ -1429,12 +1437,34 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         report.requested.targets.length - 1,
       )
     : text(copy.noRequestedTarget);
-  const testedSummary = firstTestedCheck
-    ? appendRemainingCount(
-        `${localizedCheckName(firstTestedCheck.checkId, locale, firstTestedEngine)} · ${text(testedStatusCopy(firstTestedCheck.status))}`,
-        testedChecks.length - 1,
-      )
-    : text(copy.noTestedDimension);
+  // A check that can never run -- not included in this app version,
+  // deprecated, license review, research only, or missing MCP configuration
+  // -- does not make the run partial, so it must not count against
+  // completion below. A check with no engine run found (an older report)
+  // stays counted rather than silently dropped.
+  const countedChecks = report.actual.checks.filter((check) => {
+    const engine = engineByTaskId.get(check.taskId);
+    return !engine || !isSettledSkippedCheck(engine);
+  });
+  const countedCheckTotal = countedChecks.length;
+  const countedCheckCompleted = countedChecks.filter((check) => check.status === "tested_complete").length;
+  const testedSummary = countedCheckTotal <= 1
+    ? (firstTestedCheck
+        ? appendRemainingCount(
+            `${localizedCheckName(firstTestedCheck.checkId, locale, firstTestedEngine)} · ${text(testedStatusCopy(firstTestedCheck.status))}`,
+            testedChecks.length - 1,
+          )
+        : text(copy.noTestedDimension))
+    : countedCheckCompleted === countedCheckTotal && countedCheckTotal === 2
+      ? text(copy.testedChecksBoth)
+      : countedCheckCompleted === countedCheckTotal
+        ? text(copy.testedChecksAll, { total: formatNumber(countedCheckTotal) })
+        : countedCheckCompleted === 0
+          ? text(copy.testedChecksNone, { total: formatNumber(countedCheckTotal) })
+          : text(copy.testedChecksSome, {
+              completed: formatNumber(countedCheckCompleted),
+              total: formatNumber(countedCheckTotal),
+            });
   const gapSummary = firstCoverageGap
     ? appendRemainingCountToSentence(coverageGapLine(firstCoverageGap), coverageLossGaps.length - 1)
     : text(noRecordedGapDetail);
