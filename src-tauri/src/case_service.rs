@@ -14108,6 +14108,31 @@ impl HtmlReportCatalog {
         }
     }
 
+    /// A run-in label and its colon: "Severity: " in English and "嚴重程度："
+    /// in Chinese, where the full-width colon carries its own spacing.
+    fn label(&self, label: &str) -> String {
+        format!("{label}{}", self.text(": ", "："))
+    }
+
+    /// A run-in label set in bold, as the report sets most of them. The
+    /// English space follows the element; Chinese has none.
+    fn strong_label(&self, label: &str) -> String {
+        format!(
+            "<strong>{label}{}</strong>{}",
+            self.text(":", "："),
+            self.text(" ", "")
+        )
+    }
+
+    /// The same, in italics.
+    fn em_label(&self, label: &str) -> String {
+        format!(
+            "<em>{label}{}</em>{}",
+            self.text(":", "："),
+            self.text(" ", "")
+        )
+    }
+
     fn html_lang(&self) -> &'static str {
         self.locale.as_str()
     }
@@ -16392,8 +16417,8 @@ fn html_scanner_remediation_block(
     }
     if unique.is_empty() && fixed_versions.is_empty() {
         return format!(
-            "<p class=\"finding-scanner-remediation\"><strong>{}:</strong> {}</p>",
-            label,
+            "<p class=\"finding-scanner-remediation\">{}{}</p>",
+            catalog.strong_label(label),
             catalog.text(
                 "The scanner did not provide a specific fix for this finding.",
                 "掃描工具未提供這項問題的具體修復方式。",
@@ -16404,8 +16429,8 @@ fn html_scanner_remediation_block(
         .into_iter()
         .map(|text| {
             format!(
-                "<p class=\"finding-scanner-remediation\"><strong>{}:</strong> {}</p>",
-                label,
+                "<p class=\"finding-scanner-remediation\">{}{}</p>",
+                catalog.strong_label(label),
                 html_escape(text)
             )
         })
@@ -16419,8 +16444,9 @@ fn html_scanner_remediation_block(
             .collect::<Vec<_>>()
             .join(catalog.text(", ", "、"));
         html.push_str(&format!(
-            "<p class=\"finding-scanner-remediation\"><strong>{}:</strong> {}</p>",
-            fixed_label, versions
+            "<p class=\"finding-scanner-remediation\">{}{}</p>",
+            catalog.strong_label(fixed_label),
+            versions
         ));
     }
     html
@@ -17088,8 +17114,8 @@ fn html_typed_inventory_section(
     .filter(|(_, _, count)| *count > 0)
     .map(|(en, zh, count)| {
         format!(
-            "<strong>{}:</strong> {}",
-            catalog.text(en, zh),
+            "{}{}",
+            catalog.strong_label(catalog.text(en, zh)),
             catalog.format_number(count)
         )
     })
@@ -17104,11 +17130,11 @@ fn html_typed_inventory_section(
     format!(
         concat!(
             "<section><h2>{}</h2><p>{}</p>",
-            "<p><strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
-            "<strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
-            "<strong>{}:</strong> {} · <strong>{}:</strong> {}</p>",
+            "<p>{}{} · {}{} · ",
+            "{}{} · {}{} · ",
+            "{}{} · {}{}</p>",
             "{}",
-            "<p><strong>{}:</strong> {}</p>",
+            "<p>{}{}</p>",
             "<h3>{}</h3><ul class=\"inventory-sample\">{}</ul>",
             "<details class=\"inventory-complete\"><summary><strong>{}</strong></summary>{}</details></section>"
         ),
@@ -17117,20 +17143,20 @@ fn html_typed_inventory_section(
             "Inventory observations are separate from vulnerability findings and remediation priorities.",
             "盤點觀察與漏洞問題及修復優先順序分開呈現。",
         ),
-        catalog.text("Total", "總數"),
+        catalog.strong_label(catalog.text("Total", "總數")),
         catalog.format_number(report.inventory.total),
-        catalog.text("Services", "服務"),
+        catalog.strong_label(catalog.text("Services", "服務")),
         catalog.format_number(report.inventory.counts.services),
-        catalog.text("Software components", "軟體元件"),
+        catalog.strong_label(catalog.text("Software components", "軟體元件")),
         catalog.format_number(report.inventory.counts.software_components),
-        catalog.text("Cloud resources", "雲端資源"),
+        catalog.strong_label(catalog.text("Cloud resources", "雲端資源")),
         catalog.format_number(report.inventory.counts.cloud_resources),
-        catalog.text("Inventoried assets", "已盤點資產"),
+        catalog.strong_label(catalog.text("Inventoried assets", "已盤點資產")),
         catalog.format_number(report.inventory.asset_ids.len()),
-        catalog.text("Representative records", "代表性紀錄"),
+        catalog.strong_label(catalog.text("Representative records", "代表性紀錄")),
         catalog.format_number(report.inventory.representative_sample.len().min(3)),
         workflow_counts,
-        catalog.text("Inventoried asset list", "已盤點資產清單"),
+        catalog.strong_label(catalog.text("Inventoried asset list", "已盤點資產清單")),
         readable_target_list(
             &report.inventory.asset_ids,
             target_labels,
@@ -17400,8 +17426,8 @@ fn html_report_bytes(
             String::new()
         } else {
             format!(
-                "<p><strong>{}:</strong> {}</p>",
-                catalog.text("Scan depth", "掃描深度"),
+                "<p>{}{}</p>",
+                catalog.strong_label(catalog.text("Scan depth", "掃描深度")),
                 html_escape(requested_stage),
             )
         };
@@ -17531,8 +17557,8 @@ fn html_report_bytes(
                         ),
                     };
                     format!(
-                        "<li><strong>{}:</strong> {}{}</li>",
-                        html_escape(subject),
+                        "<li>{}{}{}</li>",
+                        catalog.strong_label(&html_escape(subject)),
                         html_escape(value),
                         html_escape(&covered),
                     )
@@ -17593,18 +17619,15 @@ fn html_report_bytes(
                 })
                 .map(|dimension| {
                     format!(
-                        concat!(
-                            "<li><strong>{}:</strong> {} — {}",
-                            "<br><small>{}: {}</small></li>"
-                        ),
-                        html_escape(&match catalog.locale {
+                        concat!("<li>{}{} — {}", "<br><small>{}{}</small></li>"),
+                        catalog.strong_label(&html_escape(&match catalog.locale {
                             crate::export::ReportLocale::ZhHant => {
                                 crate::finding_narrative::coverage_dimension_zh_hant(&engine_named(
                                     &dimension.dimension,
                                 ))
                             }
                             _ => readable_dimension(&dimension.dimension),
-                        }),
+                        })),
                         html_escape(&replace_target_ids(
                             &match catalog.locale {
                                 crate::export::ReportLocale::ZhHant => {
@@ -17627,7 +17650,7 @@ fn html_report_bytes(
                             }
                             _ => dimension.observation.clone(),
                         }),
-                        catalog.text("Observed", "觀察時間"),
+                        catalog.label(catalog.text("Observed", "觀察時間")),
                         html_escape(&display_time(dimension.observed_at.as_ref())),
                     )
                 })
@@ -17704,23 +17727,23 @@ fn html_report_bytes(
                 format!(
                     concat!(
                         "<li><strong>{} — {}</strong>",
-                        "<br><span>{}: {} (<code>{}</code>)</span>",
-                        "<br><span>{}: <code>{}</code> · {}: {} <code>{}</code></span>",
-                        "<br><small>{}: {} · {}: {}</small></li>"
+                        "<br><span>{}{} (<code>{}</code>)</span>",
+                        "<br><span>{}<code>{}</code> · {}{} <code>{}</code></span>",
+                        "<br><small>{}{} · {}{}</small></li>"
                     ),
                     html_escape(&readable_dimension(&scope.check_id)),
                     html_escape(catalog.report_stage(&scope.stage)),
-                    catalog.text("Target", "目標"),
+                    catalog.label(catalog.text("Target", "目標")),
                     html_escape(target_label),
                     html_escape(&scope.target),
-                    catalog.text("Addresses", "位址"),
+                    catalog.label(catalog.text("Addresses", "位址")),
                     addresses,
-                    catalog.text("Ports", "連接埠"),
+                    catalog.label(catalog.text("Ports", "連接埠")),
                     html_escape(&scope.transport.to_uppercase()),
                     ports,
-                    catalog.text("Outcome", "結果"),
+                    catalog.label(catalog.text("Outcome", "結果")),
                     html_escape(catalog.work_unit_outcome(&scope.outcome)),
-                    catalog.text("Observed", "觀察時間"),
+                    catalog.label(catalog.text("Observed", "觀察時間")),
                     html_escape(&display_time(scope.observed_at.as_ref())),
                 )
             })
@@ -17779,11 +17802,11 @@ fn html_report_bytes(
         };
         let dimension = displayed_dimension(&dimension, catalog, &target_labels);
         format!(
-            "<li><strong>{} — {}</strong><br>{}<br><em>{}:</em> {}</li>",
+            "<li><strong>{} — {}</strong><br>{}<br>{}{}</li>",
             html_escape(catalog.gap_kind(&gap.kind)),
             html_escape(&dimension),
             html_escape(&replace_target_ids(&reason, &target_labels)),
-            catalog.text("Next", "下一步"),
+            catalog.em_label(catalog.text("Next", "下一步")),
             html_escape(&replace_target_ids(&next_action, &target_labels)),
         )
     };
@@ -17925,7 +17948,7 @@ fn html_report_bytes(
                         format!("{count} problems name this same fix. The first is {reason}")
                     }
                     crate::export::ReportLocale::ZhHant => {
-                        format!("有 {count} 項問題指向同一個修復方式，第一項是{reason}")
+                        format!("有 {count} 項問題指向同一個修復方式，第一項是 {reason}")
                     }
                 }
             };
@@ -17948,8 +17971,8 @@ fn html_report_bytes(
                 expert
                     .as_ref()
                     .map(|expert| format!(
-                        " <em>{}: {}</em>",
-                        catalog.text("Suggested expert", "建議諮詢的專家"),
+                        " <em>{}{}</em>",
+                        catalog.label(catalog.text("Suggested expert", "建議諮詢的專家")),
                         html_escape(expert),
                     ))
                     .unwrap_or_default(),
@@ -17968,8 +17991,8 @@ fn html_report_bytes(
     });
     let shared_safety_note = if any_shared_safety {
         format!(
-            "<p><strong>{}:</strong> {}</p>",
-            catalog.text("Before changing anything", "變更前考量"),
+            "<p>{}{}</p>",
+            catalog.strong_label(catalog.text("Before changing anything", "變更前考量")),
             html_escape(&match catalog.locale {
                 crate::export::ReportLocale::En =>
                     crate::finding_narrative::ENGLISH_ROLLBACK.to_owned(),
@@ -18149,8 +18172,8 @@ fn html_report_bytes(
         let safety_block = safety
             .map(|text| {
                 format!(
-                    "<p><strong>{}:</strong> {}</p>",
-                    catalog.text("Before changing anything", "變更前考量"),
+                    "<p>{}{}</p>",
+                    catalog.strong_label(catalog.text("Before changing anything", "變更前考量")),
                     html_escape(&text)
                 )
             })
@@ -18158,15 +18181,15 @@ fn html_report_bytes(
         let verification_block = verification
             .map(|text| {
                 format!(
-                    "<p><strong>{}:</strong> {}</p>",
-                    catalog.text("How to confirm the fix", "如何確認已修正"),
+                    "<p>{}{}</p>",
+                    catalog.strong_label(catalog.text("How to confirm the fix", "如何確認已修正")),
                     html_escape(&text)
                 )
             })
             .unwrap_or_else(|| {
                 format!(
-                    "<p><strong>{}:</strong> {}</p>",
-                    catalog.text("How to confirm the fix", "如何確認已修正"),
+                    "<p>{}{}</p>",
+                    catalog.strong_label(catalog.text("How to confirm the fix", "如何確認已修正")),
                     catalog.text(
                         "No verification step was retained for this result.",
                         "這筆結果未保留驗證步驟。",
@@ -18237,24 +18260,24 @@ fn html_report_bytes(
                 let mapping = match shared_mapping {
                     Some(_) => String::new(),
                     None => format!(
-                        "<br>{}: {}",
-                        catalog.text("Mapping version", "對照版本"),
+                        "<br>{}{}",
+                        catalog.label(catalog.text("Mapping version", "對照版本")),
                         html_escape(&html_mapping_identity(reference, catalog)),
                     ),
                 };
                 format!(
                     concat!(
                         "<li><strong>{} {} / {}</strong> — {}",
-                        "<br>{}: {}",
-                        "<br>{}: {}{}</li>"
+                        "<br>{}{}",
+                        "<br>{}{}{}</li>"
                     ),
                     html_escape(&reference.framework),
                     html_escape(&reference.framework_version),
                     html_escape(&reference.control_id),
                     html_escape(&control_title_text(&reference.title, catalog)),
-                    catalog.text("Relationship", "關係"),
+                    catalog.label(catalog.text("Relationship", "關係")),
                     html_escape(relationship),
-                    catalog.text("Why related", "關聯原因"),
+                    catalog.label(catalog.text("Why related", "關聯原因")),
                     html_escape(&rationale),
                     mapping,
                 )
@@ -18320,8 +18343,8 @@ fn html_report_bytes(
                 concat!(
                     "<article id=\"f{}\"><h3>{}</h3>",
                     "<p>{}</p>",
-                    "<p><strong>{}:</strong> {} · <strong>{}:</strong> {}</p>",
-                    "<p><strong>{}:</strong> <code>{}</code></p>",
+                    "<p>{}{} · {}{}</p>",
+                    "<p>{}<code>{}</code></p>",
                     "<h4>{}</h4><ul>{}</ul>",
                     "<h4>{}</h4><ul>{}</ul></article>"
                 ),
@@ -18331,11 +18354,11 @@ fn html_report_bytes(
                     "Discovery confirmed that this service responded. Reachability is useful inventory, but it does not by itself establish a vulnerability.",
                     "探索檢查確認這項服務有回應。這是有用的盤點資料，但僅能連線本身不代表存在漏洞。",
                 ),
-                catalog.text("Target", "目標"),
+                catalog.strong_label(catalog.text("Target", "目標")),
                 targets,
-                catalog.text("Observed detail", "觀察細節"),
+                catalog.strong_label(catalog.text("Observed detail", "觀察細節")),
                 details,
-                catalog.text("Record ID", "紀錄 ID"),
+                catalog.strong_label(catalog.text("Record ID", "紀錄 ID")),
                 html_escape(&finding.finding_id),
                 catalog.text("Evidence SHA-256", "證據 SHA-256"),
                 evidence,
@@ -18431,22 +18454,22 @@ fn html_report_bytes(
                 // buried, adjacent cards read as the report printing one
                 // problem twice.
                 "<article id=\"f{}\"><h3>{} <span class=\"finding-asset\">— {}</span></h3>",
-                "<p class=\"finding-meta\"><span class=\"pill pill--{}\">{}: {}</span>",
-                "<span class=\"pill\">{}: {}</span>{}",
-                "<span class=\"pill\">{}: {}</span><span>{} #{}</span>",
-                "<span>{}: {}</span></p>",
+                "<p class=\"finding-meta\"><span class=\"pill pill--{}\">{}{}</span>",
+                "<span class=\"pill\">{}{}</span>{}",
+                "<span class=\"pill\">{}{}</span><span>{} #{}</span>",
+                "<span>{}{}</span></p>",
                 // Run-in labels, not headings. Each of these carries one
                 // sentence, and a heading line plus a margin above and below
                 // it cost more vertical space than the sentence did. Six of
                 // them per card, fifty-one cards.
-                "<p>{} <strong>{}:</strong> {}</p>",
-                "<p class=\"finding-action\"><strong>{}:</strong> {}</p>",
+                "<p>{} {}{}</p>",
+                "<p class=\"finding-action\">{}{}</p>",
                 "{}",
                 "{}{}",
-                "<p class=\"finding-references\"><strong>{}:</strong> {}</p>",
+                "<p class=\"finding-references\">{}{}</p>",
                 "<details class=\"technical finding-technical\"><summary><strong>{}</strong></summary>",
-                "<p><strong>{}:</strong> {} · ",
-                "<strong>{}:</strong> <code>{}</code></p>",
+                "<p>{}{} · ",
+                "{}<code>{}</code></p>",
                 "<h4>{}</h4><ul>{}</ul>",
                 "<h4>{}</h4><ul>{}</ul>",
                 "<h4>{}</h4><ul>{}</ul></details></article>"
@@ -18455,21 +18478,21 @@ fn html_report_bytes(
             html_escape(&finding.title),
             targets,
             severity_slug(&finding.severity),
-            catalog.text("Severity", "嚴重程度"),
+            catalog.label(catalog.text("Severity", "嚴重程度")),
             html_escape(&catalog.identifier(&enum_key(&finding.severity))),
-            catalog.text("Confidence", "信心程度"),
+            catalog.label(catalog.text("Confidence", "信心程度")),
             html_escape(confidence_chip),
             confidence_note,
-            catalog.text("Priority", "優先順序"),
+            catalog.label(catalog.text("Priority", "優先順序")),
             html_escape(&priority),
             catalog.text("Report order", "報告順序"),
             catalog.format_number(index + 1),
-            catalog.text("Suggested expert", "建議諮詢的專家"),
+            catalog.label(catalog.text("Suggested expert", "建議諮詢的專家")),
             html_escape(&expert_type),
             html_escape(&plain_language_risk),
-            catalog.text("Possible impact", "可能影響"),
+            catalog.strong_label(catalog.text("Possible impact", "可能影響")),
             html_escape(&possible_impact),
-            catalog.text("What to do next", "下一步怎麼做"),
+            catalog.strong_label(catalog.text("What to do next", "下一步怎麼做")),
             next_step_inline,
             scanner_remediation_block,
             safety_block,
@@ -18477,7 +18500,7 @@ fn html_report_bytes(
             // The upstream advisory stays in the open: it is where a reader
             // goes to understand the problem, not a record of how this
             // product handled it.
-            catalog.text("Official scanner references", "掃描工具官方參照"),
+            catalog.strong_label(catalog.text("Official scanner references", "掃描工具官方參照")),
             official_references_inline,
             // Everything this product retained about how it knows. On a
             // 21-engine run these two blocks were 57% of everything printed
@@ -18493,9 +18516,9 @@ fn html_report_bytes(
             // it. A forty-character fingerprint and a restatement of the two
             // ratings already shown as pills are how the report knows, not
             // what it found.
-            catalog.text("Selected-run source", "本輪來源"),
+            catalog.strong_label(catalog.text("Selected-run source", "本輪來源")),
             html_escape(catalog.finding_source(&finding.snapshot_source)),
-            catalog.text("Finding ID", "問題 ID"),
+            catalog.strong_label(catalog.text("Finding ID", "問題 ID")),
             html_escape(&finding.finding_id),
             catalog.text("Why this priority", "此優先順序的原因"),
             priority_reasons,
@@ -18680,8 +18703,9 @@ fn html_report_bytes(
             crate::beginner_report::TechnicalExecution::InvalidBuiltInTask { explanation } => {
                 let explanation = translated_task_sentence(catalog, explanation);
                 format!(
-                    "{}: {explanation}",
-                    catalog.text("invalid built-in task record", "無效的內建工作紀錄")
+                    "{}{explanation}",
+                    catalog
+                        .label(catalog.text("invalid built-in task record", "無效的內建工作紀錄"))
                 )
             }
         };
@@ -18737,41 +18761,41 @@ fn html_report_bytes(
         let phase = match named_phase == state {
             true => String::new(),
             false => format!(
-                "<strong>{}:</strong> {} · ",
-                catalog.text("Phase", "階段"),
+                "{}{} · ",
+                catalog.strong_label(catalog.text("Phase", "階段")),
                 html_escape(&named_phase),
             ),
         };
         let body = format!(
             concat!(
                 "<article><h3>{} <code>{}</code></h3>",
-                "<p><strong>{}:</strong> {} · {}",
-                "<strong>{}:</strong> {}%</p>",
-                "<p><strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
-                "<strong>{}:</strong> {}</p>",
-                "<p><strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
-                "<strong>{}:</strong> {}</p>",
-                "<p><strong>{}:</strong> {}</p>",
+                "<p>{}{} · {}",
+                "{}{}%</p>",
+                "<p>{}{} · {}{} · ",
+                "{}{}</p>",
+                "<p>{}{} · {}{} · ",
+                "{}{}</p>",
+                "<p>{}{}</p>",
                 "<h4>{}</h4><ul>{}</ul>"
             ),
             catalog.text("Task", "工作"),
             html_escape(&task.task_id),
-            catalog.text("State", "狀態"),
+            catalog.strong_label(catalog.text("State", "狀態")),
             html_escape(&state),
             phase,
-            catalog.text("Progress", "進度"),
+            catalog.strong_label(catalog.text("Progress", "進度")),
             catalog.format_number(task.progress_percent as usize),
-            catalog.text("Started", "開始"),
+            catalog.strong_label(catalog.text("Started", "開始")),
             html_escape(&display_time(task.started_at.as_ref())),
-            catalog.text("Finished", "完成"),
+            catalog.strong_label(catalog.text("Finished", "完成")),
             html_escape(&display_time(task.finished_at.as_ref())),
-            catalog.text("Targets", "目標"),
+            catalog.strong_label(catalog.text("Targets", "目標")),
             targets,
-            catalog.text("Exit code", "結束碼"),
+            catalog.strong_label(catalog.text("Exit code", "結束碼")),
             task.exit_code
                 .map(|code| code.to_string())
                 .unwrap_or_else(|| catalog.text("not recorded", "未記錄").into()),
-            catalog.text("Error code", "錯誤碼"),
+            catalog.strong_label(catalog.text("Error code", "錯誤碼")),
             // Humanized like the availability below it and the state above it.
             // This was the one value on the line the backend's own spelling
             // reached the page through, so a Chinese record of the run that
@@ -18783,9 +18807,9 @@ fn html_report_bytes(
                     .map(|code| catalog.identifier(code))
                     .unwrap_or_else(|| catalog.text("none recorded", "未記錄").to_owned())
             ),
-            catalog.text("Cleanup", "清理"),
+            catalog.strong_label(catalog.text("Cleanup", "清理")),
             html_escape(&cleanup),
-            catalog.text("Execution identity", "執行識別"),
+            catalog.strong_label(catalog.text("Execution identity", "執行識別")),
             html_escape(&execution),
             catalog.text("Evidence SHA-256", "證據 SHA-256"),
             evidence,
@@ -18793,11 +18817,8 @@ fn html_report_bytes(
         rendered_tasks.push((
             body,
             format!(
-                concat!(
-                    "<p><strong>{}:</strong> {}{}<br>{}</p>",
-                    "<p><small>{}</small></p>"
-                ),
-                catalog.text("Availability", "可用狀態"),
+                concat!("<p>{}{}{}<br>{}</p>", "<p><small>{}</small></p>"),
+                catalog.strong_label(catalog.text("Availability", "可用狀態")),
                 html_escape(
                     &catalog.identifier(&enum_key(&task.redacted_diagnostic_log.availability))
                 ),
@@ -18908,17 +18929,17 @@ fn html_report_bytes(
         active_group_articles.push_str(&format!(
             concat!(
                 "<article><h3>{}</h3><p>{}</p><ul>{}</ul>",
-                "<p><strong>{}:</strong> {} · <strong>{}:</strong> {} · ",
-                "<strong>{}:</strong> <code>{}</code></p></article>"
+                "<p>{}{} · {}{} · ",
+                "{}<code>{}</code></p></article>"
             ),
             html_escape(&group.title),
             html_escape(&group.rationale),
             members,
-            catalog.text("Created by", "建立者"),
+            catalog.strong_label(catalog.text("Created by", "建立者")),
             html_escape(&group.grouped_by),
-            catalog.text("Created at", "建立時間"),
+            catalog.strong_label(catalog.text("Created at", "建立時間")),
             html_escape(&catalog.format_time(&group.created_at)),
-            catalog.text("Group ID", "群組 ID"),
+            catalog.strong_label(catalog.text("Group ID", "群組 ID")),
             html_escape(&group.id),
         ));
     }
@@ -18964,13 +18985,13 @@ fn html_report_bytes(
         .iter()
         .map(|target| {
             format!(
-                "<li>{}: <code>{}</code></li>",
-                html_escape(
+                "<li>{}<code>{}</code></li>",
+                catalog.label(&html_escape(
                     target_labels
                         .get(&target.asset_id)
                         .map(String::as_str)
                         .unwrap_or(catalog.text("Saved target", "已保存的目標")),
-                ),
+                )),
                 html_escape(&target.asset_id),
             )
         })
@@ -19312,7 +19333,7 @@ fn html_report_bytes(
             "<h3>{}</h3><ul>{}</ul><h3>{}</h3><ul>{}</ul>",
             "<h3>{}</h3><ul>{}</ul></div>",
             "<div class=\"report-card\"><h2>{}</h2>",
-            "<p><strong>{}:</strong> {}</p>",
+            "<p>{}{}</p>",
             "<table class=\"tested-table\">",
             "<caption class=\"visually-hidden\">{}</caption>",
             "<thead><tr><th scope=\"col\">{}</th>",
@@ -19332,7 +19353,7 @@ fn html_report_bytes(
         catalog.text("Limits", "限制"),
         requested_limits,
         catalog.text("What was actually tested", "實際測試的內容"),
-        catalog.text("Observed window", "觀察時間範圍"),
+        catalog.strong_label(catalog.text("Observed window", "觀察時間範圍")),
         html_escape(&actual_window),
         catalog.text(
             "Every check this run started, with the targets it reached and when",
@@ -36038,6 +36059,32 @@ mod tests {
         case
     }
 
+    /// Two findings with the same recommendation, family and expert on a
+    /// completed check, so the beginner report collapses them into one grouped
+    /// next step ("N problems name this same fix. The first is ..."). The
+    /// copy outranks the original, so its title leads the group.
+    fn case_for_two_findings_sharing_one_fix() -> AssessmentCase {
+        let mut case =
+            case_for_rated_httpx_finding(EngineRunStatus::Completed, None, Some("httpx-task"));
+        let mut finding = case.findings[0].clone();
+        finding.id = "hsts-unconfirmed-mirror".into();
+        finding.fingerprint = "demo:web:missing-hsts-mirror".into();
+        finding.title = "The synthetic mirror HSTS status remains unconfirmed".into();
+        finding.priority = 90;
+        for evidence in &mut finding.evidence {
+            evidence.id = "evidence-hsts-mirror".into();
+            evidence.finding_id = finding.id.clone();
+        }
+        let mut observation = case.finding_observations[0].clone();
+        observation.id = "observation-hsts-mirror".into();
+        observation.finding_id = finding.id.clone();
+        observation.fingerprint = finding.fingerprint.clone();
+        observation.finding_snapshot = Some(finding.clone());
+        case.finding_observations.push(observation);
+        case.findings.push(finding);
+        case
+    }
+
     fn html_from_export_case(case: &AssessmentCase, locale: crate::export::ReportLocale) -> String {
         String::from_utf8(
             html_report_bytes(
@@ -36113,7 +36160,7 @@ mod tests {
         assert!(zh.contains(zh_action), "{zh}");
         assert!(!zh.contains("調整這項檢查所指出的服務或設定。"));
         assert!(zh.contains(&format!(
-            "<p class=\"finding-action\"><strong>下一步怎麼做:</strong> {zh_action}</p>"
+            "<p class=\"finding-action\"><strong>下一步怎麼做：</strong>{zh_action}</p>"
         )));
         assert!(zh.contains(&format!("<td>{zh_action}</td>")));
         assert!(zh.contains(&format!(
@@ -36137,6 +36184,36 @@ mod tests {
         )));
         assert!(html.contains(&format!("<td>{action}</td>")));
         assert!(html.contains(&format!("<li><strong>{action}</strong> — <a href=\"#f1\">")));
+    }
+
+    #[test]
+    fn html_grouped_next_step_separates_the_chinese_label_from_the_english_title_with_a_space() {
+        let case = case_for_two_findings_sharing_one_fix();
+        // The higher-priority finding leads the group; its title is the
+        // engine's own words and is never translated.
+        let title = "The synthetic mirror HSTS status remains unconfirmed";
+
+        let zh = html_from_export_case(&case, crate::export::ReportLocale::ZhHant);
+        assert!(
+            zh.contains("指向同一個修復方式"),
+            "the fixture must actually reach a grouped next step: {zh}"
+        );
+        assert!(
+            zh.contains(&format!("第一項是 {title}")),
+            "a Han label must keep a space before the untranslated English title: {zh}"
+        );
+
+        let en = html_from_export_case(&case, crate::export::ReportLocale::En);
+        assert!(
+            en.contains(&format!("The first is {title}")),
+            "the English rendering of the same fixture must be unaffected: {en}"
+        );
+        // The suggested expert is one italic run, label and value together.
+        assert!(
+            en.contains("<em>Suggested expert: Network or system administrator</em>"),
+            "{en}"
+        );
+        assert!(zh.contains("<em>建議諮詢的專家："), "{zh}");
     }
 
     #[test]
@@ -36901,10 +36978,10 @@ mod tests {
             // actually tested, and why a finding-derived next step is listed.
             // All three were printed as stored English under translated
             // headings, the last one as Rust variant names.
-            "<strong>來自已保存的工作設定</strong><ul><li><strong>檢查逾時限制:</strong> 3600 秒；適用於 Gitleaks",
+            "<strong>來自已保存的工作設定</strong><ul><li><strong>檢查逾時限制：</strong>3600 秒；適用於 Gitleaks",
             "Frozen selected-run secret exposure — 嚴重程度：高；信心程度：低 — 本產品依據樣式或偵測器比對結果評定",
             "某個身分未登記多重要素驗證裝置的證據，與驗證使用者及保護驗證資訊有關。",
-            "<br>關係: 相關",
+            "<br>關係：相關",
             "來源規則",
             "證據摘要",
             "Redacted selected-run evidence &lt;summary&gt;",
@@ -36925,12 +37002,12 @@ mod tests {
             "掃描工具官方參照",
             "盤點觀察",
             "盤點觀察與漏洞問題及修復優先順序分開呈現",
-            "總數:</strong> 4",
-            "服務:</strong> 1",
-            "軟體元件:</strong> 2",
-            "雲端資源:</strong> 1",
-            "已盤點資產:</strong> 1",
-            "代表性紀錄:</strong> 3",
+            "總數：</strong>4",
+            "服務：</strong>1",
+            "軟體元件：</strong>2",
+            "雲端資源：</strong>1",
+            "已盤點資產：</strong>1",
+            "代表性紀錄：</strong>3",
             "代表性樣本（最多 3 筆）",
             "依資產列出的完整盤點清單",
             "來源追溯資料",

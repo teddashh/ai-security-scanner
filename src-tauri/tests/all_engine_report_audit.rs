@@ -1239,6 +1239,34 @@ fn an_ascii_clause_break_is_only_reported_where_a_chinese_clause_ends() {
     assert!(ascii_clause_break_after_han("移除群組只會附加歷史，不會刪除成員。").is_none());
 }
 
+/// The first place a Chinese run-in label sets its colon the English way: an
+/// ASCII `:` immediately after Han text, or a full-width `：` immediately
+/// followed by a space it was never meant to carry.
+fn ascii_label_colon_in_chinese(text: &str) -> Option<String> {
+    fn is_han(character: char) -> bool {
+        ('\u{4e00}'..='\u{9fff}').contains(&character)
+    }
+    let characters = text.chars().collect::<Vec<_>>();
+    characters.windows(2).enumerate().find_map(|(at, window)| {
+        let [before, after] = [window[0], window[1]];
+        ((is_han(before) && after == ':') || (before == '：' && after == ' ')).then(|| {
+            characters[at.saturating_sub(30)..(at + 30).min(characters.len())]
+                .iter()
+                .collect::<String>()
+        })
+    })
+}
+
+#[test]
+fn a_chinese_label_colon_is_full_width_without_a_space() {
+    assert!(ascii_label_colon_in_chinese("嚴重程度: 高").is_some());
+    assert!(ascii_label_colon_in_chinese("可能影響： 值").is_some());
+    assert!(ascii_label_colon_in_chinese("嚴重程度：高").is_none());
+    assert!(ascii_label_colon_in_chinese("觀察時間 2026年09月26日 00:21:05").is_none());
+    assert!(ascii_label_colon_in_chinese("對照版本：2026-09-11.1").is_none());
+    assert!(ascii_label_colon_in_chinese("package:pyyaml").is_none());
+}
+
 /// Discovery engines prepare a target for a security check. Their output is
 /// inventory, not a result, in either run.
 const INVENTORY_ONLY_ENGINES: [&str; 5] = ["cloudquery", "httpx", "naabu", "steampipe", "syft"];
@@ -1488,6 +1516,11 @@ fn every_detector_places_its_finding_on_its_mapped_control() {
             if let Some(offence) = ascii_clause_break_after_han(&strip_markup(&chinese)) {
                 panic!("the Chinese report ends a clause as English: {offence}");
             }
+            if let Some(offence) = ascii_label_colon_in_chinese(&strip_markup(&chinese)) {
+                panic!("the Chinese report sets a label with an ASCII colon: {offence}");
+            }
+            assert!(!chinese.contains(":</strong>"));
+            assert!(!chinese.contains(":</em>"));
             // Nothing is missing, so the report says so instead of leaving the
             // coverage and next-step sections blank.
             assert!(english.contains("What needs attention"));
@@ -2177,8 +2210,8 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             assert_paragraphs_are_well_formed(&zh_html, "the Chinese report");
             for named in [
                 "<strong>來自已保存的工作設定</strong><ul>",
-                "<strong>檢查逾時限制:</strong> 3600 秒；適用於 Checkov、CloudQuery",
-                "<strong>檢查逾時限制:</strong> 7200 秒；適用於 Greenbone Community Edition、httpx、Nuclei",
+                "<strong>檢查逾時限制：</strong>3600 秒；適用於 Checkov、CloudQuery",
+                "<strong>檢查逾時限制：</strong>7200 秒；適用於 Greenbone Community Edition、httpx、Nuclei",
                 "KICS、kube-bench",
                 "ScoutSuite、ScubaGear",
                 "Trivy、TruffleHog",
@@ -2445,6 +2478,11 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             if let Some(offence) = ascii_clause_break_after_han(&strip_markup(&zh_html)) {
                 panic!("the Chinese report ends a clause as English: {offence}");
             }
+            if let Some(offence) = ascii_label_colon_in_chinese(&strip_markup(&zh_html)) {
+                panic!("the Chinese report sets a label with an ASCII colon: {offence}");
+            }
+            assert!(!zh_html.contains(":</strong>"));
+            assert!(!zh_html.contains(":</em>"));
 
             for spelled_two_ways in [
                 "（checkov）",
@@ -3039,8 +3077,8 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 ),
                 (
                     &zh_html,
-                    "<strong>狀態:</strong> ",
-                    "<strong>階段:</strong> ",
+                    "<strong>狀態：</strong>",
+                    "<strong>階段：</strong>",
                 ),
             ] {
                 let states = html.matches(state).count();
@@ -3072,7 +3110,7 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             }
             // Under a translated label, in the translated vocabulary.
             assert!(
-                zh_html.contains("<strong>階段:</strong> 已擷取，等待轉接器處理"),
+                zh_html.contains("<strong>階段：</strong>已擷取，等待轉接器處理"),
                 "a task phase stayed in English in the Chinese report"
             );
 
@@ -3172,7 +3210,7 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 "the audit lost the failing run's error code"
             );
             assert!(
-                zh_html.contains("<strong>錯誤碼:</strong> 執行失敗"),
+                zh_html.contains("<strong>錯誤碼：</strong>執行失敗"),
                 "a task error code stayed in English in the Chinese report"
             );
 
