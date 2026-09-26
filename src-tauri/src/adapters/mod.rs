@@ -563,8 +563,8 @@ pub fn builtin_adapter_registry() -> AppResult<AdapterRegistry> {
             "Infrastructure-as-code engineer",
         ),
         ("kics", Profile::Kics, "Infrastructure-as-code engineer"),
-        ("trivy", Profile::Trivy, "Container security engineer"),
-        ("grype", Profile::Grype, "Container security engineer"),
+        ("trivy", Profile::Trivy, "Software supply-chain engineer"),
+        ("grype", Profile::Grype, "Software supply-chain engineer"),
         ("syft", Profile::Syft, "Software supply-chain engineer"),
         (
             "kubescape",

@@ -6584,6 +6584,23 @@ fn every_specialist_the_engines_recommend_is_named_in_the_readers_language() {
     );
 }
 
+#[test]
+fn package_vulnerability_scanners_recommend_a_software_supply_chain_engineer() {
+    for engine_id in ["trivy", "grype"] {
+        let findings = normalize_fixture(engine_id).findings;
+        assert!(
+            !findings.is_empty(),
+            "{engine_id} fixture produced no findings"
+        );
+        assert!(
+            findings.iter().all(|finding| {
+                finding.recommended_expert_type == "Software supply-chain engineer"
+            }),
+            "{engine_id} routed a package vulnerability to the wrong specialist: {findings:#?}"
+        );
+    }
+}
+
 /// The safety and verification sentences are the ones the translator knows.
 ///
 /// Both are matched against the English rather than composed from a code:

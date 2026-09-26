@@ -2737,7 +2737,7 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             for open_text in [
                 grype_impact,
                 "Upgrade the affected component to a fixed version",
-                "Container security engineer",
+                "Software supply-chain engineer",
                 "https://nvd.nist.gov/vuln/detail/CVE-2025-0002",
             ] {
                 let at = grype_card

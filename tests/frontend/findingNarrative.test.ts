@@ -785,8 +785,18 @@ test("the scanner location reads as a place, not a coordinate string", () => {
     },
     {
       raw: "/requirements.txt",
-      en: "/requirements.txt",
-      zh: "/requirements.txt",
+      en: "requirements.txt",
+      zh: "requirements.txt",
+    },
+    {
+      raw: "/infra/storage.tf:line=4:resource=aws_s3_bucket.logs",
+      en: "infra/storage.tf · line 4 · aws_s3_bucket.logs",
+      zh: "infra/storage.tf · 第 4 行 · aws_s3_bucket.logs",
+    },
+    {
+      raw: ".\\infra\\storage.tf:line=4:resource=resource:aws_s3_bucket.logs,resource:,similarity:dedup,resource:aws_s3_bucket.logs",
+      en: "infra/storage.tf · line 4 · aws_s3_bucket.logs",
+      zh: "infra/storage.tf · 第 4 行 · aws_s3_bucket.logs",
     },
     // An empty path is not this form.
     {
