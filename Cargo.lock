@@ -21,7 +21,7 @@ dependencies = [
 name = "ai-security-scanner"
 version = "1.0.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "directories",
