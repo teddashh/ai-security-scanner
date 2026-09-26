@@ -3962,9 +3962,9 @@ test("a scanner fixed version keeps its source label in Traditional Chinese", ()
   }));
 
   const card = container.querySelector<HTMLElement>(".priority-card");
-  expect(card!.textContent).toContain("掃描器回報的修正版");
+  expect(card!.textContent).toContain("掃描工具回報的修正版");
   expect(card!.textContent).toContain("5.3.1");
-  expect(card!.textContent).not.toContain("掃描器未提供這項問題的具體修復方式。");
+  expect(card!.textContent).not.toContain("掃描工具未提供這項問題的具體修復方式。");
 });
 
 test("scanner remediation keeps its source label concise in Traditional Chinese", () => {
@@ -3985,7 +3985,7 @@ test("scanner remediation keeps its source label concise in Traditional Chinese"
 
   openFirstFinding(container);
   const remediation = container.querySelector<HTMLElement>(".scanner-evidence-remediation");
-  expect(remediation!.textContent).toContain("掃描器提供的修復資訊");
+  expect(remediation!.textContent).toContain("掃描工具提供的修復資訊");
   expect(remediation!.textContent).not.toContain("未受信任的掃描器證據");
   expect(remediation!.textContent).toContain("UPSTREAM_REMEDIATION_TEXT");
 });

@@ -417,7 +417,7 @@ const pageCopy = {
   environmentPlanTitle: bilingual("One scan for this IT environment", "一次掃描這個 IT 環境"),
   environmentPlanBody: bilingual(
     "Choose the scan-ready items below. Each scanner receives only the assets it can check, and all completed results go into one report. Inventory-only ranges are not contacted or scanned.",
-    "選擇下方已可掃描的項目。每個掃描器只會收到它能檢查的資產，所有完成結果會整合成一份報告。僅供盤點的網段不會被連線或掃描。",
+    "選擇下方已可掃描的項目。每個掃描工具只會收到它能檢查的資產，所有完成結果會整合成一份報告。僅供盤點的網段不會被連線或掃描。",
   ),
   environmentTiming: primaryScanTiming,
   websiteTiming: primaryScanTiming,

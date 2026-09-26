@@ -977,7 +977,7 @@ export const localizedCoverageDimension = (
       ["vulnerability profile evidence", "弱點掃描設定檔證據"],
       ["website execution evidence", "網站執行證據"],
       ["target response", "目標回應"],
-      ["scanner errors", "掃描器錯誤"],
+      ["scanner errors", "掃描工具錯誤"],
       ["unsupported target input", "不支援的目標輸入"],
       [
         "connections refused by the rate limit",
@@ -2148,43 +2148,43 @@ const CONTROL_MAPPING_RATIONALE_PROSE: ReadonlyArray<
   ],
   [
     "OWASP publishes A01:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
-    "OWASP 公布 A01:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+    "OWASP 公布 A01:2021 所對應的一組 CWE；掃描工具標示的 CWE 屬於這組時，結果即歸入此類別。",
   ],
   [
     "OWASP publishes A02:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
-    "OWASP 公布 A02:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+    "OWASP 公布 A02:2021 所對應的一組 CWE；掃描工具標示的 CWE 屬於這組時，結果即歸入此類別。",
   ],
   [
     "OWASP publishes A03:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
-    "OWASP 公布 A03:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+    "OWASP 公布 A03:2021 所對應的一組 CWE；掃描工具標示的 CWE 屬於這組時，結果即歸入此類別。",
   ],
   [
     "OWASP publishes A04:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
-    "OWASP 公布 A04:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+    "OWASP 公布 A04:2021 所對應的一組 CWE；掃描工具標示的 CWE 屬於這組時，結果即歸入此類別。",
   ],
   [
     "OWASP publishes A05:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
-    "OWASP 公布 A05:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+    "OWASP 公布 A05:2021 所對應的一組 CWE；掃描工具標示的 CWE 屬於這組時，結果即歸入此類別。",
   ],
   [
     "OWASP publishes A06:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
-    "OWASP 公布 A06:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+    "OWASP 公布 A06:2021 所對應的一組 CWE；掃描工具標示的 CWE 屬於這組時，結果即歸入此類別。",
   ],
   [
     "OWASP publishes A07:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
-    "OWASP 公布 A07:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+    "OWASP 公布 A07:2021 所對應的一組 CWE；掃描工具標示的 CWE 屬於這組時，結果即歸入此類別。",
   ],
   [
     "OWASP publishes A08:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
-    "OWASP 公布 A08:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+    "OWASP 公布 A08:2021 所對應的一組 CWE；掃描工具標示的 CWE 屬於這組時，結果即歸入此類別。",
   ],
   [
     "OWASP publishes A09:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
-    "OWASP 公布 A09:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+    "OWASP 公布 A09:2021 所對應的一組 CWE；掃描工具標示的 CWE 屬於這組時，結果即歸入此類別。",
   ],
   [
     "OWASP publishes A10:2021 as this set of CWEs, so a scanner-assigned CWE in the set places the result in the category.",
-    "OWASP 公布 A10:2021 所對應的一組 CWE；掃描器標示的 CWE 屬於這組時，結果即歸入此類別。",
+    "OWASP 公布 A10:2021 所對應的一組 CWE；掃描工具標示的 CWE 屬於這組時，結果即歸入此類別。",
   ],
 ];
 

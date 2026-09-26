@@ -281,7 +281,7 @@ test("the unrated severity handoff is fully localized for a zh-TW beginner", () 
   ]);
   const rendered = container.textContent ?? "";
 
-  expect(rendered).toContain("未知（掃描器未評等）");
+  expect(rendered).toContain("未知（掃描工具未評等）");
   expect(rendered).not.toContain("本產品評定");
   expect(rendered).not.toContain("rated here");
   expect(rendered).not.toContain("未知這個等級來自來源工具");

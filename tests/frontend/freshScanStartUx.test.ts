@@ -186,7 +186,7 @@ test("the waiting-plan state is named in English and Traditional Chinese and off
     "A scan plan is waiting and nothing is running",
     "掃描計畫正在等候，目前沒有掃描在執行",
     "No scanner has started.",
-    "掃描器尚未啟動。",
+    "掃描工具尚未啟動。",
     "Cancel this plan",
     "取消這份計畫",
   ]) assert.ok(progress.includes(phrase), phrase);

@@ -14710,7 +14710,7 @@ fn html_asset_state_steps(states: &[HtmlAssetResultStatus], catalog: HtmlReportC
                     catalog.text("Incomplete or failed", "未完成或失敗"),
                     catalog.text(
                         "open Review scanner status to finish or retry this asset's remaining checks",
-                        "請開啟「查看掃描器狀態」完成或重試這個資產的其餘檢查",
+                        "請開啟「查看掃描工具狀態」完成或重試這個資產的其餘檢查",
                     ),
                 ),
                 HtmlAssetResultStatus::NotTested => (
@@ -16236,7 +16236,7 @@ fn html_asset_result_section(
             }
             action.push_str(catalog.text(
                 "Some checks are incomplete. Open Review scanner status to finish or retry them.",
-                "另有檢查尚未完成；請開啟「查看掃描器狀態」完成或重試。",
+                "另有檢查尚未完成；請開啟「查看掃描工具狀態」完成或重試。",
             ));
         }
         if action.is_empty() && !states_taking_their_own_step.contains(&status) {
@@ -18901,7 +18901,7 @@ fn html_report_bytes(
                 html_escape(diagnostic_explanation),
                 catalog.text(
                     "Scanner messages are not included in this readable HTML report.",
-                    "這份好讀的 HTML 報告不包含掃描器訊息。",
+                    "這份好讀的 HTML 報告不包含掃描工具訊息。",
                 ),
             ),
         ));
@@ -19576,7 +19576,7 @@ fn html_report_bytes(
         catalog.text(" ", ""),
         catalog.text(
             "Raw evidence is excluded. No scripts, forms, remote resources, scanner messages, or executable remediation are included.",
-            "不包含原始證據，也不包含指令碼、表單、遠端資源、掃描器訊息或可執行的修復動作。",
+            "不包含原始證據，也不包含指令碼、表單、遠端資源、掃描工具訊息或可執行的修復動作。",
         ),
         catalog.text(" ", ""),
         untrusted_evidence_terms,

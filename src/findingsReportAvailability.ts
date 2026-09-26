@@ -10,7 +10,7 @@ export const unavailableRunBoundReportCopy: {
   },
   body: {
     en: "Open Review scanner status, then start a new scan to create the report.",
-    zhTW: "請開啟「查看掃描器狀態」，再開始新的掃描以建立主要報告。",
+    zhTW: "請開啟「查看掃描工具狀態」，再開始新的掃描以建立主要報告。",
   },
 };
 

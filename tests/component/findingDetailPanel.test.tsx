@@ -145,8 +145,8 @@ test("the advice section's run-in labels carry exactly one colon, set per langua
   window.localStorage.setItem(localeStorageKey, "zh-TW");
   const zh = renderPage([finding]);
   const zhText = adviceSection(zh.container).textContent ?? "";
-  expect(zhText).toContain("掃描器提供的修復資訊：");
-  expect(zhText).toContain("掃描器回報的修正版：");
+  expect(zhText).toContain("掃描工具提供的修復資訊：");
+  expect(zhText).toContain("掃描工具回報的修正版：");
   expect(zhText).toContain("變更前考量：");
   expect(zhText).not.toContain("： ");
   expect(zhText).not.toContain("考量：：");

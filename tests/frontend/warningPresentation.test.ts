@@ -285,7 +285,7 @@ test("repository result-shape warnings have direct Traditional Chinese presentat
     ],
     [
       "Semgrep reported one or more scanner errors; valid findings were preserved, but the error details remain only in the raw artifact and completeness cannot be established",
-      "Semgrep 回報一項或多項掃描器錯誤；結果不完整",
+      "Semgrep 回報一項或多項掃描工具錯誤；結果不完整",
     ],
     [
       "Semgrep finding at /results/2 lacked its check_id; the raw record was retained",

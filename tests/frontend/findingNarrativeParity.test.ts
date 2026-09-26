@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 // The same sentences about a finding are written twice: TypeScript composes
@@ -188,4 +188,72 @@ test("the confidence basis tables have identical code-to-prose pairs", () => {
   assert.equal(tsChinese.size, 6);
   assert.deepEqual(tsChinese, rustChinese);
   assert.deepEqual(tsEnglish, rustEnglish);
+});
+
+/**
+ * The product has one Traditional Chinese word for a scanner, 掃描工具. A
+ * reader who also meets 掃描器 cannot tell whether the two name different
+ * sources. This reads the interface and the report's Rust source and fails on
+ * the retired word in either. A line counts as a comment only when, after
+ * leading whitespace, it starts with `//`, `/*`, or `*`.
+ */
+const isCommentLine = (line: string): boolean => {
+  const trimmed = line.replace(/^\s+/u, "");
+  return trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*");
+};
+
+const retiredScannerWord = "掃描器";
+
+const findRetiredWord = (label: string, source: string, violations: string[]): void => {
+  source.split("\n").forEach((line, index) => {
+    if (isCommentLine(line)) return;
+    if (line.includes(retiredScannerWord)) violations.push(`${label}:${index + 1}`);
+  });
+};
+
+/** Everything before Rust's own test module, never the fixtures inside it. */
+const beforeModTests = (source: string, label: string): string => {
+  const marker = "\nmod tests {";
+  const cut = source.indexOf(marker);
+  assert.ok(cut > 0, `${label} no longer has a top-level \`mod tests {\` boundary`);
+  return source.slice(0, cut);
+};
+
+test("the Chinese interface calls a scanner 掃描工具", () => {
+  const repoRoot = new URL("../../", import.meta.url);
+  const violations: string[] = [];
+
+  const walk = (directory: string): void => {
+    for (const entry of readdirSync(new URL(directory, repoRoot), { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        walk(`${directory}${entry.name}/`);
+        continue;
+      }
+      if (!/\.tsx?$/u.test(entry.name)) continue;
+      const relative = `${directory}${entry.name}`;
+      findRetiredWord(relative, readFileSync(new URL(relative, repoRoot), "utf8"), violations);
+    }
+  };
+  walk("src/");
+
+  const caseServiceSource = readFileSync(
+    new URL("../../src-tauri/src/case_service.rs", import.meta.url),
+    "utf8",
+  );
+  findRetiredWord(
+    "src-tauri/src/case_service.rs",
+    beforeModTests(caseServiceSource, "src-tauri/src/case_service.rs"),
+    violations,
+  );
+  findRetiredWord(
+    "src-tauri/src/finding_narrative.rs",
+    beforeModTests(rustSource, "src-tauri/src/finding_narrative.rs"),
+    violations,
+  );
+
+  assert.deepEqual(
+    violations,
+    [],
+    `still calls a scanner 掃描器 instead of 掃描工具:\n${violations.join("\n")}`,
+  );
 });

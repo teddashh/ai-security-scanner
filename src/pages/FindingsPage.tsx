@@ -271,7 +271,7 @@ const copy = {
     zhTW: "已完成的檢查在實際測試範圍內沒有記錄問題。",
   },
   openCoverage: { en: "Open scan setup", zhTW: "開啟掃描設定" },
-  openProgress: { en: "Review scanner status", zhTW: "查看掃描器狀態" },
+  openProgress: { en: "Review scanner status", zhTW: "查看掃描工具狀態" },
   openExport: { en: "Save or share report", zhTW: "保存或分享報告" },
   summaryAria: { en: "Problem summary", zhTW: "問題摘要" },
   critical: { en: "Critical", zhTW: "嚴重" },
@@ -410,7 +410,7 @@ const copy = {
   },
   assetProblemIncomplete: {
     en: "Some checks are incomplete. Open Review scanner status to finish or retry them.",
-    zhTW: "另有檢查尚未完成；請開啟「查看掃描器狀態」完成或重試。",
+    zhTW: "另有檢查尚未完成；請開啟「查看掃描工具狀態」完成或重試。",
   },
   assetNoProblemSummaryOne: {
     en: "1 completed security check reported no problems.",
@@ -430,7 +430,7 @@ const copy = {
   },
   assetIncompleteAction: {
     en: "Open Review scanner status to finish or retry this asset's remaining checks.",
-    zhTW: "請開啟「查看掃描器狀態」完成或重試這個資產的其餘檢查。",
+    zhTW: "請開啟「查看掃描工具狀態」完成或重試這個資產的其餘檢查。",
   },
   assetNotTestedSummary: {
     en: "No completed security check is recorded for this asset.",
@@ -451,7 +451,7 @@ const copy = {
   },
   scannerRemediationMissing: {
     en: "The scanner did not provide a specific fix for this finding.",
-    zhTW: "掃描器未提供這項問題的具體修復方式。",
+    zhTW: "掃描工具未提供這項問題的具體修復方式。",
   },
   reviewEvidence: { en: "Open evidence and details", zhTW: "開啟證據與詳細資料" },
   allProblems: { en: "EXPLORE RESULTS", zhTW: "查看所有結果" },
@@ -529,7 +529,7 @@ const copy = {
   evidenceKind: { en: "Type", zhTW: "種類" },
   sourceRule: { en: "Source rule", zhTW: "來源規則" },
   evidenceLocation: { en: "Evidence location", zhTW: "證據位置" },
-  scannerDescription: { en: "Scanner-provided description", zhTW: "掃描器提供的說明" },
+  scannerDescription: { en: "Scanner-provided description", zhTW: "掃描工具提供的說明" },
   iamPolicyContext: { en: "AWS IAM policy context", zhTW: "AWS IAM 政策脈絡" },
   iamPolicySource: { en: "Policy source", zhTW: "政策來源" },
   iamPolicyName: { en: "Policy", zhTW: "政策" },
@@ -549,13 +549,13 @@ const copy = {
     zhTW: "保留的附加清單不完整；變更此政策前請先核對目前的 IAM 附加關係。",
   },
   installedVersion: { en: "Observed version", zhTW: "觀察到的版本" },
-  fixedVersion: { en: "Scanner-reported fixed version", zhTW: "掃描器回報的修正版" },
+  fixedVersion: { en: "Scanner-reported fixed version", zhTW: "掃描工具回報的修正版" },
   scannerRemediation: {
     en: "Scanner-provided remediation",
-    zhTW: "掃描器提供的修復資訊",
+    zhTW: "掃描工具提供的修復資訊",
   },
   scanRun: { en: "Scan run", zhTW: "掃描輪次" },
-  engineRun: { en: "Scanner job", zhTW: "掃描器工作" },
+  engineRun: { en: "Scanner job", zhTW: "掃描工具作業" },
   artifactId: { en: "Evidence file ID", zhTW: "證據檔案 ID" },
   contentHash: { en: "Content hash", zhTW: "內容雜湊" },
   evidencePointer: { en: "Internal evidence pointer", zhTW: "內部證據指標" },

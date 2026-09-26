@@ -10,7 +10,7 @@ test("a missing durable run-bound report gives one direct recovery path", () => 
   assert.equal(unavailableRunBoundReportCopy.title.en, "Master report unavailable for this scan");
   assert.equal(unavailableRunBoundReportCopy.title.zhTW, "這次掃描沒有主要報告");
   assert.equal(unavailableRunBoundReportCopy.body.en, "Open Review scanner status, then start a new scan to create the report.");
-  assert.equal(unavailableRunBoundReportCopy.body.zhTW, "請開啟「查看掃描器狀態」，再開始新的掃描以建立主要報告。");
+  assert.equal(unavailableRunBoundReportCopy.body.zhTW, "請開啟「查看掃描工具狀態」，再開始新的掃描以建立主要報告。");
   assert.doesNotMatch(unavailableRunBoundReportCopy.body.en, /or Export/u);
   assert.doesNotMatch(unavailableRunBoundReportCopy.body.en, /available below/u);
   assert.doesNotMatch(unavailableRunBoundReportCopy.body.zhTW, /下方仍會保留/u);
@@ -25,5 +25,5 @@ test("a stale selected run gives the refresh action without defensive explanatio
   assert.match(unavailableSelectedRunCopy.body.zhTW, /在「我的掃描」重新整理專案/u);
   assert.doesNotMatch(unavailableSelectedRunCopy.body.en, /will not substitute/u);
   assert.doesNotMatch(unavailableSelectedRunCopy.body.en, /export|Review scanner status/u);
-  assert.doesNotMatch(unavailableSelectedRunCopy.body.zhTW, /匯出|查看掃描器狀態/u);
+  assert.doesNotMatch(unavailableSelectedRunCopy.body.zhTW, /匯出|查看掃描工具狀態/u);
 });

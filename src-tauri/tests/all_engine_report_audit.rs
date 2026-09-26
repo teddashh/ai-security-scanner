@@ -2935,7 +2935,7 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                     &zh_html,
                     "本輪每個工作記錄的狀態都相同。",
                     "本輪的診斷紀錄無法取得",
-                    "這份好讀的 HTML 報告不包含掃描器訊息。",
+                    "這份好讀的 HTML 報告不包含掃描工具訊息。",
                 ),
             ] {
                 assert_eq!(html.matches(availability).count(), 1);

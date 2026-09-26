@@ -517,9 +517,9 @@ test("in Traditional Chinese the default decision summary has no dangling senten
   expect(decisionSummary(container).textContent).not.toContain("。 ·");
 
   chooseCaseBundle(container, "技術案件包");
-  await waitFor(() => expect(toggle(container, "附上掃描器原始檔").disabled).toBe(false));
-  fireEvent.click(toggle(container, "附上掃描器原始檔"));
-  await waitFor(() => expect(consequence(container)).toContain("將附上未遮罩的掃描器原始檔"));
+  await waitFor(() => expect(toggle(container, "附上掃描工具原始檔").disabled).toBe(false));
+  fireEvent.click(toggle(container, "附上掃描工具原始檔"));
+  await waitFor(() => expect(consequence(container)).toContain("將附上未遮罩的掃描工具原始檔"));
   expect(decisionSummary(container).textContent).toContain("僅交付可信對象 · ");
   expect(decisionSummary(container).textContent).not.toContain("。 ·");
 });

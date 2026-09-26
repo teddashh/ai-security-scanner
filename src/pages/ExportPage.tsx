@@ -106,7 +106,7 @@ const copy = {
   },
   sharingRawSources: {
     en: "Includes unredacted scanner files that may contain secrets; share only with trusted recipients",
-    zhTW: "將附上未遮罩的掃描器原始檔，可能含機密；僅交付可信對象",
+    zhTW: "將附上未遮罩的掃描工具原始檔，可能含機密；僅交付可信對象",
   },
   previewPending: { en: "Checking file contents…", zhTW: "正在確認檔案內容…" },
   scopeSelectedRun: { en: "Selected-run report", zhTW: "所選掃描輪次報告" },
@@ -180,7 +180,7 @@ const copy = {
     en: "OCSF and OSCAL require a saved scan for their coverage manifest. Available now: HTML, JSON, framework report, and case bundle.",
     zhTW: "OCSF 與 OSCAL 的涵蓋說明檔需要一筆已保存掃描。目前可用：HTML、JSON、框架報告與案件包。",
   },
-  includeRaw: { en: "Include original scanner files", zhTW: "附上掃描器原始檔" },
+  includeRaw: { en: "Include original scanner files", zhTW: "附上掃描工具原始檔" },
   // Every artifact the desktop app captures is marked sensitive
   // (artifact_store.rs sets it unconditionally), and standard redaction drops
   // every sensitive artifact. So with private details hidden this option

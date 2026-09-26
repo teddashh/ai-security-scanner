@@ -24,7 +24,7 @@ const FIXED_ENGINE_WARNINGS: ReadonlyArray<readonly [string, string]> = [
   ["Greenbone result limit reached; later results remain only as raw evidence", "Greenbone 已達結果限制；後續結果只保留為原始證據"],
   ["Greenbone result had an invalid NVT OID", "Greenbone 結果含有無效的 NVT OID"],
   ["Greenbone reported that the host did not respond, so none of its vulnerability checks ran for that target", "Greenbone 回報主機沒有回應，因此該目標的弱點檢查一項都沒有執行"],
-  ["Greenbone reported scanner errors for the target, so some of its checks did not finish", "Greenbone 回報該目標發生掃描器錯誤，因此部分檢查沒有完成"],
+  ["Greenbone reported scanner errors for the target, so some of its checks did not finish", "Greenbone 回報該目標發生掃描工具錯誤，因此部分檢查沒有完成"],
   ["Greenbone result carried an unsupported upstream result type and was retained only as raw evidence", "Greenbone 結果帶有不支援的上游結果類型，只保留為原始證據"],
   ["Greenbone result lacked an upstream result type and a positive severity; it was retained only as raw evidence and this run cannot be treated as a clean result", "Greenbone 結果缺少上游結果類型與正的嚴重程度；只保留為原始證據，本輪不能視為乾淨的結果"],
   ["Greenbone reported a target it could not evaluate, but the result named no authorized asset; the raw artifact was retained", "Greenbone 回報了一個無法評估的目標，但該結果沒有指名任何已授權的資產；原始成品已保留"],
@@ -45,7 +45,7 @@ const FIXED_ENGINE_WARNINGS: ReadonlyArray<readonly [string, string]> = [
   ["Semgrep expected a JSON document", "Semgrep 預期收到 JSON 文件"],
   ["Semgrep output had no results array", "Semgrep 輸出沒有 results 陣列"],
   ["Semgrep output lacked its required errors array; valid findings were preserved, but completeness cannot be established", "Semgrep 輸出缺少必要的 errors 陣列；有效問題已保留，但無法確認完整性"],
-  ["Semgrep reported one or more scanner errors; valid findings were preserved, but the error details remain only in the raw artifact and completeness cannot be established", "Semgrep 回報一項或多項掃描器錯誤；有效問題已保留，錯誤細節只留在原始成品中，且無法確認完整性"],
+  ["Semgrep reported one or more scanner errors; valid findings were preserved, but the error details remain only in the raw artifact and completeness cannot be established", "Semgrep 回報一項或多項掃描工具錯誤；有效問題已保留，錯誤細節只留在原始成品中，且無法確認完整性"],
   ["Checkov expected a JSON document", "Checkov 預期收到 JSON 文件"],
   ["Checkov expected a JSON object or an array of framework result objects", "Checkov 預期收到一個 JSON 物件，或由各框架結果物件組成的陣列"],
   ["Checkov framework result limit reached; later framework results remain only as raw evidence", "Checkov 已達框架結果限制；後續框架結果只保留為原始證據"],
@@ -60,7 +60,7 @@ const FIXED_ENGINE_WARNINGS: ReadonlyArray<readonly [string, string]> = [
   ["Steampipe output lacked its rows array; the raw artifact was retained, and the inventory query should be retried", "Steampipe 輸出缺少 rows 陣列；原始成品已保留，請重試盤點查詢"],
   ["Steampipe rows exceeded the record safety boundary; later inventory rows remain only as raw evidence", "Steampipe 資料列超過記錄安全界線；後續盤點資料列只保留為原始證據"],
   ["Agentic Radar output was not its supported JSON document; the raw artifact was retained, and workflow inventory is incomplete", "Agentic Radar 輸出不是支援的 JSON 文件；工作流程盤點不完整"],
-  ["Agentic Radar output did not match the pinned schema and scanner version; the raw artifact was retained, and workflow inventory is incomplete", "Agentic Radar 輸出不符合支援的結構描述與掃描器版本；工作流程盤點不完整"],
+  ["Agentic Radar output did not match the pinned schema and scanner version; the raw artifact was retained, and workflow inventory is incomplete", "Agentic Radar 輸出不符合支援的結構描述與掃描工具版本；工作流程盤點不完整"],
   ["Agentic Radar output lacked its framework; the raw artifact was retained, and workflow inventory is incomplete", "Agentic Radar 輸出缺少框架；工作流程盤點不完整"],
   ["Agentic Radar output named an unsupported framework; the raw artifact was retained, and workflow inventory is incomplete", "Agentic Radar 輸出指名不支援的框架；工作流程盤點不完整"],
   ["Agentic Radar output lacked its status; the raw artifact was retained, and workflow inventory is incomplete", "Agentic Radar 輸出缺少狀態；工作流程盤點不完整"],
@@ -76,7 +76,7 @@ const FIXED_ENGINE_WARNINGS: ReadonlyArray<readonly [string, string]> = [
   ["Agentic Radar agents exceeded the record safety boundary; later agent metadata remains only in the raw artifact", "Agentic Radar agents 超過記錄安全界線；額外代理中繼資料未納入"],
   ["Agentic Radar edges exceeded the record safety boundary; later relationships remain only in the raw artifact", "Agentic Radar edges 超過記錄安全界線；額外關係未納入"],
   ["MCP Armor output was not its supported configuration-only JSON document; result processing is incomplete", "MCP Armor 輸出不是支援的僅設定 JSON 文件；結果處理不完整"],
-  ["MCP Armor output did not match the supported configuration-only schema, scanner version, and mode; result processing is incomplete", "MCP Armor 輸出不符合支援的僅設定結構描述、掃描器版本與模式；結果處理不完整"],
+  ["MCP Armor output did not match the supported configuration-only schema, scanner version, and mode; result processing is incomplete", "MCP Armor 輸出不符合支援的僅設定結構描述、掃描工具版本與模式；結果處理不完整"],
   ["MCP Armor input counts did not describe the one approved configuration snapshot; result processing is incomplete", "MCP Armor 輸入計數不符合唯一一份已核准設定快照；結果處理不完整"],
   ["MCP Armor output lacked its completeness flag; result processing is incomplete", "MCP Armor 輸出缺少完整性旗標；結果處理不完整"],
   ["MCP Armor warnings exceeded the result safety boundary; additional diagnostics excluded", "MCP Armor 警告超過結果安全界線；額外診斷未納入"],
@@ -390,8 +390,8 @@ const directEngineWarningZhTW = (warning: string): string => {
   return warning
     .replace(/^(.+) 轉接器輸入不符：文件宣告掃描工具為 (.+)$/u, "$1 結果不可用：文件宣告掃描工具為 $2")
     .replace(/^轉接器/u, "結果處理")
-    .replace(/^掃描器輸出已擷取，但沒有為 (.+) (.+) 版登錄經驗證的轉接器$/u, "$1 $2 結果不可用：不支援的結果格式")
-    .replace(/^掃描器輸出已擷取，但 (.+) (.+) 版轉接器驗證失敗$/u, "$1 $2 結果處理失敗")
+    .replace(/^掃描工具輸出已擷取，但沒有為 (.+) (.+) 版登錄經驗證的轉接器$/u, "$1 $2 結果不可用：不支援的結果格式")
+    .replace(/^掃描工具輸出已擷取，但 (.+) (.+) 版轉接器驗證失敗$/u, "$1 $2 結果處理失敗")
     .replace(/^(.+) 文件未宣告正規化的結果數量，因此無法確認沒有遺失$/u, "$1 文件缺少正規化結果數量；結果完整性未知")
     .replace(/^重新啟動後，擷取的啟動器涵蓋仍未驗證（(.+)）；未驗證的工作不會計為已檢測。$/u, "重新啟動後啟動器涵蓋驗證失敗（$1）。")
     .replace(/^租用戶的 ScubaGear 設定對 (.+) (.+) 的結果有異議；系統依 ScubaGear 本身的判定回報，並標記為租用戶異議，而不是隱藏$/u, "ScubaGear 將 $1 $2 標記為租用戶異議。")
@@ -423,7 +423,7 @@ const directEngineWarningZhTW = (warning: string): string => {
     .replace("結果處理已停止；請使用目前的結果讀取器開始新的掃描。", "結果處理已停止；請開始新的掃描。")
     .replace("已安裝的結果讀取器無法繼續處理這項檢查；請開始新的掃描。", "已安裝版本無法處理這項已保存的檢查；請開始新的掃描。")
     .replace("執行記錄保留這項明確的過時知識警告；其結果不得呈現為目前知識。", "結果使用過時知識。")
-    .replace("已驗證的空白 JSONL 結果已繼續處理，沒有重新執行掃描器或變更對照。", "空白 JSONL 結果處理完成。");
+    .replace("已驗證的空白 JSONL 結果已繼續處理，沒有重新執行掃描工具或變更對照。", "空白 JSONL 結果處理完成。");
 };
 
 export const recognizedEngineWarningZhTW = (warning: string): string | undefined => {
@@ -598,8 +598,8 @@ export const recognizedEngineWarningZhTW = (warning: string): string | undefined
     [/^record (.+) had no exact authorized provider identifier match and was not normalized$/u, (rule) => `記錄 ${rule} 沒有完全相符的已授權供應商識別碼，因此未正規化`],
     [/^record (.+) could not be mapped unambiguously to an authorized asset and was not normalized$/u, (rule) => `記錄 ${rule} 無法明確對應到已授權資產，因此未正規化`],
     [/^(.+) did not evaluate every control in scope \((.+)\); those controls are absent from findings and this run does not establish their state$/u, (engine, controls) => `${engine} 未評估範圍內的所有控制措施（${shortfalls(controls)}）；這些控制措施未列於問題中，本輪也無法確認其狀態`],
-    [/^scanner output was captured, but no verified adapter is registered for (.+) version (.+)$/u, (engine, version) => `掃描器輸出已擷取，但沒有為 ${engine} ${version} 版登錄經驗證的轉接器`],
-    [/^scanner output was captured, but adapter (.+) version (.+) failed validation$/u, (engine, version) => `掃描器輸出已擷取，但 ${engine} ${version} 版轉接器驗證失敗`],
+    [/^scanner output was captured, but no verified adapter is registered for (.+) version (.+)$/u, (engine, version) => `掃描工具輸出已擷取，但沒有為 ${engine} ${version} 版登錄經驗證的轉接器`],
+    [/^scanner output was captured, but adapter (.+) version (.+) failed validation$/u, (engine, version) => `掃描工具輸出已擷取，但 ${engine} ${version} 版轉接器驗證失敗`],
     [/^Zeroized and removed (.+) crash-left credential envelope\(s\) from this exact execution attempt\.$/u, (count) => `已從這次確切執行嘗試中清零並移除 ${count} 個因當機遺留的認證封套。`],
     [/^Zeroized and removed (.+) leftover credential envelope\(s\) from this exact execution attempt\.$/u, (count) => `已從這次確切執行嘗試中清零並移除 ${count} 個殘留的認證封套。`],
     [/^Captured launcher coverage remained unverified after restart \((.+)\); no unverified work was counted as tested\.$/u, (reason) => `重新啟動後，擷取的啟動器涵蓋仍未驗證（${reason}）；未驗證的工作不會計為已檢測。`],
@@ -607,7 +607,7 @@ export const recognizedEngineWarningZhTW = (warning: string): string | undefined
     [/^the tenant's ScubaGear configuration disputes the result of (.+) (.+); they are reported on ScubaGear's own determination and tagged tenant-disputed rather than suppressed$/u, (count) => `租用戶的 ScubaGear 設定對 ${count} 個控制措施的結果有異議；系統依 ScubaGear 本身的判定回報，並標記為租用戶異議，而不是隱藏`],
     [/^Engine (.+) uses knowledge dated (.+) whose declared support ended (.+)\. Execution retains this explicit stale-knowledge warning; its results must not be presented as current knowledge\.$/u, (engine, date, ended) => `掃描工具 ${engine} 使用日期為 ${date}、宣告支援已於 ${ended} 結束的知識。執行記錄保留這項明確的過時知識警告；其結果不得呈現為目前知識。`],
     [/^Engine (.+) uses different release settings \((.+)\), and (.+)\. Start a new scan with the installed release\.$/u, (engine, differences, reason) => `掃描工具 ${engine} 使用不同的版本設定（${differences}），且${reason}。請使用已安裝版本開始新的掃描。`],
-    [/^Release settings differ \((.+)\)\. Verified empty JSONL result processing continued without scanner execution or mapping changes\.$/u, (differences) => `版本設定不同（${differences}）。已驗證的空白 JSONL 結果已繼續處理，沒有重新執行掃描器或變更對照。`],
+    [/^Release settings differ \((.+)\)\. Verified empty JSONL result processing continued without scanner execution or mapping changes\.$/u, (differences) => `版本設定不同（${differences}）。已驗證的空白 JSONL 結果已繼續處理，沒有重新執行掃描工具或變更對照。`],
   ];
   for (const [expression, render] of rules) {
     const translated = frame(normalized, expression, render);

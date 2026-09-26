@@ -147,7 +147,7 @@ test("shared status copy and legacy date helpers follow the active locale", () =
   assert.equal(i18n.translate("zh-TW", "runtime.phase.failed.label"), "進階本機掃描工具設定失敗");
   assert.equal(i18n.translate("zh-TW", "status.stage.cleanupPending.description"), "正在清理本機掃描工作區。");
   assert.equal(i18n.runStatusMeta.no_checks_completed.label, "沒有完成任何檢查");
-  assert.equal(i18n.translate("zh-TW", "status.stage.capturing.description"), "正在記錄掃描器輸出。");
+  assert.equal(i18n.translate("zh-TW", "status.stage.capturing.description"), "正在記錄掃描工具輸出。");
   assert.equal(i18n.translate("zh-TW", "shell.data.refreshErrorDetail"), "請重新整理已保存的掃描。");
 
   const value = "2026-08-25T14:30:00.000Z";

@@ -520,7 +520,7 @@ test("a Traditional Chinese reader sees a translated technical warning", () => {
   const english = "Semgrep reported one or more scanner errors; valid findings were preserved, but the error details remain only in the raw artifact and completeness cannot be established";
   const { container } = renderProgress(run([engine("semgrep", "partial", { warnings: [english] })]));
   const row = engineRow(container, "semgrep");
-  expect(row.textContent).toContain("Semgrep 回報一項或多項掃描器錯誤；結果不完整");
+  expect(row.textContent).toContain("Semgrep 回報一項或多項掃描工具錯誤；結果不完整");
   expect(row.textContent).not.toMatch(/已保留|原始成品/u);
   expect(row.textContent).not.toContain(english);
 });
@@ -1296,7 +1296,7 @@ test("a waiting undispatched plan is named and offers a direct cancel", () => {
     </I18nProvider>,
   );
   expect(chinese.container.textContent).toContain("掃描計畫正在等候，目前沒有掃描在執行");
-  expect(chinese.container.textContent).toContain("掃描器尚未啟動。");
+  expect(chinese.container.textContent).toContain("掃描工具尚未啟動。");
   expect(chinese.container.textContent).toContain("取消這份計畫");
 });
 

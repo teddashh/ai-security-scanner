@@ -172,7 +172,7 @@ const copy = {
   },
   undispatchedPlanDescription: {
     en: "No scanner has started.",
-    zhTW: "掃描器尚未啟動。",
+    zhTW: "掃描工具尚未啟動。",
   },
   undispatchedPlanCancel: { en: "Cancel this plan", zhTW: "取消這份計畫" },
   checkingReady: { en: "Checking what is ready…", zhTW: "正在確認可以執行的檢查…" },
