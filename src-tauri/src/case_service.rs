@@ -14924,9 +14924,37 @@ fn html_executive_summary(
 
     let first_action = report.next_steps.first().map(|step| {
         let action = beginner_step_action(report, step, catalog);
-        match catalog.locale {
-            crate::export::ReportLocale::ZhHant => format!("建議最先處理的是：{action}"),
-            _ => format!("The first thing to do is: {action}"),
+        // A finding's fix is often shared -- one real project scan put 28
+        // findings behind the same template instruction -- so the action on
+        // its own said what to do but not to which problem. The step names
+        // the finding it leads with; a gap-derived step keeps the unnamed
+        // sentence.
+        let named_problem = step
+            .finding_id
+            .as_deref()
+            .and_then(|finding_id| {
+                report
+                    .findings
+                    .iter()
+                    .find(|finding| finding.finding_id == finding_id)
+            })
+            .and_then(|finding| {
+                let title = finding.title.trim();
+                let title = title
+                    .strip_suffix('.')
+                    .or_else(|| title.strip_suffix('。'))
+                    .unwrap_or(title);
+                (!title.is_empty()).then_some(title)
+            });
+        match (catalog.locale, named_problem) {
+            (crate::export::ReportLocale::ZhHant, Some(title)) => {
+                format!("最先處理「{title}」：{action}")
+            }
+            (crate::export::ReportLocale::ZhHant, None) => format!("建議最先處理的是：{action}"),
+            (_, Some(title)) => {
+                format!("Start with \u{201c}{title}\u{201d}: {action}")
+            }
+            (_, None) => format!("The first thing to do is: {action}"),
         }
     });
 
@@ -37876,6 +37904,25 @@ mod tests {
         (report, asset_id)
     }
 
+    /// A first next step derived from `finding`, the shape `project_next_steps`
+    /// produces for a finding whose fix is not shared with any other finding.
+    fn finding_derived_next_step(
+        finding: &crate::beginner_report::BeginnerFinding,
+    ) -> crate::beginner_report::BeginnerNextStep {
+        crate::beginner_report::BeginnerNextStep {
+            priority: 0,
+            code: NextActionCode::ReviewFinding,
+            action: finding.next_step.clone(),
+            reason: "Actionable findings in completed checks: 1.".into(),
+            finding_id: Some(finding.finding_id.clone()),
+            task_id: None,
+            recommended_expert_type: Some(finding.recommended_expert_type.clone()),
+            family: finding.family,
+            unattributed: None,
+            also_resolves: Vec::new(),
+        }
+    }
+
     /// The state pill's step is said once under the table, behind a prefix
     /// that only claims what it means: the run's one step where no row wrote
     /// its own, since a single problem asset with a normally completed check
@@ -37954,6 +38001,134 @@ mod tests {
             zh_summary.contains("共發現 2 個問題，全部都是嚴重或高嚴重程度。"),
             "{zh_summary}"
         );
+    }
+
+    /// The "In short" summary names the finding its first next step addresses
+    /// -- that step's action can also close out other findings, so leaving it
+    /// unnamed would tell a reader what to do but not to which problem.
+    #[test]
+    fn html_executive_summary_names_the_finding_the_first_step_addresses() {
+        let fixture = Fixture::new();
+        let (mut report, _asset_id) =
+            one_asset_one_completed_check_report(&fixture, Severity::Medium);
+        report.next_steps = vec![finding_derived_next_step(&report.findings[0])];
+        let title = report.findings[0].title.clone();
+
+        let en = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let zh = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
+        let en_action = beginner_step_action(&report, &report.next_steps[0], en);
+        let zh_action = beginner_step_action(&report, &report.next_steps[0], zh);
+        let en_summary = html_executive_summary(&report, &report.coverage_counts, 1, en);
+        let zh_summary = html_executive_summary(&report, &report.coverage_counts, 1, zh);
+
+        assert!(
+            en_summary.contains(&format!("Start with \u{201c}{title}\u{201d}: {en_action}")),
+            "{en_summary}"
+        );
+        assert!(
+            zh_summary.contains(&format!("最先處理「{title}」：{zh_action}")),
+            "{zh_summary}"
+        );
+        assert!(
+            !en_summary.contains("The first thing to do is:"),
+            "{en_summary}"
+        );
+        assert!(!zh_summary.contains("建議最先處理的是："), "{zh_summary}");
+    }
+
+    /// Engines such as Semgrep write a title as a full sentence. Its one
+    /// trailing period is dropped so the quoted name does not end the
+    /// summary's sentence early.
+    #[test]
+    fn html_executive_summary_first_step_title_drops_one_trailing_period() {
+        let fixture = Fixture::new();
+        let (mut report, _asset_id) =
+            one_asset_one_completed_check_report(&fixture, Severity::Medium);
+        report.findings[0].title =
+            "A subprocess launched through a shell can allow command injection.".into();
+        report.next_steps = vec![finding_derived_next_step(&report.findings[0])];
+
+        let en = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let zh = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
+        let en_action = beginner_step_action(&report, &report.next_steps[0], en);
+        let zh_action = beginner_step_action(&report, &report.next_steps[0], zh);
+        let en_summary = html_executive_summary(&report, &report.coverage_counts, 1, en);
+        let zh_summary = html_executive_summary(&report, &report.coverage_counts, 1, zh);
+
+        assert!(
+            en_summary.contains(&format!(
+                "Start with \u{201c}A subprocess launched through a shell can allow command injection\u{201d}: {en_action}"
+            )),
+            "{en_summary}"
+        );
+        assert!(
+            zh_summary.contains(&format!(
+                "最先處理「A subprocess launched through a shell can allow command injection」：{zh_action}"
+            )),
+            "{zh_summary}"
+        );
+    }
+
+    /// A first step derived from a coverage gap (for example, a retry) has no
+    /// finding behind it, so the summary keeps the unnamed sentence even
+    /// though this report does have findings of its own.
+    #[test]
+    fn html_executive_summary_keeps_the_unnamed_first_step_when_it_is_gap_derived() {
+        let fixture = Fixture::new();
+        let (report, _asset_id) = one_asset_one_completed_check_report(&fixture, Severity::Medium);
+        assert!(
+            report
+                .next_steps
+                .first()
+                .is_some_and(|step| step.finding_id.is_none()),
+            "fixture's first next step should be gap-derived, not finding-derived: {:?}",
+            report.next_steps
+        );
+        assert!(
+            !report.findings.is_empty(),
+            "fixture should still carry a finding the step must not be misattributed to"
+        );
+
+        let en = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let zh = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
+        let en_action = beginner_step_action(&report, &report.next_steps[0], en);
+        let zh_action = beginner_step_action(&report, &report.next_steps[0], zh);
+        let en_summary = html_executive_summary(&report, &report.coverage_counts, 1, en);
+        let zh_summary = html_executive_summary(&report, &report.coverage_counts, 1, zh);
+
+        assert!(
+            en_summary.contains(&format!("The first thing to do is: {en_action}")),
+            "{en_summary}"
+        );
+        assert!(
+            zh_summary.contains(&format!("建議最先處理的是：{zh_action}")),
+            "{zh_summary}"
+        );
+        assert!(
+            !en_summary.contains(&report.findings[0].title),
+            "{en_summary}"
+        );
+    }
+
+    /// The named finding's title is the engine's own untrusted text, so it
+    /// goes through the same escaping as every other summary sentence.
+    #[test]
+    fn html_executive_summary_escapes_the_named_finding_title() {
+        let fixture = Fixture::new();
+        let (mut report, _asset_id) =
+            one_asset_one_completed_check_report(&fixture, Severity::Medium);
+        report.findings[0].title = "<b>&</b> injection".into();
+        report.next_steps = vec![finding_derived_next_step(&report.findings[0])];
+
+        let en = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let zh = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
+        let en_summary = html_executive_summary(&report, &report.coverage_counts, 1, en);
+        let zh_summary = html_executive_summary(&report, &report.coverage_counts, 1, zh);
+
+        assert!(en_summary.contains("&lt;b&gt;&amp;"), "{en_summary}");
+        assert!(!en_summary.contains("<b>&</b>"), "{en_summary}");
+        assert!(zh_summary.contains("&lt;b&gt;&amp;"), "{zh_summary}");
+        assert!(!zh_summary.contains("<b>&</b>"), "{zh_summary}");
     }
 
     #[test]
