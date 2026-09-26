@@ -3744,6 +3744,13 @@ fn project_findings(case: &AssessmentCase, run: &ScanRun) -> (Vec<BeginnerFindin
         .iter()
         .map(|finding| (finding.id.as_str(), finding))
         .collect::<BTreeMap<_, _>>();
+    // Built once so `project_finding` can check a finding's target assets
+    // without walking `case.assets` per finding.
+    let asset_kinds = case
+        .assets
+        .iter()
+        .map(|asset| (asset.id.as_str(), asset.kind.clone()))
+        .collect::<BTreeMap<_, _>>();
     let mut warnings = Vec::new();
     let mut findings = selected
         .values()
@@ -3766,7 +3773,7 @@ fn project_findings(case: &AssessmentCase, run: &ScanRun) -> (Vec<BeginnerFindin
                 ));
                 (FindingSnapshotSource::ObservationOnly, None)
             };
-            project_finding(observation, source, details, run)
+            project_finding(observation, source, details, run, &asset_kinds)
         })
         .collect::<Vec<_>>();
 
@@ -3820,11 +3827,47 @@ fn project_finding_groups(
         .collect()
 }
 
+/// Trivy and Grype check both project folders and container assets. Choose
+/// the specialist from the selected run's evidence and target asset kind so
+/// reports remain accurate with either the old or new adapter default.
+fn package_finding_expert(
+    observation: &FindingObservation,
+    details: Option<&Finding>,
+    run: &ScanRun,
+    asset_kinds: &BTreeMap<&str, AssetKind>,
+) -> Option<&'static str> {
+    let mut run_evidence = details
+        .into_iter()
+        .flat_map(|finding| finding.evidence.iter())
+        .filter(|evidence| evidence.run_id == run.id)
+        .peekable();
+    run_evidence.peek()?;
+    if !run_evidence.all(|evidence| matches!(evidence.engine_id.as_str(), "trivy" | "grype")) {
+        return None;
+    }
+    let asset_expert = |asset_id: &Id| match asset_kinds.get(asset_id.as_str())? {
+        AssetKind::Repository | AssetKind::FileSystem | AssetKind::IacProject => {
+            Some("Software supply-chain engineer")
+        }
+        AssetKind::ContainerImage | AssetKind::ContainerRegistry => {
+            Some("Container security engineer")
+        }
+        _ => None,
+    };
+    let first = asset_expert(observation.asset_ids.first()?)?;
+    observation
+        .asset_ids
+        .iter()
+        .all(|asset_id| asset_expert(asset_id) == Some(first))
+        .then_some(first)
+}
+
 fn project_finding(
     observation: &FindingObservation,
     snapshot_source: FindingSnapshotSource,
     details: Option<&Finding>,
     run: &ScanRun,
+    asset_kinds: &BTreeMap<&str, AssetKind>,
 ) -> BeginnerFinding {
     let evidence_details_frozen = snapshot_source == FindingSnapshotSource::FrozenSelectedRun;
     let evidence_references = details
@@ -3989,6 +4032,9 @@ fn project_finding(
         },
         recommended_expert_type: if exposure_observation {
             crate::finding_narrative::EXPOSURE_OBSERVATION_OWNER.into()
+        } else if let Some(expert) = package_finding_expert(observation, details, run, asset_kinds)
+        {
+            expert.into()
         } else {
             details
                 .map(|finding| finding.recommended_expert_type.clone())
@@ -7595,6 +7641,10 @@ mod tests {
             retained_exposure.severity_basis_code,
             Some(crate::domain::SeverityBasisCode::OpenPort)
         );
+        assert_eq!(
+            retained_exposure.recommended_expert_type,
+            crate::finding_narrative::EXPOSURE_OBSERVATION_OWNER
+        );
         assert!(!retained_exposure.evidence_references.is_empty());
         let encoded = serde_json::to_string(retained_exposure).unwrap();
         assert!(!encoded.contains("STALE_VULNERABILITY"));
@@ -7609,6 +7659,135 @@ mod tests {
                 .next_steps
                 .iter()
                 .any(|step| { step.finding_id.as_deref() == Some(problem.id.as_str()) })
+        );
+    }
+
+    /// A minimal terminal case carrying exactly one asset of the given kind,
+    /// with no engine runs of its own: the dependency-routing tests below
+    /// only need `build_beginner_master_report` to accept the run and to
+    /// resolve one finding's target asset, not a full scan history.
+    fn case_with_single_asset(kind: AssetKind, asset_id: &str) -> AssessmentCase {
+        let mut case = empty_case();
+        case.assets.push(Asset {
+            id: asset_id.into(),
+            kind,
+            name: "Fixture asset".into(),
+            provider: None,
+            region: None,
+            identifiers: vec![],
+            discovered_from: vec![],
+            candidate: false,
+            owner_confirmed: true,
+            internet_exposed: None,
+            contains_sensitive_data: None,
+            metadata: BTreeMap::new(),
+        });
+        case.scan_runs.push(ScanRun {
+            id: "run-1".into(),
+            case_id: case.id.clone(),
+            sequence: 1,
+            created_at: instant(10),
+            completed_at: Some(instant(20)),
+            request_outcome: None,
+            report_asset_snapshots: Vec::new(),
+            knowledge_cutoff: instant(10),
+            ai_system_applicable: false,
+            ai_system_applicability: Default::default(),
+            ai_generated_artifact: Default::default(),
+            verification_baseline_run_id: None,
+            scope_grant_ids: vec![],
+            scope_grant_snapshots: vec![],
+            engine_admission_issues: Vec::new(),
+            engine_runs: vec![],
+        });
+        case
+    }
+
+    /// A finding targeting one asset, carrying one evidence record per given
+    /// engine ID. The old adapter default is retained here to test reports
+    /// created before the package specialist change.
+    fn dependency_finding(
+        case: &AssessmentCase,
+        id: &str,
+        asset_id: &str,
+        engine_ids: &[&str],
+    ) -> Finding {
+        let mut finding = frozen_finding(case, id, 80, Severity::Critical);
+        finding.asset_ids = vec![asset_id.into()];
+        finding.recommended_expert_type = "Container security engineer".into();
+        let template = finding.evidence[0].clone();
+        finding.evidence = engine_ids
+            .iter()
+            .enumerate()
+            .map(|(index, engine_id)| {
+                let mut evidence = template.clone();
+                evidence.id = format!("evidence-{id}-{index}");
+                evidence.engine_id = (*engine_id).into();
+                evidence
+            })
+            .collect();
+        finding
+    }
+
+    #[test]
+    fn trivy_and_grype_dependency_findings_on_a_repository_name_the_supply_chain_engineer() {
+        for engine_id in ["trivy", "grype"] {
+            let mut case = case_with_single_asset(AssetKind::Repository, "repo-asset");
+            let finding = dependency_finding(&case, "dep-finding", "repo-asset", &[engine_id]);
+            case.finding_observations
+                .push(observation(&finding, "run-1", instant(18)));
+            case.findings.push(finding);
+
+            let report = build_beginner_master_report(&case, "run-1").unwrap();
+            assert_eq!(report.findings.len(), 1);
+            assert_eq!(
+                report.findings[0].recommended_expert_type, "Software supply-chain engineer",
+                "a {engine_id} dependency finding on a repository must name the supply-chain engineer, not the container engineer its adapter stamped"
+            );
+        }
+    }
+
+    #[test]
+    fn trivy_and_grype_dependency_findings_on_a_container_asset_keep_the_container_engineer() {
+        for kind in [AssetKind::ContainerImage, AssetKind::ContainerRegistry] {
+            for engine_id in ["trivy", "grype"] {
+                for stored_expert in [
+                    "Container security engineer",
+                    "Software supply-chain engineer",
+                ] {
+                    let mut case = case_with_single_asset(kind.clone(), "image-asset");
+                    let mut finding =
+                        dependency_finding(&case, "dep-finding", "image-asset", &[engine_id]);
+                    finding.recommended_expert_type = stored_expert.into();
+                    case.finding_observations
+                        .push(observation(&finding, "run-1", instant(18)));
+                    case.findings.push(finding);
+
+                    let report = build_beginner_master_report(&case, "run-1").unwrap();
+                    assert_eq!(report.findings.len(), 1);
+                    assert_eq!(
+                        report.findings[0].recommended_expert_type, "Container security engineer",
+                        "a {engine_id} finding on a {kind:?} asset is still a container question with stored expert {stored_expert}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_dependency_finding_with_non_trivy_grype_evidence_keeps_its_stored_expert() {
+        let mut case = case_with_single_asset(AssetKind::Repository, "repo-asset");
+        let finding =
+            dependency_finding(&case, "dep-finding", "repo-asset", &["trivy", "gitleaks"]);
+        case.finding_observations
+            .push(observation(&finding, "run-1", instant(18)));
+        case.findings.push(finding);
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(
+            report.findings[0].recommended_expert_type, "Container security engineer",
+            "evidence from an engine other than Trivy or Grype must not move the finding off its stored expert"
         );
     }
 
