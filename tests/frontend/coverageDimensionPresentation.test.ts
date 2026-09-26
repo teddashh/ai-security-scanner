@@ -200,6 +200,16 @@ test("an interrupted preparation explanation reaches a Traditional Chinese reade
   );
 });
 
+test("a Maester review detail follows its Chinese sentence without a space", () => {
+  const english =
+    "Maester evaluated this control but did not return a pass or fail verdict. Upstream detail: Confirm the tenant exception.";
+  assert.equal(coverageGapProse("en", english), english);
+  assert.equal(
+    coverageGapProse("zh-TW", english),
+    "Maester 已評估這項控制措施，但未回傳通過或失敗的判定。上游詳細資料：Confirm the tenant exception.",
+  );
+});
+
 test("a not-tested skip reason keeps its specific next action in both languages", () => {
   const mcp =
     "This project has no MCP configuration to check. Continue with the other checks.";

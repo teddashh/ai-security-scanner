@@ -2148,7 +2148,7 @@ pub fn coverage_gap_prose_zh_hant(english: &str) -> Option<String> {
         && !detail.is_empty()
     {
         let base = lookup(REVIEW_BASE)?;
-        return Some(format!("{base} 上游詳細資料：{detail}"));
+        return Some(format!("{base}上游詳細資料：{detail}"));
     }
     // Six reasons gain a diagnostic code when the task recorded one. It is the
     // scanner's own code and stays verbatim; only the sentence around it moves.
@@ -3007,6 +3007,16 @@ mod tests {
         assert_eq!(
             tested_value_zh_hant("completed planned scan batches", "all of them"),
             None
+        );
+    }
+
+    #[test]
+    fn a_maester_review_detail_follows_its_sentence_without_a_space() {
+        assert_eq!(
+            coverage_gap_prose_zh_hant(
+                "Maester evaluated this control but did not return a pass or fail verdict. Upstream detail: Confirm the tenant exception."
+            ),
+            Some("Maester 已評估這項控制措施，但未回傳通過或失敗的判定。上游詳細資料：Confirm the tenant exception.".to_owned())
         );
     }
 

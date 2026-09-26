@@ -1501,7 +1501,7 @@ export const coverageGapProse = (
   const reviewDetailPrefix = `${reviewBase} Upstream detail: `;
   if (trimmed.startsWith(reviewDetailPrefix) && trimmed.length > reviewDetailPrefix.length) {
     const base = lookupProse(reviewBase);
-    if (base) return `${base} 上游詳細資料：${trimmed.slice(reviewDetailPrefix.length)}`;
+    if (base) return `${base}上游詳細資料：${trimmed.slice(reviewDetailPrefix.length)}`;
   }
   // Six reasons gain a diagnostic code when the task recorded one. It is the
   // scanner's own code and stays verbatim; only the sentence around it moves.

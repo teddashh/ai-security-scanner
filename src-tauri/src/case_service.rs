@@ -14124,6 +14124,19 @@ impl HtmlReportCatalog {
         )
     }
 
+    /// Full-width punctuation carries its own spacing; an English sentence
+    /// left in a Chinese report still takes the space.
+    fn gap_after(&self, preceding: &str) -> &'static str {
+        match (self.locale, preceding.chars().next_back()) {
+            (crate::export::ReportLocale::ZhHant, Some(last))
+                if "。！？；：」』）".contains(last) =>
+            {
+                ""
+            }
+            _ => " ",
+        }
+    }
+
     /// The same, in italics.
     fn em_label(&self, label: &str) -> String {
         format!(
@@ -15278,7 +15291,7 @@ fn source_line(
 ) -> String {
     format!(
         concat!(
-            "<p class=\"framework-source\"><strong>{} {} {}</strong>{}{} ",
+            "<p class=\"framework-source\"><strong>{} {} {}</strong>{}{}{}",
             "<span class=\"framework-source__url\">{}</span></p>"
         ),
         html_escape(&framework.framework),
@@ -15286,6 +15299,7 @@ fn source_line(
         html_escape(&framework.expected_version),
         catalog.text(" \u{2014} ", "："),
         attribution,
+        catalog.gap_after(attribution),
         html_escape(&framework.source.source_url),
     )
 }
@@ -18006,9 +18020,16 @@ fn html_report_bytes(
                 Some(index) => format!("<a href=\"#f{}\">{}</a>", index + 1, html_escape(&reason),),
                 None => html_escape(&reason),
             };
+            // A Chinese action that ends its own sentence takes no dash: the
+            // reason follows it as the next sentence.
+            let separator = match catalog.gap_after(&action) {
+                "" => "",
+                _ => " — ",
+            };
             format!(
-                "<li><strong>{}</strong> — {}{}</li>",
+                "<li><strong>{}</strong>{}{}{}</li>",
                 html_escape(&action),
+                separator,
                 reason_html,
                 expert
                     .as_ref()
@@ -18514,7 +18535,7 @@ fn html_report_bytes(
                 // sentence, and a heading line plus a margin above and below
                 // it cost more vertical space than the sentence did. Six of
                 // them per card, fifty-one cards.
-                "<p>{} {}{}</p>",
+                "<p>{}{}{}{}</p>",
                 "<p class=\"finding-action\">{}{}</p>",
                 "{}",
                 "{}{}",
@@ -18543,6 +18564,7 @@ fn html_report_bytes(
             html_escape(&expert_type),
             finding_location_block,
             html_escape(&plain_language_risk),
+            catalog.gap_after(&plain_language_risk),
             catalog.strong_label(catalog.text("Possible impact", "可能影響")),
             html_escape(&possible_impact),
             catalog.strong_label(catalog.text("What to do next", "下一步怎麼做")),
@@ -36216,9 +36238,7 @@ mod tests {
             "<p class=\"finding-action\"><strong>下一步怎麼做：</strong>{zh_action}</p>"
         )));
         assert!(zh.contains(&format!("<td>{zh_action}</td>")));
-        assert!(zh.contains(&format!(
-            "<li><strong>{zh_action}</strong> — <a href=\"#f1\">"
-        )));
+        assert!(zh.contains(&format!("<li><strong>{zh_action}</strong><a href=\"#f1\">")));
     }
 
     #[test]
@@ -43913,5 +43933,37 @@ mod tests {
             standard_redacted_html.contains("[redacted location]"),
             "{standard_redacted_html}"
         );
+    }
+
+    /// Full-width Chinese punctuation already carries its own spacing. A
+    /// literal ASCII space after it -- here, between the plain-language risk
+    /// sentence and "Possible impact" -- printed a visible double gap in the
+    /// rendered Chinese report.
+    ///
+    /// This fixture's case has no framework relationships, so
+    /// `html_framework_section` renders nothing and the sibling gap in
+    /// `source_line` (the framework owner's notice before its source URL)
+    /// is not reachable from here; `space_after_full_width_mark` in
+    /// `all_engine_report_audit.rs` covers that site instead.
+    #[test]
+    fn html_report_has_no_ascii_space_after_full_width_punctuation() {
+        let case =
+            case_for_rated_httpx_finding(EngineRunStatus::Completed, None, Some("httpx-task"));
+        let en = html_from_export_case(&case, crate::export::ReportLocale::En);
+        let zh = html_from_export_case(&case, crate::export::ReportLocale::ZhHant);
+
+        assert!(zh.contains("。<strong>可能影響：</strong>"), "{zh}");
+        assert!(!zh.contains("。 <strong>可能影響：</strong>"), "{zh}");
+        assert!(en.contains(". <strong>Possible impact:</strong>"), "{en}");
+    }
+
+    #[test]
+    fn gap_after_is_empty_only_after_full_width_punctuation_in_chinese() {
+        let zh = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
+        let en = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        assert_eq!(zh.gap_after("狀況。"), "");
+        assert_eq!(zh.gap_after("Unrecognised."), " ");
+        assert_eq!(zh.gap_after("狀況"), " ");
+        assert_eq!(en.gap_after("狀況。"), " ");
     }
 }

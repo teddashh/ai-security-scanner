@@ -1267,6 +1267,39 @@ fn a_chinese_label_colon_is_full_width_without_a_space() {
     assert!(ascii_label_colon_in_chinese("package:pyyaml").is_none());
 }
 
+/// The first place an ASCII space follows full-width punctuation, with the
+/// words around it.
+///
+/// Full-width sentence and clause marks -- "。！？；：」』）" -- already carry
+/// their own spacing. An ASCII space right after one is an English habit left
+/// in by prose or markup that joins two runs with a literal " ". A space
+/// before the product's own " · " metadata separator is not this mistake and
+/// is not flagged.
+fn space_after_full_width_mark(text: &str) -> Option<String> {
+    let characters = text.chars().collect::<Vec<_>>();
+    characters.windows(2).enumerate().find_map(|(at, window)| {
+        let [before, after] = [window[0], window[1]];
+        ("。！？；：」』）".contains(before)
+            && after == ' '
+            && characters.get(at + 2) != Some(&'·'))
+        .then(|| {
+            characters[at.saturating_sub(30)..(at + 30).min(characters.len())]
+                .iter()
+                .collect::<String>()
+        })
+    })
+}
+
+#[test]
+fn a_full_width_mark_is_not_followed_by_a_space() {
+    assert!(space_after_full_width_mark("狀況。 可能影響：高").is_some());
+    assert!(space_after_full_width_mark("狀況。可能影響：高").is_none());
+    assert!(space_after_full_width_mark("（CVE-2020-1747） 的").is_some());
+    assert!(space_after_full_width_mark("本整合。https://doi.org/x").is_none());
+    assert!(space_after_full_width_mark("version 2.0. Next").is_none());
+    assert!(space_after_full_width_mark("（軟體元件） · 版本").is_none());
+}
+
 /// Discovery engines prepare a target for a security check. Their output is
 /// inventory, not a result, in either run.
 const INVENTORY_ONLY_ENGINES: [&str; 5] = ["cloudquery", "httpx", "naabu", "steampipe", "syft"];
@@ -1518,6 +1551,9 @@ fn every_detector_places_its_finding_on_its_mapped_control() {
             }
             if let Some(offence) = ascii_label_colon_in_chinese(&strip_markup(&chinese)) {
                 panic!("the Chinese report sets a label with an ASCII colon: {offence}");
+            }
+            if let Some(offence) = space_after_full_width_mark(&strip_markup(&chinese)) {
+                panic!("the Chinese report puts a space after full-width punctuation: {offence}");
             }
             assert!(!chinese.contains(":</strong>"));
             assert!(!chinese.contains(":</em>"));
@@ -2480,6 +2516,9 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             }
             if let Some(offence) = ascii_label_colon_in_chinese(&strip_markup(&zh_html)) {
                 panic!("the Chinese report sets a label with an ASCII colon: {offence}");
+            }
+            if let Some(offence) = space_after_full_width_mark(&strip_markup(&zh_html)) {
+                panic!("the Chinese report puts a space after full-width punctuation: {offence}");
             }
             assert!(!zh_html.contains(":</strong>"));
             assert!(!zh_html.contains(":</em>"));
