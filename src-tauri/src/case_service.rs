@@ -14659,6 +14659,109 @@ fn html_gap_next_action(gap: &CoverageGap, catalog: HtmlReportCatalog) -> String
     }
 }
 
+/// The assets a coverage row is about, where the report needs them said.
+///
+/// Each check runs on one asset, so a check that failed on three websites is
+/// three rows, and they read "Failed — Nuclei" three times over. The asset is
+/// what tells them apart. A report about one asset has nothing to tell apart,
+/// and a row about the whole run names no asset.
+fn html_gap_targets(
+    asset_ids: &[Id],
+    labels: &BTreeMap<Id, String>,
+    catalog: HtmlReportCatalog,
+) -> Option<String> {
+    (labels.len() > 1 && !asset_ids.is_empty())
+        .then(|| target_list(asset_ids, labels, catalog, str::to_owned))
+}
+
+/// A coverage row's name in the reader's language, as its row prints it.
+fn html_gap_name(
+    gap: &CoverageGap,
+    catalog: HtmlReportCatalog,
+    labels: &BTreeMap<Id, String>,
+) -> String {
+    displayed_dimension(
+        &match catalog.locale {
+            crate::export::ReportLocale::ZhHant => {
+                crate::finding_narrative::coverage_dimension_zh_hant(&engine_named(&gap.dimension))
+            }
+            _ => crate::finding_narrative::coverage_dimension_english(&gap.dimension),
+        },
+        catalog,
+        labels,
+    )
+}
+
+/// The coverage rows a gap-derived step closes, each name once with every
+/// asset it closes a row on.
+///
+/// A step can close more than one row -- two cancelled checks share a retry
+/// -- and every row it closes is named. A check that failed on three
+/// websites read "Nuclei; Nuclei; Nuclei" before its names were merged.
+fn html_step_closes(
+    report: &BeginnerMasterReport,
+    step: &crate::beginner_report::BeginnerNextStep,
+    catalog: HtmlReportCatalog,
+    labels: &BTreeMap<Id, String>,
+) -> Vec<String> {
+    if step.finding_id.is_some() || step.unattributed.is_some() {
+        return Vec::new();
+    }
+    let mut closes: Vec<(String, Vec<Id>)> = Vec::new();
+    for gap in report
+        .coverage_gaps
+        .iter()
+        .filter(|gap| gap.unattributed.is_none() && gap.next_action == step.action)
+    {
+        let name = html_gap_name(gap, catalog, labels);
+        let index = match closes.iter().position(|(named, _)| *named == name) {
+            Some(index) => index,
+            None => {
+                closes.push((name, Vec::new()));
+                closes.len() - 1
+            }
+        };
+        let asset_ids = &mut closes[index].1;
+        for asset_id in &gap.target_asset_ids {
+            if !asset_ids.contains(asset_id) {
+                asset_ids.push(asset_id.clone());
+            }
+        }
+    }
+    closes
+        .into_iter()
+        .map(
+            |(name, asset_ids)| match html_gap_targets(&asset_ids, labels, catalog) {
+                Some(targets) => format!("{name} · {targets}"),
+                None => name,
+            },
+        )
+        .collect()
+}
+
+/// A gap's action, with the coverage it is about in parentheses.
+///
+/// "Retry this check." names nothing, and wherever it stood away from its
+/// coverage row -- the summary's first thing to do, an asset's own step --
+/// nothing near it said which check. Nothing to name, or no action, leaves
+/// the action as it is.
+fn html_action_about(action: &str, about: &[String], catalog: HtmlReportCatalog) -> String {
+    if about.is_empty() || action.trim().is_empty() {
+        return action.to_owned();
+    }
+    let about = about.join(catalog.text("; ", "；"));
+    match catalog.locale {
+        crate::export::ReportLocale::ZhHant => match action.strip_suffix('。') {
+            Some(sentence) => format!("{sentence}（{about}）。"),
+            None => format!("{action}（{about}）"),
+        },
+        _ => match action.strip_suffix('.') {
+            Some(sentence) => format!("{sentence} ({about})."),
+            None => format!("{action} ({about})"),
+        },
+    }
+}
+
 /// Read order for the asset list: what was found, then what is unknown, then
 /// what is clean. A problem the run actually found is the thing a beginner can
 /// act on now; an incomplete check is a gap they have to close before they
@@ -14958,12 +15061,23 @@ fn html_executive_summary(
     };
 
     let first_action = report.next_steps.first().map(|step| {
-        let action = beginner_step_action(report, step, catalog);
+        // A gap-derived step names the coverage it closes, as the step list
+        // does: "Retry this check." was the only mention of a check in the
+        // summary of a run whose one check failed.
+        let action = html_action_about(
+            &beginner_step_action(report, step, catalog),
+            &html_step_closes(
+                report,
+                step,
+                catalog,
+                &readable_target_labels(report, catalog),
+            ),
+            catalog,
+        );
         // A finding's fix is often shared -- one real project scan put 28
         // findings behind the same template instruction -- so the action on
         // its own said what to do but not to which problem. The step names
-        // the finding it leads with; a gap-derived step keeps the unnamed
-        // sentence.
+        // the finding it leads with.
         let named_problem = step
             .finding_id
             .as_deref()
@@ -16329,8 +16443,17 @@ fn html_asset_result_section(
         // A step that follows from this asset's own coverage gap belongs to
         // the row, and it was being read as more of the same. The row keeps
         // what is its own; the state's step is said once, under the table.
+        // The row is the asset, so the step names only the coverage it closes.
         let mut action = preferred_gap
-            .map(|gap| html_gap_next_action(gap, catalog))
+            .map(|gap| {
+                let action = html_gap_next_action(gap, catalog);
+                match gap.unattributed {
+                    None => {
+                        html_action_about(&action, &[html_gap_name(gap, catalog, labels)], catalog)
+                    }
+                    Some(_) => action,
+                }
+            })
             .unwrap_or_default();
         if status == HtmlAssetResultStatus::ProblemsFound && has_incomplete_evidence {
             if !action.is_empty() {
@@ -17922,14 +18045,6 @@ fn html_report_bytes(
             network_scope_items,
         )
     };
-    // Each check runs on one asset, so a check that failed on three websites
-    // is three rows, and they read "Failed — Nuclei" three times over. The
-    // asset is what tells them apart. A report about one asset has nothing
-    // to tell apart, and a row about the whole run names no asset.
-    let gap_targets = |asset_ids: &[Id]| {
-        (target_labels.len() > 1 && !asset_ids.is_empty())
-            .then(|| target_list(asset_ids, &target_labels, catalog, str::to_owned))
-    };
     let render_coverage_item = |gap: &CoverageGap| {
         // An unattributed gap is composed from its payload rather than
         // printed as stored English, so the reader is told which
@@ -17973,7 +18088,7 @@ fn html_report_bytes(
             ),
         };
         let dimension = displayed_dimension(&dimension, catalog, &target_labels);
-        let targets = match gap_targets(&gap.target_asset_ids) {
+        let targets = match html_gap_targets(&gap.target_asset_ids, &target_labels, catalog) {
             Some(targets) => format!(" · {}", html_escape(&targets)),
             None => String::new(),
         };
@@ -18081,56 +18196,8 @@ fn html_report_bytes(
             // the nine repeats said "this check" with nothing in the sentence
             // to say which one. Name the coverage the step closes instead:
             // shorter, and it answers the question the restated sentence
-            // raised. A step can close more than one row -- two cancelled
-            // checks share a retry -- and every row it closes is named.
-            let closes = if step.finding_id.is_none() && step.unattributed.is_none() {
-                // Each name once, with every asset it closes a row on: a
-                // check that failed on three websites read "Nuclei; Nuclei;
-                // Nuclei".
-                let mut closes: Vec<(String, Vec<Id>)> = Vec::new();
-                for gap in report
-                    .coverage_gaps
-                    .iter()
-                    .filter(|gap| gap.unattributed.is_none() && gap.next_action == step.action)
-                {
-                    let name = displayed_dimension(
-                        &match catalog.locale {
-                            crate::export::ReportLocale::ZhHant => {
-                                crate::finding_narrative::coverage_dimension_zh_hant(&engine_named(
-                                    &gap.dimension,
-                                ))
-                            }
-                            _ => {
-                                crate::finding_narrative::coverage_dimension_english(&gap.dimension)
-                            }
-                        },
-                        catalog,
-                        &target_labels,
-                    );
-                    let index = match closes.iter().position(|(named, _)| *named == name) {
-                        Some(index) => index,
-                        None => {
-                            closes.push((name, Vec::new()));
-                            closes.len() - 1
-                        }
-                    };
-                    let asset_ids = &mut closes[index].1;
-                    for asset_id in &gap.target_asset_ids {
-                        if !asset_ids.contains(asset_id) {
-                            asset_ids.push(asset_id.clone());
-                        }
-                    }
-                }
-                closes
-                    .into_iter()
-                    .map(|(name, asset_ids)| match gap_targets(&asset_ids) {
-                        Some(targets) => format!("{name} · {targets}"),
-                        None => name,
-                    })
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
+            // raised.
+            let closes = html_step_closes(&report, step, catalog, &target_labels);
             let reason = if closes.is_empty() {
                 reason
             } else {
@@ -38148,10 +38215,11 @@ mod tests {
     }
 
     /// A first step derived from a coverage gap (for example, a retry) has no
-    /// finding behind it, so the summary keeps the unnamed sentence even
-    /// though this report does have findings of its own.
+    /// finding behind it, so the summary names no finding for it even though
+    /// this report does have findings of its own. What it names is the
+    /// coverage it closes, and this fixture keeps none.
     #[test]
-    fn html_executive_summary_keeps_the_unnamed_first_step_when_it_is_gap_derived() {
+    fn html_executive_summary_names_no_finding_for_a_gap_derived_first_step() {
         let fixture = Fixture::new();
         let (report, _asset_id) = one_asset_one_completed_check_report(&fixture, Severity::Medium);
         assert!(
@@ -38409,13 +38477,7 @@ mod tests {
         }
     }
 
-    /// A check runs on one asset at a time, so a check that failed on two
-    /// repositories is two rows. Each names its repository, and the step
-    /// that retries them names the check once, with both. They used to read
-    /// "Failed — Gitleaks" twice and "Gitleaks; Gitleaks".
-    #[test]
-    fn html_report_names_the_asset_each_coverage_row_is_about() {
-        let fixture = Fixture::new();
+    fn failed_gitleaks_on_two_repositories_case(fixture: &Fixture) -> (AssessmentCase, Id) {
         let created = fixture.create();
         let service = fixture.service();
         for _ in 0..2 {
@@ -38465,6 +38527,17 @@ mod tests {
         }
         case.status = CaseStatus::ReadyForHandoff;
         case.updated_at = finished;
+        (case, run_id)
+    }
+
+    /// A check runs on one asset at a time, so a check that failed on two
+    /// repositories is two rows. Each names its repository, and the step
+    /// that retries them names the check once, with both. They used to read
+    /// "Failed — Gitleaks" twice and "Gitleaks; Gitleaks".
+    #[test]
+    fn html_report_names_the_asset_each_coverage_row_is_about() {
+        let fixture = Fixture::new();
+        let (case, run_id) = failed_gitleaks_on_two_repositories_case(&fixture);
 
         for (locale, row, step_heading, named) in [
             (
@@ -38509,6 +38582,88 @@ mod tests {
                 "{locale:?} steps: {steps}"
             );
         }
+    }
+
+    /// "Retry this check." names nothing, and the summary's first thing to
+    /// do and an asset's own step printed it away from the row that says
+    /// which check. Both name the check now. The summary adds the assets
+    /// where the report covers more than one; an asset's row is its asset.
+    #[test]
+    fn html_summary_and_asset_board_name_the_check_a_retry_is_for() {
+        let fixture = Fixture::new();
+        let (one, one_run) = failed_gitleaks_only_case(&fixture);
+        let (two, two_run) = failed_gitleaks_on_two_repositories_case(&fixture);
+        let render = |case: &AssessmentCase, run_id: &str, locale| {
+            String::from_utf8(
+                html_report_bytes(
+                    case,
+                    run_id,
+                    &ExportOptions {
+                        locale,
+                        ..ExportOptions::default()
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        };
+        for (locale, first, close, own_step) in [
+            (
+                crate::export::ReportLocale::En,
+                "<p>The first thing to do is: Retry this check (Gitleaks",
+                ").</p>",
+                "<td>Retry this check (Gitleaks).</td>",
+            ),
+            (
+                crate::export::ReportLocale::ZhHant,
+                "<p>建議最先處理的是：重新執行這項檢查（Gitleaks 檢查",
+                "）。</p>",
+                "<td>重新執行這項檢查（Gitleaks 檢查）。</td>",
+            ),
+        ] {
+            let html = render(&one, &one_run, locale);
+            assert!(
+                html.contains(&format!("{first}{close}")),
+                "{locale:?}: {html}"
+            );
+            assert_eq!(html.matches(own_step).count(), 1, "{locale:?}: {html}");
+
+            let html = render(&two, &two_run, locale);
+            assert!(
+                [" · Asset 1, Asset 2", " · Asset 2, Asset 1"]
+                    .iter()
+                    .any(|assets| html.contains(&format!("{first}{assets}{close}"))),
+                "{locale:?}: {html}"
+            );
+            assert_eq!(html.matches(own_step).count(), 2, "{locale:?}: {html}");
+        }
+    }
+
+    /// The parenthesis goes inside the sentence it names, in each language.
+    /// An absent action gains nothing, and neither does an empty name list.
+    #[test]
+    fn html_action_about_names_the_coverage_inside_the_sentence() {
+        let en = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let zh = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
+        let about = ["Naabu".to_owned(), "TruffleHog · Repository".to_owned()];
+        assert_eq!(
+            html_action_about("Retry this check.", &about, en),
+            "Retry this check (Naabu; TruffleHog · Repository)."
+        );
+        assert_eq!(
+            html_action_about("重新執行這項檢查。", &about, zh),
+            "重新執行這項檢查（Naabu；TruffleHog · Repository）。"
+        );
+        assert_eq!(
+            html_action_about("Retry this check", &about[..1], en),
+            "Retry this check (Naabu)"
+        );
+        assert_eq!(
+            html_action_about("Retry this check.", &[], en),
+            "Retry this check."
+        );
+        assert_eq!(html_action_about("", &about, en), "");
+        assert_eq!(html_action_about("  ", &about, zh), "  ");
     }
 
     #[test]
@@ -38895,7 +39050,11 @@ mod tests {
         });
         let incomplete_html = html_asset_result_section(&report, &labels, catalog);
         assert!(incomplete_html.contains("asset-result--incomplete-failed"));
-        assert!(incomplete_html.contains("Restart the cancelled work."));
+        assert!(
+            incomplete_html
+                .contains("Restart the cancelled work (Second requested security check)."),
+            "{incomplete_html}"
+        );
         assert!(!incomplete_html.contains("Retry this check."));
         assert!(!incomplete_html.contains("Keep this limitation visible when sharing"));
 
@@ -38904,7 +39063,7 @@ mod tests {
             class: CoverageGapClass::CoverageLoss,
             task_id: Some("task-unavailable".into()),
             target_asset_ids: vec![asset_id],
-            dimension: "saved result processing".into(),
+            dimension: "greenbone saved result processing".into(),
             reason: "Result processing incomplete.".into(),
             next_action_code: NextActionCode::ReviewCoverage,
             next_action:
@@ -38913,19 +39072,27 @@ mod tests {
             unattributed: None,
         });
         let prioritized_html = html_asset_result_section(&report, &labels, catalog);
-        assert!(prioritized_html.contains(
-            "This project has no MCP configuration to check. Continue with the other checks."
-        ));
+        assert!(
+            prioritized_html.contains(
+                "This project has no MCP configuration to check. Continue with the other checks (Greenbone Community Edition saved result processing)."
+            ),
+            "{prioritized_html}"
+        );
         assert!(
             !prioritized_html.contains("Open the coverage gap and complete the missing check.")
         );
-        assert!(!prioritized_html.contains("Restart the cancelled work."));
+        assert!(!prioritized_html.contains("Restart the cancelled work"));
 
         let zh_catalog = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
         let zh_labels = readable_target_labels(&report, zh_catalog);
         let zh_html = html_asset_result_section(&report, &zh_labels, zh_catalog);
         assert!(zh_html.contains("伺服器或工作站"));
-        assert!(zh_html.contains("這個專案沒有可檢查的 MCP 設定；請繼續查看其他檢查。"));
+        assert!(
+            zh_html.contains(
+                "這個專案沒有可檢查的 MCP 設定；請繼續查看其他檢查（Greenbone Community Edition 的已儲存結果的處理）。"
+            ),
+            "{zh_html}"
+        );
         assert!(!zh_html.contains("查看涵蓋缺口並完成缺少的檢查。"));
         assert!(!zh_html.contains("目前範圍不需處理"));
     }
