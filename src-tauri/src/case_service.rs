@@ -17954,8 +17954,7 @@ fn html_report_bytes(
                     .unwrap_or_else(|| gap.next_action.clone()),
             ),
             (crate::export::ReportLocale::En, None) => (
-                gap.dimension
-                    .replace(": manual review for ", ": no verdict for "),
+                crate::finding_narrative::coverage_dimension_english(&gap.dimension),
                 gap.reason.clone(),
                 gap.next_action.clone(),
             ),
@@ -18084,9 +18083,9 @@ fn html_report_bytes(
                                         &engine_named(&gap.dimension),
                                     )
                                 }
-                                _ => gap
-                                    .dimension
-                                    .replace(": manual review for ", ": no verdict for "),
+                                _ => crate::finding_narrative::coverage_dimension_english(
+                                    &gap.dimension,
+                                ),
                             },
                             catalog,
                             &target_labels,
@@ -38218,15 +38217,10 @@ mod tests {
         assert!(!zh_summary.contains("沒有回報任何問題"), "{zh_summary}");
     }
 
-    /// A website run whose one check failed has no result to describe. Its
-    /// summary said the checks that completed reported no problems, and its
-    /// tested row added that no completed dimension was retained, under a
-    /// state that already read Failed. A partly completed check did report,
-    /// so both sentences still speak for it.
-    #[test]
-    fn html_report_for_a_run_whose_only_check_failed_claims_no_result() {
-        let fixture = Fixture::new();
-        let case_id = repository_case_ready_for_execution(&fixture);
+    /// A repository case whose one Gitleaks check failed before it reported
+    /// anything, and that run's id.
+    fn failed_gitleaks_only_case(fixture: &Fixture) -> (AssessmentCase, Id) {
+        let case_id = repository_case_ready_for_execution(fixture);
         let plan = fixture
             .service()
             .plan_scan(
@@ -38256,6 +38250,18 @@ mod tests {
         }
         case.status = CaseStatus::ReadyForHandoff;
         case.updated_at = finished;
+        (case, run_id)
+    }
+
+    /// A website run whose one check failed has no result to describe. Its
+    /// summary said the checks that completed reported no problems, and its
+    /// tested row added that no completed dimension was retained, under a
+    /// state that already read Failed. A partly completed check did report,
+    /// so both sentences still speak for it.
+    #[test]
+    fn html_report_for_a_run_whose_only_check_failed_claims_no_result() {
+        let fixture = Fixture::new();
+        let (mut case, run_id) = failed_gitleaks_only_case(&fixture);
 
         let render = |case: &AssessmentCase, locale| {
             String::from_utf8(
@@ -38323,6 +38329,48 @@ mod tests {
         );
         assert!(en.contains("No completed dimension was retained."));
         assert!(zh.contains("未保留已完成的檢查面向。"));
+    }
+
+    /// The row and the step for a failed check name the check. Its name used
+    /// to repeat the state beside it: "Failed — Gitleaks: failed check
+    /// dimension", and in Chinese "失敗 — Gitleaks 的失敗的檢查項目".
+    #[test]
+    fn html_report_names_a_failed_check_by_the_check() {
+        let fixture = Fixture::new();
+        let (case, run_id) = failed_gitleaks_only_case(&fixture);
+        for (locale, row, step_heading, named) in [
+            (
+                crate::export::ReportLocale::En,
+                "<li><strong>Failed — Gitleaks</strong><br>",
+                ">What to do next</h2>",
+                " — Gitleaks</li>",
+            ),
+            (
+                crate::export::ReportLocale::ZhHant,
+                "<li><strong>失敗 — Gitleaks 檢查</strong><br>",
+                ">下一步怎麼做</h2>",
+                "</strong>Gitleaks 檢查</li>",
+            ),
+        ] {
+            let html = String::from_utf8(
+                html_report_bytes(
+                    &case,
+                    &run_id,
+                    &ExportOptions {
+                        locale,
+                        ..ExportOptions::default()
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert!(html.contains(row), "{locale:?} coverage row: {html}");
+            let steps = &html[html.find(step_heading).expect("the next steps")..];
+            let steps = &steps[..steps.find("</ol>").expect("the step list ends")];
+            assert!(steps.contains(named), "{locale:?} steps: {steps}");
+            assert!(!html.contains("check dimension"), "{locale:?}");
+            assert!(!html.contains("的失敗的檢查項目"), "{locale:?}");
+        }
     }
 
     #[test]

@@ -800,11 +800,41 @@ export const findingUnattributedGap = (
 };
 
 /**
+ * The check a task-level coverage row is about, and whether the row stands for
+ * all of it. The backend names these rows `"{check}: {state}"`, and the state --
+ * failed, timed out, cancelled, not tested -- is what the row's own sentence
+ * already says, so the check alone names the row. A partly completed check's
+ * row is only the part it did not finish (`false`). `task_state_check` is the
+ * Rust twin.
+ */
+const taskStateCheck = (dimension: string): [string, boolean] | undefined => {
+  const separator = dimension.indexOf(": ");
+  if (separator < 0) return undefined;
+  const check = dimension.slice(0, separator).trim();
+  if (!check) return undefined;
+  switch (dimension.slice(separator + 2)) {
+    case "failed check dimension":
+    case "timed-out check dimension":
+    case "cancelled check dimension":
+    case "not-tested check dimension":
+      return [check, true];
+    case "remaining requested dimensions":
+      return [check, false];
+    default:
+      return undefined;
+  }
+};
+
+/**
  * The name a coverage row is speaking about, in the reader's language.
  *
  * This lives here rather than beside the page that shows it because the shared
  * HTML report names the same rows, and Rust has to compose the identical
- * sentence there. `coverage_dimension_zh_hant` is its twin.
+ * sentence there. `coverage_dimension_zh_hant` and
+ * `coverage_dimension_english` are its twins.
+ *
+ * English keeps the backend's wording except for a row about a whole check,
+ * which is named by the check: "Nuclei", not "Nuclei: failed check dimension".
  *
  * Most of these names are composed at runtime around an identifier -- a check
  * id, an engine id, or the label a person wrote on an exclusion -- and the
@@ -821,6 +851,12 @@ export const localizedCoverageDimension = (
   dimension: string,
   locale: "en" | "zh-TW",
 ): string => {
+  const taskState = taskStateCheck(dimension);
+  if (taskState) {
+    const [check, whole] = taskState;
+    if (locale === "en") return whole ? check : `${check}: unfinished part`;
+    return whole ? `${check} 檢查` : `${check} 未完成的部分`;
+  }
   if (locale === "en") return dimension;
   const lower = dimension.toLocaleLowerCase("en");
 
@@ -967,11 +1003,6 @@ export const localizedCoverageDimension = (
   if (separator >= 0) {
     const rest = dimension.slice(separator + 2);
     for (const [fragment, label] of [
-      ["remaining requested dimensions", "尚未完成的要求項目"],
-      ["timed-out check dimension", "逾時的檢查項目"],
-      ["failed check dimension", "失敗的檢查項目"],
-      ["cancelled check dimension", "已取消的檢查項目"],
-      ["not-tested check dimension", "未檢測的檢查項目"],
       ["expired detection knowledge", "已過期的偵測知識"],
       ["unfinished check dimension", "未完成的檢查項目"],
       ["vulnerability profile evidence", "弱點掃描設定檔證據"],

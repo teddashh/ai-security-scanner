@@ -690,6 +690,42 @@ pub fn unattributed_gap_zh_hant(
     )
 }
 
+/// The check a task-level coverage row is about, and whether the row stands
+/// for all of it. `append_task_gap` names these rows `"{check}: {state}"`, and
+/// the state -- failed, timed out, cancelled, not tested -- is what the row's
+/// own label and sentence already say, so the check alone names the row. A
+/// partly completed check's row is only the part it did not finish (`false`).
+fn task_state_check(dimension: &str) -> Option<(&str, bool)> {
+    let (check, state) = dimension.split_once(": ")?;
+    let check = check.trim();
+    if check.is_empty() {
+        return None;
+    }
+    match state {
+        "failed check dimension"
+        | "timed-out check dimension"
+        | "cancelled check dimension"
+        | "not-tested check dimension" => Some((check, true)),
+        "remaining requested dimensions" => Some((check, false)),
+        _ => None,
+    }
+}
+
+/// The names a coverage row is speaking about, in English: the backend's own
+/// wording, except where it restates the row around it. A row about a whole
+/// check is named by the check ("Failed — Nuclei", not "Failed — Nuclei:
+/// failed check dimension"), and a control that returned no verdict is not
+/// called a manual review, which a redacted export still writes.
+///
+/// `localizedCoverageDimension` is the twin for the rows the app shows.
+pub fn coverage_dimension_english(dimension: &str) -> String {
+    match task_state_check(dimension) {
+        Some((check, true)) => check.to_owned(),
+        Some((check, false)) => format!("{check}: unfinished part"),
+        None => dimension.replace(": manual review for ", ": no verdict for "),
+    }
+}
+
 /// The names a coverage row is speaking about, in Traditional Chinese.
 ///
 /// Most of these are composed at runtime around an identifier -- a check id, an
@@ -720,6 +756,13 @@ pub(crate) fn recognized_coverage_dimension_zh_hant(dimension: &str) -> Option<S
         && !control.is_empty()
     {
         return Some(format!("{check}：未回傳判定的控制項 {control}"));
+    }
+
+    // Named by the check, as `coverage_dimension_english` explains.
+    match task_state_check(dimension) {
+        Some((check, true)) => return Some(format!("{check} 檢查")),
+        Some((check, false)) => return Some(format!("{check} 未完成的部分")),
+        None => {}
     }
 
     // Fixed names, in the order the more specific one has to be tried first:
@@ -870,11 +913,6 @@ pub(crate) fn recognized_coverage_dimension_zh_hant(dimension: &str) -> Option<S
     // "{check id}: {kind}".
     if let Some((check, rest)) = dimension.split_once(": ") {
         for (fragment, label) in [
-            ("remaining requested dimensions", "尚未完成的要求項目"),
-            ("timed-out check dimension", "逾時的檢查項目"),
-            ("failed check dimension", "失敗的檢查項目"),
-            ("cancelled check dimension", "已取消的檢查項目"),
-            ("not-tested check dimension", "未檢測的檢查項目"),
             ("expired detection knowledge", "已過期的偵測知識"),
             ("unfinished check dimension", "未完成的檢查項目"),
             ("vulnerability profile evidence", "弱點掃描設定檔證據"),
@@ -3263,10 +3301,10 @@ mod tests {
                 "naabu-tcp partly completed scan batches (12)",
                 "naabu-tcp 的部分完成的掃描批次（12）",
             ),
-            ("trivy: failed check dimension", "trivy 的失敗的檢查項目"),
+            ("trivy: failed check dimension", "trivy 檢查"),
             (
                 "trivy: remaining requested dimensions",
-                "trivy 的尚未完成的要求項目",
+                "trivy 未完成的部分",
             ),
             ("requested check prowler", "要求的檢查項目：prowler"),
         ] {
@@ -3276,6 +3314,57 @@ mod tests {
                 "{dimension}"
             );
         }
+    }
+
+    /// A row about a whole check says failed, timed out, cancelled or not
+    /// tested in its own label and sentence; its name used to say it again
+    /// ("Failed — Nuclei: failed check dimension"). The same rows are held in
+    /// `tests/frontend/coverageDimensionPresentation.test.ts`.
+    #[test]
+    fn a_row_about_a_whole_check_is_named_by_the_check() {
+        for (dimension, english, chinese) in [
+            ("nuclei: failed check dimension", "nuclei", "nuclei 檢查"),
+            ("kics: timed-out check dimension", "kics", "kics 檢查"),
+            ("naabu: cancelled check dimension", "naabu", "naabu 檢查"),
+            (
+                "agentic-radar: not-tested check dimension",
+                "agentic-radar",
+                "agentic-radar 檢查",
+            ),
+            (
+                "Nuclei: remaining requested dimensions",
+                "Nuclei: unfinished part",
+                "Nuclei 未完成的部分",
+            ),
+            // With no check to name, the row keeps the words it has.
+            (
+                ": failed check dimension",
+                ": failed check dimension",
+                "涵蓋範圍細節：: failed check dimension",
+            ),
+            (
+                "trivy: expired detection knowledge",
+                "trivy: expired detection knowledge",
+                "trivy 的已過期的偵測知識",
+            ),
+        ] {
+            assert_eq!(
+                coverage_dimension_english(dimension),
+                english,
+                "{dimension}"
+            );
+            assert_eq!(
+                coverage_dimension_zh_hant(dimension),
+                chinese,
+                "{dimension}"
+            );
+        }
+        // Only a redacted export still writes this wording, and the app never
+        // shows one, so it has no row in the TypeScript table.
+        assert_eq!(
+            coverage_dimension_english("maester: manual review for MT.1003"),
+            "maester: no verdict for MT.1003"
+        );
     }
 
     #[test]

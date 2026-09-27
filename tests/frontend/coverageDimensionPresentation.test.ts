@@ -298,6 +298,41 @@ test("an expired-knowledge coverage row keeps its date and moves its sentence", 
   assert.equal(coverageGapProse("zh-TW", unknown), unknown);
 });
 
+test("a row about a whole check is named by the check", () => {
+  // A row about a whole check says failed, timed out, cancelled or not tested
+  // in its own sentence; its name used to say it again ("Nuclei: failed check
+  // dimension"). The same rows are held in `finding_narrative.rs`.
+  for (const [dimension, english, chinese] of [
+    ["nuclei: failed check dimension", "nuclei", "nuclei 檢查"],
+    ["kics: timed-out check dimension", "kics", "kics 檢查"],
+    ["naabu: cancelled check dimension", "naabu", "naabu 檢查"],
+    [
+      "agentic-radar: not-tested check dimension",
+      "agentic-radar",
+      "agentic-radar 檢查",
+    ],
+    [
+      "Nuclei: remaining requested dimensions",
+      "Nuclei: unfinished part",
+      "Nuclei 未完成的部分",
+    ],
+    // With no check to name, the row keeps the words it has.
+    [
+      ": failed check dimension",
+      ": failed check dimension",
+      "涵蓋範圍細節：: failed check dimension",
+    ],
+    [
+      "trivy: expired detection knowledge",
+      "trivy: expired detection knowledge",
+      "trivy 的已過期的偵測知識",
+    ],
+  ] as const) {
+    assert.equal(localizedCoverageDimension(dimension, "en"), english, dimension);
+    assert.equal(localizedCoverageDimension(dimension, "zh-TW"), chinese, dimension);
+  }
+});
+
 test("a gateway refusal count stays verbatim and the sentence moves", () => {
   const rate =
     "The approved rate limit refused some of this check's connections, so part of the check never reached the target. Refused connections: 12.";

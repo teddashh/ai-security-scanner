@@ -2688,7 +2688,7 @@ test("a Traditional Chinese reader is told the same two reasons", () => {
   );
   const disclosure = section!.querySelector<HTMLElement>(".report-scope-disclosure");
   expect(within(disclosure!).getByText(/這項檢查沒有啟動，因此不代表通過。/u)).toBeTruthy();
-  expect(within(disclosure!).getByText(/trivy 的未檢測的檢查項目/u)).toBeTruthy();
+  expect(within(disclosure!).getByText(/trivy 檢查/u)).toBeTruthy();
   expect(section!.textContent).not.toContain("This check did not start");
   window.localStorage.setItem(localeStorageKey, "en");
 });
@@ -4286,7 +4286,7 @@ test("a coverage gap names the cause the backend actually recorded", () => {
     "section[aria-labelledby='beginner-master-report-title']",
   );
   const disclosure = section!.querySelector<HTMLElement>(".report-scope-disclosure");
-  const row = within(disclosure!).getByText(/remaining requested dimensions/u).textContent ?? "";
+  const row = within(disclosure!).getByText(/unfinished part/u).textContent ?? "";
   expect(row).toContain("did not reach a confirmed complete result");
   // The causes this kind covers but this gap is not. Naming one of them here
   // would contradict the dimension in the same row.
@@ -4325,14 +4325,16 @@ test("a coverage gap's check is named the way the rest of the report names it, w
   }), [], [run]);
 
   const notTested = outcomeStripCell(container, "What was not tested");
-  expect(notTested.textContent).toContain("Agentic Radar: not-tested check dimension");
-  expect(notTested.textContent).toContain("This check did not start, so it is not a pass.");
+  expect(notTested.textContent).toContain("Agentic Radar · This check did not start, so it is not a pass.");
   expect(notTested.textContent).not.toContain("agentic-radar");
   expect(notTested.textContent).not.toContain("Diagnostic code");
 
   const gapsCard = coverageCard(container, "What was not tested");
-  expect(gapsCard.textContent).toContain("Agentic Radar: not-tested check dimension");
+  expect(gapsCard.textContent).toContain("Agentic Radar · This check did not start");
   expect(gapsCard.textContent).toContain("Diagnostic code: engine_release_unavailable");
+  // The row's sentence says the check did not start; its name does not say
+  // it again.
+  expect(gapsCard.textContent).not.toContain("check dimension");
 });
 
 test("a Traditional Chinese reader sees the same check name, with the diagnostic code kept off the first layer", () => {
@@ -4371,7 +4373,7 @@ test("a Traditional Chinese reader sees the same check name, with the diagnostic
   window.localStorage.setItem(localeStorageKey, "en");
 });
 
-test("a coverage gap naming a check with no matching engine run keeps its raw dimension text", () => {
+test("a coverage gap naming a check with no matching engine run keeps its raw check id", () => {
   const run = localhostRun();
   run.engineRuns = [{
     ...run.engineRuns[0]!,
@@ -4396,7 +4398,7 @@ test("a coverage gap naming a check with no matching engine run keeps its raw di
   }), [], [run]);
 
   const gapsCard = coverageCard(container, "What was not tested");
-  expect(gapsCard.textContent).toContain("unlisted-engine: not-tested check dimension");
+  expect(gapsCard.textContent).toContain("unlisted-engine · This check did not start");
 });
 
 test("AIDEFEND is not presented as carrying the same standing as NIST and ISO", () => {

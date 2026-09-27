@@ -2230,14 +2230,14 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 );
             }
             for named in [
-                "Retry this check.</strong> — Checkov: failed check dimension",
+                "Retry this check.</strong> — Checkov</li>",
                 "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again.</strong> — Greenbone Community Edition: target response",
-                "Retry the timed-out work.</strong> — KICS: timed-out check dimension",
-                "Retry this check for a confirmed result.</strong> — Nuclei: remaining requested dimensions",
+                "Retry the timed-out work.</strong> — KICS <em>",
+                "Retry this check for a confirmed result.</strong> — Nuclei: unfinished part</li>",
                 "Treat these results as evidence from expired knowledge, not as current coverage.</strong> — CloudQuery: expired detection knowledge",
                 // One step closes two rows, and says so rather than showing one
                 // of the two reasons and dropping the other.
-                "Retry this check to complete the missing coverage.</strong> — Naabu: cancelled check dimension; TruffleHog: cancelled check dimension",
+                "Retry this check to complete the missing coverage.</strong> — Naabu; TruffleHog</li>",
                 "Rerun the scan to create a fully frozen result.</strong> — Automatic scope reductions or truncations; Requested scan stage",
             ] {
                 assert!(
@@ -2283,13 +2283,13 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 "KICS、kube-bench",
                 "ScoutSuite、ScubaGear",
                 "Trivy、TruffleHog",
-                "Checkov 的失敗的檢查項目",
+                "Checkov 檢查",
                 "Greenbone Community Edition 的目標回應",
-                "KICS 的逾時的檢查項目",
-                "Naabu 的已取消的檢查項目",
-                "TruffleHog 的已取消的檢查項目",
+                "KICS 檢查",
+                "Naabu 檢查",
+                "TruffleHog 檢查",
                 "CloudQuery 的已過期的偵測知識",
-                "Nuclei 的尚未完成的要求項目",
+                "Nuclei 未完成的部分",
                 "Maester：未回傳判定的控制項 MT.1003",
             ] {
                 assert!(
