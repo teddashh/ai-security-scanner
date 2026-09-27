@@ -2692,18 +2692,25 @@ fn location_text(
 ) -> String {
     let trimmed = raw.trim();
     let Some((path, line, column, resource)) = parse_location_coordinate(trimmed) else {
-        let path_like = trimmed.starts_with('/')
-            || trimmed.starts_with("./")
-            || trimmed.starts_with("../")
-            || trimmed.as_bytes().get(1) == Some(&b':')
-                && matches!(trimmed.as_bytes().get(2), Some(b'/') | Some(b'\\'));
+        // A root, `./` or `../` in either separator, or a drive letter: the
+        // same test `findingLocationText` makes.
+        let without_dots = trimmed
+            .strip_prefix("..")
+            .or_else(|| trimmed.strip_prefix('.'))
+            .unwrap_or(trimmed);
+        let path_like = without_dots.starts_with(['/', '\\'])
+            || matches!(
+                trimmed.as_bytes(),
+                [drive, b':', b'/' | b'\\', ..] if drive.is_ascii_alphabetic()
+            );
         return if path_like {
             report_file_path(trimmed)
         } else {
             raw.to_owned()
         };
     };
-    let mut parts = vec![report_file_path(path)];
+    let path = report_file_path(path);
+    let mut parts = vec![path.clone()];
     parts.extend(position(line, column));
     if let Some(resource) = resource {
         let mut names = Vec::new();
@@ -2713,6 +2720,7 @@ fn location_text(
             .filter(|part| !part.is_empty() && !part.starts_with("similarity:"))
             .map(|part| part.strip_prefix("resource:").unwrap_or(part).trim())
             .filter(|part| !part.is_empty())
+            .filter_map(|part| resource_label(part, &path))
         {
             if !names.contains(&part) {
                 names.push(part);
@@ -2742,14 +2750,36 @@ fn report_file_path(raw: &str) -> String {
     }
 }
 
+/// The resource label worth printing after `path`, if any. KICS writes `n/a`
+/// when a result has no resource, and Checkov names a Dockerfile resource
+/// after the file (`/Dockerfile.`) or the file and an instruction
+/// (`/Dockerfile.EXPOSE`); only the instruction adds anything to the path
+/// already printed in front of it.
+fn resource_label(part: &str, path: &str) -> Option<String> {
+    if part == "n/a" {
+        return None;
+    }
+    match report_file_path(part).strip_prefix(path) {
+        Some("") => None,
+        Some(rest) => match rest.strip_prefix('.') {
+            Some("") => None,
+            Some(instruction) => Some(instruction.to_owned()),
+            None => Some(part.to_owned()),
+        },
+        None => Some(part.to_owned()),
+    }
+}
+
 /// Reads a stored scanner location as a place, not the coordinate string it
 /// is kept in. KICS's `R` carries a `resource:<name>` label and/or a
 /// `similarity:<64-hex hash>` deduplication key, joined by a comma; that hash
 /// is KICS's own deduplication key, not something a reader needs in order to
 /// find the spot, so it is dropped here and kept verbatim in the technical
-/// details instead. A plain path receives the same separator/root cleanup;
-/// URLs, endpoints, package coordinates, and other non-path locations remain
-/// untouched. A coordinate with an empty leading path is likewise left raw.
+/// details instead, as is a resource label that says `n/a` or only repeats
+/// the path (see `resource_label`). A plain path receives the same
+/// separator/root cleanup; URLs, endpoints, package coordinates, and other
+/// non-path locations remain untouched. A coordinate with an empty leading
+/// path is likewise left raw.
 ///
 /// `findingLocationText` in `src/findingNarrative.ts` is the twin of this
 /// function and of [`location_zh_hant`]; the two must keep producing
@@ -3841,7 +3871,7 @@ mod tests {
         // string" in tests/frontend/findingNarrative.test.ts -- the rows and
         // the two edge cases below must stay identical between the two
         // files.
-        let rows: [(&str, &str, &str); 12] = [
+        let rows: [(&str, &str, &str); 18] = [
             (
                 "infra/main.tf:line=3:resource=resource:demo-logs-bucket,similarity:6ed736ab0df4cde21ce2716cc0a80470709d43045ca36a0c897af1f7913f1009",
                 "infra/main.tf · line 3 · demo-logs-bucket",
@@ -3883,6 +3913,41 @@ mod tests {
                 ".\\infra\\storage.tf:line=4:resource=resource:aws_s3_bucket.logs,resource:,similarity:dedup,resource:aws_s3_bucket.logs",
                 "infra/storage.tf · line 4 · aws_s3_bucket.logs",
                 "infra/storage.tf · 第 4 行 · aws_s3_bucket.logs",
+            ),
+            (
+                ".\\infra\\storage.tf",
+                "infra/storage.tf",
+                "infra/storage.tf",
+            ),
+            // KICS's no-resource marker says nothing.
+            (
+                "infra/main.tf:line=20:resource=resource:n/a,similarity:6ed736ab0df4cde21ce2716cc0a80470709d43045ca36a0c897af1f7913f1009",
+                "infra/main.tf · line 20",
+                "infra/main.tf · 第 20 行",
+            ),
+            // Checkov names a Dockerfile resource after the file, and an
+            // instruction-level one after the file and the instruction.
+            (
+                "/Dockerfile:line=1:resource=/Dockerfile.",
+                "Dockerfile · line 1",
+                "Dockerfile · 第 1 行",
+            ),
+            (
+                "/app/Dockerfile:line=5:resource=/app/Dockerfile.EXPOSE",
+                "app/Dockerfile · line 5 · EXPOSE",
+                "app/Dockerfile · 第 5 行 · EXPOSE",
+            ),
+            // A label that is the path itself adds nothing either.
+            (
+                "/Dockerfile:line=2:resource=Dockerfile",
+                "Dockerfile · line 2",
+                "Dockerfile · 第 2 行",
+            ),
+            // A resource that only starts with the path's text is its own name.
+            (
+                "infra/main.tf:line=3:resource=infra/main.tfx",
+                "infra/main.tf · line 3 · infra/main.tfx",
+                "infra/main.tf · 第 3 行 · infra/main.tfx",
             ),
             // An empty path is not this form.
             (":line=3", ":line=3", ":line=3"),

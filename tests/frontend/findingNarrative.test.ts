@@ -798,6 +798,41 @@ test("the scanner location reads as a place, not a coordinate string", () => {
       en: "infra/storage.tf · line 4 · aws_s3_bucket.logs",
       zh: "infra/storage.tf · 第 4 行 · aws_s3_bucket.logs",
     },
+    {
+      raw: ".\\infra\\storage.tf",
+      en: "infra/storage.tf",
+      zh: "infra/storage.tf",
+    },
+    // KICS's no-resource marker says nothing.
+    {
+      raw: "infra/main.tf:line=20:resource=resource:n/a,similarity:6ed736ab0df4cde21ce2716cc0a80470709d43045ca36a0c897af1f7913f1009",
+      en: "infra/main.tf · line 20",
+      zh: "infra/main.tf · 第 20 行",
+    },
+    // Checkov names a Dockerfile resource after the file, and an
+    // instruction-level one after the file and the instruction.
+    {
+      raw: "/Dockerfile:line=1:resource=/Dockerfile.",
+      en: "Dockerfile · line 1",
+      zh: "Dockerfile · 第 1 行",
+    },
+    {
+      raw: "/app/Dockerfile:line=5:resource=/app/Dockerfile.EXPOSE",
+      en: "app/Dockerfile · line 5 · EXPOSE",
+      zh: "app/Dockerfile · 第 5 行 · EXPOSE",
+    },
+    // A label that is the path itself adds nothing either.
+    {
+      raw: "/Dockerfile:line=2:resource=Dockerfile",
+      en: "Dockerfile · line 2",
+      zh: "Dockerfile · 第 2 行",
+    },
+    // A resource that only starts with the path's text is its own name.
+    {
+      raw: "infra/main.tf:line=3:resource=infra/main.tfx",
+      en: "infra/main.tf · line 3 · infra/main.tfx",
+      zh: "infra/main.tf · 第 3 行 · infra/main.tfx",
+    },
     // An empty path is not this form.
     {
       raw: ":line=3",

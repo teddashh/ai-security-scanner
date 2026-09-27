@@ -2532,13 +2532,31 @@ const reportFilePath = (raw: string): string => {
 };
 
 /**
+ * The resource label worth printing after `path`, or "" when there is none.
+ * KICS writes `n/a` when a result has no resource, and Checkov names a
+ * Dockerfile resource after the file (`/Dockerfile.`) or the file and an
+ * instruction (`/Dockerfile.EXPOSE`); only the instruction adds anything to
+ * the path already printed in front of it.
+ */
+const resourceLabel = (part: string, path: string): string => {
+  if (part === "n/a") return "";
+  const bare = reportFilePath(part);
+  if (!bare.startsWith(path)) return part;
+  const rest = bare.slice(path.length);
+  if (!rest) return "";
+  return rest.startsWith(".") ? rest.slice(1) : part;
+};
+
+/**
  * Reads a stored scanner location as a place, not the coordinate string it is
  * kept in. KICS's `R` carries a `resource:<name>` label and/or a
  * `similarity:<64-hex hash>` deduplication key, joined by a comma; that hash
  * is KICS's own dedup key, not something a reader needs to find the spot, so
- * it is dropped here and kept verbatim in the technical details instead.
- * A plain path receives the same separator/root cleanup. URLs, endpoints,
- * package coordinates, and other non-path locations are returned untouched.
+ * it is dropped here and kept verbatim in the technical details instead, as
+ * is a resource label that says `n/a` or only repeats the path (see
+ * `resourceLabel`). A plain path receives the same separator/root cleanup.
+ * URLs, endpoints, package coordinates, and other non-path locations are
+ * returned untouched.
  */
 export const findingLocationText = (locale: "en" | "zh-TW", raw: string): string => {
   const trimmed = raw.trim();
@@ -2548,7 +2566,8 @@ export const findingLocationText = (locale: "en" | "zh-TW", raw: string): string
     return raw;
   }
 
-  const parts = [reportFilePath(path)];
+  const pathText = reportFilePath(path);
+  const parts = [pathText];
   if (line && column) {
     parts.push(locale === "en" ? `line ${line}, column ${column}` : `第 ${line} 行第 ${column} 欄`);
   } else if (line) {
@@ -2562,6 +2581,7 @@ export const findingLocationText = (locale: "en" | "zh-TW", raw: string): string
       .map((part) => part.trim())
       .filter((part) => part && !part.startsWith("similarity:"))
       .map((part) => (part.startsWith("resource:") ? part.slice("resource:".length).trim() : part))
+      .map((part) => resourceLabel(part, pathText))
       .filter((part, index, all) => part && all.indexOf(part) === index);
     if (resourceParts.length > 0) parts.push(resourceParts.join(", "));
   }
