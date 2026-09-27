@@ -17922,6 +17922,14 @@ fn html_report_bytes(
             network_scope_items,
         )
     };
+    // Each check runs on one asset, so a check that failed on three websites
+    // is three rows, and they read "Failed — Nuclei" three times over. The
+    // asset is what tells them apart. A report about one asset has nothing
+    // to tell apart, and a row about the whole run names no asset.
+    let gap_targets = |asset_ids: &[Id]| {
+        (target_labels.len() > 1 && !asset_ids.is_empty())
+            .then(|| target_list(asset_ids, &target_labels, catalog, str::to_owned))
+    };
     let render_coverage_item = |gap: &CoverageGap| {
         // An unattributed gap is composed from its payload rather than
         // printed as stored English, so the reader is told which
@@ -17965,10 +17973,15 @@ fn html_report_bytes(
             ),
         };
         let dimension = displayed_dimension(&dimension, catalog, &target_labels);
+        let targets = match gap_targets(&gap.target_asset_ids) {
+            Some(targets) => format!(" · {}", html_escape(&targets)),
+            None => String::new(),
+        };
         format!(
-            "<li><strong>{} — {}</strong><br>{}<br>{}{}</li>",
+            "<li><strong>{} — {}</strong>{}<br>{}<br>{}{}</li>",
             html_escape(catalog.gap_kind(&gap.kind)),
             html_escape(&dimension),
+            targets,
             html_escape(&replace_target_ids(&reason, &target_labels)),
             catalog.em_label(catalog.text("Next", "下一步")),
             html_escape(&replace_target_ids(&next_action, &target_labels)),
@@ -18071,25 +18084,48 @@ fn html_report_bytes(
             // raised. A step can close more than one row -- two cancelled
             // checks share a retry -- and every row it closes is named.
             let closes = if step.finding_id.is_none() && step.unattributed.is_none() {
-                report
+                // Each name once, with every asset it closes a row on: a
+                // check that failed on three websites read "Nuclei; Nuclei;
+                // Nuclei".
+                let mut closes: Vec<(String, Vec<Id>)> = Vec::new();
+                for gap in report
                     .coverage_gaps
                     .iter()
                     .filter(|gap| gap.unattributed.is_none() && gap.next_action == step.action)
-                    .map(|gap| {
-                        displayed_dimension(
-                            &match catalog.locale {
-                                crate::export::ReportLocale::ZhHant => {
-                                    crate::finding_narrative::coverage_dimension_zh_hant(
-                                        &engine_named(&gap.dimension),
-                                    )
-                                }
-                                _ => crate::finding_narrative::coverage_dimension_english(
+                {
+                    let name = displayed_dimension(
+                        &match catalog.locale {
+                            crate::export::ReportLocale::ZhHant => {
+                                crate::finding_narrative::coverage_dimension_zh_hant(&engine_named(
                                     &gap.dimension,
-                                ),
-                            },
-                            catalog,
-                            &target_labels,
-                        )
+                                ))
+                            }
+                            _ => {
+                                crate::finding_narrative::coverage_dimension_english(&gap.dimension)
+                            }
+                        },
+                        catalog,
+                        &target_labels,
+                    );
+                    let index = match closes.iter().position(|(named, _)| *named == name) {
+                        Some(index) => index,
+                        None => {
+                            closes.push((name, Vec::new()));
+                            closes.len() - 1
+                        }
+                    };
+                    let asset_ids = &mut closes[index].1;
+                    for asset_id in &gap.target_asset_ids {
+                        if !asset_ids.contains(asset_id) {
+                            asset_ids.push(asset_id.clone());
+                        }
+                    }
+                }
+                closes
+                    .into_iter()
+                    .map(|(name, asset_ids)| match gap_targets(&asset_ids) {
+                        Some(targets) => format!("{name} · {targets}"),
+                        None => name,
                     })
                     .collect::<Vec<_>>()
             } else {
@@ -38370,6 +38406,108 @@ mod tests {
             assert!(steps.contains(named), "{locale:?} steps: {steps}");
             assert!(!html.contains("check dimension"), "{locale:?}");
             assert!(!html.contains("的失敗的檢查項目"), "{locale:?}");
+        }
+    }
+
+    /// A check runs on one asset at a time, so a check that failed on two
+    /// repositories is two rows. Each names its repository, and the step
+    /// that retries them names the check once, with both. They used to read
+    /// "Failed — Gitleaks" twice and "Gitleaks; Gitleaks".
+    #[test]
+    fn html_report_names_the_asset_each_coverage_row_is_about() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let service = fixture.service();
+        for _ in 0..2 {
+            let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+            service
+                .approve_scope(
+                    &created.id,
+                    ScopeApprovalRequest {
+                        asset_id,
+                        permissions: vec![ScanPermission::LocalArtifactRead],
+                        confirmed_by: "Owner".into(),
+                        expires_at: None,
+                        authorization_reference: None,
+                        notes: None,
+                        external_scope: None,
+                    },
+                )
+                .unwrap();
+        }
+        let plan = service
+            .plan_scan(
+                &created.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
+                },
+            )
+            .unwrap();
+        let run_id = plan.scan_run.id.clone();
+        let mut case = service.show_case(&created.id).unwrap();
+        let finished = plan.scan_run.created_at + Duration::seconds(1);
+        {
+            let run = case
+                .scan_runs
+                .iter_mut()
+                .find(|run| run.id == run_id)
+                .unwrap();
+            assert_eq!(run.engine_runs.len(), 2, "one Gitleaks run per repository");
+            run.completed_at = Some(finished);
+            for task in &mut run.engine_runs {
+                task.status = EngineRunStatus::Failed;
+                task.phase = "failed".into();
+                task.started_at = Some(plan.scan_run.created_at);
+                task.finished_at = Some(finished);
+                task.error_message = Some("fixture failure before any result".into());
+            }
+        }
+        case.status = CaseStatus::ReadyForHandoff;
+        case.updated_at = finished;
+
+        for (locale, row, step_heading, named) in [
+            (
+                crate::export::ReportLocale::En,
+                "<li><strong>Failed — Gitleaks</strong> · ",
+                ">What to do next</h2>",
+                " — Gitleaks · ",
+            ),
+            (
+                crate::export::ReportLocale::ZhHant,
+                "<li><strong>失敗 — Gitleaks 檢查</strong> · ",
+                ">下一步怎麼做</h2>",
+                "</strong>Gitleaks 檢查 · ",
+            ),
+        ] {
+            let html = String::from_utf8(
+                html_report_bytes(
+                    &case,
+                    &run_id,
+                    &ExportOptions {
+                        locale,
+                        ..ExportOptions::default()
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let assets = html
+                .match_indices(row)
+                .map(|(at, _)| {
+                    let rest = &html[at + row.len()..];
+                    &rest[..rest.find("<br>").expect("the row's reason follows")]
+                })
+                .collect::<Vec<_>>();
+            let mut named_once = assets.clone();
+            named_once.sort_unstable();
+            assert_eq!(named_once, ["Asset 1", "Asset 2"], "{locale:?}: {html}");
+            let steps = &html[html.find(step_heading).expect("the next steps")..];
+            let steps = &steps[..steps.find("</ol>").expect("the step list ends")];
+            assert!(
+                steps.contains(&format!("{named}{}, {}</li>", assets[0], assets[1])),
+                "{locale:?} steps: {steps}"
+            );
         }
     }
 

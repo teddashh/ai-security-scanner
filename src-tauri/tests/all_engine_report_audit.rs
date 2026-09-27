@@ -2230,19 +2230,19 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 );
             }
             for named in [
-                "Retry this check.</strong> — Checkov</li>",
+                "Retry this check.</strong> — Checkov · Repository</li>",
                 "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again.</strong> — Greenbone Community Edition: target response",
-                "Retry the timed-out work.</strong> — KICS <em>",
-                "Retry this check for a confirmed result.</strong> — Nuclei: unfinished part</li>",
+                "Retry the timed-out work.</strong> — KICS · Repository <em>",
+                "Retry this check for a confirmed result.</strong> — Nuclei: unfinished part · https://portal.example.test:443</li>",
                 "Treat these results as evidence from expired knowledge, not as current coverage.</strong> — CloudQuery: expired detection knowledge",
                 // One step closes two rows, and says so rather than showing one
                 // of the two reasons and dropping the other.
-                "Retry this check to complete the missing coverage.</strong> — Naabu; TruffleHog</li>",
+                "Retry this check to complete the missing coverage.</strong> — Naabu · 203.0.113.11; TruffleHog · Repository</li>",
                 "Rerun the scan to create a fully frozen result.</strong> — Automatic scope reductions or truncations; Requested scan stage",
             ] {
                 assert!(
                     steps.contains(named),
-                    "a step lost its coverage name: {named}"
+                    "a step lost its coverage name: {named}\n{steps}"
                 );
             }
             assert!(

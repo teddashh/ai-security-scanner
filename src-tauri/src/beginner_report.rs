@@ -860,11 +860,22 @@ pub fn build_beginner_master_report(
     // per-run identifier that appears nowhere in the report, so ordering on it
     // put two cancelled checks in a different order on every run for no reason
     // a reader could follow. The dimension opens with the check id, so one
-    // task's rows still land together.
+    // task's rows still land together. Each check runs on one asset, so one
+    // check on three assets is three rows under one name; they follow the
+    // order the report lists its targets in.
+    let target_position = |gap: &CoverageGap| {
+        gap.target_asset_ids.first().and_then(|asset_id| {
+            requested
+                .targets
+                .iter()
+                .position(|target| &target.asset_id == asset_id)
+        })
+    };
     coverage_gaps.sort_by(|left, right| {
         gap_rank(left.kind)
             .cmp(&gap_rank(right.kind))
             .then_with(|| left.dimension.cmp(&right.dimension))
+            .then_with(|| target_position(left).cmp(&target_position(right)))
             .then_with(|| left.task_id.cmp(&right.task_id))
     });
     coverage_gaps.dedup();
@@ -5179,6 +5190,39 @@ mod tests {
         append_task_gap(task, status, &mut gaps);
         assert_eq!(gaps.len(), 1, "{status:?}");
         gaps.pop().expect("one task gap")
+    }
+
+    /// One check on two assets is two rows under one name. They follow the
+    /// order the report lists its targets in; the task ids that used to
+    /// decide it appear nowhere in the report.
+    #[test]
+    fn one_check_on_two_assets_lists_its_rows_in_target_order() {
+        let mut first = catalog_task("task-b", EngineRunStatus::Failed);
+        first.engine_id = "gitleaks".into();
+        let mut second = catalog_task("task-a", EngineRunStatus::Failed);
+        second.engine_id = "gitleaks".into();
+        second.asset_ids = vec!["asset-2".into()];
+        let mut case = case_with_catalog_tasks(vec![first, second], true);
+        let mut other = case.assets[0].clone();
+        other.id = "asset-2".into();
+        other.name = "second repository".into();
+        case.assets.push(other);
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        let targets = report
+            .requested
+            .targets
+            .iter()
+            .map(|target| target.asset_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(targets, ["asset-1", "asset-2"]);
+        let rows = report
+            .coverage_gaps
+            .iter()
+            .filter(|gap| gap.dimension == "gitleaks: failed check dimension")
+            .map(|gap| gap.target_asset_ids.as_slice())
+            .collect::<Vec<_>>();
+        assert_eq!(rows, [["asset-1".to_owned()], ["asset-2".to_owned()]]);
     }
 
     #[test]
