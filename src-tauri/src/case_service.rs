@@ -14883,43 +14883,78 @@ fn html_executive_summary(
         ),
     };
 
-    let found = match (catalog.locale, problem_count, urgent) {
-        (crate::export::ReportLocale::ZhHant, 0, _) => "已完成的檢查沒有回報任何問題。".to_owned(),
-        (crate::export::ReportLocale::ZhHant, 1, 0) => {
-            "共發現 1 個問題，不屬於嚴重或高嚴重程度。".to_owned()
+    // "Reported no problems" is said only of security checks that got far
+    // enough to report. A website run whose one check failed printed "The
+    // checks that completed reported no problems" straight after "This run
+    // completed 0 checks", and inventory or a connection test never looked
+    // for problems at all; the sentences around this one already say what
+    // completed and what did not.
+    let security_checks = |status: CoverageDimensionStatus| {
+        report.actual.checks.iter().any(|check| {
+            check.status == status
+                && check.effective_result_kind() == CheckResultKind::SecurityCheck
+        })
+    };
+    let found = if problem_count == 0 {
+        match (
+            catalog.locale,
+            security_checks(CoverageDimensionStatus::TestedComplete),
+            security_checks(CoverageDimensionStatus::TestedPartial),
+        ) {
+            (_, false, false) => None,
+            (crate::export::ReportLocale::ZhHant, true, _) => {
+                Some("已完成的檢查沒有回報任何問題。")
+            }
+            (crate::export::ReportLocale::ZhHant, false, true) => {
+                Some("部分完成的檢查沒有回報任何問題。")
+            }
+            (_, true, _) if counts.tested_complete == 1 => {
+                Some("The check that completed reported no problems.")
+            }
+            (_, true, _) => Some("The checks that completed reported no problems."),
+            (_, false, true) if counts.tested_partial == 1 => {
+                Some("The partly completed check reported no problems.")
+            }
+            (_, false, true) => Some("The partly completed checks reported no problems."),
         }
-        (crate::export::ReportLocale::ZhHant, 1, _) => {
-            "共發現 1 個問題，屬於嚴重或高嚴重程度。".to_owned()
-        }
-        (crate::export::ReportLocale::ZhHant, total, 0) => format!(
-            "共發現 {} 個問題，其中沒有嚴重或高嚴重程度的項目。",
-            catalog.format_number(total)
-        ),
-        (crate::export::ReportLocale::ZhHant, total, urgent) if urgent == total => format!(
-            "共發現 {} 個問題，全部都是嚴重或高嚴重程度。",
-            catalog.format_number(total)
-        ),
-        (crate::export::ReportLocale::ZhHant, total, urgent) => format!(
-            "共發現 {} 個問題，其中 {} 個是嚴重或高嚴重程度。",
-            catalog.format_number(total),
-            catalog.format_number(urgent),
-        ),
-        (_, 0, _) => "The checks that completed reported no problems.".to_owned(),
-        (_, 1, 0) => "1 problem was found, and it is not Critical or High severity.".to_owned(),
-        (_, 1, _) => "1 problem was found, and it is Critical or High severity.".to_owned(),
-        (_, total, 0) => format!(
-            "{} problems were found, none of them Critical or High severity.",
-            catalog.format_number(total)
-        ),
-        (_, total, urgent) if urgent == total => format!(
-            "{} problems were found, all of them Critical or High severity.",
-            catalog.format_number(total)
-        ),
-        (_, total, urgent) => format!(
-            "{} problems were found, {} of them Critical or High severity.",
-            catalog.format_number(total),
-            catalog.format_number(urgent),
-        ),
+        .map(str::to_owned)
+    } else {
+        Some(match (catalog.locale, problem_count, urgent) {
+            (crate::export::ReportLocale::ZhHant, 1, 0) => {
+                "共發現 1 個問題，不屬於嚴重或高嚴重程度。".to_owned()
+            }
+            (crate::export::ReportLocale::ZhHant, 1, _) => {
+                "共發現 1 個問題，屬於嚴重或高嚴重程度。".to_owned()
+            }
+            (crate::export::ReportLocale::ZhHant, total, 0) => format!(
+                "共發現 {} 個問題，其中沒有嚴重或高嚴重程度的項目。",
+                catalog.format_number(total)
+            ),
+            (crate::export::ReportLocale::ZhHant, total, urgent) if urgent == total => format!(
+                "共發現 {} 個問題，全部都是嚴重或高嚴重程度。",
+                catalog.format_number(total)
+            ),
+            (crate::export::ReportLocale::ZhHant, total, urgent) => format!(
+                "共發現 {} 個問題，其中 {} 個是嚴重或高嚴重程度。",
+                catalog.format_number(total),
+                catalog.format_number(urgent),
+            ),
+            (_, 1, 0) => "1 problem was found, and it is not Critical or High severity.".to_owned(),
+            (_, 1, _) => "1 problem was found, and it is Critical or High severity.".to_owned(),
+            (_, total, 0) => format!(
+                "{} problems were found, none of them Critical or High severity.",
+                catalog.format_number(total)
+            ),
+            (_, total, urgent) if urgent == total => format!(
+                "{} problems were found, all of them Critical or High severity.",
+                catalog.format_number(total)
+            ),
+            (_, total, urgent) => format!(
+                "{} problems were found, {} of them Critical or High severity.",
+                catalog.format_number(total),
+                catalog.format_number(urgent),
+            ),
+        })
     };
 
     let first_action = report.next_steps.first().map(|step| {
@@ -15033,7 +15068,8 @@ fn html_executive_summary(
         )),
     };
 
-    let mut sentences = vec![scanned, found];
+    let mut sentences = vec![scanned];
+    sentences.extend(found);
     sentences.extend(first_action);
     sentences.extend(not_covered);
     sentences.extend(record_notes);
@@ -17778,10 +17814,17 @@ fn html_report_bytes(
                 })
                 .collect::<String>();
             // Retained, and said by the header instead. "No completed
-            // dimension was retained" would be false here.
+            // dimension was retained" would be false here. A check that
+            // failed, timed out, was cancelled or never ran has the state
+            // column to say so; the sentence under a failed website check
+            // repeated that in the record's own vocabulary.
+            let completed = matches!(
+                check.status,
+                CoverageDimensionStatus::TestedComplete | CoverageDimensionStatus::TestedPartial
+            );
             let dimensions = if !dimensions.is_empty() {
                 format!("<ul>{dimensions}</ul>")
-            } else if header_says_it {
+            } else if header_says_it || !completed {
                 String::new()
             } else {
                 catalog
@@ -38129,6 +38172,157 @@ mod tests {
         assert!(!en_summary.contains("<b>&</b>"), "{en_summary}");
         assert!(zh_summary.contains("&lt;b&gt;&amp;"), "{zh_summary}");
         assert!(!zh_summary.contains("<b>&</b>"), "{zh_summary}");
+    }
+
+    /// "Reported no problems" speaks for the security checks that completed,
+    /// in the number the sentence before it just gave. Inventory never looked
+    /// for problems, so a run that completed only inventory does not say it.
+    #[test]
+    fn html_executive_summary_says_no_problems_only_of_completed_security_checks() {
+        let fixture = Fixture::new();
+        let (mut report, _asset_id) =
+            one_asset_one_completed_check_report(&fixture, Severity::Medium);
+        report.findings.clear();
+        let en = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let zh = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
+
+        let en_summary = html_executive_summary(&report, &report.coverage_counts, 0, en);
+        let zh_summary = html_executive_summary(&report, &report.coverage_counts, 0, zh);
+        assert!(
+            en_summary.contains(
+                "<p>This run completed 1 check on 1 asset.</p><p>The check that completed reported no problems.</p>"
+            ),
+            "{en_summary}"
+        );
+        assert!(
+            zh_summary.contains("<p>已完成的檢查沒有回報任何問題。</p>"),
+            "{zh_summary}"
+        );
+
+        let mut two_completed = report.coverage_counts.clone();
+        two_completed.tested_complete = 2;
+        let en_summary = html_executive_summary(&report, &two_completed, 0, en);
+        assert!(
+            en_summary.contains("<p>The checks that completed reported no problems.</p>"),
+            "{en_summary}"
+        );
+
+        report.actual.checks[0].result_kind = Some(CheckResultKind::Inventory);
+        let en_summary = html_executive_summary(&report, &report.coverage_counts, 0, en);
+        let zh_summary = html_executive_summary(&report, &report.coverage_counts, 0, zh);
+        assert!(
+            en_summary.contains("<p>This run completed 1 check on 1 asset.</p>"),
+            "{en_summary}"
+        );
+        assert!(!en_summary.contains("reported no problems"), "{en_summary}");
+        assert!(!zh_summary.contains("沒有回報任何問題"), "{zh_summary}");
+    }
+
+    /// A website run whose one check failed has no result to describe. Its
+    /// summary said the checks that completed reported no problems, and its
+    /// tested row added that no completed dimension was retained, under a
+    /// state that already read Failed. A partly completed check did report,
+    /// so both sentences still speak for it.
+    #[test]
+    fn html_report_for_a_run_whose_only_check_failed_claims_no_result() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let plan = fixture
+            .service()
+            .plan_scan(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                    engine_asset_routes: Vec::new(),
+                },
+            )
+            .unwrap();
+        let run_id = plan.scan_run.id.clone();
+        let mut case = fixture.service().show_case(&case_id).unwrap();
+        let finished = plan.scan_run.created_at + Duration::seconds(1);
+        {
+            let run = case
+                .scan_runs
+                .iter_mut()
+                .find(|run| run.id == run_id)
+                .unwrap();
+            run.completed_at = Some(finished);
+            let task = &mut run.engine_runs[0];
+            task.status = EngineRunStatus::Failed;
+            task.phase = "failed".into();
+            task.started_at = Some(plan.scan_run.created_at);
+            task.finished_at = Some(finished);
+            task.error_message = Some("fixture failure before any result".into());
+        }
+        case.status = CaseStatus::ReadyForHandoff;
+        case.updated_at = finished;
+
+        let render = |case: &AssessmentCase, locale| {
+            String::from_utf8(
+                html_report_bytes(
+                    case,
+                    &run_id,
+                    &ExportOptions {
+                        locale,
+                        ..ExportOptions::default()
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        };
+        let summary = |html: &str| {
+            html.split("<section class=\"executive-summary\">")
+                .nth(1)
+                .and_then(|rest| rest.split("</section>").next())
+                .expect("the In short section")
+                .to_owned()
+        };
+
+        let en = render(&case, crate::export::ReportLocale::En);
+        let zh = render(&case, crate::export::ReportLocale::ZhHant);
+        let (en_summary, zh_summary) = (summary(&en), summary(&zh));
+        assert!(
+            en_summary.contains("<p>This run completed 0 checks on 1 asset.</p>"),
+            "{en_summary}"
+        );
+        assert!(
+            en_summary.contains("1 check did not complete."),
+            "{en_summary}"
+        );
+        assert!(!en_summary.contains("reported no problems"), "{en_summary}");
+        assert!(
+            zh_summary.contains("<p>本輪對 1 項資產完成了 0 項檢查。</p>"),
+            "{zh_summary}"
+        );
+        assert!(!zh_summary.contains("沒有回報任何問題"), "{zh_summary}");
+        assert!(!en.contains("No completed dimension was retained."));
+        assert!(!zh.contains("未保留已完成的檢查面向。"));
+
+        {
+            let run = case
+                .scan_runs
+                .iter_mut()
+                .find(|run| run.id == run_id)
+                .unwrap();
+            let task = &mut run.engine_runs[0];
+            task.status = EngineRunStatus::PartiallyCompleted;
+            task.phase = "results_partial".into();
+            task.error_message = None;
+        }
+        let en = render(&case, crate::export::ReportLocale::En);
+        let zh = render(&case, crate::export::ReportLocale::ZhHant);
+        let (en_summary, zh_summary) = (summary(&en), summary(&zh));
+        assert!(
+            en_summary.contains("<p>The partly completed check reported no problems.</p>"),
+            "{en_summary}"
+        );
+        assert!(
+            zh_summary.contains("<p>部分完成的檢查沒有回報任何問題。</p>"),
+            "{zh_summary}"
+        );
+        assert!(en.contains("No completed dimension was retained."));
+        assert!(zh.contains("未保留已完成的檢查面向。"));
     }
 
     #[test]
