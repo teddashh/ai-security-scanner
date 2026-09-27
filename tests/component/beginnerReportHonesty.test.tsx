@@ -596,10 +596,10 @@ test("the first layer gives every requested asset one evidence-derived result st
   expect(row("https://portal.example").textContent).toContain("No problems in completed checks");
   // A completed inventory tool is not promoted into a completed security check.
   expect(row("workstation-12").dataset.assetResult).toBe("not_tested");
-  expect(row("workstation-12").textContent).toContain("Choose an applicable security check.");
+  expect(row("workstation-12").textContent).toContain("Choose an applicable security check (vulnerability checks).");
   expect(row("workstation-12").textContent).not.toContain("Retry this check");
   expect(row("workstation-12").querySelector(".asset-result-row__outcome span")?.textContent)
-    .toContain("Choose an applicable security check.");
+    .toContain("Choose an applicable security check (vulnerability checks).");
   expect(row("workstation-12").querySelector("button")?.textContent)
     .toContain("Open scan setup");
 
@@ -812,7 +812,7 @@ test("a Greenbone dead host is incomplete while a completed sibling stays bounde
 
   expect(row("silent-host.example").dataset.assetResult).toBe("incomplete_failed");
   expect(row("silent-host.example").textContent).toContain(
-    "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again.",
+    "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again (greenbone: target response).",
   );
   expect(row("checked-host.example").dataset.assetResult).toBe("no_problems_completed");
 });
@@ -834,7 +834,7 @@ test("the asset board keeps the recorded skip next action", () => {
   const row = container.querySelector<HTMLElement>(".asset-result-row");
   expect(row?.dataset.assetResult).toBe("not_tested");
   expect(row?.querySelector(".asset-result-row__outcome span")?.textContent)
-    .toContain("This project has no MCP configuration to check. Continue with the other checks.");
+    .toContain("This project has no MCP configuration to check. Continue with the other checks (mcp-armor).");
   expect(row?.textContent).not.toContain("No action for the current scope.");
   expect(row?.querySelector("button")).toBeNull();
 });
@@ -938,9 +938,9 @@ test("the asset result board gives a Traditional Chinese beginner the same bound
   expect(board?.textContent).toContain("哪些資產需要處理");
   expect(board?.textContent).toContain("未測試");
   expect(board?.textContent).toContain("這個資產沒有已完成的資安檢查紀錄");
-  expect(board?.textContent).toContain("請完成目標設定或加入受支援的輸入，然後重新開始掃描。");
+  expect(board?.textContent).toContain("請完成目標設定或加入受支援的輸入，然後重新開始掃描（涵蓋範圍細節：vulnerability checks）。");
   expect(board?.querySelector(".asset-result-row__outcome span")?.textContent)
-    .toContain("請完成目標設定或加入受支援的輸入，然後重新開始掃描。");
+    .toContain("請完成目標設定或加入受支援的輸入，然後重新開始掃描（涵蓋範圍細節：vulnerability checks）。");
   expect(board?.querySelector("button")?.textContent).toContain("開啟掃描設定");
   expect(board?.textContent).not.toContain("No compatible check ran");
   expect(board?.textContent).not.toContain("「未發現問題」只適用於已完成的資安檢查");
@@ -1444,7 +1444,7 @@ test.each([
     const row = container.querySelector<HTMLElement>(".asset-result-row");
     if (!row) throw new Error("the asset result card did not render");
     expect(row.dataset.assetResult).toBe("not_tested");
-    expect(row.textContent).toContain(nextAction);
+    expect(row.textContent).toContain(`${nextAction.slice(0, -1)} (requested check).`);
 
     const action = row.querySelector("button");
     expect(action).not.toBeNull();
@@ -1541,7 +1541,7 @@ test("the first layer names the requested target, tested work, top gap, and next
   expect(strip!.textContent).toContain("naabu-tcp");
   expect(strip!.textContent).toContain("TLS configuration");
   expect(strip!.textContent).toContain("The TLS check did not start");
-  expect(strip!.textContent).toContain("Review the target and retry.");
+  expect(strip!.textContent).toContain("Review the target and retry (TLS configuration).");
   expect(strip!.textContent).not.toContain("Review the requested scope, then retry.");
 
   const firstLayerScope = container.querySelector<HTMLElement>(".report-first-layer-scope");
@@ -1562,6 +1562,57 @@ test("the first layer names the requested target, tested work, top gap, and next
   if (!limitsList) throw new Error("the limits used list did not render");
   expect(limitsList.textContent).toContain("Execution timeout");
   expect(limitsList.textContent).toContain("30 seconds");
+});
+
+test("one retry names the check and both affected assets in the summary and next steps", () => {
+  const base = report("partial");
+  const run = catalogRun("nuclei");
+  run.engineRuns = ["task-a", "task-b"].map((id, index) => ({
+    ...run.engineRuns[0]!,
+    id,
+    engineName: "Nuclei",
+    assetIds: [index === 0 ? "asset-a" : "asset-b"],
+  }));
+  const targets = [
+    { assetId: "asset-a", label: "one.example", assetKind: "domain" as const,
+      labelAvailability: "recorded" as const, assetKindAvailability: "recorded" as const },
+    { assetId: "asset-b", label: "two.example", assetKind: "domain" as const,
+      labelAvailability: "recorded" as const, assetKindAvailability: "recorded" as const },
+  ];
+  const gaps = ["task-a", "task-b"].map((taskId, index) => ({
+    kind: "failed" as const,
+    taskId,
+    targetAssetIds: [index === 0 ? "asset-a" : "asset-b"],
+    dimension: "nuclei: failed check dimension",
+    reason: "The check failed.",
+    nextActionCode: "retry_check" as const,
+    nextAction: "Retry this check.",
+  }));
+  const { container } = renderReport(report("partial", {
+    requested: { ...base.requested, targets, requestedCheckIds: ["nuclei"] },
+    actual: { ...base.actual, checks: gaps.map((gap) => ({
+      taskId: gap.taskId,
+      checkId: "nuclei",
+      targetAssetIds: gap.targetAssetIds,
+      status: "failed" as const,
+      testedDimensions: [],
+    })) },
+    coverageGaps: gaps,
+    coverageCounts: counts({ failed: 2 }),
+    nextSteps: [{ priority: 1, code: "retry_check", action: "Retry this check.",
+      reason: "The check failed." }],
+  }), [], [run]);
+
+  expect(outcomeStripCell(container, "What to do next").querySelector("dd")?.textContent)
+    .toBe("Retry this check (Nuclei · one.example, two.example).");
+  const rows = Array.from(container.querySelectorAll<HTMLElement>(".asset-result-row"));
+  for (const row of rows) {
+    expect(row.querySelector(".asset-result-row__outcome span")?.textContent)
+      .toContain("Retry this check (Nuclei).");
+  }
+  const steps = Array.from(container.querySelectorAll<HTMLElement>("ol.detail-list li"));
+  expect(steps.find((item) => item.querySelector("strong")?.textContent === "Retry this check.")?.textContent)
+    .toContain("Nuclei · one.example, two.example");
 });
 
 test("every first-layer label ends with a full-width colon in Traditional Chinese", () => {
@@ -4505,7 +4556,7 @@ test("a completed Maester review item is visible without being labelled untested
   const assetRow = container.querySelector<HTMLElement>(".asset-result-row");
   expect(assetRow?.dataset.assetResult).toBe("no_problems_completed");
   expect(assetRow?.textContent).toContain(
-    "Review the upstream detail and record a human decision for this control.",
+    "Review the upstream detail and record a human decision for this control (maester: no verdict for MT.1003 — Legacy methods need review).",
   );
 });
 
@@ -4533,7 +4584,7 @@ test("a manual-review control with no completed check keeps its decision step an
   const assetRow = container.querySelector<HTMLElement>(".asset-result-row");
   expect(assetRow?.dataset.assetResult).toBe("not_tested");
   expect(assetRow?.textContent).toContain(
-    "Review the upstream detail and record a human decision for this control.",
+    "Review the upstream detail and record a human decision for this control (maester: no verdict for MT.1003 — Legacy methods need review).",
   );
   expect(assetRow?.querySelectorAll("button")).toHaveLength(0);
   expect(assetRow?.textContent).not.toContain("Open scan setup");
@@ -4560,7 +4611,7 @@ test("an asset with no supported vulnerability profile keeps its new-scan instru
   const assetRow = container.querySelector<HTMLElement>(".asset-result-row");
   expect(assetRow?.dataset.assetResult).toBe("not_tested");
   expect(assetRow?.textContent).toContain(
-    "Start a new scan and add each exact host under Internal systems.",
+    "Start a new scan and add each exact host under Internal systems (supported vulnerability profile).",
   );
   expect(assetRow?.querySelectorAll("button")).toHaveLength(0);
   expect(assetRow?.textContent).not.toContain("Open scan setup");
@@ -4586,7 +4637,7 @@ test("a check the packaged scanner cannot read keeps the update instruction and 
 
   const assetRow = container.querySelector<HTMLElement>(".asset-result-row");
   expect(assetRow?.dataset.assetResult).toBe("not_tested");
-  expect(assetRow?.textContent).toContain("Update the app, then retry these checks.");
+  expect(assetRow?.textContent).toContain("Update the app, then retry these checks (grype: unsupported target input).");
   expect(assetRow?.querySelectorAll("button")).toHaveLength(0);
   expect(assetRow?.textContent).not.toContain("Open scan setup");
 });
@@ -4828,7 +4879,7 @@ test("a completed check cut short by the rate limit is not a clean asset", () =>
   const row = container.querySelector<HTMLElement>(".asset-result-row");
   expect(row?.dataset.assetResult).toBe("incomplete_failed");
   expect(row?.querySelector(".asset-result-row__outcome span")?.textContent)
-    .toContain("Start a new scan for a fresh result.");
+    .toContain("Start a new scan for a fresh result (nuclei: connections refused by the rate limit).");
   const action = row?.querySelector("button");
   expect(action).not.toBeNull();
   fireEvent.click(action!);

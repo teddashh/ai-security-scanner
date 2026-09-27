@@ -787,6 +787,91 @@ const localizedCheckName = (
 };
 
 /**
+ * A gap's dimension, with its leading check id (the text before the first
+ * ":") replaced by that check's display name -- the same `localizedCheckName`
+ * every other row on this page uses, and the same substitution the saved HTML
+ * report's `engine_named` makes. Without this the desktop prints the raw
+ * check id while the report it exports names the check, so the two disagree
+ * about what to call the same check.
+ */
+const coverageGapDimensionLabel = (
+  gap: BeginnerMasterReport["coverageGaps"][number],
+  locale: "en" | "zh-TW",
+  run: ScanRun | undefined,
+  unattributedDimension?: string,
+): string => {
+  const dimensionText = unattributedDimension ?? localizedCoverageDimension(gap.dimension, locale);
+  const checkId = (gap.dimension.split(":")[0] ?? gap.dimension).trim();
+  const taskEngine = gap.taskId
+    ? run?.engineRuns.find((candidate) => candidate.id === gap.taskId)
+    : undefined;
+  const engine = taskEngine && taskEngine.engineId === checkId
+    ? taskEngine
+    : run?.engineRuns.find((candidate) => candidate.engineId === checkId);
+  if (!engine || !dimensionText.startsWith(checkId)) return dimensionText;
+  return `${localizedCheckName(engine.engineId, locale, engine)}${dimensionText.slice(checkId.length)}`;
+};
+
+/**
+ * The coverage rows a gap-derived step closes, each named once with every
+ * asset it closes a row on: the names the saved HTML report gives the same
+ * step (`html_step_closes`). "Retry this check." names nothing, and a step
+ * that stands apart from its coverage row needs them to say which check.
+ * A report about one asset has no assets to tell apart and names none.
+ */
+const stepCoverageNames = (
+  step: BeginnerMasterReport["nextSteps"][number],
+  report: BeginnerMasterReport,
+  locale: "en" | "zh-TW",
+  run: ScanRun | undefined,
+): string[] => {
+  if (step.findingId || step.unattributed) return [];
+  const assetCount = new Set([
+    ...report.requested.targets.map((target) => target.assetId),
+    ...report.actual.checks.flatMap((check) => check.targetAssetIds),
+    ...report.findings.flatMap((finding) => finding.targetAssetIds),
+    ...report.coverageGaps.flatMap((gap) => gap.targetAssetIds),
+    ...(report.inventory?.assetIds ?? []),
+  ]).size;
+  const targetById = new Map(report.requested.targets.map((target) => [target.assetId, target]));
+  const closes: Array<{ name: string; assetIds: string[] }> = [];
+  for (const gap of report.coverageGaps) {
+    if (gap.unattributed || gap.nextAction !== step.action) continue;
+    const name = coverageGapDimensionLabel(gap, locale, run);
+    let closed = closes.find((candidate) => candidate.name === name);
+    if (!closed) {
+      closed = { name, assetIds: [] };
+      closes.push(closed);
+    }
+    for (const assetId of gap.targetAssetIds) {
+      if (!closed.assetIds.includes(assetId)) closed.assetIds.push(assetId);
+    }
+  }
+  return closes.map(({ name, assetIds }) => assetCount > 1 && assetIds.length > 0
+    ? `${name} · ${requestedTargetListLabel(assetIds, targetById, locale)}`
+    : name);
+};
+
+/**
+ * An action with the coverage it is about in parentheses, inside the
+ * sentence: "Retry this check (Nuclei)." The saved HTML report composes the
+ * same sentence (`html_action_about`). Nothing to name, or no action, leaves
+ * the action as it is.
+ */
+const actionAbout = (
+  action: string,
+  about: readonly string[],
+  locale: "en" | "zh-TW",
+): string => {
+  if (about.length === 0 || !action.trim()) return action;
+  const named = about.join(locale === "en" ? "; " : "；");
+  if (locale === "en") {
+    return action.endsWith(".") ? `${action.slice(0, -1)} (${named}).` : `${action} (${named})`;
+  }
+  return action.endsWith("。") ? `${action.slice(0, -1)}（${named}）。` : `${action}（${named}）`;
+};
+
+/**
  * What one coverage row measured, in the reader's language.
  *
  * The local connection check keeps its own richer sentence, which says how
@@ -1059,10 +1144,12 @@ const assetResultRank: Record<AssetResultStatus, number> = {
 
 function AssetResultBoard({
   report,
+  run,
   onOpenProgress,
   onOpenCoverage,
 }: {
   report: BeginnerMasterReport;
+  run?: ScanRun;
   onOpenProgress: () => void;
   onOpenCoverage: () => void;
 }) {
@@ -1112,8 +1199,16 @@ function AssetResultBoard({
       : status === "no_problems_completed"
         ? gaps.find((gap) => gap.kind === "manual_review")
         : firstApplicableGap;
+    // The row is the asset, so its step names only the coverage it closes. An
+    // unattributed step already names the identifier to add.
     const recordedNextAction = actionGap
-      ? gapNextActionProse(actionGap, locale)
+      ? actionGap.unattributed
+        ? gapNextActionProse(actionGap, locale)
+        : actionAbout(
+            gapNextActionProse(actionGap, locale),
+            [coverageGapDimensionLabel(actionGap, locale, run)],
+            locale,
+          )
       : undefined;
     const presentation = (() => {
       switch (status) {
@@ -1428,27 +1523,10 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
   const firstTestedEngine = firstTestedCheck ? engineByTaskId.get(firstTestedCheck.taskId) : undefined;
   const firstCoverageGap = coverageLossGaps[0];
   const firstRecordNote = recordNotes[0];
-  /**
-   * A gap's dimension, with its leading check id (the text before the first
-   * ":") replaced by that check's display name -- the same `localizedCheckName`
-   * every other row on this page uses, and the same substitution the saved HTML
-   * report's `engine_named` makes. Without this the desktop prints the raw
-   * check id while the report it exports names the check, so the two disagree
-   * about what to call the same check.
-   */
   const coverageGapDimensionText = (
     gap: BeginnerMasterReport["coverageGaps"][number],
     unattributedDimension?: string,
-  ): string => {
-    const dimensionText = unattributedDimension ?? localizedCoverageDimension(gap.dimension, locale);
-    const checkId = (gap.dimension.split(":")[0] ?? gap.dimension).trim();
-    const taskEngine = gap.taskId ? engineByTaskId.get(gap.taskId) : undefined;
-    const engine = taskEngine && taskEngine.engineId === checkId
-      ? taskEngine
-      : run?.engineRuns.find((candidate) => candidate.engineId === checkId);
-    if (!engine || !dimensionText.startsWith(checkId)) return dimensionText;
-    return `${localizedCheckName(engine.engineId, locale, engine)}${dimensionText.slice(checkId.length)}`;
-  };
+  ): string => coverageGapDimensionLabel(gap, locale, run, unattributedDimension);
   const coverageGapLine = (gap: BeginnerMasterReport["coverageGaps"][number]): string => {
     const targets = requestedTargetListLabel(gap.targetAssetIds, targetById, locale);
     const unattributedText = gap.unattributed
@@ -1522,9 +1600,15 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
     : undefined;
   const nextStepActionText = (step: (typeof orderedNextSteps)[number]): string =>
     beginnerStepAction(locale, step, report.findings, report.actual.checks);
+  // The first step stands apart from the coverage rows it closes, so it names
+  // them inside the sentence, as the saved report's summary does.
   const nextStepSummary = orderedNextSteps[0]
     ? appendRemainingCountToSentence(
-        nextStepActionText(orderedNextSteps[0]),
+        actionAbout(
+          nextStepActionText(orderedNextSteps[0]),
+          stepCoverageNames(orderedNextSteps[0], report, locale, run),
+          locale,
+        ),
         orderedNextSteps.length - 1,
       )
     : text(copy.noNextStep);
@@ -2014,9 +2098,11 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         <ol className="detail-list">
           {orderedNextSteps.map((step, index) => {
             const covers = (step.alsoResolves?.length ?? 0) + 1;
+            const closes = stepCoverageNames(step, report, locale, run);
             return (
               <li key={`${step.code}-${step.findingId ?? step.taskId ?? index}`}>
                 <strong>{nextStepActionText(step)}</strong>
+                {closes.length > 0 && <span>{closes.join(inlineSeparator)}</span>}
                 {step.findingId && covers > 1 && (
                   <span>{text(copy.stepCoversProblems, { count: formatNumber(covers) })}</span>
                 )}
@@ -2679,6 +2765,7 @@ export function FindingsPage({
         {report && (
           <AssetResultBoard
             report={report}
+            run={latestRun}
             onOpenProgress={onOpenProgress}
             onOpenCoverage={onOpenCoverage}
           />
@@ -2782,6 +2869,7 @@ export function FindingsPage({
       {report && (
         <AssetResultBoard
           report={report}
+          run={latestRun}
           onOpenProgress={onOpenProgress}
           onOpenCoverage={onOpenCoverage}
         />
