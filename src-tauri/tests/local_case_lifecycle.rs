@@ -152,9 +152,10 @@ fn execute_external_fixture(
     output: Vec<u8>,
     allowed_destinations: Vec<String>,
     frozen_destinations: Option<&[GatewayDestination]>,
+    exit_code: i32,
 ) -> ExecutionReport {
     runtime.set_behavior(FakeRunBehavior {
-        exit_code: Some(0),
+        exit_code: Some(exit_code),
         stdout: Vec::new(),
         stderr: Vec::new(),
         output_files: BTreeMap::from([(output_name.to_owned(), output)]),
@@ -1009,6 +1010,7 @@ fn mixed_environment_fake_runtime_reopens_one_shared_report_and_export() {
                     output,
                     vec!["portal.example.test:443".into()],
                     Some(&nuclei_destinations),
+                    0,
                 )
             }
             "greenbone" => {
@@ -1026,6 +1028,7 @@ fn mixed_environment_fake_runtime_reopens_one_shared_report_and_export() {
                     output,
                     vec!["203.0.113.10:443".into(), "203.0.113.10:8443".into()],
                     None,
+                    0,
                 )
             }
             unexpected => panic!("unexpected mixed-environment engine {unexpected}"),
@@ -1165,6 +1168,168 @@ fn mixed_environment_fake_runtime_reopens_one_shared_report_and_export() {
         assert!(!html.contains(secret), "mixed report leaked {secret}");
     }
     assert!(!html.contains("<script"));
+
+    // A later run is a separate report, even while it is still in Progress.
+    // One failing website check must not erase the completed repository check
+    // or change the already finished mixed-environment report.
+    let followup = service
+        .plan_scan(
+            &case.id,
+            ScanPlanRequest {
+                engine_ids: vec![],
+                engine_asset_routes: vec![
+                    EngineAssetRoute {
+                        engine_id: "gitleaks".into(),
+                        asset_ids: vec![repository_asset_id.clone()],
+                    },
+                    EngineAssetRoute {
+                        engine_id: "nuclei".into(),
+                        asset_ids: vec![website_asset_id.clone()],
+                    },
+                ],
+            },
+        )
+        .expect("save a second, narrower scan plan");
+    assert_eq!(followup.executable.len(), 2);
+    assert!(followup.not_executed.is_empty());
+    let queued_case = service.show_case(&case.id).expect("read queued follow-up");
+    assert!(build_beginner_master_report(&queued_case, &followup.scan_run.id).is_err());
+    assert_eq!(
+        build_beginner_master_report(&queued_case, &plan.scan_run.id)
+            .expect("older report remains readable during a newer run"),
+        report
+    );
+    let pending_destination = temporary.path().join("pending-report.html");
+    assert!(
+        service
+            .export_case(
+                &case.id,
+                &followup.scan_run.id,
+                CaseExportFormat::Html,
+                &pending_destination,
+                ExportOptions::default(),
+            )
+            .is_err()
+    );
+    assert!(!pending_destination.exists());
+
+    for execution in &followup.executable {
+        let execution_report = match execution.manifest.id.as_str() {
+            "gitleaks" => execute_fixture(
+                &orchestrator,
+                &runtime,
+                execution,
+                &repository_workspace,
+                GITLEAKS_FIXTURE.to_vec(),
+            ),
+            "nuclei" => execute_external_fixture(
+                &orchestrator,
+                &runtime,
+                execution,
+                "nuclei.jsonl",
+                Vec::new(),
+                vec!["portal.example.test:443".into()],
+                Some(&nuclei_destinations),
+                126,
+            ),
+            unexpected => panic!("unexpected follow-up engine {unexpected}"),
+        };
+        assert_eq!(
+            execution_report.checkpoint.stage,
+            if execution.manifest.id == "nuclei" {
+                ExecutionStage::Failed
+            } else {
+                ExecutionStage::Completed
+            }
+        );
+        service
+            .apply_execution_report(&case.id, &DurableExecutionReport::from(&execution_report))
+            .expect("persist independent follow-up outcome");
+    }
+
+    let reopened_after_followup = Storage::open(&database_path).expect("reopen both saved runs");
+    let saved = reopened_after_followup
+        .get_case(&case.id)
+        .expect("read both saved runs");
+    let followup_report = build_beginner_master_report(&saved, &followup.scan_run.id)
+        .expect("terminal follow-up report");
+    assert_eq!(followup_report.state.lifecycle, ReportLifecycle::Final);
+    assert_eq!(
+        followup_report.state.summary,
+        BeginnerReportSummary::Partial
+    );
+    assert_eq!(followup_report.requested.targets.len(), 2);
+    assert!(
+        followup_report
+            .findings
+            .iter()
+            .any(|finding| { finding.target_asset_ids == [repository_asset_id.clone()] })
+    );
+    assert!(
+        followup_report
+            .findings
+            .iter()
+            .all(|finding| { finding.target_asset_ids == [repository_asset_id.clone()] })
+    );
+    assert!(followup_report.actual.checks.iter().any(|check| {
+        check.check_id == "gitleaks" && check.status == CoverageDimensionStatus::TestedComplete
+    }));
+    assert!(followup_report.actual.checks.iter().any(|check| {
+        check.check_id == "nuclei" && check.status == CoverageDimensionStatus::Failed
+    }));
+    assert_eq!(
+        build_beginner_master_report(&saved, &plan.scan_run.id)
+            .expect("original report survives the newer failure"),
+        report
+    );
+
+    let service_after_followup = CaseService::new(
+        &reopened_after_followup,
+        &engines,
+        &adapters,
+        &artifact_root,
+        &signing_key,
+    );
+    let old_destination = temporary.path().join("selected-original-report.html");
+    let old_export = service_after_followup
+        .export_case(
+            &case.id,
+            &plan.scan_run.id,
+            CaseExportFormat::Html,
+            &old_destination,
+            ExportOptions {
+                redaction: RedactionProfile::None,
+                include_raw_artifacts: false,
+                locale: ReportLocale::En,
+            },
+        )
+        .expect("export explicitly selected original run after newer failure");
+    assert_eq!(old_export.run_id, plan.scan_run.id);
+    let old_html = fs::read_to_string(old_destination).expect("read selected original export");
+    assert!(old_html.contains("Rated Greenbone alarm NVT"));
+    assert!(old_html.contains("phpMyAdmin Panel"));
+
+    let followup_destination = temporary.path().join("selected-followup-report.html");
+    let followup_export = service_after_followup
+        .export_case(
+            &case.id,
+            &followup.scan_run.id,
+            CaseExportFormat::Html,
+            &followup_destination,
+            ExportOptions {
+                redaction: RedactionProfile::None,
+                include_raw_artifacts: false,
+                locale: ReportLocale::En,
+            },
+        )
+        .expect("export the terminal follow-up with its preserved sibling result");
+    assert_eq!(followup_export.run_id, followup.scan_run.id);
+    let followup_html =
+        fs::read_to_string(followup_destination).expect("read selected follow-up export");
+    assert!(followup_html.contains("Potential API key"));
+    assert!(!followup_html.contains("phpMyAdmin Panel"));
+    assert!(!followup_html.contains("Rated Greenbone alarm NVT"));
+    assert!(!followup_html.contains("SECRET_SENTINEL_MUST_NEVER_LEAK"));
 }
 
 #[test]
