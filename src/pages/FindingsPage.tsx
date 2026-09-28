@@ -269,6 +269,10 @@ const copy = {
     en: "No problems were observed in the work that completed",
     zhTW: "已完成的範圍內沒有觀察到問題",
   },
+  emptyPartialTitle: {
+    en: "Some checks need attention",
+    zhTW: "仍有檢查需要處理",
+  },
   emptyNoRunDescription: {
     en: "Add what you want to scan, then start the check from New scan.",
     zhTW: "先加入想掃描的目標，再到「開始新掃描」開始檢查。",
@@ -281,8 +285,13 @@ const copy = {
     en: "The completed checks recorded no issues in their tested scope.",
     zhTW: "已完成的檢查在實際測試範圍內沒有記錄問題。",
   },
+  emptyPartialDescription: {
+    en: "Completed security checks reported no problems, but some requested coverage is missing. Review what was not checked below.",
+    zhTW: "已完成的資安檢查未回報問題，但仍有要求的範圍未完成。請查看下方未檢查的內容。",
+  },
   openCoverage: { en: "Open scan setup", zhTW: "開啟掃描設定" },
   openProgress: { en: "Review scanner status", zhTW: "查看掃描工具狀態" },
+  openReportScope: { en: "View checked scope", zhTW: "查看已檢查範圍" },
   openExport: { en: "Save or share report", zhTW: "保存或分享報告" },
   summaryAria: { en: "Problem summary", zhTW: "問題摘要" },
   critical: { en: "Critical", zhTW: "嚴重" },
@@ -1250,7 +1259,7 @@ function AssetResultBoard({
               { count: formatNumber(completedSecurityChecks.length) },
             ),
             prose: recordedNextAction ?? text(copy.assetNoProblemAction),
-            control: undefined,
+            control: { destination: "scope" as const },
           };
         case "incomplete_failed": {
           const action = recordedNextAction ?? text(copy.assetIncompleteAction);
@@ -1320,7 +1329,11 @@ function AssetResultBoard({
                 <button
                   type="button"
                   className="button button--secondary button--small"
-                  onClick={presentation.control.destination === "progress" ? onOpenProgress : onOpenCoverage}
+                  onClick={presentation.control.destination === "progress"
+                    ? onOpenProgress
+                    : presentation.control.destination === "scope"
+                      ? () => document.getElementById("beginner-master-report-title")?.scrollIntoView?.({ behavior: "smooth", block: "start" })
+                      : onOpenCoverage}
                 >
                   <Icon
                     name={presentation.control.destination === "progress" ? "progress" : "coverage"}
@@ -1328,7 +1341,9 @@ function AssetResultBoard({
                   />
                   {text(presentation.control.destination === "progress"
                     ? copy.openProgress
-                    : copy.openCoverage)}
+                    : presentation.control.destination === "scope"
+                      ? copy.openReportScope
+                      : copy.openCoverage)}
                 </button>
               ) : null}
             </div>
@@ -2480,7 +2495,11 @@ export function FindingsPage({
     <div className="button-group">
       {reportRunPicker}
       {latestRun && (
-        <button className="button button--primary button--small" type="button" onClick={() => onOpenExport(latestRun.id)}>
+        <button
+          className={`button ${report && report.state.summary !== "complete" ? "button--secondary" : "button--primary"} button--small`}
+          type="button"
+          onClick={() => onOpenExport(latestRun.id)}
+        >
           <Icon name="export" size={16} />{text(copy.openExport)}
         </button>
       )}
@@ -2738,7 +2757,15 @@ export function FindingsPage({
       && !requestOutcomeSummary
       && !localhostSummary
       && !nonSecurityOnly
-      && hasCompletedSecurityCheck;
+      && hasCompletedSecurityCheck
+      && report?.state.summary === "complete";
+    const partialSecurityOutcome = Boolean(latestRun)
+      && !incompleteRun
+      && !requestOutcomeSummary
+      && !localhostSummary
+      && !nonSecurityOnly
+      && hasCompletedSecurityCheck
+      && report?.state.summary === "partial";
     const terminalActions = (
       <div className="button-group">
         <button className="button button--secondary" type="button" onClick={onOpenCoverage}><Icon name="coverage" size={16} />{text(copy.openCoverage)}</button>
@@ -2753,15 +2780,15 @@ export function FindingsPage({
             : nonSecurityOnly
               ? copy.nonSecurityHeaderEyebrow
               : copy.eyebrow)}
-          title={cleanCompletedOutcome
-            ? title
+          title={cleanCompletedOutcome || partialSecurityOutcome
+            ? text(partialSecurityOutcome ? copy.emptyPartialTitle : copy.emptyCompletedTitle)
             : text(localhostSummary
               ? copy.connectionHeaderTitle
               : nonSecurityOnly
                 ? copy.nonSecurityHeaderTitle
                 : copy.emptyHeaderTitle)}
-          description={cleanCompletedOutcome
-            ? description
+          description={cleanCompletedOutcome || partialSecurityOutcome
+            ? text(partialSecurityOutcome ? copy.emptyPartialDescription : copy.emptyCompletedDescription)
             : text(localhostSummary
               ? copy.connectionHeaderDescription
               : nonSecurityOnly
@@ -2772,8 +2799,8 @@ export function FindingsPage({
         {runningScanResultsPending && (
           <InlineNotice tone="info" title={text(copy.finishedRunWhileScanning)} />
         )}
-        {cleanCompletedOutcome && (
-          <div className="report-terminal-outcome" data-report-outcome="no_problems_completed">
+        {(cleanCompletedOutcome || partialSecurityOutcome) && (
+          <div className="report-terminal-outcome" data-report-outcome={partialSecurityOutcome ? "incomplete" : "no_problems_completed"}>
             {terminalActions}
           </div>
         )}
@@ -2785,7 +2812,7 @@ export function FindingsPage({
             onOpenCoverage={onOpenCoverage}
           />
         )}
-        {!cleanCompletedOutcome && (
+        {!cleanCompletedOutcome && !partialSecurityOutcome && (
           <EmptyState
             icon={incompleteRun
               || Boolean(requestOutcomeSummary)

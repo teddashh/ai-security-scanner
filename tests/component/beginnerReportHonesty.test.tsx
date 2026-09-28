@@ -582,7 +582,7 @@ test("the first layer gives every requested asset one evidence-derived result st
   expect(row("https://portal.example").dataset.assetResult).toBe("no_problems_completed");
   expect(row("https://portal.example").textContent).toContain("1 completed security check reported no problems");
   expect(row("https://portal.example").textContent).toContain("Open the completed-check scope");
-  expect(row("https://portal.example").querySelector("button")).toBeNull();
+  expect(row("https://portal.example").querySelector("button")?.textContent).toContain("View checked scope");
   expect(row("Branch gateway").dataset.assetResult).toBe("incomplete_failed");
   expect(row("Branch gateway").textContent).toContain("Retry the failed check");
   expect(row("Branch gateway").querySelector(".asset-result-row__outcome span")?.textContent)
@@ -902,7 +902,7 @@ test("a settled-skip gap beside a completed check with no findings still reads a
   expect(row.dataset.assetResult).toBe("no_problems_completed");
   expect(row.textContent).toContain("No problems in completed checks");
   expect(row.textContent).not.toContain("Some checks are incomplete");
-  expect(row.querySelector("button")).toBeNull();
+  expect(row.querySelector("button")?.textContent).toContain("View checked scope");
 });
 
 test("a Greenbone dead-host gap gives a Traditional Chinese reader the exact cause", () => {
@@ -983,6 +983,13 @@ test("a clean terminal run states its bounded outcome before the coverage detail
   expect(header.textContent).not.toContain("Sources included");
   expect(header.textContent).not.toContain("Open Scan setup to review exactly what was included");
   expect(container.textContent).toContain("No problems in completed checks");
+  expect(container.querySelector("[data-asset-result='no_problems_completed'] button")?.textContent)
+    .toContain("View checked scope");
+  const scopeTitle = container.querySelector<HTMLElement>("#beginner-master-report-title");
+  if (!scopeTitle) throw new Error("report scope heading did not render");
+  scopeTitle.scrollIntoView = vi.fn();
+  fireEvent.click(container.querySelector<HTMLButtonElement>("[data-asset-result='no_problems_completed'] button")!);
+  expect(scopeTitle.scrollIntoView).toHaveBeenCalled();
   expect(header.compareDocumentPosition(coverage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(outcome.compareDocumentPosition(coverage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(coverage.textContent).toContain("What was checked—and what was not");
@@ -1017,6 +1024,55 @@ test("a clean terminal run is not an empty state, while incomplete and failed ru
   expect(connection.querySelector(".page-header")?.textContent).toContain(
     "Connection test only — no vulnerability scan ran",
   );
+});
+
+test("zero findings with a completed check and a failed sibling leads with incomplete coverage", () => {
+  const base = cleanCompletedReport();
+  const partial: BeginnerMasterReport = {
+    ...base,
+    state: { ...base.state, summary: "partial" },
+    requested: { ...base.requested, requestedCheckIds: ["trivy", "semgrep"] },
+    actual: {
+      ...base.actual,
+      checks: [...base.actual.checks, {
+        taskId: "semgrep-task",
+        checkId: "semgrep",
+        resultKind: "security_check",
+        targetAssetIds: ["asset-1"],
+        status: "failed",
+        testedDimensions: [],
+      }],
+    },
+    coverageGaps: [{
+      kind: "failed",
+      taskId: "semgrep-task",
+      targetAssetIds: ["asset-1"],
+      dimension: "semgrep check",
+      reason: "The code check did not finish.",
+      nextActionCode: "retry_check",
+      nextAction: "Retry the code check.",
+    }],
+    coverageCounts: counts({ testedComplete: 1, failed: 1 }),
+  };
+  const { container, unmount } = renderReport(partial, [], [catalogRun("trivy")]);
+  expect(container.querySelector(".page-header")?.textContent).toContain("Some checks need attention");
+  expect(container.querySelector(".page-header")?.textContent).toContain("some requested coverage is missing");
+  expect(container.querySelector("[data-report-outcome='no_problems_completed']")).toBeNull();
+  expect(container.querySelector("[data-report-outcome='incomplete']")?.textContent).toContain("Review scanner status");
+  expect(container.querySelector("[data-report-outcome='incomplete'] .button--primary")?.textContent)
+    .toContain("Review scanner status");
+  expect(container.querySelector(".page-header__actions .button--secondary")?.textContent)
+    .toContain("Save or share report");
+  expect(container.querySelector(".empty-state")).toBeNull();
+  expect(container.querySelector("[data-asset-result='incomplete_failed']")?.textContent).toContain("did not produce a complete result");
+  expect(statePill(container).textContent).toContain("Completed with gaps");
+
+  unmount();
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container: zh } = renderReport(partial, [], [catalogRun("trivy")]);
+  expect(zh.querySelector(".page-header")?.textContent).toContain("仍有檢查需要處理");
+  expect(zh.querySelector(".page-header")?.textContent).toContain("仍有要求的範圍未完成");
+  expect(zh.querySelector("[data-report-outcome='no_problems_completed']")).toBeNull();
 });
 
 const emptyState = (container: HTMLElement): HTMLElement => {
