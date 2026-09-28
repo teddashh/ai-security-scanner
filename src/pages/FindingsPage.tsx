@@ -107,6 +107,17 @@ interface FindingsPageProps {
 const severityOrder: Severity[] = ["critical", "high", "medium", "low", "unknown", "info"];
 const activeRunStatuses = new Set<ScanRun["status"]>(["queued", "running", "paused"]);
 const workflowOrder = Object.keys(workflowMeta) as FindingWorkflowState[];
+const narrowFindingLayout = "(max-width: 1050px)";
+
+const scrollToSelectedFinding = (scrollOnWideLayout = true): void => {
+  const narrow = window.matchMedia?.(narrowFindingLayout).matches ?? window.innerWidth <= 1050;
+  if (!narrow && !scrollOnWideLayout) return;
+  const target = narrow
+    ? document.querySelector<HTMLElement>(".finding-detail:not(.finding-detail--empty)")
+    : document.getElementById("finding-browser");
+  target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+};
+
 const decisionStates = [
   "unreviewed",
   "expert_review_requested",
@@ -2249,13 +2260,17 @@ export function FindingsPage({
   const [groupFindingIds, setGroupFindingIds] = useState<string[]>([]);
   const appliedFocusId = useRef<string | undefined>(undefined);
   const advancedFiltersRef = useRef<HTMLDetailsElement>(null);
+  const revealFinding = (findingId: string, scrollOnWideLayout = true): void => {
+    setSelectedId(findingId);
+    window.setTimeout(() => scrollToSelectedFinding(scrollOnWideLayout), 0);
+  };
 
   useEffect(() => {
     if (focusedFindingId && appliedFocusId.current !== focusedFindingId && findings.some((finding) => finding.id === focusedFindingId)) {
       appliedFocusId.current = focusedFindingId;
       setSelectedAssetId(undefined);
       setSelectedId(focusedFindingId);
-      window.setTimeout(() => document.getElementById("finding-browser")?.scrollIntoView({ block: "start" }), 0);
+      window.setTimeout(scrollToSelectedFinding, 0);
     }
   }, [findings, focusedFindingId]);
 
@@ -2891,10 +2906,7 @@ export function FindingsPage({
                 key={finding.id}
                 type="button"
                 className="priority-card"
-                onClick={() => {
-                  setSelectedId(finding.id);
-                  document.getElementById("finding-browser")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                }}
+                onClick={() => revealFinding(finding.id)}
               >
                 <span className="priority-card__number">{String(index + 1).padStart(2, "0")}</span>
                 <span className="priority-card__status">
@@ -2971,8 +2983,7 @@ export function FindingsPage({
                     setControl("all");
                     setQuery("");
                     setSelectedAssetId(asset.assetId);
-                    setSelectedId(asset.topFindingId);
-                    window.setTimeout(() => document.getElementById("finding-browser")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+                    revealFinding(asset.topFindingId);
                   }}
                   aria-label={`${text(copy.affectedAssetOpen)}: ${asset.label}`}
                 >
@@ -3041,10 +3052,7 @@ export function FindingsPage({
                             <button
                               className="clear-filters"
                               type="button"
-                              onClick={() => {
-                                setSelectedId(finding.id);
-                                document.getElementById("finding-browser")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                              }}
+                              onClick={() => revealFinding(finding.id)}
                             >
                               {finding.title}
                             </button>
@@ -3127,10 +3135,7 @@ export function FindingsPage({
                         <button
                           className="clear-filters"
                           type="button"
-                          onClick={() => {
-                            setSelectedId(finding.id);
-                            document.getElementById("finding-browser")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                          }}
+                          onClick={() => revealFinding(finding.id)}
                         >
                           {finding.title}
                         </button>
@@ -3168,7 +3173,7 @@ export function FindingsPage({
                     {members.map(({ findingId, finding }) => (
                       <li key={findingId}>
                         {finding ? (
-                          <button className="clear-filters" type="button" onClick={() => setSelectedId(finding.id)}>
+                          <button className="clear-filters" type="button" onClick={() => revealFinding(finding.id)}>
                             {finding.title}
                           </button>
                         ) : (
@@ -3322,7 +3327,7 @@ export function FindingsPage({
                 <button
                   type="button"
                   className={selectedId === finding.id ? "finding-row finding-row--active" : "finding-row"}
-                  onClick={() => setSelectedId(finding.id)}
+                  onClick={() => revealFinding(finding.id, false)}
                 >
                   <span className="finding-row__priority" aria-label={text(copy.rankAria, { rank: displayRankByFindingId.get(finding.id) ?? "—" })}>
                     {text(copy.rank, { rank: displayRankByFindingId.get(finding.id) ?? "—" })}

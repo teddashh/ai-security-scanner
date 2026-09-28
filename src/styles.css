@@ -2784,6 +2784,7 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
   overflow-y: auto;
   position: sticky;
   top: 79px;
+  scroll-margin-top: 90px;
 }
 
 .finding-toolbar-heading { margin-bottom: 14px; }
