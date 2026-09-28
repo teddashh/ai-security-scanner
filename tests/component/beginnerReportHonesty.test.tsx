@@ -350,6 +350,7 @@ test("a run where nothing completed never reads as a clean result", () => {
   expect(container.querySelector(".page-header")?.textContent).toContain(
     "Review this run's outcome and next action.",
   );
+  expect(container.querySelector(".page-header .eyebrow")?.textContent).toBe("SCAN RESULTS");
   expect(container.querySelector(".page-header")?.textContent).not.toContain("will appear here");
 });
 
@@ -979,6 +980,7 @@ test("a clean terminal run states its bounded outcome before the coverage detail
   }
 
   expect(header.textContent).toContain("No problems were observed in the work that completed");
+  expect(header.querySelector(".eyebrow")?.textContent).toBe("SCAN RESULTS");
   expect(header.textContent).toContain("in their tested scope");
   expect(header.textContent).not.toContain("Sources included");
   expect(header.textContent).not.toContain("Open Scan setup to review exactly what was included");
@@ -1031,14 +1033,24 @@ test("zero findings with a completed check and a failed sibling leads with incom
   const partial: BeginnerMasterReport = {
     ...base,
     state: { ...base.state, summary: "partial" },
-    requested: { ...base.requested, requestedCheckIds: ["trivy", "semgrep"] },
+    requested: {
+      ...base.requested,
+      targets: [...base.requested.targets, {
+        assetId: "asset-2",
+        label: "second-project",
+        assetKind: "repository",
+        labelAvailability: "recorded",
+        assetKindAvailability: "recorded",
+      }],
+      requestedCheckIds: ["trivy", "semgrep"],
+    },
     actual: {
       ...base.actual,
       checks: [...base.actual.checks, {
         taskId: "semgrep-task",
         checkId: "semgrep",
         resultKind: "security_check",
-        targetAssetIds: ["asset-1"],
+        targetAssetIds: ["asset-2"],
         status: "failed",
         testedDimensions: [],
       }],
@@ -1046,16 +1058,43 @@ test("zero findings with a completed check and a failed sibling leads with incom
     coverageGaps: [{
       kind: "failed",
       taskId: "semgrep-task",
-      targetAssetIds: ["asset-1"],
+      targetAssetIds: ["asset-2"],
       dimension: "semgrep check",
       reason: "The code check did not finish.",
       nextActionCode: "retry_check",
       nextAction: "Retry the code check.",
     }],
     coverageCounts: counts({ testedComplete: 1, failed: 1 }),
+    nextSteps: [{
+      priority: 100,
+      code: "retry_check",
+      action: "Retry the code check.",
+      reason: "The code check did not finish.",
+      taskId: "semgrep-task",
+      alsoResolves: [],
+    }],
   };
-  const { container, unmount } = renderReport(partial, [], [catalogRun("trivy")]);
+  const completedRun = catalogRun("trivy");
+  const nativeLikePartialRun: ScanRun = {
+    ...completedRun,
+    status: "partial",
+    totalAssetCount: 2,
+    engineRuns: [{
+      ...completedRun.engineRuns[0]!,
+      id: "trivy-task",
+      assetIds: ["asset-1"],
+    }, {
+      ...completedRun.engineRuns[0]!,
+      id: "semgrep-task",
+      engineId: "semgrep",
+      engineName: "semgrep",
+      status: "failed",
+      assetIds: ["asset-2"],
+    }],
+  };
+  const { container, unmount } = renderReport(partial, [], [nativeLikePartialRun]);
   expect(container.querySelector(".page-header")?.textContent).toContain("Some checks need attention");
+  expect(container.querySelector(".page-header .eyebrow")?.textContent).toBe("SCAN RESULTS");
   expect(container.querySelector(".page-header")?.textContent).toContain("some requested coverage is missing");
   expect(container.querySelector("[data-report-outcome='no_problems_completed']")).toBeNull();
   expect(container.querySelector("[data-report-outcome='incomplete']")?.textContent).toContain("Review scanner status");
@@ -1064,15 +1103,139 @@ test("zero findings with a completed check and a failed sibling leads with incom
   expect(container.querySelector(".page-header__actions .button--secondary")?.textContent)
     .toContain("Save or share report");
   expect(container.querySelector(".empty-state")).toBeNull();
-  expect(container.querySelector("[data-asset-result='incomplete_failed']")?.textContent).toContain("did not produce a complete result");
+  expect(container.querySelector("[data-asset-result='no_problems_completed']")?.textContent).toContain("contoso.example");
+  expect(container.querySelector("[data-asset-result='incomplete_failed']")?.textContent).toContain("second-project");
   expect(statePill(container).textContent).toContain("Completed with gaps");
 
   unmount();
   window.localStorage.setItem(localeStorageKey, "zh-TW");
-  const { container: zh } = renderReport(partial, [], [catalogRun("trivy")]);
+  const { container: zh } = renderReport(partial, [], [nativeLikePartialRun]);
   expect(zh.querySelector(".page-header")?.textContent).toContain("仍有檢查需要處理");
+  expect(zh.querySelector(".page-header .eyebrow")?.textContent).toBe("掃描結果");
   expect(zh.querySelector(".page-header")?.textContent).toContain("仍有要求的範圍未完成");
   expect(zh.querySelector("[data-report-outcome='no_problems_completed']")).toBeNull();
+});
+
+test.each([
+  ["retry_check", "Review scanner status", "progress"],
+  ["review_scope_and_retry", "Open scan setup", "coverage"],
+  ["preserve_visible_limitation", "View checked scope", "scope"],
+] as const)("a native partial result routes %s to its direct continuation", (code, label, destination) => {
+  const base = cleanCompletedReport();
+  const partial: BeginnerMasterReport = {
+    ...base,
+    state: { ...base.state, summary: "partial" },
+    coverageGaps: [{
+      kind: code === "preserve_visible_limitation" ? "excluded" : "failed",
+      taskId: "unfinished-task",
+      targetAssetIds: ["asset-1"],
+      dimension: "remaining check",
+      reason: "The remaining coverage is incomplete.",
+      nextActionCode: code,
+      nextAction: "Review the remaining check.",
+    }],
+    coverageCounts: counts({
+      testedComplete: 1,
+      ...(code === "preserve_visible_limitation" ? { excluded: 1 } : { failed: 1 }),
+    }),
+    nextSteps: [{
+      priority: 100,
+      code,
+      action: "Review the remaining check.",
+      reason: "The remaining coverage is incomplete.",
+      taskId: "unfinished-task",
+      alsoResolves: [],
+    }],
+  };
+  const run = { ...catalogRun("trivy"), status: "partial" as const };
+  const onOpenProgress = vi.fn();
+  const onOpenCoverage = vi.fn();
+  const { container } = renderReport(partial, [], [run], { onOpenProgress, onOpenCoverage });
+  const scopeTitle = container.querySelector<HTMLElement>("#beginner-master-report-title");
+  if (!scopeTitle) throw new Error("report scope heading did not render");
+  scopeTitle.scrollIntoView = vi.fn();
+  const action = container.querySelector<HTMLButtonElement>("[data-report-outcome='incomplete'] .button--primary");
+  expect(action?.textContent).toContain(label);
+  fireEvent.click(action!);
+  expect(onOpenProgress).toHaveBeenCalledTimes(destination === "progress" ? 1 : 0);
+  expect(onOpenCoverage).toHaveBeenCalledTimes(destination === "coverage" ? 1 : 0);
+  expect(scopeTitle.scrollIntoView).toHaveBeenCalledTimes(destination === "scope" ? 1 : 0);
+});
+
+test("a partial security result with no complete check follows the recorded setup action", () => {
+  const base = cleanCompletedReport();
+  const partial: BeginnerMasterReport = {
+    ...base,
+    state: { ...base.state, summary: "partial" },
+    requested: {
+      ...base.requested,
+      targets: [...base.requested.targets, {
+        assetId: "asset-2",
+        label: "unresponsive-host.example",
+        assetKind: "host",
+        labelAvailability: "recorded",
+        assetKindAvailability: "recorded",
+      }],
+    },
+    actual: {
+      ...base.actual,
+      checks: [{
+        taskId: "greenbone-task",
+        checkId: "greenbone",
+        resultKind: "security_check",
+        targetAssetIds: ["asset-1", "asset-2"],
+        status: "tested_partial",
+        testedDimensions: [{
+          dimension: "Greenbone remote vulnerability scan",
+          value: "greenbone on asset asset-1",
+          observation: "Some security checks returned results.",
+        }],
+      }],
+    },
+    coverageGaps: [{
+      kind: "failed",
+      taskId: "greenbone-task",
+      targetAssetIds: ["asset-2"],
+      dimension: "greenbone: target response",
+      reason: "The target did not answer all approved checks.",
+      nextActionCode: "review_scope_and_retry",
+      nextAction: "Review the approved target and retry.",
+    }],
+    coverageCounts: counts({ testedPartial: 1, failed: 1 }),
+    nextSteps: [{
+      priority: 100,
+      code: "review_scope_and_retry",
+      action: "Review the approved target and retry.",
+      reason: "The target did not answer all approved checks.",
+      taskId: "greenbone-task",
+      alsoResolves: [],
+    }],
+  };
+  const baseRun = catalogRun("greenbone");
+  const run: ScanRun = {
+    ...baseRun,
+    status: "partial",
+    coveredAssetCount: 1,
+    totalAssetCount: 2,
+    engineRuns: [{
+      ...baseRun.engineRuns[0]!,
+      id: "greenbone-task",
+      status: "partial",
+      assetIds: ["asset-1", "asset-2"],
+    }],
+  };
+  const onOpenProgress = vi.fn();
+  const onOpenCoverage = vi.fn();
+  const { container } = renderReport(partial, [], [run], { onOpenProgress, onOpenCoverage });
+  expect(container.querySelector(".page-header")?.textContent).toContain("Available security results recorded no problems");
+  expect(container.querySelector(".page-header")?.textContent).not.toContain("Completed security checks reported no problems");
+  expect(container.querySelector(".page-header .eyebrow")?.textContent).toBe("SCAN RESULTS");
+  expect(container.querySelector(".empty-state")).toBeNull();
+  const action = container.querySelector<HTMLButtonElement>("[data-report-outcome='incomplete'] .button--primary");
+  expect(action?.textContent).toContain("Open scan setup");
+  fireEvent.click(action!);
+  expect(onOpenCoverage).toHaveBeenCalledTimes(1);
+  expect(onOpenProgress).not.toHaveBeenCalled();
 });
 
 const emptyState = (container: HTMLElement): HTMLElement => {
@@ -1153,7 +1316,7 @@ test.each(nonSecurityStatusCases)(
     const header = container.querySelector<HTMLElement>(".page-header");
     expect({
       title: header?.querySelector("h1")?.textContent,
-      description: header?.querySelector("p")?.textContent,
+      description: header?.querySelector("p:not(.eyebrow)")?.textContent,
     }).toEqual(tested ? {
       title: "Inventory or connectivity only — no security check ran",
       description: "This run completed inventory or connectivity, not a security check. Choose an applicable security scan.",
@@ -1193,7 +1356,7 @@ test("failed non-security work uses the existing Traditional Chinese incomplete 
     pill: pill.textContent,
     tone: pill.className,
     headerTitle: header?.querySelector("h1")?.textContent,
-    headerDescription: header?.querySelector("p")?.textContent,
+    headerDescription: header?.querySelector("p:not(.eyebrow)")?.textContent,
     emptyTitle: empty.querySelector("h2")?.textContent,
     emptyDescription: empty.querySelector("p")?.textContent,
   }).toEqual({

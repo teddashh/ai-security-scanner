@@ -118,6 +118,10 @@ const scrollToSelectedFinding = (scrollOnWideLayout = true): void => {
   target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
 };
 
+const scrollToReportScope = (): void => {
+  document.getElementById("beginner-master-report-title")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+};
+
 const decisionStates = [
   "unreviewed",
   "expert_review_requested",
@@ -136,6 +140,7 @@ const UNTRUSTED_EVIDENCE_CAVEAT = " Raw target text is retained only as untruste
 
 const copy = {
   eyebrow: { en: "PROBLEMS FOUND", zhTW: "發現的問題" },
+  resultsEyebrow: { en: "SCAN RESULTS", zhTW: "掃描結果" },
   title: {
     en: "Know what to fix first",
     zhTW: "先知道該修什麼",
@@ -286,8 +291,8 @@ const copy = {
     zhTW: "已完成的檢查在實際測試範圍內沒有記錄問題。",
   },
   emptyPartialDescription: {
-    en: "Completed security checks reported no problems, but some requested coverage is missing. Review what was not checked below.",
-    zhTW: "已完成的資安檢查未回報問題，但仍有要求的範圍未完成。請查看下方未檢查的內容。",
+    en: "Available security results recorded no problems, but some requested coverage is missing. Review what was not checked below.",
+    zhTW: "已取得的資安結果未記錄問題，但仍有要求的範圍未完成。請查看下方未檢查的內容。",
   },
   openCoverage: { en: "Open scan setup", zhTW: "開啟掃描設定" },
   openProgress: { en: "Review scanner status", zhTW: "查看掃描工具狀態" },
@@ -1065,6 +1070,17 @@ const assetActionDestination = (
   return undefined;
 };
 
+const partialReportActionDestination = (
+  report: BeginnerMasterReport,
+): "progress" | "coverage" | "scope" => {
+  const actionableStep = [...report.nextSteps]
+    .sort((left, right) => left.priority - right.priority)
+    .find((step) => !step.findingId && assetActionDestination(step.code, "incomplete_failed"));
+  return actionableStep
+    ? assetActionDestination(actionableStep.code, "incomplete_failed") ?? "scope"
+    : "scope";
+};
+
 /** Conservative fallback for reports saved before `resultKind` was frozen. */
 const legacyCheckResultKind = (
   checkId: string,
@@ -1332,7 +1348,7 @@ function AssetResultBoard({
                   onClick={presentation.control.destination === "progress"
                     ? onOpenProgress
                     : presentation.control.destination === "scope"
-                      ? () => document.getElementById("beginner-master-report-title")?.scrollIntoView?.({ behavior: "smooth", block: "start" })
+                      ? scrollToReportScope
                       : onOpenCoverage}
                 >
                   <Icon
@@ -2716,6 +2732,9 @@ export function FindingsPage({
     const requestOutcomeSummary = latestRequestOutcomeSummary;
     const hasCompletedSecurityCheck = Boolean(report?.actual.checks.some((check) =>
       check.status === "tested_complete" && checkResultKind(check) === "security_check"));
+    const hasSecurityResult = Boolean(report?.actual.checks.some((check) =>
+      (check.status === "tested_complete" || check.status === "tested_partial")
+      && checkResultKind(check) === "security_check"));
     const hasTestedNonSecurityWork = Boolean(report?.actual.checks.some((check) =>
       checkRecordedTestedWork(check) && checkResultKind(check) !== "security_check"));
     const title = !latestRun
@@ -2760,26 +2779,54 @@ export function FindingsPage({
       && hasCompletedSecurityCheck
       && report?.state.summary === "complete";
     const partialSecurityOutcome = Boolean(latestRun)
-      && !incompleteRun
       && !requestOutcomeSummary
       && !localhostSummary
       && !nonSecurityOnly
-      && hasCompletedSecurityCheck
+      && hasSecurityResult
       && report?.state.summary === "partial";
+    const partialActionDestination = partialSecurityOutcome && report
+      ? partialReportActionDestination(report)
+      : undefined;
     const terminalActions = (
       <div className="button-group">
-        <button className="button button--secondary" type="button" onClick={onOpenCoverage}><Icon name="coverage" size={16} />{text(copy.openCoverage)}</button>
-        {latestRun && <button className="button button--primary" type="button" onClick={onOpenProgress}><Icon name="progress" size={16} />{text(copy.openProgress)}</button>}
+        {partialActionDestination ? (
+          <button
+            className="button button--primary"
+            type="button"
+            onClick={partialActionDestination === "progress"
+              ? onOpenProgress
+              : partialActionDestination === "coverage"
+                ? onOpenCoverage
+                : scrollToReportScope}
+          >
+            <Icon name={partialActionDestination === "progress" ? "progress" : "coverage"} size={16} />
+            {text(partialActionDestination === "progress"
+              ? copy.openProgress
+              : partialActionDestination === "coverage"
+                ? copy.openCoverage
+                : copy.openReportScope)}
+          </button>
+        ) : cleanCompletedOutcome ? (
+          <button className="button button--secondary" type="button" onClick={scrollToReportScope}>
+            <Icon name="coverage" size={16} />{text(copy.openReportScope)}
+          </button>
+        ) : (
+          <>
+            <button className="button button--secondary" type="button" onClick={onOpenCoverage}><Icon name="coverage" size={16} />{text(copy.openCoverage)}</button>
+            {latestRun && <button className="button button--primary" type="button" onClick={onOpenProgress}><Icon name="progress" size={16} />{text(copy.openProgress)}</button>}
+          </>
+        )}
       </div>
     );
     return (
       <div className="page">
         <PageHeader
+          showEyebrow
           eyebrow={text(localhostSummary
             ? copy.connectionHeaderEyebrow
             : nonSecurityOnly
               ? copy.nonSecurityHeaderEyebrow
-              : copy.eyebrow)}
+              : copy.resultsEyebrow)}
           title={cleanCompletedOutcome || partialSecurityOutcome
             ? text(partialSecurityOutcome ? copy.emptyPartialTitle : copy.emptyCompletedTitle)
             : text(localhostSummary
@@ -2888,6 +2935,7 @@ export function FindingsPage({
   return (
     <div className="page">
       <PageHeader
+        showEyebrow
         eyebrow={text(copy.eyebrow)}
         title={text(copy.title)}
         actions={reportActions}
