@@ -1026,6 +1026,18 @@ const incompleteGapKinds = new Set<BeginnerMasterReport["coverageGaps"][number][
   "unattributed",
 ]);
 
+// Native profile gaps describe security dimensions outside the selected
+// bounded check. They remain visible in coverage, but do not make a completed
+// check on that asset unfinished when a sibling makes the shared task partial.
+const boundedProfileLimitDimensions = new Set([
+  "endpoint operating-system, package, application, and local-configuration coverage",
+  "RDP implementation, authentication/NLA, and endpoint host coverage",
+  "VNC implementation, authentication, and endpoint host coverage",
+  "SMTP server behavior, implementation, and endpoint host coverage",
+  "Telnet authentication, implementation, and endpoint host coverage",
+  "device product and firmware vulnerability coverage",
+]);
+
 // Older reports and fixtures omit `class`. Absence keeps the conservative
 // coverage-loss reading rather than becoming a quieter record note.
 const isRecordNoteGap = (
@@ -1227,15 +1239,18 @@ function AssetResultBoard({
       && !(check.status === "tested_partial"
         && checkResultKind(check) === "security_check"
         && hasCompletedCoordinateForAsset(check, target.assetId)));
-    // A deliberate `not_tested` boundary attached to a completed task (for
-    // example SSH host-level exclusions) does not erase that task's bounded
-    // result. A different requested task that did not run still makes the
-    // asset incomplete when another security check did complete.
+    // A completed task's deliberate `not_tested` boundary does not erase its
+    // bounded result. For a shared partial task, only the native profile-limit
+    // dimensions have that meaning; a missing planned dimension (such as
+    // SMTP TLS checks) must still mark this asset incomplete.
     const unfinishedRequestedGap = gaps.find((gap) => isCoverageLossGap(gap)
       && gap.kind === "not_tested"
       && gap.nextActionCode !== "no_action_unless_scope_changes"
       && Boolean(gap.taskId)
-      && !checks.some((check) => check.taskId === gap.taskId && check.status === "tested_complete"));
+      && !checks.some((check) => check.taskId === gap.taskId && check.status === "tested_complete")
+      && !(gap.nextActionCode === "preserve_visible_limitation"
+        && boundedProfileLimitDimensions.has(gap.dimension)
+        && completedSecurityChecks.some((check) => check.taskId === gap.taskId)));
     const hasIncompleteGap = Boolean(firstIncompleteGap);
     const hasIncompleteEvidence = hasIncompleteOutcome
       || hasIncompleteGap

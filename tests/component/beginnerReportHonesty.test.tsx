@@ -1199,6 +1199,14 @@ test("a native-shaped partial multi-asset security check keeps the tested siblin
       }],
     },
     coverageGaps: [{
+      kind: "not_tested",
+      taskId: "greenbone-task",
+      targetAssetIds: ["asset-10"],
+      dimension: "endpoint operating-system, package, application, and local-configuration coverage",
+      reason: "The completed SSH service profile did not inspect the host operating system.",
+      nextActionCode: "preserve_visible_limitation",
+      nextAction: "Use an approved endpoint inventory or local snapshot for host-level checks.",
+    }, {
       kind: "failed",
       taskId: "greenbone-task",
       targetAssetIds: ["asset-1"],
@@ -1207,7 +1215,7 @@ test("a native-shaped partial multi-asset security check keeps the tested siblin
       nextActionCode: "review_scope_and_retry",
       nextAction: "Review the approved target and retry.",
     }],
-    coverageCounts: counts({ testedPartial: 1, failed: 1 }),
+    coverageCounts: counts({ testedPartial: 1, failed: 1, notTested: 1 }),
     nextSteps: [{
       priority: 100,
       code: "review_scope_and_retry",
@@ -1250,6 +1258,21 @@ test("a native-shaped partial multi-asset security check keeps the tested siblin
   fireEvent.click(action!);
   expect(onOpenCoverage).toHaveBeenCalledTimes(1);
   expect(onOpenProgress).not.toHaveBeenCalled();
+
+  // A missing planned TLS check is a coverage loss on the tested host, unlike
+  // the selected SSH profile's documented host-level scope boundary.
+  const missingTls = renderReport({
+    ...partial,
+    coverageGaps: [{
+      ...partial.coverageGaps[0]!,
+      dimension: "SMTP TLS negotiation-dependent coverage",
+      reason: "This scan did not record every selected TLS check.",
+      nextAction: "Run a separately approved TLS assessment for complete SMTP TLS coverage.",
+    }, partial.coverageGaps[1]!],
+  }, [], [run]);
+  const tlsRow = Array.from(missingTls.container.querySelectorAll<HTMLElement>(".asset-result-row"))
+    .find((row) => row.textContent?.includes("checked-host.example"));
+  expect(tlsRow?.dataset.assetResult).toBe("incomplete_failed");
 });
 
 const emptyState = (container: HTMLElement): HTMLElement => {
