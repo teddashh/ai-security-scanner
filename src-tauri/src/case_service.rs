@@ -16617,8 +16617,8 @@ const UNTRUSTED_EVIDENCE_CAVEAT: &str = " Raw target text is retained only as un
 ///
 /// Product next-action prose names the kind of change. The scanner's own
 /// remediation text or reported fixed version is the specific step when it
-/// supplied one, and a stated absence when it supplied neither. Collapsed
-/// evidence still carries the same strings as provenance.
+/// supplied one. An absent suggestion adds nothing to the first layer.
+/// Collapsed evidence still carries the same strings as provenance.
 fn html_scanner_remediation_block(
     finding: &crate::beginner_report::BeginnerFinding,
     catalog: HtmlReportCatalog,
@@ -16655,14 +16655,7 @@ fn html_scanner_remediation_block(
         }
     }
     if unique.is_empty() && fixed_versions.is_empty() {
-        return format!(
-            "<p class=\"finding-scanner-remediation\">{}{}</p>",
-            catalog.strong_label(label),
-            catalog.text(
-                "The scanner did not provide a specific fix for this finding.",
-                "掃描工具未提供這項問題的具體修復方式。",
-            )
-        );
+        return String::new();
     }
     let mut html = unique
         .into_iter()
@@ -18466,16 +18459,7 @@ fn html_report_bytes(
                     html_escape(&text)
                 )
             })
-            .unwrap_or_else(|| {
-                format!(
-                    "<p>{}{}</p>",
-                    catalog.strong_label(catalog.text("How to confirm the fix", "如何確認已修正")),
-                    catalog.text(
-                        "No verification step was retained for this result.",
-                        "這筆結果未保留驗證步驟。",
-                    )
-                )
-            });
+            .unwrap_or_default();
         let scanner_remediation_block = html_scanner_remediation_block(finding, catalog);
         let finding_location_block = html_finding_location_block(finding, catalog);
         // The reasons are stored as English prose with no per-entry code, so
@@ -35973,7 +35957,7 @@ mod tests {
     }
 
     #[test]
-    fn html_finding_card_states_absent_scanner_remediation_instead_of_inventing_one() {
+    fn html_finding_card_omits_absent_scanner_remediation_instead_of_inventing_one() {
         let catalog = HtmlReportCatalog {
             locale: crate::export::ReportLocale::En,
         };
@@ -36003,8 +35987,7 @@ mod tests {
             verification_guidance: None,
         };
         let html = html_scanner_remediation_block(&finding, catalog);
-        assert!(html.contains("The scanner did not provide a specific fix for this finding."));
-        assert!(!html.contains("must remain reachable"));
+        assert!(html.is_empty());
     }
 
     #[test]
@@ -36097,7 +36080,7 @@ mod tests {
     }
 
     #[test]
-    fn html_finding_card_states_absent_verification_instead_of_inventing_one() {
+    fn html_finding_card_omits_absent_verification_instead_of_inventing_one() {
         const ABSENT_VERIFICATION: &str = "No verification step was retained for this result.";
         const FABRICATED_VERIFICATION: &str = "After the change, rerun the same check and confirm this problem is no longer reported.";
         const RETAINED_VERIFICATION: &str =
@@ -36194,7 +36177,8 @@ mod tests {
         };
 
         let absent_html = render("");
-        assert!(absent_html.contains(ABSENT_VERIFICATION));
+        assert!(!absent_html.contains(ABSENT_VERIFICATION));
+        assert!(!absent_html.contains("How to confirm the fix"));
         assert!(!absent_html.contains(FABRICATED_VERIFICATION));
 
         let retained_html = render(RETAINED_VERIFICATION);

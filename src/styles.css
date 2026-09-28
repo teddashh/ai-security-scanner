@@ -2595,7 +2595,6 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
 .priority-card {
   position: relative;
   display: flex;
-  min-height: 300px;
   align-items: flex-start;
   flex-direction: column;
   padding: 14px;

@@ -3811,7 +3811,7 @@ test("target-controlled raw evidence text is never relabelled as remediation gui
     .toContain("Use the product-owned safe next step.");
 });
 
-test("a Nuclei-shaped finding keeps scanner remediation on the first layer and admits missing verification", () => {
+test("a priority card leads with the action and keeps missing details out of the first layer", () => {
   const { container } = renderReport(report("partial", {
     actual: completedCoverage(),
     findings: [frozenFinding({
@@ -3827,8 +3827,9 @@ test("a Nuclei-shaped finding keeps scanner remediation on the first layer and a
   const card = container.querySelector<HTMLElement>(".priority-card");
   expect(card!.textContent).toContain("Correct the service or configuration named by this check.");
   expect(card!.textContent).not.toContain("must remain reachable");
+  expect(card!.textContent).not.toContain("Not retained by this result");
   expect(card!.textContent).toContain("Restrict access to the phpMyAdmin panel.");
-  expect(card!.textContent).toContain("No verification step was retained for this result.");
+  expect(card!.textContent).not.toContain("No verification step was retained for this result.");
 
   openFirstFinding(container);
   const advice = container.querySelector<HTMLElement>(".detail-section--advice");
@@ -3920,7 +3921,7 @@ test("a finding backed only by a timed-out check is told to confirm in Tradition
   expect(container.textContent).not.toContain("Correct the service or configuration named by this check.");
 });
 
-test("a finding without scanner remediation says the scanner did not provide a specific fix", () => {
+test("a finding without scanner remediation keeps that limit in details, behind its next action", () => {
   const { container } = renderReport(report("partial", {
     findings: [frozenFinding({
       family: "source_code",
@@ -3929,8 +3930,11 @@ test("a finding without scanner remediation says the scanner did not provide a s
   }));
 
   const card = container.querySelector<HTMLElement>(".priority-card");
-  expect(card!.textContent).toContain("The scanner did not provide a specific fix for this finding.");
+  expect(card!.textContent).not.toContain("The scanner did not provide a specific fix for this finding.");
   expect(card!.textContent).not.toContain("After the change, rerun the same check");
+  openFirstFinding(container);
+  expect(container.querySelector<HTMLElement>(".detail-section--advice")!.textContent)
+    .toContain("The scanner did not provide a specific fix for this finding.");
 });
 
 test("a scanner-reported fixed version is the finding's specific fix on the first layer and in the advice", () => {

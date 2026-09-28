@@ -2885,6 +2885,7 @@ export function FindingsPage({
             {topFindings.map((finding, index) => {
               const scannerRemediations = uniqueScannerRemediations(finding.evidence);
               const scannerFixedVersions = uniqueScannerFixedVersions(finding.evidence);
+              const locations = locationsFor(finding);
               return (
               <button
                 key={finding.id}
@@ -2912,7 +2913,9 @@ export function FindingsPage({
                 })}</p>
                 <span className="priority-card__target">
                   <span><strong>{text(copy.affectedTarget)}</strong>{finding.assetName}</span>
-                  <span><strong>{text(copy.reportedLocation)}</strong>{locationsFor(finding).join(locale === "en" ? "; " : "；") || text(copy.locationUnavailable)}</span>
+                  {locations.length > 0 && (
+                    <span><strong>{text(copy.reportedLocation)}</strong>{locations.join(locale === "en" ? "; " : "；")}</span>
+                  )}
                 </span>
                 <span className="priority-card__guidance">
                   <span>
@@ -2933,18 +2936,12 @@ export function FindingsPage({
                   {scannerFixedVersions.length > 0 && (
                     <span><strong>{text(copy.fixedVersion)}</strong>{scannerFixedVersions.join(" · ")}</span>
                   )}
-                  {scannerRemediations.length === 0 && scannerFixedVersions.length === 0 && (
+                  {finding.verificationGuidance && (
                     <span>
-                      <strong>{text(copy.scannerRemediation)}</strong>
-                      {text(copy.scannerRemediationMissing)}
+                      <strong>{text(copy.verifyFix)}</strong>
+                      {findingVerificationSentence(locale, finding.verificationGuidance, finding.title)}
                     </span>
                   )}
-                  <span>
-                    <strong>{text(copy.verifyFix)}</strong>
-                    {finding.verificationGuidance
-                      ? findingVerificationSentence(locale, finding.verificationGuidance, finding.title)
-                      : text(copy.verifyFallback)}
-                  </span>
                 </span>
                 <span className="priority-card__action">{text(copy.reviewEvidence)} <Icon name="arrow" size={15} /></span>
               </button>
