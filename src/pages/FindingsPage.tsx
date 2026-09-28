@@ -1036,6 +1036,16 @@ const isCoverageLossGap = (
   gap: BeginnerMasterReport["coverageGaps"][number],
 ): boolean => !isRecordNoteGap(gap);
 
+// Native completed tasks freeze one coordinate per asset that actually ran.
+// The task can later become `tested_partial` when a sibling lacks evidence;
+// only its exact recorded coordinate proves this asset completed a check.
+const hasCompletedCoordinateForAsset = (
+  check: BeginnerMasterReport["actual"]["checks"][number],
+  assetId: string,
+): boolean => check.testedDimensions.some((dimension) =>
+  dimension.dimension === "completed check-to-target coordinate"
+  && dimension.value.endsWith(` on asset ${assetId}`));
+
 const assetNextActionDestination = {
   // The retry lives in Progress.
   retry_check: "progress",
@@ -1202,14 +1212,21 @@ function AssetResultBoard({
     const checks = report.actual.checks.filter((check) =>
       check.targetAssetIds.includes(target.assetId));
     const completedSecurityChecks = checks.filter((check) =>
-      check.status === "tested_complete" && checkResultKind(check) === "security_check");
+      checkResultKind(check) === "security_check"
+      && (check.status === "tested_complete"
+        || (check.status === "tested_partial"
+          && hasCompletedCoordinateForAsset(check, target.assetId))));
     const gaps = report.coverageGaps.filter((gap) =>
       gap.targetAssetIds.includes(target.assetId));
     const firstApplicableGap = gaps.find((gap) =>
       isCoverageLossGap(gap) && gap.kind !== "excluded");
     const firstIncompleteGap = gaps.find((gap) =>
       isCoverageLossGap(gap) && incompleteGapKinds.has(gap.kind));
-    const hasIncompleteOutcome = checks.some((check) => incompleteCheckStatuses.has(check.status));
+    const hasIncompleteOutcome = checks.some((check) =>
+      incompleteCheckStatuses.has(check.status)
+      && !(check.status === "tested_partial"
+        && checkResultKind(check) === "security_check"
+        && hasCompletedCoordinateForAsset(check, target.assetId)));
     // A deliberate `not_tested` boundary attached to a completed task (for
     // example SSH host-level exclusions) does not erase that task's bounded
     // result. A different requested task that did not run still makes the

@@ -1162,15 +1162,21 @@ test.each([
   expect(scopeTitle.scrollIntoView).toHaveBeenCalledTimes(destination === "scope" ? 1 : 0);
 });
 
-test("a partial security result with no complete check follows the recorded setup action", () => {
+test("a native-shaped partial multi-asset security check keeps the tested sibling's clean result", () => {
   const base = cleanCompletedReport();
   const partial: BeginnerMasterReport = {
     ...base,
     state: { ...base.state, summary: "partial" },
     requested: {
       ...base.requested,
-      targets: [...base.requested.targets, {
-        assetId: "asset-2",
+      targets: [{
+        assetId: "asset-10",
+        label: "checked-host.example",
+        assetKind: "host",
+        labelAvailability: "recorded",
+        assetKindAvailability: "recorded",
+      }, {
+        assetId: "asset-1",
         label: "unresponsive-host.example",
         assetKind: "host",
         labelAvailability: "recorded",
@@ -1183,19 +1189,19 @@ test("a partial security result with no complete check follows the recorded setu
         taskId: "greenbone-task",
         checkId: "greenbone",
         resultKind: "security_check",
-        targetAssetIds: ["asset-1", "asset-2"],
+        targetAssetIds: ["asset-10", "asset-1"],
         status: "tested_partial",
         testedDimensions: [{
-          dimension: "Greenbone remote vulnerability scan",
-          value: "greenbone on asset asset-1",
-          observation: "Some security checks returned results.",
+          dimension: "completed check-to-target coordinate",
+          value: "greenbone on asset asset-10",
+          observation: "The security check completed for this target.",
         }],
       }],
     },
     coverageGaps: [{
       kind: "failed",
       taskId: "greenbone-task",
-      targetAssetIds: ["asset-2"],
+      targetAssetIds: ["asset-1"],
       dimension: "greenbone: target response",
       reason: "The target did not answer all approved checks.",
       nextActionCode: "review_scope_and_retry",
@@ -1221,7 +1227,7 @@ test("a partial security result with no complete check follows the recorded setu
       ...baseRun.engineRuns[0]!,
       id: "greenbone-task",
       status: "partial",
-      assetIds: ["asset-1", "asset-2"],
+      assetIds: ["asset-10", "asset-1"],
     }],
   };
   const onOpenProgress = vi.fn();
@@ -1231,6 +1237,14 @@ test("a partial security result with no complete check follows the recorded setu
   expect(container.querySelector(".page-header")?.textContent).not.toContain("Completed security checks reported no problems");
   expect(container.querySelector(".page-header .eyebrow")?.textContent).toBe("SCAN RESULTS");
   expect(container.querySelector(".empty-state")).toBeNull();
+  const rows = Array.from(container.querySelectorAll<HTMLElement>(".asset-result-row"));
+  expect(rows).toHaveLength(2);
+  const checkedRow = rows.find((row) => row.textContent?.includes("checked-host.example"));
+  const failedRow = rows.find((row) => row.textContent?.includes("unresponsive-host.example"));
+  expect(checkedRow?.dataset.assetResult).toBe("no_problems_completed");
+  expect(checkedRow?.textContent).toContain("1 completed security check reported no problems");
+  expect(failedRow?.dataset.assetResult).toBe("incomplete_failed");
+  expect(failedRow?.textContent).toContain("Review the approved target and retry");
   const action = container.querySelector<HTMLButtonElement>("[data-report-outcome='incomplete'] .button--primary");
   expect(action?.textContent).toContain("Open scan setup");
   fireEvent.click(action!);
