@@ -14852,8 +14852,28 @@ fn html_check_status_on_asset(
         {
             return CoverageDimensionStatus::TimedOut;
         }
-        if gaps.any(|gap| gap.kind == CoverageGapKind::Cancelled) {
+        if gaps
+            .clone()
+            .any(|gap| gap.kind == CoverageGapKind::Cancelled)
+        {
             return CoverageDimensionStatus::Cancelled;
+        }
+        // Native Nuclei omits the coordinate for a sibling without saved
+        // security-template execution and records an Unavailable gap for it.
+        // The shared task's partial state is not evidence this website ran.
+        if check.effective_result_kind() == CheckResultKind::SecurityCheck
+            && check
+                .tested_dimensions
+                .iter()
+                .any(|dimension| dimension.dimension == "completed check-to-target coordinate")
+            && gaps.any(|gap| {
+                matches!(
+                    gap.kind,
+                    CoverageGapKind::Unavailable | CoverageGapKind::NotTested
+                )
+            })
+        {
+            return CoverageDimensionStatus::NotTested;
         }
         return check.status;
     }
@@ -39384,6 +39404,148 @@ mod tests {
         assert!(zh_checked_row.contains("1 項已完成檢查未發現問題"));
         assert!(zh_failed_row.starts_with("incomplete-failed"));
         assert!(zh_failed_row.contains("未完成或失敗"));
+    }
+
+    #[test]
+    fn html_export_marks_an_unproven_nuclei_sibling_not_tested() {
+        let fixture = Fixture::new();
+        let start = mixed_environment_start(&fixture);
+        let checked_id = start.website_asset_id.clone();
+        let plan = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &start.case_id,
+                start.decisions,
+                start.request,
+            )
+            .unwrap();
+        let mut case = fixture.service().show_case(&start.case_id).unwrap();
+        let sibling_id = "unproven-website".to_owned();
+        let mut sibling = case
+            .assets
+            .iter()
+            .find(|asset| asset.id == checked_id)
+            .unwrap()
+            .clone();
+        sibling.id = sibling_id.clone();
+        sibling.name = "https://unproven.example.test:443".into();
+        for identifier in &mut sibling.identifiers {
+            if identifier.value.contains("portal.example.test") {
+                identifier.value = identifier
+                    .value
+                    .replace("portal.example.test", "unproven.example.test");
+            }
+        }
+        if let Some(origin) = sibling.metadata.get_mut(DECLARED_WEB_ORIGIN_METADATA_KEY) {
+            *origin = Value::String("https://unproven.example.test:443".into());
+        }
+        case.assets.push(sibling.clone());
+        let run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == plan.scan_run.id)
+            .unwrap();
+        run.report_asset_snapshots.push(ReportAssetSnapshot {
+            asset: sibling,
+            disposition: ReportAssetDisposition::RequestedForScan,
+        });
+        let mut sibling_grant = run
+            .scope_grant_snapshots
+            .iter()
+            .find(|grant| grant.asset_id == checked_id)
+            .unwrap()
+            .clone();
+        sibling_grant.id = "unproven-website-grant".into();
+        sibling_grant.asset_id = sibling_id.clone();
+        let external_scope = sibling_grant.external_scope.as_mut().unwrap();
+        external_scope.id = "unproven-website-external-scope".into();
+        external_scope.asset_id = sibling_id.clone();
+        external_scope.target = CanonicalTarget::Hostname("unproven.example.test".into());
+        run.scope_grant_ids.push(sibling_grant.id.clone());
+        run.scope_grant_snapshots.push(sibling_grant);
+        let mut shared = run
+            .engine_runs
+            .iter()
+            .find(|task| task.engine_id == "nuclei")
+            .unwrap()
+            .clone();
+        shared.asset_ids = vec![checked_id.clone(), sibling_id.clone()];
+        shared.status = EngineRunStatus::Completed;
+        shared.phase = "completed".into();
+        shared.progress_percent = 100;
+        shared.started_at = Some(run.created_at);
+        shared.finished_at = Some(run.created_at + Duration::seconds(1));
+        shared.exit_code = Some(0);
+        shared.security_template_executions = vec![crate::domain::SecurityTemplateExecution {
+            asset_id: checked_id.clone(),
+            result_count: 1,
+        }];
+        run.engine_runs = vec![shared];
+        run.completed_at = Some(run.created_at + Duration::seconds(1));
+        case.status = CaseStatus::ReadyForHandoff;
+
+        let report = build_beginner_master_report(&case, &plan.scan_run.id).unwrap();
+        let check = report.actual.checks.first().unwrap();
+        assert_eq!(check.status, CoverageDimensionStatus::TestedPartial);
+        assert!(check.tested_dimensions.iter().any(|dimension| {
+            dimension.dimension == "completed check-to-target coordinate"
+                && dimension
+                    .value
+                    .ends_with(&format!(" on asset {checked_id}"))
+        }));
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.kind == CoverageGapKind::Unavailable
+                && gap.dimension == "nuclei: website execution evidence"
+                && gap.target_asset_ids == [sibling_id.clone()]
+        }));
+
+        let html = String::from_utf8(
+            html_report_bytes(
+                &case,
+                &plan.scan_run.id,
+                &ExportOptions {
+                    redaction: RedactionProfile::None,
+                    ..ExportOptions::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let labels = readable_target_labels(
+            &report,
+            HtmlReportCatalog::new(crate::export::ReportLocale::En),
+        );
+        let asset_row = |label: &str| {
+            html.split("<tr class=\"asset-result asset-result--")
+                .skip(1)
+                .filter_map(|part| part.split_once("</tr>").map(|(row, _)| row))
+                .find(|row| row.contains(label))
+                .unwrap_or_else(|| panic!("no exported asset row for {label}"))
+        };
+        assert!(
+            asset_row(&html_escape_breakable_identity(&labels[&checked_id]))
+                .starts_with("no-problems-completed")
+        );
+        assert!(
+            asset_row(&html_escape_breakable_identity(&labels[&sibling_id]))
+                .starts_with("incomplete-failed")
+        );
+        let matrix = html
+            .split_once("<h2>What each check reached</h2>")
+            .and_then(|(_, rest)| rest.split_once("</section>"))
+            .map(|(section, _)| section)
+            .expect("the exported asset coverage matrix");
+        let matrix_row = |label: &str| {
+            let marker = format!("<tr><th scope=\"row\">{}</th>", html_escape(label));
+            matrix
+                .split_once(&marker)
+                .and_then(|(_, rest)| rest.split_once("</tr>"))
+                .map(|(row, _)| row.to_owned())
+                .unwrap_or_else(|| panic!("no matrix row for {label}"))
+        };
+        assert!(matrix_row(&labels[&checked_id]).contains("matrix-cell--complete"));
+        assert!(matrix_row(&labels[&sibling_id]).contains("matrix-cell--not-tested"));
+        assert!(html.contains("This run completed 1 check on 4 assets."));
     }
 
     #[test]
