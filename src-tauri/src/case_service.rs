@@ -14794,6 +14794,25 @@ fn html_check_completed_on_asset(check: &ActualCheck, asset_id: &str) -> bool {
     }
 }
 
+/// The cover and the asset rows use the same check-to-asset unit. A shared
+/// partial task can therefore contribute a completed result for one asset
+/// even though it contributes no fully completed task to coverage counts.
+fn html_completed_asset_check_count(report: &BeginnerMasterReport) -> usize {
+    let scoped = report
+        .requested
+        .targets
+        .iter()
+        .flat_map(|target| {
+            report.actual.checks.iter().filter(move |check| {
+                check.target_asset_ids.contains(&target.asset_id)
+                    && html_check_status_on_asset(report, check, &target.asset_id)
+                        == CoverageDimensionStatus::TestedComplete
+            })
+        })
+        .count();
+    scoped.max(report.coverage_counts.tested_complete)
+}
+
 /// These native rows describe dimensions outside the selected bounded
 /// profile. A partial shared task must not make them look like unfinished
 /// work on an asset with its own completed coordinate.
@@ -14808,6 +14827,54 @@ fn html_bounded_profile_limit(gap: &CoverageGap) -> bool {
                 | "Telnet authentication, implementation, and endpoint host coverage"
                 | "device product and firmware vulnerability coverage"
         )
+}
+
+fn html_check_status_on_asset(
+    report: &BeginnerMasterReport,
+    check: &ActualCheck,
+    asset_id: &str,
+) -> CoverageDimensionStatus {
+    if check.status != CoverageDimensionStatus::TestedPartial {
+        return check.status;
+    }
+    let mut gaps = report.coverage_gaps.iter().filter(|gap| {
+        gap.class != CoverageGapClass::RecordNote
+            && gap.task_id.as_deref() == Some(check.task_id.as_str())
+            && gap.target_asset_ids.iter().any(|id| id == asset_id)
+    });
+    if !html_check_completed_on_asset(check, asset_id) {
+        if gaps.clone().any(|gap| gap.kind == CoverageGapKind::Failed) {
+            return CoverageDimensionStatus::Failed;
+        }
+        if gaps
+            .clone()
+            .any(|gap| gap.kind == CoverageGapKind::TimedOut)
+        {
+            return CoverageDimensionStatus::TimedOut;
+        }
+        if gaps.any(|gap| gap.kind == CoverageGapKind::Cancelled) {
+            return CoverageDimensionStatus::Cancelled;
+        }
+        return check.status;
+    }
+    let missing = gaps.any(|gap| {
+        matches!(
+            gap.kind,
+            CoverageGapKind::Failed
+                | CoverageGapKind::TimedOut
+                | CoverageGapKind::Cancelled
+                | CoverageGapKind::Truncated
+                | CoverageGapKind::Unavailable
+                | CoverageGapKind::Unattributed
+        ) || (gap.kind == CoverageGapKind::NotTested
+            && gap.next_action_code != NextActionCode::NoActionUnlessScopeChanges
+            && !html_bounded_profile_limit(gap))
+    });
+    if missing {
+        CoverageDimensionStatus::TestedPartial
+    } else {
+        CoverageDimensionStatus::TestedComplete
+    }
 }
 
 /// The step a state implies, written once for the whole table.
@@ -14997,16 +15064,17 @@ fn html_executive_summary(
         .map(|(_, count)| *count)
         .sum::<usize>();
 
+    let completed_asset_checks = html_completed_asset_check_count(report);
     let scanned = match catalog.locale {
         crate::export::ReportLocale::ZhHant => format!(
             "本輪對 {} 項資產完成了 {} 項檢查。",
             catalog.format_number(report.requested.targets.len()),
-            catalog.format_number(counts.tested_complete),
+            catalog.format_number(completed_asset_checks),
         ),
         _ => format!(
             "This run completed {} {} on {} {}.",
-            catalog.format_number(counts.tested_complete),
-            if counts.tested_complete == 1 {
+            catalog.format_number(completed_asset_checks),
+            if completed_asset_checks == 1 {
                 "check"
             } else {
                 "checks"
@@ -15032,10 +15100,24 @@ fn html_executive_summary(
                 && check.effective_result_kind() == CheckResultKind::SecurityCheck
         })
     };
+    let completed_security_asset_checks = report
+        .requested
+        .targets
+        .iter()
+        .flat_map(|target| {
+            report.actual.checks.iter().filter(move |check| {
+                check.target_asset_ids.contains(&target.asset_id)
+                    && check.effective_result_kind() == CheckResultKind::SecurityCheck
+                    && html_check_status_on_asset(report, check, &target.asset_id)
+                        == CoverageDimensionStatus::TestedComplete
+            })
+        })
+        .count();
     let found = if problem_count == 0 {
         match (
             catalog.locale,
-            security_checks(CoverageDimensionStatus::TestedComplete),
+            security_checks(CoverageDimensionStatus::TestedComplete)
+                || completed_security_asset_checks > 0,
             security_checks(CoverageDimensionStatus::TestedPartial),
         ) {
             (_, false, false) => None,
@@ -15045,7 +15127,7 @@ fn html_executive_summary(
             (crate::export::ReportLocale::ZhHant, false, true) => {
                 Some("部分完成的檢查沒有回報任何問題。")
             }
-            (_, true, _) if counts.tested_complete == 1 => {
+            (_, true, _) if completed_security_asset_checks.max(counts.tested_complete) == 1 => {
                 Some("The check that completed reported no problems.")
             }
             (_, true, _) => Some("The checks that completed reported no problems."),
@@ -16193,9 +16275,10 @@ fn html_coverage_matrix(
                 // Worst outcome wins the cell: an engine that completed one
                 // task and failed another against the same asset has not
                 // covered it, and showing the completed half would say it had.
+                let asset_status = html_check_status_on_asset(report, check, &target.asset_id);
                 status = Some(match status {
-                    Some(existing) if worse_status(existing, check.status) => existing,
-                    _ => check.status,
+                    Some(existing) if worse_status(existing, asset_status) => existing,
+                    _ => asset_status,
                 });
             }
             let (slug, mark, text) = matrix_cell_state(status, catalog);
@@ -19594,7 +19677,7 @@ fn html_report_bytes(
                 ),
                 (
                     catalog.text("Checks completed", "已完成檢查"),
-                    report_counts.tested_complete,
+                    html_completed_asset_check_count(&report),
                     "complete",
                 ),
                 (
@@ -39211,12 +39294,65 @@ mod tests {
         let checked_row = asset_row(&html, &html_escape_breakable_identity(&labels[&checked_id]));
         let failed_row = asset_row(&html, &html_escape_breakable_identity(&labels[&failed_id]));
         assert!(
+            html.contains("This run completed 1 check on 3 assets."),
+            "{html}"
+        );
+        assert!(!html.contains("This run completed 0 checks"));
+        assert!(html.contains("The check that completed reported no problems."));
+        assert!(html.contains(
+            "<span class=\"kpi__value\">1</span><span class=\"kpi__label\">Checks completed</span>"
+        ));
+        assert!(
             checked_row.starts_with("no-problems-completed"),
             "{checked_row}"
         );
         assert!(checked_row.contains("No problems in 1 completed check"));
         assert!(failed_row.starts_with("incomplete-failed"), "{failed_row}");
         assert!(failed_row.contains("Incomplete or failed"));
+        let matrix = html
+            .split_once("<h2>What each check reached</h2>")
+            .and_then(|(_, rest)| rest.split_once("</section>"))
+            .map(|(section, _)| section)
+            .expect("the exported asset coverage matrix");
+        let matrix_row = |label: &str| {
+            let marker = format!("<tr><th scope=\"row\">{}</th>", html_escape(label));
+            matrix
+                .split_once(&marker)
+                .and_then(|(_, rest)| rest.split_once("</tr>"))
+                .map(|(row, _)| row.to_owned())
+                .unwrap_or_else(|| panic!("no matrix row for {label}"))
+        };
+        assert!(matrix_row(&labels[&checked_id]).contains("matrix-cell--complete"));
+        assert!(matrix_row(&labels[&failed_id]).contains("matrix-cell--failed"));
+
+        let mut missing_own_check = report.clone();
+        missing_own_check.coverage_gaps.push(CoverageGap {
+            kind: CoverageGapKind::NotTested,
+            class: CoverageGapClass::CoverageLoss,
+            task_id: Some(check.task_id.clone()),
+            target_asset_ids: vec![checked_id.clone()],
+            dimension: "SMTP TLS negotiation-dependent coverage".into(),
+            reason: "This scan did not record every selected TLS check.".into(),
+            next_action_code: NextActionCode::PreserveVisibleLimitation,
+            next_action: "Run a separately approved TLS assessment.".into(),
+            unattributed: None,
+        });
+        let catalog = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let missing_summary = html_executive_summary(
+            &missing_own_check,
+            &missing_own_check.coverage_counts,
+            0,
+            catalog,
+        );
+        assert!(missing_summary.contains("This run completed 0 checks on 3 assets."));
+        let missing_board = html_asset_result_section(&missing_own_check, &labels, catalog);
+        assert!(
+            asset_row(
+                &missing_board,
+                &html_escape_breakable_identity(&labels[&checked_id])
+            )
+            .starts_with("incomplete-failed")
+        );
 
         let zh_html = String::from_utf8(
             html_report_bytes(
@@ -39243,6 +39379,7 @@ mod tests {
             &zh_html,
             &html_escape_breakable_identity(&zh_labels[&failed_id]),
         );
+        assert!(zh_html.contains("本輪對 3 項資產完成了 1 項檢查。"));
         assert!(zh_checked_row.starts_with("no-problems-completed"));
         assert!(zh_checked_row.contains("1 項已完成檢查未發現問題"));
         assert!(zh_failed_row.starts_with("incomplete-failed"));

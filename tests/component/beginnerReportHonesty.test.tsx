@@ -1189,12 +1189,16 @@ test("a native-shaped partial multi-asset security check keeps the tested siblin
         taskId: "greenbone-task",
         checkId: "greenbone",
         resultKind: "security_check",
-        targetAssetIds: ["asset-10", "asset-1"],
+        targetAssetIds: ["asset-1", "asset-10"],
         status: "tested_partial",
         testedDimensions: [{
           dimension: "completed check-to-target coordinate",
           value: "greenbone on asset asset-10",
           observation: "The security check completed for this target.",
+        }, {
+          dimension: "Greenbone remote vulnerability scan",
+          value: "greenbone on asset asset-10",
+          observation: "The selected security profile ran for this host.",
         }],
       }],
     },
@@ -1235,7 +1239,7 @@ test("a native-shaped partial multi-asset security check keeps the tested siblin
       ...baseRun.engineRuns[0]!,
       id: "greenbone-task",
       status: "partial",
-      assetIds: ["asset-10", "asset-1"],
+      assetIds: ["asset-1", "asset-10"],
     }],
   };
   const onOpenProgress = vi.fn();
@@ -1251,6 +1255,11 @@ test("a native-shaped partial multi-asset security check keeps the tested siblin
   const failedRow = rows.find((row) => row.textContent?.includes("unresponsive-host.example"));
   expect(checkedRow?.dataset.assetResult).toBe("no_problems_completed");
   expect(checkedRow?.textContent).toContain("1 completed security check reported no problems");
+  const testedScope = container.querySelector<HTMLElement>(".report-first-layer-scope");
+  expect(testedScope?.textContent).toContain("greenbone completed for checked-host.example");
+  expect(testedScope?.textContent).toContain("checked-host.example · greenbone · Completed");
+  expect(testedScope?.textContent).not.toContain("checked-host.example · greenbone · Partly completed");
+  expect(testedScope?.textContent).not.toContain("asset-10");
   expect(failedRow?.dataset.assetResult).toBe("incomplete_failed");
   expect(failedRow?.textContent).toContain("Review the approved target and retry");
   const action = container.querySelector<HTMLButtonElement>("[data-report-outcome='incomplete'] .button--primary");
@@ -1273,6 +1282,15 @@ test("a native-shaped partial multi-asset security check keeps the tested siblin
   const tlsRow = Array.from(missingTls.container.querySelectorAll<HTMLElement>(".asset-result-row"))
     .find((row) => row.textContent?.includes("checked-host.example"));
   expect(tlsRow?.dataset.assetResult).toBe("incomplete_failed");
+  expect(missingTls.container.querySelector(".report-first-layer-scope")?.textContent)
+    .toContain("checked-host.example · greenbone · Partly completed");
+
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const zh = renderReport(partial, [], [run]);
+  const zhScope = zh.container.querySelector(".report-first-layer-scope")?.textContent;
+  expect(zhScope).toContain("已對 checked-host.example 完成 greenbone");
+  expect(zhScope).not.toContain("checked-host.example · greenbone · 部分完成");
+  expect(zhScope).not.toContain("asset-10");
 });
 
 const emptyState = (container: HTMLElement): HTMLElement => {
@@ -2317,6 +2335,7 @@ test("a partly completed check with a coordinate dimension keeps its own status 
       checks: [{
         taskId: "task-mail",
         checkId: mailEngineId,
+        resultKind: "security_check",
         targetAssetIds: [assetId],
         status: "tested_partial",
         testedDimensions: [{
@@ -2328,6 +2347,15 @@ test("a partly completed check with a coordinate dimension keeps its own status 
       networkScopes: [],
       unavailableDimensions: [],
     },
+    coverageGaps: [{
+      kind: "not_tested",
+      taskId: "task-mail",
+      targetAssetIds: [assetId],
+      dimension: "SMTP TLS negotiation-dependent coverage",
+      reason: "This scan did not record every selected TLS check.",
+      nextActionCode: "preserve_visible_limitation",
+      nextAction: "Run a separately approved TLS assessment.",
+    }],
     coverageCounts: counts({ testedPartial: 1 }),
   }), [], [run]);
 

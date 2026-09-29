@@ -1058,6 +1058,30 @@ const hasCompletedCoordinateForAsset = (
   dimension.dimension === "completed check-to-target coordinate"
   && dimension.value.endsWith(` on asset ${assetId}`));
 
+const dimensionRefersToAsset = (value: string, assetId: string): boolean =>
+  [" on asset ", " for asset "].some((marker) => value.split(marker).slice(1)
+    .some((rest) => rest === assetId || rest.startsWith(`${assetId} `)));
+
+const checkStatusForAsset = (
+  report: BeginnerMasterReport,
+  check: BeginnerMasterReport["actual"]["checks"][number],
+  assetId: string,
+): BeginnerCoverageStatus => {
+  if (check.status !== "tested_partial"
+    || checkResultKind(check) !== "security_check"
+    || !hasCompletedCoordinateForAsset(check, assetId)) return check.status;
+  const missingCoverage = report.coverageGaps.some((gap) =>
+    gap.taskId === check.taskId
+    && gap.targetAssetIds.includes(assetId)
+    && isCoverageLossGap(gap)
+    && (incompleteGapKinds.has(gap.kind)
+      || (gap.kind === "not_tested"
+        && gap.nextActionCode !== "no_action_unless_scope_changes"
+        && !(gap.nextActionCode === "preserve_visible_limitation"
+          && boundedProfileLimitDimensions.has(gap.dimension)))));
+  return missingCoverage ? "tested_partial" : "tested_complete";
+};
+
 const assetNextActionDestination = {
   // The retry lives in Progress.
   retry_check: "progress",
@@ -1745,9 +1769,8 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
   }
   // A completed check-to-target coordinate names one asset per check; a run
   // with several catalog checks bound to the same asset otherwise repeats
-  // "completed for <asset>" once per check. Only `tested_complete` groups: a
-  // partial/failed/etc. sibling keeps its own line because "X completed for
-  // T · Partly completed" would contradict itself. Each group is reserved a
+  // "completed for <asset>" once per check. A partial shared task joins a
+  // group only for an asset whose own check coordinate completed. Each group is reserved a
   // slot (and rendered) at the position where its first member would have
   // been emitted, so the relative order with every other line is preserved.
   const completedCoordinateGroups = new Map<string, {
@@ -1773,19 +1796,18 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
       continue;
     }
     for (const dimension of check.testedDimensions) {
+      const dimensionAssetId = check.targetAssetIds.find((assetId) =>
+        dimensionRefersToAsset(dimension.value, assetId));
+      const dimensionTarget = dimensionAssetId ? targetById.get(dimensionAssetId)?.label : undefined;
+      const dimensionStatus = dimensionAssetId
+        ? checkStatusForAsset(report, check, dimensionAssetId)
+        : check.status;
       if (dimension.dimension === "completed check-to-target coordinate") {
-        const coordinatePrefix = `${check.checkId} on asset `;
-        const coordinateAssetId = dimension.value.startsWith(coordinatePrefix)
-          ? dimension.value.slice(coordinatePrefix.length)
-          : undefined;
-        const resolvedTarget = coordinateAssetId && check.targetAssetIds.includes(coordinateAssetId)
-          ? report.requested.targets.find((candidate) => candidate.assetId === coordinateAssetId)?.label
-          : undefined;
-        if (check.status === "tested_complete") {
-          const groupKey = resolvedTarget ? `asset:${coordinateAssetId}` : unresolvedCoordinateGroupKey;
+        if (dimensionStatus === "tested_complete") {
+          const groupKey = dimensionTarget ? `asset:${dimensionAssetId}` : unresolvedCoordinateGroupKey;
           let group = completedCoordinateGroups.get(groupKey);
           if (!group) {
-            group = { labels: [], resolvedTarget, index: testedCheckSummaries.length };
+            group = { labels: [], resolvedTarget: dimensionTarget, index: testedCheckSummaries.length };
             completedCoordinateGroups.set(groupKey, group);
             testedCheckSummaries.push("");
           }
@@ -1793,17 +1815,18 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
           continue;
         }
         testedCheckSummaries.push(
-          `${resolvedTarget ? `${resolvedTarget} · ` : ""}${checkLabel} · ${text(testedStatusCopy(check.status))}`,
+          `${dimensionTarget ? `${dimensionTarget} · ` : ""}${checkLabel} · ${text(testedStatusCopy(dimensionStatus))}`,
         );
         continue;
       }
+      const dimensionPrefix = dimensionAssetId
+        ? `${dimensionTarget ? `${dimensionTarget} · ` : ""}${checkLabel} · ${text(testedStatusCopy(dimensionStatus))}`
+        : checkPrefix;
+      const displayedValue = testedValueText(engine, dimension.dimension, dimension.value, locale);
       testedCheckSummaries.push(
-        `${checkPrefix} · ${localizedCoverageDimension(dimension.dimension, locale)}${firstLayerLabelSeparator}${testedValueText(
-          engine,
-          dimension.dimension,
-          dimension.value,
-          locale,
-        )}`,
+        `${dimensionPrefix} · ${localizedCoverageDimension(dimension.dimension, locale)}${firstLayerLabelSeparator}${dimensionAssetId && dimensionTarget
+          ? displayedValue.replaceAll(dimensionAssetId, dimensionTarget)
+          : displayedValue}`,
       );
     }
   }
