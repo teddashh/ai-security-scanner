@@ -1082,6 +1082,15 @@ const checkStatusForAsset = (
   return missingCoverage ? "tested_partial" : "tested_complete";
 };
 
+// Keep the desktop count in the same check-to-asset unit as HTML Results.
+// Older reports without exact target binding retain their stored task count.
+const completedAssetCheckCount = (report: BeginnerMasterReport): number => Math.max(
+  report.coverageCounts.testedComplete,
+  report.requested.targets.reduce((count, target) => count + report.actual.checks.filter((check) =>
+    check.targetAssetIds.includes(target.assetId)
+    && checkStatusForAsset(report, check, target.assetId) === "tested_complete").length, 0),
+);
+
 const assetNextActionDestination = {
   // The retry lives in Progress.
   retry_check: "progress",
@@ -1571,6 +1580,7 @@ const projectReportFindings = (
 
 function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport; run?: ScanRun }) {
   const { locale, text, formatDateTime, formatNumber } = useI18n();
+  const completedChecks = completedAssetCheckCount(report);
   // Scoped to the `report-first-layer-scope` paragraph only: a label there is
   // followed by ": " in English but by a full-width "：" with no following
   // space in Traditional Chinese (an ASCII colon plus space is not how a
@@ -1889,7 +1899,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         ? text(copy.recordedExclusionsUnavailable, { count: formatNumber(report.coverageCounts.excluded) })
         : text(copy.noRecordedExclusions);
   const countBreakdown = [
-    [copy.testedComplete, report.coverageCounts.testedComplete],
+    [copy.testedComplete, completedChecks],
     [copy.testedPartialCount, report.coverageCounts.testedPartial],
     [copy.failedCount, report.coverageCounts.failed],
     [copy.timedOutCount, report.coverageCounts.timedOut],
@@ -1949,7 +1959,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
       <details className="page-secondary-feature report-scope-disclosure">
         <summary>
           {text(copy.scopeLimitations)} · {text(hasManualReview ? copy.scopeAttentionSummary : copy.scopeSummary, {
-            completed: formatNumber(report.coverageCounts.testedComplete),
+            completed: formatNumber(completedChecks),
             gaps: formatNumber(coverageLossGaps.length),
           })}
         </summary>
@@ -1962,12 +1972,12 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         />
         <MetricCard
           label={text(copy.testedComplete)}
-          value={formatNumber(report.coverageCounts.testedComplete)}
+          value={formatNumber(completedChecks)}
           detail={report.coverageCounts.testedPartial > 0
             ? text(copy.testedStatusPartial)
             : text(copy.testedStatusComplete)}
           icon="check"
-          tone={report.coverageCounts.testedComplete > 0 ? "accent" : "default"}
+          tone={completedChecks > 0 ? "accent" : "default"}
         />
         <MetricCard
           label={text(coverageItemsLabel)}

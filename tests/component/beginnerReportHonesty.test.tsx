@@ -1260,6 +1260,11 @@ test("a native-shaped partial multi-asset security check keeps the tested siblin
   expect(testedScope?.textContent).toContain("checked-host.example · greenbone · Completed");
   expect(testedScope?.textContent).not.toContain("checked-host.example · greenbone · Partly completed");
   expect(testedScope?.textContent).not.toContain("asset-10");
+  const completedMetric = Array.from(container.querySelectorAll<HTMLElement>(".metric-card"))
+    .find((card) => card.querySelector(".metric-card__label")?.textContent === "Checks completed");
+  expect(completedMetric?.querySelector(".metric-card__value")?.textContent).toBe("1");
+  expect(container.querySelector(".report-scope-disclosure summary")?.textContent).toContain("1 completed");
+  expect(container.querySelector(".report-count-breakdown")?.textContent).toContain("1 Checks completed");
   expect(failedRow?.dataset.assetResult).toBe("incomplete_failed");
   expect(failedRow?.textContent).toContain("Review the approved target and retry");
   const action = container.querySelector<HTMLButtonElement>("[data-report-outcome='incomplete'] .button--primary");
@@ -1291,6 +1296,10 @@ test("a native-shaped partial multi-asset security check keeps the tested siblin
   expect(zhScope).toContain("已對 checked-host.example 完成 greenbone");
   expect(zhScope).not.toContain("checked-host.example · greenbone · 部分完成");
   expect(zhScope).not.toContain("asset-10");
+  const zhCompletedMetric = Array.from(zh.container.querySelectorAll<HTMLElement>(".metric-card"))
+    .find((card) => card.querySelector(".metric-card__label")?.textContent === "完成的檢查");
+  expect(zhCompletedMetric?.querySelector(".metric-card__value")?.textContent).toBe("1");
+  expect(zh.container.querySelector(".report-scope-disclosure summary")?.textContent).toContain("完成 1 項");
 });
 
 const emptyState = (container: HTMLElement): HTMLElement => {
