@@ -15085,25 +15085,64 @@ fn html_executive_summary(
         .sum::<usize>();
 
     let completed_asset_checks = html_completed_asset_check_count(report);
+    let completed_assets = report
+        .requested
+        .targets
+        .iter()
+        .filter(|target| {
+            report.actual.checks.iter().any(|check| {
+                check.target_asset_ids.contains(&target.asset_id)
+                    && html_check_status_on_asset(report, check, &target.asset_id)
+                        == CoverageDimensionStatus::TestedComplete
+            })
+        })
+        .count();
     let scanned = match catalog.locale {
+        crate::export::ReportLocale::ZhHant if completed_assets > 0 => format!(
+            "本輪包含 {} 項資產；其中 {} 項資產有已完成的檢查，共 {} 項。",
+            catalog.format_number(report.requested.targets.len()),
+            catalog.format_number(completed_assets),
+            catalog.format_number(completed_asset_checks),
+        ),
         crate::export::ReportLocale::ZhHant => format!(
-            "本輪對 {} 項資產完成了 {} 項檢查。",
+            "本輪包含 {} 項資產，完成 {} 項檢查。",
             catalog.format_number(report.requested.targets.len()),
             catalog.format_number(completed_asset_checks),
         ),
-        _ => format!(
-            "This run completed {} {} on {} {}.",
+        _ if completed_assets > 0 => format!(
+            "This run included {} {}. It completed {} {} for {} {}.",
+            catalog.format_number(report.requested.targets.len()),
+            if report.requested.targets.len() == 1 {
+                "asset"
+            } else {
+                "assets"
+            },
             catalog.format_number(completed_asset_checks),
             if completed_asset_checks == 1 {
                 "check"
             } else {
                 "checks"
             },
+            catalog.format_number(completed_assets),
+            if completed_assets == 1 {
+                "asset"
+            } else {
+                "assets"
+            },
+        ),
+        _ => format!(
+            "This run included {} {}. It completed {} {}.",
             catalog.format_number(report.requested.targets.len()),
             if report.requested.targets.len() == 1 {
                 "asset"
             } else {
                 "assets"
+            },
+            catalog.format_number(completed_asset_checks),
+            if completed_asset_checks == 1 {
+                "check"
+            } else {
+                "checks"
             },
         ),
     };
@@ -38206,7 +38245,9 @@ mod tests {
         let zh = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
         let en_summary = html_executive_summary(&report, &report.coverage_counts, 1, en);
         let zh_summary = html_executive_summary(&report, &report.coverage_counts, 1, zh);
-        assert!(en_summary.contains("This run completed 1 check on 1 asset."));
+        assert!(
+            en_summary.contains("This run included 1 asset. It completed 1 check for 1 asset.")
+        );
         assert!(
             en_summary.contains("1 problem was found, and it is not Critical or High severity.")
         );
@@ -38418,7 +38459,7 @@ mod tests {
         let zh_summary = html_executive_summary(&report, &report.coverage_counts, 0, zh);
         assert!(
             en_summary.contains(
-                "<p>This run completed 1 check on 1 asset.</p><p>The check that completed reported no problems.</p>"
+                "<p>This run included 1 asset. It completed 1 check for 1 asset.</p><p>The check that completed reported no problems.</p>"
             ),
             "{en_summary}"
         );
@@ -38439,7 +38480,8 @@ mod tests {
         let en_summary = html_executive_summary(&report, &report.coverage_counts, 0, en);
         let zh_summary = html_executive_summary(&report, &report.coverage_counts, 0, zh);
         assert!(
-            en_summary.contains("<p>This run completed 1 check on 1 asset.</p>"),
+            en_summary
+                .contains("<p>This run included 1 asset. It completed 1 check for 1 asset.</p>"),
             "{en_summary}"
         );
         assert!(!en_summary.contains("reported no problems"), "{en_summary}");
@@ -38518,7 +38560,7 @@ mod tests {
         let zh = render(&case, crate::export::ReportLocale::ZhHant);
         let (en_summary, zh_summary) = (summary(&en), summary(&zh));
         assert!(
-            en_summary.contains("<p>This run completed 0 checks on 1 asset.</p>"),
+            en_summary.contains("<p>This run included 1 asset. It completed 0 checks.</p>"),
             "{en_summary}"
         );
         assert!(
@@ -38527,7 +38569,7 @@ mod tests {
         );
         assert!(!en_summary.contains("reported no problems"), "{en_summary}");
         assert!(
-            zh_summary.contains("<p>本輪對 1 項資產完成了 0 項檢查。</p>"),
+            zh_summary.contains("<p>本輪包含 1 項資產，完成 0 項檢查。</p>"),
             "{zh_summary}"
         );
         assert!(!zh_summary.contains("沒有回報任何問題"), "{zh_summary}");
@@ -39314,10 +39356,10 @@ mod tests {
         let checked_row = asset_row(&html, &html_escape_breakable_identity(&labels[&checked_id]));
         let failed_row = asset_row(&html, &html_escape_breakable_identity(&labels[&failed_id]));
         assert!(
-            html.contains("This run completed 1 check on 3 assets."),
+            html.contains("This run included 3 assets. It completed 1 check for 1 asset."),
             "{html}"
         );
-        assert!(!html.contains("This run completed 0 checks"));
+        assert!(!html.contains("It completed 0 checks"));
         assert!(html.contains("The check that completed reported no problems."));
         assert!(html.contains(
             "<span class=\"kpi__value\">1</span><span class=\"kpi__label\">Checks completed</span>"
@@ -39364,7 +39406,7 @@ mod tests {
             0,
             catalog,
         );
-        assert!(missing_summary.contains("This run completed 0 checks on 3 assets."));
+        assert!(missing_summary.contains("This run included 3 assets. It completed 0 checks."));
         let missing_board = html_asset_result_section(&missing_own_check, &labels, catalog);
         assert!(
             asset_row(
@@ -39399,7 +39441,7 @@ mod tests {
             &zh_html,
             &html_escape_breakable_identity(&zh_labels[&failed_id]),
         );
-        assert!(zh_html.contains("本輪對 3 項資產完成了 1 項檢查。"));
+        assert!(zh_html.contains("本輪包含 3 項資產；其中 1 項資產有已完成的檢查，共 1 項。"));
         assert!(zh_checked_row.starts_with("no-problems-completed"));
         assert!(zh_checked_row.contains("1 項已完成檢查未發現問題"));
         assert!(zh_failed_row.starts_with("incomplete-failed"));
@@ -39545,7 +39587,21 @@ mod tests {
         };
         assert!(matrix_row(&labels[&checked_id]).contains("matrix-cell--complete"));
         assert!(matrix_row(&labels[&sibling_id]).contains("matrix-cell--not-tested"));
-        assert!(html.contains("This run completed 1 check on 4 assets."));
+        assert!(html.contains("This run included 4 assets. It completed 1 check for 1 asset."));
+        let zh_html = String::from_utf8(
+            html_report_bytes(
+                &case,
+                &plan.scan_run.id,
+                &ExportOptions {
+                    redaction: RedactionProfile::None,
+                    locale: crate::export::ReportLocale::ZhHant,
+                    ..ExportOptions::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(zh_html.contains("本輪包含 4 項資產；其中 1 項資產有已完成的檢查，共 1 項。"));
     }
 
     #[test]
