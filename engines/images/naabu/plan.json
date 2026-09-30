@@ -15,7 +15,7 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-naabu",
-    "tag": "2.6.1-6",
+    "tag": "2.6.1-7",
     "digest": "sha256:4195916c522f5b64476acaac67c8694cc42c078f549744e9310f211d5f32dffc"
   },
   "publication": {
@@ -63,13 +63,13 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/naabu/Dockerfile",
-    "sha256": "sha256:9f88cc02a4b225b05148eda85285e50fbb1bef1bcb812cd5471f1f125b26dead"
+    "sha256": "sha256:936c5e7b82213ed8238d34c1af214a9e2bd33fd9ca9bc584db28910080995d11"
   },
   "wrapper": {
     "required": true,
     "strategy": "Validate each FrozenExternalScope grant and invoke one bounded TCP connect scan per grant without accepting arbitrary scanner arguments.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:c93e90835cc37e860fabbb1406fae6f32dbf9d713c4f44f2c4a6e976feb18a1f"
+    "launcher_sha256": "sha256:2aed1acdd32cd0a7db5ac911d43457647b0e93cbbca2f051080bed4eccd6a847"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",

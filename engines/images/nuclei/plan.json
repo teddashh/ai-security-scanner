@@ -15,7 +15,7 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-nuclei",
-    "tag": "3.11.1-6",
+    "tag": "3.11.1-7",
     "digest": "sha256:2bd1e15a0ffdf450cdf85acd75bca2fb7f3cf4f9bc1d1fce80d5f8a659bc7488"
   },
   "publication": {
@@ -72,13 +72,13 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/nuclei/Dockerfile",
-    "sha256": "sha256:689c7516ff49ff3908d4d0e50cecf6084743231f5c951a502e43ffc54e9ebf8c"
+    "sha256": "sha256:f74ae54b9b43a25361ac208dcfacdc2c649205779ed8c6e6e95672d249938472"
   },
   "wrapper": {
     "required": true,
     "strategy": "Validate each FrozenExternalScope grant and either its legacy exact template allowlist or the pinned upstream automatic web profile before invoking one bounded scan per exact grant port.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:c93e90835cc37e860fabbb1406fae6f32dbf9d713c4f44f2c4a6e976feb18a1f"
+    "launcher_sha256": "sha256:2aed1acdd32cd0a7db5ac911d43457647b0e93cbbca2f051080bed4eccd6a847"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",

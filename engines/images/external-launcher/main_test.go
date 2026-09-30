@@ -618,7 +618,7 @@ func TestNucleiAutomaticProfileHasNoFullTreeFallback(t *testing.T) {
 	joined := " " + strings.Join(plan.Args, " ") + " "
 	for _, required := range []string{
 		" -automatic-scan ", " -update-template-dir ", " -template-id ",
-		" -jsonl ", " -matcher-status ",
+		" -jsonl ", " -matcher-status ", " -disable-clustering ",
 		" -response-size-read 4194304 ", " -payload-concurrency 1 ", " -max-time ",
 	} {
 		if !strings.Contains(joined, required) {
@@ -674,6 +674,9 @@ func TestNucleiAutomaticProfileHasNoFullTreeFallback(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(legacy.Args, " "), "automatic-scan") {
 		t.Fatal("legacy explicit-template mode was silently changed to automatic scan")
+	}
+	if !containsString(legacy.Args, "-disable-clustering") {
+		t.Fatal("legacy explicit-template mode can report synthetic cluster IDs")
 	}
 }
 

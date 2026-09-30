@@ -15,7 +15,7 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-httpx",
-    "tag": "1.10.0-6",
+    "tag": "1.10.0-7",
     "digest": "sha256:37468b8bbecc6438681d9fd7e87d09d9375fc496b1c53a369fa95ddef62bc6d4"
   },
   "publication": {
@@ -63,13 +63,13 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/httpx/Dockerfile",
-    "sha256": "sha256:9e3b7bb63bdd0db96d5a395f93c7510105f43ebb171abf239711739b0b5592d5"
+    "sha256": "sha256:86ea6874a3164a1ce8eb5fc78bd86bff97b6ac4c9456d4f19a5bf259775bb2a6"
   },
   "wrapper": {
     "required": true,
     "strategy": "Validate each FrozenExternalScope grant and invoke one bounded URL probe per exact grant port without accepting arbitrary scanner arguments.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:c93e90835cc37e860fabbb1406fae6f32dbf9d713c4f44f2c4a6e976feb18a1f"
+    "launcher_sha256": "sha256:2aed1acdd32cd0a7db5ac911d43457647b0e93cbbca2f051080bed4eccd6a847"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",

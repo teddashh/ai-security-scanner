@@ -1868,6 +1868,10 @@ func nucleiInvocation(unit scanUnit, proxy, output string, environment []string,
 		"-response-size-read", strconv.Itoa(4 * 1024 * 1024),
 		"-response-size-save", strconv.Itoa(1024 * 1024),
 		"-jsonl", "-matcher-status",
+		// Upstream clustering reports a shared request's non-match under a
+		// synthetic cluster-<hash> ID. Run each admitted template on its own so
+		// every record keeps the exact upstream ID the allowlist check expects.
+		"-disable-clustering",
 		"-no-httpx", "-no-interactsh", "-disable-redirects",
 		"-no-stdin", "-disable-update-check",
 		"-omit-raw", "-omit-template", "-silent", "-no-color",
