@@ -7,7 +7,7 @@ Use the shortest path that matches the task.
 ## Use the product
 
 - [Getting started](getting-started.md) — install the currently offered Linux desktop app and complete the first scan.
-- [Agent Skills](getting-started.md#use-with-an-agent-skill) — use Claude Code or Codex to build from source, scan selected targets, and save the final report.
+- [Agent Skills](getting-started.md#use-with-an-agent-skill) — use Claude Code or Codex on the same computer to check readiness, guide a scan in the app, and save the final report.
 - [Scanning scope](scanning-scope.md) — exact target boundaries, profiles, and scanner behavior.
 - [Results and exports](results-and-exports.md) — interpret priorities, coverage, evidence, and saved reports.
 

@@ -7,7 +7,7 @@
 ## 使用產品
 
 - [開始使用](getting-started.zh-TW.md)：安裝目前提供的 Linux 桌面程式並完成第一次掃描。
-- [Agent Skills](getting-started.zh-TW.md#透過-agent-skill-使用)：透過 Claude Code 或 Codex 從原始碼建置、掃描選定目標並保存最終報告。
+- [Agent Skills](getting-started.zh-TW.md#透過-agent-skill-使用)：在同一台電腦上透過 Claude Code 或 Codex 確認能否掃描、引導在應用程式中掃描，並保存最終報告。
 - [掃描範圍](scanning-scope.zh-TW.md)：精確目標界線、掃描設定與引擎行為。
 - [結果與匯出](results-and-exports.zh-TW.md)：閱讀優先順序、涵蓋範圍、證據與保存報告。
 

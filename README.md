@@ -26,7 +26,7 @@ Follow **New scan → Review and start → Scan progress → Results**. From Res
 
 ## Use with Claude Code or Codex
 
-Agent Skills are a first-class way to build and operate the product from a source checkout. Both agents use the same operating instructions and the product's desktop/typed CLI interfaces:
+Scans run in the desktop app on your own computer, and **Start** is a button in the app window. An agent on the same computer can check that the computer is ready to scan, guide you through the app, explain the results, and save the HTML report. Both agents use the same skill:
 
 | Agent | Repository skill |
 | --- | --- |
@@ -35,9 +35,9 @@ Agent Skills are a first-class way to build and operate the product from a sourc
 
 Open this checkout in either agent and ask:
 
-> Use the ai-security-scanner skill to build this checkout, help me select a local project folder, run its applicable security checks, and save the final HTML report.
+> Use the ai-security-scanner skill to check that this computer can scan, guide me through a scan in the app, and save the final HTML report.
 
-The skill guides **build → target selection and authorization → scan → final report**. You choose the scope; the product selects applicable upstream checks. See [setup and build commands](docs/getting-started.md#use-with-an-agent-skill).
+A cloud agent or a sandboxed session cannot scan. The skill checks this first and stops with one next step instead of troubleshooting. You choose the scope; the product selects applicable upstream checks. See [what the agent needs and how to build from source](docs/getting-started.md#use-with-an-agent-skill).
 
 ## One report for every selected asset
 

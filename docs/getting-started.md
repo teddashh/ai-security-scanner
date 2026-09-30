@@ -44,15 +44,19 @@ Launch **ai-security-scanner** after installation. The app prepares its local sc
 
 ## Use with an Agent Skill
 
-To build current `main` yourself, including Grype repository scanning, use a source checkout. The source build-to-scan commands below have been exercised on Linux.
+Scans run in the desktop app on your own computer, and **Start** is a button in the app window. An agent on the same computer can check that the computer is ready to scan, guide you through the app, explain the results, and save the HTML report through the app's CLI.
 
-Open the checkout in **Claude Code** or **Codex** and use the repository's `ai-security-scanner` skill: [Claude Code instructions](../.claude/skills/ai-security-scanner/SKILL.md) · [Codex instructions](../.codex/skills/ai-security-scanner/SKILL.md). Both copies provide the same build-and-operate entry point through the product interfaces.
+Open this checkout in **Claude Code** or **Codex** and use the repository's `ai-security-scanner` skill: [Claude Code instructions](../.claude/skills/ai-security-scanner/SKILL.md) · [Codex instructions](../.codex/skills/ai-security-scanner/SKILL.md). Both copies are the same.
 
 Ask the agent:
 
-> Use the ai-security-scanner skill to build this checkout, help me select a local project folder, run its applicable security checks, and save the final HTML report.
+> Use the ai-security-scanner skill to check that this computer can scan, guide me through a scan in the app, and save the final HTML report.
 
-With Node.js 24 or newer, Rust 1.98, and Tauri's Linux development dependencies installed, the source build commands are:
+The agent needs to run on the same computer as the app, with network access and permission to run the app's CLI. A cloud agent or a sandboxed session cannot scan; the skill checks this first and stops with one next step instead of troubleshooting. You select the folders and confirm any network targets in the app; the skill does not authorize anything for you. Active work stays in **Scan progress**; **Results** and **Share results** use a finished or stopped run.
+
+### Build from source
+
+With Node.js 24 or newer, Rust 1.98, and Tauri's Linux development dependencies installed, build and open the app from this checkout:
 
 ```sh
 npm ci
@@ -61,7 +65,7 @@ cargo build --locked --no-default-features --features cli --bin ai-security-scan
 npm run tauri dev
 ```
 
-The agent can inspect runtime readiness, guide target selection, run the applicable checks through the product, and explain/export the final report. You select the local folder and confirm any network targets; the skill does not supply authorization for you. Active work stays in **Scan progress**; **Results** and **Share results** use a finished or stopped run.
+These commands have been exercised on Linux.
 
 The current Grype image pin is `0.117.0-4` (`sha256:56b0d675…`), with local repository vulnerability results recorded. See [the exact pin and result](engine-catalog.md#grype-repository-support).
 

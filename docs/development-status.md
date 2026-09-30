@@ -15,8 +15,9 @@ product behavior, and the [current product review](product-audit.md) tracks the 
   testing disclosures](releasing.md#current-candidate-and-publication-hold).
 - The latest published release, [v0.2.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.2.0),
   remains an earlier Linux `.deb`-only build; it does not describe the current multi-OS candidate.
-- The Linux source build-to-scan path is available through the paired repository
-  [Agent Skills](getting-started.md#use-with-an-agent-skill), using the same product interfaces.
+- The paired repository [Agent Skills](getting-started.md#use-with-an-agent-skill) check that a
+  computer can scan, guide a scan in the desktop app, and save its report; the Linux source build
+  is documented there.
 - The engine catalog contains 25 records: 22 integrated, runnable engines and 3 experimental
   integrations that remain non-runnable.
 - Repository, website/API, infrastructure, cloud, Microsoft 365, and Kubernetes paths use bounded

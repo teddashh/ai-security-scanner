@@ -44,15 +44,19 @@
 
 ## 透過 Agent Skill 使用
 
-若要自行建置目前 `main` 的實作，包含 Grype 專案掃描，請使用原始碼 checkout。下列從原始碼建置到掃描的指令已在 Linux 實測。
+掃描在你自己電腦上的桌面應用程式中執行，**開始**是應用程式視窗裡的按鈕。在同一台電腦上的 Agent 可以確認這台電腦能否掃描、引導你操作應用程式、解讀結果，並透過應用程式的 CLI 保存 HTML 報告。
 
-在 **Claude Code** 或 **Codex** 開啟本儲存庫，使用其中的 `ai-security-scanner` skill：[Claude Code 指引](../.claude/skills/ai-security-scanner/SKILL.md) · [Codex 指引](../.codex/skills/ai-security-scanner/SKILL.md)。兩份內容相同，都透過產品介面提供建置與操作入口。
+在 **Claude Code** 或 **Codex** 開啟本儲存庫，使用其中的 `ai-security-scanner` skill：[Claude Code 指引](../.claude/skills/ai-security-scanner/SKILL.md) · [Codex 指引](../.codex/skills/ai-security-scanner/SKILL.md)。兩份內容相同。
 
 可以這樣要求 Agent：
 
-> 使用 ai-security-scanner skill 建置這份原始碼，協助我選擇本機專案資料夾、執行適用的安全檢查，並保存最終 HTML 報告。
+> 使用 ai-security-scanner skill 確認這台電腦可以掃描，引導我在應用程式中完成一次掃描，並保存最終 HTML 報告。
 
-安裝 Node.js 24 或更新版本、Rust 1.98，以及 Tauri 的 Linux 開發相依套件後，可使用以下建置指令：
+Agent 必須和應用程式在同一台電腦上執行，並且能連網、能執行應用程式的 CLI。雲端 Agent 或沙箱中的工作階段無法掃描；Skill 會先確認這點，不符合時直接停下並給出一個下一步，不會反覆排錯。資料夾由你選定，網路目標也由你在應用程式中確認，Skill 不會代為授權。執行中的工作顯示於**掃描進度**，**掃描結果**與**分享結果**使用已結束或停止的掃描。
+
+### 從原始碼建置
+
+安裝 Node.js 24 或更新版本、Rust 1.98，以及 Tauri 的 Linux 開發相依套件後，用以下指令從本儲存庫建置並開啟應用程式：
 
 ```sh
 npm ci
@@ -61,7 +65,7 @@ cargo build --locked --no-default-features --features cli --bin ai-security-scan
 npm run tauri dev
 ```
 
-Agent 可檢查執行環境、引導選擇目標、透過產品執行適用檢查，再解讀與匯出最終報告。本機資料夾由你選定，網路目標授權也由你確認，Skill 不會代為授權。執行中的工作顯示於**掃描進度**，**掃描結果**與**分享結果**使用已結束或停止的掃描。
+這些指令已在 Linux 實測。
 
 目前 Grype 映像固定為 `0.117.0-4`（`sha256:56b0d675…`），已有本機專案弱點掃描結果。詳見[完整釘選與實測紀錄](engine-catalog.md#grype-repository-support)。
 
