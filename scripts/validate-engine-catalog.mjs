@@ -19,9 +19,9 @@ const managedCloudIds = new Set([
   "steampipe",
 ]);
 const managedExternalContracts = new Map([
-  ["naabu", { tag: "2.6.1-5" }],
-  ["httpx", { tag: "1.10.0-5" }],
-  ["nuclei", { tag: "3.11.1-5" }],
+  ["naabu", { tag: "2.6.1-6" }],
+  ["httpx", { tag: "1.10.0-6" }],
+  ["nuclei", { tag: "3.11.1-6" }],
 ]);
 const managedExternalIds = new Set(managedExternalContracts.keys());
 const naabuLauncherJournalVersion = 2;

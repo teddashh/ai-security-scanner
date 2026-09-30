@@ -21,9 +21,9 @@ const MAX_SBOM_BYTES = 16 * 1024 * 1024;
 const MAX_CHECKSUM_BYTES = 64 * 1024;
 
 const ENGINE_SPECS = Object.freeze({
-  naabu: { tag: "2.6.1-5", group: "external", workflow: ".github/workflows/engine-images-external.yml" },
-  httpx: { tag: "1.10.0-5", group: "external", workflow: ".github/workflows/engine-images-external.yml" },
-  nuclei: { tag: "3.11.1-5", group: "external", workflow: ".github/workflows/engine-images-external.yml" },
+  naabu: { tag: "2.6.1-6", group: "external", workflow: ".github/workflows/engine-images-external.yml" },
+  httpx: { tag: "1.10.0-6", group: "external", workflow: ".github/workflows/engine-images-external.yml" },
+  nuclei: { tag: "3.11.1-6", group: "external", workflow: ".github/workflows/engine-images-external.yml" },
   semgrep: { tag: "1.174.0-3", group: "local", workflow: ".github/workflows/engine-images-local-k8s.yml", smokeFiles: ["semgrep.json"] },
   trufflehog: { tag: "3.97.0-3", group: "local", workflow: ".github/workflows/engine-images-local-k8s.yml", smokeFiles: ["trufflehog.jsonl"] },
   trivy: {
@@ -43,7 +43,7 @@ const ENGINE_SPECS = Object.freeze({
   },
   scubagear: { tag: "1.8.0-6", group: "m365", workflow: ".github/workflows/engine-images-m365.yml" },
   maester: { tag: "2.0.0-7", group: "m365", workflow: ".github/workflows/engine-images-m365.yml" },
-  "egress-gateway": { tag: "1.0.0-1", group: "gateway", workflow: ".github/workflows/managed-egress-gateway-image.yml" },
+  "egress-gateway": { tag: "0.3.0-1", group: "gateway", workflow: ".github/workflows/managed-egress-gateway-image.yml" },
 });
 
 const PLATFORMS = ["linux/amd64", "linux/arm64"];

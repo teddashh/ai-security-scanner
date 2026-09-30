@@ -192,6 +192,33 @@ const RELEASE_COPY = new Map([
     },
   ],
   [
+    "0.3.0",
+    {
+      updaterNotes:
+        "Public test build for Windows, macOS, and Linux with refreshed website and internal-system scanners. Existing local cases and historical provenance remain intact.",
+      releaseNotes: [
+        "> **A public test build for Windows, macOS, and Linux.**",
+        "",
+        "ai-security-scanner 0.3.0 is a pre-release for trying the whole path on your own computer:",
+        "choose project folders, websites, and approved internal systems, start one scan, and read",
+        "one report organized by asset.",
+        "",
+        "Website and internal-system checks run on refreshed Nuclei, httpx, and naabu images. The",
+        "managed egress gateway now waits instead of refusing a connection over the rate limit,",
+        "answers a denied destination instead of closing silently, and records what it refused, so",
+        "the report names a check it cut short.",
+        "",
+        "The installers are not signed by Microsoft or Apple. On Windows, SmartScreen may warn",
+        "before the installer starts. On macOS, drag the app to Applications, then run this once in",
+        "Terminal before opening it; without it, macOS reports the app as damaged or from an",
+        "unidentified developer:",
+        "",
+        "    xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app",
+        "",
+      ],
+    },
+  ],
+  [
     "1.0.0",
     {
       updaterNotes:

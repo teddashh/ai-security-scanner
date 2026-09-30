@@ -31,9 +31,9 @@ const platformDigests = {
   "linux/arm64": `sha256:${"33".repeat(32)}`,
 };
 const specs = {
-  naabu: { tag: "2.6.1-5", group: "external" },
-  httpx: { tag: "1.10.0-5", group: "external" },
-  nuclei: { tag: "3.11.1-5", group: "external" },
+  naabu: { tag: "2.6.1-6", group: "external" },
+  httpx: { tag: "1.10.0-6", group: "external" },
+  nuclei: { tag: "3.11.1-6", group: "external" },
   semgrep: { tag: "1.174.0-3", group: "local", smokeFiles: ["semgrep.json"] },
   trufflehog: { tag: "3.97.0-3", group: "local", smokeFiles: ["trufflehog.jsonl"] },
   trivy: { tag: "0.74.0-4", group: "local", smokeFiles: ["trivy-oci.json", "trivy-library.json"] },
@@ -42,7 +42,7 @@ const specs = {
   "kube-bench": { tag: "0.16.0-4", group: "local", smokeFiles: ["kube-bench.json"] },
   scubagear: { tag: "1.8.0-6", group: "m365" },
   maester: { tag: "2.0.0-7", group: "m365" },
-  "egress-gateway": { tag: "1.0.0-1", group: "gateway" },
+  "egress-gateway": { tag: "0.3.0-1", group: "gateway" },
 };
 const workflows = {
   external: ".github/workflows/engine-images-external.yml",

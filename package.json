@@ -1,9 +1,9 @@
 {
   "name": "ai-security-scanner",
   "private": true,
-  "version": "1.0.0",
+  "version": "0.3.0",
   "release": {
-    "channel": "stable",
+    "channel": "prerelease",
     "target": "1.0.0"
   },
   "description": "One guided desktop app for security checks across websites, networks, code, IaC, cloud, containers, and Kubernetes.",

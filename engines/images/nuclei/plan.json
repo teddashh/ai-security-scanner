@@ -15,7 +15,7 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-nuclei",
-    "tag": "3.11.1-5",
+    "tag": "3.11.1-6",
     "digest": "sha256:2bd1e15a0ffdf450cdf85acd75bca2fb7f3cf4f9bc1d1fce80d5f8a659bc7488"
   },
   "publication": {
@@ -72,7 +72,7 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/nuclei/Dockerfile",
-    "sha256": "sha256:baa1055abeb434d6209c4318ab9850c5d74f4e09909cb9f8fde1fcc28d86215e"
+    "sha256": "sha256:689c7516ff49ff3908d4d0e50cecf6084743231f5c951a502e43ffc54e9ebf8c"
   },
   "wrapper": {
     "required": true,

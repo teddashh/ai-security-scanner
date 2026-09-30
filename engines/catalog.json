@@ -998,7 +998,7 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-naabu",
-      "tag": "2.6.1-5",
+      "tag": "2.6.1-6",
       "digest": "sha256:4195916c522f5b64476acaac67c8694cc42c078f549744e9310f211d5f32dffc",
       "signature_identity": null
     },
@@ -1149,7 +1149,7 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-httpx",
-      "tag": "1.10.0-5",
+      "tag": "1.10.0-6",
       "digest": "sha256:37468b8bbecc6438681d9fd7e87d09d9375fc496b1c53a369fa95ddef62bc6d4",
       "signature_identity": null
     },
@@ -1292,7 +1292,7 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-nuclei",
-      "tag": "3.11.1-5",
+      "tag": "3.11.1-6",
       "digest": "sha256:2bd1e15a0ffdf450cdf85acd75bca2fb7f3cf4f9bc1d1fce80d5f8a659bc7488",
       "signature_identity": null
     },

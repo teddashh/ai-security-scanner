@@ -15,7 +15,7 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-httpx",
-    "tag": "1.10.0-5",
+    "tag": "1.10.0-6",
     "digest": "sha256:37468b8bbecc6438681d9fd7e87d09d9375fc496b1c53a369fa95ddef62bc6d4"
   },
   "publication": {
@@ -63,7 +63,7 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/httpx/Dockerfile",
-    "sha256": "sha256:829a45f4124d3f74a710d90781d077e72c934919ac0208a9926b6eca3be2cf5c"
+    "sha256": "sha256:9e3b7bb63bdd0db96d5a395f93c7510105f43ebb171abf239711739b0b5592d5"
   },
   "wrapper": {
     "required": true,

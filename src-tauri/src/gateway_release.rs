@@ -7,7 +7,7 @@ const MANAGED_EGRESS_GATEWAY_MANIFEST: &str =
 const MANIFEST_SCHEMA_VERSION: &str = "1.0.0";
 const MANIFEST_MAX_BYTES: usize = 4 * 1024;
 const GATEWAY_IMAGE_REPOSITORY: &str = "ghcr.io/teddashh/ai-security-scanner-egress-gateway";
-const GATEWAY_PUBLICATION_TAG: &str = "1.0.0-1";
+const GATEWAY_PUBLICATION_TAG: &str = "0.3.0-1";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

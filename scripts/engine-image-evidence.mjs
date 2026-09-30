@@ -1309,7 +1309,7 @@ async function selfTest() {
       assert(responses.length > 0, "self-test registry client made an unexpected request");
       return responses.shift();
     };
-    const registryInputs = { image, tag: "1.0.0-1", username: "fixture", token: "fixture-token" };
+    const registryInputs = { image, tag: "0.3.0-1", username: "fixture", token: "fixture-token" };
     const present = await inspectGhcrTag({
       ...registryInputs,
       fetchImpl: scriptedFetch(
@@ -1441,7 +1441,7 @@ async function selfTest() {
     const gatewayPrepared = await createPreparedEvidence({
       engine: GATEWAY_SCRATCH_SBOM.engine,
       image: GATEWAY_SCRATCH_SBOM.image,
-      tag: "1.0.0-1",
+      tag: "0.3.0-1",
       indexDigest,
       sourceRevision,
       outputRoot: gatewayRoot,
@@ -1502,7 +1502,7 @@ async function selfTest() {
         normalizeGatewayScratchCycloneDx({
           engine: GATEWAY_SCRATCH_SBOM.engine,
           image: GATEWAY_SCRATCH_SBOM.image,
-          tag: "1.0.0-1",
+          tag: "0.3.0-1",
           platformDigest: gatewayDigest,
           sourceRevision,
           spdxDocument: fixtures.spdx,
@@ -1622,7 +1622,7 @@ async function selfTest() {
     const { manifest } = await createPreparedEvidence({
       engine,
       image,
-      tag: "1.0.0-1",
+      tag: "0.3.0-1",
       indexDigest,
       sourceRevision,
       outputRoot: root,
