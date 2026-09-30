@@ -14941,8 +14941,8 @@ fn html_asset_state_steps(
                 HtmlAssetResultStatus::IncompleteOrFailed => (
                     catalog.text("Incomplete or failed", "未完成或失敗"),
                     catalog.text(
-                        "open Review scanner status to finish or retry this asset's remaining checks",
-                        "請開啟「查看掃描工具狀態」完成或重試這個資產的其餘檢查",
+                        "finish or retry this asset's remaining checks in the app",
+                        "請在應用程式中完成或重試這個資產的其餘檢查",
                     ),
                 ),
                 HtmlAssetResultStatus::NotTested => (
@@ -16640,8 +16640,8 @@ fn html_asset_result_section(
                 action.push(' ');
             }
             action.push_str(catalog.text(
-                "Some checks are incomplete. Open Review scanner status to finish or retry them.",
-                "另有檢查尚未完成；請開啟「查看掃描工具狀態」完成或重試。",
+                "Some checks are incomplete. Finish or retry them in the app.",
+                "另有檢查尚未完成；請在應用程式中完成或重試。",
             ));
         }
         if action.is_empty() && !states_taking_their_own_step.contains(&status) {
@@ -38279,6 +38279,86 @@ mod tests {
         // not labelled like a field name.
         assert!(zh_steps.contains("</strong>，"), "{zh_steps}");
         assert!(!zh_steps.contains("</strong>："), "{zh_steps}");
+    }
+
+    /// An incomplete asset with no step of its own takes the shared state
+    /// line. The exported file has no desktop button, so that line describes
+    /// finishing or retrying the remaining checks in the app.
+    #[test]
+    fn html_state_step_for_an_incomplete_asset_describes_the_action_without_a_desktop_button() {
+        let fixture = Fixture::new();
+        let (mut report, _asset_id) =
+            one_asset_one_completed_check_report(&fixture, Severity::Medium);
+        report.findings.clear();
+        report.actual.checks[0].status = CoverageDimensionStatus::Failed;
+
+        let en = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let zh = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
+        let en_labels = readable_target_labels(&report, en);
+        let zh_labels = readable_target_labels(&report, zh);
+        let en_board = html_asset_result_section(&report, &en_labels, en);
+        let zh_board = html_asset_result_section(&report, &zh_labels, zh);
+
+        assert!(en_board.contains("asset-result asset-result--incomplete-failed"));
+        assert!(zh_board.contains("asset-result asset-result--incomplete-failed"));
+        assert!(!en_board.contains("<th scope=\"col\">What to do next</th>"));
+        assert!(!zh_board.contains("<th scope=\"col\">What to do next</th>"));
+        let en_steps = en_board
+            .split("class=\"asset-result-steps\">")
+            .nth(1)
+            .and_then(|rest| rest.split("</p>").next())
+            .expect("the English state steps");
+        let zh_steps = zh_board
+            .split("class=\"asset-result-steps\">")
+            .nth(1)
+            .and_then(|rest| rest.split("</p>").next())
+            .expect("the Chinese state steps");
+        assert_eq!(
+            en_steps,
+            "Next step: <strong>Incomplete or failed</strong> \u{2014} finish or retry this asset&#39;s remaining checks in the app."
+        );
+        assert_eq!(
+            zh_steps,
+            "下一步：<strong>未完成或失敗</strong>，請在應用程式中完成或重試這個資產的其餘檢查。"
+        );
+        assert!(!en_board.contains("Review scanner status"));
+        assert!(!en_board.contains("查看掃描工具狀態"));
+        assert!(!zh_board.contains("Review scanner status"));
+        assert!(!zh_board.contains("查看掃描工具狀態"));
+    }
+
+    /// A problem row that also has an unfinished check keeps its own note.
+    /// The exported file has no desktop button, so the note describes
+    /// finishing or retrying those checks in the app.
+    #[test]
+    fn html_problem_row_with_an_unfinished_check_describes_the_action_without_a_desktop_button() {
+        let fixture = Fixture::new();
+        let (mut report, _asset_id) =
+            one_asset_one_completed_check_report(&fixture, Severity::Medium);
+        let mut failed = report.actual.checks[0].clone();
+        failed.task_id = "task-failed".into();
+        failed.check_id = "trufflehog".into();
+        failed.status = CoverageDimensionStatus::Failed;
+        report.actual.checks.push(failed);
+
+        let en = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let zh = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
+        let en_labels = readable_target_labels(&report, en);
+        let zh_labels = readable_target_labels(&report, zh);
+        let en_board = html_asset_result_section(&report, &en_labels, en);
+        let zh_board = html_asset_result_section(&report, &zh_labels, zh);
+
+        assert!(en_board.contains("asset-result asset-result--problems-found"));
+        assert!(zh_board.contains("asset-result asset-result--problems-found"));
+        assert!(
+            en_board
+                .contains("<td>Some checks are incomplete. Finish or retry them in the app.</td>")
+        );
+        assert!(zh_board.contains("<td>另有檢查尚未完成；請在應用程式中完成或重試。</td>"));
+        assert!(!en_board.contains("Review scanner status"));
+        assert!(!en_board.contains("查看掃描工具狀態"));
+        assert!(!zh_board.contains("Review scanner status"));
+        assert!(!zh_board.contains("查看掃描工具狀態"));
     }
 
     /// When every problem is Critical or High, the summary says so instead of

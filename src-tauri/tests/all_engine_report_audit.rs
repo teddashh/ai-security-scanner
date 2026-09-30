@@ -2410,6 +2410,10 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             );
             assert!(!board.contains("Retry this check."));
             assert!(board.contains("Some checks are incomplete."));
+            assert!(
+                board.contains("Some checks are incomplete. Finish or retry them in the app."),
+                "{board}"
+            );
             let zh_board = &zh_html[zh_html
                 .find("<table class=\"asset-result-table\"")
                 .expect("the Chinese asset board")..];
@@ -2419,6 +2423,20 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 "{zh_board}"
             );
             assert!(!zh_board.contains("重試這項檢查。"));
+            assert!(
+                zh_board.contains("另有檢查尚未完成；請在應用程式中完成或重試。"),
+                "{zh_board}"
+            );
+            for html in [&ordered_html, &zh_html] {
+                assert!(
+                    !html.contains("Review scanner status"),
+                    "the exported report names a desktop-only control"
+                );
+                assert!(
+                    !html.contains("查看掃描工具狀態"),
+                    "the exported report names a desktop-only control"
+                );
+            }
 
             // Two frameworks put out of scope for the same reason share one
             // line. Given a bordered block each they printed the same sentence
