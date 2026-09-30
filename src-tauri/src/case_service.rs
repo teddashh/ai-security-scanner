@@ -16,10 +16,11 @@ use crate::artifact_store::{
 #[cfg(test)]
 use crate::beginner_report::ReportLifecycle;
 use crate::beginner_report::{
-    BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerInventoryItem, BeginnerInventoryItemKind,
-    BeginnerMasterReport, BeginnerReportSummary, CheckResultKind, CoverageDimensionStatus,
-    CoverageGap, CoverageGapClass, CoverageGapKind, DataAvailability, FindingSnapshotSource,
-    NextActionCode, ReportScanStage, RequestedLimitSource, finding_unconfirmed_by_coverage,
+    ActualCheck, BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerInventoryItem,
+    BeginnerInventoryItemKind, BeginnerMasterReport, BeginnerReportSummary, CheckResultKind,
+    CoverageDimensionStatus, CoverageGap, CoverageGapClass, CoverageGapKind, DataAvailability,
+    FindingSnapshotSource, NextActionCode, ReportScanStage, RequestedLimitSource,
+    finding_unconfirmed_by_coverage,
 };
 use crate::bootstrap::executor::list_bootstrap_cleanup_obligations;
 use crate::connectors::{
@@ -14776,6 +14777,126 @@ fn html_asset_result_rank(status: HtmlAssetResultStatus) -> u8 {
     }
 }
 
+/// A completed catalog task records one exact coordinate for each asset it
+/// actually checked. A sibling's failure can make the shared task partial
+/// without undoing that completed security result for this asset.
+fn html_check_completed_on_asset(check: &ActualCheck, asset_id: &str) -> bool {
+    if check.effective_result_kind() != CheckResultKind::SecurityCheck {
+        return false;
+    }
+    match check.status {
+        CoverageDimensionStatus::TestedComplete => true,
+        CoverageDimensionStatus::TestedPartial => check.tested_dimensions.iter().any(|dimension| {
+            dimension.dimension == "completed check-to-target coordinate"
+                && dimension.value.ends_with(&format!(" on asset {asset_id}"))
+        }),
+        _ => false,
+    }
+}
+
+/// The cover and the asset rows use the same check-to-asset unit. A shared
+/// partial task can therefore contribute a completed result for one asset
+/// even though it contributes no fully completed task to coverage counts.
+fn html_completed_asset_check_count(report: &BeginnerMasterReport) -> usize {
+    let scoped = report
+        .requested
+        .targets
+        .iter()
+        .flat_map(|target| {
+            report.actual.checks.iter().filter(move |check| {
+                check.target_asset_ids.contains(&target.asset_id)
+                    && html_check_status_on_asset(report, check, &target.asset_id)
+                        == CoverageDimensionStatus::TestedComplete
+            })
+        })
+        .count();
+    scoped.max(report.coverage_counts.tested_complete)
+}
+
+/// These native rows describe dimensions outside the selected bounded
+/// profile. A partial shared task must not make them look like unfinished
+/// work on an asset with its own completed coordinate.
+fn html_bounded_profile_limit(gap: &CoverageGap) -> bool {
+    gap.next_action_code == NextActionCode::PreserveVisibleLimitation
+        && matches!(
+            gap.dimension.as_str(),
+            "endpoint operating-system, package, application, and local-configuration coverage"
+                | "RDP implementation, authentication/NLA, and endpoint host coverage"
+                | "VNC implementation, authentication, and endpoint host coverage"
+                | "SMTP server behavior, implementation, and endpoint host coverage"
+                | "Telnet authentication, implementation, and endpoint host coverage"
+                | "device product and firmware vulnerability coverage"
+        )
+}
+
+fn html_check_status_on_asset(
+    report: &BeginnerMasterReport,
+    check: &ActualCheck,
+    asset_id: &str,
+) -> CoverageDimensionStatus {
+    if check.status != CoverageDimensionStatus::TestedPartial {
+        return check.status;
+    }
+    let mut gaps = report.coverage_gaps.iter().filter(|gap| {
+        gap.class != CoverageGapClass::RecordNote
+            && gap.task_id.as_deref() == Some(check.task_id.as_str())
+            && gap.target_asset_ids.iter().any(|id| id == asset_id)
+    });
+    if !html_check_completed_on_asset(check, asset_id) {
+        if gaps.clone().any(|gap| gap.kind == CoverageGapKind::Failed) {
+            return CoverageDimensionStatus::Failed;
+        }
+        if gaps
+            .clone()
+            .any(|gap| gap.kind == CoverageGapKind::TimedOut)
+        {
+            return CoverageDimensionStatus::TimedOut;
+        }
+        if gaps
+            .clone()
+            .any(|gap| gap.kind == CoverageGapKind::Cancelled)
+        {
+            return CoverageDimensionStatus::Cancelled;
+        }
+        // Native Nuclei omits the coordinate for a sibling without saved
+        // security-template execution and records an Unavailable gap for it.
+        // The shared task's partial state is not evidence this website ran.
+        if check.effective_result_kind() == CheckResultKind::SecurityCheck
+            && check
+                .tested_dimensions
+                .iter()
+                .any(|dimension| dimension.dimension == "completed check-to-target coordinate")
+            && gaps.any(|gap| {
+                matches!(
+                    gap.kind,
+                    CoverageGapKind::Unavailable | CoverageGapKind::NotTested
+                )
+            })
+        {
+            return CoverageDimensionStatus::NotTested;
+        }
+        return check.status;
+    }
+    let missing = gaps.any(|gap| {
+        matches!(
+            gap.kind,
+            CoverageGapKind::Failed
+                | CoverageGapKind::TimedOut
+                | CoverageGapKind::Cancelled
+                | CoverageGapKind::Truncated
+                | CoverageGapKind::Unavailable
+                | CoverageGapKind::Unattributed
+        ) || (gap.kind == CoverageGapKind::NotTested
+            && gap.next_action_code != NextActionCode::NoActionUnlessScopeChanges
+            && !html_bounded_profile_limit(gap))
+    });
+    if missing {
+        CoverageDimensionStatus::TestedPartial
+    } else {
+        CoverageDimensionStatus::TestedComplete
+    }
+}
+
 /// The step a state implies, written once for the whole table.
 ///
 /// Every asset in a state takes the same step from it, so a column carrying
@@ -14963,25 +15084,65 @@ fn html_executive_summary(
         .map(|(_, count)| *count)
         .sum::<usize>();
 
+    let completed_asset_checks = html_completed_asset_check_count(report);
+    let completed_assets = report
+        .requested
+        .targets
+        .iter()
+        .filter(|target| {
+            report.actual.checks.iter().any(|check| {
+                check.target_asset_ids.contains(&target.asset_id)
+                    && html_check_status_on_asset(report, check, &target.asset_id)
+                        == CoverageDimensionStatus::TestedComplete
+            })
+        })
+        .count();
     let scanned = match catalog.locale {
-        crate::export::ReportLocale::ZhHant => format!(
-            "本輪對 {} 項資產完成了 {} 項檢查。",
+        crate::export::ReportLocale::ZhHant if completed_assets > 0 => format!(
+            "本輪包含 {} 項資產；其中 {} 項資產有已完成的檢查，共 {} 項。",
             catalog.format_number(report.requested.targets.len()),
-            catalog.format_number(counts.tested_complete),
+            catalog.format_number(completed_assets),
+            catalog.format_number(completed_asset_checks),
         ),
-        _ => format!(
-            "This run completed {} {} on {} {}.",
-            catalog.format_number(counts.tested_complete),
-            if counts.tested_complete == 1 {
-                "check"
-            } else {
-                "checks"
-            },
+        crate::export::ReportLocale::ZhHant => format!(
+            "本輪包含 {} 項資產，完成 {} 項檢查。",
+            catalog.format_number(report.requested.targets.len()),
+            catalog.format_number(completed_asset_checks),
+        ),
+        _ if completed_assets > 0 => format!(
+            "This run included {} {}. It completed {} {} for {} {}.",
             catalog.format_number(report.requested.targets.len()),
             if report.requested.targets.len() == 1 {
                 "asset"
             } else {
                 "assets"
+            },
+            catalog.format_number(completed_asset_checks),
+            if completed_asset_checks == 1 {
+                "check"
+            } else {
+                "checks"
+            },
+            catalog.format_number(completed_assets),
+            if completed_assets == 1 {
+                "asset"
+            } else {
+                "assets"
+            },
+        ),
+        _ => format!(
+            "This run included {} {}. It completed {} {}.",
+            catalog.format_number(report.requested.targets.len()),
+            if report.requested.targets.len() == 1 {
+                "asset"
+            } else {
+                "assets"
+            },
+            catalog.format_number(completed_asset_checks),
+            if completed_asset_checks == 1 {
+                "check"
+            } else {
+                "checks"
             },
         ),
     };
@@ -14998,10 +15159,24 @@ fn html_executive_summary(
                 && check.effective_result_kind() == CheckResultKind::SecurityCheck
         })
     };
+    let completed_security_asset_checks = report
+        .requested
+        .targets
+        .iter()
+        .flat_map(|target| {
+            report.actual.checks.iter().filter(move |check| {
+                check.target_asset_ids.contains(&target.asset_id)
+                    && check.effective_result_kind() == CheckResultKind::SecurityCheck
+                    && html_check_status_on_asset(report, check, &target.asset_id)
+                        == CoverageDimensionStatus::TestedComplete
+            })
+        })
+        .count();
     let found = if problem_count == 0 {
         match (
             catalog.locale,
-            security_checks(CoverageDimensionStatus::TestedComplete),
+            security_checks(CoverageDimensionStatus::TestedComplete)
+                || completed_security_asset_checks > 0,
             security_checks(CoverageDimensionStatus::TestedPartial),
         ) {
             (_, false, false) => None,
@@ -15011,7 +15186,7 @@ fn html_executive_summary(
             (crate::export::ReportLocale::ZhHant, false, true) => {
                 Some("部分完成的檢查沒有回報任何問題。")
             }
-            (_, true, _) if counts.tested_complete == 1 => {
+            (_, true, _) if completed_security_asset_checks.max(counts.tested_complete) == 1 => {
                 Some("The check that completed reported no problems.")
             }
             (_, true, _) => Some("The checks that completed reported no problems."),
@@ -16159,9 +16334,10 @@ fn html_coverage_matrix(
                 // Worst outcome wins the cell: an engine that completed one
                 // task and failed another against the same asset has not
                 // covered it, and showing the completed half would say it had.
+                let asset_status = html_check_status_on_asset(report, check, &target.asset_id);
                 status = Some(match status {
-                    Some(existing) if worse_status(existing, check.status) => existing,
-                    _ => check.status,
+                    Some(existing) if worse_status(existing, asset_status) => existing,
+                    _ => asset_status,
                 });
             }
             let (slug, mark, text) = matrix_cell_state(status, catalog);
@@ -16315,10 +16491,7 @@ fn html_asset_result_section(
             .collect::<Vec<_>>();
         let completed_security_checks = checks
             .iter()
-            .filter(|check| {
-                check.status == CoverageDimensionStatus::TestedComplete
-                    && check.effective_result_kind() == CheckResultKind::SecurityCheck
-            })
+            .filter(|check| html_check_completed_on_asset(check, &target.asset_id))
             .count();
         let severity_counts = asset_severity_counts(report, &target.asset_id);
         let finding_count = severity_counts
@@ -16337,27 +16510,34 @@ fn html_asset_result_section(
                     | CoverageDimensionStatus::Failed
                     | CoverageDimensionStatus::TimedOut
                     | CoverageDimensionStatus::Cancelled
-            )
+            ) && !(check.status == CoverageDimensionStatus::TestedPartial
+                && html_check_completed_on_asset(check, &target.asset_id))
         });
         let has_incomplete_gap = gaps.iter().any(|gap| {
-            matches!(
-                gap.kind,
-                CoverageGapKind::Failed
-                    | CoverageGapKind::TimedOut
-                    | CoverageGapKind::Cancelled
-                    | CoverageGapKind::Truncated
-                    | CoverageGapKind::Unavailable
-                    | CoverageGapKind::Unattributed
-            )
+            gap.class != CoverageGapClass::RecordNote
+                && matches!(
+                    gap.kind,
+                    CoverageGapKind::Failed
+                        | CoverageGapKind::TimedOut
+                        | CoverageGapKind::Cancelled
+                        | CoverageGapKind::Truncated
+                        | CoverageGapKind::Unavailable
+                        | CoverageGapKind::Unattributed
+                )
         });
         let unfinished_requested_gap = gaps.iter().copied().find(|gap| {
-            gap.kind == CoverageGapKind::NotTested
+            gap.class != CoverageGapClass::RecordNote
+                && gap.kind == CoverageGapKind::NotTested
                 && gap.next_action_code != NextActionCode::NoActionUnlessScopeChanges
                 && gap.task_id.as_ref().is_some_and(|task_id| {
                     !checks.iter().any(|check| {
                         check.task_id == task_id.as_str()
                             && check.status == CoverageDimensionStatus::TestedComplete
-                    })
+                    }) && !(html_bounded_profile_limit(gap)
+                        && checks.iter().any(|check| {
+                            check.task_id == task_id.as_str()
+                                && html_check_completed_on_asset(check, &target.asset_id)
+                        }))
                 })
         });
         let has_unfinished_requested_check =
@@ -16374,24 +16554,24 @@ fn html_asset_result_section(
             HtmlAssetResultStatus::NotTested
         };
         let preferred_incomplete_gap = gaps.iter().copied().find(|gap| {
-            matches!(
-                gap.kind,
-                CoverageGapKind::Failed
-                    | CoverageGapKind::TimedOut
-                    | CoverageGapKind::Cancelled
-                    | CoverageGapKind::Truncated
-                    | CoverageGapKind::Unavailable
-                    | CoverageGapKind::Unattributed
-            )
+            gap.class != CoverageGapClass::RecordNote
+                && matches!(
+                    gap.kind,
+                    CoverageGapKind::Failed
+                        | CoverageGapKind::TimedOut
+                        | CoverageGapKind::Cancelled
+                        | CoverageGapKind::Truncated
+                        | CoverageGapKind::Unavailable
+                        | CoverageGapKind::Unattributed
+                )
         });
         let preferred_gap = match status {
             HtmlAssetResultStatus::IncompleteOrFailed => {
                 preferred_incomplete_gap.or(unfinished_requested_gap)
             }
-            HtmlAssetResultStatus::NotTested => gaps
-                .iter()
-                .copied()
-                .find(|gap| gap.kind != CoverageGapKind::Excluded),
+            HtmlAssetResultStatus::NotTested => gaps.iter().copied().find(|gap| {
+                gap.class != CoverageGapClass::RecordNote && gap.kind != CoverageGapKind::Excluded
+            }),
             HtmlAssetResultStatus::NoProblemsInCompletedChecks => gaps
                 .iter()
                 .copied()
@@ -19556,7 +19736,7 @@ fn html_report_bytes(
                 ),
                 (
                     catalog.text("Checks completed", "已完成檢查"),
-                    report_counts.tested_complete,
+                    html_completed_asset_check_count(&report),
                     "complete",
                 ),
                 (
@@ -38065,7 +38245,9 @@ mod tests {
         let zh = HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant);
         let en_summary = html_executive_summary(&report, &report.coverage_counts, 1, en);
         let zh_summary = html_executive_summary(&report, &report.coverage_counts, 1, zh);
-        assert!(en_summary.contains("This run completed 1 check on 1 asset."));
+        assert!(
+            en_summary.contains("This run included 1 asset. It completed 1 check for 1 asset.")
+        );
         assert!(
             en_summary.contains("1 problem was found, and it is not Critical or High severity.")
         );
@@ -38277,7 +38459,7 @@ mod tests {
         let zh_summary = html_executive_summary(&report, &report.coverage_counts, 0, zh);
         assert!(
             en_summary.contains(
-                "<p>This run completed 1 check on 1 asset.</p><p>The check that completed reported no problems.</p>"
+                "<p>This run included 1 asset. It completed 1 check for 1 asset.</p><p>The check that completed reported no problems.</p>"
             ),
             "{en_summary}"
         );
@@ -38298,7 +38480,8 @@ mod tests {
         let en_summary = html_executive_summary(&report, &report.coverage_counts, 0, en);
         let zh_summary = html_executive_summary(&report, &report.coverage_counts, 0, zh);
         assert!(
-            en_summary.contains("<p>This run completed 1 check on 1 asset.</p>"),
+            en_summary
+                .contains("<p>This run included 1 asset. It completed 1 check for 1 asset.</p>"),
             "{en_summary}"
         );
         assert!(!en_summary.contains("reported no problems"), "{en_summary}");
@@ -38377,7 +38560,7 @@ mod tests {
         let zh = render(&case, crate::export::ReportLocale::ZhHant);
         let (en_summary, zh_summary) = (summary(&en), summary(&zh));
         assert!(
-            en_summary.contains("<p>This run completed 0 checks on 1 asset.</p>"),
+            en_summary.contains("<p>This run included 1 asset. It completed 0 checks.</p>"),
             "{en_summary}"
         );
         assert!(
@@ -38386,7 +38569,7 @@ mod tests {
         );
         assert!(!en_summary.contains("reported no problems"), "{en_summary}");
         assert!(
-            zh_summary.contains("<p>本輪對 1 項資產完成了 0 項檢查。</p>"),
+            zh_summary.contains("<p>本輪包含 1 項資產，完成 0 項檢查。</p>"),
             "{zh_summary}"
         );
         assert!(!zh_summary.contains("沒有回報任何問題"), "{zh_summary}");
@@ -39079,6 +39262,346 @@ mod tests {
         );
         assert!(!zh_html.contains("查看涵蓋缺口並完成缺少的檢查。"));
         assert!(!zh_html.contains("目前範圍不需處理"));
+    }
+
+    #[test]
+    fn html_export_keeps_a_completed_asset_clean_when_its_shared_greenbone_task_is_partial() {
+        let fixture = Fixture::new();
+        let start = mixed_environment_start(&fixture);
+        let case_id = start.case_id.clone();
+        let checked_id = start.first_device_asset_id.clone();
+        let failed_id = start.second_device_asset_id.clone();
+        let plan = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &case_id,
+                start.decisions,
+                start.request,
+            )
+            .unwrap();
+        let mut case = fixture.service().show_case(&case_id).unwrap();
+        let run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == plan.scan_run.id)
+            .unwrap();
+        let mut shared = run
+            .engine_runs
+            .iter()
+            .find(|task| task.engine_id == "greenbone" && task.asset_ids == [checked_id.clone()])
+            .unwrap()
+            .clone();
+        shared.asset_ids = vec![checked_id.clone(), failed_id.clone()];
+        shared.status = EngineRunStatus::Completed;
+        shared.phase = "completed".into();
+        shared.progress_percent = 100;
+        shared.started_at = Some(run.created_at);
+        shared.finished_at = Some(run.created_at + Duration::seconds(1));
+        shared.exit_code = Some(0);
+        shared.unevaluated_targets = vec![crate::domain::UnevaluatedTarget {
+            asset_id: failed_id.clone(),
+            cause: crate::domain::UnevaluatedTargetCause::TargetDidNotRespond,
+            result_count: 0,
+        }];
+        run.engine_runs = vec![shared];
+        run.completed_at = Some(run.created_at + Duration::seconds(1));
+        case.status = CaseStatus::ReadyForHandoff;
+
+        let report = build_beginner_master_report(&case, &plan.scan_run.id).unwrap();
+        let check = report.actual.checks.first().unwrap();
+        assert_eq!(check.status, CoverageDimensionStatus::TestedPartial);
+        assert_eq!(
+            check.target_asset_ids,
+            [checked_id.clone(), failed_id.clone()]
+        );
+        assert!(check.tested_dimensions.iter().any(|dimension| {
+            dimension.dimension == "completed check-to-target coordinate"
+                && dimension
+                    .value
+                    .ends_with(&format!(" on asset {checked_id}"))
+        }));
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.kind == CoverageGapKind::Failed && gap.target_asset_ids == [failed_id.clone()]
+        }));
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.kind == CoverageGapKind::NotTested
+                && gap.dimension == "device product and firmware vulnerability coverage"
+                && gap.target_asset_ids == [checked_id.clone()]
+        }));
+
+        let html = String::from_utf8(
+            html_report_bytes(
+                &case,
+                &plan.scan_run.id,
+                &ExportOptions {
+                    redaction: RedactionProfile::None,
+                    ..ExportOptions::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let labels = readable_target_labels(
+            &report,
+            HtmlReportCatalog::new(crate::export::ReportLocale::En),
+        );
+        fn asset_row<'a>(document: &'a str, label: &str) -> &'a str {
+            document
+                .split("<tr class=\"asset-result asset-result--")
+                .skip(1)
+                .filter_map(|part| part.split_once("</tr>").map(|(row, _)| row))
+                .find(|row| row.contains(label))
+                .unwrap_or_else(|| panic!("no exported asset row for {label}"))
+        }
+        let checked_row = asset_row(&html, &html_escape_breakable_identity(&labels[&checked_id]));
+        let failed_row = asset_row(&html, &html_escape_breakable_identity(&labels[&failed_id]));
+        assert!(
+            html.contains("This run included 3 assets. It completed 1 check for 1 asset."),
+            "{html}"
+        );
+        assert!(!html.contains("It completed 0 checks"));
+        assert!(html.contains("The check that completed reported no problems."));
+        assert!(html.contains(
+            "<span class=\"kpi__value\">1</span><span class=\"kpi__label\">Checks completed</span>"
+        ));
+        assert!(
+            checked_row.starts_with("no-problems-completed"),
+            "{checked_row}"
+        );
+        assert!(checked_row.contains("No problems in 1 completed check"));
+        assert!(failed_row.starts_with("incomplete-failed"), "{failed_row}");
+        assert!(failed_row.contains("Incomplete or failed"));
+        let matrix = html
+            .split_once("<h2>What each check reached</h2>")
+            .and_then(|(_, rest)| rest.split_once("</section>"))
+            .map(|(section, _)| section)
+            .expect("the exported asset coverage matrix");
+        let matrix_row = |label: &str| {
+            let marker = format!("<tr><th scope=\"row\">{}</th>", html_escape(label));
+            matrix
+                .split_once(&marker)
+                .and_then(|(_, rest)| rest.split_once("</tr>"))
+                .map(|(row, _)| row.to_owned())
+                .unwrap_or_else(|| panic!("no matrix row for {label}"))
+        };
+        assert!(matrix_row(&labels[&checked_id]).contains("matrix-cell--complete"));
+        assert!(matrix_row(&labels[&failed_id]).contains("matrix-cell--failed"));
+
+        let mut missing_own_check = report.clone();
+        missing_own_check.coverage_gaps.push(CoverageGap {
+            kind: CoverageGapKind::NotTested,
+            class: CoverageGapClass::CoverageLoss,
+            task_id: Some(check.task_id.clone()),
+            target_asset_ids: vec![checked_id.clone()],
+            dimension: "SMTP TLS negotiation-dependent coverage".into(),
+            reason: "This scan did not record every selected TLS check.".into(),
+            next_action_code: NextActionCode::PreserveVisibleLimitation,
+            next_action: "Run a separately approved TLS assessment.".into(),
+            unattributed: None,
+        });
+        let catalog = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let missing_summary = html_executive_summary(
+            &missing_own_check,
+            &missing_own_check.coverage_counts,
+            0,
+            catalog,
+        );
+        assert!(missing_summary.contains("This run included 3 assets. It completed 0 checks."));
+        let missing_board = html_asset_result_section(&missing_own_check, &labels, catalog);
+        assert!(
+            asset_row(
+                &missing_board,
+                &html_escape_breakable_identity(&labels[&checked_id])
+            )
+            .starts_with("incomplete-failed")
+        );
+
+        let zh_html = String::from_utf8(
+            html_report_bytes(
+                &case,
+                &plan.scan_run.id,
+                &ExportOptions {
+                    redaction: RedactionProfile::None,
+                    locale: crate::export::ReportLocale::ZhHant,
+                    ..ExportOptions::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let zh_labels = readable_target_labels(
+            &report,
+            HtmlReportCatalog::new(crate::export::ReportLocale::ZhHant),
+        );
+        let zh_checked_row = asset_row(
+            &zh_html,
+            &html_escape_breakable_identity(&zh_labels[&checked_id]),
+        );
+        let zh_failed_row = asset_row(
+            &zh_html,
+            &html_escape_breakable_identity(&zh_labels[&failed_id]),
+        );
+        assert!(zh_html.contains("本輪包含 3 項資產；其中 1 項資產有已完成的檢查，共 1 項。"));
+        assert!(zh_checked_row.starts_with("no-problems-completed"));
+        assert!(zh_checked_row.contains("1 項已完成檢查未發現問題"));
+        assert!(zh_failed_row.starts_with("incomplete-failed"));
+        assert!(zh_failed_row.contains("未完成或失敗"));
+    }
+
+    #[test]
+    fn html_export_marks_an_unproven_nuclei_sibling_not_tested() {
+        let fixture = Fixture::new();
+        let start = mixed_environment_start(&fixture);
+        let checked_id = start.website_asset_id.clone();
+        let plan = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &start.case_id,
+                start.decisions,
+                start.request,
+            )
+            .unwrap();
+        let mut case = fixture.service().show_case(&start.case_id).unwrap();
+        let sibling_id = "unproven-website".to_owned();
+        let mut sibling = case
+            .assets
+            .iter()
+            .find(|asset| asset.id == checked_id)
+            .unwrap()
+            .clone();
+        sibling.id = sibling_id.clone();
+        sibling.name = "https://unproven.example.test:443".into();
+        for identifier in &mut sibling.identifiers {
+            if identifier.value.contains("portal.example.test") {
+                identifier.value = identifier
+                    .value
+                    .replace("portal.example.test", "unproven.example.test");
+            }
+        }
+        if let Some(origin) = sibling.metadata.get_mut(DECLARED_WEB_ORIGIN_METADATA_KEY) {
+            *origin = Value::String("https://unproven.example.test:443".into());
+        }
+        case.assets.push(sibling.clone());
+        let run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == plan.scan_run.id)
+            .unwrap();
+        run.report_asset_snapshots.push(ReportAssetSnapshot {
+            asset: sibling,
+            disposition: ReportAssetDisposition::RequestedForScan,
+        });
+        let mut sibling_grant = run
+            .scope_grant_snapshots
+            .iter()
+            .find(|grant| grant.asset_id == checked_id)
+            .unwrap()
+            .clone();
+        sibling_grant.id = "unproven-website-grant".into();
+        sibling_grant.asset_id = sibling_id.clone();
+        let external_scope = sibling_grant.external_scope.as_mut().unwrap();
+        external_scope.id = "unproven-website-external-scope".into();
+        external_scope.asset_id = sibling_id.clone();
+        external_scope.target = CanonicalTarget::Hostname("unproven.example.test".into());
+        run.scope_grant_ids.push(sibling_grant.id.clone());
+        run.scope_grant_snapshots.push(sibling_grant);
+        let mut shared = run
+            .engine_runs
+            .iter()
+            .find(|task| task.engine_id == "nuclei")
+            .unwrap()
+            .clone();
+        shared.asset_ids = vec![checked_id.clone(), sibling_id.clone()];
+        shared.status = EngineRunStatus::Completed;
+        shared.phase = "completed".into();
+        shared.progress_percent = 100;
+        shared.started_at = Some(run.created_at);
+        shared.finished_at = Some(run.created_at + Duration::seconds(1));
+        shared.exit_code = Some(0);
+        shared.security_template_executions = vec![crate::domain::SecurityTemplateExecution {
+            asset_id: checked_id.clone(),
+            result_count: 1,
+        }];
+        run.engine_runs = vec![shared];
+        run.completed_at = Some(run.created_at + Duration::seconds(1));
+        case.status = CaseStatus::ReadyForHandoff;
+
+        let report = build_beginner_master_report(&case, &plan.scan_run.id).unwrap();
+        let check = report.actual.checks.first().unwrap();
+        assert_eq!(check.status, CoverageDimensionStatus::TestedPartial);
+        assert!(check.tested_dimensions.iter().any(|dimension| {
+            dimension.dimension == "completed check-to-target coordinate"
+                && dimension
+                    .value
+                    .ends_with(&format!(" on asset {checked_id}"))
+        }));
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.kind == CoverageGapKind::Unavailable
+                && gap.dimension == "nuclei: website execution evidence"
+                && gap.target_asset_ids == [sibling_id.clone()]
+        }));
+
+        let html = String::from_utf8(
+            html_report_bytes(
+                &case,
+                &plan.scan_run.id,
+                &ExportOptions {
+                    redaction: RedactionProfile::None,
+                    ..ExportOptions::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let labels = readable_target_labels(
+            &report,
+            HtmlReportCatalog::new(crate::export::ReportLocale::En),
+        );
+        let asset_row = |label: &str| {
+            html.split("<tr class=\"asset-result asset-result--")
+                .skip(1)
+                .filter_map(|part| part.split_once("</tr>").map(|(row, _)| row))
+                .find(|row| row.contains(label))
+                .unwrap_or_else(|| panic!("no exported asset row for {label}"))
+        };
+        assert!(
+            asset_row(&html_escape_breakable_identity(&labels[&checked_id]))
+                .starts_with("no-problems-completed")
+        );
+        assert!(
+            asset_row(&html_escape_breakable_identity(&labels[&sibling_id]))
+                .starts_with("incomplete-failed")
+        );
+        let matrix = html
+            .split_once("<h2>What each check reached</h2>")
+            .and_then(|(_, rest)| rest.split_once("</section>"))
+            .map(|(section, _)| section)
+            .expect("the exported asset coverage matrix");
+        let matrix_row = |label: &str| {
+            let marker = format!("<tr><th scope=\"row\">{}</th>", html_escape(label));
+            matrix
+                .split_once(&marker)
+                .and_then(|(_, rest)| rest.split_once("</tr>"))
+                .map(|(row, _)| row.to_owned())
+                .unwrap_or_else(|| panic!("no matrix row for {label}"))
+        };
+        assert!(matrix_row(&labels[&checked_id]).contains("matrix-cell--complete"));
+        assert!(matrix_row(&labels[&sibling_id]).contains("matrix-cell--not-tested"));
+        assert!(html.contains("This run included 4 assets. It completed 1 check for 1 asset."));
+        let zh_html = String::from_utf8(
+            html_report_bytes(
+                &case,
+                &plan.scan_run.id,
+                &ExportOptions {
+                    redaction: RedactionProfile::None,
+                    locale: crate::export::ReportLocale::ZhHant,
+                    ..ExportOptions::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(zh_html.contains("本輪包含 4 項資產；其中 1 項資產有已完成的檢查，共 1 項。"));
     }
 
     #[test]

@@ -350,6 +350,7 @@ test("a run where nothing completed never reads as a clean result", () => {
   expect(container.querySelector(".page-header")?.textContent).toContain(
     "Review this run's outcome and next action.",
   );
+  expect(container.querySelector(".page-header .eyebrow")?.textContent).toBe("SCAN RESULTS");
   expect(container.querySelector(".page-header")?.textContent).not.toContain("will appear here");
 });
 
@@ -582,7 +583,7 @@ test("the first layer gives every requested asset one evidence-derived result st
   expect(row("https://portal.example").dataset.assetResult).toBe("no_problems_completed");
   expect(row("https://portal.example").textContent).toContain("1 completed security check reported no problems");
   expect(row("https://portal.example").textContent).toContain("Open the completed-check scope");
-  expect(row("https://portal.example").querySelector("button")).toBeNull();
+  expect(row("https://portal.example").querySelector("button")?.textContent).toContain("View checked scope");
   expect(row("Branch gateway").dataset.assetResult).toBe("incomplete_failed");
   expect(row("Branch gateway").textContent).toContain("Retry the failed check");
   expect(row("Branch gateway").querySelector(".asset-result-row__outcome span")?.textContent)
@@ -902,7 +903,7 @@ test("a settled-skip gap beside a completed check with no findings still reads a
   expect(row.dataset.assetResult).toBe("no_problems_completed");
   expect(row.textContent).toContain("No problems in completed checks");
   expect(row.textContent).not.toContain("Some checks are incomplete");
-  expect(row.querySelector("button")).toBeNull();
+  expect(row.querySelector("button")?.textContent).toContain("View checked scope");
 });
 
 test("a Greenbone dead-host gap gives a Traditional Chinese reader the exact cause", () => {
@@ -979,10 +980,18 @@ test("a clean terminal run states its bounded outcome before the coverage detail
   }
 
   expect(header.textContent).toContain("No problems were observed in the work that completed");
+  expect(header.querySelector(".eyebrow")?.textContent).toBe("SCAN RESULTS");
   expect(header.textContent).toContain("in their tested scope");
   expect(header.textContent).not.toContain("Sources included");
   expect(header.textContent).not.toContain("Open Scan setup to review exactly what was included");
   expect(container.textContent).toContain("No problems in completed checks");
+  expect(container.querySelector("[data-asset-result='no_problems_completed'] button")?.textContent)
+    .toContain("View checked scope");
+  const scopeTitle = container.querySelector<HTMLElement>("#beginner-master-report-title");
+  if (!scopeTitle) throw new Error("report scope heading did not render");
+  scopeTitle.scrollIntoView = vi.fn();
+  fireEvent.click(container.querySelector<HTMLButtonElement>("[data-asset-result='no_problems_completed'] button")!);
+  expect(scopeTitle.scrollIntoView).toHaveBeenCalled();
   expect(header.compareDocumentPosition(coverage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(outcome.compareDocumentPosition(coverage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(coverage.textContent).toContain("What was checked—and what was not");
@@ -1017,6 +1026,280 @@ test("a clean terminal run is not an empty state, while incomplete and failed ru
   expect(connection.querySelector(".page-header")?.textContent).toContain(
     "Connection test only — no vulnerability scan ran",
   );
+});
+
+test("zero findings with a completed check and a failed sibling leads with incomplete coverage", () => {
+  const base = cleanCompletedReport();
+  const partial: BeginnerMasterReport = {
+    ...base,
+    state: { ...base.state, summary: "partial" },
+    requested: {
+      ...base.requested,
+      targets: [...base.requested.targets, {
+        assetId: "asset-2",
+        label: "second-project",
+        assetKind: "repository",
+        labelAvailability: "recorded",
+        assetKindAvailability: "recorded",
+      }],
+      requestedCheckIds: ["trivy", "semgrep"],
+    },
+    actual: {
+      ...base.actual,
+      checks: [...base.actual.checks, {
+        taskId: "semgrep-task",
+        checkId: "semgrep",
+        resultKind: "security_check",
+        targetAssetIds: ["asset-2"],
+        status: "failed",
+        testedDimensions: [],
+      }],
+    },
+    coverageGaps: [{
+      kind: "failed",
+      taskId: "semgrep-task",
+      targetAssetIds: ["asset-2"],
+      dimension: "semgrep check",
+      reason: "The code check did not finish.",
+      nextActionCode: "retry_check",
+      nextAction: "Retry the code check.",
+    }],
+    coverageCounts: counts({ testedComplete: 1, failed: 1 }),
+    nextSteps: [{
+      priority: 100,
+      code: "retry_check",
+      action: "Retry the code check.",
+      reason: "The code check did not finish.",
+      taskId: "semgrep-task",
+      alsoResolves: [],
+    }],
+  };
+  const completedRun = catalogRun("trivy");
+  const nativeLikePartialRun: ScanRun = {
+    ...completedRun,
+    status: "partial",
+    totalAssetCount: 2,
+    engineRuns: [{
+      ...completedRun.engineRuns[0]!,
+      id: "trivy-task",
+      assetIds: ["asset-1"],
+    }, {
+      ...completedRun.engineRuns[0]!,
+      id: "semgrep-task",
+      engineId: "semgrep",
+      engineName: "semgrep",
+      status: "failed",
+      assetIds: ["asset-2"],
+    }],
+  };
+  const { container, unmount } = renderReport(partial, [], [nativeLikePartialRun]);
+  expect(container.querySelector(".page-header")?.textContent).toContain("Some checks need attention");
+  expect(container.querySelector(".page-header .eyebrow")?.textContent).toBe("SCAN RESULTS");
+  expect(container.querySelector(".page-header")?.textContent).toContain("some requested coverage is missing");
+  expect(container.querySelector("[data-report-outcome='no_problems_completed']")).toBeNull();
+  expect(container.querySelector("[data-report-outcome='incomplete']")?.textContent).toContain("Review scanner status");
+  expect(container.querySelector("[data-report-outcome='incomplete'] .button--primary")?.textContent)
+    .toContain("Review scanner status");
+  expect(container.querySelector(".page-header__actions .button--secondary")?.textContent)
+    .toContain("Save or share report");
+  expect(container.querySelector(".empty-state")).toBeNull();
+  expect(container.querySelector("[data-asset-result='no_problems_completed']")?.textContent).toContain("contoso.example");
+  expect(container.querySelector("[data-asset-result='incomplete_failed']")?.textContent).toContain("second-project");
+  expect(statePill(container).textContent).toContain("Completed with gaps");
+
+  unmount();
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container: zh } = renderReport(partial, [], [nativeLikePartialRun]);
+  expect(zh.querySelector(".page-header")?.textContent).toContain("仍有檢查需要處理");
+  expect(zh.querySelector(".page-header .eyebrow")?.textContent).toBe("掃描結果");
+  expect(zh.querySelector(".page-header")?.textContent).toContain("仍有要求的範圍未完成");
+  expect(zh.querySelector("[data-report-outcome='no_problems_completed']")).toBeNull();
+});
+
+test.each([
+  ["retry_check", "Review scanner status", "progress"],
+  ["review_scope_and_retry", "Open scan setup", "coverage"],
+  ["preserve_visible_limitation", "View checked scope", "scope"],
+] as const)("a native partial result routes %s to its direct continuation", (code, label, destination) => {
+  const base = cleanCompletedReport();
+  const partial: BeginnerMasterReport = {
+    ...base,
+    state: { ...base.state, summary: "partial" },
+    coverageGaps: [{
+      kind: code === "preserve_visible_limitation" ? "excluded" : "failed",
+      taskId: "unfinished-task",
+      targetAssetIds: ["asset-1"],
+      dimension: "remaining check",
+      reason: "The remaining coverage is incomplete.",
+      nextActionCode: code,
+      nextAction: "Review the remaining check.",
+    }],
+    coverageCounts: counts({
+      testedComplete: 1,
+      ...(code === "preserve_visible_limitation" ? { excluded: 1 } : { failed: 1 }),
+    }),
+    nextSteps: [{
+      priority: 100,
+      code,
+      action: "Review the remaining check.",
+      reason: "The remaining coverage is incomplete.",
+      taskId: "unfinished-task",
+      alsoResolves: [],
+    }],
+  };
+  const run = { ...catalogRun("trivy"), status: "partial" as const };
+  const onOpenProgress = vi.fn();
+  const onOpenCoverage = vi.fn();
+  const { container } = renderReport(partial, [], [run], { onOpenProgress, onOpenCoverage });
+  const scopeTitle = container.querySelector<HTMLElement>("#beginner-master-report-title");
+  if (!scopeTitle) throw new Error("report scope heading did not render");
+  scopeTitle.scrollIntoView = vi.fn();
+  const action = container.querySelector<HTMLButtonElement>("[data-report-outcome='incomplete'] .button--primary");
+  expect(action?.textContent).toContain(label);
+  fireEvent.click(action!);
+  expect(onOpenProgress).toHaveBeenCalledTimes(destination === "progress" ? 1 : 0);
+  expect(onOpenCoverage).toHaveBeenCalledTimes(destination === "coverage" ? 1 : 0);
+  expect(scopeTitle.scrollIntoView).toHaveBeenCalledTimes(destination === "scope" ? 1 : 0);
+});
+
+test("a native-shaped partial multi-asset security check keeps the tested sibling's clean result", () => {
+  const base = cleanCompletedReport();
+  const partial: BeginnerMasterReport = {
+    ...base,
+    state: { ...base.state, summary: "partial" },
+    requested: {
+      ...base.requested,
+      targets: [{
+        assetId: "asset-10",
+        label: "checked-host.example",
+        assetKind: "host",
+        labelAvailability: "recorded",
+        assetKindAvailability: "recorded",
+      }, {
+        assetId: "asset-1",
+        label: "unresponsive-host.example",
+        assetKind: "host",
+        labelAvailability: "recorded",
+        assetKindAvailability: "recorded",
+      }],
+    },
+    actual: {
+      ...base.actual,
+      checks: [{
+        taskId: "greenbone-task",
+        checkId: "greenbone",
+        resultKind: "security_check",
+        targetAssetIds: ["asset-1", "asset-10"],
+        status: "tested_partial",
+        testedDimensions: [{
+          dimension: "completed check-to-target coordinate",
+          value: "greenbone on asset asset-10",
+          observation: "The security check completed for this target.",
+        }, {
+          dimension: "Greenbone remote vulnerability scan",
+          value: "greenbone on asset asset-10",
+          observation: "The selected security profile ran for this host.",
+        }],
+      }],
+    },
+    coverageGaps: [{
+      kind: "not_tested",
+      taskId: "greenbone-task",
+      targetAssetIds: ["asset-10"],
+      dimension: "endpoint operating-system, package, application, and local-configuration coverage",
+      reason: "The completed SSH service profile did not inspect the host operating system.",
+      nextActionCode: "preserve_visible_limitation",
+      nextAction: "Use an approved endpoint inventory or local snapshot for host-level checks.",
+    }, {
+      kind: "failed",
+      taskId: "greenbone-task",
+      targetAssetIds: ["asset-1"],
+      dimension: "greenbone: target response",
+      reason: "The target did not answer all approved checks.",
+      nextActionCode: "review_scope_and_retry",
+      nextAction: "Review the approved target and retry.",
+    }],
+    coverageCounts: counts({ testedPartial: 1, failed: 1, notTested: 1 }),
+    nextSteps: [{
+      priority: 100,
+      code: "review_scope_and_retry",
+      action: "Review the approved target and retry.",
+      reason: "The target did not answer all approved checks.",
+      taskId: "greenbone-task",
+      alsoResolves: [],
+    }],
+  };
+  const baseRun = catalogRun("greenbone");
+  const run: ScanRun = {
+    ...baseRun,
+    status: "partial",
+    coveredAssetCount: 1,
+    totalAssetCount: 2,
+    engineRuns: [{
+      ...baseRun.engineRuns[0]!,
+      id: "greenbone-task",
+      status: "partial",
+      assetIds: ["asset-1", "asset-10"],
+    }],
+  };
+  const onOpenProgress = vi.fn();
+  const onOpenCoverage = vi.fn();
+  const { container } = renderReport(partial, [], [run], { onOpenProgress, onOpenCoverage });
+  expect(container.querySelector(".page-header")?.textContent).toContain("Available security results recorded no problems");
+  expect(container.querySelector(".page-header")?.textContent).not.toContain("Completed security checks reported no problems");
+  expect(container.querySelector(".page-header .eyebrow")?.textContent).toBe("SCAN RESULTS");
+  expect(container.querySelector(".empty-state")).toBeNull();
+  const rows = Array.from(container.querySelectorAll<HTMLElement>(".asset-result-row"));
+  expect(rows).toHaveLength(2);
+  const checkedRow = rows.find((row) => row.textContent?.includes("checked-host.example"));
+  const failedRow = rows.find((row) => row.textContent?.includes("unresponsive-host.example"));
+  expect(checkedRow?.dataset.assetResult).toBe("no_problems_completed");
+  expect(checkedRow?.textContent).toContain("1 completed security check reported no problems");
+  const testedScope = container.querySelector<HTMLElement>(".report-first-layer-scope");
+  expect(testedScope?.textContent).toContain("greenbone completed for checked-host.example");
+  expect(testedScope?.textContent).toContain("checked-host.example · greenbone · Completed");
+  expect(testedScope?.textContent).not.toContain("checked-host.example · greenbone · Partly completed");
+  expect(testedScope?.textContent).not.toContain("asset-10");
+  const completedMetric = Array.from(container.querySelectorAll<HTMLElement>(".metric-card"))
+    .find((card) => card.querySelector(".metric-card__label")?.textContent === "Checks completed");
+  expect(completedMetric?.querySelector(".metric-card__value")?.textContent).toBe("1");
+  expect(container.querySelector(".report-scope-disclosure summary")?.textContent).toContain("1 completed");
+  expect(container.querySelector(".report-count-breakdown")?.textContent).toContain("1 Checks completed");
+  expect(failedRow?.dataset.assetResult).toBe("incomplete_failed");
+  expect(failedRow?.textContent).toContain("Review the approved target and retry");
+  const action = container.querySelector<HTMLButtonElement>("[data-report-outcome='incomplete'] .button--primary");
+  expect(action?.textContent).toContain("Open scan setup");
+  fireEvent.click(action!);
+  expect(onOpenCoverage).toHaveBeenCalledTimes(1);
+  expect(onOpenProgress).not.toHaveBeenCalled();
+
+  // A missing planned TLS check is a coverage loss on the tested host, unlike
+  // the selected SSH profile's documented host-level scope boundary.
+  const missingTls = renderReport({
+    ...partial,
+    coverageGaps: [{
+      ...partial.coverageGaps[0]!,
+      dimension: "SMTP TLS negotiation-dependent coverage",
+      reason: "This scan did not record every selected TLS check.",
+      nextAction: "Run a separately approved TLS assessment for complete SMTP TLS coverage.",
+    }, partial.coverageGaps[1]!],
+  }, [], [run]);
+  const tlsRow = Array.from(missingTls.container.querySelectorAll<HTMLElement>(".asset-result-row"))
+    .find((row) => row.textContent?.includes("checked-host.example"));
+  expect(tlsRow?.dataset.assetResult).toBe("incomplete_failed");
+  expect(missingTls.container.querySelector(".report-first-layer-scope")?.textContent)
+    .toContain("checked-host.example · greenbone · Partly completed");
+
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const zh = renderReport(partial, [], [run]);
+  const zhScope = zh.container.querySelector(".report-first-layer-scope")?.textContent;
+  expect(zhScope).toContain("已對 checked-host.example 完成 greenbone");
+  expect(zhScope).not.toContain("checked-host.example · greenbone · 部分完成");
+  expect(zhScope).not.toContain("asset-10");
+  const zhCompletedMetric = Array.from(zh.container.querySelectorAll<HTMLElement>(".metric-card"))
+    .find((card) => card.querySelector(".metric-card__label")?.textContent === "完成的檢查");
+  expect(zhCompletedMetric?.querySelector(".metric-card__value")?.textContent).toBe("1");
+  expect(zh.container.querySelector(".report-scope-disclosure summary")?.textContent).toContain("完成 1 項");
 });
 
 const emptyState = (container: HTMLElement): HTMLElement => {
@@ -1097,7 +1380,7 @@ test.each(nonSecurityStatusCases)(
     const header = container.querySelector<HTMLElement>(".page-header");
     expect({
       title: header?.querySelector("h1")?.textContent,
-      description: header?.querySelector("p")?.textContent,
+      description: header?.querySelector("p:not(.eyebrow)")?.textContent,
     }).toEqual(tested ? {
       title: "Inventory or connectivity only — no security check ran",
       description: "This run completed inventory or connectivity, not a security check. Choose an applicable security scan.",
@@ -1137,7 +1420,7 @@ test("failed non-security work uses the existing Traditional Chinese incomplete 
     pill: pill.textContent,
     tone: pill.className,
     headerTitle: header?.querySelector("h1")?.textContent,
-    headerDescription: header?.querySelector("p")?.textContent,
+    headerDescription: header?.querySelector("p:not(.eyebrow)")?.textContent,
     emptyTitle: empty.querySelector("h2")?.textContent,
     emptyDescription: empty.querySelector("p")?.textContent,
   }).toEqual({
@@ -2061,6 +2344,7 @@ test("a partly completed check with a coordinate dimension keeps its own status 
       checks: [{
         taskId: "task-mail",
         checkId: mailEngineId,
+        resultKind: "security_check",
         targetAssetIds: [assetId],
         status: "tested_partial",
         testedDimensions: [{
@@ -2072,6 +2356,15 @@ test("a partly completed check with a coordinate dimension keeps its own status 
       networkScopes: [],
       unavailableDimensions: [],
     },
+    coverageGaps: [{
+      kind: "not_tested",
+      taskId: "task-mail",
+      targetAssetIds: [assetId],
+      dimension: "SMTP TLS negotiation-dependent coverage",
+      reason: "This scan did not record every selected TLS check.",
+      nextActionCode: "preserve_visible_limitation",
+      nextAction: "Run a separately approved TLS assessment.",
+    }],
     coverageCounts: counts({ testedPartial: 1 }),
   }), [], [run]);
 

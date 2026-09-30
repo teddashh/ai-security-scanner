@@ -118,6 +118,10 @@ const scrollToSelectedFinding = (scrollOnWideLayout = true): void => {
   target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
 };
 
+const scrollToReportScope = (): void => {
+  document.getElementById("beginner-master-report-title")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+};
+
 const decisionStates = [
   "unreviewed",
   "expert_review_requested",
@@ -136,6 +140,7 @@ const UNTRUSTED_EVIDENCE_CAVEAT = " Raw target text is retained only as untruste
 
 const copy = {
   eyebrow: { en: "PROBLEMS FOUND", zhTW: "發現的問題" },
+  resultsEyebrow: { en: "SCAN RESULTS", zhTW: "掃描結果" },
   title: {
     en: "Know what to fix first",
     zhTW: "先知道該修什麼",
@@ -269,6 +274,10 @@ const copy = {
     en: "No problems were observed in the work that completed",
     zhTW: "已完成的範圍內沒有觀察到問題",
   },
+  emptyPartialTitle: {
+    en: "Some checks need attention",
+    zhTW: "仍有檢查需要處理",
+  },
   emptyNoRunDescription: {
     en: "Add what you want to scan, then start the check from New scan.",
     zhTW: "先加入想掃描的目標，再到「開始新掃描」開始檢查。",
@@ -281,8 +290,13 @@ const copy = {
     en: "The completed checks recorded no issues in their tested scope.",
     zhTW: "已完成的檢查在實際測試範圍內沒有記錄問題。",
   },
+  emptyPartialDescription: {
+    en: "Available security results recorded no problems, but some requested coverage is missing. Review what was not checked below.",
+    zhTW: "已取得的資安結果未記錄問題，但仍有要求的範圍未完成。請查看下方未檢查的內容。",
+  },
   openCoverage: { en: "Open scan setup", zhTW: "開啟掃描設定" },
   openProgress: { en: "Review scanner status", zhTW: "查看掃描工具狀態" },
+  openReportScope: { en: "View checked scope", zhTW: "查看已檢查範圍" },
   openExport: { en: "Save or share report", zhTW: "保存或分享報告" },
   summaryAria: { en: "Problem summary", zhTW: "問題摘要" },
   critical: { en: "Critical", zhTW: "嚴重" },
@@ -1012,6 +1026,18 @@ const incompleteGapKinds = new Set<BeginnerMasterReport["coverageGaps"][number][
   "unattributed",
 ]);
 
+// Native profile gaps describe security dimensions outside the selected
+// bounded check. They remain visible in coverage, but do not make a completed
+// check on that asset unfinished when a sibling makes the shared task partial.
+const boundedProfileLimitDimensions = new Set([
+  "endpoint operating-system, package, application, and local-configuration coverage",
+  "RDP implementation, authentication/NLA, and endpoint host coverage",
+  "VNC implementation, authentication, and endpoint host coverage",
+  "SMTP server behavior, implementation, and endpoint host coverage",
+  "Telnet authentication, implementation, and endpoint host coverage",
+  "device product and firmware vulnerability coverage",
+]);
+
 // Older reports and fixtures omit `class`. Absence keeps the conservative
 // coverage-loss reading rather than becoming a quieter record note.
 const isRecordNoteGap = (
@@ -1021,6 +1047,49 @@ const isRecordNoteGap = (
 const isCoverageLossGap = (
   gap: BeginnerMasterReport["coverageGaps"][number],
 ): boolean => !isRecordNoteGap(gap);
+
+// Native completed tasks freeze one coordinate per asset that actually ran.
+// The task can later become `tested_partial` when a sibling lacks evidence;
+// only its exact recorded coordinate proves this asset completed a check.
+const hasCompletedCoordinateForAsset = (
+  check: BeginnerMasterReport["actual"]["checks"][number],
+  assetId: string,
+): boolean => check.testedDimensions.some((dimension) =>
+  dimension.dimension === "completed check-to-target coordinate"
+  && dimension.value.endsWith(` on asset ${assetId}`));
+
+const dimensionRefersToAsset = (value: string, assetId: string): boolean =>
+  [" on asset ", " for asset "].some((marker) => value.split(marker).slice(1)
+    .some((rest) => rest === assetId || rest.startsWith(`${assetId} `)));
+
+const checkStatusForAsset = (
+  report: BeginnerMasterReport,
+  check: BeginnerMasterReport["actual"]["checks"][number],
+  assetId: string,
+): BeginnerCoverageStatus => {
+  if (check.status !== "tested_partial"
+    || checkResultKind(check) !== "security_check"
+    || !hasCompletedCoordinateForAsset(check, assetId)) return check.status;
+  const missingCoverage = report.coverageGaps.some((gap) =>
+    gap.taskId === check.taskId
+    && gap.targetAssetIds.includes(assetId)
+    && isCoverageLossGap(gap)
+    && (incompleteGapKinds.has(gap.kind)
+      || (gap.kind === "not_tested"
+        && gap.nextActionCode !== "no_action_unless_scope_changes"
+        && !(gap.nextActionCode === "preserve_visible_limitation"
+          && boundedProfileLimitDimensions.has(gap.dimension)))));
+  return missingCoverage ? "tested_partial" : "tested_complete";
+};
+
+// Keep the desktop count in the same check-to-asset unit as HTML Results.
+// Older reports without exact target binding retain their stored task count.
+const completedAssetCheckCount = (report: BeginnerMasterReport): number => Math.max(
+  report.coverageCounts.testedComplete,
+  report.requested.targets.reduce((count, target) => count + report.actual.checks.filter((check) =>
+    check.targetAssetIds.includes(target.assetId)
+    && checkStatusForAsset(report, check, target.assetId) === "tested_complete").length, 0),
+);
 
 const assetNextActionDestination = {
   // The retry lives in Progress.
@@ -1054,6 +1123,17 @@ const assetActionDestination = (
   if (status === "incomplete_failed") return "progress";
   if (status === "not_tested") return "coverage";
   return undefined;
+};
+
+const partialReportActionDestination = (
+  report: BeginnerMasterReport,
+): "progress" | "coverage" | "scope" => {
+  const actionableStep = [...report.nextSteps]
+    .sort((left, right) => left.priority - right.priority)
+    .find((step) => !step.findingId && assetActionDestination(step.code, "incomplete_failed"));
+  return actionableStep
+    ? assetActionDestination(actionableStep.code, "incomplete_failed") ?? "scope"
+    : "scope";
 };
 
 /** Conservative fallback for reports saved before `resultKind` was frozen. */
@@ -1177,23 +1257,33 @@ function AssetResultBoard({
     const checks = report.actual.checks.filter((check) =>
       check.targetAssetIds.includes(target.assetId));
     const completedSecurityChecks = checks.filter((check) =>
-      check.status === "tested_complete" && checkResultKind(check) === "security_check");
+      checkResultKind(check) === "security_check"
+      && (check.status === "tested_complete"
+        || (check.status === "tested_partial"
+          && hasCompletedCoordinateForAsset(check, target.assetId))));
     const gaps = report.coverageGaps.filter((gap) =>
       gap.targetAssetIds.includes(target.assetId));
     const firstApplicableGap = gaps.find((gap) =>
       isCoverageLossGap(gap) && gap.kind !== "excluded");
     const firstIncompleteGap = gaps.find((gap) =>
       isCoverageLossGap(gap) && incompleteGapKinds.has(gap.kind));
-    const hasIncompleteOutcome = checks.some((check) => incompleteCheckStatuses.has(check.status));
-    // A deliberate `not_tested` boundary attached to a completed task (for
-    // example SSH host-level exclusions) does not erase that task's bounded
-    // result. A different requested task that did not run still makes the
-    // asset incomplete when another security check did complete.
+    const hasIncompleteOutcome = checks.some((check) =>
+      incompleteCheckStatuses.has(check.status)
+      && !(check.status === "tested_partial"
+        && checkResultKind(check) === "security_check"
+        && hasCompletedCoordinateForAsset(check, target.assetId)));
+    // A completed task's deliberate `not_tested` boundary does not erase its
+    // bounded result. For a shared partial task, only the native profile-limit
+    // dimensions have that meaning; a missing planned dimension (such as
+    // SMTP TLS checks) must still mark this asset incomplete.
     const unfinishedRequestedGap = gaps.find((gap) => isCoverageLossGap(gap)
       && gap.kind === "not_tested"
       && gap.nextActionCode !== "no_action_unless_scope_changes"
       && Boolean(gap.taskId)
-      && !checks.some((check) => check.taskId === gap.taskId && check.status === "tested_complete"));
+      && !checks.some((check) => check.taskId === gap.taskId && check.status === "tested_complete")
+      && !(gap.nextActionCode === "preserve_visible_limitation"
+        && boundedProfileLimitDimensions.has(gap.dimension)
+        && completedSecurityChecks.some((check) => check.taskId === gap.taskId)));
     const hasIncompleteGap = Boolean(firstIncompleteGap);
     const hasIncompleteEvidence = hasIncompleteOutcome
       || hasIncompleteGap
@@ -1250,7 +1340,7 @@ function AssetResultBoard({
               { count: formatNumber(completedSecurityChecks.length) },
             ),
             prose: recordedNextAction ?? text(copy.assetNoProblemAction),
-            control: undefined,
+            control: { destination: "scope" as const },
           };
         case "incomplete_failed": {
           const action = recordedNextAction ?? text(copy.assetIncompleteAction);
@@ -1320,7 +1410,11 @@ function AssetResultBoard({
                 <button
                   type="button"
                   className="button button--secondary button--small"
-                  onClick={presentation.control.destination === "progress" ? onOpenProgress : onOpenCoverage}
+                  onClick={presentation.control.destination === "progress"
+                    ? onOpenProgress
+                    : presentation.control.destination === "scope"
+                      ? scrollToReportScope
+                      : onOpenCoverage}
                 >
                   <Icon
                     name={presentation.control.destination === "progress" ? "progress" : "coverage"}
@@ -1328,7 +1422,9 @@ function AssetResultBoard({
                   />
                   {text(presentation.control.destination === "progress"
                     ? copy.openProgress
-                    : copy.openCoverage)}
+                    : presentation.control.destination === "scope"
+                      ? copy.openReportScope
+                      : copy.openCoverage)}
                 </button>
               ) : null}
             </div>
@@ -1484,6 +1580,7 @@ const projectReportFindings = (
 
 function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport; run?: ScanRun }) {
   const { locale, text, formatDateTime, formatNumber } = useI18n();
+  const completedChecks = completedAssetCheckCount(report);
   // Scoped to the `report-first-layer-scope` paragraph only: a label there is
   // followed by ": " in English but by a full-width "：" with no following
   // space in Traditional Chinese (an ASCII colon plus space is not how a
@@ -1682,9 +1779,8 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
   }
   // A completed check-to-target coordinate names one asset per check; a run
   // with several catalog checks bound to the same asset otherwise repeats
-  // "completed for <asset>" once per check. Only `tested_complete` groups: a
-  // partial/failed/etc. sibling keeps its own line because "X completed for
-  // T · Partly completed" would contradict itself. Each group is reserved a
+  // "completed for <asset>" once per check. A partial shared task joins a
+  // group only for an asset whose own check coordinate completed. Each group is reserved a
   // slot (and rendered) at the position where its first member would have
   // been emitted, so the relative order with every other line is preserved.
   const completedCoordinateGroups = new Map<string, {
@@ -1710,19 +1806,18 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
       continue;
     }
     for (const dimension of check.testedDimensions) {
+      const dimensionAssetId = check.targetAssetIds.find((assetId) =>
+        dimensionRefersToAsset(dimension.value, assetId));
+      const dimensionTarget = dimensionAssetId ? targetById.get(dimensionAssetId)?.label : undefined;
+      const dimensionStatus = dimensionAssetId
+        ? checkStatusForAsset(report, check, dimensionAssetId)
+        : check.status;
       if (dimension.dimension === "completed check-to-target coordinate") {
-        const coordinatePrefix = `${check.checkId} on asset `;
-        const coordinateAssetId = dimension.value.startsWith(coordinatePrefix)
-          ? dimension.value.slice(coordinatePrefix.length)
-          : undefined;
-        const resolvedTarget = coordinateAssetId && check.targetAssetIds.includes(coordinateAssetId)
-          ? report.requested.targets.find((candidate) => candidate.assetId === coordinateAssetId)?.label
-          : undefined;
-        if (check.status === "tested_complete") {
-          const groupKey = resolvedTarget ? `asset:${coordinateAssetId}` : unresolvedCoordinateGroupKey;
+        if (dimensionStatus === "tested_complete") {
+          const groupKey = dimensionTarget ? `asset:${dimensionAssetId}` : unresolvedCoordinateGroupKey;
           let group = completedCoordinateGroups.get(groupKey);
           if (!group) {
-            group = { labels: [], resolvedTarget, index: testedCheckSummaries.length };
+            group = { labels: [], resolvedTarget: dimensionTarget, index: testedCheckSummaries.length };
             completedCoordinateGroups.set(groupKey, group);
             testedCheckSummaries.push("");
           }
@@ -1730,17 +1825,18 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
           continue;
         }
         testedCheckSummaries.push(
-          `${resolvedTarget ? `${resolvedTarget} · ` : ""}${checkLabel} · ${text(testedStatusCopy(check.status))}`,
+          `${dimensionTarget ? `${dimensionTarget} · ` : ""}${checkLabel} · ${text(testedStatusCopy(dimensionStatus))}`,
         );
         continue;
       }
+      const dimensionPrefix = dimensionAssetId
+        ? `${dimensionTarget ? `${dimensionTarget} · ` : ""}${checkLabel} · ${text(testedStatusCopy(dimensionStatus))}`
+        : checkPrefix;
+      const displayedValue = testedValueText(engine, dimension.dimension, dimension.value, locale);
       testedCheckSummaries.push(
-        `${checkPrefix} · ${localizedCoverageDimension(dimension.dimension, locale)}${firstLayerLabelSeparator}${testedValueText(
-          engine,
-          dimension.dimension,
-          dimension.value,
-          locale,
-        )}`,
+        `${dimensionPrefix} · ${localizedCoverageDimension(dimension.dimension, locale)}${firstLayerLabelSeparator}${dimensionAssetId && dimensionTarget
+          ? displayedValue.replaceAll(dimensionAssetId, dimensionTarget)
+          : displayedValue}`,
       );
     }
   }
@@ -1803,7 +1899,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         ? text(copy.recordedExclusionsUnavailable, { count: formatNumber(report.coverageCounts.excluded) })
         : text(copy.noRecordedExclusions);
   const countBreakdown = [
-    [copy.testedComplete, report.coverageCounts.testedComplete],
+    [copy.testedComplete, completedChecks],
     [copy.testedPartialCount, report.coverageCounts.testedPartial],
     [copy.failedCount, report.coverageCounts.failed],
     [copy.timedOutCount, report.coverageCounts.timedOut],
@@ -1863,7 +1959,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
       <details className="page-secondary-feature report-scope-disclosure">
         <summary>
           {text(copy.scopeLimitations)} · {text(hasManualReview ? copy.scopeAttentionSummary : copy.scopeSummary, {
-            completed: formatNumber(report.coverageCounts.testedComplete),
+            completed: formatNumber(completedChecks),
             gaps: formatNumber(coverageLossGaps.length),
           })}
         </summary>
@@ -1876,12 +1972,12 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
         />
         <MetricCard
           label={text(copy.testedComplete)}
-          value={formatNumber(report.coverageCounts.testedComplete)}
+          value={formatNumber(completedChecks)}
           detail={report.coverageCounts.testedPartial > 0
             ? text(copy.testedStatusPartial)
             : text(copy.testedStatusComplete)}
           icon="check"
-          tone={report.coverageCounts.testedComplete > 0 ? "accent" : "default"}
+          tone={completedChecks > 0 ? "accent" : "default"}
         />
         <MetricCard
           label={text(coverageItemsLabel)}
@@ -2480,7 +2576,11 @@ export function FindingsPage({
     <div className="button-group">
       {reportRunPicker}
       {latestRun && (
-        <button className="button button--primary button--small" type="button" onClick={() => onOpenExport(latestRun.id)}>
+        <button
+          className={`button ${report && report.state.summary !== "complete" ? "button--secondary" : "button--primary"} button--small`}
+          type="button"
+          onClick={() => onOpenExport(latestRun.id)}
+        >
           <Icon name="export" size={16} />{text(copy.openExport)}
         </button>
       )}
@@ -2697,6 +2797,9 @@ export function FindingsPage({
     const requestOutcomeSummary = latestRequestOutcomeSummary;
     const hasCompletedSecurityCheck = Boolean(report?.actual.checks.some((check) =>
       check.status === "tested_complete" && checkResultKind(check) === "security_check"));
+    const hasSecurityResult = Boolean(report?.actual.checks.some((check) =>
+      (check.status === "tested_complete" || check.status === "tested_partial")
+      && checkResultKind(check) === "security_check"));
     const hasTestedNonSecurityWork = Boolean(report?.actual.checks.some((check) =>
       checkRecordedTestedWork(check) && checkResultKind(check) !== "security_check"));
     const title = !latestRun
@@ -2738,30 +2841,66 @@ export function FindingsPage({
       && !requestOutcomeSummary
       && !localhostSummary
       && !nonSecurityOnly
-      && hasCompletedSecurityCheck;
+      && hasCompletedSecurityCheck
+      && report?.state.summary === "complete";
+    const partialSecurityOutcome = Boolean(latestRun)
+      && !requestOutcomeSummary
+      && !localhostSummary
+      && !nonSecurityOnly
+      && hasSecurityResult
+      && report?.state.summary === "partial";
+    const partialActionDestination = partialSecurityOutcome && report
+      ? partialReportActionDestination(report)
+      : undefined;
     const terminalActions = (
       <div className="button-group">
-        <button className="button button--secondary" type="button" onClick={onOpenCoverage}><Icon name="coverage" size={16} />{text(copy.openCoverage)}</button>
-        {latestRun && <button className="button button--primary" type="button" onClick={onOpenProgress}><Icon name="progress" size={16} />{text(copy.openProgress)}</button>}
+        {partialActionDestination ? (
+          <button
+            className="button button--primary"
+            type="button"
+            onClick={partialActionDestination === "progress"
+              ? onOpenProgress
+              : partialActionDestination === "coverage"
+                ? onOpenCoverage
+                : scrollToReportScope}
+          >
+            <Icon name={partialActionDestination === "progress" ? "progress" : "coverage"} size={16} />
+            {text(partialActionDestination === "progress"
+              ? copy.openProgress
+              : partialActionDestination === "coverage"
+                ? copy.openCoverage
+                : copy.openReportScope)}
+          </button>
+        ) : cleanCompletedOutcome ? (
+          <button className="button button--secondary" type="button" onClick={scrollToReportScope}>
+            <Icon name="coverage" size={16} />{text(copy.openReportScope)}
+          </button>
+        ) : (
+          <>
+            <button className="button button--secondary" type="button" onClick={onOpenCoverage}><Icon name="coverage" size={16} />{text(copy.openCoverage)}</button>
+            {latestRun && <button className="button button--primary" type="button" onClick={onOpenProgress}><Icon name="progress" size={16} />{text(copy.openProgress)}</button>}
+          </>
+        )}
       </div>
     );
     return (
       <div className="page">
         <PageHeader
+          showEyebrow
           eyebrow={text(localhostSummary
             ? copy.connectionHeaderEyebrow
             : nonSecurityOnly
               ? copy.nonSecurityHeaderEyebrow
-              : copy.eyebrow)}
-          title={cleanCompletedOutcome
-            ? title
+              : copy.resultsEyebrow)}
+          title={cleanCompletedOutcome || partialSecurityOutcome
+            ? text(partialSecurityOutcome ? copy.emptyPartialTitle : copy.emptyCompletedTitle)
             : text(localhostSummary
               ? copy.connectionHeaderTitle
               : nonSecurityOnly
                 ? copy.nonSecurityHeaderTitle
                 : copy.emptyHeaderTitle)}
-          description={cleanCompletedOutcome
-            ? description
+          description={cleanCompletedOutcome || partialSecurityOutcome
+            ? text(partialSecurityOutcome ? copy.emptyPartialDescription : copy.emptyCompletedDescription)
             : text(localhostSummary
               ? copy.connectionHeaderDescription
               : nonSecurityOnly
@@ -2772,8 +2911,8 @@ export function FindingsPage({
         {runningScanResultsPending && (
           <InlineNotice tone="info" title={text(copy.finishedRunWhileScanning)} />
         )}
-        {cleanCompletedOutcome && (
-          <div className="report-terminal-outcome" data-report-outcome="no_problems_completed">
+        {(cleanCompletedOutcome || partialSecurityOutcome) && (
+          <div className="report-terminal-outcome" data-report-outcome={partialSecurityOutcome ? "incomplete" : "no_problems_completed"}>
             {terminalActions}
           </div>
         )}
@@ -2785,7 +2924,7 @@ export function FindingsPage({
             onOpenCoverage={onOpenCoverage}
           />
         )}
-        {!cleanCompletedOutcome && (
+        {!cleanCompletedOutcome && !partialSecurityOutcome && (
           <EmptyState
             icon={incompleteRun
               || Boolean(requestOutcomeSummary)
@@ -2861,6 +3000,7 @@ export function FindingsPage({
   return (
     <div className="page">
       <PageHeader
+        showEyebrow
         eyebrow={text(copy.eyebrow)}
         title={text(copy.title)}
         actions={reportActions}

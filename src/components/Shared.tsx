@@ -4,11 +4,14 @@ import { cx } from "../lib";
 import { Icon, type IconName } from "./Icon";
 
 export function PageHeader({
+  eyebrow,
+  showEyebrow = false,
   title,
   description,
   actions,
 }: {
   eyebrow?: string;
+  showEyebrow?: boolean;
   title: string;
   description?: string;
   actions?: ReactNode;
@@ -16,6 +19,7 @@ export function PageHeader({
   return (
     <header className="page-header">
       <div className="page-header__copy">
+        {showEyebrow && eyebrow && <p className="eyebrow">{eyebrow}</p>}
         <h1 data-page-heading tabIndex={-1}>{title}</h1>
         {description && <p>{description}</p>}
       </div>
