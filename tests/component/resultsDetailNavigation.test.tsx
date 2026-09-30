@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { I18nProvider } from "../../src/i18n";
@@ -82,4 +82,22 @@ test("on a wide screen, priority cards reveal the side-by-side browser without m
   fireEvent.click(container.querySelectorAll<HTMLButtonElement>(".finding-row")[1]!);
   await waitFor(() => expect(container.querySelector(".finding-detail h2")?.textContent).toBe("Problem two"));
   expect(scrolled).toEqual([]);
+});
+
+test("filters hide details for excluded problems and a priority link reveals its problem", async () => {
+  const { container } = renderResults();
+
+  fireEvent.click(container.querySelector<HTMLButtonElement>(".finding-row")!);
+  expect(container.querySelector(".finding-detail h2")?.textContent).toBe("Problem one");
+
+  fireEvent.change(within(container).getByRole("combobox", { name: "Severity" }), {
+    target: { value: "low" },
+  });
+  expect(container.querySelectorAll(".finding-row")).toHaveLength(0);
+  expect(container.querySelector(".finding-detail--empty")).not.toBeNull();
+
+  fireEvent.click(container.querySelector<HTMLButtonElement>(".priority-card")!);
+  await waitFor(() => expect(container.querySelector(".finding-detail h2")?.textContent).toBe("Problem one"));
+  expect(container.querySelectorAll(".finding-row")).toHaveLength(2);
+  expect((within(container).getByRole("combobox", { name: "Severity" }) as HTMLSelectElement).value).toBe("all");
 });

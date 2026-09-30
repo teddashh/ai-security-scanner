@@ -2356,7 +2356,19 @@ export function FindingsPage({
   const [groupFindingIds, setGroupFindingIds] = useState<string[]>([]);
   const appliedFocusId = useRef<string | undefined>(undefined);
   const advancedFiltersRef = useRef<HTMLDetailsElement>(null);
-  const revealFinding = (findingId: string, scrollOnWideLayout = true): void => {
+  const clearFilters = () => {
+    setQuery("");
+    setSeverity("all");
+    setWorkflow("all");
+    setExpertType("all");
+    setControl("all");
+    setSelectedAssetId(undefined);
+  };
+  const revealFinding = (
+    findingId: string,
+    { preserveFilters = false, scrollOnWideLayout = true } = {},
+  ): void => {
+    if (!preserveFilters) clearFilters();
     setSelectedId(findingId);
     window.setTimeout(() => scrollToSelectedFinding(scrollOnWideLayout), 0);
   };
@@ -2364,7 +2376,7 @@ export function FindingsPage({
   useEffect(() => {
     if (focusedFindingId && appliedFocusId.current !== focusedFindingId && findings.some((finding) => finding.id === focusedFindingId)) {
       appliedFocusId.current = focusedFindingId;
-      setSelectedAssetId(undefined);
+      clearFilters();
       setSelectedId(focusedFindingId);
       window.setTimeout(scrollToSelectedFinding, 0);
     }
@@ -2428,7 +2440,7 @@ export function FindingsPage({
     });
   }, [collationLocale, control, expertType, ordered, query, selectedAssetId, severity, workflow]);
 
-  const selected = findings.find((finding) => finding.id === selectedId);
+  const selected = filtered.find((finding) => finding.id === selectedId);
   const selectedScannerRemediations = selected
     ? uniqueScannerRemediations(selected.evidence)
     : [];
@@ -2947,17 +2959,10 @@ export function FindingsPage({
   }
 
   const applyControlFilter = (key: string) => {
+    clearFilters();
     setControl(key);
     if (advancedFiltersRef.current) advancedFiltersRef.current.open = true;
     document.getElementById("finding-browser")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-  const clearFilters = () => {
-    setQuery("");
-    setSeverity("all");
-    setWorkflow("all");
-    setExpertType("all");
-    setControl("all");
-    setSelectedAssetId(undefined);
   };
   const activeFilterCount = [severity !== "all", workflow !== "all", expertType !== "all", control !== "all", Boolean(query.trim()), selectedAssetId !== undefined].filter(Boolean).length;
   const submitDecision = async (event: FormEvent) => {
@@ -3123,7 +3128,7 @@ export function FindingsPage({
                     setControl("all");
                     setQuery("");
                     setSelectedAssetId(asset.assetId);
-                    revealFinding(asset.topFindingId);
+                    revealFinding(asset.topFindingId, { preserveFilters: true });
                   }}
                   aria-label={`${text(copy.affectedAssetOpen)}: ${asset.label}`}
                 >
@@ -3467,7 +3472,7 @@ export function FindingsPage({
                 <button
                   type="button"
                   className={selectedId === finding.id ? "finding-row finding-row--active" : "finding-row"}
-                  onClick={() => revealFinding(finding.id, false)}
+                  onClick={() => revealFinding(finding.id, { preserveFilters: true, scrollOnWideLayout: false })}
                 >
                   <span className="finding-row__priority" aria-label={text(copy.rankAria, { rank: displayRankByFindingId.get(finding.id) ?? "—" })}>
                     {text(copy.rank, { rank: displayRankByFindingId.get(finding.id) ?? "—" })}
