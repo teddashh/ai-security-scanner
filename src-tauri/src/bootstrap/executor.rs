@@ -14,13 +14,15 @@ use crate::error::{AppError, AppResult};
 use crate::source_authorization::VerifiedProviderAuthorization;
 use crate::source_authorization::provider::{
     AwsNativeAuthorizationConfig, AwsRoleCredentials, AwsSigningCredentials,
-    DeviceAuthorizationPrompt, GcpNativeAuthorizationConfig, MicrosoftNativeAuthorizationConfig,
-    PollAuthorization, ProviderHttp, ProviderHttpMethod, aws_query_encode, aws_signed_request,
-    aws_simulation_decisions, bearer_get, bearer_header, begin_aws_native_authorization,
-    decode_success_json, ensure_status, execute_json, form_request, json_request, oauth_error,
-    poll_aws_role_credentials, random_bytes, request, serializable_json_request,
-    verify_bootstrap_aws_credentials, verify_bootstrap_azure_token, verify_bootstrap_gcp_token,
-    verify_bootstrap_microsoft365_token, xml_first,
+    DeviceAuthorizationPrompt, DeviceSignInPage, GcpNativeAuthorizationConfig,
+    MicrosoftNativeAuthorizationConfig, PollAuthorization, ProviderHttp, ProviderHttpMethod,
+    aws_query_encode, aws_signed_request, aws_simulation_decisions, bearer_get, bearer_header,
+    begin_aws_native_authorization, bounded_expiry, decode_success_json, device_poll_retry,
+    ensure_status, execute_json, form_request, json_request, poll_aws_role_credentials,
+    provider_token_lifetime_is_valid, random_bytes, request, resolve_aws_session_role,
+    serializable_json_request, validate_device_response, verify_bootstrap_aws_credentials,
+    verify_bootstrap_azure_token, verify_bootstrap_gcp_token, verify_bootstrap_microsoft365_token,
+    xml_first,
 };
 use base64::Engine as _;
 use chrono::{DateTime, Duration, Utc};
@@ -2096,7 +2098,9 @@ fn cleanup_partial_aws(
         secret_access_key: admin_role.secret_access_key,
         session_token: admin_role.session_token,
     };
-    verify_aws_bootstrap_permissions(http, &administrator, &credentials, interaction.now())?;
+    let admin_role_arn =
+        resolve_aws_session_role(http, &administrator, &credentials, interaction.now())?.role_arn;
+    verify_aws_bootstrap_permissions(http, &admin_role_arn, &credentials, interaction.now())?;
     for index in partial_execution_order(ledger)? {
         let item = ledger.items[index].clone();
         if partial_item_is_completed(ledger, &item)? {
@@ -2482,7 +2486,9 @@ fn cleanup_aws(
         secret_access_key: admin_role.secret_access_key,
         session_token: admin_role.session_token,
     };
-    verify_aws_bootstrap_permissions(http, &administrator, &credentials, interaction.now())?;
+    let admin_role_arn =
+        resolve_aws_session_role(http, &administrator, &credentials, interaction.now())?.role_arn;
+    verify_aws_bootstrap_permissions(http, &admin_role_arn, &credentials, interaction.now())?;
     let item_ids = ledger
         .items
         .iter()
@@ -2919,7 +2925,13 @@ fn execute_aws(
         secret_access_key: admin_role.secret_access_key,
         session_token: admin_role.session_token,
     };
-    verify_aws_bootstrap_permissions(http, &administrator, &admin_credentials, interaction.now())?;
+    // An IAM Identity Center session runs as a reserved role whose exact ARN
+    // only IAM knows; the permission check and the scan role's trust policy
+    // both need that ARN.
+    let admin_role_arn =
+        resolve_aws_session_role(http, &administrator, &admin_credentials, interaction.now())?
+            .role_arn;
+    verify_aws_bootstrap_permissions(http, &admin_role_arn, &admin_credentials, interaction.now())?;
 
     let external_id = Zeroizing::new(
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random_bytes::<32>()?.as_slice()),
@@ -2946,7 +2958,7 @@ fn execute_aws(
         &admin_credentials,
         &stack_name,
         &bootstrap.scan_identity_name,
-        &administrator.role_arn,
+        &admin_role_arn,
         &external_id,
         interaction.now(),
     )?;
@@ -3044,7 +3056,7 @@ fn poll_aws_until_complete(
 
 fn verify_aws_bootstrap_permissions(
     http: &dyn ProviderHttp,
-    config: &AwsNativeAuthorizationConfig,
+    admin_role_arn: &str,
     credentials: &AwsSigningCredentials,
     now: DateTime<Utc>,
 ) -> AppResult<()> {
@@ -3064,7 +3076,7 @@ fn verify_aws_bootstrap_permissions(
     let mut fields = vec![
         ("Action".to_owned(), "SimulatePrincipalPolicy".to_owned()),
         ("Version".to_owned(), "2010-05-08".to_owned()),
-        ("PolicySourceArn".to_owned(), config.role_arn.clone()),
+        ("PolicySourceArn".to_owned(), admin_role_arn.to_owned()),
     ];
     for (index, action) in required.iter().enumerate() {
         fields.push((
@@ -3258,14 +3270,13 @@ fn aws_assume_scan_role(
     ensure_status(&response, &[200], "AWS dedicated scanner role assumption")?;
     let xml = std::str::from_utf8(response.body())
         .map_err(|_| AppError::NotAuthorized("AWS STS returned non-UTF-8 XML".into()))?;
-    let expiration = DateTime::parse_from_rfc3339(&xml_first(xml, "Expiration")?)
+    let issued_expiration = DateTime::parse_from_rfc3339(&xml_first(xml, "Expiration")?)
         .map_err(|_| AppError::NotAuthorized("AWS STS returned invalid credential expiry".into()))?
         .with_timezone(&Utc);
-    if expiration <= now || expiration > requested_expiry || expiration > now + Duration::hours(1) {
-        return Err(AppError::NotAuthorized(
-            "AWS STS returned an out-of-policy scanner credential lifetime".into(),
-        ));
-    }
+    // STS counts the duration from when it issued the session, a moment after
+    // `now`; the app stops using the session at the requested expiry or after
+    // one hour, whichever is sooner.
+    let expiration = bounded_expiry(now, issued_expiration)?.min(requested_expiry);
     Ok(AwsRoleCredentials {
         access_key_id: Zeroizing::new(xml_first(xml, "AccessKeyId")?),
         secret_access_key: Zeroizing::new(xml_first(xml, "SecretAccessKey")?),
@@ -4239,17 +4250,18 @@ fn generate_gcp_service_account_token(
         &[200],
         "Google dedicated service account token generation",
     )?;
-    if token.access_token.is_empty()
-        || token.access_token.len() > 128 * 1024
-        || token.expire_time <= now
-        || token.expire_time > requested_expiry
-        || token.expire_time > now + Duration::hours(1)
-    {
+    if token.access_token.is_empty() || token.access_token.len() > 128 * 1024 {
         return Err(AppError::NotAuthorized(
-            "Google returned an invalid or longer-than-one-hour scanner token".into(),
+            "Google returned an invalid scanner token".into(),
         ));
     }
-    Ok(token)
+    // Google counts the lifetime from when it issued the token, a moment after
+    // `now`; the app stops using it at the requested expiry or after one hour.
+    let expire_time = bounded_expiry(now, token.expire_time)?.min(requested_expiry);
+    Ok(GcpGeneratedAccessToken {
+        expire_time,
+        ..token
+    })
 }
 
 fn execute_microsoft365(
@@ -4558,15 +4570,13 @@ fn microsoft_admin_device_authorization(
         &[200],
         "Microsoft bootstrap device authorization",
     )?;
-    if device.expires_in == 0
-        || device.expires_in > 900
-        || device.interval == 0
-        || device.interval > 30
-    {
-        return Err(AppError::NotAuthorized(
-            "Microsoft returned an unsafe bootstrap device authorization lifetime".into(),
-        ));
-    }
+    validate_device_response(
+        DeviceSignInPage::Microsoft,
+        &device.verification_uri,
+        None,
+        device.expires_in,
+        device.interval,
+    )?;
     let prompt = DeviceAuthorizationPrompt {
         provider: match purpose {
             MicrosoftAdminPurpose::Azure => BootstrapProvider::Azure,
@@ -4585,6 +4595,7 @@ fn microsoft_admin_device_authorization(
         config.tenant_id
     );
     let mut token = None;
+    let mut poll_interval_seconds = prompt.poll_interval_seconds;
     for _ in 0..MAX_POLL_ATTEMPTS {
         if interaction.now() >= prompt.expires_at {
             break;
@@ -4599,8 +4610,10 @@ fn microsoft_admin_device_authorization(
             ],
             Vec::new(),
         )?)?;
-        if response.status == 400 && oauth_error(&response)? == "authorization_pending" {
-            interaction.wait(prompt.poll_interval_seconds)?;
+        if let Some(retry_after_seconds) =
+            device_poll_retry(&response, &mut poll_interval_seconds, "Microsoft")?
+        {
+            interaction.wait(retry_after_seconds)?;
             continue;
         }
         token = Some(decode_success_json::<BootstrapOAuthToken>(
@@ -5255,9 +5268,10 @@ fn microsoft365_application_permissions() -> Vec<String> {
 }
 
 fn require_bootstrap_token_lifetime(expires_in: u32) -> AppResult<()> {
-    if expires_in == 0 || expires_in > 3600 {
+    if !provider_token_lifetime_is_valid(expires_in) {
         return Err(AppError::NotAuthorized(
-            "provider issued an invalid or longer-than-one-hour bootstrap token".into(),
+            "provider issued an invalid bootstrap token or one that lasts longer than twelve hours"
+                .into(),
         ));
     }
     Ok(())

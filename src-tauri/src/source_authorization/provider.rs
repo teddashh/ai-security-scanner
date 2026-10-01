@@ -31,6 +31,16 @@ const MICROSOFT_ARM_ROOT: &str = "https://management.azure.com";
 const GOOGLE_AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_ENDPOINT: &str = "https://openidconnect.googleapis.com/v1/userinfo";
+/// The app keeps and uses a scanner credential for at most this long, however
+/// long the provider issued it for.
+const SCANNER_CREDENTIAL_USE_LIMIT: Duration = Duration::hours(1);
+/// Longest credential lifetime a provider may issue before the response is
+/// treated as malformed. AWS role sessions last up to 12 hours; Microsoft
+/// access tokens last 60 to 90 minutes.
+const MAX_PROVIDER_CREDENTIAL_LIFETIME_SECONDS: u32 = 12 * 60 * 60;
+/// Allowance for the provider's clock running ahead of this computer's.
+const PROVIDER_CLOCK_SKEW: Duration = Duration::minutes(5);
+const MAX_DEVICE_POLL_INTERVAL_SECONDS: u64 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderHttpMethod {
@@ -413,7 +423,16 @@ pub fn begin_aws_native_authorization(
         &[200],
         "AWS IAM Identity Center device authorization",
     )?;
-    validate_device_response(&device.verification_uri, device.expires_in, device.interval)?;
+    validate_device_response(
+        DeviceSignInPage::Aws {
+            region: &config.region,
+            start_url: &config.start_url,
+        },
+        &device.verification_uri,
+        device.verification_uri_complete.as_deref(),
+        device.expires_in,
+        device.interval,
+    )?;
     let expires_at = now + Duration::seconds(i64::from(device.expires_in.min(900)));
     let prompt = DeviceAuthorizationPrompt {
         provider: BootstrapProvider::Aws,
@@ -480,9 +499,11 @@ pub(crate) fn poll_aws_role_credentials(
         }),
         Vec::new(),
     )?)?;
-    if response.status == 400 && oauth_error(&response)? == "authorization_pending" {
+    if let Some(retry_after_seconds) =
+        device_poll_retry(&response, &mut pending.poll_interval_seconds, "AWS")?
+    {
         return Ok(PollAuthorization::Pending {
-            retry_after_seconds: pending.poll_interval_seconds,
+            retry_after_seconds,
         });
     }
     let token: AwsTokenResponse =
@@ -559,7 +580,9 @@ pub fn begin_microsoft_native_authorization(
         "Microsoft device authorization",
     )?;
     validate_device_response(
+        DeviceSignInPage::Microsoft,
         &response.verification_uri,
+        None,
         response.expires_in,
         response.interval,
     )?;
@@ -607,9 +630,11 @@ pub fn poll_microsoft_native_authorization(
         ],
         Vec::new(),
     )?)?;
-    if response.status == 400 && oauth_error(&response)? == "authorization_pending" {
+    if let Some(retry_after_seconds) =
+        device_poll_retry(&response, &mut pending.poll_interval_seconds, "Microsoft")?
+    {
         return Ok(PollAuthorization::Pending {
-            retry_after_seconds: pending.poll_interval_seconds,
+            retry_after_seconds,
         });
     }
     let mut graph_token: OAuthTokenResponse =
@@ -931,37 +956,14 @@ fn verify_aws_credentials(
         secret_access_key: credentials.secret_access_key,
         session_token: credentials.session_token,
     };
-    let sts_body = Zeroizing::new(b"Action=GetCallerIdentity&Version=2011-06-15".to_vec());
-    let sts_url = format!("https://sts.{}.amazonaws.com/", config.region);
-    let sts_response = http.execute(aws_signed_request(
-        ProviderHttpMethod::Post,
-        &sts_url,
-        "sts",
-        &config.region,
-        sts_body,
-        &aws_credentials,
-        now,
-    )?)?;
-    ensure_status(&sts_response, &[200], "AWS STS identity verification")?;
-    let sts_xml = std::str::from_utf8(sts_response.body())
-        .map_err(|_| AppError::NotAuthorized("AWS STS returned non-UTF-8 XML".into()))?;
-    let account = xml_first(sts_xml, "Account")?;
-    let caller_arn = xml_first(sts_xml, "Arn")?;
-    if account != config.account_id
-        || !caller_arn.starts_with(&format!("arn:aws:sts::{}:assumed-role/", config.account_id))
-        || !caller_arn.contains(&format!("/{}/", config.role_name))
-    {
-        return Err(AppError::NotAuthorized(
-            "AWS STS identity does not match the configured account and read-only role".into(),
-        ));
-    }
+    let session = resolve_aws_session_role(http, config, &aws_credentials, now)?;
 
     let required = aws_required_permissions();
     let prohibited = aws_prohibited_permissions();
     let mut pairs = vec![
         ("Action".to_owned(), "SimulatePrincipalPolicy".to_owned()),
         ("Version".to_owned(), "2010-05-08".to_owned()),
-        ("PolicySourceArn".to_owned(), config.role_arn.clone()),
+        ("PolicySourceArn".to_owned(), session.role_arn.clone()),
     ];
     for (index, action) in required.iter().chain(prohibited.iter()).enumerate() {
         pairs.push((format!("ActionNames.member.{}", index + 1), action.clone()));
@@ -1002,21 +1004,23 @@ fn verify_aws_credentials(
             )));
         }
     }
-    let identity = config.role_arn.clone();
+    let identity = session.role_arn;
+    let mut request_ids = session.request_ids;
+    request_ids.extend(collect_request_ids([&iam_response]));
     let proof = build_proof(
         BootstrapProvider::Aws,
         ProviderSourceProfile::AwsOrganizationReadOnlySession,
         authentication_method,
         &identity,
-        &caller_arn,
+        &session.caller_arn,
         &format!("aws-account:{}", config.account_id),
         now,
         expires_at,
-        &sts_url,
+        &session.identity_endpoint,
         vec!["https://iam.amazonaws.com/".into()],
         required,
         prohibited,
-        collect_request_ids([&sts_response, &iam_response]),
+        request_ids,
     )?;
     VerifiedProviderAuthorization::new_verified(
         ProviderSourceProfile::AwsOrganizationReadOnlySession,
@@ -1030,6 +1034,142 @@ fn verify_aws_credentials(
             SecretEnvironmentValue::new("AWS_SESSION_TOKEN", aws_credentials.session_token),
         ]),
     )
+}
+
+/// The exact IAM role behind a set of signed-in AWS credentials.
+pub(crate) struct AwsSessionRole {
+    pub(crate) role_arn: String,
+    caller_arn: String,
+    identity_endpoint: String,
+    request_ids: Vec<String>,
+}
+
+/// Confirms the credentials belong to the configured account and role, and
+/// resolves that role's exact ARN. IAM Identity Center signs a person in
+/// through a reserved role named `AWSReservedSSO_<permission set>_<suffix>`
+/// under the `aws-reserved/sso.amazonaws.com/` path, so that ARN is read from
+/// IAM instead of being built from the permission set name.
+pub(crate) fn resolve_aws_session_role(
+    http: &dyn ProviderHttp,
+    config: &AwsNativeAuthorizationConfig,
+    credentials: &AwsSigningCredentials,
+    now: DateTime<Utc>,
+) -> AppResult<AwsSessionRole> {
+    let sts_url = format!("https://sts.{}.amazonaws.com/", config.region);
+    let sts_response = http.execute(aws_signed_request(
+        ProviderHttpMethod::Post,
+        &sts_url,
+        "sts",
+        &config.region,
+        Zeroizing::new(b"Action=GetCallerIdentity&Version=2011-06-15".to_vec()),
+        credentials,
+        now,
+    )?)?;
+    ensure_status(&sts_response, &[200], "AWS STS identity verification")?;
+    let sts_xml = std::str::from_utf8(sts_response.body())
+        .map_err(|_| AppError::NotAuthorized("AWS STS returned non-UTF-8 XML".into()))?;
+    let account = xml_first(sts_xml, "Account")?;
+    let caller_arn = xml_first(sts_xml, "Arn")?;
+    let mismatch = || {
+        AppError::NotAuthorized(
+            "AWS STS identity does not match the configured account and read-only role".into(),
+        )
+    };
+    let session_role = caller_arn
+        .strip_prefix(&format!("arn:aws:sts::{}:assumed-role/", config.account_id))
+        .and_then(|rest| rest.split_once('/'))
+        .map(|(role, _)| role.to_owned())
+        .filter(|_| account == config.account_id)
+        .ok_or_else(mismatch)?;
+    let mut request_ids = collect_request_ids([&sts_response]);
+    if session_role == config.role_name {
+        return Ok(AwsSessionRole {
+            role_arn: config.role_arn.clone(),
+            caller_arn,
+            identity_endpoint: sts_url,
+            request_ids,
+        });
+    }
+    if !aws_reserved_sso_role_name(&session_role, &config.role_name) {
+        return Err(mismatch());
+    }
+    let iam_response = http.execute(aws_signed_request(
+        ProviderHttpMethod::Post,
+        "https://iam.amazonaws.com/",
+        "iam",
+        "us-east-1",
+        Zeroizing::new(
+            format!(
+                "Action=GetRole&RoleName={}&Version=2010-05-08",
+                aws_query_encode(&session_role)
+            )
+            .into_bytes(),
+        ),
+        credentials,
+        now,
+    )?)?;
+    ensure_status(&iam_response, &[200], "AWS IAM Identity Center role lookup")?;
+    let iam_xml = std::str::from_utf8(iam_response.body())
+        .map_err(|_| AppError::NotAuthorized("AWS IAM returned non-UTF-8 XML".into()))?;
+    let role_arn = xml_first(iam_xml, "Arn")?;
+    if xml_first(iam_xml, "RoleName")? != session_role
+        || !role_arn.ends_with(&format!("/{session_role}"))
+        || !aws_reserved_sso_role_arn(&role_arn, &config.account_id, &config.role_name)
+    {
+        return Err(AppError::NotAuthorized(
+            "AWS IAM returned a different role than the signed-in IAM Identity Center session"
+                .into(),
+        ));
+    }
+    // An exact role ARN typed into the connection details must be the role the
+    // person signed in with; the app's derived default only names the
+    // permission set.
+    if config.role_arn != role_arn
+        && config.role_arn
+            != format!(
+                "arn:aws:iam::{}:role/{}",
+                config.account_id, config.role_name
+            )
+    {
+        return Err(AppError::NotAuthorized(
+            "the AWS role ARN in the connection details is not the role the person signed in with"
+                .into(),
+        ));
+    }
+    request_ids.extend(collect_request_ids([&iam_response]));
+    Ok(AwsSessionRole {
+        role_arn,
+        caller_arn,
+        identity_endpoint: sts_url,
+        request_ids,
+    })
+}
+
+/// `AWSReservedSSO_<permission set>_<suffix>`, the role IAM Identity Center
+/// creates for one permission set in one account.
+fn aws_reserved_sso_role_name(role_name: &str, permission_set: &str) -> bool {
+    role_name
+        .strip_prefix("AWSReservedSSO_")
+        .and_then(|rest| rest.strip_prefix(permission_set))
+        .and_then(|rest| rest.strip_prefix('_'))
+        .is_some_and(|suffix| {
+            !suffix.is_empty()
+                && suffix.len() <= 32
+                && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+}
+
+/// `arn:aws:iam::<account>:role/aws-reserved/sso.amazonaws.com/[<region>/]AWSReservedSSO_…`
+fn aws_reserved_sso_role_arn(arn: &str, account_id: &str, permission_set: &str) -> bool {
+    let Some(path) = arn.strip_prefix(&format!(
+        "arn:aws:iam::{account_id}:role/aws-reserved/sso.amazonaws.com/"
+    )) else {
+        return false;
+    };
+    let (region, name) = path.rsplit_once('/').unwrap_or(("", path));
+    arn.len() <= 2048
+        && (region.is_empty() || valid_aws_region(region))
+        && aws_reserved_sso_role_name(name, permission_set)
 }
 
 fn verify_azure_token(
@@ -1568,11 +1708,12 @@ fn validate_aws_config(config: &AwsNativeAuthorizationConfig) -> AppResult<()> {
     let role_prefix = format!("arn:aws:iam::{}:role/", config.account_id);
     if !config.role_arn.starts_with(&role_prefix)
         || config.role_arn.len() > 2048
-        || config
+        || (config
             .role_arn
             .rsplit('/')
             .next()
             .is_none_or(|name| name != config.role_name)
+            && !aws_reserved_sso_role_arn(&config.role_arn, &config.account_id, &config.role_name))
     {
         return Err(AppError::InvalidRequest(
             "AWS role_arn must exactly identify the configured account and role name".into(),
@@ -1713,10 +1854,63 @@ fn validate_provider_endpoint(url: &Url) -> AppResult<()> {
     Ok(())
 }
 
-fn validate_device_response(uri: &str, expires_in: u32, interval: u32) -> AppResult<()> {
-    let uri = Url::parse(uri)
-        .map_err(|_| AppError::NotAuthorized("provider returned an invalid login URI".into()))?;
-    validate_provider_endpoint(&uri)?;
+/// The provider-hosted page a person opens to enter a device code. These
+/// pages are not API endpoints this app calls, so they have their own list.
+pub(crate) enum DeviceSignInPage<'a> {
+    Aws { region: &'a str, start_url: &'a str },
+    Microsoft,
+}
+
+impl DeviceSignInPage<'_> {
+    fn trusts(&self, uri: &str) -> bool {
+        let Ok(url) = Url::parse(uri) else {
+            return false;
+        };
+        if url.scheme() != "https"
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.port().is_some()
+        {
+            return false;
+        }
+        let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+        match self {
+            // AWS sends `device.sso.<region>.amazonaws.com`; older Identity
+            // Center instances send the organization's own access portal.
+            Self::Aws { region, start_url } => {
+                host == format!("device.sso.{region}.amazonaws.com")
+                    || Url::parse(start_url).is_ok_and(|start| {
+                        start
+                            .host_str()
+                            .is_some_and(|start_host| start_host.eq_ignore_ascii_case(&host))
+                    })
+            }
+            Self::Microsoft => matches!(
+                host.as_str(),
+                "microsoft.com"
+                    | "www.microsoft.com"
+                    | "login.microsoft.com"
+                    | "login.microsoftonline.com"
+            ),
+        }
+    }
+}
+
+pub(crate) fn validate_device_response(
+    page: DeviceSignInPage<'_>,
+    verification_uri: &str,
+    verification_uri_complete: Option<&str>,
+    expires_in: u32,
+    interval: u32,
+) -> AppResult<()> {
+    if !page.trusts(verification_uri)
+        || verification_uri_complete.is_some_and(|uri| !page.trusts(uri))
+    {
+        return Err(AppError::NotAuthorized(format!(
+            "provider sent a sign-in page outside the expected provider sites: {}",
+            safe_label(verification_uri)
+        )));
+    }
     if expires_in == 0 || expires_in > 900 || interval == 0 || interval > 30 {
         return Err(AppError::NotAuthorized(
             "provider returned an unsafe device-code lifetime or polling interval".into(),
@@ -1725,27 +1919,78 @@ fn validate_device_response(uri: &str, expires_in: u32, interval: u32) -> AppRes
     Ok(())
 }
 
+/// Reads a device-code token response that is not a token yet (RFC 8628
+/// section 3.5). Returns the seconds to wait before polling again, `None` for
+/// a response that is not an OAuth error, and an error once the sign-in has
+/// ended without a token.
+pub(crate) fn device_poll_retry(
+    response: &ProviderHttpResponse,
+    interval_seconds: &mut u64,
+    provider: &str,
+) -> AppResult<Option<u64>> {
+    if response.status != 400 {
+        return Ok(None);
+    }
+    let body = oauth_error_body(response)?;
+    match body.error.as_str() {
+        "authorization_pending" => Ok(Some(*interval_seconds)),
+        "slow_down" => {
+            *interval_seconds = (*interval_seconds + 5).min(MAX_DEVICE_POLL_INTERVAL_SECONDS);
+            Ok(Some(*interval_seconds))
+        }
+        "expired_token" => Err(AppError::NotAuthorized(format!(
+            "the {provider} sign-in code expired before sign-in finished; start the sign-in again"
+        ))),
+        "access_denied" | "authorization_declined" => Err(AppError::NotAuthorized(format!(
+            "the {provider} sign-in was declined"
+        ))),
+        other => Err(AppError::NotAuthorized(format!(
+            "the {provider} sign-in failed with {}{}",
+            safe_label(other),
+            body.error_codes
+                .first()
+                .map(|code| format!(" (error code {code})"))
+                .unwrap_or_default()
+        ))),
+    }
+}
+
+/// Microsoft issues access tokens for 60 to 90 minutes, so a token's own
+/// lifetime may exceed the app's one-hour use limit; `bounded_expiry` caps
+/// how long the app keeps it.
+pub(crate) fn provider_token_lifetime_is_valid(expires_in: u32) -> bool {
+    expires_in > 0 && expires_in <= MAX_PROVIDER_CREDENTIAL_LIFETIME_SECONDS
+}
+
 fn validate_bearer_token(token: &OAuthTokenResponse) -> AppResult<()> {
     if !token.token_type.eq_ignore_ascii_case("bearer")
         || token.access_token.is_empty()
         || token.access_token.len() > 128 * 1024
-        || token.expires_in == 0
-        || token.expires_in > 3600
+        || !provider_token_lifetime_is_valid(token.expires_in)
     {
         return Err(AppError::NotAuthorized(
-            "provider returned an invalid or longer-than-one-hour bearer credential".into(),
+            "provider returned an invalid bearer credential or one that lasts longer than twelve hours".into(),
         ));
     }
     Ok(())
 }
 
-fn bounded_expiry(now: DateTime<Utc>, provider_expiry: DateTime<Utc>) -> AppResult<DateTime<Utc>> {
-    if provider_expiry <= now || provider_expiry > now + Duration::hours(1) {
+/// When the app stops using a scanner credential: the provider's expiry or
+/// one hour from `now`, whichever is sooner.
+pub(crate) fn bounded_expiry(
+    now: DateTime<Utc>,
+    provider_expiry: DateTime<Utc>,
+) -> AppResult<DateTime<Utc>> {
+    let longest = now
+        + Duration::seconds(i64::from(MAX_PROVIDER_CREDENTIAL_LIFETIME_SECONDS))
+        + PROVIDER_CLOCK_SKEW;
+    if provider_expiry <= now || provider_expiry > longest {
         return Err(AppError::NotAuthorized(
-            "provider scanner credential must expire within one hour".into(),
+            "provider scanner credential is already expired or lasts longer than twelve hours"
+                .into(),
         ));
     }
-    Ok(provider_expiry)
+    Ok(provider_expiry.min(now + SCANNER_CREDENTIAL_USE_LIMIT))
 }
 
 fn microsoft_requested_scopes(profile: ProviderSourceProfile) -> Vec<String> {
@@ -1932,8 +2177,12 @@ fn normalize_scopes(scopes: &str) -> Vec<String> {
 
 fn require_scopes(granted: &str, required: &[String]) -> AppResult<()> {
     let values = normalize_scopes(granted);
+    // OpenID Connect scopes grant no resource access, and providers may leave
+    // them out of the granted list: Microsoft does not list `offline_access`
+    // even when it issues the refresh token it stands for.
     let normalized_required = required
         .iter()
+        .filter(|scope| !matches!(scope.as_str(), "openid" | "profile" | "offline_access"))
         .map(|scope| scope.rsplit('/').next().unwrap_or(scope).to_owned())
         .collect::<Vec<_>>();
     let value_set: BTreeSet<_> = values
@@ -2137,35 +2386,19 @@ pub(crate) fn ensure_status(
     }
 }
 
-pub(crate) fn oauth_error(response: &ProviderHttpResponse) -> AppResult<String> {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct OAuthError {
-        error: String,
-        #[serde(default)]
-        error_description: Option<String>,
-        #[serde(default)]
-        error_codes: Vec<i64>,
-        #[serde(default)]
-        timestamp: Option<String>,
-        #[serde(default)]
-        trace_id: Option<String>,
-        #[serde(default)]
-        correlation_id: Option<String>,
-        #[serde(default)]
-        error_uri: Option<String>,
-    }
-    let parsed: OAuthError = serde_json::from_slice(response.body())
-        .map_err(|_| AppError::NotAuthorized("provider OAuth exchange failed".into()))?;
-    let _ = (
-        parsed.error_description,
-        parsed.error_codes,
-        parsed.timestamp,
-        parsed.trace_id,
-        parsed.correlation_id,
-        parsed.error_uri,
-    );
-    Ok(parsed.error)
+/// An OAuth error body. Providers add their own fields (Microsoft sends trace
+/// and correlation IDs, AWS may add more), so only the fields read here are
+/// required.
+#[derive(Deserialize)]
+struct OAuthErrorBody {
+    error: String,
+    #[serde(default)]
+    error_codes: Vec<i64>,
+}
+
+fn oauth_error_body(response: &ProviderHttpResponse) -> AppResult<OAuthErrorBody> {
+    serde_json::from_slice(response.body())
+        .map_err(|_| AppError::NotAuthorized("provider OAuth exchange failed".into()))
 }
 
 pub(crate) struct AwsSigningCredentials {
@@ -2174,12 +2407,63 @@ pub(crate) struct AwsSigningCredentials {
     pub(crate) session_token: Zeroizing<String>,
 }
 
+/// Signs an AWS Query-protocol request (STS, IAM, CloudFormation).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn aws_signed_request(
     method: ProviderHttpMethod,
     url: &str,
     service: &str,
     region: &str,
+    body: Zeroizing<Vec<u8>>,
+    credentials: &AwsSigningCredentials,
+    now: DateTime<Utc>,
+) -> AppResult<ProviderHttpRequest> {
+    aws_sign(
+        method,
+        url,
+        service,
+        region,
+        "application/x-www-form-urlencoded; charset=utf-8",
+        None,
+        body,
+        credentials,
+        now,
+    )
+}
+
+/// Signs an AWS JSON 1.1 request, the protocol AWS Organizations speaks.
+/// `target` is the `X-Amz-Target` operation, such as
+/// `AWSOrganizationsV20161128.ListAccounts`.
+pub(crate) fn aws_signed_json_request(
+    url: &str,
+    service: &str,
+    region: &str,
+    target: &str,
+    body: Zeroizing<Vec<u8>>,
+    credentials: &AwsSigningCredentials,
+    now: DateTime<Utc>,
+) -> AppResult<ProviderHttpRequest> {
+    aws_sign(
+        ProviderHttpMethod::Post,
+        url,
+        service,
+        region,
+        "application/x-amz-json-1.1",
+        Some(target),
+        body,
+        credentials,
+        now,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn aws_sign(
+    method: ProviderHttpMethod,
+    url: &str,
+    service: &str,
+    region: &str,
+    content_type: &str,
+    target: Option<&str>,
     body: Zeroizing<Vec<u8>>,
     credentials: &AwsSigningCredentials,
     now: DateTime<Utc>,
@@ -2192,12 +2476,15 @@ pub(crate) fn aws_signed_request(
         .ok_or_else(|| AppError::Internal("AWS endpoint host is missing".into()))?;
     let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
     let date = now.format("%Y%m%d").to_string();
-    let content_type = "application/x-www-form-urlencoded; charset=utf-8";
-    let canonical_headers = format!(
+    let mut canonical_headers = format!(
         "content-type:{content_type}\nhost:{host}\nx-amz-date:{amz_date}\nx-amz-security-token:{}\n",
         credentials.session_token.as_str()
     );
-    let signed_headers = "content-type;host;x-amz-date;x-amz-security-token";
+    let mut signed_headers = "content-type;host;x-amz-date;x-amz-security-token".to_owned();
+    if let Some(target) = target {
+        canonical_headers.push_str(&format!("x-amz-target:{target}\n"));
+        signed_headers.push_str(";x-amz-target");
+    }
     let payload_hash = hex::encode(Sha256::digest(body.as_slice()));
     let canonical_request = format!(
         "{}\n{}\n{}\n{}\n{}\n{}",
@@ -2241,20 +2528,19 @@ pub(crate) fn aws_signed_request(
         signed_headers,
         signature
     ));
-    request(
-        method,
-        url,
-        vec![
-            ("content-type".into(), Zeroizing::new(content_type.into())),
-            ("x-amz-date".into(), Zeroizing::new(amz_date)),
-            (
-                "x-amz-security-token".into(),
-                credentials.session_token.clone(),
-            ),
-            ("authorization".into(), authorization),
-        ],
-        body,
-    )
+    let mut headers = vec![
+        ("content-type".into(), Zeroizing::new(content_type.into())),
+        ("x-amz-date".into(), Zeroizing::new(amz_date)),
+        (
+            "x-amz-security-token".into(),
+            credentials.session_token.clone(),
+        ),
+    ];
+    if let Some(target) = target {
+        headers.push(("x-amz-target".into(), Zeroizing::new(target.into())));
+    }
+    headers.push(("authorization".into(), authorization));
+    request(method, url, headers, body)
 }
 
 fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
@@ -2589,6 +2875,109 @@ struct GoogleTestIamPermissions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identity_center_reserved_roles_match_only_their_permission_set() {
+        for (role, accepted) in [
+            (
+                "AWSReservedSSO_security-audit-reader_0123456789abcdef",
+                true,
+            ),
+            ("AWSReservedSSO_security-audit-reader_", false),
+            ("AWSReservedSSO_security-audit-reader", false),
+            (
+                "AWSReservedSSO_security-audit-reader-extra_0123456789abcdef",
+                false,
+            ),
+            (
+                "AWSReservedSSO_security-audit-reader_extra_0123456789abcdef",
+                false,
+            ),
+            ("AWSReservedSSO_AdministratorAccess_0123456789abcdef", false),
+            ("security-audit-reader", false),
+        ] {
+            assert_eq!(
+                aws_reserved_sso_role_name(role, "security-audit-reader"),
+                accepted,
+                "{role}"
+            );
+        }
+        let prefix = "arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com";
+        let role = "AWSReservedSSO_security-audit-reader_0123456789abcdef";
+        for (arn, accepted) in [
+            (format!("{prefix}/us-east-1/{role}"), true),
+            (format!("{prefix}/{role}"), true),
+            (format!("{prefix}/US_EAST_1/{role}"), false),
+            (format!("{prefix}/us-east-1/extra/{role}"), false),
+            (format!("arn:aws:iam::111122223333:role/{role}"), false),
+            (
+                format!("arn:aws:iam::999999999999:role/aws-reserved/sso.amazonaws.com/{role}"),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                aws_reserved_sso_role_arn(&arn, "111122223333", "security-audit-reader"),
+                accepted,
+                "{arn}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_credentials_up_to_twelve_hours_are_used_for_at_most_one_hour() {
+        assert!(!provider_token_lifetime_is_valid(0));
+        assert!(provider_token_lifetime_is_valid(4537));
+        assert!(provider_token_lifetime_is_valid(12 * 60 * 60));
+        assert!(!provider_token_lifetime_is_valid(12 * 60 * 60 + 1));
+
+        let now = Utc::now();
+        assert_eq!(
+            bounded_expiry(now, now + Duration::minutes(30)).unwrap(),
+            now + Duration::minutes(30)
+        );
+        assert_eq!(
+            bounded_expiry(now, now + Duration::hours(1) + Duration::seconds(3)).unwrap(),
+            now + Duration::hours(1)
+        );
+        assert_eq!(
+            bounded_expiry(now, now + Duration::hours(12)).unwrap(),
+            now + Duration::hours(1)
+        );
+        assert!(bounded_expiry(now, now).is_err());
+        assert!(bounded_expiry(now, now + Duration::hours(12) + Duration::minutes(6)).is_err());
+    }
+
+    #[test]
+    fn aws_json_requests_sign_the_operation_target() {
+        let credentials = AwsSigningCredentials {
+            access_key_id: Zeroizing::new("AKIAFIXTURE000000000".into()),
+            secret_access_key: Zeroizing::new("fixture-secret".into()),
+            session_token: Zeroizing::new("fixture-session".into()),
+        };
+        let request = aws_signed_json_request(
+            "https://organizations.us-east-1.amazonaws.com/",
+            "organizations",
+            "us-east-1",
+            "AWSOrganizationsV20161128.ListAccounts",
+            Zeroizing::new(br#"{"MaxResults":20}"#.to_vec()),
+            &credentials,
+            Utc::now(),
+        )
+        .unwrap();
+        let headers = request
+            .sensitive_headers()
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(headers["content-type"], "application/x-amz-json-1.1");
+        assert_eq!(
+            headers["x-amz-target"],
+            "AWSOrganizationsV20161128.ListAccounts"
+        );
+        assert!(headers["authorization"].contains(
+            "/us-east-1/organizations/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token;x-amz-target, Signature="
+        ));
+        assert!(matches!(request.method(), ProviderHttpMethod::Post));
+    }
 
     #[test]
     fn gcp_organization_permission_probe_covers_recursive_discovery_only() {

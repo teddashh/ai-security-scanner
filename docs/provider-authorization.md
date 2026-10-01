@@ -44,10 +44,10 @@ AWS `role_arn` is derived locally from the region, account, and role. Google Clo
 
 ## Security boundary
 
-- Provider login happens only on the provider-hosted HTTPS page.
+- Provider login happens only on the provider-hosted HTTPS page. A device-code page must be one the provider uses for sign-in: `device.sso.<region>.amazonaws.com` or the organization's own `awsapps.com` access portal for AWS, and `microsoft.com`, `login.microsoft.com`, or `login.microsoftonline.com` for Microsoft.
 - Device codes, PKCE verifier/state/code, refresh tokens, client secrets, access tokens, AWS session credentials, and scanner capability handles have no serde representation. They stay in zeroizing process memory and have redacted `Debug` output.
 - Provider HTTP requests have a fixed host allowlist, no redirects, no environment proxy, bounded responses, and short timeouts.
-- A provider credential must expire in at most one hour. A verification proof must be fresh and match the exact credential, provider, profile, resource, source, case, and engine set.
+- The app accepts a provider credential that lasts up to twelve hours and uses it for at most one hour. Microsoft access tokens last 60 to 90 minutes, and an AWS session lasts its full duration from the moment AWS issues it, so neither ends exactly on the hour. A verification proof must be fresh and match the exact credential, provider, profile, resource, source, case, and engine set.
 - Tokens never enter frontend state, SQLite, case artifacts, logs, environment variables, command-line arguments, or cleanup ledgers.
 - A source is marked connected only after live provider identity and semantic permission checks succeed. Failure prevents use of that exact credential/source but does not abort the case/run or sibling tasks. A scanner gets credentials only through an exact `case_id + source_id + engine_id` checkout. The checkout is bounded and automatically expires.
 
@@ -65,7 +65,7 @@ The installed capability also binds the fixed backend engine ID `provider-native
 
 The live client uses only these fixed read operations:
 
-- AWS Organizations `ListAccounts` at the fixed `organizations.us-east-1.amazonaws.com` endpoint, signed with the verified short-lived role session.
+- AWS Organizations `ListAccounts` at the fixed `organizations.us-east-1.amazonaws.com` endpoint, signed with the verified short-lived role session. The API speaks AWS JSON 1.1 (`X-Amz-Target: AWSOrganizationsV20161128.ListAccounts`) and answers only for the organization's management account or a delegated administrator account.
 - Azure Resource Manager `List Resources` for the exact verified subscription.
 - Google Cloud Resource Manager `folders.list` and `projects.list`, breadth-first from the exact verified organization and then from each provider-returned child folder.
 - Microsoft Graph `organization` plus a bounded `users` projection for the verified tenant.
@@ -97,9 +97,11 @@ asset planning, and revocation remain mandatory for every checkout.
 
 ### AWS preferred flow
 
-Provide an exact IAM Identity Center start URL, region, 12-digit account ID, assigned role name, and role ARN. The assigned read-only role must include the pinned inventory reads plus `iam:SimulatePrincipalPolicy`, because the scanner verifies both required reads and prohibited writes without mutating the account.
+Provide an exact IAM Identity Center start URL, region, 12-digit account ID, assigned role name, and role ARN. The role name is the permission set name shown in the AWS access portal. The assigned read-only role must include the pinned inventory reads plus `iam:SimulatePrincipalPolicy`, because the scanner verifies both required reads and prohibited writes without mutating the account.
 
 The application dynamically registers a public IAM Identity Center OIDC client, starts device authorization, exchanges the device code, confirms that the exact account/role is assigned, obtains short-lived role credentials, calls STS `GetCallerIdentity`, and calls IAM `SimulatePrincipalPolicy`.
+
+IAM Identity Center signs a person in through a role it creates for the permission set: `AWSReservedSSO_<permission set>_<suffix>` under the path `aws-reserved/sso.amazonaws.com/[<region>/]`. When STS reports that role, the application reads its exact ARN with IAM `GetRole` and simulates that role. The role ARN field may keep the derived `role/<permission set>` form; a typed ARN must be the role the person signed in with.
 
 Official protocol references:
 
@@ -108,6 +110,7 @@ Official protocol references:
 - [CreateToken](https://docs.aws.amazon.com/singlesignon/latest/OIDCAPIReference/API_CreateToken.html)
 - [ListAccountRoles](https://docs.aws.amazon.com/singlesignon/latest/PortalAPIReference/API_ListAccountRoles.html) and [GetRoleCredentials](https://docs.aws.amazon.com/singlesignon/latest/PortalAPIReference/API_GetRoleCredentials.html)
 - [GetCallerIdentity](https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html)
+- [GetRole](https://docs.aws.amazon.com/IAM/latest/APIReference/API_GetRole.html) and [IAM Identity Center roles](https://docs.aws.amazon.com/singlesignon/latest/userguide/referencingpermissionsets.html)
 - [SimulatePrincipalPolicy](https://docs.aws.amazon.com/IAM/latest/APIReference/API_SimulatePrincipalPolicy.html)
 
 ### Azure preferred flow
@@ -175,7 +178,7 @@ For `execute`, stdout must be an anonymous pipe. Unix verifies a FIFO descriptor
 
 The provider flows are:
 
-- AWS: IAM Identity Center admin device flow → nonmutating admin permission simulation → exact CloudFormation stack → wait for `CREATE_COMPLETE` → `AssumeRole` for at most one hour → destroy admin session material → STS/IAM scanner verification.
+- AWS: IAM Identity Center admin device flow → read the admin's exact Identity Center role → nonmutating admin permission simulation → exact CloudFormation stack trusting that role → wait for `CREATE_COMPLETE` → `AssumeRole` for at most one hour → destroy admin session material → STS/IAM scanner verification.
 - Azure: Microsoft admin device flow → Graph and ARM nonmutating permission probes → exact application and service principal → exact Reader and Security Reader assignments → client-credentials ARM token → immediately remove the temporary password → destroy admin material → validate token tenant/object claims, subscription, and exact RBAC.
 - Google Cloud: admin Desktop PKCE → organization/project permission probes → exact service account → etag-preserving organization IAM update for the six pinned read-only roles → `generateAccessToken` for the read-only cloud scope → destroy admin material → verify the exact service account, organization, and semantic permissions. The operator must already have `iam.serviceAccounts.getAccessToken` for the created service account; the broker does not create a broad token-creator grant.
 - Microsoft 365: admin device flow → live Graph permission probes → exact application and service principal → dynamically resolve the official Microsoft Graph application-role IDs by permission name → assign only the pinned read roles → client-credentials Graph token → immediately remove the temporary password → destroy admin material → verify the exact service principal, tenant, and read probes. No delegated grant or directory role is created.

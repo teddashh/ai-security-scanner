@@ -6,8 +6,8 @@
 //! inspected. Asset parsing remains the connector registry's responsibility.
 
 use super::provider::{
-    AwsSigningCredentials, ProviderHttp, ProviderHttpMethod, ProviderHttpRequest,
-    ProviderHttpResponse, aws_query_encode, aws_signed_request, bearer_get,
+    AwsSigningCredentials, ProviderHttp, ProviderHttpRequest, ProviderHttpResponse,
+    aws_signed_json_request, bearer_get,
 };
 use super::{
     InstalledSourceAuthorization, PROVIDER_DISCOVERY_ENGINE_ID, PROVIDER_DISCOVERY_RECORD_LIMIT,
@@ -42,6 +42,7 @@ const MAX_CAPTURE_BYTES: usize = 12 * 1024 * 1024;
 const MAX_RETRIES: usize = 1;
 const MAX_CAPTURE_WALL_TIME: StdDuration = StdDuration::from_secs(120);
 const AWS_OPERATION: &str = "organizations:ListAccounts";
+const AWS_LIST_ACCOUNTS_TARGET: &str = "AWSOrganizationsV20161128.ListAccounts";
 const AZURE_OPERATION: &str = "resource-manager:ListResources";
 const AZURE_SUBSCRIPTION_OPERATION: &str = "resource-manager:GetSubscription";
 const GCP_OPERATION: &str = "cloud-resource-manager:ListProjects";
@@ -445,37 +446,28 @@ fn capture_aws(
     };
     let mut next_token: Option<String> = None;
     for page in 0..MAX_SUCCESS_PAGES {
-        let mut pairs = vec![
-            ("Action", "ListAccounts".to_owned()),
-            ("MaxResults", "20".to_owned()),
-            ("Version", "2016-11-28".to_owned()),
-        ];
+        let mut request_body = serde_json::json!({ "MaxResults": 20 });
         if let Some(token) = next_token.as_deref() {
-            pairs.push(("NextToken", token.to_owned()));
+            request_body["NextToken"] = Value::String(token.to_owned());
         }
-        pairs.sort_by(|left, right| left.0.cmp(right.0));
-        let body = pairs
-            .iter()
-            .map(|(key, value)| format!("{}={}", aws_query_encode(key), aws_query_encode(value)))
-            .collect::<Vec<_>>()
-            .join("&")
-            .into_bytes();
+        let body =
+            serde_json::to_vec(&request_body).map_err(|_| malformed("AWS ListAccounts request"))?;
         let observed_at = capture.observed_at;
         let response = capture.request(AWS_OPERATION, || {
-            aws_signed_request(
-                ProviderHttpMethod::Post,
+            aws_signed_json_request(
                 "https://organizations.us-east-1.amazonaws.com/",
                 "organizations",
                 "us-east-1",
+                AWS_LIST_ACCOUNTS_TARGET,
                 Zeroizing::new(body.clone()),
                 &signing,
                 observed_at,
             )
         })?;
-        let xml = std::str::from_utf8(response.body()).map_err(|_| malformed("AWS XML"))?;
-        capture.add_records(aws_account_count(xml)?)?;
+        let document = json_document(response.body(), "AWS Organizations JSON")?;
+        capture.add_records(array_len(&document, "Accounts")?)?;
         capture.mark_last_parser_eligible()?;
-        next_token = xml_optional_tag(xml, "NextToken")?;
+        next_token = optional_pagination_token(&document, "NextToken")?;
         if next_token.is_none() {
             return Ok(());
         }
@@ -975,36 +967,6 @@ fn validate_query_keys(url: &Url, allowed: &[&str]) -> Result<(), LiveProviderFa
     Ok(())
 }
 
-fn aws_account_count(xml: &str) -> Result<usize, LiveProviderFailure> {
-    if !xml.contains("<ListAccountsResponse") || !xml.contains("</ListAccountsResponse>") {
-        return Err(malformed("AWS ListAccounts XML"));
-    }
-    let accounts = xml
-        .split_once("<Accounts>")
-        .and_then(|(_, suffix)| suffix.split_once("</Accounts>").map(|(value, _)| value))
-        .unwrap_or_default();
-    Ok(accounts.matches("<member>").count())
-}
-
-fn xml_optional_tag(xml: &str, tag: &str) -> Result<Option<String>, LiveProviderFailure> {
-    let start = format!("<{tag}>");
-    let end = format!("</{tag}>");
-    let Some((_, suffix)) = xml.split_once(&start) else {
-        return Ok(None);
-    };
-    let (value, _) = suffix
-        .split_once(&end)
-        .ok_or_else(|| malformed("AWS pagination token"))?;
-    if value.is_empty()
-        || value.len() > 4_096
-        || value.chars().any(char::is_control)
-        || value.contains(['<', '>', '&'])
-    {
-        return Err(malformed("AWS pagination token"));
-    }
-    Ok(Some(value.to_owned()))
-}
-
 fn transient_status(status: u16) -> bool {
     matches!(status, 429 | 500 | 502 | 503 | 504)
 }
@@ -1073,6 +1035,7 @@ mod tests {
     struct FixtureHttp {
         responses: Mutex<VecDeque<ProviderHttpResponse>>,
         requests: Mutex<Vec<String>>,
+        aws_json_calls: Mutex<Vec<(String, String, String)>>,
         events: Arc<Mutex<Vec<String>>>,
     }
 
@@ -1081,6 +1044,7 @@ mod tests {
             Self {
                 responses: Mutex::new(responses.into()),
                 requests: Mutex::new(Vec::new()),
+                aws_json_calls: Mutex::new(Vec::new()),
                 events,
             }
         }
@@ -1091,6 +1055,26 @@ mod tests {
             assert!(!format!("{request:?}").contains("fixture-secret"));
             let summary = format!("{:?} {}", request.method(), request.url());
             self.requests.lock().unwrap().push(summary.clone());
+            let header = |wanted: &str| {
+                request
+                    .sensitive_headers()
+                    .find(|(name, _)| *name == wanted)
+                    .map(|(_, value)| value.to_owned())
+            };
+            if let Some(target) = header("x-amz-target") {
+                let signed = header("authorization").unwrap_or_default();
+                assert!(
+                    signed.contains(
+                        "SignedHeaders=content-type;host;x-amz-date;x-amz-security-token;x-amz-target,"
+                    ),
+                    "{signed}"
+                );
+                self.aws_json_calls.lock().unwrap().push((
+                    target,
+                    header("content-type").unwrap_or_default(),
+                    String::from_utf8(request.sensitive_body().to_vec()).unwrap(),
+                ));
+            }
             self.events.lock().unwrap().push(format!("http:{summary}"));
             self.responses
                 .lock()
@@ -1193,7 +1177,7 @@ mod tests {
             ProviderSourceProfile::AwsOrganizationReadOnlySession => vec![
                 ProviderHttpResponse::new(
                     200,
-                    br#"<ListAccountsResponse><ListAccountsResult><Accounts><member><Id>123456789012</Id><Arn>arn:aws:organizations::111111111111:account/o-example/123456789012</Arn><Email>raw-only@example.test</Email><Name>Production</Name><Status>ACTIVE</Status></member></Accounts></ListAccountsResult></ListAccountsResponse>"#.to_vec(),
+                    br#"{"Accounts":[{"Arn":"arn:aws:organizations::111111111111:account/o-example/123456789012","Email":"raw-only@example.test","Id":"123456789012","JoinedMethod":"CREATED","JoinedTimestamp":1.700000000E9,"Name":"Production","State":"ACTIVE","Status":"ACTIVE"}]}"#.to_vec(),
                 ),
             ],
             ProviderSourceProfile::AzureTenantReadOnlyAccessToken => vec![
@@ -1555,6 +1539,107 @@ mod tests {
         let requests = events.lock().unwrap().join("\n");
         assert!(requests.contains("/v3/folders?parent=organizations%2F123456789012"));
         assert!(requests.contains("/v3/projects?parent=folders%2F200"));
+    }
+
+    #[test]
+    fn aws_discovery_speaks_organizations_json_and_follows_next_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("artifacts");
+        fs::create_dir(&root).unwrap();
+        let registry = SnapshotConnectorRegistry::new(&root).unwrap();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let http = FixtureHttp::new(
+            vec![
+                ProviderHttpResponse::new(
+                    200,
+                    br#"{"Accounts":[{"Arn":"arn:aws:organizations::111111111111:account/o-example/111111111111","Email":"management@example.test","Id":"111111111111","JoinedMethod":"INVITED","JoinedTimestamp":1.6E9,"Name":"Management","State":"ACTIVE","Status":"ACTIVE"}],"NextToken":"page-two"}"#.to_vec(),
+                ),
+                ProviderHttpResponse::new(
+                    200,
+                    br#"{"Accounts":[{"Arn":"arn:aws:organizations::111111111111:account/o-example/123456789012","Email":"raw-only@example.test","Id":"123456789012","JoinedMethod":"CREATED","JoinedTimestamp":1.7E9,"Name":"Production","State":"SUSPENDED","Status":"SUSPENDED"}]}"#.to_vec(),
+                ),
+            ],
+            events,
+        );
+        let profile = ProviderSourceProfile::AwsOrganizationReadOnlySession;
+        let source_kind = profile.source_kind();
+        let mut sink =
+            |_: &str, _: u16, bytes: &[u8], parser_profile: &str, observed_at: DateTime<Utc>| {
+                registry
+                    .ingest_provider_response(&source_kind, bytes, parser_profile, observed_at)
+                    .map_err(|error| AppError::Storage(error.to_string()))
+            };
+        let capture = capture_provider_inventory(
+            &http,
+            &authorization(profile),
+            &credentials(profile),
+            &AtomicBool::new(false),
+            now(),
+            &mut sink,
+        );
+        assert!(capture.complete(), "{capture:?}");
+        assert_eq!(capture.successful_pages, 2);
+        assert_eq!(capture.record_count, 2);
+        let calls = http.aws_json_calls.lock().unwrap().clone();
+        assert_eq!(
+            calls,
+            vec![
+                (
+                    "AWSOrganizationsV20161128.ListAccounts".to_owned(),
+                    "application/x-amz-json-1.1".to_owned(),
+                    r#"{"MaxResults":20}"#.to_owned(),
+                ),
+                (
+                    "AWSOrganizationsV20161128.ListAccounts".to_owned(),
+                    "application/x-amz-json-1.1".to_owned(),
+                    r#"{"MaxResults":20,"NextToken":"page-two"}"#.to_owned(),
+                ),
+            ]
+        );
+
+        let mut source = DataSource {
+            id: "source-live".into(),
+            kind: source_kind,
+            label: "AWS organization".into(),
+            status: SourceConnectionStatus::Connected,
+            connected_at: Some(now()),
+            last_discovered_at: None,
+            read_only: true,
+            metadata: BTreeMap::new(),
+        };
+        capture
+            .artifact_set
+            .unwrap()
+            .insert_into(&mut source)
+            .unwrap();
+        let batch = run_connector(&registry.connector_for(&source.kind), &source).unwrap();
+        let mut accounts = batch
+            .assets
+            .iter()
+            .map(|asset| {
+                (
+                    asset.stable_identifier.value.clone(),
+                    asset
+                        .metadata
+                        .get("account_status")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                )
+            })
+            .collect::<Vec<_>>();
+        accounts.sort();
+        assert_eq!(
+            accounts,
+            vec![
+                ("111111111111".to_owned(), Some("ACTIVE".to_owned())),
+                ("123456789012".to_owned(), Some("SUSPENDED".to_owned())),
+            ]
+        );
+        assert!(
+            !serde_json::to_string(&batch.assets)
+                .unwrap()
+                .contains("@example.test")
+        );
     }
 
     #[test]

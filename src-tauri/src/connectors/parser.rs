@@ -77,10 +77,6 @@ pub(crate) fn parse_snapshot(
     observed_at: DateTime<Utc>,
 ) -> Result<ConnectorDiscovery, DiscoveryError> {
     let mut collector = Collector::new(artifact_id, profile);
-    if profile == ParserProfile::AwsOrganizationsListAccounts {
-        provider_native::parse_aws_organizations(bytes, source_kind, &mut collector)?;
-        return Ok(collector.finish(observed_at));
-    }
     let document = parse_json_or_json_lines(bytes)?;
     match profile {
         ParserProfile::CloudQuery
@@ -88,12 +84,12 @@ pub(crate) fn parse_snapshot(
         | ParserProfile::Prowler
         | ParserProfile::ScubaGear
         | ParserProfile::Maester => cloud::parse(profile, source_kind, &document, &mut collector)?,
-        ParserProfile::AzureResourceManagerResources
+        ParserProfile::AwsOrganizationsListAccounts
+        | ParserProfile::AzureResourceManagerResources
         | ParserProfile::GcpResourceManagerProjects
         | ParserProfile::MicrosoftGraphDirectoryInventory => {
             provider_native::parse_json(profile, source_kind, &document, &mut collector)?
         }
-        ParserProfile::AwsOrganizationsListAccounts => unreachable!("handled before JSON parsing"),
         ParserProfile::DnsResponse
         | ParserProfile::CertificateTransparencyResponse
         | ParserProfile::BillingExport => {

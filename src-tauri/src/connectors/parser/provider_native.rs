@@ -5,177 +5,60 @@
 use super::{AssetDraft, Collector, ParserProfile, array_at, metadata, string_at};
 use crate::discovery::DiscoveryError;
 use crate::domain::{AssetKind, RelationKind, SourceKind, valid_gcp_project_id};
-use quick_xml::Reader;
-use quick_xml::events::Event;
 use serde_json::Value;
 
-const MAX_XML_EVENTS: usize = 50_000;
-const MAX_XML_DEPTH: usize = 64;
-const MAX_FIELD_BYTES: usize = 8 * 1024;
-
-#[derive(Default)]
-struct AwsAccount {
-    id: String,
-    arn: String,
-    name: String,
-    email: String,
-    status: String,
-}
-
-pub(super) fn parse_aws_organizations(
-    bytes: &[u8],
-    source_kind: &SourceKind,
+/// Parses one AWS Organizations `ListAccounts` page. The API speaks JSON 1.1:
+/// `{"Accounts":[{"Arn","Email","Id","JoinedMethod","JoinedTimestamp","Name",
+/// "State","Status"}],"NextToken"}`.
+fn parse_aws_organizations(
+    document: &Value,
     collector: &mut Collector<'_>,
 ) -> Result<(), DiscoveryError> {
-    if !matches!(source_kind, SourceKind::AwsOrganization) {
-        return Err(DiscoveryError::Connector(
-            "AWS Organizations parser profile does not match the source kind".into(),
-        ));
-    }
-    let mut reader = Reader::from_reader(bytes);
-    reader.config_mut().trim_text(true);
-    reader.config_mut().check_end_names = true;
-    reader.config_mut().expand_empty_elements = true;
-    let mut buffer = Vec::new();
-    let mut stack = Vec::<String>::new();
-    let mut current: Option<AwsAccount> = None;
-    let mut event_count = 0_usize;
-    let mut account_index = 0_usize;
-
-    loop {
-        event_count += 1;
-        if event_count > MAX_XML_EVENTS {
-            return Err(DiscoveryError::Connector(
-                "AWS Organizations XML exceeded the event limit".into(),
+    let accounts = document
+        .as_object()
+        .and_then(|object| object.get("Accounts"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            DiscoveryError::Connector(
+                "AWS Organizations ListAccounts response omitted the Accounts array".into(),
+            )
+        })?;
+    for (index, account) in accounts.iter().enumerate() {
+        let pointer = format!("/Accounts/{index}");
+        if !collector.count_record(&pointer) {
+            break;
+        }
+        let id = string_at(account, &["Id"]).unwrap_or_default();
+        let arn = string_at(account, &["Arn"]).unwrap_or_default();
+        let valid_account_id = id.len() == 12 && id.bytes().all(|byte| byte.is_ascii_digit());
+        let valid_account_arn = arn.starts_with("arn:aws:organizations::")
+            && arn.contains(":account/")
+            && arn.ends_with(&format!("/{id}"));
+        if !valid_account_id || !valid_account_arn {
+            collector.notice(format!(
+                "ignored malformed AWS account identity at {pointer}; raw response remains preserved"
             ));
+            continue;
         }
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Eof) => break,
-            Ok(Event::DocType(_)) | Ok(Event::GeneralRef(_)) => {
-                return Err(DiscoveryError::Connector(
-                    "AWS Organizations XML containing a DTD or entity reference was rejected"
-                        .into(),
-                ));
-            }
-            Ok(Event::Start(start)) => {
-                if stack.len() >= MAX_XML_DEPTH {
-                    return Err(DiscoveryError::Connector(
-                        "AWS Organizations XML exceeded the nesting limit".into(),
-                    ));
-                }
-                let name = start.local_name().as_ref().to_owned();
-                if name == "member" && stack.last().is_some_and(|parent| parent == "Accounts") {
-                    if current.is_some() {
-                        return Err(DiscoveryError::Connector(
-                            "AWS Organizations XML contains nested account records".into(),
-                        ));
-                    }
-                    current = Some(AwsAccount::default());
-                }
-                stack.push(name);
-            }
-            Ok(Event::End(end)) => {
-                let local_name = end.local_name();
-                let name = local_name.as_ref();
-                if name == "member"
-                    && stack
-                        .last()
-                        .is_some_and(|current_name| current_name == "member")
-                    && current.is_some()
-                {
-                    let account = current.take().expect("checked above");
-                    account_index += 1;
-                    let pointer = format!("/ListAccountsResponse/Accounts/member[{account_index}]");
-                    if !collector.count_record(&pointer) {
-                        break;
-                    }
-                    let valid_account_id = account.id.len() == 12
-                        && account.id.bytes().all(|byte| byte.is_ascii_digit());
-                    let valid_account_arn = account.arn.starts_with("arn:aws:organizations::")
-                        && account.arn.contains(":account/")
-                        && account.arn.ends_with(&format!("/{}", account.id));
-                    if valid_account_id && valid_account_arn {
-                        collector.asset(
-                            AssetDraft {
-                                kind: AssetKind::CloudAccount,
-                                name: if account.name.trim().is_empty() {
-                                    &account.id
-                                } else {
-                                    &account.name
-                                },
-                                provider: Some("aws"),
-                                region: None,
-                                namespace: "aws_account_id",
-                                native_id: &account.id,
-                                additional_identifiers: vec![],
-                                internet_exposed: None,
-                                contains_sensitive_data: None,
-                                metadata: metadata(&[
-                                    ("source_resource_type", Some("aws_organizations_account")),
-                                    ("account_status", nonempty(&account.status)),
-                                ]),
-                            },
-                            &pointer,
-                        );
-                    } else {
-                        collector.notice(format!(
-                            "ignored malformed AWS account identity at {pointer}; raw XML remains preserved"
-                        ));
-                    }
-                    // Email is intentionally never copied into canonical metadata.
-                    let _ = account.email;
-                }
-                stack.pop();
-            }
-            Ok(Event::Text(text)) if current.is_some() => {
-                let raw_text: &str = text.as_ref();
-                if raw_text.len() > MAX_FIELD_BYTES {
-                    return Err(DiscoveryError::Connector(
-                        "AWS Organizations XML field exceeded the limit".into(),
-                    ));
-                }
-                let Some(field) = stack.last().map(String::as_str) else {
-                    buffer.clear();
-                    continue;
-                };
-                if !matches!(field, "Id" | "Arn" | "Name" | "Email" | "Status" | "State") {
-                    buffer.clear();
-                    continue;
-                }
-                let value = quick_xml::escape::unescape(raw_text).map_err(|_| {
-                    DiscoveryError::Connector(
-                        "AWS Organizations XML used an unsupported entity".into(),
-                    )
-                })?;
-                let account = current.as_mut().expect("checked above");
-                match field {
-                    "Id" => account.id.push_str(&value),
-                    "Arn" => account.arn.push_str(&value),
-                    "Name" => account.name.push_str(&value),
-                    "Email" => account.email.push_str(&value),
-                    "Status" | "State" => account.status.push_str(&value),
-                    _ => {}
-                }
-            }
-            Ok(Event::CData(_)) => {
-                return Err(DiscoveryError::Connector(
-                    "AWS Organizations XML CDATA fields were rejected".into(),
-                ));
-            }
-            Ok(_) => {}
-            Err(error) => {
-                return Err(DiscoveryError::Connector(format!(
-                    "AWS Organizations XML is malformed at byte {}: {error}",
-                    reader.error_position()
-                )));
-            }
-        }
-        buffer.clear();
-    }
-    if current.is_some() {
-        return Err(DiscoveryError::Connector(
-            "AWS Organizations XML ended inside an account record".into(),
-        ));
+        // Email is intentionally never copied into canonical metadata.
+        collector.asset(
+            AssetDraft {
+                kind: AssetKind::CloudAccount,
+                name: string_at(account, &["Name"]).unwrap_or(id),
+                provider: Some("aws"),
+                region: None,
+                namespace: "aws_account_id",
+                native_id: id,
+                additional_identifiers: vec![],
+                internet_exposed: None,
+                contains_sensitive_data: None,
+                metadata: metadata(&[
+                    ("source_resource_type", Some("aws_organizations_account")),
+                    ("account_status", string_at(account, &["State", "Status"])),
+                ]),
+            },
+            &pointer,
+        );
     }
     Ok(())
 }
@@ -187,6 +70,12 @@ pub(super) fn parse_json(
     collector: &mut Collector<'_>,
 ) -> Result<(), DiscoveryError> {
     match profile {
+        ParserProfile::AwsOrganizationsListAccounts => {
+            if !matches!(source_kind, SourceKind::AwsOrganization) {
+                return mismatch("AWS Organizations");
+            }
+            parse_aws_organizations(document, collector)
+        }
         ParserProfile::AzureResourceManagerResources => {
             if !matches!(source_kind, SourceKind::AzureTenant) {
                 return mismatch("Azure Resource Manager");
@@ -592,10 +481,6 @@ fn mismatch(provider: &str) -> Result<(), DiscoveryError> {
     )))
 }
 
-fn nonempty(value: &str) -> Option<&str> {
-    (!value.trim().is_empty()).then_some(value.trim())
-}
-
 fn looks_like_uuid(value: &str) -> bool {
     uuid::Uuid::parse_str(value).is_ok()
 }
@@ -613,28 +498,113 @@ fn azure_resource_group(resource_id: &str) -> Option<&str> {
 mod tests {
     use super::*;
 
-    /// A live AWS Organizations response is UTF-8. A stray non-UTF-8 byte in
-    /// an account field means the artifact was truncated or corrupted in
-    /// transit, so the parser stops and reports the exact byte offset rather
-    /// than silently dropping or mis-decoding the account.
-    #[test]
-    fn aws_organizations_non_utf8_account_field_is_malformed_at_a_byte_offset() {
-        let mut xml = br#"<ListAccountsResponse><ListAccountsResult><Accounts><member><Id>111111111111</Id><Arn>arn:aws:organizations::111111111111:account/o-example/111111111111</Arn><Name>First Account</Name><Status>ACTIVE</Status></member><member><Id>222222222222</Id><Arn>arn:aws:organizations::222222222222:account/o-example/222222222222</Arn><Name>Bad"#.to_vec();
-        xml.push(0xFF);
-        xml.extend_from_slice(
-            br#"Account</Name><Status>ACTIVE</Status></member></Accounts></ListAccountsResult></ListAccountsResponse>"#,
-        );
-
+    fn parse_accounts(document: Value) -> crate::discovery::ConnectorDiscovery {
         let mut collector =
             Collector::new("artifact-1", ParserProfile::AwsOrganizationsListAccounts);
-        let error = parse_aws_organizations(&xml, &SourceKind::AwsOrganization, &mut collector)
-            .expect_err("a non-UTF-8 byte inside an account field is a malformed document");
-        match error {
-            DiscoveryError::Connector(message) => assert!(
-                message.starts_with("AWS Organizations XML is malformed at byte"),
-                "unexpected message: {message}"
-            ),
-            other => panic!("unexpected error variant: {other:?}"),
-        }
+        parse_json(
+            ParserProfile::AwsOrganizationsListAccounts,
+            &SourceKind::AwsOrganization,
+            &document,
+            &mut collector,
+        )
+        .expect("ListAccounts page parses");
+        collector.finish(chrono::Utc::now())
+    }
+
+    #[test]
+    fn aws_organizations_json_page_yields_accounts_without_email() {
+        let discovery = parse_accounts(serde_json::json!({
+            "Accounts": [
+                {
+                    "Arn": "arn:aws:organizations::111111111111:account/o-example/111111111111",
+                    "Email": "management@example.test",
+                    "Id": "111111111111",
+                    "JoinedMethod": "INVITED",
+                    "JoinedTimestamp": 1.6E9,
+                    "Name": "Management",
+                    "State": "ACTIVE",
+                    "Status": "ACTIVE"
+                },
+                {
+                    "Arn": "arn:aws:organizations::111111111111:account/o-example/222222222222",
+                    "Email": "closed@example.test",
+                    "Id": "222222222222",
+                    "JoinedMethod": "CREATED",
+                    "JoinedTimestamp": 1.7E9,
+                    "Name": "",
+                    "State": "PENDING_CLOSURE",
+                    "Status": "PENDING_CLOSURE"
+                }
+            ],
+            "NextToken": "opaque"
+        }));
+        let accounts = discovery
+            .assets
+            .iter()
+            .map(|asset| {
+                (
+                    asset.stable_identifier.value.as_str(),
+                    asset.name.as_str(),
+                    asset.metadata.get("account_status").and_then(Value::as_str),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            accounts,
+            vec![
+                ("111111111111", "Management", Some("ACTIVE")),
+                ("222222222222", "222222222222", Some("PENDING_CLOSURE")),
+            ]
+        );
+        assert!(
+            !serde_json::to_string(&discovery.assets)
+                .unwrap()
+                .contains("@example.test")
+        );
+    }
+
+    #[test]
+    fn aws_organizations_malformed_account_identity_is_skipped_with_a_notice() {
+        let discovery = parse_accounts(serde_json::json!({
+            "Accounts": [
+                {
+                    "Arn": "arn:aws:organizations::111111111111:account/o-example/999999999999",
+                    "Id": "111111111111",
+                    "Name": "Mismatched ARN",
+                    "State": "ACTIVE"
+                },
+                {
+                    "Arn": "arn:aws:organizations::111111111111:account/o-example/1234",
+                    "Id": "1234",
+                    "Name": "Short ID",
+                    "State": "ACTIVE"
+                }
+            ]
+        }));
+        assert!(discovery.assets.is_empty());
+        assert_eq!(
+            discovery
+                .notices
+                .iter()
+                .filter(|notice| notice.contains("ignored malformed AWS account identity"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn aws_organizations_response_without_accounts_array_is_rejected() {
+        let mut collector =
+            Collector::new("artifact-1", ParserProfile::AwsOrganizationsListAccounts);
+        let error = parse_json(
+            ParserProfile::AwsOrganizationsListAccounts,
+            &SourceKind::AwsOrganization,
+            &serde_json::json!({ "accounts": "not-a-list" }),
+            &mut collector,
+        )
+        .expect_err("a page without Accounts is outside the response contract");
+        assert!(
+            matches!(error, DiscoveryError::Connector(message) if message.contains("Accounts array"))
+        );
     }
 }

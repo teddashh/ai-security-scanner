@@ -802,7 +802,7 @@ fn all_engines_in_one_report<T>(
         &case.id,
         SourceKind::AwsOrganization,
         "aws-organizations-list-accounts",
-        br#"<ListAccountsResponse><Accounts><member><Id>123456789012</Id><Arn>arn:aws:organizations::123456789012:account/o-fixture/123456789012</Arn><Name>Audit account</Name><Email>audit@example.test</Email><Status>ACTIVE</Status></member></Accounts></ListAccountsResponse>"#,
+        br#"{"Accounts":[{"Arn":"arn:aws:organizations::123456789012:account/o-fixture/123456789012","Email":"audit@example.test","Id":"123456789012","JoinedMethod":"CREATED","JoinedTimestamp":1.7E9,"Name":"Audit account","State":"ACTIVE","Status":"ACTIVE"}]}"#,
         AssetKind::CloudAccount,
     );
     let m365 = attach_provider_asset(&service, &connectors, &case.id, SourceKind::Microsoft365Tenant, "microsoft-graph-directory-inventory", br#"{"value":[{"id":"22222222-2222-4222-8222-222222222222","displayName":"Audit tenant"}]}"#, AssetKind::Tenant);

@@ -204,6 +204,31 @@ test("setup-file schema keeps provider formats exact and derives app-local coord
   assert.match(panelSource, /normalizeAndValidateDetails\(provider, flow, supplied\)/u);
 });
 
+test("the role ARN field accepts IAM paths, including IAM Identity Center roles", () => {
+  const literal = /const AWS_ROLE_ARN_PATTERN = \/(.+)\/u;/u.exec(panelSource)?.[1];
+  assert.ok(literal, "the panel should define AWS_ROLE_ARN_PATTERN");
+  const pattern = new RegExp(literal, "u");
+  for (const accepted of [
+    "arn:aws:iam::123456789012:role/SecurityAuditReader",
+    "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/us-east-1/AWSReservedSSO_SecurityAuditReader_0123456789abcdef",
+    "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_SecurityAuditReader_0123456789abcdef",
+    "arn:aws:iam::123456789012:role/teams/security/Reader",
+  ]) {
+    assert.match(accepted, pattern);
+  }
+  for (const rejected of [
+    "arn:aws:iam::123456789012:role/",
+    "arn:aws:iam::123456789012:role//Reader",
+    "arn:aws:iam::123456789012:role/Reader/",
+    `arn:aws:iam::123456789012:role/${"R".repeat(65)}`,
+    "arn:aws:iam::12345678901:role/Reader",
+    "arn:aws:iam::123456789012:user/Reader",
+  ]) {
+    assert.doesNotMatch(rejected, pattern);
+  }
+  assert.match(panelSource, /const match = AWS_ROLE_ARN_PATTERN\.exec\(value\);\s*return Boolean\(match && match\[1\] === details\.account_id\);/u);
+});
+
 test("provider device code remains a primary, actionable sign-in step", () => {
 
   const promptStart = panelSource.indexOf("{prompt && (");

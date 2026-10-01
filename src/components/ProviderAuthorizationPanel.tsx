@@ -389,13 +389,13 @@ const copy = {
     awsRoleArnPreferred: {
       label: { en: "Exact read-only role ARN", zhTW: "精確唯讀角色 ARN" },
       what: { en: "The full AWS identifier for that exact role; it prevents access from widening to another role.", zhTW: "該角色的完整 AWS 識別碼，用來避免存取擴大到其他角色。" },
-      where: { en: "IAM → Roles → choose the role → ARN. The app fills the common form automatically.", zhTW: "IAM → 角色（Roles）→ 選擇該角色 → ARN。程式會先自動填入常見格式。" },
+      where: { en: "The app fills this in. With IAM Identity Center, keep it; the app confirms the exact role after you sign in. Otherwise: IAM → Roles → choose the role → ARN.", zhTW: "程式會自動填入。使用 IAM Identity Center 時保留即可，登入後程式會確認實際角色；其他情況請到 IAM → 角色（Roles）→ 選擇該角色 → ARN。" },
       example: "arn:aws:iam::123456789012:role/SecurityAuditReader",
     },
     awsRoleArnBootstrap: {
       label: { en: "Exact setup role ARN", zhTW: "精確設定角色 ARN" },
       what: { en: "The full AWS identifier for the role used only by the reviewed setup flow.", zhTW: "只供已檢查建立流程使用的角色完整 AWS 識別碼。" },
-      where: { en: "IAM → Roles → choose the role → ARN. The app fills the common form automatically.", zhTW: "IAM → 角色（Roles）→ 選擇該角色 → ARN。程式會先自動填入常見格式。" },
+      where: { en: "The app fills this in. With IAM Identity Center, keep it; the app confirms the exact role after you sign in. Otherwise: IAM → Roles → choose the role → ARN.", zhTW: "程式會自動填入。使用 IAM Identity Center 時保留即可，登入後程式會確認實際角色；其他情況請到 IAM → 角色（Roles）→ 選擇該角色 → ARN。" },
       example: "arn:aws:iam::123456789012:role/AdministratorAccess",
     },
     tenantId: {
@@ -470,6 +470,9 @@ const GCP_CLIENT_ID_PATTERN = /^[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.
 const GCP_PROJECT_ID_PATTERN = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u;
 const AWS_REGION_PATTERN = /^(?:[a-z]{2}(?:-gov)?-[a-z]+-\d)$/u;
 const AWS_ROLE_NAME_PATTERN = /^[A-Za-z0-9+=,.@_/-]{1,64}$/u;
+// A role ARN may carry an IAM path; IAM Identity Center roles live under
+// `aws-reserved/sso.amazonaws.com/<region>/`.
+const AWS_ROLE_ARN_PATTERN = /^arn:(?:aws|aws-us-gov|aws-cn):iam::([0-9]{12}):role\/(?:[A-Za-z0-9+=,.@_-]+\/){0,16}[A-Za-z0-9+=,.@_-]{1,64}$/u;
 
 const copyText = async (value: string): Promise<boolean> => {
   try {
@@ -635,7 +638,7 @@ const validateConnectionValue = (
     case "account_id": return /^[0-9]{12}$/u.test(value);
     case "role_name": return AWS_ROLE_NAME_PATTERN.test(value);
     case "role_arn": {
-      const match = /^arn:(?:aws|aws-us-gov|aws-cn):iam::([0-9]{12}):role\/[A-Za-z0-9+=,.@_/-]{1,64}$/u.exec(value);
+      const match = AWS_ROLE_ARN_PATTERN.exec(value);
       return Boolean(match && match[1] === details.account_id);
     }
     case "tenant_id":

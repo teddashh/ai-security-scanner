@@ -185,10 +185,11 @@ fn aws_simulation_xml(include_prohibited_allow: bool) -> String {
     )
 }
 
-fn verified_aws(
-    now: DateTime<Utc>,
-) -> ai_security_scanner_lib::source_authorization::VerifiedProviderAuthorization {
-    let fixture = FixtureHttp::new(vec![
+const AWS_RESERVED_ROLE: &str = "AWSReservedSSO_security-audit-reader_0123456789abcdef";
+const AWS_RESERVED_ROLE_ARN: &str = "arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/us-east-1/AWSReservedSSO_security-audit-reader_0123456789abcdef";
+
+fn aws_device_responses(now: DateTime<Utc>, verification_uri: &str) -> Vec<ExpectedResponse> {
+    vec![
         expected(
             "Post",
             "/client/register",
@@ -205,18 +206,31 @@ fn verified_aws(
             json!({
                 "deviceCode":"fixture-secret-device",
                 "userCode":"ABCD-EFGH",
-                "verificationUri":"https://oidc.us-east-1.amazonaws.com/verify",
-                "verificationUriComplete":"https://oidc.us-east-1.amazonaws.com/verify?user_code=ABCD-EFGH",
+                "verificationUri":verification_uri,
+                "verificationUriComplete":format!("{verification_uri}?user_code=ABCD-EFGH"),
                 "expiresIn":600,
                 "interval":1
             }),
         ),
+    ]
+}
+
+/// The responses AWS sends once a person has approved the device code and
+/// IAM Identity Center has issued role credentials for `caller_role`. A
+/// permission set session runs as `AWSReservedSSO_<permission set>_<suffix>`,
+/// so the app reads the role's exact ARN from IAM before simulating it.
+fn aws_signed_in_responses(
+    now: DateTime<Utc>,
+    caller_role: &str,
+    get_role: Option<(&str, &str)>,
+) -> Vec<ExpectedResponse> {
+    let mut responses = vec![
         expected(
             "Post",
             "/token",
             json!({
                 "accessToken":"fixture-token-sso",
-                "expiresIn":600,
+                "expiresIn":28800,
                 "tokenType":"Bearer"
             }),
         ),
@@ -225,6 +239,8 @@ fn verified_aws(
             "/assignment/roles",
             json!({"roleList":[{"accountId":"111122223333","roleName":"security-audit-reader"}]}),
         ),
+        // The default permission set session lasts one hour from when AWS
+        // issued it, which is a moment after the app's `now`.
         expected(
             "Get",
             "/federation/credentials",
@@ -232,7 +248,7 @@ fn verified_aws(
                 "accessKeyId":"ASIAFIXTURE",
                 "secretAccessKey":"fixture-secret-aws",
                 "sessionToken":"fixture-token-session",
-                "expiration":(now + Duration::minutes(30)).timestamp_millis()
+                "expiration":(now + Duration::hours(1) + Duration::seconds(3)).timestamp_millis()
             }}),
         ),
         ExpectedResponse {
@@ -240,15 +256,44 @@ fn verified_aws(
             path_contains: "sts.us-east-1.amazonaws.com",
             response: ProviderHttpResponse::new(
                 200,
-                b"<GetCallerIdentityResponse><GetCallerIdentityResult><Arn>arn:aws:sts::111122223333:assumed-role/security-audit-reader/session</Arn><Account>111122223333</Account></GetCallerIdentityResult></GetCallerIdentityResponse>".to_vec(),
+                format!(
+                    "<GetCallerIdentityResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\"><GetCallerIdentityResult><Arn>arn:aws:sts::111122223333:assumed-role/{caller_role}/reader@example.invalid</Arn><UserId>AROAFIXTURE:reader@example.invalid</UserId><Account>111122223333</Account></GetCallerIdentityResult><ResponseMetadata><RequestId>01234567-89ab-cdef-0123-456789abcdef</RequestId></ResponseMetadata></GetCallerIdentityResponse>"
+                )
+                .into_bytes(),
             ),
         },
-        ExpectedResponse {
+    ];
+    if let Some((role_name, role_arn)) = get_role {
+        responses.push(ExpectedResponse {
             method: "Post",
             path_contains: "iam.amazonaws.com",
-            response: ProviderHttpResponse::new(200, aws_simulation_xml(false).into_bytes()),
-        },
-    ]);
+            response: ProviderHttpResponse::new(
+                200,
+                format!(
+                    "<GetRoleResponse xmlns=\"https://iam.amazonaws.com/doc/2010-05-08/\"><GetRoleResult><Role><Path>/aws-reserved/sso.amazonaws.com/us-east-1/</Path><AssumeRolePolicyDocument>%7B%22Version%22%3A%222012-10-17%22%7D</AssumeRolePolicyDocument><MaxSessionDuration>43200</MaxSessionDuration><RoleId>AROAFIXTURE</RoleId><RoleLastUsed><LastUsedDate>2026-10-01T00:00:00Z</LastUsedDate><Region>us-east-1</Region></RoleLastUsed><RoleName>{role_name}</RoleName><Description>Created by AWS SSO</Description><Arn>{role_arn}</Arn><CreateDate>2026-01-01T00:00:00Z</CreateDate></Role></GetRoleResult><ResponseMetadata><RequestId>fedcba98-7654-3210-fedc-ba9876543210</RequestId></ResponseMetadata></GetRoleResponse>"
+                )
+                .into_bytes(),
+            ),
+        });
+    }
+    responses
+}
+
+fn verified_aws(
+    now: DateTime<Utc>,
+) -> ai_security_scanner_lib::source_authorization::VerifiedProviderAuthorization {
+    let mut responses = aws_device_responses(now, "https://device.sso.us-east-1.amazonaws.com/");
+    responses.extend(aws_signed_in_responses(
+        now,
+        AWS_RESERVED_ROLE,
+        Some((AWS_RESERVED_ROLE, AWS_RESERVED_ROLE_ARN)),
+    ));
+    responses.push(ExpectedResponse {
+        method: "Post",
+        path_contains: "iam.amazonaws.com",
+        response: ProviderHttpResponse::new(200, aws_simulation_xml(false).into_bytes()),
+    });
+    let fixture = FixtureHttp::new(responses);
     let (_, mut pending) = begin_aws_native_authorization(&fixture, aws_config(), now).unwrap();
     let authorization = match poll_aws_native_authorization(&fixture, &mut pending, now).unwrap() {
         PollAuthorization::Complete(value) => value,
@@ -276,7 +321,7 @@ fn graph_identity_responses() -> Vec<ExpectedResponse> {
 fn verified_azure(
     now: DateTime<Utc>,
 ) -> ai_security_scanner_lib::source_authorization::VerifiedProviderAuthorization {
-    let graph_scopes = "openid profile offline_access User.Read Organization.Read.All";
+    let graph_scopes = "User.Read Organization.Read.All profile openid email";
     let mut responses = vec![
         expected(
             "Post",
@@ -284,8 +329,8 @@ fn verified_azure(
             json!({
                 "device_code":"fixture-secret-device",
                 "user_code":"ABCD-EFGH",
-                "verification_uri":"https://login.microsoftonline.com/common/oauth2/deviceauth",
-                "expires_in":600,
+                "verification_uri":"https://microsoft.com/devicelogin",
+                "expires_in":900,
                 "interval":1
             }),
         ),
@@ -295,7 +340,7 @@ fn verified_azure(
             json!({
                 "access_token":"fixture-token-graph",
                 "refresh_token":"fixture-secret-refresh",
-                "expires_in":3600,
+                "expires_in":4537,
                 "scope":graph_scopes,
                 "token_type":"Bearer"
             }),
@@ -308,7 +353,7 @@ fn verified_azure(
             "/token",
             json!({
                 "access_token":"fixture-token-arm",
-                "expires_in":1800,
+                "expires_in":5003,
                 "scope":"https://management.azure.com/.default",
                 "token_type":"Bearer"
             }),
@@ -350,7 +395,7 @@ fn verified_azure(
 fn azure_authorization_rejects_every_non_enabled_subscription_state() {
     for state in ["Disabled", "PastDue", "enabled"] {
         let now = Utc::now();
-        let graph_scopes = "openid profile offline_access User.Read Organization.Read.All";
+        let graph_scopes = "User.Read Organization.Read.All profile openid email";
         let mut responses = vec![
             expected(
                 "Post",
@@ -358,8 +403,8 @@ fn azure_authorization_rejects_every_non_enabled_subscription_state() {
                 json!({
                     "device_code":"fixture-secret-device",
                     "user_code":"ABCD-EFGH",
-                    "verification_uri":"https://login.microsoftonline.com/common/oauth2/deviceauth",
-                    "expires_in":600,
+                    "verification_uri":"https://microsoft.com/devicelogin",
+                    "expires_in":900,
                     "interval":1
                 }),
             ),
@@ -369,7 +414,7 @@ fn azure_authorization_rejects_every_non_enabled_subscription_state() {
                 json!({
                     "access_token":"fixture-token-graph",
                     "refresh_token":"fixture-secret-refresh",
-                    "expires_in":3600,
+                    "expires_in":4537,
                     "scope":graph_scopes,
                     "token_type":"Bearer"
                 }),
@@ -382,7 +427,7 @@ fn azure_authorization_rejects_every_non_enabled_subscription_state() {
                 "/token",
                 json!({
                     "access_token":"fixture-token-arm",
-                    "expires_in":1800,
+                    "expires_in":5003,
                     "scope":"https://management.azure.com/.default",
                     "token_type":"Bearer"
                 }),
@@ -438,7 +483,7 @@ fn verified_microsoft365(
     now: DateTime<Utc>,
 ) -> ai_security_scanner_lib::source_authorization::VerifiedProviderAuthorization {
     let scope = format!(
-        "openid profile offline_access {}",
+        "{} profile openid email",
         microsoft365_permissions().join(" ")
     );
     let mut responses = vec![
@@ -448,8 +493,8 @@ fn verified_microsoft365(
             json!({
                 "device_code":"fixture-secret-device",
                 "user_code":"ABCD-EFGH",
-                "verification_uri":"https://login.microsoftonline.com/common/oauth2/deviceauth",
-                "expires_in":600,
+                "verification_uri":"https://microsoft.com/devicelogin",
+                "expires_in":900,
                 "interval":1
             }),
         ),
@@ -459,7 +504,7 @@ fn verified_microsoft365(
             json!({
                 "access_token":"fixture-token-graph",
                 "refresh_token":"fixture-secret-refresh",
-                "expires_in":1800,
+                "expires_in":4537,
                 "scope":scope,
                 "token_type":"Bearer"
             }),
@@ -496,7 +541,7 @@ fn verified_gcp(
             "oauth2.googleapis.com/token",
             json!({
                 "access_token":"fixture-token-gcp",
-                "expires_in":1800,
+                "expires_in":3599,
                 "scope":"openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/cloud-platform.read-only",
                 "token_type":"Bearer"
             }),
@@ -1372,8 +1417,8 @@ fn case_wide_session_cancel_drops_only_matching_pending_secret_flows() {
                         json!({
                             "deviceCode":"fixture-secret-device",
                             "userCode":"ABCD-EFGH",
-                            "verificationUri":"https://oidc.us-east-1.amazonaws.com/verify",
-                            "verificationUriComplete":"https://oidc.us-east-1.amazonaws.com/verify?user_code=ABCD-EFGH",
+                            "verificationUri":"https://device.sso.us-east-1.amazonaws.com/",
+                            "verificationUriComplete":"https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH",
                             "expiresIn":600,
                             "interval":1
                         }),
@@ -1422,7 +1467,7 @@ fn provider_permission_failure_never_issues_a_capability() {
             "oauth2.googleapis.com/token",
             json!({
                 "access_token":"fixture-token-gcp",
-                "expires_in":1800,
+                "expires_in":3599,
                 "scope":"openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/cloud-platform.read-only",
                 "token_type":"Bearer"
             }),
@@ -1486,8 +1531,8 @@ fn secret_fields_and_long_lived_tokens_are_rejected() {
             json!({
                 "device_code":"fixture-device",
                 "user_code":"ABCD",
-                "verification_uri":"https://login.microsoftonline.com/common/oauth2/deviceauth",
-                "expires_in":600,
+                "verification_uri":"https://microsoft.com/devicelogin",
+                "expires_in":900,
                 "interval":1
             }),
         ),
@@ -1496,8 +1541,8 @@ fn secret_fields_and_long_lived_tokens_are_rejected() {
             "/token",
             json!({
                 "access_token":"fixture-token",
-                "expires_in":7200,
-                "scope":format!("openid profile offline_access {}", microsoft365_permissions().join(" ")),
+                "expires_in":86400,
+                "scope":format!("{} profile openid email", microsoft365_permissions().join(" ")),
                 "token_type":"Bearer"
             }),
         ),
@@ -1521,8 +1566,8 @@ fn device_poll_pending_is_explicit_and_does_not_fabricate_verification() {
             json!({
                 "device_code":"fixture-device",
                 "user_code":"ABCD",
-                "verification_uri":"https://login.microsoftonline.com/common/oauth2/deviceauth",
-                "expires_in":600,
+                "verification_uri":"https://microsoft.com/devicelogin",
+                "expires_in":900,
                 "interval":3
             }),
         ),
@@ -1907,4 +1952,247 @@ fn one_gcp_discovery_plus_nine_exact_projects_complete_the_bounded_lifecycle() {
         bindings.checkout(&case.id, &source.id, "prowler", now),
         Err(AppError::NotAuthorized(_))
     ));
+}
+
+fn poll_aws_fixture(
+    config: AwsNativeAuthorizationConfig,
+    responses: Vec<ExpectedResponse>,
+    now: DateTime<Utc>,
+) -> Result<
+    PollAuthorization<ai_security_scanner_lib::source_authorization::VerifiedProviderAuthorization>,
+    AppError,
+> {
+    let fixture = FixtureHttp::new(responses);
+    let (_, mut pending) = begin_aws_native_authorization(&fixture, config, now).unwrap();
+    let result = poll_aws_native_authorization(&fixture, &mut pending, now);
+    assert!(fixture.exhausted());
+    result
+}
+
+#[test]
+fn aws_identity_center_session_resolves_the_reserved_role_and_is_used_for_one_hour() {
+    let now = Utc::now();
+    let authorization = verified_aws(now);
+    let verification = authorization.verification();
+    assert_eq!(verification.provider_identity, AWS_RESERVED_ROLE_ARN);
+    assert_eq!(
+        verification.subject_id,
+        format!(
+            "arn:aws:sts::111122223333:assumed-role/{AWS_RESERVED_ROLE}/reader@example.invalid"
+        )
+    );
+    assert!(verification.credential_expires_at <= now + Duration::hours(1));
+    assert!(verification.credential_expires_at > now + Duration::minutes(59));
+}
+
+#[test]
+fn aws_session_for_another_permission_set_is_rejected() {
+    let now = Utc::now();
+    let mut responses = aws_device_responses(now, "https://device.sso.us-east-1.amazonaws.com/");
+    responses.extend(aws_signed_in_responses(
+        now,
+        "AWSReservedSSO_AdministratorAccess_0123456789abcdef",
+        None,
+    ));
+    let error = poll_aws_fixture(aws_config(), responses, now)
+        .err()
+        .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("does not match the configured account and read-only role"),
+        "{error}"
+    );
+}
+
+#[test]
+fn aws_typed_role_arn_must_be_the_role_the_person_signed_in_with() {
+    let now = Utc::now();
+    let typed = |role_arn: &str| AwsNativeAuthorizationConfig {
+        role_arn: role_arn.into(),
+        ..aws_config()
+    };
+    let signed_in = |role_arn: &'static str| {
+        let mut responses =
+            aws_device_responses(now, "https://device.sso.us-east-1.amazonaws.com/");
+        responses.extend(aws_signed_in_responses(
+            now,
+            AWS_RESERVED_ROLE,
+            Some((AWS_RESERVED_ROLE, role_arn)),
+        ));
+        responses
+    };
+
+    let mut exact = signed_in(AWS_RESERVED_ROLE_ARN);
+    exact.push(ExpectedResponse {
+        method: "Post",
+        path_contains: "iam.amazonaws.com",
+        response: ProviderHttpResponse::new(200, aws_simulation_xml(false).into_bytes()),
+    });
+    let PollAuthorization::Complete(authorization) =
+        poll_aws_fixture(typed(AWS_RESERVED_ROLE_ARN), exact, now).unwrap()
+    else {
+        panic!("the exact typed role ARN should verify");
+    };
+    assert_eq!(
+        authorization.verification().provider_identity,
+        AWS_RESERVED_ROLE_ARN
+    );
+
+    let error = poll_aws_fixture(
+        typed("arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/us-east-1/AWSReservedSSO_security-audit-reader_ffffffffffffffff"),
+        signed_in(AWS_RESERVED_ROLE_ARN),
+        now,
+    )
+    .err()
+    .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("not the role the person signed in with"),
+        "{error}"
+    );
+
+    let error = poll_aws_fixture(
+        aws_config(),
+        signed_in(
+            "arn:aws:iam::111122223333:role/AWSReservedSSO_security-audit-reader_0123456789abcdef",
+        ),
+        now,
+    )
+    .err()
+    .unwrap();
+    assert!(error.to_string().contains("different role"), "{error}");
+}
+
+#[test]
+fn device_sign_in_pages_outside_the_provider_sites_are_rejected() {
+    let now = Utc::now();
+    for (verification_uri, accepted) in [
+        ("https://device.sso.us-east-1.amazonaws.com/", true),
+        ("https://security.awsapps.com/start/#/device", true),
+        ("https://device.sso.eu-west-1.amazonaws.com/", false),
+        (
+            "https://device.sso.us-east-1.amazonaws.com.evil.example/",
+            false,
+        ),
+        ("http://device.sso.us-east-1.amazonaws.com/", false),
+        ("https://evil.example/start/#/device", false),
+    ] {
+        let fixture = FixtureHttp::new(aws_device_responses(now, verification_uri));
+        let result = begin_aws_native_authorization(&fixture, aws_config(), now);
+        assert_eq!(result.is_ok(), accepted, "{verification_uri}");
+        assert!(fixture.exhausted());
+    }
+    for (verification_uri, accepted) in [
+        ("https://microsoft.com/devicelogin", true),
+        ("https://login.microsoft.com/device", true),
+        ("https://microsoft.com.evil.example/devicelogin", false),
+        ("https://evil.example/devicelogin", false),
+    ] {
+        let fixture = FixtureHttp::new(vec![expected(
+            "Post",
+            "/devicecode",
+            json!({
+                "device_code":"fixture-device",
+                "user_code":"ABCD",
+                "verification_uri":verification_uri,
+                "expires_in":900,
+                "interval":5,
+                "message":"To sign in, use a web browser to open the page and enter the code to authenticate."
+            }),
+        )]);
+        let result = begin_microsoft_native_authorization(
+            &fixture,
+            microsoft_config(ProviderSourceProfile::Microsoft365TenantReadOnlyAccessToken),
+            now,
+        );
+        assert_eq!(result.is_ok(), accepted, "{verification_uri}");
+        assert!(fixture.exhausted());
+    }
+}
+
+#[test]
+fn microsoft_token_lasting_ninety_minutes_is_used_for_at_most_one_hour() {
+    let now = Utc::now();
+    let verification = verified_microsoft365(now).verification().clone();
+    assert!(verification.credential_expires_at <= now + Duration::hours(1));
+    assert!(verification.credential_expires_at > now + Duration::minutes(59));
+}
+
+#[test]
+fn device_poll_follows_slow_down_and_ends_on_expired_or_declined_sign_in() {
+    let now = Utc::now();
+    let microsoft_error = |error: &str, code: u32| {
+        ExpectedResponse {
+        method: "Post",
+        path_contains: "/token",
+        response: ProviderHttpResponse::new(
+            400,
+            serde_json::to_vec(&json!({
+                "error":error,
+                "error_description":format!("AADSTS{code}: device flow. Trace ID: 0 Correlation ID: 0 Timestamp: 2026-10-01 00:00:00Z"),
+                "error_codes":[code],
+                "timestamp":"2026-10-01 00:00:00Z",
+                "trace_id":"00000000-0000-0000-0000-000000000000",
+                "correlation_id":"00000000-0000-0000-0000-000000000000",
+                "error_uri":format!("https://login.microsoftonline.com/error?code={code}"),
+                "claims":null
+            }))
+            .unwrap(),
+        ),
+    }
+    };
+    let fixture = FixtureHttp::new(vec![
+        expected(
+            "Post",
+            "/devicecode",
+            json!({
+                "device_code":"fixture-device",
+                "user_code":"ABCD",
+                "verification_uri":"https://microsoft.com/devicelogin",
+                "expires_in":900,
+                "interval":5
+            }),
+        ),
+        microsoft_error("authorization_pending", 70016),
+        microsoft_error("slow_down", 70016),
+        microsoft_error("authorization_pending", 70016),
+        microsoft_error("expired_token", 70020),
+    ]);
+    let (_, mut pending) = begin_microsoft_native_authorization(
+        &fixture,
+        microsoft_config(ProviderSourceProfile::Microsoft365TenantReadOnlyAccessToken),
+        now,
+    )
+    .unwrap();
+    for expected_wait in [5, 10, 10] {
+        assert!(matches!(
+            poll_microsoft_native_authorization(&fixture, &mut pending, now).unwrap(),
+            PollAuthorization::Pending { retry_after_seconds } if retry_after_seconds == expected_wait
+        ));
+    }
+    let error = poll_microsoft_native_authorization(&fixture, &mut pending, now)
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("expired"), "{error}");
+    assert!(fixture.exhausted());
+
+    let mut responses = aws_device_responses(now, "https://device.sso.us-east-1.amazonaws.com/");
+    responses.push(ExpectedResponse {
+        method: "Post",
+        path_contains: "/token",
+        response: ProviderHttpResponse::new(
+            400,
+            serde_json::to_vec(&json!({
+                "error":"access_denied",
+                "error_description":"The user denied the authorization request."
+            }))
+            .unwrap(),
+        ),
+    });
+    let error = poll_aws_fixture(aws_config(), responses, now)
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("declined"), "{error}");
 }
