@@ -293,12 +293,6 @@ const managedGreenboneContract = {
   notusImageDigest: "sha256:f53836e6ac0eb3abb7f5ab74ccf93b8317fedd2ba5cd293473cd307c148fc4c3",
   smokeOid: "1.3.6.1.4.1.25623.1.0.108252",
 };
-const publishedGreenboneCatalogContract = {
-  tag: "23.50.24-feed202609170605-1",
-  engineVersion: "23.50.24",
-  scannerRevision: "26465a11ff0e6a98d60a253265fab5974fc757b6",
-  feedRevision: "6c8dce2f22bb9e5da081667994be6e9ed79484d8",
-};
 const greenbonePublicationBlocker =
   "Publish and independently verify the Greenbone 23.50.24-feed202610010558-1 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence.";
 const managedEvidenceWorkflows = [
@@ -1358,10 +1352,10 @@ function isPendingGreenbonePublication(plan, engine) {
     plan.final_artifact?.repository === expectedRepository &&
     plan.final_artifact?.tag === managedGreenboneContract.tag && plan.final_artifact?.digest === null &&
     engine.distribution_mode === "pull_pinned_image" && engine.image?.repository === expectedRepository &&
-    engine.image?.tag === publishedGreenboneCatalogContract.tag && digestPattern.test(engine.image?.digest ?? "") &&
-    engine.engine_version === publishedGreenboneCatalogContract.engineVersion &&
-    engine.source_revision === publishedGreenboneCatalogContract.scannerRevision &&
-    engine.rule_version === publishedGreenboneCatalogContract.feedRevision &&
+    engine.image?.tag === managedGreenboneContract.tag && digestPattern.test(engine.image?.digest ?? "") &&
+    engine.engine_version === managedGreenboneContract.engineVersion &&
+    engine.source_revision === managedGreenboneContract.scannerRevision &&
+    engine.rule_version === managedGreenboneContract.feedRevision &&
     engine.status === "integrated" && engine.compatibility?.runnable === true &&
     deepEqual(engine.compatibility?.blocked_by, []);
 }

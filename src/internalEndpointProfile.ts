@@ -30,7 +30,7 @@ export const internalEndpointCoordinate = (target: string, port: number): string
   `${target.includes(":") ? `[${target}]` : target}:${port}`;
 
 const GREENBONE_TEMPLATE_REVISION =
-  "greenbone-community-feed@6c8dce2f22bb9e5da081667994be6e9ed79484d8";
+  "greenbone-community-feed@816c24126e0375d32c667b78d20342ce7c58ec58";
 
 /**
  * Reporting VTs from the pinned Greenbone feed. The launcher resolves their

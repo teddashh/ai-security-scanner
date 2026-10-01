@@ -6,7 +6,7 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "publication_in_progress",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/greenbone/openvas-scanner",
     "revision": "26465a11ff0e6a98d60a253265fab5974fc757b6",
@@ -16,7 +16,7 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-greenbone",
     "tag": "23.50.24-feed202610010558-1",
-    "digest": null
+    "digest": "sha256:d2e95d252272488891d04766e66362aacb234e1e2975dca27e834f0050a695c4"
   },
   "build_recipe": {
     "source_revision": "26465a11ff0e6a98d60a253265fab5974fc757b6",
@@ -118,9 +118,7 @@
     "rationale": "The image carries the exact GPL-covered scanner source, source-form signed feed snapshot, license notices, project patches, and a three-year corresponding-source offer.",
     "source_offer_path": "engines/images/greenbone/SOURCE-OFFER.md"
   },
-  "blockers": [
-    "Publish and independently verify the Greenbone 23.50.24-feed202610010558-1 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence."
-  ],
+  "blockers": [],
   "managed_runtime": {
     "non_root_user": "65532:65532",
     "read_only_rootfs": true,
@@ -136,5 +134,19 @@
     "telemetry": false,
     "per_grant_target_execution": true
   },
-  "publication": null
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/36871445150",
+    "source_revision": "16d0e116aa52166b581d7ec525faf992d4757c02",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:4f20d48627a667b1edf01772b005435b58d42019add3cee05a247e9507a23600",
+      "linux/arm64": "sha256:6d716a451bf80d081e6f8235c02e1fac30b727ed5bd776aa4b86782b18327c2a"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "greenbone-image-evidence-36871445150-1",
+    "managed_smoke_evidence_sha256": "sha256:60455e2cc82d0538de9a42b20a7fd71f47448be7c7ee9223081ec3cc3654db7a"
+  }
 }

@@ -1436,13 +1436,13 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-greenbone",
-      "tag": "23.50.24-feed202609170605-1",
-      "digest": "sha256:948cf0b503d7f544915bed8f6b410661d8a68f2f64a688bc225f005857d464c0",
+      "tag": "23.50.24-feed202610010558-1",
+      "digest": "sha256:d2e95d252272488891d04766e66362aacb234e1e2975dca27e834f0050a695c4",
       "signature_identity": null
     },
     "source_revision": "26465a11ff0e6a98d60a253265fab5974fc757b6",
     "engine_version": "23.50.24",
-    "rule_version": "6c8dce2f22bb9e5da081667994be6e9ed79484d8",
+    "rule_version": "816c24126e0375d32c667b78d20342ce7c58ec58",
     "adapter_version": "0.2.0",
     "supported_asset_kinds": [
       "ip_address",
@@ -1506,14 +1506,14 @@
       "rules": {
         "mode": "embedded",
         "identifier": "Greenbone Community Feed vulnerability tests",
-        "revision": "6c8dce2f22bb9e5da081667994be6e9ed79484d8",
-        "acquisition_source": "registry.community.greenbone.net/community/vulnerability-tests@sha256:d0010b7d8e24e7df8086b85af9fabe64335dccf9a7e1fd4c7774b4712bd061cd"
+        "revision": "816c24126e0375d32c667b78d20342ce7c58ec58",
+        "acquisition_source": "registry.community.greenbone.net/community/vulnerability-tests@sha256:86a44fb7a9f9b982d521f98914aba98846f573b4f9ec9e8c1007c4866ec943af"
       },
       "data": {
         "mode": "embedded",
         "identifier": "Greenbone Community Feed and Notus snapshot",
-        "revision": "6c8dce2f22bb9e5da081667994be6e9ed79484d8",
-        "acquisition_source": "registry.community.greenbone.net/community/vulnerability-tests@sha256:d0010b7d8e24e7df8086b85af9fabe64335dccf9a7e1fd4c7774b4712bd061cd"
+        "revision": "816c24126e0375d32c667b78d20342ce7c58ec58",
+        "acquisition_source": "registry.community.greenbone.net/community/vulnerability-tests@sha256:86a44fb7a9f9b982d521f98914aba98846f573b4f9ec9e8c1007c4866ec943af"
       },
       "adapter": {
         "id": "ai-security-scanner:greenbone",
@@ -1534,8 +1534,8 @@
       "knowledge_input": {
         "kind": "embedded",
         "identifier": "Greenbone Community Feed snapshot",
-        "version": "202609170605-community",
-        "acquisition_source": "registry.community.greenbone.net/community/vulnerability-tests@sha256:d0010b7d8e24e7df8086b85af9fabe64335dccf9a7e1fd4c7774b4712bd061cd",
+        "version": "202610010558-community",
+        "acquisition_source": "registry.community.greenbone.net/community/vulnerability-tests@sha256:86a44fb7a9f9b982d521f98914aba98846f573b4f9ec9e8c1007c4866ec943af",
         "pin_state": "pinned_or_not_applicable"
       },
       "wrapper": {

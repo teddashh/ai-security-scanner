@@ -50,7 +50,7 @@ test("the generic HTTPS-management profile stays pinned to exact Greenbone TLS v
   assert.equal(internalDeviceHttpsProfile.label.en, "HTTPS management-service security");
   assert.equal(
     internalDeviceHttpsProfile.templateRevision,
-    "greenbone-community-feed@6c8dce2f22bb9e5da081667994be6e9ed79484d8",
+    "greenbone-community-feed@816c24126e0375d32c667b78d20342ce7c58ec58",
   );
   assert.deepEqual(internalDeviceHttpsProfile.engineIds, ["greenbone"]);
   assert.deepEqual(internalDeviceHttpsProfile.ratePolicy, {
@@ -79,7 +79,7 @@ test("the frontend profile matches the existing Greenbone direct-launcher bounda
   assert.match(greenboneLauncherSource, /the Greenbone profile does not expand network targets/u);
 
   const greenbone = engineCatalog.find(({ id }) => id === "greenbone");
-  assert.equal(greenbone?.rule_version, "6c8dce2f22bb9e5da081667994be6e9ed79484d8");
+  assert.equal(greenbone?.rule_version, "816c24126e0375d32c667b78d20342ce7c58ec58");
   assert.ok(greenbone?.direct_network_contract?.protocols?.includes("https"));
   assert.deepEqual(greenbone?.direct_network_contract?.target_kinds, ["hostname", "address"]);
 });
@@ -117,7 +117,7 @@ test("one exact HTTPS management URL produces one bounded generic Greenbone rout
       timeoutSeconds: 15,
     },
     templatePolicy: {
-      revision: "greenbone-community-feed@6c8dce2f22bb9e5da081667994be6e9ed79484d8",
+      revision: "greenbone-community-feed@816c24126e0375d32c667b78d20342ce7c58ec58",
       allowedTemplateIds: [...internalDeviceHttpsProfile.allowedTemplateIds],
       allowHeadless: false,
       allowOutOfBand: false,
