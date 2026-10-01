@@ -10691,6 +10691,14 @@ fn validate_security_template_executions(
             "only a Nuclei execution report can contain a missing security-template outcome".into(),
         ));
     }
+    if unevaluated_targets.iter().any(|target| {
+        target.cause == crate::domain::UnevaluatedTargetCause::NoServiceIdentified
+            && engine_id != "greenbone"
+    }) {
+        return Err(AppError::NotAuthorized(
+            "only a Greenbone execution report can contain a no-service outcome".into(),
+        ));
+    }
 
     let allowed_assets = engine_run.asset_ids.iter().collect::<BTreeSet<_>>();
     let mut unique_assets = BTreeSet::new();

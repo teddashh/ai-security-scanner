@@ -198,6 +198,10 @@ const nextStepCopy = {
     en: "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again.",
     zhTW: "請確認這台主機已開機，且本機能連到已核准的連接埠，然後再執行一次這項檢查。",
   },
+  noServiceIdentified: {
+    en: "If this host serves a web page, add its full address as a website, then start a new scan.",
+    zhTW: "如果這台主機提供網頁，請把它的完整網址加入為網站，然後開始新的掃描。",
+  },
   retryMissingWork: {
     en: "Retry this check to complete the missing work.",
     zhTW: "重新執行這項檢查以完成缺少的工作。",
@@ -315,6 +319,11 @@ const engineHostDidNotRespond = (engine: EngineRun): boolean =>
   (engine.status === "completed" || engine.status === "partial")
   && (engine.unevaluatedTargets?.some((target) => target.cause === "target_did_not_respond") ?? false);
 
+/** No service identified on any approved port means none of the host's vulnerability checks ran; a retry would repeat that. */
+const engineIdentifiedNoService = (engine: EngineRun): boolean =>
+  (engine.status === "completed" || engine.status === "partial")
+  && (engine.unevaluatedTargets?.some((target) => target.cause === "no_service_identified") ?? false);
+
 /** A recorded unevaluated target means some authorized work has no result, whatever the check's own status says. */
 export const engineRecordedUnevaluatedTarget = (engine: EngineRun): boolean =>
   (engine.status === "completed" || engine.status === "partial")
@@ -324,6 +333,7 @@ export const engineNextStepFor = (engine: EngineRun): BilingualText => {
   const localhostSummary = localhostTcpBeginnerSummary(engine);
   if (localhostSummary) return localhostSummary.nextStep;
   if (engineHostDidNotRespond(engine)) return nextStepCopy.hostDidNotRespond;
+  if (engineIdentifiedNoService(engine)) return nextStepCopy.noServiceIdentified;
   if (engineRecordedUnevaluatedTarget(engine)) return nextStepCopy.retryMissingWork;
   if (engine.status === "completed") {
     return engine.findingCount > 0

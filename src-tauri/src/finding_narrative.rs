@@ -918,6 +918,7 @@ pub(crate) fn recognized_coverage_dimension_zh_hant(dimension: &str) -> Option<S
             ("vulnerability profile evidence", "弱點掃描設定檔證據"),
             ("website execution evidence", "網站執行證據"),
             ("target response", "目標回應"),
+            ("service identification", "服務辨識"),
             ("scanner errors", "掃描工具錯誤"),
             ("unsupported target input", "不支援的目標輸入"),
             (
@@ -1753,6 +1754,10 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
         "Greenbone 回報了這台主機的錯誤，因此其檢查不能顯示為已完成。",
     ),
     (
+        "No service identified on the approved ports. Vulnerability checks did not run for this host.",
+        "已核准的連接埠上沒有辨識出任何服務，因此這台主機沒有執行弱點檢查。",
+    ),
+    (
         "The saved summary did not match this run's checks, so the report follows the checks.",
         "保存的摘要與這次掃描的檢查不符，因此報告以檢查為準。",
     ),
@@ -2098,6 +2103,10 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
     (
         "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again.",
         "請確認這台主機已開機，且本機能連到已核准的連接埠，然後再執行一次這項檢查。",
+    ),
+    (
+        "If this host serves a web page, add its full address as a website, then start a new scan.",
+        "如果這台主機提供網頁，請把它的完整網址加入為網站，然後開始新的掃描。",
     ),
     (
         "Retry only the unfinished work.",

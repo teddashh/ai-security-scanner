@@ -1828,6 +1828,16 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                     })
                     .map(|target| target.asset_id.clone())
                     .collect::<BTreeSet<_>>();
+                let no_service_asset_ids = task
+                    .unevaluated_targets
+                    .iter()
+                    .filter(|target| {
+                        target.cause == UnevaluatedTargetCause::NoServiceIdentified
+                            && bound_asset_ids.contains(&target.asset_id)
+                            && !dead_host_asset_ids.contains(&target.asset_id)
+                    })
+                    .map(|target| target.asset_id.clone())
+                    .collect::<BTreeSet<_>>();
                 let scanner_error_asset_ids = task
                     .unevaluated_targets
                     .iter()
@@ -1835,6 +1845,7 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                         target.cause == UnevaluatedTargetCause::ScannerError
                             && bound_asset_ids.contains(&target.asset_id)
                             && !dead_host_asset_ids.contains(&target.asset_id)
+                            && !no_service_asset_ids.contains(&target.asset_id)
                     })
                     .map(|target| target.asset_id.clone())
                     .collect::<BTreeSet<_>>();
@@ -1856,6 +1867,23 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                             .into(),
                     });
                 }
+                for asset_id in &no_service_asset_ids {
+                    tested_dimensions
+                        .retain(|dimension| !tested_dimension_refers_to_asset(dimension, asset_id));
+                    gaps.push(CoverageGap {
+                        unattributed: None,
+                        kind: CoverageGapKind::NotTested,
+                        class: CoverageGapKind::NotTested.default_class(),
+                        task_id: Some(task.id.clone()),
+                        target_asset_ids: vec![asset_id.clone()],
+                        dimension: format!("{}: service identification", check_id(task)),
+                        reason: "No service identified on the approved ports. Vulnerability checks did not run for this host."
+                            .into(),
+                        next_action_code: NextActionCode::ChooseCompatibleCheck,
+                        next_action: "If this host serves a web page, add its full address as a website, then start a new scan."
+                            .into(),
+                    });
+                }
                 for asset_id in &scanner_error_asset_ids {
                     gaps.push(CoverageGap {
                         unattributed: None,
@@ -1870,7 +1898,10 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                         next_action: "Start a new scan for a fresh result.".into(),
                     });
                 }
-                if !dead_host_asset_ids.is_empty() || !scanner_error_asset_ids.is_empty() {
+                if !dead_host_asset_ids.is_empty()
+                    || !no_service_asset_ids.is_empty()
+                    || !scanner_error_asset_ids.is_empty()
+                {
                     status = CoverageDimensionStatus::TestedPartial;
                     exact_complete = false;
                     task_gap_already_projected = true;
@@ -1881,6 +1912,15 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
                         .all(|asset_id| dead_host_asset_ids.contains(asset_id))
                 {
                     status = CoverageDimensionStatus::Failed;
+                    tested_dimensions.clear();
+                    useful_result = false;
+                } else if !bound_asset_ids.is_empty()
+                    && bound_asset_ids.iter().all(|asset_id| {
+                        dead_host_asset_ids.contains(asset_id)
+                            || no_service_asset_ids.contains(asset_id)
+                    })
+                {
+                    status = CoverageDimensionStatus::NotTested;
                     tested_dimensions.clear();
                     useful_result = false;
                 }
@@ -10177,6 +10217,51 @@ mod tests {
         );
         assert_eq!(gap.next_action, "Start a new scan for a fresh result.");
         assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+    }
+
+    #[test]
+    fn greenbone_host_without_an_identified_service_is_not_tested() {
+        let mut case = internal_host_case();
+        case.scan_runs[0].engine_runs[0].unevaluated_targets = vec![
+            crate::domain::UnevaluatedTarget {
+                asset_id: "host-asset".into(),
+                cause: UnevaluatedTargetCause::ScannerError,
+                result_count: 1,
+            },
+            crate::domain::UnevaluatedTarget {
+                asset_id: "host-asset".into(),
+                cause: UnevaluatedTargetCause::NoServiceIdentified,
+                result_count: 0,
+            },
+        ];
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        let check = &report.actual.checks[0];
+        assert_eq!(check.status, CoverageDimensionStatus::NotTested);
+        assert!(check.tested_dimensions.is_empty());
+        let host_gaps = report
+            .coverage_gaps
+            .iter()
+            .filter(|gap| gap.target_asset_ids == ["host-asset"])
+            .collect::<Vec<_>>();
+        assert_eq!(host_gaps.len(), 1, "one gap per host: {host_gaps:?}");
+        let gap = host_gaps[0];
+        assert_eq!(gap.dimension, "greenbone: service identification");
+        assert_eq!(gap.kind, CoverageGapKind::NotTested);
+        assert_eq!(gap.task_id.as_deref(), Some("host"));
+        assert_eq!(
+            gap.reason,
+            "No service identified on the approved ports. Vulnerability checks did not run for this host."
+        );
+        assert_eq!(gap.next_action_code, NextActionCode::ChooseCompatibleCheck);
+        assert_eq!(
+            gap.next_action,
+            "If this host serves a web page, add its full address as a website, then start a new scan."
+        );
+        assert_eq!(
+            report.state.summary,
+            BeginnerReportSummary::NoChecksCompleted
+        );
     }
 
     #[test]

@@ -573,6 +573,10 @@ const copy = {
     en: "Some checks did not finish. Open each affected check below and complete or retry it.",
     zhTW: "有些檢查沒有完成。請打開下方受影響的檢查並完成或重試。",
   },
+  untestedAssetsBody: {
+    en: "Some selected assets were not tested. Each affected check below names its next step.",
+    zhTW: "有些已選取的資產這次沒有實際檢查到。下方每項受影響的檢查都列出了下一步。",
+  },
   workEyebrow: { en: "CHECKS", zhTW: "檢查項目" },
   workTitle: { en: "Checks", zhTW: "檢查項目" },
   workDescription: {
@@ -1620,7 +1624,8 @@ export function ProgressPage({
 
       {incompleteNoticeVisible && (
         <InlineNotice tone="warning" title={text(copy.incompleteTitle)}>
-          <p>{text(copy.incompleteBody)}</p>
+          {/* Checks that finished without testing an asset did finish; only their next step differs. */}
+          <p>{text(incompleteCount === unevaluatedCompletedCheckCount ? copy.untestedAssetsBody : copy.incompleteBody)}</p>
         </InlineNotice>
       )}
 

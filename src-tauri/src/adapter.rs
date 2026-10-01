@@ -428,6 +428,14 @@ pub fn validate_adapter_output(
             "only the Nuclei adapter may emit a missing security-template execution outcome".into(),
         ));
     }
+    if output.unevaluated_targets.iter().any(|target| {
+        target.cause == crate::domain::UnevaluatedTargetCause::NoServiceIdentified
+            && input.manifest.id != "greenbone"
+    }) {
+        return Err(AppError::Runtime(
+            "only the Greenbone adapter may emit a no-service outcome".into(),
+        ));
+    }
 
     if output.manual_review_controls.len() > 10_000 {
         return Err(AppError::Runtime(

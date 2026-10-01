@@ -1229,7 +1229,16 @@ fn greenbone_unevaluated_target_requires_an_authorized_asset() {
     );
 
     assert!(output.findings.is_empty());
-    assert!(output.unevaluated_targets.is_empty());
+    // The dead host named no authorized asset, so it is not attributed. The
+    // authorized asset still has no result on any approved port.
+    assert_eq!(
+        output.unevaluated_targets,
+        [UnevaluatedTarget {
+            asset_id: "asset-1".into(),
+            cause: UnevaluatedTargetCause::NoServiceIdentified,
+            result_count: 0,
+        }]
+    );
     assert!(!output.complete);
     assert_eq!(
         output.warnings,
@@ -1259,7 +1268,14 @@ fn greenbone_unsupported_result_type_is_raw_evidence_and_incomplete() {
     );
 
     assert!(output.findings.is_empty());
-    assert!(output.unevaluated_targets.is_empty());
+    assert_eq!(
+        output.unevaluated_targets,
+        [UnevaluatedTarget {
+            asset_id: "asset-1".into(),
+            cause: UnevaluatedTargetCause::NoServiceIdentified,
+            result_count: 0,
+        }]
+    );
     assert!(!output.complete);
     assert_eq!(
         output.warnings,

@@ -1845,6 +1845,7 @@ const mapUnevaluatedTargetCause = (cause: unknown): UnevaluatedTargetCause => {
     target_did_not_respond: "target_did_not_respond",
     scanner_error: "scanner_error",
     no_security_template_execution_evidence: "no_security_template_execution_evidence",
+    no_service_identified: "no_service_identified",
   };
   return causes[cause as UnevaluatedTargetCauseWire] ?? "unknown";
 };

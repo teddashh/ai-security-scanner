@@ -383,8 +383,9 @@ pub fn assess_asset_coverage(
             // so a newly added cause cannot silently fall back to scanned.
             .min_by_key(|cause| match cause {
                 UnevaluatedTargetCause::TargetDidNotRespond => 0,
-                UnevaluatedTargetCause::ScannerError => 1,
-                UnevaluatedTargetCause::NoSecurityTemplateExecutionEvidence => 2,
+                UnevaluatedTargetCause::NoServiceIdentified => 1,
+                UnevaluatedTargetCause::ScannerError => 2,
+                UnevaluatedTargetCause::NoSecurityTemplateExecutionEvidence => 3,
             })
         {
             incomplete_reasons.push(format!("{}={}", engine_run.engine_id, enum_key(&cause)));

@@ -1800,6 +1800,11 @@ pub enum UnevaluatedTargetCause {
     /// a completed evaluation for this target. Technology discovery and a
     /// successful process exit are not security-check execution evidence.
     NoSecurityTemplateExecutionEvidence,
+    /// Greenbone returned no result on any approved port of this target. Its
+    /// service-dependent checks run only after it identifies a service, so
+    /// host-level results such as a route or an OS guess do not show that any
+    /// approved port was checked.
+    NoServiceIdentified,
 }
 
 /// being non-questionnaire, so answering a questionnaire alone cannot conjure

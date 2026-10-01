@@ -550,12 +550,20 @@ test("a completed Greenbone check whose host did not respond states the recorded
 });
 
 test("a terminal run with one completed dead-host check and one clean completed check needs attention", () => {
-  const { container } = renderProgress(run([
+  const deadHostRun = run([
     engine("greenbone", "completed", {
       unevaluatedTargets: [{ assetId: "asset-1", cause: "target_did_not_respond" }],
     }),
     engine("clear-check", "completed"),
-  ], "completed"));
+  ], "completed");
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const chinese = renderProgress(deadHostRun);
+  expect(chinese.container.textContent).toContain(
+    "有些已選取的資產這次沒有實際檢查到。下方每項受影響的檢查都列出了下一步。",
+  );
+  cleanup();
+  window.localStorage.setItem(localeStorageKey, "en");
+  const { container } = renderProgress(deadHostRun);
 
   const summary = container.querySelector(".run-overview__progress-counts")?.textContent;
   expect(summary).toContain("Checks · Completed 1 · Remaining 0 · Need attention 1");
@@ -564,7 +572,27 @@ test("a terminal run with one completed dead-host check and one clean completed 
     (candidate) => candidate.textContent?.includes("This run did not cover everything"),
   );
   expect(notice?.textContent).toContain(
+    "Some selected assets were not tested. Each affected check below names its next step.",
+  );
+  expect(notice?.textContent).not.toContain("did not finish");
+});
+
+test("a check that stopped beside a completed check that skipped its host keeps the retry notice", () => {
+  const { container } = renderProgress(run([
+    engine("greenbone", "completed", {
+      unevaluatedTargets: [{ assetId: "asset-1", cause: "no_service_identified" }],
+    }),
+    engine("stopped-check", "failed"),
+  ], "partial"));
+
+  const notice = Array.from(container.querySelectorAll<HTMLElement>(".inline-notice")).find(
+    (candidate) => candidate.textContent?.includes("This run did not cover everything"),
+  );
+  expect(notice?.textContent).toContain(
     "Some checks did not finish. Open each affected check below and complete or retry it.",
+  );
+  expect(engineRow(container, "greenbone").textContent).toContain(
+    "If this host serves a web page, add its full address as a website, then start a new scan.",
   );
 });
 

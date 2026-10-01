@@ -5281,6 +5281,10 @@ fn extract_greenbone(
     let mut complete = true;
     let mut saw_dead_host = false;
     let mut saw_scanner_error = false;
+    // Assets with at least one log or alarm on an approved port. The launcher
+    // maps every relay port back to its approved port and writes 0 for
+    // host-level results, so a non-zero port is a result about a service.
+    let mut assets_with_service_results = BTreeSet::new();
     for result in results.iter().take(MAX_RECORDS) {
         let numeric_severity = result
             .severity
@@ -5299,6 +5303,19 @@ fn extract_greenbone(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_ascii_lowercase);
+        if matches!(result_type.as_deref(), Some("alarm" | "log") | None)
+            && result
+                .port
+                .as_deref()
+                .and_then(greenbone_service_port)
+                .is_some()
+            && let Some(asset_id) = result
+                .asset_id
+                .as_ref()
+                .filter(|asset_id| authorized_asset_ids.contains(asset_id))
+        {
+            assets_with_service_results.insert(asset_id.clone());
+        }
         let is_unrated_alarm = match result_type.as_deref() {
             Some("alarm") => !positive_severity,
             Some("log") => continue,
@@ -5510,6 +5527,21 @@ fn extract_greenbone(
             "Greenbone reported scanner errors for the target, so some of its checks did not finish",
         );
     }
+    for asset_id in authorized_asset_ids {
+        let did_not_respond = unevaluated_counts.contains_key(&(
+            asset_id.clone(),
+            UnevaluatedTargetCause::TargetDidNotRespond,
+        ));
+        if !did_not_respond && !assets_with_service_results.contains(asset_id) {
+            unevaluated_counts.insert(
+                (
+                    asset_id.clone(),
+                    UnevaluatedTargetCause::NoServiceIdentified,
+                ),
+                0,
+            );
+        }
+    }
     let mut unevaluated_targets = unevaluated_counts
         .into_iter()
         .map(|((asset_id, cause), result_count)| UnevaluatedTarget {
@@ -5524,6 +5556,16 @@ fn extract_greenbone(
         unevaluated_targets,
         complete,
     }
+}
+
+/// The TCP port of a Greenbone `<port>` value such as `8080/tcp`. Host-level
+/// values (`0/tcp`, `general/tcp`) name no service and return `None`.
+fn greenbone_service_port(value: &str) -> Option<u16> {
+    let (port, protocol) = value.trim().split_once('/')?;
+    if !protocol.eq_ignore_ascii_case("tcp") {
+        return None;
+    }
+    port.parse::<u16>().ok().filter(|port| *port > 0)
 }
 
 fn extract_semgrep(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
@@ -8918,6 +8960,104 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("unsupported upstream result type"))
         );
+    }
+
+    fn greenbone_log(asset_id: &str, port: &str) -> GreenboneXmlResult {
+        GreenboneXmlResult {
+            pointer: "/report/results/result[1]".to_owned(),
+            result_id: Some("result-1".to_owned()),
+            nvt_oid: Some("1.3.6.1.4.1.25623.1.0.10107".to_owned()),
+            host: Some("198.51.100.7".to_owned()),
+            port: Some(port.to_owned()),
+            result_type: Some("log".to_owned()),
+            severity: Some("0.0".to_owned()),
+            threat: Some("Log".to_owned()),
+            asset_id: Some(asset_id.to_owned()),
+            ..GreenboneXmlResult::default()
+        }
+    }
+
+    /// Route, OS and open-port summaries are host-level (`0/tcp`). Without a
+    /// result on an approved port, Greenbone identified no service there and
+    /// its service-dependent checks never ran, so the host was not checked.
+    #[test]
+    fn greenbone_host_level_results_alone_leave_the_host_unchecked() {
+        let parsed = ParsedArtifact::Xml(vec![
+            greenbone_log("asset-7", "0/tcp"),
+            greenbone_log("asset-7", "general/tcp"),
+            greenbone_log("asset-8", "8080/tcp"),
+        ]);
+        let mut warnings = Vec::new();
+
+        let extraction = extract_greenbone(
+            &parsed,
+            &mut warnings,
+            &["asset-7".to_owned(), "asset-8".to_owned()],
+        );
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert!(extraction.records.is_empty());
+        assert!(extraction.complete);
+        assert_eq!(
+            extraction.unevaluated_targets,
+            [UnevaluatedTarget {
+                asset_id: "asset-7".into(),
+                cause: UnevaluatedTargetCause::NoServiceIdentified,
+                result_count: 0,
+            }]
+        );
+    }
+
+    #[test]
+    fn greenbone_error_on_an_approved_port_does_not_show_a_service_was_checked() {
+        let mut error = greenbone_log("asset-7", "8080/tcp");
+        error.result_type = Some("error".to_owned());
+        let parsed = ParsedArtifact::Xml(vec![error]);
+        let mut warnings = Vec::new();
+
+        let extraction = extract_greenbone(&parsed, &mut warnings, &["asset-7".to_owned()]);
+
+        assert_eq!(
+            extraction
+                .unevaluated_targets
+                .iter()
+                .map(|target| target.cause)
+                .collect::<Vec<_>>(),
+            [
+                UnevaluatedTargetCause::ScannerError,
+                UnevaluatedTargetCause::NoServiceIdentified,
+            ]
+        );
+    }
+
+    #[test]
+    fn greenbone_dead_host_is_not_also_reported_as_no_service() {
+        let mut dead = greenbone_log("asset-7", "0/tcp");
+        dead.result_type = Some("dead_host".to_owned());
+        let parsed = ParsedArtifact::Xml(vec![dead]);
+        let mut warnings = Vec::new();
+
+        let extraction = extract_greenbone(&parsed, &mut warnings, &["asset-7".to_owned()]);
+
+        assert_eq!(
+            extraction.unevaluated_targets,
+            [UnevaluatedTarget {
+                asset_id: "asset-7".into(),
+                cause: UnevaluatedTargetCause::TargetDidNotRespond,
+                result_count: 1,
+            }]
+        );
+    }
+
+    #[test]
+    fn greenbone_service_port_reads_only_a_nonzero_tcp_port() {
+        assert_eq!(greenbone_service_port("8080/tcp"), Some(8080));
+        assert_eq!(greenbone_service_port(" 65535/TCP "), Some(65535));
+        assert_eq!(greenbone_service_port("0/tcp"), None);
+        assert_eq!(greenbone_service_port("general/tcp"), None);
+        assert_eq!(greenbone_service_port("161/udp"), None);
+        assert_eq!(greenbone_service_port("65536/tcp"), None);
+        assert_eq!(greenbone_service_port("8080"), None);
     }
 
     /// A Greenbone report is UTF-8. A stray non-UTF-8 byte inside a field

@@ -823,7 +823,8 @@ export interface ScanRequestOutcome {
 export type UnevaluatedTargetCauseWire =
   | "target_did_not_respond"
   | "scanner_error"
-  | "no_security_template_execution_evidence";
+  | "no_security_template_execution_evidence"
+  | "no_service_identified";
 
 /** Adds the fail-closed member the wire never sends. */
 export type UnevaluatedTargetCause = UnevaluatedTargetCauseWire | "unknown";
