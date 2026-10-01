@@ -14,6 +14,8 @@ use crate::credential_vault::ReadOnlyCredentialSource;
 use crate::error::{AppError, AppResult};
 use base64::Engine as _;
 use chrono::{DateTime, Duration, Utc};
+use quick_xml::Reader;
+use quick_xml::events::Event;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -38,8 +40,10 @@ const SCANNER_CREDENTIAL_USE_LIMIT: Duration = Duration::hours(1);
 /// treated as malformed. AWS role sessions last up to 12 hours; Microsoft
 /// access tokens last 60 to 90 minutes.
 const MAX_PROVIDER_CREDENTIAL_LIFETIME_SECONDS: u32 = 12 * 60 * 60;
-/// Allowance for the provider's clock running ahead of this computer's.
-const PROVIDER_CLOCK_SKEW: Duration = Duration::minutes(5);
+/// Allowance for the provider's clock running ahead of this computer's. AWS
+/// accepts signed requests from a clock up to 15 minutes off, so a credential
+/// it issued can look that much longer than its real lifetime here.
+const PROVIDER_CLOCK_SKEW: Duration = Duration::minutes(15);
 const MAX_DEVICE_POLL_INTERVAL_SECONDS: u64 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -989,16 +993,24 @@ fn verify_aws_credentials(
     ensure_status(&iam_response, &[200], "AWS IAM read-only policy simulation")?;
     let iam_xml = std::str::from_utf8(iam_response.body())
         .map_err(|_| AppError::NotAuthorized("AWS IAM returned non-UTF-8 XML".into()))?;
-    let decisions = aws_simulation_decisions(iam_xml)?;
+    let requested = required
+        .iter()
+        .chain(prohibited.iter())
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let decisions = aws_simulation_decisions(iam_xml, &requested)?;
     for permission in &required {
-        if decisions.get(permission).map(String::as_str) != Some("allowed") {
+        if decisions.get(permission) != Some(&AwsSimulationDecision::Allowed) {
             return Err(AppError::NotAuthorized(format!(
                 "AWS read-only profile is missing required permission {permission}"
             )));
         }
     }
     for permission in &prohibited {
-        if decisions.get(permission).map(String::as_str) == Some("allowed") {
+        if !decisions
+            .get(permission)
+            .is_some_and(|decision| decision.is_denied())
+        {
             return Err(AppError::NotAuthorized(format!(
                 "AWS credential permits prohibited mutation {permission}"
             )));
@@ -1903,12 +1915,14 @@ pub(crate) fn validate_device_response(
     expires_in: u32,
     interval: u32,
 ) -> AppResult<()> {
-    if !page.trusts(verification_uri)
-        || verification_uri_complete.is_some_and(|uri| !page.trusts(uri))
+    if let Some(untrusted) = [Some(verification_uri), verification_uri_complete]
+        .into_iter()
+        .flatten()
+        .find(|uri| !page.trusts(uri))
     {
         return Err(AppError::NotAuthorized(format!(
             "provider sent a sign-in page outside the expected provider sites: {}",
-            safe_label(verification_uri)
+            safe_label(untrusted)
         )));
     }
     if expires_in == 0 || expires_in > 900 || interval == 0 || interval > 30 {
@@ -2095,7 +2109,7 @@ fn google_requested_scopes() -> Vec<String> {
     .collect()
 }
 
-fn aws_required_permissions() -> Vec<String> {
+pub(crate) fn aws_required_permissions() -> Vec<String> {
     [
         "organizations:ListAccounts",
         "ec2:DescribeRegions",
@@ -2133,7 +2147,7 @@ fn aws_required_permissions() -> Vec<String> {
     .collect()
 }
 
-fn aws_prohibited_permissions() -> Vec<String> {
+pub(crate) fn aws_prohibited_permissions() -> Vec<String> {
     [
         "iam:CreateUser",
         "iam:AttachRolePolicy",
@@ -2595,29 +2609,190 @@ pub(crate) fn xml_first(xml: &str, tag: &str) -> AppResult<String> {
     Ok(value.into())
 }
 
-pub(crate) fn aws_simulation_decisions(xml: &str) -> AppResult<BTreeMap<String, String>> {
-    let mut decisions = BTreeMap::new();
-    let mut cursor = xml;
-    while let Some((_, after_start)) = cursor.split_once("<member>") {
-        let Some((member, rest)) = after_start.split_once("</member>") else {
-            return Err(AppError::NotAuthorized(
-                "AWS policy simulation XML is truncated".into(),
-            ));
-        };
-        if member.contains("<EvalActionName>") {
-            let action = xml_first(member, "EvalActionName")?;
-            let decision = xml_first(member, "EvalDecision")?;
-            if decisions.insert(action, decision).is_some() {
-                return Err(AppError::NotAuthorized(
-                    "AWS policy simulation duplicated an action decision".into(),
-                ));
-            }
-        }
-        cursor = rest;
+/// One IAM policy simulator verdict for one action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AwsSimulationDecision {
+    Allowed,
+    ExplicitDeny,
+    ImplicitDeny,
+}
+
+impl AwsSimulationDecision {
+    pub(crate) fn is_denied(self) -> bool {
+        matches!(self, Self::ExplicitDeny | Self::ImplicitDeny)
     }
-    if decisions.is_empty() {
+}
+
+const AWS_SIMULATION_RESULT: [&str; 4] = [
+    "SimulatePrincipalPolicyResponse",
+    "SimulatePrincipalPolicyResult",
+    "EvaluationResults",
+    "member",
+];
+const AWS_SIMULATION_MAX_DEPTH: usize = 32;
+const AWS_SIMULATION_MAX_EVENTS: usize = 100_000;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AwsSimulationField {
+    Action,
+    Decision,
+    Truncated,
+}
+
+fn aws_simulation_field(path: &[String]) -> Option<AwsSimulationField> {
+    let (last, parent) = path.split_last()?;
+    if parent == AWS_SIMULATION_RESULT {
+        match last.as_str() {
+            "EvalActionName" => Some(AwsSimulationField::Action),
+            "EvalDecision" => Some(AwsSimulationField::Decision),
+            _ => None,
+        }
+    } else if parent == &AWS_SIMULATION_RESULT[..2] && last == "IsTruncated" {
+        Some(AwsSimulationField::Truncated)
+    } else {
+        None
+    }
+}
+
+/// Reads an IAM `SimulatePrincipalPolicy` response and returns one decision for
+/// every action in `requested`. Each evaluation result is a `member` of
+/// `SimulatePrincipalPolicyResult/EvaluationResults`; its own `EvalActionName`
+/// and `EvalDecision` are direct children that can follow nested `member` lists
+/// such as `MatchedStatements`. The response must answer every requested
+/// action exactly once, answer nothing else, and not be truncated.
+pub(crate) fn aws_simulation_decisions(
+    xml: &str,
+    requested: &[&str],
+) -> AppResult<BTreeMap<String, AwsSimulationDecision>> {
+    let malformed = || AppError::NotAuthorized("AWS policy simulation XML is malformed".into());
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    reader.config_mut().check_end_names = true;
+    reader.config_mut().expand_empty_elements = true;
+
+    let mut path: Vec<String> = Vec::new();
+    let mut root_seen = false;
+    let mut result: Option<(Option<String>, Option<AwsSimulationDecision>)> = None;
+    let mut field_seen = false;
+    let mut truncated = None;
+    let mut answers = BTreeMap::new();
+    for _ in 0..AWS_SIMULATION_MAX_EVENTS {
+        match reader.read_event().map_err(|_| malformed())? {
+            Event::Eof => {
+                if !path.is_empty() {
+                    return Err(AppError::NotAuthorized(
+                        "AWS policy simulation XML is truncated".into(),
+                    ));
+                }
+                return aws_simulation_answers(answers, truncated, requested);
+            }
+            Event::Start(start) => {
+                if path.len() >= AWS_SIMULATION_MAX_DEPTH
+                    || aws_simulation_field(&path).is_some()
+                    || (path.is_empty() && std::mem::replace(&mut root_seen, true))
+                {
+                    return Err(malformed());
+                }
+                path.push(start.local_name().as_ref().to_owned());
+                field_seen = false;
+                if path == AWS_SIMULATION_RESULT {
+                    result = Some((None, None));
+                }
+            }
+            Event::End(_) => {
+                if path == AWS_SIMULATION_RESULT {
+                    let Some((Some(action), Some(decision))) = result.take() else {
+                        return Err(AppError::NotAuthorized(
+                            "AWS policy simulation returned a result without an action decision"
+                                .into(),
+                        ));
+                    };
+                    if answers
+                        .insert(action.to_ascii_lowercase(), decision)
+                        .is_some()
+                    {
+                        return Err(AppError::NotAuthorized(
+                            "AWS policy simulation duplicated an action decision".into(),
+                        ));
+                    }
+                }
+                path.pop();
+            }
+            Event::Text(text) => {
+                let Some(field) = aws_simulation_field(&path) else {
+                    continue;
+                };
+                let value: &str = text.as_ref();
+                if field_seen || !safe_metadata(value, 256) || value.contains('&') {
+                    return Err(malformed());
+                }
+                field_seen = true;
+                let (action, decision) = match (field, result.as_mut()) {
+                    (AwsSimulationField::Truncated, _) if truncated.is_none() => {
+                        truncated = Some(match value {
+                            "true" => true,
+                            "false" => false,
+                            _ => return Err(malformed()),
+                        });
+                        continue;
+                    }
+                    (AwsSimulationField::Action | AwsSimulationField::Decision, Some(result)) => {
+                        (&mut result.0, &mut result.1)
+                    }
+                    _ => return Err(malformed()),
+                };
+                match field {
+                    AwsSimulationField::Action if action.is_none() => {
+                        *action = Some(value.to_owned());
+                    }
+                    AwsSimulationField::Decision if decision.is_none() => {
+                        *decision = Some(match value {
+                            "allowed" => AwsSimulationDecision::Allowed,
+                            "explicitDeny" => AwsSimulationDecision::ExplicitDeny,
+                            "implicitDeny" => AwsSimulationDecision::ImplicitDeny,
+                            _ => {
+                                return Err(AppError::NotAuthorized(
+                                    "AWS policy simulation returned an unrecognized decision"
+                                        .into(),
+                                ));
+                            }
+                        });
+                    }
+                    _ => return Err(malformed()),
+                }
+            }
+            Event::CData(_) | Event::GeneralRef(_) if aws_simulation_field(&path).is_some() => {
+                return Err(malformed());
+            }
+            Event::DocType(_) => return Err(malformed()),
+            _ => {}
+        }
+    }
+    Err(malformed())
+}
+
+fn aws_simulation_answers(
+    mut answers: BTreeMap<String, AwsSimulationDecision>,
+    truncated: Option<bool>,
+    requested: &[&str],
+) -> AppResult<BTreeMap<String, AwsSimulationDecision>> {
+    if truncated == Some(true) {
         return Err(AppError::NotAuthorized(
-            "AWS policy simulation returned no decisions".into(),
+            "AWS policy simulation returned a truncated answer".into(),
+        ));
+    }
+    let mut decisions = BTreeMap::new();
+    for action in requested {
+        let Some(decision) = answers.remove(&action.to_ascii_lowercase()) else {
+            return Err(AppError::NotAuthorized(format!(
+                "AWS policy simulation did not answer {action}"
+            )));
+        };
+        decisions.insert((*action).to_owned(), decision);
+    }
+    if !answers.is_empty() {
+        return Err(AppError::NotAuthorized(
+            "AWS policy simulation answered an action that was not requested".into(),
         ));
     }
     Ok(decisions)
@@ -2659,6 +2834,9 @@ fn valid_uuid(value: &str) -> bool {
     uuid::Uuid::parse_str(value).is_ok()
 }
 
+/// A commercial-partition AWS region. The app signs in only through
+/// `awsapps.com` portals and `iam.amazonaws.com`, which GovCloud and China
+/// accounts cannot use.
 fn valid_aws_region(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 32
@@ -2666,6 +2844,8 @@ fn valid_aws_region(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
         && value.contains('-')
+        && !value.starts_with("us-gov-")
+        && !value.starts_with("cn-")
 }
 
 fn deserialize_zeroizing<'de, D>(deserializer: D) -> Result<Zeroizing<String>, D::Error>
@@ -2943,17 +3123,228 @@ mod tests {
             bounded_expiry(now, now + Duration::hours(12)).unwrap(),
             now + Duration::hours(1)
         );
+        assert_eq!(
+            bounded_expiry(now, now + Duration::hours(12) + Duration::minutes(15)).unwrap(),
+            now + Duration::hours(1)
+        );
         assert!(bounded_expiry(now, now).is_err());
-        assert!(bounded_expiry(now, now + Duration::hours(12) + Duration::minutes(6)).is_err());
+        assert!(bounded_expiry(now, now + Duration::hours(12) + Duration::minutes(16)).is_err());
+    }
+
+    /// The `SimulatePrincipalPolicy` example response from the AWS IAM API
+    /// reference: each result's own decision follows its nested
+    /// `MatchedStatements` members.
+    const AWS_SIMULATION_SAMPLE: &str = r#"<SimulatePrincipalPolicyResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <SimulatePrincipalPolicyResult>
+    <IsTruncated>false</IsTruncated>
+    <EvaluationResults>
+      <member>
+        <MatchedStatements>
+          <member>
+            <SourcePolicyId>PolicyInputList.1</SourcePolicyId>
+            <EndPosition>
+              <Column>4</Column>
+              <Line>7</Line>
+            </EndPosition>
+            <StartPosition>
+              <Column>16</Column>
+              <Line>3</Line>
+            </StartPosition>
+          </member>
+        </MatchedStatements>
+        <MissingContextValues/>
+        <EvalResourceName>arn:aws:s3:::my-test-bucket</EvalResourceName>
+        <EvalDecision>allowed</EvalDecision>
+        <EvalActionName>s3:PutObject</EvalActionName>
+      </member>
+      <member>
+        <MatchedStatements>
+          <member>
+            <SourcePolicyId>AmazonS3ReadOnlyAccess</SourcePolicyId>
+            <EndPosition>
+              <Column>6</Column>
+              <Line>11</Line>
+            </EndPosition>
+            <StartPosition>
+              <Column>17</Column>
+              <Line>3</Line>
+            </StartPosition>
+          </member>
+        </MatchedStatements>
+        <MissingContextValues/>
+        <EvalResourceName>arn:aws:s3:::my-test-bucket</EvalResourceName>
+        <EvalDecision>allowed</EvalDecision>
+        <EvalActionName>s3:GetObject</EvalActionName>
+      </member>
+      <member>
+        <MatchedStatements/>
+        <MissingContextValues/>
+        <EvalResourceName>arn:aws:s3:::my-test-bucket</EvalResourceName>
+        <EvalDecision>implicitDeny</EvalDecision>
+        <EvalActionName>s3:DeleteObject</EvalActionName>
+      </member>
+    </EvaluationResults>
+  </SimulatePrincipalPolicyResult>
+  <ResponseMetadata>
+    <RequestId>004d7059-4c14-11e5-b121-bd8c7EXAMPLE</RequestId>
+  </ResponseMetadata>
+</SimulatePrincipalPolicyResponse>"#;
+    const AWS_SIMULATION_SAMPLE_ACTIONS: [&str; 3] =
+        ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"];
+
+    #[test]
+    fn aws_simulation_reads_each_result_after_its_nested_statements() {
+        let decisions =
+            aws_simulation_decisions(AWS_SIMULATION_SAMPLE, &AWS_SIMULATION_SAMPLE_ACTIONS)
+                .unwrap();
+        assert_eq!(
+            decisions,
+            BTreeMap::from([
+                ("s3:PutObject".to_owned(), AwsSimulationDecision::Allowed),
+                ("s3:GetObject".to_owned(), AwsSimulationDecision::Allowed),
+                (
+                    "s3:DeleteObject".to_owned(),
+                    AwsSimulationDecision::ImplicitDeny
+                ),
+            ])
+        );
+
+        // AWS's resource-specific example: the action's own decision sits
+        // between decision details and nested per-resource results.
+        let resource_specific = r#"<SimulatePrincipalPolicyResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+    <SimulatePrincipalPolicyResult>
+        <IsTruncated>false</IsTruncated>
+        <EvaluationResults>
+            <member>
+                <EvalDecisionDetails>
+                    <entry><key>IAM Policy</key><value>implicitDeny</value></entry>
+                    <entry><key>Resource Policy</key><value>allowed</value></entry>
+                </EvalDecisionDetails>
+                <PermissionsBoundaryDecisionDetail>
+                    <AllowedByPermissionsBoundary>false</AllowedByPermissionsBoundary>
+                </PermissionsBoundaryDecisionDetail>
+                <MatchedStatements/>
+                <MissingContextValues/>
+                <EvalResourceName>arn:aws:s3:::mary/Test</EvalResourceName>
+                <EvalDecision>implicitDeny</EvalDecision>
+                <EvalActionName>s3:PutObject</EvalActionName>
+                <ResourceSpecificResults>
+                    <member>
+                        <MatchedStatements>
+                            <member>
+                                <SourcePolicyId>ResourcePolicy</SourcePolicyId>
+                                <SourcePolicyType>Resource Policy</SourcePolicyType>
+                            </member>
+                        </MatchedStatements>
+                        <EvalResourceDecision>allowed</EvalResourceDecision>
+                        <MissingContextValues/>
+                        <EvalResourceName>arn:aws:s3:::mary/Test</EvalResourceName>
+                    </member>
+                </ResourceSpecificResults>
+            </member>
+        </EvaluationResults>
+    </SimulatePrincipalPolicyResult>
+    <ResponseMetadata><RequestId>3ebb073c-781a-437e-81a9-2a88eEXAMPLE</RequestId></ResponseMetadata>
+</SimulatePrincipalPolicyResponse>"#;
+        assert_eq!(
+            aws_simulation_decisions(resource_specific, &["S3:PUTOBJECT"]).unwrap(),
+            BTreeMap::from([(
+                "S3:PUTOBJECT".to_owned(),
+                AwsSimulationDecision::ImplicitDeny
+            )])
+        );
     }
 
     #[test]
-    fn aws_json_requests_sign_the_operation_target() {
+    fn aws_simulation_requires_exactly_one_complete_answer_per_requested_action() {
+        let sample = AWS_SIMULATION_SAMPLE;
+        let rejected = |xml: &str, requested: &[&str]| {
+            aws_simulation_decisions(xml, requested)
+                .unwrap_err()
+                .to_string()
+        };
+
+        assert!(
+            rejected(sample, &["s3:PutObject", "s3:GetObject"]).contains("not requested")
+        );
+        assert!(
+            rejected(
+                sample,
+                &[
+                    "s3:PutObject",
+                    "s3:GetObject",
+                    "s3:DeleteObject",
+                    "iam:CreateUser"
+                ]
+            )
+            .contains("did not answer iam:CreateUser")
+        );
+        assert!(
+            rejected(
+                &sample.replace(
+                    "<IsTruncated>false</IsTruncated>",
+                    "<IsTruncated>true</IsTruncated>"
+                ),
+                &AWS_SIMULATION_SAMPLE_ACTIONS
+            )
+            .contains("truncated")
+        );
+        assert!(
+            rejected(
+                &sample.replace(">implicitDeny<", ">denied<"),
+                &AWS_SIMULATION_SAMPLE_ACTIONS
+            )
+            .contains("unrecognized decision")
+        );
+        assert!(
+            rejected(
+                &sample.replace("s3:GetObject", "s3:PutObject"),
+                &AWS_SIMULATION_SAMPLE_ACTIONS
+            )
+            .contains("duplicated")
+        );
+        assert!(
+            rejected(
+                &sample.replace("<EvalDecision>implicitDeny</EvalDecision>", ""),
+                &AWS_SIMULATION_SAMPLE_ACTIONS
+            )
+            .contains("without an action decision")
+        );
+        for malformed in [
+            sample.replace(">allowed<", ">&#97;llowed<"),
+            sample.replace(">allowed<", "><![CDATA[allowed]]><"),
+            sample.replace(
+                "<EvalDecision>implicitDeny</EvalDecision>",
+                "<EvalDecision><x/>implicitDeny</EvalDecision>",
+            ),
+            format!("<!DOCTYPE x [<!ENTITY a \"allowed\">]>{sample}"),
+            format!("{sample}{sample}"),
+            sample.replace("</SimulatePrincipalPolicyResponse>", ""),
+        ] {
+            assert!(
+                aws_simulation_decisions(&malformed, &AWS_SIMULATION_SAMPLE_ACTIONS).is_err(),
+                "{malformed}"
+            );
+        }
+    }
+
+    /// The expected signatures were computed independently with botocore
+    /// 1.40's `SigV4Auth` for the same requests, keys and time.
+    #[test]
+    fn aws_requests_match_reference_signatures() {
         let credentials = AwsSigningCredentials {
             access_key_id: Zeroizing::new("AKIAFIXTURE000000000".into()),
             secret_access_key: Zeroizing::new("fixture-secret".into()),
             session_token: Zeroizing::new("fixture-session".into()),
         };
+        let now = "2026-10-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let headers = |request: &ProviderHttpRequest| {
+            request
+                .sensitive_headers()
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .collect::<BTreeMap<_, _>>()
+        };
+
         let request = aws_signed_json_request(
             "https://organizations.us-east-1.amazonaws.com/",
             "organizations",
@@ -2961,22 +3352,35 @@ mod tests {
             "AWSOrganizationsV20161128.ListAccounts",
             Zeroizing::new(br#"{"MaxResults":20}"#.to_vec()),
             &credentials,
-            Utc::now(),
+            now,
         )
         .unwrap();
-        let headers = request
-            .sensitive_headers()
-            .map(|(name, value)| (name.to_owned(), value.to_owned()))
-            .collect::<BTreeMap<_, _>>();
-        assert_eq!(headers["content-type"], "application/x-amz-json-1.1");
+        let json_headers = headers(&request);
+        assert_eq!(json_headers["content-type"], "application/x-amz-json-1.1");
         assert_eq!(
-            headers["x-amz-target"],
+            json_headers["x-amz-target"],
             "AWSOrganizationsV20161128.ListAccounts"
         );
-        assert!(headers["authorization"].contains(
-            "/us-east-1/organizations/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token;x-amz-target, Signature="
-        ));
+        assert_eq!(
+            json_headers["authorization"],
+            "AWS4-HMAC-SHA256 Credential=AKIAFIXTURE000000000/20261001/us-east-1/organizations/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token;x-amz-target, Signature=e99dcaf78bf1da083e4c5aaf068a2e31db40139a1e939a4cb105fcb324fd0591"
+        );
         assert!(matches!(request.method(), ProviderHttpMethod::Post));
+
+        let request = aws_signed_request(
+            ProviderHttpMethod::Post,
+            "https://iam.amazonaws.com/",
+            "iam",
+            "us-east-1",
+            Zeroizing::new(b"Action=GetRole&RoleName=fixture&Version=2010-05-08".to_vec()),
+            &credentials,
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            headers(&request)["authorization"],
+            "AWS4-HMAC-SHA256 Credential=AKIAFIXTURE000000000/20261001/us-east-1/iam/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token, Signature=b3d3120e8271f7ab57d033158d1e7f9ca0a9b8fd3789bf5672a3dc55ce044af1"
+        );
     }
 
     #[test]

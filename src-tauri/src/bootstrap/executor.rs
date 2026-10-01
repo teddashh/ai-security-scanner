@@ -14,7 +14,7 @@ use crate::error::{AppError, AppResult};
 use crate::source_authorization::VerifiedProviderAuthorization;
 use crate::source_authorization::provider::{
     AwsNativeAuthorizationConfig, AwsRoleCredentials, AwsSigningCredentials,
-    DeviceAuthorizationPrompt, DeviceSignInPage, GcpNativeAuthorizationConfig,
+    AwsSimulationDecision, DeviceAuthorizationPrompt, DeviceSignInPage, GcpNativeAuthorizationConfig,
     MicrosoftNativeAuthorizationConfig, PollAuthorization, ProviderHttp, ProviderHttpMethod,
     aws_query_encode, aws_signed_request, aws_simulation_decisions, bearer_get, bearer_header,
     begin_aws_native_authorization, bounded_expiry, decode_success_json, device_poll_retry,
@@ -3101,9 +3101,9 @@ fn verify_aws_bootstrap_permissions(
     )?;
     let xml = std::str::from_utf8(response.body())
         .map_err(|_| AppError::NotAuthorized("AWS IAM returned non-UTF-8 XML".into()))?;
-    let decisions = aws_simulation_decisions(xml)?;
+    let decisions = aws_simulation_decisions(xml, &required)?;
     for action in required {
-        if decisions.get(action).map(String::as_str) != Some("allowed") {
+        if decisions.get(action) != Some(&AwsSimulationDecision::Allowed) {
             return Err(AppError::NotAuthorized(format!(
                 "AWS administrator cannot perform required bootstrap operation {action}"
             )));
@@ -5483,6 +5483,365 @@ mod tests {
         fn now(&self) -> DateTime<Utc> {
             self.0
         }
+    }
+
+    /// Answers each AWS request in order, checking that it reaches the
+    /// expected endpoint or operation, and keeps every request body.
+    struct AwsFixture {
+        responses: Mutex<std::collections::VecDeque<(&'static str, ProviderHttpResponse)>>,
+        bodies: Mutex<Vec<String>>,
+    }
+
+    impl AwsFixture {
+        fn body_with(&self, marker: &str) -> Vec<String> {
+            self.bodies
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|body| body.contains(marker))
+                .cloned()
+                .collect()
+        }
+    }
+
+    impl ProviderHttp for AwsFixture {
+        fn execute(&self, request: ProviderHttpRequest) -> AppResult<ProviderHttpResponse> {
+            let body = String::from_utf8_lossy(request.sensitive_body()).into_owned();
+            let (expected, response) = self
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| AppError::Internal("fixture response queue exhausted".into()))?;
+            assert!(
+                request.url().as_str().contains(expected) || body.contains(expected),
+                "{} was not {expected}",
+                request.url()
+            );
+            self.bodies.lock().unwrap().push(body);
+            Ok(response)
+        }
+    }
+
+    /// A person who approves the device sign-in at once.
+    struct ApprovingInteraction(DateTime<Utc>);
+
+    impl BootstrapInteraction for ApprovingInteraction {
+        fn present_device_authorization(
+            &self,
+            _prompt: &DeviceAuthorizationPrompt,
+        ) -> AppResult<()> {
+            Ok(())
+        }
+
+        fn complete_pkce_authorization(
+            &self,
+            _prompt: &PkceAuthorizationPrompt,
+        ) -> AppResult<PkceAuthorizationCallback> {
+            Err(AppError::Internal(
+                "AWS bootstrap must not request PKCE authorization".into(),
+            ))
+        }
+
+        fn wait(&self, _seconds: u64) -> AppResult<()> {
+            Ok(())
+        }
+
+        fn now(&self) -> DateTime<Utc> {
+            self.0
+        }
+    }
+
+    /// An IAM `SimulatePrincipalPolicy` response in the documented shape:
+    /// an allowed result lists its matched statements before its decision.
+    fn aws_simulation(decisions: &[(&str, &str)]) -> ProviderHttpResponse {
+        let results = decisions
+            .iter()
+            .map(|(action, decision)| {
+                let statements = if *decision == "allowed" {
+                    "<member><SourcePolicyId>AdministratorAccess</SourcePolicyId><EndPosition><Column>6</Column><Line>8</Line></EndPosition><SourcePolicyType>IAM Policy</SourcePolicyType><StartPosition><Column>17</Column><Line>3</Line></StartPosition></member>"
+                } else {
+                    ""
+                };
+                format!(
+                    "<member><EvalDecisionDetails/><MatchedStatements>{statements}</MatchedStatements><MissingContextValues/><EvalResourceName>*</EvalResourceName><EvalDecision>{decision}</EvalDecision><EvalActionName>{action}</EvalActionName></member>"
+                )
+            })
+            .collect::<String>();
+        ProviderHttpResponse::new(
+            200,
+            format!(
+                "<SimulatePrincipalPolicyResponse xmlns=\"https://iam.amazonaws.com/doc/2010-05-08/\"><SimulatePrincipalPolicyResult><IsTruncated>false</IsTruncated><EvaluationResults>{results}</EvaluationResults></SimulatePrincipalPolicyResult><ResponseMetadata><RequestId>896e97bd-ff20-47d0-9f91-5d696EXAMPLE</RequestId></ResponseMetadata></SimulatePrincipalPolicyResponse>"
+            ),
+        )
+    }
+
+    const AWS_BOOTSTRAP_ACTIONS: [&str; 11] = [
+        "cloudformation:CreateStack",
+        "cloudformation:DescribeStacks",
+        "cloudformation:DeleteStack",
+        "iam:CreateRole",
+        "iam:GetRole",
+        "iam:DeleteRole",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "sts:AssumeRole",
+    ];
+    const AWS_ADMIN_ROLE: &str = "AWSReservedSSO_AdministratorAccess_0123456789abcdef";
+    const AWS_ADMIN_ROLE_ARN: &str = "arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/us-east-1/AWSReservedSSO_AdministratorAccess_0123456789abcdef";
+    const AWS_SCAN_ROLE_ARN: &str = "arn:aws:iam::111122223333:role/ai-security-scanner-case-1";
+
+    fn aws_bootstrap_execution(now: DateTime<Utc>) -> BootstrapExecutionRequest {
+        BootstrapExecutionRequest {
+            schema_version: "1.0.0".into(),
+            bootstrap: BootstrapRequest {
+                schema_version: "1.0.0".into(),
+                case_id: "case-1".into(),
+                provider: BootstrapProvider::Aws,
+                scan_identity_name: "ai-security-scanner-case-1".into(),
+                capabilities: vec![
+                    crate::bootstrap::ReadOnlyCapability::Inventory,
+                    crate::bootstrap::ReadOnlyCapability::SecurityPosture,
+                ],
+                expires_at: now + Duration::hours(1),
+            },
+            operator: BootstrapOperatorConfig::Aws {
+                administrator: AwsNativeAuthorizationConfig {
+                    start_url: "https://company.awsapps.com/start".into(),
+                    region: "us-east-1".into(),
+                    account_id: "111122223333".into(),
+                    role_name: "AdministratorAccess".into(),
+                    role_arn: "arn:aws:iam::111122223333:role/AdministratorAccess".into(),
+                },
+            },
+        }
+    }
+
+    /// What AWS sends while the administrator signs in through IAM Identity
+    /// Center and the app checks the bootstrap permissions of the reserved
+    /// role that session runs as.
+    fn aws_admin_sign_in(
+        now: DateTime<Utc>,
+        bootstrap_decisions: &[(&str, &str)],
+    ) -> Vec<(&'static str, ProviderHttpResponse)> {
+        let json = |value: serde_json::Value| {
+            ProviderHttpResponse::new(200, serde_json::to_vec(&value).unwrap())
+        };
+        vec![
+            (
+                "/client/register",
+                json(json!({
+                    "clientId":"fixture-client",
+                    "clientSecret":"fixture-secret-client",
+                    "clientIdIssuedAt":now.timestamp(),
+                    "clientSecretExpiresAt":(now + Duration::days(90)).timestamp()
+                })),
+            ),
+            (
+                "/device_authorization",
+                json(json!({
+                    "deviceCode":"fixture-secret-device",
+                    "userCode":"ABCD-EFGH",
+                    "verificationUri":"https://device.sso.us-east-1.amazonaws.com/",
+                    "verificationUriComplete":"https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH",
+                    "expiresIn":600,
+                    "interval":1
+                })),
+            ),
+            (
+                "/token",
+                json(json!({
+                    "accessToken":"fixture-token-sso",
+                    "expiresIn":28800,
+                    "tokenType":"Bearer"
+                })),
+            ),
+            (
+                "/assignment/roles",
+                json(
+                    json!({"roleList":[{"accountId":"111122223333","roleName":"AdministratorAccess"}]}),
+                ),
+            ),
+            (
+                "/federation/credentials",
+                json(json!({"roleCredentials":{
+                    "accessKeyId":"ASIAADMINFIXTURE",
+                    "secretAccessKey":"fixture-secret-admin",
+                    "sessionToken":"fixture-token-admin",
+                    "expiration":(now + Duration::hours(1) + Duration::seconds(3)).timestamp_millis()
+                }})),
+            ),
+            (
+                "Action=GetCallerIdentity",
+                ProviderHttpResponse::new(
+                    200,
+                    format!(
+                        "<GetCallerIdentityResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\"><GetCallerIdentityResult><Arn>arn:aws:sts::111122223333:assumed-role/{AWS_ADMIN_ROLE}/owner@example.invalid</Arn><UserId>AROAADMINFIXTURE:owner@example.invalid</UserId><Account>111122223333</Account></GetCallerIdentityResult><ResponseMetadata><RequestId>01234567-89ab-cdef-0123-456789abcdef</RequestId></ResponseMetadata></GetCallerIdentityResponse>"
+                    ),
+                ),
+            ),
+            (
+                "Action=GetRole",
+                ProviderHttpResponse::new(
+                    200,
+                    format!(
+                        "<GetRoleResponse xmlns=\"https://iam.amazonaws.com/doc/2010-05-08/\"><GetRoleResult><Role><Path>/aws-reserved/sso.amazonaws.com/us-east-1/</Path><AssumeRolePolicyDocument>%7B%22Version%22%3A%222012-10-17%22%7D</AssumeRolePolicyDocument><MaxSessionDuration>43200</MaxSessionDuration><RoleId>AROAADMINFIXTURE</RoleId><RoleName>{AWS_ADMIN_ROLE}</RoleName><Description>Created by AWS SSO</Description><Arn>{AWS_ADMIN_ROLE_ARN}</Arn><CreateDate>2026-01-01T00:00:00Z</CreateDate></Role></GetRoleResult><ResponseMetadata><RequestId>fedcba98-7654-3210-fedc-ba9876543210</RequestId></ResponseMetadata></GetRoleResponse>"
+                    ),
+                ),
+            ),
+            (
+                "Action=SimulatePrincipalPolicy",
+                aws_simulation(bootstrap_decisions),
+            ),
+        ]
+    }
+
+    #[test]
+    fn aws_bootstrap_trusts_and_checks_the_administrator_reserved_role() {
+        let now = Utc::now();
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("cleanup-aws.json");
+        let stack_name = format!(
+            "ai-security-scanner-case-1-{}",
+            &hex::encode(Sha256::digest(b"case-1"))[..10]
+        );
+        let stack_id = format!(
+            "arn:aws:cloudformation:us-east-1:111122223333:stack/{stack_name}/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"
+        );
+        let scanner_decisions = crate::source_authorization::provider::aws_required_permissions()
+            .into_iter()
+            .map(|action| (action, "allowed"))
+            .chain(
+                crate::source_authorization::provider::aws_prohibited_permissions()
+                    .into_iter()
+                    .map(|action| (action, "implicitDeny")),
+            )
+            .collect::<Vec<_>>();
+        let scanner_decisions = scanner_decisions
+            .iter()
+            .map(|(action, decision)| (action.as_str(), *decision))
+            .collect::<Vec<_>>();
+        let mut responses = aws_admin_sign_in(
+            now,
+            &AWS_BOOTSTRAP_ACTIONS.map(|action| (action, "allowed")),
+        );
+        responses.extend([
+            (
+                "Action=CreateStack",
+                ProviderHttpResponse::new(
+                    200,
+                    format!(
+                        "<CreateStackResponse xmlns=\"http://cloudformation.amazonaws.com/doc/2010-05-15/\"><CreateStackResult><StackId>{stack_id}</StackId></CreateStackResult><ResponseMetadata><RequestId>b9b4b068-3a41-11e5-94eb-example</RequestId></ResponseMetadata></CreateStackResponse>"
+                    ),
+                ),
+            ),
+            (
+                "Action=DescribeStacks",
+                ProviderHttpResponse::new(
+                    200,
+                    format!(
+                        "<DescribeStacksResponse xmlns=\"http://cloudformation.amazonaws.com/doc/2010-05-15/\"><DescribeStacksResult><Stacks><member><StackName>{stack_name}</StackName><StackId>{stack_id}</StackId><Parameters><member><ParameterKey>ScanRoleName</ParameterKey><ParameterValue>ai-security-scanner-case-1</ParameterValue></member><member><ParameterKey>TrustedPrincipalArn</ParameterKey><ParameterValue>{AWS_ADMIN_ROLE_ARN}</ParameterValue></member><member><ParameterKey>ExternalId</ParameterKey><ParameterValue>****</ParameterValue></member></Parameters><CreationTime>2026-10-01T12:00:00Z</CreationTime><StackStatus>CREATE_COMPLETE</StackStatus><DisableRollback>false</DisableRollback><Capabilities><member>CAPABILITY_NAMED_IAM</member></Capabilities><Outputs><member><OutputKey>ScanRoleArn</OutputKey><OutputValue>{AWS_SCAN_ROLE_ARN}</OutputValue></member><member><OutputKey>CleanupStackId</OutputKey><OutputValue>{stack_id}</OutputValue></member></Outputs><EnableTerminationProtection>false</EnableTerminationProtection><DriftInformation><StackDriftStatus>NOT_CHECKED</StackDriftStatus></DriftInformation></member></Stacks></DescribeStacksResult><ResponseMetadata><RequestId>c9b4b068-3a41-11e5-94eb-example</RequestId></ResponseMetadata></DescribeStacksResponse>"
+                    ),
+                ),
+            ),
+            (
+                "Action=AssumeRole",
+                ProviderHttpResponse::new(
+                    200,
+                    format!(
+                        "<AssumeRoleResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\"><AssumeRoleResult><AssumedRoleUser><Arn>arn:aws:sts::111122223333:assumed-role/ai-security-scanner-case-1/ai-security-scanner-0123456789ab</Arn><AssumedRoleId>AROASCANFIXTURE:ai-security-scanner-0123456789ab</AssumedRoleId></AssumedRoleUser><Credentials><AccessKeyId>ASIASCANFIXTURE</AccessKeyId><SecretAccessKey>fixture-secret-scan</SecretAccessKey><SessionToken>fixture-token-scan</SessionToken><Expiration>{}</Expiration></Credentials><PackedPolicySize>6</PackedPolicySize></AssumeRoleResult><ResponseMetadata><RequestId>d9b4b068-3a41-11e5-94eb-example</RequestId></ResponseMetadata></AssumeRoleResponse>",
+                        (now + Duration::hours(1) + Duration::seconds(2))
+                            .format("%Y-%m-%dT%H:%M:%SZ")
+                    ),
+                ),
+            ),
+            (
+                "Action=GetCallerIdentity",
+                ProviderHttpResponse::new(
+                    200,
+                    "<GetCallerIdentityResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\"><GetCallerIdentityResult><Arn>arn:aws:sts::111122223333:assumed-role/ai-security-scanner-case-1/ai-security-scanner-0123456789ab</Arn><UserId>AROASCANFIXTURE:ai-security-scanner-0123456789ab</UserId><Account>111122223333</Account></GetCallerIdentityResult><ResponseMetadata><RequestId>e9b4b068-3a41-11e5-94eb-example</RequestId></ResponseMetadata></GetCallerIdentityResponse>",
+                ),
+            ),
+            (
+                "Action=SimulatePrincipalPolicy",
+                aws_simulation(&scanner_decisions),
+            ),
+        ]);
+        let fixture = AwsFixture {
+            responses: Mutex::new(responses.into()),
+            bodies: Mutex::new(Vec::new()),
+        };
+
+        let result = execute_bootstrap(
+            &fixture,
+            &ApprovingInteraction(now),
+            aws_bootstrap_execution(now),
+            &path,
+        )
+        .unwrap();
+
+        assert!(fixture.responses.lock().unwrap().is_empty());
+        assert_eq!(
+            result.authorization.verification().provider_identity,
+            AWS_SCAN_ROLE_ARN
+        );
+        let encoded_admin = format!("={}", aws_query_encode(AWS_ADMIN_ROLE_ARN));
+        let simulations = fixture.body_with("Action=SimulatePrincipalPolicy");
+        assert_eq!(simulations.len(), 2);
+        assert!(simulations[0].contains(&format!("&PolicySourceArn{encoded_admin}&")));
+        assert!(simulations[1].contains(&format!(
+            "&PolicySourceArn={}&",
+            aws_query_encode(AWS_SCAN_ROLE_ARN)
+        )));
+        // The scan role trusts the reserved role the administrator signed in
+        // through, which is the only principal that can then assume it.
+        let create_stack = fixture.body_with("Action=CreateStack");
+        assert_eq!(create_stack.len(), 1);
+        assert!(create_stack[0].contains("&Parameters.member.2.ParameterKey=TrustedPrincipalArn&"));
+        assert!(create_stack[0].contains(&format!(
+            "&Parameters.member.2.ParameterValue{encoded_admin}&"
+        )));
+    }
+
+    #[test]
+    fn aws_bootstrap_stops_before_any_change_when_the_administrator_lacks_an_operation() {
+        let now = Utc::now();
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("cleanup-aws-denied.json");
+        let decisions = AWS_BOOTSTRAP_ACTIONS.map(|action| {
+            (
+                action,
+                if action == "cloudformation:DeleteStack" {
+                    "implicitDeny"
+                } else {
+                    "allowed"
+                },
+            )
+        });
+        let fixture = AwsFixture {
+            responses: Mutex::new(aws_admin_sign_in(now, &decisions).into()),
+            bodies: Mutex::new(Vec::new()),
+        };
+
+        let error = execute_bootstrap(
+            &fixture,
+            &ApprovingInteraction(now),
+            aws_bootstrap_execution(now),
+            &path,
+        )
+        .err()
+        .unwrap();
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot perform required bootstrap operation cloudformation:DeleteStack"),
+            "{error}"
+        );
+        assert!(fixture.responses.lock().unwrap().is_empty());
+        assert!(fixture.body_with("Action=CreateStack").is_empty());
     }
 
     #[test]

@@ -468,11 +468,11 @@ const CONNECTION_SETUP_MAX_NODES = 64;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const GCP_CLIENT_ID_PATTERN = /^[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/u;
 const GCP_PROJECT_ID_PATTERN = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u;
-const AWS_REGION_PATTERN = /^(?:[a-z]{2}(?:-gov)?-[a-z]+-\d)$/u;
+const AWS_REGION_PATTERN = /^(?!cn-)[a-z]{2}-[a-z]+-\d$/u;
 const AWS_ROLE_NAME_PATTERN = /^[A-Za-z0-9+=,.@_/-]{1,64}$/u;
 // A role ARN may carry an IAM path; IAM Identity Center roles live under
 // `aws-reserved/sso.amazonaws.com/<region>/`.
-const AWS_ROLE_ARN_PATTERN = /^arn:(?:aws|aws-us-gov|aws-cn):iam::([0-9]{12}):role\/(?:[A-Za-z0-9+=,.@_-]+\/){0,16}[A-Za-z0-9+=,.@_-]{1,64}$/u;
+const AWS_ROLE_ARN_PATTERN = /^arn:aws:iam::([0-9]{12}):role\/(?:[A-Za-z0-9+=,.@_-]+\/){0,16}[A-Za-z0-9+=,.@_-]{1,64}$/u;
 
 const copyText = async (value: string): Promise<boolean> => {
   try {
@@ -652,10 +652,8 @@ const validateConnectionValue = (
   }
 };
 
-const deriveAwsRoleArn = (region: string, accountId: string, roleName: string): string => {
-  const partition = region.startsWith("us-gov-") ? "aws-us-gov" : region.startsWith("cn-") ? "aws-cn" : "aws";
-  return `arn:${partition}:iam::${accountId}:role/${roleName}`;
-};
+const deriveAwsRoleArn = (accountId: string, roleName: string): string =>
+  `arn:aws:iam::${accountId}:role/${roleName}`;
 
 const normalizeAndValidateDetails = (
   provider: Provider,
@@ -698,7 +696,7 @@ const normalizeConnectionSetupDetails = (
     supplied[field] = raw.trim();
   }
   if (provider === "aws") {
-    supplied.role_arn = deriveAwsRoleArn(supplied.region, supplied.account_id, supplied.role_name);
+    supplied.role_arn = deriveAwsRoleArn(supplied.account_id, supplied.role_name);
   }
   if (provider === "gcp") supplied.redirect_uri = localGcpRedirectUri;
   return normalizeAndValidateDetails(provider, flow, supplied);
@@ -1003,10 +1001,10 @@ export function ProviderAuthorizationPanel({
   }, [provider, awsStartUrl, awsRegion, awsAccountId, awsRoleName, awsRoleArn, tenantId, publicClientId, subscriptionId, gcpOrganizationId, gcpProjectId, gcpRedirectUri]);
 
   useEffect(() => {
-    if (awsRegion && awsAccountId && awsRoleName) {
-      setAwsRoleArn(deriveAwsRoleArn(awsRegion, awsAccountId, awsRoleName));
+    if (awsAccountId && awsRoleName) {
+      setAwsRoleArn(deriveAwsRoleArn(awsAccountId, awsRoleName));
     }
-  }, [awsRegion, awsAccountId, awsRoleName]);
+  }, [awsAccountId, awsRoleName]);
 
   const currentConnectionDetails = useMemo<Record<string, string>>(() => {
     const details: Record<string, string> = {};

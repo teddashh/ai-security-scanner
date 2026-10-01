@@ -40,7 +40,7 @@ The exact top-level shape is:
 | Google Cloud | `public_client_id`, `organization_id` | Existing fields plus `project_id` |
 | Microsoft 365 | `tenant_id`, `public_client_id` | Same fields |
 
-AWS `role_arn` is derived locally from the region, account, and role. Google Cloud `redirect_uri` is generated locally for the current loopback listener. Neither value belongs in the IT handoff file.
+AWS `role_arn` is derived locally from the account and role. Google Cloud `redirect_uri` is generated locally for the current loopback listener. Neither value belongs in the IT handoff file.
 
 ## Security boundary
 
@@ -97,9 +97,9 @@ asset planning, and revocation remain mandatory for every checkout.
 
 ### AWS preferred flow
 
-Provide an exact IAM Identity Center start URL, region, 12-digit account ID, assigned role name, and role ARN. The role name is the permission set name shown in the AWS access portal. The assigned read-only role must include the pinned inventory reads plus `iam:SimulatePrincipalPolicy`, because the scanner verifies both required reads and prohibited writes without mutating the account.
+Provide an exact IAM Identity Center start URL, region, 12-digit account ID, assigned role name, and role ARN. The role name is the permission set name shown in the AWS access portal. The assigned read-only role must include the pinned inventory reads plus `iam:SimulatePrincipalPolicy`, because the scanner verifies both required reads and prohibited writes without mutating the account. Only commercial AWS accounts can sign in; GovCloud (`us-gov-*`) and China (`cn-*`) regions are rejected because the app signs only to `awsapps.com` portals and `iam.amazonaws.com`.
 
-The application dynamically registers a public IAM Identity Center OIDC client, starts device authorization, exchanges the device code, confirms that the exact account/role is assigned, obtains short-lived role credentials, calls STS `GetCallerIdentity`, and calls IAM `SimulatePrincipalPolicy`.
+The application dynamically registers a public IAM Identity Center OIDC client, starts device authorization, exchanges the device code, confirms that the exact account/role is assigned, obtains short-lived role credentials, calls STS `GetCallerIdentity`, and calls IAM `SimulatePrincipalPolicy`. The simulation must answer every requested action exactly once and must not be truncated: each required read must be `allowed`, and each prohibited write must be `implicitDeny` or `explicitDeny`. A missing or unrecognized answer fails the sign-in.
 
 IAM Identity Center signs a person in through a role it creates for the permission set: `AWSReservedSSO_<permission set>_<suffix>` under the path `aws-reserved/sso.amazonaws.com/[<region>/]`. When STS reports that role, the application reads its exact ARN with IAM `GetRole` and simulates that role. The role ARN field may keep the derived `role/<permission set>` form; a typed ARN must be the role the person signed in with.
 

@@ -199,7 +199,7 @@ test("setup-file schema keeps provider formats exact and derives app-local coord
 
   assert.match(panelSource, /provider === "gcp"\s*\? GCP_CLIENT_ID_PATTERN\.test\(value\)\s*:\s*UUID_PATTERN\.test\(value\)/u);
   assert.doesNotMatch(panelSource, /UUID_PATTERN\.test\(value\) \|\| GCP_CLIENT_ID_PATTERN/u);
-  assert.match(panelSource, /supplied\.role_arn = deriveAwsRoleArn\(supplied\.region, supplied\.account_id, supplied\.role_name\)/u);
+  assert.match(panelSource, /supplied\.role_arn = deriveAwsRoleArn\(supplied\.account_id, supplied\.role_name\)/u);
   assert.match(panelSource, /supplied\.redirect_uri = localGcpRedirectUri/u);
   assert.match(panelSource, /normalizeAndValidateDetails\(provider, flow, supplied\)/u);
 });
@@ -223,8 +223,20 @@ test("the role ARN field accepts IAM paths, including IAM Identity Center roles"
     `arn:aws:iam::123456789012:role/${"R".repeat(65)}`,
     "arn:aws:iam::12345678901:role/Reader",
     "arn:aws:iam::123456789012:user/Reader",
+    // The app signs in only to the commercial AWS partition.
+    "arn:aws-us-gov:iam::123456789012:role/Reader",
+    "arn:aws-cn:iam::123456789012:role/Reader",
   ]) {
     assert.doesNotMatch(rejected, pattern);
+  }
+  const region = /const AWS_REGION_PATTERN = \/(.+)\/u;/u.exec(panelSource)?.[1];
+  assert.ok(region, "the panel should define AWS_REGION_PATTERN");
+  const regionPattern = new RegExp(region, "u");
+  for (const accepted of ["us-east-1", "eu-west-2", "ap-southeast-1"]) {
+    assert.match(accepted, regionPattern);
+  }
+  for (const rejected of ["us-gov-west-1", "cn-north-1", "us-east", "US-EAST-1"]) {
+    assert.doesNotMatch(rejected, regionPattern);
   }
   assert.match(panelSource, /const match = AWS_ROLE_ARN_PATTERN\.exec\(value\);\s*return Boolean\(match && match\[1\] === details\.account_id\);/u);
 });

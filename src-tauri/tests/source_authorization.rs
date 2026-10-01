@@ -52,17 +52,30 @@ struct ExpectedResponse {
 
 struct FixtureHttp {
     expected: Mutex<VecDeque<ExpectedResponse>>,
+    bodies: Mutex<Vec<String>>,
 }
 
 impl FixtureHttp {
     fn new(responses: Vec<ExpectedResponse>) -> Self {
         Self {
             expected: Mutex::new(responses.into()),
+            bodies: Mutex::new(Vec::new()),
         }
     }
 
     fn exhausted(&self) -> bool {
         self.expected.lock().unwrap().is_empty()
+    }
+
+    /// The body of the one request whose body contains `marker`.
+    fn body_with(&self, marker: &str) -> String {
+        let bodies = self.bodies.lock().unwrap();
+        let matching = bodies
+            .iter()
+            .filter(|body| body.contains(marker))
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1, "requests containing {marker}");
+        matching[0].clone()
     }
 }
 
@@ -84,6 +97,10 @@ impl ProviderHttp for FixtureHttp {
         let debug = format!("{request:?}");
         assert!(!debug.contains("fixture-secret"));
         assert!(!debug.contains("fixture-token"));
+        self.bodies
+            .lock()
+            .unwrap()
+            .push(String::from_utf8_lossy(request.sensitive_body()).into_owned());
         Ok(expected.response)
     }
 }
@@ -126,62 +143,77 @@ fn gcp_config() -> GcpNativeAuthorizationConfig {
     }
 }
 
-fn aws_simulation_xml(include_prohibited_allow: bool) -> String {
-    let required = [
-        "organizations:ListAccounts",
-        "ec2:DescribeRegions",
-        "iam:GenerateCredentialReport",
-        "iam:GetAccessKeyLastUsed",
-        "iam:GetAccountAuthorizationDetails",
-        "iam:GetAccountPasswordPolicy",
-        "iam:GetAccountSummary",
-        "iam:GetCredentialReport",
-        "iam:GetGroupPolicy",
-        "iam:GetRole",
-        "iam:GetRolePolicy",
-        "iam:GetUser",
-        "iam:GetUserPolicy",
-        "iam:ListAccessKeys",
-        "iam:ListAccountAliases",
-        "iam:ListAttachedGroupPolicies",
-        "iam:ListAttachedRolePolicies",
-        "iam:ListAttachedUserPolicies",
-        "iam:ListGroupPolicies",
-        "iam:ListGroups",
-        "iam:ListGroupsForUser",
-        "iam:ListPolicyTags",
-        "iam:ListRolePolicies",
-        "iam:ListRoles",
-        "iam:ListSSHPublicKeys",
-        "iam:ListUserPolicies",
-        "iam:ListUsers",
-        "config:DescribeConfigurationRecorders",
-        "securityhub:GetFindings",
-        "cloudtrail:DescribeTrails",
-    ];
-    let prohibited = [
-        "iam:CreateUser",
-        "iam:AttachRolePolicy",
-        "s3:PutObject",
-        "ec2:RunInstances",
-        "organizations:CreateAccount",
-    ];
-    let members = required
+const AWS_REQUIRED_ACTIONS: [&str; 30] = [
+    "organizations:ListAccounts",
+    "ec2:DescribeRegions",
+    "iam:GenerateCredentialReport",
+    "iam:GetAccessKeyLastUsed",
+    "iam:GetAccountAuthorizationDetails",
+    "iam:GetAccountPasswordPolicy",
+    "iam:GetAccountSummary",
+    "iam:GetCredentialReport",
+    "iam:GetGroupPolicy",
+    "iam:GetRole",
+    "iam:GetRolePolicy",
+    "iam:GetUser",
+    "iam:GetUserPolicy",
+    "iam:ListAccessKeys",
+    "iam:ListAccountAliases",
+    "iam:ListAttachedGroupPolicies",
+    "iam:ListAttachedRolePolicies",
+    "iam:ListAttachedUserPolicies",
+    "iam:ListGroupPolicies",
+    "iam:ListGroups",
+    "iam:ListGroupsForUser",
+    "iam:ListPolicyTags",
+    "iam:ListRolePolicies",
+    "iam:ListRoles",
+    "iam:ListSSHPublicKeys",
+    "iam:ListUserPolicies",
+    "iam:ListUsers",
+    "config:DescribeConfigurationRecorders",
+    "securityhub:GetFindings",
+    "cloudtrail:DescribeTrails",
+];
+const AWS_PROHIBITED_ACTIONS: [&str; 5] = [
+    "iam:CreateUser",
+    "iam:AttachRolePolicy",
+    "s3:PutObject",
+    "ec2:RunInstances",
+    "organizations:CreateAccount",
+];
+
+/// An IAM `SimulatePrincipalPolicy` response in the shape the IAM API
+/// reference documents. An allowed result lists the statements that matched it
+/// before its own decision; a denied result carries an empty statement list.
+/// `first_prohibited` is the decision for `iam:CreateUser`, or `None` to leave
+/// that action unanswered.
+fn aws_simulation_xml(first_prohibited: Option<&str>) -> String {
+    let result = |action: &str, decision: &str| {
+        let statements = if decision == "allowed" {
+            "<MatchedStatements><member><SourcePolicyId>SecurityAudit</SourcePolicyId><EndPosition><Column>6</Column><Line>11</Line></EndPosition><SourcePolicyType>IAM Policy</SourcePolicyType><StartPosition><Column>17</Column><Line>3</Line></StartPosition></member></MatchedStatements>"
+        } else {
+            "<MatchedStatements/>"
+        };
+        format!(
+            "<member><EvalDecisionDetails/><PermissionsBoundaryDecisionDetail><AllowedByPermissionsBoundary>true</AllowedByPermissionsBoundary></PermissionsBoundaryDecisionDetail>{statements}<MissingContextValues/><EvalResourceName>*</EvalResourceName><EvalDecision>{decision}</EvalDecision><EvalActionName>{action}</EvalActionName></member>"
+        )
+    };
+    let results = AWS_REQUIRED_ACTIONS
         .iter()
-        .map(|action| {
-            format!("<member><EvalActionName>{action}</EvalActionName><EvalDecision>allowed</EvalDecision></member>")
-        })
-        .chain(prohibited.iter().enumerate().map(|(index, action)| {
-            let decision = if include_prohibited_allow && index == 0 {
-                "allowed"
-            } else {
-                "implicitDeny"
-            };
-            format!("<member><EvalActionName>{action}</EvalActionName><EvalDecision>{decision}</EvalDecision></member>")
-        }))
+        .map(|action| result(action, "allowed"))
+        .chain(
+            AWS_PROHIBITED_ACTIONS
+                .iter()
+                .enumerate()
+                .filter_map(|(index, action)| match index {
+                    0 => first_prohibited.map(|decision| result(action, decision)),
+                    _ => Some(result(action, "implicitDeny")),
+                }),
+        )
         .collect::<String>();
     format!(
-        "<SimulatePrincipalPolicyResponse><EvaluationResults>{members}</EvaluationResults></SimulatePrincipalPolicyResponse>"
+        "<SimulatePrincipalPolicyResponse xmlns=\"https://iam.amazonaws.com/doc/2010-05-08/\"><SimulatePrincipalPolicyResult><IsTruncated>false</IsTruncated><EvaluationResults>{results}</EvaluationResults></SimulatePrincipalPolicyResult><ResponseMetadata><RequestId>004d7059-4c14-11e5-b121-bd8c7EXAMPLE</RequestId></ResponseMetadata></SimulatePrincipalPolicyResponse>"
     )
 }
 
@@ -189,6 +221,18 @@ const AWS_RESERVED_ROLE: &str = "AWSReservedSSO_security-audit-reader_0123456789
 const AWS_RESERVED_ROLE_ARN: &str = "arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/us-east-1/AWSReservedSSO_security-audit-reader_0123456789abcdef";
 
 fn aws_device_responses(now: DateTime<Utc>, verification_uri: &str) -> Vec<ExpectedResponse> {
+    aws_device_responses_with_complete(
+        now,
+        verification_uri,
+        &format!("{verification_uri}?user_code=ABCD-EFGH"),
+    )
+}
+
+fn aws_device_responses_with_complete(
+    now: DateTime<Utc>,
+    verification_uri: &str,
+    verification_uri_complete: &str,
+) -> Vec<ExpectedResponse> {
     vec![
         expected(
             "Post",
@@ -207,7 +251,7 @@ fn aws_device_responses(now: DateTime<Utc>, verification_uri: &str) -> Vec<Expec
                 "deviceCode":"fixture-secret-device",
                 "userCode":"ABCD-EFGH",
                 "verificationUri":verification_uri,
-                "verificationUriComplete":format!("{verification_uri}?user_code=ABCD-EFGH"),
+                "verificationUriComplete":verification_uri_complete,
                 "expiresIn":600,
                 "interval":1
             }),
@@ -279,9 +323,20 @@ fn aws_signed_in_responses(
     responses
 }
 
-fn verified_aws(
+/// Signs in through the AWS fixture, answering the policy simulation with
+/// `simulation`, and returns the outcome with the fixture for request checks.
+fn aws_sign_in_with_simulation(
     now: DateTime<Utc>,
-) -> ai_security_scanner_lib::source_authorization::VerifiedProviderAuthorization {
+    simulation: String,
+) -> (
+    Result<
+        PollAuthorization<
+            ai_security_scanner_lib::source_authorization::VerifiedProviderAuthorization,
+        >,
+        AppError,
+    >,
+    FixtureHttp,
+) {
     let mut responses = aws_device_responses(now, "https://device.sso.us-east-1.amazonaws.com/");
     responses.extend(aws_signed_in_responses(
         now,
@@ -291,15 +346,36 @@ fn verified_aws(
     responses.push(ExpectedResponse {
         method: "Post",
         path_contains: "iam.amazonaws.com",
-        response: ProviderHttpResponse::new(200, aws_simulation_xml(false).into_bytes()),
+        response: ProviderHttpResponse::new(200, simulation.into_bytes()),
     });
     let fixture = FixtureHttp::new(responses);
     let (_, mut pending) = begin_aws_native_authorization(&fixture, aws_config(), now).unwrap();
-    let authorization = match poll_aws_native_authorization(&fixture, &mut pending, now).unwrap() {
+    let result = poll_aws_native_authorization(&fixture, &mut pending, now);
+    assert!(fixture.exhausted());
+    (result, fixture)
+}
+
+fn verified_aws(
+    now: DateTime<Utc>,
+) -> ai_security_scanner_lib::source_authorization::VerifiedProviderAuthorization {
+    let (result, fixture) =
+        aws_sign_in_with_simulation(now, aws_simulation_xml(Some("implicitDeny")));
+    let authorization = match result.unwrap() {
         PollAuthorization::Complete(value) => value,
         PollAuthorization::Pending { .. } => panic!("fixture should complete"),
     };
-    assert!(fixture.exhausted());
+    // IAM is asked about the reserved role the person signed in through, not
+    // a role built from the permission set name.
+    assert!(
+        fixture
+            .body_with("Action=GetRole")
+            .contains(&format!("&RoleName={AWS_RESERVED_ROLE}&"))
+    );
+    assert!(
+        fixture
+            .body_with("Action=SimulatePrincipalPolicy")
+            .contains("&PolicySourceArn=arn%3Aaws%3Aiam%3A%3A111122223333%3Arole%2Faws-reserved%2Fsso.amazonaws.com%2Fus-east-1%2FAWSReservedSSO_security-audit-reader_0123456789abcdef&")
+    );
     authorization
 }
 
@@ -1986,6 +2062,30 @@ fn aws_identity_center_session_resolves_the_reserved_role_and_is_used_for_one_ho
 }
 
 #[test]
+fn aws_session_must_be_denied_every_prohibited_mutation() {
+    let now = Utc::now();
+    let (result, _) = aws_sign_in_with_simulation(now, aws_simulation_xml(Some("explicitDeny")));
+    assert!(matches!(result, Ok(PollAuthorization::Complete(_))));
+
+    for (first_prohibited, message) in [
+        (Some("allowed"), "permits prohibited mutation iam:CreateUser"),
+        (None, "did not answer iam:CreateUser"),
+    ] {
+        let (result, _) = aws_sign_in_with_simulation(now, aws_simulation_xml(first_prohibited));
+        let error = result.err().unwrap();
+        assert!(error.to_string().contains(message), "{error}");
+    }
+
+    let truncated = aws_simulation_xml(Some("implicitDeny")).replace(
+        "<IsTruncated>false</IsTruncated>",
+        "<IsTruncated>true</IsTruncated>",
+    );
+    let (result, _) = aws_sign_in_with_simulation(now, truncated);
+    let error = result.err().unwrap();
+    assert!(error.to_string().contains("truncated"), "{error}");
+}
+
+#[test]
 fn aws_session_for_another_permission_set_is_rejected() {
     let now = Utc::now();
     let mut responses = aws_device_responses(now, "https://device.sso.us-east-1.amazonaws.com/");
@@ -2027,7 +2127,7 @@ fn aws_typed_role_arn_must_be_the_role_the_person_signed_in_with() {
     exact.push(ExpectedResponse {
         method: "Post",
         path_contains: "iam.amazonaws.com",
-        response: ProviderHttpResponse::new(200, aws_simulation_xml(false).into_bytes()),
+        response: ProviderHttpResponse::new(200, aws_simulation_xml(Some("implicitDeny")).into_bytes()),
     });
     let PollAuthorization::Complete(authorization) =
         poll_aws_fixture(typed(AWS_RESERVED_ROLE_ARN), exact, now).unwrap()
@@ -2084,6 +2184,20 @@ fn device_sign_in_pages_outside_the_provider_sites_are_rejected() {
         assert_eq!(result.is_ok(), accepted, "{verification_uri}");
         assert!(fixture.exhausted());
     }
+    // The prefilled link a person is more likely to open must be on the
+    // provider's site too.
+    let fixture = FixtureHttp::new(aws_device_responses_with_complete(
+        now,
+        "https://device.sso.us-east-1.amazonaws.com/",
+        "https://evil.example/?user_code=ABCD-EFGH",
+    ));
+    let error = begin_aws_native_authorization(&fixture, aws_config(), now)
+        .err()
+        .unwrap();
+    assert!(
+        error.to_string().contains("evil.example"),
+        "{error}"
+    );
     for (verification_uri, accepted) in [
         ("https://microsoft.com/devicelogin", true),
         ("https://login.microsoft.com/device", true),
