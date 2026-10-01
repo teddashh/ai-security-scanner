@@ -1436,7 +1436,7 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-greenbone",
-      "tag": "23.50.24-feed202609170605-2",
+      "tag": "23.50.24-feed202609170605-1",
       "digest": "sha256:948cf0b503d7f544915bed8f6b410661d8a68f2f64a688bc225f005857d464c0",
       "signature_identity": null
     },

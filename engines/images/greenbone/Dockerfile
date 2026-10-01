@@ -19,13 +19,13 @@ RUN gofmt -d main.go main_test.go | tee /tmp/gofmt.diff \
         -buildvcs=false -trimpath -ldflags='-s -w -buildid=' \
         -o /out/ai-security-scanner-engine-entrypoint .
 
-FROM registry.community.greenbone.net/community/vulnerability-tests@sha256:d0010b7d8e24e7df8086b85af9fabe64335dccf9a7e1fd4c7774b4712bd061cd AS feed
-RUN grep -Fqx 'FEED_COMMIT = "6c8dce2f22bb9e5da081667994be6e9ed79484d8";' /var/lib/openvas/24.10/vt-data/nasl/plugin_feed_info.inc \
+FROM registry.community.greenbone.net/community/vulnerability-tests@sha256:86a44fb7a9f9b982d521f98914aba98846f573b4f9ec9e8c1007c4866ec943af AS feed
+RUN grep -Fqx 'FEED_COMMIT = "816c24126e0375d32c667b78d20342ce7c58ec58";' /var/lib/openvas/24.10/vt-data/nasl/plugin_feed_info.inc \
     && test -s /var/lib/openvas/24.10/vt-data/nasl/vt-metadata.json \
     && test -s /var/lib/openvas/24.10/vt-data/nasl/sha256sums \
     && test -s /var/lib/openvas/24.10/vt-data/nasl/sha256sums.asc
 
-FROM registry.community.greenbone.net/community/notus-data@sha256:78c6a1198a3effd5a7df22acab826719744dbd16dded5208c6614761386002bc AS notus
+FROM registry.community.greenbone.net/community/notus-data@sha256:f53836e6ac0eb3abb7f5ab74ccf93b8317fedd2ba5cd293473cd307c148fc4c3 AS notus
 RUN mkdir -p /prepared \
     && tar -xzf /var/lib/notus/notus-data.tar.gz -C /prepared \
     && test -s /prepared/advisories/sha256sums \
@@ -158,7 +158,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && install -Dm755 target/release/openvasd /out/openvasd \
     && /out/openvasd --version 2>&1 | grep -Fq '26465a11ff0e6a98d60a253265fab5974fc757b6'
 
-FROM registry.community.greenbone.net/community/openvas-scanner@sha256:5b950bc273d1d5d123f15dfb7f373b0b3a3b7fb75f67286dfa28e88350a6eb33
+FROM ghcr.io/greenbone/openvas-scanner@sha256:5b950bc273d1d5d123f15dfb7f373b0b3a3b7fb75f67286dfa28e88350a6eb33
 
 ARG SOURCE_DATE_EPOCH
 
@@ -166,16 +166,16 @@ LABEL org.opencontainers.image.title="ai-security-scanner Greenbone engine" \
       org.opencontainers.image.description="Signed-feed Greenbone scanner with exact per-grant loopback relays to the managed SOCKS gateway" \
       org.opencontainers.image.source="https://github.com/greenbone/openvas-scanner" \
       org.opencontainers.image.revision="26465a11ff0e6a98d60a253265fab5974fc757b6" \
-      org.opencontainers.image.version="23.50.24-feed202609170605-2" \
+      org.opencontainers.image.version="23.50.24-feed202610010558-1" \
       org.opencontainers.image.licenses="GPL-2.0-only AND ODbL-1.0 AND Apache-2.0" \
       io.ai-security-scanner.openvas-revision="26465a11ff0e6a98d60a253265fab5974fc757b6" \
       io.ai-security-scanner.openvas-source-sha256="sha256:af8b1e0175dfc57f38bdecc08607dbac294459e684e2f3e7d69c85101fa13517" \
       io.ai-security-scanner.openvas-patch="rustls-provider:f401a3a174b6fe20fa187a1b74f53d1f9563a22c7a32bfc9aa122268d10e03c3;service-port:fd6409227338da73344657b5686c65bdf23a737da04f8bb3f7434eeb98da3424;http-compat:0aa8b07e43f2b21f32f7f2fa8181957b456248f0986de2723940809047a35eff;nasl-array-compat:affe3266602aade09416b68f2d085d1f390931d921a78eb7bb526451e1eeb891;eregmatch-captures:8e9ce5794e51abf78d77ea3c11931f50cf54f44be0d15becdd0a06c4f7b95d20;report-port:f9440c30d1c13a0fc13165ae2cdece6faab39409b2656db61d781d1e0865ca1c;socket-eof:8decd85c3acd6592b8ed10dd74b6deece386d30a6d0136d4201ccf97c3394846" \
-      io.ai-security-scanner.feed-revision="6c8dce2f22bb9e5da081667994be6e9ed79484d8" \
-      io.ai-security-scanner.feed-version="202609170605-community" \
-      io.ai-security-scanner.feed-image-digest="sha256:d0010b7d8e24e7df8086b85af9fabe64335dccf9a7e1fd4c7774b4712bd061cd" \
-      io.ai-security-scanner.notus-revision="202609170538" \
-      io.ai-security-scanner.notus-image-digest="sha256:78c6a1198a3effd5a7df22acab826719744dbd16dded5208c6614761386002bc"
+      io.ai-security-scanner.feed-revision="816c24126e0375d32c667b78d20342ce7c58ec58" \
+      io.ai-security-scanner.feed-version="202610010558-community" \
+      io.ai-security-scanner.feed-image-digest="sha256:86a44fb7a9f9b982d521f98914aba98846f573b4f9ec9e8c1007c4866ec943af" \
+      io.ai-security-scanner.notus-revision="202610010540" \
+      io.ai-security-scanner.notus-image-digest="sha256:f53836e6ac0eb3abb7f5ab74ccf93b8317fedd2ba5cd293473cd307c148fc4c3"
 
 ENV HOME="/tmp" \
     LANG="C.UTF-8" \

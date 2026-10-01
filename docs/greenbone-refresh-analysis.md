@@ -340,6 +340,20 @@ necessarily the source, runtime, or behavior reviewed here. It implies:
 
 This analysis does not create or publish such a mirror.
 
+The 2026-10-01 rebuild confirmed the lifetime: all three 2026-09-17 digests
+returned 404 fourteen days later, and `stable` had moved to 23.50.25. Greenbone
+also publishes the scanner on GHCR, where `ghcr.io/greenbone/openvas-scanner:23.50.24`
+still resolves to the reviewed
+`sha256:5b950bc273d1d5d123f15dfb7f373b0b3a3b7fb75f67286dfa28e88350a6eb33`, so
+the runtime base now comes from there with its bytes unchanged. The VT and
+Notus images have no public versioned copy, so the data moved to the snapshot
+measured that day:
+
+| Input | Index digest | linux/amd64 | linux/arm64 | Measured content identity |
+| --- | --- | --- | --- | --- |
+| `vulnerability-tests:community` | `sha256:86a44fb7a9f9b982d521f98914aba98846f573b4f9ec9e8c1007c4866ec943af` | `sha256:56080ddcca72ec4e62eb80b704e73423c336db8ae3fa7efd81e02eb997c2c686` | `sha256:89796f262a5f5ae6995d6e06d42e3870ae34ca1cfb8e6d16c8dff8733e600b4c` | `PLUGIN_SET=202610010558`, `FEED_COMMIT=816c24126e0375d32c667b78d20342ce7c58ec58` |
+| `notus-data:community` | `sha256:f53836e6ac0eb3abb7f5ab74ccf93b8317fedd2ba5cd293473cd307c148fc4c3` | `sha256:56ff58dda6888bf47d3f54b8eb03981d3b6977e612feb14a72d9b131cdafabb9` | `sha256:9223ebc963a2b233837b5e62443beb2764222eadcb51cfe389caedd5fa5e690f` | timestamp `202610010540`; amd64 tar SHA-256 `4c25ade8a6beb954d4c067dacba9e7fe85f2883283b3fb83105ec498505126bb` |
+
 ### Product decisions intentionally not implemented
 
 1. **QoD semantics.** Recommended: preserve Greenbone's complete known QoD

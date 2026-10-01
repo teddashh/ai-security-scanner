@@ -279,22 +279,28 @@ const managedLocalK8sContracts = new Map([
   }],
 ]);
 const managedGreenboneContract = {
-  tag: "23.50.24-feed202609170605-2",
+  tag: "23.50.24-feed202610010558-1",
   planKind: "multi_component_build",
   license: { disposition: "source_offer", sourceOfferPath: "engines/images/greenbone/SOURCE-OFFER.md" },
   engineVersion: "23.50.24",
   scannerRevision: "26465a11ff0e6a98d60a253265fab5974fc757b6",
   scannerArchiveUrl: "https://github.com/greenbone/openvas-scanner/archive/refs/tags/v23.50.24.tar.gz",
   scannerArchiveSha256: "sha256:af8b1e0175dfc57f38bdecc08607dbac294459e684e2f3e7d69c85101fa13517",
-  feedVersion: "202609170605-community",
-  feedRevision: "6c8dce2f22bb9e5da081667994be6e9ed79484d8",
-  feedImageDigest: "sha256:d0010b7d8e24e7df8086b85af9fabe64335dccf9a7e1fd4c7774b4712bd061cd",
-  notusRevision: "202609170538",
-  notusImageDigest: "sha256:78c6a1198a3effd5a7df22acab826719744dbd16dded5208c6614761386002bc",
+  feedVersion: "202610010558-community",
+  feedRevision: "816c24126e0375d32c667b78d20342ce7c58ec58",
+  feedImageDigest: "sha256:86a44fb7a9f9b982d521f98914aba98846f573b4f9ec9e8c1007c4866ec943af",
+  notusRevision: "202610010540",
+  notusImageDigest: "sha256:f53836e6ac0eb3abb7f5ab74ccf93b8317fedd2ba5cd293473cd307c148fc4c3",
   smokeOid: "1.3.6.1.4.1.25623.1.0.108252",
 };
+const publishedGreenboneCatalogContract = {
+  tag: "23.50.24-feed202609170605-1",
+  engineVersion: "23.50.24",
+  scannerRevision: "26465a11ff0e6a98d60a253265fab5974fc757b6",
+  feedRevision: "6c8dce2f22bb9e5da081667994be6e9ed79484d8",
+};
 const greenbonePublicationBlocker =
-  "Publish and independently verify the Greenbone 23.50.24-feed202609170605-2 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence.";
+  "Publish and independently verify the Greenbone 23.50.24-feed202610010558-1 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence.";
 const managedEvidenceWorkflows = [
   ".github/workflows/engine-images-cloud.yml",
   ".github/workflows/engine-images-external.yml",
@@ -901,7 +907,7 @@ function validateImage(image, path, {
   }
   const normalizedTag = typeof image.tag === "string" ? image.tag.toLowerCase() : "";
   if (allowFloatingDigestPinnedAlias && image.tag && !/[${}]/.test(image.tag)) {
-    // Greenbone no longer retains versioned data/runtime tags. The recorded
+    // Greenbone's community registry keeps only rolling tags. The recorded
     // rolling tag is provenance only; the mandatory digest remains the build
     // identity and every Dockerfile FROM uses that digest directly.
   } else if (allowDigestPinnedAlias && image.tag && !floatingTags.has(normalizedTag) && !/[${}]/.test(image.tag)) {
@@ -1232,11 +1238,15 @@ function validateGreenboneBuildClosure(plan, planRelative, dockerfileText) {
   for (const [repository, tag] of [
     ["registry.community.greenbone.net/community/vulnerability-tests", "community"],
     ["registry.community.greenbone.net/community/notus-data", "community"],
-    ["registry.community.greenbone.net/community/openvas-scanner", "stable"],
   ]) {
     if (greenboneBaseTags.get(repository) !== tag) {
       errors.push(`${planRelative}: Greenbone base image ${repository} must record the rolling ${tag} tag resolved for this digest`);
     }
+  }
+  // The community registry deletes superseded digests; Greenbone's GHCR package
+  // keeps each scanner release tag at the same digest.
+  if (greenboneBaseTags.get("ghcr.io/greenbone/openvas-scanner") !== managedGreenboneContract.engineVersion) {
+    errors.push(`${planRelative}: Greenbone runtime base must be the ghcr.io/greenbone/openvas-scanner ${managedGreenboneContract.engineVersion} release`);
   }
 
   const requiredDockerfileInputs = [
@@ -1348,10 +1358,10 @@ function isPendingGreenbonePublication(plan, engine) {
     plan.final_artifact?.repository === expectedRepository &&
     plan.final_artifact?.tag === managedGreenboneContract.tag && plan.final_artifact?.digest === null &&
     engine.distribution_mode === "pull_pinned_image" && engine.image?.repository === expectedRepository &&
-    engine.image?.tag === managedGreenboneContract.tag && digestPattern.test(engine.image?.digest ?? "") &&
-    engine.engine_version === managedGreenboneContract.engineVersion &&
-    engine.source_revision === managedGreenboneContract.scannerRevision &&
-    engine.rule_version === managedGreenboneContract.feedRevision &&
+    engine.image?.tag === publishedGreenboneCatalogContract.tag && digestPattern.test(engine.image?.digest ?? "") &&
+    engine.engine_version === publishedGreenboneCatalogContract.engineVersion &&
+    engine.source_revision === publishedGreenboneCatalogContract.scannerRevision &&
+    engine.rule_version === publishedGreenboneCatalogContract.feedRevision &&
     engine.status === "integrated" && engine.compatibility?.runnable === true &&
     deepEqual(engine.compatibility?.blocked_by, []);
 }

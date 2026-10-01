@@ -6,7 +6,7 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "published_managed_artifact",
+  "publish_state": "publication_in_progress",
   "source": {
     "repository": "https://github.com/greenbone/openvas-scanner",
     "revision": "26465a11ff0e6a98d60a253265fab5974fc757b6",
@@ -15,8 +15,8 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-greenbone",
-    "tag": "23.50.24-feed202609170605-2",
-    "digest": "sha256:948cf0b503d7f544915bed8f6b410661d8a68f2f64a688bc225f005857d464c0"
+    "tag": "23.50.24-feed202610010558-1",
+    "digest": null
   },
   "build_recipe": {
     "source_revision": "26465a11ff0e6a98d60a253265fab5974fc757b6",
@@ -46,7 +46,7 @@
       {
         "repository": "registry.community.greenbone.net/community/vulnerability-tests",
         "tag": "community",
-        "digest": "sha256:d0010b7d8e24e7df8086b85af9fabe64335dccf9a7e1fd4c7774b4712bd061cd",
+        "digest": "sha256:86a44fb7a9f9b982d521f98914aba98846f573b4f9ec9e8c1007c4866ec943af",
         "uses": [
           "feed"
         ]
@@ -54,7 +54,7 @@
       {
         "repository": "registry.community.greenbone.net/community/notus-data",
         "tag": "community",
-        "digest": "sha256:78c6a1198a3effd5a7df22acab826719744dbd16dded5208c6614761386002bc",
+        "digest": "sha256:f53836e6ac0eb3abb7f5ab74ccf93b8317fedd2ba5cd293473cd307c148fc4c3",
         "uses": [
           "notus"
         ]
@@ -68,8 +68,8 @@
         ]
       },
       {
-        "repository": "registry.community.greenbone.net/community/openvas-scanner",
-        "tag": "stable",
+        "repository": "ghcr.io/greenbone/openvas-scanner",
+        "tag": "23.50.24",
         "digest": "sha256:5b950bc273d1d5d123f15dfb7f373b0b3a3b7fb75f67286dfa28e88350a6eb33",
         "uses": [
           "runtime"
@@ -90,14 +90,14 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/greenbone/Dockerfile",
-    "sha256": "sha256:2d3efd49a248dda6a83cd0bdaf53e0470890ca80f8860802bc9cf6c6dcfe0df6",
+    "sha256": "sha256:d6441621463a317e0ee808ebc4aea36459a37496c4a02b0b54a85299cbe19db2",
     "reason": null
   },
   "wrapper": {
     "required": true,
     "strategy": "Run the direct scanner once per exact grant and relay only the authorized original target through the managed SOCKS gateway.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:9afec1aedccb252feb26ca37dd4beeb480d7a02276e4470236a207aacbff4205"
+    "launcher_sha256": "sha256:64a5b8c574092bf93ac6ea76a006064425b149ad5d65ee17168aded672ae7458"
   },
   "command": [
     "--engine",
@@ -118,7 +118,9 @@
     "rationale": "The image carries the exact GPL-covered scanner source, source-form signed feed snapshot, license notices, project patches, and a three-year corresponding-source offer.",
     "source_offer_path": "engines/images/greenbone/SOURCE-OFFER.md"
   },
-  "blockers": [],
+  "blockers": [
+    "Publish and independently verify the Greenbone 23.50.24-feed202610010558-1 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence."
+  ],
   "managed_runtime": {
     "non_root_user": "65532:65532",
     "read_only_rootfs": true,
@@ -134,19 +136,5 @@
     "telemetry": false,
     "per_grant_target_execution": true
   },
-  "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/35286911233",
-    "source_revision": "4ec35b0acd51df690416c84a590f922179611e1b",
-    "platforms": [
-      "linux/amd64",
-      "linux/arm64"
-    ],
-    "platform_digests": {
-      "linux/amd64": "sha256:1a75ae9e1a3c401d5194ca88a3862ecc5f8a57da336a2ef25cf4144aa98dd450",
-      "linux/arm64": "sha256:ef8dd62fd9b6fad9f79d2fc94a7641e39a759143b39253e3439c536299c43007"
-    },
-    "anonymous_pull_verified": true,
-    "evidence_artifact": "greenbone-image-evidence-35286911233-1",
-    "managed_smoke_evidence_sha256": "sha256:60455e2cc82d0538de9a42b20a7fd71f47448be7c7ee9223081ec3cc3654db7a"
-  }
+  "publication": null
 }

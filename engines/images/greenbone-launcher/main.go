@@ -45,7 +45,7 @@ const (
 	feedMetadataPath         = feedRootPath + "/vt-metadata.json"
 	notusRootPath            = "/opt/greenbone/notus"
 	openvasdPath             = "/usr/local/bin/openvasd"
-	feedRevision             = "6c8dce2f22bb9e5da081667994be6e9ed79484d8"
+	feedRevision             = "816c24126e0375d32c667b78d20342ce7c58ec58"
 	templateRevision         = "greenbone-community-feed@" + feedRevision
 	remoteSafeProfileID      = "greenbone_remote_safe_v1"
 	tcpScannerOID            = "1.3.6.1.4.1.25623.1.0.10335"

@@ -72,7 +72,7 @@ test("the generic HTTPS-management profile stays pinned to exact Greenbone TLS v
 test("the frontend profile matches the existing Greenbone direct-launcher boundary", () => {
   assert.match(
     greenboneLauncherSource,
-    /feedRevision\s+= "6c8dce2f22bb9e5da081667994be6e9ed79484d8"/u,
+    /feedRevision\s+= "816c24126e0375d32c667b78d20342ce7c58ec58"/u,
   );
   assert.match(greenboneLauncherSource, /maxSelectedVTsPerGrant\s+= 128/u);
   assert.match(greenboneLauncherSource, /external\.Activity != "active_external"/u);

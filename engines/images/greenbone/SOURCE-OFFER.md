@@ -7,8 +7,8 @@ the exact corresponding-source material shipped in the image.
 | Component | Distributed revision | Corresponding source in the image |
 | --- | --- | --- |
 | Greenbone OpenVAS Scanner / `openvasd` | `26465a11ff0e6a98d60a253265fab5974fc757b6` (`23.50.24`) | `/usr/share/source/openvas-scanner/openvas-scanner-23.50.24.tar.gz` |
-| Greenbone Community Feed | `6c8dce2f22bb9e5da081667994be6e9ed79484d8` (`202609170605-community`) | The executable NASL source, metadata, checksums, signature, and licenses are installed directly at `/opt/greenbone/feed` |
-| Greenbone Notus data | `202609170538` | The source-form advisory/product data and licenses are installed at `/opt/greenbone/notus` |
+| Greenbone Community Feed | `816c24126e0375d32c667b78d20342ce7c58ec58` (`202610010558-community`) | The executable NASL source, metadata, checksums, signature, and licenses are installed directly at `/opt/greenbone/feed` |
+| Greenbone Notus data | `202610010540` | The source-form advisory/product data and licenses are installed at `/opt/greenbone/notus` |
 | ai-security-scanner Greenbone launcher and build recipe | image source revision | `/usr/share/source/ai-security-scanner-greenbone/` |
 
 The upstream source archives are checksum-locked in the included Dockerfile.
