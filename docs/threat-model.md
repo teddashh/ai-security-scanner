@@ -100,7 +100,7 @@ hash chunks, and directory entries. It does not prevent the same user from addin
 afterward. Managed-local contexts without this contract fail closed. Verified System32 precedes the
 managed helper directory in
 `PATH`. The recovery diagnostic exposes only a fixed boundary/source, the digest read from the
-admitted manager, and the original typed packaged-failure reason—never rejected paths, bytes, or raw
+admitted manager, and the original typed packaged-failure reason, never rejected paths, bytes, or raw
 open/parser errors. This source boundary does not replace the damaged packaged application resource.
 Installer-based recovery must additionally bind
 the exact same-version installer or payload to its updater/OS signature and approved publisher, run

@@ -12,7 +12,7 @@ Use these priorities when choosing and reviewing work:
 4. Versioning, release timing, publication, and compliance positioning are product-owner decisions. Do not expand work into those areas unless the owner explicitly requests it.
 5. Primary choices, progress, and reports stay concise and action-led; detail is available on demand.
 
-A connectivity check, process launch, or empty report is not meaningful scan value. Product-facing work should help the user discover a real exposure, vulnerability, secret, risky configuration, or other actionable security signal—or clearly explain why a requested check could not run.
+A connectivity check, process launch, or empty report is not meaningful scan value. Product-facing work should help the user discover a real exposure, vulnerability, secret, risky configuration, or other actionable security signal, or clearly explain why a requested check could not run.
 
 ## Product changes
 

@@ -141,8 +141,8 @@ Greenbone's result type and severity are different dimensions:
   an alarm whose vector is absent or unsupported remains an alarm with severity
   `0.0` and threat `Unknown`. It is not converted to a log.
 
-The launcher's threat words are product projections—`Critical`, `High`,
-`Medium`, `Low`, `Unknown`, and `Log`—derived from the alarm and numeric score.
+The launcher's threat words are product projections (`Critical`, `High`,
+`Medium`, `Low`, `Unknown`, and `Log`) derived from the alarm and numeric score.
 They are not used by the Rust adapter to override a present `result_type`.
 
 The checked-out upstream tag vocabulary includes both scalar `solution` and a

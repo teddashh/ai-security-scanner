@@ -65,9 +65,9 @@ A DNS lookup, ping, socket connection, open/closed port observation, runtime hea
 
 The home screen leads with three choices:
 
-- **Scan my IT environment** — in one compact setup, add multiple repository folders, complete website URLs, and approved internal systems by exact hostname or IP address, then run the applicable upstream checks together with one Start.
-- **Check a website** — enter one complete URL and run a conservative, reviewed web-security profile.
-- **Check a project folder** — choose one local folder and run a read-only code profile.
+- **Scan my IT environment**: in one compact setup, add multiple repository folders, complete website URLs, and approved internal systems by exact hostname or IP address, then run the applicable upstream checks together with one Start.
+- **Check a website**: enter one complete URL and run a conservative, reviewed web-security profile.
+- **Check a project folder**: choose one local folder and run a read-only code profile.
 
 The two single-target choices are shortcuts into the same project model; the user can add more assets later. Cloud accounts and other advanced sources remain secondary. A localhost connection test may remain as a diagnostic labeled exactly as a connection test; it must not be a primary scan action.
 
@@ -220,7 +220,7 @@ Runtime availability affects only dependent checks. Existing projects, results, 
 
 ## 6. Unified professional report
 
-Every terminal run produces one durable report model used by Results, reopen, preview, and readable export. An active run produces Progress state, not a report. A combined IT-environment run is one report, not separate reports that the user must mentally merge. Every requested repository, website, internal system, legacy service endpoint, or inventory-only item has one asset row derived from its own findings, completed checks, and coverage gaps. It is professional because it is consistent, evidence-based, prioritized, concise, and actionable—not because it mirrors an external framework.
+Every terminal run produces one durable report model used by Results, reopen, preview, and readable export. An active run produces Progress state, not a report. A combined IT-environment run is one report, not separate reports that the user must mentally merge. Every requested repository, website, internal system, legacy service endpoint, or inventory-only item has one asset row derived from its own findings, completed checks, and coverage gaps. It is professional because it is consistent, evidence-based, prioritized, concise, and actionable, not because it mirrors an external framework.
 
 ### 6.1 First layer
 
@@ -240,7 +240,7 @@ Product-authored finding narrative states the result, possible impact, next acti
 
 The asset summary gives every requested asset exactly one beginner-readable state: **problems found**, **no problems in completed checks**, **incomplete or failed**, or **not tested**. A finding linked to multiple assets counts for each affected asset. “No problems” applies only to completed security checks; discovery-only or connection-only work cannot earn that state.
 
-Reachability inventory such as an open port or responding HTTP service appears in a separate **Observed services — not vulnerabilities** section. It is not counted as a problem, placed in remediation priorities, or given a fix workflow merely because it shares the saved-result pipeline.
+Reachability inventory such as an open port or responding HTTP service appears in a separate **Observed services (not vulnerabilities)** section. It is not counted as a problem, placed in remediation priorities, or given a fix workflow merely because it shares the saved-result pipeline.
 
 That section leads with the number of observed services, affected targets, and
 a small representative sample. The complete inventory and evidence remain

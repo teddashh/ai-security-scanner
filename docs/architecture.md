@@ -58,7 +58,7 @@ The UI never talks directly to a container runtime, credential broker, engine pr
 
 ### 3.1 Desktop UI
 
-The React application renders the four primary destinations—**New scan**, **Projects**, **Report**, and **Settings**—and contextual project states. It is unprivileged and must not receive raw credentials or a Docker/Podman socket. Setup, progress, comparison, export, engine detail, and cloud/provider configuration are contextual or Advanced surfaces, not additional primary destinations.
+The React application renders the four primary destinations (**New scan**, **Projects**, **Report**, and **Settings**) and contextual project states. It is unprivileged and must not receive raw credentials or a Docker/Podman socket. Setup, progress, comparison, export, engine detail, and cloud/provider configuration are contextual or Advanced surfaces, not additional primary destinations.
 
 ### 3.2 Tauri case service
 

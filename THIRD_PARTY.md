@@ -16,7 +16,7 @@ Release automation generates locked dependency notices, engine notices, managed-
 - `SOURCE_OFFER`: the artifact record identifies a project-managed copyleft artifact and its corresponding-source or source-offer path.
 - `SOURCE_ARCHIVE`: a managed-runtime record binds a distributed copyleft binary to an exact corresponding-source archive URL, digest, and size.
 - `UPSTREAM_PINNED`: the product retrieves an exact verified upstream artifact by digest and does not republish it as a project-managed engine image.
-- `GENERATED_INVENTORY`: the resolved release graph, notices, and SBOM—not this row—enumerate the artifact-specific dependency terms.
+- `GENERATED_INVENTORY`: the resolved release graph, notices, and SBOM (not this row) enumerate the artifact-specific dependency terms.
 - `NOT_DISTRIBUTED`: tracked or referenced source that is not shipped by the described component.
 - `MANUAL`: repository metadata did not provide an unambiguous SPDX identifier or the project has special terms requiring manual review.
 - `RESEARCH`: tracked for evaluation; not a committed release dependency.
