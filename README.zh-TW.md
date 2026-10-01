@@ -6,15 +6,15 @@
 
 ## 開始使用
 
-目前候選版本涵蓋 **Linux、macOS、Windows 三平台**。公開發布仍為 **HOLD（暫停）**，這批候選安裝檔尚未發布成 GitHub Release。[`56d3b3f` 的 commit-bound QC 執行紀錄](https://github.com/teddashh/ai-security-scanner/actions/runs/35513091476)列出：
+下載適合你電腦的 **v0.3.0 測試版**：
 
-| 平台 | 候選安裝檔 |
-| --- | --- |
-| Windows x86-64 | 提供 MSI 與 NSIS；**未簽章**，SmartScreen 可能顯示警告 |
-| macOS Universal | 提供 `.dmg`；**未經 Apple 公證** |
-| Linux x86-64 | 提供 Debian `.deb`；**未提供** AppImage 與 `.rpm` |
+| 電腦 | 安裝檔 | 第一次開啟前 |
+| --- | --- | --- |
+| macOS（Apple 晶片或 Intel） | [ai-security-scanner_0.3.0_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_universal.dmg) | 把應用程式拖進**應用程式**資料夾。此版本未經 Apple 公證，開啟前先在「終端機」執行一次 `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app`。 |
+| Windows x86-64 | [ai-security-scanner_0.3.0_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64-setup.exe) 或 [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64_en-US.msi) | 安裝檔未簽章。SmartScreen 警告時，選**其他資訊 → 仍要執行**。Windows 要求安裝或更新 WSL 時請允許。 |
+| Debian 或 Ubuntu x86-64 | [ai-security-scanner_0.3.0_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_amd64.deb) | 以 `sudo apt install ./ai-security-scanner_0.3.0_amd64.deb` 安裝。 |
 
-已記錄的測試限制請見[候選版本揭露](docs/releasing.zh-TW.md#目前候選版本與公開發布暫停狀態)。最新已發布版本 [v0.2.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.2.0) 是較早的版本，**僅提供 Linux `.deb`**。若要自行建置目前 `main`，包含 Grype 專案掃描修正，請循 [Agent Skill 流程](docs/getting-started.zh-TW.md#透過-agent-skill-使用)。
+第一次需要掃描時，應用程式會自行準備掃描環境，不需要另外安裝 Docker。檢查碼與此測試版已測試的範圍請見 [v0.3.0 發布頁](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0)。
 
 開啟應用程式並選擇一條路徑：
 
@@ -26,7 +26,7 @@
 
 ## 透過 Claude Code 或 Codex 使用
 
-掃描在你自己電腦上的桌面應用程式中執行，**開始**是應用程式視窗裡的按鈕。在同一台電腦上的 Agent 可以確認這台電腦能否掃描、引導你操作應用程式、解讀結果，並保存 HTML 報告。兩者共用同一份 Skill：
+掃描在你自己電腦上的桌面應用程式中執行，**開始**是應用程式視窗裡的按鈕。在同一台電腦上的 Agent 可以從上方表格安裝應用程式、確認這台電腦能否掃描、引導你操作應用程式、解讀結果，並保存 HTML 報告，不需要建置本儲存庫。兩者共用同一份 Skill：
 
 | Agent | 儲存庫內的 Skill |
 | --- | --- |
@@ -35,9 +35,9 @@
 
 在任一 Agent 開啟本儲存庫後，可以這樣要求：
 
-> 使用 ai-security-scanner skill 確認這台電腦可以掃描，引導我在應用程式中完成一次掃描，並保存最終 HTML 報告。
+> 使用 ai-security-scanner skill 在這台電腦安裝應用程式、確認可以掃描、引導我完成一次掃描，並保存最終 HTML 報告。
 
-雲端 Agent 或沙箱中的工作階段無法掃描。Skill 會先確認這點，不符合時直接停下並給出一個下一步，不會反覆排錯。你決定範圍，產品選擇適用的上游檢查。詳見 [Agent 需要的環境與從原始碼建置](docs/getting-started.zh-TW.md#透過-agent-skill-使用)。
+Agent 的沙箱擋住下載或應用程式時，它會請你允許那一個指令。雲端 Agent 無法在你的電腦上安裝任何東西，會改為提供安裝檔連結。範圍由你決定，產品選擇適用的上游檢查。詳見 [Agent 需要的環境](docs/getting-started.zh-TW.md#透過-agent-skill-使用)。
 
 ## 所有資產集中在一份報告
 

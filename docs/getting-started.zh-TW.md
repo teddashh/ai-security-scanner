@@ -4,7 +4,7 @@
 
 ## 從開始新掃描到 HTML 報告
 
-目前原始碼版本的操作路徑如下：
+在應用程式中依以下路徑操作：
 
 **開始新掃描 → 確認後開始 → 掃描進度 → 掃描結果 → 分享結果 → HTML 報告**
 
@@ -30,33 +30,31 @@
 
 ## 安裝
 
-目前候選版本涵蓋 **Linux、macOS、Windows 三平台**。公開發布仍為 **HOLD（暫停）**：候選安裝檔位於 [`56d3b3f` 的 commit-bound QC 執行紀錄](https://github.com/teddashh/ai-security-scanner/actions/runs/35513091476)，尚未發布成 GitHub Release。
+從[發布頁](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0)下載適合你電腦的 **v0.3.0 測試版**：
 
-| 平台 | 候選套件與揭露 |
-| --- | --- |
-| Windows x86-64 | MSI 或 NSIS；**未簽章**，SmartScreen 可能顯示警告 |
-| macOS Universal | `.dmg`；**未經 Apple 公證** |
-| Linux x86-64 | Debian `.deb`；**未提供** AppImage 與 `.rpm` |
+| 電腦 | 安裝檔 | 第一次開啟前 |
+| --- | --- | --- |
+| macOS（Apple 晶片或 Intel） | [ai-security-scanner_0.3.0_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_universal.dmg) | 把應用程式拖進**應用程式**資料夾。此版本未經 Apple 公證，開啟前先在「終端機」執行一次 `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app`。 |
+| Windows x86-64 | [ai-security-scanner_0.3.0_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64-setup.exe) 或 [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64_en-US.msi) | 安裝檔未簽章。SmartScreen 警告時，選**其他資訊 → 仍要執行**。Windows 要求安裝或更新 WSL 時請允許。 |
+| Debian 或 Ubuntu x86-64 | [ai-security-scanner_0.3.0_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_amd64.deb) | 以 `sudo apt install ./ai-security-scanner_0.3.0_amd64.deb` 安裝。 |
 
-選用前請閱讀[候選版本已記錄的測試限制](releasing.zh-TW.md#目前候選版本與公開發布暫停狀態)。最新已發布版本 [v0.2.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.2.0) 仍是較早的版本，**僅提供 Linux `.deb`**。HOLD 期間，新 Windows／macOS 候選安裝檔沒有公開 Release 下載連結。
-
-安裝完成後啟動 **ai-security-scanner**。選定的檢查需要本機掃描環境時，應用程式會直接準備。
+安裝完成後啟動 **ai-security-scanner**。第一次需要掃描時，應用程式會自行準備掃描環境，不需要另外安裝 Docker。
 
 ## 透過 Agent Skill 使用
 
-掃描在你自己電腦上的桌面應用程式中執行，**開始**是應用程式視窗裡的按鈕。在同一台電腦上的 Agent 可以確認這台電腦能否掃描、引導你操作應用程式、解讀結果，並透過應用程式的 CLI 保存 HTML 報告。
+掃描在你自己電腦上的桌面應用程式中執行，**開始**是應用程式視窗裡的按鈕。在同一台電腦上的 Agent 可以安裝應用程式、確認這台電腦能否掃描、引導你操作應用程式、解讀結果，並透過應用程式的 CLI 保存 HTML 報告。它安裝的是上方的發布版本，不需要建置本儲存庫。
 
 在 **Claude Code** 或 **Codex** 開啟本儲存庫，使用其中的 `ai-security-scanner` skill：[Claude Code 指引](../.claude/skills/ai-security-scanner/SKILL.md) · [Codex 指引](../.codex/skills/ai-security-scanner/SKILL.md)。兩份內容相同。
 
 可以這樣要求 Agent：
 
-> 使用 ai-security-scanner skill 確認這台電腦可以掃描，引導我在應用程式中完成一次掃描，並保存最終 HTML 報告。
+> 使用 ai-security-scanner skill 在這台電腦安裝應用程式、確認可以掃描、引導我完成一次掃描，並保存最終 HTML 報告。
 
-Agent 必須和應用程式在同一台電腦上執行，並且能連網、能執行應用程式的 CLI。雲端 Agent 或沙箱中的工作階段無法掃描；Skill 會先確認這點，不符合時直接停下並給出一個下一步，不會反覆排錯。資料夾由你選定，網路目標也由你在應用程式中確認，Skill 不會代為授權。執行中的工作顯示於**掃描進度**，**掃描結果**與**分享結果**使用已結束或停止的掃描。
+Agent 必須和應用程式在同一台電腦上執行，並且能連網。沙箱擋住下載或應用程式時，它會請你允許那一個指令。雲端 Agent 無法在你的電腦上安裝任何東西，會直接提供安裝檔連結，不會反覆排錯。資料夾由你選定，網路目標也由你在應用程式中確認，Skill 不會代為授權。執行中的工作顯示於**掃描進度**，**掃描結果**與**分享結果**使用已結束或停止的掃描。
 
 ### 從原始碼建置
 
-安裝 Node.js 24 或更新版本、Rust 1.98，以及 Tauri 的 Linux 開發相依套件後，用以下指令從本儲存庫建置並開啟應用程式：
+只有要修改產品時才需要建置。安裝 Node.js 24 或更新版本、Rust 1.98，以及 Tauri 的 Linux 開發相依套件後，用以下指令從本儲存庫建置並開啟應用程式：
 
 ```sh
 npm ci

@@ -4,21 +4,19 @@
 
 The product owner selects the version, channel, source commit, supported installer set, and publication time. Release automation builds, qualifies, freezes, verifies, attests, and publishes that exact decision.
 
-## Current candidate and publication HOLD
+## Current release
 
-The current candidate is **multi-OS: Linux, macOS, and Windows**. [Actions run 35513091476](https://github.com/teddashh/ai-security-scanner/actions/runs/35513091476) finalized the exact source `56d3b3f469b9fd9bb090f404b0230e7667d5d884` with `publicationMode: commit-bound-qc`. Its `release-finalized` artifact contains the authoritative `release-metadata.json`, installer bytes, checksums and disclosures. This record applies to that commit, not automatically to later source changes.
+[v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0) is a **pre-release for testers** on **Linux, macOS, and Windows**. [Actions run 36884417623](https://github.com/teddashh/ai-security-scanner/actions/runs/36884417623) built and qualified the exact source `dddd491b87f90c9cebc5f946d9e2070f36742f21` as a public candidate, and [promotion run 36890665121](https://github.com/teddashh/ai-security-scanner/actions/runs/36890665121) published those frozen bytes without rebuilding, after approval in the `release-publication` environment. The release page carries the installers, `SHA256SUMS.txt`, runtime manifests, SBOMs, notices and qualification records.
 
-**Public release is HOLD.** Keep `public_release_candidate: false`; do not run promotion, create a tag, or create a GitHub Release while HOLD remains in effect. Finalized QC artifacts are available for review, not published release downloads or a GA declaration. A formal release must cover all three operating systems.
+v0.3.0 is marked as a pre-release, so it is not the latest release and the in-app updater does not offer it. Version 1.0.0 is reserved for general availability.
 
-| Platform | Offered in this QC set | Disclosure |
+| Platform | Installer | Disclosure |
 | --- | --- | --- |
 | Windows x86-64 | MSI and NSIS | **Unsigned**; SmartScreen may warn. Technical qualification passed; Windows lifecycle and data-preservation observations are absent. |
 | macOS Universal | `.dmg` | **Not notarized**; OS signing is not configured. Installer qualification passed; managed-runtime execution was not observed on the qualification host. |
 | Linux x86-64 | Debian `.deb` | Technical qualification passed. AppImage and `.rpm` are **not offered** because their technical qualification was not observed. |
 
-For both Windows installers, metadata retains `windows-lifecycle-not-observed` and `windows-data-preservation-not-observed`; a passing installer qualification is not evidence of those lifecycle checks. The exact-candidate beginner human path is `not-observed` for every offered installer. Updater signatures, where present, do not establish OS signing or Apple notarization. Public provenance has not been created for this commit-bound QC set. These are disclosures, not newly added release gates.
-
-The latest **published** release, [v0.2.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.2.0), remains an earlier **Linux x86-64 Debian `.deb`-only** build; that historical release did not offer Windows or macOS installers. Do not use its offering to describe the current multi-OS candidate, or invent public download URLs for the unpublished candidate bytes.
+For both Windows installers, metadata retains `windows-lifecycle-not-observed` and `windows-data-preservation-not-observed`; a passing installer qualification is not evidence of those lifecycle checks. The exact-candidate beginner human path is `not-observed` for every offered installer. Updater signatures, where present, do not establish OS signing or Apple notarization. These are disclosures, not release gates.
 
 ## Release identity
 
@@ -42,8 +40,8 @@ Before candidate creation:
 
 For an owner-requested QC build, **Release desktop installers** uses:
 
-- `public_release_candidate: false`, retaining commit-bound QC while public release is on HOLD;
-- the optional `windows_data_preservation` input only when the owner requests the supported N-1 Windows upgrade and ambiguous-runtime recovery fixtures. The current QC set records those observations as absent.
+- `public_release_candidate: false`, which finalizes commit-bound QC artifacts and publishes nothing;
+- the optional `windows_data_preservation` input only when the owner requests the supported N-1 Windows upgrade and ambiguous-runtime recovery fixtures. The v0.3.0 record lists those observations as absent.
 
 The workflow defines four qualification lanes. A lane can finalize as `not-offered`; use the exact run's metadata, rather than the lane list, to determine its offered installers.
 
@@ -56,11 +54,11 @@ The workflow defines four qualification lanes. A lane can finalize as `not-offer
 
 Each lane records what it actually observed: installation, application and companion layout, desktop startup, supported managed-runtime operations, runtime/container evidence, and removal of test state. Its JSON qualification record binds those observations to the version, source commit and artifact digest. A passing installer check does not imply that runtime execution or Windows lifecycle checks were observed; the current macOS and Windows limitations are listed above.
 
-The finalized QC set records offered artifacts and their qualification evidence, checksums, runtime manifests, notices, SBOMs and limitations. The workflow summary identifies the run, artifact and source commit. Finalization does not lift HOLD.
+The finalized QC set records offered artifacts and their qualification evidence, checksums, runtime manifests, notices, SBOMs and limitations. The workflow summary identifies the run, artifact and source commit. Finalization does not publish anything.
 
-## Future promotion reference: inactive during HOLD
+## Promote a public candidate
 
-Publication remains a separate product-owner decision. After the owner lifts HOLD and authorizes a public candidate, **Promote frozen desktop release candidate** consumes five values from that preparation run:
+Publication is a separate product-owner decision. When the owner authorizes it, dispatch **Release desktop installers** from `main` with `public_release_candidate: true`. **Promote frozen desktop release candidate** then consumes five values from that run's summary:
 
 - candidate run ID;
 - candidate run attempt;

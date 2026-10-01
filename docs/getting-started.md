@@ -4,7 +4,7 @@
 
 ## From New scan to an HTML report
 
-For the current source build, follow this path:
+In the app, follow this path:
 
 **New scan → Review and start → Scan progress → Results → Share results → HTML report**
 
@@ -30,33 +30,31 @@ See [Results and exports](results-and-exports.md) for more about the report.
 
 ## Install
 
-The current candidate covers **Linux, macOS, and Windows**. Public release is **HOLD**: the candidate installers are available in the [commit-bound QC run for `56d3b3f`](https://github.com/teddashh/ai-security-scanner/actions/runs/35513091476), not a published GitHub Release.
+Download the **v0.3.0 test release** for your computer from the [release page](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0):
 
-| Platform | Candidate package and disclosure |
-| --- | --- |
-| Windows x86-64 | MSI or NSIS; **unsigned**, so SmartScreen may warn |
-| macOS Universal | `.dmg`; **not notarized** |
-| Linux x86-64 | Debian `.deb`; AppImage and `.rpm` **not offered** |
+| Computer | Installer | First launch |
+| --- | --- | --- |
+| macOS, Apple silicon or Intel | [ai-security-scanner_0.3.0_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_universal.dmg) | Drag the app into **Applications**. It is not notarized, so run `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app` once in Terminal before opening it. |
+| Windows x86-64 | [ai-security-scanner_0.3.0_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64-setup.exe) or the [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64_en-US.msi) | The installer is unsigned. If SmartScreen warns, select **More info → Run anyway**. If Windows asks to install or update WSL, allow it. |
+| Debian or Ubuntu x86-64 | [ai-security-scanner_0.3.0_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_amd64.deb) | Install with `sudo apt install ./ai-security-scanner_0.3.0_amd64.deb`. |
 
-Review the [candidate's recorded testing limits](releasing.md#current-candidate-and-publication-hold) before choosing it. The latest published release, [v0.2.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.2.0), remains an earlier **Linux `.deb`-only** build. There are no public release download links for the new Windows or macOS candidate installers while HOLD remains in effect.
-
-Launch **ai-security-scanner** after installation. The app prepares its local scanning runtime when the selected checks need it.
+Launch **ai-security-scanner** after installation. The app prepares its own scanning runtime the first time a scan needs it; Docker is not required.
 
 ## Use with an Agent Skill
 
-Scans run in the desktop app on your own computer, and **Start** is a button in the app window. An agent on the same computer can check that the computer is ready to scan, guide you through the app, explain the results, and save the HTML report through the app's CLI.
+Scans run in the desktop app on your own computer, and **Start** is a button in the app window. An agent on the same computer can install the app, check that the computer is ready to scan, guide you through the app, explain the results, and save the HTML report through the app's CLI. It installs the release above; it does not build this repository.
 
 Open this checkout in **Claude Code** or **Codex** and use the repository's `ai-security-scanner` skill: [Claude Code instructions](../.claude/skills/ai-security-scanner/SKILL.md) · [Codex instructions](../.codex/skills/ai-security-scanner/SKILL.md). Both copies are the same.
 
 Ask the agent:
 
-> Use the ai-security-scanner skill to check that this computer can scan, guide me through a scan in the app, and save the final HTML report.
+> Use the ai-security-scanner skill to install the app on this computer, check that it can scan, guide me through a scan, and save the final HTML report.
 
-The agent needs to run on the same computer as the app, with network access and permission to run the app's CLI. A cloud agent or a sandboxed session cannot scan; the skill checks this first and stops with one next step instead of troubleshooting. You select the folders and confirm any network targets in the app; the skill does not authorize anything for you. Active work stays in **Scan progress**; **Results** and **Share results** use a finished or stopped run.
+The agent needs to run on the same computer as the app, with network access. When its sandbox blocks a download or the app, it asks you to allow that one command. A cloud agent cannot install anything on your computer, so it gives you the installer link instead of troubleshooting. You select the folders and confirm any network targets in the app; the skill does not authorize anything for you. Active work stays in **Scan progress**; **Results** and **Share results** use a finished or stopped run.
 
 ### Build from source
 
-With Node.js 24 or newer, Rust 1.98, and Tauri's Linux development dependencies installed, build and open the app from this checkout:
+Building is only needed to change the product. With Node.js 24 or newer, Rust 1.98, and Tauri's Linux development dependencies installed, build and open the app from this checkout:
 
 ```sh
 npm ci

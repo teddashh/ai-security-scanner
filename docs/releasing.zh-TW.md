@@ -4,21 +4,19 @@
 
 產品負責人選擇版本、channel、source commit、支援的安裝檔與發布時間。自動化流程會針對同一個決定完成建置、平台驗證、凍結、重新驗證、attestation 與發布。
 
-## 目前候選版本與公開發布暫停狀態
+## 目前發布版本
 
-目前候選版本涵蓋 **Linux、macOS、Windows 三平台**。[Actions run 35513091476](https://github.com/teddashh/ai-security-scanner/actions/runs/35513091476) 已將來源 `56d3b3f469b9fd9bb090f404b0230e7667d5d884` 以 `publicationMode: commit-bound-qc` 完成 finalization。該 run 的 `release-finalized` artifact 內含權威的 `release-metadata.json`、安裝檔、checksums 與揭露紀錄。這份紀錄只適用於該 commit，不會自動涵蓋後續原始碼變更。
+[v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0) 是提供給測試者的**預先發行版（pre-release）**，涵蓋 **Linux、macOS、Windows**。[Actions run 36884417623](https://github.com/teddashh/ai-security-scanner/actions/runs/36884417623) 以 public candidate 建置並驗證精確來源 `dddd491b87f90c9cebc5f946d9e2070f36742f21`；[promotion run 36890665121](https://github.com/teddashh/ai-security-scanner/actions/runs/36890665121) 在 `release-publication` environment 核准後，不重新建置即發布同一批凍結檔案。發布頁包含安裝檔、`SHA256SUMS.txt`、runtime manifests、SBOM、notices 與 qualification 紀錄。
 
-**公開發布維持 HOLD（暫停）。** 保持 `public_release_candidate: false`；HOLD 期間不得執行 promotion、建立 tag 或 GitHub Release。已完成的 QC artifacts 可供審閱，並非已公開的 Release 下載或 GA 宣告。正式發布必須涵蓋三種作業系統。
+v0.3.0 標示為 pre-release，因此不是 latest release，應用程式內的更新程式也不會提供它。1.0.0 保留給正式版（GA）。
 
-| 平台 | 本次 QC 提供的安裝檔 | 揭露事項 |
+| 平台 | 安裝檔 | 揭露事項 |
 | --- | --- | --- |
 | Windows x86-64 | MSI 與 NSIS | **未簽章**，SmartScreen 可能顯示警告。技術 qualification 通過；未觀察 Windows lifecycle 與資料保留驗證。 |
 | macOS Universal | `.dmg` | **未經 Apple 公證**，未設定 OS 簽章。安裝檔 qualification 通過；qualification 主機上未觀察 managed runtime 執行。 |
 | Linux x86-64 | Debian `.deb` | 技術 qualification 通過。AppImage 與 `.rpm` 因未觀察技術 qualification 而**未提供**。 |
 
-兩種 Windows 安裝檔均保留 `windows-lifecycle-not-observed` 與 `windows-data-preservation-not-observed`；安裝檔 qualification 通過不代表已驗證這些 lifecycle 行為。每個安裝檔的 exact-candidate 新手真人操作路徑均為 `not-observed`。部分套件具有 updater 簽章，但不代表具備 OS 簽章或 Apple 公證。此 commit-bound QC 集合尚未建立公開 provenance。以上是既有紀錄的揭露，並非新增發布門檻。
-
-最新**已發布**版本 [v0.2.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.2.0) 仍是較早的版本，**僅提供 Linux x86-64 Debian `.deb`**；該歷史版本未提供 Windows／macOS 安裝檔。不可用它的供應狀態概括目前三平台候選版本，也不可為尚未發布的候選檔案編造公開下載網址。
+兩種 Windows 安裝檔均保留 `windows-lifecycle-not-observed` 與 `windows-data-preservation-not-observed`；安裝檔 qualification 通過不代表已驗證這些 lifecycle 行為。每個安裝檔的 exact-candidate 新手真人操作路徑均為 `not-observed`。部分套件具有 updater 簽章，但不代表具備 OS 簽章或 Apple 公證。以上是揭露事項，並非發布門檻。
 
 ## 版本身分
 
@@ -40,8 +38,8 @@
 
 產品負責人要求 QC 建置時，**Release desktop installers** 使用：
 
-- `public_release_candidate: false`，公開發布 HOLD 期間維持 commit-bound QC；
-- 僅在負責人要求 Windows N-1 upgrade 與 ambiguous-runtime recovery fixtures 時使用選用的 `windows_data_preservation` 輸入。目前 QC 紀錄仍標示未觀察這些項目。
+- `public_release_candidate: false`：只完成 commit-bound QC artifacts，不發布任何內容；
+- 僅在負責人要求 Windows N-1 upgrade 與 ambiguous-runtime recovery fixtures 時使用選用的 `windows_data_preservation` 輸入。v0.3.0 紀錄仍標示未觀察這些項目。
 
 Workflow 定義以下四條 qualification 路徑，各路徑最終可記為 `not-offered`。實際提供哪些安裝檔，應以該次 run 的 metadata 判定，不可只看路徑清單。
 
@@ -54,11 +52,11 @@ Workflow 定義以下四條 qualification 路徑，各路徑最終可記為 `not
 
 各 lane 如實記錄觀察到的安裝、application 與 companion layout、桌面啟動、支援的 managed-runtime operations、runtime／container evidence，以及測試狀態移除。JSON qualification record 將這些觀察綁定 version、source commit 與 artifact digest。安裝檔檢查通過不代表已觀察 runtime 執行或 Windows lifecycle；本次 macOS／Windows 限制已列於上方。
 
-Finalized QC 集合記錄所提供的 artifacts 及其 qualification evidence、checksums、runtime manifests、notices、SBOM 與限制。Workflow summary 識別 run、artifact 與 source commit；finalization 不會解除 HOLD。
+Finalized QC 集合記錄所提供的 artifacts 及其 qualification evidence、checksums、runtime manifests、notices、SBOM 與限制。Workflow summary 識別 run、artifact 與 source commit；finalization 不會發布任何內容。
 
-## 未來 promotion 參考：HOLD 期間不執行
+## 發布 public candidate
 
-公開發布仍由產品負責人另外決定。負責人解除 HOLD 並授權建立 public candidate 後，**Promote frozen desktop release candidate** 才會使用該次準備流程產生的五個值：
+公開發布由產品負責人另外決定。負責人授權後，從 `main` 以 `public_release_candidate: true` 執行 **Release desktop installers**；**Promote frozen desktop release candidate** 再使用該 run summary 中的五個值：
 
 - candidate run ID；
 - candidate run attempt；

@@ -1,6 +1,6 @@
 # Development status
 
-_Updated 2026-09-21._
+_Updated 2026-10-01._
 
 This page summarizes current engineering status for contributors. It is not a product specification
 or release declaration. [The product specification](product-spec.md) remains the source of truth for
@@ -8,16 +8,14 @@ product behavior, and the [current product review](product-audit.md) tracks the 
 
 ## At a glance
 
-- The current candidate is multi-OS: Linux, macOS, and Windows. Its commit-bound QC set offers
-  Windows MSI and NSIS (unsigned; SmartScreen may warn), macOS Universal `.dmg` (not notarized),
-  and Linux x86-64 `.deb`. Linux AppImage and `.rpm` are not offered. Public release is **HOLD**;
-  these candidate bytes are not a published GitHub Release. See the [candidate record and
-  testing disclosures](releasing.md#current-candidate-and-publication-hold).
-- The latest published release, [v0.2.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.2.0),
-  remains an earlier Linux `.deb`-only build; it does not describe the current multi-OS candidate.
-- The paired repository [Agent Skills](getting-started.md#use-with-an-agent-skill) check that a
-  computer can scan, guide a scan in the desktop app, and save its report; the Linux source build
-  is documented there.
+- The current release, [v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0), is a pre-release for testers on Linux,
+  macOS, and Windows: Windows MSI and NSIS (unsigned; SmartScreen may warn), macOS Universal `.dmg`
+  (not notarized), and Linux x86-64 `.deb`. Linux AppImage and `.rpm` are not offered. It is not
+  marked latest, so the in-app updater does not offer it. See the [release record and
+  testing disclosures](releasing.md#current-release).
+- The paired repository [Agent Skills](getting-started.md#use-with-an-agent-skill) install the
+  desktop release, check that a computer can scan, guide a scan in the app, and save its report;
+  the Linux source build is documented there for changing the product.
 - The engine catalog contains 25 records: 22 integrated, runnable engines and 3 experimental
   integrations that remain non-runnable.
 - Repository, website/API, infrastructure, cloud, Microsoft 365, and Kubernetes paths use bounded

@@ -4,10 +4,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#102c37">
-    <meta name="description" content="Use the desktop app or Claude Code and Codex Agent Skills for upstream security checks and one standardized report. Linux, macOS and Windows candidate installers; public release on HOLD.">
+    <meta name="description" content="Use the desktop app or Claude Code and Codex Agent Skills for upstream security checks and one standardized report. Download the v0.3.0 test release for Linux, macOS and Windows.">
     <meta property="og:type" content="website">
     <meta property="og:title" content="ai-security-scanner · Many security tools, one clear report">
-    <meta property="og:description" content="Choose targets and confirm scope. Run upstream scanners through the desktop app or Agent Skills. One standardized report. Linux, macOS and Windows candidate installers; public release on HOLD.">
+    <meta property="og:description" content="Choose targets and confirm scope. Run upstream scanners through the desktop app or Agent Skills. One standardized report. Download the v0.3.0 test release for Linux, macOS and Windows.">
     <meta property="og:url" content="https://teddashh.github.io/ai-security-scanner/">
     <meta property="og:image" content="https://teddashh.github.io/ai-security-scanner/project-mark.svg">
     <meta name="twitter:card" content="summary">
@@ -82,9 +82,9 @@
             <span class="lang-zh" lang="zh-Hant">選擇程式碼專案、網站與內部系統，確認網路範圍與授權。透過桌面程式或 Claude Code／Codex Agent Skills 執行適用的上游掃描器，再從一份標準化報告查看受影響資產、證據、優先順序與下一步。</span>
           </p>
           <div class="button-row">
-            <a class="button button-primary" href="https://github.com/teddashh/ai-security-scanner/actions/runs/35513091476">
-              <span class="lang-en">Review multi-OS candidate</span>
-              <span class="lang-zh" lang="zh-Hant">查看三平台候選版本</span>
+            <a class="button button-primary" href="https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0">
+              <span class="lang-en">Download v0.3.0 test release</span>
+              <span class="lang-zh" lang="zh-Hant">下載 v0.3.0 測試版</span>
               <span aria-hidden="true">→</span>
             </a>
             <a class="button button-secondary" href="#agent-skills">
@@ -93,12 +93,12 @@
             </a>
           </div>
           <p class="snapshot-note">
-            <span class="lang-en"><strong>Multi-OS candidate; public release on HOLD.</strong> The <code>56d3b3f</code> QC set offers Windows MSI + NSIS (unsigned; SmartScreen may warn), macOS Universal <code>.dmg</code> (not notarized), and Linux <code>.deb</code>. AppImage and <code>.rpm</code> are not offered. These candidate installers are not a published GitHub Release.</span>
-            <span class="lang-zh" lang="zh-Hant"><strong>三平台候選版本；公開發布維持 HOLD。</strong><code>56d3b3f</code> QC 提供 Windows MSI＋NSIS（未簽章，SmartScreen 可能警告）、macOS Universal <code>.dmg</code>（未經 Apple 公證）與 Linux <code>.deb</code>；未提供 AppImage／<code>.rpm</code>。這批候選安裝檔尚未發布成 GitHub Release。</span>
+            <span class="lang-en"><strong>v0.3.0 test release (pre-release).</strong> Windows setup <code>.exe</code> and MSI (unsigned; SmartScreen may warn), macOS Universal <code>.dmg</code> (not notarized; run one <code>xattr</code> command before the first launch), and Debian/Ubuntu <code>.deb</code>. The app prepares its own scanning runtime; Docker is not required.</span>
+            <span class="lang-zh" lang="zh-Hant"><strong>v0.3.0 測試版（pre-release）。</strong>提供 Windows 安裝程式 <code>.exe</code> 與 MSI（未簽章，SmartScreen 可能警告）、macOS Universal <code>.dmg</code>（未經 Apple 公證，第一次開啟前執行一行 <code>xattr</code> 指令）與 Debian／Ubuntu <code>.deb</code>。應用程式會自行準備掃描環境，不需要另外安裝 Docker。</span>
           </p>
           <p class="snapshot-note">
-            <span class="lang-en">See <a href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/releasing.md#current-candidate-and-publication-hold">candidate disclosures</a>. The latest published <a href="https://github.com/teddashh/ai-security-scanner/releases/tag/v0.2.0">v0.2.0</a> is an earlier Linux <code>.deb</code>-only build.</span>
-            <span class="lang-zh" lang="zh-Hant">詳見<a href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/releasing.zh-TW.md#目前候選版本與公開發布暫停狀態">候選版本揭露</a>。最新已發布版本 <a href="https://github.com/teddashh/ai-security-scanner/releases/tag/v0.2.0">v0.2.0</a> 是較早的版本，僅提供 Linux <code>.deb</code>。</span>
+            <span class="lang-en">See the <a href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/getting-started.md#install">install steps</a> and the <a href="https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0">release notes</a>.</span>
+            <span class="lang-zh" lang="zh-Hant">詳見<a href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/getting-started.zh-TW.md#安裝">安裝步驟</a>與<a href="https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0">發布說明</a>。</span>
           </p>
           <ul class="hero-metrics" aria-label="Project summary">
             <li>
@@ -310,13 +310,13 @@
             <span class="lang-zh" lang="zh-Hant">Claude Code 與 Codex，共用同一套掃描流程。</span>
           </h2>
           <p>
-            <span class="lang-en">Scans run in the desktop app on your own computer. An agent on the same computer uses the ai-security-scanner skill to check that the computer can scan, guide you through the app, explain the results, and save the final HTML report.</span>
-            <span class="lang-zh" lang="zh-Hant">掃描在你自己電腦上的桌面應用程式中執行。同一台電腦上的 Agent 透過 ai-security-scanner skill 確認能否掃描、引導你操作應用程式、解讀結果，並保存最終 HTML 報告。</span>
+            <span class="lang-en">Scans run in the desktop app on your own computer. An agent on the same computer uses the ai-security-scanner skill to install the app, check that the computer can scan, guide you through the app, explain the results, and save the final HTML report.</span>
+            <span class="lang-zh" lang="zh-Hant">掃描在你自己電腦上的桌面應用程式中執行。同一台電腦上的 Agent 透過 ai-security-scanner skill 安裝應用程式、確認能否掃描、引導你操作應用程式、解讀結果，並保存最終 HTML 報告。</span>
           </p>
         </div>
         <p>
-          <span class="lang-en">A cloud agent or a sandboxed session cannot scan; the skill checks this first and stops with one next step. You choose the scope and confirm network authorization; upstream scanners perform the checks and the shared report layer explains the results.</span>
-          <span class="lang-zh" lang="zh-Hant">雲端 Agent 或沙箱中的工作階段無法掃描；Skill 會先確認這點，不符合時直接停下並給出一個下一步。你選定範圍並確認網路授權，上游掃描器執行檢查，共用報告層解釋結果。</span>
+          <span class="lang-en">When a sandbox blocks a download or the app, the agent asks you to allow that one command. A cloud agent cannot install anything on your computer, so it gives you the installer link instead. You choose the scope and confirm network authorization; upstream scanners perform the checks and the shared report layer explains the results.</span>
+          <span class="lang-zh" lang="zh-Hant">沙箱擋住下載或應用程式時，Agent 會請你允許那一個指令。雲端 Agent 無法在你的電腦上安裝任何東西，會改為提供安裝檔連結。你選定範圍並確認網路授權，上游掃描器執行檢查，共用報告層解釋結果。</span>
         </p>
         <div class="button-row">
           <a class="button button-primary lang-en" href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/getting-started.md#use-with-an-agent-skill">Use a Skill</a>
@@ -650,13 +650,13 @@
             <span class="lang-zh" lang="zh-Hant">從資產開始，讓產品選擇適用檢查。</span>
           </h2>
           <p>
-            <span class="lang-en">Review the Linux, macOS and Windows candidate, or build current source with Claude Code or Codex. Public release remains on HOLD. Review the exact scan scope, start once, and read the final report.</span>
-            <span class="lang-zh" lang="zh-Hant">查看 Linux、macOS、Windows 候選版本，或透過 Claude Code／Codex 建置目前原始碼；公開發布仍維持 HOLD。確認精確掃描範圍、啟動一次，再閱讀最終報告。</span>
+            <span class="lang-en">Download the Linux, macOS and Windows test release, or let Claude Code or Codex install it for you. Review the exact scan scope, start once, and read the final report.</span>
+            <span class="lang-zh" lang="zh-Hant">下載 Linux、macOS、Windows 測試版，或讓 Claude Code／Codex 幫你安裝。確認精確掃描範圍、啟動一次，再閱讀最終報告。</span>
           </p>
           <div class="button-row">
-            <a class="button button-primary" href="https://github.com/teddashh/ai-security-scanner/actions/runs/35513091476">
-              <span class="lang-en">Review multi-OS candidate</span>
-              <span class="lang-zh" lang="zh-Hant">查看三平台候選版本</span>
+            <a class="button button-primary" href="https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0">
+              <span class="lang-en">Download v0.3.0 test release</span>
+              <span class="lang-zh" lang="zh-Hant">下載 v0.3.0 測試版</span>
               <span aria-hidden="true">→</span>
             </a>
             <a class="button button-secondary" href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/getting-started.md">

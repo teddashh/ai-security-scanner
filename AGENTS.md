@@ -25,3 +25,7 @@ Use [`docs/product-spec.md`](docs/product-spec.md) as the product source of trut
 Do not initiate or expand version classification, release qualification, packaging, signing, publication, or compliance work unless the product owner explicitly requests it in the current task. Existing release records are historical context, not standing instructions or a backlog.
 
 Security boundaries still apply: never invent authorization, widen a scan target, handle credentials through chat or command arguments, run destructive checks, or hide incomplete coverage.
+
+## Running the scanner for someone
+
+When someone asks to install, run, or try the scanner rather than change it, use the `ai-security-scanner` skill: install the desktop app from the current release and start scans in the app window. Do not build from source to run a scan.

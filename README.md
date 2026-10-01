@@ -6,15 +6,15 @@ Security checks across repositories, websites, and internal systems, through a d
 
 ## Start here
 
-The current candidate is **multi-OS: Linux, macOS, and Windows**. Public release is **HOLD**; these candidate installers have not been published as a GitHub Release. The [commit-bound QC run for `56d3b3f`](https://github.com/teddashh/ai-security-scanner/actions/runs/35513091476) records:
+Download the **v0.3.0 test release** for your computer:
 
-| Platform | Candidate installers |
-| --- | --- |
-| Windows x86-64 | MSI and NSIS offered; **unsigned**, so SmartScreen may warn |
-| macOS Universal | `.dmg` offered; **not notarized** |
-| Linux x86-64 | Debian `.deb` offered; AppImage and `.rpm` **not offered** |
+| Computer | Installer | First launch |
+| --- | --- | --- |
+| macOS, Apple silicon or Intel | [ai-security-scanner_0.3.0_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_universal.dmg) | Drag the app into **Applications**. It is not notarized, so run `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app` once in Terminal before opening it. |
+| Windows x86-64 | [ai-security-scanner_0.3.0_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64-setup.exe) or the [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64_en-US.msi) | The installer is unsigned. If SmartScreen warns, select **More info → Run anyway**. If Windows asks to install or update WSL, allow it. |
+| Debian or Ubuntu x86-64 | [ai-security-scanner_0.3.0_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_amd64.deb) | Install with `sudo apt install ./ai-security-scanner_0.3.0_amd64.deb`. |
 
-See the [candidate disclosures](docs/releasing.md#current-candidate-and-publication-hold) for recorded testing limits. The latest published release, [v0.2.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.2.0), is an earlier **Linux `.deb`-only** build. To build current `main` yourself, including the Grype repository fix, use the [Agent Skill workflow](docs/getting-started.md#use-with-an-agent-skill).
+The app prepares its own scanning runtime the first time a scan needs it; Docker is not required. Checksums and the tested limits of this pre-release are on the [v0.3.0 release page](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0).
 
 Open the app and choose one path:
 
@@ -26,7 +26,7 @@ Follow **New scan → Review and start → Scan progress → Results**. From Res
 
 ## Use with Claude Code or Codex
 
-Scans run in the desktop app on your own computer, and **Start** is a button in the app window. An agent on the same computer can check that the computer is ready to scan, guide you through the app, explain the results, and save the HTML report. Both agents use the same skill:
+Scans run in the desktop app on your own computer, and **Start** is a button in the app window. An agent on the same computer can install the app from the table above, check that the computer is ready to scan, guide you through the app, explain the results, and save the HTML report. It does not need to build this repository. Both agents use the same skill:
 
 | Agent | Repository skill |
 | --- | --- |
@@ -35,9 +35,9 @@ Scans run in the desktop app on your own computer, and **Start** is a button in 
 
 Open this checkout in either agent and ask:
 
-> Use the ai-security-scanner skill to check that this computer can scan, guide me through a scan in the app, and save the final HTML report.
+> Use the ai-security-scanner skill to install the app on this computer, check that it can scan, guide me through a scan, and save the final HTML report.
 
-A cloud agent or a sandboxed session cannot scan. The skill checks this first and stops with one next step instead of troubleshooting. You choose the scope; the product selects applicable upstream checks. See [what the agent needs and how to build from source](docs/getting-started.md#use-with-an-agent-skill).
+When the agent's sandbox blocks a download or the app, it asks you to allow that one command. A cloud agent cannot install anything on your computer, so it gives you the installer link instead. You choose the scope; the product selects applicable upstream checks. See [what the agent needs](docs/getting-started.md#use-with-an-agent-skill).
 
 ## One report for every selected asset
 
