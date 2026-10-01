@@ -16,21 +16,21 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-httpx",
     "tag": "1.10.0-7",
-    "digest": "sha256:37468b8bbecc6438681d9fd7e87d09d9375fc496b1c53a369fa95ddef62bc6d4"
+    "digest": "sha256:6911039efb20370ebd84ed6e57d7d793d5ae7bdff5813c007ac9b2774aaaed1e"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33369797046",
-    "source_revision": "7514fd0642b28fe73ebdd2d48f0149b40f6eec17",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/36783633415",
+    "source_revision": "51b8abfd7abe5accaf0be59b9d50567bd206dfe8",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:e613d40aa9e9795d8b49a5c5c79c3b34adb434d06e9468710530e8d9425d7172",
-      "linux/arm64": "sha256:adbeea89c523424a4939402f0018dddc43c743a9c253f38318b69eaadca0bae0"
+      "linux/amd64": "sha256:372fa216e87b0a953e64701f6382a81cf62e5b582e74e8f9a56c68798ce16754",
+      "linux/arm64": "sha256:dfbbc9b281bf675c9b26bee1e8d6342ccefac7829989641a425a47cc438e7a74"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "httpx-image-evidence-33369797046-1"
+    "evidence_artifact": "httpx-image-evidence-36783633415-1"
   },
   "build_recipe": {
     "source_revision": "13037dd08b9715cfbd960a70ae1edfef6686a857",
