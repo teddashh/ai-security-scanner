@@ -87,9 +87,11 @@ export function AppUpdateControl({ state, onCheck, onInstall }: AppUpdateControl
       type="button"
       disabled={state.phase === "checking"}
       onClick={onCheck}
-      title={state.currentVersion
-        ? t("update.currentHelp", { version: state.currentVersion })
-        : t("update.checkHelp")}
+      title={state.phase === "unoffered"
+        ? t("update.unofferedHelp")
+        : state.currentVersion
+          ? t("update.currentHelp", { version: state.currentVersion })
+          : t("update.checkHelp")}
     >
       <Icon name={state.phase === "current" ? "check" : "refresh"} size={15} />
       <span className="update-control__label">

@@ -121,6 +121,7 @@ export const zhTW = {
   "update.errorHelp": "按下此按鈕重新執行簽署更新檢查。",
   "update.unreachable": "更新服務無法使用 · 重試",
   "update.unreachableHelp": "目前離線，或更新服務無法使用。按下此按鈕再試一次。",
+  "update.unofferedHelp": "最新發布的版本沒有適用於這台電腦的更新。按下此按鈕再檢查一次。",
   "update.checking": "正在檢查更新…",
   "update.version": "版本 {version}",
   "update.currentHelp": "目前版本 {version}",

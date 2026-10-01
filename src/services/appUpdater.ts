@@ -11,6 +11,7 @@ export type AppUpdatePhase =
   | "unavailable"
   | "checking"
   | "current"
+  | "unoffered"
   | "available"
   | "downloading"
   | "installing"
@@ -43,6 +44,12 @@ const describeFailure = (error: unknown): string | undefined => {
   const message = error instanceof Error ? error.message : String(error);
   return boundedText(message, 600);
 };
+
+// The updater rejects a release manifest that lists no installer for this
+// computer before it compares versions. The service answered; its latest
+// published release offers nothing this computer can install.
+const isUnofferedPlatformFailure = (message: string | undefined): boolean =>
+  /found in the response `platforms` object/u.test(message ?? "");
 
 const closePendingUpdate = async () => {
   const prior = pendingUpdate;
@@ -85,10 +92,11 @@ export const checkForAppUpdate = async (): Promise<AppUpdateState> => {
       notes: boundedText(update.body, 2_000),
     };
   } catch (error) {
+    const message = describeFailure(error);
     return {
-      phase: "unreachable",
+      phase: isUnofferedPlatformFailure(message) ? "unoffered" : "unreachable",
       currentVersion,
-      message: describeFailure(error),
+      message,
     };
   }
 };

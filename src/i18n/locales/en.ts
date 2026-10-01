@@ -119,6 +119,7 @@ export const en = {
   "update.errorHelp": "Select this button to retry the signed update check.",
   "update.unreachable": "Update service unavailable · Retry",
   "update.unreachableHelp": "The app is offline or the update service is unavailable. Select this button to try again.",
+  "update.unofferedHelp": "The latest published release has no update for this computer. Select this button to check again.",
   "update.checking": "Checking for updates…",
   "update.version": "Version {version}",
   "update.currentHelp": "Current version {version}",

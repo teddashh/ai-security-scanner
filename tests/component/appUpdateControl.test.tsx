@@ -70,6 +70,12 @@ test.each([
     label: "Version 1.2.3",
     role: "button",
   },
+  {
+    phase: "unoffered",
+    state: { phase: "unoffered", currentVersion: "1.2.3" } satisfies AppUpdateState,
+    label: "Version 1.2.3",
+    role: "button",
+  },
 ])("the $phase phase renders its label in the truncating element", ({ state, label, role }) => {
   const { getByRole } = renderControl(state);
   const control = getByRole(role);
@@ -113,4 +119,28 @@ test("an untrusted update check stays a warning", () => {
   expect(button!.className).toContain("update-control--error");
   expect(button!.textContent).toContain("Update check failed");
   expect(button!.querySelector("svg")?.innerHTML).toContain("M10.3 3.6");
+});
+
+test.each([
+  {
+    locale: "en" as const,
+    label: "Version 0.3.0",
+    description: "The latest published release has no update for this computer. Select this button to check again.",
+  },
+  {
+    locale: "zh-TW" as const,
+    label: "版本 0.3.0",
+    description: "最新發布的版本沒有適用於這台電腦的更新。按下此按鈕再檢查一次。",
+  },
+])("a release without an installer for this computer shows the version, not an outage, in $locale", ({
+  locale,
+  label,
+  description,
+}) => {
+  window.localStorage.setItem(localeStorageKey, locale);
+  const { getByRole } = renderControl({ phase: "unoffered", currentVersion: "0.3.0" });
+  const button = getByRole("button", { name: label, description });
+
+  expect(button.className).toBe("update-control");
+  expect(button.textContent).not.toMatch(/unavailable|無法使用/u);
 });

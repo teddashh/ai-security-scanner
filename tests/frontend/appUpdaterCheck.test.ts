@@ -141,6 +141,29 @@ test("check() throwing is unreachable and keeps the underlying failure message",
   assert.equal(harness.closes.length, 0);
 });
 
+test("a reachable service whose latest release lists no installer for this computer is not offline", async () => {
+  // The published v0.2.0 manifest lists no platform, and the updater rejects
+  // that before comparing versions, so every newer install saw an outage.
+  const harness = resetHarness();
+  const missingPlatform =
+    'None of the fallback platforms `["windows-x86_64-nsis", "windows-x86_64"]` were found in the response `platforms` object';
+  harness.nextCheck = async () => {
+    throw missingPlatform;
+  };
+
+  const state = await checkForAppUpdate();
+
+  assert.equal(state.phase, "unoffered");
+  assert.equal(state.currentVersion, CURRENT_VERSION);
+  assert.equal(state.availableVersion, undefined);
+  assert.equal(state.message, missingPlatform);
+
+  harness.nextCheck = async () => {
+    throw new Error("the platform `windows-x86_64` was not found in the response `platforms` object");
+  };
+  assert.equal((await checkForAppUpdate()).phase, "unoffered");
+});
+
 test("an offered update that fails manifest verification is an error, not offline", async () => {
   const harness = resetHarness();
   const invalid = trackedUpdate({ version: VERSION, platforms: {} });
