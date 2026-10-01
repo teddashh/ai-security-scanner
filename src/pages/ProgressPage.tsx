@@ -1353,7 +1353,8 @@ export function ProgressPage({
         </InlineNotice>
       )}
 
-      {!terminalExactLocalhostQuickScan && readiness && !readiness.ready && readiness.blockerCode && (readiness.nextStep !== "progress" || startFreshScan) && (
+      {/* While a scan is active the backend can only report that scan, so any other blocker is a pre-start reading. */}
+      {!terminalExactLocalhostQuickScan && !scanWorkActive && readiness && !readiness.ready && readiness.blockerCode && (readiness.nextStep !== "progress" || startFreshScan) && (
         <InlineNotice tone="warning" title={text(blockerTitle)}>
           <p>{text(blockerDescription)}</p>
           {needsLatestInstaller ? (

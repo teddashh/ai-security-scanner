@@ -14,6 +14,7 @@ import type {
   EngineRun,
   EngineRunStatus,
   Finding,
+  ScanReadiness,
   ScanRun,
 } from "../../src/types";
 import type { UseCaseId } from "../../src/useCases";
@@ -1298,6 +1299,53 @@ test("a waiting undispatched plan is named and offers a direct cancel", () => {
   expect(chinese.container.textContent).toContain("掃描計畫正在等候，目前沒有掃描在執行");
   expect(chinese.container.textContent).toContain("掃描工具尚未啟動。");
   expect(chinese.container.textContent).toContain("取消這份計畫");
+});
+
+test("a readiness reading taken before Start does not ask to finish setup while the scan runs", () => {
+  // Observed on the desktop: for a few seconds after Start, the page kept the
+  // readiness read before confirmation and told a running scan to finish setup.
+  const preStartReadiness: ScanReadiness = {
+    caseId: "case-1",
+    checkedAt: "2026-09-04T11:59:00Z",
+    ready: false,
+    state: "scope_required",
+    authorizedTargetCount: 0,
+    pendingTargetCount: 1,
+    compatibleEngineCount: 0,
+    runnableEngineCount: 0,
+    blockerCode: "no_effective_scope_grants",
+    nextStep: "coverage",
+  };
+  const renderWith = (value: ScanRun) => render(
+    <I18nProvider>
+      <ProgressPage
+        caseId="case-1"
+        assets={[asset()]}
+        runs={[value]}
+        findings={[]}
+        selectedRunId={value.id}
+        readiness={preStartReadiness}
+        onStart={() => Promise.resolve()}
+        onRetryLocalhostQuickScan={() => Promise.resolve()}
+        onFixSetup={() => {}}
+        onPause={() => Promise.resolve()}
+        onResume={() => Promise.resolve()}
+        onCancel={() => Promise.resolve()}
+      />
+    </I18nProvider>,
+  );
+
+  const running = renderWith(run(
+    [engine("running-check", "running")],
+    "running",
+    { progress: 2, finishedAt: undefined },
+  ));
+  expect(running.container.textContent).not.toContain("Choose the exact target you want to check");
+  expect(running.queryByRole("button", { name: "Finish scan setup" })).toBeNull();
+
+  cleanup();
+  const finished = renderWith(run([engine("finished-check", "completed")], "completed"));
+  expect(finished.container.textContent).toContain("Choose the exact target you want to check");
 });
 
 // The "Checks" heading count previously counted rendered rows
