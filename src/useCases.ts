@@ -228,13 +228,13 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
       },
       cloud_account: {
         title: "An AWS, Azure, GCP, or Microsoft 365 account",
-        summary: "Review the supported identity and configuration controls for one selected cloud account.",
+        summary: "Review the identity and access settings of one selected cloud account or Microsoft 365 tenant.",
         want:
           "One exact AWS account, Azure subscription, GCP project, or Microsoft 365 tenant at a time.",
         prepare:
-          "The account or tenant identifier, permission to assess it, and access to the provider's official sign-in page. Do not paste an admin password into the app.",
+          "Owner or administrator access to set up read-only access once (the app lists each step), or read-only access someone else set up. Passwords are entered only on the provider's page.",
         productDoes:
-          "Opens the provider's sign-in flow, checks that the granted capability is read-only and bound to the chosen account, and runs the applicable checks.",
+          "Lists the console steps for read-only access, opens the provider's official sign-in, checks that the access is read-only and bound to the chosen account, and runs the applicable checks.",
         productDoesNot:
           "It does not accept a client secret in the case UI, keep an administrator credential, change cloud settings, or silently include another account.",
       },
@@ -331,10 +331,10 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
       },
       cloud_account: {
         title: "AWS、Azure、GCP 或 Microsoft 365 帳號",
-        summary: "檢查單一所選雲端帳號目前支援的身分與設定控制。",
+        summary: "檢查單一所選雲端帳號或 Microsoft 365 租用戶的身分與存取設定。",
         want: "一次只檢查一個精確的 AWS 帳號、Azure 訂閱、GCP 專案或 Microsoft 365 租用戶。",
-        prepare: "帳號或租用戶識別碼、檢查許可，以及能開啟雲端服務商官方登入頁面的權限；不要把管理員密碼貼進產品。",
-        productDoes: "開啟雲端服務商的官方登入流程，確認取得的是綁定所選帳號的唯讀能力，再執行適用檢查。",
+        prepare: "能設定一次唯讀存取的擁有者或管理員權限（程式會列出每一步），或別人已為你設定好的唯讀存取。密碼只在雲端服務商的頁面輸入。",
+        productDoes: "列出在主控台設定唯讀存取的步驟，開啟雲端服務商的官方登入，確認取得的是綁定所選帳號的唯讀存取，再執行適用檢查。",
         productDoesNot: "案件畫面不收用戶端密鑰、不保存管理員權限、不修改雲端設定，也不會偷偷加入其他帳號。",
       },
       container_image: {

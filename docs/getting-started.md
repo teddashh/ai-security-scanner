@@ -98,4 +98,22 @@ This profile covers the displayed `scheme://host:port` origin. See [Scanning sco
 
 The app scans a bounded read-only snapshot. The original folder is not changed.
 
+### Cloud account
+
+This checks the identity and access settings of one AWS account, Azure subscription, Google Cloud organization, or Microsoft 365 tenant. If you own or administer the account, you can do every step yourself.
+
+1. On **New scan**, open **More ways to scan** and select **Check a cloud account**.
+2. Pick the cloud and select **Create scan project**.
+3. In **Scan setup**, select **Open the connection guide** and keep **Sign in with read-only access**.
+4. Step 1 lists the console steps that create read-only access once, with the exact permission set, roles, or permissions to choose. If someone else manages the account, open **Someone else manages this account?** to copy a request and import the setup file they send back.
+5. In step 2, enter the details step 1 told you to copy. They are public identifiers; never paste a password or secret.
+6. Select **Continue to official sign-in**. Sign in on the provider's own page, entering the one-time code the app shows when asked.
+7. When the app shows that read-only access is verified, select **Continue: find cloud assets**, review the account, and select **Scan this signed-in account**.
+
+Google Cloud needs an organization (Google Workspace or Cloud Identity); projects under a personal Gmail account cannot be scanned.
+
+If the provider refuses the sign-in because the access can change the account or is missing a permission, the panel names the cause and the fix. Correct the access in the console, then sign in again.
+
+An administrator who prefers not to keep standing read-only access can choose **Let the app create temporary access**. The app creates a separate read-only identity that expires within an hour; after the scan, choose **Remove only what this setup created**. See [Provider authorization](provider-authorization.md) for the exact permissions.
+
 After starting, follow [the steps to an HTML report](#from-new-scan-to-an-html-report).

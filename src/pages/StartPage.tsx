@@ -99,7 +99,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
         action: "Check infrastructure code",
       },
       cloud_account: {
-        outcome: "Turn cloud assets, identity, and security settings into a prioritized fix list.",
+        outcome: "Turn a cloud account's identity and access settings into a prioritized fix list.",
         action: "Check a cloud account",
       },
       container_image: {
@@ -162,7 +162,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
         action: "檢查基礎設施程式碼",
       },
       cloud_account: {
-        outcome: "把雲端資產、身分與安全設定整理成有優先順序的改善清單。",
+        outcome: "把雲端帳號的身分與存取設定整理成有優先順序的改善清單。",
         action: "檢查雲端帳號",
       },
       container_image: {

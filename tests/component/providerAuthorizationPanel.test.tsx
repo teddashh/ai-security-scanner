@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
+import { MICROSOFT_365_READ_PERMISSIONS } from "../../src/cloudSetupGuide";
 import { ProviderAuthorizationPanel } from "../../src/components/ProviderAuthorizationPanel";
 import { I18nProvider, localeStorageKey } from "../../src/i18n";
 import { scannerService } from "../../src/services/scanner";
@@ -216,30 +217,73 @@ test("the unconnected first layer is limited to account, state, CTA, and one saf
   expect(firstLayer).not.toContain("9999-12-31");
   expect(firstLayer).not.toContain("OAuth");
   expect(firstLayer).not.toContain("clientId");
-  expect(firstLayer).not.toContain("Ask IT for the setup file");
+  expect(firstLayer).not.toContain("Ask IT");
 
   expect(setupSection().textContent).toContain(
-    "IT or a cloud administrator prepares this connection file once for the organization",
-  );
-  expect(setupSection().textContent).toContain(
-    "Connection requires the organization's public cloud app or role details",
+    "If you own or administer this account, you can do every step yourself.",
   );
   expect(setupSection().textContent).not.toMatch(/Shared OAuth registration is not provided/iu);
+});
+
+const openGuide = (): HTMLElement => {
+  const guide = panel().querySelector<HTMLDetailsElement>("details.provider-connection-guide");
+  expect(guide).not.toBeNull();
+  fireEvent.click(guide!.querySelector(":scope > summary")!);
+  expect(guide!.open).toBe(true);
+  const body = guide!.querySelector<HTMLElement>(".provider-connection-guide__body");
+  expect(body).not.toBeNull();
+  return body!;
+};
+
+test("the opened guide leads with the owner's own console steps and keeps a handoff secondary", () => {
+  renderPanel();
+
+  const guide = openGuide();
+  const visible = textBeforeAnyDisclosureIsOpened(guide);
+  expect(visible).toContain("Set up read-only access in Microsoft 365 once");
+  expect(visible).toContain("Allow public client flows");
+  expect(visible).toContain("Grant admin consent");
+  for (const permission of MICROSOFT_365_READ_PERMISSIONS) {
+    expect(visible).toContain(permission);
+  }
+  expect(visible).toContain("Enter the details");
+  expect(within(guide).getByLabelText(/Tenant ID/u).tagName).toBe("INPUT");
+  expect(within(guide).getByLabelText(/Application \(client\) ID/u).tagName).toBe("INPUT");
+  expect(visible).toContain("Continue to official sign-in");
+
+  // A person who does not manage the account can still hand the setup off,
+  // but that path stays one disclosure deep and never names "IT".
+  expect(visible).toContain("Someone else manages this account?");
+  expect(visible).not.toContain("Copy the request");
+  expect(visible).not.toMatch(/\bIT\b/u);
+  const handoff = guide.querySelector<HTMLDetailsElement>("details.provider-handoff");
+  expect(handoff?.open).toBe(false);
+  expect(handoff?.querySelector('input[type="file"]')).not.toBeNull();
+
+  const steps = Array.from(guide.querySelectorAll(".provider-connection-steps > li h3"))
+    .map((heading) => heading.textContent);
+  expect(steps).toEqual([
+    "Set up read-only access in Microsoft 365 once",
+    "Enter the details",
+    "Sign in with Microsoft 365",
+  ]);
 });
 
 test("temporary access distinguishes reviewed IAM setup from read-only scanner activity", () => {
   renderPanel();
 
-  const guide = panel().querySelector<HTMLDetailsElement>("details.provider-connection-guide");
-  expect(guide).not.toBeNull();
-  guide!.open = true;
-  const temporaryAccess = within(guide!).getByRole("button", { name: /Have IT create temporary scan access/ });
+  const guide = openGuide();
+  const temporaryAccess = within(guide).getByRole("button", { name: /Let the app create temporary access/ });
   fireEvent.click(temporaryAccess);
 
   const firstLayer = textBeforeAnyDisclosureIsOpened(panel());
   expect(firstLayer).toContain("scanner access is read-only and expires automatically");
   expect(firstLayer).toContain("The next step lists its dedicated IAM resources before creation");
   expect(firstLayer).not.toContain("does not change cloud resources");
+  const visible = textBeforeAnyDisclosureIsOpened(guide);
+  expect(visible).toContain("Prepare Microsoft 365 for temporary access");
+  expect(visible).toContain("AppRoleAssignment.ReadWrite.All");
+  expect(visible).toContain("Remove only what this setup created");
 });
 
 test("the IT request is neutral copy and the document fallback completes clipboard copy", async () => {
@@ -274,7 +318,7 @@ test("the IT request is neutral copy and the document fallback completes clipboa
     );
     expect(request).not.toMatch(/\b(?:me|our)\b/iu);
 
-    const copyButton = within(guide!).getByRole("button", { name: "Copy request for IT" });
+    const copyButton = within(guide!).getByRole("button", { name: "Copy the request" });
     copyButton.focus();
     fireEvent.click(copyButton);
 
@@ -376,4 +420,54 @@ test("the Traditional Chinese first layer keeps the same concise safety boundary
   expect(firstLayer).toContain("開啟連線指南");
   expect(firstLayer).toContain("產品能力詳細資料");
   expect(firstLayer).not.toContain("目前安裝版本可檢查的項目");
+});
+
+test("a sign-in refused for too much access names the permission and the fix, then returns to the steps", async () => {
+  vi.spyOn(scannerService, "providerAuthorizationStatus").mockResolvedValue({ data: null, mode: "native" });
+  vi.spyOn(scannerService, "listProviderBootstrapCleanup").mockResolvedValue({ data: [], mode: "native" });
+  vi.spyOn(scannerService, "subscribe").mockResolvedValue(() => undefined);
+  const begin = vi.spyOn(scannerService, "beginProviderAuthorization").mockResolvedValue({
+    data: {
+      flow: "device",
+      session_id: "session-1",
+      prompt: {
+        provider: "microsoft365",
+        verification_uri: "https://microsoft.com/devicelogin",
+        verification_uri_complete: null,
+        user_code: "ABCD-EFGH",
+        expires_at: "2099-05-17T15:00:00.000Z",
+        poll_interval_seconds: 1,
+        safety_notice: "Sign in only at microsoft.com.",
+      },
+    },
+    mode: "native",
+  });
+  vi.spyOn(scannerService, "pollProviderAuthorization").mockRejectedValue(
+    "operation is not authorized: Microsoft token includes prohibited write permission Directory.ReadWrite.All",
+  );
+
+  renderPanel({ nativeMode: true });
+  const guide = openGuide();
+  fireEvent.change(within(guide).getByLabelText(/Tenant ID/u), {
+    target: { value: "11111111-2222-4333-8444-555555555555" },
+  });
+  fireEvent.change(within(guide).getByLabelText(/Application \(client\) ID/u), {
+    target: { value: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" },
+  });
+  fireEvent.click(within(guide).getByRole("button", { name: /Continue to official sign-in/u }));
+
+  await waitFor(() => expect(panel().textContent).toContain("ABCD-EFGH"));
+  expect(begin).toHaveBeenCalledOnce();
+
+  const alert = await waitFor(() => within(panel()).getByRole("alert"), { timeout: 4_000 });
+  expect(alert.textContent).toContain(
+    "The app registration grants Directory.ReadWrite.All, which can change the tenant, and the scan accepts only read-only access.",
+  );
+  expect(alert.textContent).toContain("Remove that permission under API permissions");
+  expect(alert.textContent).not.toContain("Finish the official sign-in, then retry");
+  // The provider session ended with the refusal, so its code is gone and the
+  // steps are open again where the fix applies.
+  expect(panel().textContent).not.toContain("ABCD-EFGH");
+  expect(panel().querySelector<HTMLDetailsElement>("details.provider-connection-guide")?.open).toBe(true);
+  expect(alert.closest(".provider-connection-steps")).not.toBeNull();
 });

@@ -4,15 +4,19 @@ Status: current Advanced cloud architecture
 
 Product behavior: [Product specification](product-spec.md)
 
-Product integration rule: cloud is reached through **Settings → Advanced** or an explicitly selected cloud target. Missing, expired, rejected, or interrupted provider authorization marks only the exact cloud target-stage-engine task `not_tested`/`failed`; the run is persisted first, independent tasks continue, and the beginner master report names the coverage gap. Provider setup is not a fifth primary destination and cannot gate New scan, Projects, Report, or Settings.
+Product integration rule: cloud is reached through **New scan → More ways to scan → Check a cloud account** or an explicitly selected cloud target. Missing, expired, rejected, or interrupted provider authorization marks only the exact cloud target-stage-engine task `not_tested`/`failed`; the run is persisted first, independent tasks continue, and the beginner master report names the coverage gap. Provider setup is not a fifth primary destination and cannot gate New scan, Projects, Report, or Settings.
 
 `ai-security-scanner` supports AWS, Azure, Google Cloud, and Microsoft 365 without accepting a provider password, long-lived access key, refresh token, application secret, or administrator credential through the frontend. The preferred path uses the provider's public-client protocol. The optional bootstrap path runs in the separately packaged `ai-security-scanner-bootstrap-broker` process when a dedicated read-only identity must be created.
 
 Azure, Microsoft 365, and Google deployments register their own public client. The product rejects placeholder identifiers and unknown configuration fields.
 
-## Advanced connection setup file
+## Connection guide and setup file
 
-Within the Advanced cloud path, the UI leads with a one-file IT handoff instead of asking a beginner to transcribe cloud identifiers. The user copies the provider-specific request and JSON template, an IT or cloud administrator fills in the non-secret coordinates, and the user imports it before continuing to the provider-hosted sign-in page. When deployer configuration already exists, the simpler path is one official provider sign-in followed by automatic bounded inventory. Manual identifier entry is expert-only and collapsed. None of these paths appear during ordinary IT-environment, website, or project-folder first value.
+The connection guide is written for the person who owns or administers the account. Step 1 lists the provider-console steps that create read-only access once, naming the exact permission set, roles, or delegated permissions; `src/cloudSetupGuide.ts` holds those lists, and `tests/frontend/cloudSetupGuide.test.ts` keeps them equal to what the backend requests and verifies. Step 2 takes the non-secret identifiers inline, and step 3 opens the provider-hosted sign-in page. The temporary-access path lists the administrator setup the bootstrap broker needs and ends with the recorded cleanup. None of these paths appear during ordinary IT-environment, website, or project-folder first value.
+
+When someone else manages the account, **Someone else manages this account?** copies a provider-specific request and JSON template. The administrator fills in the non-secret coordinates, and the imported file fills the same step 2 fields.
+
+When the backend's verification or the provider refuses a sign-in, for example because a role can write, a read permission is missing, an Azure role is not Reader or Security Reader, or Microsoft returns an `AADSTS` error code, the panel names that cause and the console fix. The refusal detail stays under technical details. Temporary-access execution failures show a general message, because the isolated broker returns only an error category.
 
 The file is read once in the webview, is never persisted, and is discarded after its values fill the existing non-secret authorization state. It is limited to 64 KiB, four levels, 64 JSON nodes, exact keys, and schema version `1.0.0`. Any field name containing a password, secret, token, key, credential, certificate, or private-material term is rejected recursively. The backend still performs its existing provider-specific validation and live read-only authorization checks.
 
@@ -40,7 +44,7 @@ The exact top-level shape is:
 | Google Cloud | `public_client_id`, `organization_id` | Existing fields plus `project_id` |
 | Microsoft 365 | `tenant_id`, `public_client_id` | Same fields |
 
-AWS `role_arn` is derived locally from the account and role. Google Cloud `redirect_uri` is generated locally for the current loopback listener. Neither value belongs in the IT handoff file.
+AWS `role_arn` is derived locally from the account and role. Google Cloud `redirect_uri` is generated locally for the current loopback listener. Neither value belongs in the setup file.
 
 ## Security boundary
 
@@ -97,7 +101,7 @@ asset planning, and revocation remain mandatory for every checkout.
 
 ### AWS preferred flow
 
-Provide an exact IAM Identity Center start URL, region, 12-digit account ID, assigned role name, and role ARN. The role name is the permission set name shown in the AWS access portal. The assigned read-only role must include the pinned inventory reads plus `iam:SimulatePrincipalPolicy`, because the scanner verifies both required reads and prohibited writes without mutating the account. Only commercial AWS accounts can sign in; GovCloud (`us-gov-*`) and China (`cn-*`) regions are rejected because the app signs only to `awsapps.com` portals and `iam.amazonaws.com`.
+Provide an exact IAM Identity Center start URL, region, 12-digit account ID, assigned role name, and role ARN. The role name is the permission set name shown in the AWS access portal. The assigned read-only role must include the pinned inventory reads plus `iam:SimulatePrincipalPolicy`, because the scanner verifies both required reads and prohibited writes without mutating the account. The predefined `SecurityAudit` permission set that the connection guide names grants every required read and `iam:SimulatePrincipalPolicy` and none of the prohibited writes (checked against AWS managed policy version v94, September 2026). Only commercial AWS accounts can sign in; GovCloud (`us-gov-*`) and China (`cn-*`) regions are rejected because the app signs only to `awsapps.com` portals and `iam.amazonaws.com`.
 
 The application dynamically registers a public IAM Identity Center OIDC client, starts device authorization, exchanges the device code, confirms that the exact account/role is assigned, obtains short-lived role credentials, calls STS `GetCallerIdentity`, and calls IAM `SimulatePrincipalPolicy`. The simulation must answer every requested action exactly once and must not be truncated: each required read must be `allowed`, and each prohibited write must be `implicitDeny` or `explicitDeny`. A missing or unrecognized answer fails the sign-in.
 

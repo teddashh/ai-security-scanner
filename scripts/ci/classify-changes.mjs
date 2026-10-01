@@ -64,6 +64,12 @@ const FRONTEND_PATHS = [
   // an engine that declares `passive_external_discovery` changes what that copy
   // is allowed to say, and touches no file under `src/`.
   /^engines\/catalog\.json$/,
+  // `cloudSetupGuide.test.ts` holds the cloud setup steps to the permissions,
+  // roles and refusal sentences the provider sign-in and the temporary-access
+  // helper check. A backend-only change to either must run that test.
+  /^src-tauri\/src\/source_authorization\/provider\.rs$/,
+  /^src-tauri\/src\/bootstrap\/executor\.rs$/,
+  /^bootstrap\/gcp-readonly-bindings\.json$/,
 ];
 
 const RUST_PATHS = [

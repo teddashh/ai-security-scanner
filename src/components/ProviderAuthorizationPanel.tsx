@@ -9,6 +9,11 @@ import {
 } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
+import {
+  AWS_READ_ONLY_PERMISSION_SET,
+  AWS_SETUP_PERMISSION_SET,
+  cloudSetupGuide,
+} from "../cloudSetupGuide";
 import { useI18n, type BilingualText } from "../i18n";
 import {
   providerAuthorizationRequiredFields,
@@ -19,6 +24,7 @@ import {
   type ProviderAuthorizationPath,
   type ProviderCoordinateField,
 } from "../providerAuthorizationPolicy";
+import { explainProviderRejection } from "../providerSignInRejection";
 import { EVENTS, scannerService } from "../services/scanner";
 import { projectSourceCapabilityView } from "../sourceCapabilityPresentation";
 import type {
@@ -95,26 +101,14 @@ const copy = {
   disconnect: { en: "Disconnect account", zhTW: "中斷帳號連線" },
   connectCta: { en: "Open the connection guide", zhTW: "開啟連線指南" },
   connectionDetailsIntro: {
-    en: "IT or a cloud administrator prepares this connection file once for the organization.",
-    zhTW: "這份設定由 IT 為組織準備一次即可。",
+    en: "If you own or administer this account, you can do every step yourself.",
+    zhTW: "如果你是這個帳號的擁有者或管理員，每一步都可以自己完成。",
   },
   preparationStepsLabel: { en: "Three steps to connect a cloud account", zhTW: "連接雲端帳號的三個步驟" },
-  preparationStep1: {
-    en: "Ask IT for the connection setup file.",
-    zhTW: "向 IT 取得連線設定檔。",
-  },
-  preparationStep2: {
-    en: "Choose the file to fill the non-secret connection fields.",
-    zhTW: "選擇檔案，填入非機密連線欄位。",
-  },
-  preparationStep3: {
-    en: "Continue to {provider}'s official sign-in page.",
-    zhTW: "前往 {provider} 官方登入頁。",
-  },
-  requestTitle: { en: "Ask IT for the setup file", zhTW: "向 IT 取得設定檔" },
+  handoffSummary: { en: "Someone else manages this account?", zhTW: "帳號由別人管理？" },
   requestIntro: {
-    en: "Send this short request to your IT or cloud admin:",
-    zhTW: "把這段簡短訊息傳給 IT 或雲端管理員：",
+    en: "Send this request to the person who manages the account:",
+    zhTW: "把這段請求傳給管理這個帳號的人：",
   },
   requestMessagePreferred: {
     en: "Provide the non-secret {provider} connection setup JSON for ai-security-scanner, using the organization's existing read-only access.",
@@ -124,27 +118,28 @@ const copy = {
     en: "Provide the non-secret {provider} connection setup JSON for ai-security-scanner, for temporary read-only scan access.",
     zhTW: "請提供 ai-security-scanner 使用的 {provider} 非機密 connection setup JSON，用來建立暫時的唯讀掃描權限。",
   },
-  copyRequest: { en: "Copy request for IT", zhTW: "複製給 IT 的請求" },
+  copyRequest: { en: "Copy the request", zhTW: "複製請求" },
   requestCopied: { en: "Request copied", zhTW: "已複製請求" },
   requestCopyFailed: {
     en: "Request copy unavailable.",
     zhTW: "請求內容無法複製。",
   },
-  requestExactDetails: { en: "See the JSON template for IT", zhTW: "查看給 IT 的 JSON 範本" },
+  requestExactDetails: { en: "See the setup file template", zhTW: "查看設定檔範本" },
   registrationNote: {
-    en: "Connection requires the organization's public cloud app or role details.",
-    zhTW: "連線需要組織的雲端公開應用程式或角色資料。",
+    en: "The file holds the same public identifiers as step 2, never a password or secret.",
+    zhTW: "檔案只包含和步驟 2 相同的公開識別碼，不含密碼或秘密值。",
   },
-  importTitle: { en: "Import the setup file", zhTW: "匯入設定檔" },
   importBody: {
-    en: "Choose the file from IT to fill the connection details.",
-    zhTW: "選擇 IT 提供的檔案，以填入連線資料。",
+    en: "Choose the file they send back to fill in step 2.",
+    zhTW: "選擇對方回傳的檔案，自動填入步驟 2。",
   },
   chooseSetupFile: { en: "Choose setup file", zhTW: "選擇設定檔" },
   setupFileReady: {
-    en: "Setup ready. The non-secret details were added.",
-    zhTW: "設定完成。非機密資料已填入。",
+    en: "The details from the file are in step 2.",
+    zhTW: "檔案中的資料已填入步驟 2。",
   },
+  detailsTitle: { en: "Enter the details", zhTW: "填入連線資料" },
+  detailsFilledByApp: { en: "Filled in by the app", zhTW: "由本程式自動填入" },
   continueTitlePreferred: { en: "Sign in with {provider}", zhTW: "登入 {provider}" },
   continueTitleBootstrap: { en: "Review temporary access", zhTW: "查看暫時權限" },
   continueBodyPreferred: {
@@ -155,47 +150,32 @@ const copy = {
     en: "Review the temporary read-only access first. After you confirm it, {provider}'s official sign-in opens.",
     zhTW: "先查看將建立的暫時唯讀權限；確認後，才會開啟 {provider} 官方登入。",
   },
-  continueWaiting: { en: "Import the setup file first", zhTW: "請先匯入設定檔" },
-  manualSummary: { en: "Enter details manually", zhTW: "手動輸入資料" },
-  manualIntro: {
-    en: "Alternatively, enter the same non-secret details here.",
-    zhTW: "也可以在這裡手動輸入相同的非機密資料。",
-  },
+  continueWaiting: { en: "Fill in every field in step 2 first.", zhTW: "請先填好步驟 2 的所有欄位。" },
   setupFileErrors: {
     missing: { en: "Choose a setup JSON file to continue.", zhTW: "請選擇設定 JSON 檔案。" },
-    size: { en: "This file is too large. Ask IT for a setup JSON smaller than 64 KB.", zhTW: "檔案太大。請向 IT 索取小於 64 KB 的設定 JSON。" },
+    size: { en: "This file is too large. A setup JSON is smaller than 64 KB.", zhTW: "檔案太大；設定 JSON 應小於 64 KB。" },
     type: { en: "Choose a .json file. Other file types are not accepted.", zhTW: "請選擇 .json 檔案；不接受其他檔案類型。" },
-    json: { en: "This is not valid JSON. Ask IT to create the file again from the template.", zhTW: "這不是有效的 JSON。請 IT 依範本重新建立檔案。" },
-    shape: { en: "The setup file has an unexpected structure. Ask IT to use the template shown here.", zhTW: "設定檔結構不正確。請 IT 使用這裡顯示的範本。" },
-    schema: { en: "This setup file uses an unsupported version. Ask IT to use the current template.", zhTW: "這個設定檔版本不支援。請 IT 使用目前的範本。" },
+    json: { en: "This is not valid JSON. Create the file again from the template.", zhTW: "這不是有效的 JSON；請依範本重新建立檔案。" },
+    shape: { en: "The setup file has an unexpected structure. It must follow the template shown here.", zhTW: "設定檔結構不正確，必須依照這裡顯示的範本。" },
+    schema: { en: "This setup file uses an unsupported version. Use the current template.", zhTW: "這個設定檔版本不支援；請使用目前的範本。" },
     provider: { en: "This setup file is for a different cloud provider. Choose the matching account or file.", zhTW: "這個設定檔屬於其他雲端服務商。請選擇相符的帳號或檔案。" },
     method: { en: "The connection method in this file is not supported.", zhTW: "這個檔案指定的連接方式不支援。" },
     forbidden: { en: "This file may contain a password, secret, token, key, or credential field, so it was not imported.", zhTW: "這個檔案可能包含密碼、秘密、token、金鑰或憑證欄位，因此沒有匯入。" },
-    fields: { en: "Required details are missing or extra fields were added. Ask IT to use the exact template shown here.", zhTW: "必要資料有缺漏，或檔案含有額外欄位。請 IT 使用這裡顯示的完整範本。" },
-    values: { en: "One or more account details are not in the expected format. Ask IT to check the values and try again.", zhTW: "一個或多個帳號資料格式不正確。請 IT 確認內容後再試一次。" },
+    fields: { en: "Required details are missing or extra fields were added. Use the exact template shown here.", zhTW: "必要資料有缺漏，或檔案含有額外欄位；請使用這裡顯示的完整範本。" },
+    values: { en: "One or more account details are not in the expected format. Check the values and try again.", zhTW: "一個或多個帳號資料格式不正確；請確認內容後再試一次。" },
   },
   choiceQuestion: { en: "Choose a connection method", zhTW: "選擇連接方式" },
-  choiceHelp: {
-    en: "Choose the option your IT or cloud admin prepared. The setup file will match it.",
-    zhTW: "選擇 IT 或雲端管理員已準備的方式；連線設定檔會和它相符。",
-  },
   choiceAria: { en: "Read-only access setup method", zhTW: "唯讀存取設定方式" },
   preferredBadge: { en: "Recommended", zhTW: "建議" },
-  preferredTitle: { en: "Use my organization's sign-in", zhTW: "使用組織既有登入" },
+  preferredTitle: { en: "Sign in with read-only access", zhTW: "以唯讀存取登入" },
   preferredBody: {
-    en: "Best when IT has already prepared a read-only role or app for security checks.",
-    zhTW: "適合 IT 已經準備好資安檢查用的唯讀角色或應用程式。",
+    en: "Set it up once with the steps below, or use read-only access an administrator gave you.",
+    zhTW: "依下方步驟設定一次，或使用管理員給你的唯讀存取。",
   },
-  bootstrapTitle: { en: "Have IT create temporary scan access", zhTW: "由 IT 建立暫時掃描權限" },
+  bootstrapTitle: { en: "Let the app create temporary access", zhTW: "讓本程式建立暫時存取" },
   bootstrapBody: {
-    en: "Choose this when IT wants separate read-only access that expires after the scan.",
-    zhTW: "適合 IT 希望使用獨立、並會在掃描後到期的唯讀權限。",
-  },
-  formTitlePreferred: { en: "Details for existing {provider} access", zhTW: "既有 {provider} 存取所需資料" },
-  formTitleBootstrap: { en: "Details for temporary {provider} scan access", zhTW: "暫時 {provider} 掃描權限所需資料" },
-  formIntro: {
-    en: "Complete every required non-secret field from your IT or cloud admin, then continue to {provider}.",
-    zhTW: "請填妥 IT 或雲端管理員提供的所有必要非機密資料，再前往 {provider}。",
+    en: "Sign in as an administrator. The app creates a separate read-only identity whose access expires within an hour, and removes it when you choose cleanup after the scan.",
+    zhTW: "以管理員身分登入。本程式會建立獨立的唯讀身分，存取在一小時內到期；掃描後選擇清理即可移除。",
   },
   capabilityDetails: { en: "Product capability details", zhTW: "產品能力詳細資料" },
   capabilityTitle: { en: "What this installed product can inspect", zhTW: "目前安裝版本可檢查的項目" },
@@ -241,12 +221,12 @@ const copy = {
   example: { en: "Example:", zhTW: "範例：" },
   noSecretsTitle: { en: "Never paste a password or secret here", zhTW: "不要在這裡貼密碼或秘密值" },
   noSecretsPreferred: {
-    en: "Every field below is a public identifier or account coordinate. The actual sign-in and short-lived credentials stay in the local core and the provider's official page.",
-    zhTW: "下方欄位都只是公開識別碼或帳號座標。實際登入與短期憑證只留在本機核心及雲端服務商的官方頁面。",
+    en: "Every field in this step is a public identifier. Your password goes only into the provider's own page, and the short-lived access it returns stays on this device.",
+    zhTW: "這一步的欄位都是公開識別碼。密碼只輸入在雲端服務商自己的頁面，取得的短期存取只留在這台裝置。",
   },
   noSecretsBootstrap: {
-    en: "Administrator approval occurs on the official provider page. Scanner access is read-only and expires automatically.",
-    zhTW: "管理員核准在雲端服務商官方頁面完成；掃描存取只有讀取權限，並會自動到期。",
+    en: "Every field in this step is a public identifier. Administrator approval occurs on the official provider page. Scanner access is read-only and expires automatically.",
+    zhTW: "這一步的欄位都是公開識別碼。管理員核准在雲端服務商官方頁面完成；掃描存取只有讀取權限，並會自動到期。",
   },
   submitPreferred: { en: "Continue to official sign-in", zhTW: "前往官方登入" },
   submitBootstrap: { en: "Review what will be created", zhTW: "查看將建立的內容" },
@@ -324,7 +304,7 @@ const copy = {
     en: "Confirming authorizes only this fixed identity-creation plan. It does not authorize the scanner to write to or repair the target.",
     zhTW: "確認後只會授權這份固定的身分建立計畫；不會授權掃描工具寫入或修復目標。",
   },
-  editSetup: { en: "Change IT setup details", zhTW: "修改 IT 設定資料" },
+  editSetup: { en: "Change the details", zhTW: "修改連線資料" },
   executePlan: { en: "Create temporary read-only access", zhTW: "建立暫時唯讀存取" },
   executingPlan: { en: "Creating read-only access…", zhTW: "正在建立唯讀存取…" },
   messagesTitle: { en: "Provider setup status", zhTW: "雲端服務商設定狀態" },
@@ -359,13 +339,13 @@ const copy = {
     awsStartUrl: {
       label: { en: "AWS access portal start URL", zhTW: "AWS 存取入口起始網址" },
       what: { en: "The official IAM Identity Center page where your organization signs in.", zhTW: "組織用來登入 IAM Identity Center 的官方頁面。" },
-      where: { en: "AWS access portal or IAM Identity Center dashboard → Settings.", zhTW: "AWS 存取入口，或 IAM Identity Center 控制台 → 設定（Settings）。" },
+      where: { en: "IAM Identity Center dashboard → Settings summary → AWS access portal URL.", zhTW: "IAM Identity Center 儀表板 →「設定摘要」（Settings summary）→「AWS 存取入口網址」（AWS access portal URL）。" },
       example: "https://company.awsapps.com/start",
     },
     awsRegion: {
       label: { en: "IAM Identity Center region", zhTW: "IAM Identity Center 區域" },
       what: { en: "The AWS region where your IAM Identity Center instance is configured.", zhTW: "IAM Identity Center 執行個體所在的 AWS 區域。" },
-      where: { en: "IAM Identity Center dashboard, next to the instance details.", zhTW: "IAM Identity Center 控制台的執行個體詳細資料旁。" },
+      where: { en: "IAM Identity Center dashboard → Settings summary → Region.", zhTW: "IAM Identity Center 儀表板 →「設定摘要」（Settings summary）→ 區域（Region）。" },
       example: "us-east-1",
     },
     awsAccountId: {
@@ -375,39 +355,39 @@ const copy = {
       example: "123456789012",
     },
     awsRolePreferred: {
-      label: { en: "Assigned read-only role name", zhTW: "已指派的唯讀角色名稱" },
-      what: { en: "The IAM Identity Center role already assigned to you for security review.", zhTW: "IAM Identity Center 已指派給你、用於安全檢查的唯讀角色。" },
-      where: { en: "AWS access portal → select the account → role list.", zhTW: "AWS 存取入口 → 選擇帳號 → 角色清單。" },
-      example: "SecurityAuditReader",
+      label: { en: "Read-only permission set name", zhTW: "唯讀權限集名稱" },
+      what: { en: "The read-only permission set assigned to you in step 1. The scan signs in with it.", zhTW: "步驟 1 指派給你的唯讀權限集；掃描會用它登入。" },
+      where: { en: "IAM Identity Center → Permission sets, or the role list in the AWS access portal.", zhTW: "IAM Identity Center →「權限集」（Permission sets），或 AWS 存取入口中的角色清單。" },
+      example: AWS_READ_ONLY_PERMISSION_SET,
     },
     awsRoleBootstrap: {
-      label: { en: "Role used to create the temporary access", zhTW: "用來建立暫時存取的角色名稱" },
-      what: { en: "The role you will choose on AWS's official page to run only the reviewed setup plan.", zhTW: "你會在 AWS 官方頁面選擇、且只用來執行已檢查建立計畫的角色。" },
-      where: { en: "AWS access portal → select the account → role list.", zhTW: "AWS 存取入口 → 選擇帳號 → 角色清單。" },
-      example: "AdministratorAccess",
+      label: { en: "Administrator permission set name", zhTW: "管理員權限集名稱" },
+      what: { en: "The permission set you sign in with to create the temporary access. It runs only the reviewed setup plan.", zhTW: "用來登入並建立暫時存取的權限集；只會執行已檢查的建立計畫。" },
+      where: { en: "IAM Identity Center → Permission sets, or the role list in the AWS access portal.", zhTW: "IAM Identity Center →「權限集」（Permission sets），或 AWS 存取入口中的角色清單。" },
+      example: AWS_SETUP_PERMISSION_SET,
     },
     awsRoleArnPreferred: {
       label: { en: "Exact read-only role ARN", zhTW: "精確唯讀角色 ARN" },
       what: { en: "The full AWS identifier for that exact role; it prevents access from widening to another role.", zhTW: "該角色的完整 AWS 識別碼，用來避免存取擴大到其他角色。" },
       where: { en: "The app fills this in. With IAM Identity Center, keep it; the app confirms the exact role after you sign in. Otherwise: IAM → Roles → choose the role → ARN.", zhTW: "程式會自動填入。使用 IAM Identity Center 時保留即可，登入後程式會確認實際角色；其他情況請到 IAM → 角色（Roles）→ 選擇該角色 → ARN。" },
-      example: "arn:aws:iam::123456789012:role/SecurityAuditReader",
+      example: `arn:aws:iam::123456789012:role/${AWS_READ_ONLY_PERMISSION_SET}`,
     },
     awsRoleArnBootstrap: {
       label: { en: "Exact setup role ARN", zhTW: "精確設定角色 ARN" },
       what: { en: "The full AWS identifier for the role used only by the reviewed setup flow.", zhTW: "只供已檢查建立流程使用的角色完整 AWS 識別碼。" },
       where: { en: "The app fills this in. With IAM Identity Center, keep it; the app confirms the exact role after you sign in. Otherwise: IAM → Roles → choose the role → ARN.", zhTW: "程式會自動填入。使用 IAM Identity Center 時保留即可，登入後程式會確認實際角色；其他情況請到 IAM → 角色（Roles）→ 選擇該角色 → ARN。" },
-      example: "arn:aws:iam::123456789012:role/AdministratorAccess",
+      example: `arn:aws:iam::123456789012:role/${AWS_SETUP_PERMISSION_SET}`,
     },
     tenantId: {
       label: { en: "Tenant ID", zhTW: "租用戶識別碼" },
       what: { en: "The UUID for the Microsoft Entra tenant in this scan project.", zhTW: "這個掃描專案要檢查的 Microsoft Entra 租用戶 UUID。" },
-      where: { en: "Microsoft Entra admin center → Overview → Tenant ID.", zhTW: "Microsoft Entra 系統管理中心 → 概觀（Overview）→ 租用戶識別碼（Tenant ID）。" },
+      where: { en: "App registrations → your app → Overview → Directory (tenant) ID.", zhTW: "應用程式註冊（App registrations）→ 你的應用程式 → 概觀（Overview）→ 目錄（租用戶）識別碼。" },
       example: "11111111-2222-4333-8444-555555555555",
     },
     publicClientId: {
-      label: { en: "Public application (client) ID", zhTW: "公開應用程式（用戶端）識別碼" },
-      what: { en: "The public client UUID registered by your organization. It is an identifier, not a client secret.", zhTW: "由你的組織註冊的公開用戶端 UUID；它是識別碼，不是用戶端密鑰。" },
-      where: { en: "Microsoft Entra admin center → App registrations → app → Overview.", zhTW: "Microsoft Entra 系統管理中心 → 應用程式註冊（App registrations）→ 選擇應用程式 → 概觀（Overview）。" },
+      label: { en: "Application (client) ID", zhTW: "應用程式（用戶端）識別碼" },
+      what: { en: "The ID of the app registration from step 1. It is an identifier, not a client secret.", zhTW: "步驟 1 的應用程式註冊識別碼；它是識別碼，不是用戶端密鑰。" },
+      where: { en: "App registrations → your app → Overview → Application (client) ID.", zhTW: "應用程式註冊（App registrations）→ 你的應用程式 → 概觀（Overview）→ 應用程式（用戶端）識別碼。" },
       example: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
     },
     subscriptionId: {
@@ -418,8 +398,8 @@ const copy = {
     },
     gcpClientId: {
       label: { en: "OAuth Desktop client ID", zhTW: "OAuth 桌面用戶端識別碼" },
-      what: { en: "Your organization's Desktop-app client identifier. This app does not include or accept a client secret.", zhTW: "你的組織所註冊桌面應用程式用戶端識別碼；本程式不內建也不接收用戶端密鑰。" },
-      where: { en: "Google Cloud console → APIs & Services → Credentials → OAuth 2.0 Client IDs.", zhTW: "Google Cloud 控制台 → API 和服務（APIs & Services）→ 憑證（Credentials）→ OAuth 2.0 用戶端識別碼。" },
+      what: { en: "The Desktop app client from step 1. This app does not include or accept a client secret.", zhTW: "步驟 1 建立的電腦版應用程式用戶端；本程式不內建也不接收用戶端密鑰。" },
+      where: { en: "Google Cloud console → Google Auth Platform → Clients.", zhTW: "Google Cloud 控制台 →「Google Auth Platform」→「用戶端」（Clients）。" },
       example: "123456789012-example.apps.googleusercontent.com",
     },
     gcpOrganizationId: {
@@ -445,6 +425,8 @@ const copy = {
 } as const;
 
 type PanelErrorKind = keyof typeof copy.errors;
+/** Errors from a sign-in or setup attempt, whose cause the provider may name. */
+const SIGN_IN_ERROR_KINDS: ReadonlySet<PanelErrorKind> = new Set(["begin", "poll", "plan", "execute"]);
 type PanelNoticeKind = keyof typeof copy.notices;
 type DeviceCodeCopyState = "idle" | "copied" | "failed";
 type CopyState = "idle" | "copied" | "failed";
@@ -740,19 +722,20 @@ const providerLabels: Record<Provider, string> = {
   microsoft365: "Microsoft 365",
 };
 
+/** The permission set each path's setup steps tell the person to create. */
+const defaultAwsRoleName = (flow: ProviderAuthorizationPath): string =>
+  flow === "preferred" ? AWS_READ_ONLY_PERMISSION_SET : AWS_SETUP_PERMISSION_SET;
+
 const connectionSetupDetailsTemplate = (
   provider: Provider,
   flow: ProviderAuthorizationPath,
 ): Record<string, string> => {
-  if (provider === "aws") {
-    const roleName = flow === "preferred" ? "SecurityAuditReader" : "AdministratorAccess";
-    return {
-      start_url: "https://company.awsapps.com/start",
-      region: "us-east-1",
-      account_id: "123456789012",
-      role_name: roleName,
-    };
-  }
+  if (provider === "aws") return {
+    start_url: "https://company.awsapps.com/start",
+    region: "us-east-1",
+    account_id: "123456789012",
+    role_name: defaultAwsRoleName(flow),
+  };
   if (provider === "azure") return {
     tenant_id: "11111111-2222-4333-8444-555555555555",
     public_client_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
@@ -851,7 +834,7 @@ export function ProviderAuthorizationPanel({
     [engineManifests, provider, selectedSource],
   );
   const [flowMode, setFlowMode] = useState<ProviderAuthorizationPath>("preferred");
-  const [connectionDetailsOpen, setConnectionDetailsOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<PanelError>();
   const [notice, setNotice] = useState<PanelNoticeKind>();
@@ -861,14 +844,13 @@ export function ProviderAuthorizationPanel({
   const [requestCopyState, setRequestCopyState] = useState<CopyState>("idle");
   const [setupFileError, setSetupFileError] = useState<SetupFileErrorKind>();
   const [setupFileReady, setSetupFileReady] = useState(false);
-  const [manualDetailsUsed, setManualDetailsUsed] = useState(false);
   const pollTimer = useRef<number | undefined>(undefined);
   const schedulePollRef = useRef<(sessionId: string, delaySeconds: number) => void>(() => undefined);
 
   const [awsStartUrl, setAwsStartUrl] = useState("");
   const [awsRegion, setAwsRegion] = useState("us-east-1");
   const [awsAccountId, setAwsAccountId] = useState("");
-  const [awsRoleName, setAwsRoleName] = useState("ai-security-scanner-readonly");
+  const [awsRoleName, setAwsRoleName] = useState(AWS_READ_ONLY_PERMISSION_SET);
   const [awsRoleArn, setAwsRoleArn] = useState("");
   const [tenantId, setTenantId] = useState("");
   const [publicClientId, setPublicClientId] = useState("");
@@ -918,9 +900,8 @@ export function ProviderAuthorizationPanel({
     if (!providerSources.some((source) => source.id === selectedSourceId)) {
       setSelectedSourceId(providerSources[0]?.id ?? "");
       setFlowMode("preferred");
-      setConnectionDetailsOpen(false);
+      setGuideOpen(false);
       setSetupFileReady(false);
-      setManualDetailsUsed(false);
       setSetupFileError(undefined);
       setRequestCopyState("idle");
     }
@@ -1056,11 +1037,9 @@ export function ProviderAuthorizationPanel({
       return false;
     }
   }, [provider, flowMode, currentConnectionDetails]);
-  const canContinue = configurationReady && (setupFileReady || manualDetailsUsed);
 
-  const markManualDetailsChanged = () => {
+  const markDetailsChanged = () => {
     setSetupFileReady(false);
-    setManualDetailsUsed(true);
     setSetupFileError(undefined);
   };
 
@@ -1111,8 +1090,6 @@ export function ProviderAuthorizationPanel({
       const parsed = parseConnectionSetup(content, provider, gcpRedirectUri);
       applyConnectionDetails(provider, parsed.flow, parsed.details);
       setFlowMode(parsed.flow);
-      setConnectionDetailsOpen(false);
-      setManualDetailsUsed(false);
       setBootstrapPlan(undefined);
       setPrompt(undefined);
       clearFeedback();
@@ -1183,6 +1160,10 @@ export function ProviderAuthorizationPanel({
           setNotice("authorized");
           await onAuthorizationChanged();
         } catch (pollError) {
+          // A failed poll ends the session, so its code no longer works:
+          // return to the steps, where the cause and fix are shown.
+          setPrompt(undefined);
+          setGuideOpen(true);
           showError("poll", pollError);
           setWorking(false);
         }
@@ -1209,7 +1190,6 @@ export function ProviderAuthorizationPanel({
         authorization: authorizationConfig(),
       });
       setPrompt(result.data);
-      setConnectionDetailsOpen(false);
       const initialDelay = result.data.flow === "device" ? result.data.prompt.poll_interval_seconds : 2;
       schedulePoll(result.data.session_id, initialDelay);
     } catch (beginError) {
@@ -1264,7 +1244,6 @@ export function ProviderAuthorizationPanel({
       operatorConfig();
       const result = await scannerService.planProviderBootstrap(makeBootstrapRequest());
       setBootstrapPlan(result.data);
-      setConnectionDetailsOpen(false);
     } catch (planError) {
       showError("plan", planError);
     } finally {
@@ -1380,9 +1359,8 @@ export function ProviderAuthorizationPanel({
   const chooseFlow = (nextFlow: ProviderAuthorizationPath) => {
     if (working || disabled) return;
     setFlowMode(nextFlow);
-    setConnectionDetailsOpen(false);
+    setAwsRoleName((current) => current === defaultAwsRoleName(flowMode) ? defaultAwsRoleName(nextFlow) : current);
     setSetupFileReady(false);
-    setManualDetailsUsed(false);
     setSetupFileError(undefined);
     setRequestCopyState("idle");
     setBootstrapPlan(undefined);
@@ -1394,9 +1372,9 @@ export function ProviderAuthorizationPanel({
     if (working || disabled) return;
     setSelectedSourceId(sourceId);
     setFlowMode("preferred");
-    setConnectionDetailsOpen(false);
+    setAwsRoleName((current) => current === defaultAwsRoleName("bootstrap") ? defaultAwsRoleName("preferred") : current);
+    setGuideOpen(false);
     setSetupFileReady(false);
-    setManualDetailsUsed(false);
     setSetupFileError(undefined);
     setRequestCopyState("idle");
     setPrompt(undefined);
@@ -1405,6 +1383,25 @@ export function ProviderAuthorizationPanel({
     setBootstrapOperation(undefined);
     setBootstrapMessages([]);
     clearFeedback();
+  };
+
+  const submitConnection = (event: FormEvent) => {
+    event.preventDefault();
+    if (!configurationReady) return;
+    void (flowMode === "preferred" ? beginPreferred() : planBootstrap());
+  };
+
+  const panelError = (shown: PanelError) => {
+    const rejection = provider && SIGN_IN_ERROR_KINDS.has(shown.kind)
+      ? explainProviderRejection(provider, shown.detail)
+      : undefined;
+    return (
+      <div className="provider-auth-error" role="alert">
+        <p><Icon name="warning" size={16} />{text(rejection ? rejection.cause : copy.errors[shown.kind])}</p>
+        {rejection && <p className="provider-auth-error__fix">{text(rejection.fix)}</p>}
+        {shown.detail && <details><summary>{text(copy.errorTechnical)}</summary><pre>{shown.detail}</pre></details>}
+      </div>
+    );
   };
 
   const fieldHelp = (field: FieldCopy) => (
@@ -1499,6 +1496,7 @@ export function ProviderAuthorizationPanel({
   }
 
   const providerName = provider ? providerLabels[provider] : "—";
+  const setupGuide = provider ? cloudSetupGuide(provider, flowMode) : undefined;
   const awsRoleField = flowMode === "bootstrap" ? copy.fields.awsRoleBootstrap : copy.fields.awsRolePreferred;
   const awsRoleArnField = flowMode === "bootstrap" ? copy.fields.awsRoleArnBootstrap : copy.fields.awsRoleArnPreferred;
   const setupTemplate = provider ? connectionSetupTemplate(provider, flowMode) : "";
@@ -1555,242 +1553,240 @@ export function ProviderAuthorizationPanel({
         </div>
       )}
 
-      {!installed && !prompt && !bootstrapPlan && provider && (
+      {!installed && !prompt && !bootstrapPlan && provider && setupGuide && (
         <section className="provider-auth-details">
-          <details className="provider-connection-guide">
+          <details
+            className="provider-connection-guide"
+            open={guideOpen}
+            onToggle={(event) => setGuideOpen(event.currentTarget.open)}
+          >
             <summary>{text(copy.connectCta)}</summary>
             <div className="provider-connection-guide__body">
               <small className="provider-connection-guide__intro">{text(copy.connectionDetailsIntro)}</small>
 
-          <div className="provider-auth-choice-heading">
-            <h3 id="provider-auth-choice-title">{text(copy.choiceQuestion)}</h3>
-            <p>{text(copy.choiceHelp)}</p>
-          </div>
-          <div className="provider-auth-choice-grid" role="group" aria-labelledby="provider-auth-choice-title" aria-label={text(copy.choiceAria)}>
-            <button
-              type="button"
-              className={flowMode === "preferred" ? "provider-auth-choice provider-auth-choice--active" : "provider-auth-choice"}
-              aria-pressed={flowMode === "preferred"}
-              disabled={working || disabled}
-              onClick={() => chooseFlow("preferred")}
-            >
-              <span className="provider-auth-choice__badge">{text(copy.preferredBadge)}</span>
-              <strong>{text(copy.preferredTitle)}</strong>
-              <span>{text(copy.preferredBody)}</span>
-            </button>
-            <button
-              type="button"
-              className={flowMode === "bootstrap" ? "provider-auth-choice provider-auth-choice--active" : "provider-auth-choice"}
-              aria-pressed={flowMode === "bootstrap"}
-              disabled={working || disabled}
-              onClick={() => chooseFlow("bootstrap")}
-            >
-              <strong>{text(copy.bootstrapTitle)}</strong>
-              <span>{text(copy.bootstrapBody)}</span>
-            </button>
-          </div>
-
-          <ol className="provider-preparation-steps provider-connection-steps" aria-label={text(copy.preparationStepsLabel)}>
-            <li>
-              <span aria-hidden="true">1</span>
-              <div>
-                <h3>{text(copy.requestTitle)}</h3>
-                <p>{text(copy.requestIntro)}</p>
-                <blockquote>{requestMessage}</blockquote>
-                <button className="button button--secondary button--small" type="button" disabled={working || disabled} onClick={() => void copyItRequest(requestForIt)}>
-                  {text(copy.copyRequest)}
-                </button>
-                {requestCopyState !== "idle" && (
-                  <small className={`provider-setup-status provider-setup-status--${requestCopyState}`} role="status">
-                    {text(requestCopyState === "copied" ? copy.requestCopied : copy.requestCopyFailed)}
-                  </small>
-                )}
-                <details className="provider-auth-technical provider-setup-template">
-                  <summary>{text(copy.requestExactDetails)}</summary>
-                  <p>{text(copy.registrationNote)}</p>
-                  <pre>{setupTemplate}</pre>
-                </details>
+              <div className="provider-auth-choice-heading">
+                <h3 id="provider-auth-choice-title">{text(copy.choiceQuestion)}</h3>
               </div>
-            </li>
-            <li>
-              <span aria-hidden="true">2</span>
-              <div>
-                <h3>{text(copy.importTitle)}</h3>
-                <p>{text(copy.importBody)}</p>
-                <label className="button button--secondary button--small provider-file-picker">
-                  <Icon name="file" size={16} />
-                  {text(copy.chooseSetupFile)}
-                  <input
-                    className="visually-hidden"
-                    type="file"
-                    accept=".json,application/json"
-                    disabled={!nativeMode || working || disabled}
-                    onChange={(event) => void importConnectionSetup(event)}
-                  />
-                </label>
-                {setupFileReady && (
-                  <small className="provider-setup-status provider-setup-status--copied" role="status">
-                    <Icon name="check" size={15} />{text(copy.setupFileReady)}
-                  </small>
-                )}
-                {setupFileError && (
-                  <small className="provider-setup-status provider-setup-status--failed" role="alert">
-                    <Icon name="warning" size={15} />{text(copy.setupFileErrors[setupFileError])}
-                  </small>
-                )}
-              </div>
-            </li>
-            <li>
-              <span aria-hidden="true">3</span>
-              <div>
-                <h3>{text(
-                  flowMode === "preferred" ? copy.continueTitlePreferred : copy.continueTitleBootstrap,
-                  { provider: providerName },
-                )}</h3>
-                <p>{text(
-                  flowMode === "preferred" ? copy.continueBodyPreferred : copy.continueBodyBootstrap,
-                  { provider: providerName },
-                )}</p>
+              <div className="provider-auth-choice-grid" role="group" aria-labelledby="provider-auth-choice-title" aria-label={text(copy.choiceAria)}>
                 <button
-                  className="button button--primary button--small"
                   type="button"
-                  disabled={!nativeMode || working || disabled || !canContinue}
-                  onClick={() => void (flowMode === "preferred" ? beginPreferred() : planBootstrap())}
+                  className={flowMode === "preferred" ? "provider-auth-choice provider-auth-choice--active" : "provider-auth-choice"}
+                  aria-pressed={flowMode === "preferred"}
+                  disabled={working || disabled}
+                  onClick={() => chooseFlow("preferred")}
                 >
-                  {working ? text(copy.working) : text(flowMode === "preferred" ? copy.submitPreferred : copy.submitBootstrap)}
-                  <Icon name="arrow" size={17} />
+                  <span className="provider-auth-choice__badge">{text(copy.preferredBadge)}</span>
+                  <strong>{text(copy.preferredTitle)}</strong>
+                  <span>{text(copy.preferredBody)}</span>
                 </button>
-                {!canContinue && <small className="provider-setup-status">{text(copy.continueWaiting)}</small>}
+                <button
+                  type="button"
+                  className={flowMode === "bootstrap" ? "provider-auth-choice provider-auth-choice--active" : "provider-auth-choice"}
+                  aria-pressed={flowMode === "bootstrap"}
+                  disabled={working || disabled}
+                  onClick={() => chooseFlow("bootstrap")}
+                >
+                  <strong>{text(copy.bootstrapTitle)}</strong>
+                  <span>{text(copy.bootstrapBody)}</span>
+                </button>
               </div>
-            </li>
-          </ol>
 
-          <details
-            className="provider-manual-details"
-            open={connectionDetailsOpen}
-            onToggle={(event) => setConnectionDetailsOpen(event.currentTarget.open)}
-          >
-            <summary>{text(copy.manualSummary)}</summary>
-            <p>{text(copy.manualIntro)}</p>
-            <form className="provider-auth-form" onSubmit={flowMode === "preferred" ? beginPreferred : planBootstrap}>
-          <div className="provider-auth-form__heading">
-            <h3>{text(flowMode === "preferred" ? copy.formTitlePreferred : copy.formTitleBootstrap, { provider: providerName })}</h3>
-            <p>{text(copy.formIntro, { provider: providerName })}</p>
-          </div>
+              <form className="provider-auth-form" onSubmit={submitConnection}>
+                <ol className="provider-preparation-steps provider-connection-steps" aria-label={text(copy.preparationStepsLabel)}>
+                  <li>
+                    <span aria-hidden="true">1</span>
+                    <div>
+                      <h3>{text(setupGuide.title)}</h3>
+                      <ol className="provider-setup-guide">
+                        {setupGuide.steps.map((step) => (
+                          <li key={step.text.en}>
+                            {text(step.text)}
+                            {step.values && (
+                              <span className="provider-setup-guide__values">
+                                {step.values.map((value) => <code key={value}>{value}</code>)}
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ol>
+                      <details className="provider-handoff">
+                        <summary>{text(copy.handoffSummary)}</summary>
+                        <p>{text(copy.requestIntro)}</p>
+                        <blockquote>{requestMessage}</blockquote>
+                        <button className="button button--secondary button--small" type="button" disabled={working || disabled} onClick={() => void copyItRequest(requestForIt)}>
+                          {text(copy.copyRequest)}
+                        </button>
+                        {requestCopyState !== "idle" && (
+                          <small className={`provider-setup-status provider-setup-status--${requestCopyState}`} role="status">
+                            {text(requestCopyState === "copied" ? copy.requestCopied : copy.requestCopyFailed)}
+                          </small>
+                        )}
+                        <details className="provider-auth-technical provider-setup-template">
+                          <summary>{text(copy.requestExactDetails)}</summary>
+                          <p>{text(copy.registrationNote)}</p>
+                          <pre>{setupTemplate}</pre>
+                        </details>
+                        <p>{text(copy.importBody)}</p>
+                        <label className="button button--secondary button--small provider-file-picker">
+                          <Icon name="file" size={16} />
+                          {text(copy.chooseSetupFile)}
+                          <input
+                            className="visually-hidden"
+                            type="file"
+                            accept=".json,application/json"
+                            disabled={!nativeMode || working || disabled}
+                            onChange={(event) => void importConnectionSetup(event)}
+                          />
+                        </label>
+                        {setupFileReady && (
+                          <small className="provider-setup-status provider-setup-status--copied" role="status">
+                            <Icon name="check" size={15} />{text(copy.setupFileReady)}
+                          </small>
+                        )}
+                        {setupFileError && (
+                          <small className="provider-setup-status provider-setup-status--failed" role="alert">
+                            <Icon name="warning" size={15} />{text(copy.setupFileErrors[setupFileError])}
+                          </small>
+                        )}
+                      </details>
+                    </div>
+                  </li>
+                  <li>
+                    <span aria-hidden="true">2</span>
+                    <div>
+                      <h3>{text(copy.detailsTitle)}</h3>
+                      <fieldset className="provider-auth-fields" disabled={working || disabled}>
+                        <legend className="visually-hidden">{providerName}</legend>
+                        <div className="form-grid form-grid--two">
+                          {provider === "aws" && <>
+                            <label className="field field--wide">
+                              <span>{text(copy.fields.awsStartUrl.label)}</span>
+                              <input required type="url" autoComplete="off" spellCheck={false} value={awsStartUrl} onChange={(event) => { markDetailsChanged(); setAwsStartUrl(event.target.value); }} placeholder={copy.fields.awsStartUrl.example} />
+                              {fieldHelp(copy.fields.awsStartUrl)}
+                            </label>
+                            <label className="field">
+                              <span>{text(copy.fields.awsRegion.label)}</span>
+                              <input required autoComplete="off" spellCheck={false} value={awsRegion} onChange={(event) => { markDetailsChanged(); setAwsRegion(event.target.value); }} placeholder={copy.fields.awsRegion.example} />
+                              {fieldHelp(copy.fields.awsRegion)}
+                            </label>
+                            <label className="field">
+                              <span>{text(copy.fields.awsAccountId.label)}</span>
+                              <input required inputMode="numeric" pattern="[0-9]{12}" autoComplete="off" value={awsAccountId} onChange={(event) => { markDetailsChanged(); setAwsAccountId(event.target.value); }} placeholder={copy.fields.awsAccountId.example} />
+                              {fieldHelp(copy.fields.awsAccountId)}
+                            </label>
+                            <label className="field field--wide">
+                              <span>{text(awsRoleField.label)}</span>
+                              <input required pattern="[A-Za-z0-9+=,.@_/-]{1,64}" autoComplete="off" spellCheck={false} value={awsRoleName} onChange={(event) => { markDetailsChanged(); setAwsRoleName(event.target.value); }} placeholder={awsRoleField.example} />
+                              {fieldHelp(awsRoleField)}
+                            </label>
+                          </>}
 
-          <fieldset className="provider-auth-fields" disabled={working || disabled}>
-            <legend className="visually-hidden">{providerName}</legend>
-            <div className="form-grid form-grid--two">
-              {provider === "aws" && <>
-                <label className="field field--wide">
-                  <span>{text(copy.fields.awsStartUrl.label)}</span>
-                  <input required type="url" autoComplete="off" spellCheck={false} value={awsStartUrl} onChange={(event) => { markManualDetailsChanged(); setAwsStartUrl(event.target.value); }} placeholder={copy.fields.awsStartUrl.example} />
-                  {fieldHelp(copy.fields.awsStartUrl)}
-                </label>
-                <label className="field">
-                  <span>{text(copy.fields.awsRegion.label)}</span>
-                  <input required autoComplete="off" spellCheck={false} value={awsRegion} onChange={(event) => { markManualDetailsChanged(); setAwsRegion(event.target.value); }} placeholder={copy.fields.awsRegion.example} />
-                  {fieldHelp(copy.fields.awsRegion)}
-                </label>
-                <label className="field">
-                  <span>{text(copy.fields.awsAccountId.label)}</span>
-                  <input required inputMode="numeric" pattern="[0-9]{12}" autoComplete="off" value={awsAccountId} onChange={(event) => { markManualDetailsChanged(); setAwsAccountId(event.target.value); }} placeholder={copy.fields.awsAccountId.example} />
-                  {fieldHelp(copy.fields.awsAccountId)}
-                </label>
-                <label className="field">
-                  <span>{text(awsRoleField.label)}</span>
-                  <input required pattern="[A-Za-z0-9+=,.@_/-]{1,64}" autoComplete="off" spellCheck={false} value={awsRoleName} onChange={(event) => { markManualDetailsChanged(); setAwsRoleName(event.target.value); }} placeholder={awsRoleField.example} />
-                  {fieldHelp(awsRoleField)}
-                </label>
-                <label className="field field--wide">
-                  <span>{text(awsRoleArnField.label)}</span>
-                  <input required autoComplete="off" spellCheck={false} value={awsRoleArn} onChange={(event) => { markManualDetailsChanged(); setAwsRoleArn(event.target.value); }} placeholder={awsRoleArnField.example} />
-                  {fieldHelp(awsRoleArnField)}
-                </label>
-              </>}
+                          {(provider === "azure" || provider === "microsoft365") && <>
+                            <label className="field">
+                              <span>{text(copy.fields.tenantId.label)}</span>
+                              <input required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" autoComplete="off" spellCheck={false} value={tenantId} onChange={(event) => { markDetailsChanged(); setTenantId(event.target.value); }} placeholder={copy.fields.tenantId.example} />
+                              {fieldHelp(copy.fields.tenantId)}
+                            </label>
+                            <label className="field">
+                              <span>{text(copy.fields.publicClientId.label)}</span>
+                              <input required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" autoComplete="off" spellCheck={false} value={publicClientId} onChange={(event) => { markDetailsChanged(); setPublicClientId(event.target.value); }} placeholder={copy.fields.publicClientId.example} />
+                              {fieldHelp(copy.fields.publicClientId)}
+                            </label>
+                            {provider === "azure" && (
+                              <label className="field field--wide">
+                                <span>{text(copy.fields.subscriptionId.label)}</span>
+                                <input required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" autoComplete="off" spellCheck={false} value={subscriptionId} onChange={(event) => { markDetailsChanged(); setSubscriptionId(event.target.value); }} placeholder={copy.fields.subscriptionId.example} />
+                                {fieldHelp(copy.fields.subscriptionId)}
+                              </label>
+                            )}
+                          </>}
 
-              {(provider === "azure" || provider === "microsoft365") && <>
-                <label className="field">
-                  <span>{text(copy.fields.tenantId.label)}</span>
-                  <input required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" autoComplete="off" spellCheck={false} value={tenantId} onChange={(event) => { markManualDetailsChanged(); setTenantId(event.target.value); }} placeholder={copy.fields.tenantId.example} />
-                  {fieldHelp(copy.fields.tenantId)}
-                </label>
-                <label className="field">
-                  <span>{text(copy.fields.publicClientId.label)}</span>
-                  <input required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" autoComplete="off" spellCheck={false} value={publicClientId} onChange={(event) => { markManualDetailsChanged(); setPublicClientId(event.target.value); }} placeholder={copy.fields.publicClientId.example} />
-                  {fieldHelp(copy.fields.publicClientId)}
-                </label>
-                {provider === "azure" && (
-                  <label className="field field--wide">
-                    <span>{text(copy.fields.subscriptionId.label)}</span>
-                    <input required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" autoComplete="off" spellCheck={false} value={subscriptionId} onChange={(event) => { markManualDetailsChanged(); setSubscriptionId(event.target.value); }} placeholder={copy.fields.subscriptionId.example} />
-                    {fieldHelp(copy.fields.subscriptionId)}
-                  </label>
-                )}
-              </>}
-
-              {provider === "gcp" && <>
-                <label className="field field--wide">
-                  <span>{text(copy.fields.gcpClientId.label)}</span>
-                  <input required pattern="[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com" autoComplete="off" spellCheck={false} value={publicClientId} onChange={(event) => { markManualDetailsChanged(); setPublicClientId(event.target.value); }} placeholder={copy.fields.gcpClientId.example} />
-                  {fieldHelp(copy.fields.gcpClientId)}
-                </label>
-                <label className="field">
-                  <span>{text(copy.fields.gcpOrganizationId.label)}</span>
-                  <input required inputMode="numeric" pattern="[0-9]+" autoComplete="off" value={gcpOrganizationId} onChange={(event) => { markManualDetailsChanged(); setGcpOrganizationId(event.target.value); }} placeholder={copy.fields.gcpOrganizationId.example} />
-                  {fieldHelp(copy.fields.gcpOrganizationId)}
-                </label>
-                {flowMode === "bootstrap" && (
-                  <label className="field">
-                    <span>{text(copy.fields.gcpProjectId.label)}</span>
-                    <input required pattern="[a-z][a-z0-9-]{4,28}[a-z0-9]" autoComplete="off" spellCheck={false} value={gcpProjectId} onChange={(event) => { markManualDetailsChanged(); setGcpProjectId(event.target.value); }} placeholder={copy.fields.gcpProjectId.example} />
-                    {fieldHelp(copy.fields.gcpProjectId)}
-                  </label>
-                )}
-                <div className="field field--wide provider-generated-field">
-                  <span>{text(copy.fields.gcpRedirect.label)}</span>
-                  <span className="field-inline">
-                    <input readOnly aria-readonly="true" value={gcpRedirectUri} />
-                    <button className="button button--ghost button--small" type="button" disabled={working} onClick={() => { markManualDetailsChanged(); setGcpRedirectUri(randomLoopback()); }}>{text(copy.regenerate)}</button>
-                  </span>
-                  {fieldHelp(copy.fields.gcpRedirect)}
-                </div>
-              </>}
-            </div>
-          </fieldset>
-
-          <InlineNotice tone={flowMode === "bootstrap" ? "warning" : "info"} title={text(copy.noSecretsTitle)}>
-            <p>{text(flowMode === "bootstrap" ? copy.noSecretsBootstrap : copy.noSecretsPreferred)}</p>
-          </InlineNotice>
-
-          {error && !cleanupError && connectionDetailsOpen && (
-            <div className="provider-auth-error" role="alert">
-              <p><Icon name="warning" size={16} />{text(copy.errors[error.kind])}</p>
-              {error.detail && <details><summary>{text(copy.errorTechnical)}</summary><pre>{error.detail}</pre></details>}
-            </div>
-          )}
-          {notice && connectionDetailsOpen && <p className="provider-auth-success" role="status"><Icon name="check" size={16} />{text(copy.notices[notice])}</p>}
-
-          <details className="provider-auth-technical">
-            <summary>{text(copy.technicalSummary)}</summary>
-            <dl>
-              <div><dt>{text(copy.technicalFlow)}</dt><dd>{text(provider === "gcp" ? copy.protocolPkce : copy.protocolDevice)}</dd></div>
-              <div><dt>{text(copy.technicalEngines)}</dt><dd><code>{providerEngineBindings[provider].join(", ")}</code></dd></div>
-              <div><dt>{text(copy.technicalCheckouts)}</dt><dd>{formatNumber(providerCheckoutLimits[provider])}</dd></div>
-              <div><dt>{text(copy.technicalFields)}</dt><dd><code>{providerAuthorizationRequiredFields[provider][flowMode].join(", ")}</code></dd></div>
-            </dl>
-            <p>{text(copy.technicalBoundary)}</p>
-          </details>
-
-          <div className="form-actions provider-auth-actions">
-            <span />
-            <button className="button button--primary" type="submit" disabled={!nativeMode || working || disabled || !canContinue}>
-              {working ? text(copy.working) : text(flowMode === "preferred" ? copy.submitPreferred : copy.submitBootstrap)}
-              <Icon name="arrow" size={17} />
-            </button>
-          </div>
-            </form>
-          </details>
+                          {provider === "gcp" && <>
+                            <label className="field field--wide">
+                              <span>{text(copy.fields.gcpClientId.label)}</span>
+                              <input required pattern="[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com" autoComplete="off" spellCheck={false} value={publicClientId} onChange={(event) => { markDetailsChanged(); setPublicClientId(event.target.value); }} placeholder={copy.fields.gcpClientId.example} />
+                              {fieldHelp(copy.fields.gcpClientId)}
+                            </label>
+                            <label className="field">
+                              <span>{text(copy.fields.gcpOrganizationId.label)}</span>
+                              <input required inputMode="numeric" pattern="[0-9]+" autoComplete="off" value={gcpOrganizationId} onChange={(event) => { markDetailsChanged(); setGcpOrganizationId(event.target.value); }} placeholder={copy.fields.gcpOrganizationId.example} />
+                              {fieldHelp(copy.fields.gcpOrganizationId)}
+                            </label>
+                            {flowMode === "bootstrap" && (
+                              <label className="field">
+                                <span>{text(copy.fields.gcpProjectId.label)}</span>
+                                <input required pattern="[a-z][a-z0-9-]{4,28}[a-z0-9]" autoComplete="off" spellCheck={false} value={gcpProjectId} onChange={(event) => { markDetailsChanged(); setGcpProjectId(event.target.value); }} placeholder={copy.fields.gcpProjectId.example} />
+                                {fieldHelp(copy.fields.gcpProjectId)}
+                              </label>
+                            )}
+                          </>}
+                        </div>
+                        {(provider === "aws" || provider === "gcp") && (
+                          <details className="provider-auth-technical provider-generated-details">
+                            <summary>{text(copy.detailsFilledByApp)}</summary>
+                            <div className="form-grid">
+                              {provider === "aws" && (
+                                <label className="field field--wide">
+                                  <span>{text(awsRoleArnField.label)}</span>
+                                  <input required autoComplete="off" spellCheck={false} value={awsRoleArn} onChange={(event) => { markDetailsChanged(); setAwsRoleArn(event.target.value); }} placeholder={awsRoleArnField.example} />
+                                  {fieldHelp(awsRoleArnField)}
+                                </label>
+                              )}
+                              {provider === "gcp" && (
+                                <div className="field field--wide provider-generated-field">
+                                  <span>{text(copy.fields.gcpRedirect.label)}</span>
+                                  <span className="field-inline">
+                                    <input readOnly aria-readonly="true" value={gcpRedirectUri} />
+                                    <button className="button button--ghost button--small" type="button" disabled={working} onClick={() => { markDetailsChanged(); setGcpRedirectUri(randomLoopback()); }}>{text(copy.regenerate)}</button>
+                                  </span>
+                                  {fieldHelp(copy.fields.gcpRedirect)}
+                                </div>
+                              )}
+                            </div>
+                          </details>
+                        )}
+                      </fieldset>
+                      <InlineNotice tone={flowMode === "bootstrap" ? "warning" : "info"} title={text(copy.noSecretsTitle)}>
+                        <p>{text(flowMode === "bootstrap" ? copy.noSecretsBootstrap : copy.noSecretsPreferred)}</p>
+                      </InlineNotice>
+                    </div>
+                  </li>
+                  <li>
+                    <span aria-hidden="true">3</span>
+                    <div>
+                      <h3>{text(
+                        flowMode === "preferred" ? copy.continueTitlePreferred : copy.continueTitleBootstrap,
+                        { provider: providerName },
+                      )}</h3>
+                      <p>{text(
+                        flowMode === "preferred" ? copy.continueBodyPreferred : copy.continueBodyBootstrap,
+                        { provider: providerName },
+                      )}</p>
+                      <button
+                        className="button button--primary button--small"
+                        type="submit"
+                        disabled={!nativeMode || working || disabled || !configurationReady}
+                      >
+                        {working ? text(copy.working) : text(flowMode === "preferred" ? copy.submitPreferred : copy.submitBootstrap)}
+                        <Icon name="arrow" size={17} />
+                      </button>
+                      {!configurationReady && <small className="provider-setup-status">{text(copy.continueWaiting)}</small>}
+                      {error && !cleanupError && guideOpen && panelError(error)}
+                      {notice && guideOpen && <p className="provider-auth-success" role="status"><Icon name="check" size={16} />{text(copy.notices[notice])}</p>}
+                      <details className="provider-auth-technical">
+                        <summary>{text(copy.technicalSummary)}</summary>
+                        <dl>
+                          <div><dt>{text(copy.technicalFlow)}</dt><dd>{text(provider === "gcp" ? copy.protocolPkce : copy.protocolDevice)}</dd></div>
+                          <div><dt>{text(copy.technicalEngines)}</dt><dd><code>{providerEngineBindings[provider].join(", ")}</code></dd></div>
+                          <div><dt>{text(copy.technicalCheckouts)}</dt><dd>{formatNumber(providerCheckoutLimits[provider])}</dd></div>
+                          <div><dt>{text(copy.technicalFields)}</dt><dd><code>{providerAuthorizationRequiredFields[provider][flowMode].join(", ")}</code></dd></div>
+                        </dl>
+                        <p>{text(copy.technicalBoundary)}</p>
+                      </details>
+                    </div>
+                  </li>
+                </ol>
+              </form>
             </div>
           </details>
         </section>
@@ -1849,13 +1845,8 @@ export function ProviderAuthorizationPanel({
         </details>
       )}
 
-      {error && !cleanupError && !connectionDetailsOpen && (
-        <div className="provider-auth-error" role="alert">
-          <p><Icon name="warning" size={16} />{text(copy.errors[error.kind])}</p>
-          {error.detail && <details><summary>{text(copy.errorTechnical)}</summary><pre>{error.detail}</pre></details>}
-        </div>
-      )}
-      {notice && !connectionDetailsOpen && <p className="provider-auth-success" role="status"><Icon name="check" size={16} />{text(copy.notices[notice])}</p>}
+      {error && !cleanupError && !guideOpen && panelError(error)}
+      {notice && !guideOpen && <p className="provider-auth-success" role="status"><Icon name="check" size={16} />{text(copy.notices[notice])}</p>}
 
       {prompt && (
         <section className="provider-prompt" aria-live="polite">
@@ -1921,7 +1912,7 @@ export function ProviderAuthorizationPanel({
             <span className="button-row">
               <button className="button button--ghost" type="button" disabled={working || disabled} onClick={() => {
                 setBootstrapPlan(undefined);
-                setConnectionDetailsOpen(true);
+                setGuideOpen(true);
               }}>{text(copy.editSetup)}</button>
               <button className="button button--primary" type="button" disabled={working || disabled} onClick={() => void executeBootstrap()}>{working ? text(copy.executingPlan) : text(copy.executePlan)}</button>
             </span>

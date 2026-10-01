@@ -100,41 +100,22 @@ test("progressive setup keeps every released provider coordinate without accepti
   }
 });
 
-test("provider sign-in leads with the setup-file journey and keeps manual entry secondary", () => {
+test("provider sign-in leads with the owner's console steps and keeps the setup-file handoff secondary", () => {
+  // The rendered order and disclosure depth are covered in
+  // tests/component/providerAuthorizationPanel.test.tsx; this guards the copy.
   assert.match(panelSource, /connectCta/u);
-  assert.match(panelSource, /provider-preparation-steps/u);
-  assert.match(panelSource, /requestTitle/u);
-  assert.match(panelSource, /importTitle/u);
-  assert.match(panelSource, /continueTitlePreferred/u);
+  assert.match(panelSource, /cloudSetupGuide\(provider, flowMode\)/u);
+  assert.match(panelSource, /className="provider-handoff"/u);
   assert.match(panelSource, /copyItRequest/u);
   assert.match(panelSource, /importConnectionSetup/u);
   assert.match(panelSource, /type="file"/u);
-  assert.match(panelSource, /className="provider-manual-details"/u);
-  assert.match(panelSource, /manualSummary/u);
-  assert.match(panelSource, /IT or a cloud administrator prepares this connection file once for the organization/u);
-  assert.match(panelSource, /Connection requires the organization's public cloud app or role details/u);
+  assert.match(panelSource, /If you own or administer this account, you can do every step yourself/u);
   assert.match(panelSource, /Administrator approval occurs on the official provider page/u);
+  assert.doesNotMatch(panelSource, /\bAsk IT\b|for IT\b|from IT\b|向 IT|給 IT|IT 為組織|由 IT|請 IT/u);
+  assert.doesNotMatch(panelSource, /className="provider-manual-details"|manualSummary/u);
   assert.doesNotMatch(panelSource, /Shared OAuth registration is not provided|This form never receives|then discarded/u);
   assert.doesNotMatch(panelSource, /IT \/ admin advanced setup/u);
   assert.doesNotMatch(panelSource, /product-owned OAuth|shared OAuth client/u);
-
-  const normalizedPanelSource = panelSource.replaceAll("\r\n", "\n");
-  const stepsStart = normalizedPanelSource.indexOf('<ol className="provider-preparation-steps provider-connection-steps"');
-  const guideStart = normalizedPanelSource.indexOf('<details className="provider-connection-guide">');
-  const manualStart = normalizedPanelSource.indexOf('<details\n            className="provider-manual-details"', stepsStart);
-  const guideEnd = normalizedPanelSource.indexOf("</section>", manualStart);
-  assert.notEqual(guideStart, -1);
-  assert.notEqual(stepsStart, -1);
-  assert.notEqual(manualStart, -1);
-  assert.ok(guideStart < stepsStart && guideEnd > manualStart, "engineering setup should stay inside the progressive connection guide");
-  const firstLayer = normalizedPanelSource.slice(normalizedPanelSource.indexOf('<section className="provider-auth-details"'), guideStart);
-  assert.doesNotMatch(firstLayer, /copy\.connectionDetailsSummary|copy\.connectCtaBody|copy\.requestTitle|copy\.fields\.|setupTemplate/u);
-  assert.match(normalizedPanelSource.slice(guideStart, stepsStart), /<summary>\{text\(copy\.connectCta\)\}<\/summary>/u);
-  const primaryJourney = normalizedPanelSource.slice(stepsStart, manualStart);
-  assert.match(primaryJourney, /copy\.requestTitle/u);
-  assert.match(primaryJourney, /copy\.importTitle/u);
-  assert.match(primaryJourney, /copy\.continueTitlePreferred/u);
-  assert.doesNotMatch(primaryJourney, /copy\.fields\./u);
 });
 
 test("provider handoff copy stays neutral and uses an automatic clipboard fallback", () => {

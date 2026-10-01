@@ -191,6 +191,8 @@ An AI application scan checks selected code, dependencies, secrets, prompts, con
 
 Cloud, IaC, container, and Kubernetes paths use exact selected scopes and read-only inputs by default. They remain advanced and never add setup to an unrelated website or project scan.
 
+A cloud or Microsoft 365 scan is something a beginner can finish alone. The most common reader owns or administers the account, so the cloud path leads with numbered provider-console steps for creating read-only access once, then the provider's official sign-in. Handing the setup to an administrator stays available as a secondary choice. When a provider rejects a sign-in for having too much or too little access, the panel names that cause and the fix rather than asking for a retry.
+
 ## 5. Scanner integration and execution
 
 ### 5.1 Stay close to upstream

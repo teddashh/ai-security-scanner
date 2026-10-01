@@ -278,8 +278,8 @@ const pageCopy = {
   },
   cloudChoice: { en: "Which cloud do you want to check first?", zhTW: "想先檢查哪一個雲端服務？" },
   cloudChoiceHelp: {
-    en: "Pick one source. Its official sign-in opens next.",
-    zhTW: "選擇一個來源；下一步會開啟官方登入。",
+    en: "Pick one source. Next, set up read-only access and sign in.",
+    zhTW: "選擇一個來源；下一步會帶你設定唯讀存取並登入。",
   },
   moreSummary: { en: "Optional project details", zhTW: "選填專案資訊" },
   moreSummaryHint: {

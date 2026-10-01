@@ -2394,10 +2394,50 @@ pub(crate) fn ensure_status(
         Ok(())
     } else {
         Err(AppError::NotAuthorized(format!(
-            "{operation} failed with provider HTTP status {}",
-            response.status
+            "{operation} failed with provider HTTP status {}{}",
+            response.status,
+            provider_refusal_code(response.body())
+                .map(|code| format!(" ({code})"))
+                .unwrap_or_default()
         )))
     }
+}
+
+/// The provider's own name for a refusal, which is what tells a person what
+/// to fix: an OAuth `error` with Microsoft's first `error_codes` entry, a
+/// Microsoft Graph `error.code`, a Google `error.status`, an AWS JSON
+/// `__type`, or an AWS Query `<Code>`. Only identifier-shaped values are kept,
+/// so no provider prose or echoed request detail reaches the message.
+fn provider_refusal_code(body: &[u8]) -> Option<String> {
+    let identifier = |value: &str| {
+        let value = value.rsplit('#').next().unwrap_or(value);
+        (!value.is_empty()
+            && value.len() <= 64
+            && value.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-')
+            }))
+        .then(|| value.to_owned())
+    };
+    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(body) {
+        let error = &json["error"];
+        let name = error
+            .as_str()
+            .or_else(|| error["code"].as_str())
+            .or_else(|| error["status"].as_str())
+            .or_else(|| json["__type"].as_str())
+            .and_then(identifier)?;
+        return Some(
+            match json["error_codes"]
+                .get(0)
+                .and_then(serde_json::Value::as_i64)
+            {
+                Some(code) => format!("{name}, error code {code}"),
+                None => name,
+            },
+        );
+    }
+    let xml = std::str::from_utf8(body).ok()?;
+    identifier(xml.split_once("<Code>")?.1.split_once("</Code>")?.0)
 }
 
 /// An OAuth error body. Providers add their own fields (Microsoft sends trace
@@ -3055,6 +3095,68 @@ struct GoogleTestIamPermissions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_request_names_the_providers_own_refusal_code() {
+        let refused = |status: u16, body: &str| {
+            ensure_status(
+                &ProviderHttpResponse::new(status, body.as_bytes().to_vec()),
+                &[200],
+                "Microsoft device authorization",
+            )
+            .unwrap_err()
+            .to_string()
+        };
+        // Microsoft's token endpoint, when public client flows are off.
+        assert_eq!(
+            refused(
+                400,
+                r#"{"error":"invalid_client","error_description":"AADSTS7000218: The request body must contain the following parameter: 'client_assertion' or 'client_secret'.","error_codes":[7000218],"trace_id":"0000"}"#,
+            ),
+            "operation is not authorized: Microsoft device authorization failed with provider HTTP status 400 (invalid_client, error code 7000218)"
+        );
+        // Microsoft Graph and Google nest the refusal in an object.
+        assert!(
+            refused(
+                403,
+                r#"{"error":{"code":"Authorization_RequestDenied","message":"Insufficient privileges to complete the operation."}}"#,
+            )
+            .ends_with("status 403 (Authorization_RequestDenied)")
+        );
+        assert!(
+            refused(
+                403,
+                r#"{"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}}"#,
+            )
+            .ends_with("status 403 (PERMISSION_DENIED)")
+        );
+        assert!(
+            refused(
+                403,
+                r#"{"message":"No access","__type":"com.amazonaws.switchboard.portal#ForbiddenException"}"#,
+            )
+            .ends_with("status 403 (ForbiddenException)")
+        );
+        // An AWS Query refusal keeps its code and drops the message, which
+        // echoes the caller's ARN.
+        let aws = refused(
+            403,
+            "<ErrorResponse xmlns=\"https://iam.amazonaws.com/doc/2010-05-08/\"><Error><Type>Sender</Type><Code>AccessDenied</Code><Message>User: arn:aws:sts::111122223333:assumed-role/Reader/person is not authorized to perform: iam:SimulatePrincipalPolicy</Message></Error><RequestId>0000</RequestId></ErrorResponse>",
+        );
+        assert!(aws.ends_with("status 403 (AccessDenied)"), "{aws}");
+        assert!(!aws.contains("arn:aws"));
+        // Prose, an empty body, or an unreadable one adds nothing.
+        for body in [
+            r#"{"error":"the request could not be completed"}"#,
+            "",
+            "<html>Bad gateway</html>",
+        ] {
+            assert!(
+                refused(400, body).ends_with("provider HTTP status 400"),
+                "{body}"
+            );
+        }
+    }
 
     #[test]
     fn identity_center_reserved_roles_match_only_their_permission_set() {
