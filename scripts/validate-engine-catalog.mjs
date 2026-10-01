@@ -279,7 +279,7 @@ const managedLocalK8sContracts = new Map([
   }],
 ]);
 const managedGreenboneContract = {
-  tag: "23.50.24-feed202609170605-1",
+  tag: "23.50.24-feed202609170605-2",
   planKind: "multi_component_build",
   license: { disposition: "source_offer", sourceOfferPath: "engines/images/greenbone/SOURCE-OFFER.md" },
   engineVersion: "23.50.24",
@@ -294,7 +294,7 @@ const managedGreenboneContract = {
   smokeOid: "1.3.6.1.4.1.25623.1.0.108252",
 };
 const greenbonePublicationBlocker =
-  "Publish and independently verify the Greenbone 23.50.24-feed202609170605-1 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence.";
+  "Publish and independently verify the Greenbone 23.50.24-feed202609170605-2 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence.";
 const managedEvidenceWorkflows = [
   ".github/workflows/engine-images-cloud.yml",
   ".github/workflows/engine-images-external.yml",
@@ -1270,6 +1270,7 @@ function validateGreenboneBuildClosure(plan, planRelative, dockerfileText) {
     ["nasl-array-compat", "engines/images/greenbone/openvasd-nasl-array-compat.patch"],
     ["eregmatch-captures", "engines/images/greenbone/openvasd-eregmatch-captures.patch"],
     ["report-port", "engines/images/greenbone/openvasd-report-port.patch"],
+    ["socket-eof", "engines/images/greenbone/openvasd-socket-eof.patch"],
   ]) {
     const patchPath = resolve(root, relative);
     const patchDigest = existsSync(patchPath) ? sha256File(patchPath).slice("sha256:".length) : null;

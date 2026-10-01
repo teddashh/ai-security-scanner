@@ -1,0 +1,117 @@
+diff --git a/rust/src/nasl/builtin/network/socket.rs b/rust/src/nasl/builtin/network/socket.rs
+index 736ed9f..0844f13 100644
+--- a/rust/src/nasl/builtin/network/socket.rs
++++ b/rust/src/nasl/builtin/network/socket.rs
+@@ -444,6 +444,14 @@ async fn send(
+     send_shared(sockets, socket, data, option, len)
+ }
+ 
++/// A receive timeout surfaces as `WouldBlock` on Unix and as `TimedOut` on Windows.
++fn is_read_timeout(e: &io::Error) -> bool {
++    matches!(
++        e.kind(),
++        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
++    )
++}
++
+ fn recv_shared(
+     sockets: &mut NaslSockets,
+     socket: usize,
+@@ -464,8 +472,10 @@ fn recv_shared(
+         let timeout = Duration::from_secs(1);
+         while pos < min {
+             match conn.read_with_timeout(&mut data[pos..], timeout) {
++                // The peer closed the connection, so no more data will arrive.
++                Ok(0) => break,
+                 Ok(n) => pos += n,
+-                Err(e) if e.kind() == io::ErrorKind::TimedOut => break,
++                Err(e) if is_read_timeout(&e) => break,
+                 Err(e) => return Err(SocketError::from(e)),
+             }
+         }
+@@ -1112,7 +1122,10 @@ fn check_ftp_response(
+     let expected = format!("{} ", &line[0..3]);
+     while line.len() < 5 || line[0..4] != expected {
+         line.clear();
+-        conn.read_line(&mut line)?;
++        if conn.read_line(&mut line)? == 0 {
++            // The server closed the connection before the final reply line.
++            return Err(SocketError::FailedToReadResponseCode);
++        }
+     }
+ 
+     line = String::from(line.trim());
+@@ -1450,3 +1463,73 @@ impl DefineGlobalVars for SocketFns {
+         ]
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use std::{io::Cursor, net::TcpListener, sync::mpsc, thread};
++
++    use super::*;
++
++    fn connected_socket(listener: &TcpListener) -> (NaslSockets, usize) {
++        let port = listener.local_addr().unwrap().port();
++        let conn = TcpConnection::connect(
++            IpAddr::V4(Ipv4Addr::LOCALHOST),
++            port,
++            None,
++            Duration::from_secs(5),
++            None,
++            1,
++        )
++        .unwrap();
++        let mut sockets = NaslSockets::default();
++        let fd = sockets.add(NaslSocket::Tcp(Box::new(conn)));
++        (sockets, fd)
++    }
++
++    /// Bounds `recv` so a regression fails the test instead of hanging the suite.
++    fn recv_within_bound(mut sockets: NaslSockets, fd: usize) -> Vec<u8> {
++        let (sender, receiver) = mpsc::channel();
++        thread::spawn(move || {
++            let _ = sender.send(recv_shared(&mut sockets, fd, 1024, None, Some(Seconds(5))));
++        });
++        receiver
++            .recv_timeout(Duration::from_secs(15))
++            .expect("recv did not return")
++            .unwrap()
++    }
++
++    #[test]
++    fn recv_returns_received_data_when_the_peer_closes() {
++        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
++        let (sockets, fd) = connected_socket(&listener);
++        let (mut peer, _) = listener.accept().unwrap();
++        peer.write_all(b"HTTP/1.0 400 Bad Request\r\n\r\n").unwrap();
++        drop(peer);
++
++        assert_eq!(
++            recv_within_bound(sockets, fd),
++            b"HTTP/1.0 400 Bad Request\r\n\r\n"
++        );
++    }
++
++    #[test]
++    fn recv_returns_received_data_when_the_peer_goes_quiet() {
++        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
++        let (sockets, fd) = connected_socket(&listener);
++        let (mut peer, _) = listener.accept().unwrap();
++        peer.write_all(b"220 ready\r\n").unwrap();
++
++        assert_eq!(recv_within_bound(sockets, fd), b"220 ready\r\n");
++        drop(peer);
++    }
++
++    #[test]
++    fn ftp_reply_cut_short_by_the_server_is_an_error() {
++        let reply = Cursor::new(b"220-Welcome\r\n".to_vec());
++
++        assert!(matches!(
++            check_ftp_response(reply, &[220]),
++            Err(SocketError::FailedToReadResponseCode)
++        ));
++    }
++}

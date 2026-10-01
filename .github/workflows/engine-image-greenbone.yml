@@ -17,12 +17,12 @@ permissions:
   attestations: write
 
 concurrency:
-  group: engine-image-greenbone-23.50.24-feed202609170605-1
+  group: engine-image-greenbone-23.50.24-feed202609170605-2
   cancel-in-progress: false
 
 env:
   IMAGE: ghcr.io/teddashh/ai-security-scanner-engine-greenbone
-  IMAGE_TAG: 23.50.24-feed202609170605-1
+  IMAGE_TAG: 23.50.24-feed202609170605-2
   SOURCE_DATE_EPOCH: "1787573675"
   SCANNER_REVISION: 26465a11ff0e6a98d60a253265fab5974fc757b6
   FEED_REVISION: 6c8dce2f22bb9e5da081667994be6e9ed79484d8

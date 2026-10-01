@@ -162,6 +162,10 @@
       "reason": "Applied to the OpenVAS daemon source during the image build but absent from the plan."
     },
     {
+      "path": "engines/images/greenbone/openvasd-socket-eof.patch",
+      "reason": "Applied to the OpenVAS daemon source during the image build but absent from the plan."
+    },
+    {
       "path": "engines/images/grype/import.json",
       "reason": "Controls import of the pinned offline Grype database into the image but has no digest in the plan."
     },

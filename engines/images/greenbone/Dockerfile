@@ -130,12 +130,14 @@ COPY engines/images/greenbone/openvasd-http-compat.patch /tmp/openvasd-http-comp
 COPY engines/images/greenbone/openvasd-nasl-array-compat.patch /tmp/openvasd-nasl-array-compat.patch
 COPY engines/images/greenbone/openvasd-eregmatch-captures.patch /tmp/openvasd-eregmatch-captures.patch
 COPY engines/images/greenbone/openvasd-report-port.patch /tmp/openvasd-report-port.patch
+COPY engines/images/greenbone/openvasd-socket-eof.patch /tmp/openvasd-socket-eof.patch
 RUN patch --batch --fuzz=0 -p1 -d /source < /tmp/openvasd-rustls-provider.patch \
     && patch --batch --fuzz=0 -p1 -d /source < /tmp/openvasd-service-port.patch \
     && patch --batch --fuzz=0 -p1 -d /source < /tmp/openvasd-http-compat.patch \
     && patch --batch --fuzz=0 -p1 -d /source < /tmp/openvasd-nasl-array-compat.patch \
     && patch --batch --fuzz=0 -p1 -d /source < /tmp/openvasd-eregmatch-captures.patch \
-    && patch --batch --fuzz=0 -p1 -d /source < /tmp/openvasd-report-port.patch
+    && patch --batch --fuzz=0 -p1 -d /source < /tmp/openvasd-report-port.patch \
+    && patch --batch --fuzz=0 -p1 -d /source < /tmp/openvasd-socket-eof.patch
 WORKDIR /source/rust
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
@@ -145,6 +147,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cargo test --locked --lib nasl::builtin::http::tests \
     && cargo test --locked --lib nasl::builtin::regex::tests \
     && cargo test --locked --lib nasl::builtin::report::tests \
+    && cargo test --locked --lib nasl::builtin::network::socket::tests \
     && cargo test --locked --bin openvasd database::sqlite::results::tests \
     && cargo test --locked --lib nasl::builtin::string::tests \
     && cargo test --locked --lib nasl::interpreter::declare::tests \
@@ -163,11 +166,11 @@ LABEL org.opencontainers.image.title="ai-security-scanner Greenbone engine" \
       org.opencontainers.image.description="Signed-feed Greenbone scanner with exact per-grant loopback relays to the managed SOCKS gateway" \
       org.opencontainers.image.source="https://github.com/greenbone/openvas-scanner" \
       org.opencontainers.image.revision="26465a11ff0e6a98d60a253265fab5974fc757b6" \
-      org.opencontainers.image.version="23.50.24-feed202609170605-1" \
+      org.opencontainers.image.version="23.50.24-feed202609170605-2" \
       org.opencontainers.image.licenses="GPL-2.0-only AND ODbL-1.0 AND Apache-2.0" \
       io.ai-security-scanner.openvas-revision="26465a11ff0e6a98d60a253265fab5974fc757b6" \
       io.ai-security-scanner.openvas-source-sha256="sha256:af8b1e0175dfc57f38bdecc08607dbac294459e684e2f3e7d69c85101fa13517" \
-      io.ai-security-scanner.openvas-patch="rustls-provider:f401a3a174b6fe20fa187a1b74f53d1f9563a22c7a32bfc9aa122268d10e03c3;service-port:fd6409227338da73344657b5686c65bdf23a737da04f8bb3f7434eeb98da3424;http-compat:0aa8b07e43f2b21f32f7f2fa8181957b456248f0986de2723940809047a35eff;nasl-array-compat:affe3266602aade09416b68f2d085d1f390931d921a78eb7bb526451e1eeb891;eregmatch-captures:8e9ce5794e51abf78d77ea3c11931f50cf54f44be0d15becdd0a06c4f7b95d20;report-port:f9440c30d1c13a0fc13165ae2cdece6faab39409b2656db61d781d1e0865ca1c" \
+      io.ai-security-scanner.openvas-patch="rustls-provider:f401a3a174b6fe20fa187a1b74f53d1f9563a22c7a32bfc9aa122268d10e03c3;service-port:fd6409227338da73344657b5686c65bdf23a737da04f8bb3f7434eeb98da3424;http-compat:0aa8b07e43f2b21f32f7f2fa8181957b456248f0986de2723940809047a35eff;nasl-array-compat:affe3266602aade09416b68f2d085d1f390931d921a78eb7bb526451e1eeb891;eregmatch-captures:8e9ce5794e51abf78d77ea3c11931f50cf54f44be0d15becdd0a06c4f7b95d20;report-port:f9440c30d1c13a0fc13165ae2cdece6faab39409b2656db61d781d1e0865ca1c;socket-eof:8decd85c3acd6592b8ed10dd74b6deece386d30a6d0136d4201ccf97c3394846" \
       io.ai-security-scanner.feed-revision="6c8dce2f22bb9e5da081667994be6e9ed79484d8" \
       io.ai-security-scanner.feed-version="202609170605-community" \
       io.ai-security-scanner.feed-image-digest="sha256:d0010b7d8e24e7df8086b85af9fabe64335dccf9a7e1fd4c7774b4712bd061cd" \
@@ -197,6 +200,7 @@ COPY --chmod=0444 engines/images/greenbone/openvasd-http-compat.patch /usr/share
 COPY --chmod=0444 engines/images/greenbone/openvasd-nasl-array-compat.patch /usr/share/source/ai-security-scanner-greenbone/patches/openvasd-nasl-array-compat.patch
 COPY --chmod=0444 engines/images/greenbone/openvasd-eregmatch-captures.patch /usr/share/source/ai-security-scanner-greenbone/patches/openvasd-eregmatch-captures.patch
 COPY --chmod=0444 engines/images/greenbone/openvasd-report-port.patch /usr/share/source/ai-security-scanner-greenbone/patches/openvasd-report-port.patch
+COPY --chmod=0444 engines/images/greenbone/openvasd-socket-eof.patch /usr/share/source/ai-security-scanner-greenbone/patches/openvasd-socket-eof.patch
 COPY --chmod=0444 engines/images/greenbone-launcher/go.mod engines/images/greenbone-launcher/main.go engines/images/greenbone-launcher/main_test.go /usr/share/source/ai-security-scanner-greenbone/launcher/
 
 RUN setcap -r /usr/bin/nmap \

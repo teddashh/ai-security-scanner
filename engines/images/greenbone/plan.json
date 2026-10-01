@@ -15,7 +15,7 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-greenbone",
-    "tag": "23.50.24-feed202609170605-1",
+    "tag": "23.50.24-feed202609170605-2",
     "digest": "sha256:948cf0b503d7f544915bed8f6b410661d8a68f2f64a688bc225f005857d464c0"
   },
   "build_recipe": {
@@ -90,7 +90,7 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/greenbone/Dockerfile",
-    "sha256": "sha256:97689f62f06b098b2b043e67ffd8699759c45ffcb528c2a938d2766adb42ffaa",
+    "sha256": "sha256:2d3efd49a248dda6a83cd0bdaf53e0470890ca80f8860802bc9cf6c6dcfe0df6",
     "reason": null
   },
   "wrapper": {
