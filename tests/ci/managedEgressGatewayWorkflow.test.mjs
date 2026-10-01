@@ -40,6 +40,27 @@ test("managed egress gateway publication is explicit and immutable", () => {
   assert.ok(evidenceIndex < promotionIndex, "promotion must follow signed evidence");
 });
 
+test("the startup smoke expects the status schema the gateway writes", () => {
+  const gatewaySource = readFileSync(
+    new URL("../../src-tauri/src/bin/egress_gateway.rs", import.meta.url),
+    "utf8",
+  );
+  const statusSchema = gatewaySource.match(
+    /^const STATUS_SCHEMA_VERSION: &str = "([^"]+)";$/mu,
+  )?.[1];
+  assert.ok(statusSchema, "the gateway must declare its status schema version");
+  const statusChecks = [
+    ...workflow.matchAll(/jq -e '([^']*)' gateway-status\/status\.json/gu),
+  ].map((match) => match[1]);
+  assert.equal(statusChecks.length, 2, "the smoke reads the status file twice");
+  for (const check of statusChecks) {
+    assert.ok(
+      check.includes(`.schema_version == "${statusSchema}"`),
+      `the startup smoke must expect status schema ${statusSchema}: ${check}`,
+    );
+  }
+});
+
 test("managed egress gateway build includes the patched Cargo source", () => {
   const vendoredSourceIndex = dockerfile.indexOf(
     "COPY vendor/glib-0.18.5 vendor/glib-0.18.5",

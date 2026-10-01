@@ -130,8 +130,8 @@ jobs:
             --status-file /run/ai-security-scanner/status/status.json)"
           for attempt in {1..50}; do
             if jq -e '
-              length <= 3 and
-              .schema_version == "1.0.0" and
+              length <= 4 and
+              .schema_version == "1.1.0" and
               .phase == "ready" and
               .code == "ready"
             ' gateway-status/status.json >/dev/null 2>&1; then
@@ -142,10 +142,11 @@ jobs:
           test "$(wc -c < gateway-status/status.json)" -le 1024
           test ! -e gateway-status/status.tmp
           jq -e '
-            length == 3 and
-            .schema_version == "1.0.0" and
+            length == 4 and
+            .schema_version == "1.1.0" and
             .phase == "ready" and
-            .code == "ready"
+            .code == "ready" and
+            .refusals == {"rate": 0, "destination": 0, "unauthorized_client": 0}
           ' gateway-status/status.json >/dev/null
           docker inspect "${container_id}" --format '{{.State.Running}}' | grep -Fx true
           probe="$(docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges:true \

@@ -79,6 +79,9 @@ CLI missing-value regression (`node --test tests/ci/*.test.mjs`).
 CI document and contract tests: 84 tests passed on September 21, 2026 (`node --test tests/ci/*.test.mjs`),
 including the beginner HTML locale contract and the published MCP Armor distribution decision.
 
+CI document and contract tests: 85 tests passed on October 1, 2026 (`node --test tests/ci/*.test.mjs`),
+including the check that the gateway image's startup smoke expects the status schema the gateway writes.
+
 After removing credential-shaped text from an upstream test fixture, the MCP Armor image was rebuilt,
 published, and pinned. Its offline synthetic smoke test produced one finding, two completed checks, no
 warning, and `complete: true` under `network=none`.
