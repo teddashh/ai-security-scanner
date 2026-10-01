@@ -2,8 +2,9 @@ use ai_security_scanner_lib::adapter::AdapterRegistry;
 use ai_security_scanner_lib::adapters::{BUILTIN_ENGINE_IDS, builtin_adapter_registry};
 use ai_security_scanner_lib::artifact_store::ArtifactStore;
 use ai_security_scanner_lib::beginner_report::{
-    BeginnerInventoryItemKind, BeginnerMasterReport, CoverageDimensionStatus, CoverageGapClass,
-    CoverageGapKind, NextActionCode, build_beginner_master_report,
+    BeginnerInventoryItemKind, BeginnerMasterReport, CLOUD_SCOPE_LIMIT_DIMENSIONS,
+    CoverageDimensionStatus, CoverageGapClass, CoverageGapKind, NextActionCode,
+    build_beginner_master_report,
 };
 use ai_security_scanner_lib::case_service::{
     CaseExportFormat, CaseService, DurableExecutionReport, EngineAssetRoute,
@@ -1405,17 +1406,35 @@ fn every_detector_places_its_finding_on_its_mapped_control() {
                 "these checks did not complete on the run where every check succeeds: {unfinished:#?}"
             );
             // What is left is coverage data, not unfinished execution: a
-            // pinned catalog whose declared support has ended, and a control
-            // upstream evaluated but left for a person to rule on.
+            // pinned catalog whose declared support has ended, a control
+            // upstream evaluated but left for a person to rule on, what a
+            // cloud or Microsoft 365 check's fixed profile leaves out, and
+            // the controls an engine said it did not evaluate.
             let unfinished_gaps = report
                 .coverage_gaps
                 .iter()
                 .filter(|gap| {
                     !matches!(gap.kind, CoverageGapKind::ManualReview)
                         && !gap.dimension.ends_with("expired detection knowledge")
+                        && !CLOUD_SCOPE_LIMIT_DIMENSIONS.contains(&gap.dimension.as_str())
+                        && !gap.dimension.ends_with(": controls not evaluated")
                 })
                 .collect::<Vec<_>>();
             assert!(unfinished_gaps.is_empty(), "{unfinished_gaps:#?}");
+            let scope_limits = report
+                .coverage_gaps
+                .iter()
+                .filter(|gap| CLOUD_SCOPE_LIMIT_DIMENSIONS.contains(&gap.dimension.as_str()))
+                .map(|gap| gap.dimension.as_str())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                scope_limits,
+                BTreeSet::from([
+                    "AWS services other than IAM",
+                    "Microsoft 365 products other than Entra ID"
+                ]),
+                "a clean cloud account or tenant must say what its check left out"
+            );
 
             // Discovery still reports inventory rather than problems. A port
             // that answers is a target for a security check, not a result.

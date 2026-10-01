@@ -947,6 +947,68 @@ test("the asset result board gives a Traditional Chinese beginner the same bound
   expect(board?.textContent).not.toContain("「未發現問題」只適用於已完成的資安檢查");
 });
 
+const cleanCloudAccountReport = (): BeginnerMasterReport => {
+  const base = report("partial");
+  return report("partial", {
+    requested: {
+      ...base.requested,
+      targets: [{
+        assetId: "asset-aws",
+        label: "AWS account 111122223333",
+        assetKind: "cloud_account",
+        labelAvailability: "recorded",
+        assetKindAvailability: "recorded",
+      }],
+      requestedCheckIds: ["prowler"],
+    },
+    actual: {
+      checks: [{
+        taskId: "prowler-task",
+        checkId: "prowler",
+        resultKind: "security_check",
+        targetAssetIds: ["asset-aws"],
+        status: "tested_complete",
+        testedDimensions: [],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    coverageGaps: [{
+      kind: "not_tested",
+      class: "coverage_loss",
+      targetAssetIds: ["asset-aws"],
+      dimension: "AWS services other than IAM",
+      reason: "This scan checked identity and access (IAM) settings only. Other AWS services, such as S3, EC2, RDS, CloudTrail and GuardDuty, were not checked.",
+      nextActionCode: "preserve_visible_limitation",
+      nextAction: "Run a full Prowler scan of this account.",
+    }],
+    coverageCounts: counts({ testedComplete: 1, notTested: 1 }),
+  });
+};
+
+test("a clean cloud account names the services its check left out beside the result", () => {
+  const { container } = renderReport(cleanCloudAccountReport());
+  const row = container.querySelector<HTMLElement>(".asset-result-row");
+  expect(row?.dataset.assetResult).toBe("no_problems_completed");
+  expect(row?.querySelector(".asset-result-row__outcome span")?.textContent)
+    .toBe("Run a full Prowler scan of this account (AWS services other than IAM).");
+  expect(container.textContent).toContain(
+    "This scan checked identity and access (IAM) settings only. Other AWS services, such as S3, EC2, RDS, CloudTrail and GuardDuty, were not checked.",
+  );
+  cleanup();
+
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const { container: zh } = renderReport(cleanCloudAccountReport());
+  const zhRow = zh.querySelector<HTMLElement>(".asset-result-row");
+  expect(zhRow?.dataset.assetResult).toBe("no_problems_completed");
+  expect(zhRow?.querySelector(".asset-result-row__outcome span")?.textContent)
+    .toBe("請對這個帳號執行完整的 Prowler 掃描（IAM 以外的 AWS 服務）。");
+  expect(zh.textContent).toContain(
+    "這次掃描只檢查了身分與存取（IAM）設定。其他 AWS 服務（例如 S3、EC2、RDS、CloudTrail、GuardDuty）沒有檢查。",
+  );
+  expect(zh.textContent).not.toContain("Other AWS services");
+});
+
 const cleanCompletedReport = (): BeginnerMasterReport => {
   const base = report("complete");
   return report("complete", {

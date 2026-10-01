@@ -16580,10 +16580,19 @@ fn html_asset_result_section(
             HtmlAssetResultStatus::NotTested => gaps.iter().copied().find(|gap| {
                 gap.class != CoverageGapClass::RecordNote && gap.kind != CoverageGapKind::Excluded
             }),
+            // A cloud check looked at identity and access alone, so its clean
+            // result names what the rest of the account did not get.
             HtmlAssetResultStatus::NoProblemsInCompletedChecks => gaps
                 .iter()
                 .copied()
-                .find(|gap| gap.kind == CoverageGapKind::ManualReview),
+                .find(|gap| gap.kind == CoverageGapKind::ManualReview)
+                .or_else(|| {
+                    gaps.iter().copied().find(|gap| {
+                        gap.kind == CoverageGapKind::NotTested
+                            && crate::beginner_report::CLOUD_SCOPE_LIMIT_DIMENSIONS
+                                .contains(&gap.dimension.as_str())
+                    })
+                }),
             _ => None,
         };
         // The pill names the state. It used to be followed by a sentence
@@ -20069,6 +20078,91 @@ mod tests {
             "這個專案沒有可檢查的 MCP 設定；請繼續查看其他檢查。"
         );
         assert!(!chinese.contains("目前範圍不需處理"));
+    }
+
+    #[test]
+    fn a_clean_cloud_asset_row_names_what_its_check_left_out() {
+        let mut case = AssessmentCase::new(
+            "Cloud account".into(),
+            OrganizationProfile {
+                organization_name: "Example Co".into(),
+                employee_range: "1-10".into(),
+                data_classes: vec![DataClass::General],
+                notes: None,
+            },
+        );
+        case.assets.push(Asset {
+            id: "asset-aws".into(),
+            kind: AssetKind::CloudAccount,
+            name: "AWS account 111122223333".into(),
+            provider: Some("aws".into()),
+            region: None,
+            identifiers: vec![],
+            discovered_from: vec![],
+            candidate: false,
+            owner_confirmed: true,
+            internet_exposed: None,
+            contains_sensitive_data: None,
+            metadata: BTreeMap::new(),
+        });
+        let run: ScanRun = serde_json::from_value(serde_json::json!({
+            "id": "run-1",
+            "case_id": case.id,
+            "sequence": 1,
+            "created_at": "2026-10-01T12:00:00Z",
+            "completed_at": "2026-10-01T12:05:00Z",
+            "knowledge_cutoff": "2026-10-01T12:00:00Z",
+            "scope_grant_ids": [],
+            "engine_runs": [{
+                "id": "task-prowler",
+                "scan_run_id": "run-1",
+                "engine_id": "prowler",
+                "asset_ids": ["asset-aws"],
+                "status": "completed",
+                "progress_percent": 100,
+                "phase": "completed",
+                "started_at": "2026-10-01T12:01:00Z",
+                "finished_at": "2026-10-01T12:04:00Z",
+                "resume_token": null,
+                "engine_version": "5.0.0",
+                "image_digest": null,
+                "rule_version": null,
+                "adapter_version": "1",
+                "exit_code": 0,
+                "raw_artifact_ids": [],
+                "error_code": null,
+                "error_message": null
+            }]
+        }))
+        .unwrap();
+        case.scan_runs.push(run);
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert!(report.findings.is_empty());
+        for (locale, status, action) in [
+            (
+                crate::export::ReportLocale::En,
+                "No problems in 1 completed check",
+                "Run a full Prowler scan of this account (AWS services other than IAM).",
+            ),
+            (
+                crate::export::ReportLocale::ZhHant,
+                "1 項已完成檢查未發現問題",
+                "請對這個帳號執行完整的 Prowler 掃描（IAM 以外的 AWS 服務）。",
+            ),
+        ] {
+            let catalog = HtmlReportCatalog::new(locale);
+            let labels = readable_target_labels(&report, catalog);
+            let board = html_asset_result_section(&report, &labels, catalog);
+            let row = board
+                .split_once("<tr class=\"asset-result asset-result--")
+                .and_then(|(_, rest)| rest.split_once("</tr>"))
+                .map(|(row, _)| row)
+                .expect("the account's row");
+            assert!(row.starts_with("no-problems-completed"), "{row}");
+            assert!(row.contains(status), "{row}");
+            assert!(row.contains(&html_escape(action)), "{row}");
+        }
     }
 
     #[test]

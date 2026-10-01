@@ -4406,6 +4406,29 @@ fn extract_maester(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> M365E
     )
 }
 
+/// The sentence around the counted shortfall `unevaluated_controls` discloses.
+/// The report reads it back with `disclosed_unevaluated_controls`, so both
+/// directions share these two pieces.
+const UNEVALUATED_CONTROLS_FRAME: (&str, &str) = (
+    " did not evaluate every control in scope (",
+    "); those controls are absent from findings and this run does not establish their state",
+);
+
+/// The engine and the counted items of a disclosure `unevaluated_controls`
+/// wrote, or `None` for any other warning.
+///
+/// The disclosure is stored as a run warning, which only Progress shows. The
+/// report reads it so that a tenant check with no findings does not read as a
+/// clean tenant while controls in its scope went unevaluated.
+pub(crate) fn disclosed_unevaluated_controls(warning: &str) -> Option<(&str, Vec<&str>)> {
+    let (engine, rest) = warning.split_once(UNEVALUATED_CONTROLS_FRAME.0)?;
+    let items = rest.strip_suffix(UNEVALUATED_CONTROLS_FRAME.1)?;
+    if engine.is_empty() || items.is_empty() {
+        return None;
+    }
+    Some((engine, items.split(", ").collect()))
+}
+
 /// What a Microsoft 365 run left unevaluated, and whether that shortfall is
 /// severe enough that the run must not claim completion.
 struct UnevaluatedControls {
@@ -4480,8 +4503,10 @@ fn unevaluated_controls(profile: Profile, parsed: &ParsedArtifact) -> Option<Une
         .collect::<Vec<_>>();
     Some(UnevaluatedControls {
         disclosure: format!(
-            "{engine} did not evaluate every control in scope ({}); those controls are absent from findings and this run does not establish their state",
-            all.join(", ")
+            "{engine}{}{}{}",
+            UNEVALUATED_CONTROLS_FRAME.0,
+            all.join(", "),
+            UNEVALUATED_CONTROLS_FRAME.1
         ),
         // Losing verdicts is not a smaller problem than failing to produce
         // them: either way the run does not establish those controls' state.
@@ -8813,6 +8838,41 @@ mod tests {
             "Maester did not evaluate every control in scope (1 reported by the engine but not carried into results); those controls are absent from findings and this run does not establish their state"
         );
         assert!(unevaluated.withholds_completion);
+    }
+
+    #[test]
+    fn the_report_reads_back_the_disclosure_this_adapter_writes() {
+        let document = ParsedArtifact::Json(serde_json::json!({
+            "Diagnostics": { "passes": 3, "failures": 1, "warnings": 0, "errors": 2,
+                             "manual": 20, "omitted": 5, "normalized_results": 4 }
+        }));
+        let unevaluated = unevaluated_controls(Profile::ScubaGear, &document)
+            .expect("manual, omitted, and error counts are disclosed");
+        assert_eq!(
+            disclosed_unevaluated_controls(&unevaluated.disclosure),
+            Some((
+                "ScubaGear",
+                vec![
+                    "20 left without an automated verdict",
+                    "5 omitted by configuration",
+                    "2 could not be evaluated",
+                ]
+            ))
+        );
+        assert_eq!(
+            disclosed_unevaluated_controls(
+                "the tenant's ScubaGear configuration disputes the result of 1 control; they are reported on ScubaGear's own determination and tagged tenant-disputed rather than suppressed"
+            ),
+            None
+        );
+        assert_eq!(
+            disclosed_unevaluated_controls(&format!(
+                "{}{}",
+                UNEVALUATED_CONTROLS_FRAME.0, UNEVALUATED_CONTROLS_FRAME.1
+            )),
+            None,
+            "a disclosure names an engine and at least one item"
+        );
     }
 
     #[test]

@@ -1038,6 +1038,15 @@ const boundedProfileLimitDimensions = new Set([
   "device product and firmware vulnerability coverage",
 ]);
 
+// A cloud check looks at identity and access alone. Its clean result names
+// what the rest of the account did not get (`CLOUD_SCOPE_LIMIT_DIMENSIONS`).
+const cloudScopeLimitDimensions = new Set([
+  "AWS services other than IAM",
+  "Azure services other than IAM",
+  "Google Cloud settings other than four IAM checks",
+  "Microsoft 365 products other than Entra ID",
+]);
+
 // Older reports and fixtures omit `class`. Absence keeps the conservative
 // coverage-loss reading rather than becoming a quieter record note.
 const isRecordNoteGap = (
@@ -1299,6 +1308,7 @@ function AssetResultBoard({
       ? firstIncompleteGap ?? unfinishedRequestedGap
       : status === "no_problems_completed"
         ? gaps.find((gap) => gap.kind === "manual_review")
+          ?? gaps.find((gap) => gap.kind === "not_tested" && cloudScopeLimitDimensions.has(gap.dimension))
         : firstApplicableGap;
     // The row is the asset, so its step names only the coverage it closes. An
     // unattributed step already names the identifier to add.

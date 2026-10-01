@@ -941,6 +941,16 @@ export const localizedCoverageDimension = (
       "設備產品與韌體弱點涵蓋範圍",
     ],
     ["completed check-to-target coordinate", "完成的目標檢查"],
+    ["aws services other than iam", "IAM 以外的 AWS 服務"],
+    ["azure services other than iam", "IAM 以外的 Azure 服務"],
+    [
+      "google cloud settings other than four iam checks",
+      "四項 IAM 檢查以外的 Google Cloud 設定",
+    ],
+    [
+      "microsoft 365 products other than entra id",
+      "Entra ID 以外的 Microsoft 365 產品",
+    ],
     ["requested scan stage", "要求的掃描深度"],
     ["requested limits", "要求的掃描限制"],
     ["scope reduction", "自動縮減的範圍"],
@@ -1004,6 +1014,7 @@ export const localizedCoverageDimension = (
     const rest = dimension.slice(separator + 2);
     for (const [fragment, label] of [
       ["expired detection knowledge", "已過期的偵測知識"],
+      ["controls not evaluated", "未評估控制項"],
       ["unfinished check dimension", "未完成的檢查項目"],
       ["vulnerability profile evidence", "弱點掃描設定檔證據"],
       ["website execution evidence", "網站執行證據"],
@@ -1510,6 +1521,47 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
     "No action for the current scope.",
     "目前範圍不需處理。",
   ],
+  // What a cloud or Microsoft 365 check's fixed profile leaves out.
+  [
+    "This scan checked identity and access (IAM) settings only. Other AWS services, such as S3, EC2, RDS, CloudTrail and GuardDuty, were not checked.",
+    "這次掃描只檢查了身分與存取（IAM）設定。其他 AWS 服務（例如 S3、EC2、RDS、CloudTrail、GuardDuty）沒有檢查。",
+  ],
+  [
+    "This scan checked identity and access (IAM) role settings only. Other Azure services, such as Microsoft Entra ID, Storage, Virtual Machines, networking, Key Vault and Microsoft Defender for Cloud, were not checked.",
+    "這次掃描只檢查了身分與存取（IAM）角色設定。其他 Azure 服務（例如 Microsoft Entra ID、儲存體、虛擬機器、網路、Key Vault、適用於雲端的 Microsoft Defender）沒有檢查。",
+  ],
+  [
+    "This scan ran four identity and access (IAM) checks only: audit logging, service-account roles granted at the project level, and separation of duties for KMS and service-account roles. Other IAM settings and other Google Cloud services were not checked.",
+    "這次掃描只執行了四項身分與存取（IAM）檢查：稽核記錄、在專案層級授予的服務帳戶角色，以及 KMS 與服務帳戶角色的職責分離。其他 IAM 設定與其他 Google Cloud 服務沒有檢查。",
+  ],
+  [
+    "This scan checked Microsoft Entra ID only. Other Microsoft 365 products, such as Exchange Online, Defender for Office 365, SharePoint and OneDrive, and Teams, were not checked.",
+    "這次掃描只檢查了 Microsoft Entra ID。其他 Microsoft 365 產品（例如 Exchange Online、Defender for Office 365、SharePoint 與 OneDrive、Teams）沒有檢查。",
+  ],
+  [
+    "Run a full Prowler scan of this account.",
+    "請對這個帳號執行完整的 Prowler 掃描。",
+  ],
+  [
+    "Run a full Prowler scan of this subscription.",
+    "請對這個訂用帳戶執行完整的 Prowler 掃描。",
+  ],
+  [
+    "Run a full Prowler scan of this Google Cloud project.",
+    "請對這個 Google Cloud 專案執行完整的 Prowler 掃描。",
+  ],
+  [
+    "Run ScubaGear with all products for this tenant.",
+    "請對這個租用戶執行包含所有產品的 ScubaGear 掃描。",
+  ],
+  [
+    "Some controls in scope were not evaluated, so their state is unknown.",
+    "範圍內有部分控制項未經評估，因此狀態未知。",
+  ],
+  [
+    "Check these controls by hand.",
+    "請以人工方式檢查這些控制項。",
+  ],
   [
     "The approved rate limit refused some of this check's connections, so part of the check never reached the target.",
     "核准的速率限制拒絕了這項檢查的部分連線，因此部分檢查未能送達目標。",
@@ -1568,8 +1620,55 @@ export const coverageGapProse = (
     if (base) return `${base}拒絕的連線：${withRefusals[2]}。`;
     return english;
   }
+  // Unevaluated controls are counted by kind. Each count is the engine's and
+  // stays verbatim; each kind is this product's wording.
+  const withUnevaluated = /^(.*\.) Not evaluated: (.+)\.$/u.exec(trimmed);
+  if (withUnevaluated) {
+    const base = lookupProse(withUnevaluated[1] ?? "");
+    if (base) return `${base}未評估：${unevaluatedControlItemsZhTW(withUnevaluated[2] ?? "")}。`;
+    return english;
+  }
   return lookupProse(trimmed) ?? english;
 };
+
+/**
+ * The kinds of unevaluated control the Microsoft 365 adapters count, in
+ * Traditional Chinese. They are sentence fragments this product wrote, not
+ * values an engine reported; only the count in front of each one is the
+ * engine's. `UNEVALUATED_CONTROL_KINDS` in `finding_narrative.rs` is the twin.
+ */
+export const UNEVALUATED_CONTROL_KINDS: ReadonlyArray<readonly [string, string]> = [
+  ["left without an automated verdict", "未回傳自動判定"],
+  ["omitted by configuration", "依設定略過"],
+  ["could not be evaluated", "無法評估"],
+  ["skipped", "已略過"],
+  ["not run", "未執行"],
+  [
+    "reported by the engine but not carried into results",
+    "掃描工具已回報，但未帶入結果",
+  ],
+  [
+    "not accounted for by any reported category",
+    "未計入任何已回報類別",
+  ],
+];
+
+/**
+ * "20 left without an automated verdict, 5 could not be evaluated", item by
+ * item. An item another build wrote keeps its own text.
+ */
+export const unevaluatedControlItemsZhTW = (items: string): string => items
+  .split(", ")
+  .map((item) => {
+    for (const [english, chinese] of UNEVALUATED_CONTROL_KINDS) {
+      const count = item.endsWith(` ${english}`)
+        ? item.slice(0, item.length - english.length - 1)
+        : undefined;
+      if (count && /^\d+$/u.test(count)) return `${count} ${chinese}`;
+    }
+    return item;
+  })
+  .join("、");
 
 /**
  * `coverageGapProse`, with a trailing diagnostic code removed first.

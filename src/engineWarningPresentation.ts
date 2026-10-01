@@ -1,3 +1,5 @@
+import { UNEVALUATED_CONTROL_KINDS, unevaluatedControlItemsZhTW } from "./findingNarrative.ts";
+
 /**
  * Product-authored engine-run warnings shown only by the Progress page.
  * Stored English remains canonical; values inside known frames stay verbatim.
@@ -112,33 +114,12 @@ const FIXED_ENGINE_WARNINGS: ReadonlyArray<readonly [string, string]> = [
 
 /**
  * The counted shortfall descriptions the Microsoft 365 adapters join into the
- * "did not evaluate every control" disclosure. They are sentence fragments this
- * product wrote, not values an engine reported, so they are translated rather
- * than kept verbatim; only the count in front of each one is the engine's.
+ * "did not evaluate every control" disclosure. The report states the same
+ * counts beside the result they qualify, so both read one table. An older
+ * build's "reserved for manual review" is renamed before this is consulted.
  */
-const SHORTFALL_DESCRIPTIONS: ReadonlyArray<readonly [string, string]> = [
-  ["left without an automated verdict", "未回傳自動判定"],
-  ["reserved for manual review", "未回傳自動判定"],
-  ["omitted by configuration", "依設定略過"],
-  ["could not be evaluated", "無法評估"],
-  ["skipped", "已略過"],
-  ["not run", "未執行"],
-  ["reported by the engine but not carried into results", "掃描工具已回報，但未帶入結果"],
-  ["not accounted for by any reported category", "未計入任何已回報類別"],
-];
-
-/** Translates each `<count> <description>` item, leaving an unknown one as-is. */
-const shortfalls = (list: string): string => list
-  .split(", ")
-  .map((item) => {
-    const description = SHORTFALL_DESCRIPTIONS
-      .find(([english]) => item.endsWith(` ${english}`));
-    return description ? `${item.slice(0, item.length - description[0].length)}${description[1]}` : item;
-  })
-  .join("、");
-
 export const recognizedShortfallDescriptionZhTW = (description: string): string | undefined =>
-  SHORTFALL_DESCRIPTIONS.find(([english]) => english === description)?.[1];
+  UNEVALUATED_CONTROL_KINDS.find(([english]) => english === description)?.[1];
 
 const frame = (value: string, expression: RegExp, render: (...values: string[]) => string): string | undefined => {
   const match = value.match(expression);
@@ -597,7 +578,7 @@ export const recognizedEngineWarningZhTW = (warning: string): string | undefined
     [/^record (.+) matched an ambiguous native asset identifier and was not normalized$/u, (rule) => `記錄 ${rule} 對應到有歧義的原生資產識別碼，因此未正規化`],
     [/^record (.+) had no exact authorized provider identifier match and was not normalized$/u, (rule) => `記錄 ${rule} 沒有完全相符的已授權供應商識別碼，因此未正規化`],
     [/^record (.+) could not be mapped unambiguously to an authorized asset and was not normalized$/u, (rule) => `記錄 ${rule} 無法明確對應到已授權資產，因此未正規化`],
-    [/^(.+) did not evaluate every control in scope \((.+)\); those controls are absent from findings and this run does not establish their state$/u, (engine, controls) => `${engine} 未評估範圍內的所有控制措施（${shortfalls(controls)}）；這些控制措施未列於問題中，本輪也無法確認其狀態`],
+    [/^(.+) did not evaluate every control in scope \((.+)\); those controls are absent from findings and this run does not establish their state$/u, (engine, controls) => `${engine} 未評估範圍內的所有控制措施（${unevaluatedControlItemsZhTW(controls)}）；這些控制措施未列於問題中，本輪也無法確認其狀態`],
     [/^scanner output was captured, but no verified adapter is registered for (.+) version (.+)$/u, (engine, version) => `掃描工具輸出已擷取，但沒有為 ${engine} ${version} 版登錄經驗證的轉接器`],
     [/^scanner output was captured, but adapter (.+) version (.+) failed validation$/u, (engine, version) => `掃描工具輸出已擷取，但 ${engine} ${version} 版轉接器驗證失敗`],
     [/^Zeroized and removed (.+) crash-left credential envelope\(s\) from this exact execution attempt\.$/u, (count) => `已從這次確切執行嘗試中清零並移除 ${count} 個因當機遺留的認證封套。`],

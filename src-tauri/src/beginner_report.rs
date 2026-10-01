@@ -789,6 +789,7 @@ pub fn build_beginner_master_report(
     append_case_exclusions(case, run, &mut coverage_gaps);
     append_internal_device_profile_gaps(case, run, &mut coverage_gaps);
     append_internal_endpoint_profile_gaps(case, run, &mut coverage_gaps);
+    append_cloud_scope_gaps(&requested.targets, &actual, &mut coverage_gaps);
     append_report_asset_snapshot_gaps(run, &mut coverage_gaps);
 
     for unavailable in requested
@@ -1973,6 +1974,7 @@ fn project_actual_coverage(case: &AssessmentCase, run: &ScanRun) -> ActualCovera
             append_task_gap(task, status, &mut gaps);
         }
         append_stale_knowledge_gap(task, status, run.created_at, &mut gaps);
+        append_unevaluated_controls_gap(task, status, &mut gaps);
         if useful_result {
             useful_task_ids.insert(task.id.clone());
         }
@@ -3675,6 +3677,146 @@ fn append_internal_endpoint_profile_gaps(
             });
         }
     }
+}
+
+/// What the cloud and Microsoft 365 launchers leave out, as (dimension,
+/// reason, next action). Each profile is fixed in its launcher: Prowler runs
+/// the IAM service on AWS and Azure and four IAM checks on Google Cloud,
+/// ScoutSuite runs its IAM service, Cloudsplaining reads IAM policies,
+/// ScubaGear runs the `aad` product and Maester its Entra tests.
+const AWS_SCOPE_LIMIT: (&str, &str, &str) = (
+    "AWS services other than IAM",
+    "This scan checked identity and access (IAM) settings only. Other AWS services, such as S3, EC2, RDS, CloudTrail and GuardDuty, were not checked.",
+    "Run a full Prowler scan of this account.",
+);
+const AZURE_SCOPE_LIMIT: (&str, &str, &str) = (
+    "Azure services other than IAM",
+    "This scan checked identity and access (IAM) role settings only. Other Azure services, such as Microsoft Entra ID, Storage, Virtual Machines, networking, Key Vault and Microsoft Defender for Cloud, were not checked.",
+    "Run a full Prowler scan of this subscription.",
+);
+const GCP_SCOPE_LIMIT: (&str, &str, &str) = (
+    "Google Cloud settings other than four IAM checks",
+    "This scan ran four identity and access (IAM) checks only: audit logging, service-account roles granted at the project level, and separation of duties for KMS and service-account roles. Other IAM settings and other Google Cloud services were not checked.",
+    "Run a full Prowler scan of this Google Cloud project.",
+);
+const MICROSOFT_365_SCOPE_LIMIT: (&str, &str, &str) = (
+    "Microsoft 365 products other than Entra ID",
+    "This scan checked Microsoft Entra ID only. Other Microsoft 365 products, such as Exchange Online, Defender for Office 365, SharePoint and OneDrive, and Teams, were not checked.",
+    "Run ScubaGear with all products for this tenant.",
+);
+
+/// The dimensions `append_cloud_scope_gaps` writes. An asset row with no
+/// problems names its gap, in the app and in the saved report alike.
+pub const CLOUD_SCOPE_LIMIT_DIMENSIONS: [&str; 4] = [
+    AWS_SCOPE_LIMIT.0,
+    AZURE_SCOPE_LIMIT.0,
+    GCP_SCOPE_LIMIT.0,
+    MICROSOFT_365_SCOPE_LIMIT.0,
+];
+
+fn cloud_scope_limit(
+    engine_id: &str,
+    asset_kind: Option<&AssetKind>,
+) -> Option<(&'static str, &'static str, &'static str)> {
+    match (engine_id, asset_kind) {
+        ("prowler", Some(AssetKind::CloudAccount)) | ("scoutsuite" | "cloudsplaining", _) => {
+            Some(AWS_SCOPE_LIMIT)
+        }
+        ("prowler", Some(AssetKind::Subscription)) => Some(AZURE_SCOPE_LIMIT),
+        ("prowler", Some(AssetKind::Project)) => Some(GCP_SCOPE_LIMIT),
+        ("scubagear" | "maester", _) => Some(MICROSOFT_365_SCOPE_LIMIT),
+        _ => None,
+    }
+}
+
+/// A cloud check that completed with no findings reads as a clean account,
+/// while it looked at identity and access alone. One row per asset says what
+/// the rest of the account did not get, however many of these checks ran on
+/// it: the limit is the asset's, not any one scanner's.
+fn append_cloud_scope_gaps(
+    targets: &[RequestedTarget],
+    actual: &ActualCoverage,
+    gaps: &mut Vec<CoverageGap>,
+) {
+    let mut limits = BTreeSet::new();
+    for check in actual.checks.iter().filter(|check| {
+        matches!(
+            check.status,
+            CoverageDimensionStatus::TestedComplete | CoverageDimensionStatus::TestedPartial
+        )
+    }) {
+        for asset_id in &check.target_asset_ids {
+            let asset_kind = targets
+                .iter()
+                .find(|target| &target.asset_id == asset_id)
+                .and_then(|target| target.asset_kind.as_ref());
+            if let Some(limit) = cloud_scope_limit(&check.check_id, asset_kind) {
+                limits.insert((asset_id.clone(), limit));
+            }
+        }
+    }
+    for (asset_id, (dimension, reason, next_action)) in limits {
+        gaps.push(CoverageGap {
+            unattributed: None,
+            kind: CoverageGapKind::NotTested,
+            class: CoverageGapKind::NotTested.default_class(),
+            task_id: None,
+            target_asset_ids: vec![asset_id],
+            dimension: dimension.into(),
+            reason: reason.into(),
+            next_action_code: NextActionCode::PreserveVisibleLimitation,
+            next_action: next_action.into(),
+        });
+    }
+}
+
+/// Microsoft 365 checks pass over some controls: ScubaGear leaves some for a
+/// person to check, Maester skips tests whose prerequisites are missing, and
+/// either can fail to evaluate one. The adapter discloses the count as a run
+/// warning, which only Progress shows, so with no findings the report read as
+/// a clean tenant. This carries the count to the report.
+fn append_unevaluated_controls_gap(
+    task: &EngineRun,
+    status: CoverageDimensionStatus,
+    gaps: &mut Vec<CoverageGap>,
+) {
+    if !matches!(
+        status,
+        CoverageDimensionStatus::TestedComplete | CoverageDimensionStatus::TestedPartial
+    ) {
+        return;
+    }
+    let Some(items) = task.warnings.iter().find_map(|warning| {
+        crate::adapters::disclosed_unevaluated_controls(warning)
+            .filter(|(engine, _)| engine.eq_ignore_ascii_case(&task.engine_id))
+            .map(|(_, items)| items)
+    }) else {
+        return;
+    };
+    // An older build named ScubaGear's manual controls differently.
+    let items = items
+        .iter()
+        .map(|item| {
+            item.replace(
+                "reserved for manual review",
+                "left without an automated verdict",
+            )
+        })
+        .collect::<Vec<_>>();
+    gaps.push(CoverageGap {
+        unattributed: None,
+        kind: CoverageGapKind::NotTested,
+        class: CoverageGapKind::NotTested.default_class(),
+        task_id: Some(task.id.clone()),
+        target_asset_ids: task.asset_ids.clone(),
+        dimension: format!("{}: controls not evaluated", check_id(task)),
+        reason: format!(
+            "Some controls in scope were not evaluated, so their state is unknown. Not evaluated: {}.",
+            items.join(", ")
+        ),
+        next_action_code: NextActionCode::PreserveVisibleLimitation,
+        next_action: "Check these controls by hand.".into(),
+    });
 }
 
 fn append_report_asset_snapshot_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
@@ -8360,6 +8502,215 @@ mod tests {
             build_beginner_master_report(&reopened, "run-1").unwrap(),
             report,
             "reopening the case must preserve the manual-review coverage item"
+        );
+    }
+
+    fn completed_engine_task(engine_id: &str) -> EngineRun {
+        let mut task = catalog_task(engine_id, EngineRunStatus::Completed);
+        task.engine_id = engine_id.into();
+        task.progress_percent = 100;
+        task.phase = "completed".into();
+        task.exit_code = Some(0);
+        task.error_message = None;
+        task
+    }
+
+    fn cloud_case(tasks: Vec<EngineRun>, kind: AssetKind) -> AssessmentCase {
+        let mut case = case_with_catalog_tasks(tasks, true);
+        case.assets[0].kind = kind;
+        case.assets[0].name = "cloud target".into();
+        case
+    }
+
+    fn cloud_scope_rows(report: &BeginnerMasterReport) -> Vec<&CoverageGap> {
+        report
+            .coverage_gaps
+            .iter()
+            .filter(|gap| CLOUD_SCOPE_LIMIT_DIMENSIONS.contains(&gap.dimension.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn a_clean_cloud_account_says_which_services_its_checks_left_out() {
+        let case = cloud_case(
+            vec![
+                completed_engine_task("prowler"),
+                completed_engine_task("scoutsuite"),
+                completed_engine_task("cloudsplaining"),
+            ],
+            AssetKind::CloudAccount,
+        );
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert!(report.findings.is_empty());
+        assert!(
+            report
+                .actual
+                .checks
+                .iter()
+                .all(|check| check.status == CoverageDimensionStatus::TestedComplete),
+            "the checks themselves completed"
+        );
+        assert_eq!(
+            report.state.summary,
+            BeginnerReportSummary::Partial,
+            "identity and access alone is not the whole account"
+        );
+        // Three checks, one account, one row: the limit is the account's.
+        let rows = cloud_scope_rows(&report);
+        assert_eq!(rows.len(), 1);
+        let row = rows[0];
+        assert_eq!(row.dimension, "AWS services other than IAM");
+        assert_eq!(row.kind, CoverageGapKind::NotTested);
+        assert_eq!(row.class, CoverageGapClass::CoverageLoss);
+        assert_eq!(row.task_id, None);
+        assert_eq!(row.target_asset_ids, ["asset-1"]);
+        assert!(
+            row.reason
+                .contains("S3, EC2, RDS, CloudTrail and GuardDuty")
+        );
+        assert_eq!(
+            crate::finding_narrative::coverage_dimension_zh_hant(&row.dimension),
+            "IAM 以外的 AWS 服務"
+        );
+        assert!(report.next_steps.iter().any(|step| step.action
+            == "Run a full Prowler scan of this account."
+            && step.task_id.is_none()));
+        assert_eq!(report.coverage_counts.not_tested, 1);
+    }
+
+    #[test]
+    fn each_cloud_profile_names_its_own_limit_once_a_check_has_run() {
+        for (engine, kind, dimension, action) in [
+            (
+                "prowler",
+                AssetKind::CloudAccount,
+                "AWS services other than IAM",
+                "Run a full Prowler scan of this account.",
+            ),
+            (
+                "prowler",
+                AssetKind::Subscription,
+                "Azure services other than IAM",
+                "Run a full Prowler scan of this subscription.",
+            ),
+            (
+                "prowler",
+                AssetKind::Project,
+                "Google Cloud settings other than four IAM checks",
+                "Run a full Prowler scan of this Google Cloud project.",
+            ),
+            (
+                "scubagear",
+                AssetKind::Tenant,
+                "Microsoft 365 products other than Entra ID",
+                "Run ScubaGear with all products for this tenant.",
+            ),
+            (
+                "maester",
+                AssetKind::Tenant,
+                "Microsoft 365 products other than Entra ID",
+                "Run ScubaGear with all products for this tenant.",
+            ),
+        ] {
+            let case = cloud_case(vec![completed_engine_task(engine)], kind.clone());
+            let report = build_beginner_master_report(&case, "run-1").unwrap();
+            let rows = cloud_scope_rows(&report)
+                .into_iter()
+                .map(|gap| (gap.dimension.as_str(), gap.next_action.as_str()))
+                .collect::<Vec<_>>();
+            assert_eq!(rows, [(dimension, action)], "{engine} on {kind:?}");
+        }
+
+        // A failed check tested nothing, and its own row already says so.
+        let mut failed = completed_engine_task("prowler");
+        failed.status = EngineRunStatus::Failed;
+        let report = build_beginner_master_report(
+            &cloud_case(vec![failed], AssetKind::CloudAccount),
+            "run-1",
+        )
+        .unwrap();
+        assert!(cloud_scope_rows(&report).is_empty());
+        // Inventory is not a security check, so it has no clean result to qualify.
+        let report = build_beginner_master_report(
+            &cloud_case(
+                vec![completed_engine_task("cloudquery")],
+                AssetKind::CloudAccount,
+            ),
+            "run-1",
+        )
+        .unwrap();
+        assert!(cloud_scope_rows(&report).is_empty());
+    }
+
+    /// The scope rows describe what each launcher runs. A launcher that runs
+    /// more must change its row too, or the report understates the scan.
+    #[test]
+    fn the_cloud_scope_rows_describe_what_the_launchers_run() {
+        let cloud = include_str!("../../engines/images/cloud-launcher/main.go");
+        for invocation in [
+            r#""aws", "--service", "iam", "--region", "us-east-1""#,
+            r#""--subscription-ids", providerTarget, "--service", "iam","#,
+            r#""--checks", "iam_audit_logs_enabled", "iam_no_service_roles_at_project_level","#,
+            r#""iam_role_kms_enforce_separation_of_duties", "iam_role_sa_enforce_separation_of_duties","#,
+            r#""aws", "--services", "iam", "--no-browser", "--force","#,
+        ] {
+            assert_eq!(cloud.matches(invocation).count(), 1, "{invocation}");
+        }
+        let scubagear = include_str!("../../engines/images/scubagear/run-scubagear.ps1");
+        assert!(scubagear.contains("-ProductNames @('aad')"));
+        let maester = include_str!("../../engines/images/maester/run-maester.ps1");
+        assert!(maester.contains("-Path '/opt/ai-security-scanner/maester-tests/Maester/Entra'"));
+    }
+
+    #[test]
+    fn controls_a_tenant_check_did_not_evaluate_reach_the_report() {
+        let mut task = completed_engine_task("scubagear");
+        // Written by an older build, which named manual controls differently.
+        task.warnings = vec![
+            "ScubaGear did not evaluate every control in scope (20 reserved for manual review, 5 omitted by configuration); those controls are absent from findings and this run does not establish their state".into(),
+        ];
+        let case = cloud_case(vec![task], AssetKind::Tenant);
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        assert_eq!(
+            report.actual.checks[0].status,
+            CoverageDimensionStatus::TestedComplete
+        );
+        let gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension == "scubagear: controls not evaluated")
+            .expect("the unevaluated controls reach the report");
+        assert_eq!(gap.kind, CoverageGapKind::NotTested);
+        assert_eq!(gap.task_id.as_deref(), Some("scubagear"));
+        assert_eq!(gap.target_asset_ids, ["asset-1"]);
+        assert_eq!(
+            gap.reason,
+            "Some controls in scope were not evaluated, so their state is unknown. Not evaluated: 20 left without an automated verdict, 5 omitted by configuration."
+        );
+        assert_eq!(
+            crate::finding_narrative::coverage_gap_prose_zh_hant(&gap.reason).as_deref(),
+            Some(
+                "範圍內有部分控制項未經評估，因此狀態未知。未評估：20 未回傳自動判定、5 依設定略過。"
+            )
+        );
+        assert_eq!(
+            crate::finding_narrative::coverage_dimension_zh_hant(&gap.dimension),
+            "scubagear 的未評估控制項"
+        );
+        assert_eq!(gap.next_action, "Check these controls by hand.");
+        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+
+        // Another engine's disclosure is not this task's to report.
+        let mut other = completed_engine_task("maester");
+        other.warnings = case.scan_runs[0].engine_runs[0].warnings.clone();
+        let report =
+            build_beginner_master_report(&cloud_case(vec![other], AssetKind::Tenant), "run-1")
+                .unwrap();
+        assert!(
+            !report
+                .coverage_gaps
+                .iter()
+                .any(|gap| gap.dimension.ends_with(": controls not evaluated"))
         );
     }
 
