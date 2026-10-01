@@ -52,6 +52,11 @@ const MAX_RUNTIME_EXECUTION_INFO_BYTES: usize = 16 * 1024;
 pub const RELEASE_APPROVED_LOCAL_IMAGE_DIRECTORY_ENVIRONMENT_VARIABLE: &str =
     "AI_SECURITY_SCANNER_RELEASE_APPROVED_LOCAL_IMAGE_DIRECTORY";
 const RUNTIME_COMMAND_TIMEOUT: StdDuration = StdDuration::from_secs(30);
+// Removing an exited engine container waits on the runtime's storage cleanup,
+// which took 35 seconds on a busy Docker host after a finished Greenbone scan.
+// A removal that outlives its deadline leaves cleanup pending, and the scan is
+// then recorded as partial even though the scanner finished.
+const OWNED_CONTAINER_REMOVAL_TIMEOUT: StdDuration = StdDuration::from_secs(2 * 60);
 // Loading a release archive can transfer and unpack several hundred MB into a
 // provider VM. Keep it independent of short control-plane commands and pulls.
 const LOCAL_PINNED_IMAGE_LOAD_TIMEOUT: StdDuration = StdDuration::from_secs(15 * 60);
@@ -1874,6 +1879,7 @@ impl DirectRuntimeOperation {
         match self {
             Self::LocalPinnedImageLoad => LOCAL_PINNED_IMAGE_LOAD_TIMEOUT,
             Self::PinnedImagePull => PINNED_IMAGE_PULL_TIMEOUT,
+            Self::OwnedContainerCleanup => OWNED_CONTAINER_REMOVAL_TIMEOUT,
             _ => RUNTIME_COMMAND_TIMEOUT,
         }
     }
@@ -4740,6 +4746,10 @@ mod tests {
             DirectRuntimeOperation::PinnedImagePull.timeout(),
             StdDuration::from_secs(10 * 60)
         );
+        assert_eq!(
+            DirectRuntimeOperation::OwnedContainerCleanup.timeout(),
+            StdDuration::from_secs(2 * 60)
+        );
         for operation in [
             DirectRuntimeOperation::RuntimeVersionPreflight,
             DirectRuntimeOperation::RuntimeSecurityPreflight,
@@ -4751,7 +4761,6 @@ mod tests {
             DirectRuntimeOperation::ContainerStop,
             DirectRuntimeOperation::CreatedContainerOwnershipInspection,
             DirectRuntimeOperation::OwnedContainerInspection,
-            DirectRuntimeOperation::OwnedContainerCleanup,
         ] {
             assert_eq!(operation.timeout(), StdDuration::from_secs(30));
         }
