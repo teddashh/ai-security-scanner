@@ -33,7 +33,7 @@ The [v0.2.0 archived proposal](v0.2.0-archived-proposal.md) is retained as an un
 
 - [Engine image supply chain](engine-image-supply-chain.md)
 - [Historical Windows evidence glossary](windows-external-qualification-plan.md)
-- [Historical Windows evidence glossary — zh-TW](windows-external-qualification-plan.zh-TW.md)
+- [Historical Windows evidence glossary (zh-TW)](windows-external-qualification-plan.zh-TW.md)
 - JSON schemas define record formats consumed by release tooling.
 
 Each record describes its stated version, commit, artifact, and observation time. Current product behavior comes from the [product specification](../product-spec.md).

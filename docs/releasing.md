@@ -58,7 +58,7 @@ Each lane records what it actually observed: installation, application and compa
 
 The finalized QC set records offered artifacts and their qualification evidence, checksums, runtime manifests, notices, SBOMs and limitations. The workflow summary identifies the run, artifact and source commit. Finalization does not lift HOLD.
 
-## Future promotion reference — inactive during HOLD
+## Future promotion reference: inactive during HOLD
 
 Publication remains a separate product-owner decision. After the owner lifts HOLD and authorizes a public candidate, **Promote frozen desktop release candidate** consumes five values from that preparation run:
 

@@ -57,7 +57,7 @@ Capability labels use the catalog definitions: connectivity, exposure, vulnerabi
 7. Compare normalized records to the raw upstream output. Verify that rule IDs, titles, severities, messages, evidence, and remediation were preserved and that report-only additions are labeled.
 8. Apply the shared adapter-contract version rule in section 8. Keep migrations capable of explaining existing cases.
 9. Set `knowledge_date` to the newest date genuinely represented by the exact engine/data closure. Set `support_until` to the maintained support window; do not refresh either merely because the application was rebuilt.
-10. Update the honest capability and exclusions table if—and only if—the executed upstream profile changed what the product actually checks.
+10. Update the honest capability and exclusions table if, and only if, the executed upstream profile changed what the product actually checks.
 
 If the product owner separately requests artifact distribution, use the [engine artifact trust reference](release/engine-image-supply-chain.md) to verify the exact architectures, digest, source association, entrypoint, SBOM, notices/source offer, and retrieval claim for that artifact. This is not part of ordinary scanner maintenance.
 
@@ -110,7 +110,7 @@ Every stored engine run and every export carries this value, and that is what th
 Bump it when the same upstream bytes would produce a different normalized result. In practice, bump it when a change alters:
 
 - which upstream records become findings, or stop becoming findings;
-- the value of any normalized field for unchanged input—severity, confidence, title, location, remediation, tags, or evidence references;
+- the value of any normalized field for unchanged input (severity, confidence, title, location, remediation, tags, or evidence references);
 - the set of values a normalized field can take;
 - the warnings or coverage attributed to an engine run.
 

@@ -28,7 +28,7 @@ The app creates a bounded private snapshot and runs applicable upstream checks f
 - application, deployment, infrastructure, and Kubernetes configuration;
 - component inventory used by the report and exports.
 
-The snapshot process follows repository ignore rules for generated, dependency, build, cache, and version-control directories. Common secret-bearing source files—including `.env` variants, private keys, registry or authentication configuration, and `*.tfvars`—remain available to the secret scanners.
+The snapshot process follows repository ignore rules for generated, dependency, build, cache, and version-control directories. Common secret-bearing source files (including `.env` variants, private keys, registry or authentication configuration, and `*.tfvars`) remain available to the secret scanners.
 
 The project is not built, executed, uploaded, committed, pushed, or modified.
 
@@ -38,7 +38,7 @@ The generic internal-system profile passes the exact confirmed host and ports to
 
 The profile uses no credentials. It excludes local authenticated checks, default-account and brute-force checks, policy families, alternative port scanners, and attack, denial, destructive, kill-host, and flood categories. It does not add neighboring hosts or undisclosed ports.
 
-Open ports and detected services appear under **Observed services — not vulnerabilities**. A security finding requires an upstream vulnerability result.
+Open ports and detected services appear under **Observed services (not vulnerabilities)**. A security finding requires an upstream vulnerability result.
 
 ## Infrastructure, containers, Kubernetes, and cloud
 

@@ -1,6 +1,6 @@
-# Product doctrine — ai-security-scanner
+# Product doctrine: ai-security-scanner
 
-**Locked:** 2026-09-13 (America/New_York) — Ted Huang  
+**Locked:** 2026-09-13 (America/New_York), Ted Huang  
 **Audience:** future Codex / Claude / human sessions on this repo
 
 This note is durable product stance. Prefer it over improvising UX for “power users.”

@@ -56,7 +56,7 @@ Workflow 定義以下四條 qualification 路徑，各路徑最終可記為 `not
 
 Finalized QC 集合記錄所提供的 artifacts 及其 qualification evidence、checksums、runtime manifests、notices、SBOM 與限制。Workflow summary 識別 run、artifact 與 source commit；finalization 不會解除 HOLD。
 
-## 未來 promotion 參考 — HOLD 期間不執行
+## 未來 promotion 參考：HOLD 期間不執行
 
 公開發布仍由產品負責人另外決定。負責人解除 HOLD 並授權建立 public candidate 後，**Promote frozen desktop release candidate** 才會使用該次準備流程產生的五個值：
 

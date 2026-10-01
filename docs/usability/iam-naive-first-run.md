@@ -6,7 +6,7 @@ This document records how to study the optional AWS experience with a participan
 
 ## Research question
 
-Can a person who can use the computer and sign in to a disposable AWS account—but does not understand IAM or security scanners—connect supported read-only access, start a useful assessment, understand partial coverage, and prepare a report without a maintainer taking over?
+Can a person who can use the computer and sign in to a disposable AWS account, but does not understand IAM or security scanners, connect supported read-only access, start a useful assessment, understand partial coverage, and prepare a report without a maintainer taking over?
 
 The study should reveal product friction, not test whether the participant can invent IAM roles, copy role ARNs, diagnose provider internals, or operate scan infrastructure.
 
@@ -44,15 +44,15 @@ Unconfigured handoff:
 
 The evidence schema uses these stable task IDs. They are research coordinates, not prescribed screens:
 
-1. `install_and_start` — reach the application.
-2. `create_case` — choose AWS and create or select the project.
-3. `prepare_runtime` — observe whether scan-tool preparation stays out of the user's way.
-4. `connect_aws` — use the official sign-in without pasting secrets or manual provider identifiers.
-5. `confirm_scope` — understand the displayed read-only account and start the scan.
-6. `run_assessment` — observe useful checks and the effect of an optional scanner failure.
-7. `interpret_coverage` — distinguish tested, not tested, failed, timed out, and excluded work.
-8. `prepare_handoff` — identify the priority result, next action, and report to share.
-9. `inspect_cleanup` — understand remaining access and disconnect it when offered.
+1. `install_and_start`: reach the application.
+2. `create_case`: choose AWS and create or select the project.
+3. `prepare_runtime`: observe whether scan-tool preparation stays out of the user's way.
+4. `connect_aws`: use the official sign-in without pasting secrets or manual provider identifiers.
+5. `confirm_scope`: understand the displayed read-only account and start the scan.
+6. `run_assessment`: observe useful checks and the effect of an optional scanner failure.
+7. `interpret_coverage`: distinguish tested, not tested, failed, timed out, and excluded work.
+8. `prepare_handoff`: identify the priority result, next action, and report to share.
+9. `inspect_cleanup`: understand remaining access and disconnect it when offered.
 
 Also record unnecessary fields, unclear language, dead ends, facilitator help, time to first useful result, whether the participant understood the top finding, and whether the report supported a sensible next action.
 
