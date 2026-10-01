@@ -13,8 +13,8 @@ use super::{
 use crate::error::{AppError, AppResult};
 use crate::source_authorization::VerifiedProviderAuthorization;
 use crate::source_authorization::provider::{
-    AwsNativeAuthorizationConfig, AwsRoleCredentials, AwsSigningCredentials,
-    AwsSimulationDecision, DeviceAuthorizationPrompt, DeviceSignInPage, GcpNativeAuthorizationConfig,
+    AwsNativeAuthorizationConfig, AwsRoleCredentials, AwsSigningCredentials, AwsSimulationDecision,
+    DeviceAuthorizationPrompt, DeviceSignInPage, GcpNativeAuthorizationConfig,
     MicrosoftNativeAuthorizationConfig, PollAuthorization, ProviderHttp, ProviderHttpMethod,
     aws_query_encode, aws_signed_request, aws_simulation_decisions, bearer_get, bearer_header,
     begin_aws_native_authorization, bounded_expiry, decode_success_json, device_poll_retry,

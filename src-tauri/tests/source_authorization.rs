@@ -202,15 +202,12 @@ fn aws_simulation_xml(first_prohibited: Option<&str>) -> String {
     let results = AWS_REQUIRED_ACTIONS
         .iter()
         .map(|action| result(action, "allowed"))
-        .chain(
-            AWS_PROHIBITED_ACTIONS
-                .iter()
-                .enumerate()
-                .filter_map(|(index, action)| match index {
-                    0 => first_prohibited.map(|decision| result(action, decision)),
-                    _ => Some(result(action, "implicitDeny")),
-                }),
-        )
+        .chain(AWS_PROHIBITED_ACTIONS.iter().enumerate().filter_map(
+            |(index, action)| match index {
+                0 => first_prohibited.map(|decision| result(action, decision)),
+                _ => Some(result(action, "implicitDeny")),
+            },
+        ))
         .collect::<String>();
     format!(
         "<SimulatePrincipalPolicyResponse xmlns=\"https://iam.amazonaws.com/doc/2010-05-08/\"><SimulatePrincipalPolicyResult><IsTruncated>false</IsTruncated><EvaluationResults>{results}</EvaluationResults></SimulatePrincipalPolicyResult><ResponseMetadata><RequestId>004d7059-4c14-11e5-b121-bd8c7EXAMPLE</RequestId></ResponseMetadata></SimulatePrincipalPolicyResponse>"
@@ -2068,7 +2065,10 @@ fn aws_session_must_be_denied_every_prohibited_mutation() {
     assert!(matches!(result, Ok(PollAuthorization::Complete(_))));
 
     for (first_prohibited, message) in [
-        (Some("allowed"), "permits prohibited mutation iam:CreateUser"),
+        (
+            Some("allowed"),
+            "permits prohibited mutation iam:CreateUser",
+        ),
         (None, "did not answer iam:CreateUser"),
     ] {
         let (result, _) = aws_sign_in_with_simulation(now, aws_simulation_xml(first_prohibited));
@@ -2127,7 +2127,10 @@ fn aws_typed_role_arn_must_be_the_role_the_person_signed_in_with() {
     exact.push(ExpectedResponse {
         method: "Post",
         path_contains: "iam.amazonaws.com",
-        response: ProviderHttpResponse::new(200, aws_simulation_xml(Some("implicitDeny")).into_bytes()),
+        response: ProviderHttpResponse::new(
+            200,
+            aws_simulation_xml(Some("implicitDeny")).into_bytes(),
+        ),
     });
     let PollAuthorization::Complete(authorization) =
         poll_aws_fixture(typed(AWS_RESERVED_ROLE_ARN), exact, now).unwrap()
@@ -2194,10 +2197,7 @@ fn device_sign_in_pages_outside_the_provider_sites_are_rejected() {
     let error = begin_aws_native_authorization(&fixture, aws_config(), now)
         .err()
         .unwrap();
-    assert!(
-        error.to_string().contains("evil.example"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("evil.example"), "{error}");
     for (verification_uri, accepted) in [
         ("https://microsoft.com/devicelogin", true),
         ("https://login.microsoft.com/device", true),

@@ -3264,9 +3264,7 @@ mod tests {
                 .to_string()
         };
 
-        assert!(
-            rejected(sample, &["s3:PutObject", "s3:GetObject"]).contains("not requested")
-        );
+        assert!(rejected(sample, &["s3:PutObject", "s3:GetObject"]).contains("not requested"));
         assert!(
             rejected(
                 sample,
