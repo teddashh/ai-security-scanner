@@ -135,6 +135,30 @@ test("existing inputs collapse source setup without unmounting the cloud panel",
   expect(providerSlot?.querySelector(".provider-auth-panel")).toBe(providerPanel);
 });
 
+test("a new cloud project opens on its sign-in guide although native projects list every planned source", async () => {
+  const sources: ConnectedSource[] = [
+    { id: "source-m365", kind: "microsoft365_tenant", label: "Microsoft 365 tenant", status: "not_connected", readOnly: true },
+    { id: "source-dns", kind: "dns", label: "DNS", status: "not_connected", readOnly: true },
+    { id: "source-files", kind: "file_system", label: "Files", status: "not_connected", readOnly: true },
+  ];
+  vi.spyOn(scannerService, "providerAuthorizationStatus").mockResolvedValue({ data: null, mode: "native" });
+  vi.spyOn(scannerService, "listProviderBootstrapCleanup").mockResolvedValue({ data: [], mode: "native" });
+
+  const { container } = renderRoute({
+    assessmentIntent: "cloud_account",
+    requestedActivities: ["configuration_assessment"],
+    assets: [],
+    sources,
+  });
+
+  const setup = container.querySelector<HTMLDetailsElement>(".coverage-source-setup");
+  expect(setup?.open).toBe(true);
+  expect(container.querySelector<HTMLElement>(".coverage-provider-slot")?.hidden).toBe(false);
+  await waitFor(() => {
+    expect(container.querySelector(".provider-connection-guide > summary")?.textContent).toBe("Open the connection guide");
+  });
+});
+
 test("a collapsed source setup keeps unresolved temporary-cloud cleanup visible and directly reviewable", async () => {
   const source: ConnectedSource = {
     id: "source-aws",

@@ -292,7 +292,7 @@ const pageCopy = {
   ),
   reviewCleanup: bilingual("Review cleanup", "檢視清理狀態"),
   providerTitle: bilingual("Cloud account", "雲端帳號"),
-  providerBody: bilingual("Sign in through AWS, Azure, Google Cloud, or Microsoft and turn cloud settings into a fix list.", "透過 AWS、Azure、Google Cloud 或 Microsoft 登入，把雲端設定整理成改善清單。"),
+  providerBody: bilingual("Sign in through AWS, Azure, Google Cloud, or Microsoft and turn identity and access settings into a fix list.", "透過 AWS、Azure、Google Cloud 或 Microsoft 登入，把身分與存取設定整理成改善清單。"),
   providerOpen: bilingual("Connect a cloud account", "連接雲端帳號"),
   providerClose: bilingual("Close cloud setup", "關閉雲端設定"),
   snapshotTitle: bilingual("An inventory file", "盤點檔"),
@@ -854,7 +854,10 @@ export function CoveragePage({
   const [showSourceForm, setShowSourceForm] = useState(false);
   const [showWorkspaceForm, setShowWorkspaceForm] = useState(Boolean(guidedLocalProfile));
   const [showProviderSetup, setShowProviderSetup] = useState(guidedCloudRoute);
-  const [sourceSetupOpen, setSourceSetupOpen] = useState(() => assets.length === 0 && sources.length === 0);
+  // A cloud project's next step is the sign-in panel inside source setup, and
+  // native projects always list their planned sources, so open it explicitly.
+  const sourceSetupStartsOpen = guidedCloudRoute || (assets.length === 0 && sources.length === 0);
+  const [sourceSetupOpen, setSourceSetupOpen] = useState(sourceSetupStartsOpen);
   const [sourceKind, setSourceKind] = useState<SourceKind>("aws_organization");
   const [profile, setProfile] = useState<SnapshotParserProfile>("cloudquery");
   const [sourceLabel, setSourceLabel] = useState<string>(() => text(sourceDefinitions.aws_organization.label));
@@ -1247,7 +1250,7 @@ export function CoveragePage({
     setShowSourceForm(false);
     setShowProviderSetup(guidedCloudRoute);
     setShowWorkspaceForm(Boolean(guidedLocalProfile));
-    setSourceSetupOpen(assets.length === 0 && sources.length === 0);
+    setSourceSetupOpen(sourceSetupStartsOpen);
     setProviderConnection(undefined);
     setProviderCleanupNeedsAttention(false);
     if (guidedLocalProfile) {
