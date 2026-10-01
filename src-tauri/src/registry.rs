@@ -1,7 +1,8 @@
 use crate::container_runtime::validate_static_manifest_command;
 use crate::domain::{
     AssetKind, EngineAdmissionIssue, EngineManifest, LocalInputProfile,
-    MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS, MIN_ENGINE_EXECUTION_TIMEOUT_SECONDS, ScanPermission,
+    MAX_ENGINE_EXECUTION_CPU_MILLIS, MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS,
+    MIN_ENGINE_EXECUTION_CPU_MILLIS, MIN_ENGINE_EXECUTION_TIMEOUT_SECONDS, ScanPermission,
 };
 use crate::error::{AppError, AppResult};
 use chrono::NaiveDate;
@@ -308,6 +309,13 @@ fn validate_release_contract(manifest: &EngineManifest) -> AppResult<()> {
     {
         return Err(fail(
             "execution timeout must be between 30 and 86400 seconds",
+        ));
+    }
+    if !(MIN_ENGINE_EXECUTION_CPU_MILLIS..=MAX_ENGINE_EXECUTION_CPU_MILLIS)
+        .contains(&execution.resources.cpu_millis)
+    {
+        return Err(fail(
+            "execution CPU limit must be between 100 and 16000 millicores",
         ));
     }
     let command_contains_journal_flag = |flag: &str| {
@@ -897,6 +905,32 @@ mod tests {
     }
 
     #[test]
+    fn release_execution_cpu_limit_is_bounded() {
+        let registry = EngineRegistry::load_builtin().expect("valid catalog");
+        // openvasd sizes its API worker pool from the CPUs it can see.
+        assert_eq!(
+            registry.get("greenbone").unwrap().execution_cpu_millis(),
+            2_000
+        );
+        let mut manifest = registry.get("cloudquery").unwrap().clone();
+
+        for (cpu_millis, valid) in [(99, false), (100, true), (16_000, true), (16_001, false)] {
+            manifest.execution.as_mut().unwrap().resources.cpu_millis = cpu_millis;
+            let result = validate_release_contract(&manifest);
+            if valid {
+                result.expect("inclusive CPU boundary");
+            } else {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("between 100 and 16000 millicores")
+                );
+            }
+        }
+    }
+
+    #[test]
     fn naabu_launcher_journal_v2_accepts_only_the_exact_reviewed_command() {
         let registry = EngineRegistry::load_builtin().expect("valid catalog");
         let manifest = registry.get("naabu").unwrap().clone();
@@ -1062,6 +1096,28 @@ mod tests {
         assert_eq!(
             legacy.execution_timeout_seconds(),
             crate::domain::DEFAULT_ENGINE_EXECUTION_TIMEOUT_SECONDS
+        );
+        assert_eq!(
+            legacy.execution_cpu_millis(),
+            crate::domain::DEFAULT_ENGINE_EXECUTION_CPU_MILLIS
+        );
+    }
+
+    #[test]
+    fn saved_plan_without_a_cpu_allowance_keeps_the_earlier_limit() {
+        let registry = EngineRegistry::load_builtin().expect("valid catalog");
+        let mut document =
+            serde_json::to_value(registry.get("greenbone").unwrap()).expect("manifest JSON");
+        document["execution"]["resources"]
+            .as_object_mut()
+            .expect("resources object")
+            .remove("cpu_millis");
+
+        let saved: EngineManifest =
+            serde_json::from_value(document).expect("saved manifest remains readable");
+        assert_eq!(
+            saved.execution_cpu_millis(),
+            crate::domain::DEFAULT_ENGINE_EXECUTION_CPU_MILLIS
         );
     }
 

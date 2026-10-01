@@ -433,6 +433,9 @@ pub struct EngineWrapper {
 pub const MIN_ENGINE_EXECUTION_TIMEOUT_SECONDS: u64 = 30;
 pub const MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS: u64 = 86_400;
 pub const DEFAULT_ENGINE_EXECUTION_TIMEOUT_SECONDS: u64 = 3_600;
+pub const MIN_ENGINE_EXECUTION_CPU_MILLIS: u32 = 100;
+pub const MAX_ENGINE_EXECUTION_CPU_MILLIS: u32 = 16_000;
+pub const DEFAULT_ENGINE_EXECUTION_CPU_MILLIS: u32 = 1_000;
 
 /// The host-enforced portion of the reviewed engine execution contract.
 /// Older saved cases predate this field, so `EngineManifest::execution` is
@@ -450,6 +453,14 @@ pub struct EngineExecutionContract {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EngineExecutionResources {
     pub timeout_seconds: u64,
+    /// Reviewed CPU allowance for the engine container. Saved plans that
+    /// predate this field keep the earlier one-CPU limit.
+    #[serde(default = "default_engine_execution_cpu_millis")]
+    pub cpu_millis: u32,
+}
+
+fn default_engine_execution_cpu_millis() -> u32 {
+    DEFAULT_ENGINE_EXECUTION_CPU_MILLIS
 }
 
 impl Default for EngineCompatibility {
@@ -569,6 +580,13 @@ impl EngineManifest {
             .as_ref()
             .map(|execution| execution.resources.timeout_seconds)
             .unwrap_or(DEFAULT_ENGINE_EXECUTION_TIMEOUT_SECONDS)
+    }
+
+    pub fn execution_cpu_millis(&self) -> u32 {
+        self.execution
+            .as_ref()
+            .map(|execution| execution.resources.cpu_millis)
+            .unwrap_or(DEFAULT_ENGINE_EXECUTION_CPU_MILLIS)
     }
 
     /// Whether the supplied grants contain every permission declared by this

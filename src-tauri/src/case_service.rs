@@ -26688,6 +26688,7 @@ mod tests {
         manifest.execution = Some(EngineExecutionContract {
             resources: EngineExecutionResources {
                 timeout_seconds: 7_200,
+                cpu_millis: 1_000,
             },
             launcher_journal_version: None,
         });
@@ -26784,6 +26785,7 @@ mod tests {
         manifest.execution = Some(EngineExecutionContract {
             resources: EngineExecutionResources {
                 timeout_seconds: 3_600,
+                cpu_millis: 1_000,
             },
             launcher_journal_version: None,
         });

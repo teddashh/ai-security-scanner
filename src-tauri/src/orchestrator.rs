@@ -2001,6 +2001,7 @@ mod tests {
         manifest.execution = Some(EngineExecutionContract {
             resources: EngineExecutionResources {
                 timeout_seconds: 3_600,
+                cpu_millis: 1_000,
             },
             launcher_journal_version: Some(LAUNCHER_V2_JOURNAL_SCHEMA_VERSION),
         });

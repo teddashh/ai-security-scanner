@@ -5152,6 +5152,20 @@ fn manifest_uses_naabu_launcher_v2(manifest: &EngineManifest) -> bool {
             == Some(LAUNCHER_V2_JOURNAL_SCHEMA_VERSION)
 }
 
+/// The reviewed CPU allowance, capped at this computer's CPUs so a smaller
+/// host still starts the container. Upstream runtimes size their worker pools
+/// from the CPUs they can see; openvasd with one CPU stops answering its own
+/// status API while a scan runs. The managed runtime VM has two CPUs, which
+/// covers every reviewed allowance.
+fn engine_container_cpu_millis(manifest: &EngineManifest) -> u32 {
+    let host_cpu_millis = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .saturating_mul(1_000);
+    manifest
+        .execution_cpu_millis()
+        .min(u32::try_from(host_cpu_millis).unwrap_or(u32::MAX))
+}
+
 fn apply_worker_execution_report(
     state: &AppState,
     execution: &PlannedEngineExecution,
@@ -5538,6 +5552,7 @@ fn execute_planned_engine(
         // `/tmp` tmpfs. Size that tmpfs from the reviewed manifest estimate
         // instead of the generic 64 MiB default.
         tmpfs_mb: execution.manifest.estimated_disk_mb.clamp(16, 4_096),
+        cpu_millis: engine_container_cpu_millis(&execution.manifest),
         ..ResourceLimits::default()
     };
     let mut network_lease = provision_execution_network(
@@ -5756,6 +5771,7 @@ fn resume_captured_execution(
     };
     let limits = ResourceLimits {
         memory_mb: execution.manifest.estimated_memory_mb.clamp(128, 262_144),
+        cpu_millis: engine_container_cpu_millis(&execution.manifest),
         ..ResourceLimits::default()
     };
     let network = NetworkPolicy::Disabled;
@@ -7406,6 +7422,28 @@ mod tests {
     use zeroize::Zeroizing;
 
     #[test]
+    fn engine_container_receives_its_reviewed_cpu_allowance_up_to_this_computer() {
+        let registry = EngineRegistry::load_builtin().unwrap();
+        let host_cpu_millis = u32::try_from(
+            std::thread::available_parallelism()
+                .map_or(1, std::num::NonZeroUsize::get)
+                .saturating_mul(1_000),
+        )
+        .unwrap_or(u32::MAX);
+        let greenbone = registry.get("greenbone").unwrap();
+        assert_eq!(
+            engine_container_cpu_millis(greenbone),
+            2_000.min(host_cpu_millis)
+        );
+        let gitleaks = registry.get("gitleaks").unwrap();
+        assert_eq!(engine_container_cpu_millis(gitleaks), 1_000);
+
+        let mut legacy = greenbone.clone();
+        legacy.execution = None;
+        assert_eq!(engine_container_cpu_millis(&legacy), 1_000);
+    }
+
+    #[test]
     fn merge_managed_cleanup_keeps_a_read_refusal_record() {
         let counted = GatewayRefusalRecord::Counted {
             rate: 2,
@@ -8145,6 +8183,7 @@ mod tests {
         execution.manifest.execution = Some(EngineExecutionContract {
             resources: EngineExecutionResources {
                 timeout_seconds: 3_600,
+                cpu_millis: 1_000,
             },
             launcher_journal_version: Some(LAUNCHER_V2_JOURNAL_SCHEMA_VERSION),
         });
@@ -8216,6 +8255,7 @@ mod tests {
         execution.manifest.execution = Some(EngineExecutionContract {
             resources: EngineExecutionResources {
                 timeout_seconds: 3_600,
+                cpu_millis: 1_000,
             },
             launcher_journal_version: Some(LAUNCHER_V2_JOURNAL_SCHEMA_VERSION),
         });
@@ -8388,6 +8428,7 @@ mod tests {
         execution.manifest.execution = Some(EngineExecutionContract {
             resources: EngineExecutionResources {
                 timeout_seconds: 3_600,
+                cpu_millis: 1_000,
             },
             launcher_journal_version: Some(LAUNCHER_V2_JOURNAL_SCHEMA_VERSION),
         });

@@ -5536,6 +5536,7 @@ esac
         manifest.execution = Some(EngineExecutionContract {
             resources: EngineExecutionResources {
                 timeout_seconds: 14_400,
+                cpu_millis: 1_000,
             },
             launcher_journal_version: Some(LAUNCHER_V2_JOURNAL_SCHEMA_VERSION),
         });
@@ -5845,6 +5846,7 @@ esac\n",
         manifest.execution = Some(EngineExecutionContract {
             resources: EngineExecutionResources {
                 timeout_seconds: 7_200,
+                cpu_millis: 1_000,
             },
             launcher_journal_version: None,
         });
@@ -5890,6 +5892,7 @@ esac\n",
             manifest.execution = Some(EngineExecutionContract {
                 resources: EngineExecutionResources {
                     timeout_seconds: invalid,
+                    cpu_millis: 1_000,
                 },
                 launcher_journal_version: None,
             });
