@@ -43,8 +43,12 @@ export const MICROSOFT_365_READ_PERMISSIONS = [
   "IdentityRiskEvent.Read.All",
   "Organization.Read.All",
   "Policy.Read.All",
+  "PrivilegedAccess.Read.AzureADGroup",
+  "PrivilegedEligibilitySchedule.Read.AzureADGroup",
   "Reports.Read.All",
   "RoleManagement.Read.Directory",
+  "RoleManagementPolicy.Read.AzureADGroup",
+  "RoleManagementPolicy.Read.Directory",
   "SecurityEvents.Read.All",
   "User.Read.All",
 ] as const;
