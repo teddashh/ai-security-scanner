@@ -11,6 +11,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,12 +22,13 @@ import (
 )
 
 const (
-	credentialPath    = "/run/ai-security-scanner/credentials.json"
-	maximumCredential = 256 * 1024
-	maximumScope      = 4 * 1024 * 1024
-	maximumToken      = 128 * 1024
-	maximumTokenLife  = 65 * time.Minute
-	powershell        = "/opt/microsoft/powershell/7/pwsh"
+	credentialPath     = "/run/ai-security-scanner/credentials.json"
+	maximumCredential  = 256 * 1024
+	maximumScope       = 4 * 1024 * 1024
+	maximumToken       = 128 * 1024
+	maximumTokenLife   = 65 * time.Minute
+	powershell         = "/opt/microsoft/powershell/7/pwsh"
+	managedGatewayPort = "1080"
 )
 
 var safeProxyKeys = []string{
@@ -173,6 +176,18 @@ func childEnvironment(parentEnvironment []string, engineID string) ([]string, er
 			}
 		}
 	}
+	// .NET does not recognise the socks5h spelling of the managed gateway and
+	// would connect directly. Its socks5 client already hands the host name to
+	// the gateway, which resolves it against the allowlist.
+	if gateway, present := values["AI_SECURITY_SCANNER_PROXY"]; present {
+		proxy, err := dotnetProxy(gateway)
+		if err != nil {
+			return nil, err
+		}
+		for _, key := range []string{"ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"} {
+			values[key] = proxy
+		}
+	}
 	static := map[string]string{
 		"HOME":                        "/tmp/ai-security-scanner-home",
 		"LANG":                        "C.UTF-8",
@@ -205,6 +220,15 @@ func childEnvironment(parentEnvironment []string, engineID string) ([]string, er
 		environment = append(environment, key+"="+values[key])
 	}
 	return environment, nil
+}
+
+func dotnetProxy(gateway string) (string, error) {
+	parsed, err := url.Parse(gateway)
+	if err != nil || parsed.Scheme != "socks5h" || parsed.User != nil || parsed.Port() != managedGatewayPort ||
+		net.ParseIP(parsed.Hostname()) == nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("managed SOCKS gateway endpoint is absent or malformed")
+	}
+	return "socks5://" + net.JoinHostPort(parsed.Hostname(), parsed.Port()), nil
 }
 
 func loadScope(path, expectedEngine string, now time.Time) (*scopeDocument, error) {

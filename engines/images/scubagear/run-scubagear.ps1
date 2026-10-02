@@ -94,7 +94,7 @@ $null = New-Item -ItemType Directory -Path $upstreamPath -ErrorAction Stop
 $connected = $false
 try {
     Import-Module Microsoft.Graph.Authentication -RequiredVersion '2.25.0' -Force -ErrorAction Stop
-    Connect-MgGraph -AccessToken $secureToken -ContextScope Process -NoWelcome -ErrorAction Stop | Out-Null
+    Connect-MgGraph -AccessToken $secureToken -NoWelcome -ErrorAction Stop | Out-Null
     $secureToken = $null
     $connected = $true
     $context = Get-MgContext -ErrorAction Stop

@@ -1,14 +1,20 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -686,6 +692,361 @@ func TestCloudQueryConfigurationIsExactLocalSourceClosure(t *testing.T) {
 	} {
 		if strings.Contains(config, forbidden) {
 			t.Fatalf("CloudQuery config contains forbidden registry or schema value %q", forbidden)
+		}
+	}
+}
+
+// fakeGateway is a SOCKS5 server that records each CONNECT and, unless told to
+// refuse, joins the tunnel to target whatever host the CONNECT named.
+type fakeGateway struct {
+	listener net.Listener
+	target   string
+	refuse   bool
+	mutex    sync.Mutex
+	requests []string
+}
+
+func startFakeGateway(t *testing.T, target string, refuse bool) *fakeGateway {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := &fakeGateway{listener: listener, target: target, refuse: refuse}
+	go func() {
+		for {
+			client, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go gateway.serve(client)
+		}
+	}()
+	t.Cleanup(func() { _ = listener.Close() })
+	return gateway
+}
+
+func (gateway *fakeGateway) serve(client net.Conn) {
+	defer client.Close()
+	greeting := make([]byte, 3)
+	if _, err := io.ReadFull(client, greeting); err != nil {
+		return
+	}
+	if _, err := client.Write([]byte{5, 0}); err != nil {
+		return
+	}
+	header := make([]byte, 5)
+	if _, err := io.ReadFull(client, header); err != nil || header[3] != 3 {
+		return
+	}
+	name := make([]byte, int(header[4])+2)
+	if _, err := io.ReadFull(client, name); err != nil {
+		return
+	}
+	port := int(name[header[4]])<<8 | int(name[header[4]+1])
+	gateway.mutex.Lock()
+	gateway.requests = append(gateway.requests, fmt.Sprintf("%s:%d", name[:header[4]], port))
+	gateway.mutex.Unlock()
+	if gateway.refuse {
+		_, _ = client.Write([]byte{5, 2, 0, 1, 0, 0, 0, 0, 0, 0})
+		return
+	}
+	upstream, err := net.Dial("tcp4", gateway.target)
+	if err != nil {
+		_, _ = client.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
+		return
+	}
+	defer upstream.Close()
+	if _, err := client.Write([]byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 0}); err != nil {
+		return
+	}
+	go func() { _, _ = io.Copy(upstream, client) }()
+	_, _ = io.Copy(client, upstream)
+}
+
+func (gateway *fakeGateway) seen() []string {
+	gateway.mutex.Lock()
+	defer gateway.mutex.Unlock()
+	return append([]string(nil), gateway.requests...)
+}
+
+func startEchoServer(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer connection.Close()
+				_, _ = io.Copy(connection, connection)
+			}()
+		}
+	}()
+	t.Cleanup(func() { _ = listener.Close() })
+	return listener.Addr().String()
+}
+
+func openProviderTunnel(t *testing.T, bridge *providerBridge, target string) (net.Conn, string) {
+	t.Helper()
+	client, err := net.Dial("tcp4", bridge.listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if _, err := fmt.Fprintf(client, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	status, err := bufio.NewReader(client).ReadString('\n')
+	if err != nil {
+		return client, ""
+	}
+	_ = client.SetReadDeadline(time.Time{})
+	return client, strings.TrimSpace(status)
+}
+
+func TestProviderBridgeCarriesAnHTTPSRequestThroughTheGateway(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(writer, "provider answer")
+	}))
+	defer server.Close()
+	gateway := startFakeGateway(t, server.Listener.Addr().String(), false)
+	bridge, err := startProviderBridge(gateway.listener.Addr().String(), 2, 100, time.Minute, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+
+	trusted := server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	trusted.ServerName = "example.com"
+	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+		Proxy:           http.ProxyURL(&url.URL{Scheme: "http", Host: bridge.listener.Addr().String()}),
+		TLSClientConfig: trusted,
+	}}
+	response, err := client.Get("https://iam.amazonaws.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if string(body) != "provider answer" {
+		t.Fatalf("tunnel returned %q", body)
+	}
+	if seen := gateway.seen(); len(seen) != 1 || seen[0] != "iam.amazonaws.com:443" {
+		t.Fatalf("gateway saw %v, want the provider host name and port", seen)
+	}
+}
+
+func TestProviderBridgeRefusesWhatItCannotTunnel(t *testing.T) {
+	gateway := startFakeGateway(t, startEchoServer(t), false)
+	bridge, err := startProviderBridge(gateway.listener.Addr().String(), 2, 100, time.Minute, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+
+	for _, target := range []string{"10.0.0.1:443", "[fd00::1]:443", "iam.amazonaws.com:80", "localhost:443", "iam..amazonaws.com:443"} {
+		if _, status := openProviderTunnel(t, bridge, target); !strings.HasPrefix(status, "HTTP/1.1 403") {
+			t.Fatalf("CONNECT %s answered %q, want 403", target, status)
+		}
+	}
+	client, err := net.Dial("tcp4", bridge.listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	_, _ = io.WriteString(client, "GET http://iam.amazonaws.com/ HTTP/1.1\r\nHost: iam.amazonaws.com\r\n\r\n")
+	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if status, _ := bufio.NewReader(client).ReadString('\n'); !strings.HasPrefix(status, "HTTP/1.1 405") {
+		t.Fatalf("plain proxy request answered %q, want 405", status)
+	}
+	if seen := gateway.seen(); len(seen) != 0 {
+		t.Fatalf("refused requests reached the gateway: %v", seen)
+	}
+
+	refusing := startFakeGateway(t, startEchoServer(t), true)
+	refused, err := startProviderBridge(refusing.listener.Addr().String(), 2, 100, time.Minute, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer refused.Close()
+	if _, status := openProviderTunnel(t, refused, "billing.amazonaws.com:443"); !strings.HasPrefix(status, "HTTP/1.1 403") {
+		t.Fatalf("a destination the gateway refused answered %q, want 403", status)
+	}
+}
+
+func TestProviderBridgeQueuesTunnelsBeyondItsLimit(t *testing.T) {
+	gateway := startFakeGateway(t, startEchoServer(t), false)
+	bridge, err := startProviderBridge(gateway.listener.Addr().String(), 1, 100, time.Minute, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+
+	first, status := openProviderTunnel(t, bridge, "iam.amazonaws.com:443")
+	if status != "HTTP/1.1 200 Connection established" {
+		t.Fatalf("first tunnel answered %q", status)
+	}
+	second, err := net.Dial("tcp4", bridge.listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	_, _ = io.WriteString(second, "CONNECT sts.us-east-1.amazonaws.com:443 HTTP/1.1\r\nHost: sts.us-east-1.amazonaws.com:443\r\n\r\n")
+	reader := bufio.NewReader(second)
+	_ = second.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if line, err := reader.ReadString('\n'); err == nil {
+		t.Fatalf("second tunnel opened while the first held the only slot: %q", line)
+	}
+	_ = first.Close()
+	_ = second.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if line, err := reader.ReadString('\n'); err != nil || strings.TrimSpace(line) != "HTTP/1.1 200 Connection established" {
+		t.Fatalf("queued tunnel answered %q after the slot freed: %v", line, err)
+	}
+}
+
+func TestProviderBridgeClosesIdleTunnelsAndFreesTheirSlot(t *testing.T) {
+	gateway := startFakeGateway(t, startEchoServer(t), false)
+	bridge, err := startProviderBridge(gateway.listener.Addr().String(), 1, 100, 200*time.Millisecond, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+
+	tunnel, status := openProviderTunnel(t, bridge, "iam.amazonaws.com:443")
+	if status != "HTTP/1.1 200 Connection established" {
+		t.Fatalf("tunnel answered %q", status)
+	}
+	_, _ = io.WriteString(tunnel, "ping")
+	echo := make([]byte, 4)
+	_ = tunnel.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.ReadFull(tunnel, echo); err != nil || string(echo) != "ping" {
+		t.Fatalf("tunnel did not carry traffic: %q %v", echo, err)
+	}
+	started := time.Now()
+	if _, err := tunnel.Read(echo); err == nil || time.Since(started) > 3*time.Second {
+		t.Fatalf("idle tunnel stayed open: %v after %s", err, time.Since(started))
+	}
+	if _, status := openProviderTunnel(t, bridge, "iam.amazonaws.com:443"); status != "HTTP/1.1 200 Connection established" {
+		t.Fatalf("slot was not freed by the idle close: %q", status)
+	}
+}
+
+func TestProviderBridgeWaitsLongerForAnAnswerThanForTheNextRequest(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		connection, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+		request := make([]byte, 4)
+		if _, err := io.ReadFull(connection, request); err != nil {
+			return
+		}
+		time.Sleep(700 * time.Millisecond)
+		_, _ = io.WriteString(connection, "pong")
+		_, _ = io.Copy(io.Discard, connection)
+	}()
+	gateway := startFakeGateway(t, listener.Addr().String(), false)
+	bridge, err := startProviderBridge(gateway.listener.Addr().String(), 1, 100, 200*time.Millisecond, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+
+	tunnel, status := openProviderTunnel(t, bridge, "iam.amazonaws.com:443")
+	if status != "HTTP/1.1 200 Connection established" {
+		t.Fatalf("tunnel answered %q", status)
+	}
+	_, _ = io.WriteString(tunnel, "ping")
+	answer := make([]byte, 4)
+	_ = tunnel.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.ReadFull(tunnel, answer); err != nil || string(answer) != "pong" {
+		t.Fatalf("a slow answer was cut off: %q %v", answer, err)
+	}
+	started := time.Now()
+	if _, err := tunnel.Read(answer); err == nil || time.Since(started) > 3*time.Second {
+		t.Fatalf("tunnel stayed open after the answer: %v after %s", err, time.Since(started))
+	}
+}
+
+func TestProviderBridgeCloseEndsOpenTunnels(t *testing.T) {
+	gateway := startFakeGateway(t, startEchoServer(t), false)
+	bridge, err := startProviderBridge(gateway.listener.Addr().String(), 2, 100, time.Minute, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tunnel, status := openProviderTunnel(t, bridge, "iam.amazonaws.com:443")
+	if status != "HTTP/1.1 200 Connection established" {
+		t.Fatalf("tunnel answered %q", status)
+	}
+	closed := make(chan struct{})
+	go func() {
+		bridge.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("bridge did not stop while a tunnel was open")
+	}
+	_ = tunnel.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := tunnel.Read(make([]byte, 1)); err == nil {
+		t.Fatal("tunnel survived the bridge")
+	}
+}
+
+func TestBridgeProviderTrafficPointsOnlyTheProxyVariablesAtTheBridge(t *testing.T) {
+	gatewayURL := "socks5h://127.0.0.1:1080"
+	environment := []string{"AI_SECURITY_SCANNER_PROXY=" + gatewayURL, "AWS_REGION=us-east-1", "NO_PROXY=", "no_proxy="}
+	for _, key := range bridgedProxyKeys {
+		environment = append(environment, key+"="+gatewayURL)
+	}
+	sort.Strings(environment)
+	bridged, bridge, err := bridgeProviderTraffic(environment)
+	if err != nil || bridge == nil {
+		t.Fatalf("managed gateway was not bridged: %v", err)
+	}
+	defer bridge.Close()
+	values := map[string]string{}
+	for _, entry := range bridged {
+		key, value, _ := strings.Cut(entry, "=")
+		values[key] = value
+	}
+	proxy := "http://" + bridge.listener.Addr().String()
+	for _, key := range bridgedProxyKeys {
+		if values[key] != proxy {
+			t.Fatalf("%s=%q, want the loopback bridge %q", key, values[key], proxy)
+		}
+	}
+	if values["AI_SECURITY_SCANNER_PROXY"] != gatewayURL || values["AWS_REGION"] != "us-east-1" ||
+		values["NO_PROXY"] != "" || len(bridged) != len(environment) {
+		t.Fatalf("bridging changed more than the proxy variables: %v", bridged)
+	}
+
+	unmanaged := []string{"AWS_REGION=us-east-1"}
+	if same, none, err := bridgeProviderTraffic(unmanaged); err != nil || none != nil || len(same) != 1 {
+		t.Fatalf("an engine run without a managed gateway changed: %v %v %v", same, none, err)
+	}
+	for _, malformed := range []string{
+		"", "socks5h://gateway:1080", "socks5://127.0.0.1:1080", "socks5h://127.0.0.1:1081",
+		"socks5h://user@127.0.0.1:1080", "http://127.0.0.1:1080", "socks5h://127.0.0.1:1080/path",
+	} {
+		if _, rejected, err := bridgeProviderTraffic([]string{"AI_SECURITY_SCANNER_PROXY=" + malformed}); err == nil || rejected != nil {
+			t.Fatalf("malformed gateway %q was bridged", malformed)
 		}
 	}
 }

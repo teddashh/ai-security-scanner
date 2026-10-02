@@ -17,12 +17,16 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -180,6 +184,8 @@ func run(arguments []string) error {
 	default:
 		return errors.New("unreachable provider preflight")
 	}
+	// An idle preflight connection would hold a gateway slot through the run.
+	providerClient.CloseIdleConnections()
 
 	temporaryRoot, err := os.MkdirTemp("/tmp", "ai-security-scanner-cloud-")
 	if err != nil {
@@ -191,6 +197,13 @@ func run(arguments []string) error {
 	defer os.RemoveAll(temporaryRoot)
 
 	environment := childEnvironment(credentials, selectedProvider, providerTarget, temporaryRoot)
+	environment, bridge, err := bridgeProviderTraffic(environment)
+	if err != nil {
+		return err
+	}
+	if bridge != nil {
+		defer bridge.Close()
+	}
 	switch *engineID {
 	case "cloudsplaining":
 		return runCloudsplaining(environment, temporaryRoot, *outputPath)
@@ -860,6 +873,370 @@ func childEnvironment(credentials map[string]string, selected provider, provider
 		environment = append(environment, key+"="+values[key])
 	}
 	return environment
+}
+
+// The managed gateway speaks only SOCKS5. The Python SDKs in Prowler,
+// ScoutSuite and Cloudsplaining cannot use a SOCKS proxy, and CloudQuery's
+// Go 1.19 build does not accept the socks5h scheme, so for the length of the
+// engine process the launcher runs a loopback HTTP proxy for every engine and
+// opens each tunnel through the gateway. The gateway still decides which
+// provider hosts a tunnel may reach.
+const (
+	managedGatewayPort = "1080"
+	// The gateway admits ten provider tunnels at once and 25 new ones a second
+	// (ManagedEgressPolicy::from_provider_service_plan), and refuses a tunnel
+	// it cannot admit within its connect timeout. Staying under both keeps
+	// that wait here.
+	providerTunnelLimit      = 8
+	providerTunnelsPerSecond = 20
+	// An idle keep-alive tunnel still holds a gateway slot. A tunnel whose last
+	// bytes were the provider's answer is closed after a short pause, and the
+	// engine reconnects on its next request. A tunnel still waiting for an
+	// answer gets longer than the SDKs' own read timeouts.
+	providerTunnelIdle       = 5 * time.Second
+	providerTunnelAwaiting   = 120 * time.Second
+	providerTunnelHandshake  = 60 * time.Second
+	maxProxyRequestHeaderLen = 16 * 1024
+)
+
+var bridgedProxyKeys = []string{"ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"}
+
+var errGatewayRefusedTunnel = errors.New("managed SOCKS gateway refused the tunnel")
+
+func bridgeProviderTraffic(environment []string) ([]string, *providerBridge, error) {
+	gateway, present := "", false
+	for _, entry := range environment {
+		if value, found := strings.CutPrefix(entry, "AI_SECURITY_SCANNER_PROXY="); found {
+			gateway, present = value, true
+		}
+	}
+	if !present {
+		return environment, nil, nil
+	}
+	address, err := managedGatewayAddress(gateway)
+	if err != nil {
+		return nil, nil, err
+	}
+	bridge, err := startProviderBridge(address, providerTunnelLimit, providerTunnelsPerSecond, providerTunnelIdle, providerTunnelAwaiting)
+	if err != nil {
+		return nil, nil, err
+	}
+	proxy := "http://" + bridge.listener.Addr().String()
+	for _, key := range bridgedProxyKeys {
+		environment = replaceEnvironmentValue(environment, key, proxy)
+	}
+	return environment, bridge, nil
+}
+
+func managedGatewayAddress(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "socks5h" || parsed.User != nil || parsed.Port() != managedGatewayPort ||
+		net.ParseIP(parsed.Hostname()) == nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("managed SOCKS gateway endpoint is absent or malformed")
+	}
+	return net.JoinHostPort(parsed.Hostname(), parsed.Port()), nil
+}
+
+type providerBridge struct {
+	listener *net.TCPListener
+	gateway  string
+	idle     time.Duration
+	awaiting time.Duration
+	slots    chan struct{}
+	pace     *time.Ticker
+	stop     chan struct{}
+	stopOnce sync.Once
+	mutex    sync.Mutex
+	open     map[net.Conn]struct{}
+	workers  sync.WaitGroup
+}
+
+func startProviderBridge(gateway string, limit, perSecond int, idle, awaiting time.Duration) (*providerBridge, error) {
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		return nil, errors.New("open the loopback provider proxy")
+	}
+	bridge := &providerBridge{
+		listener: listener,
+		gateway:  gateway,
+		idle:     idle,
+		awaiting: awaiting,
+		slots:    make(chan struct{}, limit),
+		pace:     time.NewTicker(time.Second / time.Duration(perSecond)),
+		stop:     make(chan struct{}),
+		open:     make(map[net.Conn]struct{}),
+	}
+	bridge.workers.Add(1)
+	go bridge.serve()
+	return bridge, nil
+}
+
+func (bridge *providerBridge) Close() {
+	bridge.stopOnce.Do(func() {
+		close(bridge.stop)
+		_ = bridge.listener.Close()
+		bridge.pace.Stop()
+		bridge.mutex.Lock()
+		for connection := range bridge.open {
+			_ = connection.Close()
+		}
+		bridge.open = nil
+		bridge.mutex.Unlock()
+	})
+	bridge.workers.Wait()
+}
+
+func (bridge *providerBridge) serve() {
+	defer bridge.workers.Done()
+	for {
+		client, err := bridge.listener.Accept()
+		if err != nil {
+			select {
+			case <-bridge.stop:
+				return
+			case <-time.After(50 * time.Millisecond):
+				continue
+			}
+		}
+		if !bridge.track(client) {
+			_ = client.Close()
+			return
+		}
+		bridge.workers.Add(1)
+		go func() {
+			defer bridge.workers.Done()
+			defer bridge.release(client)
+			bridge.handle(client)
+		}()
+	}
+}
+
+func (bridge *providerBridge) track(connection net.Conn) bool {
+	bridge.mutex.Lock()
+	defer bridge.mutex.Unlock()
+	if bridge.open == nil {
+		return false
+	}
+	bridge.open[connection] = struct{}{}
+	return true
+}
+
+func (bridge *providerBridge) release(connection net.Conn) {
+	_ = connection.Close()
+	bridge.mutex.Lock()
+	defer bridge.mutex.Unlock()
+	if bridge.open != nil {
+		delete(bridge.open, connection)
+	}
+}
+
+func (bridge *providerBridge) handle(client net.Conn) {
+	_ = client.SetDeadline(time.Now().Add(providerTunnelHandshake))
+	reader := bufio.NewReader(&io.LimitedReader{R: client, N: maxProxyRequestHeaderLen})
+	request, err := http.ReadRequest(reader)
+	if err != nil {
+		writeProxyStatus(client, http.StatusBadRequest)
+		return
+	}
+	if request.Method != http.MethodConnect {
+		writeProxyStatus(client, http.StatusMethodNotAllowed)
+		return
+	}
+	host, port, err := net.SplitHostPort(request.Host)
+	if err != nil || port != "443" || !providerHostname(host) {
+		writeProxyStatus(client, http.StatusForbidden)
+		return
+	}
+	upstream, status := bridge.tunnel(host)
+	if upstream == nil {
+		writeProxyStatus(client, status)
+		return
+	}
+	defer func() {
+		bridge.release(upstream)
+		<-bridge.slots
+	}()
+	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection established\r\n\r\n"); err != nil {
+		return
+	}
+	if err := client.SetDeadline(time.Time{}); err != nil {
+		return
+	}
+	if buffered := reader.Buffered(); buffered > 0 {
+		early, _ := reader.Peek(buffered)
+		if _, err := upstream.Write(early); err != nil {
+			return
+		}
+	}
+	bridge.relay(client, upstream)
+}
+
+// tunnel waits for a gateway slot and the pace, then opens one SOCKS CONNECT.
+// On success the caller owns the slot until the tunnel closes.
+func (bridge *providerBridge) tunnel(host string) (net.Conn, int) {
+	select {
+	case bridge.slots <- struct{}{}:
+	case <-bridge.stop:
+		return nil, http.StatusServiceUnavailable
+	}
+	select {
+	case <-bridge.pace.C:
+	case <-bridge.stop:
+		<-bridge.slots
+		return nil, http.StatusServiceUnavailable
+	}
+	upstream, err := dialGatewayTunnel(bridge.gateway, host, 443)
+	if err == nil && bridge.track(upstream) {
+		return upstream, http.StatusOK
+	}
+	if upstream != nil {
+		_ = upstream.Close()
+	}
+	<-bridge.slots
+	if errors.Is(err, errGatewayRefusedTunnel) {
+		return nil, http.StatusForbidden
+	}
+	return nil, http.StatusBadGateway
+}
+
+// relay copies both ways until either side ends, the bridge stops, or the
+// tunnel sits idle. A tunnel opens for a request, so it counts as waiting for
+// an answer until the provider sends one.
+func (bridge *providerBridge) relay(client, upstream net.Conn) {
+	var lastActivity atomic.Int64
+	var awaiting atomic.Bool
+	lastActivity.Store(time.Now().UnixNano())
+	awaiting.Store(true)
+	finished := make(chan struct{}, 2)
+	pipe := func(destination, source net.Conn, request bool) {
+		buffer := make([]byte, 32*1024)
+		for {
+			count, err := source.Read(buffer)
+			if count > 0 {
+				lastActivity.Store(time.Now().UnixNano())
+				awaiting.Store(request)
+				if _, writeErr := destination.Write(buffer[:count]); writeErr != nil {
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+		finished <- struct{}{}
+	}
+	go pipe(upstream, client, true)
+	go pipe(client, upstream, false)
+	check := time.NewTicker(bridge.idle / 4)
+	defer check.Stop()
+	ended := 0
+wait:
+	for {
+		select {
+		case <-finished:
+			ended++
+			break wait
+		case <-check.C:
+			limit := bridge.idle
+			if awaiting.Load() {
+				limit = bridge.awaiting
+			}
+			if time.Since(time.Unix(0, lastActivity.Load())) >= limit {
+				break wait
+			}
+		case <-bridge.stop:
+			break wait
+		}
+	}
+	_ = client.Close()
+	_ = upstream.Close()
+	for ; ended < 2; ended++ {
+		<-finished
+	}
+}
+
+func dialGatewayTunnel(gateway, host string, port uint16) (net.Conn, error) {
+	connection, err := net.DialTimeout("tcp", gateway, 30*time.Second)
+	if err != nil {
+		return nil, errors.New("connect to the managed SOCKS gateway")
+	}
+	fail := func(cause error) (net.Conn, error) {
+		_ = connection.Close()
+		return nil, cause
+	}
+	// The gateway admits at most ten tunnels and makes the eleventh wait before
+	// it answers the greeting, so the handshake allows for that wait.
+	if err := connection.SetDeadline(time.Now().Add(providerTunnelHandshake)); err != nil {
+		return fail(errors.New("set the managed SOCKS handshake deadline"))
+	}
+	if _, err := connection.Write([]byte{5, 1, 0}); err != nil {
+		return fail(errors.New("write the managed SOCKS greeting"))
+	}
+	method := make([]byte, 2)
+	if _, err := io.ReadFull(connection, method); err != nil || method[0] != 5 || method[1] != 0 {
+		return fail(errors.New("managed SOCKS gateway rejected the greeting"))
+	}
+	request := append([]byte{5, 1, 0, 3, byte(len(host))}, host...)
+	request = append(request, byte(port>>8), byte(port))
+	if _, err := connection.Write(request); err != nil {
+		return fail(errors.New("write the managed SOCKS CONNECT"))
+	}
+	reply := make([]byte, 4)
+	if _, err := io.ReadFull(connection, reply); err != nil || reply[0] != 5 || reply[2] != 0 {
+		return fail(errors.New("read the managed SOCKS CONNECT reply"))
+	}
+	if reply[1] != 0 {
+		return fail(errGatewayRefusedTunnel)
+	}
+	var bound int
+	switch reply[3] {
+	case 1:
+		bound = 4
+	case 3:
+		length := []byte{0}
+		if _, err := io.ReadFull(connection, length); err != nil || length[0] == 0 {
+			return fail(errors.New("managed SOCKS gateway returned a malformed host name"))
+		}
+		bound = int(length[0])
+	case 4:
+		bound = 16
+	default:
+		return fail(errors.New("managed SOCKS gateway returned an unknown address type"))
+	}
+	if _, err := io.ReadFull(connection, make([]byte, bound+2)); err != nil {
+		return fail(errors.New("read the managed SOCKS bound address"))
+	}
+	if err := connection.SetDeadline(time.Time{}); err != nil {
+		return fail(errors.New("clear the managed SOCKS handshake deadline"))
+	}
+	return connection, nil
+}
+
+// providerHostname accepts a DNS host name with at least two labels. Provider
+// endpoints are always names; the gateway's allowlist holds names, not IPs.
+func providerHostname(host string) bool {
+	if len(host) == 0 || len(host) > 253 || net.ParseIP(host) != nil {
+		return false
+	}
+	labels := strings.Split(host, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, character := range label {
+			if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func writeProxyStatus(client net.Conn, status int) {
+	_, _ = fmt.Fprintf(client, "HTTP/1.1 %d %s\r\nConnection: close\r\nContent-Length: 0\r\n\r\n", status, http.StatusText(status))
 }
 
 func prowlerInvocation(selected provider, providerTarget string, credentialExpiresAt time.Time, environment []string, output string) (invocation, error) {

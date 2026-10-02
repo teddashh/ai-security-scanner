@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -116,11 +117,15 @@ func TestCredentialChannelRequiresOneFreshGraphToken(t *testing.T) {
 
 func TestInvocationIsFixedAndNeverCarriesCredentialMaterial(t *testing.T) {
 	for _, engine := range []string{"scubagear", "maester"} {
-		plan, err := fixedInvocation(engine, []string{
+		parent := []string{
 			"MSGRAPH_ACCESS_TOKEN=must-not-survive",
-			"HTTPS_PROXY=socks5h://10.0.0.2:1080",
 			"UNRELATED_SECRET=must-not-survive",
-		})
+			"NO_PROXY=",
+		}
+		for _, key := range []string{"AI_SECURITY_SCANNER_PROXY", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"} {
+			parent = append(parent, key+"=socks5h://10.0.0.2:1080")
+		}
+		plan, err := fixedInvocation(engine, parent)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -128,8 +133,17 @@ func TestInvocationIsFixedAndNeverCarriesCredentialMaterial(t *testing.T) {
 		if strings.Contains(serialized, "must-not-survive") || strings.Contains(serialized, "MSGRAPH_ACCESS_TOKEN") || strings.Contains(serialized, "UNRELATED_SECRET") {
 			t.Fatal("credential or unrelated environment leaked into the child")
 		}
-		if !strings.Contains(serialized, "HTTPS_PROXY=socks5h://10.0.0.2:1080") {
-			t.Fatal("managed egress proxy was not preserved")
+		// PowerShell reads the gateway from the proxy variables in the
+		// spelling .NET recognises; the gateway itself is unchanged.
+		for _, entry := range []string{
+			"AI_SECURITY_SCANNER_PROXY=socks5h://10.0.0.2:1080", "NO_PROXY=",
+			"ALL_PROXY=socks5://10.0.0.2:1080", "all_proxy=socks5://10.0.0.2:1080",
+			"HTTP_PROXY=socks5://10.0.0.2:1080", "http_proxy=socks5://10.0.0.2:1080",
+			"HTTPS_PROXY=socks5://10.0.0.2:1080", "https_proxy=socks5://10.0.0.2:1080",
+		} {
+			if !slices.Contains(plan.Env, entry) {
+				t.Fatalf("managed egress proxy entry %q is missing from %v", entry, plan.Env)
+			}
 		}
 		if plan.Program != powershell || plan.Args[len(plan.Args)-2] != "-File" || !strings.HasSuffix(plan.Args[len(plan.Args)-1], "run-"+engine+".ps1") {
 			t.Fatalf("unexpected fixed plan: %#v", plan)
@@ -137,6 +151,14 @@ func TestInvocationIsFixedAndNeverCarriesCredentialMaterial(t *testing.T) {
 	}
 	if _, err := fixedInvocation("powershell", nil); err == nil {
 		t.Fatal("unallowlisted engine was accepted")
+	}
+	for _, malformed := range []string{
+		"", "socks5h://gateway:1080", "socks5://10.0.0.2:1080", "socks5h://10.0.0.2:1081",
+		"socks5h://user@10.0.0.2:1080", "http://10.0.0.2:1080", "socks5h://10.0.0.2:1080/path",
+	} {
+		if _, err := fixedInvocation("scubagear", []string{"AI_SECURITY_SCANNER_PROXY=" + malformed}); err == nil {
+			t.Fatalf("malformed managed gateway %q was accepted", malformed)
+		}
 	}
 }
 

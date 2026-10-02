@@ -96,6 +96,19 @@ Describe 'run-maester.ps1 as a dot-sourced library' {
     }
 }
 
+Describe 'Graph sign-in' {
+    It 'passes Connect-MgGraph only parameters the pinned module accepts with an access token' {
+        Import-Module Microsoft.Graph.Authentication -RequiredVersion '2.27.0' -ErrorAction Stop
+        $accepted = ((Get-Command Connect-MgGraph).ParameterSets | Where-Object Name -eq 'AccessTokenParameterSet').Parameters.Name
+        $script = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'run-maester.ps1'), [ref]$null, [ref]$null)
+        $calls = @($script.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Connect-MgGraph' }, $true))
+        $calls.Count | Should -Be 1
+        $parameters = @($calls[0].CommandElements | Where-Object { $_ -is [System.Management.Automation.Language.CommandParameterAst] } | ForEach-Object ParameterName)
+        $parameters | Should -Contain 'AccessToken'
+        foreach ($parameter in $parameters) { $accepted | Should -Contain $parameter }
+    }
+}
+
 Describe 'ConvertTo-ManagedMaesterDocument verdicts' {
     BeforeAll {
         $everyVerdict = New-MaesterReport -Tests @(
