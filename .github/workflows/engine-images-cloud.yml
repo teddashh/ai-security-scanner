@@ -30,7 +30,7 @@ concurrency:
 
 env:
   CLOUD_ENGINE_MATRIX: >-
-    [{"engine":"cloudquery","tag":"2.0.31-aws9.2.0-5","dockerfile":"engines/images/cloudquery/Dockerfile"},{"engine":"prowler","tag":"5.39.1-6","dockerfile":"engines/images/prowler/Dockerfile"},{"engine":"cloudsplaining","tag":"0.9.1-5","dockerfile":"engines/images/cloudsplaining/Dockerfile"},{"engine":"scoutsuite","tag":"5.14.0-5","dockerfile":"engines/images/scoutsuite/Dockerfile"},{"engine":"steampipe","tag":"2.4.5-5","dockerfile":"engines/images/steampipe/Dockerfile"}]
+    [{"engine":"cloudquery","tag":"2.0.31-aws9.2.0-6","dockerfile":"engines/images/cloudquery/Dockerfile"},{"engine":"prowler","tag":"5.39.1-7","dockerfile":"engines/images/prowler/Dockerfile"},{"engine":"cloudsplaining","tag":"0.9.1-6","dockerfile":"engines/images/cloudsplaining/Dockerfile"},{"engine":"scoutsuite","tag":"5.14.0-6","dockerfile":"engines/images/scoutsuite/Dockerfile"},{"engine":"steampipe","tag":"2.4.5-6","dockerfile":"engines/images/steampipe/Dockerfile"}]
 
 jobs:
   changes:
