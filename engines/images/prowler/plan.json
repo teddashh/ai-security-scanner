@@ -123,33 +123,33 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-prowler",
-    "tag": "5.39.1-6",
-    "digest": "sha256:ce31420dd566cd5a18a725bad8e192f4544e3626e24dea7069aa1d863c1a70cc"
+    "tag": "5.39.1-7",
+    "digest": "sha256:38d9593af214ce164c78b731d1ea29abd06de6babe84b230502972f67a658450"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/37032232080",
-    "source_revision": "9f6a976552b044787025f0f843e231a13c024dcf",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/37044614517",
+    "source_revision": "dfe8af1721cd165a629a4d438318661e940c13d8",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:925161dbe8873db27acda4b6970dc6e64609bf7f55bfa93b6de4b05993e7888e",
-      "linux/arm64": "sha256:77597b6d878ef0b4fe43fdd5e8f4f4771aeba4ab0f85ffc4659cad08a1075217"
+      "linux/amd64": "sha256:0c4eeebf1f9558c62efc0d197e9cc7d8ac2b263161a610cc00d62a8be7bd8386",
+      "linux/arm64": "sha256:ebe37071c9b98c10a0d97f6b56e1e3626ac38237a715f7fee5ddfbad90c8f3cc"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "prowler-image-evidence-37032232080-1"
+    "evidence_artifact": "prowler-image-evidence-37044614517-1"
   },
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/prowler/Dockerfile",
-    "sha256": "sha256:5757c666f494d71eabc1cb849140f16c37b0b46885dc6fb627f9b1b11300c4f2"
+    "sha256": "sha256:4888013c30ad4ec31fada4ddce1079aa2aa755e4d7eece1ae40cf3bd456bdd7f"
   },
   "wrapper": {
     "required": true,
     "strategy": "Validate exactly one AWS account, Azure subscription, or GCP project against one complete ephemeral provider credential profile, enforce provider-specific identity and read-only permission preflights, then invoke only the matching narrow IAM profile without a shell.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:481e3ab79be75e0118e34edfc40601e9dc9b881a92e65c50d7f518ee108bec26"
+    "launcher_sha256": "sha256:61e20050247a7fbe1731930dbe178a8247c7532ac67d4d628bc30073e7ed12c0"
   },
   "provider_execution_contracts": [
     {

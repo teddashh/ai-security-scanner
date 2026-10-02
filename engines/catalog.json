@@ -14,8 +14,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudquery",
-      "tag": "2.0.31-aws9.2.0-5",
-      "digest": "sha256:7bfe433f9d0ccdbe2adfeac4853130fb70d22e38713d26964288961a4a15cf8b",
+      "tag": "2.0.31-aws9.2.0-6",
+      "digest": "sha256:e80bc6914b9a007b2a1e8978a222ff7b0ead657d004ca22f410270d086c3be82",
       "signature_identity": null
     },
     "source_revision": "e27e4ab61ad85479a5d53dae9b08440bc63e72b3",
@@ -151,8 +151,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-steampipe",
-      "tag": "2.4.5-5",
-      "digest": "sha256:f8600409a283b6e3ebe140dfb4ff05e5d035e8a69aba649529ea048af99f1366",
+      "tag": "2.4.5-6",
+      "digest": "sha256:cd488a85ca1ebfb4c5f17212b9b29c1309a4cf9450d8645a911ffb1bdb6b4e42",
       "signature_identity": null
     },
     "source_revision": "71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
@@ -286,8 +286,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-prowler",
-      "tag": "5.39.1-6",
-      "digest": "sha256:ce31420dd566cd5a18a725bad8e192f4544e3626e24dea7069aa1d863c1a70cc",
+      "tag": "5.39.1-7",
+      "digest": "sha256:38d9593af214ce164c78b731d1ea29abd06de6babe84b230502972f67a658450",
       "signature_identity": null
     },
     "source_revision": "40ecbd035e5541bf099917c5033cceb8959c4737",
@@ -461,8 +461,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scoutsuite",
-      "tag": "5.14.0-5",
-      "digest": "sha256:7ceebf10981b28ddc4b204c06112949ad5d6ab2988731e65f638d63dac0de5e2",
+      "tag": "5.14.0-6",
+      "digest": "sha256:72eea2aa430852cb92511a5234c99fe6fce6d574c36594fdc15dcf85d3a26394",
       "signature_identity": null
     },
     "source_revision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
@@ -597,8 +597,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudsplaining",
-      "tag": "0.9.1-5",
-      "digest": "sha256:81114bb260de3b9ae5240578c5b2a8573ba7e785df56cb626c917b4725d3d512",
+      "tag": "0.9.1-6",
+      "digest": "sha256:26f629d8bf65dd43aec6e217a4492e7c974ec81d0daf6b07d52efff475968997",
       "signature_identity": null
     },
     "source_revision": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",

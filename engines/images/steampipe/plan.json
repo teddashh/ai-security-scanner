@@ -15,22 +15,22 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-steampipe",
-    "tag": "2.4.5-5",
-    "digest": "sha256:f8600409a283b6e3ebe140dfb4ff05e5d035e8a69aba649529ea048af99f1366"
+    "tag": "2.4.5-6",
+    "digest": "sha256:cd488a85ca1ebfb4c5f17212b9b29c1309a4cf9450d8645a911ffb1bdb6b4e42"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/37032232080",
-    "source_revision": "9f6a976552b044787025f0f843e231a13c024dcf",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/37044614517",
+    "source_revision": "dfe8af1721cd165a629a4d438318661e940c13d8",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:bd9abe8770dfe9aafd0cc32722f4ca1baf07c25d2c3bc0faa158b34d83fffb41",
-      "linux/arm64": "sha256:4b6bfc448c23ff3b49c047ad7d3a3d6b6faccee5380acae60e0cfffe1b88c808"
+      "linux/amd64": "sha256:00d3a0a18f195499f4378d6bc9e2c899601bb24bf1e62f267168e1aef15cb9b1",
+      "linux/arm64": "sha256:3d887cea7274072e0a120c85255b16ca604201d63a381d0b4af903f006d100f8"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "steampipe-image-evidence-37032232080-1"
+    "evidence_artifact": "steampipe-image-evidence-37044614517-1"
   },
   "build_recipe": {
     "source_revision": "71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
@@ -75,13 +75,13 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/steampipe/Dockerfile",
-    "sha256": "sha256:75614eafcd146de8bc8f1f6e326cf29761017e89eeb38c0f2ddf14740342910d"
+    "sha256": "sha256:3fe82487183e2bbbbf5b951cdbd7d1c75de4f47b21d7cc330ee3c31b31dffc45"
   },
   "wrapper": {
     "required": true,
-    "strategy": "Copy the preseeded executable closure to one case-owned transient directory, write a fixed AWS IAM query/config, capture bounded JSON without a shell, and remove all runtime database state on exit.",
+    "strategy": "Write Steampipe's database cluster and state to a private install directory in the noexec /tmp tmpfs that links the preseeded executable closure in the read-only image, write a fixed AWS IAM query/config, and capture bounded JSON without a shell.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:481e3ab79be75e0118e34edfc40601e9dc9b881a92e65c50d7f518ee108bec26"
+    "launcher_sha256": "sha256:61e20050247a7fbe1731930dbe178a8247c7532ac67d4d628bc30073e7ed12c0"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",

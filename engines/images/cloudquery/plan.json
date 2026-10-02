@@ -15,22 +15,22 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudquery",
-    "tag": "2.0.31-aws9.2.0-5",
-    "digest": "sha256:7bfe433f9d0ccdbe2adfeac4853130fb70d22e38713d26964288961a4a15cf8b"
+    "tag": "2.0.31-aws9.2.0-6",
+    "digest": "sha256:e80bc6914b9a007b2a1e8978a222ff7b0ead657d004ca22f410270d086c3be82"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/37032232080",
-    "source_revision": "9f6a976552b044787025f0f843e231a13c024dcf",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/37044614517",
+    "source_revision": "dfe8af1721cd165a629a4d438318661e940c13d8",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:2b9b692d84b77009f84c1ecc104ccf1e03eff9c108a82db45f0e2720eb446674",
-      "linux/arm64": "sha256:e9dcff9d3330059b83ab933446cd5ebccc1cc0de935d3d54ce390c7da6ee028c"
+      "linux/amd64": "sha256:4f614b7566278180822d959b9b2cc66652ce88beafc9124688934f19d64ecba6",
+      "linux/arm64": "sha256:fa2c195713c2238e509dde5f4afaef484a3d5860bb7386e632d7fd08f0b0faba"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "cloudquery-image-evidence-37032232080-1"
+    "evidence_artifact": "cloudquery-image-evidence-37044614517-1"
   },
   "build_recipe": {
     "source_revision": "e27e4ab61ad85479a5d53dae9b08440bc63e72b3",
@@ -47,14 +47,14 @@
       },
       {
         "component": "cloudquery-destination-file",
-        "revision": "05f02334b9d6ed5de344fd9a9cf7ddead31ce453",
-        "url": "https://github.com/cloudquery/cloudquery/archive/05f02334b9d6ed5de344fd9a9cf7ddead31ce453.tar.gz",
-        "sha256": "sha256:21f4b826b9ad4830854130674023b97e443abba17b66a3557cd0805b3083b2d1"
+        "revision": "600ffdd2707af566e3c99469d84a34d94730aaa1",
+        "url": "https://github.com/cloudquery/cloudquery/archive/600ffdd2707af566e3c99469d84a34d94730aaa1.tar.gz",
+        "sha256": "sha256:700e2008b33a31a6e396d1e348464d2e832c856fdd9b4e45362f90b84bf92a5f"
       }
     ],
     "dependency_lock": {
       "path": "engines/images/cloudquery/dependencies.lock.json",
-      "sha256": "sha256:853f96af454192c83954d774f04eb569e7eff2d94cb948afd8fe29df207d27a2"
+      "sha256": "sha256:33316c9547ea884f0e8b6f750bf1afee1e4148b9cb314cd75ef76daba0a22c97"
     },
     "source_date_epoch": 1672928198,
     "target_platforms": [
@@ -85,16 +85,16 @@
     },
     {
       "name": "cloudquery-destination-file",
-      "version": "1.0.2",
-      "release_ref": "plugins-destination-file-v1.0.2",
-      "source_revision": "05f02334b9d6ed5de344fd9a9cf7ddead31ce453",
+      "version": "1.0.4",
+      "release_ref": "plugins-destination-file-v1.0.4",
+      "source_revision": "600ffdd2707af566e3c99469d84a34d94730aaa1",
       "path": "/usr/local/libexec/cloudquery-destination-file",
       "registry": "local"
     }
   ],
   "provider_lock": {
     "path": "engines/images/cloudquery/dependencies.lock.json",
-    "sha256": "sha256:853f96af454192c83954d774f04eb569e7eff2d94cb948afd8fe29df207d27a2",
+    "sha256": "sha256:33316c9547ea884f0e8b6f750bf1afee1e4148b9cb314cd75ef76daba0a22c97",
     "install_result": "anonymous_public_release_artifacts",
     "source_closure": "complete",
     "registry": "local"
@@ -106,13 +106,13 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/cloudquery/Dockerfile",
-    "sha256": "sha256:df5329709fab2d83e6c236b2768c2a68d794646512d02c675c1d51e48a38945b"
+    "sha256": "sha256:cd9cafa5c5d8595a280dafa3e04b6c813f0a15af65299af6196eb5b2f68b950f"
   },
   "wrapper": {
     "required": true,
     "strategy": "Materialize only the fixed seven-table AWS IAM profile, execute embedded local plugins with no registry access, and retain bounded per-table NDJSON evidence without a shell.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:481e3ab79be75e0118e34edfc40601e9dc9b881a92e65c50d7f518ee108bec26"
+    "launcher_sha256": "sha256:61e20050247a7fbe1731930dbe178a8247c7532ac67d4d628bc30073e7ed12c0"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",
