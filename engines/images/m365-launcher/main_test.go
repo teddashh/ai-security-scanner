@@ -162,6 +162,30 @@ func TestInvocationIsFixedAndNeverCarriesCredentialMaterial(t *testing.T) {
 	}
 }
 
+func TestRuntimeDirectoriesExistBeforePowerShellStarts(t *testing.T) {
+	plan, err := fixedInvocation("maester", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"} {
+		index := slices.IndexFunc(plan.Env, func(entry string) bool { return strings.HasPrefix(entry, key+"=") })
+		if index < 0 || !slices.Contains(runtimeDirectories, strings.TrimPrefix(plan.Env[index], key+"=")) {
+			t.Fatalf("%s is not one of the directories the launcher creates: %v", key, plan.Env)
+		}
+	}
+	root := t.TempDir()
+	directories := []string{filepath.Join(root, "tmp", "home"), filepath.Join(root, "tmp", "cache")}
+	if err := prepareRuntimeDirectories(directories); err != nil {
+		t.Fatal(err)
+	}
+	for _, directory := range directories {
+		info, err := os.Stat(directory)
+		if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+			t.Fatalf("runtime directory %s was not created private: %v %v", directory, info, err)
+		}
+	}
+}
+
 func TestBoundedReaderRejectsSymlinksAndOversizedFiles(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")

@@ -31,6 +31,19 @@ const (
 	managedGatewayPort = "1080"
 )
 
+// The child's HOME and XDG directories sit on the container's fresh /tmp
+// tmpfs, so they do not exist until the launcher creates them. .NET reports an
+// absent HOME as an empty user profile; the Microsoft Graph module then opens
+// its context file relative to the read-only working directory and fails.
+const (
+	homeDirectory   = "/tmp/ai-security-scanner-home"
+	cacheDirectory  = "/tmp/ai-security-scanner-cache"
+	configDirectory = "/tmp/ai-security-scanner-config"
+	dataDirectory   = "/tmp/ai-security-scanner-data"
+)
+
+var runtimeDirectories = []string{homeDirectory, cacheDirectory, configDirectory, dataDirectory}
+
 var safeProxyKeys = []string{
 	"AI_SECURITY_SCANNER_PROXY",
 	"ALL_PROXY", "all_proxy",
@@ -124,7 +137,19 @@ func run(arguments []string) error {
 	if err != nil {
 		return err
 	}
+	if err := prepareRuntimeDirectories(runtimeDirectories); err != nil {
+		return err
+	}
 	return syscall.Exec(plan.Program, plan.Args, plan.Env)
+}
+
+func prepareRuntimeDirectories(directories []string) error {
+	for _, directory := range directories {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			return fmt.Errorf("prepare runtime directory: %w", err)
+		}
+	}
+	return nil
 }
 
 func supportedEngine(engineID string) bool {
@@ -189,7 +214,7 @@ func childEnvironment(parentEnvironment []string, engineID string) ([]string, er
 		}
 	}
 	static := map[string]string{
-		"HOME":                        "/tmp/ai-security-scanner-home",
+		"HOME":                        homeDirectory,
 		"LANG":                        "C.UTF-8",
 		"LC_ALL":                      "C.UTF-8",
 		"PATH":                        "/opt/microsoft/powershell/7:/usr/local/bin:/usr/bin:/bin",
@@ -197,9 +222,9 @@ func childEnvironment(parentEnvironment []string, engineID string) ([]string, er
 		"POWERSHELL_UPDATECHECK":      "Off",
 		"PSModulePath":                "/opt/ai-security-scanner/modules:/opt/microsoft/powershell/7/Modules",
 		"TERM":                        "dumb",
-		"XDG_CACHE_HOME":              "/tmp/ai-security-scanner-cache",
-		"XDG_CONFIG_HOME":             "/tmp/ai-security-scanner-config",
-		"XDG_DATA_HOME":               "/tmp/ai-security-scanner-data",
+		"XDG_CACHE_HOME":              cacheDirectory,
+		"XDG_CONFIG_HOME":             configDirectory,
+		"XDG_DATA_HOME":               dataDirectory,
 		"DOTNET_CLI_TELEMETRY_OPTOUT": "1",
 		"DOTNET_NOLOGO":               "1",
 		"NUGET_XMLDOC_MODE":           "skip",

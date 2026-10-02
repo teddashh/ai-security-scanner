@@ -51,6 +51,18 @@ function ConvertTo-SafeText {
     return $text
 }
 
+# ScubaGear appends its policy badges (BOD 25-01 Requirement, Automated Check,
+# Configurable, Manual) to the requirement sentence as one HTML block
+# (CreateReport.psm1:255). Removing only the tags would run the badge labels
+# into the sentence, so the block is cut before the text is made safe.
+function ConvertTo-RequirementText {
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value) { return '' }
+    $sentence = [regex]::Replace([string]$Value, "<div class='policy-indicators'>.*?</div>\s*$", '', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    return ConvertTo-SafeText -Value $sentence
+}
+
 function Write-AtomicJson {
     param([Parameter(Mandatory = $true)][object]$Value, [Parameter(Mandatory = $true)][string]$LiteralPath)
 
@@ -160,7 +172,7 @@ try {
             }
             $normalized.Add([ordered]@{
                 PolicyId = ConvertTo-SafeText -Value $control.'Control ID' -MaximumLength 256
-                Requirement = ConvertTo-SafeText -Value $control.Requirement
+                Requirement = ConvertTo-RequirementText -Value $control.Requirement
                 Result = $result
                 SourceResult = $sourceResult
                 SourceCriticality = $criticality
