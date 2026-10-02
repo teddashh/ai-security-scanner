@@ -70,6 +70,7 @@ const FRONTEND_PATHS = [
   /^src-tauri\/src\/source_authorization\/provider\.rs$/,
   /^src-tauri\/src\/bootstrap\/executor\.rs$/,
   /^bootstrap\/gcp-readonly-bindings\.json$/,
+  /^bootstrap\/microsoft365-readonly-permissions\.json$/,
   // `cloudSetupScripts.test.ts` runs the account-owner setup scripts against
   // provider-shaped fakes and holds what they grant to the permissions the app
   // signs in with. A script-only or fake-only change must run that test.
