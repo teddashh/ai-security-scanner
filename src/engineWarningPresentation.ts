@@ -469,6 +469,7 @@ export const recognizedEngineWarningZhTW = (warning: string): string | undefined
     [/^JSONL line (.+) exceeded the line limit and was skipped$/u, (line) => `JSONL 第 ${line} 行超過行限制，因此已略過`],
     [/^malformed JSONL line (.+) was skipped$/u, (line) => `已略過格式錯誤的 JSONL 第 ${line} 行`],
     [/^artifact (.+) was neither valid bounded JSON nor JSONL: (.+)$/u, (id, detail) => `成品 ${id} 既不是有效且有界的 JSON，也不是 JSONL：${detail}`],
+    [/^artifact (.+) was neither valid bounded JSON nor JSONL$/u, (id) => `成品 ${id} 既不是有效且有界的 JSON，也不是 JSONL`],
     [/^Greenbone XML parsing stopped at byte (.+): (.+)$/u, (byte, detail) => `Greenbone XML 解析在位元組 ${byte} 停止：${detail}`],
     [/^non-object Prowler record at (.+) was skipped$/u, (pointer) => `已略過 ${pointer} 的非物件 Prowler 記錄`],
     [/^non-object Checkov framework result at (.+) was skipped$/u, (pointer) => `已略過 ${pointer} 的非物件 Checkov 框架結果`],
