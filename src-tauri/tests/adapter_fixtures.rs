@@ -2796,6 +2796,96 @@ fn m365_missing_and_unrecognized_source_ratings_stay_unknown_and_traceable() {
 }
 
 #[test]
+fn prowler_failure_headlines_use_result_details_with_stable_identity() {
+    let base: serde_json::Value =
+        serde_json::from_slice(fixture("prowler").0).expect("Prowler fixture");
+    let baseline = normalize_fixture("prowler");
+    let baseline = &baseline.findings[0];
+    let fallback = "Prowler check iam_customer_attached_policy_no_administrative_privileges";
+    let cases = [
+        (
+            Some("This resource failed the OCSF check."),
+            Some("Legacy failure detail."),
+            Some("Passing condition"),
+            Some("Legacy check title"),
+            "This resource failed the OCSF check.",
+        ),
+        (
+            Some(" \t\n "),
+            Some("Legacy failure detail."),
+            Some("Passing condition"),
+            None,
+            "Legacy failure detail.",
+        ),
+        (
+            None,
+            None,
+            Some("Check title fallback"),
+            None,
+            "Check title fallback",
+        ),
+        (
+            None,
+            Some(" "),
+            Some(" "),
+            Some("Legacy check title"),
+            "Legacy check title",
+        ),
+        (None, None, None, None, fallback),
+        (Some(" "), Some(" "), Some(" "), Some(" "), fallback),
+    ];
+    for (detail, extended, title, legacy_title, expected) in cases {
+        let mut row = base[0].clone();
+        row["status_detail"] = serde_json::json!(detail);
+        row["StatusExtended"] = serde_json::json!(extended);
+        row["finding_info"]["title"] = serde_json::json!(title);
+        row["CheckTitle"] = serde_json::json!(legacy_title);
+        let bytes = serde_json::to_vec(&serde_json::json!([row])).expect("serialize Prowler");
+        let output = normalize_bytes(
+            "prowler",
+            &bytes,
+            "prowler-ocsf.json",
+            "application/json",
+            "run-1",
+        );
+        assert!(output.complete, "{:?}", output.warnings);
+        assert_eq!(output.findings.len(), 1);
+        let finding = &output.findings[0];
+        assert_eq!(finding.title, expected);
+        assert_eq!(finding.fingerprint, baseline.fingerprint);
+        assert_eq!(finding.id, baseline.id);
+        assert_eq!(finding.severity, baseline.severity);
+        assert_eq!(finding.asset_ids, baseline.asset_ids);
+        assert_eq!(
+            finding.evidence[0].source_rule,
+            baseline.evidence[0].source_rule
+        );
+        assert_eq!(finding.evidence[0].pointer.as_deref(), Some("/0"));
+    }
+
+    let legacy = normalize_bytes(
+        "prowler",
+        br#"[{
+            "Status": "FAIL",
+            "CheckID": "iam_user_hardware_mfa_enabled",
+            "CheckTitle": "IAM user has hardware MFA enabled",
+            "StatusExtended": "User alice does not have any type of MFA enabled.",
+            "Severity": "High",
+            "unmapped": {"AccountId": "123456789012", "provider": "aws", "ResourceId": "alice"}
+        }]"#,
+        "prowler-legacy.json",
+        "application/json",
+        "run-legacy",
+    );
+    assert!(legacy.complete, "{:?}", legacy.warnings);
+    assert_eq!(legacy.findings.len(), 1);
+    assert_eq!(
+        legacy.findings[0].title,
+        "User alice does not have any type of MFA enabled."
+    );
+}
+
+#[test]
 fn prowler_5_39_ocsf_maps_provider_native_accounts_to_canonical_assets() {
     // Shape and field names are reduced from the pinned Prowler 5.39 OCSF
     // serializer/fixtures: status_code, metadata.event_code,
@@ -2855,6 +2945,18 @@ fn prowler_5_39_ocsf_maps_provider_native_accounts_to_canonical_assets() {
         .iter()
         .map(|finding| (finding.asset_ids[0].as_str(), finding))
         .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        by_asset["canonical-aws"].title,
+        "IAM Access Analyzer is not enabled"
+    );
+    assert_eq!(
+        by_asset["canonical-gcp"].title,
+        "Audit logs are not enabled for all services"
+    );
+    assert_eq!(
+        by_asset["canonical-azure"].title,
+        "Subscription has too many owners"
+    );
     assert!(
         by_asset["canonical-aws"]
             .tags
@@ -4650,7 +4752,9 @@ fn upstream_rule_details_are_retained_as_evidence_without_replacing_product_reco
     assert!(prowler.findings.iter().any(|finding| {
         finding.evidence.iter().any(|evidence| {
             evidence.scanner_details.as_ref().is_some_and(|details| {
-                details.remediation.as_deref()
+                details.description.as_deref()
+                    == Some("Attached customer-managed IAM policies should grant only the permissions needed.")
+                && details.remediation.as_deref()
                     == Some("Replace the wildcard action and resource with the specific permissions the role needs.")
             })
         }) && !finding.recommendation.contains("Replace the wildcard action")

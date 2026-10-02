@@ -25,7 +25,7 @@ use std::io::{BufRead, BufReader, Read, Take};
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-pub const ADAPTER_VERSION: &str = "0.2.1";
+pub const ADAPTER_VERSION: &str = "0.2.2";
 /// Stable identity for the canonical finding fingerprint algorithm. Changing
 /// this value requires an explicit migration before cross-version diffs may be
 /// treated as comparable.
@@ -3903,9 +3903,18 @@ fn extract_prowler(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
             );
             continue;
         };
-        let title = nested_string(value, &["finding_info", "title"])
-            .or_else(|| string_any(object, &["CheckTitle", "check_title"]))
-            .unwrap_or_else(|| format!("Prowler check {rule_id}"));
+        // The check title describes the passing condition; the result detail
+        // names what actually failed on this resource.
+        let title = [
+            string_any(object, &["status_detail"]),
+            string_any(object, &["StatusExtended"]),
+            nested_string(value, &["finding_info", "title"]),
+            string_any(object, &["CheckTitle", "check_title"]),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|title| !title.is_empty())
+        .unwrap_or_else(|| format!("Prowler check {rule_id}"));
         let severity_text = string_any(object, &["Severity", "severity"])
             .or_else(|| nested_string(value, &["unmapped", "Severity"]))
             .unwrap_or_else(|| "unknown".into());
@@ -3930,7 +3939,7 @@ fn extract_prowler(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
             .or_else(|| nested_string(value, &["unmapped", "provider"]));
         records.push(with_scanner_details(
             record,
-            None,
+            nested_string(value, &["finding_info", "desc"]),
             nested_string(value, &["remediation", "desc"]),
             None,
             None,

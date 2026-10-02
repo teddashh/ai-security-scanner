@@ -23,11 +23,13 @@
         "type": "Rule",
         "type_id": 1
       },
-      "title": "Attached IAM customer-managed policy allows '*:*' administrative privileges",
+      "title": "Attached IAM customer-managed policies do not allow administrative privileges",
+      "desc": "Attached customer-managed IAM policies should grant only the permissions needed.",
       "uid": "provider-finding-instance-1"
     },
     "status": "New",
     "status_code": "FAIL",
+    "status_detail": "Attached IAM customer-managed policy allows '*:*' administrative privileges",
     "severity": "High",
     "cloud": {
       "account": {

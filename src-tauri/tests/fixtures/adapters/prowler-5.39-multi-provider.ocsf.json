@@ -8,11 +8,12 @@
     },
     "finding_info": {
       "analytic": {"name": "accessanalyzer_enabled", "uid": "accessanalyzer_enabled", "type": "Rule", "type_id": 1},
-      "title": "IAM Access Analyzer is not enabled",
+      "title": "IAM Access Analyzer is enabled",
       "uid": "aws-finding-instance-not-the-rule-id"
     },
     "status": "New",
     "status_code": "FAIL",
+    "status_detail": "IAM Access Analyzer is not enabled",
     "severity": "Low",
     "cloud": {
       "account": {"name": "production", "type": "AWS Account", "type_id": 10, "uid": "123456789012"},
@@ -30,11 +31,12 @@
     },
     "finding_info": {
       "analytic": {"name": "iam_audit_logs_enabled", "uid": "iam_audit_logs_enabled", "type": "Rule", "type_id": 1},
-      "title": "Audit logs are not enabled for all services",
+      "title": "Audit logs are enabled for all services",
       "uid": "gcp-finding-instance-not-the-rule-id"
     },
     "status": "New",
     "status_code": "FAIL",
+    "status_detail": "Audit logs are not enabled for all services",
     "severity": "Medium",
     "cloud": {
       "account": {"name": "security-production", "type": "GCP Account", "type_id": 5, "uid": "security-prod-123"},
@@ -53,11 +55,12 @@
     },
     "finding_info": {
       "analytic": {"name": "iam_subscription_owner_max_3", "uid": "iam_subscription_owner_max_3", "type": "Rule", "type_id": 1},
-      "title": "Subscription has too many owners",
+      "title": "Subscription has at most three owners",
       "uid": "azure-finding-instance-not-the-rule-id"
     },
     "status": "New",
     "status_code": "FAIL",
+    "status_detail": "Subscription has too many owners",
     "severity": "High",
     "cloud": {
       "account": {"name": "Production", "type": "Azure AD Account", "type_id": 6, "uid": "11111111-2222-3333-4444-555555555555"},
