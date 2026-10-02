@@ -157,7 +157,7 @@ Immediately before Prowler starts, the cloud launcher calls `projects.testIamPer
 
 Register a tenant-specific public client, enable device authorization, and grant only the requested delegated read permissions. The backend rejects known `ReadWrite`, write, and user-impersonation permissions. It verifies `/me`, `/organization`, and live read probes for audit metadata, authorization policy, and directory role definitions.
 
-The pinned read set includes directory, application, audit log, domain, group, risk event, organization, policy, reports, role-management, security-event, administrative-unit, and user reads.
+The pinned read set includes directory, application, audit log, domain, group, risk event, organization, policy, privileged access for groups, privileged eligibility schedules, reports, role-management, role-management policy, security-event, administrative-unit, and user reads.
 
 - [Microsoft Graph permissions reference](https://learn.microsoft.com/en-us/graph/permissions-reference)
 - [Get the signed-in user](https://learn.microsoft.com/en-us/graph/api/user-get?view=graph-rest-1.0)

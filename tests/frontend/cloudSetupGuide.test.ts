@@ -64,6 +64,15 @@ test("the Microsoft 365 steps ask for exactly the read permissions the sign-in r
   }
 });
 
+test("temporary access grants the same Microsoft 365 reads the sign-in requires", () => {
+  const start = executorSource.indexOf("fn microsoft365_application_permissions()");
+  assert.notEqual(start, -1, "executor.rs should define microsoft365_application_permissions");
+  const granted = quotedStrings(executorSource.slice(start, executorSource.indexOf("\n}\n", start)));
+  const template = JSON.parse(read("../../bootstrap/microsoft365-readonly-permissions.json"));
+  assert.deepEqual(granted, [...MICROSOFT_365_READ_PERMISSIONS]);
+  assert.deepEqual(template.application_permissions, [...MICROSOFT_365_READ_PERMISSIONS]);
+});
+
 test("the temporary-access steps ask for exactly the scopes the setup helper requires", () => {
   const microsoftAdmin = executorSource.slice(executorSource.indexOf("fn microsoft_admin_device_authorization"));
   const required = microsoftAdmin.slice(0, microsoftAdmin.indexOf("let mut scopes"));
