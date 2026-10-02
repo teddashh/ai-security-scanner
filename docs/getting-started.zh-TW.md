@@ -110,6 +110,23 @@ npm run tauri dev
 6. 按**前往官方登入**，在雲端服務商自己的頁面登入；頁面要求時，輸入本程式顯示的一次性代碼。
 7. 本程式顯示唯讀存取已驗證後，按**繼續：尋找雲端資產**，確認帳號，再按**掃描這個已登入帳號**。
 
+AWS 和 Microsoft 365 可以用腳本完成步驟 1。腳本會以英文印出步驟 2 要填的資料，並存成設定檔。再執行一次只會補上缺少的部分，不會移除任何東西。
+
+- **AWS：**在管理 IAM Identity Center 的帳號的 AWS 主控台開啟 CloudShell，執行：
+
+  ```sh
+  curl -fsSLO https://raw.githubusercontent.com/teddashh/ai-security-scanner/main/cloud-setup/aws-read-only.sh
+  bash aws-read-only.sh
+  ```
+
+  啟用 IAM Identity Center 和新增登入用的使用者仍要在主控台完成；缺哪一步，腳本會直接說明。
+- **Microsoft 365：**在 Windows 的 PowerShell 執行下列指令，再到 Microsoft 的頁面以全域管理員身分登入。macOS 或 Linux 請改用 `pwsh`（PowerShell 7）執行腳本。
+
+  ```powershell
+  Invoke-WebRequest https://raw.githubusercontent.com/teddashh/ai-security-scanner/main/cloud-setup/microsoft365-read-only.ps1 -OutFile microsoft365-read-only.ps1 -UseBasicParsing
+  powershell -ExecutionPolicy Bypass -File .\microsoft365-read-only.ps1
+  ```
+
 Google Cloud 需要組織（Google Workspace 或 Cloud Identity）；個人 Gmail 帳號底下的專案無法掃描。
 
 如果雲端服務商因為存取權限可以修改帳號，或缺少某個權限而拒絕登入，面板會指出原因與修正方式。到主控台修正存取權限後再登入一次。

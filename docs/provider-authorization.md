@@ -46,6 +46,15 @@ The exact top-level shape is:
 
 AWS `role_arn` is derived locally from the account and role. Google Cloud `redirect_uri` is generated locally for the current loopback listener. Neither value belongs in the setup file.
 
+### Setup scripts
+
+`cloud-setup/` holds two scripts that do step 1 in one command for the account owner. Each runs under the owner's own provider sign-in, prints the step 2 values, and writes the setup file above with `existing_read_only`. A rerun adds only what is missing. Neither script deletes, detaches, or replaces anything; when an existing object grants more than the sign-in accepts, the script stops and names the console fix.
+
+- `aws-read-only.sh` runs in AWS CloudShell (bash, AWS CLI v2, `jq`). It finds the organization instance of IAM Identity Center in any enabled Region, creates or reuses the `SecurityAudit` permission set (only the AWS managed `SecurityAudit` policy, one-hour session), and assigns it on the account to the Identity Center user who will scan. Enabling the organization instance and adding a user who has a password are console-only, so the script names those steps instead. It prints the default start URL, `https://<identity store ID>.awsapps.com/start`.
+- `microsoft365-read-only.ps1` runs in Windows PowerShell 5.1 or PowerShell 7. It signs in through the Microsoft Graph PowerShell SDK with `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All` for that process only. It then makes sure the single-tenant `ai-security-scanner` app registration allows public client flows, requests the delegated read permissions in `src/cloudSetupGuide.ts` plus the sign-in's `openid`, `profile`, and `offline_access`, and has tenant-wide admin consent for them, so no user is stopped for approval. The scanner's own sign-in never receives the setup permissions.
+
+`tests/frontend/cloudSetupScripts.test.ts` runs both scripts end to end against provider-shaped fakes in `tests/fixtures/cloud-setup/` and holds what they grant to the lists the sign-in verifies.
+
 ## Security boundary
 
 - Provider login happens only on the provider-hosted HTTPS page. A device-code page must be one the provider uses for sign-in: `device.sso.<region>.amazonaws.com` or the organization's own `awsapps.com` access portal for AWS, and `microsoft.com`, `login.microsoft.com`, or `login.microsoftonline.com` for Microsoft.

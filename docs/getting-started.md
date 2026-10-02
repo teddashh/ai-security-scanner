@@ -110,6 +110,23 @@ This checks the identity and access settings of one AWS account, Azure subscript
 6. Select **Continue to official sign-in**. Sign in on the provider's own page, entering the one-time code the app shows when asked.
 7. When the app shows that read-only access is verified, select **Continue: find cloud assets**, review the account, and select **Scan this signed-in account**.
 
+For AWS and Microsoft 365, a script can do step 1 for you. It prints the step 2 values and saves them as a setup file. Running it again adds only what is missing and never removes anything.
+
+- **AWS:** in the AWS console of the account that manages IAM Identity Center, open CloudShell and run:
+
+  ```sh
+  curl -fsSLO https://raw.githubusercontent.com/teddashh/ai-security-scanner/main/cloud-setup/aws-read-only.sh
+  bash aws-read-only.sh
+  ```
+
+  Turning on IAM Identity Center and adding the user who signs in stay console steps; the script says which one is missing.
+- **Microsoft 365:** on Windows, run these in PowerShell and sign in on Microsoft's page as a Global Administrator. On macOS or Linux, run the script with `pwsh` (PowerShell 7).
+
+  ```powershell
+  Invoke-WebRequest https://raw.githubusercontent.com/teddashh/ai-security-scanner/main/cloud-setup/microsoft365-read-only.ps1 -OutFile microsoft365-read-only.ps1 -UseBasicParsing
+  powershell -ExecutionPolicy Bypass -File .\microsoft365-read-only.ps1
+  ```
+
 Google Cloud needs an organization (Google Workspace or Cloud Identity); projects under a personal Gmail account cannot be scanned.
 
 If the provider refuses the sign-in because the access can change the account or is missing a permission, the panel names the cause and the fix. Correct the access in the console, then sign in again.

@@ -174,6 +174,12 @@ test("backend files a frontend test reads schedule the frontend lane too", () =>
   // The warning census also reads the orchestrator and adapter producer files.
   assert.equal(classifyChangedPaths(["src-tauri/src/orchestrator.rs"]).frontend, true);
   assert.equal(classifyChangedPaths(["src-tauri/src/adapters/mod.rs"]).frontend, true);
+  // `cloudSetupScripts.test.ts` loads the fake Graph module by directory, which
+  // the read guard skips, so pin the fake and the scripts it exercises here.
+  assert.equal(classifyChangedPaths([
+    "tests/fixtures/cloud-setup/modules/Microsoft.Graph.Authentication/Microsoft.Graph.Authentication.psm1",
+  ]).frontend, true);
+  assert.equal(classifyChangedPaths(["cloud-setup/microsoft365-read-only.ps1"]).frontend, true);
   // Unrelated backend files must not drag the frontend suite in with them.
   assert.equal(classifyChangedPaths(["src-tauri/src/bootstrap.rs"]).frontend, false);
 });
