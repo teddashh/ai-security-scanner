@@ -319,6 +319,13 @@ const graphScopes = [
 }));
 const scopeId = (name: string) => graphScopes.find((scope) => scope.value === name)!.id;
 
+// What the script signs in with, and a token for them in Microsoft's JWT shape.
+const graphPowerShellClientId = "14d82eec-204b-4c2f-b7e8-296a70dab67e";
+const setupScopes = ["Application.ReadWrite.All", "DelegatedPermissionGrant.ReadWrite.All"];
+const base64url = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+const setupClaims = { tid: tenantId, scp: setupScopes.join(" "), exp: 4102444800 };
+const setupToken = [base64url({ typ: "JWT", alg: "RS256" }), base64url(setupClaims), "c2lnbmF0dXJl"].join(".");
+
 const graphState = (overrides: Record<string, unknown> = {}) => ({
   tenantId,
   graphServicePrincipal: { id: graphPrincipalId, oauth2PermissionScopes: graphScopes },
@@ -327,6 +334,8 @@ const graphState = (overrides: Record<string, unknown> = {}) => ({
   oauth2PermissionGrants: [],
   replicationDelays: 0,
   calls: [],
+  signIn: { pending: 1, token: setupToken, refusal: null },
+  login: [],
   ...overrides,
 });
 
@@ -360,12 +369,8 @@ test("the Microsoft 365 script prepares a fresh tenant, and a second run changes
   const dir = workspace(t);
   const first = await runMicrosoft(dir, graphState({ replicationDelays: 1 }));
   assert.equal(first.status, 0, first.stdout + first.stderr);
-  assert.deepEqual(first.state.connect, {
-    scopes: ["Application.ReadWrite.All", "DelegatedPermissionGrant.ReadWrite.All"],
-    tenantId: "",
-    contextScope: "Process",
-    useDeviceCode: false,
-  });
+  assert.deepEqual(first.state.connect, { scopes: setupScopes, tenantId: "", contextScope: "Process" });
+  assert.deepEqual(first.state.login, []);
   assert.equal(first.state.disconnected, true);
   assert.deepEqual(first.changes.map((call) => `${call.method} ${call.uri}`), [
     "POST /v1.0/applications",
@@ -412,10 +417,32 @@ test("the Microsoft 365 script signs in with a one-time code when asked, and alw
   const dir = workspace(t);
   const result = await runMicrosoft(dir, graphState(), ["-UseDeviceCode"]);
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.equal(result.state.connect.useDeviceCode, true);
-  // The person can sign in only if the script shows the code Connect-MgGraph
-  // writes to its output, and the code must not leak into the tenant it reads.
-  assert.match(result.stdout, /microsoft\.com\/devicelogin and enter the code FAKECODE1/u);
+
+  // Windows PowerShell 5.1 crashed inside Connect-MgGraph's own device-code
+  // sign-in, so the script asks Microsoft's sign-in service for the code and
+  // polls for the token itself, then hands Connect-MgGraph only the token.
+  const endpoint = "https://login.microsoftonline.com/organizations/oauth2/v2.0";
+  const [request, ...polls] = result.state.login;
+  assert.equal(request.uri, `${endpoint}/devicecode`);
+  assert.deepEqual(request.body, {
+    client_id: graphPowerShellClientId,
+    scope: setupScopes.map((scope) => `https://graph.microsoft.com/${scope}`).join(" "),
+  });
+  assert.equal(polls.length, 2, "one answer that the sign-in is pending, then the token");
+  for (const poll of polls) {
+    assert.equal(poll.uri, `${endpoint}/token`);
+    assert.deepEqual(poll.body, {
+      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+      client_id: graphPowerShellClientId,
+      device_code: "fake-device-code",
+    });
+  }
+  assert.deepEqual(result.state.connect, { accessToken: true, tenantId, scopes: setupScopes });
+
+  // The person can sign in only if the script shows the code, and the token
+  // never reaches the screen.
+  assert.match(result.stdout, /login\.microsoft\.com\/device and enter the code FAKECODE1/u);
+  assert.equal((result.stdout + result.stderr).includes(setupToken.split(".")[1]!), false);
   const setup = JSON.parse(readFileSync(join(dir, "ai-security-scanner-microsoft365-setup.json"), "utf8"));
   assert.equal(setup.details.tenant_id, tenantId);
 
@@ -424,7 +451,26 @@ test("the Microsoft 365 script signs in with a one-time code when asked, and alw
   // branch that keeps Windows on the one-time code.
   const source = readFileSync(microsoftScript, "utf8");
   assert.match(source, /\$onWindows = \[Environment\]::OSVersion\.Platform -eq \[PlatformID\]::Win32NT\n/u);
-  assert.match(source, /if \(\$UseDeviceCode -or \$onWindows -or [^\n]+\) \{ \$connect\['UseDeviceCode'\] = \$true \}/u);
+  assert.match(source, /if \(\$UseDeviceCode -or \$onWindows -or [^\n]+\) \{\n\s+\$token = Get-SignInToken\n/u);
+});
+
+test("the Microsoft 365 script stops when the one-time code sign-in is declined", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const refusal = {
+    error: "authorization_declined",
+    error_description: "The end user denied the authorization request. Trace ID: 00000000-0000-0000-0000-000000000000 Correlation ID: 00000000-0000-0000-0000-000000000000 Timestamp: 2026-10-02 22:00:00Z",
+  };
+  const result = await runMicrosoft(
+    dir,
+    graphState({ signIn: { pending: 0, token: setupToken, refusal } }),
+    ["-UseDeviceCode", "-TenantId", tenantId],
+  );
+  assert.equal(result.status, 1);
+  assert.equal(result.state.login[0].uri, `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/devicecode`);
+  assert.match(result.stdout, /Stopped: Microsoft stopped the sign-in: The end user denied the authorization request\.\n/u);
+  assert.equal(result.state.connect, undefined);
+  assert.deepEqual(result.calls, []);
+  assert.equal(existsSync(join(dir, "ai-security-scanner-microsoft365-setup.json")), false);
 });
 
 test("the Microsoft 365 script completes an app registered in the portal", { skip: skipWithoutPwsh }, async (t) => {

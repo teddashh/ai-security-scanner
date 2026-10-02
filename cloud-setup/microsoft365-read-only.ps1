@@ -7,12 +7,12 @@ Run it as a Global Administrator of the tenant you want to scan:
 
     powershell -ExecutionPolicy Bypass -File .\microsoft365-read-only.ps1
 
-You sign in on Microsoft's own page through the Microsoft Graph PowerShell SDK,
-so this script never sees your password. It makes sure the tenant has a
-single-tenant app registration named ai-security-scanner that allows public
-client flows, asks only for the Microsoft Graph delegated sign-in and read
-permissions the scan uses, and has admin consent for them. It then prints the two IDs for step 2
-of the app's connection guide and saves them as a setup file the app can import.
+You sign in on Microsoft's own page, so this script never sees your password.
+It makes sure the tenant has a single-tenant app registration named
+ai-security-scanner that allows public client flows, asks only for the
+Microsoft Graph delegated sign-in and read permissions the scan uses, and has
+admin consent for them. It then prints the two IDs for step 2 of the app's
+connection guide and saves them as a setup file the app can import.
 
 Running it again adds only what is missing. It never removes or replaces
 anything; when something is in the way, it stops and says what to change.
@@ -34,9 +34,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
+if ($PSVersionTable.PSEdition -ne 'Core') {
+    # Windows PowerShell 5.1 can still offer TLS 1.0, which Microsoft refuses.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+}
 
 $AppName = 'ai-security-scanner'
 $GraphAppId = '00000003-0000-0000-c000-000000000000'
+# Microsoft Graph PowerShell's own public client, which Connect-MgGraph signs in with.
+$GraphPowerShellClientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e'
 $SetupFile = 'ai-security-scanner-microsoft365-setup.json'
 # The Microsoft Graph delegated permissions the Microsoft 365 sign-in verifies.
 $ReadPermissions = @(
@@ -103,30 +109,78 @@ function Split-Scope($Scope) {
     @(([string] $Scope) -split '\s+' | Where-Object { $_ })
 }
 
+# Microsoft's sign-in service answers a code that is still waiting, or was
+# refused, with HTTP 400 and a JSON body naming the error. Invoke-RestMethod puts
+# that body in ErrorDetails.
+function Get-SignInRefusal($Record) {
+    if (-not $Record.ErrorDetails -or -not $Record.ErrorDetails.Message) { return $null }
+    try { $body = ConvertFrom-Json -InputObject $Record.ErrorDetails.Message } catch { return $null }
+    if (-not $body -or -not $body.PSObject.Properties['error']) { return $null }
+    $description = [string] $body.error
+    if ($body.PSObject.Properties['error_description']) {
+        # The description ends with trace and correlation IDs nobody needs here.
+        $description = ([string] $body.error_description) -replace '(?s)\s*Trace ID:.*$', ''
+    }
+    [pscustomobject]@{ Error = [string] $body.error; Description = $description }
+}
+
+# Signs in with a one-time code and returns the access token. Windows PowerShell
+# 5.1 ended the whole process with a StackOverflowException inside
+# Connect-MgGraph -UseDeviceCode, so the script asks Microsoft's sign-in service
+# for the code itself and hands Connect-MgGraph only the token.
+function Get-SignInToken {
+    $tenant = if ($TenantId) { $TenantId } else { 'organizations' }
+    $endpoint = "https://login.microsoftonline.com/$tenant/oauth2/v2.0"
+    $scope = @($SetupScopes | ForEach-Object { "https://graph.microsoft.com/$_" }) -join ' '
+    $code = Invoke-RestMethod -Method Post -Uri "$endpoint/devicecode" -Body @{ client_id = $GraphPowerShellClientId; scope = $scope }
+    Write-Host $code.message
+    $interval = [Math]::Max(1, [int] $code.interval)
+    $deadline = (Get-Date).AddSeconds([int] $code.expires_in)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds $interval
+        try {
+            $answer = Invoke-RestMethod -Method Post -Uri "$endpoint/token" -Body @{
+                grant_type  = 'urn:ietf:params:oauth:grant-type:device_code'
+                client_id   = $GraphPowerShellClientId
+                device_code = $code.device_code
+            }
+            return [string] $answer.access_token
+        } catch {
+            $refusal = Get-SignInRefusal $_
+            if (-not $refusal) { throw }
+            if ($refusal.Error -eq 'slow_down') {
+                $interval += 5
+            } elseif ($refusal.Error -ne 'authorization_pending') {
+                Stop-Setup "Microsoft stopped the sign-in: $($refusal.Description)"
+            }
+        }
+    }
+    Stop-Setup 'the one-time code expired before the sign-in finished. Run this script again.'
+}
+
 function Connect-Tenant {
     $installed = Get-Module -ListAvailable -Name Microsoft.Graph.Authentication |
         Where-Object { $_.Version -ge [version] '2.0.0' }
     if (-not $installed) {
         Write-Host 'Installing the Microsoft Graph PowerShell sign-in module for your user account...'
-        if ($PSVersionTable.PSEdition -ne 'Core') {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        }
         Install-Module -Name Microsoft.Graph.Authentication -MinimumVersion 2.0.0 -Scope CurrentUser -Repository PSGallery
     }
     Import-Module Microsoft.Graph.Authentication -MinimumVersion 2.0.0
 
-    $connect = @{ Scopes = $SetupScopes; ContextScope = 'Process'; NoWelcome = $true }
-    if ($TenantId) { $connect['TenantId'] = $TenantId }
+    Write-Host "Sign in on Microsoft's page as a Global Administrator of the tenant to scan."
     # On Windows, the Microsoft Graph sign-in window belongs to Windows itself,
     # and it offers to add the account to Windows and let the organization manage
     # the computer. A sign-in with a one-time code stays in the browser.
     $onWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
-    if ($UseDeviceCode -or $onWindows -or "$env:AZUREPS_HOST_ENVIRONMENT" -like 'cloud-shell*') { $connect['UseDeviceCode'] = $true }
-    Write-Host "Sign in on Microsoft's page as a Global Administrator of the tenant to scan."
-    # Connect-MgGraph writes the one-time code and its page to its output, not
-    # to the console, so discarding that output hid the code and the sign-in
-    # timed out. Show it, and keep it out of what this function returns.
-    Connect-MgGraph @connect | ForEach-Object { Write-Host $_ }
+    if ($UseDeviceCode -or $onWindows -or "$env:AZUREPS_HOST_ENVIRONMENT" -like 'cloud-shell*') {
+        $token = Get-SignInToken
+        Connect-MgGraph -AccessToken (ConvertTo-SecureString -String $token -AsPlainText -Force) -NoWelcome | Out-Null
+        $token = $null
+    } else {
+        $connect = @{ Scopes = $SetupScopes; ContextScope = 'Process'; NoWelcome = $true }
+        if ($TenantId) { $connect['TenantId'] = $TenantId }
+        Connect-MgGraph @connect | Out-Null
+    }
     $context = Get-MgContext
     if (-not $context -or -not $context.TenantId) { Stop-Setup 'the Microsoft sign-in did not finish.' }
     return [string] $context.TenantId
