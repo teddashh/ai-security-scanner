@@ -2,6 +2,8 @@
 
 This procedure keeps each scanner close to its upstream project while preserving safe product operation and one professional report. The machine-readable catalog owns exact artifact facts, [engine-catalog.md](engine-catalog.md) owns the public capability description, and the [product specification](product-spec.md) owns product behavior.
 
+The [engine reference](engines/README.md) has a page per engine and launcher with the wiring, the files that move together, and the lessons from real runs. Read it before changing an engine.
+
 ## 1. Default decision: update upstream, not a private detector
 
 For every change, classify it before implementation:

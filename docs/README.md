@@ -25,6 +25,7 @@ Use the shortest path that matches the task.
 - [Development status](development-status.md): current implementation, recorded verification, and remaining work.
 - [Contributing](../CONTRIBUTING.md): product priorities, implementation rules, and verification.
 - [Engine maintenance](engine-maintenance.md): upstream updates, adapter boundaries, and patch exceptions.
+- [Engine reference](engines/README.md): one page per engine and launcher: how it runs, what its adapter keeps, how to update it, and what real runs taught.
 - [Engine and report-layer contracts](engine-alignment-handover.zh-TW.md): current engine semantics, asset paths, report behavior, and completion criteria.
 - [Threat model](threat-model.md): protected assets, threats, and required controls.
 - [Security policy](../SECURITY.md): private vulnerability reporting and operating rules.

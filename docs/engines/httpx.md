@@ -1,0 +1,44 @@
+# httpx
+
+Collects HTTP service facts (status code, scheme, port, TLS) from one approved origin per grant port, under `low_impact_external_connection`. Results are typed service inventory, not findings; httpx emits no severity (b8b989a).
+
+| Item | Value |
+| --- | --- |
+| Upstream | [projectdiscovery/httpx](https://github.com/projectdiscovery/httpx) v1.10.0, revision `13037dd08b9715cfbd960a70ae1edfef6686a857` |
+| Image | `ghcr.io/teddashh/ai-security-scanner-engine-httpx:1.10.0-7`, built from 51b8abf for linux/amd64 and linux/arm64. The digest is pinned in `engines/catalog.json` and `plan.json` `final_artifact` |
+| Build inputs | `engines/images/httpx/Dockerfile` (checksum-pinned source archive, version and `go.sum` checks, `go mod verify`, the DNS patch below, `-mod=readonly`, `CGO_ENABLED=0`, `FROM scratch`), `patch_live_dns.go`, `patch_live_dns_test.go`, `SOURCE.md`, `plan.json`, and the [external launcher](external-launcher.md) |
+| Launcher | `httpxInvocation` in `engines/images/external-launcher/main.go`; command `--engine httpx --scope /run/ai-security-scanner/scope.json --output /output` |
+| Adapter | `extract_httpx_inventory` in `src-tauri/src/adapters/mod.rs` |
+| Publish workflow | `.github/workflows/engine-images-external.yml`, matrix entry `httpx` / `1.10.0-7` |
+
+## How it is wired
+
+- **Scope.** A `low_impact_external_connection` grant whose external scope declares `http` or `https`, on a `domain`, `ip_address` or `web_service` asset, with at most 25 requests/s, 10 concurrent and a 1,800 s timeout. A `tcp` grant is refused for httpx and planned for Naabu, and the planner names the protocol mismatch (3b4b25e).
+- **Network.** httpx gets `socks5h://<gateway-ip>:1080`, so the approved hostname travels to the gateway unchanged and keeps its HTTP Host and TLS SNI.
+- **Invocation.** `-target <scheme>://<host>:<port> -proxy <gateway> -rate-limit -threads -timeout` from the grant, `-retries 0 -json -output <unit file> -status-code -omit-body -no-fallback-scheme -no-stdin -disable-update-check -silent -no-color`. The process deadline is the timeout plus 1 s plus 5 s.
+- **Output.** Each record's `url` (or `input`) must have the grant's scheme, host and port. The launcher adds `asset_id`, `scope_grant_id` and `scope_target`, removes `request`, `response`, `template`, `curl-command`, `body` and `raw`, and for httpx also the DNS fields `host_ip`, `a`, `aaaa`, `cname` and `resolvers`. Result: `/output/httpx.jsonl`.
+- **Mapping.** Each record becomes one service observation: endpoint from `host`, then `input`, then the URL host; status from `status_code` or `status-code` (100 to 599); port from `port`, else the URL default; scheme from `scheme`, else the URL; transport `tcp`; `tls` if present; asset from `asset_id`. A record without a target or status is skipped with a warning and stays in the raw artifact.
+- **Failed or partial.** A launcher error exits 126 and the check fails. An empty `httpx.jsonl` from a completed run is a complete zero-observation result (`provably_complete_empty_released_jsonl_streams_are_zero_finding_results`).
+
+## Downstream changes
+
+- **Post-request DNS removed** (206ed74). `patch_live_dns.go` replaces the `getDNSData(hp, onlyHost)` block in `runner/runner.go` with empty `ips4`, `ips6`, `cnames` and `resolvers`, so httpx performs no second, live DNS lookup outside the gateway. The Dockerfile checks the file's SHA-256 before (`748502c7633140c7395d73d3b7d91eaa2efa324a5567cfc7b7a57485a1f9a641`) and after (`6e8c7c8e59f6f7e574af0ff3b87cf3cd74e8e9d814618108dedeb9620fdbab95`), runs the patch tests against the pinned file, and greps that the call is gone. The patch binary accepts only `--source /src/httpx/runner/runner.go`.
+- **DNS fields stripped** from evidence by the launcher, as above.
+- The [section 6](../engine-maintenance.md#6-downstream-patch-exception) record is incomplete: no upstream issue link, applicable version range, removal condition or review date is written down beside the plan. Record them at the next update, and try to drop the patch first.
+
+## Lessons from real runs
+
+- 2026-08-26: httpx's own DNS enrichment was a second lookup path outside the frozen addresses -> the source patch and DNS field stripping, together with scope schema `"2"` (206ed74).
+- 2026-09-05: httpx records reached the report tagged `source-severity:` although httpx has no severity field -> derived severity basis (b8b989a); since 2026-09-08 they are typed inventory, not findings (d8fe70b).
+- 2026-09-19: a domain whose grant declared `tcp` was reported as missing ownership for httpx while the same grant was planning Naabu -> each refusal cause now names the observed protocol (3b4b25e).
+- 2026-09-30: the published `-5` image predated the shared launcher changes of ef1c653 and 601da4b, because push-triggered rebuilds stopped at the guard that refuses to overwrite an existing tag -> `-6` (1614d72), then `-7` for a Nuclei-only launcher fix (51b8abf, pinned in a493929).
+
+## Updating this engine
+
+Follow [section 4](../engine-maintenance.md#4-updating-an-engine), then:
+
+- **Patch first.** If the new revision changes `runner/runner.go`, the pre-patch hash check stops the build. Check whether upstream can now skip post-request DNS; if so, drop the patch and its Dockerfile steps. Otherwise re-derive `liveDNSBlock`, both hashes (in `patch_live_dns.go`, the Dockerfile and `SOURCE.md`), and run `HTTPX_PINNED_RUNNER=<runner.go> go test patch_live_dns.go patch_live_dns_test.go` (`TestPinnedSourceTransformsToTheReviewedHashWhenProvided`, `TestReviewedReplacementRemovesOnlyPostRequestLiveDNS`, `TestReviewedReplacementRejectsAbsentDuplicateAndAlreadyPatchedBlocks`, `TestPatchCLIIsBoundToThePinnedContainerPath`).
+- **Output shape.** Re-check `url`, `input`, `host`, `port`, `scheme`, `status_code`, `tls` and the DNS field names the launcher strips. Check what `host` carries through the proxy, because the adapter prefers it as the endpoint. Confirm `-no-fallback-scheme` and `-omit-body` still exist.
+- **Tests.** Launcher: `TestStaticInvocationsCarryEveryFrozenLimit`, `TestEvidenceIsReattributedAndOutOfScopeRecordsFail`. Adapter: `src-tauri/tests/adapter_fixtures.rs` with `fixtures/adapters/httpx.jsonl` (`native_fixtures_normalize_without_inventing_inventory_findings`, `inventory_fixtures_preserve_typed_upstream_facts_and_exact_provenance`, `service_inventory_uses_a_path_free_endpoint_that_report_code_can_correlate`, `secret_values_and_target_instructions_never_enter_findings`, `missing_primary_result_shapes_are_incomplete_but_known_empty_shapes_are_complete`).
+- **Hard-coded tag.** `1.10.0-7` appears in the workflow matrix, catalog `image.tag`, `plan.json` `final_artifact.tag`, the Dockerfile version label, `scripts/validate-engine-catalog.mjs`, `scripts/release/verify-publication-artifact.mjs`, `tests/release/verifyPublicationArtifact.test.mjs` and this page. A launcher change moves all three external tags ([external launcher](external-launcher.md#updating-this-engine)). `support_until` is 2026-11-22.
+- **Compare with raw output.** Run the pinned image with `--entrypoint /usr/local/bin/httpx` and the launcher's flags against `<local-test-origin>`, then compare with the run's `httpx.jsonl`: the same records, with only the three scope keys added and the eleven keys above removed. Each record should appear as one service observation with the same host, port, scheme and status.

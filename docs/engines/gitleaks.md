@@ -1,0 +1,82 @@
+# Gitleaks
+
+Runs Gitleaks' `dir` scan over a `repository` snapshot with upstream's default rule configuration. The scanned project cannot suppress results, and the launcher rejects any report that still holds a secret value. Git history is not scanned.
+
+| Item | Value |
+| --- | --- |
+| Upstream | [gitleaks/gitleaks](https://github.com/gitleaks/gitleaks) 8.30.1 (`source_ref` `v8.30.1`), revision `83d9cd684c87d95d656c1458ef04895a7f1cbd8e`. Rules: upstream `config/gitleaks.toml` at that revision, SHA-256 `e163e53b…` (catalog `rule_version`). |
+| Image | `ghcr.io/teddashh/ai-security-scanner-engine-gitleaks:8.30.1-1` (`plan_kind: managed_build`, `MIT AND Apache-2.0`). The published digest is pinned in `engines/catalog.json`. |
+| Build inputs | `engines/images/gitleaks/`: `Dockerfile`, `plan.json`, `patches/0001-add-scanner-owned-ignore-policy.patch`, `PATCHES.md`, `launcher/` (`go.mod`, `main.go`, `main_test.go`) and `testdata/` (`fixture.txt`, `.gitleaks.toml`, `.gitleaksignore`, `README.md`). The build pins the source archive with `ADD --checksum`, checks `go.sum`, `config/gitleaks.toml` and the patch by SHA-256, then runs `git apply --check`, `go mod verify` and `go test ./cmd/...`. The runtime is `FROM scratch`. |
+| Launcher | Its own: `engines/images/gitleaks/launcher/main.go`, entrypoint `/usr/local/bin/ai-security-scanner-gitleaks-entrypoint`. It is not the [local launcher](local-launcher.md). |
+| Adapter | `extract_gitleaks` and `gitleaks_location` in `src-tauri/src/adapters/mod.rs` |
+| Publish workflow | `.github/workflows/engine-image-gitleaks.yml`. Changes to `plan.json`, `testdata/**` or `*.md` do not trigger it. |
+
+## How it is wired
+
+- **Input.** One `repository` asset; the catalog contract is the only routing, and the launcher reads no input marker. The arguments must be exactly `--workspace /workspace --output /output`. Both must be real directories, and `/workspace` must be mounted read-only (`statfs`). Networking is disabled. Catalog resources: 512 MB memory, 512 MB disk, 1000 CPU millis, 3600 s.
+- **Invocation.** The launcher first checks `/opt/ai-security-scanner/gitleaks/gitleaks.toml` against `configSHA256` and requires that `/output/gitleaks.json` does not exist. It then runs this command with a fixed environment and a one-hour limit:
+
+  `gitleaks dir --config <that file> --ignore-gitleaks-allow --no-source-ignore --exit-code 0 --redact=100 --max-decode-depth 5 --max-archive-depth 0 --report-format json --report-path /output/gitleaks.json --no-banner --no-color /workspace`
+
+  - `--config` outranks a target `.gitleaks.toml`.
+  - `--no-source-ignore` (the patch) skips every `.gitleaksignore`.
+  - `--ignore-gitleaks-allow` still reports lines marked `gitleaks:allow`.
+  - With `--exit-code 0`, findings do not read as a failure.
+  - Archives are not opened. Encoded text is decoded up to five levels deep.
+  - Gitleaks' stdout and stderr are captured (8 MiB) but never printed, so a failure reports only `Gitleaks execution failed: <exit status>`.
+- **Output.** `validateRedactedEvidence` requires one JSON array of 2 bytes to 512 MiB, with nothing after it, in which every element has `Secret` equal to `REDACTED`. Otherwise the report is deleted, and the launcher prints `managed Gitleaks launcher: <reason>` and exits 126. An accepted report is set to mode 0600.
+- **Mapping.** `extract_gitleaks`, one finding per element:
+  - Rule id `RuleID` (exact). Title `Description`, else `Potential secret detected by <rule>`.
+  - Location from `gitleaks_location`: `File` with `/workspace` stripped (else `repository`), plus `:line=`, `:column=` and a validated `:commit=`. `Secret` and `Match` are never read.
+  - Severity Unknown with basis `SecretPatternMatch`, because Gitleaks rates nothing. Confidence is derived (`UnverifiedPatternOrDetectorMatch`).
+  - Tag `secret-value:redacted`; `merge_finding` marks the finding redacted.
+- **Failed or partial.** A launcher refusal or a non-zero exit fails the run. These make it partial:
+  - a report that is not a JSON array (no findings are read);
+  - an element that is not an object, or that has no `RuleID`.
+
+## Downstream changes
+
+- **`0001-add-scanner-owned-ignore-policy.patch`** (`cmd/root.go`).
+  - What: adds `--no-source-ignore`. When it is set, `Detector` loads no `.gitleaksignore` from `--gitleaks-ignore-path` (default `.`, the launcher's working directory `/workspace`), from a folder at that path, or from the scan source.
+  - Why: a scanned project must not narrow the product's coverage with its own ignore file.
+  - Where the digest is pinned: the Dockerfile, plan `build_recipe.source_patch`, the image label `io.ai-security-scanner.patch-sha256` and the validator. The patch ships in the image under `/usr/share/source/`.
+  - Removal: once upstream offers an equivalent switch. `PATCHES.md` does not yet record the upstream link, version range, removal condition or review date that [section 6](../engine-maintenance.md#6-downstream-patch-exception) requires.
+- **Launcher policy** (not a patch): fixed config, inline allow comments ignored, `--exit-code 0`, and full redaction.
+
+## Lessons from real runs
+
+- 2026-08-26: the first patch skipped only the scan source's `.gitleaksignore`, but the default ignore path `.` is the working directory `/workspace`, so the same file could still load -> every ignore path now sits behind `--no-source-ignore`; `8.30.1-1` was published from this commit (77233a2).
+- 2026-09-05: findings carried `source-severity:high`, a rating Gitleaks never gives -> the adapter hard-coded it -> derived severity (b8b989a), changed from High to Unknown in 97093ae.
+- 2026-09-19: an end-to-end scan reported no secrets and could not tell a working scanner from a broken one -> the target used the AWS documentation example pair, which upstream's allowlist ignores -> synthetic fixture and `TestFixtureContainsDetectableSyntheticSecret` (e2ce26f).
+- 2026-09-20: the fixture had to avoid GitHub push protection (GH013) and the new test could not see `testdata/` -> a non-AWS synthetic token, with `testdata/` mounted beside the launcher in the workflow and copied in the Dockerfile (b48ec90). d894a6a reverted the Dockerfile copy to keep the recorded Dockerfile digest.
+
+## Updating this engine
+
+Follow [section 4](../engine-maintenance.md#4-updating-an-engine), then:
+
+- **Fix the build first.** The launcher stage copies only `go.mod`, `main.go` and `main_test.go` into `/src/launcher`. `TestFixtureContainsDetectableSyntheticSecret` reads `../testdata/fixture.txt`, so `go test ./...` fails inside the image build. The workflow's validate step passes because it mounts the whole directory. Copy `testdata/` to `/src/testdata` as b48ec90 did.
+- **Build.** Update in step:
+  - the archive URL and checksum, and `SOURCE_DATE_EPOCH`;
+  - the `go.sum` digest;
+  - the `config/gitleaks.toml` digest, which also appears in `configSHA256`, the catalog `rule_version` and `provenance.rules`, and the image label;
+  - `-X github.com/zricethezav/gitleaks/v8/version.Version`.
+
+  Rebase the patch so `git apply --check` passes and update its digest. `immutableLauncherInputs` and `immutableDockerfileInputs` in `scripts/validate-engine-catalog.mjs` repeat these lines exactly.
+- **Re-check upstream.** Before rebasing the patch, check whether upstream now offers an equivalent switch (section 6). Also re-check:
+  - the ignore-file loading in `cmd/root.go` `Detector`, and the config precedence (`--config` first);
+  - `Redact` in `report/finding.go`, which sets `Secret` to `REDACTED` at 100 and replaces it in `Match`;
+  - the JSON finding shape: `Line` is `json:"-"` at this pin. Make sure no new field carries the secret.
+- **Output shape.** `RuleID`, `Description`, `File`, `StartLine`, `StartColumn`, `Commit` and `Secret`.
+- **Mapping.** `mappings/control-mappings.json` has one exact entry, `generic-api-key`. Confirm the rule still exists in the new default config.
+- **Tests.**
+  - The four launcher tests in `launcher/main_test.go`.
+  - `gitleaks_keeps_same_rule_findings_at_distinct_source_coordinates_without_secrets` in `src-tauri/tests/adapter_fixtures.rs`, with the fixture `gitleaks.json`.
+  - The workflow smoke checks the `version` output, then that the report is an array with at least one finding, every `Secret` is `REDACTED`, a `generic-api-key` finding is present, and the synthetic raw value is absent. Keep fixture values synthetic and non-AWS.
+- **Hard-coded values.** `8.30.1-1` appears in:
+  - the workflow `IMAGE_TAG`;
+  - catalog `image.tag`, plan `final_artifact.tag` and the Dockerfile label;
+  - `scripts/validate-engine-catalog.mjs`.
+
+  `8.30.1` also appears in the workflow version check, the Dockerfile ldflag, the catalog `engine_version` and `provenance.engine`, `PATCHES.md` and `THIRD_PARTY.md`. Find them with `grep -rn "8.30.1" --exclude-dir=node_modules --exclude-dir=target --exclude-dir=.git --exclude-dir=.upstreams --exclude-dir=.engine-cache`. `support_until` is 2026-11-22.
+- **Compare with raw output.** Run `jq -r '.[] | [.RuleID, .File, .StartLine, .StartColumn] | @tsv' gitleaks.json | sort | uniq -c`. Each distinct row should be one finding: rows that share a rule and coordinates merge. Also check `jq 'all(.[]; .Secret == "REDACTED")' gitleaks.json`, and never paste `Match`.
+- **Publishing.** The plan at the publishing commit 77233a2 is `upstream_image` for `ghcr.io/gitleaks/gitleaks:v8.30.1`; the managed plan arrived in 3257057. The guard therefore can never reuse `8.30.1-1`, whatever the Dockerfile bytes, and the next push that triggers the workflow needs a new tag. `launcher/go.mod` has no plan digest (`uncovered_baseline` in `engines/image-input-hash-policy.json`).

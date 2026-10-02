@@ -1,0 +1,57 @@
+# CloudQuery
+
+Syncs seven AWS IAM tables of one authorized AWS account into per-table NDJSON under the fixed profile `aws-iam-us-east-1`, using the last fully public CloudQuery closure. Rows become inventory observations, not findings.
+
+| Item | Value |
+| --- | --- |
+| Upstream | [cloudquery/cloudquery](https://github.com/cloudquery/cloudquery): CLI 2.0.31 (`cli-v2.0.31`) at `e27e4ab61ad85479a5d53dae9b08440bc63e72b3`; AWS source plugin 9.2.0 (`plugins-source-aws-v9.2.0`) at `804be3a90d6f15d3e6c662c0eb7afa88a9596180`; file destination 1.0.4 (`plugins-destination-file-v1.0.4`) at `600ffdd2707af566e3c99469d84a34d94730aaa1`. Catalog `engine_version` is `2.0.31-aws9.2.0-file1.0.4`. |
+| Image | `ghcr.io/teddashh/ai-security-scanner-engine-cloudquery:2.0.31-aws9.2.0-6` (`plan_kind: managed_source_image`, MPL-2.0 with source offer, `FROM scratch`). The published digest is pinned in `engines/catalog.json`. |
+| Build inputs | `engines/images/cloudquery/`: `Dockerfile`, `dependencies.lock.json`, `plugins.yml`, `SOURCE-OFFER.md`, `plan.json` (no dockerignore) |
+| Launcher | `runCloudQuery` and `cloudQueryConfiguration` in `engines/images/cloud-launcher/main.go` ([shared launcher](cloud-launcher.md)) |
+| Wrapper | None |
+| Adapter | `read_cloudquery_rows` and `extract_cloudquery_inventory` in `src-tauri/src/adapters/mod.rs` |
+| Publish workflow | `.github/workflows/engine-images-cloud.yml`, matrix entry `cloudquery` and the step "Run the anonymous CloudQuery amd64 smoke contract" |
+
+## How it is wired
+
+- **Build.** Nothing is compiled. The Dockerfile adds upstream's release binaries for amd64 and arm64 (the CLI and the two plugin zips) with `ADD --checksum`, checks the SHA-256 of each plugin binary extracted from its zip, and ships the three source archives in `/usr/share/source/cloudquery/` (`cli-e27e4ab.tar.gz`, `aws-804be3a.tar.gz`, `file-600ffdd.tar.gz`) with the lock, `plugins.yml`, the Dockerfile and the launcher source. The CLI is `/app/cloudquery`; the plugins are `/usr/local/libexec/cloudquery-source-aws` and `/usr/local/libexec/cloudquery-destination-file`.
+- **Input.** One `cloud_account` asset with exactly one `aws_account_id`, granted `inventory_read` (no `configuration_read` needed), and the AWS session triple expiring in 5 to 60 minutes. Provider traffic goes through the launcher's CONNECT bridge to the managed gateway, which allows `ec2.us-east-1.amazonaws.com`, `iam.amazonaws.com` and `sts.us-east-1.amazonaws.com` on port 443. The 27 AWS actions the profile requires are listed in `dependencies.lock.json` `required_aws_actions`.
+- **Invocation.** The launcher writes `cloudQueryConfiguration()` to `<tmp>/cloudquery.yml` and runs `/app/cloudquery sync <tmp>/cloudquery.yml --cq-dir <tmp>/cq --no-log-file --log-console --telemetry-level none`. The configuration selects `aws_iam_accounts`, `aws_iam_credential_reports`, `aws_iam_groups`, `aws_iam_password_policies`, `aws_iam_policies`, `aws_iam_roles` and `aws_iam_users` in `us-east-1`, runs both plugins with `registry: local`, and sets the file destination to `directory: /output`, `format: json`, `no_rotate: true`, `write_mode: append`. It must equal `plugins.yml` byte for byte.
+- **Output.** The file destination writes `/output/<table>.json`, one JSON row per line (`WriteTableBatch` at the pinned revision). The AWS plugin also syncs seven child tables: `aws_iam_group_policies`, `aws_iam_role_policies`, `aws_iam_ssh_public_keys`, `aws_iam_user_access_keys`, `aws_iam_user_attached_policies`, `aws_iam_user_groups` and `aws_iam_user_policies`.
+- **Mapping.** `read_cloudquery_rows` streams each file (up to 512 MiB per file and in total, 64 MiB per row), keeps only each row's top-level scalar columns, and verifies length and SHA-256 over the whole file before any row is used. `extract_cloudquery_inventory` picks the table from the file name. Child tables stay raw evidence without a warning; any other unknown name warns. Each row needs `account_id`, except that `aws_iam_credential_reports` rows (which have none in plugin 9.2.0) take the account from a root or `user/` ARN. Each row becomes a cloud resource observation of its table, with the asset hint `account_id` qualified by provider `aws`:
+
+  | Table | Native id | Display name |
+  | --- | --- | --- |
+  | `aws_iam_accounts`, `aws_iam_password_policies` | `account_id` | none |
+  | `aws_iam_credential_reports` | `arn`, else `user_id` | `user`, else `user_name` |
+  | `aws_iam_groups` | `arn`, else `group_id` | `group_name` |
+  | `aws_iam_policies` | `arn`, else `policy_id` | `policy_name` |
+  | `aws_iam_roles` | `arn`, else `role_id` | `role_name` |
+  | `aws_iam_users` | `arn`, else `user_id` | `user_name` |
+
+- **Failed or partial.** A launcher refusal or a non-zero `cloudquery sync` exit makes the container exit 126, and the run fails without normalizing. The run is partial on a malformed or oversized line, more than 10,000 rows in one file, a length or hash mismatch, more than 512 MiB of files, an unknown file name, a row without an account, or an account that matches no `aws_account_id` on the authorized asset.
+
+## Downstream changes
+
+- **Frozen pin.** `engines/upstream-refresh-policy.json` marks CloudQuery `frozen`: 2.0.31 is the last fully public CLI before the project stopped being fully open source, and a refresh would move the product onto a non-open-source upstream (`tests/ci/upstream-refresh.test.mjs` pins the reason). `knowledge_date` 2023-01-10 and `support_until` 2023-04-10 are kept on purpose; `validateCloudQueryPlan` requires the knowledge date and the catalog notice discloses the closure. It changes only by an owner decision to replace the engine.
+- **Local plugins only.** Both plugins run from `/usr/local/libexec` with `registry: local`, and `validateCloudQueryPlan` rejects hub or remote registry strings in `plugins.yml`, the launcher and the Dockerfile. Permanent while [section 4](../engine-maintenance.md#4-updating-an-engine) item 4 forbids runtime plugin downloads.
+- **File destination 1.0.4** instead of 1.0.2 (a56f0fb): 1.0.4 carries the upstream fix for the panic below and writes the same per-table layout.
+- **Exact AWS action list** (e57629e): `required_aws_actions` must equal `expectedAwsActions` in `validateCloudQueryPlan`. It moves only with the table list.
+
+## Lessons from real runs
+
+- 2026-10-02: a live AWS run failed on its first provider call -> CloudQuery's Go 1.19 build does not accept the gateway's `socks5h://` scheme -> launcher CONNECT bridge (e4571df, published in 9f6a976, pinned in eba1c22).
+- 2026-10-02: the run failed on a live account -> file destination 1.0.2 panics with "unexpected end of JSON input" when a row carries an empty JSON column -> file destination 1.0.4; its source archive, lock, source offer and smoke check moved with it (a56f0fb, published as `2.0.31-aws9.2.0-6` in dfe8af1, pinned in bad4485).
+- 2026-10-02: CloudQuery exited 0 and wrote every table but read Partial -> credential report rows have no `account_id`, one `aws_iam_policies` row was 7 MB (file 11 MB) against the 1 MiB line limit, and the child tables warned -> account from the credential report ARN only, streamed reading of top-level scalars under 512 MiB bounds, child tables kept raw; adapter contract 0.2.0 -> 0.2.1. On the captured artifacts 28 resources now normalize completely, where 23 did and 5 rows were dropped before (08fd9da).
+
+## Updating this engine
+
+CloudQuery is frozen, so [section 4](../engine-maintenance.md#4-updating-an-engine) refreshes do not apply. When something in the closure must change anyway:
+
+- **Move the closure together.** `dependencies.lock.json` (components, artifacts, `tables`, `network_destinations`, `required_aws_actions`, `output`); `plugins.yml` and `cloudQueryConfiguration()`, byte-equal; Dockerfile URLs, `ADD --checksum` values, per-architecture `aws_sha` and `file_sha`, and labels; `plan.json` `provider_plugins`, `component_source_archives`, `dependency_lock`, `provider_lock` and `configuration_lock`; and the hard-coded `expectedPlugins`, `expectedTables`, `expectedDestinations`, `expectedAwsActions` and `expectedComponents` in `validateCloudQueryPlan` (`scripts/validate-engine-catalog.mjs`). A new endpoint also changes the catalog network closure.
+- **Output shape.** Re-check the `<table>.json` names, one row per line, the columns in the table above, the missing `account_id` in credential reports, and the child-table list in `is_cloudquery_dependent_table`. A new child table would warn as an unknown file name.
+- **Media type.** Real `<table>.json` artifacts get `application/json` from `media_type_for_path` (`src-tauri/src/artifact_store.rs`), and for that type a zero-byte file warns. The empty-file case in `inventory_schema_and_asset_boundaries_fail_closed_but_known_empty_shapes_complete` uses `application/x-ndjson`.
+- **Tests.** `src-tauri/tests/adapter_fixtures.rs`: `cloudquery_live_table_shapes_normalize_completely`, `cloudquery_account_fallback_is_limited_to_credential_report_arns`, `inventory_fixtures_preserve_typed_upstream_facts_and_exact_provenance` (fixture `cloudquery.json`, mounted as `aws_iam_users.json`) and the empty-shape test above; `cloudquery_rows_keep_only_top_level_scalar_columns` and `cloudquery_rows_verify_the_recorded_length_and_hash` in `src-tauri/src/adapters/mod.rs`; launcher test `TestCloudQueryConfigurationIsExactLocalSourceClosure`; the workflow smoke step. A new warning sentence needs its Traditional Chinese form in `src/engineWarningPresentation.ts`, or the census in `tests/frontend/warningPresentation.test.ts` fails (b2d0155).
+- **Hard-coded values.** `2.0.31-aws9.2.0-6` appears in `CLOUD_ENGINE_MATRIX`, catalog `image.tag`, plan `final_artifact.tag` and the Dockerfile version label. The component versions and revisions also appear in the catalog `engine_version`, provenance and notice, the Dockerfile labels, `SOURCE-OFFER.md`, the lock, `validateCloudQueryPlan`, the smoke step (`cloudquery version 2.0.31`, archive names and hashes) and the v9.2.0 comments in `src-tauri/src/adapters/mod.rs` and `adapter_fixtures.rs`. The demo manifest in `src/data/demo.ts` lists 6.31.0, which is not the pin.
+- **Compare with raw output.** In the run's raw evidence, each line of the seven selected table files should be one observation of that `resource_type` on the account, with the native id from the table above; child-table files produce none. A warning naming an identifier means the asset lacks that `aws_account_id`.
+- **Publishing.** The next push that touches `engines/images/cloudquery/` needs a new tag; see [publishing a changed image](cloud-launcher.md#publishing-a-changed-image).

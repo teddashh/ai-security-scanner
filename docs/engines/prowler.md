@@ -1,0 +1,65 @@
+# Prowler
+
+Runs Prowler's IAM checks against exactly one authorized AWS account, Azure subscription or GCP project under the fixed profile `aws-azure-gcp-narrow-iam`. It is the only cloud engine with Azure and GCP profiles, and both depend on six downstream patches.
+
+| Item | Value |
+| --- | --- |
+| Upstream | [prowler-cloud/prowler](https://github.com/prowler-cloud/prowler) 5.39.1, revision `40ecbd035e5541bf099917c5033cceb8959c4737` |
+| Image | `ghcr.io/teddashh/ai-security-scanner-engine-prowler:5.39.1-7`, rebased on the official `public.ecr.aws/prowler-cloud/prowler` 5.39.1 image by digest (`plan_kind: managed_rebase`). The published digest is pinned in `engines/catalog.json`. |
+| Build inputs | `engines/images/prowler/`: `Dockerfile`, `Dockerfile.dockerignore`, `apply-runtime-patches.py`, `patches/` (`series`, `0001` to `0006`, `verify-patches.sh`, `README.md`), `plan.json` |
+| Launcher | `prowlerInvocation`, `runProwler`, `validateProwlerOutput` in `engines/images/cloud-launcher/main.go` ([shared launcher](cloud-launcher.md)) |
+| Wrapper | None beyond the launcher. `scripts/prowler-catalog-contract.mjs` pins the provider contracts, patch hashes, wrapper strategy and catalog notice. |
+| Adapter | `extract_prowler` in `src-tauri/src/adapters/mod.rs` |
+| Publish workflow | `.github/workflows/engine-images-cloud.yml`, matrix entry `prowler` and the step "Run the anonymous Prowler amd64 patch and launcher contract" |
+
+## How it is wired
+
+- **Input.** One asset: `cloud_account` with `aws_account_id`, `subscription` with `azure_subscription_id`, or `project` with `gcp_project_id`, granted `inventory_read` and `configuration_read`. The credential channel holds exactly the AWS session triple, `AZURE_ACCESS_TOKEN`, or `GOOGLE_OAUTH_ACCESS_TOKEN`, each expiring in 5 to 60 minutes. Provider traffic goes through the launcher's CONNECT bridge to the managed gateway, which allows only `iam.amazonaws.com`, `sts.us-east-1.amazonaws.com`, `ec2.us-east-1.amazonaws.com`, `organizations.us-east-1.amazonaws.com`, `management.azure.com` and `cloudresourcemanager.googleapis.com` on port 443.
+- **Invocation.** `/home/prowler/.venv/bin/prowler` with `--output-formats json-ocsf --output-filename prowler --output-directory /output --ignore-exit-code-3 --no-banner --no-color` and one provider profile:
+  - AWS: `aws --service iam --region us-east-1`, plus `--skip-sh-update`
+  - Azure: `azure --access-token-auth --access-token-expires-at <earliest credential expiry> --subscription-ids <subscription-id> --service iam`
+  - GCP: `gcp --project-ids <project-id> --checks iam_audit_logs_enabled iam_no_service_roles_at_project_level iam_role_kms_enforce_separation_of_duties iam_role_sa_enforce_separation_of_duties --skip-api-check --gcp-retries-max-attempts 2`
+- **Output.** Prowler writes `/output/prowler.ocsf.json` directly. `runProwler` refuses to start if the file already exists. After exit 0, `validateProwlerOutput` requires a non-empty regular file opened without following links, at most 512 MiB, holding one JSON array of objects (each at most 8 MiB, at most 1,000,000) with nothing after it.
+- **Mapping.** For each array element, `extract_prowler` takes:
+  - status from `status_code` (Prowler 5.39 keeps PASS/FAIL/MANUAL there; `status` holds the lifecycle value `New`). PASS and MANUAL are skipped.
+  - rule id from `metadata.event_code`, then `finding_info.analytic.uid`, then `CheckID`.
+  - title from `finding_info.title`, severity from Prowler's `severity` through `parse_severity`, location from the first `resources[]` entry, remediation from `remediation.desc`, tag `format:ocsf`.
+  - the asset from `cloud.account.uid` qualified by `cloud.provider`. It must equal a native identifier on the authorized asset; there is no single-asset fallback. Unmatched results are dropped and named once per identifier in a warning and in `unattributed`.
+- **Failed or partial.** A launcher refusal, a Prowler exit other than 0 (exit 3 for failed checks is suppressed), or an invalid OCSF file makes the container exit 126, and `src-tauri/src/orchestrator.rs` fails the run without normalizing. The run is partial when the adapter warns: a non-object record, a record with no failing status or no check id, an unattributed account, an artifact over 16 MiB (`MAX_ARTIFACT_BYTES`), or 10,000 records.
+
+## Downstream changes
+
+The pinned upstream image has neither git nor patch, so `apply-runtime-patches.py` applies the hunks during the build. It checks the series order, each patch's SHA-256 and file set, and the pre- and post-patch SHA-256 of the six runtime files; test hunks are not installed. Reason recorded in `patches/README.md`: upstream at this pin has no Azure `--access-token-auth`, and its GCP project selection lists every accessible project before filtering.
+
+| Patch | Runtime files | Change |
+| --- | --- | --- |
+| 0001 | `azure_provider.py`, Azure `arguments.py`, `common/provider.py` | Non-refreshing Azure ARM static-token auth, exact subscription resolution, IAM service only |
+| 0002 | `gcp_provider.py` | Exact requested-project lookups instead of listing every project |
+| 0003 | `cloudresourcemanager_service.py` | No ambient GCP organization search |
+| 0004 | `gcp_provider.py` | No parent-organization enrichment when exact project ids are given |
+| 0005 | `finding.py`, `azure_provider.py` | Tenant taken from the exact subscription instead of tenant enumeration |
+| 0006 | `azure_provider.py` | Rejects a subscription unless ARM reports `Enabled` (00eec6f) |
+
+- No upstream link, removal condition or review date is recorded for any patch, although [section 6](../engine-maintenance.md#6-downstream-patch-exception) requires them. Record them at the next rebase, and try to drop each patch first.
+- The Dockerfile also sets `chmod 0755 /home/prowler` (4d2bca9) and points `HOME` and `XDG_CACHE_HOME` into `/tmp`.
+
+## Lessons from real runs
+
+- 2026-08-24: Prowler had to run as the managed non-root user -> `/home/prowler` was mode 0711 -> made 0755 (4d2bca9).
+- 2026-09-05: no Prowler finding ever resolved a control mapping -> the mapping was keyed on `s3_bucket_level_public_access_block`, an S3 check the `--service iam` profile cannot emit -> re-keyed to `iam_customer_attached_policy_no_administrative_privileges`, and the fixture now uses IAM checks the profile reaches (a5e76de).
+- 2026-09-05: an authorized account without its native identifier made Prowler's results all drop, and the run read as a clean scan -> provider-qualified OCSF accounts never fall back to the only asset, and nothing named the cause -> one warning per unmatched identifier with the count and the fix (165ef62).
+- 2026-10-02: a live AWS run failed on its first provider call -> botocore read the gateway's `socks5h://` URL as an HTTP proxy -> launcher CONNECT bridge (e4571df, published in 9f6a976, pinned in eba1c22).
+- 2026-10-02: Prowler then completed on a live AWS account (a56f0fb). Its tag still moved to `5.39.1-7` because the shared launcher changed (dfe8af1, pinned in bad4485).
+
+## Updating this engine
+
+Follow [section 4](../engine-maintenance.md#4-updating-an-engine), then:
+
+- **Rebase.** Put the new upstream digest in the Dockerfile `FROM` line and in `plan.json` `verified_upstream_artifact`; `validateCloudManagedImage` in `scripts/validate-engine-catalog.mjs` requires them to match. Regenerate each surviving patch against the new revision, update `PIN` in `patches/verify-patches.sh`, and run it with `--pytest` on a Prowler clone that contains the pin (`engines/upstreams.lock.json` records a different research revision).
+- **Patch hashes** live in `apply-runtime-patches.py`, `patches/verify-patches.sh`, `plan.json` `downstream_runtime_patches` and `PROWLER_DOWNSTREAM_RUNTIME_PATCHES` in `scripts/prowler-catalog-contract.mjs`. The post-patch file hashes are also in the workflow's Prowler smoke step.
+- **Output shape.** Re-check `status_code`, `metadata.event_code`, `finding_info.title`, `severity`, `resources[]`, `cloud.account.uid`, `cloud.provider` and `remediation.desc`, and that the flags above still exist and still produce one array in `prowler.ocsf.json`. The smoke step greps `--help` for `--skip-sh-update`, `--access-token-auth` and `--project-ids`.
+- **Mapping.** `iam_customer_attached_policy_no_administrative_privileges` in `mappings/control-mappings.json` must remain a check the AWS profile emits. A content change needs a `mapping_version` bump.
+- **Tests.** `src-tauri/tests/adapter_fixtures.rs` with fixtures `prowler-ocsf.json` and `prowler-5.39-multi-provider.ocsf.json` (`native_fixtures_normalize_without_inventing_inventory_findings`, `prowler_5_39_ocsf_maps_provider_native_accounts_to_canonical_assets`, `prowler_native_identifier_collisions_fail_closed`, `prowler_names_the_account_it_could_not_attribute_rather_than_each_dropped_rule`); `src-tauri/tests/source_authorization.rs` (`azure_and_gcp_profiles_release_only_discovery_and_narrow_prowler`, `azure_and_gcp_ui_capability_checkout_reaches_narrow_prowler_dispatch`); `tests/engines/prowlerCatalogContract.test.mjs`; launcher tests `TestProwlerProviderInvocationsAreExactAndNarrow` and `TestProwlerOutputValidationIsBoundedAndFailClosed`.
+- **Hard-coded values.** `5.39.1-7` appears in `CLOUD_ENGINE_MATRIX`, catalog `image.tag`, plan `final_artifact.tag` and the Dockerfile version label. `5.39.1` also appears in `downstreamNotice` (`scripts/prowler-catalog-contract.mjs`, must equal the catalog notice), `docs/engine-catalog.md`, `docs/engine-maintenance.md` section 6, `patches/README.md`, `src/data/demo.ts`, `src-tauri/tests/source_authorization.rs`, both fixtures, and the "Prowler 5.39 OCSF" comment in `extract_prowler`. `support_until` is 2026-11-22.
+- **Compare with raw output.** In the run's raw `prowler.ocsf.json`, every element with `status_code` FAIL should appear as a finding on the asset; two FAIL elements with the same check and resource merge into one finding with two evidence items (`merge_finding`). Compare `metadata.event_code`, `severity`, `finding_info.title` and `resources[0].uid` with the normalized rule, severity, title and location. A warning that names an identifier means the asset lacks that native identifier.
+- **Publishing.** The next push that touches `engines/images/prowler/` needs a new tag; see [publishing a changed image](cloud-launcher.md#publishing-a-changed-image).
