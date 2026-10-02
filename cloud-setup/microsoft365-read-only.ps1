@@ -123,7 +123,10 @@ function Connect-Tenant {
     $onWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
     if ($UseDeviceCode -or $onWindows -or "$env:AZUREPS_HOST_ENVIRONMENT" -like 'cloud-shell*') { $connect['UseDeviceCode'] = $true }
     Write-Host "Sign in on Microsoft's page as a Global Administrator of the tenant to scan."
-    Connect-MgGraph @connect | Out-Null
+    # Connect-MgGraph writes the one-time code and its page to its output, not
+    # to the console, so discarding that output hid the code and the sign-in
+    # timed out. Show it, and keep it out of what this function returns.
+    Connect-MgGraph @connect | ForEach-Object { Write-Host $_ }
     $context = Get-MgContext
     if (-not $context -or -not $context.TenantId) { Stop-Setup 'the Microsoft sign-in did not finish.' }
     return [string] $context.TenantId

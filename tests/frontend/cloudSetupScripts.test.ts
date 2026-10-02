@@ -413,6 +413,11 @@ test("the Microsoft 365 script signs in with a one-time code when asked, and alw
   const result = await runMicrosoft(dir, graphState(), ["-UseDeviceCode"]);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(result.state.connect.useDeviceCode, true);
+  // The person can sign in only if the script shows the code Connect-MgGraph
+  // writes to its output, and the code must not leak into the tenant it reads.
+  assert.match(result.stdout, /microsoft\.com\/devicelogin and enter the code FAKECODE1/u);
+  const setup = JSON.parse(readFileSync(join(dir, "ai-security-scanner-microsoft365-setup.json"), "utf8"));
+  assert.equal(setup.details.tenant_id, tenantId);
 
   // On Windows the interactive sign-in is Windows's own window, which offers to
   // let the organization manage the computer. CI runs on Linux, so pin the

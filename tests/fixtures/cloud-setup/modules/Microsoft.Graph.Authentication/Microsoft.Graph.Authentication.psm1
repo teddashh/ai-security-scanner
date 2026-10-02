@@ -32,6 +32,12 @@ function Connect-MgGraph {
     }
     Save-FakeState $state
     $script:Connected = $true
+    # The real module hands the one-time code to the cmdlet's output stream
+    # (AuthenticationHelpers.cs: DeviceCodeCallback calls OutputWriter.WriteObject),
+    # so a caller that discards the output never shows the code.
+    if ($UseDeviceCode) {
+        'To sign in, use a web browser to open the page https://microsoft.com/devicelogin and enter the code FAKECODE1 to authenticate.'
+    }
 }
 
 function Get-MgContext {
