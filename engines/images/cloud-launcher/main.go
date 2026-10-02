@@ -43,6 +43,7 @@ const (
 	maxOutputFileSize       = 512 * 1024 * 1024
 	maxProviderResponseSize = 256 * 1024
 	maxJSONRecordSize       = 8 * 1024 * 1024
+	maxSteampipeRecordSize  = 64 * 1024
 	maxJSONRecords          = 1_000_000
 	minimumCredentialTTL    = 5 * time.Minute
 )
@@ -1475,7 +1476,7 @@ func runCloudsplaining(environment []string, temporaryRoot, output string) error
 	}
 	source := filepath.Join(reportDirectory, "iam-findings-default.json")
 	destination := filepath.Join(output, "cloudsplaining.json")
-	if err := moveBoundedRegularFile(source, destination); err != nil {
+	if err := copyBoundedRegularFile(source, destination); err != nil {
 		return fmt.Errorf("normalize Cloudsplaining findings: %w", err)
 	}
 	return nil
@@ -1559,22 +1560,21 @@ spec:
 `)
 }
 
-func runSteampipe(environment []string, temporaryRoot, output string) (result error) {
-	// The runtime deliberately mounts /tmp noexec. Keep that hardening intact:
-	// Steampipe's executable PostgreSQL and plugin files use one exact hidden
-	// directory in the case-owned output mount, which is removed on every exit.
-	installDir := filepath.Join(output, ".ai-security-scanner-steampipe-runtime")
-	if _, err := os.Lstat(installDir); !errors.Is(err, os.ErrNotExist) {
-		return errors.New("transient Steampipe state already exists")
-	}
-	if err := copyTree("/opt/ai-security-scanner/steampipe-install", installDir); err != nil {
+// steampipeSeed is the install tree the image build prepared: the embedded
+// PostgreSQL closure with its FDW, the AWS plugin, and the database versions
+// record Steampipe checks before it starts.
+const steampipeSeed = "/opt/ai-security-scanner/steampipe-install"
+
+func runSteampipe(environment []string, temporaryRoot, output string) error {
+	// Steampipe writes its database cluster, state and logs into its install
+	// directory, so that directory lives in the private /tmp tmpfs. The
+	// runtime mounts /tmp noexec; the PostgreSQL closure and the AWS plugin
+	// stay in the read-only image and are reached through symlinks, which
+	// execute from the image filesystem they resolve to.
+	installDir := filepath.Join(temporaryRoot, "steampipe-install")
+	if err := prepareSteampipeInstall(steampipeSeed, installDir); err != nil {
 		return fmt.Errorf("prepare ephemeral Steampipe state: %w", err)
 	}
-	defer func() {
-		if err := os.RemoveAll(installDir); err != nil {
-			result = errors.Join(result, errors.New("remove transient Steampipe state"))
-		}
-	}()
 	environment = replaceEnvironmentValue(environment, "STEAMPIPE_INSTALL_DIR", installDir)
 	configDirectory := filepath.Join(installDir, "config")
 	if err := os.MkdirAll(configDirectory, 0o700); err != nil {
@@ -1602,6 +1602,64 @@ options "database" {
 		},
 		Env: environment,
 	}, filepath.Join(output, "steampipe.json"))
+}
+
+// prepareSteampipeInstall links the seed's executables into a writable
+// install directory instead of copying them. The PostgreSQL closure and the
+// AWS plugin together exceed the runtime's output budget, and Steampipe does
+// not write to either while the recorded versions match its own. The
+// versions record is copied because Steampipe may rewrite it.
+func prepareSteampipeInstall(seed, installDir string) error {
+	versions, err := readBoundedRegularFile(filepath.Join(seed, "db", "versions.json"), maxSteampipeRecordSize)
+	if err != nil {
+		return errors.New("Steampipe database versions record is unavailable")
+	}
+	databaseVersion, err := steampipeSeedDatabaseVersion(filepath.Join(seed, "db"))
+	if err != nil {
+		return err
+	}
+	for _, link := range []struct {
+		relative  string
+		directory bool
+	}{
+		{filepath.Join("db", databaseVersion, "postgres"), true},
+		{filepath.Join("plugins", "local", "aws", "steampipe-plugin-aws.plugin"), false},
+	} {
+		source := filepath.Join(seed, link.relative)
+		info, err := os.Lstat(source)
+		if err != nil || info.IsDir() != link.directory || (!link.directory && !info.Mode().IsRegular()) {
+			return errors.New("Steampipe seed is not the pinned install layout")
+		}
+		target := filepath.Join(installDir, link.relative)
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return err
+		}
+		if err := os.Symlink(source, target); err != nil {
+			return err
+		}
+	}
+	return writeExclusive(filepath.Join(installDir, "db", "versions.json"), versions, 0o600)
+}
+
+func steampipeSeedDatabaseVersion(databaseDirectory string) (string, error) {
+	entries, err := os.ReadDir(databaseDirectory)
+	if err != nil {
+		return "", errors.New("Steampipe seed database directory is unavailable")
+	}
+	version := ""
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if version != "" {
+			return "", errors.New("Steampipe seed holds more than one database version")
+		}
+		version = entry.Name()
+	}
+	if version == "" {
+		return "", errors.New("Steampipe seed holds no database version")
+	}
+	return version, nil
 }
 
 // Steampipe is an upstream SQL inventory engine. Keep this query to identity
@@ -1733,14 +1791,15 @@ func readBoundedRegularFile(path string, maximum int64) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-func moveBoundedRegularFile(source, destination string) error {
-	if _, err := readBoundedRegularFile(source, maxOutputFileSize); err != nil {
+// copyBoundedRegularFile writes a bounded engine result into the output
+// mount. Engines write under the /tmp tmpfs and /output is a separate mount,
+// so a rename between them fails across filesystems.
+func copyBoundedRegularFile(source, destination string) error {
+	content, err := readBoundedRegularFile(source, maxOutputFileSize)
+	if err != nil {
 		return err
 	}
-	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
-		return errors.New("normalized output already exists")
-	}
-	return os.Rename(source, destination)
+	return writeExclusive(destination, content, 0o600)
 }
 
 func writeExclusive(path string, content []byte, mode os.FileMode) error {
@@ -1794,37 +1853,6 @@ func allowedCredentialKey(key string) bool {
 	default:
 		return false
 	}
-}
-
-func copyTree(source, destination string) error {
-	sourceInfo, err := os.Lstat(source)
-	if err != nil || !sourceInfo.IsDir() || sourceInfo.Mode()&os.ModeSymlink != 0 {
-		return errors.New("managed state template is unavailable")
-	}
-	return filepath.Walk(source, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		relative, err := filepath.Rel(source, path)
-		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return errors.New("managed state path escaped its template")
-		}
-		target := filepath.Join(destination, relative)
-		if info.Mode()&os.ModeSymlink != 0 {
-			return errors.New("managed state template contains a symlink")
-		}
-		if info.IsDir() {
-			return os.MkdirAll(target, 0o700)
-		}
-		if !info.Mode().IsRegular() || info.Size() > maxOutputFileSize {
-			return errors.New("managed state template contains an unsupported file")
-		}
-		bytes, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return writeExclusive(target, bytes, info.Mode().Perm()&0o700)
-	})
 }
 
 // Keep syscall linked in the static launcher so Docker stop signals are

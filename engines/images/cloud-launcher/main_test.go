@@ -649,6 +649,140 @@ from aws_iam_user;
 	}
 }
 
+func writeSteampipeSeed(t *testing.T, seed string) {
+	t.Helper()
+	for path, content := range map[string]string{
+		filepath.Join("db", "versions.json"):                                    `{"struct_version":20220411}`,
+		filepath.Join("db", "14.19.0", "postgres", "bin", "postgres"):           "postgres",
+		filepath.Join("plugins", "local", "aws", "steampipe-plugin-aws.plugin"): strings.Repeat("p", 64*1024),
+		"ai-security-scanner-provenance.json":                                   "{}",
+	} {
+		target := filepath.Join(seed, path)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, []byte(content), 0o555); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestSteampipeInstallLinksTheSeedExecutablesInsteadOfCopyingThem(t *testing.T) {
+	seed := filepath.Join(t.TempDir(), "seed")
+	writeSteampipeSeed(t, seed)
+	install := filepath.Join(t.TempDir(), "steampipe-install")
+	if err := prepareSteampipeInstall(seed, install); err != nil {
+		t.Fatalf("prepare install directory: %v", err)
+	}
+
+	for _, relative := range []string{
+		filepath.Join("db", "14.19.0", "postgres"),
+		filepath.Join("plugins", "local", "aws", "steampipe-plugin-aws.plugin"),
+	} {
+		target, err := os.Readlink(filepath.Join(install, relative))
+		if err != nil || target != filepath.Join(seed, relative) {
+			t.Fatalf("%s is not linked to the seed: %q %v", relative, target, err)
+		}
+	}
+	// Steampipe writes plugins/versions.json, so the directories it writes
+	// into are real directories even where a file inside them is a link.
+	for _, relative := range []string{"db", filepath.Join("db", "14.19.0"), "plugins", filepath.Join("plugins", "local", "aws")} {
+		info, err := os.Lstat(filepath.Join(install, relative))
+		if err != nil || !info.IsDir() {
+			t.Fatalf("%s is not a writable directory: %v", relative, err)
+		}
+	}
+	versions := filepath.Join(install, "db", "versions.json")
+	info, err := os.Lstat(versions)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		t.Fatalf("versions record is not a private writable copy: %v %v", info, err)
+	}
+	if content, err := os.ReadFile(versions); err != nil || string(content) != `{"struct_version":20220411}` {
+		t.Fatalf("versions record was not copied: %q %v", content, err)
+	}
+
+	var copied int64
+	if err := filepath.Walk(install, func(_ string, info os.FileInfo, err error) error {
+		if err == nil && info.Mode().IsRegular() {
+			copied += info.Size()
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if copied != info.Size() {
+		t.Fatalf("install directory copied %d bytes of the seed, want only the versions record", copied)
+	}
+}
+
+func TestSteampipeInstallRefusesAnUnexpectedSeed(t *testing.T) {
+	for name, mutate := range map[string]func(t *testing.T, seed string){
+		"missing versions record": func(t *testing.T, seed string) {
+			if err := os.Remove(filepath.Join(seed, "db", "versions.json")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"second database version": func(t *testing.T, seed string) {
+			if err := os.MkdirAll(filepath.Join(seed, "db", "15.0.0", "postgres"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"symlinked plugin": func(t *testing.T, seed string) {
+			plugin := filepath.Join(seed, "plugins", "local", "aws", "steampipe-plugin-aws.plugin")
+			if err := os.Remove(plugin); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("/bin/sh", plugin); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"missing postgres": func(t *testing.T, seed string) {
+			if err := os.RemoveAll(filepath.Join(seed, "db", "14.19.0", "postgres")); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			seed := filepath.Join(t.TempDir(), "seed")
+			writeSteampipeSeed(t, seed)
+			mutate(t, seed)
+			if err := prepareSteampipeInstall(seed, filepath.Join(t.TempDir(), "steampipe-install")); err == nil {
+				t.Fatal("unexpected Steampipe seed was accepted")
+			}
+		})
+	}
+}
+
+func TestEngineResultIsCopiedIntoTheOutputMount(t *testing.T) {
+	directory := t.TempDir()
+	source := filepath.Join(directory, "iam-findings-default.json")
+	if err := os.WriteFile(source, []byte(`{"findings":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(directory, "cloudsplaining.json")
+	if err := copyBoundedRegularFile(source, destination); err != nil {
+		t.Fatalf("copy engine result: %v", err)
+	}
+	info, err := os.Lstat(destination)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		t.Fatalf("engine result is not a private regular file: %v %v", info, err)
+	}
+	if content, err := os.ReadFile(destination); err != nil || string(content) != `{"findings":[]}` {
+		t.Fatalf("engine result content changed: %q %v", content, err)
+	}
+	if err := copyBoundedRegularFile(source, destination); err == nil {
+		t.Fatal("existing engine result was overwritten")
+	}
+
+	symlink := filepath.Join(directory, "symlink.json")
+	if err := os.Symlink(source, symlink); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyBoundedRegularFile(symlink, filepath.Join(directory, "from-symlink.json")); err == nil {
+		t.Fatal("symlinked engine result was accepted")
+	}
+}
+
 func TestCloudQueryConfigurationIsExactLocalSourceClosure(t *testing.T) {
 	config := string(cloudQueryConfiguration())
 	tables := []string{

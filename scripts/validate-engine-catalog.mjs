@@ -1574,9 +1574,9 @@ function validateCloudQueryPlan(plan, planRelative, engine) {
     },
     {
       name: "cloudquery-destination-file",
-      version: "1.0.2",
-      release_ref: "plugins-destination-file-v1.0.2",
-      source_revision: "05f02334b9d6ed5de344fd9a9cf7ddead31ce453",
+      version: "1.0.4",
+      release_ref: "plugins-destination-file-v1.0.4",
+      source_revision: "600ffdd2707af566e3c99469d84a34d94730aaa1",
       path: "/usr/local/libexec/cloudquery-destination-file",
       registry: "local",
     },
@@ -1662,7 +1662,7 @@ function validateCloudQueryPlan(plan, planRelative, engine) {
   const expectedComponents = new Map([
     ["cloudquery-cli", { version: "2.0.31", release_ref: "cli-v2.0.31", source_revision: "e27e4ab61ad85479a5d53dae9b08440bc63e72b3" }],
     ["cloudquery-source-aws", { version: "9.2.0", release_ref: "plugins-source-aws-v9.2.0", source_revision: "804be3a90d6f15d3e6c662c0eb7afa88a9596180" }],
-    ["cloudquery-destination-file", { version: "1.0.2", release_ref: "plugins-destination-file-v1.0.2", source_revision: "05f02334b9d6ed5de344fd9a9cf7ddead31ce453" }],
+    ["cloudquery-destination-file", { version: "1.0.4", release_ref: "plugins-destination-file-v1.0.4", source_revision: "600ffdd2707af566e3c99469d84a34d94730aaa1" }],
   ]);
   if (!Array.isArray(lock.components) || lock.components.length !== expectedComponents.size) {
     errors.push(`${providerLock.path}: CloudQuery lock must contain exactly three components`);

@@ -175,7 +175,7 @@ jobs:
           printf '%s  %s\n' \
             21e18c3d1348243273231e72a39febd9d7429ac4f1ec36c5bf18c32d509e5996 "${evidence}/cli-e27e4ab.tar.gz" \
             a4788989f99ab02144605539ab552e86c076405ac7516fb673e73ba6bda40c6b "${evidence}/aws-804be3a.tar.gz" \
-            21f4b826b9ad4830854130674023b97e443abba17b66a3557cd0805b3083b2d1 "${evidence}/file-05f0233.tar.gz" \
+            700e2008b33a31a6e396d1e348464d2e832c856fdd9b4e45362f90b84bf92a5f "${evidence}/file-600ffdd.tar.gz" \
             | sha256sum --check --strict
           jq -e '.registry == {mode:"local", authenticated:false, runtime_downloads:false}' \
             "${evidence}/build/dependencies.lock.json" >/dev/null

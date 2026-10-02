@@ -53,23 +53,23 @@
     },
     {
       "name": "cloudquery-destination-file",
-      "version": "1.0.2",
-      "release_ref": "plugins-destination-file-v1.0.2",
-      "source_revision": "05f02334b9d6ed5de344fd9a9cf7ddead31ce453",
+      "version": "1.0.4",
+      "release_ref": "plugins-destination-file-v1.0.4",
+      "source_revision": "600ffdd2707af566e3c99469d84a34d94730aaa1",
       "source_archive": {
-        "url": "https://github.com/cloudquery/cloudquery/archive/05f02334b9d6ed5de344fd9a9cf7ddead31ce453.tar.gz",
-        "sha256": "sha256:21f4b826b9ad4830854130674023b97e443abba17b66a3557cd0805b3083b2d1"
+        "url": "https://github.com/cloudquery/cloudquery/archive/600ffdd2707af566e3c99469d84a34d94730aaa1.tar.gz",
+        "sha256": "sha256:700e2008b33a31a6e396d1e348464d2e832c856fdd9b4e45362f90b84bf92a5f"
       },
       "artifacts": {
         "linux/amd64": {
-          "url": "https://github.com/cloudquery/cloudquery/releases/download/plugins-destination-file-v1.0.2/file_linux_amd64.zip",
-          "archive_sha256": "sha256:10c7278be4e365e7b6263fd3c2fef871d1559f3c65f6115728d8d5d13e307257",
-          "binary_sha256": "sha256:73f24531aeb686db87e38624f71fa8e0e5ce876d5dc36458dcb554d400f17387"
+          "url": "https://github.com/cloudquery/cloudquery/releases/download/plugins-destination-file-v1.0.4/file_linux_amd64.zip",
+          "archive_sha256": "sha256:4a53fe39f9c9daa377369dc0ad1be47e47e4ede99911dcd954476b0d47fe356b",
+          "binary_sha256": "sha256:61b25f842a1f9d48db367d754641f8cccd1b3a089d517a5d4d3b54b61b82b2b9"
         },
         "linux/arm64": {
-          "url": "https://github.com/cloudquery/cloudquery/releases/download/plugins-destination-file-v1.0.2/file_linux_arm64.zip",
-          "archive_sha256": "sha256:68688cd89c3a8c8fd0332463c7039a9a14443d382a01ee7cb74e57d0234a8b85",
-          "binary_sha256": "sha256:e3708d162c6dbb429185d5295edcfd1324ed459252f794eca5a805e1ab5d3122"
+          "url": "https://github.com/cloudquery/cloudquery/releases/download/plugins-destination-file-v1.0.4/file_linux_arm64.zip",
+          "archive_sha256": "sha256:e8885e5f3e5ccd9325ed4f35e40774b649f88440fc2b4dc3a4a9a03ed93fdaa2",
+          "binary_sha256": "sha256:63c2f522dfa21ff4d3915ae96b061a216bf81a3dbc49f53b41931697d2909379"
         }
       }
     }
