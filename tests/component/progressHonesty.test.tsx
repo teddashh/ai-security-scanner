@@ -1376,6 +1376,56 @@ test("a readiness reading taken before Start does not ask to finish setup while 
   expect(finished.container.textContent).toContain("Choose the exact target you want to check");
 });
 
+test("a finished cloud scan offers a reconnect for the next scan instead of an expired-connection warning", () => {
+  // Observed on the desktop after live AWS and Microsoft 365 scans: the scan had
+  // spent its read-only connection, and the page that had just finished it
+  // warned that the connection was no longer available.
+  const spentConnection: ScanReadiness = {
+    caseId: "case-1",
+    checkedAt: "2026-10-02T19:00:00Z",
+    ready: false,
+    state: "provider_capability_required",
+    authorizedTargetCount: 1,
+    pendingTargetCount: 0,
+    compatibleEngineCount: 5,
+    runnableEngineCount: 5,
+    blockerCode: "provider_capability_unavailable",
+    nextStep: "coverage",
+  };
+  const onFixSetup = vi.fn();
+  const onStart = vi.fn(() => Promise.resolve());
+  const renderWith = (runs: ScanRun[]) => render(
+    <I18nProvider>
+      <ProgressPage
+        caseId="case-1"
+        assets={[asset()]}
+        runs={runs}
+        findings={[]}
+        selectedRunId={runs[0]?.id}
+        readiness={spentConnection}
+        onStart={onStart}
+        onRetryLocalhostQuickScan={() => Promise.resolve()}
+        onFixSetup={onFixSetup}
+        onPause={() => Promise.resolve()}
+        onResume={() => Promise.resolve()}
+        onCancel={() => Promise.resolve()}
+      />
+    </I18nProvider>,
+  );
+
+  const finished = renderWith([run([engine("prowler", "completed")], "completed")]);
+  expect(finished.container.textContent).not.toContain("Your read-only connection is no longer available");
+  expect(finished.queryByRole("button", { name: "Start scan" })).toBeNull();
+  fireEvent.click(finished.getByRole("button", { name: "Reconnect to scan again" }));
+  expect(onFixSetup).toHaveBeenCalledTimes(1);
+  expect(onStart).not.toHaveBeenCalled();
+
+  cleanup();
+  const neverScanned = renderWith([]);
+  expect(neverScanned.container.textContent).toContain("Your read-only connection is no longer available");
+  expect(neverScanned.getByRole("button", { name: "Reconnect account" })).toBeTruthy();
+});
+
 // The "Checks" heading count previously counted rendered rows
 // (`visibleWorkCount`), not checks: a shared aggregate row hid every check it
 // stood in for, and a blocked run's setup-attempt placeholder still counted as

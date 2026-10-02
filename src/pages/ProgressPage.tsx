@@ -128,6 +128,7 @@ const copy = {
     zhTW: "正在驗證已保存的目標並建立新的掃描。",
   },
   start: { en: "Start scan", zhTW: "開始掃描" },
+  reconnectToScanAgain: { en: "Reconnect to scan again", zhTW: "重新連接後再掃描" },
   viewResults: { en: "View results", zhTW: "查看結果" },
   resultsWaitingTitle: { en: "Results are not open yet", zhTW: "「結果」尚未開啟" },
   exportWaitingTitle: { en: "Export is not open yet", zhTW: "「匯出」尚未開啟" },
@@ -868,6 +869,9 @@ export function ProgressPage({
     ? copy.readiness[readiness.blockerCode] ?? copy.readinessUnavailableDescription
     : copy.readinessUnavailableDescription;
   const startFreshScan = !readinessCheckFailed && isCapturedEvidenceBlocker(readiness?.blockerCode);
+  // A scan spends its cloud connection, so after one the next scan simply starts with a reconnect.
+  const reconnectBeforeNextScan = !readinessCheckFailed
+    && readiness?.blockerCode === "provider_capability_unavailable";
   const needsLatestInstaller = Boolean(
     !readinessCheckFailed
     && readiness?.blockerCode
@@ -1052,7 +1056,7 @@ export function ProgressPage({
             <button className="button button--primary" type="button" disabled aria-busy="true">
               <Icon name="progress" size={17} />{text(copy.startingAction)}
             </button>
-          ) : canStart ? (
+          ) : canStart && !reconnectBeforeNextScan ? (
             <button className="button button--primary" type="button" disabled={busy} onClick={requestStart}>
               <Icon name="play" size={17} />{text(copy.start)}
             </button>
@@ -1261,11 +1265,15 @@ export function ProgressPage({
                 <Icon name="findings" size={17} />{text(copy.viewResults)}
               </a>
             )}
-            {canStart && !hasReleaseIncompatibleWork && (
+            {canStart && !hasReleaseIncompatibleWork && (reconnectBeforeNextScan ? (
+              <button className="button button--secondary" type="button" disabled={busy} onClick={onFixSetup}>
+                <Icon name="refresh" size={17} />{text(copy.reconnectToScanAgain)}
+              </button>
+            ) : (
               <button className="button button--primary" type="button" disabled={busy || starting} aria-busy={starting} onClick={requestStart}>
                 <Icon name={starting ? "progress" : "play"} size={17} />{text(starting ? copy.startingAction : copy.start)}
               </button>
-            )}
+            ))}
             {canPause && (
               <button className="button button--secondary" type="button" disabled={busy} aria-label={text(copy.pauseAria, { id: selectedRun.id })} onClick={() => void onPause(selectedRun.id)}>
                 <Icon name="pause" size={17} />{text(copy.pause)}
@@ -1358,7 +1366,7 @@ export function ProgressPage({
       )}
 
       {/* While a scan is active the backend can only report that scan, so any other blocker is a pre-start reading. */}
-      {!terminalExactLocalhostQuickScan && !scanWorkActive && readiness && !readiness.ready && readiness.blockerCode && (readiness.nextStep !== "progress" || startFreshScan) && (
+      {!terminalExactLocalhostQuickScan && !scanWorkActive && !reconnectBeforeNextScan && readiness && !readiness.ready && readiness.blockerCode && (readiness.nextStep !== "progress" || startFreshScan) && (
         <InlineNotice tone="warning" title={text(blockerTitle)}>
           <p>{text(blockerDescription)}</p>
           {needsLatestInstaller ? (

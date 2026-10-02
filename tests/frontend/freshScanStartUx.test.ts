@@ -33,7 +33,7 @@ test("a fresh scan request immediately replaces the empty state and prevents a d
   assert.match(noRun, /description=\{text\(starting \? copy\.startingDescription : emptyDescription\)\}/u);
   assert.match(
     noRun,
-    /action=\{starting \? \([\s\S]*?<button[^>]*disabled aria-busy="true">[\s\S]*?copy\.startingAction[\s\S]*?\) : canStart \?/u,
+    /action=\{starting \? \([\s\S]*?<button[^>]*disabled aria-busy="true">[\s\S]*?copy\.startingAction[\s\S]*?\) : canStart && !reconnectBeforeNextScan \?/u,
   );
   assert.match(noRun, /\{starting && \([\s\S]*?className="scan-activity__current" role="status"/u);
   assert.doesNotMatch(noRun, /selectedRun\.id/u);

@@ -95,7 +95,7 @@ test("scan readiness only blocks unsafe empty runs and sends each fix to the use
   const progress = await readPage("ProgressPage.tsx");
   const app = await readFile(new URL("../../src/App.tsx", import.meta.url), "utf8");
 
-  assert.match(progress, /const canStart = !terminalExactLocalhostQuickScan[\s\S]*canStartPreparedScan\([\s\S]*action=\{starting \? \([\s\S]*\) : canStart \?/u);
+  assert.match(progress, /const canStart = !terminalExactLocalhostQuickScan[\s\S]*canStartPreparedScan\([\s\S]*action=\{starting \? \([\s\S]*\) : canStart && !reconnectBeforeNextScan \?/u);
   assert.doesNotMatch(progress, /action=\{starting \? \([\s\S]*\) : readiness\?\.ready \?/u);
   assert.match(progress, /readiness\?\.nextStep === "scanner_setup"[\s\S]*copy\.setupTools/u);
   assert.match(progress, /provider_capability_unavailable:[\s\S]*action: copy\.reconnectCloud/u);

@@ -152,7 +152,7 @@ test("progress hides pause and resume for the exact task and makes a stop reques
   assert.match(progress, /Create a new connection-test attempt for 127\.0\.0\.1:\{port\}\./u);
   assert.match(progress, /為 127\.0\.0\.1:\{port\} 建立新的連線測試嘗試。/u);
   assert.match(progress, /\{!terminalExactLocalhostQuickScan && readinessCheckFailed/u);
-  assert.match(progress, /\{!terminalExactLocalhostQuickScan && !scanWorkActive && readiness && !readiness\.ready/u);
+  assert.match(progress, /\{!terminalExactLocalhostQuickScan && !scanWorkActive && !reconnectBeforeNextScan && readiness && !readiness\.ready/u);
   assert.match(progress, /const localhostCancelRequested = isLocalhostQuickScanCancelRequested\(selectedRun\)/u);
   assert.match(progress, /const canPause = selectedRun\.status === "running" && !exactLocalhostQuickScan/u);
   assert.match(progress, /const canResume = !startFreshScan &&[\s\S]*\) && !exactLocalhostQuickScan;/u);
