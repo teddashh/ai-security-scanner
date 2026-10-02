@@ -408,6 +408,20 @@ test("the Microsoft 365 script prepares a fresh tenant, and a second run changes
   assert.match(second.stdout, /Admin consent is already in place/u);
 });
 
+test("the Microsoft 365 script signs in with a one-time code when asked, and always on Windows", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const result = await runMicrosoft(dir, graphState(), ["-UseDeviceCode"]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(result.state.connect.useDeviceCode, true);
+
+  // On Windows the interactive sign-in is Windows's own window, which offers to
+  // let the organization manage the computer. CI runs on Linux, so pin the
+  // branch that keeps Windows on the one-time code.
+  const source = readFileSync(microsoftScript, "utf8");
+  assert.match(source, /\$onWindows = \[Environment\]::OSVersion\.Platform -eq \[PlatformID\]::Win32NT\n/u);
+  assert.match(source, /if \(\$UseDeviceCode -or \$onWindows -or [^\n]+\) \{ \$connect\['UseDeviceCode'\] = \$true \}/u);
+});
+
 test("the Microsoft 365 script completes an app registered in the portal", { skip: skipWithoutPwsh }, async (t) => {
   const dir = workspace(t);
   const app = {

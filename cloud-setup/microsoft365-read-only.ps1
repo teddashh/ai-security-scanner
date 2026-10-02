@@ -22,6 +22,8 @@ The tenant to prepare. Leave it out to use the tenant you sign in to.
 
 .PARAMETER UseDeviceCode
 Sign in with a code on another device, for a shell that cannot open a browser.
+On Windows the script always signs in this way, so Windows does not offer to
+let the organization manage the computer.
 #>
 [CmdletBinding()]
 param(
@@ -111,7 +113,11 @@ function Connect-Tenant {
 
     $connect = @{ Scopes = $SetupScopes; ContextScope = 'Process'; NoWelcome = $true }
     if ($TenantId) { $connect['TenantId'] = $TenantId }
-    if ($UseDeviceCode -or "$env:AZUREPS_HOST_ENVIRONMENT" -like 'cloud-shell*') { $connect['UseDeviceCode'] = $true }
+    # On Windows, the Microsoft Graph sign-in window belongs to Windows itself,
+    # and it offers to add the account to Windows and let the organization manage
+    # the computer. A sign-in with a one-time code stays in the browser.
+    $onWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
+    if ($UseDeviceCode -or $onWindows -or "$env:AZUREPS_HOST_ENVIRONMENT" -like 'cloud-shell*') { $connect['UseDeviceCode'] = $true }
     Write-Host "Sign in on Microsoft's page as a Global Administrator of the tenant to scan."
     Connect-MgGraph @connect | Out-Null
     $context = Get-MgContext

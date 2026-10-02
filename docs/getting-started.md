@@ -120,7 +120,7 @@ For AWS and Microsoft 365, a script can do step 1 for you. It prints the step 2 
   ```
 
   Turning on IAM Identity Center and adding the user who signs in stay console steps; the script says which one is missing.
-- **Microsoft 365:** on Windows, run these in PowerShell and sign in on Microsoft's page as a Global Administrator. On macOS or Linux, run the script with `pwsh` (PowerShell 7).
+- **Microsoft 365:** on Windows, run these in PowerShell. Open the Microsoft page the script prints, enter its code, and sign in as a Global Administrator. On macOS or Linux, run the script with `pwsh` (PowerShell 7).
 
   ```powershell
   Invoke-WebRequest https://raw.githubusercontent.com/teddashh/ai-security-scanner/main/cloud-setup/microsoft365-read-only.ps1 -OutFile microsoft365-read-only.ps1 -UseBasicParsing

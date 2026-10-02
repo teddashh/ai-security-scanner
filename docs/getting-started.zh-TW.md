@@ -120,7 +120,7 @@ AWS 和 Microsoft 365 可以用腳本完成步驟 1。腳本會以英文印出�
   ```
 
   啟用 IAM Identity Center 和新增登入用的使用者仍要在主控台完成；缺哪一步，腳本會直接說明。
-- **Microsoft 365：**在 Windows 的 PowerShell 執行下列指令，再到 Microsoft 的頁面以全域管理員身分登入。macOS 或 Linux 請改用 `pwsh`（PowerShell 7）執行腳本。
+- **Microsoft 365：**在 Windows 的 PowerShell 執行下列指令。打開腳本印出的 Microsoft 網頁，輸入它給的代碼，再以全域管理員身分登入。macOS 或 Linux 請改用 `pwsh`（PowerShell 7）執行腳本。
 
   ```powershell
   Invoke-WebRequest https://raw.githubusercontent.com/teddashh/ai-security-scanner/main/cloud-setup/microsoft365-read-only.ps1 -OutFile microsoft365-read-only.ps1 -UseBasicParsing
