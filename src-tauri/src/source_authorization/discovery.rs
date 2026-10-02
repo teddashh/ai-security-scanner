@@ -48,7 +48,6 @@ const AZURE_SUBSCRIPTION_OPERATION: &str = "resource-manager:GetSubscription";
 const GCP_OPERATION: &str = "cloud-resource-manager:ListProjects";
 const GCP_FOLDERS_OPERATION: &str = "cloud-resource-manager:ListFolders";
 const M365_ORGANIZATION_OPERATION: &str = "microsoft-graph:GetOrganization";
-const M365_USERS_OPERATION: &str = "microsoft-graph:ListUsers";
 
 #[derive(Default)]
 pub struct ProviderDiscoveryJobs {
@@ -714,6 +713,10 @@ fn valid_gcp_numeric_resource_name(value: &str, prefix: &str) -> bool {
     })
 }
 
+/// Reads only the organization. The tenant is the one scan target, and no
+/// engine scans an individual user. Listing users as well put hundreds of
+/// candidate rows in front of the user, and a tenant with more than 700 users
+/// ran past the page limit, which failed the whole source.
 fn capture_microsoft365(
     capture: &mut CaptureAccumulator<'_>,
     credentials: &ScannerCredentialSet,
@@ -730,27 +733,7 @@ fn capture_microsoft365(
         return Err(malformed("Microsoft Graph organization identity"));
     }
     capture.add_records(organization_count)?;
-    capture.mark_last_parser_eligible()?;
-
-    let mut endpoint = "https://graph.microsoft.com/v1.0/users?%24select=id%2CdisplayName%2CuserPrincipalName%2CuserType%2CaccountEnabled&%24top=100".to_owned();
-    for page in 0..(MAX_SUCCESS_PAGES - 1) {
-        let request_endpoint = endpoint.clone();
-        let response = capture.request(M365_USERS_OPERATION, || {
-            bearer_get(&request_endpoint, &token)
-        })?;
-        let document = json_document(response.body(), "Microsoft Graph JSON")?;
-        capture.add_records(array_len(&document, "value")?)?;
-        capture.mark_last_parser_eligible()?;
-        let next = optional_string(&document, "@odata.nextLink")?;
-        let Some(next) = next else {
-            return Ok(());
-        };
-        endpoint = validate_graph_next_link(&next)?;
-        if page + 1 == MAX_SUCCESS_PAGES - 1 {
-            return Err(page_limit());
-        }
-    }
-    unreachable!("bounded Microsoft Graph page loop")
+    capture.mark_last_parser_eligible()
 }
 
 fn profile_and_operation(profile: ProviderSourceProfile) -> (&'static str, &'static str) {
@@ -917,22 +900,6 @@ fn validate_azure_next_link(
         .map(|(_, value)| value.into_owned());
     if api_version.as_deref() != Some("2021-04-01") {
         return Err(malformed("Azure pagination API version"));
-    }
-    Ok(url.into())
-}
-
-fn validate_graph_next_link(value: &str) -> Result<String, LiveProviderFailure> {
-    let url = fixed_pagination_url(value, "graph.microsoft.com")?;
-    if url.path() != "/v1.0/users" {
-        return Err(malformed("Microsoft Graph pagination path"));
-    }
-    validate_query_keys(&url, &["$select", "$top", "$skiptoken", "$skip"])?;
-    let select = url
-        .query_pairs()
-        .find(|(key, _)| key == "$select")
-        .map(|(_, value)| value.into_owned());
-    if select.as_deref() != Some("id,displayName,userPrincipalName,userType,accountEnabled") {
-        return Err(malformed("Microsoft Graph pagination projection"));
     }
     Ok(url.into())
 }
@@ -1202,10 +1169,6 @@ mod tests {
                     200,
                     br#"{"value":[{"id":"33333333-3333-4333-8333-333333333333","displayName":"Example tenant"}]}"#.to_vec(),
                 ),
-                ProviderHttpResponse::new(
-                    200,
-                    br#"{"value":[{"id":"44444444-4444-4444-8444-444444444444","displayName":"Ada Example","userPrincipalName":"ada@example.test","userType":"Member","accountEnabled":true}]}"#.to_vec(),
-                ),
             ],
         }
     }
@@ -1303,6 +1266,38 @@ mod tests {
                     .contains("fixture-secret")
             }));
         }
+    }
+
+    #[test]
+    fn microsoft365_discovery_reads_only_the_tenant() {
+        let profile = ProviderSourceProfile::Microsoft365TenantReadOnlyAccessToken;
+        let (capture, registry, events) = capture_fixture(profile);
+        assert!(capture.complete(), "{capture:?}");
+        let event_log = events.lock().unwrap().clone();
+        assert_eq!(event_log.len(), 2, "{event_log:?}");
+        assert!(
+            event_log[0].contains("/v1.0/organization?"),
+            "{event_log:?}"
+        );
+
+        let mut source = DataSource {
+            id: "source-live".into(),
+            kind: profile.source_kind(),
+            label: "Live provider".into(),
+            status: SourceConnectionStatus::Connected,
+            connected_at: Some(now()),
+            last_discovered_at: None,
+            read_only: true,
+            metadata: BTreeMap::new(),
+        };
+        capture
+            .artifact_set
+            .expect("artifact set")
+            .insert_into(&mut source)
+            .unwrap();
+        let batch = run_connector(&registry.connector_for(&source.kind), &source).unwrap();
+        assert_eq!(batch.assets.len(), 1);
+        assert_eq!(batch.assets[0].kind, crate::domain::AssetKind::Tenant);
     }
 
     #[cfg(unix)]

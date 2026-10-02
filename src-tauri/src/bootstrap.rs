@@ -465,7 +465,7 @@ fn bootstrap_verify_operations(provider: BootstrapProvider) -> Vec<String> {
             "graph:GET /organization".into(),
             "graph:GET /auditLogs/directoryAudits?$top=1".into(),
             "graph:GET /policies/authorizationPolicy".into(),
-            "graph:GET /roleManagement/directory/roleDefinitions?$top=1".into(),
+            "graph:GET /roleManagement/directory/roleDefinitions/{Directory Readers ID}".into(),
         ],
     }
 }

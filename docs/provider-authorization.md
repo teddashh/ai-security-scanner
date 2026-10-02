@@ -81,7 +81,7 @@ The live client uses only these fixed read operations:
 - AWS Organizations `ListAccounts` at the fixed `organizations.us-east-1.amazonaws.com` endpoint, signed with the verified short-lived role session. The API speaks AWS JSON 1.1 (`X-Amz-Target: AWSOrganizationsV20161128.ListAccounts`) and answers only for the organization's management account or a delegated administrator account.
 - Azure Resource Manager `List Resources` for the exact verified subscription.
 - Google Cloud Resource Manager `folders.list` and `projects.list`, breadth-first from the exact verified organization and then from each provider-returned child folder.
-- Microsoft Graph `organization` plus a bounded `users` projection for the verified tenant.
+- Microsoft Graph `organization` for the verified tenant. The tenant is the scan target, so discovery does not list users.
 
 Every operation has fixed fields, response-size and record limits, at most eight successful pages, one retry for a short transient-status allowlist, a two-minute aggregate deadline, and strict provider-host/path/query validation for continuation links. Google list APIs return direct children only, so discovery exhausts `nextPageToken` independently for folders and projects at every exact parent. Every returned `parent` must equal the requested organization/folder and every folder/project must be `ACTIVE`; a mismatched parent, duplicate identity/token, non-active resource, pending parent beyond the page bound, or any unexhausted pagination makes the capture partial/failed rather than complete. Redirects and environment proxies remain disabled. `cancel_discovery` sets the case-bound cancellation flag; the worker checks it before each request and retry.
 

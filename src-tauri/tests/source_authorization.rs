@@ -587,7 +587,11 @@ fn verified_microsoft365(
     responses.extend([
         expected("Get", "/auditLogs/", json!({"value":[]})),
         expected("Get", "/policies/", json!({"id":"policy"})),
-        expected("Get", "/roleManagement/", json!({"value":[]})),
+        expected(
+            "Get",
+            "/roleManagement/directory/roleDefinitions/88d8e3e3-8f55-4a1e-953a-9b9898b8876b",
+            json!({"id":"88d8e3e3-8f55-4a1e-953a-9b9898b8876b"}),
+        ),
     ]);
     let fixture = FixtureHttp::new(responses);
     let (_, mut pending) = begin_microsoft_native_authorization(

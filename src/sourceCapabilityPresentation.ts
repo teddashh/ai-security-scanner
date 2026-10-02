@@ -206,8 +206,8 @@ const definitions: Record<SourceCapabilityProvider, readonly CellDefinition[]> =
       stateWhenAvailable: "partial",
       engines: [nativeInventory.microsoft365],
       limitation: {
-        en: "Lists the tenant organization and users only; it is not full Microsoft 365 service inventory.",
-        zhTW: "只列出租用戶組織與使用者；不是完整 Microsoft 365 服務盤點。",
+        en: "Lists the tenant organization only; it is not full Microsoft 365 service inventory.",
+        zhTW: "只列出租用戶組織；不是完整 Microsoft 365 服務盤點。",
       },
     },
     {

@@ -29,6 +29,11 @@ use zeroize::Zeroizing;
 
 const MAX_PROVIDER_RESPONSE_BYTES: usize = 1024 * 1024;
 const MICROSOFT_GRAPH_ROOT: &str = "https://graph.microsoft.com/v1.0";
+/// The built-in Directory Readers role. A built-in role definition has the same
+/// ID in every tenant. Graph rejects `$top` on role definitions with
+/// `Request_UnsupportedQuery`, so the role-management probe reads this one
+/// definition by key.
+const MICROSOFT_DIRECTORY_READERS_ROLE_ID: &str = "88d8e3e3-8f55-4a1e-953a-9b9898b8876b";
 const MICROSOFT_ARM_ROOT: &str = "https://management.azure.com";
 const GOOGLE_AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
@@ -1362,7 +1367,7 @@ fn verify_microsoft365_token_with_identity(
         format!("{MICROSOFT_GRAPH_ROOT}/auditLogs/directoryAudits?%24top=1&%24select=id"),
         format!("{MICROSOFT_GRAPH_ROOT}/policies/authorizationPolicy?%24select=id"),
         format!(
-            "{MICROSOFT_GRAPH_ROOT}/roleManagement/directory/roleDefinitions?%24top=1&%24select=id"
+            "{MICROSOFT_GRAPH_ROOT}/roleManagement/directory/roleDefinitions/{MICROSOFT_DIRECTORY_READERS_ROLE_ID}"
         ),
     ];
     let mut request_ids = identity.request_ids;
