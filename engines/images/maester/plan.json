@@ -16,22 +16,22 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-maester",
-    "tag": "2.0.0-8",
-    "digest": "sha256:4ac9caf846c9ed20604e6ef700416f88ac46ae5319f84dcf4a059b9058d9fb21"
+    "tag": "2.0.0-9",
+    "digest": "sha256:a41df2693dcb5923a85fb4e75f10d80dca130c6269c5621d82cd4809f176cf81"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/37032232091",
-    "source_revision": "9f6a976552b044787025f0f843e231a13c024dcf",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/37063438651",
+    "source_revision": "31ae95d43840ff5ca67f80d476d91a4cb384a216",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:8d5a4ee1644d9fe596e5f54e72e78042a86854e4fc2aecc9bbf33f3d6a4318c0",
-      "linux/arm64": "sha256:2830568a73e279f2a28b0202a15793385cdee8e450a5ac15b420c54988e58433"
+      "linux/amd64": "sha256:86102f2372d648aa3ebe407c6b1ec301234d833aaf025f8f3c9009f52cf79eba",
+      "linux/arm64": "sha256:370f9b912da930964a892ba5cad70aba944a83a48cb2631142957df07f0c57d2"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "maester-image-evidence-37032232091-1"
+    "evidence_artifact": "maester-image-evidence-37063438651-1"
   },
   "build_recipe": {
     "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
@@ -101,14 +101,14 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/maester/Dockerfile",
-    "sha256": "sha256:e56f85953004147bb1b59c8ffb207ae8ee0d26b619848bc5cbfc33cd5dae6dc2",
+    "sha256": "sha256:cdec6126cb579796af4adc4b77b98123e3c66f91e9069ade8f9448393fee4fda",
     "reason": null
   },
   "wrapper": {
     "required": true,
     "strategy": "Validate one immutable Microsoft 365 tenant scope and one short-lived protected Graph token; retain source severity, map only Maester's documented ratings, and leave every other rating unknown; then invoke the fixed Graph-only Entra test profile without a shell.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-m365-launcher",
-    "launcher_sha256": "sha256:be0775674894fbec7e92f9de68a114c2b2259c47e17efd6fab386c2371b823ae",
+    "launcher_sha256": "sha256:6e57234c2c9d7f97a68722b18c3fd5b1862736be4a2c4bfc266014c6e852f592",
     "script": {
       "path": "engines/images/maester/run-maester.ps1",
       "sha256": "sha256:6eafb9ff00353d24641e1a08222c7898d2da2712f8709b4b3f29c5e2db64f331"

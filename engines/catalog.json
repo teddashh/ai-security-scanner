@@ -731,8 +731,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scubagear",
-      "tag": "1.8.0-7",
-      "digest": "sha256:da6ea75956106793f7adfb4ed343a044bfe1b9d6f8f688c390673c948b0afb30",
+      "tag": "1.8.0-8",
+      "digest": "sha256:9933c263fee77b187f2b763ffc0b490a0e220effb8b011c8a204abb23d340cc7",
       "signature_identity": null
     },
     "source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
@@ -782,7 +782,7 @@
         "source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
         "source_ref": "main",
         "acquisition_source": "https://github.com/cisagov/ScubaGear/commit/4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
-        "artifact_source_revision": "9f6a976552b044787025f0f843e231a13c024dcf",
+        "artifact_source_revision": "31ae95d43840ff5ca67f80d476d91a4cb384a216",
         "source_association": "attested_match"
       },
       "rules": {
@@ -865,8 +865,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-maester",
-      "tag": "2.0.0-8",
-      "digest": "sha256:4ac9caf846c9ed20604e6ef700416f88ac46ae5319f84dcf4a059b9058d9fb21",
+      "tag": "2.0.0-9",
+      "digest": "sha256:a41df2693dcb5923a85fb4e75f10d80dca130c6269c5621d82cd4809f176cf81",
       "signature_identity": null
     },
     "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
@@ -917,7 +917,7 @@
         "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
         "source_ref": "main",
         "acquisition_source": "https://github.com/maester365/maester/commit/6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
-        "artifact_source_revision": "9f6a976552b044787025f0f843e231a13c024dcf",
+        "artifact_source_revision": "31ae95d43840ff5ca67f80d476d91a4cb384a216",
         "source_association": "attested_match"
       },
       "rules": {
