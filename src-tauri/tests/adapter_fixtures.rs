@@ -2161,6 +2161,148 @@ fn inventory_schema_and_asset_boundaries_fail_closed_but_known_empty_shapes_comp
     ));
 }
 
+fn cloud_resources(output: &AdapterOutput) -> BTreeSet<(String, String, String)> {
+    output
+        .observations
+        .iter()
+        .filter_map(|observation| match &observation.kind {
+            InventoryObservationKind::CloudResource {
+                resource_type,
+                native_id: Some(native_id),
+                display_name: Some(display_name),
+            } => Some((
+                resource_type.clone(),
+                native_id.clone(),
+                display_name.clone(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Shapes a live AWS account produced through the pinned AWS v9.2.0 profile:
+/// credential report rows have no account_id column, dependent child tables
+/// arrive beside the seven selected tables, and an attached AWS managed policy
+/// carries every one of its versions in a single row.
+#[test]
+fn cloudquery_live_table_shapes_normalize_completely() {
+    let credential_reports = concat!(
+        r#"{"_cq_id":"cq-report-1","arn":"arn:aws:iam::123456789012:user/example-user","user":"example-user","password_enabled":false,"mfa_active":false}"#,
+        "\n",
+        r#"{"_cq_id":"cq-report-2","arn":"arn:aws:iam::123456789012:root","user":"root-account","password_enabled":true,"mfa_active":true}"#,
+        "\n",
+    );
+    let output = normalize_bytes(
+        "cloudquery",
+        credential_reports.as_bytes(),
+        "aws_iam_credential_reports.json",
+        "application/json",
+        "run-credential-reports",
+    );
+    assert!(output.complete, "{:?}", output.warnings);
+    assert_eq!(
+        cloud_resources(&output),
+        BTreeSet::from([
+            (
+                "aws_iam_credential_reports".to_owned(),
+                "arn:aws:iam::123456789012:root".to_owned(),
+                "root-account".to_owned(),
+            ),
+            (
+                "aws_iam_credential_reports".to_owned(),
+                "arn:aws:iam::123456789012:user/example-user".to_owned(),
+                "example-user".to_owned(),
+            ),
+        ])
+    );
+
+    let child = normalize_bytes(
+        "cloudquery",
+        br#"{"_cq_id":"cq-membership-1","_cq_parent_id":"cq-user-1","account_id":"123456789012","user_arn":"arn:aws:iam::123456789012:user/example-user","group_name":"example-group"}"#,
+        "aws_iam_user_groups.json",
+        "application/json",
+        "run-dependent-table",
+    );
+    assert!(child.complete, "{:?}", child.warnings);
+    assert!(child.observations.is_empty());
+
+    // Past the generic 1 MiB line bound and the 16 MiB document bound.
+    let version = format!(
+        r#"{{"VersionId":"v1","IsDefaultVersion":false,"Document":"{}"}}"#,
+        "VERSION_HISTORY_MUST_NOT_BE_NORMALIZED ".repeat(1_700)
+    );
+    let versions = vec![version; 260].join(",");
+    let policies = format!(
+        "{}\n{}\n{}\n",
+        r#"{"_cq_id":"cq-policy-1","account_id":"123456789012","arn":"arn:aws:iam::123456789012:policy/example-policy","policy_name":"example-policy","attachment_count":1,"policy_version_list":[{"VersionId":"v1","IsDefaultVersion":true}]}"#,
+        format_args!(
+            r#"{{"_cq_id":"cq-policy-2","account_id":"123456789012","arn":"arn:aws:iam::aws:policy/SecurityAudit","policy_name":"SecurityAudit","attachment_count":1,"policy_version_list":[{versions}],"tags":{{"owner":"aws"}}}}"#
+        ),
+        r#"{"_cq_id":"cq-policy-3","account_id":"123456789012","arn":"arn:aws:iam::aws:policy/aws-service-role/AWSSupportServiceRolePolicy","policy_name":"AWSSupportServiceRolePolicy","attachment_count":1}"#,
+    );
+    assert!(policies.len() > 16 * 1024 * 1024);
+    let output = normalize_bytes(
+        "cloudquery",
+        policies.as_bytes(),
+        "aws_iam_policies.json",
+        "application/json",
+        "run-managed-policy-versions",
+    );
+    assert!(output.complete, "{:?}", output.warnings);
+    assert_eq!(
+        cloud_resources(&output)
+            .into_iter()
+            .map(|(_, _, name)| name)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "AWSSupportServiceRolePolicy".to_owned(),
+            "SecurityAudit".to_owned(),
+            "example-policy".to_owned(),
+        ])
+    );
+    let observations = serde_json::to_string(&output.observations).unwrap();
+    assert!(!observations.contains("VERSION_HISTORY_MUST_NOT_BE_NORMALIZED"));
+}
+
+#[test]
+fn cloudquery_account_fallback_is_limited_to_credential_report_arns() {
+    for (bytes, filename) in [
+        (
+            br#"{"arn":"arn:aws:iam::123456789012:role/example-role","user":"example-role"}"#
+                .as_slice(),
+            "aws_iam_credential_reports.json",
+        ),
+        (
+            br#"{"arn":"arn:aws:iam::12345678901:user/short-account","user":"short-account"}"#
+                .as_slice(),
+            "aws_iam_credential_reports.json",
+        ),
+        (
+            br#"{"arn":"arn:aws:iam::123456789012:user/example-user","user_name":"example-user"}"#
+                .as_slice(),
+            "aws_iam_users.json",
+        ),
+    ] {
+        let output = normalize_bytes(
+            "cloudquery",
+            bytes,
+            filename,
+            "application/json",
+            "run-account-fallback",
+        );
+        assert!(!output.complete, "{filename}");
+        assert!(output.observations.is_empty(), "{filename}");
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("lacked its account_id")),
+            "{filename}: {:?}",
+            output.warnings
+        );
+    }
+}
+
 #[test]
 fn service_inventory_uses_a_path_free_endpoint_that_report_code_can_correlate() {
     let naabu = normalize_bytes(

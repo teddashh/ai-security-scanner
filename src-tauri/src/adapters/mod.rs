@@ -21,11 +21,11 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
-use std::io::{Read, Take};
+use std::io::{BufRead, BufReader, Read, Take};
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-pub const ADAPTER_VERSION: &str = "0.2.0";
+pub const ADAPTER_VERSION: &str = "0.2.1";
 /// Stable identity for the canonical finding fingerprint algorithm. Changing
 /// this value requires an explicit migration before cross-version diffs may be
 /// treated as comparable.
@@ -67,6 +67,9 @@ const MAX_ARTIFACT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_RECORDS: usize = 10_000;
 const MAX_LINE_BYTES: usize = 1024 * 1024;
+const MAX_CLOUDQUERY_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_CLOUDQUERY_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_CLOUDQUERY_ROW_BYTES: usize = 64 * 1024 * 1024;
 const MAX_WARNINGS: usize = 256;
 /// Distinct unresolved provider identifiers tracked per normalization.
 const MAX_UNMATCHED_IDENTIFIERS: usize = 32;
@@ -747,8 +750,13 @@ fn normalize_artifacts(
     }
 
     let relevant_count = relevant.len();
+    let total_byte_limit = if adapter.profile == Profile::CloudQuery {
+        MAX_CLOUDQUERY_TOTAL_BYTES
+    } else {
+        MAX_TOTAL_BYTES
+    };
     for artifact in relevant.into_iter().take(MAX_ARTIFACTS) {
-        if processed_bytes.saturating_add(artifact.byte_length) > MAX_TOTAL_BYTES {
+        if processed_bytes.saturating_add(artifact.byte_length) > total_byte_limit {
             output.complete = false;
             push_warning(
                 &mut output.warnings,
@@ -758,22 +766,26 @@ fn normalize_artifacts(
         }
 
         let warnings_before_read = output.warnings.len();
-        let bytes = read_bounded_artifact(input.artifact_root, artifact, &mut output.warnings);
-        if output.warnings.len() > warnings_before_read {
-            output.complete = false;
-        }
-        let Some(bytes) = bytes else {
-            continue;
-        };
-        processed_bytes += bytes.len() as u64;
-
-        let warnings_before_parse = output.warnings.len();
-        let parsed = if is_complete_empty_json_lines(adapter.profile, artifact, &bytes) {
-            Some(ParsedArtifact::JsonLines(Vec::new()))
+        let parsed = if adapter.profile == Profile::CloudQuery {
+            let parsed = read_cloudquery_rows(input.artifact_root, artifact, &mut output.warnings);
+            if parsed.is_some() {
+                processed_bytes += artifact.byte_length;
+            }
+            parsed
         } else {
-            parse_artifact(&bytes, artifact, &mut output.warnings)
+            match read_bounded_artifact(input.artifact_root, artifact, &mut output.warnings) {
+                Some(bytes) => {
+                    processed_bytes += bytes.len() as u64;
+                    if is_complete_empty_json_lines(adapter.profile, artifact, &bytes) {
+                        Some(ParsedArtifact::JsonLines(Vec::new()))
+                    } else {
+                        parse_artifact(&bytes, artifact, &mut output.warnings)
+                    }
+                }
+                None => None,
+            }
         };
-        if output.warnings.len() > warnings_before_parse {
+        if output.warnings.len() > warnings_before_read {
             output.complete = false;
         }
         let Some(parsed) = parsed else {
@@ -1074,6 +1086,10 @@ fn is_complete_empty_json_lines(profile: Profile, artifact: &RawArtifact, bytes:
     {
         return false;
     }
+    is_json_lines_artifact(artifact)
+}
+
+fn is_json_lines_artifact(artifact: &RawArtifact) -> bool {
     let extension_is_json_lines = Path::new(&artifact.relative_path)
         .extension()
         .and_then(|extension| extension.to_str())
@@ -1181,7 +1197,42 @@ fn read_bounded_artifact(
     artifact: &RawArtifact,
     warnings: &mut Vec<String>,
 ) -> Option<Vec<u8>> {
-    if artifact.byte_length > MAX_ARTIFACT_BYTES {
+    let file = open_bounded_artifact(root, artifact, MAX_ARTIFACT_BYTES, warnings)?;
+    let mut bytes =
+        Vec::with_capacity((artifact.byte_length as usize).min(MAX_ARTIFACT_BYTES as usize));
+    let mut reader: Take<File> = file.take(MAX_ARTIFACT_BYTES + 1);
+    if reader.read_to_end(&mut bytes).is_err() || bytes.len() as u64 > MAX_ARTIFACT_BYTES {
+        push_warning(
+            warnings,
+            "an artifact exceeded the byte limit while being read",
+        );
+        return None;
+    }
+    if bytes.len() as u64 != artifact.byte_length {
+        push_warning(
+            warnings,
+            "an artifact length did not match its recorded evidence metadata",
+        );
+        return None;
+    }
+    let actual_hash = hex::encode(Sha256::digest(&bytes));
+    if !actual_hash.eq_ignore_ascii_case(&artifact.sha256) {
+        push_warning(
+            warnings,
+            "an artifact hash did not match its recorded evidence metadata",
+        );
+        return None;
+    }
+    Some(bytes)
+}
+
+fn open_bounded_artifact(
+    root: &Path,
+    artifact: &RawArtifact,
+    max_bytes: u64,
+    warnings: &mut Vec<String>,
+) -> Option<File> {
+    if artifact.byte_length > max_bytes {
         push_warning(
             warnings,
             format!(
@@ -1226,8 +1277,8 @@ fn read_bounded_artifact(
             return None;
         }
     };
-    let file = match File::open(&canonical) {
-        Ok(file) => file,
+    match File::open(&canonical) {
+        Ok(file) => Some(file),
         Err(_) => {
             push_warning(
                 warnings,
@@ -1236,35 +1287,348 @@ fn read_bounded_artifact(
                     safe_text(&artifact.id, MAX_SHORT_TEXT)
                 ),
             );
-            return None;
+            None
         }
-    };
-    let mut bytes =
-        Vec::with_capacity((artifact.byte_length as usize).min(MAX_ARTIFACT_BYTES as usize));
-    let mut reader: Take<File> = file.take(MAX_ARTIFACT_BYTES + 1);
-    if reader.read_to_end(&mut bytes).is_err() || bytes.len() as u64 > MAX_ARTIFACT_BYTES {
+    }
+}
+
+/// Streams one CloudQuery NDJSON table file. The aws_iam_policies table carries
+/// every version of each attached AWS managed policy, so on a live account one
+/// row measured 7 MB and the file 11 MB. Each row is reduced to its top-level
+/// scalar columns while it is read, which is all the inventory mapping uses, so
+/// these bounds follow the engine's 512 MiB output budget instead of the
+/// in-memory document bounds. The length and hash are verified over the whole
+/// stream before any row is used.
+fn read_cloudquery_rows(
+    root: &Path,
+    artifact: &RawArtifact,
+    warnings: &mut Vec<String>,
+) -> Option<ParsedArtifact> {
+    let file = open_bounded_artifact(root, artifact, MAX_CLOUDQUERY_ARTIFACT_BYTES, warnings)?;
+    let mut reader = BufReader::new(HashingReader {
+        inner: file.take(MAX_CLOUDQUERY_ARTIFACT_BYTES + 1),
+        hasher: Sha256::new(),
+        length: 0,
+    });
+    let mut rows = Vec::new();
+    let mut row_lines = 0_usize;
+    let mut line = Vec::new();
+    let mut line_number = 0_usize;
+    loop {
+        let (consumed, oversized) =
+            match read_bounded_line(&mut reader, &mut line, MAX_CLOUDQUERY_ROW_BYTES) {
+                Ok(result) => result,
+                Err(_) => {
+                    push_warning(
+                        warnings,
+                        "an artifact exceeded the byte limit while being read",
+                    );
+                    return None;
+                }
+            };
+        if consumed == 0 {
+            break;
+        }
+        line_number += 1;
+        if oversized {
+            row_lines += 1;
+            push_warning(
+                warnings,
+                format!("JSONL line {line_number} exceeded the line limit and was skipped"),
+            );
+            continue;
+        }
+        let row = trim_ascii(&line);
+        if row.is_empty() {
+            continue;
+        }
+        row_lines += 1;
+        if rows.len() >= MAX_RECORDS {
+            push_warning(
+                warnings,
+                "JSONL record limit reached; later lines remain only as raw evidence",
+            );
+            if std::io::copy(&mut reader, &mut std::io::sink()).is_err() {
+                push_warning(
+                    warnings,
+                    "an artifact exceeded the byte limit while being read",
+                );
+                return None;
+            }
+            break;
+        }
+        match serde_json::from_slice::<CloudQueryRow>(row) {
+            Ok(CloudQueryRow(value)) => rows.push((line_number, value)),
+            Err(_) => push_warning(
+                warnings,
+                format!("malformed JSONL line {line_number} was skipped"),
+            ),
+        }
+    }
+
+    let HashingReader { hasher, length, .. } = reader.into_inner();
+    if length > MAX_CLOUDQUERY_ARTIFACT_BYTES {
         push_warning(
             warnings,
             "an artifact exceeded the byte limit while being read",
         );
         return None;
     }
-    if bytes.len() as u64 != artifact.byte_length {
+    if length != artifact.byte_length {
         push_warning(
             warnings,
             "an artifact length did not match its recorded evidence metadata",
         );
         return None;
     }
-    let actual_hash = hex::encode(Sha256::digest(&bytes));
-    if !actual_hash.eq_ignore_ascii_case(&artifact.sha256) {
+    if !hex::encode(hasher.finalize()).eq_ignore_ascii_case(&artifact.sha256) {
         push_warning(
             warnings,
             "an artifact hash did not match its recorded evidence metadata",
         );
         return None;
     }
-    Some(bytes)
+
+    if row_lines == 0 {
+        if is_json_lines_artifact(artifact) {
+            return Some(ParsedArtifact::JsonLines(Vec::new()));
+        }
+    } else if row_lines == 1 && rows.len() == 1 {
+        // A one-row file is also a complete JSON document; keep its document
+        // pointer, as the generic parser does.
+        let (_, value) = rows.pop()?;
+        return Some(ParsedArtifact::Json(value));
+    }
+    if rows.is_empty() {
+        push_warning(
+            warnings,
+            format!(
+                "artifact {} was neither valid bounded JSON nor JSONL",
+                safe_text(&artifact.id, MAX_SHORT_TEXT)
+            ),
+        );
+        return None;
+    }
+    Some(ParsedArtifact::JsonLines(rows))
+}
+
+struct HashingReader<R> {
+    inner: R,
+    hasher: Sha256,
+    length: u64,
+}
+
+impl<R: Read> Read for HashingReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buffer)?;
+        self.hasher.update(&buffer[..read]);
+        self.length += read as u64;
+        Ok(read)
+    }
+}
+
+/// Reads one line, keeping at most `limit` bytes of it. Returns the bytes
+/// consumed, zero at end of input, and whether the line was longer than the
+/// limit; an oversized line is consumed to its end but not kept.
+fn read_bounded_line(
+    reader: &mut impl BufRead,
+    line: &mut Vec<u8>,
+    limit: usize,
+) -> std::io::Result<(usize, bool)> {
+    line.clear();
+    let mut consumed = 0;
+    let mut oversized = false;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok((consumed, oversized));
+        }
+        let (length, ends_line) = match available.iter().position(|byte| *byte == b'\n') {
+            Some(index) => (index + 1, true),
+            None => (available.len(), false),
+        };
+        if !oversized {
+            if line.len() + length > limit {
+                oversized = true;
+                line.clear();
+            } else {
+                line.extend_from_slice(&available[..length]);
+            }
+        }
+        reader.consume(length);
+        consumed += length;
+        if ends_line {
+            return Ok((consumed, oversized));
+        }
+    }
+}
+
+/// One CloudQuery line reduced to what the inventory mapping reads: an object
+/// keeps its top-level scalar columns, an array keeps each object element that
+/// way, and anything else becomes `null`. Nested values are skipped without
+/// being built.
+struct CloudQueryRow(Value);
+
+impl<'de> serde::Deserialize<'de> for CloudQueryRow {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct RowVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for RowVisitor {
+            type Value = CloudQueryRow;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a CloudQuery row")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<Self::Value, A::Error> {
+                scalar_columns(map).map(|columns| CloudQueryRow(Value::Object(columns)))
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut sequence: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut elements = Vec::new();
+                while let Some(CloudQueryElement(element)) = sequence.next_element()? {
+                    // One past the limit lets `json_rows` report the truncation.
+                    if elements.len() <= MAX_RECORDS {
+                        elements.push(element);
+                    }
+                }
+                Ok(CloudQueryRow(Value::Array(elements)))
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+                Ok(CloudQueryRow(Value::Null))
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+                Ok(CloudQueryRow(Value::Null))
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+                Ok(CloudQueryRow(Value::Null))
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+                Ok(CloudQueryRow(Value::Null))
+            }
+
+            fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
+                Ok(CloudQueryRow(Value::Null))
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(CloudQueryRow(Value::Null))
+            }
+        }
+
+        deserializer.deserialize_any(RowVisitor)
+    }
+}
+
+struct CloudQueryElement(Value);
+
+impl<'de> serde::Deserialize<'de> for CloudQueryElement {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match deserializer.deserialize_any(ScalarColumnVisitor { keep_objects: true })? {
+            ScalarColumn::Object(columns) => Ok(CloudQueryElement(Value::Object(columns))),
+            ScalarColumn::Scalar(_) | ScalarColumn::Skipped => Ok(CloudQueryElement(Value::Null)),
+        }
+    }
+}
+
+enum ScalarColumn {
+    Scalar(Value),
+    Object(Map<String, Value>),
+    Skipped,
+}
+
+impl<'de> serde::Deserialize<'de> for ScalarColumn {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(ScalarColumnVisitor {
+            keep_objects: false,
+        })
+    }
+}
+
+struct ScalarColumnVisitor {
+    keep_objects: bool,
+}
+
+impl<'de> serde::de::Visitor<'de> for ScalarColumnVisitor {
+    type Value = ScalarColumn;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a CloudQuery column")
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(ScalarColumn::Scalar(Value::Bool(value)))
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(ScalarColumn::Scalar(Value::from(value)))
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(ScalarColumn::Scalar(Value::from(value)))
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Self::Value, E> {
+        Ok(ScalarColumn::Scalar(Value::from(value)))
+    }
+
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(ScalarColumn::Scalar(Value::String(value.to_owned())))
+    }
+
+    fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+        Ok(ScalarColumn::Scalar(Value::String(value)))
+    }
+
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+        Ok(ScalarColumn::Scalar(Value::Null))
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(
+        self,
+        mut sequence: A,
+    ) -> Result<Self::Value, A::Error> {
+        while sequence.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+        Ok(ScalarColumn::Skipped)
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        if self.keep_objects {
+            return scalar_columns(map).map(ScalarColumn::Object);
+        }
+        while map
+            .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+            .is_some()
+        {}
+        Ok(ScalarColumn::Skipped)
+    }
+}
+
+fn scalar_columns<'de, A: serde::de::MapAccess<'de>>(
+    mut map: A,
+) -> Result<Map<String, Value>, A::Error> {
+    let mut columns = Map::new();
+    while let Some(key) = map.next_key::<String>()? {
+        match map.next_value::<ScalarColumn>()? {
+            ScalarColumn::Scalar(value) => {
+                columns.insert(key, value);
+            }
+            ScalarColumn::Object(_) | ScalarColumn::Skipped => {
+                columns.remove(&key);
+            }
+        }
+    }
+    Ok(columns)
 }
 
 fn parse_artifact(
@@ -2508,11 +2872,61 @@ fn cloudquery_resource_type(relative_path: &str) -> Option<&'static str> {
     }
 }
 
+/// Child tables the pinned AWS v9.2.0 plugin syncs beneath the seven selected
+/// tables. Their parent rows carry the inventory; the child rows stay raw
+/// evidence.
+fn is_cloudquery_dependent_table(relative_path: &str) -> bool {
+    matches!(
+        Path::new(relative_path)
+            .file_name()
+            .and_then(|basename| basename.to_str()),
+        Some(
+            "aws_iam_group_policies.json"
+                | "aws_iam_role_policies.json"
+                | "aws_iam_ssh_public_keys.json"
+                | "aws_iam_user_access_keys.json"
+                | "aws_iam_user_attached_policies.json"
+                | "aws_iam_user_groups.json"
+                | "aws_iam_user_policies.json"
+        )
+    )
+}
+
+/// The v9.2.0 aws_iam_credential_reports table has no account_id column; each
+/// report row's ARN names its account, for an IAM user or the root user.
+fn cloudquery_credential_report_account(arn: &str) -> Option<String> {
+    let mut parts = arn.splitn(6, ':');
+    match (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) {
+        (Some("arn"), Some(partition), Some("iam"), Some(""), Some(account), Some(resource))
+            if matches!(
+                partition,
+                "aws" | "aws-cn" | "aws-us-gov" | "aws-iso" | "aws-iso-b"
+            ) && account.len() == 12
+                && account.bytes().all(|byte| byte.is_ascii_digit())
+                && (resource == "root"
+                    || (resource.starts_with("user/") && resource.len() > "user/".len())) =>
+        {
+            Some(account.to_owned())
+        }
+        _ => None,
+    }
+}
+
 fn extract_cloudquery_inventory(
     parsed: &ParsedArtifact,
     artifact: &RawArtifact,
     warnings: &mut Vec<String>,
 ) -> Vec<InventoryRecord> {
+    if is_cloudquery_dependent_table(&artifact.relative_path) {
+        return Vec::new();
+    }
     let Some(resource_type) = cloudquery_resource_type(&artifact.relative_path) else {
         push_warning(
             warnings,
@@ -2531,7 +2945,13 @@ fn extract_cloudquery_inventory(
             );
             continue;
         };
-        let Some(account_id) = inventory_string_any(object, &["account_id"]) else {
+        let account_id = inventory_string_any(object, &["account_id"]).or_else(|| {
+            (resource_type == "aws_iam_credential_reports")
+                .then(|| inventory_string_any(object, &["arn"]))
+                .flatten()
+                .and_then(|arn| cloudquery_credential_report_account(&arn))
+        });
+        let Some(account_id) = account_id else {
             push_warning(
                 warnings,
                 format!(
@@ -8141,6 +8561,101 @@ fn push_priority_warning(warnings: &mut Vec<String>, warning: impl AsRef<str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_lines_keep_short_lines_and_consume_long_ones() {
+        let mut reader = BufReader::with_capacity(3, b"abc\nabcdefgh\n\nxy".as_slice());
+        let mut line = Vec::new();
+        let mut lines = Vec::new();
+        loop {
+            let (consumed, oversized) = read_bounded_line(&mut reader, &mut line, 5).unwrap();
+            if consumed == 0 {
+                break;
+            }
+            lines.push((consumed, oversized, line.clone()));
+        }
+        assert_eq!(
+            lines,
+            vec![
+                (4, false, b"abc\n".to_vec()),
+                (9, true, Vec::new()),
+                (1, false, b"\n".to_vec()),
+                (2, false, b"xy".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn cloudquery_rows_keep_only_top_level_scalar_columns() {
+        let row = |text: &str| serde_json::from_str::<CloudQueryRow>(text).unwrap().0;
+        assert_eq!(
+            row(
+                r#"{"arn":"a","count":2,"active":true,"none":null,"tags":{"k":"v"},"versions":[{"Document":"d"}],"name":"n","name":{"nested":1}}"#
+            ),
+            serde_json::json!({"arn":"a","count":2,"active":true,"none":null})
+        );
+        assert_eq!(
+            row(r#"[{"arn":"a","tags":{}},5,[1]]"#),
+            serde_json::json!([{"arn":"a"}, null, null])
+        );
+        assert_eq!(row(r#""text""#), Value::Null);
+        assert!(serde_json::from_str::<CloudQueryRow>(r#"{"arn":"a""#).is_err());
+    }
+
+    #[test]
+    fn cloudquery_rows_verify_the_recorded_length_and_hash() {
+        let root = tempfile::tempdir().unwrap();
+        let bytes = b"{\"account_id\":\"123456789012\"}\n{\"account_id\":\"123456789012\"}\n";
+        std::fs::write(root.path().join("aws_iam_users.json"), bytes).unwrap();
+        let artifact = |byte_length: u64, sha256: String| RawArtifact {
+            id: "artifact-cloudquery".into(),
+            case_id: "case-1".into(),
+            run_id: "run-1".into(),
+            engine_run_id: "engine-run-1".into(),
+            relative_path: "aws_iam_users.json".into(),
+            media_type: "application/json".into(),
+            sha256,
+            byte_length,
+            created_at: chrono::Utc::now(),
+            contains_sensitive_data: false,
+        };
+        let digest = hex::encode(Sha256::digest(bytes));
+
+        let mut warnings = Vec::new();
+        let parsed = read_cloudquery_rows(
+            root.path(),
+            &artifact(bytes.len() as u64, digest.clone()),
+            &mut warnings,
+        );
+        assert!(
+            matches!(parsed, Some(ParsedArtifact::JsonLines(ref rows)) if rows.len() == 2),
+            "{warnings:?}"
+        );
+        assert!(warnings.is_empty());
+
+        for (byte_length, sha256, expected) in [
+            (
+                bytes.len() as u64,
+                "0".repeat(64),
+                "hash did not match its recorded evidence metadata",
+            ),
+            (
+                bytes.len() as u64 - 1,
+                digest,
+                "length did not match its recorded evidence metadata",
+            ),
+        ] {
+            let mut warnings = Vec::new();
+            assert!(
+                read_cloudquery_rows(root.path(), &artifact(byte_length, sha256), &mut warnings)
+                    .is_none()
+            );
+            assert!(
+                warnings.iter().any(|warning| warning.contains(expected)),
+                "{warnings:?}"
+            );
+        }
+    }
 
     #[test]
     fn zap_plain_text_separates_boundaries_and_decodes_entities() {
