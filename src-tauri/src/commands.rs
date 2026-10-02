@@ -13,7 +13,7 @@ use crate::case_service::{
     PersistedPreDispatchTaskOutcome, PersistedPreDispatchTransition,
     PersistedScanPreflightFailureReason, PlannedEngineExecution, ScanPlan, ScanPlanRequest,
     ScanReadiness, ScanReadinessBlocker, ScanReadinessNextStep, ScanReadinessState,
-    ScopeApprovalRequest, SourceMutation,
+    ScopeApprovalRequest,
 };
 use crate::connectors::{
     SNAPSHOT_ARTIFACT_METADATA_KEY, SnapshotArtifactReference, SnapshotConnectorRegistry,
@@ -1848,62 +1848,8 @@ pub fn poll_provider_authorization(
             retry_after_seconds,
         }),
         ProviderSessionPoll::Complete(request) => {
-            let request = *request;
             let case_id = request.case_id.clone();
-            let source_id = request.source_id.clone();
-            let verification = request.verified_authorization.verification().clone();
-            let case = state.case_service().show_case(&case_id)?;
-            let source = case
-                .data_sources
-                .iter()
-                .find(|source| source.id == source_id)
-                .cloned()
-                .ok_or_else(|| {
-                    AppError::InvalidRequest(
-                        "provider source was removed during authorization".into(),
-                    )
-                })?;
-            if source.kind != verification.profile.source_kind() || !source.read_only {
-                return Err(AppError::NotAuthorized(
-                    "verified provider profile no longer matches the bound source".into(),
-                ));
-            }
-            let installed = state.source_authorizations.install_now(request)?;
-            let mut metadata = source.metadata;
-            metadata.insert(
-                "provider_profile".into(),
-                serde_json::to_value(verification.profile).map_err(|_| {
-                    AppError::Internal("provider profile could not be encoded".into())
-                })?,
-            );
-            metadata.insert(
-                "provider_identity".into(),
-                serde_json::Value::String(verification.provider_identity),
-            );
-            metadata.insert(
-                PROVIDER_RESOURCE_SCOPE_METADATA_KEY.into(),
-                serde_json::Value::String(verification.resource_scope),
-            );
-            metadata.insert(
-                "verification_evidence_sha256".into(),
-                serde_json::Value::String(verification.evidence_sha256),
-            );
-            if let Err(error) = state.case_service().upsert_source(
-                &case_id,
-                SourceMutation {
-                    id: Some(source_id.clone()),
-                    kind: source.kind,
-                    label: source.label,
-                    status: SourceConnectionStatus::Connected,
-                    read_only: true,
-                    metadata,
-                },
-            ) {
-                let _ = state
-                    .source_authorizations
-                    .revoke_source(&case_id, &source_id, Utc::now());
-                return Err(error);
-            }
+            let installed = install_verified_provider_authorization(&state, *request)?;
             let case = state.case_service().show_case(&case_id)?;
             emit(&app, COVERAGE_CHANGED_EVENT, &case)?;
             Ok(ProviderAuthorizationProgress::Installed {
@@ -2053,7 +1999,8 @@ pub async fn execute_provider_bootstrap(
     }
     let mut allowed_engine_ids = input.allowed_engine_ids;
     allowed_engine_ids.insert(crate::source_authorization::PROVIDER_DISCOVERY_ENGINE_ID.into());
-    let installed = state.source_authorizations.install_now(
+    let installed = install_verified_provider_authorization(
+        &state,
         crate::source_authorization::SourceAuthorizationRequest {
             case_id: case_id.clone(),
             source_id: input.source_id.clone(),
@@ -2062,12 +2009,6 @@ pub async fn execute_provider_bootstrap(
             verified_authorization: authorization,
         },
     )?;
-    if let Err(error) = connect_verified_provider_source(&state, &case_id, source, &verification) {
-        let _ = state
-            .source_authorizations
-            .revoke_source(&case_id, &input.source_id, Utc::now());
-        return Err(error);
-    }
     let case = state.case_service().show_case(&case_id)?;
     emit(&app, COVERAGE_CHANGED_EVENT, &case)?;
     Ok(ProviderBootstrapInstalled {
@@ -2123,41 +2064,41 @@ pub fn list_provider_bootstrap_cleanup(
     list_bootstrap_cleanup_obligations(&cleanup_root, &case_id)
 }
 
-fn connect_verified_provider_source(
+/// Installs a verified provider sign-in for its bound source and marks the
+/// source connected. If the source cannot record the connection, the
+/// capability installed a moment earlier is revoked.
+fn install_verified_provider_authorization(
     state: &AppState,
-    case_id: &str,
-    source: DataSource,
-    verification: &crate::source_authorization::ProviderVerificationState,
-) -> AppResult<DataSource> {
-    let mut metadata = source.metadata;
-    metadata.insert(
-        "provider_profile".into(),
-        serde_json::to_value(verification.profile)
-            .map_err(|_| AppError::Internal("provider profile could not be encoded".into()))?,
-    );
-    metadata.insert(
-        "provider_identity".into(),
-        serde_json::Value::String(verification.provider_identity.clone()),
-    );
-    metadata.insert(
-        PROVIDER_RESOURCE_SCOPE_METADATA_KEY.into(),
-        serde_json::Value::String(verification.resource_scope.clone()),
-    );
-    metadata.insert(
-        "verification_evidence_sha256".into(),
-        serde_json::Value::String(verification.evidence_sha256.clone()),
-    );
-    state.case_service().upsert_source(
-        case_id,
-        SourceMutation {
-            id: Some(source.id),
-            kind: source.kind,
-            label: source.label,
-            status: SourceConnectionStatus::Connected,
-            read_only: true,
-            metadata,
-        },
-    )
+    request: crate::source_authorization::SourceAuthorizationRequest,
+) -> AppResult<InstalledSourceAuthorization> {
+    let case_id = request.case_id.clone();
+    let source_id = request.source_id.clone();
+    let verification = request.verified_authorization.verification().clone();
+    let case = state.case_service().show_case(&case_id)?;
+    let source = case
+        .data_sources
+        .iter()
+        .find(|source| source.id == source_id)
+        .ok_or_else(|| {
+            AppError::InvalidRequest("provider source was removed during authorization".into())
+        })?;
+    if source.kind != verification.profile.source_kind() || !source.read_only {
+        return Err(AppError::NotAuthorized(
+            "verified provider profile no longer matches the bound source".into(),
+        ));
+    }
+    let installed = state.source_authorizations.install_now(request)?;
+    if let Err(error) =
+        state
+            .case_service()
+            .connect_verified_provider_source(&case_id, &source_id, &verification)
+    {
+        let _ = state
+            .source_authorizations
+            .revoke_source(&case_id, &source_id, Utc::now());
+        return Err(error);
+    }
+    Ok(installed)
 }
 
 fn validate_operation_id(value: &str) -> AppResult<()> {
@@ -8658,7 +8599,10 @@ mod tests {
                 issued_at,
             )
             .unwrap();
-        connect_verified_provider_source(state, case_id, source.clone(), &verification).unwrap();
+        state
+            .case_service()
+            .connect_verified_provider_source(case_id, &source.id, &verification)
+            .unwrap();
         (source.id, asset_id)
     }
 
@@ -8677,6 +8621,77 @@ mod tests {
             max_checkouts,
         );
         (directory, state, case.id, source_id)
+    }
+
+    #[test]
+    fn signing_in_again_after_the_capability_expired_reconnects_the_source() {
+        let (_directory, state, case_id, source_id) = ready_aws_state(Utc::now(), 4);
+        state
+            .case_service()
+            .record_live_provider_discovery_outcome(
+                &case_id,
+                &source_id,
+                LiveProviderDiscoveryOutcome {
+                    status: SourceConnectionStatus::NeedsReauthorization,
+                    code: "provider_discovery_authorization_missing".into(),
+                    message: "reconnect this source before live discovery".into(),
+                    complete: false,
+                    successful_pages: 0,
+                    record_count: 0,
+                    notices: vec![],
+                    observed_at: Utc::now(),
+                },
+            )
+            .unwrap();
+
+        let installed = install_verified_provider_authorization(
+            &state,
+            SourceAuthorizationRequest {
+                case_id: case_id.clone(),
+                source_id: source_id.clone(),
+                allowed_engine_ids: BTreeSet::from([
+                    "steampipe".into(),
+                    crate::source_authorization::PROVIDER_DISCOVERY_ENGINE_ID.into(),
+                ]),
+                max_checkouts: 4,
+                verified_authorization: verified_aws_authorization_for_account(
+                    Utc::now(),
+                    "111122223333",
+                    "b",
+                ),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            installed.provider_verification.evidence_sha256,
+            "b".repeat(64)
+        );
+        let source = state
+            .case_service()
+            .show_case(&case_id)
+            .unwrap()
+            .data_sources
+            .into_iter()
+            .find(|source| source.id == source_id)
+            .unwrap();
+        assert_eq!(source.status, SourceConnectionStatus::Connected);
+        assert_eq!(
+            source.metadata["verification_evidence_sha256"],
+            serde_json::Value::String("b".repeat(64))
+        );
+        assert!(
+            source
+                .metadata
+                .contains_key("ai_security_scanner.live_discovery_outcome")
+        );
+        assert!(
+            state
+                .source_authorizations
+                .status(&case_id, &source_id, Utc::now())
+                .unwrap()
+                .is_some()
+        );
     }
 
     fn completed_baseline(state: &AppState, case_id: &str, engine_id: &str) -> Id {

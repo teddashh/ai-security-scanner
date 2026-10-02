@@ -82,7 +82,9 @@ use crate::naabu_work_plan::{
 };
 use crate::orchestrator::{ExecutionCheckpoint, ExecutionReport, ExecutionStage};
 use crate::registry::EngineRegistry;
-use crate::source_authorization::PROVIDER_RESOURCE_SCOPE_METADATA_KEY;
+use crate::source_authorization::{
+    PROVIDER_RESOURCE_SCOPE_METADATA_KEY, ProviderVerificationState,
+};
 use crate::storage::Storage;
 use crate::workspace_snapshot::{
     WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY, WORKSPACE_SNAPSHOT_REFERENCE_SCHEMA,
@@ -1319,6 +1321,67 @@ impl<'a> CaseService<'a> {
         refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
         self.storage.save_case(&mut case, "source.upserted")?;
         Ok(result)
+    }
+
+    /// Marks one read-only provider source connected after the backend verified
+    /// a provider sign-in. Only the verified provider coordinates change: the
+    /// raw pages and discovery outcome the backend attached earlier stay, so
+    /// signing in again after the capability expires keeps that evidence.
+    /// Frontend edits still go through `upsert_source`, which refuses the
+    /// backend-owned keys.
+    pub fn connect_verified_provider_source(
+        &self,
+        case_id: &str,
+        source_id: &str,
+        verification: &ProviderVerificationState,
+    ) -> AppResult<DataSource> {
+        let coordinates = serde_json::Map::from_iter([
+            (
+                "provider_profile".to_owned(),
+                serde_json::to_value(verification.profile).map_err(|_| {
+                    AppError::Internal("provider profile could not be encoded".into())
+                })?,
+            ),
+            (
+                "provider_identity".to_owned(),
+                Value::String(verification.provider_identity.clone()),
+            ),
+            (
+                PROVIDER_RESOURCE_SCOPE_METADATA_KEY.to_owned(),
+                Value::String(verification.resource_scope.clone()),
+            ),
+            (
+                "verification_evidence_sha256".to_owned(),
+                Value::String(verification.evidence_sha256.clone()),
+            ),
+        ]);
+        validate_non_secret_value("metadata", &Value::Object(coordinates.clone()))?;
+        let mut case = self.mutable_case(case_id, "connect a provider source")?;
+        ensure_no_active_scan(&case, "connect a provider source")?;
+        let now = Utc::now();
+        let source = case
+            .data_sources
+            .iter_mut()
+            .find(|source| source.id == source_id)
+            .ok_or_else(|| AppError::InvalidRequest("provider source does not exist".into()))?;
+        if source.kind != verification.profile.source_kind() || !source.read_only {
+            return Err(AppError::NotAuthorized(
+                "verified provider profile no longer matches the bound source".into(),
+            ));
+        }
+        source.metadata.extend(coordinates);
+        source.status = SourceConnectionStatus::Connected;
+        if source.connected_at.is_none() {
+            source.connected_at = Some(now);
+        }
+        let connected = source.clone();
+
+        case.status = CaseStatus::Discovering;
+        case.touch();
+        refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
+        self.storage
+            .save_case(&mut case, "source.provider_connected")?;
+        Ok(connected)
     }
 
     /// Atomically binds a backend-ingested immutable snapshot to one planned
@@ -41604,6 +41667,151 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, AppError::InvalidRequest(_)));
         assert!(service.show_case(&case.id).unwrap().data_sources.is_empty());
+    }
+
+    #[test]
+    fn signing_in_again_after_live_discovery_keeps_the_preserved_provider_evidence() {
+        use crate::connectors::{LIVE_PROVIDER_ARTIFACT_METADATA_KEY, LiveProviderArtifactPage};
+
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let service = fixture.service();
+        let source = service
+            .upsert_source(
+                &case.id,
+                SourceMutation {
+                    id: None,
+                    kind: SourceKind::AwsOrganization,
+                    label: "AWS account 111122223333".into(),
+                    status: SourceConnectionStatus::NotConnected,
+                    read_only: true,
+                    metadata: BTreeMap::new(),
+                },
+            )
+            .unwrap();
+        let verification = |evidence: &str| ProviderVerificationState {
+            schema_version: "1.0.0".into(),
+            provider: crate::bootstrap::BootstrapProvider::Aws,
+            profile:
+                crate::source_authorization::ProviderSourceProfile::AwsOrganizationReadOnlySession,
+            authentication_method: "fixture_short_lived_session".into(),
+            provider_identity: "arn:aws:sts::111122223333:assumed-role/SecurityAudit/session"
+                .into(),
+            subject_id: "fixture-subject".into(),
+            resource_scope: "aws-account:111122223333".into(),
+            verified_at: Utc::now(),
+            credential_expires_at: Utc::now() + Duration::minutes(60),
+            identity_endpoint: "https://sts.amazonaws.com/".into(),
+            permission_endpoints: vec!["https://iam.amazonaws.com/".into()],
+            required_permissions_verified: vec!["inventory.read".into()],
+            prohibited_permissions_denied: vec!["inventory.write".into()],
+            provider_request_ids: vec!["fixture-request".into()],
+            evidence_sha256: evidence.repeat(64),
+        };
+        service
+            .connect_verified_provider_source(&case.id, &source.id, &verification("a"))
+            .unwrap();
+
+        // The first sign-in captured inventory, then the capability expired
+        // before the next discovery.
+        let observed_at = Utc::now();
+        service
+            .attach_live_provider_capture(
+                &case.id,
+                &source.id,
+                LiveProviderArtifactSet {
+                    schema_version: LIVE_PROVIDER_ARTIFACT_SET_SCHEMA.into(),
+                    capture_id: "capture-1".into(),
+                    profile: "aws-organizations-list-accounts".into(),
+                    operation: "organizations:ListAccounts".into(),
+                    observed_at,
+                    complete: true,
+                    pages: vec![LiveProviderArtifactPage {
+                        sequence: 1,
+                        operation: "organizations:ListAccounts".into(),
+                        http_status: 200,
+                        parser_eligible: true,
+                        artifact: SnapshotArtifactReference::new(
+                            "page-1.json",
+                            "page-1",
+                            "aws-organizations-list-accounts",
+                            observed_at,
+                            Some("c".repeat(64)),
+                        ),
+                    }],
+                },
+            )
+            .unwrap();
+        service
+            .record_live_provider_discovery_outcome(
+                &case.id,
+                &source.id,
+                LiveProviderDiscoveryOutcome {
+                    status: SourceConnectionStatus::NeedsReauthorization,
+                    code: "provider_discovery_authorization_missing".into(),
+                    message: "reconnect this source before live discovery".into(),
+                    complete: false,
+                    successful_pages: 0,
+                    record_count: 0,
+                    notices: vec![],
+                    observed_at: Utc::now(),
+                },
+            )
+            .unwrap();
+        let expired = service
+            .show_case(&case.id)
+            .unwrap()
+            .data_sources
+            .into_iter()
+            .find(|candidate| candidate.id == source.id)
+            .unwrap();
+        assert_eq!(expired.status, SourceConnectionStatus::NeedsReauthorization);
+
+        // Frontend edits still cannot carry the backend-owned keys.
+        let error = service
+            .upsert_source(
+                &case.id,
+                SourceMutation {
+                    id: Some(source.id.clone()),
+                    kind: SourceKind::AwsOrganization,
+                    label: expired.label.clone(),
+                    status: SourceConnectionStatus::Connected,
+                    read_only: true,
+                    metadata: expired.metadata.clone(),
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, AppError::InvalidRequest(_)), "{error}");
+
+        let reconnected = service
+            .connect_verified_provider_source(&case.id, &source.id, &verification("b"))
+            .unwrap();
+        assert_eq!(reconnected.status, SourceConnectionStatus::Connected);
+        assert_eq!(
+            reconnected.metadata["verification_evidence_sha256"],
+            Value::String("b".repeat(64))
+        );
+        for key in [
+            LIVE_PROVIDER_ARTIFACT_METADATA_KEY,
+            "ai_security_scanner.live_discovery_capture_phase",
+            "ai_security_scanner.live_discovery_outcome",
+        ] {
+            assert!(reconnected.metadata.contains_key(key), "{key}");
+            assert_eq!(
+                reconnected.metadata.get(key),
+                expired.metadata.get(key),
+                "{key}"
+            );
+        }
+        let stored = service
+            .show_case(&case.id)
+            .unwrap()
+            .data_sources
+            .into_iter()
+            .find(|candidate| candidate.id == source.id)
+            .unwrap();
+        assert_eq!(stored.status, SourceConnectionStatus::Connected);
+        assert_eq!(stored.metadata, reconnected.metadata);
     }
 
     #[test]
