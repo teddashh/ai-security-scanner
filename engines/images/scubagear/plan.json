@@ -16,22 +16,22 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scubagear",
-    "tag": "1.8.0-6",
-    "digest": "sha256:5fcb37f89efe4b190f8c8aaa7a034735fcdd724a7855c98e3a262072da1d4159"
+    "tag": "1.8.0-7",
+    "digest": "sha256:da6ea75956106793f7adfb4ed343a044bfe1b9d6f8f688c390673c948b0afb30"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/34051072485",
-    "source_revision": "f28df23cf8c430466363ea0d78f09b23e84e3df3",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/37032232091",
+    "source_revision": "9f6a976552b044787025f0f843e231a13c024dcf",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:b1818d7eb5c1daf10fa5e329c959d5f8874df80e29b719049b9ee19043e3c9da",
-      "linux/arm64": "sha256:bff6f463d34f9f564857912fa3dc97e1642c4cf5567c3e22680ac3e575fbee40"
+      "linux/amd64": "sha256:d248986776956db4add4aa2913502a3f09f8feff2be3405a4fb9278dcec50e2d",
+      "linux/arm64": "sha256:fc60f09830222c6e05aed42a3b00eaa67d94e5de927cf80c8084d08f14a90201"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "scubagear-image-evidence-34051072485-1"
+    "evidence_artifact": "scubagear-image-evidence-37032232091-1"
   },
   "build_recipe": {
     "source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
@@ -95,17 +95,17 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/scubagear/Dockerfile",
-    "sha256": "sha256:9cc786a730b4721d17e1613a3a097776feeab3d800a11a47c8a7a700178b2903",
+    "sha256": "sha256:88423a864bf049f81a3075cdc448d6043ab5dc8340ac15dee4cb41a270046c6d",
     "reason": null
   },
   "wrapper": {
     "required": true,
     "strategy": "Validate one immutable Microsoft 365 tenant scope and one short-lived protected Graph token; retain source criticality, map only reviewed Shall/Should values, and leave every other rating unknown; then invoke the fixed AAD-only ScubaGear script without a shell.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-m365-launcher",
-    "launcher_sha256": "sha256:9db814b18999c58a9ebe2c62aa5e7fc33606e2f96547cb2141b4d1cbb76b9222",
+    "launcher_sha256": "sha256:be0775674894fbec7e92f9de68a114c2b2259c47e17efd6fab386c2371b823ae",
     "script": {
       "path": "engines/images/scubagear/run-scubagear.ps1",
-      "sha256": "sha256:98d8d1d3f6db2030b9ca8bbd83a32980106bce596d08e74ab0bc078dd7f905a4"
+      "sha256": "sha256:80b30d3b466d99e4bbc519e21244883b53a7ad3a0d2c8c3b75911d5eb30477d2"
     }
   },
   "managed_runtime": {

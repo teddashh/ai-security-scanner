@@ -14,8 +14,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudquery",
-      "tag": "2.0.31-aws9.2.0-4",
-      "digest": "sha256:76623585c6ef9668b5b327f51dfea93051511fc3a98097760485619931ced9c4",
+      "tag": "2.0.31-aws9.2.0-5",
+      "digest": "sha256:7bfe433f9d0ccdbe2adfeac4853130fb70d22e38713d26964288961a4a15cf8b",
       "signature_identity": null
     },
     "source_revision": "e27e4ab61ad85479a5d53dae9b08440bc63e72b3",
@@ -151,8 +151,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-steampipe",
-      "tag": "2.4.5-4",
-      "digest": "sha256:e851c557a6f873cdaf756daeddf9aba02ccaa6e3df38da7e9ac93133529740fd",
+      "tag": "2.4.5-5",
+      "digest": "sha256:f8600409a283b6e3ebe140dfb4ff05e5d035e8a69aba649529ea048af99f1366",
       "signature_identity": null
     },
     "source_revision": "71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
@@ -286,8 +286,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-prowler",
-      "tag": "5.39.1-5",
-      "digest": "sha256:59cd4dd393c152fea96ffc9c84b66af29ebf42e5dd4ffa8df45be4eebd454f4e",
+      "tag": "5.39.1-6",
+      "digest": "sha256:ce31420dd566cd5a18a725bad8e192f4544e3626e24dea7069aa1d863c1a70cc",
       "signature_identity": null
     },
     "source_revision": "40ecbd035e5541bf099917c5033cceb8959c4737",
@@ -461,8 +461,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scoutsuite",
-      "tag": "5.14.0-4",
-      "digest": "sha256:a6341e57a40ceda93a9542a71151e6a5b08a4e5029e127f3cbc327701d47e0a3",
+      "tag": "5.14.0-5",
+      "digest": "sha256:7ceebf10981b28ddc4b204c06112949ad5d6ab2988731e65f638d63dac0de5e2",
       "signature_identity": null
     },
     "source_revision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
@@ -597,8 +597,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudsplaining",
-      "tag": "0.9.1-4",
-      "digest": "sha256:fda95de48a49a71ada358161da455119b9cadd33f65ea81a508f46a9cd4ecea9",
+      "tag": "0.9.1-5",
+      "digest": "sha256:81114bb260de3b9ae5240578c5b2a8573ba7e785df56cb626c917b4725d3d512",
       "signature_identity": null
     },
     "source_revision": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
@@ -731,8 +731,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scubagear",
-      "tag": "1.8.0-6",
-      "digest": "sha256:5fcb37f89efe4b190f8c8aaa7a034735fcdd724a7855c98e3a262072da1d4159",
+      "tag": "1.8.0-7",
+      "digest": "sha256:da6ea75956106793f7adfb4ed343a044bfe1b9d6f8f688c390673c948b0afb30",
       "signature_identity": null
     },
     "source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
@@ -782,7 +782,7 @@
         "source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
         "source_ref": "main",
         "acquisition_source": "https://github.com/cisagov/ScubaGear/commit/4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
-        "artifact_source_revision": "f28df23cf8c430466363ea0d78f09b23e84e3df3",
+        "artifact_source_revision": "9f6a976552b044787025f0f843e231a13c024dcf",
         "source_association": "attested_match"
       },
       "rules": {
@@ -865,8 +865,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-maester",
-      "tag": "2.0.0-7",
-      "digest": "sha256:3853d73e3099f5eeb1efa30e7a4734b8b3def881ff60c2f948196652a91e4721",
+      "tag": "2.0.0-8",
+      "digest": "sha256:4ac9caf846c9ed20604e6ef700416f88ac46ae5319f84dcf4a059b9058d9fb21",
       "signature_identity": null
     },
     "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
@@ -917,7 +917,7 @@
         "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
         "source_ref": "main",
         "acquisition_source": "https://github.com/maester365/maester/commit/6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
-        "artifact_source_revision": "9ee5257d269b2aaf9dc28d1eed470ed9e9c933f3",
+        "artifact_source_revision": "9f6a976552b044787025f0f843e231a13c024dcf",
         "source_association": "attested_match"
       },
       "rules": {

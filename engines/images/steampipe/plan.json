@@ -15,22 +15,22 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-steampipe",
-    "tag": "2.4.5-4",
-    "digest": "sha256:e851c557a6f873cdaf756daeddf9aba02ccaa6e3df38da7e9ac93133529740fd"
+    "tag": "2.4.5-5",
+    "digest": "sha256:f8600409a283b6e3ebe140dfb4ff05e5d035e8a69aba649529ea048af99f1366"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32811911860",
-    "source_revision": "f611848a872bb41865ff00085ab3bd200e53deeb",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/37032232080",
+    "source_revision": "9f6a976552b044787025f0f843e231a13c024dcf",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:2ec8e20e4faa7be9711c676d5cb4e8bdb567fbfabf22165a1460eebf7f625629",
-      "linux/arm64": "sha256:7e8edd7bfdcf3942b2aae2c0eb3f4f28efb97a3fc4d9a1f4fe52df0089573611"
+      "linux/amd64": "sha256:bd9abe8770dfe9aafd0cc32722f4ca1baf07c25d2c3bc0faa158b34d83fffb41",
+      "linux/arm64": "sha256:4b6bfc448c23ff3b49c047ad7d3a3d6b6faccee5380acae60e0cfffe1b88c808"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "steampipe-image-evidence-32811911860-1"
+    "evidence_artifact": "steampipe-image-evidence-37032232080-1"
   },
   "build_recipe": {
     "source_revision": "71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
@@ -75,13 +75,13 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/steampipe/Dockerfile",
-    "sha256": "sha256:d6ea6882a25a8f8b875fb025b8358321a70981138934383a44777d97d12b6d3e"
+    "sha256": "sha256:75614eafcd146de8bc8f1f6e326cf29761017e89eeb38c0f2ddf14740342910d"
   },
   "wrapper": {
     "required": true,
     "strategy": "Copy the preseeded executable closure to one case-owned transient directory, write a fixed AWS IAM query/config, capture bounded JSON without a shell, and remove all runtime database state on exit.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:d0956c059ba8ffe5b2fcebd0debf06d3ea99d538b27be43c6666bc0c02224d30"
+    "launcher_sha256": "sha256:481e3ab79be75e0118e34edfc40601e9dc9b881a92e65c50d7f518ee108bec26"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",
