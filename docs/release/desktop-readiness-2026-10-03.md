@@ -30,6 +30,8 @@ The shared adapter contract advances from `0.2.2` to `0.2.3`, because unchanged 
 
 Local verification passed on 2026-10-03: 2,072 Rust tests (including real-fixture normalization, the mixed all-engine report in both locales, persistence and the typed node lifecycle), 798 frontend tests with six explicit skips, 515 rendered component tests, 89 CI contracts and 202 release contracts. Rust formatting, all-target CLI Clippy, TypeScript/production build, engine catalog/input validation, and release-policy validation also passed. These are development checks, not installation acceptance for a new desktop candidate.
 
+The coverage implementation is [source commit f0126c0](https://github.com/teddashh/ai-security-scanner/commit/f0126c0791337d258f10b0d68367b78a3660e0fa). Catalog adapter provenance binds to that commit; engine image coordinates and publication-source revisions remain unchanged.
+
 ## Remaining delivery work
 
 1. Record the owner's next version and channel, update the coordinated desktop version files, and finish the release notes. The already-published `v0.3.0` tag is immutable and cannot identify new installer bytes.
