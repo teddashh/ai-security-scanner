@@ -336,3 +336,47 @@ DOCKER_CONFIG="$anonymous_docker" docker buildx stop "$arm_builder"
 ```
 
 If reusing an existing task builder, inspect its pinned image and resource limits instead of recreating it blindly. Keep build logs, source inspection, native JSON, normalization and the recorded execution architecture together.
+
+## Fresh native amd64 and ARM64 builds (2026-10-03)
+
+Publication preparation is isolated on the
+[semgrep-release-20261003 branch](https://github.com/teddashh/ai-security-scanner/tree/semgrep-release-20261003).
+[Run 37127986459](https://github.com/teddashh/ai-security-scanner/actions/runs/37127986459)
+built fresh complete images on native amd64 and ARM64 runners from
+`6fa7709c9617c05cc87d7c0096d7ee84594d829e`. Both jobs succeeded. They checked
+the production-version label, attached source/licenses/rebuild inputs, four
+complete fixture passes and four actual launcher refusal controls. The
+publication job was skipped; no image, rule cache or source archive was uploaded.
+
+Both architectures produced product/upstream/combined/managed counts of
+**10/12/22/22**, empty errors and the exact complete-result multiset union.
+Changed configs, changed provenance, an extra config and a writable workspace
+each exited 126 before output. The downloaded native result multisets also
+match each other and the separately verified local amd64 results.
+
+The attached source is identical on both architectures: 33,033,850 bytes,
+SHA-256 `3282013b050f79b3f417f488433a050fda219da99edc66c1a6520414842156cd`.
+It retains the 1,477 selected originals and exact notices/rebuild inputs without
+the excluded proprietary file or unfiltered rules archive. The real shared
+normalizer turned the fresh ARM64 artifact into 22 findings without warnings,
+preserving native IDs, locations, severity mapping, bounded titles and raw hashes.
+
+| Native CI architecture | Installed-filesystem receipt SHA-256 | Verification JSON SHA-256 |
+| --- | --- | --- |
+| amd64 | `8bc02b97a361030ef8141165c90aa636922e18f7641d9819486dfb276e5d076b` | `9b83d3e6395474a7975aba6252f1930ee39ff7a121f366fcc9d35f210db32ed1` |
+| arm64 | `cdf2e196bf1f3e7983ade54ebdcb60933f8ff7cde76585f3876661ca35674c62` | `a3fbff4930e83db58b4097f6509194e0385fc049b93f2d2296e0e712924ba9b1` |
+
+These are verification receipts, not public release digests. The separately
+built local amd64 filesystem differs from CI amd64 despite equal source
+attachments and scan results. Do not infer byte-identical builds from pinned
+source alone. The prepared publication path compares each candidate platform's
+filesystem against that run's actual native verification before signing and
+immutable-tag promotion.
+
+The preparation branch also limits automatic publication to explicitly new
+tags, isolates native Semgrep failures from selected sibling publications and
+extends downloadable-artifact checks to the native receipts and complete result
+union. Thirteen Python tests, 91 CI contracts, 19 publication-artifact verifier
+tests and all 200 release contracts passed. Current main image pins and published
+receipts remain unchanged; applicability of the legacy Commons Clause to the
+owner's business model still needs an answer before publication.
