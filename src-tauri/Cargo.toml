@@ -1,7 +1,7 @@
 [package]
 name = "ai-security-scanner"
-version = "0.3.0"
-description = "Local-first, repeatable security assessment casework"
+version = "0.3.1"
+description = "Guided security scans and one clear report"
 authors = ["Ted Huang and ai-security-scanner contributors"]
 edition = "2024"
 license = "Apache-2.0"

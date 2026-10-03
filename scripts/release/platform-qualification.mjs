@@ -50,6 +50,9 @@ const MACOS_HOSTED_LIMITATION = "github_hosted_macos_nested_virtualization_unsup
 const MAX_QUALIFICATION_DOCUMENT_BYTES = 1024 * 1024;
 const MAX_CONTAINER_REPORT_BYTES = 1024 * 1024;
 const GATEWAY_IMAGE_REPOSITORY = "ghcr.io/teddashh/ai-security-scanner-egress-gateway";
+// Keep gateway publication provenance aligned with gateway_release.rs.
+// A new desktop version does not require republishing unchanged gateway bytes.
+const GATEWAY_PUBLICATION_TAG = "0.3.0-1";
 
 const STATUS_KEYS = [
   "architecture",
@@ -261,7 +264,7 @@ function gatewayImageFromReleaseManifest(manifest, version) {
     "managed egress gateway manifest repository is not release-owned",
   );
   assert(
-    manifest.image.publication_tag === `${version}-1`,
+    manifest.image.publication_tag === GATEWAY_PUBLICATION_TAG,
     "managed egress gateway publication tag is not release-fixed",
   );
   assert(

@@ -54,9 +54,9 @@ fn parse_managed_egress_gateway_manifest(bytes: &[u8]) -> AppResult<GatewayConta
     if manifest.image.repository != GATEWAY_IMAGE_REPOSITORY {
         return Err(invalid_manifest("image repository is not release-owned"));
     }
-    if manifest.image.publication_tag != GATEWAY_PUBLICATION_TAG
-        || manifest.image.publication_tag != format!("{}-1", env!("CARGO_PKG_VERSION"))
-    {
+    // A desktop release may reuse an already published gateway image.
+    // Keep its provenance pinned independently of the application version.
+    if manifest.image.publication_tag != GATEWAY_PUBLICATION_TAG {
         return Err(invalid_manifest("publication tag is not release-fixed"));
     }
     if !is_lower_hex(&manifest.image.source_revision, 40) {

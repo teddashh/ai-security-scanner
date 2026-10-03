@@ -1,6 +1,6 @@
 # Desktop release readiness — 2026-10-03
 
-The owner requested continued release work and a concrete readiness assessment. The latest changes are ready for candidate preparation after the coverage fixes pass their regression checks. A new desktop installer containing these changes has not yet been built or published. The next immutable version and channel await the owner's selection; `v0.3.1` is the proposed version, not an assigned release.
+On 2026-10-03 the owner accepted **v0.3.1 on the stable channel** and authorized installer preparation, qualification, publication, and English/Traditional Chinese marketing updates. The coordinated version files and bilingual release notes are being prepared. The current published installer remains v0.3.0 until the frozen v0.3.1 candidate is verified and promoted.
 
 ## Published desktop baseline
 
@@ -32,9 +32,13 @@ Local verification passed on 2026-10-03: 2,072 Rust tests (including real-fixtur
 
 The coverage implementation is [source commit f0126c0](https://github.com/teddashh/ai-security-scanner/commit/f0126c0791337d258f10b0d68367b78a3660e0fa). Catalog adapter provenance binds to that commit; engine image coordinates and publication-source revisions remain unchanged.
 
+## v0.3.1 preparation
+
+The application, lockfiles, Tauri bundle and managed-gateway product identity are coordinated at 0.3.1 stable. The gateway image remains the published `0.3.0-1` digest and source revision. Runtime and qualification validation retain the exact gateway publication pin independently of the desktop version; a desktop patch does not rebuild unchanged gateway bytes. A future gateway publication must update both `src-tauri/src/gateway_release.rs` and `scripts/release/platform-qualification.mjs` alongside its manifest.
+
 ## Remaining delivery work
 
-1. Record the owner's next version and channel, update the coordinated desktop version files, and finish the release notes. The already-published `v0.3.0` tag is immutable and cannot identify new installer bytes.
+1. Owner decision recorded: v0.3.1, stable. Update the coordinated desktop version files and finish the bilingual release notes. The already-published `v0.3.0` tag is immutable and cannot identify new installer bytes.
 2. Finish changed-boundary validation, push the exact candidate source to main, and check its CI and CodeQL results.
 3. Run **Release desktop installers** on that exact main source. Verify the offered installer set and its frozen checksums, runtime manifests, notices, updater payloads and qualification observations.
 4. Check the installed candidate with isolated test data: controlled project scan, terminal Results, saved report, reopen and readable HTML export. Preserve the owner's live app and cases. Record platform limits from what the exact candidate actually demonstrated.
