@@ -77,7 +77,7 @@ CLI missing-value regression (`node --test tests/ci/*.test.mjs`).
 CI document and contract tests: 84 tests passed on September 21, 2026 (`node --test tests/ci/*.test.mjs`),
 including the beginner HTML locale contract and the published MCP Armor distribution decision.
 
-CI document and contract tests: 89 tests include four scoped engine-publication selection checks
+CI document and contract tests: 91 tests include six scoped engine-publication and verification checks
 added on October 3, 2026. Native Semgrep image verification runs separately before publication.
 
 CI document and contract tests: 85 tests passed on October 1, 2026 (`node --test tests/ci/*.test.mjs`),

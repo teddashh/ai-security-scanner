@@ -30,6 +30,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   ]));
   const requested = process.env.EVENT_NAME === "workflow_dispatch" ? process.env.REQUESTED_ENGINE : "";
   assert.ok(process.env.EVENT_NAME !== "workflow_dispatch" || requested, "manual run requires an engine");
+  assert.ok(process.env.PUBLICATION_MODE !== "verify" || requested === "semgrep", "native verification mode currently supports Semgrep only");
   const selected = selectLocalEnginePublication(matrix, publishedTags, requested);
   const outputs = {
     engines: JSON.stringify(selected.map((entry) => entry.engine)),

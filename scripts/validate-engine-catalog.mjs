@@ -528,10 +528,14 @@ function validateManagedImageEvidence(catalogEntries) {
     : [localK8sWorkflow?.jobs?.publish?.needs].filter(Boolean);
   const nativeSemgrep = localK8sWorkflow?.jobs?.["semgrep-native-verify"];
   const localPublishIf = localK8sWorkflow?.jobs?.publish?.if ?? "";
+  const nativeGate = localK8sWorkflow?.jobs?.publish?.steps?.[0];
   if (!localPublishNeeds.includes("semgrep-native-verify") || nativeSemgrep?.["continue-on-error"] === true ||
       nativeSemgrep?.if !== "contains(fromJSON(needs.changes.outputs.engines), 'semgrep')" ||
-      !localPublishIf.includes("needs.semgrep-native-verify.result == 'success'") ||
-      !localPublishIf.includes("needs.semgrep-native-verify.result == 'skipped'") ||
+      !localPublishIf.includes("always()") ||
+      localPublishIf.includes("needs.semgrep-native-verify.result") ||
+      nativeGate?.if !== "matrix.engine == 'semgrep'" ||
+      nativeGate?.env?.NATIVE_RESULT !== "${{ needs.semgrep-native-verify.result }}" ||
+      nativeGate?.run !== 'test "${NATIVE_RESULT}" = success' ||
       !localPublishIf.includes("inputs.mode != 'verify'")) {
     errors.push(`${localK8sWorkflowRelative}: Semgrep requires native verification on both architectures before publication, with sibling engines independent`);
   }

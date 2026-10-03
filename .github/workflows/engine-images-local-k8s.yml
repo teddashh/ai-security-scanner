@@ -66,6 +66,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           REQUESTED_ENGINE: ${{ inputs.engine }}
+          PUBLICATION_MODE: ${{ inputs.mode }}
         run: node scripts/select-local-engine-publication.mjs
   launcher-tests:
     name: Validate the managed-local capability boundary
@@ -144,7 +145,7 @@ jobs:
           python3 engines/images/semgrep/run_managed_combination.py
           --archive .engine-cache/offline/semgrep-submodules/tests__semgrep-rules.tar.gz
           --image aiss-local/semgrep-combined${{ matrix.arch == 'arm64' && '-arm64' || '' }}:review
-          --expected-version 1.174.0-4
+          --expected-version ${{ fromJSON(env.LOCAL_ENGINE_MATRIX)[0].tag }}
           --output package-evidence/semgrep-native-${{ matrix.arch }}
 
       - name: Upload actual native verification evidence
@@ -165,8 +166,7 @@ jobs:
     if: >-
       always() && !cancelled() && inputs.mode != 'verify' &&
       needs.changes.result == 'success' && needs.changes.outputs.has_engines == 'true' &&
-      needs.launcher-tests.result == 'success' &&
-      (needs.semgrep-native-verify.result == 'success' || needs.semgrep-native-verify.result == 'skipped')
+      needs.launcher-tests.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
@@ -176,6 +176,12 @@ jobs:
       IMAGE: ghcr.io/teddashh/ai-security-scanner-engine-${{ matrix.engine }}
       IMAGE_TAG: ${{ matrix.tag }}
     steps:
+      - name: Require both native Semgrep verifications before publication
+        if: matrix.engine == 'semgrep'
+        env:
+          NATIVE_RESULT: ${{ needs.semgrep-native-verify.result }}
+        run: test "${NATIVE_RESULT}" = success
+
       - name: Check out the exact source revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

@@ -34,7 +34,7 @@ const specs = {
   naabu: { tag: "2.6.1-7", group: "external" },
   httpx: { tag: "1.10.0-7", group: "external" },
   nuclei: { tag: "3.11.1-7", group: "external" },
-  semgrep: { tag: "1.174.0-3", group: "local", smokeFiles: ["semgrep.json"] },
+  semgrep: { tag: "1.174.0-4", group: "local", smokeFiles: ["semgrep.json"] },
   trufflehog: { tag: "3.97.0-3", group: "local", smokeFiles: ["trufflehog.jsonl"] },
   trivy: { tag: "0.74.0-4", group: "local", smokeFiles: ["trivy-oci.json", "trivy-library.json"] },
   grype: { tag: "0.117.0-4", group: "local", smokeFiles: ["grype.json"] },
@@ -404,6 +404,35 @@ async function createArtifact(testContext, engine) {
         : { ...common, platforms, public: true };
     await writeJson(path.join(root, `${engine}-image-manifest.json`), summary);
   }
+  if (engine === "semgrep") {
+    for (const arch of ["amd64", "arm64"]) {
+      const native = path.join(root, `semgrep-native-${arch}`);
+      await mkdir(native);
+      const product = Array.from({ length: 10 }, (_, i) => ({ check_id: `product-${i}`, path: "/workspace/synthetic.py" }));
+      const upstream = Array.from({ length: 12 }, (_, i) => ({ check_id: `upstream-${i}`, path: "/workspace/synthetic.py" }));
+      const passes = { product, upstream, combined: [...product, ...upstream], managed: [...product, ...upstream] };
+      for (const [name, results] of Object.entries(passes)) {
+        await mkdir(path.join(native, name));
+        await writeJson(path.join(native, name, "semgrep.json"), { results, errors: [] });
+        await writeFile(path.join(native, `${name}.log`), "synthetic scan log\n");
+      }
+      const rejections = { "changed-rule": 126, "changed-provenance": 126, "extra-rule": 126, "writable-workspace": 126 };
+      for (const name of Object.keys(rejections)) await writeFile(path.join(native, `${name}.log`), "synthetic refusal log\n");
+      const payload = { schema_version: 1, rootfs_payload_sha256: "ab".repeat(32) };
+      await writeJson(path.join(native, "published-payload.json"), payload);
+      await writeJson(path.join(native, "verification.json"), {
+        source_revision: sourceRevision,
+        expected_version: spec.tag,
+        execution: { mode: "native", host_architecture: arch, image_architecture: arch },
+        native_matches: { product: 10, upstream: 12, combined: 22, managed: 22 },
+        exact_full_result_union: true,
+        rejections_before_output: rejections,
+        source_attachment: { selected_original_files: 1477, excluded_rule_absent: true, unfiltered_rules_archive_absent: true, rebuild_inputs_match: true, sha256: "cd".repeat(32) },
+        image_payload: payload,
+        managed_artifact_sha256: sha256(await readFile(path.join(native, "managed/semgrep.json"))),
+      });
+    }
+  }
   await sealRoot(root);
   return root;
 }
@@ -473,6 +502,51 @@ test("publication verifier accepts every fixed engine and the gateway with one n
     if (spec.group === "local") assert.match(payload.evidence.managedSmokeEvidenceSha256, /^sha256:[0-9a-f]{64}$/u);
     if (spec.group === "gateway") assert.deepEqual(payload.evidence.sbomTransformationPlatforms, platforms);
   }
+});
+
+test("publication verifier rejects resealed Semgrep native evidence drift", async (t) => {
+  const cases = [
+    ["emulated architecture", (value) => { value.execution.mode = "qemu"; }, /actual native verification/u],
+    ["missing refusal", (value) => { delete value.rejections_before_output["writable-workspace"]; }, /refusal controls/u],
+    ["excluded source present", (value) => { value.source_attachment.excluded_rule_absent = false; }, /selected-source verification/u],
+    ["wrong source commit", (value) => { value.source_revision = "ff".repeat(20); }, /native source\/version mismatch/u],
+  ];
+  for (const [name, mutate, error] of cases) {
+    await t.test(name, async (subtest) => {
+      const artifact = await createArtifact(subtest, "semgrep");
+      const file = path.join(artifact, "semgrep-native-arm64/verification.json");
+      const value = JSON.parse(await readFile(file, "utf8"));
+      mutate(value);
+      await writeJson(file, value);
+      await sealRoot(artifact);
+      const result = runVerifier("semgrep", artifact);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, error);
+    });
+  }
+  await t.test("a different published filesystem", async (subtest) => {
+    const artifact = await createArtifact(subtest, "semgrep");
+    await writeJson(path.join(artifact, "semgrep-native-arm64/published-payload.json"), { schema_version: 1, rootfs_payload_sha256: "ff".repeat(32) });
+    await sealRoot(artifact);
+    const result = runVerifier("semgrep", artifact);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /published filesystem differs/u);
+  });
+  await t.test("changed result bytes despite matching counts and rehashed receipts", async (subtest) => {
+    const artifact = await createArtifact(subtest, "semgrep");
+    const managed = path.join(artifact, "semgrep-native-arm64/managed/semgrep.json");
+    const value = JSON.parse(await readFile(managed, "utf8"));
+    value.results[0].check_id = "different-observation";
+    await writeJson(managed, value);
+    const file = path.join(artifact, "semgrep-native-arm64/verification.json");
+    const receipt = JSON.parse(await readFile(file, "utf8"));
+    receipt.managed_artifact_sha256 = sha256(await readFile(managed));
+    await writeJson(file, receipt);
+    await sealRoot(artifact);
+    const result = runVerifier("semgrep", artifact);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /complete native results differ/u);
+  });
 });
 
 test("Microsoft 365 workflow seals the exact downloadable evidence inventory before upload", async () => {

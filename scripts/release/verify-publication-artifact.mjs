@@ -24,7 +24,7 @@ const ENGINE_SPECS = Object.freeze({
   naabu: { tag: "2.6.1-7", group: "external", workflow: ".github/workflows/engine-images-external.yml" },
   httpx: { tag: "1.10.0-7", group: "external", workflow: ".github/workflows/engine-images-external.yml" },
   nuclei: { tag: "3.11.1-7", group: "external", workflow: ".github/workflows/engine-images-external.yml" },
-  semgrep: { tag: "1.174.0-3", group: "local", workflow: ".github/workflows/engine-images-local-k8s.yml", smokeFiles: ["semgrep.json"] },
+  semgrep: { tag: "1.174.0-4", group: "local", workflow: ".github/workflows/engine-images-local-k8s.yml", smokeFiles: ["semgrep.json"] },
   trufflehog: { tag: "3.97.0-3", group: "local", workflow: ".github/workflows/engine-images-local-k8s.yml", smokeFiles: ["trufflehog.jsonl"] },
   trivy: {
     tag: "0.74.0-4",
@@ -62,6 +62,8 @@ const M365_SMOKE_CONTRACT = Object.freeze({
   dependencyNoticesVerified: true,
 });
 const PROVENANCE_PREDICATE = "https://slsa.dev/provenance/v1";
+const SEMGREP_PASSES = { product: 10, upstream: 12, combined: 22, managed: 22 };
+const SEMGREP_REFUSALS = { "changed-rule": 126, "changed-provenance": 126, "extra-rule": 126, "writable-workspace": 126 };
 
 function fail(message) {
   throw new Error(message);
@@ -261,7 +263,48 @@ function expectedArtifactFiles(engine, spec) {
     expected.push(`${engine}-managed-smoke/SHA256SUMS.txt`);
     expected.push(...spec.smokeFiles.map((file) => `${engine}-managed-smoke/${file}`));
   }
+  if (engine === "semgrep") {
+    for (const arch of ["amd64", "arm64"]) {
+      const prefix = `semgrep-native-${arch}/`;
+      expected.push(`${prefix}verification.json`, `${prefix}published-payload.json`);
+      for (const name of Object.keys(SEMGREP_PASSES)) expected.push(`${prefix}${name}.log`, `${prefix}${name}/semgrep.json`);
+      for (const name of Object.keys(SEMGREP_REFUSALS)) expected.push(`${prefix}${name}.log`);
+    }
+  }
   return expected;
+}
+
+async function verifySemgrepNativeEvidence(files, sourceRevision, version) {
+  for (const arch of ["amd64", "arm64"]) {
+    const prefix = `semgrep-native-${arch}/`;
+    const receipt = await readJson(files, `${prefix}verification.json`, "Semgrep native receipt");
+    assert(receipt.source_revision === sourceRevision && receipt.expected_version === version, "Semgrep native source/version mismatch");
+    assert(isDeepStrictEqual(receipt.execution, { mode: "native", host_architecture: arch, image_architecture: arch }), "Semgrep requires actual native verification for each architecture");
+    assert(isDeepStrictEqual(receipt.native_matches, SEMGREP_PASSES) && receipt.exact_full_result_union === true, "Semgrep native full-result union receipt is incomplete");
+    assert(isDeepStrictEqual(receipt.rejections_before_output, SEMGREP_REFUSALS), "Semgrep native refusal controls are incomplete");
+    const source = receipt.source_attachment;
+    assert(source?.selected_original_files === 1477 && source.excluded_rule_absent === true && source.unfiltered_rules_archive_absent === true && source.rebuild_inputs_match === true, "Semgrep selected-source verification is incomplete");
+    assertHash(source.sha256, "Semgrep source attachment hash");
+    const published = await readJson(files, `${prefix}published-payload.json`, "Semgrep published filesystem receipt");
+    assertHash(receipt.image_payload?.rootfs_payload_sha256, "Semgrep native filesystem hash");
+    assert(published.schema_version === 1 && published.rootfs_payload_sha256 === receipt.image_payload.rootfs_payload_sha256, "Semgrep published filesystem differs from native verification");
+    const passes = {};
+    for (const [name, count] of Object.entries(SEMGREP_PASSES)) {
+      const scan = await readJson(files, `${prefix}${name}/semgrep.json`, "Semgrep native scan");
+      assert(Array.isArray(scan.results) && scan.results.length === count && isDeepStrictEqual(scan.errors, []), "Semgrep native scan count/errors mismatch");
+      passes[name] = scan.results;
+    }
+    for (const name of ["combined", "managed"]) {
+      const remaining = [...passes[name]];
+      for (const result of [...passes.product, ...passes.upstream]) {
+        const index = remaining.findIndex((row) => isDeepStrictEqual(row, result));
+        assert(index >= 0, "Semgrep complete native results differ from the separate-pass union");
+        remaining.splice(index, 1);
+      }
+      assert(remaining.length === 0, "Semgrep native output contains unexpected results");
+    }
+    assert(receipt.managed_artifact_sha256 === sha256(await readInventoryFile(files, `${prefix}managed/semgrep.json`, MAX_JSON_BYTES, "Semgrep managed native artifact")), "Semgrep managed native artifact hash mismatch");
+  }
 }
 
 function assertDigest(value, label) {
@@ -664,6 +707,7 @@ async function verifyPublicationArtifact(args) {
     assert(smoke.receiptSha256 === expectedSmokeReceipt, "managed smoke receipt hash does not match the root image summary");
     managedSmokeEvidenceSha256 = smoke.receiptSha256;
   }
+  if (args.engine === "semgrep") await verifySemgrepNativeEvidence(files, args["source-revision"], spec.tag);
 
   const platformDigests = Object.fromEntries(
     PLATFORMS.map((platform) => [platform, platformRecords.get(platform).digest]),

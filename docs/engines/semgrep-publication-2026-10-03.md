@@ -3,6 +3,8 @@
 This record describes the prepared `1.174.0-4` recipe. It does not claim that
 the version has been published. The catalog and published-plan receipts still
 name `1.174.0-3`; change them only after actual publication evidence exists.
+Preparation is isolated on the `semgrep-release-20261003` review branch until
+license applicability permits the publication path on main.
 
 The owner authorized advancing publication on October 3. The remaining license
 fact is whether the scanner is freely provided or offered as a paid product or
@@ -15,7 +17,8 @@ that restriction. No rule archive is committed to the repository.
 
 - CE stays at `a0c13f304151e531c7e7c00838076211a07a790c`, version `1.174.0`.
   The legacy rule snapshot stays at `0f5a85ceab1b82b193d0eaa418784c932d237d68`;
-  a new image build does not make that December 2024 rule knowledge current.
+  that commit's upstream timestamp is `2024-12-13T09:04:54Z`. A new image build
+  does not make that December 2024 rule knowledge current.
 - The pack has 1,493 upstream rules plus four original product rules, 1,497
   unique IDs in 1,478 config files. Qualified upstream IDs retain original
   IDs/paths/hashes in provenance; all detector bodies and native ratings remain
@@ -41,7 +44,10 @@ that restriction. No rule archive is committed to the repository.
 `engine-images-local-k8s.yml` declares its six entries in `LOCAL_ENGINE_MATRIX`.
 Automatic runs select entries whose explicitly assigned tag differs from their
 recorded published tag. Shared launcher edits therefore do not assign new tags
-to sibling engines. Manual runs require one engine; `verify` is the default.
+to sibling engines. Manual runs require one engine; `verify` is the default and
+currently supports Semgrep. A failed Semgrep native check is refused by the
+first step of its publication job, before registry mutation; selected sibling
+publication jobs remain independent.
 
 Semgrep verification uses `ubuntu-24.04` for amd64 and `ubuntu-24.04-arm` for
 arm64. Both build a complete image and load it locally. The fixed launcher is
@@ -84,6 +90,12 @@ gh workflow run engine-images-local-k8s.yml --ref <review-branch> \
   -f engine=semgrep -f mode=verify
 ```
 
+The downloaded-artifact verifier also requires the two native receipts, four
+native scan JSON files per architecture, refusal logs and published filesystem
+receipts in its exact inventory. It recomputes the complete result multiset
+union and managed-artifact hash, and refuses resealed evidence with an incorrect
+architecture, source commit, source selection or filesystem receipt.
+
 After both actual native runs pass and license applicability is established,
 use the approved publication path on main. Read its signed manifest before
 updating the catalog, plan, verifier contracts and notices. All six current
@@ -91,3 +103,51 @@ plans record the shared launcher source hash; updating those records does not
 mean the five sibling images were rebuilt. Keep their historical publication
 receipts unchanged. Record the final index/platform digests, evidence run,
 source commit, source attachment hash and product normalizer result here.
+
+## Completed local production-recipe checks
+
+The amd64 build completed with all native compiler stages cached. Its local
+image ID is `sha256:f9adc8dc432a927a4f33f46e9ed3cc5fbeee086ac2ccc8072859158b4103e679`.
+The actual fixed-launcher verification returned **10/12/22/22**, empty errors,
+the full-result multiset union and all four exit-126/no-output refusals.
+
+The attached source is 33,033,850 bytes, SHA-256
+`3282013b050f79b3f417f488433a050fda219da99edc66c1a6520414842156cd`.
+The verified filesystem payload has 9,496 recorded members, SHA-256
+`7eb1b29834a13116ae520f22313161e439b76b4b4e346e2e27223f2c9506a23d`.
+Repeating the filesystem receipt and the streaming source check gave identical
+receipts. These identify this local recipe build, not a public release digest.
+
+The real shared Rust normalizer produced **22 findings with no warnings** and
+kept native IDs, locations, severity mapping, bounded titles and raw evidence
+hashes. Two native messages exceeded the existing 512-character display bound;
+their complete messages remain in the raw JSON. Thirteen Python tests,
+91 CI contract tests, Rust formatting and the signed-image evidence self-test
+passed. No live application, sign-in, credential or scan state was changed.
+
+[Run 37127986459](https://github.com/teddashh/ai-security-scanner/actions/runs/37127986459)
+completed **successfully** for source
+`6fa7709c9617c05cc87d7c0096d7ee84594d829e` in verification mode. Both fresh
+native builds returned 10/12/22/22, empty errors, the complete result union and
+all four actual launcher refusals. The publication job was skipped. No image,
+rule cache, source attachment or build-record artifact was published.
+
+| Native CI architecture | Filesystem payload SHA-256 | Managed JSON SHA-256 | Verification JSON SHA-256 |
+| --- | --- | --- | --- |
+| amd64 | `8bc02b97a361030ef8141165c90aa636922e18f7641d9819486dfb276e5d076b` | `e8c6f9e0896b0a5eaeb190ecbed187db3a928fb0808b10a94ba6581b940520c8` | `9b83d3e6395474a7975aba6252f1930ee39ff7a121f366fcc9d35f210db32ed1` |
+| arm64 | `cdf2e196bf1f3e7983ade54ebdcb60933f8ff7cde76585f3876661ca35674c62` | `1e89fbcf6a09ee3124e996a50f6d633707fe7e4d82019641aa66855ca050dd51` | `a3fbff4930e83db58b4097f6509194e0385fc049b93f2d2296e0e712924ba9b1` |
+
+The actual amd64 and ARM64 complete result multisets match each other and the
+local amd64 results. Both source attachments match the local attachment hash
+above. Normalizing the fresh ARM64 artifact again produced 22 findings without
+warnings. The raw JSON hashes differ because run-level data varies; result
+comparison uses complete result objects, not an entire-file hash comparison.
+
+The CI amd64 filesystem differs from the separately built local amd64 one.
+Pinned inputs and equal scan results do not establish byte-identical builds.
+Publication must compare against its own immediately verified platform receipts
+and reuse those staged caches; a cache miss or changed filesystem fails before
+promotion. The actual publication remains pending the business-model fact and
+the signed public image evidence. The updated artifact verifier passed all
+19 tests, including six native-evidence drift cases; all 200 release contract
+tests also passed.
