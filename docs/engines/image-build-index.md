@@ -4,6 +4,8 @@ Checked against repository source at `801a500` on 2026-10-02. This index describ
 
 There are **25 catalog engines with 25 distinct primary upstream repositories**, **21 scanner Dockerfiles**, and **one additional egress gateway Dockerfile**. KICS and ZAP use upstream images. garak and Agentic Radar have plans but no Dockerfiles or runnable images. Plugins, rule repositories, Semgrep submodules, PowerShell modules, feeds, vulnerability databases and toolchains add more upstream inputs; 25 is not the count of the complete dependency closure.
 
+The checked-in Semgrep submodule lock alone declares **36 additional repository URLs**, disjoint from those 25 primary URLs: **61 declared repositories** before counting the other engines' secondary sources or package dependencies. This is a source-input inventory, not 61 scanner images. Repository renames, alternate URLs and different revisions still need reconciliation when changing an acquisition pin.
+
 ## Start an update here
 
 1. Read the engine page's **Downstream changes**, **Lessons from real runs** and **Updating this engine**. Read its shared launcher page too. These explain why a customization exists and when it can be removed.
@@ -70,7 +72,27 @@ nice -n 10 docker buildx build \
 
 Use `linux/arm64` for a separate arm64 review. One local platform proves only that platform; `--load` here does not publish a multi-platform index. Run one heavy build at a time on a shared machine. Some stages download pinned dependencies; **offline scanner execution does not mean an offline image build**. Check each Dockerfile's `RUN --network=none` smoke separately.
 
+`nice` on the Docker client does not bound the daemon's build workers. Use a task-owned builder with explicit CPU/memory limits, and constrain its CPU affinity when an upstream recipe uses `make -j"$(nproc)"` (Greenbone does). A CPU quota alone can still leave `nproc` seeing more processors and launching too many compilers. The [Semgrep ARM64 example](semgrep-combination-review.md#arm64-local-validation-attempt) shows an isolated builder; its four-CPU affinity was checked with `nproc`. Do not reconfigure another project's builder or install global emulation interpreters for a local review.
+
 Only Semgrep, Trivy and Grype consume host `.engine-cache/offline/` inputs today. The preparation script checks download size and digest; the image build also verifies the inputs it consumes. Trivy needs **both** its vulnerability DB and Java DB. Grype needs the archive and matching `import.json`. Cache availability is not proof that the data matches a newly edited pin.
+
+## Secondary inputs to inspect with the scanner
+
+An engine-source update does not automatically update its rules, plugins or data. These records show where the additional inputs are acquired and why they need their own review; the per-engine page supplies the full recipe.
+
+| Engine | Additional sources and acquisition record | Update detail to retain |
+| --- | --- | --- |
+| CloudQuery | [Three-component lock](../../engines/images/cloudquery/dependencies.lock.json): CLI, AWS source and file destination come from three different revisions of one repository. | Match every architecture-specific binary to its own source archive; a shared repository URL does not mean one source revision covers all three. |
+| Steampipe | [Dockerfile](../../engines/images/steampipe/Dockerfile): `turbot/steampipe-plugin-aws`, `turbot/steampipe-postgres-fdw`, embedded PostgreSQL and its installer. | Scanner, plugin and native database closure can change independently; retain architecture-specific installation and ownership checks. |
+| ScubaGear / Maester | Separate [ScubaGear lock](../../engines/images/scubagear/dependencies.lock.json) and [Maester lock](../../engines/images/maester/dependencies.lock.json): PowerShell runtime, Graph SDK packages and their source/notices; ScubaGear also uses YAML and OPA, Maester uses Pester. | Package version/hash, source revision and license bytes are separate fields. The two engines use different Graph SDK versions and module selections. |
+| Nuclei | [Dockerfile](../../engines/images/nuclei/Dockerfile): `projectdiscovery/nuclei-templates` has a separate archive pin. | Preserve the selected HTTP template/dependency closure and original template IDs; changing scanner source alone does not advance template knowledge. |
+| Semgrep | [36-record submodule lock](../../engines/images/semgrep/submodules.lock), upstream opam locks/compiler fork and static-curl hook; [candidate evidence](semgrep-combination-review.md#local-build-integration). | The candidate keeps 35 compiler/parser sources and replaces only the rule revision/selection. Check runtime configs, attached originals and intermediate cache layers separately. |
+| Greenbone | [Dockerfile](../../engines/images/greenbone/Dockerfile): separate VT-feed and Notus images, scanner archive with vendored Kerberos/libpcap, and native build/runtime packages. | Feed and Notus signatures/content must agree with their own acquisition records. A scanner rebuild does not establish that an older feed can still be retrieved. |
+| Trivy / Grype | [Host acquisition script](../../scripts/prepare-offline-engine-data.mjs), separate [Trivy notice](../../engines/images/trivy/DATABASE-NOTICE.md) and [Grype notice](../../engines/images/grype/DATABASE-NOTICE.md). | Trivy's vulnerability/Java DB pair and Grype's schema/import metadata are independently pinned data, with dates distinct from scanner versions. |
+| Kubescape | [Dockerfile](../../engines/images/kubescape/Dockerfile): three `kubescape/regolibrary` assets. | The release URL is mutable; checksum, launcher and notice must identify the same NSA framework, inputs and exceptions. |
+| Source-built engines and gateway | Upstream `go.sum`, `uv.lock`, opam dependency locks or `Cargo.lock` inside the pinned source; local Python requirement locks where supplied; gateway [Cargo.lock](../../Cargo.lock). | Record the package/toolchain lock and actual install mode as part of the build. Transitive packages and OS repositories extend this inventory beyond explicitly listed Git repositories. |
+
+For each changed input, retain its acquisition URL, immutable revision/digest, original bytes or cache location, data date, runtime use and source/notice destination. A byte-identical compiler cache can be reused for a rule-only change only when the recipe keeps those stages independent. Record native versus emulated execution explicitly; a successful emulated smoke does not establish native performance.
 
 ## Rules, customizations and edits that move together
 

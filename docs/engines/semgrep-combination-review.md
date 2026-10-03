@@ -96,6 +96,10 @@ The Dockerfile separates the 35 compiler/parser inputs from the rules archive. A
 
 Keep the native dependency pins visible when updating the engine: this revision's Makefile selects opam-repository `78d29aba187e8362b8ab86c189790c0af9153d4b`, OCaml 5.3.0 and Semgrep's compiler fork `aaaacf27f74fd87eb5b9887fb9995bee4cedb979`; platform-specific dependency locks and `validate-compiler-sha.sh` stay upstream-owned. Its `scripts/build-static-libcurl.sh` downloads curl **8.5.0**, SHA-256 `05fc17ff25b793a437a0906e0484b82172a9f4de02be5ed447e0cab8c3475add`, and builds a minimal static library because the Alpine archive pulls unsupported optional link dependencies. Updating Alpine `curl-dev` does not update that separately compiled curl. Do not replace this upstream hook with the system static library without checking the link behavior and upstream change.
 
+That hook also installs `openssl-libs-static` and `zlib-static` from Alpine without explicit version arguments. Both the amd64 build and ARM64 attempt acquired **3.5.9-r0** and **1.3.2-r0**, respectively. Record their actual acquired versions on the next build; the pinned source/base and Dockerfile's visible APK list do not freeze those hook-installed packages.
+
+The 36-record submodule lock is not the whole dependency inventory. Upstream opam `pin-depends` also retrieves source revisions, including `semgrep/pcre2-ocaml@e88c082341e4ff278eed892c17032df83b26e585` and `semgrep/ocaml-tree-sitter-core@c4baff8d83b2e1f83f247acb11d0c9dafa5e48f7`. The latter differs from the `libs/ocaml-tree-sitter-core` submodule revision `2dc9e0c738086df1ce4de93723302d9560d5b76c`. Both build logs show these pins; preserve their separate roles/revisions rather than treating a repository name as one dependency version.
+
 Fresh inspection of the pinned Alpine 3.23 amd64 repository required these exact updates: `curl-dev` 8.22.0-r0, `pcre2-dev`/`pcre2-static` 10.49-r0, `python3` 3.12.15-r0 in both stages, `rsync` 3.5.0-r0 and `xz-static` 5.8.4-r0. Both package-install stages passed in the actual local build. Re-check repository availability next time; these values are observations, not a move-to-latest policy.
 
 Local integration completed on **2026-10-03**. Ten Python pack/source tests passed, including reproducibility, detector-byte restoration, refused unpinned/changed inputs, refused changed originals, and refused full-rule source checkout. Go launcher tests passed in the pinned Go toolchain. The engine compiled natively for amd64 with the upstream compiler SHA check passing and CE version `1.174.0`; its network-off Dockerfile fixture smoke produced 22 results without errors. The final cache-safety rebuild reused every native compilation stage.
@@ -110,11 +114,44 @@ Local integration completed on **2026-10-03**. Ten Python pack/source tests pass
 | Actual runtime source attachment | 33,033,800 bytes; SHA-256 `d30bdcb4e694505a6c1cc1b16477de9525947a844eae648108ce971a8a9db0b0`; exactly 1,477 selected original files in the rules gitlink, exact legacy notice and source profile, excluded file/whole rules archive absent |
 | Attached Dockerfile / launcher source | SHA-256 `14b6a917ef9e576e3b58c7e636fe883de51e26c79e1f7acbc1afdaebf5e1e1a6` / `ddd5775990c5ecff62a356a5480e4dd88afe9521e2f00ee94c03cedcc9592794` |
 
-Evidence is retained locally under `~/.cache/aiss-semgrep-combined/`: `native-build-v2.log`, `native-build-final.log`, `managed-verification/verification.json`, each native JSON/log, `managed-adapter-verification.json`, `candidate-source-inspection.json`, `published-source-inspection.json` and `published-rules-inspection.json`. This is one native architecture and six synthetic files, not all-language/project coverage or distribution clearance. ARM64 has not been built or tested. No public image, catalog pin or live scan changed.
+Evidence is retained locally under `~/.cache/aiss-semgrep-combined/`: `native-build-v2.log`, `native-build-final.log`, `managed-verification/verification.json`, each native JSON/log, `managed-adapter-verification.json`, `candidate-source-inspection.json`, `published-source-inspection.json` and `published-rules-inspection.json`. This is one native architecture and six synthetic files, not all-language/project coverage or distribution clearance. ARM64 work is recorded separately below. No public image, catalog pin or live scan changed.
+
+The revised verification runner was rechecked natively on amd64 after the ARM64 attempt. With explicit image architecture/entrypoint checks, `--pull never`, a `noexec` mode-1777 tmpfs and a 512 MiB file-size bound, the same image again produced **10 / 12 / 22 / 22** results with empty errors. Complete combined/managed result objects equal the separate-pass union, and all three tamper cases again returned 126 before output. The real normalizer again produced **22 findings with no warnings**, retaining IDs, locations, severity and raw evidence. Evidence: `managed-verification-native-v2/verification.json`, its native JSON/logs and `managed-native-v2-adapter.log`; managed JSON SHA-256 `861140fd126a1ad251f89198302034e3c945c091896fe2f05b2f8b4f5ed2f5bb`.
+
+## ARM64 local validation attempt
+
+Attempted on 2026-10-03 on an **amd64 host**. The default Docker builder supports only amd64; the host has no ARM64 `binfmt_misc` registration. A separate task-owned `docker-container` builder used the same official BuildKit digest as the existing image workflow: `moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8` (BuildKit v0.32.2). Its `buildkit-qemu-aarch64` is v10.2.3, SHA-256 `239ff153cde81b6a6ab2c48eef9cff234751caa8e9d841363eace8db51e000e8`.
+
+BuildKit can invoke its [bundled user-mode emulator](https://github.com/moby/buildkit/blob/master/docs/multi-platform.md) without registering a host interpreter. This helper has upstream [child-process execution](https://github.com/tonistiigi/binfmt/blob/master/patches/buildkit-direct-execve-v10.2/0001-linux-user-have-execve-call-qemu-via-proc-self-exe-t.patch) and [script-interpreter support](https://github.com/tonistiigi/binfmt/blob/master/patches/buildkit-direct-execve-v10.2/0004-linux-user-support-loading-scripts-with-shebang.patch). Its [BuildKit-specific documentation](https://github.com/tonistiigi/binfmt#buildkit-target) says not to install it into kernel `binfmt_misc`. No global interpreter or other project's builder was changed.
+
+The builder was limited to four CPUs, 8 GiB memory and reduced CPU shares; CPU affinity was also constrained to four allowed host CPUs, and `nproc` inside it returned four. An explicit ARM64 Alpine `RUN --network=none` printed `aarch64` and executed a child shell, although `buildx inspect` did not list ARM64 among native worker platforms. Test actual execution before treating that platform list as the final capability check.
+
+| ARM64 attempt | Observed result |
+| --- | --- |
+| Build/runtime APK installs | Passed with candidate pins |
+| Launcher | Native-host Go tests passed; cross-compiled ELF machine 183 (AArch64), SHA-256 `70d9f2a3d3e55dd59d6c4a111b9a6c0e1919d269f25d53ee191463e929024f16` |
+| Config manifest / provenance / source attachment | All byte-match the amd64 artifacts; same 1,478 configs and selected-originals source profile |
+| Compiler switch / static curl | OCaml 5.3.0 switch and static curl completed; upstream locked dependency installation started |
+| Actual ARM64 launcher preflight | Exit 126 before scanner execution: `workspace mount is writable; refusing to scan` |
+| Kernel mount / attempted write | `/workspace` reported `ro`; an attempted write to the synthetic fixture mount failed with `Read-only file system` |
+| Full engine/image/scan | Build stopped after the incompatible safety preflight; no completed ARM64 image or managed scan |
+
+A minimal Go `statfs` probe compared a read-only and writable task directory in the same container boundaries:
+
+| Probe | Read-only mount flags | Writable mount flags |
+| --- | --- | --- |
+| Native amd64 | 4129; read-only bit present | 4128; read-only bit absent |
+| ARM64 through the exact BuildKit helper | **0; read-only bit absent** | **0; read-only bit absent** |
+
+This helper cannot represent the mount property required by the managed launcher's existing check. [QEMU v10.2.3 source](https://github.com/qemu/qemu/blob/v10.2.3/linux-user/syscall.c#L10568-L10597) has an `_STATFS_F_FLAGS` compile-time guard that writes zero when absent; that path is consistent with the observation, but the exact helper's compiler configuration was not independently recovered. This is an emulation limitation, not evidence that the mount was writable or that a native ARM64 run fails. The product's read-only check and detector/launcher code were kept intact.
+
+The managed verification script therefore requires a **native host matching the image architecture**. It accepts only the two local review tags, checks Linux architecture and the fixed managed entrypoint, uses `--pull never`, and records host/image architecture. Its scan containers now also use a `noexec`, mode-1777 temporary filesystem and a 512 MiB file-size bound. Native ARM64 build, managed execution and performance remain unverified.
+
+Evidence is retained under `~/.cache/aiss-semgrep-combined/`: `arm64-build.log`, `arm64-input-export.log`, `arm64-input-inspection.json`, `arm64-launcher-input-preflight/valid-inputs.log`, `arm64-readonly-probe.log`, `statfs-comparison.json` and the minimal `statfs-probes.Dockerfile`/binaries. The task's build was stopped by its own client PID, and its builder was stopped with completed cache retained. No public artifact or live scan changed.
 
 ## Overlap review
 
-These are observed similarities and differences, not approved suppression or grouping rules. All source records stay available.
+These are observed similarities and differences, not approved suppression or grouping rules. All source records stay available. Rating pairs below mean **native severity / native confidence**, for example `ERROR / LOW`; `LOW` is not a lowered severity. The existing adapter maps `ERROR` to High, `WARNING` to Medium and `INFO` to Informational while preserving the separate source confidence.
 
 | Product rule | Related upstream rule IDs (original short IDs) | Observed difference / report decision to review |
 | --- | --- | --- |
@@ -128,7 +165,7 @@ No changes to shared report grouping or severity/confidence policy were made for
 
 ## Repeat the local preview
 
-The experiment is kept on the **local-only** branch `semgrep-combined-local`, integration commit `afdafb00dd3df3cab67566a33d4bc9c385f99c71`, in the sibling worktree `../ai-security-scanner-semgrep-local`. It is deliberately absent from `main`'s image build inputs because changing those inputs can automatically publish all six local/k8s engines. The branch contains:
+The experiment is kept on the **local-only** branch `semgrep-combined-local`, image integration commit `afdafb00dd3df3cab67566a33d4bc9c385f99c71` and verification-script commit `11967e8d5190553551d00559e77ca06343d9ebf0`, in the sibling worktree `../ai-security-scanner-semgrep-local`. The latter changes only the test runner, not Dockerfile, detector, launcher or source-attachment bytes. It is deliberately absent from `main`'s image build inputs because changing those inputs can automatically publish all six local/k8s engines. The branch contains:
 
 - `engines/images/semgrep/build_rule_pack.py`: shared candidate/preview acquisition and license checks, collision-free IDs, original bytes, provenance and manifest; `preview_combined_pack.py` delegates to it.
 - `prepare_source_bundle.py`, `test_source_bundle.py` and candidate `SOURCE-OFFER.md`: selected original sources, unchanged compiler/parser closure, reproducible attachment and rejected unintended source files.
@@ -185,3 +222,32 @@ PYTHONDONTWRITEBYTECODE=1 python3 engines/images/semgrep/run_managed_combination
 ```
 
 Before publication, reconcile selected-profile disclosure, catalog rule/data dates, source/notice records, plan facts, new build-input coverage and local/k8s workflow reach. Public release guards intentionally still describe the old published artifact; this local candidate does not claim those records bind it. Re-check native builds on each intended architecture and decide how to handle the already-published restricted source attachment. Publication remains an owner decision after these exact artifacts and results can be reviewed.
+
+To repeat the candidate on a **native Linux ARM64 host**, use a task-owned builder. The known helper above cannot validate managed execution on amd64. Run only one heavy build or scan at a time:
+
+```sh
+case "$(uname -s)/$(uname -m)" in
+  Linux/aarch64|Linux/arm64) ;;
+  *) printf 'Managed ARM64 validation requires a native ARM64 host.\n' >&2; exit 1 ;;
+esac
+arm_builder=aiss-semgrep-arm64-review
+task_cpuset=$(python3 -c 'import os; print(",".join(map(str, sorted(os.sched_getaffinity(0))[-4:])))')
+DOCKER_CONFIG="$anonymous_docker" docker buildx create \
+  --name "$arm_builder" --driver docker-container \
+  --driver-opt image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8 \
+  --driver-opt memory=8g --driver-opt cpu-period=100000 \
+  --driver-opt cpu-quota=400000 --driver-opt cpu-shares=256 \
+  --driver-opt "cpuset-cpus=$task_cpuset" --bootstrap
+DOCKER_CONFIG="$anonymous_docker" nice -n 10 docker buildx build \
+  --builder "$arm_builder" --platform linux/arm64 --progress plain --load \
+  -t aiss-local/semgrep-combined-arm64:review \
+  -f engines/images/semgrep/Dockerfile .
+arm_output=/absolute/path/to/new-arm64-verification-directory
+PYTHONDONTWRITEBYTECODE=1 python3 engines/images/semgrep/run_managed_combination.py \
+  --archive "$legacy_archive" --output "$arm_output" \
+  --image aiss-local/semgrep-combined-arm64:review
+# Stop only this task's builder after its builds finish; retain its cache.
+DOCKER_CONFIG="$anonymous_docker" docker buildx stop "$arm_builder"
+```
+
+If reusing an existing task builder, inspect its pinned image and resource limits instead of recreating it blindly. Keep build logs, source inspection, native JSON, normalization and the recorded execution architecture together.

@@ -37,7 +37,7 @@ See the [image build index](image-build-index.md) for the repeatable local build
 
 ## Downstream changes
 
-- **Local combination proposal (2026-10-02).** The [legacy + four-rule review](semgrep-combination-review.md) records acquisition/license exceptions, collision-free IDs with original-source provenance, three separate CE executions, overlap and remaining integration work. It changes no production lock, image pin or detector body.
+- **Local combination candidate (2026-10-02 onward).** The [legacy + four-rule review](semgrep-combination-review.md) records acquisition/license exceptions, collision-free IDs with original-source provenance, integrated local build and managed-launcher results, architecture evidence and observed overlap. It changes no production lock, image pin or detector body.
 - **Published source attachment correction (2026-10-02).** Inspecting the actual pinned digest found newer upstream rules under `semgrep/tests/semgrep-rules/` in `/usr/share/source/semgrep-source.tar.gz`, despite the runtime loading only four own rules. Its attached license is Semgrep Rules License v1.0. See the [exact artifact hashes and local source-assembly fix](semgrep-combination-review.md#published-source-attachment-inspection). A runtime-only inventory does not establish the contents or distribution terms of the whole image.
 - **No source patches.** Semgrep is built unmodified from the pinned revision. Its git submodules come from `submodules.lock` (path, repository, revision, SHA-256, size, archive), and each archive's size and digest are checked before extraction.
 - **Offline security rule pack** (`build_rule_pack.py`). Engine networking is disabled, so the rules are embedded. From the rules archive the builder keeps every `.yaml`/`.yml` file that:
