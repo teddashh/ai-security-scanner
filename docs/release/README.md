@@ -2,6 +2,8 @@
 
 Current operations are documented in [Release operations](../releasing.md). The product owner controls version numbers, release timing, channels, supported installers, signing, and publication.
 
+The [2026-10-03 desktop readiness record](desktop-readiness-2026-10-03.md) tracks the next candidate's completed changes and remaining delivery work.
+
 This directory contains historical release records, exact delivery observations, artifact references, and schemas. It is not the product roadmap.
 
 ## Version records

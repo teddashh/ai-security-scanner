@@ -1,6 +1,6 @@
 # Development status
 
-_Updated 2026-10-01._
+_Updated 2026-10-03._
 
 This page summarizes current engineering status for contributors. It is not a product specification
 or release declaration. [The product specification](product-spec.md) remains the source of truth for
@@ -8,11 +8,15 @@ product behavior, and the [current product review](product-audit.md) tracks the 
 
 ## At a glance
 
-- The current release, [v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0), is a pre-release for testers on Linux,
+- The current release, [v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0), is published on Linux,
   macOS, and Windows: Windows MSI and NSIS (unsigned; SmartScreen may warn), macOS Universal `.dmg`
-  (not notarized), and Linux x86-64 `.deb`. Linux AppImage and `.rpm` are not offered. It is not
-  marked latest, so the in-app updater does not offer it. See the [release record and
-  testing disclosures](releasing.md#current-release).
+  (not notarized), and Linux x86-64 `.deb`. Linux AppImage and `.rpm` are not offered. GitHub currently
+  marks it latest, while its frozen metadata retains the original prerelease channel. Its public
+  updater manifest offers macOS and Windows NSIS targets. See the [release record and testing disclosures](releasing.md#current-release).
+- Main now includes Prowler failure headlines, approved AWS report grouping, reconnect actions,
+  blocked-scan continuations, and the published Semgrep `1.174.0-4` combined pack. These changes
+  require a new desktop candidate; they are not present in the v0.3.0 installers. See the
+  [desktop readiness record](release/desktop-readiness-2026-10-03.md).
 - The paired repository [Agent Skills](getting-started.md#use-with-an-agent-skill) install the
   desktop release, check that a computer can scan, guide a scan in the app, and save its report;
   the Linux source build is documented there for changing the product.

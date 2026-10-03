@@ -61,7 +61,9 @@ enum EngineOutcomes {
     /// checks that report. This is the run the coverage and next-step
     /// sections are written for.
     MixedTerminalStates,
-    /// Every detector completes and reports. Five packaged catalog entries
+    /// Every detector exits successfully and reports. The real kube-bench
+    /// fixture still has WARN controls and must retain that coverage gap.
+    /// Five packaged catalog entries
     /// belong to checks that only ever carry a terminal state in the mixed
     /// run, so nothing else proves their adapter can carry a finding through
     /// the report and onto its mapped control.
@@ -1401,9 +1403,10 @@ fn every_detector_places_its_finding_on_its_mapped_control() {
                 .filter(|check| check.status != CoverageDimensionStatus::TestedComplete)
                 .map(|check| (check.check_id.clone(), check.status))
                 .collect::<Vec<_>>();
-            assert!(
-                unfinished.is_empty(),
-                "these checks did not complete on the run where every check succeeds: {unfinished:#?}"
+            assert_eq!(
+                unfinished,
+                [("kube-bench".into(), CoverageDimensionStatus::TestedPartial)],
+                "a successful process must not hide the fixture's WARN controls"
             );
             // What is left is coverage data, not unfinished execution: a
             // pinned catalog whose declared support has ended, a control
@@ -1420,7 +1423,23 @@ fn every_detector_places_its_finding_on_its_mapped_control() {
                         && !gap.dimension.ends_with(": controls not evaluated")
                 })
                 .collect::<Vec<_>>();
-            assert!(unfinished_gaps.is_empty(), "{unfinished_gaps:#?}");
+            assert_eq!(unfinished_gaps.len(), 1, "{unfinished_gaps:#?}");
+            assert_eq!(
+                unfinished_gaps[0].dimension,
+                "kube-bench: remaining requested dimensions"
+            );
+            let benchmark_gap = report
+                .coverage_gaps
+                .iter()
+                .find(|gap| gap.dimension == "kube-bench: controls not evaluated")
+                .expect("WARN controls must reach the terminal report");
+            assert_eq!(benchmark_gap.kind, CoverageGapKind::NotTested);
+            assert!(
+                benchmark_gap
+                    .reason
+                    .contains("5 left without an automated verdict")
+            );
+            assert_eq!(benchmark_gap.next_action, "Check these controls by hand.");
             let scope_limits = report
                 .coverage_gaps
                 .iter()
@@ -1608,20 +1627,26 @@ fn every_detector_places_its_finding_on_its_mapped_control() {
             }
             assert!(!chinese.contains(":</strong>"));
             assert!(!chinese.contains(":</em>"));
-            // Nothing is missing, so the report says so instead of leaving the
-            // coverage and next-step sections blank.
+            // Successful process exits still expose the benchmark WARN checks
+            // in the coverage and next-step sections.
             assert!(english.contains("What needs attention"));
             assert!(english.contains("What to do next"));
 
-            // Every asset in this run takes its state's step, so no row has
-            // one of its own and the column is not there to be blank.
+            // The node's remaining checks need an asset-specific step, so its
+            // action column is useful even when every process exited zero.
             let board = &english[english
                 .find("<table class=\"asset-result-table\"")
                 .expect("the asset board")..];
             let board = &board[..board.find("</section>").expect("the board ends")];
             assert!(
-                !board.contains("<th scope=\"col\">What to do next</th>"),
-                "a column of blanks was printed anyway"
+                board.contains("<th scope=\"col\">What to do next</th>"),
+                "the node's remaining checks lost their action column"
+            );
+            assert!(
+                board.contains(
+                    "<td>Some checks are incomplete. Finish or retry them in the app.</td>"
+                ),
+                "the node must have a direct continuation: {board}"
             );
             assert!(board.contains("class=\"asset-result-steps\""), "{board}");
 
@@ -2252,7 +2277,8 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 "Retry this check.</strong> — Checkov · Repository</li>",
                 "Confirm the host is powered on and reachable from this computer on the approved ports, then run this check again.</strong> — Greenbone Community Edition: target response",
                 "Retry the timed-out work.</strong> — KICS · Repository <em>",
-                "Retry this check for a confirmed result.</strong> — Nuclei: unfinished part · https://portal.example.test:443</li>",
+                "Retry this check for a confirmed result.</strong> — kube-bench: unfinished part · Kubernetes node; Nuclei: unfinished part · https://portal.example.test:443</li>",
+                "Check these controls by hand.</strong> — kube-bench: controls not evaluated · Kubernetes node; Maester: controls not evaluated · Audit tenant</li>",
                 "Treat these results as evidence from expired knowledge, not as current coverage.</strong> — CloudQuery: expired detection knowledge",
                 // One step closes two rows, and says so rather than showing one
                 // of the two reasons and dropping the other.

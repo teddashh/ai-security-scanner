@@ -33,7 +33,7 @@ A `not_installed` runtime before the first scan is normal; the app prepares it w
 
 ## Install the app
 
-Install the current release, the [v0.3.0 pre-release](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0), when the user asks you to; otherwise give them the link for their computer. Before opening a download, compare its SHA-256 with the matching line of `SHA256SUMS.txt` from the same release, and stop on a mismatch.
+Install the current release, the [v0.3.0 release](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0), when the user asks you to; otherwise give them the link for their computer. Before opening a download, compare its SHA-256 with the matching line of `SHA256SUMS.txt` from the same release, and stop on a mismatch.
 
 macOS, Apple silicon or Intel. The app is not notarized; the `xattr` line lets macOS open it:
 

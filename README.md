@@ -14,7 +14,7 @@ Download the **v0.3.0 test release** for your computer:
 | Windows x86-64 | [ai-security-scanner_0.3.0_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64-setup.exe) or the [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64_en-US.msi) | The installer is unsigned. If SmartScreen warns, select **More info → Run anyway**. If Windows asks to install or update WSL, allow it. |
 | Debian or Ubuntu x86-64 | [ai-security-scanner_0.3.0_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_amd64.deb) | Install with `sudo apt install ./ai-security-scanner_0.3.0_amd64.deb`. |
 
-The app prepares its own scanning runtime the first time a scan needs it; Docker is not required. Checksums and the tested limits of this pre-release are on the [v0.3.0 release page](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0).
+The app prepares its own scanning runtime the first time a scan needs it; Docker is not required. Checksums and the tested limits of this release are on the [v0.3.0 release page](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0).
 
 Open the app and choose one path:
 

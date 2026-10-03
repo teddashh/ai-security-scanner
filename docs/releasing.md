@@ -6,9 +6,9 @@ The product owner selects the version, channel, source commit, supported install
 
 ## Current release
 
-[v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0) is a **pre-release for testers** on **Linux, macOS, and Windows**. [Actions run 36884417623](https://github.com/teddashh/ai-security-scanner/actions/runs/36884417623) built and qualified the exact source `dddd491b87f90c9cebc5f946d9e2070f36742f21` as a public candidate, and [promotion run 36890665121](https://github.com/teddashh/ai-security-scanner/actions/runs/36890665121) published those frozen bytes without rebuilding, after approval in the `release-publication` environment. The release page carries the installers, `SHA256SUMS.txt`, runtime manifests, SBOMs, notices and qualification records.
+[v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0) is the currently published desktop release on **Linux, macOS, and Windows**. [Actions run 36884417623](https://github.com/teddashh/ai-security-scanner/actions/runs/36884417623) built and qualified the exact source `dddd491b87f90c9cebc5f946d9e2070f36742f21` as a public candidate, and [promotion run 36890665121](https://github.com/teddashh/ai-security-scanner/actions/runs/36890665121) published those frozen bytes without rebuilding, after approval in the `release-publication` environment. The release page carries the installers, `SHA256SUMS.txt`, runtime manifests, SBOMs, notices and qualification records.
 
-v0.3.0 is marked as a pre-release, so it is not the latest release and the in-app updater does not offer it. Version 1.0.0 is reserved for general availability.
+As verified on 2026-10-03, GitHub marks v0.3.0 as the latest release with `prerelease: false`. Its frozen `release-metadata.json` still records `releaseChannel: prerelease`, and its release notes retain the original testing disclosures. The public `latest.json` contains macOS and Windows NSIS updater targets; Linux Debian and Windows MSI have no artifact-scoped updater. The GitHub label does not change the frozen qualification observations or establish general availability. `package.json` retains `release.target: 1.0.0`; the owner selects the next version and channel.
 
 | Platform | Installer | Disclosure |
 | --- | --- | --- |
@@ -17,6 +17,8 @@ v0.3.0 is marked as a pre-release, so it is not the latest release and the in-ap
 | Linux x86-64 | Debian `.deb` | Technical qualification passed. AppImage and `.rpm` are **not offered** because their technical qualification was not observed. |
 
 For both Windows installers, metadata retains `windows-lifecycle-not-observed` and `windows-data-preservation-not-observed`; a passing installer qualification is not evidence of those lifecycle checks. The exact-candidate beginner human path is `not-observed` for every offered installer. Updater signatures, where present, do not establish OS signing or Apple notarization. These are disclosures, not release gates.
+
+The [2026-10-03 desktop release readiness record](release/desktop-readiness-2026-10-03.md) distinguishes completed main changes from the remaining candidate work.
 
 ## Release identity
 

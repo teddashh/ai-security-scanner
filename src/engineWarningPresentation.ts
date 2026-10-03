@@ -113,7 +113,7 @@ const FIXED_ENGINE_WARNINGS: ReadonlyArray<readonly [string, string]> = [
 ];
 
 /**
- * The counted shortfall descriptions the Microsoft 365 adapters join into the
+ * The counted shortfall descriptions the scanner adapters join into the
  * "did not evaluate every control" disclosure. The report states the same
  * counts beside the result they qualify, so both read one table. An older
  * build's "reserved for manual review" is renamed before this is consulted.
@@ -540,6 +540,8 @@ export const recognizedEngineWarningZhTW = (warning: string): string | undefined
     [/^Semgrep finding at (.+) was not an object; the raw record was retained$/u, (pointer) => `${pointer} 的 Semgrep 問題不是物件；原始記錄已保留`],
     [/^Semgrep finding at (.+) lacked its check_id; the raw record was retained$/u, (pointer) => `${pointer} 的 Semgrep 問題缺少 check_id；原始記錄已保留`],
     [/^KICS query at (.+) was not an object; the raw record was retained$/u, (pointer) => `${pointer} 的 KICS 查詢不是物件；原始記錄已保留`],
+    [/^KICS reported failures in (.+); review the scan evidence and retry the affected checks$/u, (field) => `KICS 的 ${field} 回報檢查失敗；請查看掃描證據並重試受影響的檢查`],
+    [/^KICS (.+) counter was not a non-negative integer; scan completeness cannot be established$/u, (field) => `KICS 的 ${field} 計數格式不正確；無法確認掃描完整性`],
     [/^KICS query at (.+) lacked a valid query_id; the raw record was retained$/u, (pointer) => `${pointer} 的 KICS 查詢缺少有效的 query_id；原始記錄已保留`],
     [/^KICS query at (.+) lacked its files array; the raw record was retained$/u, (pointer) => `${pointer} 的 KICS 查詢缺少 files 陣列；原始記錄已保留`],
     [/^KICS file at (.+) was not an object; the raw record was retained$/u, (pointer) => `${pointer} 的 KICS 檔案記錄不是物件；原始記錄已保留`],

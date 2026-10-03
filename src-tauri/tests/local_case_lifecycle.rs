@@ -204,7 +204,19 @@ fn assert_report_provenance(
     execution: &PlannedEngineExecution,
     report: &ExecutionReport,
 ) {
-    assert_eq!(report.checkpoint.stage, ExecutionStage::Completed);
+    let expected_stage = if execution.manifest.id == "kube-bench" {
+        // The native fixture includes five WARN checks despite exit code zero.
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| { warning.contains("5 left without an automated verdict") })
+        );
+        ExecutionStage::CapturedAwaitingAdapter
+    } else {
+        ExecutionStage::Completed
+    };
+    assert_eq!(report.checkpoint.stage, expected_stage);
     assert!(report.checkpoint.cleanup_completed);
     assert_eq!(report.exit_code, Some(0));
     assert_eq!(report.checkpoint.case_id, execution.case_id);
@@ -1541,6 +1553,11 @@ fn typed_container_and_kubernetes_inputs_complete_the_product_lifecycle() {
             && purl == "pkg:deb/debian/example-package@1.0"
     ));
     let beginner = build_beginner_master_report(&completed, &plan.scan_run.id).unwrap();
+    assert!(beginner.coverage_gaps.iter().any(|gap| {
+        gap.dimension == "kube-bench: controls not evaluated"
+            && gap.reason.contains("5 left without an automated verdict")
+            && gap.next_action == "Check these controls by hand."
+    }));
     assert_eq!(beginner.inventory.counts.software_components, 1);
     assert!(beginner.inventory.items.iter().any(|item| {
         item.asset_id == oci_asset_id
@@ -1558,13 +1575,25 @@ fn typed_container_and_kubernetes_inputs_complete_the_product_lifecycle() {
             )
             && item.sources.iter().any(|source| source.engine_id == "syft")
     }));
-    assert!(
-        completed
-            .coverage
-            .iter()
-            .filter(|entry| entry.asset_id.is_some())
-            .all(|entry| entry.status == CoverageStatus::DiscoveredAuthorizedScanned)
-    );
+    let node_asset_id = &plan
+        .executable
+        .iter()
+        .find(|execution| execution.manifest.id == "kube-bench")
+        .unwrap()
+        .assets[0]
+        .id;
+    for entry in completed
+        .coverage
+        .iter()
+        .filter(|entry| entry.asset_id.is_some())
+    {
+        let expected = if entry.asset_id.as_ref() == Some(node_asset_id) {
+            CoverageStatus::AuthorizedScanIncomplete
+        } else {
+            CoverageStatus::DiscoveredAuthorizedScanned
+        };
+        assert_eq!(entry.status, expected, "{}", entry.label);
+    }
 }
 
 struct GreenboneFrameworkVertical {

@@ -36,7 +36,7 @@ See the [image build index](image-build-index.md) for the repeatable local build
   - a file entry that is not an object;
   - 10,000 records.
 
-  `{"queries":[]}` is a finished run with nothing found. The adapter does not read the counters, so files KICS could not scan (`files_failed_to_scan`), failed queries (`queries_failed_to_execute`) and lines skipped by inline `kics-scan` comments (`lines_ignored`) leave the run complete.
+  Positive `files_failed_to_scan` or `queries_failed_to_execute` counters make the run partial, even with an empty `queries` array. A declared counter that is not a non-negative integer also withholds completion. Missing counters remain supported for historical reports. Lines skipped by inline `kics-scan` comments (`lines_ignored`) do not by themselves imply a failed check. Valid sibling findings keep their identities, severity and evidence. `{"queries":[]}` with no reported failures remains a finished run with nothing found.
 
 ## Downstream changes
 
@@ -47,6 +47,7 @@ None. The image is the upstream release image by digest, with no Dockerfile, lau
 - 2026-09-05: the KICS control mapping never matched -> it was keyed on `e24efb0e`, the shape of KICS's `description_id`, while findings carry the 36-character query UUID -> re-keyed to the query id of "S3 Bucket Object Not Encrypted" (a5e76de).
 - 2026-09-05: KICS findings carried no advisory link -> `references_from` did not read `query_url` -> it does now (a60d38a).
 - 2026-09-26: on a real 47-finding project scan, fifteen cards told the reader to confirm that a query UUID was no longer reported -> the verification sentence named the source rule, and KICS rules are UUIDs -> when the rule is a UUID and the finding has a title, the sentence names the title (6a60d50).
+- 2026-10-03: release review found that positive file/query failure counters could leave even an empty report complete -> adapter contract 0.2.3 records the coverage gap while keeping valid sibling findings. Regression cases cover empty and populated reports, malformed counters and ordinary ignored lines; no image change.
 - 2026-09-27: a real project report printed "infra/main.tf · line 1 · n/a" -> KICS writes `n/a` when a result has no resource -> the report and Results leave that label out; the technical details keep the location as written (d53ca4e).
 
 ## Updating this engine
@@ -61,7 +62,7 @@ Follow [section 4](../engine-maintenance.md#4-updating-an-engine), then:
 - **CLI and output shape.** At the new revision, re-check the flags in `internal/console/assets/scan-flags.json`, `ResultsExitCode` and `EngineErrorCode`, the report file name, and the `pkg/model/summary.go` fields the adapter reads: `query_id`, `query_name`, `severity`, `description`, `cwe`, `query_url`, and `files[].{file_name,line,search_line,resource_name,similarity_id,old_similarity_id}`. Read upstream with `git -C .upstreams/Checkmarx/kics show <revision>:<path>`; `engines/upstreams.lock.json` records that checkout at `015905d9…` on `master`, not at the pin.
 - **Mapping.** `mappings/control-mappings.json` has one exact entry, `5fb49a69-8d46-4495-a2f8-9c8c622b2b6e`; confirm it still exists in `assets/queries/terraform/aws/s3_bucket_object_not_encrypted/metadata.json`. `engine_rule_identifiers_have_the_shape_their_engine_actually_emits` (`src-tauri/src/adapters/control_mapping.rs`) requires KICS entries to be UUIDs. KICS and Checkov findings on one resource are never grouped (`configuration_rule_ids_are_never_correlated_across_engines` in `src-tauri/src/correlation.rs`).
 - **Tests.**
-  - In `src-tauri/tests/adapter_fixtures.rs` (fixture `kics.json`): `kics_preserves_valid_files_but_withholds_completion_for_malformed_declared_shapes`, `kics_and_trivy_keep_distinct_upstream_resources_and_secret_coordinates`, `repo_adapters_accept_their_explicit_empty_result_shapes_without_warnings`, `engine_supplied_advisory_links_survive_and_unsafe_ones_do_not`, `upstream_rule_details_are_retained_as_evidence_without_replacing_product_recommendations` and `the_action_a_finding_asks_for_matches_the_kind_of_problem_it_reports`.
+  - In `src-tauri/tests/adapter_fixtures.rs` (fixture `kics.json`): `kics_failed_checks_withhold_completion_and_keep_completed_sibling_findings`, `kics_preserves_valid_files_but_withholds_completion_for_malformed_declared_shapes`, `kics_and_trivy_keep_distinct_upstream_resources_and_secret_coordinates`, `repo_adapters_accept_their_explicit_empty_result_shapes_without_warnings`, `engine_supplied_advisory_links_survive_and_unsafe_ones_do_not`, `upstream_rule_details_are_retained_as_evidence_without_replacing_product_recommendations` and `the_action_a_finding_asks_for_matches_the_kind_of_problem_it_reports`.
   - `every_detector_places_its_finding_on_its_mapped_control` in `src-tauri/tests/all_engine_report_audit.rs`, `local_case_lifecycle_preserves_scope_evidence_and_comparison_truth` in `src-tauri/tests/local_case_lifecycle.rs`, and `an_opaque_source_rule_gives_way_to_the_finding_title` in `src-tauri/src/finding_narrative.rs`.
   - `src/engineWarningPresentation.ts` translates the adapter's warnings by exact text (`tests/frontend/warningPresentation.test.ts`); change both together.
   - The fixture holds only `queries`; its query has no `cwe` or `description`, and its file has an `asset_id` KICS never writes.
@@ -70,5 +71,5 @@ Follow [section 4](../engine-maintenance.md#4-updating-an-engine), then:
 - **Compare with raw output.**
   - Count with `jq '([.queries[].files[]] | length), .total_counter' kics.json`; the two numbers should match.
   - List with `jq -r '.queries[] | .query_id as $q | .files[] | [$q, .file_name, .line, .resource_name, .similarity_id] | @tsv' kics.json | sort | uniq -c`; identical rows merge into one finding.
-  - Read `jq '{files_scanned, files_failed_to_scan, queries_total, queries_failed_to_execute, lines_ignored}' kics.json` for what the report does not show.
+  - Read `jq '{files_scanned, files_failed_to_scan, queries_total, queries_failed_to_execute, lines_ignored}' kics.json` to compare the adapter coverage disclosure with the upstream counters.
 - **Publishing.** Nothing is built or published. Changing the pin is a catalog and plan edit.

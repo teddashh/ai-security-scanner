@@ -1,6 +1,6 @@
 # Current product review
 
-Reviewed: 2026-09-15
+Reviewed: 2026-10-03
 
 Canonical behavior: [Product specification](product-spec.md)
 
@@ -39,7 +39,7 @@ The app creates a bounded private snapshot and runs applicable upstream tools:
 
 Adapters preserve upstream identifiers, severity, locations, evidence, and remediation. Repository ignore rules remove generated, dependency, build, cache, and VCS trees while retaining common secret-bearing source files for secret inspection.
 
-The prepared Trivy source adds checksum-pinned offline JAR identification through Trivy's standard Java index and vulnerability database. The published catalog image remains `0.74.0-3`; activating the prepared image requires a new immutable image release.
+The published and catalog-pinned Trivy `0.74.0-4` image includes checksum-pinned offline JAR identification through Trivy's standard Java index and vulnerability database. Semgrep `1.174.0-4` combines 1,493 legacy upstream rules with four product rules; its dated LGPL and Commons Clause notices and original rule sources are retained. See the [image build and update notebook](engines/image-build-index.md) and [Semgrep publication record](engines/semgrep-publication-2026-10-03.md).
 
 ## Website checks
 
@@ -53,15 +53,15 @@ Each internal system is one exact hostname or IP address with confirmed ports. T
 
 Only `alarm` records become vulnerability findings. Unrated alarms remain **Unknown**. Scanner errors and non-responsive hosts become incomplete asset coverage with a direct next action. Informational `log` records remain technical evidence. Saved legacy single-service profiles retain their original host, protocol, and port boundaries.
 
-The updated Greenbone launcher source carries typed result semantics. The published immutable image still contains the earlier launcher; a new image coordinate activates the updated output contract.
+The published and catalog-pinned Greenbone `23.50.24-feed202610010558-1` image carries the typed result contract and the current feed snapshot.
 
 ## Advanced sources
 
 Infrastructure files, Kubernetes manifests, exported container images, cloud accounts, and live clusters remain available as secondary sources. Each uses its selected artifact, resource, account, subscription, project, or cluster scope.
 
-Prepared source updates for kube-bench replace the former six-check subset with the unmodified upstream CIS 1.11 node profile. The published catalog still points to `0.16.0-3`; a new immutable image coordinate activates the updated profile.
+The published and catalog-pinned kube-bench `0.16.0-4` image uses the unmodified upstream CIS 1.11 node profile. The next desktop adapter records WARN checks as incomplete automated coverage without turning them into failed findings. KICS similarly withholds completion when its declared file or query failure counters are positive or malformed.
 
-The Maester source preserves upstream `Investigate` as a no-verdict control instead of a failed finding. The published Maester image predates that wrapper update; a new immutable image coordinate activates it.
+The published and catalog-pinned Maester `2.0.0-9` image preserves upstream `Investigate` as a no-verdict control instead of a failed finding. ScubaGear `1.8.0-8` and the revised Microsoft 365 setup include the approved PIM read permissions. A fresh owner-run Microsoft 365 acceptance scan has not yet been observed.
 
 GCP Prowler currently uses its reviewed four-check permission and endpoint closure. Widening that profile requires one coordinated product decision covering checks, permissions, assets, endpoints, and report wording.
 
@@ -88,7 +88,7 @@ task-provenance, and packaged-engine metadata used to decide what the reader see
 permissions and task kinds fail closed: they cannot create authorization, scanner provenance, completed
 work, or covered-asset credit.
 
-The automated baseline completed with 1,691 Rust tests, 678 frontend tests, 263 component tests, 46 CI
+The 2026-09-15 automated baseline completed with 1,691 Rust tests, 678 frontend tests, 263 component tests, 46 CI
 contract tests, and 8 engine-catalog tests, together with TypeScript checking, production build, Rust
 formatting, Clippy, mapping validation, and the five-scenario usability-evidence contract. The usability
 record contains no human session, and this review does not claim installed-product acceptance.
@@ -97,4 +97,4 @@ record contains no human session, and this review does not claim installed-produ
 
 The next installed-product acceptance uses the published desktop installer to complete one controlled mixed IT-environment run through Setup, Review, Progress, Results, reopen, and readable HTML export. It records time from asset entry to the first useful security result.
 
-Image-source updates enter a release only after their new immutable coordinates are published and selected in the engine catalog. GCP Prowler remains at its current reviewed scope until the wider product contract is selected.
+The [desktop release readiness record](release/desktop-readiness-2026-10-03.md) tracks the candidate build, installed check and Microsoft 365 follow-up. Image-source updates enter a release only after their new immutable coordinates are published and selected in the engine catalog. GCP Prowler remains at its current reviewed scope until the wider product contract is selected.

@@ -6,9 +6,9 @@
 
 ## 目前發布版本
 
-[v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0) 是提供給測試者的**預先發行版（pre-release）**，涵蓋 **Linux、macOS、Windows**。[Actions run 36884417623](https://github.com/teddashh/ai-security-scanner/actions/runs/36884417623) 以 public candidate 建置並驗證精確來源 `dddd491b87f90c9cebc5f946d9e2070f36742f21`；[promotion run 36890665121](https://github.com/teddashh/ai-security-scanner/actions/runs/36890665121) 在 `release-publication` environment 核准後，不重新建置即發布同一批凍結檔案。發布頁包含安裝檔、`SHA256SUMS.txt`、runtime manifests、SBOM、notices 與 qualification 紀錄。
+[v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0) 是目前已發布的桌面版本，涵蓋 **Linux、macOS、Windows**。[Actions run 36884417623](https://github.com/teddashh/ai-security-scanner/actions/runs/36884417623) 以 public candidate 建置並驗證精確來源 `dddd491b87f90c9cebc5f946d9e2070f36742f21`；[promotion run 36890665121](https://github.com/teddashh/ai-security-scanner/actions/runs/36890665121) 在 `release-publication` environment 核准後，不重新建置即發布同一批凍結檔案。發布頁包含安裝檔、`SHA256SUMS.txt`、runtime manifests、SBOM、notices 與 qualification 紀錄。
 
-v0.3.0 標示為 pre-release，因此不是 latest release，應用程式內的更新程式也不會提供它。1.0.0 保留給正式版（GA）。
+2026-10-03 核對時，GitHub 將 v0.3.0 標為 latest，且 `prerelease: false`。凍結的 `release-metadata.json` 仍記錄 `releaseChannel: prerelease`，發布說明也保留原始測試揭露。公開的 `latest.json` 有 macOS 與 Windows NSIS 更新目標；Linux Debian 與 Windows MSI 沒有對應的套件更新。GitHub 標籤不會改變原始驗證紀錄，也不代表已達 GA。`package.json` 仍保留 `release.target: 1.0.0`；下一版的版本與渠道由負責人決定。
 
 | 平台 | 安裝檔 | 揭露事項 |
 | --- | --- | --- |
@@ -17,6 +17,8 @@ v0.3.0 標示為 pre-release，因此不是 latest release，應用程式內的�
 | Linux x86-64 | Debian `.deb` | 技術 qualification 通過。AppImage 與 `.rpm` 因未觀察技術 qualification 而**未提供**。 |
 
 兩種 Windows 安裝檔均保留 `windows-lifecycle-not-observed` 與 `windows-data-preservation-not-observed`；安裝檔 qualification 通過不代表已驗證這些 lifecycle 行為。每個安裝檔的 exact-candidate 新手真人操作路徑均為 `not-observed`。部分套件具有 updater 簽章，但不代表具備 OS 簽章或 Apple 公證。以上是揭露事項，並非發布門檻。
+
+最新進度見 [2026-10-03 桌面發布準備紀錄](release/desktop-readiness-2026-10-03.md)，區分已完成的 main 修正與候選安裝包待辦。
 
 ## 版本身分
 

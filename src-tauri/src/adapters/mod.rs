@@ -25,7 +25,7 @@ use std::io::{BufRead, BufReader, Read, Take};
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-pub const ADAPTER_VERSION: &str = "0.2.2";
+pub const ADAPTER_VERSION: &str = "0.2.3";
 /// Stable identity for the canonical finding fingerprint algorithm. Changing
 /// this value requires an explicit migration before cross-version diffs may be
 /// treated as comparable.
@@ -4858,7 +4858,7 @@ pub(crate) fn disclosed_unevaluated_controls(warning: &str) -> Option<(&str, Vec
     Some((engine, items.split(", ").collect()))
 }
 
-/// What a Microsoft 365 run left unevaluated, and whether that shortfall is
+/// What a scanner run left unevaluated, and whether that shortfall is
 /// severe enough that the run must not claim completion.
 struct UnevaluatedControls {
     disclosure: String,
@@ -4869,8 +4869,8 @@ struct UnevaluatedControls {
     withholds_completion: bool,
 }
 
-/// Controls the Microsoft 365 wrappers counted but did not turn into a
-/// normalized result, phrased for the person reading the run.
+/// Controls left without a verdict, phrased for the person reading the run.
+/// kube-bench exposes WARN directly; Microsoft 365 wrappers expose counters.
 ///
 /// Both wrappers drop any control whose upstream status they do not map
 /// (`run-scubagear.ps1:126`, `run-maester.ps1:123`), and they record what they
@@ -4885,6 +4885,35 @@ struct UnevaluatedControls {
 /// upstream is explicit that this is what its error counter means: a missing
 /// provider command becomes an error. Only the second withholds completion.
 fn unevaluated_controls(profile: Profile, parsed: &ParsedArtifact) -> Option<UnevaluatedControls> {
+    if profile == Profile::KubeBench {
+        let root = json_root(parsed)?;
+        let controls = root
+            .get("Controls")
+            .or_else(|| root.get("controls"))?
+            .as_array()?;
+        let count = controls
+            .iter()
+            .filter_map(|control| control.get("tests").and_then(Value::as_array))
+            .flatten()
+            .filter_map(|test| test.get("results").and_then(Value::as_array))
+            .flatten()
+            .filter(|result| {
+                result
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .is_some_and(|status| status.eq_ignore_ascii_case("WARN"))
+            })
+            .count();
+        return (count > 0).then(|| UnevaluatedControls {
+            disclosure: format!(
+                "kube-bench{}{count} left without an automated verdict{}",
+                UNEVALUATED_CONTROLS_FRAME.0, UNEVALUATED_CONTROLS_FRAME.1
+            ),
+            // WARN covers both manual checks and checks that could not run.
+            // Status alone cannot establish which checks actually completed.
+            withholds_completion: true,
+        });
+    }
     // `Diagnostics` counters for controls the wrapper did not represent, paired
     // with how to say each one out loud. `by_design` was a deliberate pass;
     // `unevaluable` means the engine tried and could not.
@@ -6759,6 +6788,28 @@ fn extract_kics(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sour
         push_warning(warnings, "KICS expected a JSON document");
         return Vec::new();
     };
+    // Older reports omit these counters. A declared failure must still prevent
+    // a clean result, even when the findings array is empty. Ignored lines and
+    // similarity-id failures are not evidence that a security query failed.
+    for field in ["files_failed_to_scan", "queries_failed_to_execute"] {
+        if let Some(counter) = root.get(field) {
+            match counter.as_u64() {
+                Some(0) => {}
+                Some(_) => push_warning(
+                    warnings,
+                    format!(
+                        "KICS reported failures in {field}; review the scan evidence and retry the affected checks"
+                    ),
+                ),
+                None => push_warning(
+                    warnings,
+                    format!(
+                        "KICS {field} counter was not a non-negative integer; scan completeness cannot be established"
+                    ),
+                ),
+            }
+        }
+    }
     let Some(queries) = root.get("queries").and_then(Value::as_array) else {
         push_warning(
             warnings,

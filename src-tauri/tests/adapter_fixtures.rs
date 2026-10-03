@@ -1402,9 +1402,10 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
     ]);
     for engine_id in BUILTIN_ENGINE_IDS {
         let output = normalize_fixture(engine_id);
-        assert!(
+        assert_eq!(
             output.complete,
-            "native fixture for {engine_id} must normalize completely"
+            *engine_id != "kube-bench",
+            "{engine_id}: the kube-bench fixture includes manual WARN checks"
         );
         if inventory_engines.contains(engine_id) {
             assert!(
@@ -2621,11 +2622,9 @@ fn checkov_preserves_explicit_ratings_and_keeps_missing_ones_unknown() {
 #[test]
 fn kube_bench_failures_remain_findings_without_an_invented_rating() {
     let output = normalize_fixture("kube-bench");
-    assert!(
-        output.complete,
-        "unexpected warnings: {:?}",
-        output.warnings
-    );
+    assert!(!output.complete, "the fixture includes five WARN checks");
+    assert_eq!(output.warnings.len(), 1, "WARN checks share one disclosure");
+    assert!(output.warnings[0].contains("5 left without an automated verdict"));
     assert_eq!(output.findings.len(), 6, "only failing checks are findings");
 
     for finding in &output.findings {
@@ -4454,6 +4453,108 @@ fn semgrep_preserves_valid_findings_but_withholds_completion_for_errors_and_bad_
                 .contains("ERROR_SHAPE_SENTINEL_MUST_NOT_LEAK")
         );
     }
+}
+
+#[test]
+fn kube_bench_manual_checks_never_become_a_clean_zero_finding_result() {
+    let bytes = br#"{"Controls":[{"tests":[{"results":[
+      {"test_number":"4.2.20","test_desc":"Manual configuration check","status":"WARN",
+       "remediation":"MANUAL_REMEDIATION_STAYS_IN_EVIDENCE"},
+      {"test_number":"4.2.21","status":"WARN"}
+    ]}]}]}"#;
+    let manual = normalize_bytes(
+        "kube-bench",
+        bytes,
+        "kube-bench-manual.json",
+        "application/json",
+        "run-manual",
+    );
+    assert!(!manual.complete);
+    assert!(
+        manual.findings.is_empty(),
+        "manual checks are not failed findings"
+    );
+    assert_eq!(manual.warnings.len(), 1);
+    assert!(manual.warnings[0].contains("2 left without an automated verdict"));
+    assert!(!manual.warnings[0].contains("MANUAL_REMEDIATION_STAYS_IN_EVIDENCE"));
+
+    let passed = normalize_bytes(
+        "kube-bench",
+        br#"{"Controls":[{"tests":[{"results":[{"test_number":"4.2.1","status":"PASS"}]}]}]}"#,
+        "kube-bench-pass.json",
+        "application/json",
+        "run-pass",
+    );
+    assert!(passed.complete);
+    assert!(passed.findings.is_empty());
+    assert!(passed.warnings.is_empty());
+}
+
+#[test]
+fn kics_failed_checks_withhold_completion_and_keep_completed_sibling_findings() {
+    let (bytes, filename, media_type) = fixture("kics");
+    let baseline = normalize_bytes("kics", bytes, filename, media_type, "run-kics-coverage");
+    assert!(baseline.complete);
+    assert!(!baseline.findings.is_empty());
+    for field in ["files_failed_to_scan", "queries_failed_to_execute"] {
+        for counter in [
+            serde_json::json!(2),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("COUNTER_SENTINEL_MUST_NOT_LEAK"),
+            serde_json::json!(null),
+        ] {
+            let mut report: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+            report[field] = counter.clone();
+            let output = normalize_bytes(
+                "kics",
+                &serde_json::to_vec(&report).unwrap(),
+                filename,
+                media_type,
+                "run-kics-coverage",
+            );
+            assert!(!output.complete, "{field}={counter}");
+            assert_eq!(output.findings.len(), baseline.findings.len());
+            for (actual, expected) in output.findings.iter().zip(&baseline.findings) {
+                assert_eq!(actual.id, expected.id);
+                assert_eq!(actual.fingerprint, expected.fingerprint);
+                assert_eq!(actual.title, expected.title);
+                assert_eq!(actual.severity, expected.severity);
+                assert_eq!(actual.evidence.len(), expected.evidence.len());
+                for (actual, expected) in actual.evidence.iter().zip(&expected.evidence) {
+                    assert_eq!(actual.location, expected.location);
+                    assert_eq!(actual.source_rule, expected.source_rule);
+                }
+            }
+            assert_eq!(output.warnings.len(), 1);
+            assert!(!output.warnings[0].contains("COUNTER_SENTINEL_MUST_NOT_LEAK"));
+
+            report["queries"] = serde_json::json!([]);
+            let empty = normalize_bytes(
+                "kics",
+                &serde_json::to_vec(&report).unwrap(),
+                filename,
+                media_type,
+                "run-kics-empty-coverage",
+            );
+            assert!(
+                !empty.complete,
+                "empty findings must not hide {field}={counter}"
+            );
+            assert!(empty.findings.is_empty());
+        }
+    }
+    let clean = normalize_bytes(
+        "kics",
+        br#"{"queries":[],"files_failed_to_scan":0,"queries_failed_to_execute":0,"lines_ignored":7}"#,
+        filename, media_type, "run-kics-clean",
+    );
+    assert!(
+        clean.complete,
+        "ignored lines are part of the selected upstream scan scope"
+    );
+    assert!(clean.findings.is_empty());
+    assert!(clean.warnings.is_empty());
 }
 
 #[test]
