@@ -1,10 +1,10 @@
-# Semgrep combined-pack publication preparation — 2026-10-03
+# Semgrep combined-pack publication — 2026-10-03
 
-This record describes the prepared `1.174.0-4` recipe. It does not claim that
-the version has been published. The catalog and published-plan receipts still
-name `1.174.0-3`; change them only after actual publication evidence exists.
-Preparation was verified on the `semgrep-release-20261003` review branch before
-advancing the approved publication path on main.
+This record describes published `1.174.0-4`, verified and signed in
+[run 37138219098](https://github.com/teddashh/ai-security-scanner/actions/runs/37138219098) from project source
+`94af3e7c5f28fe5f442525a7b0d3aab88b5632ba`. The catalog and plan now pin the
+actual public index and platform digests. Earlier local and verification-only
+receipts below remain historical evidence, distinct from this publication.
 
 The owner authorized advancing publication on October 3. This operation
 distributes the image publicly without a fee, preserving the legacy
@@ -149,7 +149,49 @@ The CI amd64 filesystem differs from the separately built local amd64 one.
 Pinned inputs and equal scan results do not establish byte-identical builds.
 Publication must compare against its own immediately verified platform receipts
 and reuse those staged caches; a cache miss or changed filesystem fails before
-promotion. The actual publication remains pending signed public image
-evidence. The updated artifact verifier passed all
+promotion. The later publication completed and its signed public image
+evidence is recorded below. The updated artifact verifier passed all
 19 tests, including six native-evidence drift cases; all 200 release contract
 tests also passed.
+
+## Completed public distribution
+
+[Run 37138219098](https://github.com/teddashh/ai-security-scanner/actions/runs/37138219098) completed successfully.
+Anonymous pulls and both installed-filesystem receipts match the native
+verifications from that same run. Downloaded evidence was independently checked
+with the artifact verifier: four per-platform SBOMs, five cryptographically
+verified Sigstore attestations, source/run/workflow identities, exact file
+inventory and checksums, full-result unions and all four refusal controls.
+
+Index digest: `sha256:3f1a10c7bce32eae912479c5744dbb653bdfa9a4cbd3d53afd2e0a435b10fb59`.
+
+| Platform | Published manifest digest | Native / public filesystem SHA-256 | Verification JSON SHA-256 |
+| --- | --- | --- | --- |
+| linux/amd64 | `sha256:974a9bf30c7d0cd973893a12186b054ae48a692367c174d8514fe667fb150e41` | `21fb6e6abf9a85456ecaf860fc2a29fef6359f4df66b0366a9397f4969a3ff5b` | `0cf04c936456917d409e0ee6e631fed4407904557cc03f198a1ac327ddffeaae` |
+| linux/arm64 | `sha256:27a6f8d42f7bbea1ee62e4a662fd4c4b591de45ac947c90c22e1f9e29438f979` | `529fca787dee01941f133806352c1a855a337921e0140764032029175dc75b0d` | `12c0e173d8d452783326a6d1efc1cb0c0a6de3df5a17d162c2fddbfee22d9bf6` |
+
+Evidence artifact: `semgrep-image-evidence-37138219098-1`;
+root checksum receipt: `sha256:ea90c34c1273b9dca7991d8d61b0e035357fa44337a65466b48901cc8a8c91dd`.
+The selected source attachment remains 33,033,850 bytes with SHA-256
+`3282013b050f79b3f417f488433a050fda219da99edc66c1a6520414842156cd`.
+Both actual builds acquired upstream hook packages `openssl-libs-static`
+3.5.9-r0 and `zlib-static` 1.3.2-r0.
+
+The current Semgrep plan now covers every tracked executable input, including
+rule/source builders, product rules/license, submodule lock and verification
+helpers. Its two historical uncovered-input exceptions were removed. The shared
+launcher hash was updated in all six current consuming plans; the five sibling
+image tags, digests and historical publication receipts are unchanged.
+
+The dependency-free CI suite has 89 tests; its two YAML workflow checks moved
+to the dependency-installed release suite, which passed all 202 tests. This
+corrects the first main CI failure caused by importing YAML before installation.
+
+A separate anonymous local pull of the public index also matched the amd64
+installed-filesystem receipt. Its fixed launcher scanned the same six synthetic
+fixtures with networking disabled, read-only root/input, two CPUs, 2 GiB,
+256 PIDs and 512 MiB of temporary storage. It returned 22 complete results,
+identical to the native CI result multiset. The shared Rust normalizer produced
+22 findings without warnings and preserved native IDs, locations, severity,
+bounded titles and raw evidence hashes. The local raw JSON SHA-256 is
+`08758043fa5f50ac98776f1ba9b714455a2fcea694963fc9ea97a00724b6acf5`.

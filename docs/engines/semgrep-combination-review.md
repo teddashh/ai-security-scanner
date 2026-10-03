@@ -377,8 +377,8 @@ The preparation branch also limits automatic publication to explicitly new
 tags, isolates native Semgrep failures from selected sibling publications and
 extends downloadable-artifact checks to the native receipts and complete result
 union. Thirteen Python tests, 91 CI contracts, 19 publication-artifact verifier
-tests and all 200 release contracts passed. Current main image pins and published
-receipts remain unchanged until the approved free public image distribution
-produces signed evidence. Preserve the legacy Commons Clause restriction on
+tests and all 200 release contracts passed. The later `1.174.0-4` free public distribution succeeded;
+its actual signed digests and replacement catalog pin are recorded in the
+[publication record](semgrep-publication-2026-10-03.md). Preserve the legacy Commons Clause restriction on
 paid products/services whose value derives entirely or substantially from the
 rules; publication does not decide the product's future business model.

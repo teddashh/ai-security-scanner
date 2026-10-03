@@ -16,8 +16,8 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-semgrep",
-    "tag": "1.174.0-3",
-    "digest": "sha256:6240c4ce08f9a5d7ead0914d907fae08704a1b783c3a7f8f405f978e9b596498"
+    "tag": "1.174.0-4",
+    "digest": "sha256:3f1a10c7bce32eae912479c5744dbb653bdfa9a4cbd3d53afd2e0a435b10fb59"
   },
   "build_recipe": {
     "source_revision": "a0c13f304151e531c7e7c00838076211a07a790c",
@@ -65,21 +65,119 @@
     "static_steps": [
       [
         "make",
-        "build-release"
+        "opam-init",
+        "OPAM_INIT_FLAGS=--disable-sandboxing"
+      ],
+      [
+        "make",
+        "switch"
+      ],
+      [
+        "make",
+        "install-deps"
+      ],
+      [
+        "env",
+        "DUNE_JOBS=4",
+        "SEMGREP_GIT_COMMIT=a0c13f304151e531c7e7c00838076211a07a790c",
+        "opam",
+        "exec",
+        "--",
+        "make",
+        "core"
+      ],
+      [
+        "uv",
+        "sync",
+        "--frozen",
+        "--no-dev",
+        "--no-editable",
+        "--python",
+        "/usr/bin/python3"
       ]
-    ]
+    ],
+    "local_inputs": [
+      {
+        "path": "engines/images/semgrep/build_rule_pack.py",
+        "sha256": "sha256:dcd0148af08f5ab5fe8973da53ccb5d88b26f03894c074f3b516f09031cd0222"
+      },
+      {
+        "path": "engines/images/semgrep/prepare_source_bundle.py",
+        "sha256": "sha256:f6c570d7bb8cc60fca0c169cdd512436d21e0be301bb6236fad120d58a92e250"
+      },
+      {
+        "path": "engines/images/semgrep/product-rules.yml",
+        "sha256": "sha256:2081a62359682db1ddd15eda7eed1f3931975870cef8f8dab7120ba86fe2e5f3"
+      },
+      {
+        "path": "engines/images/semgrep/product-LICENSE",
+        "sha256": "sha256:2c932015241407e23ce7b557b89d284ea7d5f13fa056f480e91184f27e87bdc8"
+      },
+      {
+        "path": "engines/images/semgrep/submodules.lock",
+        "sha256": "sha256:71e3d2192ffc7452b6a886506dcd24ce19ea0c1168488d87eb2e2f3847354e8d"
+      },
+      {
+        "path": "engines/images/semgrep/preview_combined_pack.py",
+        "sha256": "sha256:92cc6c4e677a6b7b6eab7690875a21d734518f5e6637b6e8f7a231f4364a393b"
+      },
+      {
+        "path": "engines/images/semgrep/run_combined_preview.py",
+        "sha256": "sha256:89f7a7e2dc47a632932c6cdd460319b4fb916dc75bf634755fedb3c563a778a3"
+      },
+      {
+        "path": "engines/images/semgrep/run_managed_combination.py",
+        "sha256": "sha256:5a7c1a7e7d549820aa07ea26f3018d0c1edaeb868965c886881270afe09ce0d6"
+      },
+      {
+        "path": "engines/images/semgrep/verify_image_payload.py",
+        "sha256": "sha256:3864513bc403a38b11e6053973f266ac7b4b72d562d3c185333fddb764ea7c32"
+      },
+      {
+        "path": "engines/images/semgrep/SOURCE-OFFER.md",
+        "sha256": "sha256:501bf2e26fe5b12468ef63d1d9ccaf409767ce1a087e9442b6d629182eb9f41a"
+      },
+      {
+        "path": "engines/images/local-launcher/go.mod",
+        "sha256": "sha256:dd2e0294fcbd04fa8f8e706daf4924b01f052a0d0b16946b02952027ef33dadb"
+      }
+    ],
+    "rule_pack": {
+      "profile": "legacy-and-product-offline",
+      "upstream_repository": "https://github.com/semgrep/semgrep-rules",
+      "upstream_revision": "0f5a85ceab1b82b193d0eaa418784c932d237d68",
+      "upstream_committed_at": "2024-12-13T09:04:54Z",
+      "upstream_archive": {
+        "url": "https://github.com/semgrep/semgrep-rules/archive/0f5a85ceab1b82b193d0eaa418784c932d237d68.tar.gz",
+        "size_bytes": 1148011,
+        "sha256": "sha256:a6bb2ee1a261da82a1263c1b32ad6f4535628742192c0bb1f68f13343c31bbcc"
+      },
+      "upstream_license": {
+        "identifier": "LGPL 2.1 plus Commons Clause",
+        "sha256": "sha256:9600f388f17cb800a7a0ba8b55bc15c5b0ed047de8517f2d5e533becee9d0a18"
+      },
+      "selected_upstream_files": 1477,
+      "upstream_rule_count": 1493,
+      "product_rule_count": 4,
+      "config_file_count": 1478,
+      "unique_rule_count": 1497,
+      "manifest_sha256": "sha256:63678fc6790ebdeca2961080095611030b8e51f8b19ac228ee7e2c6862083040",
+      "provenance_sha256": "sha256:a5f8961abe75a57da4c752f39272baa64ac95ca4181e507c070772c54f5c09bf",
+      "excluded_source": "java/lang/security/audit/xss/no-direct-response-writer.yaml",
+      "source_profile": "selected-legacy-and-product-rules"
+    }
   },
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/semgrep/Dockerfile",
-    "sha256": "sha256:cbd0f55a2d32d880d1bf26be73076a1caf21731c1beb7b2bc21c47179a766335",
+    "sha256": "sha256:081f7a34aeb8d9af839df679006902b6ad0c51e00862e8d76951e2fb2e432a81",
     "reason": null
   },
   "wrapper": {
     "required": true,
-    "strategy": "Invoke the pinned OSS source build against only the read-only case workspace and the checksum-verified upstream offline security rule pack.",
+    "strategy": "Invoke the pinned CE build against only the read-only repository snapshot and checksum-verified legacy plus product offline rule pack; verify rule-ID provenance before execution.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:e5b1c32b528c339a2be857211a8f7879f677d1a11377fd3893f3f8508d504a66"
+    "launcher_sha256": "sha256:ddd5775990c5ecff62a356a5480e4dd88afe9521e2f00ee94c03cedcc9592794"
   },
   "command": [
     "--engine",
@@ -97,7 +195,7 @@
   },
   "license": {
     "disposition": "source_offer",
-    "rationale": "The managed image is built from the pinned LGPL-2.1-or-later source closure and carries corresponding source; the separate pinned upstream rule license and source records are preserved in the image.",
+    "rationale": "The pinned LGPL-2.1-or-later CE build carries selected corresponding sources and notices. The 1,493 selected legacy upstream rules retain their LGPL 2.1 plus Commons Clause notice, unchanged detector bytes and original-source provenance; four product rules are Apache-2.0. Free public distribution preserves these terms and does not authorize restricted paid uses.",
     "source_offer_path": "engines/images/semgrep/SOURCE-OFFER.md"
   },
   "blockers": [],
@@ -114,18 +212,58 @@
     "telemetry": false
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33196902246",
-    "source_revision": "2641850304aeade6ab8ee3b23eda80a7f66411d0",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/37138219098",
+    "source_revision": "94af3e7c5f28fe5f442525a7b0d3aab88b5632ba",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:0f73d9f10fef8d4b67b217b4deb5f85a65304f40d79a4fd499c1bab892b5a5d4",
-      "linux/arm64": "sha256:0e80059911abc48d4aab405cbcc621104c7de0b9a212dede830636940b85d66c"
+      "linux/amd64": "sha256:974a9bf30c7d0cd973893a12186b054ae48a692367c174d8514fe667fb150e41",
+      "linux/arm64": "sha256:27a6f8d42f7bbea1ee62e4a662fd4c4b591de45ac947c90c22e1f9e29438f979"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "semgrep-image-evidence-33196902246-1",
-    "managed_smoke_evidence_sha256": "sha256:2b744f5a527b441f5c7d7033882b785c98a29e522e4e784901815df62cf9227c"
+    "evidence_artifact": "semgrep-image-evidence-37138219098-1",
+    "managed_smoke_evidence_sha256": "sha256:1219e929a158c27c6d14c3d3e2847202218023eb3272f482f2e02ae470b5c91e",
+    "signer_identity": "https://github.com/teddashh/ai-security-scanner/.github/workflows/engine-images-local-k8s.yml@refs/heads/main",
+    "root_checksum_receipt_sha256": "sha256:ea90c34c1273b9dca7991d8d61b0e035357fa44337a65466b48901cc8a8c91dd",
+    "native_verification": {
+      "linux/amd64": {
+        "receipt_sha256": "sha256:0cf04c936456917d409e0ee6e631fed4407904557cc03f198a1ac327ddffeaae",
+        "rootfs_payload_sha256": "sha256:21fb6e6abf9a85456ecaf860fc2a29fef6359f4df66b0366a9397f4969a3ff5b",
+        "source_attachment_sha256": "sha256:3282013b050f79b3f417f488433a050fda219da99edc66c1a6520414842156cd",
+        "managed_artifact_sha256": "sha256:e69b8d68247937790e7102725b3914070a617eb0f5b42720590180d5ac429ec3",
+        "native_matches": {
+          "combined": 22,
+          "managed": 22,
+          "product": 10,
+          "upstream": 12
+        },
+        "rejections_before_output": {
+          "changed-provenance": 126,
+          "changed-rule": 126,
+          "extra-rule": 126,
+          "writable-workspace": 126
+        }
+      },
+      "linux/arm64": {
+        "receipt_sha256": "sha256:12c0e173d8d452783326a6d1efc1cb0c0a6de3df5a17d162c2fddbfee22d9bf6",
+        "rootfs_payload_sha256": "sha256:529fca787dee01941f133806352c1a855a337921e0140764032029175dc75b0d",
+        "source_attachment_sha256": "sha256:3282013b050f79b3f417f488433a050fda219da99edc66c1a6520414842156cd",
+        "managed_artifact_sha256": "sha256:94b633a24264e60f6d5f0a028ff0637c3af94e4932ffc0f41c5544ccfa9ab53f",
+        "native_matches": {
+          "combined": 22,
+          "managed": 22,
+          "product": 10,
+          "upstream": 12
+        },
+        "rejections_before_output": {
+          "changed-provenance": 126,
+          "changed-rule": 126,
+          "extra-rule": 126,
+          "writable-workspace": 126
+        }
+      }
+    }
   }
 }

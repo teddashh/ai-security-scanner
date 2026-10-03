@@ -214,14 +214,6 @@
       "reason": "Controls the ScubaGear Docker build context allowlist but has no digest in the plan."
     },
     {
-      "path": "engines/images/semgrep/build_rule_pack.py",
-      "reason": "Selects and builds the pinned Semgrep rule pack during the image build but is absent from the plan."
-    },
-    {
-      "path": "engines/images/semgrep/submodules.lock",
-      "reason": "Pins Semgrep parser and rule-source archives used by the build but the lock file itself has no plan digest."
-    },
-    {
       "path": "engines/images/steampipe/Dockerfile.dockerignore",
       "reason": "Controls the Steampipe Docker build context allowlist but has no digest in the plan."
     },

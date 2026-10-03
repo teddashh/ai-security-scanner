@@ -1723,27 +1723,30 @@
     "id": "semgrep",
     "display_name": "Semgrep",
     "category": "code_and_secrets",
-    "description": "Runs the pinned upstream Semgrep security rule pack across applicable languages in user-selected repository snapshots.",
+    "description": "Runs Semgrep CE over user-selected repository snapshots with 1,493 selected legacy upstream security rules and four product rules, all pinned offline.",
     "supported_providers": [],
     "repository_url": "https://github.com/semgrep/semgrep",
     "homepage_url": "https://semgrep.dev/",
-    "license_spdx": "LGPL-2.1-or-later AND LicenseRef-Semgrep-Rules-License-1.0",
+    "license_spdx": "LGPL-2.1-or-later AND LicenseRef-Semgrep-Legacy-Rules-Commons-Clause AND Apache-2.0",
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-semgrep",
-      "tag": "1.174.0-3",
-      "digest": "sha256:6240c4ce08f9a5d7ead0914d907fae08704a1b783c3a7f8f405f978e9b596498",
-      "signature_identity": null
+      "tag": "1.174.0-4",
+      "digest": "sha256:3f1a10c7bce32eae912479c5744dbb653bdfa9a4cbd3d53afd2e0a435b10fb59",
+      "signature_identity": "https://github.com/teddashh/ai-security-scanner/.github/workflows/engine-images-local-k8s.yml@refs/heads/main"
     },
     "source_revision": "a0c13f304151e531c7e7c00838076211a07a790c",
     "engine_version": "source@a0c13f304151e531c7e7c00838076211a07a790c",
-    "rule_version": "947bf05744d4c95153173a24879f30b3ba1a65aa",
+    "rule_version": "0f5a85ceab1b82b193d0eaa418784c932d237d68",
     "adapter_version": "0.2.2",
     "supported_asset_kinds": [
       "repository"
     ],
     "input_contracts": [
-      { "asset_kind": "repository", "input_profile": "repository_working_tree" }
+      {
+        "asset_kind": "repository",
+        "input_profile": "repository_working_tree"
+      }
     ],
     "required_permissions": [
       "local_artifact_read"
@@ -1767,13 +1770,14 @@
     ],
     "status": "integrated",
     "notices": [
-      "Built from the exact open-source Semgrep revision with a checksum-bound upstream security rule pack containing 1,620 rules across 1,603 configurations.",
-      "Runs against the read-only case workspace with engine networking disabled.",
-      "Corresponding source and notices are carried in the image and repository."
+      "The offline pack contains 1,493 selected upstream rules from the 2024-12-13 legacy snapshot and four Apache-2.0 product rules: 1,497 unique IDs in 1,478 configurations.",
+      "Legacy upstream rules retain LGPL 2.1 plus Commons Clause, including restrictions on paid products or services whose value derives entirely or substantially from the rules.",
+      "Runs against the read-only repository snapshot with engine networking disabled; detector bodies and native ratings remain unchanged.",
+      "Selected original sources, qualified-ID provenance and license notices are carried in the image."
     ],
     "license": {
       "disposition": "source_offer",
-      "rationale": "The managed image is built from the pinned LGPL-2.1-or-later source closure and carries corresponding source; the separate pinned upstream rule license and source records are preserved in the image.",
+      "rationale": "The pinned LGPL-2.1-or-later CE build carries selected corresponding sources and notices. The 1,493 selected legacy upstream rules retain their LGPL 2.1 plus Commons Clause notice, unchanged detector bytes and original-source provenance; four product rules are Apache-2.0. Free public distribution preserves these terms and does not authorize restricted paid uses.",
       "source_offer_path": "engines/images/semgrep/SOURCE-OFFER.md"
     },
     "provenance": {
@@ -1783,14 +1787,14 @@
         "source_revision": "a0c13f304151e531c7e7c00838076211a07a790c",
         "source_ref": "develop",
         "acquisition_source": "https://github.com/semgrep/semgrep/commit/a0c13f304151e531c7e7c00838076211a07a790c",
-        "artifact_source_revision": "a0c13f304151e531c7e7c00838076211a07a790c",
+        "artifact_source_revision": "94af3e7c5f28fe5f442525a7b0d3aab88b5632ba",
         "source_association": "attested_match"
       },
       "rules": {
         "mode": "embedded",
-        "identifier": "returntocorp/semgrep-rules security selection",
-        "revision": "947bf05744d4c95153173a24879f30b3ba1a65aa",
-        "acquisition_source": "https://github.com/returntocorp/semgrep-rules/commit/947bf05744d4c95153173a24879f30b3ba1a65aa"
+        "identifier": "semgrep/semgrep-rules legacy security selection plus four product rules",
+        "revision": "0f5a85ceab1b82b193d0eaa418784c932d237d68",
+        "acquisition_source": "https://github.com/semgrep/semgrep-rules/commit/0f5a85ceab1b82b193d0eaa418784c932d237d68"
       },
       "data": {
         "mode": "runtime_bound",
@@ -1823,7 +1827,7 @@
       },
       "wrapper": {
         "required": true,
-        "strategy": "Invoke the pinned source build through the project-owned launcher against only the read-only case workspace and embedded rule pack.",
+        "strategy": "Invoke the pinned CE build against only the read-only repository snapshot and checksum-verified legacy plus product offline rule pack; verify rule-ID provenance before execution.",
         "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
       },
       "packaging_plan": "engines/images/semgrep/plan.json"
