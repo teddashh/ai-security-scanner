@@ -2,7 +2,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { basename, resolve } from "node:path";
+import { basename, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 
 import { validateProwlerCatalogContract } from "./prowler-catalog-contract.mjs";
@@ -97,14 +97,17 @@ const managedLocalSmokeOutputFiles = new Map([
 ]);
 const managedLocalK8sContracts = new Map([
   ["semgrep", {
-    tag: "1.174.0-3",
+    tag: "1.174.0-4",
     planKind: "managed_build",
     license: { disposition: "source_offer", sourceOfferPath: "engines/images/semgrep/SOURCE-OFFER.md" },
     immutableDockerfileInputs: [
-      "COPY engines/images/semgrep/build_rule_pack.py /tmp/build-semgrep-rule-pack.py",
-      "COPY --from=build /tmp/semgrep-rule-pack/rules /opt/ai-security-scanner/semgrep/rules",
-      "COPY --from=build /tmp/semgrep-rule-pack/RULES.sha256 /opt/ai-security-scanner/semgrep/RULES.sha256",
-      "COPY --from=build /tmp/semgrep-rule-pack/LICENSE /usr/share/licenses/semgrep-rules/LICENSE",
+      "COPY engines/images/semgrep/build_rule_pack.py engines/images/semgrep/product-rules.yml engines/images/semgrep/product-LICENSE /tmp/rule-builder/",
+      "COPY --from=rule-pack /tmp/semgrep-rule-pack/rules /opt/ai-security-scanner/semgrep/rules",
+      "COPY --from=rule-pack /tmp/semgrep-rule-pack/RULES.sha256 /opt/ai-security-scanner/semgrep/RULES.sha256",
+      "COPY --from=rule-pack /tmp/semgrep-rule-pack/LICENSE /usr/share/licenses/semgrep-rules/LICENSE",
+      "COPY --from=rule-pack /tmp/semgrep-rule-pack/RULE-PROVENANCE.json /opt/ai-security-scanner/semgrep/RULE-PROVENANCE.json",
+      "COPY --from=source /tmp/semgrep-complete-source.tar.gz /usr/share/source/semgrep-source.tar.gz",
+      "RUN --mount=type=bind,source=.engine-cache/offline/semgrep-submodules/tests__semgrep-rules.tar.gz,target=/tmp/rules.tar.gz,readonly",
       "COPY engines/images/semgrep/submodules.lock /usr/share/source/semgrep-submodules.lock",
       "COPY engines/images/semgrep/SOURCE-OFFER.md /usr/share/source/SEMGREP-SOURCE-OFFER.md",
       'SEMGREP_ENABLE_VERSION_CHECK="0"',
@@ -219,8 +222,8 @@ const managedLocalK8sContracts = new Map([
       'outputPath:  "/output/trivy-individual-packages.json"',
       '"rootfs", "--cache-dir", "/opt/ai-security-scanner/trivy-cache"',
       'verifyFile("/opt/ai-security-scanner/trivy-cache/java-db/trivy-java.db", trivyJavaDBSHA256, maxImmutableBytes)',
-      'trivyJavaDBSHA256         = "7eaa54234967d2dc36f5c60d51c614bdd40997ddadcd13b3815eb8baeb7dc5cb"',
-      'trivyJavaMetadataSHA256   = "856f573fa061b68555b24a06cdd24ab99f9d6a0cd3129a10a620236ffa507d58"',
+      'trivyJavaDBSHA256           = "7eaa54234967d2dc36f5c60d51c614bdd40997ddadcd13b3815eb8baeb7dc5cb"',
+      'trivyJavaMetadataSHA256     = "856f573fa061b68555b24a06cdd24ab99f9d6a0cd3129a10a620236ffa507d58"',
     ],
     immutableDockerfileInputs: [
       "go mod verify",
@@ -406,10 +409,10 @@ function resolveEvidenceStepEngines(workflow, job, step, label) {
     if (matrixEngines.length === 0 && typeof job?.strategy?.matrix === "string" &&
         job.strategy.matrix.includes("needs.changes.outputs.matrix")) {
       try {
-        const configuredMatrix = JSON.parse(workflow?.env?.CLOUD_ENGINE_MATRIX ?? "null");
+        const configuredMatrix = JSON.parse(workflow?.env?.CLOUD_ENGINE_MATRIX ?? workflow?.env?.LOCAL_ENGINE_MATRIX ?? "null");
         matrixEngines.push(...(Array.isArray(configuredMatrix) ? configuredMatrix.map((entry) => entry?.engine) : []));
       } catch {
-        errors.push(`${label}: dynamic cloud matrix contract is not valid JSON`);
+        errors.push(`${label}: declared engine matrix contract is not valid JSON`);
       }
     }
     if (matrixEngines.length === 0 || matrixEngines.some((id) => typeof id !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id))) {
@@ -490,7 +493,14 @@ function validateManagedImageEvidence(catalogEntries) {
       `${managedEgressGatewayWorkflowRelative}: immutable gateway publication must be manual-only via workflow_dispatch`,
     );
   }
-  const localK8sMatrix = localK8sWorkflow?.jobs?.publish?.strategy?.matrix?.include;
+  let localK8sMatrix = localK8sWorkflow?.jobs?.publish?.strategy?.matrix?.include;
+  if (localK8sWorkflow?.jobs?.publish?.strategy?.matrix === "${{ fromJSON(needs.changes.outputs.matrix) }}") {
+    try {
+      localK8sMatrix = JSON.parse(localK8sWorkflow?.env?.LOCAL_ENGINE_MATRIX ?? "null");
+    } catch {
+      errors.push(`${localK8sWorkflowRelative}: declared local engine matrix is invalid JSON`);
+    }
+  }
   const observedSmokeOutputs = new Map(
     Array.isArray(localK8sMatrix)
       ? localK8sMatrix.map((entry) => [entry?.engine, entry?.output_file])
@@ -516,11 +526,14 @@ function validateManagedImageEvidence(catalogEntries) {
   const localPublishNeeds = Array.isArray(localK8sWorkflow?.jobs?.publish?.needs)
     ? localK8sWorkflow.jobs.publish.needs
     : [localK8sWorkflow?.jobs?.publish?.needs].filter(Boolean);
-  if (localPublishNeeds.includes("semgrep-native-cache")) {
-    errors.push(`${localK8sWorkflowRelative}: Semgrep's optional native cache must not gate unrelated engine publication`);
-  }
-  if (localK8sWorkflow?.jobs?.["semgrep-native-cache"]?.["continue-on-error"] !== true) {
-    errors.push(`${localK8sWorkflowRelative}: the optional Semgrep cache refresh must not fail sibling publication`);
+  const nativeSemgrep = localK8sWorkflow?.jobs?.["semgrep-native-verify"];
+  const localPublishIf = localK8sWorkflow?.jobs?.publish?.if ?? "";
+  if (!localPublishNeeds.includes("semgrep-native-verify") || nativeSemgrep?.["continue-on-error"] === true ||
+      nativeSemgrep?.if !== "contains(fromJSON(needs.changes.outputs.engines), 'semgrep')" ||
+      !localPublishIf.includes("needs.semgrep-native-verify.result == 'success'") ||
+      !localPublishIf.includes("needs.semgrep-native-verify.result == 'skipped'") ||
+      !localPublishIf.includes("inputs.mode != 'verify'")) {
+    errors.push(`${localK8sWorkflowRelative}: Semgrep requires native verification on both architectures before publication, with sibling engines independent`);
   }
   const localPublishSteps = localK8sWorkflow?.jobs?.publish?.steps;
   const localVerifyStep = Array.isArray(localPublishSteps)
@@ -2813,6 +2826,8 @@ if (!existsSync(m365WorkflowPath)) {
 }
 
 for (const dockerfile of walkFiles(resolve(root, "engines/images")).filter((path) => {
+  // Deliberately insecure scanner fixtures are inputs, never build recipes.
+  if (path.split(sep).includes("testdata")) return false;
   const name = basename(path).toLowerCase();
   return name === "dockerfile" || name.startsWith("dockerfile.") && !name.endsWith(".dockerignore");
 })) {

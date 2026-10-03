@@ -20,7 +20,21 @@ on:
       - '!engines/images/kube-bench/plan.json'
       - scripts/generate-oci-layout-fixture.mjs
       - scripts/prepare-offline-engine-data.mjs
+      - scripts/select-local-engine-publication.mjs
   workflow_dispatch:
+    inputs:
+      engine:
+        description: One engine to verify or publish
+        type: choice
+        required: true
+        default: semgrep
+        options: [semgrep, trufflehog, trivy, grype, kubescape, kube-bench]
+      mode:
+        description: Verification builds locally on runners without publishing an image
+        type: choice
+        required: true
+        default: verify
+        options: [verify, publish]
 
 permissions:
   contents: read
@@ -32,7 +46,27 @@ concurrency:
   group: managed-local-k8s-engine-images
   cancel-in-progress: false
 
+env:
+  LOCAL_ENGINE_MATRIX: >-
+    [{"engine":"semgrep","tag":"1.174.0-4","version":"1.174.0","version_args":"--version","dockerfile":"engines/images/semgrep/Dockerfile","workspace":"engines/images/semgrep/testdata/combination-review","output_file":"semgrep.json","output_kind":"json","offline_data":"semgrep"},{"engine":"trufflehog","tag":"3.97.0-3","version":"3.97.0","version_args":"--version","dockerfile":"engines/images/trufflehog/Dockerfile","workspace":"engines/images/trufflehog/testdata","output_file":"trufflehog.jsonl","output_kind":"jsonl","offline_data":"none"},{"engine":"trivy","tag":"0.74.0-4","version":"0.74.0","version_args":"--version","dockerfile":"engines/images/trivy/Dockerfile","workspace":"engines/images/local-launcher/testdata/oci-layout","output_file":"trivy.json","output_kind":"json","offline_data":"trivy"},{"engine":"grype","tag":"0.117.0-4","version":"0.117.0","version_args":"version","dockerfile":"engines/images/grype/Dockerfile","workspace":"engines/images/local-launcher/testdata/oci-layout","output_file":"grype.json","output_kind":"json","offline_data":"grype"},{"engine":"kubescape","tag":"4.0.12-3","version":"4.0.12","version_args":"version","dockerfile":"engines/images/kubescape/Dockerfile","workspace":"engines/images/kubescape/testdata","output_file":"kubescape.json","output_kind":"json","offline_data":"none"},{"engine":"kube-bench","tag":"0.16.0-4","version":"0.16.0","version_args":"version","dockerfile":"engines/images/kube-bench/Dockerfile","workspace":"engines/images/kube-bench/testdata","output_file":"kube-bench.json","output_kind":"json","offline_data":"none"}]
+
 jobs:
+  changes:
+    name: Select explicitly versioned engine updates
+    runs-on: ubuntu-24.04
+    outputs:
+      engines: ${{ steps.select.outputs.engines }}
+      matrix: ${{ steps.select.outputs.matrix }}
+      has_engines: ${{ steps.select.outputs.has_engines }}
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select new tags or one manually requested engine
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_ENGINE: ${{ inputs.engine }}
+        run: node scripts/select-local-engine-publication.mjs
   launcher-tests:
     name: Validate the managed-local capability boundary
     runs-on: ubuntu-24.04
@@ -55,12 +89,14 @@ jobs:
             engines/images/local-launcher/testdata/oci-layout \
             engines/images/local-launcher/testdata/oci-layout-source
 
-  semgrep-native-cache:
-    name: Refresh optional Semgrep ${{ matrix.arch }} build cache
-    needs: launcher-tests
-    continue-on-error: true
+  semgrep-native-verify:
+    name: Build and verify Semgrep natively on ${{ matrix.arch }}
+    needs: [changes, launcher-tests]
+    if: contains(fromJSON(needs.changes.outputs.engines), 'semgrep')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
     strategy:
       fail-fast: false
       matrix:
@@ -83,84 +119,59 @@ jobs:
           driver-opts: |
             image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
 
-      - name: Build Semgrep natively and export the complete platform cache
+      - name: Build the complete native image and export its platform cache
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: engines/images/semgrep/Dockerfile
           platforms: linux/${{ matrix.arch }}
           push: false
-          outputs: type=cacheonly
+          load: true
+          tags: aiss-local/semgrep-combined${{ matrix.arch == 'arm64' && '-arm64' || '' }}:review
           provenance: false
           sbom: false
           cache-from: |
             type=gha,scope=local-k8s-engine-semgrep-${{ matrix.arch }}
             type=gha,scope=local-k8s-engine-semgrep
-          cache-to: type=gha,mode=max,scope=local-k8s-engine-semgrep-${{ matrix.arch }}
+          cache-to: ${{ inputs.mode != 'verify' && format('type=gha,mode=max,scope=local-k8s-engine-semgrep-{0}', matrix.arch) || '' }}
+
+      - name: Verify pinned rules and selected original-source assembly
+        run: |
+          python3 -m unittest discover -s engines/images/semgrep -p 'test_*.py'
+
+      - name: Verify complete result union, source attachment and runtime boundaries
+        run: >-
+          python3 engines/images/semgrep/run_managed_combination.py
+          --archive .engine-cache/offline/semgrep-submodules/tests__semgrep-rules.tar.gz
+          --image aiss-local/semgrep-combined${{ matrix.arch == 'arm64' && '-arm64' || '' }}:review
+          --expected-version 1.174.0-4
+          --output package-evidence/semgrep-native-${{ matrix.arch }}
+
+      - name: Upload actual native verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: semgrep-native-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            package-evidence/semgrep-native-${{ matrix.arch }}/verification.json
+            package-evidence/semgrep-native-${{ matrix.arch }}/*.log
+            package-evidence/semgrep-native-${{ matrix.arch }}/*/semgrep.json
+          if-no-files-found: error
+          retention-days: 90
 
   publish:
     name: Publish ${{ matrix.engine }} for amd64 + arm64
-    needs: launcher-tests
+    needs: [changes, launcher-tests, semgrep-native-verify]
+    if: >-
+      always() && !cancelled() && inputs.mode != 'verify' &&
+      needs.changes.result == 'success' && needs.changes.outputs.has_engines == 'true' &&
+      needs.launcher-tests.result == 'success' &&
+      (needs.semgrep-native-verify.result == 'success' || needs.semgrep-native-verify.result == 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - engine: semgrep
-            tag: 1.174.0-3
-            version: 1.174.0
-            version_args: --version
-            dockerfile: engines/images/semgrep/Dockerfile
-            workspace: engines/images/semgrep/testdata
-            output_file: semgrep.json
-            output_kind: json
-            offline_data: semgrep
-          - engine: trufflehog
-            tag: 3.97.0-3
-            version: 3.97.0
-            version_args: --version
-            dockerfile: engines/images/trufflehog/Dockerfile
-            workspace: engines/images/trufflehog/testdata
-            output_file: trufflehog.jsonl
-            output_kind: jsonl
-            offline_data: none
-          - engine: trivy
-            tag: 0.74.0-4
-            version: 0.74.0
-            version_args: --version
-            dockerfile: engines/images/trivy/Dockerfile
-            workspace: engines/images/local-launcher/testdata/oci-layout
-            output_file: trivy.json
-            output_kind: json
-            offline_data: trivy
-          - engine: grype
-            tag: 0.117.0-4
-            version: 0.117.0
-            version_args: version
-            dockerfile: engines/images/grype/Dockerfile
-            workspace: engines/images/local-launcher/testdata/oci-layout
-            output_file: grype.json
-            output_kind: json
-            offline_data: grype
-          - engine: kubescape
-            tag: 4.0.12-3
-            version: 4.0.12
-            version_args: version
-            dockerfile: engines/images/kubescape/Dockerfile
-            workspace: engines/images/kubescape/testdata
-            output_file: kubescape.json
-            output_kind: json
-            offline_data: none
-          - engine: kube-bench
-            tag: 0.16.0-4
-            version: 0.16.0
-            version_args: version
-            dockerfile: engines/images/kube-bench/Dockerfile
-            workspace: engines/images/kube-bench/testdata
-            output_file: kube-bench.json
-            output_kind: json
-            offline_data: none
+      matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
     env:
       IMAGE: ghcr.io/teddashh/ai-security-scanner-engine-${{ matrix.engine }}
       IMAGE_TAG: ${{ matrix.tag }}
@@ -227,6 +238,20 @@ jobs:
           package="${IMAGE#ghcr.io/teddashh/}"
           gh api --method PATCH "/user/packages/container/${package}" -f visibility=public
 
+      - name: Download the actual amd64 native verification receipt
+        if: matrix.engine == 'semgrep'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: semgrep-native-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: package-evidence/semgrep-native-amd64
+
+      - name: Download the actual arm64 native verification receipt
+        if: matrix.engine == 'semgrep'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: semgrep-native-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: package-evidence/semgrep-native-arm64
+
       - name: Verify anonymous access, platforms, version, and managed scan
         id: verify
         env:
@@ -237,6 +262,7 @@ jobs:
           OUTPUT_KIND: ${{ matrix.output_kind }}
           VERSION_ARGS: ${{ matrix.version_args }}
           WORKSPACE: ${{ matrix.workspace }}
+          REVISION: ${{ github.sha }}
         run: |
           docker logout ghcr.io
           raw_manifest="$(docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}")"
@@ -244,6 +270,29 @@ jobs:
           arm64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest' <<<"${raw_manifest}")"
           test "${amd64_digest#sha256:}" != "${amd64_digest}"
           test "${arm64_digest#sha256:}" != "${arm64_digest}"
+
+          if [ "${ENGINE}" = semgrep ]; then
+            for arch in amd64 arm64; do
+              receipt="package-evidence/semgrep-native-${arch}/verification.json"
+              jq -e --arg arch "${arch}" --arg revision "${REVISION}" --arg version "${IMAGE_TAG}" '
+                .source_revision == $revision and .expected_version == $version and
+                .execution == {mode: "native", host_architecture: $arch, image_architecture: $arch} and
+                .native_matches == {product: 10, upstream: 12, combined: 22, managed: 22} and
+                .exact_full_result_union == true and
+                .rejections_before_output == {"changed-rule": 126, "changed-provenance": 126, "extra-rule": 126, "writable-workspace": 126} and
+                .source_attachment.selected_original_files == 1477 and
+                .source_attachment.excluded_rule_absent == true and
+                .source_attachment.unfiltered_rules_archive_absent == true and
+                .source_attachment.rebuild_inputs_match == true
+              ' "${receipt}" >/dev/null
+              if [ "${arch}" = amd64 ]; then platform_digest="${amd64_digest}"; else platform_digest="${arm64_digest}"; fi
+              docker pull --platform "linux/${arch}" "${IMAGE}@${platform_digest}"
+              expected="$(jq -er '.image_payload.rootfs_payload_sha256 | select(test("^[0-9a-f]{64}$"))' "${receipt}")"
+              python3 engines/images/semgrep/verify_image_payload.py \
+                --image "${IMAGE}@${platform_digest}" --expected "${expected}" \
+                > "package-evidence/semgrep-native-${arch}/published-payload.json"
+            done
+          fi
 
           docker run --platform linux/amd64 --rm \
             --read-only --network none --cap-drop ALL \
@@ -271,6 +320,9 @@ jobs:
             while IFS= read -r line; do
               test -z "${line}" || jq -e . <<<"${line}" >/dev/null
             done < "${output}/${OUTPUT_FILE}"
+          fi
+          if [ "${ENGINE}" = semgrep ]; then
+            jq -e '.errors == [] and (.results | length) == 22' "${output}/${OUTPUT_FILE}" >/dev/null
           fi
           if [ "${ENGINE}" = trivy ]; then
             jq -e \

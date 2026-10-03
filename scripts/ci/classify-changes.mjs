@@ -108,6 +108,7 @@ const DESKTOP_PATHS = [
 ];
 
 const ENGINE_PATHS = [
+  /^scripts\/select-local-engine-publication\.mjs$/,
   /^engines\//,
   /^tests\/engines\//,
   /^scripts\/(?:validate-engine-|prowler-catalog-contract\.mjs$|prepare-offline-engine-data\.mjs$|lock-upstreams\.mjs$|engine-image-evidence\.mjs$|generate-oci-layout-fixture\.mjs$)/,

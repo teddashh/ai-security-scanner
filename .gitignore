@@ -3,12 +3,16 @@
 .vscode/
 
 # JavaScript
-node_modules/
+node_modules
 dist/
 coverage/
 playwright-report/
 test-results/
 *.tsbuildinfo
+
+# Python build helpers
+__pycache__/
+*.pyc
 
 # Rust / Tauri
 target/
