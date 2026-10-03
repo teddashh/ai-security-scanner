@@ -74,6 +74,8 @@ Use `linux/arm64` for a separate arm64 review. One local platform proves only th
 
 `nice` on the Docker client does not bound the daemon's build workers. Use a task-owned builder with explicit CPU/memory limits, and constrain its CPU affinity when an upstream recipe uses `make -j"$(nproc)"` (Greenbone does). A CPU quota alone can still leave `nproc` seeing more processors and launching too many compilers. The [Semgrep ARM64 example](semgrep-combination-review.md#arm64-local-validation-attempt) shows an isolated builder; its four-CPU affinity was checked with `nproc`. Do not reconfigure another project's builder or install global emulation interpreters for a local review.
 
+Separate architecture evidence into source/config assembly, actual binary execution, a fresh image build and native managed execution. Reusing a published binary with new read-only inputs does not prove a new image compiled. Before trusting an emulator for safety checks, test read-only and writable mounts plus child execution/status propagation; the [Semgrep helper follow-up](semgrep-combination-review.md#follow-up-local-glibc-helper) records a measured statfs limitation, a local testing workaround and its remaining constraints.
+
 Only Semgrep, Trivy and Grype consume host `.engine-cache/offline/` inputs today. The preparation script checks download size and digest; the image build also verifies the inputs it consumes. Trivy needs **both** its vulnerability DB and Java DB. Grype needs the archive and matching `import.json`. Cache availability is not proof that the data matches a newly edited pin.
 
 ## Secondary inputs to inspect with the scanner

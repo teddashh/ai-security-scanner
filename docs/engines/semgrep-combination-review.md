@@ -143,11 +143,65 @@ A minimal Go `statfs` probe compared a read-only and writable task directory in 
 | Native amd64 | 4129; read-only bit present | 4128; read-only bit absent |
 | ARM64 through the exact BuildKit helper | **0; read-only bit absent** | **0; read-only bit absent** |
 
-This helper cannot represent the mount property required by the managed launcher's existing check. [QEMU v10.2.3 source](https://github.com/qemu/qemu/blob/v10.2.3/linux-user/syscall.c#L10568-L10597) has an `_STATFS_F_FLAGS` compile-time guard that writes zero when absent; that path is consistent with the observation, but the exact helper's compiler configuration was not independently recovered. This is an emulation limitation, not evidence that the mount was writable or that a native ARM64 run fails. The product's read-only check and detector/launcher code were kept intact.
+This helper cannot represent the mount property required by the managed launcher's existing check. [QEMU v10.2.3 source](https://github.com/qemu/qemu/blob/v10.2.3/linux-user/syscall.c) has an `_STATFS_F_FLAGS` compile-time guard that writes zero when absent; that path is consistent with the observation, but the exact helper's compiler configuration was not independently recovered. This is an emulation limitation, not evidence that the mount was writable or that a native ARM64 run fails. The product's read-only check and detector/launcher code were kept intact.
 
 The managed verification script therefore requires a **native host matching the image architecture**. It accepts only the two local review tags, checks Linux architecture and the fixed managed entrypoint, uses `--pull never`, and records host/image architecture. Its scan containers now also use a `noexec`, mode-1777 temporary filesystem and a 512 MiB file-size bound. Native ARM64 build, managed execution and performance remain unverified.
 
 Evidence is retained under `~/.cache/aiss-semgrep-combined/`: `arm64-build.log`, `arm64-input-export.log`, `arm64-input-inspection.json`, `arm64-launcher-input-preflight/valid-inputs.log`, `arm64-readonly-probe.log`, `statfs-comparison.json` and the minimal `statfs-probes.Dockerfile`/binaries. The task's build was stopped by its own client PID, and its builder was stopped with completed cache retained. No public artifact or live scan changed.
+
+### Follow-up: local glibc helper
+
+On 2026-10-03 a separate **local testing helper** was built on the amd64 host using glibc, whose actual headers define `_STATFS_F_FLAGS`. No Semgrep detector, Dockerfile, managed launcher or read-only guard was changed. The helper is not installed into `binfmt_misc`, copied into an engine image, or substituted into BuildKit. The native-only candidate runner remains native-only.
+
+| Helper build input | Exact observed input |
+| --- | --- |
+| QEMU release archive | [10.2.3](https://download.qemu.org/qemu-10.2.3.tar.xz), 141,095,748 bytes; observed SHA-256 `2aa0e420e4ea89ea34a833f4c4eced96a35b51a9ee8568b232692729b60b064d` |
+| Child execution / script support | Seven patches from [tonistiigi/binfmt at `e41434f`](https://github.com/tonistiigi/binfmt/tree/e41434fefad6aee7b01fbe5efc1c4b6f6c735fff/patches/buildkit-direct-execve-v10.2), applied in filename order |
+| Host compiler / libc | GCC 15.2.0 (`gcc-15` 15.2.0-16ubuntu1); glibc 2.43 (`libc6-dev` 2.43-2ubuntu2.4) |
+| Host static libraries | GLib 2.88.0 (2.88.0-1ubuntu0.1), PCRE2 10.46 (10.46-1build1), sysprof capture 50.0-1 |
+| Python / build tools | Python 3.14.4; archive-provided Meson 1.9.0 / pycotap 1.3.1; task-local Ninja 1.13.0 wheel SHA-256 `fb46acf6b93b8dd0322adc3a4945452a4e774b75b91293bafcc7b7f8e6517dfa` |
+| Resulting helper | Static PIE Linux amd64 `qemu-aarch64`, version 10.2.3; SHA-256 `bcaf5c26953814a0f3033101140fb342eb049d054d35fb3cb07a49d36a188406` |
+
+The release archive's hash records the acquired bytes; it is not an independently verified upstream checksum. The extracted linux-user source excludes `roms/`, which is unnecessary for this target and contains an absolute symlink refused by Python's `data` extraction filter. The filter remains enabled for extracted files.
+
+One upstream patch needed a **context-only** adjustment: QEMU 10.2.3 removed the unused `regs` argument from `loader_exec`. In patch `0004-linux-user-support-loading-scripts-with-shebang.patch`, replace the two context lines containing `struct target_pt_regs *regs, struct image_info *infop,` / `struct linux_binprm *bprm)` with `struct image_info *infop, struct linux_binprm *bprm)`, and change that hunk's old/new line counts from 7 to 6. Its actual additions/deletions remain identical. Original patch SHA-256: `e803d8145ce49a31669048e046d8226be2b074cdb08014cc03f21ab56743ae98`; adjusted SHA-256: `20978f806121bb6ffe50015a0efb840e437e742ae518accd54b50ce5fd1e9553`. Apply with `patch --batch --fuzz=0 -p1`; do not force a rejected hunk. No statfs code or flag values were patched.
+
+After acquiring/extracting those exact sources and patches, create a task-local Python environment for Ninja, keep its `pip --report`, and build out of tree. Inspect the allowed host CPU set and use four of those CPUs; this host allowed CPUs 20–23. The actual configure/build recipe was:
+
+```sh
+# qemu_source is the extracted, patched QEMU 10.2.3 directory.
+# helper_tools is a task-local venv containing Ninja 1.13.0.
+# Run from a new task-local build directory, under nice/ionice and four-CPU affinity.
+"$qemu_source/configure" --python=/usr/bin/python3 \
+  --ninja="$helper_tools/bin/ninja" --target-list=aarch64-linux-user \
+  --static --disable-system --disable-docs --disable-tools \
+  --disable-guest-agent --disable-debug-info --disable-werror \
+  --disable-capstone --disable-gcrypt --disable-gnutls --disable-nettle \
+  --disable-curl --disable-slirp --disable-plugins --disable-rust
+"$helper_tools/bin/ninja" -j4 qemu-aarch64
+```
+
+Before using it with scanner inputs, compare the actual mount flags and child execution on both read-only and writable disposable task mounts. The new helper returned **4129 / 4128**, matching native amd64, and correctly distinguished the read-only bit. An ARM64 child shell's attempted write failed with `Read-only file system` on the read-only mount; creation/removal succeeded on the writable control. This is measured helper behavior; the original BuildKit helper's exact compilation configuration is still unknown.
+
+Build inputs, each downloaded patch/blob hash, the context adjustment, resulting patched-source hashes and probe logs are retained under `~/.cache/aiss-semgrep-combined/qemu-helper-glibc/`: `patch-inputs.json`, `context-adjustment.json`, `python-tools.json`, `build-manifest.json`, `build.sh`, `build.log`, `probe.py` and `probe-verification.json`. Static-glibc linker warnings about NSS/DNS remain in the build log; this helper is bounded to local network-off tests and has no portability or publication claim. A rebuild can change its binary hash when host packages change; re-run both mount controls and child-execution tests before accepting a replacement hash.
+
+### ARM64 launcher boundaries with the local helper
+
+The separate private `run_arm64_runtime_probe.py` uses the exact **already-published ARM64 CE manifest** `sha256:0e80059911abc48d4aab405cbcc621104c7de0b9a212dede830636940b85d66c`, with the candidate pack and cross-compiled launcher bound read-only. It pulls nothing, creates no image, checks the Linux ARM64 manifest/entrypoint and exact helper/launcher/probe-file hashes, and scans only the six synthetic fixtures. This is a runtime probe with reused CE binaries, not the completed new ARM64 candidate build.
+
+| Actual ARM64 launcher control | Observed result |
+| --- | --- |
+| Changed product config | Exit 126, release digest mismatch, no output |
+| Changed provenance | Exit 126, release digest mismatch, no output |
+| Extra rule in a copied rules tree | Exit 126, outside immutable manifest, no output |
+| Writable disposable workspace | Exit 126, writable workspace refused, no output |
+| Valid configs/provenance and read-only workspace | Reached child invocation; a deliberately substituted boundary fixture printed its marker and exited 23, which the launcher propagated as a failure with no evidence output |
+
+The last control tests input acceptance and child-process status propagation; the substituted fixture performs no security check. Boundary results remain in `arm64-managed-runtime-probe-v3/boundary-verification.json` even if a later actual scan fails.
+
+Two fixture-wiring details matter when repeating this probe. To add a rule under an already read-only **bind-mounted** pack, materialize a separate full rules tree containing the extra file and bind that existing directory. Binding one new file onto a nonexistent child can fail at Docker setup with 125, before the launcher runs; that is not a launcher rejection. Also, a non-executable-child control through this helper returned `errno 0`, so it does not establish native exec-error fidelity. The final valid-input control uses a real executed shell fixture with explicit exit 23 instead. Neither limitation was fixed by weakening product checks.
+
+An initial direct four-product-rule ARM64 scan completed with **10 results and empty errors**. The separate full-upstream pass hit its **600-second outer test timeout** during per-file rule checks, without a result JSON; the harness removed only its own named container. Combined/managed passes in that first attempt did not run. Evidence: `arm64-runtime-probe/product/semgrep.json`, per-pass logs and `arm64-runtime-probe.log`. Do not describe this as an ARM64 complete-result union pass.
 
 ## Overlap review
 
