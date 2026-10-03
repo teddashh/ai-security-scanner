@@ -3,15 +3,17 @@
 This record describes the prepared `1.174.0-4` recipe. It does not claim that
 the version has been published. The catalog and published-plan receipts still
 name `1.174.0-3`; change them only after actual publication evidence exists.
-Preparation is isolated on the `semgrep-release-20261003` review branch until
-license applicability permits the publication path on main.
+Preparation was verified on the `semgrep-release-20261003` review branch before
+advancing the approved publication path on main.
 
-The owner authorized advancing publication on October 3. The remaining license
-fact is whether the scanner is freely provided or offered as a paid product or
-service whose value derives substantially from these rules. The legacy
+The owner authorized advancing publication on October 3. This operation
+distributes the image publicly without a fee, preserving the legacy
 [Commons Clause notice](https://github.com/semgrep/semgrep-rules/blob/0f5a85ceab1b82b193d0eaa418784c932d237d68/LICENSE)
-restricts the latter. Combining four Apache-2.0 product rules does not remove
-that restriction. No rule archive is committed to the repository.
+and complete selected sources. The notice restricts paid products or services
+whose value derives entirely or substantially from these rules. Combining four
+Apache-2.0 product rules does not remove that restriction. Future paid use
+requires a separate owner decision; this publication does not establish the
+product's business model. No rule archive is committed to the repository.
 
 ## Recipe and update coupling
 
@@ -96,8 +98,8 @@ receipts in its exact inventory. It recomputes the complete result multiset
 union and managed-artifact hash, and refuses resealed evidence with an incorrect
 architecture, source commit, source selection or filesystem receipt.
 
-After both actual native runs pass and license applicability is established,
-use the approved publication path on main. Read its signed manifest before
+After both actual native runs pass, use the approved free public distribution
+path on main. Read its signed manifest before
 updating the catalog, plan, verifier contracts and notices. All six current
 plans record the shared launcher source hash; updating those records does not
 mean the five sibling images were rebuilt. Keep their historical publication
@@ -147,7 +149,7 @@ The CI amd64 filesystem differs from the separately built local amd64 one.
 Pinned inputs and equal scan results do not establish byte-identical builds.
 Publication must compare against its own immediately verified platform receipts
 and reuse those staged caches; a cache miss or changed filesystem fails before
-promotion. The actual publication remains pending the business-model fact and
-the signed public image evidence. The updated artifact verifier passed all
+promotion. The actual publication remains pending signed public image
+evidence. The updated artifact verifier passed all
 19 tests, including six native-evidence drift cases; all 200 release contract
 tests also passed.
