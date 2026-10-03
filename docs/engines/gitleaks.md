@@ -11,6 +11,16 @@ Runs Gitleaks' `dir` scan over a `repository` snapshot with upstream's default r
 | Adapter | `extract_gitleaks` and `gitleaks_location` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-image-gitleaks.yml`. Changes to `plan.json`, `testdata/**` or `*.md` do not trigger it. |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/gitleaks/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+Current source has a known launcher-test fixture copy omission; see **Fix the build first** below before treating this as a working clean-build recipe.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Input.** One `repository` asset; the catalog contract is the only routing, and the launcher reads no input marker. The arguments must be exactly `--workspace /workspace --output /output`. Both must be real directories, and `/workspace` must be mounted read-only (`statfs`). Networking is disabled. Catalog resources: 512 MB memory, 512 MB disk, 1000 CPU millis, 3600 s.

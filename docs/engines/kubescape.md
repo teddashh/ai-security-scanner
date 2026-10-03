@@ -12,6 +12,14 @@ Runs Kubescape's NSA framework (`scan framework nsa`) offline over an immutable 
 | Adapter | `extract_kubescape` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-images-local-k8s.yml`, matrix entry `kubescape` |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/kubescape/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Input.** "Kubernetes configuration" in `src/localInputProfiles.ts`: a folder of exported YAML or JSON settings, which the form says must not contain kubeconfig files, tokens or certificates. `validate_copied_input_files` in `src-tauri/src/workspace_snapshot.rs` requires at least one `.json`, `.yaml` or `.yml` file, the snapshot carries the marker `.ai-security-scanner-input.json` with `input_profile` `kubernetes_manifests`, and `expected_input_profile` in `src-tauri/src/registry.rs` binds `kubernetes_cluster` to that profile. `localInputEngineIds` routes the profile to Kubescape, and without explicit routes the backend default plan (`default_plan_includes_manifest` in `src-tauri/src/case_service.rs`) includes it whenever an authorized asset carries such a snapshot; the catalog `default_enabled` (true) is not read by the planner.

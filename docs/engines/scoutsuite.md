@@ -12,6 +12,14 @@ Runs ScoutSuite's AWS IAM rules against one authorized AWS account under the fix
 | Adapter | `extract_scoutsuite` and `scoutsuite_rule_key` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-images-cloud.yml`, matrix entry `scoutsuite` (no image smoke step) |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/scoutsuite/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Input.** One `cloud_account` asset with exactly one `aws_account_id`, granted `inventory_read` and `configuration_read`, and the AWS session triple expiring in 5 to 60 minutes. The launcher verifies the account with `GetCallerIdentity` at `sts.us-east-1.amazonaws.com`. Provider traffic goes through the launcher's CONNECT bridge to the managed gateway, which allows `iam.amazonaws.com`, `sts.us-east-1.amazonaws.com` and `ec2.us-east-1.amazonaws.com` on port 443.

@@ -11,6 +11,12 @@ A policy-bound SOCKS5 gateway between engine containers and everything outside t
 | Adapter | None. Refusal counts reach the report through `gateway_refusal_record` (`managed_network.rs`) and `append_gateway_refusal_gaps` (`src-tauri/src/beginner_report.rs`) |
 | Publish workflow | `.github/workflows/managed-egress-gateway-image.yml`, `workflow_dispatch` only |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/egress-gateway/Dockerfile) and context `.`. No host `.engine-cache` preparation is required. The Rust library embeds files outside `src-tauri/src`; preserve the COPY list and its contract tests when those inputs change.
+
+See the [image build index](image-build-index.md) for local build commands and the update record. A local gateway build does not change the runtime pin or authorize its publication.
+
 ## How it is wired
 
 - **Image selection.** `managed_egress_gateway_spec()` (`src-tauri/src/gateway_release.rs`) embeds the manifest and requires schema 1.0.0, `product_version` equal to the app version, the release repository, a tag equal to both `GATEWAY_PUBLICATION_TAG` and `"{version}-1"`, a 40-hex source revision and a sha256 digest. The desktop (`provision_execution_network` in `commands.rs`) and the CLI use it; if it fails, network checks are blocked with `EgressGatewayUnavailable`. The image is pulled as `repository@digest` (`ensure_gateway_container_image`, 10-minute timeout). The `ai-security-scanner-egress-gateway` sidecar listed in `src-tauri/tauri.conf.json` is not on this path.

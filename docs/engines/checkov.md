@@ -11,6 +11,14 @@ Runs Checkov's bundled policy checks over a `repository` or `iac_project` snapsh
 | Adapter | `extract_checkov` and `extract_checkov_framework` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-image-checkov.yml`, triggered by the `Dockerfile`, `prepare_source.py` or `.dockerignore` |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/checkov/Dockerfile) and context `engines/images/checkov`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Input.** One asset: a `repository` (`repository_working_tree`) or an `iac_project` (`iac_working_tree`). Networking is disabled. Catalog resources: 2048 MB memory, 2048 MB disk, 2000 CPU millis, 3600 s.

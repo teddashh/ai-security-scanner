@@ -2,7 +2,7 @@
 
 This procedure keeps each scanner close to its upstream project while preserving safe product operation and one professional report. The machine-readable catalog owns exact artifact facts, [engine-catalog.md](engine-catalog.md) owns the public capability description, and the [product specification](product-spec.md) owns product behavior.
 
-The [engine reference](engines/README.md) has a page per engine and launcher with the wiring, the files that move together, and the lessons from real runs. Read it before changing an engine.
+The [engine reference](engines/README.md) has a page per engine and launcher with the wiring, the files that move together, and the lessons from real runs. The [image build and update notebook](engines/image-build-index.md) indexes every Dockerfile/context, host rule/database preparation and shared launcher impact, with a dated update-record template. Read these before changing an engine and record what the update actually tested.
 
 ## 1. Default decision: update upstream, not a private detector
 

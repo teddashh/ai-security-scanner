@@ -11,6 +11,12 @@ Runs KICS's bundled queries over a `repository` or `iac_project` snapshot with t
 | Adapter | `extract_kics` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | None. `upstreamImageOnlyIds` in `scripts/validate-engine-catalog.mjs` keeps KICS from being counted as a project-managed image. |
 
+## Local build and update entry
+
+There is no local Dockerfile. This integration uses the catalog’s digest-pinned upstream image; update acquisition/provenance and the product invocation together.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Input.** One asset: a `repository` (`repository_working_tree`) or an `iac_project` (`iac_working_tree`). No launcher checks the profile; the host routes by the catalog contracts. Networking is disabled. Catalog resources: 1024 MB memory, 1024 MB disk, 1000 CPU millis, 3600 s.

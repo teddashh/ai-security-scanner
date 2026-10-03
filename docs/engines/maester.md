@@ -12,6 +12,14 @@ Runs Maester's Microsoft Entra ID tests against one approved Microsoft 365 tenan
 | Adapter | `extract_maester` → `extract_m365` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-images-m365.yml`, matrix entry `maester` |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/maester/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Launch, token, environment.** As for ScubaGear, through the [shared launcher](m365-launcher.md): `--engine maester`, one `MSGRAPH_ACCESS_TOKEN` used by the host for at most one hour and refused by the launcher when expired or more than 65 minutes ahead, the gateway handed to .NET as `socks5://<gateway-ip>:1080`, HOME and XDG directories under `/tmp`.

@@ -12,9 +12,17 @@ Syncs seven AWS IAM tables of one authorized AWS account into per-table NDJSON u
 | Adapter | `read_cloudquery_rows` and `extract_cloudquery_inventory` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-images-cloud.yml`, matrix entry `cloudquery` and the step "Run the anonymous CloudQuery amd64 smoke contract" |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/cloudquery/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
-- **Build.** Nothing is compiled. The Dockerfile adds upstream's release binaries for amd64 and arm64 (the CLI and the two plugin zips) with `ADD --checksum`, checks the SHA-256 of each plugin binary extracted from its zip, and ships the three source archives in `/usr/share/source/cloudquery/` (`cli-e27e4ab.tar.gz`, `aws-804be3a.tar.gz`, `file-600ffdd.tar.gz`) with the lock, `plugins.yml`, the Dockerfile and the launcher source. The CLI is `/app/cloudquery`; the plugins are `/usr/local/libexec/cloudquery-source-aws` and `/usr/local/libexec/cloudquery-destination-file`.
+- **Build.** The three upstream components use release binaries; only the project-owned shared launcher is compiled. The Dockerfile adds upstream's release binaries for amd64 and arm64 (the CLI and the two plugin zips) with `ADD --checksum`, checks the SHA-256 of each plugin binary extracted from its zip, and ships the three source archives in `/usr/share/source/cloudquery/` (`cli-e27e4ab.tar.gz`, `aws-804be3a.tar.gz`, `file-600ffdd.tar.gz`) with the lock, `plugins.yml`, the Dockerfile and the launcher source. The CLI is `/app/cloudquery`; the plugins are `/usr/local/libexec/cloudquery-source-aws` and `/usr/local/libexec/cloudquery-destination-file`.
 - **Input.** One `cloud_account` asset with exactly one `aws_account_id`, granted `inventory_read` (no `configuration_read` needed), and the AWS session triple expiring in 5 to 60 minutes. Provider traffic goes through the launcher's CONNECT bridge to the managed gateway, which allows `ec2.us-east-1.amazonaws.com`, `iam.amazonaws.com` and `sts.us-east-1.amazonaws.com` on port 443. The 27 AWS actions the profile requires are listed in `dependencies.lock.json` `required_aws_actions`.
 - **Invocation.** The launcher writes `cloudQueryConfiguration()` to `<tmp>/cloudquery.yml` and runs `/app/cloudquery sync <tmp>/cloudquery.yml --cq-dir <tmp>/cq --no-log-file --log-console --telemetry-level none`. The configuration selects `aws_iam_accounts`, `aws_iam_credential_reports`, `aws_iam_groups`, `aws_iam_password_policies`, `aws_iam_policies`, `aws_iam_roles` and `aws_iam_users` in `us-east-1`, runs both plugins with `registry: local`, and sets the file destination to `directory: /output`, `format: json`, `no_rotate: true`, `write_mode: append`. It must equal `plugins.yml` byte for byte.
 - **Output.** The file destination writes `/output/<table>.json`, one JSON row per line (`WriteTableBatch` at the pinned revision). The AWS plugin also syncs seven child tables: `aws_iam_group_policies`, `aws_iam_role_policies`, `aws_iam_ssh_public_keys`, `aws_iam_user_access_keys`, `aws_iam_user_attached_policies`, `aws_iam_user_groups` and `aws_iam_user_policies`.

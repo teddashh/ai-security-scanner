@@ -12,6 +12,14 @@ Lists the IAM users of one authorized AWS account through Steampipe's `aws_iam_u
 | Adapter | `extract_steampipe_inventory` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-images-cloud.yml`, matrix entry `steampipe` (no image smoke step) |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/steampipe/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Build.** Steampipe and the AWS plugin are compiled from checksum-pinned source archives; the FDW archive is shipped for license and source only. In the `seed` stage, running as uid 65532, `steampipe query --output json "select 1 as seed_ready"` downloads and installs the embedded database and FDW, using a build-only `config/ai-security-scanner-build.spc` with port 19193 (amd64) or 19194 (arm64) that is removed afterwards. `installprep` then requires `db/versions.json` to name `ghcr.io/turbot/steampipe/db:14.19.0` and `fdw:2.2.5` at the pinned digests and the PostgreSQL `signature` file to match them, deletes `config`, `internal`, `logs`, `plugins`, `backups` and `db/14.19.0/data`, replaces symlinks inside `db/14.19.0/postgres` with file copies, installs the plugin as `plugins/local/aws/steampipe-plugin-aws.plugin`, and writes a stable `versions.json` and `ai-security-scanner-provenance.json`. The result is the read-only seed `/opt/ai-security-scanner/steampipe-install`.

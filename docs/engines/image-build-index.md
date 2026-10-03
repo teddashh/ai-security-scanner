@@ -1,0 +1,148 @@
+# Engine image build and update notebook
+
+Checked against repository source at `801a500` on 2026-10-02. This index describes the recipes that exist; it does not certify that every current recipe builds or matches its published image. The per-engine pages contain the detailed invocation, adapter fields, fixtures, downstream changes and incident history.
+
+There are **25 catalog engines with 25 distinct primary upstream repositories**, **21 scanner Dockerfiles**, and **one additional egress gateway Dockerfile**. KICS and ZAP use upstream images. garak and Agentic Radar have plans but no Dockerfiles or runnable images. Plugins, rule repositories, Semgrep submodules, PowerShell modules, feeds, vulnerability databases and toolchains add more upstream inputs; 25 is not the count of the complete dependency closure.
+
+## Start an update here
+
+1. Read the engine page's **Downstream changes**, **Lessons from real runs** and **Updating this engine**. Read its shared launcher page too. These explain why a customization exists and when it can be removed.
+2. Establish two baselines: the catalog's digest-qualified **published image**, and the **current build inputs**. Compare the plan's publication source commit with current Dockerfile, patches, launcher and data locks. A current plan hash or documentation claim alone does not prove what is in an older image. Research checkouts in `engines/upstreams.lock.json` can differ from image-source pins.
+3. Review the upstream change for CLI, report schema, rule IDs, severity, messages, fixes, dependencies and offline support. Re-evaluate each patch against unmodified upstream before rebasing it. Record a missing upstream issue/removal condition as missing; do not invent one.
+4. Change the source/archive checksums, dependency locks, rule/data closure and the corresponding runtime verification hashes together. Use the table below to find engine-specific coupling, then the engine page for exact files and tests.
+5. Validate locally with bounded synthetic fixtures. Keep native output, normalized results, errors and omissions. Version output or valid JSON alone does not show that a meaningful check ran. Never replace a failed pinned acquisition with a floating input.
+6. Add a dated record using the template below. Publishing, new tags, signing and release timing remain the owner's separate decision; a local recipe is not permission to publish.
+
+See the [maintenance procedure](../engine-maintenance.md) for adapter/report boundaries and the separate [publication procedure](README.md#shipping-an-engine-image-change) when publication is requested.
+
+## Local build contexts and host preparation
+
+Run these from the repository root. **Dockerfile location is not the build context.** The root context is needed whenever a Dockerfile copies a shared launcher, root license, patch under `docs/`, or prepared cache. Checkov and Syft are the two narrow-context exceptions.
+
+| Engine / detailed notes | Dockerfile / context | Host preparation before a build |
+| --- | --- | --- |
+| [CloudQuery](cloudquery.md) | [Dockerfile](../../engines/images/cloudquery/Dockerfile) / `.` | None; checksum-pinned binaries and three component source archives are acquired in the build. |
+| [Steampipe](steampipe.md) | [Dockerfile](../../engines/images/steampipe/Dockerfile) / `.` | None; CLI/plugin/FDW source and architecture-specific PostgreSQL closure are acquired in the build. |
+| [Prowler](prowler.md) | [Dockerfile](../../engines/images/prowler/Dockerfile) / `.` | None; rebase on a pinned upstream image and apply the six local patches. |
+| [ScoutSuite](scoutsuite.md) | [Dockerfile](../../engines/images/scoutsuite/Dockerfile) / `.` | None; source preparation, patch and dependency install run inside the build. |
+| [Cloudsplaining](cloudsplaining.md) | [Dockerfile](../../engines/images/cloudsplaining/Dockerfile) / `.` | None; source archive contains the upstream `uv.lock`. |
+| [ScubaGear](scubagear.md) | [Dockerfile](../../engines/images/scubagear/Dockerfile) / `.` | None; shared source preparer verifies the locked engine/modules; OPA is bundled. |
+| [Maester](maester.md) | [Dockerfile](../../engines/images/maester/Dockerfile) / `.` | None; shared source preparer verifies the locked engine/modules. |
+| [Naabu](naabu.md) | [Dockerfile](../../engines/images/naabu/Dockerfile) / `.` | None; pinned source build. |
+| [httpx](httpx.md) | [Dockerfile](../../engines/images/httpx/Dockerfile) / `.` | None; pinned source build and local DNS patch. |
+| [Nuclei](nuclei.md) | [Dockerfile](../../engines/images/nuclei/Dockerfile) / `.` | None; scanner and template archives are acquired in the build. |
+| [Greenbone](greenbone.md) | [Dockerfile](../../engines/images/greenbone/Dockerfile) / `.` | None; source, native dependencies, feed and Notus are acquired in the build. |
+| [Semgrep](semgrep.md) | [Dockerfile](../../engines/images/semgrep/Dockerfile) / `.` | `node scripts/prepare-offline-engine-data.mjs semgrep`; current source's rule pack is blocked from public distribution. See the [local combination experiment](semgrep-combination-review.md). |
+| [Gitleaks](gitleaks.md) | [Dockerfile](../../engines/images/gitleaks/Dockerfile) / `.` | None; known missing fixture copy currently prevents a clean launcher-stage build. |
+| [TruffleHog](trufflehog.md) | [Dockerfile](../../engines/images/trufflehog/Dockerfile) / `.` | None; pinned source build. |
+| [Checkov](checkov.md) | [Dockerfile](../../engines/images/checkov/Dockerfile) / `engines/images/checkov` | None; `prepare_source.py` runs inside the build. |
+| [Trivy](trivy.md) | [Dockerfile](../../engines/images/trivy/Dockerfile) / `.` | `node scripts/prepare-offline-engine-data.mjs trivy` |
+| [Grype](grype.md) | [Dockerfile](../../engines/images/grype/Dockerfile) / `.` | `node scripts/prepare-offline-engine-data.mjs grype` |
+| [Syft](syft.md) | [Dockerfile](../../engines/images/syft/Dockerfile) / `engines/images/syft` | None; rebase on a pinned upstream image. |
+| [Kubescape](kubescape.md) | [Dockerfile](../../engines/images/kubescape/Dockerfile) / `.` | None; three checksum-pinned policy files are acquired in the build. |
+| [kube-bench](kube-bench.md) | [Dockerfile](../../engines/images/kube-bench/Dockerfile) / `.` | None; upstream benchmark files plus the product's snapshot path config are bundled. |
+| [MCP Armor](mcp-armor.md) | [Dockerfile](../../engines/images/mcp-armor/Dockerfile) / `.` | None; source, config-only patch and requirements lock are build inputs. |
+| [KICS](kics.md) | No local Dockerfile | Pull the catalog's upstream image by digest; queries belong to that image. |
+| [ZAP](zap.md) | No local Dockerfile | Upstream image pin exists, but product execution remains blocked. |
+| [garak](garak.md) | No local Dockerfile | Plan only; no build recipe or published image. |
+| [Agentic Radar](agentic-radar.md) | No local Dockerfile | Plan/research only; no build recipe or published image. |
+| [Egress gateway](egress-gateway.md) | [Dockerfile](../../engines/images/egress-gateway/Dockerfile) / `.` | None; project Rust source. Runtime pin is in [managed-egress-gateway.json](../../runtime/managed-egress-gateway.json), outside the scanner catalog. |
+
+For an engine with a Dockerfile, this builds a **local, single-platform review image**:
+
+```sh
+# Run from the repository root. Choose an engine from the table above.
+engine_id=prowler
+build_context=.
+case "$engine_id" in
+  checkov|syft) build_context="engines/images/$engine_id" ;;
+esac
+test -f "engines/images/$engine_id/Dockerfile" || exit 1
+case "$engine_id" in
+  semgrep|trivy|grype)
+    node scripts/prepare-offline-engine-data.mjs "$engine_id" || exit 1 ;;
+esac
+nice -n 10 docker buildx build \
+  --platform linux/amd64 --load \
+  --file "engines/images/$engine_id/Dockerfile" \
+  --tag "aiss-local/$engine_id:review" "$build_context"
+```
+
+Use `linux/arm64` for a separate arm64 review. One local platform proves only that platform; `--load` here does not publish a multi-platform index. Run one heavy build at a time on a shared machine. Some stages download pinned dependencies; **offline scanner execution does not mean an offline image build**. Check each Dockerfile's `RUN --network=none` smoke separately.
+
+Only Semgrep, Trivy and Grype consume host `.engine-cache/offline/` inputs today. The preparation script checks download size and digest; the image build also verifies the inputs it consumes. Trivy needs **both** its vulnerability DB and Java DB. Grype needs the archive and matching `import.json`. Cache availability is not proof that the data matches a newly edited pin.
+
+## Rules, customizations and edits that move together
+
+Common to every update: actual acquisition pin, catalog/provenance and plan facts must agree with the tested closure. Base images, source archive hashes, dependency locks, source/notices and smoke expectations need review when their bytes change. The table adds engine-specific work; exact hashes stay in the machine-readable files rather than being copied here.
+
+| Engine | Rules or data used | Customization to re-check; coupled edits and pitfalls |
+| --- | --- | --- |
+| CloudQuery | CLI + AWS source + file destination; seven IAM parent tables and dependent table evidence | **Frozen public closure**, not a routine move to latest. Keep `dependencies.lock.json`, `plugins.yml`, `cloudQueryConfiguration()`, allowed AWS actions/endpoints and validator constants in step. CLI/plugin binary hashes are per architecture. Three source archives must correspond to the shipped binaries. It is inventory; credential-report rows lack `account_id`, and dependent tables stay raw. |
+| Steampipe | CLI, AWS plugin, FDW/PostgreSQL installation; fixed `aws_iam_user` query | Re-check `installprep`, seeded installation, FDW/source notices, non-root ownership and writable runtime directories. CLI, plugin and embedded PostgreSQL versions are separate. Preserve inventory semantics and exact AWS-account checking. |
+| Prowler | Checks bundled in the upstream image; fixed AWS/Azure/GCP product profiles | Six ordered runtime patches are hash-bound in the applicator, patch series, plan and validator. Azure static-token IAM and GCP exact-project behavior are downstream exceptions. Try removing each patch first; keep organization/subscription enumeration disabled. Status detail supplies the finding title; original description remains evidence. |
+| ScoutSuite | Checks bundled in the source archive | Rebase the JSON-only patch, source preparer's expected hashes and hashed Python lock together. Preserve the fixed provider scope and pinned source offer. JSON-only reporting must still contain completed checks and expose provider failures. |
+| Cloudsplaining | Upstream IAM policy risk logic and dependency lock | Move the archive, upstream `uv.lock` hash, labels/plan and shared launcher together. Re-check downloaded authorization details, nested policy/principal output, and pass-through network bridge. Equivalent risks are grouped by the shared report layer, not detector changes. |
+| ScubaGear | Source Rego/baselines, OPA, Graph authentication and YAML module | `dependencies.lock.json`, shared `prepare_source.py` contracts, Dockerfile, wrapper provenance and notices must agree. Re-derive read permissions from upstream's BOM-prefixed API catalog and synchronize the five product permission lists. AAD-only scope, criticality mapping, disputed verdicts and badge removal are explicit customizations. Live completion is not established by the workflow's fake-token rejection smoke. |
+| Maester | Upstream test suite, Pester, Graph authentication | Move lock, preparer contract, Dockerfile/module licenses and both PowerShell runner files together. Retain the approved test selection and structured skipped/not-evaluated counters. Re-check tenant verification, read permissions and token expiry. Graph versions differ from ScubaGear; do not merge their locks. |
+| Naabu | Compiled upstream service discovery | Preserve connect scanning, frozen targets/ports and gateway journal contract. Update source/go.sum/version fields and launcher fixtures. Port discoveries remain inventory, never vulnerability findings. |
+| httpx | Compiled upstream HTTP/TLS inspection | `patch_live_dns.go` is tied to pre/post hashes of upstream `runner.go`; re-check the matching function and no live DNS before rebasing. Keep origin/redirect scope and gateway behavior. Output remains inventory. |
+| Nuclei | Pinned `nuclei-templates` archive; only HTTP templates copied | Scanner and templates have separate revisions. Move the template marker, policy revision in grants, plan/catalog, labels and source notices together. Re-check read-only template selection, dependencies, excluded protocols/payloads and original template IDs. A template count change requires inspecting selection, not just changing a smoke count. |
+| Greenbone | Scanner/openvasd, signed VT feed, Notus and native dependency sources | Seven patches apply in order at zero fuzz; some touch the same interpreter files. Feed revision is also bound into launcher, validator, product profiles/OID lists and grants. Review signature/metadata, safe dependency closure, result port/QoD and service identification. Historical feed digests disappeared quickly: measure all feed components together and preserve evidence of exactly what was acquired. A failure in one grant currently deletes the XML; this remains an implementation limitation. |
+| Semgrep | Published pin: four product rules. Current source: a 1,620-rule upstream pack. Proposed local pack: [legacy + four rules](semgrep-combination-review.md) | Rule pack and engine licenses differ. Current upstream pack is blocked from distribution. Runtime manifest, ID provenance, file count, launcher constants, Docker smoke and source attachments must agree. Inspect per-file licenses and the complete source archive as well as runtime configs. No license substitution or newer knowledge date just because the engine was rebuilt. |
+| Gitleaks | Upstream `gitleaks.toml`, hash-verified at runtime | Keep default config digest, scanner-owned ignore patch, CLI/version/source hashes, own launcher and plan in step. Source-controlled suppression is intentionally disabled; re-check redaction in native output. **Current Dockerfile omits a test fixture** required by launcher tests; workflow-mounted tests do not prove this build stage works. |
+| TruffleHog | Compiled upstream detectors; no embedded external rule pack | Keep source/go.sum/build-version and source offer together. Verification stays disabled with network off; an unverified match is not a proven live credential. Re-check JSONL detectors and redaction; preserve native confidence without exposing secret material. |
+| Checkov | Checks and dependency lock in the source archive | Narrow context is required. `prepare_source.py` checks source/lock and generates hash-pinned wheel requirements. Re-check the reason for using a source image, CLI flags, framework output shape and output-path comma convention. Preserve absent native severity as absent; platform downloads stay disabled. |
+| KICS | Queries bundled in its official image | No local build. Re-check upstream digest/labels, bundled query IDs and JSON parsing. Offline execution blocks network, but upstream startup can still attempt metadata/version requests; do not describe it as making no network attempts. |
+| Trivy | Pinned vulnerability DB **and Java DB**; source-built scanner | Move preparation script, archive/internal DB/metadata hashes, `DATABASE-NOTICE.md`, plan and source/go.sum fields together. Preserve filesystem + rootfs repository passes and OS-only OCI image pass. Lockfile, standalone JAR and OCI fixtures test different paths. Scanner age and data age are separate. |
+| Grype | Embedded schema-v6 vulnerability DB and `import.json` | Move acquisition/internal DB digests, schema/build metadata, import config, notice and launcher together. Check directory and OCI-layout matching, disabled DB updates and raw vulnerability ratings. Historical publication evidence for the current tag is incomplete; a matching source file is not proof of a workflow publication. |
+| Syft | Catalogers bundled in the official image; no vulnerability DB | Narrow context; rebase `FROM` digest and upstream provenance labels together. Retain non-root cache paths and no update check. SBOM inventory is not vulnerability output. |
+| Kubescape | NSA framework, control inputs and exceptions from regolibrary | All three `ADD --checksum` values must equal launcher constants and notice. Mutable `v2` asset URLs must still match their hashes; do not silently acquire replacements. Re-check offline flags, manifest marker and nested v2 `status.status`/per-resource results. Published/source launcher identity and tag reuse are separate from policy-byte compatibility. |
+| kube-bench | Upstream `cis-1.11` node benchmark; product snapshot path config | Preserve the benchmark and snapshot profile together. Shared launcher also answers `ps`/`stat` from exported facts; it must never switch to host probes. Re-check required files, process/stat facts and all fail/pass/WARN/manual/not-done outcomes. Non-failure statuses currently do not all become coverage warnings; a zero-finding report is not full node coverage. |
+| MCP Armor | Two existing static configuration checks | Config-only patch, source digest, requirements lock, own launcher, version-bound adapter, research fixtures and validator hashes are coupled. Re-check no server/model contact, selected configuration path/hash, redaction and complete-check ledger. Copied upstream license text must be reviewed independently of the image's declared license label. |
+| ZAP | Upstream passive scan add-ons; product-generated passive work plan | No local build; preserve the execution blockers. Re-check plan schema/add-on revisions, origin/redirect scope, actual crawl coverage and gateway request/rate limits before enabling it. An upstream image pin alone does not resolve those blockers. |
+| garak | Planned upstream probe/detector closure | No existing build to reproduce. Current plan/image blockers and adapter fixtures describe intended integration, not completed product scans. A future build needs a separately approved bounded endpoint/probe profile. |
+| Agentic Radar | Planned framework/tool inventory | No existing build to reproduce. Research patch/fixtures are evidence for a proposal only. Re-check supported framework selection, structured warnings and inventory semantics before implementing a build. |
+| Egress gateway | Project Rust code; no scanner rule pack | Root context includes library `include_str!`/`include_bytes!` inputs beyond Rust source. A new embed needs a COPY and contract test. Runtime policy/status schema must remain compatible with the pinned gateway. Embedded catalog/mappings are build inputs, but a catalog-only edit does not itself justify publication; assess whether gateway behavior uses the changed fields. |
+
+## Shared launchers and workflow reach
+
+| Shared code | Engine images containing it | Workflow |
+| --- | --- | --- |
+| [Cloud launcher](cloud-launcher.md) | CloudQuery, Steampipe, Prowler, ScoutSuite, Cloudsplaining | [engine-images-cloud.yml](../../.github/workflows/engine-images-cloud.yml), changed-engine selection |
+| [M365 launcher and source preparer](m365-launcher.md) | ScubaGear, Maester | [engine-images-m365.yml](../../.github/workflows/engine-images-m365.yml) |
+| [External launcher](external-launcher.md) | Naabu, httpx, Nuclei | [engine-images-external.yml](../../.github/workflows/engine-images-external.yml) |
+| [Local launcher](local-launcher.md) | Semgrep, TruffleHog, Trivy, Grype, Kubescape, kube-bench | [engine-images-local-k8s.yml](../../.github/workflows/engine-images-local-k8s.yml), **static six-engine publish matrix** |
+| [Greenbone launcher](greenbone-launcher.md) | Greenbone | [engine-image-greenbone.yml](../../.github/workflows/engine-image-greenbone.yml) |
+
+Gitleaks and MCP Armor have their own launchers. Checkov, KICS and Syft use upstream entrypoints. ZAP's proposed work plan is generated by the host.
+
+A shared launcher edit changes every image embedding it, even if only one engine branch changed. Keep affected plan hashes and test selections in step. However, a file-change trigger and a publication guard are different: the local/k8s workflow can schedule all six publications, and existing tag/source disagreements can block siblings. Keep unapproved image-input work isolated; pushing it to `main` can publish images automatically. Documentation edits under `docs/engines/` do not trigger these image workflows.
+
+Do not fix a historical pin/source disagreement by rewriting the publication commit or assuming all images were rebuilt. Record what the pinned digest runs and what a new local build would run, separately. Documentation/source-offer changes copied into an image also change its bytes, even where the current hash policy omits `.md` inputs.
+
+## Validation and update record
+
+Use the engine page's named launcher tests, adapter fixtures, real-output comparison and workflow smoke. Add tests for the changed risk; do not run every scanner or require a live cloud sign-in for a documentation edit. Synthetic fixtures must never carry real credentials. A runtime or feed change needs actual bounded execution, with CPU/memory/time limits and the same network boundary as the product. Scope for external/provider tests must already be approved.
+
+Before declaring an updated engine complete, compare native IDs, messages, severity, confidence, locations and remediation with normalization. Check errors, skipped/manual checks, service-identification failures and output truncation. The launchers' large artifact bounds and adapters' smaller parse bounds can differ; native exit zero is not sufficient evidence of complete product coverage.
+
+Append this to the relevant engine page after each update or useful run:
+
+```text
+Date / reason:
+Previous published image: repository@digest; publication source commit
+Candidate source: full revision; archive URL + SHA-256
+Rules / plugins / feed / DB: revisions, hashes, data dates; exclusions
+Build: Dockerfile + context; preparation command; platform + build args
+Customization: upstream files changed; reason; patch hash/order
+Upstream issue or reason absent; removal condition; next review date
+Files moved together: recipe, locks, launcher constants, plan, adapter, notices
+Validation: exact commands; synthetic/approved fixture; native vs normalized
+Observed result: findings/inventory/errors/skips; meaningful check evidence
+Limits / remaining blockers:
+Publication: local only, or owner-approved artifact + evidence link
+Fix / documentation commit:
+```
+
+Keep exact pins in [catalog.json](../../engines/catalog.json), the engine's plan and the relevant locks. Keep **why**, **how to repeat it**, **what failed**, and **when to revisit it** in these pages. Historical records stay historical; a newer build does not rewrite old scan provenance or advance old data dates.

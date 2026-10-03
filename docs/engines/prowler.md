@@ -12,6 +12,14 @@ Runs Prowler's IAM checks against exactly one authorized AWS account, Azure subs
 | Adapter | `extract_prowler` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-images-cloud.yml`, matrix entry `prowler` and the step "Run the anonymous Prowler amd64 patch and launcher contract" |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/prowler/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Input.** One asset: `cloud_account` with `aws_account_id`, `subscription` with `azure_subscription_id`, or `project` with `gcp_project_id`, granted `inventory_read` and `configuration_read`. The credential channel holds exactly the AWS session triple, `AZURE_ACCESS_TOKEN`, or `GOOGLE_OAUTH_ACCESS_TOKEN`, each expiring in 5 to 60 minutes. Provider traffic goes through the launcher's CONNECT bridge to the managed gateway, which allows only `iam.amazonaws.com`, `sts.us-east-1.amazonaws.com`, `ec2.us-east-1.amazonaws.com`, `organizations.us-east-1.amazonaws.com`, `management.azure.com` and `cloudresourcemanager.googleapis.com` on port 443.

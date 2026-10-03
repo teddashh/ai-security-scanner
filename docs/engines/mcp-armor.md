@@ -12,6 +12,14 @@ Runs MCP Armor's two static configuration checks, `hardcoded_secrets` and `exces
 | Adapter | `extract_mcp_armor` and `MCP_ARMOR_CHECKS` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-image-mcp-armor.yml` |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/mcp-armor/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Input.** On repository attach, `discover_mcp_configurations` lists files of at most 10 MiB accepted by `is_mcp_configuration_relative_path` (`mcp.json`, `mcp_servers.json`, `mcp*` or `*.mcp` names ending `.json`, `.yaml` or `.yml`, and a few editor settings files). More than 64 candidates clears the list and marks discovery incomplete. `annotate_repository_asset` auto-selects only a complete discovery with exactly one candidate; otherwise the user picks one (`select_mcp_configuration` command). The choice becomes two asset identifiers, `ai-security-scanner:mcp-configuration-relative-path` and `ai-security-scanner:mcp-configuration-sha256`, which reach the launcher in the scope document.

@@ -11,6 +11,14 @@ Runs Semgrep Community Edition static analysis over a `repository` snapshot with
 | Adapter | `extract_semgrep` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-images-local-k8s.yml`, matrix entry `semgrep` |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/semgrep/Dockerfile) and context `.`.
+
+Prepare the host cache first: `node scripts/prepare-offline-engine-data.mjs semgrep`. This prepares current source inputs, whose upstream rule license blocks public distribution; the [legacy combination review](semgrep-combination-review.md) is a separate local experiment.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **What the pin runs.** The plan's `publication` names commit 2641850 (run 33196902246). At that commit the Dockerfile copied `engines/images/semgrep/rules.yml`, and the launcher passed `--config /opt/ai-security-scanner/semgrep/rules.yml`. That file held four product rules: `ai-security-scanner.python.dynamic-code-execution`, `.python.shell-true`, `.javascript.child-process-exec` and `.generic.private-key`. ef1c653 (2026-09-08) deleted it and added the upstream pack. Since then the catalog `rule_version`, notice and provenance and the plan all describe a 1,620-rule image that has never been published. 9ee5257 scheduled rebuilds for Trivy, kube-bench, Maester and Greenbone, but not Semgrep.
@@ -29,6 +37,7 @@ Runs Semgrep Community Edition static analysis over a `repository` snapshot with
 
 ## Downstream changes
 
+- **Local combination proposal (2026-10-02).** The [legacy + four-rule review](semgrep-combination-review.md) records acquisition/license exceptions, collision-free IDs with original-source provenance, three separate CE executions, overlap and remaining integration work. It changes no production lock, image pin or detector body.
 - **No source patches.** Semgrep is built unmodified from the pinned revision. Its git submodules come from `submodules.lock` (path, repository, revision, SHA-256, size, archive), and each archive's size and digest are checked before extraction.
 - **Offline security rule pack** (`build_rule_pack.py`). Engine networking is disabled, so the rules are embedded. From the rules archive the builder keeps every `.yaml`/`.yml` file that:
   - is not a test file;

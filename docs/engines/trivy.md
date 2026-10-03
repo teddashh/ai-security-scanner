@@ -11,6 +11,14 @@ Runs Trivy's offline vulnerability scanner. Repository and IaC snapshots get two
 | Adapter | `extract_trivy` and `trivy_weakness` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-images-local-k8s.yml`, matrix entry `trivy` |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/trivy/Dockerfile) and context `.`.
+
+Prepare the host cache first: `node scripts/prepare-offline-engine-data.mjs trivy`. Both the vulnerability DB and Java DB are required.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Input.** One asset: a `repository` (`repository_working_tree`), an `iac_project` (`iac_working_tree`) or a `container_image` (`container_image_oci_layout`). Networking is disabled. Catalog resources: 2048 MB memory, 2000 CPU millis, and 3600 s for all passes together; 5000 MB disk, but the host clamps the `/tmp` tmpfs to 4096 MB. The catalog's `default_enabled: false` is read only by registry validation; routing alone decides when Trivy runs.

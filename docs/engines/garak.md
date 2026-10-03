@@ -12,6 +12,12 @@ Catalogued but not runnable. garak would send NVIDIA garak's adversarial probe s
 | Adapter | `extract_garak`, `garak_target`, `garak_probe_contexts` and `garak_counts_sentence` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | None |
 
+## Local build and update entry
+
+There is no Dockerfile or published runnable product image. The existing plan and research describe a proposed integration; there is no completed build recipe to repeat yet.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Release gate.** Catalog `status` `experimental`, `compatibility.runnable` false, and three blockers repeated in the plan:

@@ -11,6 +11,14 @@ Runs upstream Nuclei HTTP templates against one approved website origin per gran
 | Adapter | `extract_nuclei` and the Nuclei branch of `normalize_artifacts` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-images-external.yml`, matrix entry `nuclei` / `3.11.1-7` |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/nuclei/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Scope.** The website path (`src/websiteQuickProfile.ts`) asks for `nuclei-templates@24858b4…`, profile `nuclei_web_safe_v1`, 10 requests/s, 5 concurrent and a 10 s timeout. `validateTemplatePolicy` requires that exact revision, exactly one of the profile or an explicit allowlist (at most 1,000 IDs, still supported), and all six `allow_*` capabilities false.

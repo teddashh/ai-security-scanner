@@ -11,6 +11,12 @@ Crawls one approved website origin and applies ZAP's upstream passive scan rules
 | Adapter | `extract_zap`, `zap_severity` and `zap_confidence` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | None (official image) |
 
+## Local build and update entry
+
+There is no local Dockerfile. This integration uses the catalog’s digest-pinned upstream image; update acquisition/provenance and the product invocation together. The existing execution blockers remain in force.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Why it cannot run.** `PinnedImage::from_manifest` (`src-tauri/src/container_runtime.rs`) refuses any manifest with a `release_blocker()` (`src-tauri/src/domain.rs`). Catalog `compatibility.blocked_by` and `plan.json` `blockers`: no scope-grant profile exists for a ZAP website scan; the generated plan is not delivered into a run; ZAP enforces no requests-per-second limit and the gateway bounds connections, not requests.

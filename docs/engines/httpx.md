@@ -11,6 +11,14 @@ Collects HTTP service facts (status code, scheme, port, TLS) from one approved o
 | Adapter | `extract_httpx_inventory` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-images-external.yml`, matrix entry `httpx` / `1.10.0-7` |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/httpx/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Scope.** A `low_impact_external_connection` grant whose external scope declares `http` or `https`, on a `domain`, `ip_address` or `web_service` asset, with at most 25 requests/s, 10 concurrent and a 1,800 s timeout. A `tcp` grant is refused for httpx and planned for Naabu, and the planner names the protocol mismatch (3b4b25e).

@@ -11,6 +11,14 @@ Finds open TCP ports with a connect scan through the managed gateway on authoriz
 | Adapter | `extract_naabu_inventory` in `src-tauri/src/adapters/mod.rs`; journal reconciliation in `apply_naabu_launcher_v2_execution_report` and `adapt_and_persist_naabu_attempt` (`src-tauri/src/case_service.rs`) |
 | Publish workflow | `.github/workflows/engine-images-external.yml`, matrix entry `naabu` / `2.6.1-7` |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/naabu/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Work plan.** `build_naabu_work_plan` (`src-tauri/src/naabu_work_plan.rs`) freezes grants and addresses once, with no DNS, and splits them into work units: quick-discovery units first, then inventory units. `select_naabu_attempt` takes the next prefix of unfinished units that fits one outer host timeout, at most 128 units and 10,000 address-port pairs. The host writes it as a schema-3 plan (`launcher_plan_v3`; attempts recorded with the older request schema re-derive the schema-2 plan with `legacy_launcher_plan_v2`), mounted read-only at `/run/ai-security-scanner/execution-journal-v2.json` with the label `ai.security-scanner.naabu-launcher-plan-sha256`; `materializeLauncherV2Plan` checks it against the scope.

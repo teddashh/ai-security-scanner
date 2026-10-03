@@ -12,6 +12,14 @@ Runs openvasd from the Greenbone OpenVAS Scanner, with an embedded signed Commun
 | Adapter | `parse_greenbone_xml` and `extract_greenbone` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-image-greenbone.yml`: native amd64 and arm64 builds, each with a real smoke scan, then the same smoke against the anonymously pulled index |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/greenbone/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Input.** Catalog asset kinds `ip_address`, `host` and `web_service`, each with an `active_external_testing` grant whose external scope names one canonical hostname or address, sorted TCP ports and a template policy bound to `greenbone-community-feed@<FEED_COMMIT>`. Product profiles:

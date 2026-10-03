@@ -11,6 +11,14 @@ Runs Grype's offline vulnerability matcher over a `repository` snapshot (`dir:`)
 | Adapter | `extract_grype` and `grype_weakness` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-images-local-k8s.yml`, matrix entry `grype` |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/grype/Dockerfile) and context `.`.
+
+Prepare the host cache first: `node scripts/prepare-offline-engine-data.mjs grype`. The database archive and `import.json` must describe the same pinned database.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Input.** One asset: a `repository` (`repository_working_tree`) or a `container_image` (`container_image_oci_layout`). The launcher refuses IaC and every other profile. Networking is disabled. Catalog resources: 1024 MB memory, 3000 MB disk, 1000 CPU millis, 3600 s.

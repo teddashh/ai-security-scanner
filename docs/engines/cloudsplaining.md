@@ -12,6 +12,14 @@ Downloads the IAM authorization details of one authorized AWS account and runs C
 | Adapter | `extract_cloudsplaining` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-images-cloud.yml`, matrix entry `cloudsplaining` (no image smoke step) |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/cloudsplaining/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Input.** One `cloud_account` asset with exactly one `aws_account_id`, granted `inventory_read` and `configuration_read`, and the AWS session triple expiring in 5 to 60 minutes. This is the only engine whose identity preflight uses the global STS endpoint (`awsSTSEndpointForEngine`), because its network closure is `iam.amazonaws.com:443` and `sts.amazonaws.com:443` only. Provider traffic goes through the launcher's CONNECT bridge to the managed gateway.

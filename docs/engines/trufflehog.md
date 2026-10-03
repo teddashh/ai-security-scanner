@@ -11,6 +11,14 @@ Runs TruffleHog's secret detectors over the files of a `repository` snapshot wit
 | Adapter | `extract_trufflehog` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-images-local-k8s.yml`, matrix entry `trufflehog` |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/trufflehog/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Input.** One `repository` asset (`repository_working_tree`); the launcher refuses every other profile. The snapshot has no `.git`, so history is not scanned. Networking is disabled. Catalog resources: 1024 MB memory, 1024 MB disk, 1000 CPU millis, 3600 s.

@@ -2,7 +2,9 @@
 
 One page per scanner and per shared launcher. Each page records how the product runs that engine, what the adapter keeps from its output, how to update it, and what real runs taught. Read the page before changing an engine, and add a line to its **Lessons from real runs** when a real run teaches something new.
 
-[Engine maintenance procedure](../engine-maintenance.md) is the policy. `engines/catalog.json` and each `engines/images/<engine>/plan.json` hold the exact pins; when a page disagrees with them, the files are right and the page needs fixing.
+[Engine maintenance procedure](../engine-maintenance.md) is the policy. Start a rebuild or upstream update with the [image build and update notebook](image-build-index.md): it covers all 25 engines, their build contexts, rules/data preparation, coupled edits and known pitfalls, plus the gateway. Each engine page links back to that entry point.
+
+`engines/catalog.json` and each `engines/images/<engine>/plan.json` record exact pins and intended build facts. Compare them with the publication source commit and evidence before saying what a pinned image runs: current source can differ from the published artifact. Semgrep is one such case. Resolve a disagreement from the actual artifact and acquisition evidence, then correct the affected records and documentation.
 
 ## Engines
 
@@ -26,6 +28,7 @@ Engines that reach a network target or a provider leave their container only thr
 ## What a page holds
 
 - The pins: upstream release and revision, image tag, build inputs, launcher, wrapper, adapter and tests.
+- A local-build entry: Dockerfile, actual build context, host preparation, known build limitations and a link to the update notebook.
 - How the product invokes it: the fixed profile, what goes in and what comes out.
 - What the adapter turns into findings, inventory and warnings, and what it leaves as raw evidence.
 - Every product-owned difference from upstream, with its reason and the condition for removing it.
@@ -41,4 +44,4 @@ Publishing an image is the product owner's decision. Once it is approved:
 3. **Push to `main`.** The family's workflow builds both architectures, runs its smoke checks, attests the image and uploads `<engine>-image-evidence-<run>-<attempt>` with `<engine>-image-manifest.json`. Until the pin commit, `npm run validate:engines` and the CI job **Engine admission contracts** fail because the inputs run ahead of the plans.
 4. **Check the evidence.** The manifest's digest and platform digests, `sourceRevision` equal to the publish commit, an anonymous pull, and `gh attestation verify oci://<image>@<digest> -R teddashh/ai-security-scanner --signer-workflow teddashh/ai-security-scanner/.github/workflows/<workflow> --source-ref refs/heads/main --source-digest <publish commit>`.
 5. **Pin commit.** Catalog `image.tag`, `image.digest` and `provenance.engine.artifact_source_revision`; the plan's `final_artifact`, `publication` and any recorded hash that changed; then every other current file naming the old tag (`git grep -nF '<old tag>'`). Leave historical records alone. `npm run validate:engines` passes again.
-6. **Run it for real.** Rebuild the desktop app, which compiles the catalog in, scan a real target, and compare the normalized output with the raw upstream output using the engine page's recipe. Add what the run taught to the page.
+6. **Verify product execution.** Test the updated catalog in the product with a bounded fixture or an already-approved target, and compare normalized output with native output using the engine page's recipe. Add the actual scope, commands, outcomes and limits to the page. For someone asking to install or run a scan, use the released desktop app and the scanner skill as AGENTS.md requires.

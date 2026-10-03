@@ -11,6 +11,14 @@ Runs Syft over a `repository` snapshot (`dir:`) or a single-image OCI layout (`o
 | Adapter | `extract_syft_inventory` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-image-syft.yml` |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/syft/Dockerfile) and context `engines/images/syft`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Input.** One asset: a `repository` (`repository_working_tree`) or a `container_image` (`container_image_oci_layout`). No launcher checks the input inside the container; the host routes by the catalog contracts. Networking is disabled. Catalog resources: 1024 MB memory, 1024 MB disk, 1000 CPU millis, 3600 s.

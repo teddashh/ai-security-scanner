@@ -12,6 +12,14 @@ Runs kube-bench's unmodified upstream CIS Kubernetes 1.11 node profile (`--bench
 | Adapter | `extract_kube_bench` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-images-local-k8s.yml`, matrix entry `kube-bench` |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/kube-bench/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Input.** The user chooses the parent folder of `node-snapshot/` ("Exported Kubernetes node settings" in `src/localInputProfiles.ts`, routed to kube-bench by `localInputEngineIds`). `expected_input_profile` in `src-tauri/src/registry.rs` binds `host` to `kubernetes_node_snapshot`. Without explicit routes, the backend default plan (`default_plan_includes_manifest` in `src-tauri/src/case_service.rs`) includes kube-bench whenever an authorized `host` asset carries such a snapshot; the catalog `default_enabled` (false) is not read by the planner.

@@ -12,6 +12,14 @@ Checks one approved Microsoft 365 tenant (asset kind `tenant`, provider `microso
 | Adapter | `extract_scubagear` → `extract_m365` in `src-tauri/src/adapters/mod.rs` |
 | Publish workflow | `.github/workflows/engine-images-m365.yml`, matrix entry `scubagear` |
 
+## Local build and update entry
+
+Build from the repository root with [this Dockerfile](../../engines/images/scubagear/Dockerfile) and context `.`.
+
+No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
+
+See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+
 ## How it is wired
 
 - **Launch.** `--engine scubagear --scope /run/ai-security-scanner/scope.json --output /output`. The launcher validates the scope (one `microsoft365` tenant with `inventory_read` and `configuration_read`) and the credential file `/run/ai-security-scanner/credentials.json` before PowerShell starts.
